@@ -200,6 +200,19 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 
 The add-on parts leave out the steps that replace a machine. Those are RKE2's and k3s's own upload, the load balancer off, scaling, the upgrade and the dead worker. Every part runs the rest, on Talos the upgrade in place too, and checks SELinux at its end.
 
+## Demo mode
+
+`kubehenge serve --demo` serves the real interface over sample clusters held in memory, at `http://127.0.0.1:8443`. It signs in an administrator, refuses every change and reaches no Proxmox VE host or cluster.
+
+```sh
+make web && go run ./cmd/kubehenge serve --demo
+make screenshots   # docs/images, from the demo in a headless Chromium
+```
+
+The sample fleet is in `pkg/ui/demo-fleet.json`. Its ClusterClasses are the chart's, kept in `pkg/ui/demo-classes.json`. After a change to the chart's ClusterClasses, `go test ./pkg/ui -run TestDemoClassesMatchTheChart -update-demo-classes` rewrites the file.
+
+`make screenshots` fixes the window, the colour scheme and both clocks, so a second run gives the same images. Run it after a change to a page the docs show.
+
 ## End to end without a Proxmox VE host
 
 CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one test per machine.
@@ -306,6 +319,8 @@ Once the management cluster is up, each sample also holds the management node's 
 #### Memory without swap
 
 Under 1 GiB of memory available for a minute or more, swap not counted, the guests have outgrown the runner. That ends no test, since such guests slow down rather than fail at once. The guard names the stretch when the test ends. Beside a failure such as a lost lease it is an error. When the test passed it is a warning.
+
+A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
 
 A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
 

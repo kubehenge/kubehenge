@@ -144,7 +144,7 @@
       "description": "Rancher names the versions of the webhook, Fleet, its shell and Turtles it runs with, whose images Kubehenge pins beside Rancher's; they move only with Rancher, and the Rancher test fails until they match.",
       "matchDepNames": ["docker.io/rancher/rancher"],
       "prBodyNotes": [
-        "Set the images under `addons.rancher` in `charts/kubehenge/values.yaml` to those of the new release, tag and digest: the webhook, Fleet and its agent, the shell and the audit log image from its `build.yaml` (`webhookVersion`, `fleetVersion`, `defaultShellVersion`, `chartAuditLogImage`), the shell three times; and `turtles` from the rancher-turtles chart `build.yaml` names (`turtlesVersion`), whose `values.yaml` names Turtles' image and whose core provider ConfigMap names the Cluster API controller's."
+        "Set the images under `addons.rancher` in `charts/kubehenge/values.yaml` to those of the new release, tag and digest: the webhook, Fleet and its agent, the shell and the audit log image from its `build.yaml` (`webhookVersion`, `fleetVersion`, `defaultShellVersion`, `chartAuditLogImage`), the shell three times; and `turtles` from the rancher-turtles chart `build.yaml` names (`turtlesVersion`), whose `values.yaml` names Turtles' image and whose core provider ConfigMap names the Cluster API controller's. Set `CATTLE_RANCHER_TURTLES_VERSION`, `CATTLE_RANCHER_WEBHOOK_VERSION` and `CATTLE_FLEET_VERSION` in `extraEnv` to the chart versions `build.yaml` names (`turtlesVersion`, `webhookVersion`, `fleetVersion`)."
       ]
     }
   ],

@@ -26,6 +26,8 @@ Before the first cluster, the VM templates for its distribution have to exist ([
 
 **Create cluster** on the cluster list opens a wizard of six steps: General, Network, Machines, Add-ons, Identity providers and Confirm.
 
+![The wizard's General step: distribution, node OS, Kubernetes version, control-plane nodes and workers](images/create-cluster.png)
+
 A field shows what is wrong with it once it has been changed, or when **Next** is pressed with something missing. **Next** then moves to the first such field. A step in the bar above opens only once the steps before it are complete. **Cancel** asks before it discards what was entered.
 
 Choosing another distribution brings its defaults only into what you have not set yet.
@@ -360,6 +362,8 @@ Each is an address as well, the cluster's page with `?do=scale`, `upgrade`, `del
 
 ## The cluster page
 
+![A cluster's Summary: its machines laid out by Proxmox VE node, then its settings](images/cluster.png)
+
 The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upgrade**, **Kubeconfig**, **Support bundle**, **Headlamp** and **Delete**. **Kubeconfig** and **Headlamp** appear once the cluster is available (Kubeconfig for those with `Sys.Modify` on its pool, Headlamp for clusters in the interface's namespaces). **Support bundle** appears for those with `Sys.Modify` on its pool. It downloads the same bundle as `kubehenge diagnose` ([troubleshooting.md](troubleshooting.md#a-clusters-support-bundle)). Without `VM.Allocate` on its pool, or while it is being deleted, the others are disabled and the page says why. The tabs under the name switch between its views:
 
 - **Summary:** first the cluster's machines laid out by the Proxmox VE node their VMs run on, control planes first, each with its state.
@@ -428,6 +432,8 @@ Nothing changes in the cluster until the changes are applied. A bar above the vi
 ## Pools
 
 **Machines** lists the control plane and each worker pool with its nodes, cores, memory and disk. **Add pool** adds a worker pool with its own name, workers and size. A new cluster starts with one, `md-0`.
+
+![The Machines view: the pools with their sizes, then every machine with its role, Proxmox VE node, version and address](images/machines.png)
 
 **Resize** gives the control plane, or one pool, another size, and replaces those nodes one at a time. A resized pool keeps its own size from then on. The other pools keep the cluster's. **Delete** drains and deletes a pool's workers and their disks.
 
@@ -528,6 +534,8 @@ New machines, from scaling up or a repair, clone the template of the release the
 ## Change settings
 
 **Options** lists every setting that can change once the cluster exists, grouped into Nodes, Network, Storage, Add-ons, Security and Maintenance. Some show only where the cluster or the management cluster offers them.
+
+![The Options view: node, network, storage and add-on settings, each with its value and Edit](images/options.png)
 
 A setting that is only on or off has a switch in its row. These are Proxmox VE HA, HA group labels, the CSI plugin's newest release, volume snapshots and Istio. The switch says what switching it on brings, or why it cannot be. The rest have **Edit**.
 
@@ -759,6 +767,8 @@ A refusal can come up after the cluster switched it on, such as a template built
 ## Back up and restore
 
 A cluster with backups on runs Velero, which backs up on the cluster's schedule to its target, under `<prefix>/<namespace>.<name>/velero` in the target's bucket. Each backup holds the cluster's resources and the files of every volume its pods mount, emptyDir volumes aside. It covers every namespace but `kube-system`, `kube-public`, `kube-node-lease`, Velero's and the add-ons'. Kubehenge installs those again itself. `kube-system` holds the cluster's Proxmox VE token, which no backup carries.
+
+![The Backups view: the target and schedule, then a week of backups, each with Restore and Delete](images/backups.png)
 
 What lands in the store is encrypted with keys of the cluster's own. They are made when backups are first switched on and kept beside the Cluster, in the Secret `<name>-backup-keys`. The store encrypts the resources with the cluster's SSE-C key. Kopia, which Velero reads the volumes with, encrypts their data with the cluster's repository password.
 

@@ -4,10 +4,25 @@
 Kubernetes for Proxmox VE.
 
 [![Latest release](https://img.shields.io/github/v/release/kubehenge/kubehenge?label=alpha)](docs/changelog.md)
+[![CI](https://github.com/kubehenge/kubehenge/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/kubehenge/kubehenge/actions/workflows/ci.yml?query=branch%3Amain)
+[![End-to-end](https://github.com/kubehenge/kubehenge/actions/workflows/e2e.yml/badge.svg?event=schedule)](https://github.com/kubehenge/kubehenge/actions/workflows/e2e.yml?query=event%3Aschedule)
+[![CodeQL](https://github.com/kubehenge/kubehenge/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/kubehenge/kubehenge/actions/workflows/codeql.yml?query=branch%3Amain)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/kubehenge/kubehenge/badge)](https://scorecard.dev/viewer/?uri=github.com/kubehenge/kubehenge)
+[![SLSA Build L3](https://img.shields.io/badge/SLSA-Build%20L3-2f6f4e)](docs/releasing.md#how-it-is-built-and-signed)
+[![SBOM SPDX](https://img.shields.io/badge/SBOM-SPDX-2f6f4e)](docs/releasing.md#what-is-attested)
+[![Sigstore signed](https://img.shields.io/badge/Sigstore-signed-2f6f4e)](docs/releasing.md#what-is-attested)
+[![Made for Proxmox VE 9](https://img.shields.io/badge/Made%20for-Proxmox%20VE%209-e57000)](docs/install.md)
+[![Go](https://img.shields.io/github/go-mod/go-version/kubehenge/kubehenge)](go.mod)
+[![Licence](https://img.shields.io/github/license/kubehenge/kubehenge?label=licence)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-kubehenge.dev-2f6f4e)](https://kubehenge.dev)
+[![Downloads](https://img.shields.io/github/downloads/kubehenge/kubehenge/total)](https://github.com/kubehenge/kubehenge/releases)
+
+**[kubehenge.dev](https://kubehenge.dev)** · [Install](docs/install.md) · [Clusters](docs/clusters.md) · [Changelog](docs/changelog.md) · [Roadmap](docs/roadmap.md)
 
 > [!WARNING]
 > **Alpha. Do not use it in production.** Any release may change Kubehenge completely, its settings, interface and ClusterClasses included. Nothing is guaranteed yet to keep working from one release to the next.
+
+![The cluster list: seven clusters across kubeadm, RKE2, k3s and Talos, one degraded by a crash-looping pod and one upgrading](docs/images/fleet.png)
 
 Kubehenge creates and runs Kubernetes clusters on Proxmox VE. You manage them from a web interface that signs in with your Proxmox VE users, LDAP, Active Directory and OpenID Connect realms included.
 
@@ -21,6 +36,26 @@ VMware ships Kubernetes in vSphere as the vSphere Kubernetes Service, OpenStack 
 - **Clusters kept apart.** Each cluster gets its own Proxmox VE pool, user and API token. The token, held on its control-plane nodes only, has rights on its own VMs and volumes only.
 - **Upgrades without a shell.** Clusters can upgrade Kubernetes on their own inside a maintenance window you set. Kubehenge upgrades itself to signed releases only, from a button or automatically.
 - **Told when something breaks.** A failed run, a management cluster problem or a cluster's health item reaches a webhook, ntfy or email. Activity lists who did what for 90 days.
+
+## What runs where
+
+```mermaid
+flowchart LR
+    you([You]) -->|browser, Proxmox VE sign-in| appliance[Appliance<br>LXC container]
+    appliance -->|creates and looks after| management[Management cluster<br>Talos, Cluster API]
+    management -->|creates, scales, upgrades| clusters[Your clusters<br>kubeadm, RKE2, k3s, Talos]
+    management -.-> pve[(Proxmox VE VMs)]
+    clusters -.-> pve
+```
+
+| Distribution | CNI | Node OS |
+| --- | --- | --- |
+| kubeadm | Cilium, Calico | AlmaLinux 10, Rocky Linux 10 |
+| RKE2 | canal, Calico, Cilium | AlmaLinux 10, Rocky Linux 10 |
+| k3s | flannel, Cilium, Calico | AlmaLinux 10, Rocky Linux 10 |
+| Talos | flannel, Cilium, Calico | Talos Linux |
+
+Kubehenge needs Proxmox VE 9. The end-to-end tests run each distribution with each CNI and node OS in the table ([testing.md](docs/testing.md)).
 
 ## Add-ons and sign-in
 

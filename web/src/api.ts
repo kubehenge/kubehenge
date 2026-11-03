@@ -100,6 +100,20 @@ function noteRelease(res: Response): void {
   }
 }
 
+// Set once any answer comes from `kubehenge serve --demo`, whose every answer says so, signed in or not.
+let demo = false;
+
+/** isDemo tells whether the interface is the demo, with sample clusters and no Proxmox VE behind it. */
+export function isDemo(): boolean {
+  return demo;
+}
+
+function noteDemo(res: Response): void {
+  if (res.headers.get("X-Kubehenge-Demo") === "1") {
+    demo = true;
+  }
+}
+
 /** The message for a request that got no answer at all, such as while the appliance restarts. */
 export const noAnswer = "No answer from Kubehenge. Check the connection.";
 
@@ -209,6 +223,7 @@ async function send(method: string, path: string, { body, headers: extra = {}, s
   }
   const res = await ((method === "GET" ? takePrimed(path) : undefined) ?? fetchAnswer(path, init));
   noteRelease(res);
+  noteDemo(res);
   if (!res.ok) {
     const { message, requestId } = await errorOf(res);
     if (res.status === httpUnauthorized && !path.startsWith("/api/session")) {

@@ -787,7 +787,7 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
             const s = poolStatus(p);
             return (
               <tr key={p.name} className={s.state === "ok" ? "" : "attention"}>
-                <td>{p.name}</td>
+                <td className="nowrap">{p.name}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
                   {filled(p.message) && <Detail>{p.message}</Detail>}
@@ -847,7 +847,7 @@ function HealthChecks({ checks }: { checks: HealthSection<HealthCheck> }): JSX.E
             const s = checkStatus(x);
             return (
               <tr key={x.name} className={s.state === "ok" ? "" : "attention"}>
-                <td>{x.name}</td>
+                <td className="nowrap">{x.name}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
                   {filled(x.message) && <Detail>{x.message}</Detail>}

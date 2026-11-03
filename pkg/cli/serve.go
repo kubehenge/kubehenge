@@ -58,6 +58,10 @@ type serveOptions struct {
 	certFile     string
 	keyFile      string
 	logs         logOptions
+	demo         bool
+	demoTime     string
+	// listenChanged tells whether --listen was given, which the demo's own default yields to.
+	listenChanged bool
 
 	headlampListen     string
 	headlampUpstream   string
@@ -78,6 +82,7 @@ pool), scales, upgrades, changes add-ons and deletes. Sys.Modify downloads its a
 The interface acts in the management cluster with its own kubeconfig.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			o.listenChanged = cmd.Flags().Changed("listen")
 			return o.run(cmd.Context(), conn)
 		},
 	}
@@ -104,12 +109,22 @@ The interface acts in the management cluster with its own kubeconfig.`,
 	f.StringVar(&a.Tofu, "tofu", "/usr/local/bin/tofu", "the OpenTofu binary the appliance runs")
 	f.StringVar(&o.updateSpool, "update-spool", "/var/lib/kubehenge-update", "the appliance updater's spool, where upgrades are requested")
 	f.StringVar(&o.releaseIndex, "release-index", releaseIndexDefault(), "URL of the signed index of Kubehenge's releases (env KUBEHENGE_RELEASE_INDEX)")
+	f.BoolVar(&o.demo, "demo", false, "serve the interface with sample clusters and no Proxmox VE or management cluster behind it. "+
+		"Changes are refused. Without --tls-cert it serves plain HTTP, on a loopback address only")
+	f.StringVar(&o.demoTime, "demo-time", "", "with --demo, stop the demo's clock at this RFC 3339 time, for screenshots that come out the same every run")
 	o.logs.addFlags(f, "log in development mode, naming where in the code each line was logged. Lines stay in JSON")
 	return cmd
 }
 
+// demoListen is where the demo serves unless --listen says otherwise: plain HTTP stays on the
+// machine it runs on.
+const demoListen = "127.0.0.1:8443"
+
 func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	s := &o.s
+	if o.demo {
+		return o.runDemo(ctx)
+	}
 	if o.certFile == "" || o.keyFile == "" {
 		return errors.New("--tls-cert and --tls-key are required: the interface carries Proxmox VE passwords and is served over HTTPS only")
 	}
@@ -161,6 +176,55 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 		return err
 	}
 	return o.serve(ctx)
+}
+
+// runDemo serves the interface over sample clusters held in memory. Nothing it does reaches a
+// Proxmox VE host or a cluster: every client behind the interface is the demo's own.
+func (o *serveOptions) runDemo(ctx context.Context) error {
+	if (o.certFile == "") != (o.keyFile == "") {
+		return errors.New("--tls-cert and --tls-key go together")
+	}
+	if o.certFile == "" {
+		if !o.listenChanged {
+			o.listen = demoListen
+		}
+		if !loopback(o.listen) {
+			return fmt.Errorf("--listen %s: without --tls-cert the demo serves on a loopback address only, such as %s", o.listen, demoListen)
+		}
+	}
+	if o.headlampListen != "" || o.a.Dir != "" {
+		return errors.New("--demo takes no --headlamp-listen or --appliance-dir")
+	}
+	var err error
+	if o.s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
+		return err
+	}
+	clock := time.Now
+	if o.demoTime != "" {
+		at, parseErr := time.Parse(time.RFC3339, o.demoTime)
+		if parseErr != nil {
+			return fmt.Errorf("--demo-time: %w", parseErr)
+		}
+		clock = func() time.Time { return at }
+	}
+	o.s.Assets = ui.Frontend()
+	if err = ui.SetUpDemo(&o.s, clock); err != nil {
+		return fmt.Errorf("--demo: %w", err)
+	}
+	return o.serve(ctx)
+}
+
+// loopback tells whether a listen address names a loopback address or localhost.
+func loopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func interfaceScheme() (*runtime.Scheme, error) {
@@ -289,7 +353,11 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	errs := make(chan error, len(servers))
 	for _, srv := range servers {
 		s.Log.Info("serving", "address", srv.Addr)
-		go func() { errs <- srv.ListenAndServeTLS(o.certFile, o.keyFile) }()
+		if o.certFile == "" {
+			go func() { errs <- srv.ListenAndServe() }()
+		} else {
+			go func() { errs <- srv.ListenAndServeTLS(o.certFile, o.keyFile) }()
+		}
 	}
 	// The first to stop takes the others down with it. The process ends when serve returns, so it
 	// waits for the servers' shutdown, which lets the requests under way finish, and for the loops
