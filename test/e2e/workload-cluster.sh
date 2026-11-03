@@ -825,6 +825,8 @@ metrics_pid=
 kubectl delete clusterrolebinding "${reader}" > /dev/null
 kubectl -n kubehenge-system delete serviceaccount "${reader}" > /dev/null
 
+cni=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.spec.topology.variables[] | select(.name == "cni") | .value')
+
 # kube-bench carries no benchmark for Talos, whose components keep their configuration where none
 # of its checks look.
 if [ "${distribution}" != talos ] && [ "${cis}" = true ]; then
@@ -833,7 +835,6 @@ if [ "${distribution}" != talos ] && [ "${cis}" = true ]; then
 fi
 
 step "the cluster runs its CNI, which enforces network policies"
-cni=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.spec.topology.variables[] | select(.name == "cni") | .value')
 case ${cni} in
     cilium) wl -n kube-system rollout status daemonset/cilium --timeout=10m ;;
     calico) until_true 600 "calico-node" sh -c "KUBECONFIG=${work}/workload kubectl -n calico-system rollout status daemonset/calico-node --timeout=10s >/dev/null 2>&1" ;;
