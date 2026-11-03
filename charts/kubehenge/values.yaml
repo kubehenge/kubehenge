@@ -265,46 +265,58 @@ addons:
     # matrix); the cluster that installs it is held within them.
     kubernetes: 34-36
     # Turtles, which Rancher installs itself and whose Cluster API its registered clusters need, and
-    # the Cluster API controller it runs: those of the rancher-turtles chart this Rancher release
-    # installs, so they move with Rancher. Kubehenge's controller hands them to Rancher.
+    # the Cluster API controller it runs: those of the rancher-turtles chart named in
+    # CATTLE_RANCHER_TURTLES_VERSION below. Kubehenge's controller hands them to Rancher.
     turtles:
-      image: docker.io/rancher/turtles:v0.27.2@sha256:fff10f34feffcf0fc583ffb51975e9e6f2839c65d54f96668790bbb770456512
+      image: docker.io/rancher/turtles:v0.27.4@sha256:df1701aaa49a0b40eb5243e7c1c21a18bb6db77f4891f61054af8ff2ead8966e
       clusterAPI: docker.io/rancher/cluster-api-controller:v1.13.3@sha256:80f8775553807ddba520dcbfd84da42fbfdfbd36036fc2f9238b1ad423649309
     values:
       image:
         # renovate: datasource=docker depName=docker.io/rancher/rancher
         tag: v2.15.3@sha256:3f3a50c6e49c1cf5b4673bef236e0f260f36055de4d073438e38c441dc97aa9b
+      # The charts Rancher installs itself come from the copy of its chart repository inside its
+      # image, which the digest above fixes. Otherwise Rancher fetches the repository's release
+      # branch from Git at whatever commit it has reached.
+      useBundledSystemChart: true
       # Rancher reads a setting from CATTLE_<NAME> before its own object, and starts the agent and
       # shell images exactly as named here. Imported-cluster version management would upgrade RKE2
-      # and k3s beside Cluster API, with images it names by tag alone.
+      # and k3s beside Cluster API, with images it names by tag alone. The chart versions of
+      # Turtles, the webhook and Fleet are those Rancher's image names. Set here, each moves only
+      # together with the images pinned for it.
       extraEnv:
         - name: CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT
           value: "false"
+        - name: CATTLE_RANCHER_TURTLES_VERSION
+          value: 110.0.4+up0.27.4
+        - name: CATTLE_RANCHER_WEBHOOK_VERSION
+          value: 110.0.4+up0.11.4
+        - name: CATTLE_FLEET_VERSION
+          value: 110.0.3+up0.16.3
         - name: CATTLE_AGENT_IMAGE
           # renovate: datasource=docker depName=docker.io/rancher/rancher-agent
           value: rancher/rancher-agent:v2.15.3@sha256:4cf966019a4400a49b113025e490f66c271f93983948d67050a7ef34ca19fc3d
         - name: CATTLE_SHELL_IMAGE
-          value: rancher/shell:v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
+          value: rancher/shell:v0.8.3@sha256:abb0804d239cae9c137347b0c1175e745ab791d60023ae619f6aa6465fb2da7c
       # The webhook's and Fleet's charts, which Rancher installs itself, read these from its
       # rancher-config ConfigMap. From here on, and the shell image above, each is the one this
       # Rancher release names, so they move with Rancher.
       webhook:
         image:
           repository: rancher/rancher-webhook
-          tag: v0.11.3@sha256:6d76ccda60ab030b898e615730a037c8f59a4cc9f7d04b49f7f5bd1be6c23e3f
+          tag: v0.11.4@sha256:4f20823ddc604c9d07248c88f2631ed32606945bf4871a740c855d5d73e5cfb7
       fleet:
         image:
           repository: rancher/fleet
-          tag: v0.16.2@sha256:31f39589e1f876ebafe8af05e2aabf1ee0b553fb94d2f8aaf8ea691b67fe66ca
+          tag: v0.16.3@sha256:a1696682faa60a6b76e9a79963ec20fc2b0bacd82b0c64d3159d9e869a79b8e8
         agentImage:
           repository: rancher/fleet-agent
-          tag: v0.16.2@sha256:9bed916e5a2307ac4a6c752f809964364464de71bdd47f95009f4be657e071c7
+          tag: v0.16.3@sha256:a657a2a3a93ae55499b2082c9143d19e7ecbbb64268d758782f7393ade54e02d
       preUpgrade:
         image:
-          tag: v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
+          tag: v0.8.3@sha256:abb0804d239cae9c137347b0c1175e745ab791d60023ae619f6aa6465fb2da7c
       postDelete:
         image:
-          tag: v0.8.2@sha256:1eeed72d4eda486de13403c4ae6e9d29a0842edc35d0f4a8fb7b0dab79d04be9
+          tag: v0.8.3@sha256:abb0804d239cae9c137347b0c1175e745ab791d60023ae619f6aa6465fb2da7c
       auditLog:
         image:
           tag: 16.0-15.11@sha256:c05817e6ec52af611e2d1e2e901b4c0c8e57ad49e516e2faca25d046d8deff89

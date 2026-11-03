@@ -215,6 +215,7 @@ The sample fleet is in `pkg/ui/demo-fleet.json`. Its ClusterClasses are the char
 CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one test per machine.
 
 - The merge queue runs the tests all the changes of a merge group need together (`test/e2e/ci/scope.sh`), on the tree that would land on main. It picks none for documentation alone and all of them for a change it cannot place.
+- The nightly run's four extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it).
 - A pull request runs the other tiers and leaves this one to the queue.
 - The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers and a two-node Proxmox VE cluster.
 - It runs both halves of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
@@ -257,6 +258,8 @@ A guard (`test/e2e/ci/guard.sh`) keeps the CI agent's own processes out of the O
 - a file system has under 2 GiB free
 
 It reports what held the memory (the VMs by name, the largest other processes, the last samples and the kernel's lines on memory). The test then fails like any other and keeps its artifacts. The log's "The runner's room" step gives how near each run came to these floors. It also gives the least memory available and how much was read back from swap.
+
+A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
 
 ### What a failed test leaves
 

@@ -140,10 +140,12 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Fixes
 
+- Applying the management-cluster module no longer returns while the Cluster API Operator reinstalls core Cluster API right after upgrading it. The providers' release now waits until the providers have stayed unchanged for 30 seconds.
 - A template build or a cluster's storage set-up no longer fails when Proxmox VE kills a VM create before it starts. It goes on under the next VM ID and logs how to remove the VM left locked.
 - `kubehenge template create` tries a failed build again after 2 and 8 minutes, as the interface and the refresh do.
 - Deleting a template build checks that its VM ID still holds that template. Proxmox VE gives a freed ID to the next VM created.
 - An add-on whose publisher moves a version's tag to a new build still installs and upgrades. The Add-on Provider for Helm refused the pinned chart once the tag pointed elsewhere, which stopped the newest CSI plugin.
+- Rancher installs the Turtles, webhook and Fleet charts Kubehenge names, from the chart repository inside its pinned image. With Rancher 2.15.3 these are Turtles 0.27.4, the webhook 0.11.4, Fleet 0.16.3 and shell 0.8.3.
 - Kyverno's controllers hold their leader leases through a stall of up to 50 seconds, like the other add-ons, rather than restart after 10.
 - The management-cluster module no longer asks the Image Factory for the Talos image's size, a request that held up a Proxmox VE API worker. The download no longer waits for the module's other changes.
 - **Cluster variables checked from the first cluster on.** Cluster API admitted the first cluster of each distribution unchecked, so a later change of its CNI or CIS hardening escaped the rules.
@@ -220,6 +222,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - A VM stopped, paused by hand, paused by QEMU after a disk error, or crashed for 3 minutes sets the condition `VMsNotRunning`.
   - A storage 85% full on a node the cluster runs on sets `StorageNearlyFull`. It turns to an error from 95%.
   - Both record events ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)).
+- **A held Kubernetes upgrade says why.** While Kubehenge holds one back, the Cluster has the condition `UpgradeHeld`, with the reason `RancherKubernetes`, `RancherElsewhere` or `TalosUpgrade`.
+  - The fleet and the Health page show **Upgrade held for Rancher** or **Upgrade waits for Talos**. `kubehenge cluster list` shows the reason in STATUS ([troubleshooting.md](troubleshooting.md#upgrades-held-back)).
 - **The management cluster's etcd is backed up, and restored from the appliance.** **Administration, Backups** snapshots it on a schedule into a backup target, encrypted.
   - It works through the nodes' Talos API with a talosconfig that may only take etcd snapshots. It lists the snapshots there.
   - **Restore…** wipes etcd on the control-plane nodes and restores one with the state passphrase. It works while the management cluster's API is down too ([install.md](install.md#back-up-the-management-clusters-etcd)).

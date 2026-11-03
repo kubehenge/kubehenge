@@ -67,6 +67,13 @@ The operator's own chart is published only as a release download and in a Helm r
 
 The operator downloads no provider itself. A hook of the providers' release (`kubehenge manifests`) downloads each provider's metadata and components and checks them against the SHA-256s `versions.tf` names. It stores them in the ConfigMap the provider's `fetchConfig` selects.
 
+Another hook (`kubehenge wait providers`) holds the release until the providers run:
+
+- The operator reports each provider's current generation installed or upgraded.
+- The hash of what it applied matches on the provider and on the Secret it caches the manifests in.
+- Every provider Deployment has rolled out.
+- All of that holds for 30 seconds with the same Deployments. Right after an install, the operator can install a provider again from a stale read and recreate its Deployments.
+
 Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.1 from a later upstream commit with a fix kubeadm upgrades need. It adds fixes of its own (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`).
 
 Both are built reproducibly, so the published images can be rebuilt from their sources and compared ([releasing.md](releasing.md)). A release of each that carries its fixes replaces the build.
@@ -353,6 +360,7 @@ It deletes the rest.
   - It deletes the DaemonSets' pods the node's kubelet rejected while it shut down. Otherwise they would keep their DaemonSets reading not ready for up to 15 minutes.
   - Talos moves a minor version at a time, so a jump of two goes through the newest release of the minor in between.
   - Progress and the last upgrade are recorded on the Cluster (`kubehenge.dev/talos-upgrading`, `kubehenge.dev/talos-upgraded`) for the interface.
+  - A Kubernetes upgrade waits meanwhile (`BeforeClusterUpgrade`), with the Cluster's condition `UpgradeHeld` at reason `TalosUpgrade`.
 - **A failed upgrade** stops the rest.
   - A node that does not come back Ready, or comes back on its old release because Talos rolled back, is recorded in `kubehenge.dev/talos-upgrade-failed`.
   - The controller upgrades nothing more in the cluster until an operator removes the record (**Try again** on the cluster's page).
@@ -677,7 +685,12 @@ CIS hardening (`cis: true`), chosen when a cluster is created and fixed after, a
   - The pods in `kube-system`, `kube-public` and `default` take connections only from their own namespace, DNS and a few of RKE2's own services aside.
   - With monitoring on, Kubehenge's controller lets Prometheus through to CoreDNS's metrics.
 
-The end-to-end tests run [kube-bench](https://github.com/aquasecurity/kube-bench) on a hardened cluster of each distribution. They test against the CIS Kubernetes Benchmark 2.0 for kubeadm and Rancher's own benchmarks for RKE2 and k3s. They fail on every failed check but 1.1.12. kubeadm runs etcd as root and has no supported way to run it as another user.
+The end-to-end tests run [kube-bench](https://github.com/aquasecurity/kube-bench) on a hardened cluster of each distribution. They test against the CIS Kubernetes Benchmark 2.0 for kubeadm and Rancher's own benchmarks for RKE2 and k3s. They fail on every failed check but two exceptions:
+
+- 1.1.12 on kubeadm, which runs etcd as root and has no supported way to run it as another user.
+- 1.1.9 and 1.1.10 on k3s with Cilium or Calico. k3s's benchmark looks only in `/var/lib/cni/networks`, flannel's lease folder, where these CNIs write nothing.
+
+For those two, the test checks the same thing itself. Every node's files in `/etc/cni/net.d` and `/var/lib/cni/networks` must be mode 600 or tighter and owned by root:root.
 
 The benchmark's policies section is the cluster owner's, since it judges what runs in the cluster, not how the cluster is built.
 
@@ -693,11 +706,15 @@ Rancher (`rancher: {install: true, hostname: …}`) goes into one cluster Kubehe
 
 Rancher's chart refuses Kubernetes versions its release does not run on. The controller refuses to create the Rancher cluster outside them. It holds back an upgrade beyond them (`BeforeClusterUpgrade`) until a Kubehenge release brings a Rancher that runs there.
 
+The hook records each hold as the Cluster's condition `UpgradeHeld`, whose reason the interface, `kubehenge cluster list` and kubectl read ([troubleshooting.md](troubleshooting.md#upgrades-held-back)). Cluster API's own `TopologyReconciled` carries the hook's message only inside its prose. The controller removes the condition once nothing holds the upgrade, also when the Cluster goes back to the version it runs.
+
 On fewer than 4 vCPUs a node running Rancher starves its own etcd and API server. `BeforeClusterCreate` refuses such a cluster, and a validating webhook refuses switching Rancher on or shrinking its nodes later. Rancher's first admin password is generated into the `bootstrap-secret` Secret in `cattle-system`, never written into values.
 
 Rancher runs with imported-cluster version management off. Otherwise it would upgrade RKE2 and k3s beside Cluster API, with upgrade jobs that name their images by tag alone. The images Rancher starts itself (its agent, shell, webhook and Fleet) are named by digest through its chart's values.
 
 Rancher also installs Turtles, its own Cluster API, without which it never takes a registered cluster as ready. Rancher reads Turtles' values only from its `rancher-config` ConfigMap, which its chart writes without them. Kubehenge's controller therefore writes that ConfigMap, with Turtles' image and its Cluster API controller by digest, before the chart installs and adopts it.
+
+Rancher installs the chart versions of Turtles, the webhook and Fleet that its settings name. Its image sets them, and Kubehenge sets them again beside the images it pins for each. Rancher takes the charts from the copy of its chart repository inside its image (`useBundledSystemChart`), never from the repository's Git branch, which moves.
 
 ## Cluster autoscaler
 

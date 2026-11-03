@@ -316,8 +316,22 @@ export function health(c: Cluster): { state: Health; text: string } {
   return { state: "progress", text: "Provisioning" };
 }
 
-// Cluster API conditions that are normal when False.
-const negativePolarity = new Set(["Paused", "Deleting", "RollingOut", "Remediating", "ScalingUp", "ScalingDown"]);
+// Conditions that are normal when False: Cluster API's, then those Kubehenge's controller sets.
+const negativePolarity = new Set([
+  "Paused",
+  "Deleting",
+  "RollingOut",
+  "Remediating",
+  "ScalingUp",
+  "ScalingDown",
+  "UpgradeHeld",
+  "ControlPlaneRollStalled",
+  "DeletionStalled",
+  "MachinesStalled",
+  "CertificatesExpiring",
+  "VMsNotRunning",
+  "StorageNearlyFull",
+]);
 
 // abnormal tells whether a condition is worth a look.
 export function abnormal(type: string, status: string): boolean {

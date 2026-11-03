@@ -1,7 +1,7 @@
 #!/bin/sh
-# shellcheck disable=SC2154 # distribution and work are workload-cluster.sh's, which sources this.
+# shellcheck disable=SC2154 # distribution, cni, ns, name and work are workload-cluster.sh's, which sources this.
 # The CIS Kubernetes Benchmark for a workload cluster hardened with the cis variable, sourced by
-# workload-cluster.sh, whose wl, work, distribution and fail it uses.
+# workload-cluster.sh, whose wl, work, distribution, cni, ns, name, on_machines and fail it uses.
 #
 # kube-bench checks a control-plane node against the benchmark's control-plane, etcd and node
 # sections, and a worker against its node section, and every check that fails fails the test,
@@ -27,12 +27,33 @@ security_scan_image=docker.io/rancher/security-scan:v0.10.4@sha256:9af5e01b6b3c8
 
 # cis_exceptions: the checks the cluster fails by design, each with why, as a JSON list.
 cis_exceptions() {
-    case ${distribution} in
+    case ${distribution}+${cni} in
         # 1.1.12: kubeadm runs etcd as root, so its data belongs to root, not to an etcd user.
         # Kubernetes has no supported way to run kubeadm's etcd as another user.
-        kubeadm) echo '["1.1.12"]' ;;
+        kubeadm+*) echo '["1.1.12"]' ;;
+        # 1.1.9 and 1.1.10: k3s's benchmark looks for CNI files only in /var/lib/cni/networks, where
+        # flannel's host-local IPAM keeps its leases. Cilium and Calico allocate addresses through
+        # their own IPAM and write nothing there, and kube-bench fails a check that finds no file.
+        # cis_cni_files checks the files they do write in its place.
+        k3s+cilium | k3s+calico) echo '["1.1.9", "1.1.10"]' ;;
         *) echo '[]' ;;
     esac
+}
+
+# cis_cni_files: CIS 1.1.9 and 1.1.10 on every node, over the files the CNI writes: Cilium's
+# 05-cilium.conflist, Calico's 10-calico.conflist and calico-kubeconfig in /etc/cni/net.d, and any
+# address leases in /var/lib/cni/networks. Each is 600 or tighter and owned by root:root.
+cis_cni_files() {
+    for machine in $(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name}" -o jsonpath='{.items[*].metadata.name}'); do
+        # shellcheck disable=SC2016 # expanded on the node.
+        found=$(on_machines "${machine}" 'for d in /etc/cni/net.d /var/lib/cni/networks; do [ ! -d "$d" ] || find "$d" -type f ! -name lock -exec stat -c "%a %U:%G %n" {} +; done') ||
+            fail "cannot list the CNI files on ${machine}"
+        printf '%s CNI files:\n%s\n' "${machine}" "${found}"
+        [ -n "${found}" ] || fail "${machine} has no CNI file in /etc/cni/net.d"
+        loose=$(printf '%s\n' "${found}" | awk '$1 !~ /^[0246]00$/ || $2 != "root:root"')
+        [ -z "${loose}" ] || fail "CIS 1.1.9 and 1.1.10: CNI files on ${machine} not 600 or tighter and owned by root:root:
+${loose}"
+    done
 }
 
 # cis_job <name> <control plane: true|false> <targets>: a kube-bench Job on a node of that kind,
@@ -129,10 +150,14 @@ cis_benchmark() {
             fail "kube-bench reported nothing on the ${job#cis-}"
         jq -r '.Controls[] | "\(.text): \(.total_pass) passed, \(.total_fail) failed, \(.total_warn) to check by hand"' "${work}/${job}.json"
         failed=$(jq -r --argjson except "${exceptions}" \
-            '[.Controls[].tests[].results[] | select(.status == "FAIL" and (.test_number | IN($except[]) | not)) | "\(.test_number) \(.test_desc)"] | .[]' \
+            '[.Controls[].tests[].results[] | select(.status == "FAIL" and (.test_number | IN($except[]) | not)) | "\(.test_number) \(.test_desc), audit found: \(.actual_value // "" | if . == "" then "nothing" else . end)"] | .[]' \
             "${work}/${job}.json")
         [ -z "${failed}" ] || fail "the ${job#cis-} fails the CIS benchmark:
 ${failed}"
     done
+    case ${distribution}+${cni} in
+        k3s+cilium | k3s+calico) cis_cni_files ;;
+        *) ;;
+    esac
     wl delete namespace e2e-cis --wait --timeout=5m
 }
