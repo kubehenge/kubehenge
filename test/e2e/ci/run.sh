@@ -54,9 +54,18 @@ fi
 : "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}" "${KUBEHENGE_E2E_NODE:?}" "${KUBEHENGE_E2E_ADDRESS:?}"
 : "${KUBEHENGE_E2E_GATEWAY:?}" "${KUBEHENGE_E2E_DNS:?}" "${KUBEHENGE_E2E_REGISTRY:?}"
 
-from=${KUBEHENGE_E2E_FROM:-v1.36.5}
-to=$(sed -n 's/^ *kubernetes *= *"\(v[^"]*\)".*/\1/p' "${repo}/management-cluster/versions.tf")
-[ -n "${to}" ]
+# shellcheck source=templates.sh
+. "${repo}/test/e2e/ci/templates.sh"
+kubernetes_versions "${repo}"
+# What test/e2e/ci/build.sh built for the run, when it ran: the binary, and the images up.sh's
+# registry already serves.
+built=false
+if [ -s "${work}/build/controller-digest" ]; then
+    built=true
+    mkdir -p "${repo}/dist"
+    cp "${work}/build/kubehenge" "${repo}/dist/kubehenge"
+    chmod +x "${repo}/dist/kubehenge"
+fi
 # pinned <rke2|k3s> <version>: the newest release of the version's minor that the controller pins;
 # its nodes install no other.
 pinned() {
@@ -119,12 +128,52 @@ template() { # distribution [flags]
 # The node OS a test's options chose, for the templates of its distribution.
 node_os=
 [ -z "${KUBEHENGE_E2E_NODE_OS:-}" ] || node_os="--node-os ${KUBEHENGE_E2E_NODE_OS}"
+# A baked template the Actions cache kept (test/e2e/ci/templates.sh) is restored into the pool from
+# ${work}/vz/template-<n>, the n-th baked template of the test, where `kubehenge template create`
+# then finds it. One baked here whose slot KUBEHENGE_E2E_KEEP_TEMPLATES lists (as in "1 2") is backed
+# up there for the cache.
+pve() { docker exec kubehenge-e2e-pve "$@"; }
+# made <slot> <options>: restores the template or makes it.
+made() {
+    made_slot=$1
+    shift
+    made_kept=/var/lib/vz/template-${made_slot}
+    if [ "${made_slot}" != 0 ] && [ -s "${work}/vz/template-${made_slot}/template.vma.zst" ]; then
+        made_id=$(pve pvesh get /cluster/nextid)
+        pve qmrestore "${made_kept}/template.vma.zst" "${made_id}" --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
+            --pool kubehenge-templates > /dev/null
+        echo "template $* restored from the cache as VM ${made_id}"
+        template "$@"
+        return
+    fi
+    made_status=0
+    # shellcheck disable=SC2310 # the status is returned below, once the output is shown.
+    made_out=$(template "$@" 2>&1) || made_status=$?
+    printf '%s\n' "${made_out}"
+    [ "${made_status}" = 0 ] || return "${made_status}"
+    case " ${KUBEHENGE_E2E_KEEP_TEMPLATES:-} " in
+        *" ${made_slot} "*) ;;
+        *) return 0 ;;
+    esac
+    made_id=$(printf '%s\n' "${made_out}" | sed -n 's/^template .* is VM \([0-9][0-9]*\)$/\1/p' | tail -n 1)
+    [ -n "${made_id}" ] || {
+        echo "no VM ID for template $* to keep" >&2
+        return 1
+    }
+    pve rm -rf "${made_kept}"
+    pve mkdir -p "${made_kept}"
+    pve vzdump "${made_id}" --dumpdir "${made_kept}" --compress zstd --quiet 1
+    pve sh -c "mv ${made_kept}/vzdump-qemu-*.vma.zst ${made_kept}/template.vma.zst && rm -f ${made_kept}/vzdump-qemu-*"
+    made_size=$(du -h "${work}/vz/template-${made_slot}/template.vma.zst")
+    echo "template $* kept for the cache: ${made_size%%[[:space:]]*}"
+}
 # A template needs only Proxmox VE and the template pool, which the apply makes in its first seconds,
 # so the ones a test needs are made while the management cluster comes up. One at a time: they share
 # the build address.
 templates=
 # How many of them are kubeadm's, RKE2's or k3s's, each of whose builds proves, through Proxmox VE,
-# that its guest agent hands out the node's boot log.
+# that its guest agent hands out the node's boot log. A restored one proved it when it was baked:
+# only a template that passed is kept.
 case "${test}" in
     talos | talos-addons-?) boot_log_builds=0 ;;
     kubeadm | node-image-refresh) boot_log_builds=2 ;;
@@ -132,7 +181,7 @@ case "${test}" in
 esac
 case "${test}" in
     rke2* | k3s* | kubeadm* | talos* | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha | two-nodes)
-        make -s -C "${repo}" build
+        [ "${built}" = true ] || make -s -C "${repo}" build
         {
             waited=0
             until docker exec kubehenge-e2e-pve pvesh get /pools/kubehenge-templates > /dev/null 2>&1; do
@@ -143,30 +192,19 @@ case "${test}" in
                 sleep 5
                 waited=$((waited + 5))
             done
-            # shellcheck disable=SC2086 # node_os is empty or one option and its argument.
-            case "${test}" in
-                rke2*) template rke2 ${node_os} ;;
-                k3s*) template k3s ${node_os} ;;
-                rancher | cluster-mesh | autoscaler | control-plane-ha | two-nodes) template k3s ;;
-                # The test moves its cluster to another node OS than the default.
-                node-image-refresh)
-                    template k3s
-                    template k3s --node-os rocky-10
-                    ;;
-                kubeadm)
-                    template kubeadm --kubernetes-version "${from}" ${node_os}
-                    template kubeadm --kubernetes-version "${to}" ${node_os}
-                    ;;
-                # Its add-on parts replace no machine, so they need only the one they start from.
-                kubeadm-addons-?) template kubeadm --kubernetes-version "${from}" ${node_os} ;;
-                # The release the cluster starts on, and the one its machines boot once the
-                # Kubernetes upgrade replaces them.
-                talos*)
-                    template talos --talos-version "${talos_from}"
-                    template talos --talos-version "${talos_to}"
-                    ;;
-                *) ;;
-            esac
+            slot=0
+            templates_of "${test}" > "${work}/templates.txt"
+            while read -r options; do
+                case "${options}" in
+                    talos*) this=0 ;;
+                    *)
+                        slot=$((slot + 1))
+                        this=${slot}
+                        ;;
+                esac
+                # shellcheck disable=SC2086 # one option or argument per word
+                made "${this}" ${options}
+            done < "${work}/templates.txt"
         } > "${work}/templates.log" 2>&1 &
         templates=$!
         ;;
@@ -183,14 +221,20 @@ templates_made() {
     cat "${work}/templates.log"
     # grep -c exits non-zero when it counts none, which the comparison reports.
     checked=$(grep -c 'hands out its boot log and cloud-init.s output through the guest agent$' "${work}/templates.log" || true)
+    restored=$(grep -c '^template .* restored from the cache as VM ' "${work}/templates.log" || true)
+    boot_log_builds=$((boot_log_builds - restored))
     if [ "${checked}" -lt "${boot_log_builds}" ]; then
         echo "${checked} of the ${boot_log_builds} node templates were seen handing out their boot logs" >&2
         exit 1
     fi
 }
 
-TF_VAR_controller_image=ghcr.io/kubehenge/kubehenge@$(make -s -C "${repo}" image \
-    IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/kubehenge" KO_FLAGS=--insecure-registry | sed -n 's/.*@//p')
+if [ "${built}" = true ]; then
+    TF_VAR_controller_image=ghcr.io/kubehenge/kubehenge@$(cat "${work}/build/controller-digest")
+else
+    TF_VAR_controller_image=ghcr.io/kubehenge/kubehenge@$(make -s -C "${repo}" image \
+        IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/kubehenge" KO_FLAGS=--insecure-registry | sed -n 's/.*@//p')
+fi
 export TF_VAR_proxmox_ca_certificate TF_VAR_controller_image
 case "${TF_VAR_controller_image}" in
     *@)
@@ -202,10 +246,12 @@ case "${TF_VAR_controller_image}" in
 esac
 # capmox and the Add-on Provider for Helm as a release publishes them, by the digests the module
 # names; the mirror serves them as ghcr.io's.
-make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
-    KO_FLAGS=--insecure-registry > /dev/null
-make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
-    KO_FLAGS=--insecure-registry > /dev/null
+if [ "${built}" != true ]; then
+    make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
+        KO_FLAGS=--insecure-registry > /dev/null
+    make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
+        KO_FLAGS=--insecure-registry > /dev/null
+fi
 
 # The tests' own output is shown as it comes rather than when each make target ends.
 e2e() { make -C "${repo}" OUTPUT_SYNC=none "$@"; }

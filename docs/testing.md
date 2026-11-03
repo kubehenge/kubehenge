@@ -209,6 +209,9 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers and a two-node Proxmox VE cluster.
 - It runs every part of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
 - It builds Proxmox VE's image afresh and keeps it, with Go's build cache, for the day's runs.
+- One job builds the `kubehenge` binary and the controller's, capmox's and the Add-on Provider for Helm's images once per run (`test/e2e/ci/build.sh`). Each lane's registry serves them under the same digests, and capmox's and the Add-on Provider's are checked against `management-cluster/versions.tf` as in a release.
+- A lane restores its kubeadm, RKE2 and k3s templates from the Actions cache, kept under a hash of each bake's inputs (`test/e2e/ci/templates.sh`).
+- The nightly run bakes every template afresh from the mirrors and keeps those whose inputs changed. Talos's templates are only downloaded.
 - A change to the image's files on main builds and keeps it straight away (`e2e-image.yml`).
 - A dispatch of the workflow names the tests to run, or runs that night's set.
 
@@ -318,7 +321,7 @@ A node whose API does not answer is asked once, and every call is cut off after 
 
 `up.sh` gives the VMs the bridge 172.20.99.0/24 with a name server that asks this machine's own, so they need no public one. It gives the containers 172.21.99.0/24, routes this machine to the bridge (with `sudo`) and writes the settings `run.sh` reads.
 
-`run.sh` builds the controller from the working tree and pushes it to the registry. It applies the management cluster (`test/e2e/ci/main.tf`) with the container's CA trusted only by its own processes (`SSL_CERT_FILE`), not the machine's trust store. Meanwhile it creates the templates the test needs from the working tree's recipes. Each kubeadm, RKE2 or k3s build must hand out its boot log through its guest agent. Then it runs the test.
+`run.sh` builds the controller from the working tree and pushes it to the registry, unless `build.sh` built it into `<work directory>/build`. It applies the management cluster (`test/e2e/ci/main.tf`) with the container's CA trusted only by its own processes (`SSL_CERT_FILE`), not the machine's trust store. Meanwhile it creates the templates the test needs from the working tree's recipes. Each kubeadm, RKE2 or k3s build must hand out its boot log through its guest agent. Then it runs the test.
 
 `management-cluster` runs the templates and volumes tests while the management cluster is up, before destroying it. For `appliance`, `run.sh` builds three releases instead and runs the test in the container, whose appliance sets the management cluster up itself.
 

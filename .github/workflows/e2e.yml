@@ -67,12 +67,67 @@ jobs:
           esac
           echo "tests=$(printf '%s' "$tests" | jq -c .)" >> "$GITHUB_OUTPUT"
 
+  # What every lane runs from the tree under test, built once (test/e2e/ci/build.sh): the kubehenge
+  # binary, and the controller's, capmox's and the Add-on Provider for Helm's images in a registry's
+  # storage, which each lane's registry serves under the same digests.
+  build:
+    name: build
+    needs: scope
+    if: needs.scope.outputs.tests != '[]'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: local
+      GOPROXY: https://proxy.golang.org|direct
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Go's and npm's caches are e2e's own: the ci workflow's hold race-instrumented test builds,
+      # none of the controller's and capmox's static builds. The nightly run saves them and every
+      # other run reads them, so a pull request never fills the cache with its own.
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
+          restore-keys: |
+            e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
+            e2e-go-
+      - name: Tools
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Build
+        run: |
+          test/e2e/ci/build.sh "$RUNNER_TEMP/build"
+          # The registry wrote its storage as root.
+          sudo tar -C "$RUNNER_TEMP/build" -cf - . | zstd -T0 -q -o "$RUNNER_TEMP/e2e-build.tar.zst"
+          ls -lh "$RUNNER_TEMP/e2e-build.tar.zst"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-build
+          path: ${{ runner.temp }}/e2e-build.tar.zst
+          compression-level: 0
+          retention-days: 1
+      - if: github.event_name == 'schedule'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
   # Each test in a lane of its own (e2e-lane.yml), which hands it to a fresh runner when its runner
   # lacks pause-loop exiting. One test per runner, since a runner holds one management cluster and
   # one workload cluster; it needs no secrets, so pull requests from forks run it as they are.
   test:
     name: e2e (${{ matrix.test }})
-    needs: scope
+    needs: [scope, build]
     if: needs.scope.outputs.tests != '[]'
     strategy:
       fail-fast: false
@@ -86,14 +141,16 @@ jobs:
   # request, or a merge group of documentation only, skips them.
   result:
     name: e2e
-    needs: [scope, test]
+    needs: [scope, build, test]
     if: always()
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - env:
           SCOPE: ${{ needs.scope.result }}
+          BUILD: ${{ needs.build.result }}
           TESTS: ${{ needs.test.result }}
         run: |
-          echo "scope: $SCOPE, tests: $TESTS"
-          [ "$SCOPE" = success ] && { [ "$TESTS" = success ] || [ "$TESTS" = skipped ]; }
+          echo "scope: $SCOPE, build: $BUILD, tests: $TESTS"
+          [ "$SCOPE" = success ] && { [ "$BUILD" = success ] || [ "$BUILD" = skipped ]; } &&
+            { [ "$TESTS" = success ] || [ "$TESTS" = skipped ]; }

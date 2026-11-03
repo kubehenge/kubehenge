@@ -246,6 +246,11 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - The add-ons' CPU figures count the new requests, so a 2-core worker no longer takes every add-on on RKE2 and Talos.
 - k3s clusters run without k3s's local path provisioner. Its StorageClass claimed to be the default too, so a claim without a class could end up on one node's disk.
 
+### Contributing
+
+- An end-to-end run builds the binary and the images once for all its lanes.
+- Its lanes restore the kubeadm, RKE2 and k3s templates from the Actions cache instead of baking them ([testing.md](testing.md#end-to-end-without-a-proxmox-ve-host)).
+
 ## [0.3.1] - 2026-10-28
 
 - capmox, which creates the clusters' VMs, is built from a later commit of its main branch.
