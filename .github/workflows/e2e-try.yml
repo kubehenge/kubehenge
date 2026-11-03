@@ -268,6 +268,10 @@ jobs:
             kinds=coreproviders,bootstrapproviders,controlplaneproviders
             kinds=$kinds,infrastructureproviders,ipamproviders,addonproviders
             kubectl get "$kinds" -A -o yaml > "$out/providers.yaml" 2>&1 || true
+            # A HelmReleaseProxy's conditions say why Helm did not install or upgrade an add-on,
+            # also when it never touched the release in the cluster.
+            kubectl get helmchartproxies,helmreleaseproxies -A -o yaml \
+              > "$out/helm-proxies.yaml" 2>&1 || true
             # Helm writes why a release failed only into its record, a Secret holding the release
             # as gzipped JSON in base64.
             kubectl get secrets -A -l owner=helm,status=failed -o json |
