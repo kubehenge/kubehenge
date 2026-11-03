@@ -3469,7 +3469,7 @@ if [ "${part}" != addons ]; then
     wl delete namespace e2e-lb --wait --timeout=5m
 
     workers_ready() {
-        until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o name | wc -l)\" = $1 ]"
+        until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o json | jq '[.items[] | select(.metadata.deletionTimestamp == null)] | length')\" = $1 ]"
     }
     workers() {
         kubectl -n "${ns}" patch "cluster/${name}" --type=json \
@@ -3765,17 +3765,19 @@ EOF
     esac
 
     step "a dead worker is replaced"
-    # The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration
-    # tier pins the classes' own checks. The override has to repeat the class's remediation, or it would
-    # drop it.
+    # The class's 300 s before an unreachable node counts as dead only adds waiting here, so Unknown, which
+    # a stopped VM shows, gets 60 s. Ready=False stays at the class's 300 s, since a replacement worker
+    # reports it for longer than 60 s while its CNI starts. The integration tier pins the classes' own
+    # checks. The override has to repeat the class's remediation, or it would drop it.
     kubectl -n "${ns}" patch "cluster/${name}" --type=json -p '[{"op": "add", "path": "/spec/topology/workers/machineDeployments/0/healthCheck", "value": {
   "checks": {"nodeStartupTimeoutSeconds": 1200, "unhealthyNodeConditions": [
-    {"type": "Ready", "status": "Unknown", "timeoutSeconds": 60}, {"type": "Ready", "status": "False", "timeoutSeconds": 60}]},
+    {"type": "Ready", "status": "Unknown", "timeoutSeconds": 60}, {"type": "Ready", "status": "False", "timeoutSeconds": 300}]},
   "remediation": {"maxInFlight": 1}}}]'
-    until_true 120 "the workers' health check at 60 s" sh -c "kubectl -n ${ns} get machinehealthchecks -o json |
+    until_true 120 "the workers' health check at 60 s for Unknown and 300 s for False" sh -c "kubectl -n ${ns} get machinehealthchecks -o json |
     jq -e '[.items[] | select(.spec.selector.matchLabels[\"topology.cluster.x-k8s.io/deployment-name\"] == \"md-0\")
-    | .spec.checks.unhealthyNodeConditions[].timeoutSeconds] | length > 0 and all(. == 60)' >/dev/null"
-    machine=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/deployment-name -o jsonpath='{.items[0].metadata.name}')
+    | .spec.checks.unhealthyNodeConditions | map({(.status): .timeoutSeconds}) | add] | length > 0 and all(. == {\"Unknown\": 60, \"False\": 300})' >/dev/null"
+    machine=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/deployment-name -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.name // empty')
+    [ -n "${machine}" ] || fail "no worker machine to stop"
     infra=$(kubectl -n "${ns}" get machine "${machine}" -o jsonpath='{.spec.infrastructureRef.name}')
     vmid=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.spec.virtualMachineID}')
     node=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.status.proxmoxNode}')
@@ -3789,7 +3791,7 @@ step "delete, held up by a worker, reported stalled and abandoned"
 # A finalizer of the test's own holds a worker Machine, as a drain that never ends would. Cluster
 # API deletes its VM, and then waits for the Machine before it deletes the control plane.
 hold=e2e.kubehenge.dev/hold
-worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o jsonpath='{.items[0].metadata.name}')
+worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.name // empty')
 [ -n "${worker}" ] || fail "no worker machine to hold the deletion up with"
 kubectl -n "${ns}" patch "machine/${worker}" --type json -p "[{\"op\":\"add\",\"path\":\"/metadata/finalizers/-\",\"value\":\"${hold}\"}]" > /dev/null
 creator -n "${ns}" delete "cluster/${name}" --wait=false
