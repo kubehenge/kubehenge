@@ -54,10 +54,14 @@ admit it. A dry run keeps nothing.`,
 	providers := &cobra.Command{
 		Use:   "providers",
 		Short: "Wait until the operator has applied every provider and their Deployments have rolled out",
-		Args:  noArgs,
+		Long: `Wait until the operator has applied every provider and their Deployments have rolled out.
+
+The wait ends once all of that has held for 30 seconds with the same Deployments. Right after an
+install, the operator can install a provider again and replace its Deployments.`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return inCluster(cmd.Context(), timeout, func(ctx context.Context, c client.Client) error {
-				return provisioner.WaitForProviders(ctx, c, waitPoll, cmd.ErrOrStderr())
+				return provisioner.WaitForProviders(ctx, c, waitPoll, provisioner.ProvidersSettle, cmd.ErrOrStderr())
 			})
 		},
 	}

@@ -67,6 +67,13 @@ The operator's own chart is published only as a release download and in a Helm r
 
 The operator downloads no provider itself. A hook of the providers' release (`kubehenge manifests`) downloads each provider's metadata and components and checks them against the SHA-256s `versions.tf` names. It stores them in the ConfigMap the provider's `fetchConfig` selects.
 
+Another hook (`kubehenge wait providers`) holds the release until the providers run:
+
+- The operator reports each provider's current generation installed or upgraded.
+- The hash of what it applied matches on the provider and on the Secret it caches the manifests in.
+- Every provider Deployment has rolled out.
+- All of that holds for 30 seconds with the same Deployments. Right after an install, the operator can install a provider again from a stale read and recreate its Deployments.
+
 Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.1 from a later upstream commit with a fix kubeadm upgrades need. It adds fixes of its own (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`).
 
 Both are built reproducibly, so the published images can be rebuilt from their sources and compared ([releasing.md](releasing.md)). A release of each that carries its fixes replaces the build.

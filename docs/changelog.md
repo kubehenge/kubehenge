@@ -139,6 +139,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Fixes
 
+- Applying the management-cluster module no longer returns while the Cluster API Operator reinstalls core Cluster API right after upgrading it. The providers' release now waits until the providers have stayed unchanged for 30 seconds.
 - A template build or a cluster's storage set-up no longer fails when Proxmox VE kills a VM create before it starts. It goes on under the next VM ID and logs how to remove the VM left locked.
 - `kubehenge template create` tries a failed build again after 2 and 8 minutes, as the interface and the refresh do.
 - Deleting a template build checks that its VM ID still holds that template. Proxmox VE gives a freed ID to the next VM created.
