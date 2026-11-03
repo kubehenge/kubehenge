@@ -60,7 +60,8 @@ jobs:
             # difference from main's commit under it.
             merge_group)
               git fetch --no-tags --depth=1 origin "$GROUP_BASE"
-              tests=$(git diff --name-only "$GROUP_BASE" HEAD | test/e2e/ci/scope.sh)
+              tests=$(git diff --name-only "$GROUP_BASE" HEAD |
+                test/e2e/ci/scope.sh --base "$GROUP_BASE")
               ;;
             # run.sh refuses a name it cannot read before anything is built.
             workflow_dispatch)

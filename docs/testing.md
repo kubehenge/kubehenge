@@ -206,7 +206,7 @@ The add-on parts leave out the steps that replace a machine. Those are RKE2's an
 CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one test per machine.
 
 - The merge queue runs the tests all the changes of a merge group need together (`test/e2e/ci/scope.sh`), on the tree that would land on main. It picks none for documentation alone and all of them for a change it cannot place.
-- The nightly run's four extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it).
+- The nightly run's four extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
 - A pull request runs the other tiers and leaves this one to the queue.
 - The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers and a two-node Proxmox VE cluster.
 - It runs every part of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
