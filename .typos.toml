@@ -1,0 +1,103 @@
+# typos: misspellings in every file git lists, in British spelling. An American spelling passes only
+# where it is the name of something outside: an API, a header, a flag or a product's own term.
+[files]
+extend-exclude = [
+  # Armoured keys and signatures, base64 throughout.
+  "*.asc",
+  # The Apache License's text, kept word for word.
+  "LICENSE",
+]
+
+[default]
+locale = "en-gb"
+extend-ignore-re = [
+  # A line that has to carry a misspelling, such as a test's deliberately misspelt input, says so.
+  "(?Rm)^.*(#|//|<!--)\\s*spellchecker:disable-line.*$",
+  # HTTP's Authorization header.
+  "\\bAuthorization(:| header|\"|`)",
+  # Kubernetes' authorization API groups and the kube-apiserver flag named after them.
+  "\\b(rbac\\.)?authorization\\.k8s\\.io\\b",
+  "authorization-always-allow-paths",
+  # kubectl's error for a refused credential.
+  "\\(Unauthorized\\)|\\*Unauthorized\\*",
+  # OpenID Connect's discovery field and Prometheus' ServiceMonitor field.
+  "authorization_endpoint",
+  "\\[?\"authorization\"(:|\\])",
+  # Istio's policy kind.
+  "AuthorizationPolicy",
+  # go-proxmox's error text.
+  "not authorized",
+  # Cluster API's status field.
+  "\"initialization\"|\\binitialization \\{",
+  # The Talos Image Factory schematic's key.
+  "\\bcustomization( =|:)",
+  # in-toto's attestation files.
+  "\\.intoto\\.jsonl",
+  # Headlamp's plugins, which it names the app catalog and the plugin catalog.
+  "(app|plugin)[ -]catalog",
+  # Unicode code points in a font's unicode-range.
+  "U\\+[0-9A-Fa-f?-]+",
+  # The Linux security module.
+  "AppArmor",
+  # HTML's colour scheme meta name, Playwright's option for it, Chromium's and OpenTofu's flags,
+  # and axe's contrast rules.
+  "color-scheme|colorScheme|--force-color-profile|-no-color\\b|color-contrast(-enhanced)?",
+]
+
+[default.extend-words]
+# The computing sense keeps this spelling in British English too, as does HTML's element.
+dialog = "dialog"
+dialogs = "dialogs"
+# GitHub Actions' name for the files a run keeps.
+artifact = "artifact"
+artifacts = "artifacts"
+
+[type.css]
+# CSS's own property and keyword names.
+extend-ignore-identifiers-re = ["^color$", "^center$"]
+
+[type.diff]
+# The patches change upstream's code, which is written in American English.
+locale = "en-us"
+# git cuts the function name in a hunk header short.
+extend-ignore-re = ["(?m)^@@ .* @@.*$"]
+
+[type.go]
+# Names from the Go libraries Kubehenge calls.
+extend-ignore-identifiers-re = [
+  "^StatusUnauthorized$",
+  "^(Is|New)Unauthorized$",
+  "^WithAuthenticationAndAuthorization$",
+  "^(Marshal|Parse)AuthorizedKey$",
+  "^ReadArmoredKeyRing$",
+  "^CheckArmoredDetachedSignature$",
+  "^Canceled$",
+  "^armor$",
+  "^Serialize$",
+  "^(Is|Err)NotAuthorized$",
+  "^Organization$",
+  "^Initialization$",
+  "^ClusterInitializationStatus$",
+  "^ControlPlaneInitialized$",
+  "^ClusterControlPlaneInitialized(Condition|Reason)$",
+  "^Finalize(Options)?$",
+  "^Normalize$",
+  "^SYNCHRONIZE$",
+  "^AuthorizationV1$",
+  "^(runtime)?[cC]atalog$",
+  "^AddToCatalog$",
+  "^(clusterAgent|fleetAgent|webhook)DeploymentCustomization$",
+]
+
+[type.ts]
+# SVG's colour keyword and the DOM's scrolling option.
+extend-ignore-identifiers-re = ["^currentColor$"]
+extend-ignore-re = [
+  "block: \"center\"",
+  # Velero's backup phases.
+  "\"Finalizing(PartiallyFailed)?\"",
+]
+
+[type.yaml]
+# syft's catalogers, by their names.
+extend-ignore-re = ["\\b[a-z-]+-cataloger\\b", "\\bcatalogers?\\b"]

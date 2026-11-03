@@ -306,8 +306,8 @@ func problem(err error) string {
 	if errors.As(err, &status) {
 		return status.Status().Message
 	}
-	if ue, ok := errors.AsType[*url.Error](err); ok {
-		return ue.Err.Error()
+	if urlErr, ok := errors.AsType[*url.Error](err); ok {
+		return urlErr.Err.Error()
 	}
 	return err.Error()
 }

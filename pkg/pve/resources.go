@@ -407,7 +407,7 @@ func (a *Accounts) DeleteVM(ctx context.Context, t *Ticket, node string, vmid in
 	if err != nil {
 		return err
 	}
-	t.authorize(req)
+	t.authorise(req)
 	var upid string
 	if err := a.do(req, &upid); err != nil {
 		return err
@@ -461,7 +461,7 @@ func (a *Accounts) remove(ctx context.Context, t *Ticket, path string) error {
 	if err != nil {
 		return err
 	}
-	t.authorize(req)
+	t.authorise(req)
 	var ignored any
 	return a.do(req, &ignored)
 }

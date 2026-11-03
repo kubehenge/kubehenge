@@ -132,7 +132,7 @@ export const banned = [
   "unlock",
   "usually",
   "utilise",
-  "utilize",
+  "utilize", // spellchecker:disable-line
   "various",
   "very",
   "we",

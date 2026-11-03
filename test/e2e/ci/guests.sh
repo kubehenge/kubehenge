@@ -196,7 +196,7 @@ guest_script() {
         # per watch each time, so that a minute without a leader would leave only them.
         etcd-journal)
             echo 'journalctl --no-pager -o short-iso-precise -u k3s -u rke2-server |
-                grep -iE "etcd|raft|learner|promot|quorum|leader|member" |
+                grep -iE "etcd|raft|learner|promote|promoted|promotion|promoting|quorum|leader|member" |
                 grep -vE "watcher\.go|reflector\.go|cacher\.go" | tail -n 3000'
             ;;
         # The control plane's static pods and kube-vip as the kubelet keeps their logs on the node,

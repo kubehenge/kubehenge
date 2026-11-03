@@ -374,7 +374,7 @@ func TestAnAPITokenActsInPlaceOfATicket(t *testing.T) {
 	const token = "alice@pve!ci=0b6f3c1e" //nolint:gosec // the fake Proxmox VE's own
 	var removed int
 	mux := http.NewServeMux()
-	authorized := func(w http.ResponseWriter, r *http.Request) bool {
+	authorised := func(w http.ResponseWriter, r *http.Request) bool {
 		if r.Header.Get("Authorization") != "PVEAPIToken="+token || r.Header.Get("Cookie") != "" || r.Header.Get("Csrfpreventiontoken") != "" {
 			http.Error(w, "authentication failure", http.StatusUnauthorized)
 			return false
@@ -382,12 +382,12 @@ func TestAnAPITokenActsInPlaceOfATicket(t *testing.T) {
 		return true
 	}
 	mux.HandleFunc("GET /api2/json/version", func(w http.ResponseWriter, r *http.Request) {
-		if authorized(w, r) {
+		if authorised(w, r) {
 			_, _ = w.Write([]byte(`{"data":{"version":"9.1"}}`))
 		}
 	})
 	mux.HandleFunc("DELETE /api2/json/", func(w http.ResponseWriter, r *http.Request) {
-		if authorized(w, r) {
+		if authorised(w, r) {
 			removed++
 			_, _ = w.Write([]byte(`{"data":null}`))
 		}

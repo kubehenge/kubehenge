@@ -70,7 +70,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 - **`kubehenge cluster`** lists, creates, scales and deletes clusters, prints a cluster's kubeconfig and acts on its machines through the interface. It signs in with a Proxmox VE API token from `KUBEHENGE_PROXMOX_TOKEN`.
   - The interface acts on an `Authorization: PVEAPIToken=…` header with the token's privileges, so scripts and CI need no password ([From the command line](clusters.md#from-the-command-line)).
-- **The `kubehenge` commands say what they expect.** A mistyped subcommand fails and names the closest one: `unknown command "lsit" for "kubehenge cluster": did you mean list?`.
+- **The `kubehenge` commands say what they expect.** A mistyped subcommand fails and names the closest one: `unknown command "lsit" for "kubehenge cluster": did you mean list?`. <!-- spellchecker:disable-line -->
   - A command given the wrong arguments says which it takes, such as `give the cluster's name`.
   - `kubehenge cluster list -o` checks its format before it calls the interface.
   - `kubehenge cluster list` and `create` refuse `-n`.
