@@ -10,7 +10,9 @@
 #       every KUBEHENGE_E2E_GUARD_INTERVAL seconds (5) until stopped: the machine's memory, page
 #       cache, swap and pressure, what of the swap zswap holds in memory and the free space of each
 #       path's file system (/ by default) into <record>; once a sample crosses a floor while the
-#       test that <pid file> names runs, its report into <record>.fail, and the test ended
+#       test that <pid file> names runs, its report into <record>.fail, and the test ended. With
+#       KUBEHENGE_E2E_GUARD_TALOSCONFIG naming a talosconfig, each sample also holds the management
+#       node's own memory, read from inside it, whenever that file is there and the node answers
 #   test/e2e/ci/guard.sh run <pid file> <record> <command>...
 #       the command in a session of its own, whose ID it leaves in <pid file>, then the report of the
 #       watch that ended it, if one did, and the stretches the guests left the machine short of
@@ -35,6 +37,9 @@ here=$(dirname "$0")
 proc=${KUBEHENGE_E2E_GUARD_PROC:-/proc}
 interval=${KUBEHENGE_E2E_GUARD_INTERVAL:-5}
 report_every=${KUBEHENGE_E2E_GUARD_REPORT:-60}
+# Seconds the management node has to answer each read.
+talos_timeout=4
+management_record=''
 
 # MiB of memory and swap together. Below it the kernel is about to choose a process to end, and
 # collecting from the guests needs some hundreds of MiB of its own.
@@ -87,7 +92,43 @@ sample() {
         free=$(df -Pk "${path}" 2> /dev/null | awk 'NR == 2 { print int($4 / 1024) }')
         [ -z "${free}" ] || line="${line} free:${path}=${free}"
     done
+    if [ -n "${management_record}" ] && [ -s "${management_record}" ]; then
+        line="${line} $(cat "${management_record}" 2> /dev/null || true)"
+    fi
     printf '%s\n' "${line}"
+}
+
+# management <talosconfig> <file>: every interval until stopped, the management node's memory into
+# the file, as name=value: mgmt_used (its memory less what it has available), mgmt_available and its
+# memory pressure, named as the machine's are, with mgmt_ before them. The file goes while the
+# talosconfig is missing or the node does not answer. A loop of its own, so that a node slow to
+# answer never holds the guard's own samples back.
+management() {
+    config=$1 out=$2
+    while :; do
+        figures=''
+        if [ -s "${config}" ]; then
+            # The talosconfig lists every node: the first is asked, as talosctl reads one at a time.
+            node=$(awk '/^ *nodes:/ { f = 1; next } f && /^ *- / { sub(/^ *- */, ""); print; exit } f { exit }' "${config}")
+            if [ -n "${node}" ]; then
+                meminfo=$(timeout -k 1 "${talos_timeout}" talosctl --talosconfig "${config}" -n "${node}" read /proc/meminfo 2> /dev/null < /dev/null || true)
+                pressure=$(timeout -k 1 "${talos_timeout}" talosctl --talosconfig "${config}" -n "${node}" read /proc/pressure/memory 2> /dev/null < /dev/null || true)
+                figures=$(printf '%s\n' "${meminfo}" | awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2; seen = 1 }
+                    END { if (seen && t > 0) printf "mgmt_used=%d mgmt_available=%d", (t - a) / 1024, a / 1024 }')
+                if [ -n "${figures}" ]; then
+                    figures="${figures}$(printf '%s\n' "${pressure}" | awk '$1 == "some" || $1 == "full" { for (i = 2; i <= NF; i++) {
+                        if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); printf " mgmt_memory_%s10=%s", $1, $i }
+                        else if ($i ~ /^avg60=/) { sub(/^avg60=/, "", $i); printf " mgmt_memory_%s=%s", $1, $i } } }')"
+                fi
+            fi
+        fi
+        if [ -n "${figures}" ]; then
+            printf '%s\n' "${figures}" > "${out}.part" && mv "${out}.part" "${out}"
+        else
+            rm -f "${out}"
+        fi
+        sleep "${interval}"
+    done
 }
 
 # crossed <sample>: each floor the sample crosses, separated by "; ", or nothing.
@@ -189,6 +230,14 @@ watch() {
     kills_at_start=$(counter oom_kill)
     swapins_at_start=$(counter pswpin)
     fired=''
+    if [ -n "${KUBEHENGE_E2E_GUARD_TALOSCONFIG:-}" ]; then
+        management_record=${record}.management
+        rm -f "${management_record}"
+        management "${KUBEHENGE_E2E_GUARD_TALOSCONFIG}" "${management_record}" &
+        reader=$!
+        trap 'kill "${reader}" 2> /dev/null || true' EXIT
+        trap 'exit 0' INT TERM
+    fi
     while :; do
         line=$(sample "${kills_at_start}" "${swapins_at_start}" "$@")
         printf '%s\n' "${line}" >> "${record}"
@@ -265,6 +314,8 @@ peaks() {
             kills = v["oom_kills"] + 0
             swapped = v["swapped_in"] + 0
             if (("zswapped" in v) && (zswappedat == "" || v["zswapped"] + 0 > zswapped)) { zswapped = v["zswapped"] + 0; pool = v["zswap_pool"] + 0; zswappedat = $1 }
+            if (("mgmt_used" in v) && (mgmtusedat == "" || v["mgmt_used"] + 0 > mgmtused)) { mgmtused = v["mgmt_used"] + 0; mgmtusedat = $1 }
+            if (("mgmt_available" in v) && (mgmtlowat == "" || v["mgmt_available"] + 0 < mgmtlow)) { mgmtlow = v["mgmt_available"] + 0; mgmtlowat = $1 }
             n++
         }
         END {
@@ -275,9 +326,13 @@ peaks() {
             printf "read back from swap: %d MiB\n", swapped
             if (zswappedat != "") printf "most swap held in memory by zswap: %d MiB, compressed to %d MiB, at %s\n", zswapped, pool, zswappedat
             for (k in most) {
-                if (k ~ /10$/) printf "most %s pressure: %.2f%% of 10 seconds at %s\n", substr(k, 1, length(k) - 2), most[k], mostat[k]
-                else printf "most %s pressure: %.2f%% of a minute at %s%s\n", k, most[k], mostat[k], (k == "memory_full" ? sprintf("; the ceiling is %d%%", stall) : "")
+                name = k; where = ""
+                if (name ~ /^mgmt_/) { name = substr(name, 6); where = " on the management node" }
+                if (k ~ /10$/) printf "most %s pressure%s: %.2f%% of 10 seconds at %s\n", substr(name, 1, length(name) - 2), where, most[k], mostat[k]
+                else printf "most %s pressure%s: %.2f%% of a minute at %s%s\n", name, where, most[k], mostat[k], (k == "memory_full" ? sprintf("; the ceiling is %d%%", stall) : "")
             }
+            if (mgmtusedat != "") printf "the management node'\''s most memory used: %d MiB at %s\n", mgmtused, mgmtusedat
+            if (mgmtlowat != "") printf "the management node'\''s least memory available: %d MiB at %s\n", mgmtlow, mgmtlowat
             for (k in low) printf "least free on %s: %d MiB at %s; the floor is %d\n", substr(k, 6), low[k], lowat[k], disk
             printf "OOM kills: %d\n", kills
         }

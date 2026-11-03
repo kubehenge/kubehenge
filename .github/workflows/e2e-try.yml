@@ -146,12 +146,14 @@ jobs:
       # tests' peaks, so the runner's agent is first kept out of the OOM killer's choice and out of
       # reclaim, which the recorders inherit, and a guard ends the test once the runner nears the
       # end of its memory, swap or disk, while it can still report: a runner starved or killed
-      # instead keeps neither log nor artifacts.
+      # instead keeps neither log nor artifacts. The guard's samples also hold the management node's
+      # own memory once run.sh has left its talosconfig there.
       - name: Record the runner's load
         if: env.E2E_RUN == 'true'
         run: |
           test/e2e/ci/guard.sh protect
-          nohup test/e2e/ci/guard.sh watch "$RUNNER_TEMP/test.pid" "$RUNNER_TEMP/guard.txt" \
+          KUBEHENGE_E2E_GUARD_TALOSCONFIG="$RUNNER_TEMP/e2e/mgmt/talosconfig" \
+            nohup test/e2e/ci/guard.sh watch "$RUNNER_TEMP/test.pid" "$RUNNER_TEMP/guard.txt" \
             "$RUNNER_TEMP/vmstat.txt" / /mnt "$RUNNER_TEMP" > "$RUNNER_TEMP/guard.log" 2>&1 &
           grep -r . /sys/devices/system/cpu/vulnerabilities/ /sys/module/kvm*/parameters/ || true
           nohup vmstat -t -w 15 > "$RUNNER_TEMP/vmstat.txt" 2>&1 &

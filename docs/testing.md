@@ -224,6 +224,7 @@ scripts/tools.sh ~/.local/kubehenge-tools && export PATH=~/.local/kubehenge-tool
 test/e2e/ci/up.sh /tmp/e2e          # Proxmox VE in a container, a registry beside it
 test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, kubeadm-addons-a, kubeadm-addons-b, kubeadm-addons-c, rke2-addons-a, rke2-addons-b, rke2-addons-c, rke2-addons-d, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, talos-addons-c, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
 test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or an add-on part with its CNI, node OS or no CIS hardening
+test/e2e/ci/run.sh /tmp/e2e management-cluster-upgrade+management-3584   # any test but the appliance, its management node at 3584 MiB
 ```
 
 The control plane of three servers stays on k3s. Three k3s servers at the class's least of 4096 MiB fit beside a worker and the management cluster. RKE2's and kubeadm's need bigger workers too. A minor upgrade of three servers needs a fourth beside them while each is replaced, which the machine's memory does not hold.
@@ -266,11 +267,13 @@ Every node is at the least Kubehenge allows for what its test switches on. The m
 | `talos-addons-b` | 2368 | 10560 | 11400 | 10560 |
 | `talos-addons-c` | 2240 | 10432 | 11256 | 10432 |
 
-Three kinds of lane outgrow 12 GiB, all on a CNI the nightly run picks:
+Three kinds of lane outgrow 12 GiB with that management node, all on a CNI the nightly run picks:
 
 - RKE2 with Calico. Its least control plane (3120 MiB) and Calico's figure together pass 4096 MiB with no add-on, beside a worker of at least 4096 MiB.
 - `kubeadm-addons-a` with Calico, by 400 MiB. Logs need monitoring's Grafana, and those two alone pass it by 88 MiB.
 - `rke2-addons-b` with Cilium, by 80 MiB. It holds one add-on.
+
+kubeadm's add-on parts with Calico and RKE2's with Cilium therefore run with a management node of 3584 MiB (`run.sh`). That brings them to 12176 MiB at most. The guard's samples show what the management node itself uses (below).
 
 These tests outgrow 12 GiB as well:
 
@@ -297,6 +300,8 @@ A guard (`test/e2e/ci/guard.sh`) keeps the CI agent's own processes out of the O
 - a file system has under 2 GiB free
 
 It reports what held the memory (the VMs by name, the largest other processes, the last samples and the kernel's lines on memory). The test then fails like any other and keeps its artifacts. The log's "The runner's room" step gives how near each run came to these floors. It also gives the least memory available and page cache, and how much was read back from swap.
+
+Once the management cluster is up, each sample also holds the management node's own memory, read through Talos's API. That is `mgmt_used`, `mgmt_available` and its memory pressure. "The runner's room" gives the node's most memory used and least available. The node's figures end no test.
 
 #### Memory without swap
 
