@@ -688,7 +688,9 @@ CIS hardening (`cis: true`), chosen when a cluster is created and fixed after, a
 The end-to-end tests run [kube-bench](https://github.com/aquasecurity/kube-bench) on a hardened cluster of each distribution. They test against the CIS Kubernetes Benchmark 2.0 for kubeadm and Rancher's own benchmarks for RKE2 and k3s. They fail on every failed check but two exceptions:
 
 - 1.1.12 on kubeadm, which runs etcd as root and has no supported way to run it as another user.
-- 1.1.9 and 1.1.10 on k3s with Cilium or Calico. k3s's benchmark checks CNI files only where flannel keeps its address leases, and these CNIs write none there.
+- 1.1.9 and 1.1.10 on k3s with Cilium or Calico. k3s's benchmark looks only in `/var/lib/cni/networks`, flannel's lease folder, where these CNIs write nothing.
+
+For those two, the test checks the same thing itself. Every node's files in `/etc/cni/net.d` and `/var/lib/cni/networks` must be mode 600 or tighter and owned by root:root.
 
 The benchmark's policies section is the cluster owner's, since it judges what runs in the cluster, not how the cluster is built.
 
