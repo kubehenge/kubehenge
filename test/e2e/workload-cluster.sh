@@ -960,6 +960,10 @@ crash_seen() {
     printf '%s' "${crash_pod}" | jq -e '.status.containerStatuses[0].state.waiting.reason == "CrashLoopBackOff"' > /dev/null
 }
 until_true 300 "the health identity sees the pod crash-looping" crash_seen
+# How long the pod took to start and how often it restarted before it was seen, which is where a slow
+# step lost its time.
+printf '%s' "${crash_pod}" | jq -r '"crash-looping \(now - (.metadata.creationTimestamp | fromdate) | floor) s after the pod was made, after \(.status.containerStatuses[0].restartCount) restarts"'
+wl -n e2e-health get events --sort-by=.lastTimestamp -o custom-columns=AT:.lastTimestamp,REASON:.reason,MESSAGE:.message --no-headers | cut -c1-200
 health_ready=$(KUBECONFIG="${work}/health" kubectl get --raw /readyz) ||
     fail "the health identity cannot read the API server's readiness"
 [ "${health_ready}" = ok ] || fail "the API server is not ready: ${health_ready}"
