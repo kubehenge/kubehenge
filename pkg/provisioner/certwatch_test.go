@@ -201,8 +201,8 @@ func TestCertificatesLookAgainSoonWhileRenewing(t *testing.T) {
 		t.Fatalf("condition %+v", cond)
 	}
 
-	settled := newCertFixture(t, certCluster("rke2", 1), []client.Object{certControlPlane("web-cp-a"), certWorker("web-md-0-a")},
-		report("web-md-0-a", 90, time.Minute))
+	settled := newCertFixture(t, certCluster("rke2", 1), []client.Object{certControlPlane("web-cp-a"), certWorker("web-md-0-b")},
+		report("web-md-0-b", 90, time.Minute))
 	settled.watch.Interval, settled.watch.RenewingInterval = 5*time.Minute, time.Minute
 	if next := settled.watch.pass(context.Background()); next != 5*time.Minute {
 		t.Errorf("next look after %v with nothing to renew", next)
