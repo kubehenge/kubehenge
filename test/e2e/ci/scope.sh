@@ -10,7 +10,7 @@
 # which runs them all: leave a test out only for a path it cannot reach.
 set -eu
 
-workload='kubeadm rke2 k3s talos kubeadm-addons rke2-addons k3s-addons talos-addons'
+workload='kubeadm rke2 k3s talos kubeadm-addons-a kubeadm-addons-b rke2-addons-a rke2-addons-b rke2-addons-c k3s-addons-a k3s-addons-b talos-addons-a talos-addons-b'
 all="management-cluster appliance ${workload} cluster-mesh node-image-refresh autoscaler"
 need=
 [ "${1:-}" != --all ] || need=${all}

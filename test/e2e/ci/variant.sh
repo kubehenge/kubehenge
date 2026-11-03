@@ -2,7 +2,7 @@
 # Sourced by test/e2e/ci/run.sh and test/unit/nightly.sh.
 #
 # variant <test>: the settings an end-to-end test's name carries, as exports to evaluate. A workload
-# distribution's test (kubeadm, rke2, k3s, talos) and its add-on half (kubeadm-addons and so on)
+# distribution's test (kubeadm, rke2, k3s, talos) and its add-on parts (kubeadm-addons-a and so on)
 # take options after their name, each after a +: its CNI, its node OS as one word such as rocky-10,
 # or cis-off for a cluster without CIS hardening, as in kubeadm+calico+rocky-10+cis-off; the test
 # itself is the name before the first +. Refuses an option it does not know, or one the test does
@@ -10,7 +10,7 @@
 variant() {
     variant_test=${1%%+*}
     [ "$1" != "${variant_test}" ] || return 0
-    variant_distribution=${variant_test%-addons}
+    variant_distribution=${variant_test%-addons-?}
     case ${variant_distribution} in
         kubeadm | rke2 | k3s | talos) ;;
         *)

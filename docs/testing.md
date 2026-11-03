@@ -94,7 +94,7 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 1. Create a cluster from a ClusterClass:
    - with `KUBEHENGE_E2E_NAMESPACE`, as the interface's account in that one of the interface's namespaces, which the k3s run uses
    - on Talos at the release `KUBEHENGE_E2E_TALOS_VERSION` names, which CI sets by default to the one before the templates' release
-   - with its worker at the least memory and cores the class allows with every add-on but Rancher
+   - with its worker at the least memory and cores the class allows with the add-ons the run switches on
    - trusting an OpenID issuer the test serves
    - hardened to the CIS benchmark, unless `KUBEHENGE_E2E_CIS=false`, the classes' default
    - with Pod Security Admission enforcing the restricted level, so every component Kubehenge installs runs under it.
@@ -188,14 +188,16 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 8. Check that every node runs the cluster's node OS (`KUBEHENGE_E2E_NODE_OS`, else the class's default) with SELinux enforcing, a read-only `/usr` and no denial in its logs. Talos, whose nodes run Talos, is skipped.
 9. Replace a stopped worker, delete the cluster and check nothing is left.
 
-#### Running half of it
+#### Running part of it
 
-`KUBEHENGE_E2E_PART` runs half of the test, for a machine whose memory holds the guests of only one half. CI runs each class's test this way, one half per machine.
+`KUBEHENGE_E2E_PART` runs part of the test, for a machine whose memory holds the guests of only one part. CI runs each class's test this way, one part per machine.
 
 - `lifecycle` (the `kubeadm`, `rke2`, `k3s` and `talos` tests) sizes the nodes at the least the class allows with the add-ons a cluster starts with (the load balancer and Rancher's agent). It switches on no other add-on.
-- `addons` (`kubeadm-addons`, `rke2-addons`, `k3s-addons` and `talos-addons`) sizes them for every add-on. It leaves out the steps that replace a machine. Those are RKE2's and k3s's own upload, the load balancer off, scaling, the upgrade and the dead worker.
+- `addons-a` (`kubeadm-addons-a` and so on) sizes them for Headlamp, monitoring, logs and certificates, and switches those on. Logs read Loki through monitoring's Grafana, and the certificates serve Headlamp and Grafana.
+- `addons-b` does the same for Kyverno, Istio, backups and GitOps.
+- RKE2's least worker of 4 GiB leaves its control plane no room for all of `addons-b`. On RKE2, `addons-b` has Kyverno and backups, and `addons-c` Istio and GitOps.
 
-Both run the rest, on Talos the upgrade in place too, and check SELinux at their end.
+The add-on parts leave out the steps that replace a machine. Those are RKE2's and k3s's own upload, the load balancer off, scaling, the upgrade and the dead worker. Every part runs the rest, on Talos the upgrade in place too, and checks SELinux at its end.
 
 ## End to end without a Proxmox VE host
 
@@ -204,7 +206,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - The merge queue runs the tests all the changes of a merge group need together (`test/e2e/ci/scope.sh`), on the tree that would land on main. It picks none for documentation alone and all of them for a change it cannot place.
 - A pull request runs the other tiers and leaves this one to the queue.
 - The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers and a two-node Proxmox VE cluster.
-- It runs both halves of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
+- It runs every part of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
 - It builds Proxmox VE's image afresh and keeps it, with Go's build cache, for the day's runs.
 - A change to the image's files on main builds and keeps it straight away (`e2e-image.yml`).
 - A dispatch of the workflow names the tests to run, or runs that night's set.
@@ -218,8 +220,8 @@ Any Linux machine with Docker, `/dev/kvm` and about 16 GB of free memory can do 
 ```sh
 scripts/tools.sh ~/.local/kubehenge-tools && export PATH=~/.local/kubehenge-tools:$PATH
 test/e2e/ci/up.sh /tmp/e2e          # Proxmox VE in a container, a registry beside it
-test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, kubeadm-addons, rke2-addons, k3s-addons, talos-addons, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
-test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or its add-on half with its CNI, node OS or no CIS hardening
+test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, kubeadm-addons-a, kubeadm-addons-b, rke2-addons-a, rke2-addons-b, rke2-addons-c, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
+test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or an add-on part with its CNI, node OS or no CIS hardening
 ```
 
 The control plane of three servers stays on k3s. Three k3s servers at the class's least of 4096 MiB fit beside a worker and the management cluster. RKE2's and kubeadm's need bigger workers too. A minor upgrade of three servers needs a fourth beside them while each is replaced, which the machine's memory does not hold.
@@ -243,14 +245,24 @@ The runner has 15.6 GiB of memory. Its own processes and the Proxmox VE containe
 
 Swap does not count as room for the guests. Cold pages of the runner's own processes go there harmlessly. A guest read back from swap stalls until its own checks fail.
 
-Every node is at the least Kubehenge allows for what its test switches on. The management node has the module's default 4 GiB. These tests still outgrow 12 GiB, in MiB:
+#### Each test's guests
+
+Every node is at the least Kubehenge allows for what its test switches on. The management node has the module's default 4 GiB. The add-on parts stay within 12 GiB, in MiB:
+
+| Test | Management node | Control plane | Worker | Together |
+| --- | --- | --- | --- | --- |
+| `kubeadm-addons-a` | 4096 | 4096 | 3648 | 11840 |
+| `kubeadm-addons-b` | 4096 | 4832 | 3264 | 12192 |
+| `rke2-addons-a`, `-b`, `-c` | 4096 | 4096 | 4096 | 12288 |
+| `k3s-addons-a` | 4096 | 4096 | 3392 | 11584 |
+| `k3s-addons-b` | 4096 | 4096 | 3008 | 11200 |
+| `talos-addons-a` | 4096 | 4096 | 3648 | 11840 |
+| `talos-addons-b` | 4096 | 4096 | 3264 | 11456 |
+
+These tests still outgrow 12 GiB:
 
 | Test | Steady | Peak | At the peak |
 | --- | --- | --- | --- |
-| `kubeadm-addons` | 14640 | 14640 | every add-on |
-| `rke2-addons` | 14384 | 14384 | every add-on |
-| `k3s-addons` | 13504 | 13504 | every add-on |
-| `talos-addons` | 13760 | 13760 | every add-on |
 | `rke2` | 12288 | 16384 | two workers, or a control plane replaced |
 | `kubeadm` | 10240 | 14336 | a control plane replaced |
 | `k3s` | 9280 | 13376 | a control plane replaced |

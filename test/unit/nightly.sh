@@ -22,6 +22,8 @@ bad() {
 
 seen=$(mktemp)
 trap 'rm -f "${seen}"' EXIT
+# jq on Windows ends its lines with CR LF.
+lanes=$(sh "${ci}/scope.sh" --all | jq -r '.[]' | tr -d '\r')
 nights=24
 night=0
 while [ "${night}" -lt "${nights}" ]; do
@@ -41,7 +43,7 @@ while [ "${night}" -lt "${nights}" ]; do
         KUBEHENGE_E2E_CNI='' KUBEHENGE_E2E_NODE_OS='' KUBEHENGE_E2E_CIS=''
         eval "${settings}"
         test=${name%%+*}
-        test=${test%-addons}
+        test=${test%-addons-?}
         enum=$(awk '/- name: cni$/ { f = 1 } f && /enum:/ { gsub(/.*\[|\].*/, ""); gsub(/,/, " "); print; exit }' "${chart}/templates/${test}.yaml")
         case " ${enum} " in
             *" ${KUBEHENGE_E2E_CNI} "*) ok ;;
@@ -57,12 +59,18 @@ while [ "${night}" -lt "${nights}" ]; do
             bad "${name}: no node OS ${KUBEHENGE_E2E_NODE_OS}"
         fi
         printf '%s %s %s %s\n' "${test}" "${KUBEHENGE_E2E_CNI}" "${KUBEHENGE_E2E_NODE_OS:--}" "${KUBEHENGE_E2E_CIS:-true}" >> "${seen}"
-        # Each variant runs as both halves of its distribution's test.
-        case ${name} in
-            *-addons+*) twin=${test}+${name#*+} ;;
-            *) twin=${test}-addons+${name#*+} ;;
-        esac
-        if printf '%s' "${list}" | jq -e --arg t "${twin}" 'index($t) != null' > /dev/null; then ok; else bad "night ${night} runs ${name} without ${twin}"; fi
+        # Each variant runs as every part of its distribution's test.
+        parts=0
+        for part in ${lanes}; do
+            case ${part} in
+                "${test}" | "${test}"-addons-?) ;;
+                *) continue ;;
+            esac
+            parts=$((parts + 1))
+            twin=${part}+${name#*+}
+            if printf '%s' "${list}" | jq -e --arg t "${twin}" 'index($t) != null' > /dev/null; then ok; else bad "night ${night} runs ${name} without ${twin}"; fi
+        done
+        if [ "${parts}" -ge 3 ]; then ok; else bad "${test} runs in ${parts} parts, not its lifecycle and at least two add-on parts"; fi
     done
     night=$((night + 1))
 done
@@ -93,8 +101,10 @@ refused() {
     fi
 }
 refused talos+rocky-10
-refused talos-addons+rocky-10
-refused appliance-addons+calico
+refused talos-addons-a+rocky-10
+refused appliance-addons-a+calico
+refused k3s-addons+calico
+refused k3s-addons-ab+calico
 refused appliance+calico
 refused control-plane-ha+calico
 refused k3s+weave
