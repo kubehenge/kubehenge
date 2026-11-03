@@ -67,6 +67,10 @@ const (
 	// certificateRenewingInterval is how soon they are looked at again while a cluster's are being
 	// renewed, so that it shows them renewed within a minute of its machines being replaced.
 	certificateRenewingInterval = time.Minute
+	// vmWatchInterval is how often the VMs and storages are read, two reads of Proxmox VE's resource
+	// list for every cluster: a VM out of the running state is reported within this of its grace
+	// running out, and the report cleared within this of it running again.
+	vmWatchInterval = 15 * time.Second
 	// templateRequestsInterval is how soon a build asked for in the interface starts.
 	templateRequestsInterval = 15 * time.Second
 	// talosUpgradeInterval is how soon a Talos node's upgrade starts after the one before, or after
@@ -808,7 +812,7 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 	}
 	vms := &provisioner.VMWatch{
 		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Events: mgr.GetEventRecorder("kubehenge"),
-		Interval: time.Minute,
+		Interval: vmWatchInterval,
 	}
 	if err := mgr.Add(vms); err != nil {
 		return fmt.Errorf("the VM watch: %w", err)

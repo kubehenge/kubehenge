@@ -216,7 +216,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - **A template build that fails is tried again**, three times in all, 2 and then 8 minutes apart. This holds from the interface and the weekly build alike.
   - A failure that would repeat, such as a node whose CPU is too old, is not tried again.
   - A weekly build that still fails records a `TemplateBuildFailed` warning event on the ConfigMap `kubehenge-template-refresh` ([troubleshooting.md](troubleshooting.md#template-build-fails)).
-- **VMs that do not run and storage nearly full show on the Health page and the fleet.** The controller checks each cluster's VMs and storage every minute.
+- **VMs that do not run and storage nearly full show on the Health page and the fleet.** The controller checks each cluster's VMs and storage every 15 seconds.
   - A VM stopped, paused by hand, paused by QEMU after a disk error, or crashed for 3 minutes sets the condition `VMsNotRunning`.
   - A storage 85% full on a node the cluster runs on sets `StorageNearlyFull`. It turns to an error from 95%.
   - Both record events ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)).

@@ -156,6 +156,27 @@ func TestVMWatchSaysWhichVMsDoNotRun(t *testing.T) {
 	}
 }
 
+// Looked at every 15 seconds, a paused VM is reported at the first look past its grace, counted from
+// the look that first found it paused, and the report clears at the first look after it runs.
+func TestVMWatchReportsOnTheLookItsGraceEnds(t *testing.T) {
+	t.Parallel()
+	const every = 15 * time.Second
+	f := newVMFixture(t)
+	f.vms(map[int64]string{101: "running", 102: "paused", 103: "running", 104: "running"})
+	for waited := time.Duration(0); waited < vmStateGrace; waited += every {
+		if cond := f.look(every, VMsCondition); cond != nil {
+			t.Fatalf("reported %v after the pause was found: %+v", waited, cond)
+		}
+	}
+	if cond := f.look(every, VMsCondition); cond == nil || cond.Reason != VMsPaused {
+		t.Fatalf("not reported on the look past the grace: %+v", cond)
+	}
+	f.vms(map[int64]string{101: "running", 102: "running", 103: "running", 104: "running"})
+	if cond := f.look(every, VMsCondition); cond != nil {
+		t.Fatalf("still reported a look after the VM runs: %+v", cond)
+	}
+}
+
 // What Proxmox VE does on purpose, and a moment's pause, is not reported.
 func TestVMWatchLetsPassingStatesBe(t *testing.T) {
 	t.Parallel()
