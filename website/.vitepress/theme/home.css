@@ -1,8 +1,9 @@
 /* The home page: a root shell on a Proxmox VE node, with the henge as the hero. Everything sits
    under .kh, so none of it reaches the documentation pages. */
 
-/* Fontsource's JetBrains Mono leaves out box drawing and block elements, which the stones are
-   drawn with; the upstream web fonts carry them, so every column of a drawing lines up. */
+/* The fonts are cut down to the characters this page draws (website/subset-fonts.sh). JetBrains
+   Mono comes from the upstream web fonts, not Fontsource's, which leave out the box drawing and
+   block elements the stones are drawn with, so every column of a drawing lines up. */
 @font-face {
   font-family: "JetBrains Mono";
   font-weight: 400;
@@ -15,19 +16,103 @@
   font-display: swap;
   src: url("./fonts/JetBrainsMono-Bold.woff2") format("woff2");
 }
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleNext-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/AtkinsonHyperlegibleNext-700.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Big Shoulders Display";
+  font-weight: 800;
+  font-display: swap;
+  src: url("./fonts/BigShouldersDisplay-800.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Big Shoulders Display";
+  font-weight: 900;
+  font-display: swap;
+  src: url("./fonts/BigShouldersDisplay-900.woff2") format("woff2");
+}
+
+/* Stand-ins for a web font until it arrives, sized so the text keeps its width and line height and
+   nothing moves at the swap. size-adjust is the web font's average character width over the
+   page's text divided by the stand-in's, and each override is the web font's own metric divided by
+   size-adjust. Courier New is as wide as JetBrains Mono, so its size-adjust is 100%. */
+@font-face {
+  font-family: "JetBrains Mono Fallback";
+  font-weight: 400;
+  src: local("Courier New"), local("CourierNewPSMT"), local("Liberation Mono"), local("Cousine");
+  size-adjust: 100%;
+  ascent-override: 102.02%;
+  descent-override: 30%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "JetBrains Mono Fallback";
+  font-weight: 700;
+  src: local("Courier New Bold"), local("CourierNewPS-BoldMT"), local("Liberation Mono Bold"), local("Cousine Bold");
+  size-adjust: 100%;
+  ascent-override: 102.02%;
+  descent-override: 30%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next Fallback";
+  font-weight: 400;
+  src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("Arimo");
+  size-adjust: 99.52%;
+  ascent-override: 98.87%;
+  descent-override: 31.75%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next Fallback";
+  font-weight: 700;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"), local("Arimo Bold");
+  size-adjust: 102.53%;
+  ascent-override: 95.97%;
+  descent-override: 30.82%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Big Shoulders Display Fallback";
+  font-weight: 800;
+  src: local("Arial Narrow Bold"), local("ArialNarrow-Bold"), local("Liberation Sans Narrow Bold");
+  size-adjust: 78.89%;
+  ascent-override: 124.74%;
+  descent-override: 27%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: "Big Shoulders Display Fallback";
+  font-weight: 900;
+  src: local("Arial Narrow Bold"), local("ArialNarrow-Bold"), local("Liberation Sans Narrow Bold");
+  size-adjust: 84.33%;
+  ascent-override: 116.69%;
+  descent-override: 25.26%;
+  line-gap-override: 0%;
+}
 
 @keyframes kh-blink {
   50% {
     opacity: 0;
   }
 }
+/* A phase word lights white with a glow and settles to its colour. Only opacity animates, on a
+   copy of the word laid over it, so the browser can run it off the main thread. */
 @keyframes kh-flash {
-  0% {
-    color: #fff;
-    text-shadow: 0 0 14px #2fb5a7;
+  from {
+    opacity: 1;
   }
-  100% {
-    text-shadow: none;
+  to {
+    opacity: 0;
   }
 }
 @keyframes kh-march {
@@ -56,9 +141,10 @@ html:has(.kh) {
   --teal-hi: #2fb5a7;
   --amber: #f2b84b;
   --red: #ef6b5b;
-  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
-  --display: "Big Shoulders Display", "Archivo Narrow", "Arial Narrow", sans-serif;
-  --sans: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "JetBrains Mono Fallback", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --display: "Big Shoulders Display", "Big Shoulders Display Fallback", "Archivo Narrow", "Arial Narrow", sans-serif;
+  --sans:
+    "Atkinson Hyperlegible Next", "Atkinson Hyperlegible Next Fallback", "Atkinson Hyperlegible", system-ui, sans-serif;
   --gutter: 40px;
   --maxw: 1360px;
 
@@ -309,8 +395,11 @@ html:has(.kh) {
     width: calc(13.2 * var(--art));
     position: relative;
   }
+  /* The drawing is 12 rows tall. The page ships the slots empty, so this keeps the room the stones
+     fill, and nothing below moves as they rise. */
   .aw {
     position: relative;
+    min-height: 15.84em;
     font-size: var(--art);
     line-height: 1.32;
     transform-origin: 50% 100%;
@@ -442,6 +531,16 @@ html:has(.kh) {
     opacity: 0;
   }
   .slot.landed .ph {
+    position: relative;
+  }
+  .slot.landed .ph::after {
+    content: attr(data-text);
+    content: attr(data-text) / "";
+    position: absolute;
+    inset: 0;
+    color: #fff;
+    text-shadow: 0 0 14px #2fb5a7;
+    opacity: 0;
     animation: kh-flash 0.9s ease-out;
   }
 
@@ -922,6 +1021,7 @@ html:has(.kh) {
     }
     /* The ring wraps onto two rows here, where arcs from foot to foot would cross the labels. */
     .ring .ghost,
+    .ring .bare:last-child,
     .ley {
       display: none;
     }
@@ -1017,7 +1117,7 @@ html:has(.kh) {
 
   @media (prefers-reduced-motion: reduce) {
     .cur,
-    .slot.landed .ph,
+    .slot.landed .ph::after,
     .link.mesh path {
       animation: none;
     }

@@ -1,12 +1,8 @@
 <script setup>
-import "@fontsource/atkinson-hyperlegible-next/400";
-import "@fontsource/atkinson-hyperlegible-next/700";
-import "@fontsource/big-shoulders-display/800";
-import "@fontsource/big-shoulders-display/900";
 import "./home.css";
 import { onBeforeUnmount, onMounted, useTemplateRef } from "vue";
 
-import { start } from "./henge.js";
+import { bare, start } from "./henge.js";
 
 const root = useTemplateRef("root");
 let stop = () => {};
@@ -18,12 +14,13 @@ onBeforeUnmount(() => stop());
   <div ref="root" class="kh">
     <header class="top">
       <div class="wrap">
-        <a class="brand" href="/"><img src="/logo.svg" alt="" /><span>Kubehenge</span></a>
+        <!-- target="_self" keeps VitePress from prefetching a page the reader may never open: it skips links with a target. -->
+        <a class="brand" href="/" target="_self"><img src="/logo.svg" alt="" /><span>Kubehenge</span></a>
         <nav aria-label="Site">
-          <a href="/docs/install">docs</a>
-          <a class="opt" href="/docs/clusters">clusters</a>
-          <a class="opt" href="/docs/architecture">architecture</a>
-          <a class="opt" href="/docs/roadmap">roadmap</a>
+          <a href="/docs/install" target="_self">docs</a>
+          <a class="opt" href="/docs/clusters" target="_self">clusters</a>
+          <a class="opt" href="/docs/architecture" target="_self">architecture</a>
+          <a class="opt" href="/docs/roadmap" target="_self">roadmap</a>
         </nav>
         <span class="spacer"></span>
         <span class="ver"><b>alpha</b></span>
@@ -51,7 +48,21 @@ onBeforeUnmount(() => stop());
           </div>
 
           <div class="henge">
-            <ul class="ring" data-ring aria-label="The henge: one stone per cluster, sample clusters"></ul>
+            <!-- The five slots ship empty, so the ring has its size before the script draws into them. -->
+            <ul class="ring" data-ring aria-label="The henge: one stone per cluster, sample clusters">
+              <li v-for="n in 5" :key="n" class="slot bare">
+                <div class="aw">
+                  <pre class="art" aria-hidden="true" v-html="bare"></pre>
+                  <pre class="top-stone" aria-hidden="true" hidden></pre>
+                  <div class="decos" aria-hidden="true"></div>
+                </div>
+                <div class="lab">
+                  <p class="nm"></p>
+                  <p class="ds"></p>
+                  <p class="ph"></p>
+                </div>
+              </li>
+            </ul>
             <svg class="ley" data-ley aria-hidden="true"></svg>
             <div class="controls">
               <div class="acts">
@@ -155,16 +166,17 @@ onBeforeUnmount(() => stop());
             </p>
           </div>
           <nav class="links" aria-label="Documentation and source">
-            <a href="/docs/install">Install</a>
-            <a href="/docs/clusters">Clusters</a>
-            <a href="/docs/architecture">Architecture</a>
-            <a href="/docs/roadmap">Roadmap</a>
+            <a href="/docs/install" target="_self">Install</a>
+            <a href="/docs/clusters" target="_self">Clusters</a>
+            <a href="/docs/architecture" target="_self">Architecture</a>
+            <a href="/docs/roadmap" target="_self">Roadmap</a>
             <a href="https://github.com/kubehenge/kubehenge">Source ↗</a>
           </nav>
         </div>
         <div class="wrap">
           <p class="alpha">
-            <b>Kubehenge is alpha.</b> Not everything on this page is built yet. The <a href="/docs/roadmap">roadmap</a>
+            <b>Kubehenge is alpha.</b> Not everything on this page is built yet. The
+            <a href="/docs/roadmap" target="_self">roadmap</a>
             says what is. Any release may change it completely, its settings, interface and ClusterClasses included. Do
             not run production on it yet.
           </p>

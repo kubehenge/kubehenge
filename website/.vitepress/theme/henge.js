@@ -75,6 +75,9 @@ function paint(rows, ground = true) {
     .join("\n");
 }
 
+// A slot with no stone in it, which the page ships so its first paint already has the ground line.
+export const bare = paint(rising(0));
+
 // Columns and rows of the painted drawing (one column of margin each side), for the dust.
 const at = { ground: R - 1, joint: 3, feet: [2, 7, 14, 19], ends: [1, W] };
 
@@ -86,6 +89,11 @@ const PHASE = { Pending: "pend", Provisioning: "pend", Provisioned: "ok", Deleti
 const BITS = ["░", "▒", "▘", "▝", "▖", "▗", "·", "˙", "▂"];
 const SPARKS = ["✦", "✧", "·", "˙", "+"];
 const NS = "http://www.w3.org/2000/svg";
+
+// The page requires Trusted Types for script, so markup is written through a policy. Every string
+// given to it is built from this file's own drawings, and the typed command's text is escaped.
+const policy = globalThis.trustedTypes?.createPolicy("kubehenge-henge", { createHTML: (s) => s });
+const markup = (html) => policy?.createHTML(html) ?? html;
 
 // Starts the page's motion inside root and returns what stops it, for when the page is left.
 export function start(root) {
@@ -109,7 +117,34 @@ export function start(root) {
     });
   const $ = (q, el = root) => el.querySelector(q);
   const $$ = (q, el = root) => [...el.querySelectorAll(q)];
-  const anim = (el, frames, opts) => (still || !el.animate ? null : el.animate(frames, opts));
+  // Two animations on one element at once keep both off the compositor. Every one ends at rest,
+  // so the one still running is finished first. The last one is remembered here, because asking
+  // the element for its animations makes the browser recalculate styles on the spot.
+  const last = new WeakMap();
+  const anim = (el, frames, opts) => {
+    if (still || !el.animate) return null;
+    const prev = last.get(el);
+    if (prev?.playState === "running" && prev.effect.getTiming().fill !== "forwards") prev.finish();
+    const next = el.animate(frames, opts);
+    last.set(el, next);
+    return next;
+  };
+
+  // The page's links are full page loads, so the next page is fetched ahead once a reader reaches
+  // for its link, not for every link in view.
+  const fetched = new Set();
+  $$("a[href^='/']").forEach((a) => {
+    const ahead = () => {
+      if (fetched.has(a.href)) return;
+      fetched.add(a.href);
+      const link = document.createElement("link");
+      link.rel = "prefetch";
+      link.href = a.href;
+      document.head.append(link);
+    };
+    for (const type of ["pointerenter", "focus", "touchstart"])
+      a.addEventListener(type, ahead, { once: true, passive: true });
+  });
 
   $$("[data-copy]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -146,7 +181,7 @@ export function start(root) {
     cmd.textContent = "";
     await wait(500);
     for (let i = 1; i <= full.length; i++) {
-      cmd.innerHTML = upTo(i);
+      cmd.innerHTML = markup(upTo(i));
       await wait(i < 10 ? 45 : 11);
     }
   })();
@@ -189,12 +224,8 @@ export function start(root) {
   let busy = true;
   let loading = true;
 
-  const slots = Array.from({ length: MAX }, () => {
-    const li = document.createElement("li");
-    li.innerHTML =
-      '<div class="aw"><pre class="art" aria-hidden="true"></pre><pre class="top-stone" aria-hidden="true" hidden></pre><div class="decos" aria-hidden="true"></div></div>' +
-      '<div class="lab"><p class="nm"></p><p class="ds"></p><p class="ph"></p></div>';
-    list.append(li);
+  // The page ships the slots empty (HengeHome.vue), so the ring has its size from the first paint.
+  const slots = Array.from(list.children, (li) => {
     return {
       li,
       aw: $(".aw", li),
@@ -209,12 +240,12 @@ export function start(root) {
     };
   });
 
-  const draw = (sl, rows) => (sl.art.innerHTML = paint(rows));
+  const draw = (sl, rows) => (sl.art.innerHTML = markup(paint(rows)));
 
   function flag(sl, name) {
     const f = document.createElement("span");
     f.className = `flag ${name.toLowerCase().replace(/ /g, "-")}`;
-    f.innerHTML = `<span>${name}</span>`;
+    f.innerHTML = markup(`<span>${name}</span>`);
     sl.decos.append(f);
     return f;
   }
@@ -228,6 +259,7 @@ export function start(root) {
     sl.ds.textContent = `${c.dist} ${c.ver}`;
     sl.ph.className = `ph ${PHASE[c.phase]}`;
     sl.ph.textContent = c.phase;
+    sl.ph.dataset.text = c.phase;
     const addons = c.decos.length ? `, with ${c.decos.join(" and ")}` : "";
     sl.li.setAttribute("aria-label", `${c.name}: ${c.dist} ${c.ver}${addons}, ${c.phase}`);
     if (c.phase === "Provisioning" && !still) {
@@ -325,21 +357,28 @@ export function start(root) {
     ley.append(g);
     const l = { a, b, kind, g, path, text, span: 0 };
     links.push(l);
-    shape(l);
-    relabel();
-    if (kind === "rancher") {
-      const len = path.getTotalLength();
-      anim(
-        path,
-        [
-          { strokeDasharray: `${len}`, strokeDashoffset: `${len}` },
-          { strokeDasharray: `${len}`, strokeDashoffset: "0" },
-        ],
-        { duration: 700, easing: "ease-out" },
-      );
-    } else {
-      anim(g, [{ opacity: 0 }, { opacity: 1 }], { duration: 500 });
-    }
+    // Measuring the stones waits for the next frame, when the layout is settled, instead of
+    // forcing it to be worked out in the middle of this one.
+    g.setAttribute("visibility", "hidden");
+    requestAnimationFrame(() => {
+      if (stopped) return;
+      shape(l);
+      relabel();
+      g.removeAttribute("visibility");
+      if (kind === "rancher") {
+        const len = path.getTotalLength();
+        anim(
+          path,
+          [
+            { strokeDasharray: `${len}`, strokeDashoffset: `${len}` },
+            { strokeDasharray: `${len}`, strokeDashoffset: "0" },
+          ],
+          { duration: 700, easing: "ease-out" },
+        );
+      } else {
+        anim(g, [{ opacity: 0 }, { opacity: 1 }], { duration: 500 });
+      }
+    });
   }
   function unlink(sl) {
     for (const l of links.filter((x) => x.a === sl || x.b === sl)) {
@@ -372,17 +411,18 @@ export function start(root) {
   // A flag drops onto the stone on top, bites in and swings itself still.
   async function hang(sl, name) {
     const f = flag(sl, name);
-    const col = (f.offsetLeft / sl.aw.offsetWidth) * 22 + 1;
     const drop = anim(
       f,
       [
-        { transform: "translateY(-9em) rotate(-25deg)", opacity: 0 },
-        { transform: "translateY(-6em) rotate(-18deg)", opacity: 1, offset: 0.3 },
-        { transform: "translateY(0) rotate(0deg)", opacity: 1 },
+        { transform: "translateY(-9em) rotate(-25deg)" },
+        { transform: "translateY(-6em) rotate(-18deg)", offset: 0.3 },
+        { transform: "translateY(0) rotate(0deg)" },
       ],
       { duration: 420, easing: "cubic-bezier(.55,0,1,.5)" },
     );
     if (drop) await drop.finished;
+    // Read once the drop has settled, when no write has dirtied the layout since the last frame.
+    const col = (f.offsetLeft / sl.aw.offsetWidth) * 22 + 1;
     quake(2);
     dust(sl, col, 1, 4, 1.5, 0.8);
     dust(sl, col + 2, 0, 9, 3.5, 2.2, SPARKS);
@@ -422,7 +462,7 @@ export function start(root) {
       await wait(h === RISE ? 220 : 95);
     }
     // The stone on top comes down from well above and lands with its weight.
-    sl.top.innerHTML = paint(falling, false);
+    sl.top.innerHTML = markup(paint(falling, false));
     sl.top.hidden = false;
     const fall = anim(
       sl.top,
