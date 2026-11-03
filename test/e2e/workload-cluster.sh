@@ -1782,18 +1782,6 @@ wl -n default delete configmap e2e-before-snapshot
 after_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
 wl -n default create configmap e2e-after-snapshot --from-literal=marker="${after_marker}"
 etcd_restore_requested
-diag_pid=
-if [ "${distribution}" = rke2 ]; then
-    (
-        diag_cp=${control_planes%% *}
-        while sleep 45; do
-            echo "== diag $(date -u +%T)"
-            # shellcheck disable=SC2016 # expanded on the node
-            on_machines "${diag_cp}" 'export PATH=$PATH:/var/lib/rancher/rke2/bin; r="crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock"; $r ps -a 2>&1 | head -20; for c in $($r ps -a -q --name etcd 2>/dev/null | head -2); do echo "-- etcd $c"; $r logs --tail 12 "$c" 2>&1; done; ls -lnZ /var/lib/rancher/rke2/server/db/etcd /var/lib/rancher/rke2/server/db/etcd/member/snap 2>&1 | head -20; ls /var/lib/rancher/rke2/agent/pod-manifests; ps -eo pid,user,label,args | grep -E "rke2|etcd|kubelet" | grep -v grep | cut -c1-300' 2>&1 | cut -c1-500 || true
-        done
-    ) &
-    diag_pid=$!
-fi
 # etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
 # fails the test with why.
 etcd_restored() {
@@ -1811,10 +1799,6 @@ etcd_restored() {
     printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
 }
 until_true 2400 "etcd restored" etcd_restored
-if [ -n "${diag_pid}" ]; then
-    kill "${diag_pid}" || true
-    kubectl -n kubehenge-system logs deployment/kubehenge-controller --since=40m | grep -E '"(restoring etcd|fetching the snapshot|stopping the control plane|starting the control plane|the cluster answers on its address)"' | cut -c1-6000 || true
-fi
 until_true 1200 "cluster ${name} available after the restore" available_or_failed
 wl wait --for=condition=Ready nodes --all --timeout=10m
 until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
