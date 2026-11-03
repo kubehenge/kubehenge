@@ -202,7 +202,7 @@ Both run the rest, on Talos the upgrade in place too, and check SELinux at their
 CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one test per machine.
 
 - The merge queue runs the tests all the changes of a merge group need together (`test/e2e/ci/scope.sh`), on the tree that would land on main. It picks none for documentation alone and all of them for a change it cannot place.
-- The management cluster's upgrade, Rancher, the control plane of three servers and the two-node cluster join a merge group too. Each comes with its own script, the scripts it shares and any product code.
+- The nightly run's four extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it).
 - A pull request runs the other tiers and leaves this one to the queue.
 - The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers and a two-node Proxmox VE cluster.
 - It runs both halves of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.

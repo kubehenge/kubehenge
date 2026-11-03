@@ -5,15 +5,15 @@
 #   git diff --name-only <base> <head> | test/e2e/ci/scope.sh
 #   test/e2e/ci/scope.sh --all
 #
-# A path no rule below names needs them all and the nightly run's four as well (--all lists only
-# the first). Only the merge queue runs end-to-end
+# A path no rule below names needs them all, as --all does. Only the merge queue runs end-to-end
 # tests, so a rule that leaves a test out lets a change reach main without it until the nightly run,
-# which runs them all: leave a test out only for a path it cannot reach.
+# which runs them all: leave a test out only for a path it cannot reach. The nightly run's own four
+# are long, so a merge group runs one only for its own script and the code only it exercises.
 set -eu
 
 workload='kubeadm rke2 k3s talos kubeadm-addons rke2-addons k3s-addons talos-addons'
 all="management-cluster appliance ${workload} cluster-mesh node-image-refresh autoscaler"
-# Tests the nightly run adds to --all. A merge group runs one only when a change reaches it.
+# Tests the nightly run adds to --all.
 nightly='management-cluster-upgrade rancher control-plane-ha two-nodes'
 need=
 [ "${1:-}" != --all ] || need=${all}
@@ -41,7 +41,13 @@ need=
         test/e2e/node-image-refresh.sh) need="${need} node-image-refresh" ;;
         test/e2e/autoscaler.sh) need="${need} autoscaler" ;;
         test/e2e/management-cluster.sh | test/e2e/lib.sh) need="${need} management-cluster management-cluster-upgrade" ;;
-        *) need="${need} ${all} ${nightly}" ;;
+        management-cluster/* | pkg/provisioner/operator.go | pkg/cli/wait.go | scripts/provider-image.sh | scripts/*-patches/*)
+            need="${need} ${all} management-cluster-upgrade"
+            ;;
+        pkg/provisioner/rancher*.go | pkg/provisioner/hooks.go | pkg/provisioner/upgradehold.go) need="${need} ${all} rancher" ;;
+        pkg/provisioner/placement.go | pkg/provisioner/ha*.go) need="${need} ${all} two-nodes" ;;
+        charts/kubehenge/files/kube-vip-credentials.sh) need="${need} ${all} control-plane-ha" ;;
+        *) need="${need} ${all}" ;;
     esac
 done
 
