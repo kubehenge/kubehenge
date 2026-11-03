@@ -206,7 +206,7 @@ make web && go run ./cmd/kubehenge serve --demo
 make screenshots   # docs/images, from the demo in a headless Chromium
 ```
 
-The sample fleet is in `pkg/ui/demo-fleet.json`. Its ClusterClasses are the chart's, kept in `pkg/ui/demo-classes.json`. When the chart's change, `go test ./pkg/ui -run TestDemoClassesMatchTheChart -update-demo-classes` writes them again.
+The sample fleet is in `pkg/ui/demo-fleet.json`. Its ClusterClasses are the chart's, kept in `pkg/ui/demo-classes.json`. After a change to the chart's ClusterClasses, `go test ./pkg/ui -run TestDemoClassesMatchTheChart -update-demo-classes` rewrites the file.
 
 `make screenshots` fixes the window, the colour scheme and both clocks, so a second run gives the same images. Run it after a change to a page the docs show.
 

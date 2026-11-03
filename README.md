@@ -55,7 +55,7 @@ flowchart LR
 | k3s | flannel, Cilium, Calico | AlmaLinux 10, Rocky Linux 10 |
 | Talos | flannel, Cilium, Calico | Talos Linux |
 
-It needs Proxmox VE 9. The end-to-end tests run each distribution with each CNI and node OS in turn ([testing.md](docs/testing.md)).
+Kubehenge needs Proxmox VE 9. The end-to-end tests run each distribution with each CNI and node OS in the table ([testing.md](docs/testing.md)).
 
 ## Add-ons and sign-in
 
