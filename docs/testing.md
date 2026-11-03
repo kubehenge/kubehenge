@@ -45,6 +45,7 @@ The frontend's packages are installed again only when `web/package-lock.json` ch
 - For each distribution, start its providers for the first cluster and apply its templates once they serve. After the last cluster, remove them and scale the providers to none.
 - Take a cluster through Kubehenge's controller (finalizer, credentials owned by the cluster, the add-ons' objects) and delete it. Its Proxmox VE objects (faked) are removed only once its last machine is gone.
 - Apply the Gateway API release the controller carries. Every CRD is established and its admission policy refuses older and experimental CRDs.
+  - Once a Helm release ships one of the CRDs, the controller deletes its policy. The API server then takes an older CRD.
 - Find an RKE2 Gateway API chart by its HelmChart, before and after helm-controller's CRD is there, and wait until its release is installed.
 - Render the RKE2 and k3s classes' Traefik configuration with its Gateway provider on, with and without the certificates add-on's default certificate.
 - Act as the interface's account, which writes and deletes the credentials users type in and no other Secret.
@@ -114,6 +115,7 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 11. Check that every object of the Gateway API is held once, and again after the upgrade.
     - One a Helm release's latest revision ships is marked as that release's, shipped by no other and of the release that chart ships.
     - One that no release ships is of Kubehenge's release or newer.
+    - The admission policy is there only where a release ships it, or on kubeadm and Talos beside CRDs no release ships.
     - By the upgrade, RKE2's and k3s's own Gateway API chart has to be installed and ship every object.
 12. Check that a Service of type `LoadBalancer` answers the test machine on an address from the cluster's load-balancer range. The load balancer is `KUBEHENGE_E2E_LOAD_BALANCER` (MetalLB unless kube-vip) on `KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES`, on k3s without servicelb beside it. Switch it off again. On k3s servicelb then answers for the Service once the control planes are replaced.
 13. Create and delete a persistent volume.

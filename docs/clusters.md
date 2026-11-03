@@ -666,9 +666,13 @@ With [certificates](#certificates) from DNS-01 or the cluster's CA, the Gateway 
 
 A Gateway of your own with the class `traefik` works too. Its listeners use Traefik's ports, 8000 for HTTP and 8443 for HTTPS. The nodes' ports 80 and 443 lead to them. Istio's waypoints, its layer 7 proxies, are Gateways of the class `istio-waypoint`. Istiod serves them once the Istio add-on is on.
 
-The Gateway API's admission policy (`safe-upgrades.gateway.networking.k8s.io`) refuses CRDs of the group from the experimental channel over standard ones, and from releases before v1.5.0. So a chart that brings old CRDs fails rather than downgrades the cluster's.
-
 Kubehenge applies its release of the CRDs where they are missing, or older and no longer shipped by the distribution. It never puts an older release over a newer one. Where the distribution's release has its own Gateway API chart (RKE2's `rke2-gateway-api-crd`, k3s's `gateway-api-crd`), the Gateway API is that chart's alone, at its release ([architecture.md](architecture.md#networking)).
+
+The Gateway API's admission policy (`safe-upgrades.gateway.networking.k8s.io`) refuses experimental CRDs of the group over standard ones. It also refuses CRDs from releases before its own. It comes with whoever holds the CRDs:
+
+- **kubeadm and Talos:** Kubehenge applies its release's policy beside its CRDs.
+- **RKE2 and k3s:** only the distribution's Gateway API chart brings one. A distribution upgrade can always install its release of the CRDs.
+- **CRDs a Helm release of your own ships:** that release brings the policy or leaves it out.
 
 The annotation `kubehenge.dev/gateway-api` on the Cluster names the oldest release among the CRDs once every one is in place.
 

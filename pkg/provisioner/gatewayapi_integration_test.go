@@ -16,6 +16,7 @@ import (
 
 	"github.com/Masterminds/sprig/v3"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,10 +51,10 @@ func TestIntegrationGatewayAPI(t *testing.T) { //nolint:paralleltest // starts a
 	ctx := context.Background()
 	r := &GatewayAPIReconciler{Bundle: bundle}
 	key := types.NamespacedName{Namespace: "team-a", Name: "web"}
-	if _, applied, ensureErr := r.ensure(ctx, key, workload, ""); ensureErr != nil || !applied {
+	if _, applied, ensureErr := r.ensure(ctx, key, workload, "", true); ensureErr != nil || !applied {
 		t.Fatalf("applied %v, %v", applied, ensureErr)
 	}
-	oldest, applied, err := r.ensure(ctx, key, workload, "")
+	oldest, applied, err := r.ensure(ctx, key, workload, "", true)
 	if err != nil || applied || oldest != bundle.Version {
 		t.Fatalf("once applied: oldest %q, applied %v, %v", oldest, applied, err)
 	}
@@ -61,7 +62,7 @@ func TestIntegrationGatewayAPI(t *testing.T) { //nolint:paralleltest // starts a
 		if o.gvk != crdGVK {
 			continue
 		}
-		until(t, 30*time.Second, o.name+" established", func() bool {
+		until(t, o.name+" established", func() bool {
 			crd := &apiextensionsv1.CustomResourceDefinition{}
 			if err := workload.Get(ctx, client.ObjectKey{Name: o.name}, crd); err != nil {
 				t.Fatal(err)
@@ -99,7 +100,7 @@ func TestIntegrationGatewayAPI(t *testing.T) { //nolint:paralleltest // starts a
 		},
 	}
 	// The API server enforces a new policy a moment after it is created.
-	until(t, 30*time.Second, "the policy refuses a release before v1.5.0", func() bool {
+	until(t, "the policy refuses a release before v1.5.0", func() bool {
 		created := workload.Create(ctx, older.DeepCopy())
 		if created == nil {
 			if err := workload.Delete(ctx, older.DeepCopy()); err != nil {
@@ -119,6 +120,30 @@ func TestIntegrationGatewayAPI(t *testing.T) { //nolint:paralleltest // starts a
 	if err := workload.Patch(ctx, routes, experimental); err == nil || !strings.Contains(err.Error(), "prohibited") {
 		t.Errorf("an experimental CRD over a standard one: %v", err)
 	}
+
+	// Once a Helm release ships a CRD, Kubehenge withdraws its policy, and the release may bring an
+	// older one.
+	shipped := client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"annotations":{"`+helmReleaseName+`":"gateway-crds","`+helmReleaseNamespace+`":"kube-system"}}}`))
+	if err := workload.Patch(ctx, routes, shipped); err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.Create(ctx, helmRevision(t, "gateway-crds", 1, "deployed", crdDoc(routes.Name, bundle.Version))); err != nil {
+		t.Fatal(err)
+	}
+	if _, applied, err := r.ensure(ctx, key, workload, "", true); err != nil || applied {
+		t.Fatalf("once a release ships a CRD: applied %v, %v", applied, err)
+	}
+	for _, gvk := range gatewayAPIKinds[1:] {
+		o := &metav1.PartialObjectMetadata{}
+		o.SetGroupVersionKind(gvk)
+		if err := workload.Get(ctx, client.ObjectKey{Name: "safe-upgrades.gateway.networking.k8s.io"}, o); !apierrors.IsNotFound(err) {
+			t.Errorf("Kubehenge's %s beside a release's CRD: %v", gvk.Kind, err)
+		}
+	}
+	// The API server stops enforcing a deleted policy a moment after.
+	until(t, "an older CRD taken once the policy is withdrawn", func() bool {
+		return workload.Create(ctx, older.DeepCopy()) == nil
+	})
 }
 
 // The distribution's own Gateway API chart is found by its HelmChart, through a kind an API server
@@ -172,7 +197,7 @@ func TestIntegrationGatewayAPIFindsTheDistributionsChart(t *testing.T) { //nolin
 	chart.SetGroupVersionKind(helmChartGVK)
 	chart.SetNamespace("kube-system")
 	chart.SetName("rke2-gateway-api-crd")
-	until(t, 30*time.Second, "a HelmChart created", func() bool { return workload.Create(ctx, chart.DeepCopy()) == nil })
+	until(t, "a HelmChart created", func() bool { return workload.Create(ctx, chart.DeepCopy()) == nil })
 	if ready, owner := held(); ready || owner != "kube-system/rke2-gateway-api-crd" {
 		t.Errorf("while the distribution's Gateway API chart installs: ready %v, held by %q", ready, owner)
 	}
@@ -184,10 +209,11 @@ func TestIntegrationGatewayAPIFindsTheDistributionsChart(t *testing.T) { //nolin
 	}
 }
 
-// until polls cond until it holds and fails the test after limit.
-func until(t *testing.T, limit time.Duration, what string, cond func() bool) {
+// until polls cond until it holds and fails the test after 30 seconds, which the API server takes
+// at most to act on a new CRD, policy or deleted policy.
+func until(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	for deadline := time.Now().Add(limit); !cond(); {
+	for deadline := time.Now().Add(30 * time.Second); !cond(); {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out: %s", what)
 		}

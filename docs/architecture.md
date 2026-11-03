@@ -1057,7 +1057,7 @@ An upgrade starts only inside the window (days of the week or of the month, a st
   - Every class honours the Cluster's ranges, kubeadm's pod subnet among them, which the Tigera operator needs to install Calico. The k3s provider reads its own server configuration only, so the k3s class copies them there.
 - **The Gateway API** is in every cluster, with no switch, and costs no pod. Traefik's Gateway, Istio's waypoints and anything else that speaks it get the same API everywhere.
   - **Kubehenge's release.** Kubehenge's controller carries one release of upstream's standard-channel install file, built into its binary and checked against its SHA-256 at build time.
-    - It applies its CRDs and the admission policy beside them (`safe-upgrades.gateway.networking.k8s.io`) with the cluster's admin kubeconfig once the control plane is up.
+    - It applies its CRDs with the cluster's admin kubeconfig once the control plane is up. On kubeadm and Talos it applies the admission policy beside them (`safe-upgrades.gateway.networking.k8s.io`).
   - **The distributions' charts.** RKE2 and k3s ship the CRDs in their Traefik CRD charts in some releases.
     - Later releases drop them from that chart, which keeps them in the cluster. They ship all of the Gateway API, CRDs and policy, in a chart of its own instead (`rke2-gateway-api-crd`, `gateway-api-crd`), which adopts what it finds.
     - There the controller first waits until the Traefik CRD chart, and the Gateway API chart where the release has one, are installed. The distribution creates all of a release's HelmCharts at once.
@@ -1067,8 +1067,11 @@ An upgrade starts only inside the window (days of the week or of the month, a st
       - One missing gets Kubehenge's.
       - One of Kubehenge's release or newer stays.
       - An older one stays while the latest revision of the Helm release that marks it as its own still holds it. It is taken over and brought to Kubehenge's release once that revision does not.
-  - **Logged and guarded.** The controller logs each object it applies, and which Helm releases hold the cluster's objects whenever that changes.
-    - The policy stays in place too, so that a chart bringing older CRDs, or experimental ones over standard ones, is refused.
+  - **The policy goes with the CRDs.** It refuses CRDs older than its own release. Only whoever holds the CRDs brings it.
+    - The controller keeps its copy on kubeadm and Talos while no Helm release ships a CRD of the bundle. There it refuses older CRDs, and experimental ones over standard ones.
+    - On RKE2 and k3s, and wherever a Helm release ships a CRD, the controller deletes the copy it applied. A later release's Gateway API chart can then install its CRDs, older than Kubehenge's or not.
+    - A policy that a Helm release ships, or that someone else applied, stays.
+  - **Logged.** The controller logs each object it applies or deletes, and which Helm releases hold the cluster's objects whenever that changes.
     - The distributions' Gateway API charts install only the standard channel, as Kubehenge does. Their experimental channel adds only the `gateway.networking.x-k8s.io` CRDs, which neither Traefik's Gateway provider nor Istio's waypoints need.
   - **Traefik's Gateway provider** is on in every distribution, configured like the rest of Traefik.
     - The configuration is in the chart values on kubeadm and Talos.

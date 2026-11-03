@@ -1039,18 +1039,35 @@ gateway_api_shipped() {
 # gateway_api_held: every object of the Gateway API is held once. One that a Helm release ships is
 # that release's alone: no other release ships it, its annotations name that release, and it is of
 # the Gateway API release the chart ships, which nothing has replaced. One that no Helm release
-# ships is of Kubehenge's release or newer.
+# ships is of Kubehenge's release or newer. The admission policy goes with the CRDs: Kubehenge keeps
+# it only on kubeadm and Talos, beside CRDs no Helm release ships, so that it never refuses the CRDs
+# a chart brings.
 gateway_api_held() {
     # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
     gateway_api_shipping=$(gateway_api_shipped) || return 1
+    gateway_api_policy=kubehenge
+    if [ -n "${gateway_api_chart}" ] || printf '%s\n' "${gateway_api_shipping}" | awk '$2 == "CustomResourceDefinition" { found = 1 } END { exit !found }'; then
+        gateway_api_policy=
+    fi
     for gateway_api_object in ${gateway_api_objects}; do
         gateway_api_kind=${gateway_api_object%%/*} gateway_api_name=${gateway_api_object#*/}
         # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-        gateway_api_has=$(wl get "${gateway_api_kind}" "${gateway_api_name}" -o json 2> /dev/null) || return 1
-        gateway_api_named=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations // {} | "\(.["meta.helm.sh/release-namespace"] // "")/\(.["meta.helm.sh/release-name"] // "")"')
-        gateway_api_is=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations["gateway.networking.k8s.io/bundle-version"] // "none"')
+        gateway_api_has=$(wl get "${gateway_api_kind}" "${gateway_api_name}" -o json --ignore-not-found 2> /dev/null) || return 1
         gateway_api_holders=$(printf '%s\n' "${gateway_api_shipping}" | awk -v k="${gateway_api_kind}" -v n="${gateway_api_name}" '$2 == k && $3 == n')
         gateway_api_count=$(printf '%s' "${gateway_api_holders}" | grep -c . || true)
+        if [ "${gateway_api_kind}" != CustomResourceDefinition ] && [ "${gateway_api_count}" = 0 ] && [ -z "${gateway_api_policy}" ]; then
+            [ -z "${gateway_api_has}" ] || {
+                gateway_api_say "${gateway_api_object} is there, shipped by no Helm release, beside CRDs that charts hold"
+                return 1
+            }
+            continue
+        fi
+        [ -n "${gateway_api_has}" ] || {
+            gateway_api_say "the cluster has no ${gateway_api_object}"
+            return 1
+        }
+        gateway_api_named=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations // {} | "\(.["meta.helm.sh/release-namespace"] // "")/\(.["meta.helm.sh/release-name"] // "")"')
+        gateway_api_is=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations["gateway.networking.k8s.io/bundle-version"] // "none"')
         case ${gateway_api_count} in
             0)
                 gateway_api_oldest=$(printf '%s\n%s\n' "${gateway_api_is}" "${gateway_api_version}" | sort -V | head -n 1)
@@ -1114,7 +1131,6 @@ done
 
 step "the Gateway API: Traefik's Gateway routes an HTTPRoute"
 until_true 300 "the Gateway API's objects, each held once, by Kubehenge or a Helm release" gateway_api_held
-wl get validatingadmissionpolicy,validatingadmissionpolicybinding safe-upgrades.gateway.networking.k8s.io > /dev/null
 until_true 300 "Traefik's Gateway is programmed, at the API address" gateway_programmed
 wl -n e2e-ingress apply -f - << 'EOF'
 apiVersion: gateway.networking.k8s.io/v1
@@ -3656,8 +3672,8 @@ if [ "${part}" != addons ]; then
     fi
     # The new control-plane nodes have to carry the authentication configuration too.
     check_sign_in
-    # The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before,
-    # and Kubehenge's policy, without Kubehenge applying anything beside it.
+    # The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before
+    # and brings its own policy, without Kubehenge applying anything beside it.
     if [ -n "${gateway_api_chart}" ]; then
         until_true 300 "${gateway_api_chart} holds the Gateway API after the upgrade" gateway_api_chart_holds
     fi
