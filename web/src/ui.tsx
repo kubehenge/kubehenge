@@ -803,12 +803,12 @@ export function Dialog({
         onClose();
       }}
     >
-      <header className="dialog-title">
+      <div className="dialog-title">
         <h2 id={titleId}>{title}</h2>
         <button type="button" className="dialog-close" aria-label="Close" onClick={onClose}>
           ×
         </button>
-      </header>
+      </div>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -816,7 +816,7 @@ export function Dialog({
         }}
       >
         <div className="dialog-body">{children}</div>
-        <footer className="dialog-actions">{actions}</footer>
+        <div className="dialog-actions">{actions}</div>
       </form>
     </dialog>
   );

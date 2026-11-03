@@ -188,7 +188,7 @@ export function RunsPanel({ runs, onFold }: { runs: Run[]; onFold: () => void })
           return null;
         }
         return (
-          <section key={group} className={`runs-group runs-${group}`} aria-label={label}>
+          <section key={group} className={`runs-group runs-${group}`} aria-label={`Runs ${label.toLowerCase()}`}>
             <h3>{label}</h3>
             <ul>
               {members.map((r) => (
