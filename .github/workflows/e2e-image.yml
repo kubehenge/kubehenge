@@ -65,6 +65,7 @@ jobs:
       contents: read
     outputs:
       missing: ${{ steps.missing.outputs.missing }}
+      current: ${{ steps.missing.outputs.current }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -88,6 +89,8 @@ jobs:
           missing=$(test/e2e/ci/templates.sh missing "$REF")
           echo "missing: $missing"
           echo "missing=$missing" >> "$GITHUB_OUTPUT"
+          current=$(test/e2e/ci/templates.sh current | tr '\n' ' ')
+          echo "current=$current" >> "$GITHUB_OUTPUT"
 
   bake:
     name: Bake (${{ matrix.template.options }})
@@ -147,11 +150,14 @@ jobs:
           path: ${{ runner.temp }}/e2e/vz/template-1
           key: ${{ matrix.template.key }}
 
-  # Each template's entry a new one replaced, and the image's, go at once: the cache holds 10 GB.
+  # Each template's entry a new one replaced, a template no test needs any more, and the image's
+  # older entry go at once: the cache holds 10 GB.
   prune:
     name: Prune
-    needs: [build, bake]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    needs: [build, templates, bake]
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.templates.result == 'success'
+      && needs.bake.result != 'failure' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
@@ -163,4 +169,10 @@ jobs:
           persist-credentials: false
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/cache-prune.sh newest refs/heads/main
+          CURRENT: ${{ needs.templates.outputs.current }}
+        run: |
+          # shellcheck disable=SC2086 # one key per word
+          printf '%s\n' $CURRENT > "$RUNNER_TEMP/current"
+          [ -s "$RUNNER_TEMP/current" ]
+          scripts/cache-prune.sh templates refs/heads/main "$RUNNER_TEMP/current"
+          scripts/cache-prune.sh newest refs/heads/main

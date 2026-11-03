@@ -3,7 +3,8 @@
 # under. run.sh sources this file.
 #
 #   test/e2e/ci/templates.sh keys <test>       # key1=<key> and key2=<key>
-#   test/e2e/ci/templates.sh missing <ref>     # the keys the cache lacks on <ref>, as JSON
+#   test/e2e/ci/templates.sh current           # the keys of the merge queue's tests' templates
+#   test/e2e/ci/templates.sh missing <ref>     # those the cache lacks on <ref>, as JSON
 #   test/e2e/ci/templates.sh bake <work directory> <key> <options>...
 #
 # keys prints one key for each template of kubeadm, RKE2 or k3s the test makes, in the order run.sh
@@ -77,7 +78,7 @@ key_of() {
 
 # baked <test>: the options of each template of the test a bake makes, one per line.
 baked() {
-    templates_of "$1" | grep -v '^talos'
+    templates_of "$1" | sed -n '/^talos/!s/ *$//p'
 }
 
 # The host's CPU: told of a generic one, the guests' kernels run Meltdown's and MDS's mitigations,
@@ -162,6 +163,15 @@ if [ "${0##*/}" = templates.sh ]; then
             done < "${TMPDIR:-/tmp}/templates.$$"
             rm -f "${TMPDIR:-/tmp}/templates.$$"
             ;;
+        current)
+            cli_inputs=$(bake_inputs "${repo}")
+            cli_tests=$(sh "${here}/scope.sh" --all | jq -r '.[]' | tr -d '\r')
+            for cli_test in ${cli_tests}; do
+                baked "${cli_test}"
+            done | sort -u | while read -r cli_options; do
+                key_of "${cli_options}" "${cli_inputs}"
+            done
+            ;;
         missing)
             cli_ref=${2:?usage: $0 missing <ref>}
             cli_inputs=$(bake_inputs "${repo}")
@@ -194,7 +204,7 @@ if [ "${0##*/}" = templates.sh ]; then
             made 1 "$@"
             ;;
         *)
-            echo "usage: $0 keys <test> | missing <ref> | bake <work directory> <key> <options>..." >&2
+            echo "usage: $0 keys <test> | current | missing <ref> | bake <work directory> <key> <options>..." >&2
             exit 2
             ;;
     esac
