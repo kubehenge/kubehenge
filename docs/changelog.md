@@ -220,6 +220,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - A VM stopped, paused by hand, paused by QEMU after a disk error, or crashed for 3 minutes sets the condition `VMsNotRunning`.
   - A storage 85% full on a node the cluster runs on sets `StorageNearlyFull`. It turns to an error from 95%.
   - Both record events ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)).
+- **A held Kubernetes upgrade says why.** While Kubehenge holds one back, the Cluster has the condition `UpgradeHeld`, with the reason `RancherKubernetes`, `RancherElsewhere` or `TalosUpgrade`.
+  - The fleet and the Health page show **Upgrade held for Rancher** or **Upgrade waits for Talos**. `kubehenge cluster list` shows the reason in STATUS ([troubleshooting.md](troubleshooting.md#upgrades-held-back)).
 - **The management cluster's etcd is backed up, and restored from the appliance.** **Administration, Backups** snapshots it on a schedule into a backup target, encrypted.
   - It works through the nodes' Talos API with a talosconfig that may only take etcd snapshots. It lists the snapshots there.
   - **Restore…** wipes etcd on the control-plane nodes and restores one with the state passphrase. It works while the management cluster's API is down too ([install.md](install.md#back-up-the-management-clusters-etcd)).

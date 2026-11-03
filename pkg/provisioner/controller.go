@@ -159,6 +159,9 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if err := r.addFinalizer(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.clearUpgradeHeld(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
+	}
 	access, err := r.access(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -753,8 +756,7 @@ func (r *Reconciler) refuseRancher(ctx context.Context, cluster *clusterv1.Clust
 	if !apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("reading the Rancher proxy: %w", err)
 	}
-	return fmt.Sprintf("for Rancher, choose Kubernetes 1.%d to 1.%d, not %s",
-		r.RancherKubernetes.Min, r.RancherKubernetes.Max, cluster.Spec.Topology.Version), nil
+	return r.RancherKubernetes.refusal(cluster.Spec.Topology.Version), nil
 }
 
 // removeRancher uninstalls Rancher from a cluster that switched it off, once every cluster

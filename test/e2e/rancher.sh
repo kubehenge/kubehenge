@@ -217,7 +217,7 @@ until_true 1200 "registered again" registered
 
 step "Rancher's cluster is held at the Kubernetes versions Rancher runs on"
 kubectl -n "${ns}" patch cluster/rancher --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${KUBEHENGE_E2E_BLOCKED_VERSION}\"}}}"
-until_true 300 "upgrade held back" sh -c "kubectl -n ${ns} get cluster/rancher -o json | jq -e '[.status.conditions[]? | select(.message // \"\" | test(\"Rancher release\"))] | length > 0' >/dev/null"
+until_true 300 "upgrade held back" sh -c "kubectl -n ${ns} get cluster/rancher -o json | jq -e '.status.conditions // [] | any(.type == \"UpgradeHeld\" and .status == \"True\" and .reason == \"RancherKubernetes\")' >/dev/null"
 sleep 60
 # RKE2 and k3s kubelets report the distribution's full version, +rke2r1 or +k3s1 included.
 kubelet=$(rancher get nodes -o jsonpath='{.items[0].status.nodeInfo.kubeletVersion}')

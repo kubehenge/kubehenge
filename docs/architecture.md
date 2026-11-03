@@ -360,6 +360,7 @@ It deletes the rest.
   - It deletes the DaemonSets' pods the node's kubelet rejected while it shut down. Otherwise they would keep their DaemonSets reading not ready for up to 15 minutes.
   - Talos moves a minor version at a time, so a jump of two goes through the newest release of the minor in between.
   - Progress and the last upgrade are recorded on the Cluster (`kubehenge.dev/talos-upgrading`, `kubehenge.dev/talos-upgraded`) for the interface.
+  - A Kubernetes upgrade waits meanwhile (`BeforeClusterUpgrade`), with the Cluster's condition `UpgradeHeld` at reason `TalosUpgrade`.
 - **A failed upgrade** stops the rest.
   - A node that does not come back Ready, or comes back on its old release because Talos rolled back, is recorded in `kubehenge.dev/talos-upgrade-failed`.
   - The controller upgrades nothing more in the cluster until an operator removes the record (**Try again** on the cluster's page).
@@ -699,6 +700,8 @@ Rancher (`rancher: {install: true, hostname: …}`) goes into one cluster Kubehe
   - Cluster API does not authenticate itself to the controller's hooks. Each hook therefore reads the Cluster named in a request from the API server, and the delete hook acts only on one being deleted.
 
 Rancher's chart refuses Kubernetes versions its release does not run on. The controller refuses to create the Rancher cluster outside them. It holds back an upgrade beyond them (`BeforeClusterUpgrade`) until a Kubehenge release brings a Rancher that runs there.
+
+The hook records each hold as the Cluster's condition `UpgradeHeld`, whose reason the interface, `kubehenge cluster list` and kubectl read ([troubleshooting.md](troubleshooting.md#upgrades-held-back)). Cluster API's own `TopologyReconciled` carries the hook's message only inside its prose. The controller removes the condition once nothing holds the upgrade, also when the Cluster goes back to the version it runs.
 
 On fewer than 4 vCPUs a node running Rancher starves its own etcd and API server. `BeforeClusterCreate` refuses such a cluster, and a validating webhook refuses switching Rancher on or shrinking its nodes later. Rancher's first admin password is generated into the `bootstrap-secret` Secret in `cattle-system`, never written into values.
 
