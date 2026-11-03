@@ -183,7 +183,16 @@ The CPU is what the add-ons' pods request as Kubehenge installs them. It counts 
 
 A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm, RKE2 and Talos. A control plane counts 1848 MiB on k3s, 2392 MiB on Talos, 3120 MiB on RKE2 and 3376 MiB on kubeadm before any add-on. With every add-on but Rancher it needs 3872 MiB on k3s, 3992 MiB on Talos, 4720 MiB on RKE2 and 4976 MiB on kubeadm. These are above the least of 4096 MiB on RKE2 and kubeadm.
 
-On k3s, Cilium adds 1112 MiB to each control plane and Calico adds 1768 MiB. These count once the cluster has an add-on. With every add-on but Rancher, a k3s control plane needs 4984 MiB with Cilium and 5640 MiB with Calico.
+A CNI other than the class's default adds to each control plane. This counts once the cluster has an add-on.
+
+| Distribution | Cilium | Calico |
+| --- | --- | --- |
+| k3s | 1160 MiB | 1808 MiB |
+| kubeadm | default | 1424 MiB |
+| RKE2 | 504 MiB | 1808 MiB |
+| Talos | 1808 MiB | 384 MiB |
+
+RKE2 with Calico and Talos with Cilium have no measurement yet, so they count the largest figure measured. With every add-on but Rancher, a k3s control plane needs 5032 MiB with Cilium and 5680 MiB with Calico.
 
 A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB. It needs 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either. GitOps with Argo CD on top takes each 512 MiB further.
 
