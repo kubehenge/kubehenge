@@ -239,6 +239,8 @@ How releases are built and signed is in [releasing.md](releasing.md).
 
 ## Sign in
 
+![The sign-in form: user name, password and realm](images/sign-in.png)
+
 Open the address the installer printed. A browser that trusts Proxmox VE's certificates trusts it, as the Proxmox VE cluster's CA signed it. Otherwise, compare the fingerprint the browser shows with the one the installer printed.
 
 Sign in with a Proxmox VE account of any realm: Proxmox VE, PAM, LDAP, Active Directory or OpenID. There is no second user directory.
