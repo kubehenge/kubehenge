@@ -8,12 +8,12 @@ agnhost=registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070
 pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
 # The Git server the GitOps engines sync from, rootless as Pod Security's restricted level needs.
 # renovate: datasource=docker depName=docker.io/gitea/gitea
-gitea=docker.io/gitea/gitea:28.2.0-rootless@sha256:94807314454f6525994a3b76286ba12bc7e7f8cd14f61d9e67431767f8103306
+gitea=docker.io/gitea/gitea:28.3.0-rootless@sha256:40c5a68a0463c0940e1ae32626c8300dd0572f3558e390073ad8379ca67c0e1d
 export agnhost pause_image gitea
 # The S3 store the backup tests write to.
 # renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
-SEAWEEDFS_VERSION=4.51
-SEAWEEDFS_SHA256=c03be37416a8ee672c77766e20b22a4e1430744c3af2668599a4b6eeaec14cee
+SEAWEEDFS_VERSION=4.52
+SEAWEEDFS_SHA256=8b538c22d47d0c3fb6792adaa6b0c735a967401270a53427d5a476dcaca9b7ae
 
 # Each step shows the time since the test started, which is how a slow run shows where it lost it.
 e2e_started=$(date +%s)

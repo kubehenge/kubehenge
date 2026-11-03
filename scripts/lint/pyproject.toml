@@ -5,7 +5,7 @@ version = "0"
 requires-python = ">=3.12"
 dependencies = [
   "yamllint==1.38.0",
-  "zizmor==1.31.1",
+  "zizmor==1.32.0",
 ]
 
 [tool.uv]
