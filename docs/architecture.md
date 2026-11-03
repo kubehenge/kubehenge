@@ -685,7 +685,12 @@ CIS hardening (`cis: true`), chosen when a cluster is created and fixed after, a
   - The pods in `kube-system`, `kube-public` and `default` take connections only from their own namespace, DNS and a few of RKE2's own services aside.
   - With monitoring on, Kubehenge's controller lets Prometheus through to CoreDNS's metrics.
 
-The end-to-end tests run [kube-bench](https://github.com/aquasecurity/kube-bench) on a hardened cluster of each distribution. They test against the CIS Kubernetes Benchmark 2.0 for kubeadm and Rancher's own benchmarks for RKE2 and k3s. They fail on every failed check but 1.1.12. kubeadm runs etcd as root and has no supported way to run it as another user.
+The end-to-end tests run [kube-bench](https://github.com/aquasecurity/kube-bench) on a hardened cluster of each distribution. They test against the CIS Kubernetes Benchmark 2.0 for kubeadm and Rancher's own benchmarks for RKE2 and k3s. They fail on every failed check but two exceptions:
+
+- 1.1.12 on kubeadm, which runs etcd as root and has no supported way to run it as another user.
+- 1.1.9 and 1.1.10 on k3s with Cilium or Calico. k3s's benchmark looks only in `/var/lib/cni/networks`, flannel's lease folder, where these CNIs write nothing.
+
+For those two, the test checks the same thing itself. Every node's files in `/etc/cni/net.d` and `/var/lib/cni/networks` must be mode 600 or tighter and owned by root:root.
 
 The benchmark's policies section is the cluster owner's, since it judges what runs in the cluster, not how the cluster is built.
 
@@ -708,6 +713,8 @@ On fewer than 4 vCPUs a node running Rancher starves its own etcd and API server
 Rancher runs with imported-cluster version management off. Otherwise it would upgrade RKE2 and k3s beside Cluster API, with upgrade jobs that name their images by tag alone. The images Rancher starts itself (its agent, shell, webhook and Fleet) are named by digest through its chart's values.
 
 Rancher also installs Turtles, its own Cluster API, without which it never takes a registered cluster as ready. Rancher reads Turtles' values only from its `rancher-config` ConfigMap, which its chart writes without them. Kubehenge's controller therefore writes that ConfigMap, with Turtles' image and its Cluster API controller by digest, before the chart installs and adopts it.
+
+Rancher installs the chart versions of Turtles, the webhook and Fleet that its settings name. Its image sets them, and Kubehenge sets them again beside the images it pins for each. Rancher takes the charts from the copy of its chart repository inside its image (`useBundledSystemChart`), never from the repository's Git branch, which moves.
 
 ## Cluster autoscaler
 
@@ -1067,7 +1074,7 @@ An upgrade starts only inside the window (days of the week or of the month, a st
   - Every class honours the Cluster's ranges, kubeadm's pod subnet among them, which the Tigera operator needs to install Calico. The k3s provider reads its own server configuration only, so the k3s class copies them there.
 - **The Gateway API** is in every cluster, with no switch, and costs no pod. Traefik's Gateway, Istio's waypoints and anything else that speaks it get the same API everywhere.
   - **Kubehenge's release.** Kubehenge's controller carries one release of upstream's standard-channel install file, built into its binary and checked against its SHA-256 at build time.
-    - It applies its CRDs and the admission policy beside them (`safe-upgrades.gateway.networking.k8s.io`) with the cluster's admin kubeconfig once the control plane is up.
+    - It applies its CRDs with the cluster's admin kubeconfig once the control plane is up. On kubeadm and Talos it applies the admission policy beside them (`safe-upgrades.gateway.networking.k8s.io`).
   - **The distributions' charts.** RKE2 and k3s ship the CRDs in their Traefik CRD charts in some releases.
     - Later releases drop them from that chart, which keeps them in the cluster. They ship all of the Gateway API, CRDs and policy, in a chart of its own instead (`rke2-gateway-api-crd`, `gateway-api-crd`), which adopts what it finds.
     - There the controller first waits until the Traefik CRD chart, and the Gateway API chart where the release has one, are installed. The distribution creates all of a release's HelmCharts at once.
@@ -1077,8 +1084,11 @@ An upgrade starts only inside the window (days of the week or of the month, a st
       - One missing gets Kubehenge's.
       - One of Kubehenge's release or newer stays.
       - An older one stays while the latest revision of the Helm release that marks it as its own still holds it. It is taken over and brought to Kubehenge's release once that revision does not.
-  - **Logged and guarded.** The controller logs each object it applies, and which Helm releases hold the cluster's objects whenever that changes.
-    - The policy stays in place too, so that a chart bringing older CRDs, or experimental ones over standard ones, is refused.
+  - **The policy goes with the CRDs.** It refuses CRDs older than its own release. Only whoever holds the CRDs brings it.
+    - The controller keeps its copy on kubeadm and Talos while no Helm release ships a CRD of the bundle. There it refuses older CRDs, and experimental ones over standard ones.
+    - On RKE2 and k3s, and wherever a Helm release ships a CRD, the controller deletes the copy it applied. A later release's Gateway API chart can then install its CRDs, older than Kubehenge's or not.
+    - A policy that a Helm release ships, or that someone else applied, stays.
+  - **Logged.** The controller logs each object it applies or deletes, and which Helm releases hold the cluster's objects whenever that changes.
     - The distributions' Gateway API charts install only the standard channel, as Kubehenge does. Their experimental channel adds only the `gateway.networking.x-k8s.io` CRDs, which neither Traefik's Gateway provider nor Istio's waypoints need.
   - **Traefik's Gateway provider** is on in every distribution, configured like the rest of Traefik.
     - The configuration is in the chart values on kubeadm and Talos.

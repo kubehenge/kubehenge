@@ -65,11 +65,13 @@ for distribution in kubeadm rke2 k3s talos; do
     # shellcheck disable=SC2086 # one node OS per word
     [ "${distribution}" = talos ] || name=${name}+$(pick $((n / (count * 2))) ${oses})
     [ $((n / count % 2)) = 1 ] || name=${name}+cis-off
-    # The same options on each of its parts.
+    # The same options on each of its parts, in the same lanes as the merge queue's: a part that
+    # shares one runs the test it shares it with after it, as there.
     for lane in ${lanes}; do
-        case ${lane} in
+        first=${lane%%,*}
+        case ${first} in
             "${distribution}" | "${distribution}"-etcd | "${distribution}"-machines | "${distribution}"-addons-?)
-                variants="${variants} ${lane}${name#"${distribution}"}"
+                variants="${variants} ${first}${name#"${distribution}"}${lane#"${first}"}"
                 ;;
             *) ;;
         esac

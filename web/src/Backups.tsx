@@ -892,7 +892,7 @@ function BackupsTable({
             const mayDelete = v.canDelete && deletable(b);
             return (
               <tr key={b.name}>
-                <td>{b.name}</td>
+                <td className="nowrap">{b.name}</td>
                 <td className="started">
                   <span title={when(b.started)}>{ago(b.started)}</span>
                   {(b.scheduled || filled(b.by)) && (

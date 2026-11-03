@@ -128,9 +128,10 @@ jobs:
             ~/.npm
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
-  # Each test in a lane of its own (e2e-lane.yml), which hands it to a fresh runner when its runner
-  # lacks pause-loop exiting. One test per runner, since a runner holds one management cluster and
-  # one workload cluster; it needs no secrets, so pull requests from forks run it as they are.
+  # Each lane (e2e-lane.yml), a test or two run one after the other, on a runner of its own, which
+  # is handed to a fresh one when it lacks pause-loop exiting. A runner holds one management cluster
+  # and one test's workload clusters at a time; the lane needs no secrets, so pull requests from
+  # forks run it as they are.
   test:
     name: e2e (${{ matrix.test }})
     needs: [scope, build]

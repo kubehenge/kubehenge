@@ -16,12 +16,14 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The API server now refuses Clusters that break the interface's rules (listed under Fixes). Check the Clusters kept in Git first.
 - Fixed pools need one node address more than their machines.
 - A kubeadm control plane counts 3376 MiB for itself, up from 2392 MiB.
+- A control plane with add-ons counts more memory when its cluster runs a CNI other than the class's default, up to 1808 MiB ([clusters.md](clusters.md#machines)). Changes to a cluster that is already short go through only when they leave it no shorter.
 - Boot logs need the kubeadm, RKE2 and k3s templates built again.
 - `install.sh --upgrade` adds the volume that sealed automatic-upgrade secrets need.
 - Applying the management cluster replaces the nodes of Talos clusters, which get a new log target. It also replaces the control planes of kubeadm, RKE2 and k3s clusters, which get a CPU request for kube-vip among other changes ([upgrading.md](upgrading.md#when-a-release-changes-a-clusterclass)).
 
 ### Interface
 
+- `kubehenge serve --demo` serves the interface over seven sample clusters, with a **Demo** mark and every change refused. The docs' screenshots come from it ([testing.md](testing.md#demo-mode)).
 - **Activity** lists who did what, newest first, in Administration and on each cluster's page, with the management cluster's events of the last day. `kubehenge appliance activity` lists it too.
   - The setting **kubectl changes** (`api_audit_log`) adds the changes people make with kubectl, through the management cluster's audit log.
 - **A faster interface.** Pages load the session, setup status and fleet together. A change to a cluster or machine shows at once in the fleet, the runs and the cluster's page.
@@ -145,6 +147,9 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - `kubehenge template create` tries a failed build again after 2 and 8 minutes, as the interface and the refresh do.
 - Deleting a template build checks that its VM ID still holds that template. Proxmox VE gives a freed ID to the next VM created.
 - An add-on whose publisher moves a version's tag to a new build still installs and upgrades. The Add-on Provider for Helm refused the pinned chart once the tag pointed elsewhere, which stopped the newest CSI plugin.
+- Rancher installs the Turtles, webhook and Fleet charts Kubehenge names, from the chart repository inside its pinned image. With Rancher 2.15.3 these are Turtles 0.27.4, the webhook 0.11.4, Fleet 0.16.3 and shell 0.8.3.
+- A k3s or RKE2 upgrade whose Gateway API chart carries an older release than Kubehenge's installs that chart. Kubehenge's admission policy refused the chart's CRDs, and k3s's helm controller then never retried it.
+  - Kubehenge now applies the policy only beside CRDs it holds itself, on kubeadm and Talos. Elsewhere it deletes the copy it applied before.
 - Kyverno's controllers hold their leader leases through a stall of up to 50 seconds, like the other add-ons, rather than restart after 10.
 - The management-cluster module no longer asks the Image Factory for the Talos image's size, a request that held up a Proxmox VE API worker. The download no longer waits for the module's other changes.
 - **Cluster variables checked from the first cluster on.** Cluster API admitted the first cluster of each distribution unchecked, so a later change of its CNI or CIS hardening escaped the rules.
@@ -253,6 +258,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - Its lanes restore the kubeadm, RKE2 and k3s templates from the Actions cache instead of baking them ([testing.md](testing.md#end-to-end-without-a-proxmox-ve-host)).
 - RKE2's and k3s's workload tests run in two halves, `etcd` and `machines`, on a machine each ([testing.md](testing.md#running-part-of-it)).
 - The template refresh test makes its Rocky Linux template after the refresh's two runs, which then build one template fewer each.
+- Three pairs of short end-to-end tests share a lane, one after the other, so the merge queue runs 20 lanes ([testing.md](testing.md#lanes-of-two)).
 
 ## [0.3.1] - 2026-10-28
 

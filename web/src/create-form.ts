@@ -278,7 +278,8 @@ export function addonMemory(
     pods: "kubehenge.dev/addon-memory",
     growth: "kubehenge.dev/addon-control-plane-memory",
   });
-  return { names, mib: total, controlPlaneMiB: growth };
+  const cni = quantity(classFigures(c, "kubehenge.dev/cni-control-plane-memory")[form.cni]) ?? 0;
+  return { names, mib: total, controlPlaneMiB: growth + cni };
 }
 
 const bytesPerMiB = 1_048_576;

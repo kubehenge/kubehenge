@@ -29,6 +29,10 @@ metadata:
     # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
     # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
     kubehenge.dev/node-memory: '{"controlPlane":3376,"worker":704}'
+    # What Calico adds to a control plane in place of Cilium, which node-memory's figure runs: the most
+    # an idle control plane used with it in the end-to-end tests, less the least with Cilium at the
+    # same size, with a quarter on top, in steps of 8.
+    kubehenge.dev/cni-control-plane-memory: '{"calico":1424}'
     {{- include "kubehenge.addonCPU" . | nindent 4 }}
     # The CPU, in millicores, a node's own pods request besides the add-ons': on a worker the CNI's
     # agent (Cilium's 100m, what its CNI installer asks for before the agent's 50m, and its Envoy's

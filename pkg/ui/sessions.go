@@ -75,15 +75,19 @@ func (s *sessions) start(w http.ResponseWriter, ticket *pve.Ticket, challenge *p
 	s.mu.Lock()
 	s.byID[sess.id] = sess
 	s.mu.Unlock()
+	setSessionCookie(w, sess.id)
+	return sess
+}
+
+func setSessionCookie(w http.ResponseWriter, id string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
-		Value:    sess.id,
+		Value:    id,
 		Path:     "/",
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
-	return sess
 }
 
 // end forgets the request's session, if any, and clears its cookie.

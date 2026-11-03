@@ -1,6 +1,7 @@
 #!/bin/sh
-# Prints, as a JSON list, the end-to-end tests a merge group needs, from the paths its pull requests
-# change, one per line on standard input:
+# Prints, as a JSON list of lanes, the end-to-end tests a merge group needs, from the paths its pull
+# requests change, one per line on standard input. A lane is a test, or two run one after the other
+# on one runner, as in k3s-etcd,cluster-mesh:
 #
 #   git diff --name-only <base> HEAD | test/e2e/ci/scope.sh [--base <base>]
 #   test/e2e/ci/scope.sh --all
@@ -35,10 +36,27 @@ rancher_changed() {
     [ "${before}" != "${after}" ]
 }
 
-workload='kubeadm rke2-etcd rke2-machines k3s-etcd k3s-machines talos kubeadm-addons-a kubeadm-addons-b rke2-addons-a rke2-addons-b rke2-addons-c k3s-addons-a k3s-addons-b talos-addons-a talos-addons-b'
+workload='kubeadm rke2-etcd rke2-machines k3s-etcd k3s-machines talos kubeadm-addons-a kubeadm-addons-b kubeadm-addons-c rke2-addons-a rke2-addons-b rke2-addons-c rke2-addons-d k3s-addons-a k3s-addons-b talos-addons-a talos-addons-b talos-addons-c'
 all="management-cluster appliance ${workload} cluster-mesh node-image-refresh autoscaler"
 # Tests the nightly run adds to --all.
 nightly='management-cluster-upgrade rancher control-plane-ha two-nodes'
+# Tests that share a lane, one after the other on its runner, which keeps the merge queue at 20 lanes,
+# as many as a run's jobs at once. Each pair ends within the longest lane, and the first test leaves
+# no guest behind (docs/testing.md).
+pairs='appliance,management-cluster k3s-etcd,cluster-mesh k3s-addons-b,autoscaler'
+# lane_of <test>: the lane the test runs in, its pair or itself.
+lane_of() {
+    for lane in ${pairs}; do
+        case ",${lane}," in
+            *",$1,"*)
+                echo "${lane}"
+                return
+                ;;
+            *) ;;
+        esac
+    done
+    echo "$1"
+}
 need=
 [ "${1:-}" != --all ] || need=${all}
 [ -n "${need}" ] || while IFS= read -r path; do
@@ -55,7 +73,9 @@ need=
         appliance/* | pkg/appliance/* | pkg/ui/* | web/* | test/e2e/appliance.sh) need="${need} appliance" ;;
         *e2e_test.go) need="${need} management-cluster" ;;
         # They hold the Rancher and Turtles pins to what Rancher's test proved.
-        pkg/provisioner/rancher*_test.go | pkg/provisioner/turtles*_test.go) need="${need} rancher" ;;
+        pkg/provisioner/rancher*_test.go | pkg/provisioner/turtles*_test.go | charts/kubehenge/rancher_test.go)
+            need="${need} rancher"
+            ;;
         *_test.go | */testdata/* | test/integration/*) ;;
         test/e2e/ci/nightly.sh) ;;
         test/e2e/management-cluster-upgrade.sh) need="${need} management-cluster-upgrade" ;;
@@ -85,13 +105,20 @@ done
 
 printf '['
 sep=
+printed=' '
 for t in ${all} ${nightly}; do
     case " ${need} " in
-        *" ${t} "*)
-            printf '%s"%s"' "${sep}" "${t}"
+        *" ${t} "*) ;;
+        *) continue ;;
+    esac
+    lane=$(lane_of "${t}")
+    case "${printed}" in
+        *" ${lane} "*) ;;
+        *)
+            printf '%s"%s"' "${sep}" "${lane}"
             sep=', '
+            printed="${printed}${lane} "
             ;;
-        *) ;;
     esac
 done
 printf ']\n'

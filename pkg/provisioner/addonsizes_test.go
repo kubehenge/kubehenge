@@ -137,6 +137,47 @@ func TestControlPlanesHaveRoomForTheAddons(t *testing.T) {
 	}
 }
 
+func TestControlPlanesHaveRoomForTheirCNI(t *testing.T) {
+	t.Parallel()
+	class := addonClass()
+	class.Annotations[AddonControlPlaneMemoryAnnotation] = `{"monitoring":768}`
+	class.Annotations[CNIControlPlaneMemoryAnnotation] = `{"calico":1768,"cilium":1112}`
+	monitoring := func(cni, controlPlane string) *clusterv1.Cluster {
+		vars := map[string]string{"monitoring": `{"enabled":true}`, "rancher": `{"register":false}`}
+		if cni != "" {
+			vars["cni"] = `"` + cni + `"`
+		}
+		return workerMemory(withAddons(sized(controlPlane, new(int32(1))), vars), `{"cores":3,"memoryMiB":4644}`)
+	}
+	for _, tc := range []struct {
+		name string
+		c    *clusterv1.Cluster
+		want string
+	}{
+		{"the class's own CNI", monitoring("", `{"memoryMiB":4608}`), ""},
+		{"a CNI without a figure", monitoring("canal", `{"memoryMiB":4608}`), ""},
+		{
+			"Calico", monitoring("calico", `{"memoryMiB":4608}`),
+			"each control plane needs 6376 MiB of memory with Calico and add-ons (monitoring, cert-manager), and has 4608 MiB",
+		},
+		{"Calico with room", monitoring("calico", `{"memoryMiB":6376}`), ""},
+		{"Cilium", monitoring("cilium", `{"memoryMiB":5632}`), "needs 5720 MiB of memory with Cilium and add-ons"},
+		{"Calico without add-ons", withAddons(sized("", new(int32(1))), map[string]string{"cni": `"calico"`, "rancher": `{"register":false}`}), ""},
+		{
+			"without workers, Calico under the add-ons' pods", withAddons(sized(`{"cores":4,"memoryMiB":9000}`), map[string]string{"cni": `"calico"`, "monitoring": `{"enabled":true}`, "rancher": `{"register":false}`}),
+			"on control planes without workers, which have 2624 MiB",
+		},
+	} {
+		err := checkAddonRoom(nil, tc.c, class)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: refused: %v", tc.name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: %v, want a refusal naming %q", tc.name, err, tc.want)
+		}
+	}
+}
+
 // everyAddonButRancher adds to everyAddon logs, backups, the load balancer and Flux, as the
 // end-to-end tests switch them on.
 func everyAddonButRancher(c *clusterv1.Cluster) *clusterv1.Cluster {

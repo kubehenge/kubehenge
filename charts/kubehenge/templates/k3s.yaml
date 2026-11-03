@@ -27,6 +27,13 @@ metadata:
     # What each add-on adds to a control plane, where k3s runs the API server in its own process:
     # measured as the chart's kubehenge.addonControlPlaneMemory figures are, on k3s.
     kubehenge.dev/addon-control-plane-memory: '{"monitoring":616,"backups":24,"kyverno":520,"istio":504,"rancher":512,"argocd":360}'
+    # What Cilium or Calico adds to a control plane in place of k3s's own flannel, which node-memory's
+    # figure runs: the most an idle control plane used with it in the end-to-end tests, less the least
+    # with flannel at the same size, with a quarter on top as the node figures have, in steps of 8.
+    # Calico's operator, API server, Typha and node agent run there, and Cilium's agent and operator.
+    # A control plane short of it thrashes its page cache, and etcd's writes stall past the
+    # leader-election leases' deadlines.
+    kubehenge.dev/cni-control-plane-memory: '{"cilium":1160,"calico":1808}'
     {{- include "kubehenge.backupTargets" . | nindent 4 }}
     # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
     # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type SubmitEvent } from "react";
 
-import { api } from "./api";
+import { api, isDemo } from "./api";
 import logo from "./logo.svg";
 import type { Realm, SecondFactor, Session } from "./types";
 import { ErrorBox, Field, errorMessage, filled } from "./ui";
@@ -106,6 +106,7 @@ export function SignIn({
         <h1 className="brand">
           <img src={logo} alt="" />
           Kubehenge
+          {isDemo() && <span className="demo-mark">Demo</span>}
         </h1>
         {filled(notice) && <output className="warning notice">{notice}</output>}
         {factor ? (

@@ -21,6 +21,7 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -143,10 +144,11 @@ var gatewayScheme = func() *runtime.Scheme {
 	return s
 }()
 
-// gatewayWorkload is a workload cluster holding objs.
+// gatewayWorkload is a workload cluster holding objs. It returns managed fields, which tell
+// Kubehenge's own copy of the admission policy apart.
 func gatewayWorkload(t *testing.T, objs ...client.Object) client.WithWatch {
 	t.Helper()
-	return fake.NewClientBuilder().WithScheme(gatewayScheme).WithObjects(objs...).Build()
+	return fake.NewClientBuilder().WithScheme(gatewayScheme).WithObjects(objs...).WithReturnManagedFields().Build()
 }
 
 // helmChart is a distribution's HelmChart of a chart.
@@ -225,7 +227,7 @@ func TestGatewayAPIAppliesWhatIsMissing(t *testing.T) {
 	ctx := context.Background()
 	r := &GatewayAPIReconciler{Bundle: testGatewayAPI(t)}
 	workload := gatewayWorkload(t)
-	if _, applied, err := r.ensure(ctx, testClusterKey, workload, ""); err != nil || !applied {
+	if _, applied, err := r.ensure(ctx, testClusterKey, workload, "", true); err != nil || !applied {
 		t.Fatalf("applied %v, %v", applied, err)
 	}
 	for _, name := range []string{testGateways, testHTTPRoutes} {
@@ -233,16 +235,147 @@ func TestGatewayAPIAppliesWhatIsMissing(t *testing.T) {
 			t.Errorf("%s of release %q", name, got)
 		}
 	}
+	if kinds := policyKinds(t, workload); len(kinds) != 2 {
+		t.Errorf("beside the CRDs it applied, Kubehenge's policy has %v", kinds)
+	}
+	oldest, applied, err := r.ensure(ctx, testClusterKey, workload, "", true)
+	if err != nil || applied || oldest != "v1.6.3" {
+		t.Errorf("once applied: oldest %q, applied %v, %v", oldest, applied, err)
+	}
+}
+
+// policyKinds are the kinds of the admission policy's objects, policy and binding, the workload
+// cluster has.
+func policyKinds(t *testing.T, workload client.Client) []string {
+	t.Helper()
+	var kinds []string
 	for _, gvk := range gatewayAPIKinds[1:] {
 		o := &metav1.PartialObjectMetadata{}
 		o.SetGroupVersionKind(gvk)
-		if err := workload.Get(ctx, client.ObjectKey{Name: testPolicy}, o); err != nil {
-			t.Errorf("the admission policy's %s: %v", gvk.Kind, err)
+		err := workload.Get(context.Background(), client.ObjectKey{Name: testPolicy}, o)
+		switch {
+		case err == nil:
+			kinds = append(kinds, gvk.Kind)
+		case !apierrors.IsNotFound(err):
+			t.Fatal(err)
 		}
 	}
-	oldest, applied, err := r.ensure(ctx, testClusterKey, workload, "")
-	if err != nil || applied || oldest != "v1.6.3" {
-		t.Errorf("once applied: oldest %q, applied %v, %v", oldest, applied, err)
+	return kinds
+}
+
+// kubehengePolicy applies the bundle's admission policy and binding to the workload cluster, as
+// Kubehenge did beside CRDs it did not hold before it left the policy to their holder.
+func kubehengePolicy(t *testing.T, g *GatewayAPI, workload client.Client) {
+	t.Helper()
+	for i := range g.objects {
+		if o := &g.objects[i]; o.gvk != crdGVK {
+			if err := applyGatewayAPIObject(context.Background(), workload, o); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+// On RKE2 and k3s Kubehenge applies the CRDs no chart holds, but no policy: the distribution's own
+// Gateway API chart of a later release has to install its release over them, older or not.
+func TestGatewayAPIAppliesNoPolicyWhereTheDistributionHasCharts(t *testing.T) {
+	t.Parallel()
+	r := &GatewayAPIReconciler{Bundle: testGatewayAPI(t)}
+	workload := gatewayWorkload(t)
+	if _, applied, err := r.ensure(context.Background(), testClusterKey, workload, "", false); err != nil || !applied {
+		t.Fatalf("applied %v, %v", applied, err)
+	}
+	if got := releaseOf(t, workload, testGateways); got != "v1.6.3" {
+		t.Errorf("a CRD nobody had is of release %q", got)
+	}
+	if kinds := policyKinds(t, workload); len(kinds) != 0 {
+		t.Errorf("Kubehenge applied the policy's %v", kinds)
+	}
+}
+
+// Beside CRDs a Helm release ships, the policy is that release's to bring or not. Kubehenge's copy
+// is withdrawn, so that the release can install CRDs older than Kubehenge's. A policy someone else
+// applied, or the release ships, stays.
+func TestGatewayAPILeavesThePolicyToTheReleaseShippingTheCRDs(t *testing.T) {
+	t.Parallel()
+	helm := []string{helmReleaseName, "gateway-crds", helmReleaseNamespace, "kube-system"}
+	crds := crdDoc(testGateways, "v1.6.1") + "---\n" + crdDoc(testHTTPRoutes, "v1.6.1")
+	for what, c := range map[string]struct {
+		policy   []client.Object
+		manifest string
+		ours     bool
+		stays    bool
+	}{
+		"Kubehenge's":            {ours: true, manifest: crds},
+		"one applied by another": {policy: clusterPolicy("v1.6.3"), manifest: crds, stays: true},
+		"the release's":          {policy: clusterPolicy("v1.6.1", helm...), manifest: testManifest("v1.6.1"), stays: true},
+		"none":                   {manifest: crds},
+	} {
+		t.Run(what, func(t *testing.T) {
+			t.Parallel()
+			r := &GatewayAPIReconciler{Bundle: testGatewayAPI(t)}
+			workload := gatewayWorkload(t, append(c.policy,
+				clusterCRD(testGateways, "v1.6.1", helm...), clusterCRD(testHTTPRoutes, "v1.6.1", helm...),
+				helmRevision(t, "gateway-crds", 1, "deployed", c.manifest))...)
+			if c.ours {
+				kubehengePolicy(t, r.Bundle, workload)
+			}
+			oldest, applied, err := r.ensure(context.Background(), testClusterKey, workload, "", true)
+			if err != nil || applied || oldest != "v1.6.1" {
+				t.Errorf("oldest %q, applied %v, %v", oldest, applied, err)
+			}
+			if kinds := policyKinds(t, workload); len(kinds) != 0 != c.stays {
+				t.Errorf("the policy's %v there, where it stays: %v", kinds, c.stays)
+			}
+			if got := releaseOf(t, workload, testGateways); got != "v1.6.1" {
+				t.Errorf("the release's CRD is of release %s", got)
+			}
+		})
+	}
+}
+
+// Kubehenge holds the CRDs and its policy until a Helm release takes the CRDs over, even of
+// Kubehenge's release or newer. The policy then goes, and comes back once no release ships them.
+func TestGatewayAPIHandsThePolicyOverWithTheCRDs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := &GatewayAPIReconciler{Bundle: testGatewayAPI(t)}
+	workload := gatewayWorkload(t)
+	if _, _, err := r.ensure(ctx, testClusterKey, workload, "", true); err != nil {
+		t.Fatal(err)
+	}
+
+	// A chart adopts the CRDs as they are, which Helm marks as the release's.
+	for _, name := range []string{testGateways, testHTTPRoutes} {
+		crd := &apiextensionsv1.CustomResourceDefinition{}
+		if err := workload.Get(ctx, client.ObjectKey{Name: name}, crd); err != nil {
+			t.Fatal(err)
+		}
+		crd.Annotations[helmReleaseName], crd.Annotations[helmReleaseNamespace] = "gateway-crds", "kube-system"
+		if err := workload.Update(ctx, crd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	crds := crdDoc(testGateways, "v1.6.3") + "---\n" + crdDoc(testHTTPRoutes, "v1.6.3")
+	if err := workload.Create(ctx, helmRevision(t, "gateway-crds", 1, "deployed", crds)); err != nil {
+		t.Fatal(err)
+	}
+	if _, applied, err := r.ensure(ctx, testClusterKey, workload, "", true); err != nil || applied {
+		t.Fatalf("once a release holds the CRDs: applied %v, %v", applied, err)
+	}
+	if kinds := policyKinds(t, workload); len(kinds) != 0 {
+		t.Errorf("Kubehenge's policy's %v stay beside a release's CRDs", kinds)
+	}
+
+	// The release's next revision no longer ships them, and Helm keeps them.
+	if err := workload.Create(ctx, helmRevision(t, "gateway-crds", 2, "deployed", "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, applied, err := r.ensure(ctx, testClusterKey, workload, "", true); err != nil || !applied {
+		t.Fatalf("once no release ships the CRDs: applied %v, %v", applied, err)
+	}
+	if kinds := policyKinds(t, workload); len(kinds) != 2 {
+		t.Errorf("once Kubehenge holds the CRDs again, its policy has %v", kinds)
 	}
 }
 
@@ -251,7 +384,7 @@ func TestGatewayAPINeverDowngrades(t *testing.T) {
 	ctx := context.Background()
 	r := &GatewayAPIReconciler{Bundle: testGatewayAPI(t)}
 	workload := gatewayWorkload(t, clusterCRD(testGateways, "v1.7.0"), clusterCRD(testHTTPRoutes, "v1.6.3"))
-	if _, _, err := r.ensure(ctx, testClusterKey, workload, ""); err != nil {
+	if _, _, err := r.ensure(ctx, testClusterKey, workload, "", true); err != nil {
 		t.Fatal(err)
 	}
 	if got := releaseOf(t, workload, testGateways); got != "v1.7.0" {
@@ -288,20 +421,23 @@ func TestGatewayAPIStaysTheDistributionsWhileItShipsIt(t *testing.T) {
 	shipping := helmRevision(t, "traefik-crd", 1, "superseded", crdDoc(testGateways, "v1.6.1")+"---\n"+crdDoc(testHTTPRoutes, "v1.6.1")+traefikCRD)
 	workload := gatewayWorkload(t, clusterCRD(testGateways, "v1.6.1", helm...), clusterCRD(testHTTPRoutes, "v1.6.1", helm...), shipping)
 
-	oldest, applied, err := r.ensure(ctx, testClusterKey, workload, "")
+	oldest, applied, err := r.ensure(ctx, testClusterKey, workload, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := releaseOf(t, workload, testGateways); got != "v1.6.1" || oldest != "v1.6.1" || !applied {
-		t.Errorf("while the distribution ships the CRDs: they are of release %s, oldest %s, applied %v (the policy only)", got, oldest, applied)
+	if got := releaseOf(t, workload, testGateways); got != "v1.6.1" || oldest != "v1.6.1" || applied {
+		t.Errorf("while the distribution ships the CRDs: they are of release %s, oldest %s, applied %v", got, oldest, applied)
 	}
 
 	// A distribution upgrade brings a chart without them, which Helm keeps in the cluster.
 	if err = workload.Create(ctx, helmRevision(t, "traefik-crd", 2, "deployed", traefikCRD)); err != nil {
 		t.Fatal(err)
 	}
-	if _, applied, err = r.ensure(ctx, testClusterKey, workload, ""); err != nil || !applied {
+	if _, applied, err = r.ensure(ctx, testClusterKey, workload, "", false); err != nil || !applied {
 		t.Fatalf("once the distribution no longer ships them: applied %v, %v", applied, err)
+	}
+	if kinds := policyKinds(t, workload); len(kinds) != 0 {
+		t.Errorf("Kubehenge applied the policy's %v on a distribution with charts of its own", kinds)
 	}
 	for _, name := range []string{testGateways, testHTTPRoutes} {
 		got := &metav1.PartialObjectMetadata{}
@@ -323,7 +459,7 @@ func TestGatewayAPITakesOverWhatAnUninstalledReleaseLeft(t *testing.T) {
 		clusterCRD(testGateways, "v1.6.1", helm...), clusterCRD(testHTTPRoutes, "v1.6.1", helm...),
 		helmRevision(t, "gateway-crds", 1, "uninstalled", crdDoc(testGateways, "v1.6.1")+"---\n"+crdDoc(testHTTPRoutes, "v1.6.1")),
 	)
-	if _, _, err := r.ensure(context.Background(), testClusterKey, workload, ""); err != nil {
+	if _, _, err := r.ensure(context.Background(), testClusterKey, workload, "", true); err != nil {
 		t.Fatal(err)
 	}
 	if got := releaseOf(t, workload, testHTTPRoutes); got != "v1.6.3" {
@@ -339,7 +475,7 @@ func TestGatewayAPILeavesEveryKindToTheReleaseShippingIt(t *testing.T) {
 	r := &GatewayAPIReconciler{Bundle: testGatewayAPI(t)}
 	helm := []string{helmReleaseName, "gateway-crds", helmReleaseNamespace, "kube-system"}
 	workload := gatewayWorkload(t, append(clusterPolicy("v1.6.1", helm...), helmRevision(t, "gateway-crds", 1, "deployed", testManifest("v1.6.1")))...)
-	if _, applied, err := r.ensure(ctx, testClusterKey, workload, ""); err != nil || !applied {
+	if _, applied, err := r.ensure(ctx, testClusterKey, workload, "", true); err != nil || !applied {
 		t.Fatalf("applied %v, %v", applied, err)
 	}
 	if got := policyRelease(t, workload); got != "v1.6.1" {
@@ -359,7 +495,7 @@ func TestGatewayAPIMixesNothingIntoTheDistributionsChart(t *testing.T) {
 	helm := []string{helmReleaseName, "gateway-api-crd", helmReleaseNamespace, "kube-system"}
 	workload := gatewayWorkload(t, clusterCRD(testGateways, "v1.6.1", helm...),
 		helmRevision(t, "gateway-api-crd", 1, "deployed", crdDoc(testGateways, "v1.6.1")))
-	oldest, applied, err := r.ensure(ctx, testClusterKey, workload, "kube-system/gateway-api-crd")
+	oldest, applied, err := r.ensure(ctx, testClusterKey, workload, "kube-system/gateway-api-crd", false)
 	if err != nil || applied || oldest != "v1.6.1" {
 		t.Errorf("oldest %q, applied %v, %v", oldest, applied, err)
 	}
@@ -483,14 +619,18 @@ func TestGatewayAPIWaitsForTheDistributionsCRDChart(t *testing.T) {
 			if !applied() {
 				t.Error("nothing applied once the distribution's CRD chart is installed")
 			}
+			if kinds := policyKinds(t, workload); len(kinds) != 0 {
+				t.Errorf("Kubehenge applied the policy's %v", kinds)
+			}
 		})
 	}
 }
 
 // A distribution release with a Gateway API chart of its own holds all of the Gateway API in it,
-// adopting the CRDs the Traefik CRD chart of the release before left behind and Kubehenge's policy,
-// and keeps its own release of them, older than Kubehenge's or not. Kubehenge applies nothing while
-// the chart installs or after, and records the release the chart holds.
+// adopting the CRDs the Traefik CRD chart of the release before left behind, and keeps its own
+// release of them, older than Kubehenge's or not. A policy Kubehenge applied before is withdrawn
+// while the chart installs, as it would refuse the chart's older CRDs. Kubehenge applies nothing
+// while the chart installs or after, and records the release the chart holds.
 func TestGatewayAPILeavesItToTheDistributionsOwnChart(t *testing.T) {
 	t.Parallel()
 	for distribution, charts := range map[string]distributionCharts{
@@ -505,18 +645,20 @@ func TestGatewayAPILeavesItToTheDistributionsOwnChart(t *testing.T) {
 			_, kube := newReconciler(t, &fakeCloud{}, c)
 			left := []string{helmReleaseName, charts.traefikCRD, helmReleaseNamespace, "kube-system"}
 			traefikCRD := "---\n# Source: traefik-crd/templates/traefik.io_middlewares.yaml\n" + crdDoc("middlewares.traefik.io", "")
-			cluster := gatewayWorkload(t, append(clusterPolicy("v1.6.3"),
+			cluster := gatewayWorkload(t,
 				clusterCRD(testGateways, "v1.6.1", left...), clusterCRD(testHTTPRoutes, "v1.6.1", left...),
 				helmRevision(t, charts.traefikCRD, 1, "superseded", crdDoc(testGateways, "v1.6.1")+"---\n"+crdDoc(testHTTPRoutes, "v1.6.1")+traefikCRD),
 				helmRevision(t, charts.traefikCRD, 2, "deployed", traefikCRD),
 				helmChart(charts.gatewayAPI),
 				helmRevision(t, charts.gatewayAPI, 1, "pending-install", ""),
-			)...)
+			)
 			applies := 0
 			r := &GatewayAPIReconciler{
 				Client: kube, ClassNamespace: "kubehenge-system", Bundle: testGatewayAPI(t),
 				Remotes: &Remotes{byCluster: map[string]remote{remoteKey(c): {client: countingApplies(cluster, &applies), until: time.Now().Add(time.Hour)}}},
 			}
+			kubehengePolicy(t, r.Bundle, cluster)
+			applies = 0
 			run := func() ctrl.Result {
 				t.Helper()
 				result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)})
@@ -537,17 +679,24 @@ func TestGatewayAPILeavesItToTheDistributionsOwnChart(t *testing.T) {
 			if result := run(); applies != 0 || result.RequeueAfter != waitInterval || recorded() != "" {
 				t.Errorf("while the distribution's Gateway API chart installs: %d applied, requeued after %v, recorded %q", applies, result.RequeueAfter, recorded())
 			}
+			if kinds := policyKinds(t, cluster); len(kinds) != 0 {
+				t.Errorf("while the distribution's Gateway API chart installs, Kubehenge's policy's %v stay", kinds)
+			}
 
 			adopted := map[string]string{bundleVersionAnnotation: "v1.6.1", helmReleaseName: charts.gatewayAPI, helmReleaseNamespace: "kube-system"}
 			for _, o := range []client.Object{
 				&apiextensionsv1.CustomResourceDefinition{Name: testGateways}, &apiextensionsv1.CustomResourceDefinition{Name: testHTTPRoutes},
-				&admissionregistrationv1.ValidatingAdmissionPolicy{Name: testPolicy}, &admissionregistrationv1.ValidatingAdmissionPolicyBinding{Name: testPolicy},
 			} {
 				if err := cluster.Get(ctx, client.ObjectKeyFromObject(o), o); err != nil {
 					t.Fatal(err)
 				}
 				o.SetAnnotations(maps.Clone(adopted))
 				if err := cluster.Update(ctx, o); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, o := range clusterPolicy("v1.6.1", helmReleaseName, charts.gatewayAPI, helmReleaseNamespace, "kube-system") {
+				if err := cluster.Create(ctx, o); err != nil {
 					t.Fatal(err)
 				}
 			}

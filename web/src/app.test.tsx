@@ -1290,6 +1290,26 @@ describe("create", () => {
     expect(addonNeedMiB(alone, grown)).toBe(3200 + 1000 + 1656);
   });
 
+  it("counts what a CNI other than the class's own adds to the control planes", () => {
+    const grown: ClusterClass = {
+      ...rke2,
+      annotations: {
+        "kubehenge.dev/addon-memory": '{"monitoring":1500}',
+        "kubehenge.dev/addon-control-plane-memory": '{"monitoring":904}',
+        "kubehenge.dev/cni-control-plane-memory": '{"calico":1768}',
+        "kubehenge.dev/node-memory": '{"controlPlane":1848,"worker":448}',
+      },
+    };
+    const least = { cores: 2, memoryMiB: 4096, diskGiB: 30 };
+    const calico = { ...form, workerReplicas: 1, controlPlaneMachine: least, monitoring: true, cni: "calico" };
+    expect(addonMemory(calico, grown).controlPlaneMiB).toBe(904 + 1768);
+    expect(fieldProblems("Machines", calico, grown).controlPlaneMachine).toBe(
+      "At least 4520 MiB of memory for the add-ons chosen, in steps of 8",
+    );
+    // The class's own CNI is what the node figures were measured with.
+    expect(addonMemory({ ...calico, cni: "" }, grown).controlPlaneMiB).toBe(904);
+  });
+
   it("gives the nodes that carry the add-ons the CPU their pods ask for", () => {
     // Flux's figure as its pods asked for before Kubehenge gave them 10m each.
     const figures =

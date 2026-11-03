@@ -3,18 +3,20 @@
 # root, with the controller and capmox built from the tree under test:
 #
 #   test/e2e/ci/run.sh <work directory> <test>
+#   test/e2e/ci/run.sh <work directory> <test>,<test>     # a lane of two, one after the other
 #
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
 # k3s, talos, the halves of rke2 and k3s rke2-etcd, rke2-machines, k3s-etcd and k3s-machines, their
-# add-on parts kubeadm-addons-a and -b, rke2-addons-a, -b and -c, k3s-addons-a and -b and
-# talos-addons-a and -b, rancher,
+# add-on parts kubeadm-addons-a, -b and -c, rke2-addons-a to -d, k3s-addons-a and -b and
+# talos-addons-a, -b and -c, rancher,
 # cluster-mesh, node-image-refresh, autoscaler, control-plane-ha or two-nodes (which first joins a
 # second Proxmox VE node, test/e2e/ci/second-node.sh), which first apply the management cluster and
 # create the templates they need, and leave it up. The workload tests and their add-on halves take
 # options after their name, each after a +: the cluster's CNI, its node OS, or cis-off
-# (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off.
+# (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off. Every test but the appliance
+# takes management-<MiB>, the management node's memory, as in management-cluster-upgrade+management-3584.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
 # upgraded to it; KUBEHENGE_E2E_FROM names the release they start on. The Talos cluster starts on
@@ -24,6 +26,51 @@ set -eu
 
 work=$(readlink -f "${1:?usage: $0 <work directory> <test>}")
 test=${2:?usage: $0 <work directory> <test>}
+# lane_clear: no workload cluster and no VM of one is left, so the lane's next test has the runner's
+# memory to itself. The management cluster and the templates stay for it.
+lane_clear() {
+    if [ -s "${work}/kubeconfig.yaml" ] && kubectl --kubeconfig "${work}/kubeconfig.yaml" get --raw /readyz > /dev/null 2>&1; then
+        lane_left=$(kubectl --kubeconfig "${work}/kubeconfig.yaml" get clusters.cluster.x-k8s.io -A \
+            -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {end}')
+        if [ -n "${lane_left}" ]; then
+            echo "the lane's next test would start beside the clusters ${lane_left}" >&2
+            return 1
+        fi
+    fi
+    lane_left=$(docker exec kubehenge-e2e-pve pvesh get /cluster/resources --type vm --output-format json |
+        jq -j '.[] | select((.template // 0) == 0 and (.name | startswith("kubehenge-") | not)) | "\(.name) "')
+    if [ -n "${lane_left}" ]; then
+        echo "the lane's next test would start beside the VMs ${lane_left}" >&2
+        return 1
+    fi
+}
+# A lane of two tests (test/e2e/ci/scope.sh) runs each in turn on this Proxmox VE and stops at the
+# first that fails, naming it in <work directory>/failed-test.
+case "${test}" in
+    *,*)
+        lane=${test}
+        lane_first=${lane%%,*}
+        for lane_test in $(printf '%s' "${lane}" | tr , ' '); do
+            lane_status=0
+            # shellcheck disable=SC2310 # its refusal, which it explains, fails the test before it.
+            if [ "${lane_test}" != "${lane_first}" ] && ! lane_clear; then
+                lane_test=${lane_first}
+                lane_status=1
+            fi
+            if [ "${lane_status}" = 0 ]; then
+                echo "== ${lane_test}, in the lane ${lane}"
+                KUBEHENGE_E2E_LANE=${lane} sh "$0" "${work}" "${lane_test}" || lane_status=$?
+            fi
+            if [ "${lane_status}" != 0 ]; then
+                printf '%s\n' "${lane_test}" > "${work}/failed-test"
+                echo "${lane_test} failed, in the lane ${lane}" >&2
+                exit "${lane_status}"
+            fi
+        done
+        exit 0
+        ;;
+    *) ;;
+esac
 # shellcheck source=variant.sh
 . "$(dirname "$0")/variant.sh"
 # shellcheck disable=SC2310 # its refusal, which it explains, ends the run.
@@ -33,8 +80,9 @@ test=${test%%+*}
 case "${test}" in
     management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos) ;;
     rke2-etcd | rke2-machines | k3s-etcd | k3s-machines) ;;
-    kubeadm-addons-a | kubeadm-addons-b | rke2-addons-a | rke2-addons-b | rke2-addons-c) ;;
-    k3s-addons-a | k3s-addons-b | talos-addons-a | talos-addons-b) ;;
+    kubeadm-addons-a | kubeadm-addons-b | kubeadm-addons-c) ;;
+    rke2-addons-a | rke2-addons-b | rke2-addons-c | rke2-addons-d) ;;
+    k3s-addons-a | k3s-addons-b | talos-addons-a | talos-addons-b | talos-addons-c) ;;
     rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
     control-plane-ha | two-nodes) ;;
     *)
@@ -153,17 +201,21 @@ case "${test}" in
                 sleep 5
                 waited=$((waited + 5))
             done
-            slot=0
+            # A template's slot is its place among the baked templates of the test's lane, as
+            # templates.sh keys numbers their keys.
+            lane_baked=$(baked "${KUBEHENGE_E2E_LANE:-${test}}")
             templates_of "${test}" > "${work}/templates.txt"
             while read -r options; do
                 case "${options}" in
                     talos*) this=0 ;;
-                    *)
-                        slot=$((slot + 1))
-                        this=${slot}
-                        ;;
+                    *) this=$(printf '%s\n' "${lane_baked}" | grep -nxF -- "${options}" | cut -d: -f1) ;;
                 esac
-                [ "${test}-${slot}" != node-image-refresh-2 ] || continue
+                [ "${test}-${this}" != node-image-refresh-2 ] || continue
+                # A lane's earlier test made it and checked its boot log.
+                if grep -qxF -- "${options}" "${work}/templates-made" 2> /dev/null; then
+                    echo "template ${options} made for the lane's earlier test"
+                    continue
+                fi
                 # shellcheck disable=SC2086 # one option or argument per word
                 made "${this}" ${options}
             done < "${work}/templates.txt"
@@ -183,12 +235,13 @@ templates_made() {
     cat "${work}/templates.log"
     # grep -c exits non-zero when it counts none, which the comparison reports.
     checked=$(grep -c 'hands out its boot log and cloud-init.s output through the guest agent$' "${work}/templates.log" || true)
-    restored=$(grep -c '^template .* restored from the cache as VM ' "${work}/templates.log" || true)
+    restored=$(grep -c -e '^template .* restored from the cache as VM ' -e "^template .* made for the lane's earlier test$" "${work}/templates.log" || true)
     boot_log_builds=$((boot_log_builds - restored))
     if [ "${checked}" -lt "${boot_log_builds}" ]; then
         echo "${checked} of the ${boot_log_builds} node templates were seen handing out their boot logs" >&2
         exit 1
     fi
+    sed 's/ *$//' "${work}/templates.txt" >> "${work}/templates-made"
 }
 
 if [ "${built}" = true ]; then
@@ -213,6 +266,18 @@ if [ "${built}" != true ]; then
         KO_FLAGS=--insecure-registry > /dev/null
     make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
         KO_FLAGS=--insecure-registry > /dev/null
+fi
+
+# The management node's memory is the module's default, but where the test's name gives another.
+# kubeadm's add-on parts with Calico and RKE2's with Cilium take 3584 MiB, as with 4096 their guests
+# outgrow 12 GiB (docs/testing.md).
+case "${test}+${KUBEHENGE_E2E_CNI:-}" in
+    kubeadm-addons-?+calico | rke2-addons-?+cilium) : "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:=3584}" ;;
+    *) ;;
+esac
+if [ -n "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:-}" ]; then
+    export TF_VAR_node_memory_mb="${KUBEHENGE_E2E_MANAGEMENT_MEMORY}"
+    echo "the management node has ${TF_VAR_node_memory_mb} MiB of memory"
 fi
 
 # The tests' own output is shown as it comes rather than when each make target ends.
@@ -272,27 +337,35 @@ case "${test}" in
         ;;
     # The other tests run against a management cluster applied here first. The runner has 4 vCPUs,
     # and a workload cluster with every add-on starting starves when the management node holds 4 of
-    # its own beside it; with no provider upgrade to ride out, 2 do. Its memory stays the module's
-    # default: with 3 GiB the node stalled for half a minute while the add-on provider
-    # reconciled every release at once, its probes failing, and the webhooks with them.
+    # its own beside it; with no provider upgrade to ride out, 2 do. Its memory is set above: with
+    # 3 GiB the node stalled for half a minute while the add-on provider reconciled every release
+    # at once, its probes failing, and the webhooks with them.
     *) export TF_VAR_node_cores=2 ;;
 esac
 
 # The workload cluster and Cluster Mesh tests back up to an S3 store they serve on this machine, at
 # the address the nodes reach it by, under a certificate of a CA made for the run; the management
 # cluster offers it as a backup target, and as a second one, which nothing backs up to, for the
-# clusters' reads of each other's backups.
+# clusters' reads of each other's backups. A lane's later test keeps the store and its certificate
+# when an earlier one set them up, so that the management cluster's apply changes nothing.
+s3=${work}/s3
 case "${test}" in
-    rke2* | k3s* | kubeadm* | talos* | cluster-mesh)
-        s3=${work}/s3
+    rke2* | k3s* | kubeadm* | talos* | cluster-mesh) serves_s3=true ;;
+    *) serves_s3=false ;;
+esac
+[ ! -s "${s3}/tls.crt" ] || serves_s3=true
+case "${serves_s3}" in
+    true)
         mkdir -p "${s3}"
-        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \
-            -keyout "${s3}/ca.key" -out "${s3}/ca.crt" 2> /dev/null
-        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=kubehenge-e2e-s3 \
-            -keyout "${s3}/tls.key" -out "${s3}/tls.csr" 2> /dev/null
-        printf 'subjectAltName = IP:%s\nextendedKeyUsage = serverAuth\n' "${KUBEHENGE_E2E_OIDC_ADDRESS:?}" > "${s3}/san.cnf"
-        openssl x509 -req -in "${s3}/tls.csr" -CA "${s3}/ca.crt" -CAkey "${s3}/ca.key" -CAcreateserial \
-            -CAserial "${s3}/ca.srl" -days 2 -extfile "${s3}/san.cnf" -out "${s3}/tls.crt" 2> /dev/null
+        if [ ! -s "${s3}/tls.crt" ]; then
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \
+                -keyout "${s3}/ca.key" -out "${s3}/ca.crt" 2> /dev/null
+            openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=kubehenge-e2e-s3 \
+                -keyout "${s3}/tls.key" -out "${s3}/tls.csr" 2> /dev/null
+            printf 'subjectAltName = IP:%s\nextendedKeyUsage = serverAuth\n' "${KUBEHENGE_E2E_OIDC_ADDRESS:?}" > "${s3}/san.cnf"
+            openssl x509 -req -in "${s3}/tls.csr" -CA "${s3}/ca.crt" -CAkey "${s3}/ca.key" -CAcreateserial \
+                -CAserial "${s3}/ca.srl" -days 2 -extfile "${s3}/san.cnf" -out "${s3}/tls.crt" 2> /dev/null
+        fi
         TF_VAR_backup_targets=$(jq -cn --arg e "https://${KUBEHENGE_E2E_OIDC_ADDRESS}:8333" --rawfile ca "${s3}/ca.crt" \
             '[{name: "e2e", endpoint: $e, bucket: "kubehenge-e2e", prefix: "ci", ca_certificate: $ca},
               {name: "e2e-other", endpoint: $e, bucket: "kubehenge-e2e-other", prefix: "ci", ca_certificate: $ca}]')
@@ -314,6 +387,8 @@ if ! tofu -chdir="${work}/mgmt" apply -input=false -auto-approve -no-color > "${
 fi
 (umask 077 && tofu -chdir="${work}/mgmt" output -raw kubeconfig > "${work}/kubeconfig.yaml")
 export KUBECONFIG="${work}/kubeconfig.yaml"
+# For the guard, which samples the management node's memory from inside it once this is here.
+(umask 077 && tofu -chdir="${work}/mgmt" output -raw talosconfig > "${work}/mgmt/talosconfig")
 
 templates_made
 
@@ -322,10 +397,10 @@ templates_made
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
 # Each class's workload test runs in parts, on a machine each, as the whole outgrows one machine's
 # memory: kubeadm, rke2, k3s and talos take a cluster of the least size the class allows with the
-# add-ons it starts with through everything but the other add-ons, and their -addons-a, -addons-b
-# and, on RKE2, -addons-c parts one sized for a group of the add-ons through that group, replacing
-# no machine. rke2's and k3s's own test also runs in two halves, -etcd and -machines, on a machine
-# each.
+# add-ons it starts with through everything but the other add-ons, and their -addons-a, -addons-b,
+# -addons-c but on k3s and -addons-d on RKE2 parts one sized for a group of the add-ons through that
+# group, replacing no machine. rke2's and k3s's own test also runs in two halves, -etcd and
+# -machines, on a machine each.
 case "${test}" in
     *-addons-?) export KUBEHENGE_E2E_PART="addons-${test##*-}" ;;
     *-etcd | *-machines) export KUBEHENGE_E2E_PART="${test#*-}" ;;

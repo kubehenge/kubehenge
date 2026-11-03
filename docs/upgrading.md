@@ -169,6 +169,10 @@ When there is neither, the version can be typed in. For kubeadm, the dialog asks
 
 Cluster API replaces the control-plane nodes one by one, then the workers. Each new node is created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)).
 
+The upgrade shows as a run, with each step and how many nodes it has replaced so far.
+
+![An upgrade under way: the control plane replaced, one of two workers replaced, the cluster yet to settle](images/run.png)
+
 #### Per distribution
 
 - **kubeadm** nodes boot from a template built for their exact Kubernetes version. Create the template of the new version first ([templates.md](templates.md)).

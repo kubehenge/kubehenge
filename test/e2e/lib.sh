@@ -24,6 +24,8 @@ apply_management_cluster() {
     "${tofu}" -chdir="${dir}" apply -input=false -auto-approve
     "${tofu}" -chdir="${dir}" output -raw kubeconfig > "${KUBECONFIG}"
     "${tofu}" -chdir="${dir}" output -json proxmox_objects > "${work}/objects.json"
+    # For CI's guard, which samples the management node's memory from inside it once this is here.
+    (umask 077 && "${tofu}" -chdir="${dir}" output -raw talosconfig > "${dir}/talosconfig") || rm -f "${dir}/talosconfig"
 }
 
 check_nodes() {
@@ -217,6 +219,7 @@ check_template_builder_privileges() {
 }
 
 destroy_and_check_nothing_left() {
+    rm -f "${dir}/talosconfig"
     "${tofu}" -chdir="${dir}" destroy -input=false -auto-approve
 
     step "nothing left on Proxmox VE"

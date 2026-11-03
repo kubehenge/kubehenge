@@ -91,8 +91,9 @@
 # cluster's talosconfig, or are left out.
 # KUBEHENGE_E2E_PART runs part of the test, for a machine whose memory holds the guests of only one:
 # lifecycle sizes the nodes at the least the class lets them have with the add-ons a cluster starts
-# with, and switches on no other; addons-a, addons-b and, on RKE2, addons-c each size them for a
-# group of the add-ons, switch on that group alone and leave out every step that replaces machines
+# with, and switches on no other; addons-a, addons-b, addons-c but on k3s and addons-d on RKE2 each
+# size them for a group of the add-ons, switch on that group alone and leave out every step that
+# replaces machines
 # (the distribution's own etcd upload, the load balancer switched off on k3s, scaling, the upgrade
 # and the dead worker). On RKE2 and k3s, etcd and machines split lifecycle in two: etcd leaves out
 # the load balancer switched off, scaling, the upgrade and the paused, expiring and dead workers,
@@ -140,17 +141,22 @@ distribution=$(echo "${class}" | sed 's/^kubehenge-//')
 # The add-ons this run switches on, by their keys in the class's kubehenge.dev/addon-memory; argocd
 # stands for GitOps, Flux and then Argo CD. Logs read Loki through monitoring's Grafana, and the
 # certificates step serves Headlamp and Grafana, so those four share a group. Each group's guests
-# stay within 12 GiB with the management node (docs/testing.md): RKE2's least worker of 4096 MiB
-# leaves its control plane no room for the second group's growth, which RKE2 splits in two.
+# stay within 12 GiB with the management node (docs/testing.md), also with a CNI other than the
+# class's default. k3s's control plane grows least and keeps the other four together. kubeadm and
+# Talos split them in two. RKE2's least worker of 4096 MiB leaves its control plane the least room,
+# so it splits them in three.
 case ${part}-${distribution} in
     all-*) addons='headlamp kyverno istio monitoring logs backups certManager argocd' ;;
     lifecycle-* | etcd-rke2 | etcd-k3s | machines-rke2 | machines-k3s) addons='' ;;
     addons-a-*) addons='headlamp monitoring logs certManager' ;;
-    addons-b-rke2) addons='kyverno backups' ;;
-    addons-b-*) addons='kyverno istio backups argocd' ;;
-    addons-c-rke2) addons='istio argocd' ;;
+    addons-b-k3s) addons='kyverno istio backups argocd' ;;
+    addons-b-rke2) addons='kyverno' ;;
+    addons-b-*) addons='kyverno backups' ;;
+    addons-c-rke2) addons='istio backups' ;;
+    addons-c-kubeadm | addons-c-talos) addons='istio argocd' ;;
+    addons-d-rke2) addons='argocd' ;;
     *)
-        echo "KUBEHENGE_E2E_PART is lifecycle, addons-a, addons-b or, on RKE2, addons-c, or etcd or machines on RKE2 and k3s, not ${part}" >&2
+        echo "KUBEHENGE_E2E_PART is lifecycle, addons-a or addons-b, addons-c but on k3s, addons-d on RKE2, or etcd or machines on RKE2 and k3s, not ${part}" >&2
         exit 2
         ;;
 esac
@@ -465,13 +471,14 @@ worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r
         (($node.worker + ([$on[] | if . == "argocd" then ([$addon.argocd, $addon.flux] | max) else $addon[.] end] | add)) / 1000 | ceil)]
     | max')}
 # The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
-# it uses itself with those add-ons, whichever is more.
-control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
+# it uses itself with those add-ons and its CNI, whichever is more.
+control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --arg cni "${KUBEHENGE_E2E_CNI:-}" '
     (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
+    | (.metadata.annotations["kubehenge.dev/cni-control-plane-memory"] // "{}" | fromjson) as $cnis
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
         (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.controlPlane + ([$on[] | $grows[.] // 0] | add)]
+        $node.controlPlane + ([$on[] | $grows[.] // 0] | add) + ($cnis[$cni] // 0)]
     | max')}
 echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the control plane with ${control_plane_memory} MiB"
 cat > "${work}/cluster.yaml" << EOF
@@ -856,6 +863,8 @@ metrics_pid=
 kubectl delete clusterrolebinding "${reader}" > /dev/null
 kubectl -n kubehenge-system delete serviceaccount "${reader}" > /dev/null
 
+cni=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.spec.topology.variables[] | select(.name == "cni") | .value')
+
 # kube-bench carries no benchmark for Talos, whose components keep their configuration where none
 # of its checks look.
 if [ "${distribution}" != talos ] && [ "${cis}" = true ]; then
@@ -864,7 +873,6 @@ if [ "${distribution}" != talos ] && [ "${cis}" = true ]; then
 fi
 
 step "the cluster runs its CNI, which enforces network policies"
-cni=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.spec.topology.variables[] | select(.name == "cni") | .value')
 case ${cni} in
     cilium) wl -n kube-system rollout status daemonset/cilium --timeout=10m ;;
     calico) until_true 600 "calico-node" sh -c "KUBECONFIG=${work}/workload kubectl -n calico-system rollout status daemonset/calico-node --timeout=10s >/dev/null 2>&1" ;;
@@ -1074,18 +1082,35 @@ gateway_api_shipped() {
 # gateway_api_held: every object of the Gateway API is held once. One that a Helm release ships is
 # that release's alone: no other release ships it, its annotations name that release, and it is of
 # the Gateway API release the chart ships, which nothing has replaced. One that no Helm release
-# ships is of Kubehenge's release or newer.
+# ships is of Kubehenge's release or newer. The admission policy goes with the CRDs: Kubehenge keeps
+# it only on kubeadm and Talos, beside CRDs no Helm release ships, so that it never refuses the CRDs
+# a chart brings.
 gateway_api_held() {
     # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
     gateway_api_shipping=$(gateway_api_shipped) || return 1
+    gateway_api_policy=kubehenge
+    if [ -n "${gateway_api_chart}" ] || printf '%s\n' "${gateway_api_shipping}" | awk '$2 == "CustomResourceDefinition" { found = 1 } END { exit !found }'; then
+        gateway_api_policy=
+    fi
     for gateway_api_object in ${gateway_api_objects}; do
         gateway_api_kind=${gateway_api_object%%/*} gateway_api_name=${gateway_api_object#*/}
         # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-        gateway_api_has=$(wl get "${gateway_api_kind}" "${gateway_api_name}" -o json 2> /dev/null) || return 1
-        gateway_api_named=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations // {} | "\(.["meta.helm.sh/release-namespace"] // "")/\(.["meta.helm.sh/release-name"] // "")"')
-        gateway_api_is=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations["gateway.networking.k8s.io/bundle-version"] // "none"')
+        gateway_api_has=$(wl get "${gateway_api_kind}" "${gateway_api_name}" -o json --ignore-not-found 2> /dev/null) || return 1
         gateway_api_holders=$(printf '%s\n' "${gateway_api_shipping}" | awk -v k="${gateway_api_kind}" -v n="${gateway_api_name}" '$2 == k && $3 == n')
         gateway_api_count=$(printf '%s' "${gateway_api_holders}" | grep -c . || true)
+        if [ "${gateway_api_kind}" != CustomResourceDefinition ] && [ "${gateway_api_count}" = 0 ] && [ -z "${gateway_api_policy}" ]; then
+            [ -z "${gateway_api_has}" ] || {
+                gateway_api_say "${gateway_api_object} is there, shipped by no Helm release, beside CRDs that charts hold"
+                return 1
+            }
+            continue
+        fi
+        [ -n "${gateway_api_has}" ] || {
+            gateway_api_say "the cluster has no ${gateway_api_object}"
+            return 1
+        }
+        gateway_api_named=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations // {} | "\(.["meta.helm.sh/release-namespace"] // "")/\(.["meta.helm.sh/release-name"] // "")"')
+        gateway_api_is=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations["gateway.networking.k8s.io/bundle-version"] // "none"')
         case ${gateway_api_count} in
             0)
                 gateway_api_oldest=$(printf '%s\n%s\n' "${gateway_api_is}" "${gateway_api_version}" | sort -V | head -n 1)
@@ -1149,7 +1174,6 @@ done
 
 step "the Gateway API: Traefik's Gateway routes an HTTPRoute"
 until_true 300 "the Gateway API's objects, each held once, by Kubehenge or a Helm release" gateway_api_held
-wl get validatingadmissionpolicy,validatingadmissionpolicybinding safe-upgrades.gateway.networking.k8s.io > /dev/null
 until_true 300 "Traefik's Gateway is programmed, at the API address" gateway_programmed
 wl -n e2e-ingress apply -f - << 'EOF'
 apiVersion: gateway.networking.k8s.io/v1
@@ -3313,6 +3337,11 @@ EOF
         (.spec.template.spec.initContainers // [])[], .spec.template.spec.containers[] | "kube-system/\($m.name) \(.image)"')
     unpinned=$(printf '%s\n%s\n' "${images}" "${system_images}" | grep -v -e '@sha256:[0-9a-f]\{64\}$' -e '^$' | sort -u)
     [ -z "${unpinned}" ] || fail "images named without a digest (pod, image): ${unpinned}"
+else
+    # The figure to set beside the add-on parts' "memory before the add-ons", which a CNI's
+    # kubehenge.dev/cni-control-plane-memory is measured from.
+    echo "memory with no add-on:"
+    pod_memory "${work}/workload"
 fi
 
 if [ "${distribution}" = talos ]; then
@@ -3730,8 +3759,8 @@ if [ "${replaces_machines}" = true ]; then
     fi
     # The new control-plane nodes have to carry the authentication configuration too.
     check_sign_in
-    # The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before,
-    # and Kubehenge's policy, without Kubehenge applying anything beside it.
+    # The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before
+    # and brings its own policy, without Kubehenge applying anything beside it.
     if [ -n "${gateway_api_chart}" ]; then
         until_true 300 "${gateway_api_chart} holds the Gateway API after the upgrade" gateway_api_chart_holds
     fi

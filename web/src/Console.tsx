@@ -162,6 +162,7 @@ export function Console({
   settingUp,
   path,
   here,
+  demo,
   main,
   onSignOut,
   children,
@@ -173,6 +174,7 @@ export function Console({
   settingUp: boolean;
   path: string;
   here: Here | undefined;
+  demo: boolean;
   main: RefObject<HTMLElement | null>;
   onSignOut: () => void;
   children: ReactNode;
@@ -238,6 +240,7 @@ export function Console({
         canManage={canManage}
         settingUp={settingUp}
         path={path}
+        demo={demo}
         running={runs.filter((r) => r.group === "running").length}
         anyRuns={runs.length > 0}
         runsShown={runsShown}
@@ -261,6 +264,7 @@ function TopBar({
   canManage,
   settingUp,
   path,
+  demo,
   running,
   anyRuns,
   runsShown,
@@ -272,6 +276,7 @@ function TopBar({
   canManage: boolean;
   settingUp: boolean;
   path: string;
+  demo: boolean;
   running: number;
   anyRuns: boolean;
   runsShown: boolean | undefined;
@@ -297,6 +302,7 @@ function TopBar({
       <Link to="/" className="brand">
         <img src={logo} alt="" />
         <span className="brand-name">Kubehenge</span>
+        {demo && <span className="demo-mark">Demo</span>}
       </Link>
       {!settingUp && (
         <>

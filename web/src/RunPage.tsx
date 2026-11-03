@@ -31,12 +31,12 @@ const stepDots: Record<RunStep["state"], string> = {
 
 const msPerMinute = 60_000;
 
-// took says how long a run took, or has taken so far.
+// took says how long a finished run took. A running one has only its start, which says the same.
 function took(r: RunInfo): string | undefined {
-  if (r.started === undefined) {
+  if (r.started === undefined || r.finished === undefined) {
     return undefined;
   }
-  const end = r.finished === undefined ? Date.now() : new Date(r.finished).getTime();
+  const end = new Date(r.finished).getTime();
   const minutes = Math.max(0, Math.round((end - new Date(r.started).getTime()) / msPerMinute));
   return minutes < 1 ? "<1 min" : `${minutes} min`;
 }
@@ -81,7 +81,7 @@ export function RunPage({ id }: { id: string }): JSX.Element {
             </span>
             {run.by !== undefined && <span>by {run.by}</span>}
             {run.started !== undefined && <span>started {age(run.started)} ago</span>}
-            {spent !== undefined && <span>{run.finished === undefined ? `${spent} so far` : `took ${spent}`}</span>}
+            {spent !== undefined && <span>took {spent}</span>}
           </p>
         </div>
         <div className="page-actions">

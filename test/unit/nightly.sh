@@ -33,7 +33,22 @@ while [ "${night}" -lt "${nights}" ]; do
     for t in $(sh "${ci}/scope.sh" --all | jq -r '.[]' | tr -d '\r') management-cluster-upgrade rancher control-plane-ha two-nodes; do
         if printf '%s' "${list}" | jq -e --arg t "${t}" 'index($t) != null' > /dev/null; then ok; else bad "night ${night} leaves ${t} out"; fi
     done
-    for name in $(printf '%s' "${list}" | jq -r '.[] | select(contains("+"))' | tr -d '\r'); do
+    # Every lane is one the merge queue runs, its tests without their options, or one of the
+    # nightly run's own four: none runs only at night by accident.
+    for lane in $(printf '%s' "${list}" | jq -r '.[]' | tr -d '\r'); do
+        bare=$(printf '%s' "${lane}" | tr , '\n' | sed 's/+.*//' | paste -sd, -)
+        case " $(printf '%s' "${lanes}" | tr '\n' ' ') management-cluster-upgrade rancher control-plane-ha two-nodes " in
+            *" ${bare} "*) ok ;;
+            *) bad "night ${night} runs the lane ${lane}, which the merge queue does not run as ${bare}" ;;
+        esac
+    done
+    for lane in $(printf '%s' "${list}" | jq -r '.[] | select(contains("+"))' | tr -d '\r'); do
+        # The options are the first test's, and the lane's other test runs as in the merge queue.
+        name=${lane%%,*}
+        case ${lane#"${name}"} in
+            *+*) bad "night ${night}: ${lane} gives options to the test after ${name}" ;;
+            *) ok ;;
+        esac
         # shellcheck disable=SC2310 # its refusal is the failure reported.
         if ! settings=$(variant "${name}" 2>&1); then
             bad "${name} does not read: ${settings}"
@@ -61,21 +76,22 @@ while [ "${night}" -lt "${nights}" ]; do
             bad "${name}: no node OS ${KUBEHENGE_E2E_NODE_OS}"
         fi
         printf '%s %s %s %s\n' "${test}" "${KUBEHENGE_E2E_CNI}" "${KUBEHENGE_E2E_NODE_OS:--}" "${KUBEHENGE_E2E_CIS:-true}" >> "${seen}"
-        # Each variant runs as every part of its distribution's test.
+        # Each variant runs as every part of its distribution's test, in the part's own lane.
         parts=0
         for part in ${lanes}; do
-            case ${part} in
+            first=${part%%,*}
+            case ${first} in
                 "${test}" | "${test}"-etcd | "${test}"-machines | "${test}"-addons-?) ;;
                 *) continue ;;
             esac
             parts=$((parts + 1))
-            twin=${part}+${name#*+}
+            twin=${first}+${name#*+}${part#"${first}"}
             if printf '%s' "${list}" | jq -e --arg t "${twin}" 'index($t) != null' > /dev/null; then ok; else bad "night ${night} runs ${name} without ${twin}"; fi
         done
         if [ "${parts}" -ge 3 ]; then ok; else bad "${test} runs in ${parts} parts, not its lifecycle and at least two add-on parts"; fi
         # Every step of the lifecycle runs with the options: whole, or as both its halves.
         lifecycle=no
-        all_lanes=" $(printf '%s' "${lanes}" | tr '\n' ' ') "
+        all_lanes=" $(printf '%s' "${lanes}" | tr '\n,' '  ') "
         case ${all_lanes} in
             *" ${test} "*) lifecycle=yes ;;
             *" ${test}-etcd "*)
@@ -131,6 +147,22 @@ refused 'k3s+cilium;true'
 refused 'k3s+$(true)'
 refused 'k3s++cilium'
 refused 'k3s+Cilium'
+refused appliance+management-3584
+refused management-cluster+management-
+refused management-cluster+management-0
+refused management-cluster+management-035
+refused management-cluster+management-35x
+refused management-cluster+management-3584+calico
+# reads <name> <settings>: the settings the name carries, one per line.
+reads() {
+    # shellcheck disable=SC2310 # a refusal is reported as the failure.
+    if out=$(variant "$1" 2>&1) && [ "${out}" = "$2" ]; then ok; else bad "$1 reads as '${out}', not '$2'"; fi
+}
+reads management-cluster-upgrade+management-3584 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=3584'
+reads control-plane-ha+management-5120 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=5120'
+reads kubeadm-addons-a+calico+management-4096 'export KUBEHENGE_E2E_CNI=calico
+export KUBEHENGE_E2E_MANAGEMENT_MEMORY=4096'
+reads rke2+calico 'export KUBEHENGE_E2E_CNI=calico'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
 if out=$(variant control-plane-ha 2>&1) && [ -z "${out}" ]; then ok; else bad "control-plane-ha carries settings: ${out}"; fi

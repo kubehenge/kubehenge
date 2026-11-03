@@ -45,6 +45,7 @@ The frontend's packages are installed again only when `web/package-lock.json` ch
 - For each distribution, start its providers for the first cluster and apply its templates once they serve. After the last cluster, remove them and scale the providers to none.
 - Take a cluster through Kubehenge's controller (finalizer, credentials owned by the cluster, the add-ons' objects) and delete it. Its Proxmox VE objects (faked) are removed only once its last machine is gone.
 - Apply the Gateway API release the controller carries. Every CRD is established and its admission policy refuses older and experimental CRDs.
+  - Once a Helm release ships one of the CRDs, the controller deletes its policy. The API server then takes an older CRD.
 - Find an RKE2 Gateway API chart by its HelmChart, before and after helm-controller's CRD is there, and wait until its release is installed.
 - Render the RKE2 and k3s classes' Traefik configuration with its Gateway provider on, with and without the certificates add-on's default certificate.
 - Act as the interface's account, which writes and deletes the credentials users type in and no other Secret.
@@ -81,7 +82,7 @@ The frontend's packages are installed again only when `web/package-lock.json` ch
 
 The workload and Rancher tests print each node's and namespace's memory and the CPU requested of what each node offers. They print it before the add-ons and with every add-on on. The workload test also prints the control plane's memory after each add-on.
 
-The classes' memory figures come from these prints: the add-ons', what they add to a control plane, and the nodes' own (`kubehenge.dev/addon-memory`, `kubehenge.dev/addon-control-plane-memory` and `kubehenge.dev/node-memory`, [clusters.md](clusters.md#machines)). The workload test gives its control plane and worker the least the figures let them have. A figure a new add-on or release outgrows is raised in `charts/kubehenge/templates`.
+The classes' memory figures come from these prints: the add-ons', what they and a CNI other than the class's own add to a control plane, and the nodes' own (`kubehenge.dev/addon-memory`, `kubehenge.dev/addon-control-plane-memory`, `kubehenge.dev/cni-control-plane-memory` and `kubehenge.dev/node-memory`, [clusters.md](clusters.md#machines)). The workload test gives its control plane and worker the least the figures let them have. A figure a new add-on or release outgrows is raised in `charts/kubehenge/templates`.
 
 The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the requests of the pinned charts and distributions as Kubehenge configures them, and move with them. A figure that falls behind shows in the requests the tests print. The test's worker, given the fewest cores the figures allow, then leaves a pod pending.
 
@@ -114,6 +115,7 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 11. Check that every object of the Gateway API is held once, and again after the upgrade.
     - One a Helm release's latest revision ships is marked as that release's, shipped by no other and of the release that chart ships.
     - One that no release ships is of Kubehenge's release or newer.
+    - The admission policy is there only where a release ships it, or on kubeadm and Talos beside CRDs no release ships.
     - By the upgrade, RKE2's and k3s's own Gateway API chart has to be installed and ship every object.
 12. Check that a Service of type `LoadBalancer` answers the test machine on an address from the cluster's load-balancer range. The load balancer is `KUBEHENGE_E2E_LOAD_BALANCER` (MetalLB unless kube-vip) on `KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES`, on k3s without servicelb beside it. Switch it off again. On k3s servicelb then answers for the Service once the control planes are replaced.
 13. Create and delete a persistent volume.
@@ -192,18 +194,32 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 
 `KUBEHENGE_E2E_PART` runs part of the test, for a machine whose memory holds the guests of only one part. CI runs each class's test this way, one part per machine.
 
-- `lifecycle` (the `kubeadm` and `talos` tests) sizes the nodes at the least the class allows with the add-ons a cluster starts with (the load balancer and Rancher's agent). It switches on no other add-on.
+- `lifecycle` (the `kubeadm`, `rke2`, `k3s` and `talos` tests) sizes the nodes at the least the class allows with the add-ons a cluster starts with (the load balancer and Rancher's agent). It switches on no other add-on.
 - `etcd` (`rke2-etcd`, `k3s-etcd`) is the first half of RKE2's and k3s's `lifecycle`: the snapshot, restore and own upload.
 - `machines` (`rke2-machines`, `k3s-machines`) is the second: the load balancer off, scaling, the upgrade and the paused, expiring and dead workers.
-- `addons-a` (`kubeadm-addons-a` and so on) sizes the nodes for Headlamp, monitoring, logs and certificates, and switches those on. Logs read Loki through monitoring's Grafana, and the certificates serve Headlamp and Grafana.
-- `addons-b` does the same for Kyverno, Istio, backups and GitOps.
-- RKE2's least worker of 4 GiB leaves its control plane no room for all of `addons-b`. On RKE2, `addons-b` has Kyverno and backups, and `addons-c` Istio and GitOps.
+- `addons-a` (`kubeadm-addons-a` and so on) sizes them for Headlamp, monitoring, logs and certificates, and switches those on. Logs read Loki through monitoring's Grafana, and the certificates serve Headlamp and Grafana.
+- On k3s, `addons-b` does the same for Kyverno, Istio, backups and GitOps.
+- kubeadm's and Talos's control planes grow more with those four, more still on a CNI other than the class's default. There `addons-b` has Kyverno and backups, and `addons-c` Istio and GitOps.
+- RKE2's least worker of 4 GiB leaves its control plane the least room. There `addons-b` has Kyverno, `addons-c` Istio and backups, and `addons-d` GitOps.
 
 The add-on parts leave out the steps that replace a machine. Those are RKE2's and k3s's own upload, the load balancer off, scaling, the upgrade and the dead worker. Every part but `machines` runs the etcd snapshot and restore. Every part checks SELinux at its end, and on Talos runs the upgrade in place.
 
+## Demo mode
+
+`kubehenge serve --demo` serves the real interface over sample clusters held in memory, at `http://127.0.0.1:8443`. It signs in an administrator, refuses every change and reaches no Proxmox VE host or cluster.
+
+```sh
+make web && go run ./cmd/kubehenge serve --demo
+make screenshots   # docs/images, from the demo in a headless Chromium
+```
+
+The sample fleet is in `pkg/ui/demo-fleet.json`. Its ClusterClasses are the chart's, kept in `pkg/ui/demo-classes.json`. After a change to the chart's ClusterClasses, `go test ./pkg/ui -run TestDemoClassesMatchTheChart -update-demo-classes` rewrites the file.
+
+`make screenshots` fixes the window, the colour scheme and both clocks, so a second run gives the same images. Run it after a change to a page the docs show.
+
 ## End to end without a Proxmox VE host
 
-CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one test per machine.
+CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one lane per machine. A lane is one test, or two short ones run one after the other ([below](#lanes-of-two)).
 
 - The merge queue runs the tests all the changes of a merge group need together (`test/e2e/ci/scope.sh`), on the tree that would land on main. It picks none for documentation alone and all of them for a change it cannot place.
 - The nightly run's four extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
@@ -242,8 +258,9 @@ Any Linux machine with Docker, `/dev/kvm` and about 16 GB of free memory can do 
 ```sh
 scripts/tools.sh ~/.local/kubehenge-tools && export PATH=~/.local/kubehenge-tools:$PATH
 test/e2e/ci/up.sh /tmp/e2e          # Proxmox VE in a container, a registry beside it
-test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, rke2-etcd, rke2-machines, k3s-etcd, k3s-machines, kubeadm-addons-a, kubeadm-addons-b, rke2-addons-a, rke2-addons-b, rke2-addons-c, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
+test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, rke2-etcd, rke2-machines, k3s-etcd, k3s-machines, kubeadm-addons-a, kubeadm-addons-b, kubeadm-addons-c, rke2-addons-a, rke2-addons-b, rke2-addons-c, rke2-addons-d, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, talos-addons-c, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
 test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or an add-on part with its CNI, node OS or no CIS hardening
+test/e2e/ci/run.sh /tmp/e2e management-cluster-upgrade+management-3584   # any test but the appliance, its management node at 3584 MiB
 ```
 
 The control plane of three servers stays on k3s. Three k3s servers at the class's least of 4096 MiB fit beside a worker and the management cluster. RKE2's and kubeadm's need bigger workers too. A minor upgrade of three servers needs a fourth beside them while each is replaced, which the machine's memory does not hold.
@@ -269,19 +286,32 @@ Swap does not count as room for the guests. Cold pages of the runner's own proce
 
 #### Each test's guests
 
-Every node is at the least Kubehenge allows for what its test switches on. The management node has the module's default 4 GiB. The add-on parts stay within 12 GiB, in MiB:
+Every node is at the least Kubehenge allows for what its test switches on. The management node has the module's default 4 GiB. A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). The guests of each add-on part together, per CNI, in MiB:
 
-| Test | Management node | Control plane | Worker | Together |
+| Test | Worker | Default CNI | Cilium | Calico |
 | --- | --- | --- | --- | --- |
-| `kubeadm-addons-a` | 4096 | 4096 | 3648 | 11840 |
-| `kubeadm-addons-b` | 4096 | 4832 | 3264 | 12192 |
-| `rke2-addons-a`, `-b`, `-c` | 4096 | 4096 | 4096 | 12288 |
-| `k3s-addons-a` | 4096 | 4096 | 3392 | 11584 |
-| `k3s-addons-b` | 4096 | 4096 | 3008 | 11200 |
-| `talos-addons-a` | 4096 | 4096 | 3648 | 11840 |
-| `talos-addons-b` | 4096 | 4096 | 3264 | 11456 |
+| `kubeadm-addons-a` | 3648 | 11840 | (default) | 12688 |
+| `kubeadm-addons-b` | 2368 | 10576 | (default) | 12000 |
+| `kubeadm-addons-c` | 2240 | 10432 | (default) | 11856 |
+| `rke2-addons-a` | 4096 | 12288 | 12288 | 13264 |
+| `rke2-addons-b` | 4096 | 12288 | 12368 | 13672 |
+| `rke2-addons-c` | 4096 | 12288 | 12288 | 13592 |
+| `rke2-addons-d` | 4096 | 12288 | 12288 | 13552 |
+| `k3s-addons-a` | 3392 | 11584 | 11584 | 11760 |
+| `k3s-addons-b` | 3008 | 11200 | 11520 | 12168 |
+| `talos-addons-a` | 3648 | 11840 | 12088 | 11840 |
+| `talos-addons-b` | 2368 | 10560 | 11400 | 10560 |
+| `talos-addons-c` | 2240 | 10432 | 11256 | 10432 |
 
-These tests still outgrow 12 GiB:
+Three kinds of lane outgrow 12 GiB with that management node, all on a CNI the nightly run picks:
+
+- RKE2 with Calico. Its least control plane (3120 MiB) and Calico's figure together pass 4096 MiB with no add-on, beside a worker of at least 4096 MiB.
+- `kubeadm-addons-a` with Calico, by 400 MiB. Logs need monitoring's Grafana, and those two alone pass it by 88 MiB.
+- `rke2-addons-b` with Cilium, by 80 MiB. It holds one add-on.
+
+kubeadm's add-on parts with Calico and RKE2's with Cilium therefore run with a management node of 3584 MiB (`run.sh`). That brings them to 12176 MiB at most. The guard's samples show what the management node itself uses (below).
+
+These tests outgrow 12 GiB as well:
 
 | Test | Steady | Peak | At the peak |
 | --- | --- | --- | --- |
@@ -297,6 +327,21 @@ These tests still outgrow 12 GiB:
 
 The guard names every run whose guests outgrew the memory (below).
 
+#### Lanes of two
+
+The merge queue runs 20 lanes, as many as a run's jobs at once. Three pairs of tests share a lane, the second test after the first (`scope.sh`):
+
+| Lane | Guests at the peak (MiB) | Time (min) |
+| --- | --- | --- |
+| `appliance,management-cluster` | 5120, then about 8900 | about 48 |
+| `k3s-etcd,cluster-mesh` | 13376, then 14336 | about 48 |
+| `k3s-addons-b,autoscaler` | 11200, then 13312 | about 50 |
+
+- `run.sh` starts the second test only once no workload cluster and no VM of the first is left. A lane's peak is therefore its larger test's, as when each ran alone.
+- The second test keeps the management cluster, its S3 store and the templates the first made.
+- A failed lane names its failed test in the log, as an error and in the run's summary.
+- A dispatch can name a pair as one test, as in `k3s-etcd,cluster-mesh`. The nightly run gives a pair's first test the night's options and runs the second as in the queue.
+
 ### The guard
 
 A guard (`test/e2e/ci/guard.sh`) keeps the CI agent's own processes out of the OOM killer's choice and their memory out of reclaim. It samples the machine's memory, page cache, swap, free disk and pressure every 5 seconds. Pressure on memory, disk and CPU comes over the last 10 seconds and the last minute. It ends the test while the machine can still report, once any of these holds:
@@ -308,9 +353,13 @@ A guard (`test/e2e/ci/guard.sh`) keeps the CI agent's own processes out of the O
 
 It reports what held the memory (the VMs by name, the largest other processes, the last samples and the kernel's lines on memory). The test then fails like any other and keeps its artifacts. The log's "The runner's room" step gives how near each run came to these floors. It also gives the least memory available and page cache, and how much was read back from swap.
 
+Once the management cluster is up, each sample also holds the management node's own memory, read through Talos's API. That is `mgmt_used`, `mgmt_available` and its memory pressure. "The runner's room" gives the node's most memory used and least available. The node's figures end no test.
+
 #### Memory without swap
 
 Under 1 GiB of memory available for a minute or more, swap not counted, the guests have outgrown the runner. That ends no test, since such guests slow down rather than fail at once. The guard names the stretch when the test ends. Beside a failure such as a lost lease it is an error. When the test passed it is a warning.
+
+A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
 
 A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
 

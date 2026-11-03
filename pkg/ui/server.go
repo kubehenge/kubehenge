@@ -165,6 +165,8 @@ type Server struct {
 	notifier   notifier
 	// clock is the health page's time. Unset, the system's.
 	clock func() time.Time
+	// demo is set by SetUpDemo: the answers say so and changes are refused.
+	demo *demoState
 }
 
 const (
@@ -240,6 +242,9 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("/", s.assets)
+	if s.demo != nil {
+		return withRequestID(securityHeaders(s.demoGuard(mux)))
+	}
 	return withRequestID(securityHeaders(mux))
 }
 

@@ -152,6 +152,64 @@ holds "and the most zswap held" "most swap held in memory by zswap: 30 MiB, comp
 holds "and the most stall, beside its ceiling" "most memory_full pressure: 75.00% of a minute" "${peaks}"
 holds "and the least free space" "least free on ${root}/full: 1 MiB" "${peaks}"
 expect "nothing recorded" "the guard recorded nothing" sh "${guard}" peaks "${root}/none.txt"
+truth "a watch without a talosconfig reads no management node" [ ! -e "${record}.management" ]
+
+# The management node's memory, through a stand-in talosctl that answers while ${root}/talos-up is
+# there and leaves the arguments it was given in ${root}/talosctl.args.
+cat > "${bin}/talosctl" << EOF
+#!/bin/sh
+echo "\$*" >> "${root}/talosctl.args"
+[ -e "${root}/talos-up" ] || exit 1
+case "\$*" in
+    *' read /proc/meminfo') printf 'MemTotal: 3991552 kB\nMemFree: 300000 kB\nMemAvailable: 1556480 kB\nCached: 1200000 kB\n' ;;
+    *' read /proc/pressure/memory') printf 'some avg10=1.50 avg60=0.75 avg300=0.10 total=5\nfull avg10=0.50 avg60=60.00 avg300=0.05 total=2\n' ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "${bin}/talosctl"
+memory 4096000 6144000 2.00 3
+rm -f "${record}"
+talosconfig=${root}/talosconfig
+KUBEHENGE_E2E_GUARD_TALOSCONFIG=${talosconfig} sh "${guard}" watch "${root}/test.pid" "${record}" > "${root}/watch.log" 2>&1 &
+watcher=$!
+sampled "swapped_in=0"
+truth "no talosconfig yet, no node asked" [ ! -e "${root}/talosctl.args" ]
+printf 'context: e2e\ncontexts:\n    e2e:\n        endpoints:\n            - 172.20.99.11\n            - 172.20.99.12\n        nodes:\n            - 172.20.99.11\n            - 172.20.99.12\n        ca: x\n' > "${talosconfig}"
+touch "${root}/talos-up"
+sampled "mgmt_used="
+# A node that stops answering leaves no figures behind.
+rm -f "${root}/talos-up"
+gone=''
+for _ in $(seq 100); do
+    case "$(tail -n 1 "${record}")" in
+        *mgmt_*) sleep 0.2 ;;
+        *)
+            gone=1
+            break
+            ;;
+    esac
+done
+kill "${watcher}"
+watcher=''
+truth "a node that stops answering leaves no figures in the samples after it" [ -n "${gone}" ]
+first=$(head -n 1 "${record}")
+case "${first}" in
+    *mgmt_*) bad=1 ;;
+    *) bad='' ;;
+esac
+truth "a sample before the talosconfig holds no figures of the node" [ -z "${bad}" ]
+mgmt=$(grep -m 1 mgmt_ "${record}")
+holds "the node's memory used and available, in MiB" "mgmt_used=2378 mgmt_available=1520" "${mgmt}"
+holds "and its memory pressure over 10 seconds and the minute" \
+    "mgmt_memory_some10=1.50 mgmt_memory_some=0.75 mgmt_memory_full10=0.50 mgmt_memory_full=60.00" "${mgmt}"
+asked=$(cat "${root}/talosctl.args")
+holds "read from the talosconfig's first node" "--talosconfig ${talosconfig} -n 172.20.99.11 read /proc/meminfo" "${asked}"
+expect "the node's pressure ends no test, the machine's does" "" crossed "${mgmt}"
+mgmt_peaks=$(sh "${guard}" peaks "${record}")
+holds "the peaks give the node's most memory used" "the management node's most memory used: 2378 MiB at " "${mgmt_peaks}"
+holds "and its least available" "the management node's least memory available: 1520 MiB at " "${mgmt_peaks}"
+holds "and its pressure, named as its own" "most memory_full pressure on the management node: 60.00% of a minute at " "${mgmt_peaks}"
+holds "with the machine's still beside its ceiling" "most memory_full pressure: 2.00% of a minute at " "${mgmt_peaks}"
 
 # Memory without swap: a stretch under 1024 MiB counts from a minute on, whatever swap is left.
 short() { sh "${guard}" short "$1"; }

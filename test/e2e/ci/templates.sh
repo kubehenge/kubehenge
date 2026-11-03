@@ -2,7 +2,7 @@
 # The VM templates the end-to-end tests need, and the keys the Actions cache keeps the baked ones
 # under. run.sh sources this file.
 #
-#   test/e2e/ci/templates.sh keys <test>       # key1=<key> and key2=<key>
+#   test/e2e/ci/templates.sh keys <lane>       # key1=<key> and key2=<key>
 #   test/e2e/ci/templates.sh current           # the keys of the merge queue's tests' templates
 #   test/e2e/ci/templates.sh missing <ref>     # those the cache lacks on <ref>, as JSON
 #   test/e2e/ci/templates.sh bake <work directory> <key> <options>...
@@ -78,9 +78,12 @@ key_of() {
     echo "e2e-template-${key_name}-${key_hash}"
 }
 
-# baked <test>: the options of each template of the test a bake makes, one per line.
+# baked <lane>: the options of each template of the lane's tests a bake makes, one per line, each
+# once. A lane is a test or two, as in k3s-etcd,cluster-mesh (scope.sh).
 baked() {
-    templates_of "$1" | sed -n '/^talos/!s/ *$//p'
+    for baked_test in $(printf '%s' "$1" | tr , ' '); do
+        templates_of "${baked_test}"
+    done | sed -n '/^talos/!s/ *$//p' | awk '!seen[$0]++'
 }
 
 # The host's CPU: told of a generic one, the guests' kernels run Meltdown's and MDS's mitigations,

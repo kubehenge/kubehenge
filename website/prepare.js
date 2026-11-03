@@ -1,6 +1,6 @@
 // Copies the documentation and the logo into the site, so docs/ stays plain Markdown that reads
 // the same on GitHub, and nothing outside docs/ can end up on the site.
-import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,5 +49,7 @@ for (const name of readdirSync(docs)) {
     writeFileSync(join(pages, name), front + markdown);
   }
 }
+// The pages show the screenshots by the same relative path as on GitHub.
+cpSync(join(docs, "images"), join(pages, "images"), { recursive: true });
 mkdirSync(join(site, "public"), { recursive: true });
 copyFileSync(join(site, "..", "web", "src", "logo.svg"), join(site, "public", "logo.svg"));
