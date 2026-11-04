@@ -64,7 +64,7 @@ finish() {
     for u in "${admin}" "${user}"; do
         pvesh delete "/access/users/${u}" > /dev/null 2>&1 || true
     done
-    [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
+    [ -z "${s3_pid}" ] || seaweedfs_stop "${s3_pid}"
     rm -rf "${work}"
 }
 trap finish EXIT
@@ -366,7 +366,7 @@ jq -n --arg k "${s3_key}" --arg s "${s3_secret}" '{identities: [
     {name: "anonymous", actions: ["Read:releases"]}]}' > "${work}/s3/s3.json"
 seaweedfs_server "${work}" 8333 "${work}/s3/s3.json" "${work}/s3/tls.crt" "${work}/s3/tls.key"
 s3_pid=$!
-until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/kubehenge-e2e"
+until_true 120 "the S3 store takes a bucket" seaweedfs_answers "${work}" s3 -X PUT -o /dev/null "${s3_endpoint}/kubehenge-e2e"
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 jq --arg e "${s3_endpoint}" --rawfile ca "${work}/s3/ca.crt" \
     '.backupTargets = [{name: "e2e", endpoint: $e, bucket: "kubehenge-e2e", prefix: "ci", caCertificate: $ca}]' \
@@ -406,8 +406,8 @@ newer_sum=$(sha256sum "${newer}" | cut -d ' ' -f 1)
 broken_sum=$(sha256sum "${broken}" | cut -d ' ' -f 1)
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 jq -n --arg base "${releases}" --arg nv "${newer_version}" --arg na "${newer##*/}" --arg ns "${newer_sum}" \
-    --arg bv "${broken_version}" --arg ba "${broken##*/}" --arg bs "${broken_sum}" \
-    '{expires: (now + 14 * 86400 | floor | todate), releases: [{version: $nv, url: "\($base)/\($na)", sha256: $ns}, {version: $bv, url: "\($base)/\($ba)", sha256: $bs}]}' \
+    --arg bv "${broken_version}" --arg bfile "${broken##*/}" --arg bs "${broken_sum}" \
+    '{expires: (now + 14 * 86400 | floor | todate), releases: [{version: $nv, url: "\($base)/\($na)", sha256: $ns}, {version: $bv, url: "\($base)/\($bfile)", sha256: $bs}]}' \
     > "${work}/index.json"
 # Signed by the first release's own binary, which checks the key against the one it trusts.
 tar -xzOf "${release}" ./bin/kubehenge > "${work}/kubehenge"

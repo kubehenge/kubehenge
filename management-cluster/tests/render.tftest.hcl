@@ -102,6 +102,11 @@ run "nodes" {
   }
 
   assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.memory[0].dedicated == 4096 && vm.memory[0].floating == 4096])
+    error_message = "without a minimum, each node keeps all its memory and still has a balloon device"
+  }
+
+  assert {
     condition     = output.api_endpoint == "https://192.0.2.10:6443"
     error_message = "the API endpoint must be the virtual IP"
   }
@@ -692,6 +697,39 @@ run "extra_cluster_namespaces" {
     )
     error_message = "the chart is told the namespaces, and Proxmox VE grants nothing more for them: each cluster's pool still nests under the workload pool"
   }
+}
+
+run "node_memory_min" {
+  command = plan
+
+  variables {
+    node_memory_min_mb = 3072
+  }
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.memory[0].dedicated == 4096 && vm.memory[0].floating == 3072])
+    error_message = "the balloon may take each node down to node_memory_min_mb"
+  }
+}
+
+run "node_memory_min_refuses_more_than_the_node" {
+  command = plan
+
+  variables {
+    node_memory_min_mb = 5120
+  }
+
+  expect_failures = [var.node_memory_min_mb]
+}
+
+run "node_memory_min_refuses_less_than_talos_needs" {
+  command = plan
+
+  variables {
+    node_memory_min_mb = 1024
+  }
+
+  expect_failures = [var.node_memory_min_mb]
 }
 
 run "extra_cluster_namespaces_refuse_system_ones" {

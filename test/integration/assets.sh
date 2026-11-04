@@ -20,8 +20,8 @@ CLUSTER_API_BOOTSTRAP_SHA256=537d6db3b70aad723710825f76073659865dc1a115715ef5d5c
 CLUSTER_API_CONTROL_PLANE=v1.14.3
 CLUSTER_API_CONTROL_PLANE_SHA256=a211e2e54b6b6fb93e59191f5db8ee76ad6ff92a698f1c62f9d6ce4d5218cf87
 # renovate: datasource=github-release-attachments depName=ionos-cloud/cluster-api-provider-proxmox
-CAPMOX=v0.9.1
-CAPMOX_SHA256=424fb38189659147df452490bb2b11f9f4ae3a75c7179b92a85041658bfd74d5
+CAPMOX=v0.9.2
+CAPMOX_SHA256=6817322435b42cfda07a8f94006bacb709afb83445ce24545af253c7904755d8
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
 HELM_ADDON=v0.6.4
 HELM_ADDON_SHA256=a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6

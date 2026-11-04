@@ -79,9 +79,9 @@ func sameJSON(a, b []byte) bool {
 	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
 		return false
 	}
-	ax, errX := json.Marshal(x)
-	by, errY := json.Marshal(y)
-	return errX == nil && errY == nil && bytes.Equal(ax, by)
+	xJSON, errX := json.Marshal(x)
+	yJSON, errY := json.Marshal(y)
+	return errX == nil && errY == nil && bytes.Equal(xJSON, yJSON)
 }
 
 // alreadyTrusted tells whether every provider in raw is one the class's default lists as it stands,

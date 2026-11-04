@@ -4,12 +4,11 @@
 #
 #   test/e2e/ci/nightly.sh [day]
 #
-# Every test the merge queue may run (scope.sh --all) and those only the nightly run runs, then each
-# workload distribution's test and its add-on half once more with options (variant.sh): a CNI of its
-# class other than the one its own test runs, a node OS other than the default, and every other
-# night no CIS hardening. The
-# choice moves on each night, and from one distribution to the next, so that a few nights cover
-# every CNI and node OS of every class, each with hardening and without.
+# Every test the merge queue may run (scope.sh --all) and those only the nightly run runs, then every
+# part of each workload distribution's test once more with options (variant.sh): a CNI of its class
+# other than the one its own test runs, a node OS other than the default, and every other night no
+# CIS hardening. The choice moves on each night, and from one distribution to the next, so that a
+# few nights cover every CNI and node OS of every class, each with hardening and without.
 set -eu
 
 here=$(dirname "$0")
@@ -50,6 +49,8 @@ oses=$(jq -r '(.default | "\(.family)-\(.release)") as $d | .available[] | selec
     exit 1
 }
 
+# jq on Windows ends its lines with CR LF.
+lanes=$("${here}/scope.sh" --all | jq -r '.[]' | tr -d '\r')
 variants=
 i=0
 for distribution in kubeadm rke2 k3s talos; do
@@ -64,7 +65,17 @@ for distribution in kubeadm rke2 k3s talos; do
     # shellcheck disable=SC2086 # one node OS per word
     [ "${distribution}" = talos ] || name=${name}+$(pick $((n / (count * 2))) ${oses})
     [ $((n / count % 2)) = 1 ] || name=${name}+cis-off
-    variants="${variants} ${name} ${distribution}-addons${name#"${distribution}"}"
+    # The same options on each of its parts, in the same lanes as the merge queue's: a part that
+    # shares one runs the test it shares it with after it, as there.
+    for lane in ${lanes}; do
+        first=${lane%%,*}
+        case ${first} in
+            "${distribution}" | "${distribution}"-etcd | "${distribution}"-machines | "${distribution}"-addons-?)
+                variants="${variants} ${first}${name#"${distribution}"}${lane#"${first}"}"
+                ;;
+            *) ;;
+        esac
+    done
     i=$((i + 1))
 done
 

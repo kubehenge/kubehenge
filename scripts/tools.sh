@@ -153,6 +153,18 @@ HADOLINT=v2.15.1
 HADOLINT_SHA256=c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
 release hadolint hadolint/hadolint "${HADOLINT}" hadolint-linux-x86_64 "${HADOLINT_SHA256}"
 
+# renovate: datasource=github-release-attachments depName=crate-ci/typos
+TYPOS=v1.52.0
+TYPOS_SHA256=6155d4114f9a0f5b8f6d4fda96266c9d5f6add71df80da7f684ee5e72eb14588
+release typos crate-ci/typos "${TYPOS}" "typos-${TYPOS}-x86_64-unknown-linux-musl.tar.gz" "${TYPOS_SHA256}" ./typos
+
+# The nightly link check runs it (make links).
+# renovate: datasource=github-release-attachments depName=lycheeverse/lychee
+LYCHEE=lychee-v0.24.2
+LYCHEE_SHA256=1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+release lychee lycheeverse/lychee "${LYCHEE}" lychee-x86_64-unknown-linux-gnu.tar.gz "${LYCHEE_SHA256}" \
+    lychee-x86_64-unknown-linux-gnu/lychee
+
 # The release signs its images with it.
 # renovate: datasource=github-release-attachments depName=sigstore/cosign
 COSIGN=v3.1.4

@@ -2,12 +2,15 @@
 # What the VMs of the Proxmox VE that test/e2e/ci/up.sh started take of the machine running it, and
 # what their guests hold when a test fails:
 #
-#   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory, swap and
-#                                          bytes received
-#   test/e2e/ci/guests.sh now              the same once, to standard output
-#   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs, memory and download
-#                                          rate by VM, and
-#                                          each VM's peaks: what a test's steps ask of the machine
+#   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory, swap,
+#                                          bytes received, bytes read from disk and time stalled
+#                                          and, while memory is short, has the guests drop their page
+#                                          cache, noting each in <file>.trims
+#   test/e2e/ci/guests.sh now              the same sample once, to standard output
+#   test/e2e/ci/guests.sh trim <file>      the page cache step once
+#   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs, memory, download and
+#                                          disk read rates and stalls by VM, and each VM's peaks:
+#                                          what a test's steps ask of the machine
 #   test/e2e/ci/guests.sh collect <dir> [<work dir>]
 #                                          from inside each running VM, through its guest agent: its
 #                                          state, the distribution's, the kernel's and cloud-init's
@@ -31,13 +34,19 @@
 # a node whose API does not answer the first is asked nothing more.
 set -eu
 
+proc=${KUBEHENGE_E2E_GUESTS_PROC:-/proc}
+
 # A VM's QEMU process names its VM ID and name on its command line.
 qemu_arg() { # pid option
-    tr '\0' '\n' < "/proc/$1/cmdline" | sed -n "/^$2\$/{n;s/,.*//;p;q;}"
+    tr '\0' '\n' < "${proc}/$1/cmdline" | sed -n "/^$2\$/{n;s/,.*//;p;q;}"
 }
 
 # sample: one line per running VM: the time, its QEMU process, VM ID and name, CPU ticks, resident
-# and swapped KiB, and the bytes it has received.
+# and swapped KiB, the bytes it has received, the bytes read from disk for it, and the microseconds
+# some of its threads waited on CPU, on memory and on disk, each - where the machine does not say.
+# The bytes read are its disks' and its memory brought back from swap, which the kernel counts to
+# the process that faulted. The waits are its cgroup's pressure stall totals: a guest whose vCPUs
+# wait on the machine's CPUs shows under CPU, one whose disk reads queue under disk.
 sample() {
     now=$(date -u +%T)
     for pid in $(pgrep -x kvm || true); do
@@ -54,22 +63,81 @@ sample() {
         # The kernel pads names to six characters, so a tap's name has no space before it.
         received=$(awk -F '[: ]+' -v tap="tap${vmid}i" '{ sub(/^ +/, "") } index($1, tap) == 1 { b += $10 } END { print b + 0 }' \
             "/proc/${pid}/net/dev" 2> /dev/null) || continue
-        printf '%s %s %s %s %s %s %s\n' "${now}" "${pid}" "${vmid}" "${name}" "${ticks}" "${memory}" "${received}"
+        # Only QEMU's owner and root may read its I/O counts.
+        disk_read=$({ cat "/proc/${pid}/io" 2> /dev/null || sudo -n cat "/proc/${pid}/io" 2> /dev/null; } |
+            awk '$1 == "read_bytes:" { print $2 }')
+        cgroup=$(sed -n 's/^0:://p' "/proc/${pid}/cgroup" 2> /dev/null || true)
+        stalls=''
+        for kind in cpu memory io; do
+            stall=''
+            # The root's totals are the machine's, not the VM's.
+            [ "${cgroup:-/}" = / ] ||
+                stall=$(awk '$1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^total=/) print substr($i, 7) }' \
+                    "/sys/fs/cgroup${cgroup}/${kind}.pressure" 2> /dev/null || true)
+            stalls="${stalls} ${stall:--}"
+        done
+        printf '%s %s %s %s %s %s %s %s%s\n' "${now}" "${pid}" "${vmid}" "${name}" "${ticks}" "${memory}" "${received}" \
+            "${disk_read:--}" "${stalls}"
+    done
+}
+
+# MiB of memory available on this machine below which record has the guests drop their page cache.
+# A guest keeps all the memory it was given resident, mostly page cache of what it read once, so
+# the machine swaps guest memory out while the guests hold little they need. A guest dropping its
+# page cache frees only clean pages no process maps, and free page reporting hands them back:
+# 2 GiB of one guest's within 20 s on Proxmox VE. 0 turns it off.
+trim_below=${KUBEHENGE_E2E_TRIM_BELOW:-2048}
+# Seconds before the same guest is asked again, as its page cache fills again from what it reads.
+trim_every=120
+
+# trim <trims file>: while memory is short, asks each running guest not asked in the last
+# trim_every seconds to drop its page cache, and notes each guest that did with the MiB the machine
+# had available. A guest whose agent runs no commands, such as Talos's or one still booting, is
+# asked again in trim_every seconds.
+trim() {
+    [ "${trim_below}" -gt 0 ] || return 0
+    available=$(awk '/^MemAvailable:/ { print int($2 / 1024) }' "${proc}/meminfo")
+    [ "${available}" -lt "${trim_below}" ] || return 0
+    now=$(date +%s)
+    for pid in $(pgrep -x kvm || true); do
+        vmid=$(qemu_arg "${pid}" -id 2> /dev/null)
+        case ${vmid} in
+            '' | *[!0-9]*) continue ;;
+            *) ;;
+        esac
+        eval "last=\${trimmed_${vmid}:-}"
+        [ -z "${last}" ] || [ $((now - last)) -ge "${trim_every}" ] || continue
+        eval "trimmed_${vmid}=${now}"
+        if timeout -k 5 30 docker exec kubehenge-e2e-pve qm guest exec "${vmid}" --timeout 20 -- \
+            sh -c 'echo 1 > /proc/sys/vm/drop_caches' < /dev/null > /dev/null 2>&1; then
+            at=$(date -u +%T)
+            printf '%s %s %s\n' "${at}" "${vmid}" "${available}" >> "$1"
+        fi
     done
 }
 
 record() {
     while :; do
         sample
+        trim "$1"
         sleep 15
     done
 }
 
 summary() {
-    [ -s "$1" ] || {
+    if [ -s "$1" ]; then
+        load "$1"
+    else
         echo "no VM was sampled"
-        return 0
-    }
+    fi
+    [ -s "$1.trims" ] || return 0
+    echo "guests that dropped their page cache, with the MiB the machine had available then:"
+    awk '{ n[$2]++; if (!($2 in first)) first[$2] = $1 " (" $3 ")"; last[$2] = $1 " (" $3 ")" }
+        END { for (vm in n) printf "  %s: %d times, first at %s, last at %s\n", vm, n[vm], first[vm], last[vm] }' "$1.trims"
+}
+
+# load <record>: the record's minutes and peaks by VM.
+load() {
     hz=$(getconf CLK_TCK)
     awk -v hz="${hz}" '
         function seconds(t, p) { split(t, p, ":"); return p[1] * 3600 + p[2] * 60 + p[3] }
@@ -81,18 +149,33 @@ summary() {
             if (mib > top[minute, vm]) { top[minute, vm] = mib; topswap[minute, vm] = swap }
             if (mib > peak[vm]) { peak[vm] = mib; peakswap[vm] = swap; peakat[vm] = $1 }
             vms[minute, vm] = 1
-            # CPU time and bytes received over the time since the same process was last sampled.
+            # CPU time, bytes received and read, and time stalled over the time since the same
+            # process was last sampled; a count the machine did not give stays out.
             if ((pid in last) && t > lastt[pid]) {
                 cpu[minute, vm] += ($5 - last[pid]) / hz
                 got[minute, vm] += $8 - lastgot[pid]
                 span[minute, vm] += t - lastt[pid]
+                for (f = 9; f <= 12; f++)
+                    if ($f ~ /^[0-9]+$/ && lastf[pid, f] ~ /^[0-9]+$/) {
+                        more[minute, vm, f] += $f - lastf[pid, f]
+                        morespan[minute, vm, f] += t - lastt[pid]
+                    }
             }
             last[pid] = $5; lastgot[pid] = $8; lastt[pid] = t
+            for (f = 9; f <= 12; f++) lastf[pid, f] = $f
         }
+        # rate <minute> <vm> <field>: kB/s of bytes read, or the percent of the time some thread
+        # stalled, from microseconds; -1 without counts.
+        function rate(m, vm, f) {
+            if (morespan[m, vm, f] <= 0) return -1
+            return f == 9 ? more[m, vm, f] / morespan[m, vm, f] / 1000 : more[m, vm, f] / morespan[m, vm, f] / 10000
+        }
+        function shown(r, unit) { return r < 0 ? "-" : sprintf("%d%s", r, unit) }
         END {
+            split("read CPU memory disk", what)
             print "VMs:"
             for (vm in names) printf "  %s %s\n", vm, names[vm]
-            print "each minute: CPUs and resident MiB (swapped MiB) of all VMs, then of each VM with the kB/s it received"
+            print "each minute: CPUs and resident MiB (swapped MiB) of all VMs, then of each VM with the kB/s it received and read from disk and the percent of the time it waited on CPU/memory/disk"
             for (i = 1; i <= n; i++) {
                 m = minutes[i]; line = ""; cpus = 0; mem = 0; swapped = 0
                 for (vm in names) {
@@ -100,14 +183,24 @@ summary() {
                     c = span[m, vm] > 0 ? cpu[m, vm] / span[m, vm] : 0
                     if (c > cpupeak[vm]) { cpupeak[vm] = c; cpupeakat[vm] = m }
                     cpus += c; mem += top[m, vm] - topswap[m, vm]; swapped += topswap[m, vm]
-                    rate = span[m, vm] > 0 ? got[m, vm] / span[m, vm] / 1000 : 0
-                    line = line sprintf("  %s %.1f %d (%d) %dkB/s", vm, c, top[m, vm] - topswap[m, vm], topswap[m, vm], rate)
+                    received = span[m, vm] > 0 ? got[m, vm] / span[m, vm] / 1000 : 0
+                    for (f = 9; f <= 12; f++) {
+                        r[f] = rate(m, vm, f)
+                        if (r[f] >= 0 && (!((vm, f) in mostat) || r[f] > mostr[vm, f])) { mostr[vm, f] = r[f]; mostat[vm, f] = m }
+                    }
+                    line = line sprintf("  %s %.1f %d (%d) %dkB/s %s %s/%s/%s", vm, c, top[m, vm] - topswap[m, vm], topswap[m, vm], received,
+                        shown(r[9], "kB/s"), shown(r[10], ""), shown(r[11], ""), shown(r[12], "%"))
                 }
                 printf "%s  %.1f %d (%d) |%s\n", m, cpus, mem, swapped, line
             }
-            print "each VM: its busiest minute, and its most memory, resident and swapped together"
-            for (vm in names)
-                printf "  %s: %.1f CPUs at %s; %d MiB (%d swapped) at %s\n", vm, cpupeak[vm], cpupeakat[vm], peak[vm], peakswap[vm], peakat[vm]
+            print "each VM: its busiest minute, its most memory, resident and swapped together, its fastest disk reads and its longest waits"
+            for (vm in names) {
+                printf "  %s: %.1f CPUs at %s; %d MiB (%d swapped) at %s", vm, cpupeak[vm], cpupeakat[vm], peak[vm], peakswap[vm], peakat[vm]
+                if ((vm, 9) in mostat) printf "; %d kB/s read at %s", mostr[vm, 9], mostat[vm, 9]
+                for (f = 10; f <= 12; f++)
+                    if ((vm, f) in mostat) printf "; waited on %s %d%% at %s", what[f - 8], mostr[vm, f], mostat[vm, f]
+                printf "\n"
+            }
         }' "$1"
 }
 
@@ -153,7 +246,7 @@ guest_script() {
         # per watch each time, so that a minute without a leader would leave only them.
         etcd-journal)
             echo 'journalctl --no-pager -o short-iso-precise -u k3s -u rke2-server |
-                grep -iE "etcd|raft|learner|promot|quorum|leader|member" |
+                grep -iE "etcd|raft|learner|promote|promoted|promotion|promoting|quorum|leader|member" |
                 grep -vE "watcher\.go|reflector\.go|cacher\.go" | tail -n 3000'
             ;;
         # The control plane's static pods and kube-vip as the kubelet keeps their logs on the node,
@@ -501,8 +594,9 @@ collect() {
 }
 
 case ${1:-} in
-    record) record > "${2:?usage: $0 record <file>}" ;;
+    record) record "${2:?usage: $0 record <file>}.trims" > "$2" ;;
     now) sample ;;
+    trim) trim "${2:?usage: $0 trim <file>}.trims" ;;
     summary) summary "${2:?usage: $0 summary <file>}" ;;
     collect) collect "${2:?usage: $0 collect <directory> [<work directory>]}" "${3:-${RUNNER_TEMP:+${RUNNER_TEMP}/e2e}}" ;;
     *)

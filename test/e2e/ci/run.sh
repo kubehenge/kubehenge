@@ -3,16 +3,20 @@
 # root, with the controller and capmox built from the tree under test:
 #
 #   test/e2e/ci/run.sh <work directory> <test>
+#   test/e2e/ci/run.sh <work directory> <test>,<test>     # a lane of two, one after the other
 #
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
 # (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
-# k3s, talos, their add-on halves kubeadm-addons, rke2-addons, k3s-addons and talos-addons, rancher,
+# k3s, talos, the halves of rke2 and k3s rke2-etcd, rke2-machines, k3s-etcd and k3s-machines, their
+# add-on parts kubeadm-addons-a, -b and -c, rke2-addons-a to -d, k3s-addons-a and -b and
+# talos-addons-a, -b and -c, rancher,
 # cluster-mesh, node-image-refresh, autoscaler, control-plane-ha or two-nodes (which first joins a
 # second Proxmox VE node, test/e2e/ci/second-node.sh), which first apply the management cluster and
 # create the templates they need, and leave it up. The workload tests and their add-on halves take
 # options after their name, each after a +: the cluster's CNI, its node OS, or cis-off
-# (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off.
+# (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off. Every test but the appliance
+# takes management-<MiB>, the management node's memory, as in management-cluster-upgrade+management-3584.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
 # upgraded to it; KUBEHENGE_E2E_FROM names the release they start on. The Talos cluster starts on
@@ -22,6 +26,51 @@ set -eu
 
 work=$(readlink -f "${1:?usage: $0 <work directory> <test>}")
 test=${2:?usage: $0 <work directory> <test>}
+# lane_clear: no workload cluster and no VM of one is left, so the lane's next test has the runner's
+# memory to itself. The management cluster and the templates stay for it.
+lane_clear() {
+    if [ -s "${work}/kubeconfig.yaml" ] && kubectl --kubeconfig "${work}/kubeconfig.yaml" get --raw /readyz > /dev/null 2>&1; then
+        lane_left=$(kubectl --kubeconfig "${work}/kubeconfig.yaml" get clusters.cluster.x-k8s.io -A \
+            -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {end}')
+        if [ -n "${lane_left}" ]; then
+            echo "the lane's next test would start beside the clusters ${lane_left}" >&2
+            return 1
+        fi
+    fi
+    lane_left=$(docker exec kubehenge-e2e-pve pvesh get /cluster/resources --type vm --output-format json |
+        jq -j '.[] | select((.template // 0) == 0 and (.name | startswith("kubehenge-") | not)) | "\(.name) "')
+    if [ -n "${lane_left}" ]; then
+        echo "the lane's next test would start beside the VMs ${lane_left}" >&2
+        return 1
+    fi
+}
+# A lane of two tests (test/e2e/ci/scope.sh) runs each in turn on this Proxmox VE and stops at the
+# first that fails, naming it in <work directory>/failed-test.
+case "${test}" in
+    *,*)
+        lane=${test}
+        lane_first=${lane%%,*}
+        for lane_test in $(printf '%s' "${lane}" | tr , ' '); do
+            lane_status=0
+            # shellcheck disable=SC2310 # its refusal, which it explains, fails the test before it.
+            if [ "${lane_test}" != "${lane_first}" ] && ! lane_clear; then
+                lane_test=${lane_first}
+                lane_status=1
+            fi
+            if [ "${lane_status}" = 0 ]; then
+                echo "== ${lane_test}, in the lane ${lane}"
+                KUBEHENGE_E2E_LANE=${lane} sh "$0" "${work}" "${lane_test}" || lane_status=$?
+            fi
+            if [ "${lane_status}" != 0 ]; then
+                printf '%s\n' "${lane_test}" > "${work}/failed-test"
+                echo "${lane_test} failed, in the lane ${lane}" >&2
+                exit "${lane_status}"
+            fi
+        done
+        exit 0
+        ;;
+    *) ;;
+esac
 # shellcheck source=variant.sh
 . "$(dirname "$0")/variant.sh"
 # shellcheck disable=SC2310 # its refusal, which it explains, ends the run.
@@ -30,7 +79,11 @@ eval "${settings}"
 test=${test%%+*}
 case "${test}" in
     management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos) ;;
-    kubeadm-addons | rke2-addons | k3s-addons | talos-addons | rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
+    rke2-etcd | rke2-machines | k3s-etcd | k3s-machines) ;;
+    kubeadm-addons-a | kubeadm-addons-b | kubeadm-addons-c) ;;
+    rke2-addons-a | rke2-addons-b | rke2-addons-c | rke2-addons-d) ;;
+    k3s-addons-a | k3s-addons-b | talos-addons-a | talos-addons-b | talos-addons-c) ;;
+    rancher | cluster-mesh | node-image-refresh | autoscaler) ;;
     control-plane-ha | two-nodes) ;;
     *)
         echo "unknown test ${test}" >&2
@@ -51,9 +104,18 @@ fi
 : "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}" "${KUBEHENGE_E2E_NODE:?}" "${KUBEHENGE_E2E_ADDRESS:?}"
 : "${KUBEHENGE_E2E_GATEWAY:?}" "${KUBEHENGE_E2E_DNS:?}" "${KUBEHENGE_E2E_REGISTRY:?}"
 
-from=${KUBEHENGE_E2E_FROM:-v1.36.5}
-to=$(sed -n 's/^ *kubernetes *= *"\(v[^"]*\)".*/\1/p' "${repo}/management-cluster/versions.tf")
-[ -n "${to}" ]
+# shellcheck source=templates.sh
+. "${repo}/test/e2e/ci/templates.sh"
+kubernetes_versions "${repo}"
+# What test/e2e/ci/build.sh built for the run, when it ran: the binary, and the images up.sh's
+# registry already serves.
+built=false
+if [ -s "${work}/build/controller-digest" ]; then
+    built=true
+    mkdir -p "${repo}/dist"
+    cp "${work}/build/kubehenge" "${repo}/dist/kubehenge"
+    chmod +x "${repo}/dist/kubehenge"
+fi
 # pinned <rke2|k3s> <version>: the newest release of the version's minor that the controller pins;
 # its nodes install no other.
 pinned() {
@@ -68,7 +130,7 @@ rke2_from=$(pinned rke2 "${from}")
 rke2_to=$(pinned rke2 "${to}")
 k3s_from=$(pinned k3s "${from}")
 k3s_to=$(pinned k3s "${to}")
-if [ "${test%-addons}" = talos ]; then
+if [ "${test%-addons-?}" = talos ]; then
     talos_to=$(sed -n 's/^\(const \)\{0,1\}[[:space:]]*DefaultTalosVersion = "\(v[^"]*\)".*/\2/p' "${repo}/pkg/templates/plan.go")
     [ -n "${talos_to}" ] || {
         echo "pkg/templates/plan.go names no DefaultTalosVersion" >&2
@@ -105,31 +167,30 @@ done
 cat "${bundle}" "${KUBEHENGE_PROXMOX_CA}" > "${work}/ca-bundle.pem"
 export SSL_CERT_FILE="${work}/ca-bundle.pem"
 
-# The host's CPU: told of a generic one, the guests' kernels run Meltdown's and MDS's mitigations,
-# which under nested virtualisation slow them on Intel runners until a worker loses its API server.
-template() { # distribution [flags]
-    "${repo}/dist/kubehenge" template create "$@" --cpu-type host --node "${KUBEHENGE_E2E_NODE}" \
-        --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
-        --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
-        --build-dns "${KUBEHENGE_E2E_DNS}"
-}
 # The node OS a test's options chose, for the templates of its distribution.
 node_os=
 [ -z "${KUBEHENGE_E2E_NODE_OS:-}" ] || node_os="--node-os ${KUBEHENGE_E2E_NODE_OS}"
+# templates.sh restores a template the Actions cache kept, or makes it (made).
 # A template needs only Proxmox VE and the template pool, which the apply makes in its first seconds,
 # so the ones a test needs are made while the management cluster comes up. One at a time: they share
 # the build address.
 templates=
 # How many of them are kubeadm's, RKE2's or k3s's, each of whose builds proves, through Proxmox VE,
-# that its guest agent hands out the node's boot log.
+# that its guest agent hands out the node's boot log. A restored one proved it when it was baked:
+# only a template that passed is kept.
 case "${test}" in
-    talos | talos-addons) boot_log_builds=0 ;;
-    kubeadm | node-image-refresh) boot_log_builds=2 ;;
+    talos | talos-addons-?) boot_log_builds=0 ;;
+    kubeadm) boot_log_builds=2 ;;
     *) boot_log_builds=1 ;;
 esac
+# node-image-refresh's test makes its Rocky Linux template, its second, only once the refresh's runs
+# are done, which then build none of their own: each takes 8 to 9 minutes, and nothing checks them.
+if [ "${test}" = node-image-refresh ]; then
+    export KUBEHENGE_E2E_ROCKY_TEMPLATE="sh '${repo}/test/e2e/ci/templates.sh' made '${work}' 2 k3s --node-os rocky-10"
+fi
 case "${test}" in
     rke2* | k3s* | kubeadm* | talos* | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha | two-nodes)
-        make -s -C "${repo}" build
+        [ "${built}" = true ] || make -s -C "${repo}" build
         {
             waited=0
             until docker exec kubehenge-e2e-pve pvesh get /pools/kubehenge-templates > /dev/null 2>&1; do
@@ -140,30 +201,24 @@ case "${test}" in
                 sleep 5
                 waited=$((waited + 5))
             done
-            # shellcheck disable=SC2086 # node_os is empty or one option and its argument.
-            case "${test}" in
-                rke2*) template rke2 ${node_os} ;;
-                k3s*) template k3s ${node_os} ;;
-                rancher | cluster-mesh | autoscaler | control-plane-ha | two-nodes) template k3s ;;
-                # The test moves its cluster to another node OS than the default.
-                node-image-refresh)
-                    template k3s
-                    template k3s --node-os rocky-10
-                    ;;
-                kubeadm)
-                    template kubeadm --kubernetes-version "${from}" ${node_os}
-                    template kubeadm --kubernetes-version "${to}" ${node_os}
-                    ;;
-                # Its add-on half replaces no machine, so it needs only the one it starts from.
-                kubeadm-addons) template kubeadm --kubernetes-version "${from}" ${node_os} ;;
-                # The release the cluster starts on, and the one its machines boot once the
-                # Kubernetes upgrade replaces them.
-                talos*)
-                    template talos --talos-version "${talos_from}"
-                    template talos --talos-version "${talos_to}"
-                    ;;
-                *) ;;
-            esac
+            # A template's slot is its place among the baked templates of the test's lane, as
+            # templates.sh keys numbers their keys.
+            lane_baked=$(baked "${KUBEHENGE_E2E_LANE:-${test}}")
+            templates_of "${test}" > "${work}/templates.txt"
+            while read -r options; do
+                case "${options}" in
+                    talos*) this=0 ;;
+                    *) this=$(printf '%s\n' "${lane_baked}" | grep -nxF -- "${options}" | cut -d: -f1) ;;
+                esac
+                [ "${test}-${this}" != node-image-refresh-2 ] || continue
+                # A lane's earlier test made it and checked its boot log.
+                if grep -qxF -- "${options}" "${work}/templates-made" 2> /dev/null; then
+                    echo "template ${options} made for the lane's earlier test"
+                    continue
+                fi
+                # shellcheck disable=SC2086 # one option or argument per word
+                made "${this}" ${options}
+            done < "${work}/templates.txt"
         } > "${work}/templates.log" 2>&1 &
         templates=$!
         ;;
@@ -180,14 +235,21 @@ templates_made() {
     cat "${work}/templates.log"
     # grep -c exits non-zero when it counts none, which the comparison reports.
     checked=$(grep -c 'hands out its boot log and cloud-init.s output through the guest agent$' "${work}/templates.log" || true)
+    restored=$(grep -c -e '^template .* restored from the cache as VM ' -e "^template .* made for the lane's earlier test$" "${work}/templates.log" || true)
+    boot_log_builds=$((boot_log_builds - restored))
     if [ "${checked}" -lt "${boot_log_builds}" ]; then
         echo "${checked} of the ${boot_log_builds} node templates were seen handing out their boot logs" >&2
         exit 1
     fi
+    sed 's/ *$//' "${work}/templates.txt" >> "${work}/templates-made"
 }
 
-TF_VAR_controller_image=ghcr.io/kubehenge/kubehenge@$(make -s -C "${repo}" image \
-    IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/kubehenge" KO_FLAGS=--insecure-registry | sed -n 's/.*@//p')
+if [ "${built}" = true ]; then
+    TF_VAR_controller_image=ghcr.io/kubehenge/kubehenge@$(cat "${work}/build/controller-digest")
+else
+    TF_VAR_controller_image=ghcr.io/kubehenge/kubehenge@$(make -s -C "${repo}" image \
+        IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/kubehenge" KO_FLAGS=--insecure-registry | sed -n 's/.*@//p')
+fi
 export TF_VAR_proxmox_ca_certificate TF_VAR_controller_image
 case "${TF_VAR_controller_image}" in
     *@)
@@ -199,10 +261,27 @@ case "${TF_VAR_controller_image}" in
 esac
 # capmox and the Add-on Provider for Helm as a release publishes them, by the digests the module
 # names; the mirror serves them as ghcr.io's.
-make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
-    KO_FLAGS=--insecure-registry > /dev/null
-make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
-    KO_FLAGS=--insecure-registry > /dev/null
+if [ "${built}" != true ]; then
+    make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
+        KO_FLAGS=--insecure-registry > /dev/null
+    make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
+        KO_FLAGS=--insecure-registry > /dev/null
+fi
+
+# The management node's memory is the module's default, but where the test's name gives another.
+# kubeadm-addons-a with Calico and rke2-addons-b with Cilium take 3584 MiB, as with 4096 their
+# guests outgrow 12 GiB (docs/testing.md).
+case "${test}+${KUBEHENGE_E2E_CNI:-}" in
+    kubeadm-addons-a+calico | rke2-addons-b+cilium) : "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:=3584}" ;;
+    *) ;;
+esac
+if [ -n "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:-}" ]; then
+    export TF_VAR_node_memory_mb="${KUBEHENGE_E2E_MANAGEMENT_MEMORY}"
+    echo "the management node has ${TF_VAR_node_memory_mb} MiB of memory"
+fi
+# Talos keeps its page cache, so the management node gives memory back only through its balloon.
+# It used 2212 MiB at most (docs/testing.md), which leaves room above 3072.
+export TF_VAR_node_memory_min_mb="${KUBEHENGE_E2E_MANAGEMENT_MEMORY_MIN:-3072}"
 
 # The tests' own output is shown as it comes rather than when each make target ends.
 e2e() { make -C "${repo}" OUTPUT_SYNC=none "$@"; }
@@ -261,27 +340,35 @@ case "${test}" in
         ;;
     # The other tests run against a management cluster applied here first. The runner has 4 vCPUs,
     # and a workload cluster with every add-on starting starves when the management node holds 4 of
-    # its own beside it; with no provider upgrade to ride out, 2 do. Its memory stays the module's
-    # default: with 3 GiB the node stalled for half a minute while the add-on provider
-    # reconciled every release at once, its probes failing, and the webhooks with them.
+    # its own beside it; with no provider upgrade to ride out, 2 do. Its memory is set above: with
+    # 3 GiB the node stalled for half a minute while the add-on provider reconciled every release
+    # at once, its probes failing, and the webhooks with them.
     *) export TF_VAR_node_cores=2 ;;
 esac
 
 # The workload cluster and Cluster Mesh tests back up to an S3 store they serve on this machine, at
 # the address the nodes reach it by, under a certificate of a CA made for the run; the management
 # cluster offers it as a backup target, and as a second one, which nothing backs up to, for the
-# clusters' reads of each other's backups.
+# clusters' reads of each other's backups. A lane's later test keeps the store and its certificate
+# when an earlier one set them up, so that the management cluster's apply changes nothing.
+s3=${work}/s3
 case "${test}" in
-    rke2* | k3s* | kubeadm* | talos* | cluster-mesh)
-        s3=${work}/s3
+    rke2* | k3s* | kubeadm* | talos* | cluster-mesh) serves_s3=true ;;
+    *) serves_s3=false ;;
+esac
+[ ! -s "${s3}/tls.crt" ] || serves_s3=true
+case "${serves_s3}" in
+    true)
         mkdir -p "${s3}"
-        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \
-            -keyout "${s3}/ca.key" -out "${s3}/ca.crt" 2> /dev/null
-        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=kubehenge-e2e-s3 \
-            -keyout "${s3}/tls.key" -out "${s3}/tls.csr" 2> /dev/null
-        printf 'subjectAltName = IP:%s\nextendedKeyUsage = serverAuth\n' "${KUBEHENGE_E2E_OIDC_ADDRESS:?}" > "${s3}/san.cnf"
-        openssl x509 -req -in "${s3}/tls.csr" -CA "${s3}/ca.crt" -CAkey "${s3}/ca.key" -CAcreateserial \
-            -CAserial "${s3}/ca.srl" -days 2 -extfile "${s3}/san.cnf" -out "${s3}/tls.crt" 2> /dev/null
+        if [ ! -s "${s3}/tls.crt" ]; then
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-s3-ca \
+                -keyout "${s3}/ca.key" -out "${s3}/ca.crt" 2> /dev/null
+            openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=kubehenge-e2e-s3 \
+                -keyout "${s3}/tls.key" -out "${s3}/tls.csr" 2> /dev/null
+            printf 'subjectAltName = IP:%s\nextendedKeyUsage = serverAuth\n' "${KUBEHENGE_E2E_OIDC_ADDRESS:?}" > "${s3}/san.cnf"
+            openssl x509 -req -in "${s3}/tls.csr" -CA "${s3}/ca.crt" -CAkey "${s3}/ca.key" -CAcreateserial \
+                -CAserial "${s3}/ca.srl" -days 2 -extfile "${s3}/san.cnf" -out "${s3}/tls.crt" 2> /dev/null
+        fi
         TF_VAR_backup_targets=$(jq -cn --arg e "https://${KUBEHENGE_E2E_OIDC_ADDRESS}:8333" --rawfile ca "${s3}/ca.crt" \
             '[{name: "e2e", endpoint: $e, bucket: "kubehenge-e2e", prefix: "ci", ca_certificate: $ca},
               {name: "e2e-other", endpoint: $e, bucket: "kubehenge-e2e-other", prefix: "ci", ca_certificate: $ca}]')
@@ -303,47 +390,62 @@ if ! tofu -chdir="${work}/mgmt" apply -input=false -auto-approve -no-color > "${
 fi
 (umask 077 && tofu -chdir="${work}/mgmt" output -raw kubeconfig > "${work}/kubeconfig.yaml")
 export KUBECONFIG="${work}/kubeconfig.yaml"
+# For the guard, which samples the management node's memory from inside it once this is here.
+(umask 077 && tofu -chdir="${work}/mgmt" output -raw talosconfig > "${work}/mgmt/talosconfig")
 
 templates_made
 
 # Nested vCPUs cost no memory, and with two an RKE2 control plane stopped answering its own lease
 # renewals while everything started.
 export KUBEHENGE_E2E_CONTROL_PLANE_CORES=4
-# Each class's workload test runs in two halves, on a machine each, as the whole outgrows one
-# machine's memory: kubeadm, rke2, k3s and talos take a cluster of the least size the class allows
-# with the add-ons it starts with through everything but the other add-ons, and their -addons halves one sized for every add-on through
-# the add-ons, replacing no machine.
+# Each class's workload test runs in parts, on a machine each, as the whole outgrows one machine's
+# memory: kubeadm, rke2, k3s and talos take a cluster of the least size the class allows with the
+# add-ons it starts with through everything but the other add-ons, and their -addons-a, -addons-b,
+# -addons-c but on k3s and -addons-d on RKE2 parts one sized for a group of the add-ons through that
+# group, replacing no machine. rke2's and k3s's own test also runs in two halves, -etcd and
+# -machines, on a machine each.
 case "${test}" in
-    *-addons) export KUBEHENGE_E2E_PART=addons ;;
+    *-addons-?) export KUBEHENGE_E2E_PART="addons-${test##*-}" ;;
+    *-etcd | *-machines) export KUBEHENGE_E2E_PART="${test#*-}" ;;
     rke2 | k3s | kubeadm | talos) export KUBEHENGE_E2E_PART=lifecycle ;;
     *) ;;
 esac
 case "${test}" in
-    rke2 | rke2-addons)
+    rke2 | rke2-*)
         # MetalLB is the default the other distributions run; kube-vip gets a cluster of its own.
         export KUBEHENGE_E2E_LOAD_BALANCER=kube-vip
         # The one cluster that checks its nodes' HA group labels, which every cluster has by default,
         # and switches them off and on again.
-        [ "${test}" != rke2 ] || export KUBEHENGE_E2E_HA_GROUPS=1
+        case "${test}" in
+            rke2 | rke2-etcd) export KUBEHENGE_E2E_HA_GROUPS=1 ;;
+            *) ;;
+        esac
         e2e e2e-workload-cluster CLASS=kubehenge-rke2 VERSION="${rke2_from}" UPGRADE="${rke2_to}"
         ;;
-    k3s | k3s-addons)
-        # The one cluster on the storage of its own, which switches the CSI plugin's newest release
-        # on and off, and volume snapshots, with the copy proxy's image pulled from
-        # KUBEHENGE_E2E_REGISTRY, where this build was pushed.
-        if [ "${test}" = k3s ]; then
-            export KUBEHENGE_E2E_STORAGE=own KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
-            export KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1
-        fi
+    k3s | k3s-*)
+        # The one cluster on the storage of its own, whose machines are cloned there. Its etcd half
+        # switches the CSI plugin's newest release on and off, and volume snapshots, with the copy
+        # proxy's image pulled from KUBEHENGE_E2E_REGISTRY, where this build was pushed.
+        case "${test}" in
+            k3s | k3s-etcd | k3s-machines) export KUBEHENGE_E2E_STORAGE=own ;;
+            *) ;;
+        esac
+        case "${test}" in
+            k3s | k3s-etcd)
+                export KUBEHENGE_E2E_DATASTORE_ALLOCATE=1 KUBEHENGE_E2E_LOCAL_STORAGE=local
+                export KUBEHENGE_E2E_VOLUME_SNAPSHOTS=1
+                ;;
+            *) ;;
+        esac
         # In one of main.tf's extra_cluster_namespaces, created with the interface's own account.
         export KUBEHENGE_E2E_NAMESPACE=e2e-team
         e2e e2e-workload-cluster CLASS=kubehenge-k3s VERSION="${k3s_from}" UPGRADE="${k3s_to}"
         ;;
-    kubeadm | kubeadm-addons)
+    kubeadm | kubeadm-addons-?)
         export KUBEHENGE_E2E_CNI="${KUBEHENGE_E2E_CNI:-cilium}"
         e2e e2e-workload-cluster CLASS=kubehenge-kubeadm VERSION="${from}" UPGRADE="${to}"
         ;;
-    talos | talos-addons)
+    talos | talos-addons-?)
         # Talos's own CNI, flannel, unless an option chose another: the kubeadm run covers Cilium.
         export KUBEHENGE_E2E_TALOS_VERSION="${talos_from}" KUBEHENGE_E2E_TALOS_UPGRADE="${talos_to}"
         e2e e2e-workload-cluster CLASS=kubehenge-talos VERSION="${from}" UPGRADE="${to}"

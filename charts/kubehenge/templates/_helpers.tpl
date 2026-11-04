@@ -89,11 +89,12 @@ properties:
 {{- end -}}
 
 {{/*
-Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "workerMinCores" <n> "workerMinMemoryMiB" <n> "clusters" .Values.clusters "sysAudit" <whether clusters may hold Sys.Audit on />).
+Call with (dict "controlPlaneDiskGiB" <n> "workerDiskGiB" <n> "minDiskGiB" <n> "workerMinCores" <n> "workerMinMemoryMiB" <n> "clusters" .Values.clusters "sysAudit" <whether clusters may hold Sys.Audit on />), and "controlPlaneMemoryMiB" <n> where a control plane's default memory is above its minimum.
 A control plane's minimum is the first row of the k3s and RKE2 server sizing guides, 2 vCPUs and
 4 GiB; kubeadm, which documents no sizes past its 2 GiB to start, follows RKE2's, whose servers run
 the same components. On less, an add-on's install crowds out the API server and etcd. A worker's is
-never below its distribution's documented minimum for a node.
+never below its distribution's documented minimum for a node. A control plane's default holds the
+node's own memory with every CNI the class offers, so that a cluster of the defaults is admitted.
 */}}
 {{- define "kubehenge.proxmoxVariables" -}}
 - name: controlPlaneEndpoint
@@ -225,7 +226,7 @@ never below its distribution's documented minimum for a node.
   required: false
   schema:
     openAPIV3Schema:
-      {{- include "kubehenge.machineSchema" (dict "cores" 2 "minCores" 2 "memoryMiB" 4096 "minMemoryMiB" 4096 "diskGiB" .controlPlaneDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
+      {{- include "kubehenge.machineSchema" (dict "cores" 2 "minCores" 2 "memoryMiB" (.controlPlaneMemoryMiB | default 4096) "minMemoryMiB" 4096 "diskGiB" .controlPlaneDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
 - name: workerMachine
   required: false
   schema:

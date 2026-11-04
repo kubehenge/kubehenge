@@ -29,16 +29,20 @@ metadata:
     # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
     # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
     kubehenge.dev/node-memory: '{"controlPlane":3376,"worker":704}'
+    # What Calico adds to a control plane in place of Cilium, which node-memory's figure runs: the most
+    # an idle control plane used with it in the end-to-end tests, less the least with Cilium at the
+    # same size, with a quarter on top, in steps of 8.
+    kubehenge.dev/cni-control-plane-memory: '{"calico":1424}'
     {{- include "kubehenge.addonCPU" . | nindent 4 }}
     # The CPU, in millicores, a node's own pods request besides the add-ons': on a worker the CNI's
     # agent (Cilium's 100m, what its CNI installer asks for before the agent's 50m, and its Envoy's
-    # 10m; Calico's 50m), a CoreDNS replica's 100m, Traefik's 10m and the CSI plugin's 30m; a control
-    # plane without workers adds the API server's 250m, the controller manager's 200m, the
-    # scheduler's and etcd's 100m each, the second CoreDNS replica, the CSI controller's 50m, and
-    # 10m each for the cloud controller manager, kube-vip and Cilium's operator, more with Cilium's
-    # agent than Calico's operator, Typha, controllers and API server come to. kube-proxy asks for
-    # none.
-    kubehenge.dev/node-cpu: '{"controlPlane":1080,"worker":250}'
+    # 10m; Calico's 50m), Traefik's 10m and the CSI plugin's 30m. The workers together carry
+    # CoreDNS's two replicas at 100m each, which can both land on one worker. A control plane
+    # without workers runs all of that and adds the API server's 250m, the controller manager's
+    # 200m, the scheduler's and etcd's 100m each, the CSI controller's 50m, and 10m each for the
+    # cloud controller manager, kube-vip and Cilium's operator, more with Cilium's agent than
+    # Calico's operator, Typha, controllers and API server come to. kube-proxy asks for none.
+    kubehenge.dev/node-cpu: '{"controlPlane":1080,"worker":150,"workers":200}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -93,7 +97,8 @@ spec:
         healthCheck:
           {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
   variables:
-    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 2048 "clusters" .Values.clusters "sysAudit" (not (empty .Values.proxmox.sysAuditGroup))) | nindent 4 }}
+    # A control plane's default memory is node-memory's controlPlane with Calico's figure on top.
+    {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "controlPlaneMemoryMiB" 4800 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 2048 "clusters" .Values.clusters "sysAudit" (not (empty .Values.proxmox.sysAuditGroup))) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
     {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}

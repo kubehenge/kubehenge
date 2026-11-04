@@ -1,14 +1,17 @@
 ---
 name: e2e image
 
-# Proxmox VE's image for the end-to-end tests (test/e2e/pve), cached under its files' hash. The
-# nightly run saves it too, but a change to those files would leave every lane of every run until
-# then building it from Proxmox VE's repository, where one refused connection fails a lane. A cache
-# saved on main is read by every branch and merge group.
+# What the end-to-end lanes restore instead of building, made on main once its inputs change: a
+# cache saved on main is read by every branch and merge group, so the merge group after the change
+# finds it. Without this, every lane of every run until the nightly run would build it again.
+# - Proxmox VE's image (test/e2e/pve), under its files' hash. Built in a lane it comes from Proxmox
+#   VE's repository, where one refused connection fails the lane.
+# - Go's and npm's caches, under the hash of go.sum and the frontend's lockfile.
+# - The templates of kubeadm, RKE2 and k3s the merge queue's tests bake, each under a hash of its
+#   bake's inputs (test/e2e/ci/templates.sh). Only those whose keys the cache lacks are baked.
 on:
   push:
     branches: [main]
-    paths: [test/e2e/pve/**, .github/workflows/e2e-image.yml]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +20,10 @@ permissions:
 concurrency:
   group: e2e-image-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+  GOPROXY: https://proxy.golang.org|direct
 
 jobs:
   build:
@@ -27,7 +34,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: kept
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pve-image.tar.zst
+          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
+          restore-keys: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-
+          lookup-only: true
       - name: Proxmox VE's image
+        if: steps.kept.outputs.cache-matched-key == ''
         run: |
           for try in 1 2 3; do
             docker build --progress=plain -t kubehenge-e2e-pve test/e2e/pve && break
@@ -35,7 +50,177 @@ jobs:
             sleep 60
           done
           docker save kubehenge-e2e-pve | zstd -T0 -q -o "$RUNNER_TEMP/pve-image.tar.zst"
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - if: steps.kept.outputs.cache-matched-key == ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
           key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
+
+  # Go's and npm's caches of e2e.yml's build job, once go.sum or the frontend's lockfile changes or
+  # the entry was evicted. Saved by the nightly run alone, merge groups found none until then.
+  go:
+    name: Go's cache
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: kept
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
+          restore-keys: |
+            e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
+          lookup-only: true
+      - if: steps.kept.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
+          restore-keys: e2e-go-
+      - name: Tools
+        if: steps.kept.outputs.cache-matched-key == ''
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Build
+        if: steps.kept.outputs.cache-matched-key == ''
+        run: test/e2e/ci/build.sh "$RUNNER_TEMP/build"
+      - if: steps.kept.outputs.cache-matched-key == ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
+
+  # The templates whose keys the cache lacks on this branch.
+  templates:
+    name: Templates to bake
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: read # lists the cache's entries
+      contents: read
+    outputs:
+      missing: ${{ steps.missing.outputs.missing }}
+      current: ${{ steps.missing.outputs.current }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
+          restore-keys: |
+            e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
+            e2e-go-
+      - name: Go
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin" go
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.ref }}
+        run: |
+          missing=$(test/e2e/ci/templates.sh missing "$REF")
+          echo "missing: $missing"
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+          current=$(test/e2e/ci/templates.sh current | tr '\n' ' ')
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+
+  bake:
+    name: Bake (${{ matrix.template.options }})
+    needs: [build, templates]
+    if: needs.templates.outputs.missing != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        template: ${{ fromJSON(needs.templates.outputs.missing) }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
+          restore-keys: |
+            e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
+            e2e-go-
+      - id: pve-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pve-image.tar.zst
+          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
+          restore-keys: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-
+      - if: steps.pve-cache.outputs.cache-matched-key != ''
+        run: |
+          zstd -dc "$RUNNER_TEMP/pve-image.tar.zst" | docker load -q
+          echo KUBEHENGE_E2E_PVE_BUILT=1 >> "$GITHUB_ENV"
+      - name: Tools
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm.rules >/dev/null
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          test -c /dev/kvm
+      - name: Proxmox VE
+        run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
+      - name: Bake
+        env:
+          KEY: ${{ matrix.template.key }}
+          OPTIONS: ${{ matrix.template.options }}
+        run: |
+          # shellcheck disable=SC2086 # one option or argument per word
+          test/e2e/ci/templates.sh bake "$RUNNER_TEMP/e2e" "$KEY" $OPTIONS
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/e2e/vz/template-1
+          key: ${{ matrix.template.key }}
+
+  # Each template's entry a new one replaced, a template no test needs any more, and the image's
+  # older entry go at once: the cache holds 10 GB.
+  prune:
+    name: Prune
+    needs: [build, go, templates, bake]
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.templates.result == 'success'
+      && needs.bake.result != 'failure' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: write # deletes cache entries
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT: ${{ needs.templates.outputs.current }}
+        run: |
+          # shellcheck disable=SC2086 # one key per word
+          printf '%s\n' $CURRENT > "$RUNNER_TEMP/current"
+          [ -s "$RUNNER_TEMP/current" ]
+          scripts/cache-prune.sh templates refs/heads/main "$RUNNER_TEMP/current"
+          scripts/cache-prune.sh newest refs/heads/main

@@ -74,7 +74,7 @@ Another hook (`kubehenge wait providers`) holds the release until the providers 
 - Every provider Deployment has rolled out.
 - All of that holds for 30 seconds with the same Deployments. Right after an install, the operator can install a provider again from a stale read and recreate its Deployments.
 
-Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.1 from a later upstream commit with a fix kubeadm upgrades need. It adds fixes of its own (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`).
+Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.2 with two fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`).
 
 Both are built reproducibly, so the published images can be rebuilt from their sources and compared ([releasing.md](releasing.md)). A release of each that carries its fixes replaces the build.
 
@@ -149,7 +149,7 @@ It sets the condition `CertificatesExpiring` on the Cluster while anything runs 
 
 Cluster API sees a node's VM only through the node. A VM paused by hand, or by QEMU after a failed disk write, keeps its machine ready until the node's lease runs out. A full storage is not seen at all.
 
-Kubehenge's controller therefore reads Proxmox VE's resource list every minute, with a token that holds `VM.Audit` on the workload pool and `Datastore.Audit` on the clusters' storages. For a started VM, that list gives the state QEMU reports, such as paused or a disk error.
+Kubehenge's controller therefore reads Proxmox VE's resource list every 15 seconds, with a token that holds `VM.Audit` on the workload pool and `Datastore.Audit` on the clusters' storages. For a started VM, that list gives the state QEMU reports, such as paused or a disk error.
 
 The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). It changes nothing. Resuming, starting or replacing a VM is the administrator's call.
 
@@ -1074,7 +1074,7 @@ An upgrade starts only inside the window (days of the week or of the month, a st
   - Every class honours the Cluster's ranges, kubeadm's pod subnet among them, which the Tigera operator needs to install Calico. The k3s provider reads its own server configuration only, so the k3s class copies them there.
 - **The Gateway API** is in every cluster, with no switch, and costs no pod. Traefik's Gateway, Istio's waypoints and anything else that speaks it get the same API everywhere.
   - **Kubehenge's release.** Kubehenge's controller carries one release of upstream's standard-channel install file, built into its binary and checked against its SHA-256 at build time.
-    - It applies its CRDs and the admission policy beside them (`safe-upgrades.gateway.networking.k8s.io`) with the cluster's admin kubeconfig once the control plane is up.
+    - It applies its CRDs with the cluster's admin kubeconfig once the control plane is up. On kubeadm and Talos it applies the admission policy beside them (`safe-upgrades.gateway.networking.k8s.io`).
   - **The distributions' charts.** RKE2 and k3s ship the CRDs in their Traefik CRD charts in some releases.
     - Later releases drop them from that chart, which keeps them in the cluster. They ship all of the Gateway API, CRDs and policy, in a chart of its own instead (`rke2-gateway-api-crd`, `gateway-api-crd`), which adopts what it finds.
     - There the controller first waits until the Traefik CRD chart, and the Gateway API chart where the release has one, are installed. The distribution creates all of a release's HelmCharts at once.
@@ -1084,8 +1084,11 @@ An upgrade starts only inside the window (days of the week or of the month, a st
       - One missing gets Kubehenge's.
       - One of Kubehenge's release or newer stays.
       - An older one stays while the latest revision of the Helm release that marks it as its own still holds it. It is taken over and brought to Kubehenge's release once that revision does not.
-  - **Logged and guarded.** The controller logs each object it applies, and which Helm releases hold the cluster's objects whenever that changes.
-    - The policy stays in place too, so that a chart bringing older CRDs, or experimental ones over standard ones, is refused.
+  - **The policy goes with the CRDs.** It refuses CRDs older than its own release. Only whoever holds the CRDs brings it.
+    - The controller keeps its copy on kubeadm and Talos while no Helm release ships a CRD of the bundle. There it refuses older CRDs, and experimental ones over standard ones.
+    - On RKE2 and k3s, and wherever a Helm release ships a CRD, the controller deletes the copy it applied. A later release's Gateway API chart can then install its CRDs, older than Kubehenge's or not.
+    - A policy that a Helm release ships, or that someone else applied, stays.
+  - **Logged.** The controller logs each object it applies or deletes, and which Helm releases hold the cluster's objects whenever that changes.
     - The distributions' Gateway API charts install only the standard channel, as Kubehenge does. Their experimental channel adds only the `gateway.networking.x-k8s.io` CRDs, which neither Traefik's Gateway provider nor Istio's waypoints need.
   - **Traefik's Gateway provider** is on in every distribution, configured like the rest of Traefik.
     - The configuration is in the chart values on kubeadm and Talos.

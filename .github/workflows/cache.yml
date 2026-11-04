@@ -1,0 +1,47 @@
+---
+name: cache
+
+# Keeps the Actions cache within its 10 GB (docs/testing.md#the-actions-cache). Only main saves, so
+# main keeps each family's newest entry alone, and a closed pull request's entries go with it.
+on:
+  push:
+    branches: [main]
+  # After the nightly end-to-end run has saved Go's cache and the templates.
+  schedule:
+    - cron: '7 5 * * *'
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: cache-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: prune
+    # A fork's pull request gets a token that deletes nothing; its entries age out instead.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: write # deletes cache entries
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PULL: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            scripts/cache-prune.sh all "refs/pull/$PULL/merge"
+          else
+            scripts/cache-prune.sh newest refs/heads/main
+          fi

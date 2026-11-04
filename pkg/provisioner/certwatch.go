@@ -111,7 +111,10 @@ type CertificateWatch struct {
 	Events   events.EventRecorder
 	// Interval is how often the clusters are looked at.
 	Interval time.Duration
-	Now      func() time.Time
+	// RenewingInterval is how soon they are looked at again while a cluster's certificates are being
+	// renewed, so that its condition clears soon after its machines are replaced.
+	RenewingInterval time.Duration
+	Now              func() time.Time
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -119,18 +122,39 @@ func (*CertificateWatch) NeedLeaderElection() bool { return true }
 
 // Start implements manager.Runnable.
 func (w *CertificateWatch) Start(ctx context.Context) error {
-	return every(ctx, w.Interval, func(ctx context.Context) {
-		eachCluster(ctx, w.Client, w.ClassNamespace, "certificate-watch", w.watch)
-	})
+	for {
+		t := time.NewTimer(w.pass(ctx))
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil
+		case <-t.C:
+		}
+	}
 }
 
-func (w *CertificateWatch) watch(ctx context.Context, c *clusterv1.Cluster) error {
+// pass looks at every cluster once and returns how long until the next look.
+func (w *CertificateWatch) pass(ctx context.Context) time.Duration {
+	renewing := false
+	eachCluster(ctx, w.Client, w.ClassNamespace, "certificate-watch", func(ctx context.Context, c *clusterv1.Cluster) error {
+		r, err := w.watch(ctx, c)
+		renewing = renewing || r
+		return err
+	})
+	if renewing && w.RenewingInterval > 0 && w.RenewingInterval < w.Interval {
+		return w.RenewingInterval
+	}
+	return w.Interval
+}
+
+// watch looks at one cluster's certificates and tells whether they are being renewed.
+func (w *CertificateWatch) watch(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
 	if !c.DeletionTimestamp.IsZero() || ptr.Deref(c.Spec.Paused, false) || RestoreInProgress(c) {
-		return nil
+		return false, nil
 	}
 	machines, err := clusterMachines(ctx, w.Client, c)
 	if err != nil {
-		return err
+		return false, err
 	}
 	found, readErr := w.expiries(ctx, c, machines)
 	now := w.now()
@@ -141,10 +165,10 @@ func (w *CertificateWatch) watch(ctx context.Context, c *clusterv1.Cluster) erro
 		}
 	}
 	if len(due) == 0 {
-		return errors.Join(readErr, w.mark(ctx, c, nil))
+		return false, errors.Join(readErr, w.mark(ctx, c, nil))
 	}
 	cond, renewErr := w.renew(ctx, c, due)
-	return errors.Join(readErr, renewErr, w.mark(ctx, c, cond))
+	return cond != nil && cond.Reason == CertificatesRenewing, errors.Join(readErr, renewErr, w.mark(ctx, c, cond))
 }
 
 func (w *CertificateWatch) mark(ctx context.Context, c *clusterv1.Cluster, cond *metav1.Condition) error {

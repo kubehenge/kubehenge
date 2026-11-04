@@ -34,15 +34,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # What Go, npm and uv download and build, by the lock files they read.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # What Go, npm and uv download and build, by the lock files they read. Only a push to main
+      # saves it: a pull request's or merge group's entry would serve no other run and push main's
+      # out of the cache's 10 GB.
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
             ~/.npm
             ~/.cache/uv
-          key: ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
+          key: >-
+            ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
           restore-keys: ci-
       - name: Tools
         run: |
@@ -57,6 +61,15 @@ jobs:
       - run: make verify-providers
         env:
           GH_TOKEN: ${{ github.token }}
+      - if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+            ~/.cache/uv
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
   # The workflows are code with credentials attached, the release's among them, so actionlint and
   # zizmor check them in a job of their own as well as in `make test`: it answers within a minute,

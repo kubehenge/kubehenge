@@ -149,7 +149,7 @@ Unticked, the cloud controller manager logs a permission error for each node eve
 
 #### Sizes
 
-The defaults are 2 cores and 4096 MiB, with a 30 GiB disk for the control plane and 40 GiB for workers. Disks are at least 20 GiB. A control-plane node needs at least 2 cores and 4096 MiB, the first row of the k3s and RKE2 server sizing guides. For kubeadm, which documents no sizes, RKE2's guide applies.
+The defaults are 2 cores and 4096 MiB, with a 30 GiB disk for the control plane and 40 GiB for workers. A kubeadm control plane defaults to 4800 MiB, which it needs with Calico. Disks are at least 20 GiB. A control-plane node needs at least 2 cores and 4096 MiB, the first row of the k3s and RKE2 server sizing guides. For kubeadm, which documents no sizes, RKE2's guide applies.
 
 With more workers the guides ask for more. Kubehenge refuses a cluster whose control planes fall short, when it is created and when its workers or machines change. RKE2 and kubeadm need 4 cores and 8192 MiB from 226 workers. They need 8 cores and 16384 MiB from 451 and 16 cores and 32768 MiB from 1,301. For k3s the same sizes start at 351, 901 and 1,801 workers.
 
@@ -185,11 +185,24 @@ The CPU is what the add-ons' pods request as Kubehenge installs them. It counts 
 
 A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm, RKE2 and Talos. A control plane counts 1848 MiB on k3s, 2392 MiB on Talos, 3120 MiB on RKE2 and 3376 MiB on kubeadm before any add-on. With every add-on but Rancher it needs 3872 MiB on k3s, 3992 MiB on Talos, 4720 MiB on RKE2 and 4976 MiB on kubeadm. These are above the least of 4096 MiB on RKE2 and kubeadm.
 
+A CNI other than the class's default adds to each control plane. This counts once the cluster has an add-on.
+
+| Distribution | Cilium | Calico |
+| --- | --- | --- |
+| k3s | 1160 MiB | 1808 MiB |
+| kubeadm | default | 1424 MiB |
+| RKE2 | 504 MiB | 144 MiB |
+| Talos | 520 MiB | 384 MiB |
+
+With every add-on but Rancher, a k3s control plane needs 5032 MiB with Cilium and 5680 MiB with Calico.
+
 A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB. It needs 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either. GitOps with Argo CD on top takes each 512 MiB further.
 
-The default machines hold every add-on but Rancher, logs, backups and GitOps on every distribution. The exception is kubeadm's control plane, which needs 4304 MiB for them, above the default 4096 MiB. A second worker makes room for logs and backups too.
+The default machines hold every add-on but Rancher, logs, backups and GitOps with the distribution's default CNI, and on kubeadm with Cilium. A second worker makes room for logs and backups too.
 
-For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there. That is 250 millicores on kubeadm, 350 on k3s, 490 on Talos and 775 on RKE2. Talos keeps 50 of them back for the system, and its flannel asks for 200 with its network policy controller. On RKE2, kube-proxy asks for 250 and canal for 260. Without workers, a control plane counts 1080 millicores on kubeadm, 430 on k3s, 910 on Talos and 1605 on RKE2.
+For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there. That is 150 millicores on kubeadm, 350 on k3s, 390 on Talos and 775 on RKE2. Talos keeps 50 of them back for the system. Its flannel asks for 200 with its network policy controller. On RKE2, kube-proxy asks for 250 and canal for 260. Without workers, a control plane counts 1080 millicores on kubeadm, 430 on k3s, 910 on Talos and 1605 on RKE2.
+
+On kubeadm and Talos the workers together count 200 millicores more for CoreDNS's two replicas, since both can sit on one worker.
 
 Every add-on but Rancher takes 1595 millicores with Argo CD, or 1555 with Flux. So it fits on one worker of the default 2 cores on kubeadm and k3s. Talos and RKE2 need a third core for it, or a second worker.
 
@@ -608,9 +621,9 @@ In the cluster's audit log, what you do appears as the ServiceAccount `kube-syst
 
 **Log out** in Headlamp signs you out of that cluster. The appliance drops your session's token, and Headlamp asks for a token or a sign-in of your own. That lasts until you open the cluster again with **Headlamp** on its page here, which signs you in again.
 
-Where the administrator switched on the [Headlamp actions](install-settings.md#headlamp-actions), Headlamp also offers the Helm app catalog and the Prometheus charts it ships with. The catalog lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them. It acts with your own credentials in the cluster, or the sign-in's.
+Where the administrator switched on the [Headlamp actions](install-settings.md#headlamp-actions), Headlamp also offers the Helm app catalog and the Prometheus charts it ships with. The app catalog lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them. It acts with your own credentials in the cluster, or the sign-in's.
 
-The catalog installs charts only from the Helm repositories set for the appliance. Only those who may set up the appliance add or remove them.
+The app catalog installs charts only from the Helm repositories set for the appliance. Only those who may set up the appliance add or remove them.
 
 The Prometheus plugin charts a cluster's metrics from a Prometheus running in it, such as the monitoring add-on's. It reads them through the cluster's API with your credentials. Node drain is offered either way, with your own credentials.
 
@@ -674,9 +687,13 @@ With [certificates](#certificates) from DNS-01 or the cluster's CA, the Gateway 
 
 A Gateway of your own with the class `traefik` works too. Its listeners use Traefik's ports, 8000 for HTTP and 8443 for HTTPS. The nodes' ports 80 and 443 lead to them. Istio's waypoints, its layer 7 proxies, are Gateways of the class `istio-waypoint`. Istiod serves them once the Istio add-on is on.
 
-The Gateway API's admission policy (`safe-upgrades.gateway.networking.k8s.io`) refuses CRDs of the group from the experimental channel over standard ones, and from releases before v1.5.0. So a chart that brings old CRDs fails rather than downgrades the cluster's.
-
 Kubehenge applies its release of the CRDs where they are missing, or older and no longer shipped by the distribution. It never puts an older release over a newer one. Where the distribution's release has its own Gateway API chart (RKE2's `rke2-gateway-api-crd`, k3s's `gateway-api-crd`), the Gateway API is that chart's alone, at its release ([architecture.md](architecture.md#networking)).
+
+The Gateway API's admission policy (`safe-upgrades.gateway.networking.k8s.io`) refuses experimental CRDs of the group over standard ones. It also refuses CRDs from releases before its own. It comes with whoever holds the CRDs:
+
+- **kubeadm and Talos:** Kubehenge applies its release's policy beside its CRDs.
+- **RKE2 and k3s:** only the distribution's Gateway API chart brings one. A distribution upgrade can always install its release of the CRDs.
+- **CRDs a Helm release of your own ships:** that release brings the policy or leaves it out.
 
 The annotation `kubehenge.dev/gateway-api` on the Cluster names the oldest release among the CRDs once every one is in place.
 

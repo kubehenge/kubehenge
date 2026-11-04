@@ -278,7 +278,8 @@ export function addonMemory(
     pods: "kubehenge.dev/addon-memory",
     growth: "kubehenge.dev/addon-control-plane-memory",
   });
-  return { names, mib: total, controlPlaneMiB: growth };
+  const cni = quantity(classFigures(c, "kubehenge.dev/cni-control-plane-memory")[form.cni]) ?? 0;
+  return { names, mib: total, controlPlaneMiB: growth + cni };
 }
 
 const bytesPerMiB = 1_048_576;
@@ -416,7 +417,7 @@ const millicoresPerCore = 1000;
 /**
  * addonNeedCores is the cores each node that carries a form's add-ons needs for the CPU their pods
  * request, as the controller asks: what such a node takes itself, by its class, and its share of
- * the add-ons'. Without add-ons that request CPU it is 0.
+ * the add-ons' and of what the workers run once per cluster. Without add-ons that request CPU it is 0.
  */
 export function addonNeedCores(form: Form, c: ClusterClass | undefined): number {
   const key = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
@@ -425,10 +426,12 @@ export function addonNeedCores(form: Form, c: ClusterClass | undefined): number 
   if (millicores === 0 || nodes <= 0) {
     return 0;
   }
+  const figures = classFigures(c, "kubehenge.dev/node-cpu");
   const own =
-    quantity(classFigures(c, "kubehenge.dev/node-cpu")[key === "workerMachine" ? "worker" : "controlPlane"]) ??
+    quantity(figures[key === "workerMachine" ? "worker" : "controlPlane"]) ??
     plainLeast(form, c, key).cores * millicoresPerCore;
-  return Math.ceil((own + Math.ceil(millicores / nodes)) / millicoresPerCore);
+  const once = key === "workerMachine" ? (quantity(figures["workers"]) ?? 0) : 0;
+  return Math.ceil((own + Math.ceil((millicores + once) / nodes)) / millicoresPerCore);
 }
 
 /**

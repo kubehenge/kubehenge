@@ -1,20 +1,62 @@
 #!/bin/sh
-# Prints, as a JSON list, the end-to-end tests a merge group needs, from the paths its pull requests
-# change, one per line on standard input:
+# Prints, as a JSON list of lanes, the end-to-end tests a merge group needs, from the paths its pull
+# requests change, one per line on standard input. A lane is a test, or two run one after the other
+# on one runner, as in k3s-etcd,cluster-mesh:
 #
-#   git diff --name-only <base> <head> | test/e2e/ci/scope.sh
+#   git diff --name-only <base> HEAD | test/e2e/ci/scope.sh [--base <base>]
 #   test/e2e/ci/scope.sh --all
 #
 # A path no rule below names needs them all, as --all does. Only the merge queue runs end-to-end
 # tests, so a rule that leaves a test out lets a change reach main without it until the nightly run,
 # which runs them all: leave a test out only for a path it cannot reach. The nightly run's own four
 # are long, so a merge group runs one only for its own script and the code only it exercises.
+# With --base, run in the repository's checkout, a change to the chart's values brings Rancher's
+# test only when it changes addons.rancher since <base>, a commit or tree; without it, any change to
+# them does.
 set -eu
 
-workload='kubeadm rke2 k3s talos kubeadm-addons rke2-addons k3s-addons talos-addons'
+base=
+if [ "${1:-}" = --base ]; then
+    base=${2:?usage: $0 [--base <commit>] | --all}
+    shift 2
+fi
+# rancher_block <values.yaml>: the values' addons.rancher block, from its key to the next key or
+# comment at its depth.
+rancher_block() {
+    awk '{ sub(/\r$/, "") } /^addons:/ { a = 1; next } /^[^ #]/ { a = 0 } a && /^  rancher:/ { r = 1; print; next }
+        r && /^  [^ ]/ { r = 0 } r { print }'
+}
+# rancher_changed: whether addons.rancher differs between <base> and the checkout.
+rancher_changed() {
+    [ -n "${base}" ] || return 0
+    root=$(git rev-parse --show-toplevel)
+    before=$(git show "${base}:charts/kubehenge/values.yaml") || return 0
+    before=$(printf '%s\n' "${before}" | rancher_block)
+    after=$(rancher_block < "${root}/charts/kubehenge/values.yaml")
+    [ "${before}" != "${after}" ]
+}
+
+workload='kubeadm rke2-etcd rke2-machines k3s-etcd k3s-machines talos kubeadm-addons-a kubeadm-addons-b kubeadm-addons-c rke2-addons-a rke2-addons-b rke2-addons-c rke2-addons-d k3s-addons-a k3s-addons-b talos-addons-a talos-addons-b talos-addons-c'
 all="management-cluster appliance ${workload} cluster-mesh node-image-refresh autoscaler"
 # Tests the nightly run adds to --all.
 nightly='management-cluster-upgrade rancher control-plane-ha two-nodes'
+# Tests that share a lane, one after the other on its runner, which keeps the merge queue at 20 lanes,
+# as many as a run's jobs at once. Each pair ends within the longest lane, and the first test leaves
+# no guest behind (docs/testing.md).
+pairs='appliance,management-cluster k3s-etcd,cluster-mesh k3s-addons-b,autoscaler'
+# lane_of <test>: the lane the test runs in, its pair or itself.
+lane_of() {
+    for lane in ${pairs}; do
+        case ",${lane}," in
+            *",$1,"*)
+                echo "${lane}"
+                return
+                ;;
+            *) ;;
+        esac
+    done
+    echo "$1"
+}
 need=
 [ "${1:-}" != --all ] || need=${all}
 [ -n "${need}" ] || while IFS= read -r path; do
@@ -27,8 +69,13 @@ need=
         .github/workflows/release-build.yml | .github/workflows/fuzz.yml | scripts/sbom.sh | scripts/syft.yaml) ;;
         .github/codeql-config.yml | .github/zizmor.yml) ;;
         .github/workflows/website.yml | osv-scanner.toml | scripts/lint/*) ;;
+        .github/workflows/cache.yml | scripts/cache-prune.sh) ;;
         appliance/* | pkg/appliance/* | pkg/ui/* | web/* | test/e2e/appliance.sh) need="${need} appliance" ;;
         *e2e_test.go) need="${need} management-cluster" ;;
+        # They hold the Rancher and Turtles pins to what Rancher's test proved.
+        pkg/provisioner/rancher*_test.go | pkg/provisioner/turtles*_test.go | charts/kubehenge/rancher_test.go)
+            need="${need} rancher"
+            ;;
         *_test.go | */testdata/* | test/integration/*) ;;
         test/e2e/ci/nightly.sh) ;;
         test/e2e/management-cluster-upgrade.sh) need="${need} management-cluster-upgrade" ;;
@@ -44,7 +91,12 @@ need=
         management-cluster/* | pkg/provisioner/operator.go | pkg/cli/wait.go | scripts/provider-image.sh | scripts/*-patches/*)
             need="${need} ${all} management-cluster-upgrade"
             ;;
-        pkg/provisioner/rancher*.go | pkg/provisioner/hooks.go | pkg/provisioner/upgradehold.go) need="${need} ${all} rancher" ;;
+        charts/kubehenge/values.yaml)
+            need="${need} ${all}"
+            # shellcheck disable=SC2310 # its answer is the condition.
+            if rancher_changed; then need="${need} rancher"; fi
+            ;;
+        pkg/provisioner/rancher*.go | pkg/provisioner/turtles*.go | pkg/provisioner/hooks.go | pkg/provisioner/upgradehold.go) need="${need} ${all} rancher" ;;
         pkg/provisioner/placement.go | pkg/provisioner/ha*.go) need="${need} ${all} two-nodes" ;;
         charts/kubehenge/files/kube-vip-credentials.sh) need="${need} ${all} control-plane-ha" ;;
         *) need="${need} ${all}" ;;
@@ -53,13 +105,20 @@ done
 
 printf '['
 sep=
+printed=' '
 for t in ${all} ${nightly}; do
     case " ${need} " in
-        *" ${t} "*)
-            printf '%s"%s"' "${sep}" "${t}"
+        *" ${t} "*) ;;
+        *) continue ;;
+    esac
+    lane=$(lane_of "${t}")
+    case "${printed}" in
+        *" ${lane} "*) ;;
+        *)
+            printf '%s"%s"' "${sep}" "${lane}"
             sep=', '
+            printed="${printed}${lane} "
             ;;
-        *) ;;
     esac
 done
 printf ']\n'

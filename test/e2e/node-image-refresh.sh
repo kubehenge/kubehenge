@@ -1,13 +1,13 @@
 #!/bin/sh
 # End-to-end test of the weekly template refresh on a Proxmox VE host, against a running management
 # cluster whose refresh is on with no soak, k3s's template on the default node OS built once, and
-# on Rocky Linux 10 too: a one-node k3s cluster runs that build; a run of the refresh, asked for as
-# Build now asks, makes a new one; the cluster's node stays on its build while the maintenance window
-# is closed and moves to the new one once it opens; a second run makes a third build and deletes the
-# first, which nothing runs any more, while the two newest stay; the cluster's node OS changed to
-# Rocky Linux replaces its node with a clone of that template, SELinux enforcing on it and its boot
-# log read through its guest agent; nothing of
-# the cluster is left afterwards.
+# on Rocky Linux 10 too unless KUBEHENGE_E2E_ROCKY_TEMPLATE makes it later: a one-node k3s cluster
+# runs the first build; a run of the refresh, asked for as Build now asks, makes a new one; the
+# cluster's node stays on its build while the maintenance window is closed and moves to the new one
+# once it opens; a second run makes a third build and deletes the first, which nothing runs any
+# more, while the two newest stay; the cluster's node OS changed to Rocky Linux replaces its node
+# with a clone of that template, SELinux enforcing on it and its boot log read through its guest
+# agent; nothing of the cluster is left afterwards.
 #
 #   test/e2e/node-image-refresh.sh
 #
@@ -18,7 +18,8 @@
 # KUBEHENGE_E2E_ADDRESSES and KUBEHENGE_E2E_ENDPOINT. KUBEHENGE_E2E_VERSION is the k3s version;
 # KUBEHENGE_E2E_CORES and _MEMORY (MiB) size the node, by default the least of a k3s control plane
 # that runs the workloads too; KUBEHENGE_E2E_POOL is the template pool, kubehenge-templates unless
-# set.
+# set. KUBEHENGE_E2E_ROCKY_TEMPLATE is a command that makes k3s's template on Rocky Linux 10 once the
+# refresh's runs are done, for a pool that lacks it until then.
 set -eu
 
 : "${KUBECONFIG:?KUBECONFIG must point at the management cluster}"
@@ -229,6 +230,8 @@ until_true 120 "the two newest builds alone are there" builds_are "${second} ${t
 runs "${second}" || fail 'the node left its build'
 
 step "the node OS changed to Rocky Linux 10 replaces the node, which enforces SELinux"
+# Made only now, the refresh's runs build no Rocky Linux template of their own.
+[ -z "${KUBEHENGE_E2E_ROCKY_TEMPLATE:-}" ] || sh -c "${KUBEHENGE_E2E_ROCKY_TEMPLATE}"
 rocky_builds=$(builds rocky-10)
 [ -n "${rocky_builds}" ] || fail 'the template pool holds no build of k3s on Rocky Linux 10'
 machine=$(machine_name)

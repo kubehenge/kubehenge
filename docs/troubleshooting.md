@@ -515,7 +515,7 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.t
 
 ### VMs that do not run, storage nearly full
 
-Kubehenge's controller looks every minute at the VMs of every cluster's machines whose node has joined. It also looks at the storage in the cluster's `storage` variable. Both show in the cluster's **Health** view. The fleet lists the cluster under what needs you.
+Kubehenge's controller looks every 15 seconds at the VMs of every cluster's machines whose node has joined. It also looks at the storage in the cluster's `storage` variable. Both show in the cluster's **Health** view. The fleet lists the cluster under what needs you.
 
 - **`VMsNotRunning`** on the Cluster, with **VM disk error**, **VM crashed**, **VM stopped** or **VM paused**: a VM has been out of the running state for 3 minutes. The message names each machine, its VM and node, and the reason is the worst found.
   - Suspend-mode backups, migrations, reboots and locks for a backup, migration, snapshot or clone do not count.

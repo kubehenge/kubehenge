@@ -1,8 +1,9 @@
 ---
 name: e2e lane
 
-# One end-to-end test, in up to four tries (e2e-try.yml): a try whose runner lacks pause-loop
-# exiting hands the test to the next one on a fresh runner, and the last runs it wherever it lands.
+# One end-to-end lane, a test or two run one after the other (test/e2e/ci/scope.sh), in up to four
+# tries (e2e-try.yml): a try whose runner lacks pause-loop exiting hands the lane to the next one on
+# a fresh runner, and the last runs it wherever it lands.
 # The calls keep the `./` form, which actionlint still requires; GitHub resolves a called workflow
 # from this commit either way.
 on:
@@ -12,6 +13,10 @@ on:
         description: The test to run, as test/e2e/ci/run.sh names it.
         required: true
         type: string
+      fresh:
+        description: Whether to bake every template from the mirrors instead of the cache.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +27,7 @@ jobs:
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
     with:
       test: ${{ inputs.test }}
+      fresh: ${{ inputs.fresh }}
   try-2:
     name: try 2
     needs: try-1
@@ -29,6 +35,7 @@ jobs:
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
     with:
       test: ${{ inputs.test }}
+      fresh: ${{ inputs.fresh }}
   try-3:
     name: try 3
     needs: try-2
@@ -36,6 +43,7 @@ jobs:
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
     with:
       test: ${{ inputs.test }}
+      fresh: ${{ inputs.fresh }}
   try-4:
     name: try 4
     needs: try-3
@@ -43,6 +51,7 @@ jobs:
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
     with:
       test: ${{ inputs.test }}
+      fresh: ${{ inputs.fresh }}
       last: true
 
   # A try that hands the test back succeeds without running it, so the lane passes only when every
@@ -56,8 +65,13 @@ jobs:
     steps:
       - env:
           TRIES: ${{ toJSON(needs) }}
+          LANE: ${{ inputs.test }}
         run: |
-          printf '%s' "$TRIES" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          printf '%s' "$TRIES" | jq -r 'to_entries[] | "\(.key): \(.value.result)"
+            + (.value.outputs.failed // "" | if . == "" then "" else ", \(.) failed" end)'
+          # A lane of two names the test that failed, in the run's summary too.
+          printf '%s' "$TRIES" | jq -r --arg l "$LANE" '.[] | .outputs.failed // empty
+            | select(. != "") | "\(.) failed, in the lane \($l)."' | tee -a "$GITHUB_STEP_SUMMARY"
           printf '%s' "$TRIES" | jq -e '
             all(.[]; .result == "success" or .result == "skipped")
             and any(.[]; .result == "success" and .outputs["handed-back"] != "true")' > /dev/null

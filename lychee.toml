@@ -1,0 +1,22 @@
+# lychee: the outside links of the README, docs/ and the built website. The VitePress build checks
+# the links between pages, so only web addresses are followed here.
+scheme = ["https", "http"]
+# Root-relative links are the site's own, which the exclusion below leaves to the build.
+base_url = "https://kubehenge.dev/"
+include_fragments = "full"
+accept_timeouts = false
+include_verbatim = false
+max_retries = 3
+retry_wait_time = 5
+timeout = 30
+max_concurrency = 16
+accept = ["200..=299"]
+require_https = true
+no_progress = true
+
+exclude = [
+  # Kubehenge's own site, built from the same files that are checked here.
+  "^https://kubehenge\\.dev/",
+  # Addresses of a local or example machine in the docs, never real ones.
+  "^https?://(localhost|127\\.0\\.0\\.1|[^/]*\\.(test|internal|example|localhost))([:/]|$)",
+]

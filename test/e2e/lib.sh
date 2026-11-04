@@ -24,6 +24,8 @@ apply_management_cluster() {
     "${tofu}" -chdir="${dir}" apply -input=false -auto-approve
     "${tofu}" -chdir="${dir}" output -raw kubeconfig > "${KUBECONFIG}"
     "${tofu}" -chdir="${dir}" output -json proxmox_objects > "${work}/objects.json"
+    # For CI's guard, which samples the management node's memory from inside it once this is here.
+    (umask 077 && "${tofu}" -chdir="${dir}" output -raw talosconfig > "${dir}/talosconfig") || rm -f "${dir}/talosconfig"
 }
 
 check_nodes() {
@@ -32,8 +34,7 @@ check_nodes() {
 }
 
 # providers_ready: whether every provider runs the version its spec names and is Ready. Not with
-# kubectl wait, which takes a condition from an older generation as unmet: the operator leaves Ready
-# as it was when an upgraded provider's Deployment stays available, observed generation and all.
+# kubectl wait, which cannot compare two fields of the object, the installed version with the spec's.
 providers_ready() {
     kubectl get "${provider_kinds}" --all-namespaces -o json | jq -e '.items | length > 0 and all(.[];
         .status.installedVersion == .spec.version and any(.status.conditions[]?; .type == "Ready" and .status == "True"))' > /dev/null
@@ -217,6 +218,7 @@ check_template_builder_privileges() {
 }
 
 destroy_and_check_nothing_left() {
+    rm -f "${dir}/talosconfig"
     "${tofu}" -chdir="${dir}" destroy -input=false -auto-approve
 
     step "nothing left on Proxmox VE"

@@ -32,7 +32,7 @@ s3_store() {
     seaweedfs_server "${work}" "${s3_port}" "${work}/s3.json" "${KUBEHENGE_E2E_BACKUP_CERT}" "${KUBEHENGE_E2E_BACKUP_KEY}"
     # shellcheck disable=SC2034 # the sourcing test stops the store with it.
     s3_pid=$!
-    until_true 120 "the S3 store takes a bucket" s3 -X PUT -o /dev/null "${s3_endpoint}/${bucket}"
+    until_true 120 "the S3 store takes a bucket" seaweedfs_answers "${work}" s3 -X PUT -o /dev/null "${s3_endpoint}/${bucket}"
 }
 s3() { curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" "$@"; }
 

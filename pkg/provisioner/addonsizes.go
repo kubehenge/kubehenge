@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -21,6 +22,12 @@ const AddonMemoryAnnotation = "kubehenge.dev/addon-memory"
 // figures as each add-on is switched on.
 const AddonControlPlaneMemoryAnnotation = "kubehenge.dev/addon-control-plane-memory"
 
+// CNIControlPlaneMemoryAnnotation on a ClusterClass is the memory, in MiB, a CNI other than the one
+// NodeMemoryAnnotation's figures were measured with adds to each control plane's own use, by the
+// cni variable's values: its pods on the control plane and its objects in the API server. It counts
+// wherever AddonControlPlaneMemoryAnnotation's figures do.
+const CNIControlPlaneMemoryAnnotation = "kubehenge.dev/cni-control-plane-memory"
+
 // NodeMemoryAnnotation on a ClusterClass is the memory, in MiB, a node of one of its clusters uses
 // besides the add-ons, by kind: controlPlane and worker, each before any add-on. The end-to-end
 // tests measure them too. A kind it leaves out counts as the least its machines may have.
@@ -36,7 +43,9 @@ const AddonCPUAnnotation = "kubehenge.dev/addon-cpu"
 // NodeCPUAnnotation on a ClusterClass is the CPU, in millicores, a node of one of its clusters
 // requests besides the add-ons' pods, by kind: controlPlane (without workers) or worker. It is what the
 // kubelet keeps back and what the pods of the distribution, its CNI and Kubehenge's own ask for. A
-// kind it leaves out counts as the least its machines may have.
+// kind it leaves out counts as the least its machines may have. Its workers key is what a cluster's
+// workers request together on top of each worker's own: the pods that run a fixed number of times
+// per cluster, such as two CoreDNS replicas, which can all land on one worker.
 const NodeCPUAnnotation = "kubehenge.dev/node-cpu"
 
 // The keys in AddonMemoryAnnotation of what is not an add-on of its own.
@@ -51,6 +60,9 @@ var addonNames = map[string]string{
 	clusterMeshVariable: "Cluster Mesh", loadBalancerVariable: "the load balancer", certManagerFigure: "cert-manager", rancherAddon: "Rancher", rancherAgentFigure: "Rancher's agent",
 	argoCD: "Argo CD", flux: "Flux",
 }
+
+// cniNames are the CNIs with figures in CNIControlPlaneMemoryAnnotation as people know them.
+var cniNames = map[string]string{cniCilium: "Cilium", cniCalico: "Calico"}
 
 // addonsOn names the add-ons the cluster runs, in a fixed order. Rancher's agent counts wherever the
 // cluster would register: once a cluster installs Rancher, every other one registers with it.
@@ -91,7 +103,10 @@ type addonResource struct {
 	addons, nodes string
 	// growth names the figures of what each add-on adds to each control plane's own use, empty but
 	// for memory: the add-ons' objects grow the API server, not what it requests.
-	growth     string
+	growth string
+	// cni names the figures of what each CNI adds to each control plane's own use, empty but for
+	// memory, as growth.
+	cni        string
 	unit, name string
 	// of is how much of it a node of this size has.
 	of func(controlPlaneSize) int
@@ -100,7 +115,7 @@ type addonResource struct {
 var (
 	addonMemory = &addonResource{
 		addons: AddonMemoryAnnotation, nodes: NodeMemoryAnnotation, growth: AddonControlPlaneMemoryAnnotation,
-		unit: "MiB", name: "memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
+		cni: CNIControlPlaneMemoryAnnotation, unit: "MiB", name: "memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
 	}
 	addonCPU = &addonResource{
 		addons: AddonCPUAnnotation, nodes: NodeCPUAnnotation,
@@ -172,8 +187,8 @@ func checkRoomFor(r *addonResource, old, cluster *clusterv1.Cluster, class *clus
 			addons, room.Need, r.unit, r.name, room.Have, r.unit)
 	}
 	if room.controlPlaneShort() > 0 && !excused(addonRoom.controlPlaneShort) {
-		return fmt.Errorf("each control plane needs %d %s of %s with add-ons (%s), and has %d %s",
-			room.ControlPlaneNeed, r.unit, r.name, addons, room.ControlPlaneHave, r.unit)
+		return fmt.Errorf("each control plane needs %d %s of %s with %sadd-ons (%s), and has %d %s",
+			room.ControlPlaneNeed, r.unit, r.name, cniCounted(r, cluster, class), addons, room.ControlPlaneHave, r.unit)
 	}
 	return nil
 }
@@ -194,7 +209,7 @@ func classFigures(class *clusterv1.ClusterClass, annotation string) (map[string]
 // resourceFigures are a class's figures for one resource: its add-ons' pods', what they add to each
 // control plane's own use, and its nodes' own.
 type resourceFigures struct {
-	pods, growth, nodes map[string]int
+	pods, growth, cni, nodes map[string]int
 }
 
 // addonFigures reads a class's figures for the resource. A class without figures for the add-ons'
@@ -212,7 +227,69 @@ func addonFigures(r *addonResource, class *clusterv1.ClusterClass) (resourceFigu
 	if f.growth, _, err = classFigures(class, r.growth); err != nil {
 		return f, false, err
 	}
+	if f.cni, _, err = classFigures(class, r.cni); err != nil {
+		return f, false, err
+	}
 	return f, true, nil
+}
+
+// cniCounted names the cluster's CNI for a refusal, followed by " and ", where its figure counts.
+func cniCounted(r *addonResource, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) string {
+	f, ok, err := addonFigures(r, class)
+	if err != nil || !ok {
+		return ""
+	}
+	cni, _, err := cniGrowth(f, cluster)
+	if err != nil || cni == "" {
+		return ""
+	}
+	return cmp.Or(cniNames[cni], cni) + " and "
+}
+
+// cniGrowth is the cluster's CNI and what it adds to each control plane's own use by the class's
+// figures. A CNI without a figure adds nothing, and is then left unnamed.
+func cniGrowth(f resourceFigures, cluster *clusterv1.Cluster) (string, int, error) {
+	cni, _, err := optionalVariable[string](cluster, "cni")
+	if err != nil || f.cni[cni] == 0 {
+		return "", 0, err
+	}
+	return cni, f.cni[cni], nil
+}
+
+// addonNeeds is what the add-ons on take by the class's figures: their pods, and what they and the
+// cluster's CNI add to each control plane's own use.
+func addonNeeds(f resourceFigures, on []string, cluster *clusterv1.Cluster) (int, int, error) {
+	pods, grown := 0, 0
+	for _, a := range on {
+		pods += f.pods[a]
+		grown += f.growth[a]
+	}
+	_, cni, err := cniGrowth(f, cluster)
+	return pods, grown + cni, err
+}
+
+// workersRoom sets room.Have to the room the cluster's workers leave the add-ons: each worker's
+// beyond room.Base, what it takes itself, less once, what the workers take together. It returns
+// their least and most number. An autoscaled pool counts with its least workers, the room the
+// add-ons always have. The control planes stay tainted while any pool is autoscaled
+// (TaintReconciler), so the add-ons never move there.
+func workersRoom(room *addonRoom, r *addonResource, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass, once int) (int32, int32, error) {
+	workers, most := int32(0), int32(0)
+	for i := range cluster.Spec.Topology.Workers.MachineDeployments {
+		md := &cluster.Spec.Topology.Workers.MachineDeployments[i]
+		pool := workerRange(md)
+		workers += pool.least
+		most += pool.most
+		cores, mem, sizeErr := nodeSize(cluster, class, "workerMachine", md.Variables.Overrides)
+		if sizeErr != nil {
+			return 0, 0, sizeErr
+		}
+		room.Have += int(pool.least) * max(r.of(controlPlaneSize{Cores: cores, MemoryMiB: mem})-room.Base, 0)
+	}
+	if workers > 0 {
+		room.Have = max(room.Have-once, 0)
+	}
+	return workers, most, nil
 }
 
 func addonRoomOf(r *addonResource, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) (addonRoom, error) {
@@ -231,31 +308,20 @@ func addonRoomOf(r *addonResource, cluster *clusterv1.Cluster, class *clusterv1.
 	if room.Base == 0 {
 		room.Base = r.of(classMinimumSize(class, "workerMachine"))
 	}
-	// An autoscaled pool counts with its least workers, the room the add-ons always have. The control
-	// planes stay tainted while any pool is autoscaled (TaintReconciler), so the add-ons never move
-	// there.
-	workers, most := int32(0), int32(0)
-	for i := range topology.Workers.MachineDeployments {
-		md := &topology.Workers.MachineDeployments[i]
-		pool := workerRange(md)
-		workers += pool.least
-		most += pool.most
-		cores, mem, sizeErr := nodeSize(cluster, class, "workerMachine", md.Variables.Overrides)
-		if sizeErr != nil {
-			return room, sizeErr
-		}
-		room.Have += int(pool.least) * max(r.of(controlPlaneSize{Cores: cores, MemoryMiB: mem})-room.Base, 0)
+	workers, most, err := workersRoom(&room, r, cluster, class, nodes["workers"])
+	if err != nil {
+		return room, err
 	}
 	if workers == 0 && most > 0 {
 		// Rancher's agent alone holds no worker up: it runs only once there is a Rancher to register
 		// with, and its pod waiting for room brings a worker up from none.
 		on = slices.DeleteFunc(on, func(a string) bool { return a == rancherAgentFigure })
 	}
-	grown := 0
-	for _, a := range on {
-		room.Need += figures[a]
-		grown += growth[a]
+	pods, grown, err := addonNeeds(f, on, cluster)
+	if err != nil {
+		return room, err
 	}
+	room.Need = pods
 	room.Addons = slices.DeleteFunc(on, func(a string) bool { return figures[a] == 0 && growth[a] == 0 })
 	if workers > 0 || most > 0 {
 		room.Autoscaled = workers == 0

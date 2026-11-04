@@ -38,8 +38,9 @@ work=$(mktemp -d)
 ns=e2e-mesh-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 cleanup() {
     status=$?
-    [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
+    [ -z "${s3_pid}" ] || seaweedfs_stop "${s3_pid}"
     if [ "${status}" -ne 0 ]; then
+        seaweedfs_errors "${work}"
         printf '\nleaving the clusters in %s for inspection; delete them with: kubectl delete namespace %s\n' "${ns}" "${ns}"
     fi
     rm -rf "${work}"
@@ -204,8 +205,7 @@ until_true 120 "west's client reaches east's server at its address" fetches "${s
 global_service east
 global_service west
 until_true 120 "west's client reaches east's server through the global service" fetches echo.e2e-mesh.svc.cluster.local
-echo "memory with Cluster Mesh:"
-pod_memory "${work}/east"
+measured "memory with Cluster Mesh" pod_memory "${work}/east"
 for node in $(east get nodes -o jsonpath='{.items[*].metadata.name}'); do
     east get --raw "/api/v1/nodes/${node}/proxy/stats/summary" |
         jq -r '.pods[] | select(.podRef.name | startswith("clustermesh-apiserver")) | "  clustermesh-apiserver: \(.memory.workingSetBytes / 1048576 | floor) MiB"'
@@ -278,7 +278,7 @@ pools=$(pve_get pools)
 printf '%s' "${pools}" | jq -e --arg p "/${ns}." '[.data[] | select(.poolid | contains($p))] | length == 0' > /dev/null ||
     fail "pools of the clusters are still there"
 kubectl delete namespace "${ns}" --wait --timeout=5m
-kill "${s3_pid}"
+seaweedfs_stop "${s3_pid}"
 s3_pid=
 
 printf '\nPASS\n'

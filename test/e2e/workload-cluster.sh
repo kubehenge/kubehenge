@@ -89,11 +89,16 @@
 # template in the template pool. Talos has no SSH, no systemd and no guest agent that runs commands:
 # the steps that read a node from inside read it through Talos's API, with talosctl and the
 # cluster's talosconfig, or are left out.
-# KUBEHENGE_E2E_PART runs half of the test, for a machine whose memory holds the guests of only one:
+# KUBEHENGE_E2E_PART runs part of the test, for a machine whose memory holds the guests of only one:
 # lifecycle sizes the nodes at the least the class lets them have with the add-ons a cluster starts
-# with, and switches on no other; addons sizes them for every add-on and leaves out every step that replaces machines (the distribution's
-# own etcd upload, the load balancer switched off on k3s, scaling, the upgrade and the dead worker).
-# Unset, the test runs whole.
+# with, and switches on no other; addons-a, addons-b, addons-c but on k3s and addons-d on RKE2 each
+# size them for a group of the add-ons, switch on that group alone and leave out every step that
+# replaces machines
+# (the distribution's own etcd upload, the load balancer switched off on k3s, scaling, the upgrade
+# and the dead worker). On RKE2 and k3s, etcd and machines split lifecycle in two: etcd leaves out
+# the load balancer switched off, scaling, the upgrade and the paused, expiring and dead workers,
+# and machines the etcd snapshot, its restore and the distribution's own upload. Unset, the test runs
+# whole.
 set -eu
 
 class=${1:?usage: $0 <ClusterClass> <version> <upgrade version>}
@@ -107,13 +112,6 @@ upgrade=${3:?usage: $0 <ClusterClass> <version> <upgrade version>}
 : "${KUBEHENGE_E2E_BACKUP_TARGET:?}" "${KUBEHENGE_E2E_BACKUP_CA:?}" "${KUBEHENGE_E2E_BACKUP_CERT:?}" "${KUBEHENGE_E2E_BACKUP_KEY:?}"
 load_balancer=${KUBEHENGE_E2E_LOAD_BALANCER:-metallb}
 part=${KUBEHENGE_E2E_PART:-all}
-case ${part} in
-    all | lifecycle | addons) ;;
-    *)
-        echo "KUBEHENGE_E2E_PART is lifecycle or addons, not ${part}" >&2
-        exit 2
-        ;;
-esac
 
 # etcdutl, which reads the etcd snapshots back.
 # renovate: datasource=github-release-attachments depName=etcd-io/etcd
@@ -134,7 +132,48 @@ case ${cis} in
 esac
 
 work=$(mktemp -d)
+# The kubehenge command as `make build` makes it, which CI has just run: Go's cache holds its
+# packages built so, while `go run` would build every one again with other flags, minutes on a cold
+# cache.
+make -s -C "$(dirname "$0")/../.." build > /dev/null
+kubehenge="$(dirname "$0")/../../dist/kubehenge"
 distribution=$(echo "${class}" | sed 's/^kubehenge-//')
+# The add-ons this run switches on, by their keys in the class's kubehenge.dev/addon-memory; argocd
+# stands for GitOps, Flux and then Argo CD. Logs read Loki through monitoring's Grafana, and the
+# certificates step serves Headlamp and Grafana, so those four share a group. docs/testing.md gives
+# each group's guests with the management node, per CNI, against the runner's room. k3s's control
+# plane grows least and keeps the other four together. kubeadm and
+# Talos split them in two. RKE2's least worker of 4096 MiB leaves its control plane the least room,
+# so it splits them in three.
+case ${part}-${distribution} in
+    all-*) addons='headlamp kyverno istio monitoring logs backups certManager argocd' ;;
+    lifecycle-* | etcd-rke2 | etcd-k3s | machines-rke2 | machines-k3s) addons='' ;;
+    addons-a-*) addons='headlamp monitoring logs certManager' ;;
+    addons-b-k3s) addons='kyverno istio backups argocd' ;;
+    addons-b-rke2) addons='kyverno' ;;
+    addons-b-*) addons='kyverno backups' ;;
+    addons-c-rke2) addons='istio backups' ;;
+    addons-c-kubeadm | addons-c-talos) addons='istio argocd' ;;
+    addons-d-rke2) addons='argocd' ;;
+    *)
+        echo "KUBEHENGE_E2E_PART is lifecycle, addons-a or addons-b, addons-c but on k3s, addons-d on RKE2, or etcd or machines on RKE2 and k3s, not ${part}" >&2
+        exit 2
+        ;;
+esac
+# The steps that replace machines run whole and in the lifecycle and machines parts only, and every
+# part but machines takes, restores and uploads etcd.
+case ${part} in
+    all | lifecycle) restores_etcd=true replaces_machines=true ;;
+    machines) restores_etcd=false replaces_machines=true ;;
+    *) restores_etcd=true replaces_machines=false ;;
+esac
+# on <add-on>: whether this run switches the add-on on.
+on() {
+    case " ${addons} " in
+        *" $1 "*) ;;
+        *) return 1 ;;
+    esac
+}
 suffix=$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 name=e2e-${distribution}-${suffix}
 ns=${KUBEHENGE_E2E_NAMESPACE:-${name}}
@@ -191,7 +230,7 @@ cleanup() {
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${interface_pid}" ] || kill "${interface_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
-    [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
+    [ -z "${s3_pid}" ] || seaweedfs_stop "${s3_pid}"
     [ -z "${recorder_pid}" ] || kill "${recorder_pid}" 2> /dev/null || true
     [ -z "${metrics_pid}" ] || kill "${metrics_pid}" 2> /dev/null || true
     [ -z "${health_pid}" ] || kill "${health_pid}" 2> /dev/null || true
@@ -410,12 +449,10 @@ else
 fi
 oidc=$(jq -cn --arg i "${issuer}" --rawfile ca "${work}/ca.crt" '[{issuerURL: $i, clientID: "kubehenge-e2e", certificateAuthority: $ca}]')
 class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
-# The add-ons the nodes are sized for: every one but Rancher, or with the add-ons left out only those
-# on from the start, the load balancer and Rancher's agent, which registers a cluster by default.
-case ${part} in
-    lifecycle) sized_for='["loadBalancer", "rancherAgent"]' ;;
-    *) sized_for='["headlamp", "monitoring", "logs", "backups", "kyverno", "istio", "loadBalancer", "certManager", "argocd", "rancherAgent"]' ;;
-esac
+# The add-ons the nodes are sized for: those this run switches on, and those on from the start, the
+# load balancer and Rancher's agent, which registers a cluster by default.
+# shellcheck disable=SC2086 # one add-on per word.
+sized_for=$(jq -cn '$ARGS.positional + ["loadBalancer", "rancherAgent"]' --args ${addons})
 # Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they
 # are seen to fit in it: its distribution's least, or what a worker uses itself and each add-on's
 # figure, whichever is more.
@@ -425,22 +462,23 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
         $node.worker + ([$on[] | $addon[.]] | add)]
     | max')}
-# Its cores likewise, for the CPU a worker's own pods and each add-on's request, the GitOps engine
-# that asks for more of the two.
+# Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
+# request, the GitOps engine that asks for more of the two.
 worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
     (.metadata.annotations["kubehenge.dev/addon-cpu"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-cpu"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.cores.minimum),
-        (($node.worker + ([$on[] | if . == "argocd" then ([$addon.argocd, $addon.flux] | max) else $addon[.] end] | add)) / 1000 | ceil)]
+        (($node.worker + ($node.workers // 0) + ([$on[] | if . == "argocd" then ([$addon.argocd, $addon.flux] | max) else $addon[.] end] | add)) / 1000 | ceil)]
     | max')}
 # The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
-# it uses itself with those add-ons, whichever is more.
-control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
+# it uses itself with those add-ons and its CNI, whichever is more.
+control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --arg cni "${KUBEHENGE_E2E_CNI:-}" '
     (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
+    | (.metadata.annotations["kubehenge.dev/cni-control-plane-memory"] // "{}" | fromjson) as $cnis
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
         (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.controlPlane + ([$on[] | $grows[.] // 0] | add)]
+        $node.controlPlane + ([$on[] | $grows[.] // 0] | add) + ($cnis[$cni] // 0)]
     | max')}
 echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the control plane with ${control_plane_memory} MiB"
 cat > "${work}/cluster.yaml" << EOF
@@ -725,7 +763,7 @@ fi
 
 step "the cluster's support bundle: the Cluster, its boot logs, no Secret and no secret"
 bundle=${work}/bundle.tar.gz
-go -C "$(dirname "$0")/../.." run ./cmd/kubehenge diagnose "${ns}/${name}" --output "${bundle}"
+"${kubehenge}" diagnose "${ns}/${name}" --output "${bundle}"
 mkdir "${work}/bundle"
 tar -xzf "${bundle}" -C "${work}/bundle"
 bundled=${work}/bundle/${ns}-${name}
@@ -935,6 +973,10 @@ crash_seen() {
     printf '%s' "${crash_pod}" | jq -e '.status.containerStatuses[0].state.waiting.reason == "CrashLoopBackOff"' > /dev/null
 }
 until_true 300 "the health identity sees the pod crash-looping" crash_seen
+# How long the pod took to start and how often it restarted before it was seen, which is where a slow
+# step lost its time.
+printf '%s' "${crash_pod}" | jq -r '"crash-looping \(now - (.metadata.creationTimestamp | fromdate) | floor) s after the pod was made, after \(.status.containerStatuses[0].restartCount) restarts"'
+wl -n e2e-health get events --sort-by=.lastTimestamp -o custom-columns=AT:.lastTimestamp,REASON:.reason,MESSAGE:.message --no-headers | cut -c1-200
 health_ready=$(KUBECONFIG="${work}/health" kubectl get --raw /readyz) ||
     fail "the health identity cannot read the API server's readiness"
 [ "${health_ready}" = ok ] || fail "the API server is not ready: ${health_ready}"
@@ -1040,18 +1082,35 @@ gateway_api_shipped() {
 # gateway_api_held: every object of the Gateway API is held once. One that a Helm release ships is
 # that release's alone: no other release ships it, its annotations name that release, and it is of
 # the Gateway API release the chart ships, which nothing has replaced. One that no Helm release
-# ships is of Kubehenge's release or newer.
+# ships is of Kubehenge's release or newer. The admission policy goes with the CRDs: Kubehenge keeps
+# it only on kubeadm and Talos, beside CRDs no Helm release ships, so that it never refuses the CRDs
+# a chart brings.
 gateway_api_held() {
     # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
     gateway_api_shipping=$(gateway_api_shipped) || return 1
+    gateway_api_policy=kubehenge
+    if [ -n "${gateway_api_chart}" ] || printf '%s\n' "${gateway_api_shipping}" | awk '$2 == "CustomResourceDefinition" { found = 1 } END { exit !found }'; then
+        gateway_api_policy=
+    fi
     for gateway_api_object in ${gateway_api_objects}; do
         gateway_api_kind=${gateway_api_object%%/*} gateway_api_name=${gateway_api_object#*/}
         # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-        gateway_api_has=$(wl get "${gateway_api_kind}" "${gateway_api_name}" -o json 2> /dev/null) || return 1
-        gateway_api_named=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations // {} | "\(.["meta.helm.sh/release-namespace"] // "")/\(.["meta.helm.sh/release-name"] // "")"')
-        gateway_api_is=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations["gateway.networking.k8s.io/bundle-version"] // "none"')
+        gateway_api_has=$(wl get "${gateway_api_kind}" "${gateway_api_name}" -o json --ignore-not-found 2> /dev/null) || return 1
         gateway_api_holders=$(printf '%s\n' "${gateway_api_shipping}" | awk -v k="${gateway_api_kind}" -v n="${gateway_api_name}" '$2 == k && $3 == n')
         gateway_api_count=$(printf '%s' "${gateway_api_holders}" | grep -c . || true)
+        if [ "${gateway_api_kind}" != CustomResourceDefinition ] && [ "${gateway_api_count}" = 0 ] && [ -z "${gateway_api_policy}" ]; then
+            [ -z "${gateway_api_has}" ] || {
+                gateway_api_say "${gateway_api_object} is there, shipped by no Helm release, beside CRDs that charts hold"
+                return 1
+            }
+            continue
+        fi
+        [ -n "${gateway_api_has}" ] || {
+            gateway_api_say "the cluster has no ${gateway_api_object}"
+            return 1
+        }
+        gateway_api_named=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations // {} | "\(.["meta.helm.sh/release-namespace"] // "")/\(.["meta.helm.sh/release-name"] // "")"')
+        gateway_api_is=$(printf '%s' "${gateway_api_has}" | jq -r '.metadata.annotations["gateway.networking.k8s.io/bundle-version"] // "none"')
         case ${gateway_api_count} in
             0)
                 gateway_api_oldest=$(printf '%s\n%s\n' "${gateway_api_is}" "${gateway_api_version}" | sort -V | head -n 1)
@@ -1115,7 +1174,6 @@ done
 
 step "the Gateway API: Traefik's Gateway routes an HTTPRoute"
 until_true 300 "the Gateway API's objects, each held once, by Kubehenge or a Helm release" gateway_api_held
-wl get validatingadmissionpolicy,validatingadmissionpolicybinding safe-upgrades.gateway.networking.k8s.io > /dev/null
 until_true 300 "Traefik's Gateway is programmed, at the API address" gateway_programmed
 wl -n e2e-ingress apply -f - << 'EOF'
 apiVersion: gateway.networking.k8s.io/v1
@@ -1653,80 +1711,6 @@ if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
     remove_ha_rule
 fi
 
-# etcd is taken, restored and uploaded before any add-on runs: replacing a server holds two beside
-# the worker, which the runner has room for only while the cluster is this small, and every add-on
-# after it then runs on a restored cluster.
-step "an S3 store for the backups and etcd snapshots"
-s3_store "${class_json}"
-# Where the cluster's backups go in the bucket.
-prefix=$(target_folder "${name}" velero)
-backup_credential "${name}"
-
-step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
-# A ConfigMap rather than a Secret, which the cluster encrypts in etcd: the database holds it in
-# plain text, so it is seen there and must not be seen in the store.
-etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
-# Once a day, twelve hours from now: the default schedule's slot after the cluster was made can have
-# passed already, and switching snapshots on would then take one of its own beside the one asked for.
-etcd_schedule="0 $((($(date -u +%-H) + 12) % 24)) * * *"
-set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
-# As the interface's Take a snapshot now asks for one.
-now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
-    "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
-# snapshot_taken: whether the controller has taken the snapshot asked for; one it tried and failed
-# fails the test with why.
-snapshot_taken() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
-    if printf '%s' "${cluster_json}" | jq -e '.metadata.annotations["kubehenge.dev/etcd-snapshot-requested"]' > /dev/null; then
-        return 1
-    fi
-    if ! printf '%s' "${cluster_json}" |
-        jq -e '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded" and .status == "True")' > /dev/null; then
-        printf '%s' "${cluster_json}" | jq '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded")' >&2
-        kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
-        fail "the etcd snapshot was not taken"
-    fi
-}
-until_true 900 "an etcd snapshot taken" snapshot_taken
-snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
-snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
-etcd_prefix=$(target_folder "${name}" etcd)
-keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-[ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
-s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
-header=$(head -c 21 "${work}/snapshot.db.age")
-[ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
-grep -r -q -F "${etcd_marker}" "${work}/s3-data" && fail "the store keeps the etcd snapshot unencrypted"
-kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > "${work}/etcd-identity"
-go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
-    "${work}/snapshot.db.age" "${work}/snapshot.db"
-sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
-taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
-[ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
-curl -sS --fail -L -o "${work}/etcd.tar.gz" \
-    "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
-printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
-    fail "etcd's download does not have its SHA-256"
-tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
-status=$("${work}/etcdutl" snapshot status "${work}/snapshot.db" -w json) || fail "etcdutl cannot read the snapshot"
-if [ "${distribution}" = talos ]; then
-    # Talos's API streams the snapshot without telling the store's revision.
-    printf '%s' "${snapshot}" | jq -e 'has("revision") | not' > /dev/null ||
-        fail "the snapshot records a revision Talos never told: ${snapshot}"
-else
-    # The revision recorded is the member's just before the snapshot began; writes in between add
-    # to the snapshot's.
-    db_revision=$(printf '%s' "${status}" | jq .revision)
-    taken_revision=$(printf '%s' "${snapshot}" | jq '.revision // 0')
-    [ "${taken_revision}" -gt 0 ] || fail "no revision was recorded for the snapshot: ${snapshot}"
-    [ "${db_revision}" -ge "${taken_revision}" ] ||
-        fail "the snapshot is older than the revision recorded for it: ${status}"
-fi
-grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does not hold the ConfigMap made before it"
-
 # lease_times: each Lease's last renewal, by namespace/name. An API server's identity Lease names one
 # process and outlives it by an hour, and the nodes' Leases go with their nodes, so neither is in.
 lease_times() {
@@ -1734,88 +1718,170 @@ lease_times() {
         jq -c '[.items[] | select(.metadata.namespace != "kube-node-lease") |
             {key: "\(.metadata.namespace)/\(.metadata.name)", value: (.spec.renewTime // "")}] | from_entries'
 }
-# etcd_restore_requested: asks for a restore from the snapshot, as the interface's Restore does,
-# noting first the Leases the cluster's components renew, which the restart baseline waits on.
-etcd_restore_requested() {
-    held_from=$(date +%s)
-    held_since=$(date -u -d "@$((held_from - 60))" +%Y-%m-%dT%H:%M:%SZ)
-    held_leases=$(lease_times | jq -c --arg since "${held_since}" '[to_entries[] | select(.value > $since) | .key]')
+
+# The nodes with their CNI and the add-ons a cluster starts with alone, settled, before etcd is
+# restored, any other add-on, scaling or upgrade: what a class's kubehenge.dev/cni-control-plane-memory
+# figures are measured from, in every part.
+measured "memory with the CNI alone" pod_memory "${work}/workload"
+
+# etcd is taken, restored and uploaded before any add-on runs: replacing a server holds two beside
+# the worker, which the runner has room for only while the cluster is this small, and every add-on
+# after it then runs on a restored cluster.
+if [ "${restores_etcd}" = true ]; then
+    step "an S3 store for the backups and etcd snapshots"
+    s3_store "${class_json}"
+    # Where the cluster's backups go in the bucket.
+    prefix=$(target_folder "${name}" velero)
+    backup_credential "${name}"
+
+    step "etcd snapshots: one taken into the S3 store, encrypted, and read back"
+    # A ConfigMap rather than a Secret, which the cluster encrypts in etcd: the database holds it in
+    # plain text, so it is seen there and must not be seen in the store.
+    etcd_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    wl -n default create configmap e2e-before-snapshot --from-literal=marker="${etcd_marker}"
+    # Once a day, twelve hours from now: the default schedule's slot after the cluster was made can
+    # have passed already, and switching snapshots on would then take one of its own beside the one
+    # asked for.
+    etcd_schedule="0 $((($(date -u +%-H) + 12) % 24)) * * *"
+    set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
+    # As the interface's Take a snapshot now asks for one.
     now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    kubectl -n "${ns}" annotate cluster "${name}" \
-        "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
-}
-if [ "${distribution}" = talos ]; then
-    step "etcd restored from the snapshot through the Talos API, the control planes wiped and joining it again"
-else
-    step "etcd restored from the snapshot through the guest agent"
-fi
-control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-wl -n default delete configmap e2e-before-snapshot
-after_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-wl -n default create configmap e2e-after-snapshot --from-literal=marker="${after_marker}"
-etcd_restore_requested
-# etcd_restored: whether the restore has ended and the controller let the cluster go; a failed one
-# fails the test with why.
-etcd_restored() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
-    restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
-    case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
-        Succeeded) ;;
-        Failed)
-            kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
-            fail "the etcd restore failed: ${restore}"
-            ;;
-        *) return 1 ;;
-    esac
-    printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
-}
-until_true 2400 "etcd restored" etcd_restored
-until_true 1200 "cluster ${name} available after the restore" available_or_failed
-wl wait --for=condition=Ready nodes --all --timeout=10m
-until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
-# shellcheck disable=SC2310 # absent's answer is what is checked.
-absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
-wl -n default delete configmap e2e-before-snapshot
-# The revision moves on past any a client of etcd from before saw. Every watch from before then ends
-# and its client lists again.
-restored_revision=$(wl -n default create configmap e2e-after-restore -o jsonpath='{.metadata.resourceVersion}')
-wl -n default delete configmap e2e-after-restore
-[ "${restored_revision}" -gt 1000000000 ] || fail "etcd's revision did not move on with the restore: ${restored_revision}"
-# The restore snapshots etcd as it was first, so that a restore from the wrong snapshot can be undone.
-before_name=$(printf '%s' "${restore}" | jq -r '.before // ""')
-[ -n "${before_name}" ] || fail "the restore took no snapshot of etcd as it was first: ${restore}"
-keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
-expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${before_name}" | sort)
-[ "${keys}" = "${expected_keys}" ] ||
-    fail "the store's etcd snapshots after the restore are not the one restored and the one of etcd as it was: ${keys}"
-s3 -o "${work}/before.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${before_name}"
-header=$(head -c 21 "${work}/before.db.age")
-[ "${header}" = age-encryption.org/v1 ] || fail "the snapshot of etcd as it was is not encrypted with age"
-grep -r -q -F "${after_marker}" "${work}/s3-data" && fail "the store keeps the snapshot of etcd as it was unencrypted"
-go -C "$(dirname "$0")/../.." run ./cmd/kubehenge etcd-snapshot decrypt --identity "${work}/etcd-identity" \
-    "${work}/before.db.age" "${work}/before.db"
-grep -a -q -F "${after_marker}" "${work}/before.db" ||
-    fail "the snapshot of etcd as it was does not hold the ConfigMap made before the restore"
-if [ "${distribution}" = talos ]; then
-    # Talos's control planes join the restored etcd again rather than being made anew.
-    restored_control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-    [ "${restored_control_planes}" = "${control_planes}" ] ||
-        fail "the restore replaced control planes: ${control_planes} became ${restored_control_planes}"
-    first_control_plane=$(machine_address "${control_planes%% *}")
-    # etcd_rejoined: whether every control plane is a voting member of the restored etcd again.
-    etcd_rejoined() {
+    kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+        "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
+    # snapshot_taken: whether the controller has taken the snapshot asked for; one it tried and failed
+    # fails the test with why.
+    snapshot_taken() {
         # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-        members=$(talos_api "${first_control_plane}" etcd members) || return 1
-        voting=$(printf '%s\n' "${members}" | awk 'NR > 1 && $NF == "false" { n++ } END { print n + 0 }')
-        wanted=$(printf '%s' "${control_planes}" | wc -w)
-        [ "${voting}" -eq "${wanted}" ]
+        cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+        if printf '%s' "${cluster_json}" | jq -e '.metadata.annotations["kubehenge.dev/etcd-snapshot-requested"]' > /dev/null; then
+            return 1
+        fi
+        if ! printf '%s' "${cluster_json}" |
+            jq -e '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded" and .status == "True")' > /dev/null; then
+            printf '%s' "${cluster_json}" | jq '.status.conditions[]? | select(.type == "EtcdSnapshotSucceeded")' >&2
+            kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+            fail "the etcd snapshot was not taken"
+        fi
     }
-    until_true 900 "every control plane a member of the restored etcd" etcd_rejoined
+    until_true 900 "an etcd snapshot taken" snapshot_taken
+    snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
+    snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
+    etcd_prefix=$(target_folder "${name}" etcd)
+    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+    [ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
+    s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
+    header=$(head -c 21 "${work}/snapshot.db.age")
+    [ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
+    grep -r -q -F "${etcd_marker}" "${work}/s3-data" && fail "the store keeps the etcd snapshot unencrypted"
+    kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.etcd-snapshot-identity}' | base64 -d > "${work}/etcd-identity"
+    "${kubehenge}" etcd-snapshot decrypt --identity "${work}/etcd-identity" "${work}/snapshot.db.age" "${work}/snapshot.db"
+    sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
+    taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
+    [ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
+    curl -sS --fail -L -o "${work}/etcd.tar.gz" \
+        "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
+    printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
+        fail "etcd's download does not have its SHA-256"
+    tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
+    status=$("${work}/etcdutl" snapshot status "${work}/snapshot.db" -w json) || fail "etcdutl cannot read the snapshot"
+    if [ "${distribution}" = talos ]; then
+        # Talos's API streams the snapshot without telling the store's revision.
+        printf '%s' "${snapshot}" | jq -e 'has("revision") | not' > /dev/null ||
+            fail "the snapshot records a revision Talos never told: ${snapshot}"
+    else
+        # The revision recorded is the member's just before the snapshot began; writes in between add
+        # to the snapshot's.
+        db_revision=$(printf '%s' "${status}" | jq .revision)
+        taken_revision=$(printf '%s' "${snapshot}" | jq '.revision // 0')
+        [ "${taken_revision}" -gt 0 ] || fail "no revision was recorded for the snapshot: ${snapshot}"
+        [ "${db_revision}" -ge "${taken_revision}" ] ||
+            fail "the snapshot is older than the revision recorded for it: ${status}"
+    fi
+    grep -a -q -F "${etcd_marker}" "${work}/snapshot.db" || fail "the snapshot does not hold the ConfigMap made before it"
+
+    # etcd_restore_requested: asks for a restore from the snapshot, as the interface's Restore does,
+    # noting first the Leases the cluster's components renew, which the restart baseline waits on.
+    etcd_restore_requested() {
+        held_from=$(date +%s)
+        held_since=$(date -u -d "@$((held_from - 60))" +%Y-%m-%dT%H:%M:%SZ)
+        held_leases=$(lease_times | jq -c --arg since "${held_since}" '[to_entries[] | select(.value > $since) | .key]')
+        now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        kubectl -n "${ns}" annotate cluster "${name}" \
+            "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
+    }
+    if [ "${distribution}" = talos ]; then
+        step "etcd restored from the snapshot through the Talos API, the control planes wiped and joining it again"
+    else
+        step "etcd restored from the snapshot through the guest agent"
+    fi
+    control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    wl -n default delete configmap e2e-before-snapshot
+    after_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    wl -n default create configmap e2e-after-snapshot --from-literal=marker="${after_marker}"
+    etcd_restore_requested
+    # etcd_restored: whether the restore has ended and the controller let the cluster go; a failed
+    # one fails the test with why.
+    etcd_restored() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        cluster_json=$(kubectl -n "${ns}" get cluster "${name}" -o json) || return 1
+        restore=$(printf '%s' "${cluster_json}" | jq -c '.metadata.annotations["kubehenge.dev/etcd-restore-status"] // "{}" | fromjson')
+        case $(printf '%s' "${restore}" | jq -r '.phase // ""') in
+            Succeeded) ;;
+            Failed)
+                kubectl -n kubehenge-system logs deployment/kubehenge-controller --tail=100 >&2
+                fail "the etcd restore failed: ${restore}"
+                ;;
+            *) return 1 ;;
+        esac
+        printf '%s' "${cluster_json}" | jq -e '(.metadata.annotations["kubehenge.dev/etcd-restore"] | not) and (.spec.paused // false | not)' > /dev/null
+    }
+    until_true 2400 "etcd restored" etcd_restored
+    until_true 1200 "cluster ${name} available after the restore" available_or_failed
+    wl wait --for=condition=Ready nodes --all --timeout=10m
+    until_true 300 "the ConfigMap made before the snapshot back" wl -n default get configmap e2e-before-snapshot
+    # shellcheck disable=SC2310 # absent's answer is what is checked.
+    absent wl -n default get configmap e2e-after-snapshot || fail "a ConfigMap made after the snapshot outlived the restore"
+    wl -n default delete configmap e2e-before-snapshot
+    # The revision moves on past any a client of etcd from before saw. Every watch from before then
+    # ends and its client lists again.
+    restored_revision=$(wl -n default create configmap e2e-after-restore -o jsonpath='{.metadata.resourceVersion}')
+    wl -n default delete configmap e2e-after-restore
+    [ "${restored_revision}" -gt 1000000000 ] || fail "etcd's revision did not move on with the restore: ${restored_revision}"
+    # The restore snapshots etcd as it was first, so that a restore from the wrong snapshot can be
+    # undone.
+    before_name=$(printf '%s' "${restore}" | jq -r '.before // ""')
+    [ -n "${before_name}" ] || fail "the restore took no snapshot of etcd as it was first: ${restore}"
+    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
+    expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${before_name}" | sort)
+    [ "${keys}" = "${expected_keys}" ] ||
+        fail "the store's etcd snapshots after the restore are not the one restored and the one of etcd as it was: ${keys}"
+    s3 -o "${work}/before.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${before_name}"
+    header=$(head -c 21 "${work}/before.db.age")
+    [ "${header}" = age-encryption.org/v1 ] || fail "the snapshot of etcd as it was is not encrypted with age"
+    grep -r -q -F "${after_marker}" "${work}/s3-data" && fail "the store keeps the snapshot of etcd as it was unencrypted"
+    "${kubehenge}" etcd-snapshot decrypt --identity "${work}/etcd-identity" "${work}/before.db.age" "${work}/before.db"
+    grep -a -q -F "${after_marker}" "${work}/before.db" ||
+        fail "the snapshot of etcd as it was does not hold the ConfigMap made before the restore"
+    if [ "${distribution}" = talos ]; then
+        # Talos's control planes join the restored etcd again rather than being made anew.
+        restored_control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+        [ "${restored_control_planes}" = "${control_planes}" ] ||
+            fail "the restore replaced control planes: ${control_planes} became ${restored_control_planes}"
+        first_control_plane=$(machine_address "${control_planes%% *}")
+        # etcd_rejoined: whether every control plane is a voting member of the restored etcd again.
+        etcd_rejoined() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            members=$(talos_api "${first_control_plane}" etcd members) || return 1
+            voting=$(printf '%s\n' "${members}" | awk 'NR > 1 && $NF == "false" { n++ } END { print n + 0 }')
+            wanted=$(printf '%s' "${control_planes}" | wc -w)
+            [ "${voting}" -eq "${wanted}" ]
+        }
+        until_true 900 "every control plane a member of the restored etcd" etcd_rejoined
+    fi
 fi
 
 case ${part}-${distribution} in
-    all-rke2 | all-k3s | lifecycle-rke2 | lifecycle-k3s)
+    all-rke2 | all-k3s | lifecycle-rke2 | lifecycle-k3s | etcd-rke2 | etcd-k3s)
         step "${distribution}'s own etcd snapshots uploaded to the same store, and switched off"
         # The drop-in is part of the servers' bootstrap, so switching the upload replaces them.
         servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
@@ -1925,7 +1991,8 @@ restarts_since() {
     found_restarts "containers restarted $1 (pod, restarts): ${restarted}"
 }
 
-if [ "${part}" != lifecycle ]; then
+# shellcheck disable=SC2310 # on only reads a list.
+if [ -n "${addons}" ]; then
     # A component that could not renew its Lease while the API was away, through the restore or a
     # control plane's replacement, exits only once its renew deadline has passed, which may be after the
     # API is back. Once each Lease renewed before the restore is renewed again after this point, every
@@ -1939,10 +2006,8 @@ if [ "${part}" != lifecycle ]; then
     }
     until_true 300 "the components' Leases renewed after the restore" leases_renewed
     restart_baseline
-    echo "memory before the add-ons:"
-    pod_memory "${work}/workload"
-    echo "CPU requested before the add-ons:"
-    pod_cpu "${work}/workload"
+    measured "memory before the add-ons" pod_memory "${work}/workload"
+    measured "CPU requested before the add-ons" pod_cpu "${work}/workload"
     # What the guests are told of the CPU decides which mitigations their kernels run, and those cost
     # the most under nested virtualisation: the figure to read beside a slow run.
     echo "the CPU a control plane sees:"
@@ -1956,149 +2021,154 @@ if [ "${part}" != lifecycle ]; then
             echo "  cannot read it"
     fi
 
-    step "Headlamp switched on"
-    set_variable headlamp '{"enabled":true}'
-    until_true 600 "Headlamp installed" sh -c "KUBECONFIG=${work}/workload kubectl -n headlamp get deployment/headlamp >/dev/null 2>&1"
-    wl -n headlamp rollout status deployment/headlamp --timeout=10m
-    # Through the API server's service proxy, as Kubehenge's interface reaches it. A rollout counts the
-    # pod available before the endpoints controller has published it, and until then the proxy answers
-    # that the Service has no endpoints.
-    headlamp_page() {
-        wl get --raw /api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/ 2> /dev/null | grep -q -i '<html'
-    }
-    until_true 60 "Headlamp answers through the API server" headlamp_page
-    # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the comparison reads.
-    can_list=$(wl auth can-i list pods --all-namespaces --as=system:serviceaccount:headlamp:headlamp || true)
-    [ "${can_list}" = no ] || fail "Headlamp's service account has rights in the cluster"
-    pod_security=$(wl label --dry-run=server --overwrite namespace headlamp pod-security.kubernetes.io/enforce=restricted 2>&1)
-    case ${pod_security} in
-        *violate*) fail "Headlamp's pod does not meet Pod Security's restricted level" ;;
-        # Only a pod that falls short of the level gets a warning.
-        *) ;;
-    esac
-    # headlamp_pods: Headlamp's answer to a list of pods in its in-cluster context, asked through the
-    # API server's service proxy. The admin kubeconfig signs in with a client certificate, which ends
-    # at the API server, so Headlamp is sent no credentials of anyone's.
-    headlamp_pods() { wl get --raw '/api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/clusters/main/api/v1/pods?limit=1' 2>&1; }
-    headlamp_lists_pods() { headlamp_pods | jq -e '.kind == "PodList"' > /dev/null 2>&1; }
-    # headlamp_refuses: whether the API server refused Headlamp's request, rather than Headlamp being
-    # out of reach for a moment.
-    headlamp_refuses() {
-        # shellcheck disable=SC2310 # the request failing is the answer looked for.
-        if answer=$(headlamp_pods); then
-            seen="listed: $(printf '%s' "${answer}" | tr '\n' ' ' | cut -c1-400)"
-            return 1
-        fi
-        seen="refused: $(printf '%s' "${answer}" | tr '\n' ' ' | cut -c1-400)"
-        case ${answer} in
-            *Unauthorized* | *Forbidden* | *forbidden*) ;;
-            *) return 1 ;;
+    if on headlamp; then
+        step "Headlamp switched on"
+        set_variable headlamp '{"enabled":true}'
+        until_true 600 "Headlamp installed" sh -c "KUBECONFIG=${work}/workload kubectl -n headlamp get deployment/headlamp >/dev/null 2>&1"
+        wl -n headlamp rollout status deployment/headlamp --timeout=10m
+        # Through the API server's service proxy, as Kubehenge's interface reaches it. A rollout counts the
+        # pod available before the endpoints controller has published it, and until then the proxy answers
+        # that the Service has no endpoints.
+        headlamp_page() {
+            wl get --raw /api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/ 2> /dev/null | grep -q -i '<html'
+        }
+        until_true 60 "Headlamp answers through the API server" headlamp_page
+        # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the comparison reads.
+        can_list=$(wl auth can-i list pods --all-namespaces --as=system:serviceaccount:headlamp:headlamp || true)
+        [ "${can_list}" = no ] || fail "Headlamp's service account has rights in the cluster"
+        pod_security=$(wl label --dry-run=server --overwrite namespace headlamp pod-security.kubernetes.io/enforce=restricted 2>&1)
+        case ${pod_security} in
+            *violate*) fail "Headlamp's pod does not meet Pod Security's restricted level" ;;
+            # Only a pod that falls short of the level gets a warning.
+            *) ;;
         esac
-    }
-    # headlamp_flag <present|absent>: whether Headlamp's running Deployment uses its own account.
-    headlamp_flag() {
-        # shellcheck disable=SC2310 # a Deployment not read yet is no answer, polled again.
-        args=$(wl -n headlamp get deployment/headlamp -o jsonpath='{.spec.template.spec.containers[0].args}') || return 1
-        case ${args} in
-            *-unsafe-use-service-account-token*) [ "$1" = present ] ;;
-            *) [ "$1" = absent ] ;;
+        # headlamp_pods: Headlamp's answer to a list of pods in its in-cluster context, asked through the
+        # API server's service proxy. The admin kubeconfig signs in with a client certificate, which ends
+        # at the API server, so Headlamp is sent no credentials of anyone's.
+        headlamp_pods() { wl get --raw '/api/v1/namespaces/headlamp/services/http:headlamp:80/proxy/clusters/main/api/v1/pods?limit=1' 2>&1; }
+        headlamp_lists_pods() { headlamp_pods | jq -e '.kind == "PodList"' > /dev/null 2>&1; }
+        # headlamp_refuses: whether the API server refused Headlamp's request, rather than Headlamp being
+        # out of reach for a moment.
+        headlamp_refuses() {
+            # shellcheck disable=SC2310 # the request failing is the answer looked for.
+            if answer=$(headlamp_pods); then
+                seen="listed: $(printf '%s' "${answer}" | tr '\n' ' ' | cut -c1-400)"
+                return 1
+            fi
+            seen="refused: $(printf '%s' "${answer}" | tr '\n' ' ' | cut -c1-400)"
+            case ${answer} in
+                *Unauthorized* | *Forbidden* | *forbidden*) ;;
+                *) return 1 ;;
+            esac
+        }
+        # headlamp_flag <present|absent>: whether Headlamp's running Deployment uses its own account.
+        headlamp_flag() {
+            # shellcheck disable=SC2310 # a Deployment not read yet is no answer, polled again.
+            args=$(wl -n headlamp get deployment/headlamp -o jsonpath='{.spec.template.spec.containers[0].args}') || return 1
+            case ${args} in
+                *-unsafe-use-service-account-token*) [ "$1" = present ] ;;
+                *) [ "$1" = absent ] ;;
+            esac
+        }
+        # headlamp_can <verb> <resource>: what Headlamp's service account may do across the cluster.
+        headlamp_can() {
+            # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
+            wl auth can-i "$1" "$2" --all-namespaces --as=system:serviceaccount:headlamp:headlamp 2> /dev/null || true
+        }
+        until_true 120 "Headlamp refuses to list pods without a token" headlamp_refuses
+        measured "" control_plane_use "${work}/workload" headlamp
+
+        step "Headlamp read-only for everyone"
+        set_variable headlamp '{"enabled":true,"access":"view"}'
+        until_true 600 "Headlamp started with its own account" headlamp_flag present
+        wl -n headlamp rollout status deployment/headlamp --timeout=10m
+        until_true 120 "Headlamp lists pods without a token" headlamp_lists_pods
+        can_list=$(headlamp_can list pods)
+        [ "${can_list}" = yes ] || fail "Headlamp's service account cannot list pods"
+        for denied in "get secrets" "list secrets" "create pods" "delete deployments" "list nodes"; do
+            # shellcheck disable=SC2086 # the verb and the resource, split on purpose.
+            allowed=$(headlamp_can ${denied})
+            [ "${allowed}" = no ] || fail "Headlamp's service account may ${denied}"
+        done
+
+        step "Headlamp back to everyone's own token"
+        set_variable headlamp '{"enabled":true}'
+        until_true 600 "Headlamp started without its own account" headlamp_flag absent
+        wl -n headlamp rollout status deployment/headlamp --timeout=10m
+        can_list=$(headlamp_can list pods)
+        [ "${can_list}" = no ] || fail "Headlamp's service account keeps its view binding"
+        until_true 120 "Headlamp refuses to list pods without a token again" headlamp_refuses
+    fi
+
+    if on kyverno; then
+        step "pod security enforced, with Kyverno switched on"
+        # privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
+        privileged_pod() {
+            wl -n "$1" run e2e-privileged --image="${pause_image}" --restart=Never --dry-run=server \
+                --overrides="{\"apiVersion\":\"v1\",\"spec\":{\"containers\":[{\"name\":\"e2e-privileged\",\"image\":\"${pause_image}\",\"securityContext\":{\"privileged\":true}}]}}" 2>&1
+        }
+        # shellcheck disable=SC2310 # the refusal is the answer looked for.
+        refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
+        case ${refused} in
+            *'violates PodSecurity "restricted'*) ;;
+            *) fail "a privileged pod is refused for another reason: ${refused}" ;;
         esac
-    }
-    # headlamp_can <verb> <resource>: what Headlamp's service account may do across the cluster.
-    headlamp_can() {
-        # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
-        wl auth can-i "$1" "$2" --all-namespaces --as=system:serviceaccount:headlamp:headlamp 2> /dev/null || true
-    }
-    until_true 120 "Headlamp refuses to list pods without a token" headlamp_refuses
-    control_plane_use "${work}/workload" headlamp
-
-    step "Headlamp read-only for everyone"
-    set_variable headlamp '{"enabled":true,"access":"view"}'
-    until_true 600 "Headlamp started with its own account" headlamp_flag present
-    wl -n headlamp rollout status deployment/headlamp --timeout=10m
-    until_true 120 "Headlamp lists pods without a token" headlamp_lists_pods
-    can_list=$(headlamp_can list pods)
-    [ "${can_list}" = yes ] || fail "Headlamp's service account cannot list pods"
-    for denied in "get secrets" "list secrets" "create pods" "delete deployments" "list nodes"; do
-        # shellcheck disable=SC2086 # the verb and the resource, split on purpose.
-        allowed=$(headlamp_can ${denied})
-        [ "${allowed}" = no ] || fail "Headlamp's service account may ${denied}"
-    done
-
-    step "Headlamp back to everyone's own token"
-    set_variable headlamp '{"enabled":true}'
-    until_true 600 "Headlamp started without its own account" headlamp_flag absent
-    wl -n headlamp rollout status deployment/headlamp --timeout=10m
-    can_list=$(headlamp_can list pods)
-    [ "${can_list}" = no ] || fail "Headlamp's service account keeps its view binding"
-    until_true 120 "Headlamp refuses to list pods without a token again" headlamp_refuses
-
-    step "pod security enforced, with Kyverno switched on"
-    # privileged_pod <namespace>: asks the API server to admit a privileged pod, without creating it.
-    privileged_pod() {
-        wl -n "$1" run e2e-privileged --image="${pause_image}" --restart=Never --dry-run=server \
-            --overrides="{\"apiVersion\":\"v1\",\"spec\":{\"containers\":[{\"name\":\"e2e-privileged\",\"image\":\"${pause_image}\",\"securityContext\":{\"privileged\":true}}]}}" 2>&1
-    }
-    # shellcheck disable=SC2310 # the refusal is the answer looked for.
-    refused=$(privileged_pod default) && fail "a privileged pod is admitted under Pod Security's restricted level"
-    case ${refused} in
-        *'violates PodSecurity "restricted'*) ;;
-        *) fail "a privileged pod is refused for another reason: ${refused}" ;;
-    esac
-    # A namespace labelled privileged is past Pod Security Admission, but not past Kyverno.
-    new_namespace wl e2e-privileged
-    wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
-    set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
-    kyverno_refuses() {
-        # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
-        out=$(privileged_pod e2e-privileged) && return 1
-        case ${out} in
-            *disallow-privileged-containers*) ;;
-            *) return 1 ;;
+        # A namespace labelled privileged is past Pod Security Admission, but not past Kyverno.
+        new_namespace wl e2e-privileged
+        wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
+        set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
+        kyverno_refuses() {
+            # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
+            out=$(privileged_pod e2e-privileged) && return 1
+            case ${out} in
+                *disallow-privileged-containers*) ;;
+                *) return 1 ;;
+            esac
+        }
+        until_true 900 "Kyverno refuses a privileged pod" kyverno_refuses
+        pod_security=$(wl label --dry-run=server --overwrite namespace kyverno pod-security.kubernetes.io/enforce=restricted 2>&1)
+        case ${pod_security} in
+            *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+            *) ;;
         esac
-    }
-    until_true 900 "Kyverno refuses a privileged pod" kyverno_refuses
-    pod_security=$(wl label --dry-run=server --overwrite namespace kyverno pod-security.kubernetes.io/enforce=restricted 2>&1)
-    case ${pod_security} in
-        *violate*) fail "Kyverno's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-        *) ;;
-    esac
-    control_plane_use "${work}/workload" kyverno
+        measured "" control_plane_use "${work}/workload" kyverno
+    fi
 
     # Before monitoring: on Cilium, switching Istio on restarts Cilium's agents and operator, and with
     # monitoring's pods busy beside them a worker of the least size runs short of CPU.
-    step "Istio switched on, the mesh's traffic over mutual TLS"
-    set_variable istio '{"enabled":true}'
-    until_true 900 "istiod available" wl -n istio-system wait --for=condition=Available deployment/istiod --timeout=10s
-    until_true 600 "ztunnel on every node" wl -n istio-node rollout status daemonset/ztunnel --timeout=10s
-    until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemonset/istio-cni-node --timeout=10s
-    new_namespace wl e2e-mesh
-    wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
-    new_namespace wl e2e-plain
-    # Kept by Deployments: they are used again once every add-on is switched off, and on Talos the
-    # upgrade before that drains every node, which deletes pods of their own.
-    agnhost_deployment e2e-mesh server netexec --http-port=8080
-    agnhost_deployment e2e-mesh client pause
-    agnhost_deployment e2e-plain client pause
-    wl -n e2e-mesh wait --for=condition=Available deployment/server deployment/client --timeout=5m
-    wl -n e2e-plain wait --for=condition=Available deployment/client --timeout=5m
-    redirected() {
-        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-        marks=$(wl -n e2e-mesh get pods -l 'app in (server,client)' -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
-            [ "${marks}" = "enabled enabled" ]
-    }
-    until_true 120 "the mesh's pods redirected through ztunnel" redirected
-    # fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client at the
-    # address of the server's running pod, which a drain moves.
-    fetch() {
-        mesh_ip=$(KUBECONFIG=${work}/workload kubectl -n e2e-mesh get pods -l app=server --field-selector=status.phase=Running \
-            -o jsonpath='{.items[0].status.podIP}' 2>&1) &&
-            KUBECONFIG=${work}/workload kubectl -n "$1" exec deployment/client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1
-    }
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
-    fetches() { fetched=$(fetch "$1") && [ "${fetched}" = server ]; }
-    until_true 60 "a client outside the mesh reaches the server while mutual TLS is optional" fetches e2e-plain
-    wl -n e2e-mesh apply -f - << 'EOF'
+    if on istio; then
+        step "Istio switched on, the mesh's traffic over mutual TLS"
+        set_variable istio '{"enabled":true}'
+        until_true 900 "istiod available" wl -n istio-system wait --for=condition=Available deployment/istiod --timeout=10s
+        until_true 600 "ztunnel on every node" wl -n istio-node rollout status daemonset/ztunnel --timeout=10s
+        until_true 600 "istio-cni on every node" wl -n istio-node rollout status daemonset/istio-cni-node --timeout=10s
+        new_namespace wl e2e-mesh
+        wl label namespace e2e-mesh istio.io/dataplane-mode=ambient
+        new_namespace wl e2e-plain
+        # Kept by Deployments: they are used again once every add-on is switched off, and on Talos the
+        # upgrade before that drains every node, which deletes pods of their own.
+        agnhost_deployment e2e-mesh server netexec --http-port=8080
+        agnhost_deployment e2e-mesh client pause
+        agnhost_deployment e2e-plain client pause
+        wl -n e2e-mesh wait --for=condition=Available deployment/server deployment/client --timeout=5m
+        wl -n e2e-plain wait --for=condition=Available deployment/client --timeout=5m
+        redirected() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            marks=$(wl -n e2e-mesh get pods -l 'app in (server,client)' -o jsonpath='{.items[*].metadata.annotations.ambient\.istio\.io/redirection}') &&
+                [ "${marks}" = "enabled enabled" ]
+        }
+        until_true 120 "the mesh's pods redirected through ztunnel" redirected
+        # fetch <namespace>: the server's host name, fetched over HTTP by the namespace's client at the
+        # address of the server's running pod, which a drain moves.
+        fetch() {
+            mesh_ip=$(KUBECONFIG=${work}/workload kubectl -n e2e-mesh get pods -l app=server --field-selector=status.phase=Running \
+                -o jsonpath='{.items[0].status.podIP}' 2>&1) &&
+                KUBECONFIG=${work}/workload kubectl -n "$1" exec deployment/client -- curl -sS --max-time 5 "http://${mesh_ip}:8080/hostname" 2>&1
+        }
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
+        fetches() { fetched=$(fetch "$1") && [ "${fetched}" = server ]; }
+        until_true 60 "a client outside the mesh reaches the server while mutual TLS is optional" fetches e2e-plain
+        wl -n e2e-mesh apply -f - << 'EOF'
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
@@ -2107,19 +2177,19 @@ spec:
   mtls:
     mode: STRICT
 EOF
-    # ztunnel closes a plain-text connection the policy refuses, so curl gets no reply; any other
-    # failure, a failing exec among them, does not count as refused.
-    plain_refused() { fetch e2e-plain | grep -qE '^curl: \((52|56)\)'; }
-    until_true 120 "a client outside the mesh refused once mutual TLS is required" plain_refused
-    until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
-    # What ztunnel let through carries the client's workload identity.
-    mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
-    until_true 60 "ztunnel names the client's workload identity" mesh_identity
+        # ztunnel closes a plain-text connection the policy refuses, so curl gets no reply; any other
+        # failure, a failing exec among them, does not count as refused.
+        plain_refused() { fetch e2e-plain | grep -qE '^curl: \((52|56)\)'; }
+        until_true 120 "a client outside the mesh refused once mutual TLS is required" plain_refused
+        until_true 60 "a client in the mesh reaches the server" fetches e2e-mesh
+        # What ztunnel let through carries the client's workload identity.
+        mesh_identity() { wl -n istio-node logs -l app=ztunnel --tail=-1 --prefix=false | grep -q 'spiffe://cluster.local/ns/e2e-mesh/sa/default'; }
+        until_true 60 "ztunnel names the client's workload identity" mesh_identity
 
-    # A waypoint, deployed by istiod under the restricted level and Kyverno, holds a layer 7 rule
-    # for the server's Service. It is removed again so that later steps meet the mesh as before.
-    wl -n e2e-mesh expose deployment/server --port=8080
-    wl -n e2e-mesh apply -f - << 'EOF'
+        # A waypoint, deployed by istiod under the restricted level and Kyverno, holds a layer 7 rule
+        # for the server's Service. It is removed again so that later steps meet the mesh as before.
+        wl -n e2e-mesh expose deployment/server --port=8080
+        wl -n e2e-mesh apply -f - << 'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -2146,154 +2216,158 @@ spec:
         - operation:
             paths: ["/echo"]
 EOF
-    until_true 300 "the waypoint programmed" wl -n e2e-mesh wait --for=condition=Programmed gateway/waypoint --timeout=10s
-    wl -n e2e-mesh label service server istio.io/use-waypoint=waypoint
-    # status <path>: the HTTP status the mesh's client gets for a path of the server's Service.
-    status() { wl -n e2e-mesh exec deployment/client -- curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "http://server:8080$1" 2>&1; }
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    waypoint_denies() { denied=$(status '/echo?msg=x') && passed=$(status /hostname) && [ "${denied}" = 403 ] && [ "${passed}" = 200 ]; }
-    until_true 120 "the waypoint refuses /echo and passes /hostname" waypoint_denies
-    wl -n e2e-mesh label service server istio.io/use-waypoint-
-    wl -n e2e-mesh delete authorizationpolicy/no-echo gateway/waypoint
-    until_true 120 "the waypoint's pods gone" absent wl -n e2e-mesh get deployment/waypoint
-    control_plane_use "${work}/workload" istio
-
-    step "monitoring switched on"
-    set_variable monitoring '{"enabled":true}'
-    prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
-    until_true 1200 "Prometheus installed" sh -c "KUBECONFIG=${work}/workload kubectl -n monitoring get ${prometheus} >/dev/null 2>&1"
-    wl -n monitoring rollout status "${prometheus}" --timeout=15m
-    # Every component's job, each scraped with its server verified; k3s's components are in its
-    # kubelet's metrics. Talos's controller manager and scheduler are scraped only on releases that pass
-    # them a serving certificate of the cluster CA; before those they sign their own, which nothing
-    # could verify.
-    jobs="apiserver kubelet coredns kube-state-metrics node-exporter kube-etcd"
-    case ${distribution} in
-        k3s) ;;
-        talos)
-            jobs="${jobs} kube-proxy"
-            control_plane_pods=$(wl -n kube-system get pods -l 'component in (kube-controller-manager,kube-scheduler)' -o json)
-            if printf '%s' "${control_plane_pods}" |
-                jq -e '(.items | length > 0) and all(.items[]; any(.spec.containers[].command[]?; startswith("--tls-cert-file=")))' > /dev/null; then
-                jobs="${jobs} kube-controller-manager kube-scheduler"
-            fi
-            ;;
-        *) jobs="${jobs} kube-controller-manager kube-scheduler kube-proxy" ;;
-    esac
-    targets='/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets?state=active'
-    all_up() {
-        # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
-        active=$(wl get --raw "${targets}") || return 1
-        for job in ${jobs}; do
-            printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null || return 1
-        done
-        printf '%s' "${active}" | jq -e 'all(.data.activeTargets[]; .health == "up")' > /dev/null
-    }
-    deadline=$(($(date +%s) + 900))
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    until all_up; do
-        now=$(date +%s)
-        if [ "${now}" -ge "${deadline}" ]; then
-            # A Service without ready endpoints leaves its job out of the targets altogether, so the
-            # missing jobs are named beside the ones down, with the pods that would serve them.
-            active=$(wl get --raw "${targets}")
-            for job in ${jobs}; do
-                printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null ||
-                    echo "no target for ${job}" >&2
-            done
-            printf '%s' "${active}" | jq -r '.data.activeTargets[] | select(.health != "up") | "\(.labels.job) \(.scrapeUrl): \(.lastError)"' >&2
-            wl -n kube-system get daemonsets -o wide >&2
-            wl get pods -A -o wide | awk 'NR == 1 || $3 !~ /^([0-9]+)\/\1$/ || $4 != "Running"' >&2
-            wl -n kube-system get events --field-selector type=Warning >&2
-            fail "monitoring does not reach every component"
-        fi
-        sleep 10
-    done
-    if [ "${distribution}" = k3s ]; then
-        # The chart's rules and dashboards find k3s's controller manager, scheduler and kube-proxy in
-        # the kubelet's job, so their own series have to arrive there.
-        has_series() {
-            query=$(printf '%s' "$1" | jq -sRr @uri)
-            # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
-            found=$(wl get --raw "/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/query?query=${query}") || return 1
-            printf '%s' "${found}" | jq -e '.data.result | length > 0' > /dev/null
-        }
-        for series in 'workqueue_adds_total{job="kubelet",name="deployment"}' \
-            'scheduler_schedule_attempts_total{job="kubelet"}' \
-            'kubeproxy_sync_proxy_rules_duration_seconds_count{job="kubelet"}'; do
-            until_true 300 "${series} in Prometheus" has_series "${series}"
-        done
+        until_true 300 "the waypoint programmed" wl -n e2e-mesh wait --for=condition=Programmed gateway/waypoint --timeout=10s
+        wl -n e2e-mesh label service server istio.io/use-waypoint=waypoint
+        # status <path>: the HTTP status the mesh's client gets for a path of the server's Service.
+        status() { wl -n e2e-mesh exec deployment/client -- curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "http://server:8080$1" 2>&1; }
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        waypoint_denies() { denied=$(status '/echo?msg=x') && passed=$(status /hostname) && [ "${denied}" = 403 ] && [ "${passed}" = 200 ]; }
+        until_true 120 "the waypoint refuses /echo and passes /hostname" waypoint_denies
+        wl -n e2e-mesh label service server istio.io/use-waypoint-
+        wl -n e2e-mesh delete authorizationpolicy/no-echo gateway/waypoint
+        until_true 120 "the waypoint's pods gone" absent wl -n e2e-mesh get deployment/waypoint
+        measured "" control_plane_use "${work}/workload" istio
     fi
-    pod_security=$(wl label --dry-run=server --overwrite namespace monitoring pod-security.kubernetes.io/enforce=restricted 2>&1)
-    case ${pod_security} in
-        *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-        *) ;;
-    esac
-    control_plane_use "${work}/workload" monitoring
 
-    # The alerts identity reads Alertmanager's alerts through the API server's proxy, the health
-    # page's way in, and may do nothing else there.
-    until_true 300 "the alerts identity's token beside the cluster" identity_kubeconfig alerts
-    alerts_read() {
-        KUBECONFIG="${work}/alerts" kubectl get --raw \
-            '/api/v1/namespaces/monitoring/services/kube-prometheus-stack-alertmanager:http-web/proxy/api/v2/alerts?active=true' |
-            jq -e 'type == "array"' > /dev/null
-    }
-    until_true 300 "the alerts identity reads Alertmanager's alerts" alerts_read
-    refused alerts create services/kube-prometheus-stack-alertmanager:http-web --subresource=proxy -n monitoring
-    refused alerts get services/kube-prometheus-stack-prometheus:http-web --subresource=proxy -n monitoring
-    refused alerts list pods -n monitoring
+    if on monitoring; then
+        step "monitoring switched on"
+        set_variable monitoring '{"enabled":true}'
+        prometheus=statefulset/prometheus-kube-prometheus-stack-prometheus
+        until_true 1200 "Prometheus installed" sh -c "KUBECONFIG=${work}/workload kubectl -n monitoring get ${prometheus} >/dev/null 2>&1"
+        wl -n monitoring rollout status "${prometheus}" --timeout=15m
+        # Every component's job, each scraped with its server verified; k3s's components are in its
+        # kubelet's metrics. Talos's controller manager and scheduler are scraped only on releases that pass
+        # them a serving certificate of the cluster CA; before those they sign their own, which nothing
+        # could verify.
+        jobs="apiserver kubelet coredns kube-state-metrics node-exporter kube-etcd"
+        case ${distribution} in
+            k3s) ;;
+            talos)
+                jobs="${jobs} kube-proxy"
+                control_plane_pods=$(wl -n kube-system get pods -l 'component in (kube-controller-manager,kube-scheduler)' -o json)
+                if printf '%s' "${control_plane_pods}" |
+                    jq -e '(.items | length > 0) and all(.items[]; any(.spec.containers[].command[]?; startswith("--tls-cert-file=")))' > /dev/null; then
+                    jobs="${jobs} kube-controller-manager kube-scheduler"
+                fi
+                ;;
+            *) jobs="${jobs} kube-controller-manager kube-scheduler kube-proxy" ;;
+        esac
+        targets='/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/targets?state=active'
+        all_up() {
+            # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
+            active=$(wl get --raw "${targets}") || return 1
+            for job in ${jobs}; do
+                printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null || return 1
+            done
+            printf '%s' "${active}" | jq -e 'all(.data.activeTargets[]; .health == "up")' > /dev/null
+        }
+        deadline=$(($(date +%s) + 900))
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        until all_up; do
+            now=$(date +%s)
+            if [ "${now}" -ge "${deadline}" ]; then
+                # A Service without ready endpoints leaves its job out of the targets altogether, so the
+                # missing jobs are named beside the ones down, with the pods that would serve them.
+                active=$(wl get --raw "${targets}")
+                for job in ${jobs}; do
+                    printf '%s' "${active}" | jq -e --arg j "${job}" 'any(.data.activeTargets[]; .labels.job == $j)' > /dev/null ||
+                        echo "no target for ${job}" >&2
+                done
+                printf '%s' "${active}" | jq -r '.data.activeTargets[] | select(.health != "up") | "\(.labels.job) \(.scrapeUrl): \(.lastError)"' >&2
+                wl -n kube-system get daemonsets -o wide >&2
+                wl get pods -A -o wide | awk 'NR == 1 || $3 !~ /^([0-9]+)\/\1$/ || $4 != "Running"' >&2
+                wl -n kube-system get events --field-selector type=Warning >&2
+                fail "monitoring does not reach every component"
+            fi
+            sleep 10
+        done
+        if [ "${distribution}" = k3s ]; then
+            # The chart's rules and dashboards find k3s's controller manager, scheduler and kube-proxy in
+            # the kubelet's job, so their own series have to arrive there.
+            has_series() {
+                query=$(printf '%s' "$1" | jq -sRr @uri)
+                # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed request is only a retry.
+                found=$(wl get --raw "/api/v1/namespaces/monitoring/services/http:kube-prometheus-stack-prometheus:9090/proxy/api/v1/query?query=${query}") || return 1
+                printf '%s' "${found}" | jq -e '.data.result | length > 0' > /dev/null
+            }
+            for series in 'workqueue_adds_total{job="kubelet",name="deployment"}' \
+                'scheduler_schedule_attempts_total{job="kubelet"}' \
+                'kubeproxy_sync_proxy_rules_duration_seconds_count{job="kubelet"}'; do
+                until_true 300 "${series} in Prometheus" has_series "${series}"
+            done
+        fi
+        pod_security=$(wl label --dry-run=server --overwrite namespace monitoring pod-security.kubernetes.io/enforce=restricted 2>&1)
+        case ${pod_security} in
+            *violate*) fail "monitoring's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+            *) ;;
+        esac
+        measured "" control_plane_use "${work}/workload" monitoring
 
-    step "logs switched on, collected on every node"
-    set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
-    until_true 900 "Loki installed" sh -c "KUBECONFIG=${work}/workload kubectl -n logging get statefulset/loki >/dev/null 2>&1"
-    wl -n logging rollout status statefulset/loki --timeout=10m
-    until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
-    wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
-    wl -n logging rollout status deployment/alloy --timeout=10m
-    # Grafana reads Loki with its client certificate once its Deployment mounts it, which replaces its pod.
-    grafana_deployment=deployment/kube-prometheus-stack-grafana
-    grafana_mounts() {
-        wl -n monitoring get "${grafana_deployment}" -o json |
-            jq -e 'any(.spec.template.spec.volumes[]; .secret.secretName == "kubehenge-loki-client")' > /dev/null
-    }
-    until_true 600 "Grafana mounts its Loki client certificate" grafana_mounts
-    wl -n monitoring rollout status "${grafana_deployment}" --timeout=10m
-    grafana_user=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-user}' | base64 -d)
-    grafana_password=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
-    grafana_port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
-    KUBECONFIG="${work}/workload" kubectl -n monitoring port-forward "${grafana_deployment}" "${grafana_port}:3000" > "${work}/grafana-forward.log" 2>&1 &
-    grafana_pid=$!
-    # grafana <path> [curl options...]: Grafana's API, as its admin.
-    grafana() {
-        grafana_path=$1
-        shift
-        curl -sS --fail --max-time 30 -u "${grafana_user}:${grafana_password}" "$@" "http://127.0.0.1:${grafana_port}${grafana_path}"
-    }
-    until_true 60 "Grafana reached" grafana /api/health
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    loki_healthy() { health=$(grafana /api/datasources/uid/loki/health) && printf '%s' "${health}" | jq -e '.status == "OK"' > /dev/null; }
-    until_true 300 "Grafana reaches Loki with its client certificate" loki_healthy
-    # lines <LogQL query> <text>: how many of the last hour's lines the query finds in Loki through
-    # Grafana's Loki data source hold the text.
-    lines() {
-        query=$(jq -cn --arg e "$1" '{from: "now-1h", to: "now", queries: [{refId: "A", datasource: {uid: "loki", type: "loki"}, expr: $e, queryType: "range", maxLines: 1000}]}')
-        # shellcheck disable=SC2310 # its failure is returned.
-        found=$(grafana /api/ds/query -X POST -H 'Content-Type: application/json' -d "${query}") || return 1
-        printf '%s' "${found}" | jq --arg t "$2" '[.results.A.frames[]?.data.values[]? | arrays | .[] | strings | select(contains($t))] | length'
-    }
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
-    logged() { count=$(lines "$1" "$2") && [ "${count}" -ge 1 ]; }
-    # Without a client certificate or a token Loki's proxy lets nobody read, through the API server's
-    # service proxy no more than from anywhere else.
-    # shellcheck disable=SC2310 # the refusal is the answer looked for.
-    wl get --request-timeout=20s --raw /api/v1/namespaces/logging/services/https:loki:3100/proxy/loki/api/v1/labels > /dev/null 2>&1 &&
-        fail "Loki answers a client it does not know"
-    new_namespace wl e2e-logs
-    # log_pod <name> <line> <ports JSON> <then>: a pod at Pod Security's restricted level that writes the
-    # line, declares the ports and then runs the command.
-    log_pod() {
-        wl -n e2e-logs apply -f - << EOF
+        # The alerts identity reads Alertmanager's alerts through the API server's proxy, the health
+        # page's way in, and may do nothing else there.
+        until_true 300 "the alerts identity's token beside the cluster" identity_kubeconfig alerts
+        alerts_read() {
+            KUBECONFIG="${work}/alerts" kubectl get --raw \
+                '/api/v1/namespaces/monitoring/services/kube-prometheus-stack-alertmanager:http-web/proxy/api/v2/alerts?active=true' |
+                jq -e 'type == "array"' > /dev/null
+        }
+        until_true 300 "the alerts identity reads Alertmanager's alerts" alerts_read
+        refused alerts create services/kube-prometheus-stack-alertmanager:http-web --subresource=proxy -n monitoring
+        refused alerts get services/kube-prometheus-stack-prometheus:http-web --subresource=proxy -n monitoring
+        refused alerts list pods -n monitoring
+    fi
+
+    if on logs; then
+        step "logs switched on, collected on every node"
+        set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
+        until_true 900 "Loki installed" sh -c "KUBECONFIG=${work}/workload kubectl -n logging get statefulset/loki >/dev/null 2>&1"
+        wl -n logging rollout status statefulset/loki --timeout=10m
+        until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
+        wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
+        wl -n logging rollout status deployment/alloy --timeout=10m
+        # Grafana reads Loki with its client certificate once its Deployment mounts it, which replaces its pod.
+        grafana_deployment=deployment/kube-prometheus-stack-grafana
+        grafana_mounts() {
+            wl -n monitoring get "${grafana_deployment}" -o json |
+                jq -e 'any(.spec.template.spec.volumes[]; .secret.secretName == "kubehenge-loki-client")' > /dev/null
+        }
+        until_true 600 "Grafana mounts its Loki client certificate" grafana_mounts
+        wl -n monitoring rollout status "${grafana_deployment}" --timeout=10m
+        grafana_user=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-user}' | base64 -d)
+        grafana_password=$(wl -n monitoring get secret kube-prometheus-stack-grafana -o jsonpath='{.data.admin-password}' | base64 -d)
+        grafana_port=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 10000))
+        KUBECONFIG="${work}/workload" kubectl -n monitoring port-forward "${grafana_deployment}" "${grafana_port}:3000" > "${work}/grafana-forward.log" 2>&1 &
+        grafana_pid=$!
+        # grafana <path> [curl options...]: Grafana's API, as its admin.
+        grafana() {
+            grafana_path=$1
+            shift
+            curl -sS --fail --max-time 30 -u "${grafana_user}:${grafana_password}" "$@" "http://127.0.0.1:${grafana_port}${grafana_path}"
+        }
+        until_true 60 "Grafana reached" grafana /api/health
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        loki_healthy() { health=$(grafana /api/datasources/uid/loki/health) && printf '%s' "${health}" | jq -e '.status == "OK"' > /dev/null; }
+        until_true 300 "Grafana reaches Loki with its client certificate" loki_healthy
+        # lines <LogQL query> <text>: how many of the last hour's lines the query finds in Loki through
+        # Grafana's Loki data source hold the text.
+        lines() {
+            query=$(jq -cn --arg e "$1" '{from: "now-1h", to: "now", queries: [{refId: "A", datasource: {uid: "loki", type: "loki"}, expr: $e, queryType: "range", maxLines: 1000}]}')
+            # shellcheck disable=SC2310 # its failure is returned.
+            found=$(grafana /api/ds/query -X POST -H 'Content-Type: application/json' -d "${query}") || return 1
+            printf '%s' "${found}" | jq --arg t "$2" '[.results.A.frames[]?.data.values[]? | arrays | .[] | strings | select(contains($t))] | length'
+        }
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
+        logged() { count=$(lines "$1" "$2") && [ "${count}" -ge 1 ]; }
+        # Without a client certificate or a token Loki's proxy lets nobody read, through the API server's
+        # service proxy no more than from anywhere else.
+        # shellcheck disable=SC2310 # the refusal is the answer looked for.
+        wl get --request-timeout=20s --raw /api/v1/namespaces/logging/services/https:loki:3100/proxy/loki/api/v1/labels > /dev/null 2>&1 &&
+            fail "Loki answers a client it does not know"
+        new_namespace wl e2e-logs
+        # log_pod <name> <line> <ports JSON> <then>: a pod at Pod Security's restricted level that writes the
+        # line, declares the ports and then runs the command.
+        log_pod() {
+            wl -n e2e-logs apply -f - << EOF
 apiVersion: v1
 kind: Pod
 metadata:
@@ -2315,351 +2389,355 @@ spec:
         capabilities:
           drop: [ALL]
 EOF
-    }
-    # A pod gone again within a second: the node collector reads its log from the node.
-    short_line=e2e-short-lived-${suffix}
-    log_pod short "${short_line}" '[]' 'true'
-    wl -n e2e-logs wait --for=jsonpath='{.status.phase}'=Succeeded pod/short --timeout=5m
-    until_true 300 "the short-lived pod's line in Loki" logged '{namespace="e2e-logs", pod="short", container="log", job="pods"}' "${short_line}"
-    if [ "${distribution}" = talos ]; then
-        # Talos keeps no journal: it sends its services' and the kernel's logs to the collector on its
-        # node's own link-local address, and its API server's audit log lies in a directory of its own.
-        collector=$(wl -n logging-node get daemonset/alloy-node -o json)
-        audit_dir=$(printf '%s' "${collector}" | jq -r '.spec.template.spec.volumes[] | select(.name == "audit") | .hostPath.path')
-        [ "${audit_dir}" = /var/log/audit/kube ] || fail "the collector reads the audit log from '${audit_dir}', not /var/log/audit/kube"
-        printf '%s' "${collector}" | jq -e 'any(.spec.template.spec.volumes[]; .name == "journal") | not' > /dev/null ||
-            fail "the collector mounts a journal Talos does not keep"
-        until_true 300 "Talos's service logs in Loki" logged '{job="talos", unit="kubelet"}' ""
-        until_true 300 "the nodes' kernel logs in Loki" logged '{job="talos", unit="kernel"}' ""
-    else
-        until_true 300 "the nodes' journals in Loki" logged '{job="journal"}' ""
+        }
+        # A pod gone again within a second: the node collector reads its log from the node.
+        short_line=e2e-short-lived-${suffix}
+        log_pod short "${short_line}" '[]' 'true'
+        wl -n e2e-logs wait --for=jsonpath='{.status.phase}'=Succeeded pod/short --timeout=5m
+        until_true 300 "the short-lived pod's line in Loki" logged '{namespace="e2e-logs", pod="short", container="log", job="pods"}' "${short_line}"
+        if [ "${distribution}" = talos ]; then
+            # Talos keeps no journal: it sends its services' and the kernel's logs to the collector on its
+            # node's own link-local address, and its API server's audit log lies in a directory of its own.
+            collector=$(wl -n logging-node get daemonset/alloy-node -o json)
+            audit_dir=$(printf '%s' "${collector}" | jq -r '.spec.template.spec.volumes[] | select(.name == "audit") | .hostPath.path')
+            [ "${audit_dir}" = /var/log/audit/kube ] || fail "the collector reads the audit log from '${audit_dir}', not /var/log/audit/kube"
+            printf '%s' "${collector}" | jq -e 'any(.spec.template.spec.volumes[]; .name == "journal") | not' > /dev/null ||
+                fail "the collector mounts a journal Talos does not keep"
+            until_true 300 "Talos's service logs in Loki" logged '{job="talos", unit="kubelet"}' ""
+            until_true 300 "the nodes' kernel logs in Loki" logged '{job="talos", unit="kernel"}' ""
+        else
+            until_true 300 "the nodes' journals in Loki" logged '{job="journal"}' ""
+        fi
+        # The API server audited the pod's creation, after the collector started reading the log.
+        until_true 300 "the API server's audit log in Loki" logged '{job="audit"} |= "e2e-logs"' '"name":"short"'
+        wl -n e2e-logs delete pod/short --wait --timeout=2m
+        pod_security=$(wl label --dry-run=server --overwrite namespace logging pod-security.kubernetes.io/enforce=restricted 2>&1)
+        case ${pod_security} in
+            *violate*) fail "Loki's and the events collector's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+            *) ;;
+        esac
+        measured "" control_plane_use "${work}/workload" logs
+
+        step "logs collected through the Kubernetes API instead"
+        set_variable logs '{"enabled":true,"collector":"api","retentionDays":7,"sizeGiB":10}'
+        until_true 600 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
+        wl -n logging rollout status deployment/alloy --timeout=10m
+        # Two ports, which discovery gives the container once each: its line still arrives once.
+        api_line=e2e-through-the-api-${suffix}
+        log_pod ported "${api_line}" '[{"containerPort": 8080}, {"containerPort": 8081}]' 'exec /agnhost pause'
+        wl -n e2e-logs wait --for=condition=Ready pod/ported --timeout=5m
+        until_true 300 "the pod's line in Loki through the API" logged '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}"
+        # shellcheck disable=SC2310 # a failed query fails the step.
+        count=$(lines '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}") || fail "cannot query Loki"
+        [ "${count}" = 1 ] || fail "the pod's line arrived ${count} times"
+        wl delete namespace e2e-logs --wait --timeout=5m
+
+        step "logs collected on every node again"
+        set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
+        until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
+        wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
     fi
-    # The API server audited the pod's creation, after the collector started reading the log.
-    until_true 300 "the API server's audit log in Loki" logged '{job="audit"} |= "e2e-logs"' '"name":"short"'
-    wl -n e2e-logs delete pod/short --wait --timeout=2m
-    pod_security=$(wl label --dry-run=server --overwrite namespace logging pod-security.kubernetes.io/enforce=restricted 2>&1)
-    case ${pod_security} in
-        *violate*) fail "Loki's and the events collector's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-        *) ;;
-    esac
-    control_plane_use "${work}/workload" logs
 
-    step "logs collected through the Kubernetes API instead"
-    set_variable logs '{"enabled":true,"collector":"api","retentionDays":7,"sizeGiB":10}'
-    until_true 600 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
-    wl -n logging rollout status deployment/alloy --timeout=10m
-    # Two ports, which discovery gives the container once each: its line still arrives once.
-    api_line=e2e-through-the-api-${suffix}
-    log_pod ported "${api_line}" '[{"containerPort": 8080}, {"containerPort": 8081}]' 'exec /agnhost pause'
-    wl -n e2e-logs wait --for=condition=Ready pod/ported --timeout=5m
-    until_true 300 "the pod's line in Loki through the API" logged '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}"
-    # shellcheck disable=SC2310 # a failed query fails the step.
-    count=$(lines '{namespace="e2e-logs", pod="ported", job="pods"}' "${api_line}") || fail "cannot query Loki"
-    [ "${count}" = 1 ] || fail "the pod's line arrived ${count} times"
-    wl delete namespace e2e-logs --wait --timeout=5m
+    if on backups; then
+        step "backups with Velero: a volume and a Secret backed up, deleted and restored"
+        marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        set_variable backups "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+        velero_ready "${work}/workload"
+        # The node agent reads every pod's volumes from the node, which takes a privileged pod; Velero's
+        # server needs nothing of the kind.
+        pod_security=$(wl label --dry-run=server --overwrite namespace velero pod-security.kubernetes.io/enforce=restricted 2>&1)
+        server_violations=$(printf '%s\n' "${pod_security}" | grep '^Warning: velero-' || true)
+        [ -z "${server_violations}" ] || fail "Velero's server does not meet Pod Security's restricted level: ${server_violations}"
+        # The interface's two identities in the cluster: one that reads, starts and deletes backups (the
+        # last only through Velero, which removes what a backup holds in the store) and reads restores'
+        # results, one that restores, neither able to read the keys Velero holds. What the interface does
+        # in the cluster, the test does as these identities.
+        # can <Secret> <verb> <resource>: whether the identity may do it in the velero namespace.
+        can() {
+            # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
+            as_identity "${work}/workload" "$1" -n velero auth can-i "$2" "$3" 2> /dev/null || true
+        }
+        until_true 300 "the interface's identities in the cluster" sh -c \
+            "kubectl -n ${ns} get secret ${name}-backups ${name}-restores > /dev/null 2>&1"
+        for check in "${name}-backups create backups.velero.io yes" "${name}-backups create restores.velero.io no" \
+            "${name}-backups create deletebackuprequests.velero.io yes" "${name}-backups delete backups.velero.io no" \
+            "${name}-backups create downloadrequests.velero.io yes" "${name}-backups get downloadrequests.velero.io yes" \
+            "${name}-backups get secrets no" "${name}-restores create restores.velero.io yes" \
+            "${name}-restores get backupstoragelocations.velero.io yes" "${name}-restores create deletebackuprequests.velero.io no" \
+            "${name}-restores get secrets no"; do
+            # shellcheck disable=SC2086 # the check's words are the arguments.
+            set -- ${check}
+            answer=$(can "$1" "$2" "$3")
+            [ "${answer}" = "$4" ] || fail "$1 may $2 $3: ${answer}, not $4"
+        done
+        new_namespace wl e2e-backup
+        wl -n e2e-backup create secret generic e2e --from-literal=marker="${marker}"
+        wl -n e2e-backup create configmap e2e --from-literal=marker="${marker}"
+        # A second namespace in the same backup, which a restore of the first leaves out.
+        new_namespace wl e2e-backup-also
+        wl -n e2e-backup-also create configmap e2e --from-literal=marker="${marker}"
+        volume_claim "${work}/workload" e2e-backup
+        volume_pod "${work}/workload" e2e-backup data
+        wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
+        wl -n e2e-backup exec data -- sh -c "printf '%s' '${marker}' > /data/marker"
+        template=$(wl -n velero get schedule velero-scheduled -o json | jq -c .spec.template)
+        excluded=$(printf '%s' "${template}" | jq -r '.excludedNamespaces | index("kube-system")')
+        [ "${excluded}" != null ] || fail "the schedule backs kube-system up"
+        back_up_now "${work}/workload" "${name}" e2e
+        until_true 1200 "the backup completed" velero_phase "${work}/workload" backup e2e Completed
+        volume_backups=$(wl -n velero get podvolumebackups -l velero.io/backup-name=e2e -o json |
+            jq '[.items[] | select(.spec.pod.namespace == "e2e-backup" and .status.phase == "Completed")] | length')
+        [ "${volume_backups}" = 1 ] || fail "the pod's volume was not backed up: ${volume_backups} volume backups"
+        measured "" control_plane_use "${work}/workload" backups
 
-    step "logs collected on every node again"
-    set_variable logs '{"enabled":true,"collector":"node","retentionDays":7,"sizeGiB":10}'
-    until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
-    wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
+        step "the backup in the S3 store: under the cluster's own prefix, encrypted"
+        keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+        # The etcd snapshots taken before stay in the store under the cluster's etcd prefixes.
+        stray=$(printf '%s\n' "${keys}" | grep -v -e "^${prefix}/" -e "^${etcd_prefix}/" -e "^${upload_prefix:-${etcd_prefix}}/" -e '^$' || true)
+        [ -z "${stray}" ] || fail "objects outside the cluster's prefix ${prefix}: ${stray}"
+        printf '%s\n' "${keys}" | grep -q "^${prefix}/kopia/e2e-backup/" || fail "no Kopia repository for e2e-backup under ${prefix}"
+        tarball="${s3_endpoint}/${bucket}/${prefix}/backups/e2e/e2e.tar.gz"
+        # Without the cluster's SSE-C key the store gives nothing out; with it, the backup.
+        plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" \
+            -o /dev/null -w '%{http_code}' "${tarball}")
+        [ "${plain}" = 400 ] || fail "the backup was read without its SSE-C key: HTTP ${plain}"
+        sse_key=$(kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.sse-c-key}')
+        sse_md5=$(printf '%s' "${sse_key}" | base64 -d | openssl dgst -md5 -binary | base64)
+        s3 -H 'x-amz-server-side-encryption-customer-algorithm: AES256' -H "x-amz-server-side-encryption-customer-key: ${sse_key}" \
+            -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" -o "${work}/e2e.tar.gz" "${tarball}"
+        contents=$(tar -tzf "${work}/e2e.tar.gz")
+        printf '%s\n' "${contents}" | grep -q '/namespaces/kube-system/' && fail "the backup holds kube-system"
+        secret_json=$(tar -xzOf "${work}/e2e.tar.gz" resources/secrets/namespaces/e2e-backup/e2e.json)
+        backed_up=$(printf '%s' "${secret_json}" | jq -r .data.marker | base64 -d)
+        [ "${backed_up}" = "${marker}" ] || fail "the backup does not hold the Secret"
+        printf '%s\n' "${contents}" | grep -qx 'resources/configmaps/namespaces/e2e-backup-also/e2e.json' ||
+            fail "the backup does not hold e2e-backup-also"
+        # What the store keeps on its disk: the volume's data encrypted by Kopia, the resources by SSE-C.
+        grep -r -q -F "${marker}" "${work}/s3-data" && fail "the store keeps the volume's data unencrypted"
 
-    step "backups with Velero: a volume and a Secret backed up, deleted and restored"
-    marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    set_variable backups "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
-    velero_ready "${work}/workload"
-    # The node agent reads every pod's volumes from the node, which takes a privileged pod; Velero's
-    # server needs nothing of the kind.
-    pod_security=$(wl label --dry-run=server --overwrite namespace velero pod-security.kubernetes.io/enforce=restricted 2>&1)
-    server_violations=$(printf '%s\n' "${pod_security}" | grep '^Warning: velero-' || true)
-    [ -z "${server_violations}" ] || fail "Velero's server does not meet Pod Security's restricted level: ${server_violations}"
-    # The interface's two identities in the cluster: one that reads, starts and deletes backups (the
-    # last only through Velero, which removes what a backup holds in the store) and reads restores'
-    # results, one that restores, neither able to read the keys Velero holds. What the interface does
-    # in the cluster, the test does as these identities.
-    # can <Secret> <verb> <resource>: whether the identity may do it in the velero namespace.
-    can() {
-        # shellcheck disable=SC2310 # can-i exits non-zero for its answer no, which the caller reads.
-        as_identity "${work}/workload" "$1" -n velero auth can-i "$2" "$3" 2> /dev/null || true
-    }
-    until_true 300 "the interface's identities in the cluster" sh -c \
-        "kubectl -n ${ns} get secret ${name}-backups ${name}-restores > /dev/null 2>&1"
-    for check in "${name}-backups create backups.velero.io yes" "${name}-backups create restores.velero.io no" \
-        "${name}-backups create deletebackuprequests.velero.io yes" "${name}-backups delete backups.velero.io no" \
-        "${name}-backups create downloadrequests.velero.io yes" "${name}-backups get downloadrequests.velero.io yes" \
-        "${name}-backups get secrets no" "${name}-restores create restores.velero.io yes" \
-        "${name}-restores get backupstoragelocations.velero.io yes" "${name}-restores create deletebackuprequests.velero.io no" \
-        "${name}-restores get secrets no"; do
-        # shellcheck disable=SC2086 # the check's words are the arguments.
-        set -- ${check}
-        answer=$(can "$1" "$2" "$3")
-        [ "${answer}" = "$4" ] || fail "$1 may $2 $3: ${answer}, not $4"
-    done
-    new_namespace wl e2e-backup
-    wl -n e2e-backup create secret generic e2e --from-literal=marker="${marker}"
-    wl -n e2e-backup create configmap e2e --from-literal=marker="${marker}"
-    # A second namespace in the same backup, which a restore of the first leaves out.
-    new_namespace wl e2e-backup-also
-    wl -n e2e-backup-also create configmap e2e --from-literal=marker="${marker}"
-    volume_claim "${work}/workload" e2e-backup
-    volume_pod "${work}/workload" e2e-backup data
-    wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
-    wl -n e2e-backup exec data -- sh -c "printf '%s' '${marker}' > /data/marker"
-    template=$(wl -n velero get schedule velero-scheduled -o json | jq -c .spec.template)
-    excluded=$(printf '%s' "${template}" | jq -r '.excludedNamespaces | index("kube-system")')
-    [ "${excluded}" != null ] || fail "the schedule backs kube-system up"
-    back_up_now "${work}/workload" "${name}" e2e
-    until_true 1200 "the backup completed" velero_phase "${work}/workload" backup e2e Completed
-    volume_backups=$(wl -n velero get podvolumebackups -l velero.io/backup-name=e2e -o json |
-        jq '[.items[] | select(.spec.pod.namespace == "e2e-backup" and .status.phase == "Completed")] | length')
-    [ "${volume_backups}" = 1 ] || fail "the pod's volume was not backed up: ${volume_backups} volume backups"
-    control_plane_use "${work}/workload" backups
+        step "the namespaces deleted, and one of them restored with its volume's data"
+        wl delete namespace e2e-backup e2e-backup-also --wait --timeout=5m
+        # restore_e2e <name> <spec>: a restore of backup e2e, as restore_backup makes one.
+        restore_e2e() {
+            restore_spec=$(printf '%s' "$2" | jq -c '{backupName: "e2e"} + .')
+            restore_backup "${work}/workload" "${name}" "$1" "${restore_spec}"
+        }
+        restore_e2e e2e '{"includedNamespaces":["e2e-backup"],"restorePVs":true}'
+        wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
+        restored=$(wl -n e2e-backup exec data -- cat /data/marker)
+        [ "${restored}" = "${marker}" ] || fail "the volume's data did not come back: ${restored}"
+        restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
+        [ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
+        # shellcheck disable=SC2310 # absent's answer is what is checked.
+        absent wl get namespace e2e-backup-also || fail "a restore of e2e-backup alone brought e2e-backup-also back"
 
-    step "the backup in the S3 store: under the cluster's own prefix, encrypted"
-    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-    # The etcd snapshots taken before stay in the store under the cluster's etcd prefixes.
-    stray=$(printf '%s\n' "${keys}" | grep -v -e "^${prefix}/" -e "^${etcd_prefix}/" -e "^${upload_prefix:-${etcd_prefix}}/" -e '^$' || true)
-    [ -z "${stray}" ] || fail "objects outside the cluster's prefix ${prefix}: ${stray}"
-    printf '%s\n' "${keys}" | grep -q "^${prefix}/kopia/e2e-backup/" || fail "no Kopia repository for e2e-backup under ${prefix}"
-    tarball="${s3_endpoint}/${bucket}/${prefix}/backups/e2e/e2e.tar.gz"
-    # Without the cluster's SSE-C key the store gives nothing out; with it, the backup.
-    plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" --aws-sigv4 "aws:amz:${region}:s3" --user "${s3_key}:${s3_secret}" \
-        -o /dev/null -w '%{http_code}' "${tarball}")
-    [ "${plain}" = 400 ] || fail "the backup was read without its SSE-C key: HTTP ${plain}"
-    sse_key=$(kubectl -n "${ns}" get secret "${name}-backup-keys" -o jsonpath='{.data.sse-c-key}')
-    sse_md5=$(printf '%s' "${sse_key}" | base64 -d | openssl dgst -md5 -binary | base64)
-    s3 -H 'x-amz-server-side-encryption-customer-algorithm: AES256' -H "x-amz-server-side-encryption-customer-key: ${sse_key}" \
-        -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" -o "${work}/e2e.tar.gz" "${tarball}"
-    contents=$(tar -tzf "${work}/e2e.tar.gz")
-    printf '%s\n' "${contents}" | grep -q '/namespaces/kube-system/' && fail "the backup holds kube-system"
-    secret_json=$(tar -xzOf "${work}/e2e.tar.gz" resources/secrets/namespaces/e2e-backup/e2e.json)
-    backed_up=$(printf '%s' "${secret_json}" | jq -r .data.marker | base64 -d)
-    [ "${backed_up}" = "${marker}" ] || fail "the backup does not hold the Secret"
-    printf '%s\n' "${contents}" | grep -qx 'resources/configmaps/namespaces/e2e-backup-also/e2e.json' ||
-        fail "the backup does not hold e2e-backup-also"
-    # What the store keeps on its disk: the volume's data encrypted by Kopia, the resources by SSE-C.
-    grep -r -q -F "${marker}" "${work}/s3-data" && fail "the store keeps the volume's data unencrypted"
-
-    step "the namespaces deleted, and one of them restored with its volume's data"
-    wl delete namespace e2e-backup e2e-backup-also --wait --timeout=5m
-    # restore_e2e <name> <spec>: a restore of backup e2e, as restore_backup makes one.
-    restore_e2e() {
-        restore_spec=$(printf '%s' "$2" | jq -c '{backupName: "e2e"} + .')
-        restore_backup "${work}/workload" "${name}" "$1" "${restore_spec}"
-    }
-    restore_e2e e2e '{"includedNamespaces":["e2e-backup"],"restorePVs":true}'
-    wl -n e2e-backup wait --for=condition=Ready pod/data --timeout=10m
-    restored=$(wl -n e2e-backup exec data -- cat /data/marker)
-    [ "${restored}" = "${marker}" ] || fail "the volume's data did not come back: ${restored}"
-    restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
-    [ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
-    # shellcheck disable=SC2310 # absent's answer is what is checked.
-    absent wl get namespace e2e-backup-also || fail "a restore of e2e-backup alone brought e2e-backup-also back"
-
-    step "a restore of one kind, leaving what the cluster has, its results read as the interface reads them"
-    wl -n e2e-backup patch secret e2e --type=merge -p '{"stringData":{"marker":"changed"}}'
-    restore_e2e e2e-secrets '{"includedNamespaces":["e2e-backup"],"includedResources":["secrets"],"restorePVs":true}'
-    kept=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
-    [ "${kept}" = changed ] || fail "the restore replaced the Secret the cluster had: ${kept}"
-    # Velero keeps a restore's results in the store, encrypted with the cluster's SSE-C key, and signs a
-    # link to them for a DownloadRequest; the interface follows it with the key.
-    download=$(jq -n '{apiVersion: "velero.io/v1", kind: "DownloadRequest", metadata: {generateName: "e2e-secrets-", namespace: "velero"},
+        step "a restore of one kind, leaving what the cluster has, its results read as the interface reads them"
+        wl -n e2e-backup patch secret e2e --type=merge -p '{"stringData":{"marker":"changed"}}'
+        restore_e2e e2e-secrets '{"includedNamespaces":["e2e-backup"],"includedResources":["secrets"],"restorePVs":true}'
+        kept=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
+        [ "${kept}" = changed ] || fail "the restore replaced the Secret the cluster had: ${kept}"
+        # Velero keeps a restore's results in the store, encrypted with the cluster's SSE-C key, and signs a
+        # link to them for a DownloadRequest; the interface follows it with the key.
+        download=$(jq -n '{apiVersion: "velero.io/v1", kind: "DownloadRequest", metadata: {generateName: "e2e-secrets-", namespace: "velero"},
         spec: {target: {kind: "RestoreResults", name: "e2e-secrets"}}}' |
-        as_identity "${work}/workload" "${name}-backups" create -f - -o jsonpath='{.metadata.name}')
-    # results_signed: whether Velero has signed the link to the results, in results_link.
-    results_signed() {
-        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-        results_link=$(as_identity "${work}/workload" "${name}-backups" -n velero get downloadrequest "${download}" -o json |
-            jq -r 'select(.status.phase == "Processed") | .status.downloadURL // empty') && [ -n "${results_link}" ]
-    }
-    until_true 120 "Velero's link to the restore's results" results_signed
-    # The interface sends the key along only to the target itself, and the link must not carry it.
-    host_of() { python3 -c 'import sys, urllib.parse; u = urllib.parse.urlsplit(sys.argv[1]); print(u.scheme + "://" + u.netloc)' "$1"; }
-    link_host=$(host_of "${results_link}")
-    target_host=$(host_of "${s3_endpoint}")
-    [ "${link_host}" = "${target_host}" ] || fail "Velero's link leads to ${link_host}, not to the target at ${target_host}"
-    # The link names the SSE-C headers among those it signs, which the request then has to send; the
-    # key itself is neither a parameter of it nor anywhere in it.
-    SSE_KEY=${sse_key} python3 -c 'import os, sys, urllib.parse
+            as_identity "${work}/workload" "${name}-backups" create -f - -o jsonpath='{.metadata.name}')
+        # results_signed: whether Velero has signed the link to the results, in results_link.
+        results_signed() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            results_link=$(as_identity "${work}/workload" "${name}-backups" -n velero get downloadrequest "${download}" -o json |
+                jq -r 'select(.status.phase == "Processed") | .status.downloadURL // empty') && [ -n "${results_link}" ]
+        }
+        until_true 120 "Velero's link to the restore's results" results_signed
+        # The interface sends the key along only to the target itself, and the link must not carry it.
+        host_of() { python3 -c 'import sys, urllib.parse; u = urllib.parse.urlsplit(sys.argv[1]); print(u.scheme + "://" + u.netloc)' "$1"; }
+        link_host=$(host_of "${results_link}")
+        target_host=$(host_of "${s3_endpoint}")
+        [ "${link_host}" = "${target_host}" ] || fail "Velero's link leads to ${link_host}, not to the target at ${target_host}"
+        # The link names the SSE-C headers among those it signs, which the request then has to send; the
+        # key itself is neither a parameter of it nor anywhere in it.
+        SSE_KEY=${sse_key} python3 -c 'import os, sys, urllib.parse
 link = sys.argv[1]
 params = {k.lower() for k in urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)}
 sys.exit(1 if "x-amz-server-side-encryption-customer-key" in params or os.environ["SSE_KEY"] in urllib.parse.unquote(link) else 0)' \
-        "${results_link}" || fail "Velero's link carries the SSE-C key"
-    plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" -o /dev/null -w '%{http_code}' "${results_link}")
-    case ${plain} in
-        2??) fail "the restore's results were read without the SSE-C key: HTTP ${plain}" ;;
-        *) ;;
-    esac
-    curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
-        -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" \
-        -o "${work}/results.gz" "${results_link}"
-    results=$(gzip -dc "${work}/results.gz")
-    result_errors=$(printf '%s' "${results}" | jq -c '[.errors // {} | (.velero // [])[], (.cluster // [])[], ((.namespaces // {}) | .[][])]')
-    [ "${result_errors}" = '[]' ] || fail "the restore's results hold errors: ${result_errors}"
-    namespace_warnings=$(printf '%s' "${results}" | jq -c '.warnings.namespaces["e2e-backup"] // []')
-    printf '%s' "${namespace_warnings}" | jq -e 'any(contains("Secret:e2e already exists"))' > /dev/null ||
-        fail "the restore's results do not tell, for e2e-backup, that its Secret was kept: ${namespace_warnings}"
+            "${results_link}" || fail "Velero's link carries the SSE-C key"
+        plain=$(curl -sS --cacert "${KUBEHENGE_E2E_BACKUP_CA}" -o /dev/null -w '%{http_code}' "${results_link}")
+        case ${plain} in
+            2??) fail "the restore's results were read without the SSE-C key: HTTP ${plain}" ;;
+            *) ;;
+        esac
+        curl -sS --fail --cacert "${KUBEHENGE_E2E_BACKUP_CA}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
+            -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" \
+            -o "${work}/results.gz" "${results_link}"
+        results=$(gzip -dc "${work}/results.gz")
+        result_errors=$(printf '%s' "${results}" | jq -c '[.errors // {} | (.velero // [])[], (.cluster // [])[], ((.namespaces // {}) | .[][])]')
+        [ "${result_errors}" = '[]' ] || fail "the restore's results hold errors: ${result_errors}"
+        namespace_warnings=$(printf '%s' "${results}" | jq -c '.warnings.namespaces["e2e-backup"] // []')
+        printf '%s' "${namespace_warnings}" | jq -e 'any(contains("Secret:e2e already exists"))' > /dev/null ||
+            fail "the restore's results do not tell, for e2e-backup, that its Secret was kept: ${namespace_warnings}"
 
-    step "a backup deleted as the interface deletes one, gone from Velero and from the store"
-    back_up_now "${work}/workload" "${name}" e2e-deleted
-    until_true 1200 "the backup to delete completed" velero_phase "${work}/workload" backup e2e-deleted Completed
-    # store_keys <folder>: the keys in the store under the folder of the cluster's prefix.
-    store_keys() {
-        listing=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${prefix}/$1/")
-        printf '%s' "${listing}" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g'
-    }
-    in_store=$(store_keys backups/e2e-deleted)
-    [ -n "${in_store}" ] || fail "backup e2e-deleted is not in the store"
-    uid=$(wl -n velero get backup e2e-deleted -o jsonpath='{.metadata.uid}')
-    # Labelled as Velero's CLI labels the request.
-    jq -n --arg uid "${uid}" '{apiVersion: "velero.io/v1", kind: "DeleteBackupRequest",
+        step "a backup deleted as the interface deletes one, gone from Velero and from the store"
+        back_up_now "${work}/workload" "${name}" e2e-deleted
+        until_true 1200 "the backup to delete completed" velero_phase "${work}/workload" backup e2e-deleted Completed
+        # store_keys <folder>: the keys in the store under the folder of the cluster's prefix.
+        store_keys() {
+            listing=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${prefix}/$1/")
+            printf '%s' "${listing}" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g'
+        }
+        in_store=$(store_keys backups/e2e-deleted)
+        [ -n "${in_store}" ] || fail "backup e2e-deleted is not in the store"
+        uid=$(wl -n velero get backup e2e-deleted -o jsonpath='{.metadata.uid}')
+        # Labelled as Velero's CLI labels the request.
+        jq -n --arg uid "${uid}" '{apiVersion: "velero.io/v1", kind: "DeleteBackupRequest",
         metadata: {generateName: "e2e-deleted-", namespace: "velero", labels: {"velero.io/backup-name": "e2e-deleted", "velero.io/backup-uid": $uid}},
         spec: {backupName: "e2e-deleted"}}' | as_identity "${work}/workload" "${name}-backups" create -f -
-    # backup_deleted: whether Velero has deleted the backup; a deletion it gave up on fails the test.
-    backup_deleted() {
-        # shellcheck disable=SC2310 # the absence is the answer looked for.
-        absent wl -n velero get backup e2e-deleted && return
-        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-        deletion_errors=$(wl -n velero get deletebackuprequests -l velero.io/backup-name=e2e-deleted -o json |
-            jq -c '[.items[] | select(.status.phase == "Processed") | .status.errors // [] | .[]]') || return 1
-        [ "${deletion_errors}" = '[]' ] || fail "Velero did not delete backup e2e-deleted: ${deletion_errors}"
-        return 1
-    }
-    until_true 600 "Velero deleted the backup" backup_deleted
-    left=$(store_keys backups/e2e-deleted)
-    [ -z "${left}" ] || fail "the deleted backup is still in the store: ${left}"
-    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
-    wl -n velero get backup e2e > /dev/null || fail "deleting one backup took another with it"
+        # backup_deleted: whether Velero has deleted the backup; a deletion it gave up on fails the test.
+        backup_deleted() {
+            # shellcheck disable=SC2310 # the absence is the answer looked for.
+            absent wl -n velero get backup e2e-deleted && return
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            deletion_errors=$(wl -n velero get deletebackuprequests -l velero.io/backup-name=e2e-deleted -o json |
+                jq -c '[.items[] | select(.status.phase == "Processed") | .status.errors // [] | .[]]') || return 1
+            [ "${deletion_errors}" = '[]' ] || fail "Velero did not delete backup e2e-deleted: ${deletion_errors}"
+            return 1
+        }
+        until_true 600 "Velero deleted the backup" backup_deleted
+        left=$(store_keys backups/e2e-deleted)
+        [ -z "${left}" ] || fail "the deleted backup is still in the store: ${left}"
+        # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+        wl -n velero get backup e2e > /dev/null || fail "deleting one backup took another with it"
 
-    step "a restore without the volumes' data: the objects back, on a new, empty volume"
-    wl delete namespace e2e-backup --wait --timeout=5m
-    # As the interface restores without the volumes' data, the pods left out for their controllers to
-    # start again; ConfigMaps left out as a kind not chosen.
-    restore_e2e e2e-no-data '{"includedNamespaces":["e2e-backup"],"excludedResources":["configmaps","pods"],"restorePVs":false}'
-    restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
-    [ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
-    wl -n e2e-backup get persistentvolumeclaim data > /dev/null
-    # shellcheck disable=SC2310 # absent's answer is what is checked.
-    absent wl -n e2e-backup get configmap e2e || fail "a restore leaving ConfigMaps out brought one back"
-    # shellcheck disable=SC2310 # absent's answer is what is checked.
-    absent wl -n e2e-backup get pod data || fail "a restore without the volumes' data brought the pod back"
-    volume_restores=$(wl -n velero get podvolumerestores -l velero.io/restore-name=e2e-no-data -o json | jq '.items | length')
-    [ "${volume_restores}" = 0 ] || fail "a restore without the volumes' data restored ${volume_restores} volumes"
-    volume_pod "${work}/workload" e2e-backup fresh
-    wl -n e2e-backup wait --for=condition=Ready pod/fresh --timeout=10m
-    on_volume=$(wl -n e2e-backup exec fresh -- ls -A /data)
-    printf '%s\n' "${on_volume}" | grep -qx marker && fail "the volume's data came back with a restore without it"
-    wl delete namespace e2e-backup --wait --timeout=5m
+        step "a restore without the volumes' data: the objects back, on a new, empty volume"
+        wl delete namespace e2e-backup --wait --timeout=5m
+        # As the interface restores without the volumes' data, the pods left out for their controllers to
+        # start again; ConfigMaps left out as a kind not chosen.
+        restore_e2e e2e-no-data '{"includedNamespaces":["e2e-backup"],"excludedResources":["configmaps","pods"],"restorePVs":false}'
+        restored=$(wl -n e2e-backup get secret e2e -o jsonpath='{.data.marker}' | base64 -d)
+        [ "${restored}" = "${marker}" ] || fail "the Secret did not come back"
+        wl -n e2e-backup get persistentvolumeclaim data > /dev/null
+        # shellcheck disable=SC2310 # absent's answer is what is checked.
+        absent wl -n e2e-backup get configmap e2e || fail "a restore leaving ConfigMaps out brought one back"
+        # shellcheck disable=SC2310 # absent's answer is what is checked.
+        absent wl -n e2e-backup get pod data || fail "a restore without the volumes' data brought the pod back"
+        volume_restores=$(wl -n velero get podvolumerestores -l velero.io/restore-name=e2e-no-data -o json | jq '.items | length')
+        [ "${volume_restores}" = 0 ] || fail "a restore without the volumes' data restored ${volume_restores} volumes"
+        volume_pod "${work}/workload" e2e-backup fresh
+        wl -n e2e-backup wait --for=condition=Ready pod/fresh --timeout=10m
+        on_volume=$(wl -n e2e-backup exec fresh -- ls -A /data)
+        printf '%s\n' "${on_volume}" | grep -qx marker && fail "the volume's data came back with a restore without it"
+        wl delete namespace e2e-backup --wait --timeout=5m
 
-    step "backups of another cluster read, where they may be"
-    backups_on=$(jq -cn --arg t "${KUBEHENGE_E2E_BACKUP_TARGET}" '{enabled: true, target: $t}')
-    # reading <cluster>: the backups variable reading that cluster's backups too.
-    reading() { printf '%s' "${backups_on}" | jq -c --arg s "$1" '.readFrom = [$s]'; }
-    # refused_backups <message> <backups value>: the cluster's backups set to the value through kubectl
-    # are refused for the reason.
-    refused_backups() {
-        vars=$(kubectl -n "${ns}" get "cluster/${name}" -o json |
-            jq -c --argjson v "$2" '[.spec.topology.variables[] | select(.name != "backups")] + [{name: "backups", value: $v}]')
-        if out=$(kubectl -n "${ns}" patch "cluster/${name}" --dry-run=server --type=merge \
-            -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}" 2>&1); then
-            fail "backups $2 were let in"
-        fi
-        printf '%s' "${out}" | grep -qF "$1" || fail "backups $2 were refused for another reason: ${out}"
-    }
-    reads=$(reading "${name}")
-    refused_backups "readFrom names the cluster itself" "${reads}"
-    reads=$(reading "e2e-none-${suffix}")
-    refused_backups "cluster e2e-none-${suffix} has no backup keys beside it" "${reads}"
-    if [ -n "${KUBEHENGE_E2E_BACKUP_OTHER_TARGET:-}" ]; then
-        # A second cluster beside this one, backing up to the other target, may not read this one's
-        # backups, which are in another.
-        reader=$(kubectl -n "${ns}" get "cluster/${name}" -o json |
-            jq -c --arg t "${KUBEHENGE_E2E_BACKUP_OTHER_TARGET}" --arg s "${name}" '
+        step "backups of another cluster read, where they may be"
+        backups_on=$(jq -cn --arg t "${KUBEHENGE_E2E_BACKUP_TARGET}" '{enabled: true, target: $t}')
+        # reading <cluster>: the backups variable reading that cluster's backups too.
+        reading() { printf '%s' "${backups_on}" | jq -c --arg s "$1" '.readFrom = [$s]'; }
+        # refused_backups <message> <backups value>: the cluster's backups set to the value through kubectl
+        # are refused for the reason.
+        refused_backups() {
+            vars=$(kubectl -n "${ns}" get "cluster/${name}" -o json |
+                jq -c --argjson v "$2" '[.spec.topology.variables[] | select(.name != "backups")] + [{name: "backups", value: $v}]')
+            if out=$(kubectl -n "${ns}" patch "cluster/${name}" --dry-run=server --type=merge \
+                -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}" 2>&1); then
+                fail "backups $2 were let in"
+            fi
+            printf '%s' "${out}" | grep -qF "$1" || fail "backups $2 were refused for another reason: ${out}"
+        }
+        reads=$(reading "${name}")
+        refused_backups "readFrom names the cluster itself" "${reads}"
+        reads=$(reading "e2e-none-${suffix}")
+        refused_backups "cluster e2e-none-${suffix} has no backup keys beside it" "${reads}"
+        if [ -n "${KUBEHENGE_E2E_BACKUP_OTHER_TARGET:-}" ]; then
+            # A second cluster beside this one, backing up to the other target, may not read this one's
+            # backups, which are in another.
+            reader=$(kubectl -n "${ns}" get "cluster/${name}" -o json |
+                jq -c --arg t "${KUBEHENGE_E2E_BACKUP_OTHER_TARGET}" --arg s "${name}" '
                 {apiVersion, kind, metadata: {name: "e2e-reader", namespace: .metadata.namespace},
                  spec: (.spec | del(.controlPlaneEndpoint) | .topology.variables = ([.topology.variables[] |
                      select(.name != "backups")] + [{name: "backups", value: {enabled: true, target: $t, readFrom: [$s]}}]))}')
-        if out=$(printf '%s' "${reader}" | kubectl create --dry-run=server -f - 2>&1); then
-            fail "a cluster backing up to ${KUBEHENGE_E2E_BACKUP_OTHER_TARGET} was let read the backups of ${name}"
+            if out=$(printf '%s' "${reader}" | kubectl create --dry-run=server -f - 2>&1); then
+                fail "a cluster backing up to ${KUBEHENGE_E2E_BACKUP_OTHER_TARGET} was let read the backups of ${name}"
+            fi
+            printf '%s' "${out}" | grep -qF "cluster ${name} does not back up to target ${KUBEHENGE_E2E_BACKUP_OTHER_TARGET}" ||
+                fail "a cluster reading the backups of ${name} in another target was refused for another reason: ${out}"
         fi
-        printf '%s' "${out}" | grep -qF "cluster ${name} does not back up to target ${KUBEHENGE_E2E_BACKUP_OTHER_TARGET}" ||
-            fail "a cluster reading the backups of ${name} in another target was refused for another reason: ${out}"
-    fi
-    # A cluster deleted since keeps its backups in the target and its keys beside it, which another
-    # may read: here one sharing this cluster's Kopia password, as a cluster made to read another's
-    # backups shares it, so that Velero reads its volumes' data too.
-    gone=e2e-gone-${suffix}
-    gone_key=$(head -c 32 /dev/urandom | base64 -w0)
-    kubectl -n "${ns}" get secret "${name}-backup-keys" -o json |
-        jq --arg n "${gone}-backup-keys" --arg k "${gone_key}" \
-            '{apiVersion, kind, type: (.type // "Opaque"), metadata: {name: $n, namespace: .metadata.namespace},
+        # A cluster deleted since keeps its backups in the target and its keys beside it, which another
+        # may read: here one sharing this cluster's Kopia password, as a cluster made to read another's
+        # backups shares it, so that Velero reads its volumes' data too.
+        gone=e2e-gone-${suffix}
+        gone_key=$(head -c 32 /dev/urandom | base64 -w0)
+        kubectl -n "${ns}" get secret "${name}-backup-keys" -o json |
+            jq --arg n "${gone}-backup-keys" --arg k "${gone_key}" \
+                '{apiVersion, kind, type: (.type // "Opaque"), metadata: {name: $n, namespace: .metadata.namespace},
               data: {"repository-password": .data["repository-password"], "sse-c-key": $k}}' |
-        kubectl create -f - > /dev/null
-    gone_prefix=$(target_folder "${gone}" velero)
-    reads=$(reading "${gone}")
-    set_variable backups "${reads}"
-    # source_location: whether the restores identity sees the read-only location of the deleted cluster's
-    # backups as the interface reads it, available.
-    source_location() {
-        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-        location=$(as_identity "${work}/workload" "${name}-restores" -n velero get backupstoragelocation "cluster-${gone}" -o json 2> /dev/null) || return 1
-        printf '%s' "${location}" | jq -e --arg g "${gone}" --arg p "${gone_prefix}" '
+            kubectl create -f - > /dev/null
+        gone_prefix=$(target_folder "${gone}" velero)
+        reads=$(reading "${gone}")
+        set_variable backups "${reads}"
+        # source_location: whether the restores identity sees the read-only location of the deleted cluster's
+        # backups as the interface reads it, available.
+        source_location() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+            location=$(as_identity "${work}/workload" "${name}-restores" -n velero get backupstoragelocation "cluster-${gone}" -o json 2> /dev/null) || return 1
+            printf '%s' "${location}" | jq -e --arg g "${gone}" --arg p "${gone_prefix}" '
             .metadata.annotations["kubehenge.dev/backups-of"] == $g and .metadata.annotations["kubehenge.dev/volume-data"] == "true" and
             .spec.accessMode == "ReadOnly" and .spec.objectStorage.prefix == $p and .status.phase == "Available"' > /dev/null
-    }
-    until_true 600 "a read-only location of ${gone}'s backups" source_location
-    location_key=$(wl -n velero get secret "velero-sse-c-${gone}" -o jsonpath='{.data.key}')
-    [ "${location_key}" = "${gone_key}" ] || fail "the location of ${gone}'s backups has not its SSE-C key"
-    set_variable backups "${backups_on}"
-    until_true 600 "the location of ${gone}'s backups removed" absent wl -n velero get backupstoragelocation "cluster-${gone}"
-    until_true 120 "the SSE-C key of ${gone} removed" absent wl -n velero get secret "velero-sse-c-${gone}"
-    kubectl -n "${ns}" delete secret "${gone}-backup-keys"
+        }
+        until_true 600 "a read-only location of ${gone}'s backups" source_location
+        location_key=$(wl -n velero get secret "velero-sse-c-${gone}" -o jsonpath='{.data.key}')
+        [ "${location_key}" = "${gone_key}" ] || fail "the location of ${gone}'s backups has not its SSE-C key"
+        set_variable backups "${backups_on}"
+        until_true 600 "the location of ${gone}'s backups removed" absent wl -n velero get backupstoragelocation "cluster-${gone}"
+        until_true 120 "the SSE-C key of ${gone} removed" absent wl -n velero get secret "velero-sse-c-${gone}"
+        kubectl -n "${ns}" delete secret "${gone}-backup-keys"
+    fi
 
-    step "certificates switched on, from the cluster's own CA"
-    set_variable certificates '{"enabled":true,"issuer":"ca","domain":"e2e.test"}'
-    ingress_ca=${name}-ingress-ca
-    until_true 300 "the cluster's CA beside it" sh -c "kubectl -n ${ns} get secret ${ingress_ca} >/dev/null 2>&1"
-    ca_domain=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.metadata.annotations.kubehenge\.dev/ingress-ca-domain}')
-    [ "${ca_domain}" = e2e.test ] || fail "the cluster's CA records the domain '${ca_domain}', not e2e.test"
-    ca_data=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.data.tls\.crt}')
-    printf '%s' "${ca_data}" | base64 -d > "${work}/ingress-ca.crt"
-    ca_text=$(openssl x509 -in "${work}/ingress-ca.crt" -noout -text)
-    # A CA that vouches only for names in the domain and for no address cannot stand in for any other
-    # server its users reach, however far it is trusted.
-    printf '%s\n' "${ca_text}" | grep -A1 'Permitted:' | grep -qx ' *DNS:e2e.test' || fail "the cluster's CA is not constrained to e2e.test"
-    printf '%s\n' "${ca_text}" | grep -q 'IP:0.0.0.0/0.0.0.0' || fail "the cluster's CA may vouch for IP addresses"
-    printf '%s\n' "${ca_text}" | grep -q 'ASN1 OID: prime256v1' || fail "the cluster's CA's key is not ECDSA P-256"
-    openssl x509 -in "${work}/ingress-ca.crt" -noout -checkend $((9 * 365 * 86400)) > /dev/null || fail "the cluster's CA runs out within nine years"
-    marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")')
-    [ "${marked}" = true ] || fail "the Cluster is not marked as having certificates"
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-    ca_copied() { ca_copy=$(wl -n cert-manager get secret kubehenge-ingress-ca -o jsonpath='{.data.tls\.crt}' 2> /dev/null) && [ "${ca_copy}" = "${ca_data}" ]; }
-    until_true 300 "the cluster's CA in the workload cluster" ca_copied
-    until_true 600 "the default certificate issued" wl -n kube-system wait --for=condition=Ready certificate.cert-manager.io/kubehenge-ingress --timeout=10s
-    # default_certificate: whether the default certificate covers the domain and every name one level
-    # below it, with an ECDSA P-256 key.
-    default_certificate() {
-        leaf=$(wl -n kube-system get secret kubehenge-ingress-tls -o jsonpath='{.data.tls\.crt}')
-        leaf=$(printf '%s' "${leaf}" | base64 -d | openssl x509 -noout -text)
-        sans=$(printf '%s\n' "${leaf}" | grep -A1 'Subject Alternative Name' | tail -n 1 | tr -d ' ' | tr ',' '\n' | LC_ALL=C sort | tr '\n' ' ')
-        [ "${sans}" = 'DNS:*.e2e.test DNS:e2e.test ' ] || fail "the default certificate names ${sans}, not e2e.test and *.e2e.test"
-        printf '%s\n' "${leaf}" | grep -q 'ASN1 OID: prime256v1' || fail "the default certificate's key is not ECDSA P-256"
-    }
-    default_certificate
-    # websecure_programmed: whether Traefik's Gateway has its HTTPS listener, terminating TLS with the
-    # default certificate for routes from every namespace, and has programmed it.
-    websecure_programmed() {
-        wl -n kube-system get gateway traefik-gateway -o json 2> /dev/null | jq -e '
+    if on certManager; then
+        step "certificates switched on, from the cluster's own CA"
+        set_variable certificates '{"enabled":true,"issuer":"ca","domain":"e2e.test"}'
+        ingress_ca=${name}-ingress-ca
+        until_true 300 "the cluster's CA beside it" sh -c "kubectl -n ${ns} get secret ${ingress_ca} >/dev/null 2>&1"
+        ca_domain=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.metadata.annotations.kubehenge\.dev/ingress-ca-domain}')
+        [ "${ca_domain}" = e2e.test ] || fail "the cluster's CA records the domain '${ca_domain}', not e2e.test"
+        ca_data=$(kubectl -n "${ns}" get secret "${ingress_ca}" -o jsonpath='{.data.tls\.crt}')
+        printf '%s' "${ca_data}" | base64 -d > "${work}/ingress-ca.crt"
+        ca_text=$(openssl x509 -in "${work}/ingress-ca.crt" -noout -text)
+        # A CA that vouches only for names in the domain and for no address cannot stand in for any other
+        # server its users reach, however far it is trusted.
+        printf '%s\n' "${ca_text}" | grep -A1 'Permitted:' | grep -qx ' *DNS:e2e.test' || fail "the cluster's CA is not constrained to e2e.test"
+        printf '%s\n' "${ca_text}" | grep -q 'IP:0.0.0.0/0.0.0.0' || fail "the cluster's CA may vouch for IP addresses"
+        printf '%s\n' "${ca_text}" | grep -q 'ASN1 OID: prime256v1' || fail "the cluster's CA's key is not ECDSA P-256"
+        openssl x509 -in "${work}/ingress-ca.crt" -noout -checkend $((9 * 365 * 86400)) > /dev/null || fail "the cluster's CA runs out within nine years"
+        marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")')
+        [ "${marked}" = true ] || fail "the Cluster is not marked as having certificates"
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        ca_copied() { ca_copy=$(wl -n cert-manager get secret kubehenge-ingress-ca -o jsonpath='{.data.tls\.crt}' 2> /dev/null) && [ "${ca_copy}" = "${ca_data}" ]; }
+        until_true 300 "the cluster's CA in the workload cluster" ca_copied
+        until_true 600 "the default certificate issued" wl -n kube-system wait --for=condition=Ready certificate.cert-manager.io/kubehenge-ingress --timeout=10s
+        # default_certificate: whether the default certificate covers the domain and every name one level
+        # below it, with an ECDSA P-256 key.
+        default_certificate() {
+            leaf=$(wl -n kube-system get secret kubehenge-ingress-tls -o jsonpath='{.data.tls\.crt}')
+            leaf=$(printf '%s' "${leaf}" | base64 -d | openssl x509 -noout -text)
+            sans=$(printf '%s\n' "${leaf}" | grep -A1 'Subject Alternative Name' | tail -n 1 | tr -d ' ' | tr ',' '\n' | LC_ALL=C sort | tr '\n' ' ')
+            [ "${sans}" = 'DNS:*.e2e.test DNS:e2e.test ' ] || fail "the default certificate names ${sans}, not e2e.test and *.e2e.test"
+            printf '%s\n' "${leaf}" | grep -q 'ASN1 OID: prime256v1' || fail "the default certificate's key is not ECDSA P-256"
+        }
+        default_certificate
+        # websecure_programmed: whether Traefik's Gateway has its HTTPS listener, terminating TLS with the
+        # default certificate for routes from every namespace, and has programmed it.
+        websecure_programmed() {
+            wl -n kube-system get gateway traefik-gateway -o json 2> /dev/null | jq -e '
         any(.spec.listeners[]; .name == "websecure" and .port == 8443 and .protocol == "HTTPS" and .tls.mode == "Terminate" and
             any(.tls.certificateRefs[]; .name == "kubehenge-ingress-tls") and .allowedRoutes.namespaces.from == "All") and
         any(.status.listeners[]?; .name == "websecure" and
             any(.conditions[]; .type == "Programmed" and .status == "True") and any(.conditions[]; .type == "ResolvedRefs" and .status == "True"))' > /dev/null
-    }
-    until_true 300 "Traefik's Gateway serves HTTPS with the default certificate" websecure_programmed
-    new_namespace wl e2e-certs
-    agnhost_pod e2e-certs web netexec --http-port=8080
-    wl -n e2e-certs expose pod web --port=80 --target-port=8080
-    # Neither names a certificate: the default one serves both.
-    wl -n e2e-certs create ingress web --rule='web.e2e.test/*=web:80'
-    wl -n e2e-certs apply -f - << 'EOF'
+        }
+        until_true 300 "Traefik's Gateway serves HTTPS with the default certificate" websecure_programmed
+        new_namespace wl e2e-certs
+        agnhost_pod e2e-certs web netexec --http-port=8080
+        wl -n e2e-certs expose pod web --port=80 --target-port=8080
+        # Neither names a certificate: the default one serves both.
+        wl -n e2e-certs create ingress web --rule='web.e2e.test/*=web:80'
+        wl -n e2e-certs apply -f - << 'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -2675,32 +2753,32 @@ spec:
         - name: web
           port: 80
 EOF
-    wl -n e2e-certs wait --for=condition=Ready pod/web --timeout=5m
-    # https_answers <CA file> <host name> <path> <pattern>: whether the API address answers the path at
-    # the host name over HTTPS, with a certificate the CA vouches for, matching the pattern.
-    https_answers() {
-        https_answer=$(curl -sS --fail --max-time 5 --cacert "$1" --resolve "$2:443:${KUBEHENGE_E2E_ENDPOINT}" "https://$2$3" 2> /dev/null) || return 1
-        printf '%s' "${https_answer}" | grep -qiE "$4"
-    }
-    until_true 300 "an Ingress served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" web.e2e.test /hostname '^web$'
-    until_true 300 "an HTTPRoute served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" gateway.e2e.test /hostname '^web$'
-    control_plane_use "${work}/workload" certificates
+        wl -n e2e-certs wait --for=condition=Ready pod/web --timeout=5m
+        # https_answers <CA file> <host name> <path> <pattern>: whether the API address answers the path at
+        # the host name over HTTPS, with a certificate the CA vouches for, matching the pattern.
+        https_answers() {
+            https_answer=$(curl -sS --fail --max-time 5 --cacert "$1" --resolve "$2:443:${KUBEHENGE_E2E_ENDPOINT}" "https://$2$3" 2> /dev/null) || return 1
+            printf '%s' "${https_answer}" | grep -qiE "$4"
+        }
+        until_true 300 "an Ingress served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" web.e2e.test /hostname '^web$'
+        until_true 300 "an HTTPRoute served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" gateway.e2e.test /hostname '^web$'
+        measured "" control_plane_use "${work}/workload" certificates
 
-    # Pebble, an ACME server made for tests, validates challenges against the DNS server it is given:
-    # BIND, which takes the DNS-01 records over RFC 2136 and answers for the HTTP-01 name.
-    step "an ACME server, and a DNS server for its challenges"
-    # renovate: datasource=docker depName=docker.io/internetsystemsconsortium/bind9
-    bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
-    # renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
-    pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
-    # The HTTP-01 names live in the cluster's own DNS, as Services in e2e-certs whose endpoint is the API
-    # address, where Traefik answers on port 80; cert-manager's self-check finds them there, and Pebble
-    # in BIND's copy of the same records, so that nothing outside the cluster need resolve them.
-    http01_zone=e2e-certs.svc.cluster.local
-    http01_host=http01.${http01_zone}
-    http01_headlamp=headlamp.${http01_zone}
-    new_namespace wl e2e-acme
-    wl -n e2e-acme apply -f - << 'EOF'
+        # Pebble, an ACME server made for tests, validates challenges against the DNS server it is given:
+        # BIND, which takes the DNS-01 records over RFC 2136 and answers for the HTTP-01 name.
+        step "an ACME server, and a DNS server for its challenges"
+        # renovate: datasource=docker depName=docker.io/internetsystemsconsortium/bind9
+        bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
+        # renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
+        pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
+        # The HTTP-01 names live in the cluster's own DNS, as Services in e2e-certs whose endpoint is the API
+        # address, where Traefik answers on port 80; cert-manager's self-check finds them there, and Pebble
+        # in BIND's copy of the same records, so that nothing outside the cluster need resolve them.
+        http01_zone=e2e-certs.svc.cluster.local
+        http01_host=http01.${http01_zone}
+        http01_headlamp=headlamp.${http01_zone}
+        new_namespace wl e2e-acme
+        wl -n e2e-acme apply -f - << 'EOF'
 apiVersion: v1
 kind: Service
 metadata:
@@ -2731,10 +2809,10 @@ spec:
     - name: management
       port: 15000
 EOF
-    dns_ip=$(wl -n e2e-acme get service dns -o jsonpath='{.spec.clusterIP}')
-    tsig=$(head -c 32 /dev/urandom | base64 -w0)
-    mkdir -p "${work}/dns"
-    cat > "${work}/dns/named.conf" << EOF
+        dns_ip=$(wl -n e2e-acme get service dns -o jsonpath='{.spec.clusterIP}')
+        tsig=$(head -c 32 /dev/urandom | base64 -w0)
+        mkdir -p "${work}/dns"
+        cat > "${work}/dns/named.conf" << EOF
 options {
     directory "/var/cache/bind";
     pid-file none;
@@ -2759,13 +2837,13 @@ zone "${http01_zone}" {
     file "/var/lib/bind/http01.zone";
 };
 EOF
-    cat > "${work}/dns/e2e.test.zone" << EOF
+        cat > "${work}/dns/e2e.test.zone" << EOF
 \$TTL 60
 @ IN SOA ns hostmaster 1 60 60 600 60
 @ IN NS ns
 ns IN A ${dns_ip}
 EOF
-    cat > "${work}/dns/http01.zone" << EOF
+        cat > "${work}/dns/http01.zone" << EOF
 \$TTL 60
 @ IN SOA ns hostmaster 1 60 60 600 60
 @ IN NS ns
@@ -2773,16 +2851,16 @@ ns IN A ${dns_ip}
 ${http01_host}. IN A ${KUBEHENGE_E2E_ENDPOINT}
 ${http01_headlamp}. IN A ${KUBEHENGE_E2E_ENDPOINT}
 EOF
-    wl -n e2e-acme create secret generic dns --from-file="${work}/dns"
-    openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=pebble \
-        -keyout "${work}/pebble.key" -out "${work}/pebble.csr" 2> /dev/null
-    printf 'subjectAltName = DNS:pebble.e2e-acme.svc, DNS:pebble.e2e-acme.svc.cluster.local\nextendedKeyUsage = serverAuth\n' > "${work}/pebble.cnf"
-    openssl x509 -req -in "${work}/pebble.csr" -CA "${work}/ca.crt" -CAkey "${work}/ca.key" -CAserial "${work}/ca.srl" \
-        -days 1 -extfile "${work}/pebble.cnf" -out "${work}/pebble.crt" 2> /dev/null
-    wl -n e2e-acme create secret tls pebble-tls --cert="${work}/pebble.crt" --key="${work}/pebble.key"
-    # Both run as Pod Security's restricted level and Kyverno require: BIND as an unprivileged user on
-    # an unprivileged port, with its zones copied where it may write their journals.
-    wl -n e2e-acme apply -f - << EOF
+        wl -n e2e-acme create secret generic dns --from-file="${work}/dns"
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=pebble \
+            -keyout "${work}/pebble.key" -out "${work}/pebble.csr" 2> /dev/null
+        printf 'subjectAltName = DNS:pebble.e2e-acme.svc, DNS:pebble.e2e-acme.svc.cluster.local\nextendedKeyUsage = serverAuth\n' > "${work}/pebble.cnf"
+        openssl x509 -req -in "${work}/pebble.csr" -CA "${work}/ca.crt" -CAkey "${work}/ca.key" -CAserial "${work}/ca.srl" \
+            -days 1 -extfile "${work}/pebble.cnf" -out "${work}/pebble.crt" 2> /dev/null
+        wl -n e2e-acme create secret tls pebble-tls --cert="${work}/pebble.crt" --key="${work}/pebble.key"
+        # Both run as Pod Security's restricted level and Kyverno require: BIND as an unprivileged user on
+        # an unprivileged port, with its zones copied where it may write their journals.
+        wl -n e2e-acme apply -f - << EOF
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -2892,37 +2970,37 @@ spec:
       secret:
         secretName: pebble-tls
 EOF
-    agnhost_pod e2e-acme client pause
-    wl -n e2e-acme wait --for=condition=Ready pod/dns pod/pebble pod/client --timeout=5m
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
-    dns_answers() {
-        soa=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" e2e.test SOA 2>&1) && [ -n "${soa}" ] && return
-        # A dig that dies says so only here: a timeout alone cannot tell a crashed client from a silent server.
-        printf 'dig: %s\n' "${soa:-no answer}" >&2
-        return 1
-    }
-    until_true 60 "BIND answers for e2e.test" dns_answers
-    # Pebble makes a new root each time it starts, which only its management interface hands out. The
-    # client fetches it there, verifying Pebble's own certificate.
-    acme_root() {
-        # shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
-        wl -n e2e-acme exec -i client -- sh -c 'cat > /tmp/ca.crt && curl -sS --fail --max-time 5 --cacert /tmp/ca.crt https://pebble.e2e-acme.svc:15000/roots/0' \
-            < "${work}/ca.crt" > "${work}/acme-root.crt" 2> /dev/null && grep -q 'BEGIN CERTIFICATE' "${work}/acme-root.crt"
-    }
-    until_true 120 "Pebble's root" acme_root
-    acme_server=https://pebble.e2e-acme.svc:14000/dir
-    # ingress_tls <namespace> <host name>: the cluster issuer the Ingress for the host name asks
-    # cert-manager for, and the Secrets it names, as JSON.
-    ingress_tls() {
-        wl -n "$1" get ingress -o json | jq -c --arg h "$2" '[.items[] | select(any(.spec.rules[]; .host == $h)) |
+        agnhost_pod e2e-acme client pause
+        wl -n e2e-acme wait --for=condition=Ready pod/dns pod/pebble pod/client --timeout=5m
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
+        dns_answers() {
+            soa=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" e2e.test SOA 2>&1) && [ -n "${soa}" ] && return
+            # A dig that dies says so only here: a timeout alone cannot tell a crashed client from a silent server.
+            printf 'dig: %s\n' "${soa:-no answer}" >&2
+            return 1
+        }
+        until_true 60 "BIND answers for e2e.test" dns_answers
+        # Pebble makes a new root each time it starts, which only its management interface hands out. The
+        # client fetches it there, verifying Pebble's own certificate.
+        acme_root() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed fetch is only a retry.
+            wl -n e2e-acme exec -i client -- sh -c 'cat > /tmp/ca.crt && curl -sS --fail --max-time 5 --cacert /tmp/ca.crt https://pebble.e2e-acme.svc:15000/roots/0' \
+                < "${work}/ca.crt" > "${work}/acme-root.crt" 2> /dev/null && grep -q 'BEGIN CERTIFICATE' "${work}/acme-root.crt"
+        }
+        until_true 120 "Pebble's root" acme_root
+        acme_server=https://pebble.e2e-acme.svc:14000/dir
+        # ingress_tls <namespace> <host name>: the cluster issuer the Ingress for the host name asks
+        # cert-manager for, and the Secrets it names, as JSON.
+        ingress_tls() {
+            wl -n "$1" get ingress -o json | jq -c --arg h "$2" '[.items[] | select(any(.spec.rules[]; .host == $h)) |
         {issuer: .metadata.annotations["cert-manager.io/cluster-issuer"], secrets: [.spec.tls[]?.secretName]}]'
-    }
+        }
 
-    step "certificates over ACME's DNS-01 challenge, with the cluster's own DNS credential"
-    # The credential as the interface stores it, and the mark it leaves on the Cluster.
-    cluster_uid=$(kubectl -n "${ns}" get cluster "${name}" -o jsonpath='{.metadata.uid}')
-    stored_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    kubectl -n "${ns}" apply -f - << EOF
+        step "certificates over ACME's DNS-01 challenge, with the cluster's own DNS credential"
+        # The credential as the interface stores it, and the mark it leaves on the Cluster.
+        cluster_uid=$(kubectl -n "${ns}" get cluster "${name}" -o jsonpath='{.metadata.uid}')
+        stored_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        kubectl -n "${ns}" apply -f - << EOF
 apiVersion: v1
 kind: Secret
 metadata:
@@ -2942,46 +3020,46 @@ type: kubehenge.dev/user-credential
 stringData:
   token: "${tsig}"
 EOF
-    kubectl -n "${ns}" annotate cluster "${name}" --overwrite "kubehenge.dev/credentials-stored-at=${stored_at}"
-    dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
+        kubectl -n "${ns}" annotate cluster "${name}" --overwrite "kubehenge.dev/credentials-stored-at=${stored_at}"
+        dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
     acme: {server: $s, caBundle: $ca}, dns01: {provider: "rfc2136", nameservers: [$d], rfc2136: {nameserver: $d, tsigKeyName: "e2e", tsigAlgorithm: "HMACSHA256"}}}')
-    set_variable certificates "${dns01}"
-    # One name one level too deep for the default certificate, and one it covers.
-    set_variable headlamp '{"enabled":true,"hostname":"headlamp.apps.e2e.test"}'
-    set_variable monitoring '{"enabled":true,"hostname":"grafana.e2e.test"}'
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-    dns01_copied() {
-        dns01_token=$(wl -n cert-manager get secret kubehenge-dns01 -o jsonpath='{.data.token}' 2> /dev/null) &&
-            dns01_token=$(printf '%s' "${dns01_token}" | base64 -d) && [ "${dns01_token}" = "${tsig}" ]
-    }
-    until_true 300 "the cluster's DNS credential in the workload cluster" dns01_copied
-    # cert-manager looks for its records only at BIND, which alone knows e2e.test.
-    recursive() {
-        wl -n cert-manager get deployment cert-manager -o json 2> /dev/null |
-            jq -e --arg a "--dns01-recursive-nameservers=${dns_ip}:53" '.spec.template.spec.containers[0].args | index($a) and index("--dns01-recursive-nameservers-only=true")' > /dev/null
-    }
-    until_true 300 "cert-manager checks its records at BIND" recursive
-    wl -n cert-manager rollout status deployment/cert-manager --timeout=5m
-    # Issued by Pebble, the default certificate is one its root vouches for; the CA's never is.
-    until_true 900 "an Ingress served over HTTPS with the default certificate from the ACME server" \
-        https_answers "${work}/acme-root.crt" web.e2e.test /hostname '^web$'
-    until_true 120 "an HTTPRoute served over HTTPS with the default certificate from the ACME server" \
-        https_answers "${work}/acme-root.crt" gateway.e2e.test /hostname '^web$'
-    default_certificate
-    wl -n cert-manager get secret kubehenge-ingress-acme > /dev/null
-    until_true 900 "Headlamp served at a name of its own, with a certificate of its own" https_answers "${work}/acme-root.crt" headlamp.apps.e2e.test / '<html'
-    headlamp_tls=$(ingress_tls headlamp headlamp.apps.e2e.test)
-    [ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
-        fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
-    until_true 600 "Grafana served with the default certificate" https_answers "${work}/acme-root.crt" grafana.e2e.test /api/health '"database"'
-    grafana_tls=$(ingress_tls monitoring grafana.e2e.test)
-    printf '%s' "${grafana_tls}" | jq -e 'length == 1 and .[0].issuer == null' > /dev/null ||
-        fail "Grafana's Ingress asks for a certificate of its own, which the default one makes needless: ${grafana_tls}"
+        set_variable certificates "${dns01}"
+        # One name one level too deep for the default certificate, and one it covers.
+        set_variable headlamp '{"enabled":true,"hostname":"headlamp.apps.e2e.test"}'
+        set_variable monitoring '{"enabled":true,"hostname":"grafana.e2e.test"}'
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        dns01_copied() {
+            dns01_token=$(wl -n cert-manager get secret kubehenge-dns01 -o jsonpath='{.data.token}' 2> /dev/null) &&
+                dns01_token=$(printf '%s' "${dns01_token}" | base64 -d) && [ "${dns01_token}" = "${tsig}" ]
+        }
+        until_true 300 "the cluster's DNS credential in the workload cluster" dns01_copied
+        # cert-manager looks for its records only at BIND, which alone knows e2e.test.
+        recursive() {
+            wl -n cert-manager get deployment cert-manager -o json 2> /dev/null |
+                jq -e --arg a "--dns01-recursive-nameservers=${dns_ip}:53" '.spec.template.spec.containers[0].args | index($a) and index("--dns01-recursive-nameservers-only=true")' > /dev/null
+        }
+        until_true 300 "cert-manager checks its records at BIND" recursive
+        wl -n cert-manager rollout status deployment/cert-manager --timeout=5m
+        # Issued by Pebble, the default certificate is one its root vouches for; the CA's never is.
+        until_true 900 "an Ingress served over HTTPS with the default certificate from the ACME server" \
+            https_answers "${work}/acme-root.crt" web.e2e.test /hostname '^web$'
+        until_true 120 "an HTTPRoute served over HTTPS with the default certificate from the ACME server" \
+            https_answers "${work}/acme-root.crt" gateway.e2e.test /hostname '^web$'
+        default_certificate
+        wl -n cert-manager get secret kubehenge-ingress-acme > /dev/null
+        until_true 900 "Headlamp served at a name of its own, with a certificate of its own" https_answers "${work}/acme-root.crt" headlamp.apps.e2e.test / '<html'
+        headlamp_tls=$(ingress_tls headlamp headlamp.apps.e2e.test)
+        [ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
+            fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
+        until_true 600 "Grafana served with the default certificate" https_answers "${work}/acme-root.crt" grafana.e2e.test /api/health '"database"'
+        grafana_tls=$(ingress_tls monitoring grafana.e2e.test)
+        printf '%s' "${grafana_tls}" | jq -e 'length == 1 and .[0].issuer == null' > /dev/null ||
+            fail "Grafana's Ingress asks for a certificate of its own, which the default one makes needless: ${grafana_tls}"
 
-    step "certificates over ACME's HTTP-01 challenge, through the Gateway"
-    # Headless and without a selector, a Service resolves to the endpoints written for it.
-    for http01_service in http01 headlamp; do
-        wl -n e2e-certs apply -f - << EOF
+        step "certificates over ACME's HTTP-01 challenge, through the Gateway"
+        # Headless and without a selector, a Service resolves to the endpoints written for it.
+        for http01_service in http01 headlamp; do
+            wl -n e2e-certs apply -f - << EOF
 apiVersion: v1
 kind: Service
 metadata:
@@ -3007,36 +3085,36 @@ ports:
 endpoints:
   - addresses: [${KUBEHENGE_E2E_ENDPOINT}]
 EOF
-    done
-    # http01_resolved <name>: whether the cluster's DNS and BIND both give the name the API address.
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
-    http01_resolved() {
-        http01_cluster=$(wl -n e2e-acme exec client -- dig +short "$1" A 2>&1) &&
-            http01_bind=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" "$1" A 2>&1) &&
-            [ "${http01_cluster}" = "${KUBEHENGE_E2E_ENDPOINT}" ] && [ "${http01_bind}" = "${KUBEHENGE_E2E_ENDPOINT}" ]
-    }
-    until_true 60 "${http01_host} resolved to the API address" http01_resolved "${http01_host}"
-    until_true 60 "${http01_headlamp} resolved to the API address" http01_resolved "${http01_headlamp}"
-    # Pebble and cert-manager's self-check fetch the challenge from a pod; any answer at all is Traefik's,
-    # a 404 while nothing routes the name.
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
-    http01_reached() {
-        http01_status=$(wl -n e2e-acme exec client -- curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://${http01_host}/" 2> /dev/null) &&
-            [ "${http01_status}" != 000 ]
-    }
-    until_true 60 "Traefik reached from a pod at ${http01_host} on port 80" http01_reached
-    http01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" '{enabled: true, issuer: "acme-http01", acme: {server: $s, caBundle: $ca}}')
-    set_variable certificates "${http01}"
-    set_variable headlamp "{\"enabled\":true,\"hostname\":\"${http01_headlamp}\"}"
-    set_variable monitoring '{"enabled":true}'
-    until_true 300 "the default certificate removed" absent wl -n kube-system get certificate.cert-manager.io/kubehenge-ingress
-    until_true 300 "its Secret removed with it" absent wl -n kube-system get secret/kubehenge-ingress-tls
-    until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
-    websecure_gone() { wl -n kube-system get gateway traefik-gateway -o json | jq -e 'all(.spec.listeners[]; .name != "websecure")' > /dev/null; }
-    until_true 300 "the Gateway's HTTPS listener removed with the default certificate" websecure_gone
-    # On the HTTPS entry point alone, so that the challenge's route is the only one for the name over
-    # HTTP. ingress-shim gives it a certificate from the cluster's default issuer.
-    wl -n e2e-certs apply -f - << EOF
+        done
+        # http01_resolved <name>: whether the cluster's DNS and BIND both give the name the API address.
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
+        http01_resolved() {
+            http01_cluster=$(wl -n e2e-acme exec client -- dig +short "$1" A 2>&1) &&
+                http01_bind=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" "$1" A 2>&1) &&
+                [ "${http01_cluster}" = "${KUBEHENGE_E2E_ENDPOINT}" ] && [ "${http01_bind}" = "${KUBEHENGE_E2E_ENDPOINT}" ]
+        }
+        until_true 60 "${http01_host} resolved to the API address" http01_resolved "${http01_host}"
+        until_true 60 "${http01_headlamp} resolved to the API address" http01_resolved "${http01_headlamp}"
+        # Pebble and cert-manager's self-check fetch the challenge from a pod; any answer at all is Traefik's,
+        # a 404 while nothing routes the name.
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
+        http01_reached() {
+            http01_status=$(wl -n e2e-acme exec client -- curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://${http01_host}/" 2> /dev/null) &&
+                [ "${http01_status}" != 000 ]
+        }
+        until_true 60 "Traefik reached from a pod at ${http01_host} on port 80" http01_reached
+        http01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" '{enabled: true, issuer: "acme-http01", acme: {server: $s, caBundle: $ca}}')
+        set_variable certificates "${http01}"
+        set_variable headlamp "{\"enabled\":true,\"hostname\":\"${http01_headlamp}\"}"
+        set_variable monitoring '{"enabled":true}'
+        until_true 300 "the default certificate removed" absent wl -n kube-system get certificate.cert-manager.io/kubehenge-ingress
+        until_true 300 "its Secret removed with it" absent wl -n kube-system get secret/kubehenge-ingress-tls
+        until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
+        websecure_gone() { wl -n kube-system get gateway traefik-gateway -o json | jq -e 'all(.spec.listeners[]; .name != "websecure")' > /dev/null; }
+        until_true 300 "the Gateway's HTTPS listener removed with the default certificate" websecure_gone
+        # On the HTTPS entry point alone, so that the challenge's route is the only one for the name over
+        # HTTP. ingress-shim gives it a certificate from the cluster's default issuer.
+        wl -n e2e-certs apply -f - << EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -3060,23 +3138,25 @@ spec:
                 port:
                   number: 80
 EOF
-    until_true 900 "an Ingress served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_host}" /hostname '^web$'
-    until_true 900 "Headlamp served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_headlamp}" / '<html'
-    headlamp_tls=$(ingress_tls headlamp "${http01_headlamp}")
-    [ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
-        fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
+        until_true 900 "an Ingress served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_host}" /hostname '^web$'
+        until_true 900 "Headlamp served with its own certificate over HTTP-01" https_answers "${work}/acme-root.crt" "${http01_headlamp}" / '<html'
+        headlamp_tls=$(ingress_tls headlamp "${http01_headlamp}")
+        [ "${headlamp_tls}" = '[{"issuer":"kubehenge-ingress","secrets":["headlamp-tls"]}]' ] ||
+            fail "Headlamp's Ingress asks for ${headlamp_tls}, not its own certificate from kubehenge-ingress"
+    fi
 
-    step "GitOps with Flux, then Argo CD, from a Git server in the cluster through a deploy key"
-    # The repository lives in the cluster itself, so that no outside service is needed. The engine
-    # reads it over SSH with the deploy key the controller makes; its host key is given, since the
-    # controller, outside the cluster, cannot reach the server to read it.
-    ssh-keygen -q -t ed25519 -N '' -C '' -f "${work}/git-host"
-    git_host=gitea.e2e-git.svc.cluster.local
-    known_hosts="[${git_host}]:2222 $(cut -d' ' -f1,2 "${work}/git-host.pub")"
-    git_password=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    new_namespace wl e2e-git
-    wl -n e2e-git create secret generic gitea-host-key --from-file=host="${work}/git-host"
-    wl -n e2e-git apply -f - << EOF
+    if on argocd; then
+        step "GitOps with Flux, then Argo CD, from a Git server in the cluster through a deploy key"
+        # The repository lives in the cluster itself, so that no outside service is needed. The engine
+        # reads it over SSH with the deploy key the controller makes; its host key is given, since the
+        # controller, outside the cluster, cannot reach the server to read it.
+        ssh-keygen -q -t ed25519 -N '' -C '' -f "${work}/git-host"
+        git_host=gitea.e2e-git.svc.cluster.local
+        known_hosts="[${git_host}]:2222 $(cut -d' ' -f1,2 "${work}/git-host.pub")"
+        git_password=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        new_namespace wl e2e-git
+        wl -n e2e-git create secret generic gitea-host-key --from-file=host="${work}/git-host"
+        wl -n e2e-git apply -f - << EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -3129,114 +3209,114 @@ spec:
     - {name: http, port: 3000, targetPort: http}
     - {name: ssh, port: 2222, targetPort: ssh}
 EOF
-    wl -n e2e-git rollout status deployment/gitea --timeout=5m
-    wl -n e2e-git exec deployment/gitea -- gitea admin user create --username e2e --password "${git_password}" \
-        --email e2e@example.org --admin --must-change-password=false
-    agnhost_pod e2e-git client pause
-    wl -n e2e-git wait --for=condition=Ready pod/client --timeout=5m
-    # git_api <method> <path> [<curl options>]: a call to the Git server's API, as its admin.
-    git_api() {
-        git_method=$1 git_path=$2
-        shift 2
-        KUBECONFIG=${work}/workload kubectl -n e2e-git exec client -- curl -sS --fail --max-time 10 -u "e2e:${git_password}" \
-            -H 'Content-Type: application/json' -X "${git_method}" "$@" "http://gitea:3000/api/v1/${git_path}"
-    }
-    # manifest <revision>: what the repository asks for, base64-encoded as the API takes a file.
-    manifest() {
-        printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: e2e-gitops\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: synced\n  namespace: e2e-gitops\ndata:\n  revision: "%s"\n' "$1" | base64 -w0
-    }
-    contents=repos/e2e/clusters/contents/apps/cluster.yaml
-    git_api POST user/repos -d '{"name":"clusters","private":true,"auto_init":true,"default_branch":"main"}' > /dev/null
-    git_file=$(manifest one)
-    git_request=$(jq -cn --arg c "${git_file}" '{content: $c, branch: "main", message: "one"}')
-    git_api POST "${contents}" -d "${git_request}" > /dev/null
-    # push <revision>: commits the manifest at a new revision. The Git server shares the worker with the
-    # GitOps engine being installed, which can hold up its answers past curl's limit, so the commit is
-    # tried until it is there.
-    push() { until_true 120 "commit ${1} pushed to the Git server" pushed "$1"; }
-    # pushed <revision>: whether the manifest is at that revision, committing it if not.
-    pushed() {
-        # shellcheck disable=SC2310 # polled with set -e off, so a failed call is only a retry.
-        git_current=$(git_api GET "${contents}") || return 1
-        git_file=$(manifest "$1")
-        # A try whose answer was lost may have committed it already.
-        git_now=$(printf '%s' "${git_current}" | jq -r '.content // "" | gsub("\\s"; "")')
-        [ "${git_now}" != "${git_file}" ] || return 0
-        git_request=$(printf '%s' "${git_current}" | jq -c --arg c "${git_file}" --arg m "$1" '{content: $c, sha: .sha, branch: "main", message: $m}')
-        git_api PUT "${contents}" -d "${git_request}" > /dev/null
-    }
-    # synced <revision>: whether the cluster runs the manifest at that revision.
-    synced() {
-        # shellcheck disable=SC2310 # wl wraps one kubectl call; a missing ConfigMap is only a retry.
-        synced_revision=$(wl -n e2e-gitops get configmap synced -o jsonpath='{.data.revision}' 2> /dev/null) || return 1
-        [ "${synced_revision}" = "$1" ]
-    }
-    gitops_value() {
-        jq -cn --arg url "ssh://git@${git_host}:2222/e2e/clusters.git" --arg hosts "${known_hosts}" --arg engine "$1" --argjson on "$2" \
-            '{enabled: $on, engine: $engine, auth: "deployKey", repository: {url: $url, revision: "main", path: "apps"}, knownHosts: $hosts, signIn: {clientSecret: "none"}}'
-    }
-    gitops=$(gitops_value flux true)
-    set_variable gitops "${gitops}"
-    # deploy_key: the public half of the deploy key the controller made, once it has made it.
-    deploy_key() {
-        encoded_key=$(kubectl -n "${ns}" get secret "${name}-gitops" -o jsonpath='{.data.identity\.pub}' 2> /dev/null) || return 1
-        [ -n "${encoded_key}" ] && printf '%s' "${encoded_key}" | base64 -d
-    }
-    has_deploy_key() { deploy_key > /dev/null; }
-    until_true 300 "the cluster's deploy key made" has_deploy_key
-    public_key=$(deploy_key)
-    # Read only, as the interface tells its users to add it.
-    git_request=$(jq -cn --arg k "${public_key}" '{title: "kubehenge", key: $k, read_only: true}')
-    git_api POST repos/e2e/clusters/keys -d "${git_request}" > /dev/null
-    until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=condition=Ready fluxinstance/flux --timeout=10s
-    until_true 600 "Flux syncs the repository" synced one
-    push two
-    until_true 300 "Flux syncs a new commit" synced two
-    control_plane_use "${work}/workload" flux
-    pod_security=$(wl label --dry-run=server --overwrite namespace flux-system pod-security.kubernetes.io/enforce=restricted 2>&1)
-    case ${pod_security} in
-        *violate*) fail "Flux's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-        *) ;;
-    esac
+        wl -n e2e-git rollout status deployment/gitea --timeout=5m
+        wl -n e2e-git exec deployment/gitea -- gitea admin user create --username e2e --password "${git_password}" \
+            --email e2e@example.org --admin --must-change-password=false
+        agnhost_pod e2e-git client pause
+        wl -n e2e-git wait --for=condition=Ready pod/client --timeout=5m
+        # git_api <method> <path> [<curl options>]: a call to the Git server's API, as its admin.
+        git_api() {
+            git_method=$1 git_path=$2
+            shift 2
+            KUBECONFIG=${work}/workload kubectl -n e2e-git exec client -- curl -sS --fail --max-time 10 -u "e2e:${git_password}" \
+                -H 'Content-Type: application/json' -X "${git_method}" "$@" "http://gitea:3000/api/v1/${git_path}"
+        }
+        # manifest <revision>: what the repository asks for, base64-encoded as the API takes a file.
+        manifest() {
+            printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: e2e-gitops\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: synced\n  namespace: e2e-gitops\ndata:\n  revision: "%s"\n' "$1" | base64 -w0
+        }
+        contents=repos/e2e/clusters/contents/apps/cluster.yaml
+        git_api POST user/repos -d '{"name":"clusters","private":true,"auto_init":true,"default_branch":"main"}' > /dev/null
+        git_file=$(manifest one)
+        git_request=$(jq -cn --arg c "${git_file}" '{content: $c, branch: "main", message: "one"}')
+        git_api POST "${contents}" -d "${git_request}" > /dev/null
+        # push <revision>: commits the manifest at a new revision. The Git server shares the worker with the
+        # GitOps engine being installed, which can hold up its answers past curl's limit, so the commit is
+        # tried until it is there.
+        push() { until_true 120 "commit ${1} pushed to the Git server" pushed "$1"; }
+        # pushed <revision>: whether the manifest is at that revision, committing it if not.
+        pushed() {
+            # shellcheck disable=SC2310 # polled with set -e off, so a failed call is only a retry.
+            git_current=$(git_api GET "${contents}") || return 1
+            git_file=$(manifest "$1")
+            # A try whose answer was lost may have committed it already.
+            git_now=$(printf '%s' "${git_current}" | jq -r '.content // "" | gsub("\\s"; "")')
+            [ "${git_now}" != "${git_file}" ] || return 0
+            git_request=$(printf '%s' "${git_current}" | jq -c --arg c "${git_file}" --arg m "$1" '{content: $c, sha: .sha, branch: "main", message: $m}')
+            git_api PUT "${contents}" -d "${git_request}" > /dev/null
+        }
+        # synced <revision>: whether the cluster runs the manifest at that revision.
+        synced() {
+            # shellcheck disable=SC2310 # wl wraps one kubectl call; a missing ConfigMap is only a retry.
+            synced_revision=$(wl -n e2e-gitops get configmap synced -o jsonpath='{.data.revision}' 2> /dev/null) || return 1
+            [ "${synced_revision}" = "$1" ]
+        }
+        gitops_value() {
+            jq -cn --arg url "ssh://git@${git_host}:2222/e2e/clusters.git" --arg hosts "${known_hosts}" --arg engine "$1" --argjson on "$2" \
+                '{enabled: $on, engine: $engine, auth: "deployKey", repository: {url: $url, revision: "main", path: "apps"}, knownHosts: $hosts, signIn: {clientSecret: "none"}}'
+        }
+        gitops=$(gitops_value flux true)
+        set_variable gitops "${gitops}"
+        # deploy_key: the public half of the deploy key the controller made, once it has made it.
+        deploy_key() {
+            encoded_key=$(kubectl -n "${ns}" get secret "${name}-gitops" -o jsonpath='{.data.identity\.pub}' 2> /dev/null) || return 1
+            [ -n "${encoded_key}" ] && printf '%s' "${encoded_key}" | base64 -d
+        }
+        has_deploy_key() { deploy_key > /dev/null; }
+        until_true 300 "the cluster's deploy key made" has_deploy_key
+        public_key=$(deploy_key)
+        # Read only, as the interface tells its users to add it.
+        git_request=$(jq -cn --arg k "${public_key}" '{title: "kubehenge", key: $k, read_only: true}')
+        git_api POST repos/e2e/clusters/keys -d "${git_request}" > /dev/null
+        until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=condition=Ready fluxinstance/flux --timeout=10s
+        until_true 600 "Flux syncs the repository" synced one
+        push two
+        until_true 300 "Flux syncs a new commit" synced two
+        measured "" control_plane_use "${work}/workload" flux
+        pod_security=$(wl label --dry-run=server --overwrite namespace flux-system pod-security.kubernetes.io/enforce=restricted 2>&1)
+        case ${pod_security} in
+            *violate*) fail "Flux's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+            *) ;;
+        esac
 
-    gitops=$(gitops_value argocd true)
-    set_variable gitops "${gitops}"
-    # Flux goes first and leaves what it synced running, so that the two never fight over it.
-    until_true 600 "Flux uninstalled" absent wl get crd kustomizations.kustomize.toolkit.fluxcd.io
-    until_true 600 "the Flux Operator removed" absent wl -n flux-system get deployment/flux-operator
-    # shellcheck disable=SC2310 # each answers the check.
-    absent wl -n flux-system get secret/kubehenge-gitops || fail "Flux's copy of the deploy key outlives Flux"
-    # shellcheck disable=SC2310 # each answers the check.
-    synced two || fail "what Flux synced went with it"
-    until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available deployment/argocd-server deployment/argocd-repo-server --timeout=10s
-    until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
-    push three
-    until_true 600 "Argo CD syncs a new commit" synced three
-    # The sync applies the ConfigMap before Argo CD records the sync's outcome on the application.
-    app_settled() {
-        # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed read is only a retry.
-        app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}') || return 1
-        [ "${app_status}" = "Synced Healthy" ]
-    }
-    until_true 120 "Argo CD's application synced and healthy" app_settled
-    admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
-    [ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
-    pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
-    case ${pod_security} in
-        *violate*) fail "Argo CD's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
-        *) ;;
-    esac
-    control_plane_use "${work}/workload" argocd
+        gitops=$(gitops_value argocd true)
+        set_variable gitops "${gitops}"
+        # Flux goes first and leaves what it synced running, so that the two never fight over it.
+        until_true 600 "Flux uninstalled" absent wl get crd kustomizations.kustomize.toolkit.fluxcd.io
+        until_true 600 "the Flux Operator removed" absent wl -n flux-system get deployment/flux-operator
+        # shellcheck disable=SC2310 # each answers the check.
+        absent wl -n flux-system get secret/kubehenge-gitops || fail "Flux's copy of the deploy key outlives Flux"
+        # shellcheck disable=SC2310 # each answers the check.
+        synced two || fail "what Flux synced went with it"
+        until_true 900 "Argo CD available" wl -n argocd wait --for=condition=Available deployment/argocd-server deployment/argocd-repo-server --timeout=10s
+        until_true 300 "Argo CD's application controller ready" wl -n argocd rollout status statefulset/argocd-application-controller --timeout=10s
+        push three
+        until_true 600 "Argo CD syncs a new commit" synced three
+        # The sync applies the ConfigMap before Argo CD records the sync's outcome on the application.
+        app_settled() {
+            # shellcheck disable=SC2310 # wl wraps one kubectl call; a failed read is only a retry.
+            app_status=$(wl -n argocd get application kubehenge -o jsonpath='{.status.sync.status} {.status.health.status}') || return 1
+            [ "${app_status}" = "Synced Healthy" ]
+        }
+        until_true 120 "Argo CD's application synced and healthy" app_settled
+        admin=$(wl -n argocd get configmap argocd-cm -o jsonpath='{.data.admin\.enabled}')
+        [ "${admin}" = false ] || fail "Argo CD's built-in admin is enabled"
+        pod_security=$(wl label --dry-run=server --overwrite namespace argocd pod-security.kubernetes.io/enforce=restricted 2>&1)
+        case ${pod_security} in
+            *violate*) fail "Argo CD's pods do not meet Pod Security's restricted level: ${pod_security}" ;;
+            *) ;;
+        esac
+        measured "" control_plane_use "${work}/workload" argocd
+    fi
 
-    # The class's minimum sizes have to carry every add-on at once.
-    step "every add-on at once, with nothing restarted"
+    # The class's minimum sizes have to carry the run's add-ons at once.
+    step "the run's add-ons at once, with nothing restarted"
     restarts_since "while the add-ons were installed"
-    pod_memory "${work}/workload"
-    echo "CPU requested with every add-on on:"
-    pod_cpu "${work}/workload"
+    measured "memory with every add-on on" pod_memory "${work}/workload"
+    measured "CPU requested with every add-on on" pod_cpu "${work}/workload"
 
     if [ "${cni}" = calico ]; then
-        step "Calico's operator still reconciles, with every add-on's policies on"
+        step "Calico's operator still reconciles, with the run's add-ons' policies on"
         calico_healthy() {
             wl get tigerastatus calico -o json | jq -e '[.status.conditions[] | {(.type): .status}] | add | .Available == "True" and .Degraded == "False"' > /dev/null
         }
@@ -3262,11 +3342,10 @@ EOF
 fi
 
 if [ "${distribution}" = talos ]; then
-    # With every add-on on, unless they are left out, as a cluster in use is upgraded: the controller
-    # drains each node, has it reboot into the new release and lets it back, the control plane first,
-    # on the same machines.
-    with_addons=', with every add-on on'
-    [ "${part}" != lifecycle ] || with_addons=
+    # With the run's add-ons on, as a cluster in use is upgraded: the controller drains each node, has
+    # it reboot into the new release and lets it back, the control plane first, on the same machines.
+    with_addons=", with ${addons} on"
+    [ -n "${addons}" ] || with_addons=
     step "Talos upgraded in place to ${talos_to}, node by node${with_addons}"
     machine_names() { kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name}" -o json | jq -c '[.items[].metadata.name] | sort'; }
     talos_machines_before=$(machine_names)
@@ -3340,102 +3419,124 @@ if [ "${distribution}" = talos ]; then
     }
     until_true 900 "every add-on's release deployed after the upgrade" releases_deployed
     until_true 900 "every workload ready after the upgrade" workloads_ready
-    if [ "${part}" != lifecycle ]; then
+    # shellcheck disable=SC2310 # on only reads a list.
+    if on monitoring; then
         until_true 600 "monitoring reaches every component after the upgrade" all_up
     fi
     wl get nodes -o wide
 fi
 
-if [ "${part}" != lifecycle ]; then
-    step "every add-on switched off at once"
+# shellcheck disable=SC2310 # on only reads a list.
+if [ -n "${addons}" ]; then
+    step "the run's add-ons switched off at once"
     # Removing them all at once is the control planes' heaviest moment.
     control_plane_record "${work}/workload" &
     recorder_pid=$!
-    set_variable headlamp '{"enabled":false}'
-    # Logs go first: they need monitoring, which is refused off while they are on.
-    # shellcheck disable=SC2310 # the refusal is the answer looked for.
-    set_variable monitoring '{"enabled":false}' > /dev/null 2>&1 && fail "monitoring was switched off under logs"
-    kill "${grafana_pid}" 2> /dev/null || true
-    grafana_pid=
-    set_variable logs '{"enabled":false,"collector":"node","retentionDays":7,"sizeGiB":10}'
-    set_variable monitoring '{"enabled":false}'
-    set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
-    set_variable istio '{"enabled":false}'
-    set_variable backups "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
-    set_variable certificates '{"enabled":false}'
-    gitops=$(gitops_value argocd false)
-    set_variable gitops "${gitops}"
-    until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
-    until_true 600 "Loki removed" absent wl -n logging get statefulset/loki
-    until_true 300 "Alloy removed" absent wl -n logging get deployment/alloy
-    until_true 300 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
-    # shellcheck disable=SC2310 # a volume that cannot be read fails the step.
-    wl -n logging get pvc/loki-storage > /dev/null || fail "Loki's volume went with logs"
-    until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
-    until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
-    until_true 900 "Kyverno removed" absent wl -n kyverno get deployment/kyverno-admission-controller
-    # shellcheck disable=SC2310 # the admission is the answer looked for.
-    privileged_pod e2e-privileged > /dev/null || fail "Kyverno's policies outlive Kyverno"
-    wl delete namespace e2e-privileged --wait --timeout=5m
-    until_true 900 "Istio removed" absent wl -n istio-node get daemonset/ztunnel
-    until_true 300 "istiod removed" absent wl -n istio-system get deployment/istiod
-    enrolled=$(wl get namespace e2e-mesh -o jsonpath='{.metadata.labels.istio\.io/dataplane-mode}')
-    [ -z "${enrolled}" ] || fail "e2e-mesh is still enrolled in a mesh that has gone"
-    # Taken out of the mesh first, its pods reach each other and the rest without ztunnel.
-    until_true 120 "a client outside the old mesh reaches the server" fetches e2e-plain
-    until_true 60 "a client in the old mesh reaches the server" fetches e2e-mesh
-    wl delete namespace e2e-mesh e2e-plain --wait --timeout=5m
-    until_true 900 "Velero removed" absent wl get namespace velero
-    crds=$(wl get customresourcedefinitions -o name)
-    velero_crds=$(printf '%s\n' "${crds}" | grep '\.velero\.io$' || true)
-    [ -z "${velero_crds}" ] || fail "Velero's resource definitions outlive it: ${velero_crds}"
-    until_true 300 "the interface's identities in the cluster removed" absent kubectl -n "${ns}" get secret "${name}-backups"
-    # shellcheck disable=SC2310 # absent's answer is what is checked.
-    absent kubectl -n "${ns}" get secret "${name}-restores" || fail "the restores identity outlives backups"
-    # The keys stay, so that the backups, which stay in the store, can be read again.
-    kubectl -n "${ns}" get secret "${name}-backup-keys" > /dev/null || fail "the backup keys went with Velero"
-    # shellcheck disable=SC2310 # a failed read fails the test with the reason.
-    s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
-        -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" ||
-        fail "the backup went from the store with Velero"
+    ! on headlamp || set_variable headlamp '{"enabled":false}'
+    if on logs; then
+        # Logs go first: they need monitoring, which is refused off while they are on.
+        # shellcheck disable=SC2310 # the refusal is the answer looked for.
+        set_variable monitoring '{"enabled":false}' > /dev/null 2>&1 && fail "monitoring was switched off under logs"
+        kill "${grafana_pid}" 2> /dev/null || true
+        grafana_pid=
+        set_variable logs '{"enabled":false,"collector":"node","retentionDays":7,"sizeGiB":10}'
+    fi
+    ! on monitoring || set_variable monitoring '{"enabled":false}'
+    ! on kyverno || set_variable podSecurity '{"admission":"restricted","kyverno":"off"}'
+    ! on istio || set_variable istio '{"enabled":false}'
+    ! on backups || set_variable backups "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}"
+    ! on certManager || set_variable certificates '{"enabled":false}'
+    if on argocd; then
+        gitops=$(gitops_value argocd false)
+        set_variable gitops "${gitops}"
+    fi
+    if on headlamp; then
+        until_true 600 "Headlamp removed" absent wl -n headlamp get deployment/headlamp
+    fi
+    if on logs; then
+        until_true 600 "Loki removed" absent wl -n logging get statefulset/loki
+        until_true 300 "Alloy removed" absent wl -n logging get deployment/alloy
+        until_true 300 "Alloy removed from the nodes" absent wl -n logging-node get daemonset/alloy-node
+        # shellcheck disable=SC2310 # a volume that cannot be read fails the step.
+        wl -n logging get pvc/loki-storage > /dev/null || fail "Loki's volume went with logs"
+    fi
+    if on monitoring; then
+        until_true 900 "monitoring removed" absent wl -n monitoring get "${prometheus}"
+        until_true 300 "metrics proxies removed" absent wl -n kube-system get daemonset/kubehenge-etcd-metrics
+    fi
+    if on kyverno; then
+        until_true 900 "Kyverno removed" absent wl -n kyverno get deployment/kyverno-admission-controller
+        # shellcheck disable=SC2310 # the admission is the answer looked for.
+        privileged_pod e2e-privileged > /dev/null || fail "Kyverno's policies outlive Kyverno"
+        wl delete namespace e2e-privileged --wait --timeout=5m
+    fi
+    if on istio; then
+        until_true 900 "Istio removed" absent wl -n istio-node get daemonset/ztunnel
+        until_true 300 "istiod removed" absent wl -n istio-system get deployment/istiod
+        enrolled=$(wl get namespace e2e-mesh -o jsonpath='{.metadata.labels.istio\.io/dataplane-mode}')
+        [ -z "${enrolled}" ] || fail "e2e-mesh is still enrolled in a mesh that has gone"
+        # Taken out of the mesh first, its pods reach each other and the rest without ztunnel.
+        until_true 120 "a client outside the old mesh reaches the server" fetches e2e-plain
+        until_true 60 "a client in the old mesh reaches the server" fetches e2e-mesh
+        wl delete namespace e2e-mesh e2e-plain --wait --timeout=5m
+    fi
+    if on backups; then
+        until_true 900 "Velero removed" absent wl get namespace velero
+        crds=$(wl get customresourcedefinitions -o name)
+        velero_crds=$(printf '%s\n' "${crds}" | grep '\.velero\.io$' || true)
+        [ -z "${velero_crds}" ] || fail "Velero's resource definitions outlive it: ${velero_crds}"
+        until_true 300 "the interface's identities in the cluster removed" absent kubectl -n "${ns}" get secret "${name}-backups"
+        # shellcheck disable=SC2310 # absent's answer is what is checked.
+        absent kubectl -n "${ns}" get secret "${name}-restores" || fail "the restores identity outlives backups"
+        # The keys stay, so that the backups, which stay in the store, can be read again.
+        kubectl -n "${ns}" get secret "${name}-backup-keys" > /dev/null || fail "the backup keys went with Velero"
+        # shellcheck disable=SC2310 # a failed read fails the test with the reason.
+        s3 -o /dev/null "${tarball}" -H 'x-amz-server-side-encryption-customer-algorithm: AES256' \
+            -H "x-amz-server-side-encryption-customer-key: ${sse_key}" -H "x-amz-server-side-encryption-customer-key-MD5: ${sse_md5}" ||
+            fail "the backup went from the store with Velero"
+    fi
     kill "${recorder_pid}" 2> /dev/null || true
     recorder_pid=
-    kill "${s3_pid}"
+    seaweedfs_stop "${s3_pid}"
     s3_pid=
-    # removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own
-    # kinds go once nothing needs cert-manager.
-    removed() {
-        # shellcheck disable=SC2310 # the absence is the answer looked for.
-        absent "$@" && return
-        removed_out=$("$@" -o name 2>&1) && return 1
-        case ${removed_out} in
-            *"the server doesn't have a resource type"*) ;;
-            *) return 1 ;;
-        esac
-    }
-    until_true 300 "the certificates' issuer removed" removed wl get clusterissuers.cert-manager.io/kubehenge-ingress
-    until_true 300 "the default certificate removed" removed wl -n kube-system get certificates.cert-manager.io/kubehenge-ingress
-    until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-    unmarked() {
-        marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")') &&
-            [ "${marked}" = false ]
-    }
-    until_true 300 "the Cluster no longer marked as having certificates" unmarked
-    until_true 900 "cert-manager removed, with nothing left that needs it" absent wl -n cert-manager get deployment/cert-manager
-    # The CA stays while the cluster lives, so that certificates switched on again keep it.
-    kubectl -n "${ns}" get secret "${ingress_ca}" > /dev/null || fail "the cluster's CA went with its certificates"
-    wl delete namespace e2e-certs e2e-acme --wait --timeout=5m
-    until_true 600 "Argo CD removed" absent wl -n argocd get deployment/argocd-server
-    until_true 300 "Argo CD's CRDs removed" absent wl get crd applications.argoproj.io
-    # shellcheck disable=SC2310 # each answers the check.
-    absent wl -n argocd get secret/kubehenge-repository || fail "Argo CD's copy of the deploy key outlives Argo CD"
-    # shellcheck disable=SC2310 # each answers the check.
-    synced three || fail "what Argo CD synced went with it"
-    wl delete namespace e2e-gitops e2e-git --wait --timeout=5m
+    if on certManager; then
+        # removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own
+        # kinds go once nothing needs cert-manager.
+        removed() {
+            # shellcheck disable=SC2310 # the absence is the answer looked for.
+            absent "$@" && return
+            removed_out=$("$@" -o name 2>&1) && return 1
+            case ${removed_out} in
+                *"the server doesn't have a resource type"*) ;;
+                *) return 1 ;;
+            esac
+        }
+        until_true 300 "the certificates' issuer removed" removed wl get clusterissuers.cert-manager.io/kubehenge-ingress
+        until_true 300 "the default certificate removed" removed wl -n kube-system get certificates.cert-manager.io/kubehenge-ingress
+        until_true 300 "the DNS credential removed from the workload cluster" absent wl -n cert-manager get secret/kubehenge-dns01
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        unmarked() {
+            marked=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq '.metadata.annotations // {} | has("kubehenge.dev/certificates")') &&
+                [ "${marked}" = false ]
+        }
+        until_true 300 "the Cluster no longer marked as having certificates" unmarked
+        until_true 900 "cert-manager removed, with nothing left that needs it" absent wl -n cert-manager get deployment/cert-manager
+        # The CA stays while the cluster lives, so that certificates switched on again keep it.
+        kubectl -n "${ns}" get secret "${ingress_ca}" > /dev/null || fail "the cluster's CA went with its certificates"
+        wl delete namespace e2e-certs e2e-acme --wait --timeout=5m
+    fi
+    if on argocd; then
+        until_true 600 "Argo CD removed" absent wl -n argocd get deployment/argocd-server
+        until_true 300 "Argo CD's CRDs removed" absent wl get crd applications.argoproj.io
+        # shellcheck disable=SC2310 # each answers the check.
+        absent wl -n argocd get secret/kubehenge-repository || fail "Argo CD's copy of the deploy key outlives Argo CD"
+        # shellcheck disable=SC2310 # each answers the check.
+        synced three || fail "what Argo CD synced went with it"
+        wl delete namespace e2e-gitops e2e-git --wait --timeout=5m
+    fi
 fi
 
-if [ "${part}" != addons ]; then
+if [ "${replaces_machines}" = true ]; then
     step "the load balancer switched off"
     servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
     set_variable loadBalancer "{\"enabled\":false,\"implementation\":\"${load_balancer}\",\"addresses\":${load_balancer_addresses}}"
@@ -3482,8 +3583,6 @@ if [ "${part}" != addons ]; then
         # through it as the test's Proxmox VE API token: every machine action of a cluster's
         # Machines tab, as kubectl-free automation would take it.
         step "the interface and kubehenge cluster, as a Proxmox VE API token"
-        kubehenge="$(dirname "$0")/../../dist/kubehenge"
-        [ -x "${kubehenge}" ] || make -s -C "$(dirname "$0")/../.." build
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj /CN=127.0.0.1 \
             -addext subjectAltName=IP:127.0.0.1 -keyout "${work}/interface.key" -out "${work}/interface.crt" 2> /dev/null
         KUBECONFIG=${creator_config} "${kubehenge}" serve --listen 127.0.0.1:18443 \
@@ -3657,8 +3756,8 @@ if [ "${part}" != addons ]; then
     fi
     # The new control-plane nodes have to carry the authentication configuration too.
     check_sign_in
-    # The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before,
-    # and Kubehenge's policy, without Kubehenge applying anything beside it.
+    # The distribution's own Gateway API chart takes over what its Traefik CRD chart shipped before
+    # and brings its own policy, without Kubehenge applying anything beside it.
     if [ -n "${gateway_api_chart}" ]; then
         until_true 300 "${gateway_api_chart} holds the Gateway API after the upgrade" gateway_api_chart_holds
     fi
@@ -3696,7 +3795,7 @@ if [ "${distribution}" != talos ]; then
     done
 fi
 
-if [ "${part}" != addons ]; then
+if [ "${replaces_machines}" = true ]; then
     step "a paused worker VM is reported, and the report cleared once it runs"
     # The health check would replace the worker once its node is not ready; skipping remediation keeps
     # the VM paused for as long as the report takes.
@@ -3847,9 +3946,13 @@ if [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
         left=$(left_of_cluster) || left='(no answer)'
         fail "still in ${ns}: ${left}"
     fi
-    kubectl -n "${ns}" get "${keys}" > /dev/null || fail "${name}'s backup keys went with it"
-    # A test cluster's keys guard backups of nothing, and the namespace outlives the test.
-    kubectl -n "${ns}" delete "${keys}" > /dev/null
+    # The controller makes them for the first backup or etcd snapshot, which the machines part takes
+    # none of.
+    if [ "${restores_etcd}" = true ]; then
+        kubectl -n "${ns}" get "${keys}" > /dev/null || fail "${name}'s backup keys went with it"
+        # A test cluster's keys guard backups of nothing, and the namespace outlives the test.
+        kubectl -n "${ns}" delete "${keys}" > /dev/null
+    fi
 elif ! kubectl delete namespace "${ns}" --wait --timeout=5m; then
     # Its conditions say what is left in it and whose finalizers hold that.
     left=$(kubectl get namespace "${ns}" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.message}; {end}' || true)

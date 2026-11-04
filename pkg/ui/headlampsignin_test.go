@@ -97,7 +97,7 @@ func TestHeadlampSignsInThoseWhoMayDownloadTheKubeconfig(t *testing.T) {
 		if strings.Contains(rec.Body.String()+strings.Join(rec.Result().Header.Values("Set-Cookie"), ";"), "signature") {
 			t.Fatal("the token reached the browser")
 		}
-		return (*seen)[0].authorization
+		return (*seen)[0].authorisation
 	}
 
 	dev := h.browser()
@@ -161,7 +161,7 @@ func TestHeadlampSignsNobodyInWithoutTheIssuer(t *testing.T) {
 	dev.signIn("dev@pve")
 	for range 2 {
 		*seen = nil
-		if rec := dev.headlamp("GET", "/clusters/default.one/version"); rec.Code != http.StatusOK || len(*seen) != 1 || (*seen)[0].authorization != "" {
+		if rec := dev.headlamp("GET", "/clusters/default.one/version"); rec.Code != http.StatusOK || len(*seen) != 1 || (*seen)[0].authorisation != "" {
 			t.Fatalf("with the sign-in off: %d, upstream %+v", rec.Code, *seen)
 		}
 	}
@@ -175,7 +175,7 @@ func TestHeadlampSignsNobodyInWithoutTheIssuer(t *testing.T) {
 	}
 	h.clock = h.clock.Add(headlampPrivilegeTTL)
 	*seen = nil
-	if rec := dev.headlamp("GET", "/clusters/default.one/version"); rec.Code != http.StatusOK || !strings.HasPrefix((*seen)[0].authorization, "Bearer ") {
+	if rec := dev.headlamp("GET", "/clusters/default.one/version"); rec.Code != http.StatusOK || !strings.HasPrefix((*seen)[0].authorisation, "Bearer ") {
 		t.Fatalf("with the sign-in on: %d, upstream %+v", rec.Code, *seen)
 	}
 }
@@ -200,7 +200,7 @@ func TestHeadlampLogOutSignsTheSessionOut(t *testing.T) {
 		if rec := b.headlamp("GET", "/clusters/default.one/api/v1/namespaces"); rec.Code != http.StatusOK || len(*seen) != 1 {
 			t.Fatalf("through the gate: %d %s", rec.Code, rec.Body)
 		}
-		return (*seen)[0].authorization
+		return (*seen)[0].authorisation
 	}
 	// Headlamp names the cluster in its log out's path in unpadded URL-safe base64.
 	logOut := "/encoded-clusters/" + base64.RawURLEncoding.EncodeToString([]byte("default.one")) + "/clear-token"

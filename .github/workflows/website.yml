@@ -105,7 +105,9 @@ jobs:
           persist-credentials: false
           # The pages' last-updated dates come from their history.
           fetch-depth: 0
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Only main saves, so a pull request's entry never pushes main's out of the cache.
+      - id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
           key: website-${{ hashFiles('website/package-lock.json') }}
@@ -115,6 +117,13 @@ jobs:
           scripts/tools.sh "$RUNNER_TEMP/bin" node
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: make website
+      - if: >-
+          github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+          && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: ${{ steps.cache.outputs.cache-primary-key }}
       - if: needs.index.outputs.signed == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -124,6 +133,41 @@ jobs:
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: website/.vitepress/dist
+
+  # Lighthouse CI over the built site on loopback, mobile and desktop, against the limits in
+  # website/lighthouserc.cjs. The reports stay with the run, never on a public host.
+  lighthouse:
+    name: Lighthouse
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: website-${{ hashFiles('website/package-lock.json') }}
+          restore-keys: website-
+      - name: Node
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin" node
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # Ubuntu's AppArmor denies unprivileged user namespaces to programs without a profile of
+      # their own, Playwright's Chromium among them, whose sandbox needs one. Allowing them here
+      # keeps the sandbox, where --no-sandbox would drop it.
+      - name: Chromium's sandbox
+        run: sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+      - run: make website-check
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lighthouse
+          path: website/.vitepress/lighthouse
+          if-no-files-found: ignore
+          retention-days: 14
 
   deploy:
     name: Deploy
@@ -141,3 +185,31 @@ jobs:
     steps:
       - id: deploy
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  # The published pages, sent to IndexNow, which passes them on to Bing, Yandex and the other
+  # engines that take part. Google reads the sitemap that robots.txt names. The key is public by
+  # design: the engines check that the site serves it.
+  indexnow:
+    name: IndexNow
+    needs: deploy
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && github.event_name == 'push' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Send the pages
+        env:
+          SITE: https://kubehenge.dev
+          KEY: de4648cfd1ca935797a72233390428d9
+        run: |
+          set -eu
+          curl --fail --silent --show-error --retry 3 "$SITE/sitemap.xml" |
+            grep -o '<loc>[^<]*</loc>' | sed 's/<[^>]*>//g' > pages.txt
+          [ -s pages.txt ] || { echo "::error::$SITE/sitemap.xml lists no pages"; exit 1; }
+          jq -R . pages.txt | jq -s --arg host "${SITE#https://}" --arg key "$KEY" \
+            --arg location "$SITE/$KEY.txt" \
+            '{host: $host, key: $key, keyLocation: $location, urlList: .}' > body.json
+          curl --fail-with-body --silent --show-error --retry 3 --request POST \
+            --header 'Content-Type: application/json; charset=utf-8' --data @body.json \
+            https://api.indexnow.org/indexnow
+          echo "Sent $(wc -l < pages.txt) pages."

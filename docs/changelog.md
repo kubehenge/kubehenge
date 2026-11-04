@@ -16,6 +16,9 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The API server now refuses Clusters that break the interface's rules (listed under Fixes). Check the Clusters kept in Git first.
 - Fixed pools need one node address more than their machines.
 - A kubeadm control plane counts 3376 MiB for itself, up from 2392 MiB.
+- The workers of a kubeadm or Talos cluster count 200 millicores together for CoreDNS's two replicas, which can both run on one worker. A single worker of one core then holds fewer add-ons ([clusters.md](clusters.md#machines)).
+- A control plane with add-ons counts more memory when its cluster runs a CNI other than the class's default, up to 1808 MiB ([clusters.md](clusters.md#machines)). Changes to a cluster that is already short go through only when they leave it no shorter.
+- A new kubeadm cluster's control planes get 4800 MiB by default, up from 4096 MiB, which a cluster with Calico needs. Existing clusters keep their size.
 - Boot logs need the kubeadm, RKE2 and k3s templates built again.
 - `install.sh --upgrade` adds the volume that sealed automatic-upgrade secrets need.
 - Applying the management cluster replaces the nodes of Talos clusters, which get a new log target. It also replaces the control planes of kubeadm, RKE2 and k3s clusters, which get a CPU request for kube-vip among other changes ([upgrading.md](upgrading.md#when-a-release-changes-a-clusterclass)).
@@ -69,7 +72,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 - **`kubehenge cluster`** lists, creates, scales and deletes clusters, prints a cluster's kubeconfig and acts on its machines through the interface. It signs in with a Proxmox VE API token from `KUBEHENGE_PROXMOX_TOKEN`.
   - The interface acts on an `Authorization: PVEAPIToken=…` header with the token's privileges, so scripts and CI need no password ([From the command line](clusters.md#from-the-command-line)).
-- **The `kubehenge` commands say what they expect.** A mistyped subcommand fails and names the closest one: `unknown command "lsit" for "kubehenge cluster": did you mean list?`.
+- **The `kubehenge` commands say what they expect.** A mistyped subcommand fails and names the closest one: `unknown command "lsit" for "kubehenge cluster": did you mean list?`. <!-- spellchecker:disable-line -->
   - A command given the wrong arguments says which it takes, such as `give the cluster's name`.
   - `kubehenge cluster list -o` checks its format before it calls the interface.
   - `kubehenge cluster list` and `create` refuse `-n`.
@@ -140,12 +143,15 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Fixes
 
+- An etcd restore or reset of an RKE2 cluster hardened to the CIS benchmark takes about 2 minutes, not 17. While RKE2 reset etcd, etcd could not read its own data and the reset waited out RKE2's 15-minute limit.
 - Applying the management-cluster module no longer returns while the Cluster API Operator reinstalls core Cluster API right after upgrading it. The providers' release now waits until the providers have stayed unchanged for 30 seconds.
 - A template build or a cluster's storage set-up no longer fails when Proxmox VE kills a VM create before it starts. It goes on under the next VM ID and logs how to remove the VM left locked.
 - `kubehenge template create` tries a failed build again after 2 and 8 minutes, as the interface and the refresh do.
 - Deleting a template build checks that its VM ID still holds that template. Proxmox VE gives a freed ID to the next VM created.
 - An add-on whose publisher moves a version's tag to a new build still installs and upgrades. The Add-on Provider for Helm refused the pinned chart once the tag pointed elsewhere, which stopped the newest CSI plugin.
 - Rancher installs the Turtles, webhook and Fleet charts Kubehenge names, from the chart repository inside its pinned image. With Rancher 2.15.3 these are Turtles 0.27.4, the webhook 0.11.4, Fleet 0.16.3 and shell 0.8.3.
+- A k3s or RKE2 upgrade whose Gateway API chart carries an older release than Kubehenge's installs that chart. Kubehenge's admission policy refused the chart's CRDs, and k3s's helm controller then never retried it.
+  - Kubehenge now applies the policy only beside CRDs it holds itself, on kubeadm and Talos. Elsewhere it deletes the copy it applied before.
 - Kyverno's controllers hold their leader leases through a stall of up to 50 seconds, like the other add-ons, rather than restart after 10.
 - The management-cluster module no longer asks the Image Factory for the Talos image's size, a request that held up a Proxmox VE API worker. The download no longer waits for the module's other changes.
 - **Cluster variables checked from the first cluster on.** Cluster API admitted the first cluster of each distribution unchecked, so a later change of its CNI or CIS hardening escaped the rules.
@@ -212,13 +218,13 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - **Certificates are renewed before they run out.** kubeadm's control plane is replaced 60 days before its certificates run out.
   - For RKE2 and k3s, the controller rolls the workers' pool and k3s's control plane from 60 days before, one machine at a time.
   - It rolls an RKE2 control plane of three or more too. A smaller one says to restart `rke2-server`.
-  - The Cluster gets the condition `CertificatesExpiring` with events, shown on its Health page and in the fleet.
+  - The Cluster gets the condition `CertificatesExpiring` with events, shown on its Health page and in the fleet. It clears within a minute of the last machine's replacement.
   - The kubeconfig and talosconfig kept for each cluster are watched too ([troubleshooting.md](troubleshooting.md#certificates)).
   - The interface warns administrators 30 days before the management cluster's admin credentials run out. An apply renews them.
 - **A template build that fails is tried again**, three times in all, 2 and then 8 minutes apart. This holds from the interface and the weekly build alike.
   - A failure that would repeat, such as a node whose CPU is too old, is not tried again.
   - A weekly build that still fails records a `TemplateBuildFailed` warning event on the ConfigMap `kubehenge-template-refresh` ([troubleshooting.md](troubleshooting.md#template-build-fails)).
-- **VMs that do not run and storage nearly full show on the Health page and the fleet.** The controller checks each cluster's VMs and storage every minute.
+- **VMs that do not run and storage nearly full show on the Health page and the fleet.** The controller checks each cluster's VMs and storage every 15 seconds.
   - A VM stopped, paused by hand, paused by QEMU after a disk error, or crashed for 3 minutes sets the condition `VMsNotRunning`.
   - A storage 85% full on a node the cluster runs on sets `StorageNearlyFull`. It turns to an error from 95%.
   - Both record events ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)).
@@ -247,6 +253,16 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - Before, Prometheus's operator, MetalLB's speakers and RKE2's Traefik among others failed their liveness probes on a busy node and were restarted.
   - The add-ons' CPU figures count the new requests, so a 2-core worker no longer takes every add-on on RKE2 and Talos.
 - k3s clusters run without k3s's local path provisioner. Its StorageClass claimed to be the default too, so a claim without a class could end up on one node's disk.
+
+### Contributing
+
+- capmox moves to its v0.9.2 release, which carries all but two of the fixes Kubehenge built on top of v0.9.1.
+  - Kubehenge's build adds only those two: a failed clone forgets its VM ID, and a VM is confirmed as the machine's before it is destroyed.
+- An end-to-end run builds the binary and the images once for all its lanes.
+- Its lanes restore the kubeadm, RKE2 and k3s templates from the Actions cache instead of baking them ([testing.md](testing.md#end-to-end-without-a-proxmox-ve-host)).
+- RKE2's and k3s's workload tests run in two halves, `etcd` and `machines`, on a machine each ([testing.md](testing.md#running-part-of-it)).
+- The template refresh test makes its Rocky Linux template after the refresh's two runs, which then build one template fewer each.
+- Three pairs of short end-to-end tests share a lane, one after the other, so the merge queue runs 20 lanes ([testing.md](testing.md#lanes-of-two)).
 
 ## [0.3.1] - 2026-10-28
 

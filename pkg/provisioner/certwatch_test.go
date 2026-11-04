@@ -120,7 +120,7 @@ func (f *certFixture) look() *metav1.Condition {
 	if err := f.kube.Get(context.Background(), webKey, c); err != nil {
 		f.t.Fatal(err)
 	}
-	if err := f.watch.watch(context.Background(), c); err != nil {
+	if _, err := f.watch.watch(context.Background(), c); err != nil {
 		f.t.Fatal(err)
 	}
 	if err := f.kube.Get(context.Background(), webKey, c); err != nil {
@@ -184,6 +184,28 @@ func TestCertificatesRenewedByReplacing(t *testing.T) {
 	f.look()
 	if got := f.drained(); len(got) != 0 {
 		t.Errorf("events %q on a second look", got)
+	}
+}
+
+// While a cluster's certificates are being renewed, the next look comes within RenewingInterval, so
+// the condition clears soon after the machines are replaced. Otherwise it comes after Interval.
+func TestCertificatesLookAgainSoonWhileRenewing(t *testing.T) {
+	t.Parallel()
+	renewing := newCertFixture(t, certCluster("rke2", 1), []client.Object{certControlPlane("web-cp-a"), certWorker("web-md-0-a")},
+		report("web-md-0-a", 45, time.Minute))
+	renewing.watch.Interval, renewing.watch.RenewingInterval = 5*time.Minute, time.Minute
+	if next := renewing.watch.pass(context.Background()); next != time.Minute {
+		t.Errorf("next look after %v while renewing", next)
+	}
+	if cond := renewing.look(); cond == nil || cond.Reason != CertificatesRenewing {
+		t.Fatalf("condition %+v", cond)
+	}
+
+	settled := newCertFixture(t, certCluster("rke2", 1), []client.Object{certControlPlane("web-cp-a"), certWorker("web-md-0-b")},
+		report("web-md-0-b", 90, time.Minute))
+	settled.watch.Interval, settled.watch.RenewingInterval = 5*time.Minute, time.Minute
+	if next := settled.watch.pass(context.Background()); next != 5*time.Minute {
+		t.Errorf("next look after %v with nothing to renew", next)
 	}
 }
 

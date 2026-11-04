@@ -9,6 +9,8 @@
 # With KUBEHENGE_E2E_PVE_BUILT=1, the image kubehenge-e2e-pve already loaded is run as it is rather
 # than built.
 #
+# The registry serves the images test/e2e/ci/build.sh left in <work directory>/build/registry.
+#
 #   172.21.99.0/24  the Docker network: this machine .1, Proxmox VE .2 (its API on 8006), registry .3
 #   172.20.99.0/24  the VMs' bridge, NAT through the container, which is .1 and their name server
 #                   (test/e2e/pve/dnsmasq.conf): management cluster .10 (API) and .11-.13,
@@ -41,8 +43,10 @@ docker network create --subnet 172.21.99.0/24 --gateway 172.21.99.1 kubehenge-e2
 docker run -d --name kubehenge-e2e-pve --hostname pve --privileged --cgroupns=private \
     --network kubehenge-e2e --ip 172.21.99.2 --tmpfs /run --tmpfs /run/lock --shm-size 1g \
     -v /sys/kernel/security:/sys/kernel/security -v "${work}/vz:/var/lib/vz" kubehenge-e2e-pve > /dev/null
+# Its storage holds the images test/e2e/ci/build.sh built for the run, when it ran.
+mkdir -p "${work}/build/registry"
 docker run -d --name kubehenge-e2e-registry --network kubehenge-e2e --ip 172.21.99.3 \
-    -e OTEL_TRACES_EXPORTER=none "${REGISTRY_IMAGE}" > /dev/null
+    -v "${work}/build/registry:/var/lib/registry" -e OTEL_TRACES_EXPORTER=none "${REGISTRY_IMAGE}" > /dev/null
 
 pve() { docker exec kubehenge-e2e-pve "$@"; }
 deadline=$(($(date +%s) + 600))

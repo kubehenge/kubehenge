@@ -1,7 +1,40 @@
-import { defineConfig } from "vitepress";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import Beasties from "beasties";
+import { defineConfig, type HeadConfig } from "vitepress";
 
 const repository = "https://github.com/kubehenge/kubehenge";
 const site = "https://kubehenge.dev";
+
+// The home page's fonts that sit above the fold, fetched at once instead of when the stylesheet is parsed.
+const homeFonts =
+  /\/(JetBrainsMono-(Regular|Bold)|AtkinsonHyperlegibleNext-400|BigShouldersDisplay-(800|900))\.[^/]+\.woff2$/u;
+
+const sha256 = (text: string) => `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
+
+// A page may run only its own scripts and the inline ones VitePress writes into it, which are
+// listed by hash. GitHub Pages sets no headers, so this travels in the page. The inline style
+// attributes Vue renders are listed by hash too, and styles set from script are not restricted.
+function contentSecurityPolicy(html: string) {
+  const scripts = [...html.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/gu)].map((m) => sha256(m[1]));
+  const styles = [...html.matchAll(/\sstyle="([^"]*)"/gu)].map((m) => sha256(m[1]));
+  const handlers = [...html.matchAll(/\sonload="([^"]*)"/gu)].map((m) => sha256(m[1]));
+  const sheets = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gu)].map((m) => sha256(m[1]));
+  return [
+    "default-src 'self'",
+    `script-src 'self' ${[...new Set(scripts)].join(" ")}`,
+    `script-src-attr 'unsafe-hashes' ${[...new Set(handlers)].join(" ")}`,
+    `style-src 'self' ${[...new Set(sheets)].join(" ")}`,
+    `style-src-attr 'unsafe-hashes' ${[...new Set(styles)].join(" ")}`,
+    "img-src 'self' data:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "require-trusted-types-for 'script'",
+  ].join("; ");
+}
 
 export default defineConfig({
   title: "Kubehenge",
@@ -9,6 +42,9 @@ export default defineConfig({
   lang: "en-GB",
   cleanUrls: true,
   lastUpdated: true,
+  // VueUse's dark-mode switch writes a style element and reads it back to stop transitions, which
+  // makes the browser lay the page out again at start-up. The theme animates the switch itself.
+  appearance: { disableTransition: false },
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/logo.svg" }],
     // What chat and social apps show for a shared link: Open Graph, and X's own card tags.
@@ -22,15 +58,73 @@ export default defineConfig({
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
   ],
   // Each page's own title, description and address, and the address search engines index it at.
-  transformHead({ pageData, title, description }) {
+  transformHead({ pageData, title, description, assets }) {
     const path = pageData.relativePath.replace(/(?:^|\/)index\.md$/u, "").replace(/\.md$/u, "");
     const url = `${site}/${path}`;
+    const fonts: HeadConfig[] =
+      pageData.relativePath === "index.md"
+        ? assets
+            .filter((file) => homeFonts.test(file))
+            .map((file) => ["link", { rel: "preload", href: file, as: "font", type: "font/woff2", crossorigin: "" }])
+        : [];
     return [
+      ...fonts,
       ["link", { rel: "canonical", href: url }],
       ["meta", { property: "og:url", content: url }],
       ["meta", { property: "og:title", content: title }],
       ["meta", { property: "og:description", content: description }],
     ];
+  },
+  // The theme preloads Inter and the icon stylesheet for every page. The home page uses neither, so
+  // it drops them. The content security policy goes last, as it lists the page's inline scripts.
+  async transformHtml(code, _id, { pageData, siteConfig }) {
+    let html = code;
+    if (pageData.relativePath === "index.md") {
+      html = html
+        .replace(/\s*<link rel="preload" href="[^"]*inter-[^"]*\.woff2"[^>]*>/u, "")
+        .replace(/\s*<link rel="preload stylesheet" href="[^"]*vp-icons[^"]*"[^>]*>/u, "");
+    }
+    // The stylesheet blocks the first paint, so each page carries the rules it paints with and the
+    // whole sheet follows at the end of the body, where it blocks nothing.
+    const beasties = new Beasties({
+      path: siteConfig.outDir,
+      publicPath: "/",
+      preload: "media",
+      keyframes: "all",
+      pruneSource: false,
+      logLevel: "warn",
+    });
+    html = await beasties.process(
+      html.replace(/<link rel="preload stylesheet"( href="[^"]*\/style\.[^"]*")[^>]*?>/u, '<link rel="stylesheet"$1>'),
+    );
+    // Beasties finds a font family only where a rule names it, and these pages name theirs through
+    // custom properties, so it would leave every @font-face to the late sheet. They go in whole.
+    const sheet = /<link rel="stylesheet" href="([^"]+\.css)">/u.exec(html)?.[1];
+    if (sheet !== undefined) {
+      const faces = readFileSync(join(siteConfig.outDir, sheet), "utf8").match(/@font-face\{[^}]*\}/gu) ?? [];
+      html = html.replace("</head>", `<style>${faces.join("")}</style>\n  </head>`);
+    }
+    const policy = contentSecurityPolicy(html).replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+    return html.replace("<head>", `<head>\n    <meta http-equiv="Content-Security-Policy" content="${policy}">`);
+  },
+  // The icon stylesheet's file name is final only once every page is written, so pages that use it
+  // get it inline now, with its hash in their policy.
+  buildEnd({ outDir }) {
+    const icons = /<link rel="preload stylesheet" href="(\/assets\/vp-icons\.[^"]+\.css)" as="style">/u;
+    for (const file of readdirSync(outDir, { recursive: true, encoding: "utf8" })) {
+      if (!file.endsWith(".html")) continue;
+      const path = join(outDir, file);
+      const html = readFileSync(path, "utf8");
+      const href = icons.exec(html)?.[1];
+      if (href === undefined) continue;
+      const css = readFileSync(join(outDir, href), "utf8");
+      writeFileSync(
+        path,
+        html
+          .replace(icons, () => `<style>${css}</style>`)
+          .replace("style-src 'self'", `style-src 'self' ${sha256(css)}`),
+      );
+    }
   },
   sitemap: { hostname: site },
   themeConfig: {

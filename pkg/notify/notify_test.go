@@ -93,7 +93,7 @@ func TestNtfyGetsTheTitlePriorityTagsLinkAndToken(t *testing.T) {
 	}
 }
 
-func TestNtfyWithoutATokenSendsNoAuthorization(t *testing.T) {
+func TestNtfyWithoutATokenSendsNoCredentialHeader(t *testing.T) {
 	t.Parallel()
 	var h http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { h = r.Header.Clone() }))

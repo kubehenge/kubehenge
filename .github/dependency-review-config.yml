@@ -5,15 +5,19 @@
 # the website's fonts be served with it; each combines with Kubehenge's Apache-2.0. The Go
 # project's own modules add a patent grant to BSD-3-Clause, which the licence data names
 # LicenseRef-scancode-google-patent-license-golang; it only gives rights. The Python Software
-# Foundation's licences (argparse's, ported to JavaScript) are permissive as well.
+# Foundation's licences (argparse's, ported to JavaScript) are permissive as well. MIT-0, 0BSD and
+# BlueOak-1.0.0 ask less than MIT: no notice to keep, and BlueOak adds a patent grant.
 allow-licenses:
+  - 0BSD
   - Apache-2.0
+  - BlueOak-1.0.0
   - BSD-2-Clause
   - BSD-3-Clause
   - CC0-1.0
   - ISC
   - LicenseRef-scancode-google-patent-license-golang
   - MIT
+  - MIT-0
   - MPL-2.0
   - OFL-1.1
   - PSF-2.0
@@ -24,12 +28,15 @@ allow-licenses:
 # ghodss/yaml's one LICENSE file holds MIT and the Go project's BSD-3-Clause, which the licence
 # data names LicenseRef-bad-mit-bsd-3-clause. go-digest's code is Apache-2.0; CC-BY-SA-4.0 covers
 # only its documentation (LICENSE.docs). runtime-spec is Apache-2.0; the DCO the licence data adds
-# is the contributors' sign-off, which grants nothing and asks nothing of users.
+# is the contributors' sign-off, which grants nothing and asks nothing of users. Sentry's CLI, under
+# the Functional Source License, comes only inside Lighthouse, which scores the website in CI. The
+# licence forbids only a product competing with Sentry, and nothing Kubehenge distributes holds it.
 allow-dependencies-licenses:
   - pkg:golang/github.com/ghodss/yaml
   - pkg:golang/github.com/moby/spdystream
   - pkg:golang/github.com/opencontainers/go-digest
   - pkg:golang/github.com/opencontainers/runtime-spec
+  - pkg:npm/sentry
   - pkg:pypi/yamllint
 fail-on-severity: low
 fail-on-scopes: [runtime, development, unknown]

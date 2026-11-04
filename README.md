@@ -15,7 +15,6 @@ Kubernetes for Proxmox VE.
 [![Go](https://img.shields.io/github/go-mod/go-version/kubehenge/kubehenge)](go.mod)
 [![Licence](https://img.shields.io/github/license/kubehenge/kubehenge?label=licence)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-kubehenge.dev-2f6f4e)](https://kubehenge.dev)
-[![Downloads](https://img.shields.io/github/downloads/kubehenge/kubehenge/total)](https://github.com/kubehenge/kubehenge/releases)
 
 **[kubehenge.dev](https://kubehenge.dev)** · [Install](docs/install.md) · [Clusters](docs/clusters.md) · [Changelog](docs/changelog.md) · [Roadmap](docs/roadmap.md)
 

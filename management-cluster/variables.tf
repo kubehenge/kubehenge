@@ -171,6 +171,17 @@ variable "node_memory_mb" {
   default     = 4096
 }
 
+variable "node_memory_min_mb" {
+  description = "Least memory per control-plane node, in MiB, that Proxmox VE's ballooning takes a node down to while its host is above 80 % memory use. Unset, each node keeps node_memory_mb."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.node_memory_min_mb == null || (var.node_memory_min_mb >= 2048 && var.node_memory_min_mb <= var.node_memory_mb)
+    error_message = "node_memory_min_mb must be at least 2048, Talos's least for a control-plane node, and at most node_memory_mb."
+  }
+}
+
 variable "node_disk_gb" {
   description = "System disk size per control-plane node, in GB."
   type        = number

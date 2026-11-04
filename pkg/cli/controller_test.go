@@ -66,7 +66,7 @@ func TestStrictJSONRefusesWhatTheFlagCannotHold(t *testing.T) {
 	}
 	for value, want := range map[string]string{
 		// A misspelt key would leave its namespaces held to the cluster's level without a word.
-		`{"alwys":["kube-system"]}`: `unknown field "alwys"`,
+		`{"alwys":["kube-system"]}`: `unknown field "alwys"`, // spellchecker:disable-line
 		// So would the part after a brace closed too early.
 		`{"always":["kube-system"]},"calico":["calico-system"]}`: "after the first JSON value",
 		`["kube-system"]`: "cannot unmarshal array",
@@ -135,7 +135,7 @@ func TestControllerRefusesAFlagBeforeItStarts(t *testing.T) {
 		{"a CA file missing", func(_ *controllerOptions, conn *pve.Config) { conn.CAFile = filepath.Join(dir, "missing.pem") }, "--proxmox-ca:"},
 		{"a token without its secret", func(_ *controllerOptions, conn *pve.Config) { conn.Token = "kubehenge@pve!controller" }, "connecting to Proxmox VE"},
 		{"a chart without its digest", func(o *controllerOptions, _ *pve.Config) { o.ccmChart = "https://charts.example.test/ccm:1.0.0" }, "--ccm-chart"},
-		{"a misspelt exemption", func(o *controllerOptions, _ *pve.Config) { o.podSecurityExempt = `{"alwys":[]}` }, "--pod-security-exempt"},
+		{"a misspelt exemption", func(o *controllerOptions, _ *pve.Config) { o.podSecurityExempt = `{"alwys":[]}` }, "--pod-security-exempt"}, // spellchecker:disable-line
 		{"an exemption cut short", func(o *controllerOptions, _ *pve.Config) {
 			o.podSecurityExempt = `{"always":["kube-system"]},"calico":["calico-system"]}`
 		}, "--pod-security-exempt"},

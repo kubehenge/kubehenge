@@ -66,7 +66,7 @@ export class ApiError extends Error {
 /** referenceMark sets a request's id apart from the message an error shows it under. */
 export const referenceMark = "\nReference: ";
 
-const httpUnauthorized = 401;
+const httpUnauthorised = 401;
 
 // The session's CSRF token, which every change has to carry in a header.
 let csrf = "";
@@ -226,7 +226,7 @@ async function send(method: string, path: string, { body, headers: extra = {}, s
   noteDemo(res);
   if (!res.ok) {
     const { message, requestId } = await errorOf(res);
-    if (res.status === httpUnauthorized && !path.startsWith("/api/session")) {
+    if (res.status === httpUnauthorised && !path.startsWith("/api/session")) {
       onSignedOut?.();
     }
     throw new ApiError(res.status, message || res.statusText, requestId);

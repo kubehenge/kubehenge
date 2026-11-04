@@ -1290,6 +1290,26 @@ describe("create", () => {
     expect(addonNeedMiB(alone, grown)).toBe(3200 + 1000 + 1656);
   });
 
+  it("counts what a CNI other than the class's own adds to the control planes", () => {
+    const grown: ClusterClass = {
+      ...rke2,
+      annotations: {
+        "kubehenge.dev/addon-memory": '{"monitoring":1500}',
+        "kubehenge.dev/addon-control-plane-memory": '{"monitoring":904}',
+        "kubehenge.dev/cni-control-plane-memory": '{"calico":1768}',
+        "kubehenge.dev/node-memory": '{"controlPlane":1848,"worker":448}',
+      },
+    };
+    const least = { cores: 2, memoryMiB: 4096, diskGiB: 30 };
+    const calico = { ...form, workerReplicas: 1, controlPlaneMachine: least, monitoring: true, cni: "calico" };
+    expect(addonMemory(calico, grown).controlPlaneMiB).toBe(904 + 1768);
+    expect(fieldProblems("Machines", calico, grown).controlPlaneMachine).toBe(
+      "At least 4520 MiB of memory for the add-ons chosen, in steps of 8",
+    );
+    // The class's own CNI is what the node figures were measured with.
+    expect(addonMemory({ ...calico, cni: "" }, grown).controlPlaneMiB).toBe(904);
+  });
+
   it("gives the nodes that carry the add-ons the CPU their pods ask for", () => {
     // Flux's figure as its pods asked for before Kubehenge gave them 10m each.
     const figures =
@@ -1324,6 +1344,16 @@ describe("create", () => {
     });
     expect(withRoom(heavy, figured).workerMachine).toStrictEqual({ ...least, cores: 3 });
     expect(fieldProblems("Machines", { ...heavy, workerReplicas: 2 }, figured)).toStrictEqual({});
+    // What the cluster runs once can all land on one worker, and is shared out over two.
+    const once: ClusterClass = {
+      ...rke2,
+      annotations: {
+        ...figured.annotations,
+        "kubehenge.dev/node-cpu": '{"controlPlane":1555,"worker":745,"workers":900}',
+      },
+    };
+    expect(withRoom(heavy, once).workerMachine).toStrictEqual({ ...least, cores: 4 });
+    expect(fieldProblems("Machines", { ...heavy, workerReplicas: 2 }, once)).toStrictEqual({});
     // A class that says nothing of its nodes' own CPU counts their least for it.
     const unmeasured: ClusterClass = { ...rke2, annotations: { "kubehenge.dev/addon-cpu": figures } };
     expect(fieldProblems("Machines", heavy, unmeasured).workerMachine).toMatch(

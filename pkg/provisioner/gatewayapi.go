@@ -187,14 +187,15 @@ func older(named string, v *version.Version) bool {
 	return err != nil || got.LessThan(v)
 }
 
-// GatewayAPIReconciler keeps the Gateway API's CRDs in every workload cluster, with the admission
-// policy upstream ships beside them, so that Gateways and HTTPRoutes work everywhere and Istio's
-// waypoints can be deployed. An object of the Gateway API stays with the Helm release that marks it
+// GatewayAPIReconciler keeps the Gateway API's CRDs in every workload cluster, so that Gateways
+// and HTTPRoutes work everywhere and Istio's waypoints can be deployed. An object of the Gateway API stays with the Helm release that marks it
 // as its own while that release's latest revision ships it, and becomes Kubehenge's once it does
 // not: RKE2 and k3s ship the CRDs in their Traefik CRD charts in some releases, and Helm keeps them
 // when a later chart stops shipping them. A distribution release with a Gateway API chart of its own
 // holds all of the Gateway API there, adopting what the Traefik CRD chart left, and Kubehenge then
-// applies none of it. Kubehenge never puts an older release over a newer one.
+// applies none of it. Kubehenge never puts an older release over a newer one. The admission policy
+// stays with whoever holds the CRDs: Kubehenge applies its own only on kubeadm and Talos, beside
+// CRDs no Helm release ships.
 type GatewayAPIReconciler struct {
 	Client         client.Client
 	ClassNamespace string
@@ -274,7 +275,18 @@ func (r *GatewayAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if !found {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
-	ready, owner, err := distributionGatewayAPI(ctx, workload.client, distributionOf(cluster))
+	distribution := distributionOf(cluster)
+	// RKE2's and k3s's charts hold the CRDs, or will once a later release brings a Gateway API chart,
+	// often of an older release than Kubehenge's. A policy of Kubehenge's would refuse them, so it is
+	// withdrawn first, also while those charts install.
+	_, charts := chartsOf(distribution)
+	if charts {
+		if err = r.withdrawPolicy(ctx, req.NamespacedName, workload.client, "the distribution's charts hold the CRDs"); err != nil {
+			r.Remotes.forget(cluster)
+			return ctrl.Result{}, err
+		}
+	}
+	ready, owner, err := distributionGatewayAPI(ctx, workload.client, distribution)
 	if err != nil {
 		r.Remotes.forget(cluster)
 		return ctrl.Result{}, err
@@ -282,7 +294,7 @@ func (r *GatewayAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if !ready {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
-	installed, applied, err := r.ensure(ctx, req.NamespacedName, workload.client, owner)
+	installed, applied, err := r.ensure(ctx, req.NamespacedName, workload.client, owner, !charts)
 	if err != nil {
 		r.Remotes.forget(cluster)
 		return ctrl.Result{}, err
@@ -297,41 +309,139 @@ func (r *GatewayAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{RequeueAfter: gatewayAPIInterval}, nil
 }
 
-// ensure applies each object of the bundle the workload cluster lacks, or has in an older release
-// that no Helm release ships any more. While owner, the Helm release of the distribution's own
-// Gateway API chart, holds the Gateway API, it applies nothing: an object that chart does not ship
-// would mix a second owner's release into the distribution's. It returns the oldest release among
-// the cluster's CRDs of the bundle, and whether it applied anything.
-func (r *GatewayAPIReconciler) ensure(ctx context.Context, key types.NamespacedName, workload client.Client, owner string) (string, bool, error) {
-	log := ctrl.LoggerFrom(ctx).WithValues("cluster", key)
-	oldest, applied := "", false
-	var held []string
+// ensure applies each CRD of the bundle the workload cluster lacks, or has in an older release that
+// no Helm release ships any more. While owner, the Helm release of the distribution's own Gateway
+// API chart, holds the Gateway API, it applies nothing: an object that chart does not ship would mix
+// a second owner's release into the distribution's. It returns the oldest release among the
+// cluster's CRDs of the bundle, and whether it applied anything.
+//
+// The admission policy refuses CRDs older than its own release, so it goes with whoever holds the
+// CRDs. Kubehenge keeps it, as it keeps the CRDs, only where policy says it may and no Helm release
+// ships a CRD of the bundle. Otherwise it withdraws the copy it applied, so that the release holding
+// the CRDs can install its own release of them.
+func (r *GatewayAPIReconciler) ensure(ctx context.Context, key types.NamespacedName, workload client.Client, owner string, policy bool) (string, bool, error) {
+	oldest, applied, crdsHeld := "", false, false
+	var (
+		held   []string
+		guards []gatewayAPIFound
+	)
 	for i := range r.Bundle.objects {
 		o := &r.Bundle.objects[i]
-		has, err := r.has(ctx, key, workload, o, owner)
+		has, err := r.has(ctx, key, workload, o)
 		if err != nil {
 			return "", false, err
 		}
 		if has.holder != "" {
 			held = append(held, o.gvk.Kind+" "+o.name+": "+has.holder)
 		}
-		switch {
-		case has.present && (owner != "" || has.holder != "" || !older(has.release, r.Bundle.release)):
+		if o.gvk != crdGVK {
+			guards = append(guards, gatewayAPIFound{object: o, has: has})
+			continue
+		}
+		crdsHeld = crdsHeld || has.holder != ""
+		did, err := r.keep(ctx, key, workload, o, has, owner)
+		if err != nil {
+			return "", false, err
+		}
+		applied = applied || did
+		if has.present && !did {
 			oldest = oldestOf(oldest, has.release, o)
-		case owner == "":
-			if err := applyGatewayAPIObject(ctx, workload, o); err != nil {
-				return "", false, err
-			}
-			had := "nothing"
-			if has.present {
-				had = cmp.Or(has.release, "no release")
-			}
-			log.Info("applied an object of the Gateway API", "kind", o.gvk.Kind, "name", o.name, "release", r.Bundle.Version, "had", had)
-			applied = true
 		}
 	}
+	guarded, err := r.guard(ctx, key, workload, guards, policy && owner == "", crdsHeld)
+	if err != nil {
+		return "", false, err
+	}
 	r.logHolders(ctx, key, owner, held)
-	return oldest, applied, nil
+	return oldest, applied || guarded, nil
+}
+
+// guard keeps the admission policy beside CRDs Kubehenge holds, where it may keep one, and
+// withdraws its copy beside CRDs a Helm release ships. Where it may keep none, the distribution's
+// charts hold the policy, and Reconcile has withdrawn Kubehenge's copy already. It reports whether
+// it applied anything.
+func (r *GatewayAPIReconciler) guard(ctx context.Context, key types.NamespacedName, workload client.Client, guards []gatewayAPIFound, may, crdsHeld bool) (bool, error) {
+	switch {
+	case !may:
+		return false, nil
+	case crdsHeld:
+		return false, r.withdrawPolicy(ctx, key, workload, "a Helm release ships the CRDs")
+	}
+	applied := false
+	for _, g := range guards {
+		did, err := r.keep(ctx, key, workload, g.object, g.has, "")
+		if err != nil {
+			return false, err
+		}
+		applied = applied || did
+	}
+	return applied, nil
+}
+
+// gatewayAPIFound is an object of the bundle with what the workload cluster has of it.
+type gatewayAPIFound struct {
+	object *gatewayAPIObject
+	has    gatewayAPIHas
+}
+
+// keep applies an object of the bundle the workload cluster lacks, or has in an older release that
+// no Helm release ships, unless owner holds the Gateway API. It reports whether it applied it.
+func (r *GatewayAPIReconciler) keep(ctx context.Context, key types.NamespacedName, workload client.Client, o *gatewayAPIObject, has gatewayAPIHas, owner string) (bool, error) {
+	if owner != "" || (has.present && (has.holder != "" || !older(has.release, r.Bundle.release))) {
+		return false, nil
+	}
+	if err := applyGatewayAPIObject(ctx, workload, o); err != nil {
+		return false, err
+	}
+	had := "nothing"
+	if has.present {
+		had = cmp.Or(has.release, "no release")
+	}
+	ctrl.LoggerFrom(ctx).WithValues("cluster", key).Info("applied an object of the Gateway API", "kind", o.gvk.Kind, "name", o.name, "release", r.Bundle.Version, "had", had)
+	return true, nil
+}
+
+// withdrawPolicy deletes the admission policy and binding Kubehenge applied, binding first, where
+// they are still its own: applied by its field owner and shipped by no Helm release. A policy
+// someone else applied stays theirs.
+func (r *GatewayAPIReconciler) withdrawPolicy(ctx context.Context, key types.NamespacedName, workload client.Client, because string) error {
+	for i := len(r.Bundle.objects) - 1; i >= 0; i-- {
+		o := &r.Bundle.objects[i]
+		if o.gvk == crdGVK {
+			continue
+		}
+		got := &metav1.PartialObjectMetadata{}
+		got.SetGroupVersionKind(o.gvk)
+		if err := workload.Get(ctx, client.ObjectKey{Name: o.name}, got); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("reading the Gateway API's %s %s: %w", o.gvk.Kind, o.name, err)
+		}
+		if !appliedBy(got, fieldOwner) {
+			continue
+		}
+		holder, err := r.shippedBy(ctx, key, workload, o.gvk.GroupKind(), got)
+		if err != nil {
+			return err
+		}
+		if holder != "" {
+			continue
+		}
+		// Preconditioned, so that a release adopting it meanwhile keeps it.
+		uid, resourceVersion := got.UID, got.ResourceVersion
+		err = workload.Delete(ctx, got, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion})
+		if client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("withdrawing the Gateway API's %s %s: %w", o.gvk.Kind, o.name, err)
+		}
+		ctrl.LoggerFrom(ctx).WithValues("cluster", key).Info("withdrew Kubehenge's copy of the Gateway API's admission policy", "kind", o.gvk.Kind, "name", o.name, "because", because)
+	}
+	return nil
+}
+
+// appliedBy reports whether a field manager has a part in an object.
+func appliedBy(o metav1.Object, manager string) bool {
+	return slices.ContainsFunc(o.GetManagedFields(), func(f metav1.ManagedFieldsEntry) bool { return f.Manager == manager })
 }
 
 // gatewayAPIHas is what a workload cluster has of an object of the bundle: whether it is there, the
@@ -343,10 +453,10 @@ type gatewayAPIHas struct {
 	holder  string
 }
 
-// has reads what the workload cluster has of an object of the bundle. Which Helm release ships it
-// is looked up only where that decides something, for an object older than the bundle, or where it
-// tells which objects the distribution's own chart holds.
-func (r *GatewayAPIReconciler) has(ctx context.Context, key types.NamespacedName, workload client.Client, o *gatewayAPIObject, owner string) (gatewayAPIHas, error) {
+// has reads what the workload cluster has of an object of the bundle, with the Helm release that
+// ships it: that decides whether an older object is taken over, and whether the policy is
+// Kubehenge's to keep. Only an object Helm marks as a release's costs a read of that release.
+func (r *GatewayAPIReconciler) has(ctx context.Context, key types.NamespacedName, workload client.Client, o *gatewayAPIObject) (gatewayAPIHas, error) {
 	got := &metav1.PartialObjectMetadata{}
 	got.SetGroupVersionKind(o.gvk)
 	if err := workload.Get(ctx, client.ObjectKey{Name: o.name}, got); err != nil {
@@ -356,9 +466,6 @@ func (r *GatewayAPIReconciler) has(ctx context.Context, key types.NamespacedName
 		return gatewayAPIHas{}, fmt.Errorf("reading the Gateway API's %s %s: %w", o.gvk.Kind, o.name, err)
 	}
 	has := gatewayAPIHas{present: true, release: got.Annotations[bundleVersionAnnotation]}
-	if owner == "" && !older(has.release, r.Bundle.release) {
-		return has, nil
-	}
 	holder, err := r.shippedBy(ctx, key, workload, o.gvk.GroupKind(), got)
 	has.holder = holder
 	return has, err

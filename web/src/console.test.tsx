@@ -314,7 +314,9 @@ describe("the console", () => {
     const healthy = within(rail).getByRole("region", { name: "Healthy" });
     expect(within(healthy).getByRole("link")).toHaveAttribute("aria-current", "page");
 
-    const runs = within(screen.getByRole("complementary", { name: "Runs" })).getByRole("region", { name: "Running" });
+    const runs = within(screen.getByRole("complementary", { name: "Runs" })).getByRole("region", {
+      name: "Runs running",
+    });
     expect(
       within(runs)
         .getAllByRole("link")
@@ -360,11 +362,11 @@ describe("the console", () => {
     const running = await within(runs).findByRole("link", { name: /^web Scheduled backup/u });
     expect(running).toHaveAttribute("href", "/runs/backup/default/web/daily-1");
     expect(running).toHaveTextContent("webScheduled backup120 of 300 items");
-    const failed = within(within(runs).getByRole("region", { name: "Failed" })).getByRole("link");
+    const failed = within(within(runs).getByRole("region", { name: "Runs failed" })).getByRole("link");
     expect(failed).toHaveAttribute("href", "/runs/appliance-upgrade");
     expect(failed).toHaveTextContent("Upgrade appliance to 0.3.1 failed, 5m ago");
     expect(failed).not.toHaveTextContent("checksum");
-    expect(within(within(runs).getByRole("region", { name: "Done" })).getByRole("link")).toHaveTextContent(
+    expect(within(within(runs).getByRole("region", { name: "Runs done" })).getByRole("link")).toHaveTextContent(
       "dbTake etcd snapshot, 12m ago",
     );
     expect(screen.getByRole("button", { name: "Running 3" })).toBeInTheDocument();
@@ -941,7 +943,7 @@ describe("the console", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     const runs = within(await screen.findByRole("complementary", { name: "Runs" }));
-    const stalledRuns = within(await runs.findByRole("region", { name: "Stalled" }));
+    const stalledRuns = within(await runs.findByRole("region", { name: "Runs stalled" }));
     await waitFor(() => expect(stalledRuns.getAllByRole("link")).toHaveLength(2));
     // What holds a run up stays on its page, out of the narrow column.
     expect(stalledRuns.getByRole("link", { name: /^ci/u })).toHaveTextContent("Machines stuck for 20 minutes");

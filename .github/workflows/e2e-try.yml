@@ -19,10 +19,17 @@ on:
         description: Whether to run the test wherever it lands.
         type: boolean
         default: false
+      fresh:
+        description: Whether to bake every template from the mirrors instead of the cache.
+        type: boolean
+        default: false
     outputs:
       handed-back:
         description: Whether the test was handed back for the next try.
         value: ${{ jobs.test.outputs.handed-back }}
+      failed:
+        description: The test of the lane that failed, if one did.
+        value: ${{ jobs.test.outputs.failed }}
 
 permissions:
   contents: read
@@ -45,6 +52,7 @@ jobs:
     timeout-minutes: 150
     outputs:
       handed-back: ${{ steps.host.outputs.handed-back || steps.load.outputs.handed-back }}
+      failed: ${{ steps.failed.outputs.test }}
     steps:
       - name: Host
         id: host
@@ -68,9 +76,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Go's and npm's caches are e2e's own: the ci workflow's hold race-instrumented test builds,
-      # none of the controller's and capmox's static builds. The nightly run saves them and every
-      # other run reads them, so a pull request never fills the cache with its own.
+      # Go's and npm's caches as the nightly run's build job saved them (e2e.yml), for what still
+      # reads Go here: the appliance's releases, the management cluster's tests and the templates'
+      # keys.
       - id: go-cache
         if: env.E2E_RUN == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -116,6 +124,64 @@ jobs:
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # The binary and images the run's build job made (test/e2e/ci/build.sh), which up.sh's
+      # registry serves and run.sh uses instead of building them.
+      - if: env.E2E_RUN == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: e2e-build
+          path: ${{ runner.temp }}/e2e-build
+      - name: The run's build
+        if: env.E2E_RUN == 'true'
+        run: |
+          build="$RUNNER_TEMP/e2e/build"
+          mkdir -p "$build"
+          zstd -dc "$RUNNER_TEMP/e2e-build/e2e-build.tar.zst" | tar -C "$build" -xf -
+          rm -rf "$RUNNER_TEMP/e2e-build"
+          echo "controller image $(cat "$build/controller-digest")"
+      # The templates of kubeadm, RKE2 and k3s the test bakes, each kept in the cache under a hash
+      # of its bake's inputs (test/e2e/ci/templates.sh). Kept from a nightly run, on main, every
+      # branch and merge group reads them. The nightly run, and a dispatch asked to, bakes every
+      # template afresh from the mirrors and only looks the keys up, keeping a template whose key
+      # the cache lacks.
+      - name: Template keys
+        id: templates
+        if: env.E2E_RUN == 'true'
+        env:
+          TEST: ${{ inputs.test }}
+        run: test/e2e/ci/templates.sh keys "$TEST" | tee -a "$GITHUB_OUTPUT"
+      - id: template-1
+        if: env.E2E_RUN == 'true' && steps.templates.outputs.key1 != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/e2e/vz/template-1
+          key: ${{ steps.templates.outputs.key1 }}
+          lookup-only: ${{ inputs.fresh }}
+      - id: template-2
+        if: env.E2E_RUN == 'true' && steps.templates.outputs.key2 != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/e2e/vz/template-2
+          key: ${{ steps.templates.outputs.key2 }}
+          lookup-only: ${{ inputs.fresh }}
+      # Only the nightly run and a dispatch keep templates: a merge group's cache would serve no
+      # other run.
+      - name: Templates to keep
+        if: >-
+          env.E2E_RUN == 'true'
+          && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          KEY1: ${{ steps.templates.outputs.key1 }}
+          HIT1: ${{ steps.template-1.outputs.cache-hit }}
+          KEY2: ${{ steps.templates.outputs.key2 }}
+          HIT2: ${{ steps.template-2.outputs.cache-hit }}
+        run: |
+          keep=
+          echo "templates restored: 1: ${HIT1:-none}, 2: ${HIT2:-none}"
+          [ -z "$KEY1" ] || [ "$HIT1" = true ] || keep="$keep 1"
+          [ -z "$KEY2" ] || [ "$HIT2" = true ] || keep="$keep 2"
+          echo "templates to keep: ${keep:- none}"
+          echo "KUBEHENGE_E2E_KEEP_TEMPLATES=${keep# }" >> "$GITHUB_ENV"
       - name: KVM and memory
         if: env.E2E_RUN == 'true'
         run: |
@@ -146,12 +212,14 @@ jobs:
       # tests' peaks, so the runner's agent is first kept out of the OOM killer's choice and out of
       # reclaim, which the recorders inherit, and a guard ends the test once the runner nears the
       # end of its memory, swap or disk, while it can still report: a runner starved or killed
-      # instead keeps neither log nor artifacts.
+      # instead keeps neither log nor artifacts. The guard's samples also hold the management node's
+      # own memory once run.sh has left its talosconfig there.
       - name: Record the runner's load
         if: env.E2E_RUN == 'true'
         run: |
           test/e2e/ci/guard.sh protect
-          nohup test/e2e/ci/guard.sh watch "$RUNNER_TEMP/test.pid" "$RUNNER_TEMP/guard.txt" \
+          KUBEHENGE_E2E_GUARD_TALOSCONFIG="$RUNNER_TEMP/e2e/mgmt/talosconfig" \
+            nohup test/e2e/ci/guard.sh watch "$RUNNER_TEMP/test.pid" "$RUNNER_TEMP/guard.txt" \
             "$RUNNER_TEMP/vmstat.txt" / /mnt "$RUNNER_TEMP" > "$RUNNER_TEMP/guard.log" 2>&1 &
           grep -r . /sys/devices/system/cpu/vulnerabilities/ /sys/module/kvm*/parameters/ || true
           nohup vmstat -t -w 15 > "$RUNNER_TEMP/vmstat.txt" 2>&1 &
@@ -162,15 +230,15 @@ jobs:
       - name: Proxmox VE
         if: env.E2E_RUN == 'true'
         run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
-      # One nightly job keeps what the others read.
+      # One nightly job keeps what the others read: the lane of the management cluster's test.
       - name: Keep Proxmox VE's image
         if: >-
           env.E2E_RUN == 'true' && github.event_name == 'schedule'
-          && inputs.test == 'management-cluster'
+          && contains(format(',{0},', inputs.test), ',management-cluster,')
         run: docker save kubehenge-e2e-pve | zstd -T0 -q -o "$RUNNER_TEMP/pve-image.tar.zst"
       - if: >-
           env.E2E_RUN == 'true' && github.event_name == 'schedule'
-          && inputs.test == 'management-cluster'
+          && contains(format(',{0},', inputs.test), ',management-cluster,')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
@@ -189,6 +257,18 @@ jobs:
         run: >-
           test/e2e/ci/guard.sh run "$RUNNER_TEMP/test.pid" "$RUNNER_TEMP/guard.txt"
           test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST" 2>&1 | tee "$RUNNER_TEMP/test.log"
+      # The test that failed, which in a lane of two (test/e2e/ci/scope.sh) run.sh names.
+      - name: The failed test
+        id: failed
+        if: failure() && env.E2E_RUN == 'true'
+        env:
+          TEST: ${{ inputs.test }}
+        run: |
+          failed=$(cat "$RUNNER_TEMP/e2e/failed-test" 2>/dev/null || true)
+          failed=${failed:-$TEST}
+          echo "::error title=${failed} failed::${failed} failed, in the lane ${TEST}"
+          echo "${failed} failed, in the lane ${TEST}." >> "$GITHUB_STEP_SUMMARY"
+          echo "test=${failed}" >> "$GITHUB_OUTPUT"
       # Each KVM counter's average per second over the job, to set one runner's CPU against
       # another's.
       - name: The guests' exits
@@ -219,16 +299,19 @@ jobs:
       - name: The runner's room
         if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
         run: test/e2e/ci/guard.sh peaks "$RUNNER_TEMP/guard.txt"
+      # run.sh backs up only a template that passed its bake's checks.
       - if: >-
-          !cancelled() && env.E2E_RUN == 'true' && github.event_name == 'schedule'
-          && inputs.test == 'management-cluster'
+          !cancelled() && contains(format(' {0} ', env.KUBEHENGE_E2E_KEEP_TEMPLATES), ' 1 ')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-            ~/.npm
-          key: ${{ steps.go-cache.outputs.cache-primary-key }}
+          path: ${{ runner.temp }}/e2e/vz/template-1
+          key: ${{ steps.templates.outputs.key1 }}
+      - if: >-
+          !cancelled() && contains(format(' {0} ', env.KUBEHENGE_E2E_KEEP_TEMPLATES), ' 2 ')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/e2e/vz/template-2
+          key: ${{ steps.templates.outputs.key2 }}
       - name: Collect
         if: failure()
         run: |
@@ -249,7 +332,8 @@ jobs:
                 jq -r '.[].t'
             done > "$out/proxmox-failed-tasks.txt" 2>&1 || true
           cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
-            "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests-record.log" "$RUNNER_TEMP/guard.txt" \
+            "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests.txt.trims" \
+            "$RUNNER_TEMP/guests-record.log" "$RUNNER_TEMP/guard.txt" \
             "$RUNNER_TEMP/guard.txt.fail" "$RUNNER_TEMP/guard.log" "$out/" 2>/dev/null || true
           # From inside the VMs, which answers even when a cluster's API does not.
           test/e2e/ci/guests.sh collect "$out/guests" || true
