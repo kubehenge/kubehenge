@@ -53,14 +53,11 @@ module.exports = {
       chromePath: chromium.executablePath(),
       settings: {
         ...(formFactor === "desktop" ? { preset: "desktop" } : {}),
-        // Playwright's Chromium in its new headless mode, a fresh temporary profile each run. Its
-        // search launcher would otherwise install itself on Windows. Linux runners' AppArmor
-        // refuses the user namespaces its sandbox needs.
-        chromeFlags: [
-          "--headless=new",
-          "--disable-features=OmniboxEverywhere",
-          ...(process.platform === "linux" ? ["--no-sandbox"] : []),
-        ],
+        // Playwright's Chromium in its new headless mode, which lhci adds itself, with a fresh
+        // temporary profile each run. Its search launcher would otherwise install itself on
+        // Windows. One string, as lhci appends its own flag to it: an array would reach Chrome
+        // joined by commas, as one malformed flag.
+        chromeFlags: "--disable-features=OmniboxEverywhere",
       },
     },
     assert: {
