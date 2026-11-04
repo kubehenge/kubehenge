@@ -21,24 +21,23 @@ const binary = ["accessibility", "best-practices", "seo"].flatMap((category) =>
 // do not vary between runs: bytes get 3 to 5 per cent of room for a docs edit, requests none.
 const limits = {
   mobile: {
-    "/": { performance: 0.75, cls: 0.01, bytes: 460_000, fontBytes: 320_000, requests: 19 },
+    "/": { performance: 0.93, cls: 0.01, bytes: 215_000, fontBytes: 95_000, requests: 16 },
     "/docs/install.html": {
       performance: 0.84,
       cls: 0.01,
-      bytes: 280_000,
+      bytes: 285_000,
       fontBytes: 76_000,
-      requests: 15,
+      requests: 14,
     },
   },
   desktop: {
-    // The home page shifts by 0.27 as its display font arrives.
-    "/": { performance: 0.85, cls: 0.28, bytes: 560_000, fontBytes: 320_000, requests: 22 },
+    "/": { performance: 0.99, cls: 0.01, bytes: 215_000, fontBytes: 95_000, requests: 16 },
     "/docs/install.html": {
       performance: 0.99,
       cls: 0.01,
-      bytes: 460_000,
+      bytes: 470_000,
       fontBytes: 76_000,
-      requests: 26,
+      requests: 25,
     },
   },
 }[formFactor];

@@ -44,6 +44,8 @@ extend-ignore-re = [
   # HTML's colour scheme meta name, Playwright's option for it, Chromium's and OpenTofu's flags,
   # and axe's contrast rules.
   "color-scheme|colorScheme|--force-color-profile|-no-color\\b|color-contrast(-enhanced)?",
+  # fontTools' pyftsubset flag for the output format.
+  "--flavor=",
 ]
 
 [default.extend-words]
