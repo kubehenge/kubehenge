@@ -1880,45 +1880,9 @@ if [ "${restores_etcd}" = true ]; then
     fi
 fi
 
-# workers_ready <n>: waits until the pool has n machines and n ready worker nodes.
-workers_ready() {
-    until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o json | jq '[.items[] | select(.metadata.deletionTimestamp == null)] | length')\" = $1 ]"
-}
-# workers <n>: scales the pool to n workers through the Cluster's topology, as a user would.
-workers() {
-    kubectl -n "${ns}" patch "cluster/${name}" --type=json \
-        -p "[{\"op\":\"replace\",\"path\":\"/spec/topology/workers/machineDeployments/0/replicas\",\"value\":$1}]"
-    workers_ready "$1"
-}
-# workloads_ready: every Deployment, StatefulSet and DaemonSet in the cluster has its pods ready.
-workloads_ready() {
-    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-    workloads=$(wl get deployments,statefulsets,daemonsets -A -o json) || return 1
-    printf '%s' "${workloads}" | jq -e '.items | all(if .kind == "DaemonSet"
-        then (.status.numberReady // 0) == .status.desiredNumberScheduled
-        else (.status.readyReplicas // 0) == (.spec.replicas // 1) end)' > /dev/null
-}
-# RKE2's least control plane and worker take 4096 MiB each. A second control plane beside them
-# while one is replaced outgrows the runner's room, so the worker goes for each replacement.
-case ${distribution} in
-    rke2) sheds_worker=true ;;
-    *) sheds_worker=false ;;
-esac
-# worker_back: the pool at one worker again after a replacement, the cluster available and every
-# node and workload ready.
-worker_back() {
-    workers 1
-    kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
-    wl wait --for=condition=Ready nodes --all --timeout=10m
-    until_true 900 "every workload ready with the worker back" workloads_ready
-}
-
 case ${part}-${distribution} in
     all-rke2 | all-k3s | lifecycle-rke2 | lifecycle-k3s | etcd-rke2 | etcd-k3s)
         step "${distribution}'s own etcd snapshots uploaded to the same store, and switched off"
-        if [ "${sheds_worker}" = true ]; then
-            workers 0
-        fi
         # The drop-in is part of the servers' bootstrap, so switching the upload replaces them.
         servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
         servers_replaced() {
@@ -1954,9 +1918,6 @@ case ${part}-${distribution} in
         until_true 1800 "the control planes replaced without the upload" servers_replaced
         kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
         until_true 300 "the upload's Secret gone" absent wl -n kube-system get secret kubehenge-etcd-s3
-        if [ "${sheds_worker}" = true ]; then
-            worker_back
-        fi
         ;;
     *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
 esac
@@ -3448,6 +3409,14 @@ if [ "${distribution}" = talos ]; then
         printf '%s' "${proxies}" | jq -e '.items | length > 0 and all(.status.status == "deployed" and
             any(.status.conditions[]?; .type == "Ready" and .status == "True"))' > /dev/null
     }
+    # workloads_ready: every Deployment, StatefulSet and DaemonSet in the cluster has its pods ready.
+    workloads_ready() {
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        workloads=$(wl get deployments,statefulsets,daemonsets -A -o json) || return 1
+        printf '%s' "${workloads}" | jq -e '.items | all(if .kind == "DaemonSet"
+            then (.status.numberReady // 0) == .status.desiredNumberScheduled
+            else (.status.readyReplicas // 0) == (.spec.replicas // 1) end)' > /dev/null
+    }
     until_true 900 "every add-on's release deployed after the upgrade" releases_deployed
     until_true 900 "every workload ready after the upgrade" workloads_ready
     # shellcheck disable=SC2310 # on only reads a list.
@@ -3601,6 +3570,14 @@ if [ "${replaces_machines}" = true ]; then
     fi
     wl delete namespace e2e-lb --wait --timeout=5m
 
+    workers_ready() {
+        until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o json | jq '[.items[] | select(.metadata.deletionTimestamp == null)] | length')\" = $1 ]"
+    }
+    workers() {
+        kubectl -n "${ns}" patch "cluster/${name}" --type=json \
+            -p "[{\"op\":\"replace\",\"path\":\"/spec/topology/workers/machineDeployments/0/replicas\",\"value\":$1}]"
+        workers_ready "$1"
+    }
     if [ -n "${creator_config:-}" ]; then
         # The interface as the appliance runs it, on the interface's own account, and the CLI acting
         # through it as the test's Proxmox VE API token: every machine action of a cluster's
@@ -3689,9 +3666,6 @@ if [ "${replaces_machines}" = true ]; then
         until_true 2700 "every node on Talos ${talos_to} before the upgrade" talos_upgraded
         talos_last=$(talos_annotation talos-upgraded)
     fi
-    if [ "${sheds_worker}" = true ]; then
-        workers 0
-    fi
     old_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
     # The cluster has one control plane, so kubectl hears from the admission webhook what the
     # interface's plan says before the same change.
@@ -3757,25 +3731,7 @@ if [ "${replaces_machines}" = true ]; then
         *) ;;
     esac
     kubelet=${upgrade%%+*}
-    # nodes_upgraded <n>: n nodes, each ready and on the upgrade's kubelet.
-    nodes_upgraded() {
-        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
-        nodes=$(wl get nodes -o json) || return 1
-        printf '%s' "${nodes}" | jq -e --arg v "${kubelet}" --argjson n "$1" '(.items | length == $n) and
-            (.items | all(.status.nodeInfo.kubeletVersion | startswith($v))) and
-            (.items | all(any(.status.conditions[]; .type == "Ready" and .status == "True")))' > /dev/null
-    }
-    if [ "${sheds_worker}" = true ]; then
-        until_true 3600 "the control plane on ${kubelet}" nodes_upgraded 1
-        # The worker comes back once its pool's template is at the upgrade, so it joins on it.
-        pool_upgraded() {
-            kubectl -n "${ns}" get machinedeployments -l "cluster.x-k8s.io/cluster-name=${name}" -o json |
-                jq -e --arg v "${upgrade}" '.items | length > 0 and all(.spec.template.spec.version == $v)' > /dev/null
-        }
-        until_true 600 "the workers' pool at ${upgrade}" pool_upgraded
-        worker_back
-    fi
-    until_true 3600 "every node on ${kubelet}" nodes_upgraded 2
+    until_true 3600 "every node on ${kubelet}" sh -c "KUBECONFIG=${work}/workload kubectl get nodes -o json | jq -e --arg v '${kubelet}' '(.items | length == 2) and (.items | all(.status.nodeInfo.kubeletVersion | startswith(\$v))) and (.items | all(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\")))' >/dev/null"
     kubectl -n "${ns}" wait --for=condition=Available "cluster/${name}" --timeout=20m
     wl get nodes -o wide
     case ${class} in

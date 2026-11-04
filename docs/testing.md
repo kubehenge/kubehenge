@@ -189,8 +189,6 @@ The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the
 7. Upgrade by one minor version.
    - On RKE2 and k3s the old servers refuse the first new server until its cloud-init has ended. Its first start fails, and the roll survives it.
    - On Talos the new machines are cloned from the template of the release the nodes were upgraded to, and need no upgrade in place.
-
-On RKE2 the worker is scaled to 0 through the Cluster's topology while a control plane is replaced, for the own upload and the upgrade. Two RKE2 control planes beside a worker and the management node outgrow the runner's memory ([below](#each-tests-guests)). The worker then comes back at its size, and every node and workload is ready again before the next check.
 8. Check that every node runs the cluster's node OS (`KUBEHENGE_E2E_NODE_OS`, else the class's default) with SELinux enforcing, a read-only `/usr` and no denial in its logs. Talos, whose nodes run Talos, is skipped.
 9. Replace a stopped worker, delete the cluster and check nothing is left.
 
@@ -314,11 +312,12 @@ Every node is at the least Kubehenge allows for what its test switches on. The m
 
 `kubeadm-addons-a` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176 and 11856 MiB. At that size `management-cluster-upgrade`, where every provider restarts at once, used 2212 MiB at most on the node. It kept 1181 MiB available, and its memory pressure stayed at 0.18 % of 10 seconds at most. The guard's samples show what the management node uses in every run (below).
 
-These tests outgrow 12 GiB as well. Only the RKE2 ones read back from swap past the guard's line, 570 to 1220 MiB in a minute. With RKE2's worker gone while a control plane is replaced, `rke2-etcd` stays at 12288 MiB:
+These tests outgrow 12 GiB as well. Only the RKE2 ones read back from swap past the guard's line, 570 to 1220 MiB in a minute:
 
 | Test | Steady | Peak | At the peak |
 | --- | --- | --- | --- |
-| `rke2-machines` | 12288 | 16384 | two workers |
+| `rke2-etcd` | 12288 | 16384 | a control plane replaced |
+| `rke2-machines` | 12288 | 16384 | two workers, or a control plane replaced |
 | `kubeadm` | 10240 | 14336 | a control plane replaced |
 | `k3s-etcd`, `k3s-machines` | 9280 | 13376 | a control plane replaced |
 | `talos` | 9536 | 13632 | a control plane replaced |
