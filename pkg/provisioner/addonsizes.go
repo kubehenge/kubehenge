@@ -43,7 +43,9 @@ const AddonCPUAnnotation = "kubehenge.dev/addon-cpu"
 // NodeCPUAnnotation on a ClusterClass is the CPU, in millicores, a node of one of its clusters
 // requests besides the add-ons' pods, by kind: controlPlane (without workers) or worker. It is what the
 // kubelet keeps back and what the pods of the distribution, its CNI and Kubehenge's own ask for. A
-// kind it leaves out counts as the least its machines may have.
+// kind it leaves out counts as the least its machines may have. Its workers key is what a cluster's
+// workers request together on top of each worker's own: the pods that run a fixed number of times
+// per cluster, such as two CoreDNS replicas, which can all land on one worker.
 const NodeCPUAnnotation = "kubehenge.dev/node-cpu"
 
 // The keys in AddonMemoryAnnotation of what is not an add-on of its own.
@@ -266,6 +268,30 @@ func addonNeeds(f resourceFigures, on []string, cluster *clusterv1.Cluster) (int
 	return pods, grown + cni, err
 }
 
+// workersRoom sets room.Have to the room the cluster's workers leave the add-ons: each worker's
+// beyond room.Base, what it takes itself, less once, what the workers take together. It returns
+// their least and most number. An autoscaled pool counts with its least workers, the room the
+// add-ons always have. The control planes stay tainted while any pool is autoscaled
+// (TaintReconciler), so the add-ons never move there.
+func workersRoom(room *addonRoom, r *addonResource, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass, once int) (int32, int32, error) {
+	workers, most := int32(0), int32(0)
+	for i := range cluster.Spec.Topology.Workers.MachineDeployments {
+		md := &cluster.Spec.Topology.Workers.MachineDeployments[i]
+		pool := workerRange(md)
+		workers += pool.least
+		most += pool.most
+		cores, mem, sizeErr := nodeSize(cluster, class, "workerMachine", md.Variables.Overrides)
+		if sizeErr != nil {
+			return 0, 0, sizeErr
+		}
+		room.Have += int(pool.least) * max(r.of(controlPlaneSize{Cores: cores, MemoryMiB: mem})-room.Base, 0)
+	}
+	if workers > 0 {
+		room.Have = max(room.Have-once, 0)
+	}
+	return workers, most, nil
+}
+
 func addonRoomOf(r *addonResource, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) (addonRoom, error) {
 	var room addonRoom
 	f, ok, err := addonFigures(r, class)
@@ -282,20 +308,9 @@ func addonRoomOf(r *addonResource, cluster *clusterv1.Cluster, class *clusterv1.
 	if room.Base == 0 {
 		room.Base = r.of(classMinimumSize(class, "workerMachine"))
 	}
-	// An autoscaled pool counts with its least workers, the room the add-ons always have. The control
-	// planes stay tainted while any pool is autoscaled (TaintReconciler), so the add-ons never move
-	// there.
-	workers, most := int32(0), int32(0)
-	for i := range topology.Workers.MachineDeployments {
-		md := &topology.Workers.MachineDeployments[i]
-		pool := workerRange(md)
-		workers += pool.least
-		most += pool.most
-		cores, mem, sizeErr := nodeSize(cluster, class, "workerMachine", md.Variables.Overrides)
-		if sizeErr != nil {
-			return room, sizeErr
-		}
-		room.Have += int(pool.least) * max(r.of(controlPlaneSize{Cores: cores, MemoryMiB: mem})-room.Base, 0)
+	workers, most, err := workersRoom(&room, r, cluster, class, nodes["workers"])
+	if err != nil {
+		return room, err
 	}
 	if workers == 0 && most > 0 {
 		// Rancher's agent alone holds no worker up: it runs only once there is a Rancher to register

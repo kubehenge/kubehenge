@@ -192,15 +192,17 @@ A CNI other than the class's default adds to each control plane. This counts onc
 | k3s | 1160 MiB | 1808 MiB |
 | kubeadm | default | 1424 MiB |
 | RKE2 | 504 MiB | 144 MiB |
-| Talos | 1808 MiB | 384 MiB |
+| Talos | 520 MiB | 384 MiB |
 
-Talos with Cilium has no measurement yet, so it counts the largest figure measured. With every add-on but Rancher, a k3s control plane needs 5032 MiB with Cilium and 5680 MiB with Calico.
+With every add-on but Rancher, a k3s control plane needs 5032 MiB with Cilium and 5680 MiB with Calico.
 
 A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB. It needs 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either. GitOps with Argo CD on top takes each 512 MiB further.
 
 The default machines hold every add-on but Rancher, logs, backups and GitOps on every distribution. The exception is kubeadm's control plane, which needs 4304 MiB for them, above the default 4096 MiB. A second worker makes room for logs and backups too.
 
-For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there. That is 250 millicores on kubeadm, 350 on k3s, 490 on Talos and 775 on RKE2. Talos keeps 50 of them back for the system, and its flannel asks for 200 with its network policy controller. On RKE2, kube-proxy asks for 250 and canal for 260. Without workers, a control plane counts 1080 millicores on kubeadm, 430 on k3s, 910 on Talos and 1605 on RKE2.
+For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there. That is 150 millicores on kubeadm, 350 on k3s, 390 on Talos and 775 on RKE2. Talos keeps 50 of them back for the system. Its flannel asks for 200 with its network policy controller. On RKE2, kube-proxy asks for 250 and canal for 260. Without workers, a control plane counts 1080 millicores on kubeadm, 430 on k3s, 910 on Talos and 1605 on RKE2.
+
+On kubeadm and Talos the workers together count 200 millicores more for CoreDNS's two replicas, since both can sit on one worker.
 
 Every add-on but Rancher takes 1595 millicores with Argo CD, or 1555 with Flux. So it fits on one worker of the default 2 cores on kubeadm and k3s. Talos and RKE2 need a third core for it, or a second worker.
 

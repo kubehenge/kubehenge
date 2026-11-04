@@ -32,20 +32,21 @@ metadata:
     # components on a system that runs nothing else.
     kubehenge.dev/node-memory: '{"controlPlane":2392,"worker":704}'
     # What Cilium or Calico adds to a control plane in place of flannel, which the test's control
-    # planes run. Calico's is the most an idle control plane used with it in the end-to-end tests,
-    # less the least with flannel at the same size, with a quarter on top, in steps of 8. Cilium has
-    # not run on Talos there, so it takes the largest figure measured on any distribution, k3s's
-    # Calico.
-    kubehenge.dev/cni-control-plane-memory: '{"cilium":1808,"calico":384}'
+    # planes run: what an idle control plane used with it in the end-to-end tests, less what one
+    # used with flannel, with a quarter on top, in steps of 8. Cilium's control plane used 1630 MiB
+    # against flannel's 1218.
+    kubehenge.dev/cni-control-plane-memory: '{"cilium":520,"calico":384}'
     {{- include "kubehenge.addonCPU" . | nindent 4 }}
     # The CPU, in millicores, a node keeps back or its own pods request besides the add-ons': on a
     # worker the kubelet's 50m reserved for the system, Talos's kube-proxy at 100m, the CNI's agent
     # (flannel's 200m with its network policy controller; Cilium's 110m with its Envoy and its
-    # operator's 10m, Calico's 50m and its other pods' 50m come to less), a CoreDNS replica's 100m,
-    # Traefik's 10m and the CSI plugin's 30m; a control plane without workers adds the API server's
-    # 200m, the controller manager's 50m, the scheduler's 10m, the second CoreDNS replica, the CSI
-    # controller's 50m and the cloud controller manager's 10m. etcd runs outside Kubernetes.
-    kubehenge.dev/node-cpu: '{"controlPlane":910,"worker":490}'
+    # operator's 10m, Calico's 50m and its other pods' 50m come to less), Traefik's 10m and the CSI
+    # plugin's 30m. The workers together carry CoreDNS's two replicas at 100m each, which tolerate
+    # no control-plane taint and so both sit on a cluster's only worker. A control plane without
+    # workers runs all of that and adds the API server's 200m, the controller manager's 50m, the
+    # scheduler's 10m, the CSI controller's 50m and the cloud controller manager's 10m. etcd runs
+    # outside Kubernetes.
+    kubehenge.dev/node-cpu: '{"controlPlane":910,"worker":390,"workers":200}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

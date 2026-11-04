@@ -16,6 +16,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The API server now refuses Clusters that break the interface's rules (listed under Fixes). Check the Clusters kept in Git first.
 - Fixed pools need one node address more than their machines.
 - A kubeadm control plane counts 3376 MiB for itself, up from 2392 MiB.
+- The workers of a kubeadm or Talos cluster count 200 millicores together for CoreDNS's two replicas, which can both run on one worker. A single worker of one core then holds fewer add-ons ([clusters.md](clusters.md#machines)).
 - A control plane with add-ons counts more memory when its cluster runs a CNI other than the class's default, up to 1808 MiB ([clusters.md](clusters.md#machines)). Changes to a cluster that is already short go through only when they leave it no shorter.
 - Boot logs need the kubeadm, RKE2 and k3s templates built again.
 - `install.sh --upgrade` adds the volume that sealed automatic-upgrade secrets need.

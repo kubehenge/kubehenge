@@ -201,6 +201,36 @@ seaweedfs_server() {
         -s3 -s3.port="$2" -s3.config="$3" -s3.iam=false -s3.cert.file="$4" -s3.key.file="$5" > "$1/s3.log" 2>&1 &
 }
 
+# seaweedfs_stop <PID>: stops the weed seaweedfs_server ran, a child of this shell, and returns once
+# it is gone. Its ports stay taken while it shuts down, so the next test of a lane, starting its own
+# store seconds later, would find them in use. A weed still there after
+# KUBEHENGE_E2E_S3_STOP_TIMEOUT seconds (30) is killed.
+seaweedfs_stop() {
+    kill "$1" 2> /dev/null || return 0
+    # Its sleep outlives the watchdog killed below, and holds none of the test's output open.
+    (sleep "${KUBEHENGE_E2E_S3_STOP_TIMEOUT:-30}" && kill -9 "$1") > /dev/null 2>&1 &
+    stop_watchdog=$!
+    wait "$1" 2> /dev/null || true
+    kill "${stop_watchdog}" 2> /dev/null || true
+}
+
+# seaweedfs_fatal <directory>: the fatal error seaweedfs_server's weed stopped on there, if it did.
+seaweedfs_fatal() {
+    [ -f "$1/s3.log" ] || return 1
+    grep -E '^F[0-9]{4} ' "$1/s3.log" | tail -n 1 | grep .
+}
+
+# seaweedfs_answers <directory> <command...>: runs the command against the store seaweedfs_server
+# runs from the directory, for until_true, and fails the test at once if its weed stopped on a fatal
+# error, which no retry mends.
+seaweedfs_answers() {
+    if fatal=$(seaweedfs_fatal "$1"); then
+        fail "the S3 store stopped: ${fatal}"
+    fi
+    shift
+    "$@"
+}
+
 # seaweedfs_errors <directory>: the last errors seaweedfs_server logged there, if it ran, since a
 # client sees only InternalError for most of them.
 seaweedfs_errors() {

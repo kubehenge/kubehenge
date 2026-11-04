@@ -228,6 +228,24 @@ holds "the peaks give them too" "130 s with under 1024 MiB" "${starved_peaks}"
 expect "a record without them" "" short "${record}"
 expect "no record" "" short "${root}/none.txt"
 
+# Pressure and reads back from swap past their lines, over 10 seconds and over a minute.
+strained() { sh "${guard}" strained "$1"; }
+expect "a stretch under the floor without pressure strains nothing" "" strained "${root}/starved.txt"
+printf '%s\n' '10:00:00 available=900 memory_full10=9.00 swapped_in=0' '10:00:30 available=800 memory_full10=10.00 swapped_in=200' \
+    '10:01:05 available=700 memory_full10=2.00 swapped_in=450' > "${root}/leaning.txt"
+expect "at the lines, or more in more than a minute, is no strain" "" strained "${root}/leaning.txt"
+printf '%s\n' '23:59:40 available=900 memory_full10=1.00 swapped_in=100' '00:00:10 available=800 memory_full10=12.50 mgmt_memory_full10=90.00 swapped_in=200' \
+    '00:00:40 available=700 memory_full10=3.00 swapped_in=400' > "${root}/strained.txt"
+expect "pressure and a minute's swap reads past their lines, across midnight" \
+    "every task waited on memory 12.50% of 10 seconds at 00:00:10, past the line of 10%; 300 MiB read back from swap in the minute to 00:00:40, past the line of 256 MiB" \
+    strained "${root}/strained.txt"
+printf '%s\n' '10:00:00 memory_full10=1.00 mgmt_memory_full10=95.00 swapped_in=0' > "${root}/node.txt"
+expect "the management node's own pressure strains nothing" "" strained "${root}/node.txt"
+strained_peaks=$(sh "${guard}" peaks "${root}/strained.txt")
+holds "the peaks give the strain" "past the line of 10%" "${strained_peaks}"
+holds "and the line beside the pressure" "most memory_full pressure: 12.50% of 10 seconds at 00:00:10; the line is 10%" "${strained_peaks}"
+expect "no record strains nothing" "" strained "${root}/none.txt"
+
 if command -v setsid > /dev/null 2>&1; then
     rm -f "${record}"
     memory 4096000 6144000 2.00 3
@@ -247,12 +265,22 @@ if command -v setsid > /dev/null 2>&1; then
     cp "${root}/starved.txt" "${record}"
     code=0
     out=$(sh "${guard}" run "${root}/test.pid" "${record}" sh -c 'exit 3') || code=$?
-    truth "a failed test whose guests outgrew the machine keeps its exit code" [ "${code}" = 3 ]
-    holds "and is named an error beside it" "::error title=The guests outgrew the runner's memory::130 s with under 1024 MiB" "${out}"
+    truth "a failed test short of available memory keeps its exit code" [ "${code}" = 3 ]
+    holds "with the stretch as a figure" "memory available: 130 s with under 1024 MiB" "${out}"
+    case "${out}" in
+        *::error* | *::warning*) annotated=1 ;;
+        *) annotated='' ;;
+    esac
+    truth "and no annotation without pressure" [ -z "${annotated}" ]
+    cp "${root}/strained.txt" "${record}"
+    code=0
+    out=$(sh "${guard}" run "${root}/test.pid" "${record}" sh -c 'exit 3') || code=$?
+    truth "a failed test whose guests strained the machine keeps its exit code" [ "${code}" = 3 ]
+    holds "and is named an error beside it" "::error title=The guests strained the runner's memory::every task waited on memory 12.50%" "${out}"
     code=0
     out=$(sh "${guard}" run "${root}/test.pid" "${record}" true) || code=$?
     truth "a passed one still passes" [ "${code}" = 0 ]
-    holds "with a warning" "::warning title=The guests outgrew the runner's memory::130 s with under 1024 MiB" "${out}"
+    holds "with a warning" "::warning title=The guests strained the runner's memory::every task waited on memory 12.50%" "${out}"
     rm -f "${record}"
 
     sh "${guard}" watch "${root}/test.pid" "${record}" "${root}/vmstat.txt" / > "${root}/watch.log" 2>&1 &

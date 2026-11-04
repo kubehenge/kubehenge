@@ -140,9 +140,9 @@ kubehenge="$(dirname "$0")/../../dist/kubehenge"
 distribution=$(echo "${class}" | sed 's/^kubehenge-//')
 # The add-ons this run switches on, by their keys in the class's kubehenge.dev/addon-memory; argocd
 # stands for GitOps, Flux and then Argo CD. Logs read Loki through monitoring's Grafana, and the
-# certificates step serves Headlamp and Grafana, so those four share a group. Each group's guests
-# stay within 12 GiB with the management node (docs/testing.md), also with a CNI other than the
-# class's default. k3s's control plane grows least and keeps the other four together. kubeadm and
+# certificates step serves Headlamp and Grafana, so those four share a group. docs/testing.md gives
+# each group's guests with the management node, per CNI, against the runner's room. k3s's control
+# plane grows least and keeps the other four together. kubeadm and
 # Talos split them in two. RKE2's least worker of 4096 MiB leaves its control plane the least room,
 # so it splits them in three.
 case ${part}-${distribution} in
@@ -230,7 +230,7 @@ cleanup() {
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${interface_pid}" ] || kill "${interface_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
-    [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
+    [ -z "${s3_pid}" ] || seaweedfs_stop "${s3_pid}"
     [ -z "${recorder_pid}" ] || kill "${recorder_pid}" 2> /dev/null || true
     [ -z "${metrics_pid}" ] || kill "${metrics_pid}" 2> /dev/null || true
     [ -z "${health_pid}" ] || kill "${health_pid}" 2> /dev/null || true
@@ -462,13 +462,13 @@ worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq 
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
         $node.worker + ([$on[] | $addon[.]] | add)]
     | max')}
-# Its cores likewise, for the CPU a worker's own pods and each add-on's request, the GitOps engine
-# that asks for more of the two.
+# Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
+# request, the GitOps engine that asks for more of the two.
 worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
     (.metadata.annotations["kubehenge.dev/addon-cpu"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-cpu"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.cores.minimum),
-        (($node.worker + ([$on[] | if . == "argocd" then ([$addon.argocd, $addon.flux] | max) else $addon[.] end] | add)) / 1000 | ceil)]
+        (($node.worker + ($node.workers // 0) + ([$on[] | if . == "argocd" then ([$addon.argocd, $addon.flux] | max) else $addon[.] end] | add)) / 1000 | ceil)]
     | max')}
 # The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
 # it uses itself with those add-ons and its CNI, whichever is more.
@@ -3497,7 +3497,7 @@ if [ -n "${addons}" ]; then
     fi
     kill "${recorder_pid}" 2> /dev/null || true
     recorder_pid=
-    kill "${s3_pid}"
+    seaweedfs_stop "${s3_pid}"
     s3_pid=
     if on certManager; then
         # removed <kubectl get...>: whether the object is gone, or its kind with it, as cert-manager's own

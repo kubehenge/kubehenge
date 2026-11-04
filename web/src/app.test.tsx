@@ -1344,6 +1344,16 @@ describe("create", () => {
     });
     expect(withRoom(heavy, figured).workerMachine).toStrictEqual({ ...least, cores: 3 });
     expect(fieldProblems("Machines", { ...heavy, workerReplicas: 2 }, figured)).toStrictEqual({});
+    // What the cluster runs once can all land on one worker, and is shared out over two.
+    const once: ClusterClass = {
+      ...rke2,
+      annotations: {
+        ...figured.annotations,
+        "kubehenge.dev/node-cpu": '{"controlPlane":1555,"worker":745,"workers":900}',
+      },
+    };
+    expect(withRoom(heavy, once).workerMachine).toStrictEqual({ ...least, cores: 4 });
+    expect(fieldProblems("Machines", { ...heavy, workerReplicas: 2 }, once)).toStrictEqual({});
     // A class that says nothing of its nodes' own CPU counts their least for it.
     const unmeasured: ClusterClass = { ...rke2, annotations: { "kubehenge.dev/addon-cpu": figures } };
     expect(fieldProblems("Machines", heavy, unmeasured).workerMachine).toMatch(

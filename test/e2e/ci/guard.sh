@@ -25,12 +25,17 @@
 #       the floors one line of the record crosses, as watch judges them
 #   test/e2e/ci/guard.sh short <record>
 #       how long the record's memory, swap not counted, stayed under memory_floor, if a minute or more
+#   test/e2e/ci/guard.sh strained <record>
+#       where the record's memory pressure or its reads back from swap passed their lines, if they did
 #
 # The floors leave the machine room to stop the test, collect from the guests and upload the
 # artifacts, and lie well past what the tests take when they pass. A record's swapped_in, the MiB
 # read back from swap since the watch began, shows a test that leans on swap where it should not.
-# memory_floor ends no test: guests that outgrow the machine's memory slow down rather than fail at
-# once, so run names the stretch beside the test's own failure, or as a warning when it passed.
+# Guests that outgrow the machine's memory slow down rather than fail at once. What slows them is
+# pressure, the time every task waits on memory, and reads back from swap, not how little is
+# available: the kernel keeps a reserve and cache it does not count as available. So run names
+# pressure or swap reads past their lines beside the test's own failure, or as a warning when it
+# passed, and prints a stretch under memory_floor only as a figure.
 set -eu
 
 here=$(dirname "$0")
@@ -44,12 +49,17 @@ management_record=''
 # MiB of memory and swap together. Below it the kernel is about to choose a process to end, and
 # collecting from the guests needs some hundreds of MiB of its own.
 room_floor=1536
-# MiB of memory available, swap not counted, and the seconds under it that name a test whose guests
-# outgrow the machine. With 12 GiB of guests the machine kept 1.7 GiB of page cache, about 1.7 GiB
-# available, and read next to nothing; with 13.4 GiB it kept 1 GiB of cache, 400 MiB available, and
-# reread 50 to 190 MB/s until a control plane's etcd stalled for 6 s.
+# MiB of memory available, swap not counted, and the seconds under it that run reports as a figure.
+# With 10.2 to 11 GiB of guests the machine kept 1280 MiB available or more, with 12 GiB 476 to
+# 520 MiB, and the tests passed without pressure.
 memory_floor=1024
 memory_floor_hold=60
+# The lines that name a test whose guests strain the machine. Percent of 10 seconds in which every
+# task that could run waited on memory: lanes that read nothing back from swap peaked at 9 %, and
+# those that leaned on swap at 17 to 30 %. MiB read back from swap in a minute: the same lanes read
+# 0, and those 570 to 1220.
+pressure_line=10
+swap_in_line=256
 # Percent of the last minute in which every task that could run waited on memory: the machine
 # thrashing, too slow to answer for itself.
 stall_ceiling=50
@@ -185,6 +195,37 @@ short() {
         }' "$1"
 }
 
+# strained <record>: in one line, the record's most memory pressure over 10 seconds and its most MiB
+# read back from swap in a minute, each with its time, if either passed its line. Nothing otherwise.
+strained() {
+    [ -s "$1" ] || return 0
+    awk -v pressure="${pressure_line}" -v swap="${swap_in_line}" '
+        function seconds(t, p) { split(t, p, ":"); return p[1] * 3600 + p[2] * 60 + p[3] }
+        {
+            delete v
+            for (i = 2; i <= NF; i++) { eq = index($i, "="); v[substr($i, 1, eq - 1)] = substr($i, eq + 1) }
+            t = seconds($1)
+            # A record that runs past midnight.
+            if (seen && t < prev) day += 86400
+            seen = 1; prev = t; t += day
+            if (("memory_full10" in v) && v["memory_full10"] + 0 > full) { full = v["memory_full10"] + 0; fullat = $1 }
+            if ("swapped_in" in v) {
+                n++; at[n] = t; read[n] = v["swapped_in"] + 0
+                if (lo == 0) lo = 1
+                while (at[lo] < t - 60) lo++
+                if (read[n] - read[lo] > minute) { minute = read[n] - read[lo]; minuteat = $1 }
+            }
+        }
+        END {
+            out = ""
+            if (full > pressure)
+                out = sprintf("every task waited on memory %.2f%% of 10 seconds at %s, past the line of %d%%", full, fullat, pressure)
+            if (minute > swap)
+                out = out (out == "" ? "" : "; ") sprintf("%d MiB read back from swap in the minute to %s, past the line of %d MiB", minute, minuteat, swap)
+            if (out != "") print out
+        }' "$1"
+}
+
 # report <why> <sample> <vmstat record>: what holds the memory when a floor is crossed: the guests by
 # name, the largest other processes, the last minute of vmstat, the pressure, and what the kernel
 # said of memory.
@@ -283,14 +324,16 @@ run() {
         cat "${record}.fail"
         [ "${code}" -ne 0 ] || code=1
     fi
-    # Guests that outgrow the machine fail later as something else, such as a lost lease; the
-    # stretch names the cause beside it.
-    stretch=$(short "${record}")
-    if [ -n "${stretch}" ]; then
+    # Guests that strain the machine fail later as something else, such as a lost lease; the
+    # pressure names the cause beside it.
+    strain=$(strained "${record}")
+    if [ -n "${strain}" ]; then
         level=warning
         [ "${code}" -eq 0 ] || level=error
-        printf '::%s title=The guests outgrew the runner'\''s memory::%s\n' "${level}" "${stretch}"
+        printf '::%s title=The guests strained the runner'\''s memory::%s\n' "${level}" "${strain}"
     fi
+    stretch=$(short "${record}")
+    [ -z "${stretch}" ] || printf 'memory available: %s\n' "${stretch}"
     return "${code}"
 }
 
@@ -299,7 +342,7 @@ peaks() {
         echo "the guard recorded nothing"
         return 0
     }
-    awk -v room="${room_floor}" -v floor="${memory_floor}" -v stall="${stall_ceiling}" -v disk="${disk_floor}" '
+    awk -v room="${room_floor}" -v floor="${memory_floor}" -v stall="${stall_ceiling}" -v disk="${disk_floor}" -v line="${pressure_line}" '
         {
             delete v
             for (i = 2; i <= NF; i++) { eq = index($i, "="); v[substr($i, 1, eq - 1)] = substr($i, eq + 1) }
@@ -321,14 +364,14 @@ peaks() {
         END {
             printf "%d samples from %s to %s\n", n, first, $1
             printf "least memory and swap left: %d MiB (%d available, %d of swap) at %s; the floor is %d\n", least, available, swap, leastat, room
-            printf "least memory available: %d MiB at %s; under %d for a minute names the guests as too big\n", lowmem, lowmemat, floor
+            printf "least memory available: %d MiB at %s; a minute under %d is reported\n", lowmem, lowmemat, floor
             if (cacheat != "") printf "least page cache: %d MiB at %s\n", lowcache, cacheat
             printf "read back from swap: %d MiB\n", swapped
             if (zswappedat != "") printf "most swap held in memory by zswap: %d MiB, compressed to %d MiB, at %s\n", zswapped, pool, zswappedat
             for (k in most) {
                 name = k; where = ""
                 if (name ~ /^mgmt_/) { name = substr(name, 6); where = " on the management node" }
-                if (k ~ /10$/) printf "most %s pressure%s: %.2f%% of 10 seconds at %s\n", substr(name, 1, length(name) - 2), where, most[k], mostat[k]
+                if (k ~ /10$/) printf "most %s pressure%s: %.2f%% of 10 seconds at %s%s\n", substr(name, 1, length(name) - 2), where, most[k], mostat[k], (k == "memory_full10" ? sprintf("; the line is %d%%", line) : "")
                 else printf "most %s pressure%s: %.2f%% of a minute at %s%s\n", name, where, most[k], mostat[k], (k == "memory_full" ? sprintf("; the ceiling is %d%%", stall) : "")
             }
             if (mgmtusedat != "") printf "the management node'\''s most memory used: %d MiB at %s\n", mgmtused, mgmtusedat
@@ -338,6 +381,7 @@ peaks() {
         }
         NR == 1 { first = $1 }' "$1"
     short "$1"
+    strained "$1"
 }
 
 protect() {
@@ -379,7 +423,7 @@ protect() {
     done
 }
 
-usage="usage: $0 protect | watch <pid file> <record> [<vmstat record>] [<path>...] | run <pid file> <record> <command>... | peaks <record> | crossed <sample> | short <record>"
+usage="usage: $0 protect | watch <pid file> <record> [<vmstat record>] [<path>...] | run <pid file> <record> <command>... | peaks <record> | crossed <sample> | short <record> | strained <record>"
 command=${1:-}
 [ "$#" -eq 0 ] || shift
 case ${command} in
@@ -401,6 +445,7 @@ case ${command} in
     peaks) peaks "${1:?${usage}}" ;;
     crossed) crossed "${1:?${usage}}" ;;
     short) short "${1:?${usage}}" ;;
+    strained) strained "${1:?${usage}}" ;;
     *)
         echo "${usage}" >&2
         exit 2

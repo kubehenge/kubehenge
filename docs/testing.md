@@ -277,10 +277,15 @@ Under pressure the machine keeps its page cache rather than the guests' memory (
 
 ### How much the guests may take
 
-The runner has 15.6 GiB of memory. Its own processes and the Proxmox VE container keep about 1.6 GiB resident. The guests have room in 12 GiB:
+The runner has 15983 MiB of memory. Besides the guests' QEMU processes, about 3.3 GiB of it is not available:
 
-- With 12 GiB of guests the runner kept 1.7 GiB of page cache and read next to nothing from disk.
-- With 13.4 GiB the cache fell to 1 GiB and the runner reread up to 190 MB/s. A control plane's etcd stalled for 6 s.
+- The runner's own processes, the Proxmox VE container and the kernel hold about 1.9 GiB.
+- The kernel keeps about 1.1 GiB free or as cache it does not count as available, at `vm.watermark_scale_factor=200`.
+
+Each QEMU process holds about 55 MiB more than its guest's memory. The guests have room in 12 GiB:
+
+- With 12 GiB of guests the runner kept 476 to 520 MiB available and read nothing back from swap. Memory pressure stayed at 8 % of 10 seconds at most.
+- With 13.4 GiB the page cache fell to 1 GiB and the runner reread up to 190 MB/s. A control plane's etcd stalled for 6 s.
 
 Swap does not count as room for the guests. Cold pages of the runner's own processes go there harmlessly. A guest read back from swap stalls until its own checks fail.
 
@@ -299,18 +304,13 @@ Every node is at the least Kubehenge allows for what its test switches on. The m
 | `rke2-addons-d` | 4096 | 12288 | 12288 | 12288 |
 | `k3s-addons-a` | 3392 | 11584 | 11584 | 11760 |
 | `k3s-addons-b` | 3008 | 11200 | 11520 | 12168 |
-| `talos-addons-a` | 3648 | 11840 | 12088 | 11840 |
-| `talos-addons-b` | 2368 | 10560 | 11400 | 10560 |
-| `talos-addons-c` | 2240 | 10432 | 11256 | 10432 |
+| `talos-addons-a` | 3648 | 11840 | 11840 | 11840 |
+| `talos-addons-b` | 2368 | 10560 | 10560 | 10560 |
+| `talos-addons-c` | 2240 | 10432 | 10432 | 10432 |
 
-Two lanes outgrow 12 GiB with that management node, both on a CNI the nightly run picks:
+`kubeadm-addons-a` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176 and 11856 MiB. At that size `management-cluster-upgrade`, where every provider restarts at once, used 2212 MiB at most on the node. It kept 1181 MiB available, and its memory pressure stayed at 0.18 % of 10 seconds at most. The guard's samples show what the management node uses in every run (below).
 
-- `kubeadm-addons-a` with Calico, by 400 MiB. Logs need monitoring's Grafana, and those two alone pass it by 88 MiB.
-- `rke2-addons-b` with Cilium, by 80 MiB. It holds one add-on.
-
-Those two run with a management node of 3584 MiB (`run.sh`), which brings them to 12176 and 11856 MiB. At that size `management-cluster-upgrade`, where every provider restarts at once, used 2212 MiB at most on the node. It kept 1181 MiB available, and its memory pressure stayed at 0.18 % of 10 seconds at most. The guard's samples show what the management node uses in every run (below).
-
-These tests outgrow 12 GiB as well:
+These tests outgrow 12 GiB as well. Only the RKE2 ones read back from swap past the guard's line, 570 to 1220 MiB in a minute:
 
 | Test | Steady | Peak | At the peak |
 | --- | --- | --- | --- |
@@ -337,7 +337,7 @@ The merge queue runs 20 lanes, as many as a run's jobs at once. Three pairs of t
 | `k3s-addons-b,autoscaler` | 11200, then 13312 | about 50 |
 
 - `run.sh` starts the second test only once no workload cluster and no VM of the first is left. A lane's peak is therefore its larger test's, as when each ran alone.
-- The second test keeps the management cluster, its S3 store and the templates the first made.
+- The second test keeps the management cluster, its backup targets and the templates the first made. Each test serves the S3 store itself, and the first's store has stopped before the second's starts on the same ports.
 - A failed lane names its failed test in the log, as an error and in the run's summary.
 - A dispatch can name a pair as one test, as in `k3s-etcd,cluster-mesh`. The nightly run gives a pair's first test the night's options and runs the second as in the queue.
 
@@ -354,11 +354,14 @@ It reports what held the memory (the VMs by name, the largest other processes, t
 
 Once the management cluster is up, each sample also holds the management node's own memory, read through Talos's API. That is `mgmt_used`, `mgmt_available` and its memory pressure. "The runner's room" gives the node's most memory used and least available. The node's figures end no test.
 
-#### Memory without swap
+#### Memory pressure
 
-Under 1 GiB of memory available for a minute or more, swap not counted, the guests have outgrown the runner. That ends no test, since such guests slow down rather than fail at once. The guard names the stretch when the test ends. Beside a failure such as a lost lease it is an error. When the test passed it is a warning.
+The guard judges memory by what slows a test: every task waiting on memory, and reads back from swap. Little memory available is no sign by itself, since the kernel keeps a reserve and cache that it does not count as available.
 
-A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
+- The line for pressure is 10 % of 10 seconds. Lanes that read nothing back from swap peaked at 9 %, those that leaned on swap at 17 to 30 %.
+- The line for swap is 256 MiB read back in a minute. Lanes that leaned on swap read 570 to 1220 MiB.
+
+Past either line the guests have strained the runner. That ends no test, since such guests slow down rather than fail at once. The guard names it when the test ends. Beside a failure such as a lost lease it is an error. When the test passed it is a warning. A minute or more under 1 GiB available is printed as a figure.
 
 A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
 

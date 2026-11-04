@@ -38,8 +38,9 @@ work=$(mktemp -d)
 ns=e2e-mesh-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 cleanup() {
     status=$?
-    [ -z "${s3_pid}" ] || kill "${s3_pid}" 2> /dev/null || true
+    [ -z "${s3_pid}" ] || seaweedfs_stop "${s3_pid}"
     if [ "${status}" -ne 0 ]; then
+        seaweedfs_errors "${work}"
         printf '\nleaving the clusters in %s for inspection; delete them with: kubectl delete namespace %s\n' "${ns}" "${ns}"
     fi
     rm -rf "${work}"
@@ -277,7 +278,7 @@ pools=$(pve_get pools)
 printf '%s' "${pools}" | jq -e --arg p "/${ns}." '[.data[] | select(.poolid | contains($p))] | length == 0' > /dev/null ||
     fail "pools of the clusters are still there"
 kubectl delete namespace "${ns}" --wait --timeout=5m
-kill "${s3_pid}"
+seaweedfs_stop "${s3_pid}"
 s3_pid=
 
 printf '\nPASS\n'
