@@ -1495,7 +1495,7 @@
               "default": {
                 "cores": 2,
                 "diskGiB": 30,
-                "memoryMiB": 4096
+                "memoryMiB": 4800
               },
               "properties": {
                 "cores": {
@@ -1510,7 +1510,7 @@
                   "type": "integer"
                 },
                 "memoryMiB": {
-                  "default": 4096,
+                  "default": 4800,
                   "minimum": 4096,
                   "multipleOf": 8,
                   "type": "integer"

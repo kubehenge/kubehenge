@@ -163,6 +163,16 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 			if err := c.Delete(ctx, got); err != nil {
 				t.Fatal(err)
 			}
+			for _, cni := range classCNIs(ctx, t, c, class) {
+				name := strings.TrimPrefix(class, "kubehenge-") + "-" + strings.Trim(cni, `"`)
+				withCNI := clusterOf(class, name, net, nil)
+				withCNI.Spec.Topology.Variables = slices.DeleteFunc(withCNI.Spec.Topology.Variables,
+					func(v clusterv1.ClusterVariable) bool { return v.Name == "cni" })
+				withAddons(withCNI, map[string]string{"cni": cni})
+				if err := c.Create(ctx, withCNI, client.DryRunAll); err != nil {
+					t.Errorf("a cluster of the class's defaults with the CNI %s: %v", cni, err)
+				}
+			}
 		})
 	}
 
@@ -189,6 +199,27 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 	}
 
 	checkRulesOnChanges(ctx, t, c)
+}
+
+// classCNIs are the values of the class's cni variable, each as JSON.
+func classCNIs(ctx context.Context, t *testing.T, c client.Client, name string) []string {
+	t.Helper()
+	class := &clusterv1.ClusterClass{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: name}, class); err != nil {
+		t.Fatal(err)
+	}
+	var cnis []string
+	for _, v := range class.Spec.Variables {
+		if v.Name == "cni" {
+			for _, e := range v.Schema.OpenAPIV3Schema.Enum {
+				cnis = append(cnis, string(e.Raw))
+			}
+		}
+	}
+	if len(cnis) == 0 {
+		t.Fatalf("%s offers no CNI", name)
+	}
+	return cnis
 }
 
 // classRanges are the pod and service ranges each class's distribution uses by default.

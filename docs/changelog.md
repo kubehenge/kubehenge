@@ -18,6 +18,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A kubeadm control plane counts 3376 MiB for itself, up from 2392 MiB.
 - The workers of a kubeadm or Talos cluster count 200 millicores together for CoreDNS's two replicas, which can both run on one worker. A single worker of one core then holds fewer add-ons ([clusters.md](clusters.md#machines)).
 - A control plane with add-ons counts more memory when its cluster runs a CNI other than the class's default, up to 1808 MiB ([clusters.md](clusters.md#machines)). Changes to a cluster that is already short go through only when they leave it no shorter.
+- A new kubeadm cluster's control planes get 4800 MiB by default, up from 4096 MiB, which a cluster with Calico needs. Existing clusters keep their size.
 - Boot logs need the kubeadm, RKE2 and k3s templates built again.
 - `install.sh --upgrade` adds the volume that sealed automatic-upgrade secrets need.
 - Applying the management cluster replaces the nodes of Talos clusters, which get a new log target. It also replaces the control planes of kubeadm, RKE2 and k3s clusters, which get a CPU request for kube-vip among other changes ([upgrading.md](upgrading.md#when-a-release-changes-a-clusterclass)).

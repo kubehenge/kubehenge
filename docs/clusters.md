@@ -149,7 +149,7 @@ Unticked, the cloud controller manager logs a permission error for each node eve
 
 #### Sizes
 
-The defaults are 2 cores and 4096 MiB, with a 30 GiB disk for the control plane and 40 GiB for workers. Disks are at least 20 GiB. A control-plane node needs at least 2 cores and 4096 MiB, the first row of the k3s and RKE2 server sizing guides. For kubeadm, which documents no sizes, RKE2's guide applies.
+The defaults are 2 cores and 4096 MiB, with a 30 GiB disk for the control plane and 40 GiB for workers. A kubeadm control plane defaults to 4800 MiB, which it needs with Calico. Disks are at least 20 GiB. A control-plane node needs at least 2 cores and 4096 MiB, the first row of the k3s and RKE2 server sizing guides. For kubeadm, which documents no sizes, RKE2's guide applies.
 
 With more workers the guides ask for more. Kubehenge refuses a cluster whose control planes fall short, when it is created and when its workers or machines change. RKE2 and kubeadm need 4 cores and 8192 MiB from 226 workers. They need 8 cores and 16384 MiB from 451 and 16 cores and 32768 MiB from 1,301. For k3s the same sizes start at 351, 901 and 1,801 workers.
 
@@ -198,7 +198,7 @@ With every add-on but Rancher, a k3s control plane needs 5032 MiB with Cilium an
 
 A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB. It needs 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either. GitOps with Argo CD on top takes each 512 MiB further.
 
-The default machines hold every add-on but Rancher, logs, backups and GitOps on every distribution. The exception is kubeadm's control plane, which needs 4304 MiB for them, above the default 4096 MiB. A second worker makes room for logs and backups too.
+The default machines hold every add-on but Rancher, logs, backups and GitOps with the distribution's default CNI, and on kubeadm with Cilium. A second worker makes room for logs and backups too.
 
 For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there. That is 150 millicores on kubeadm, 350 on k3s, 390 on Talos and 775 on RKE2. Talos keeps 50 of them back for the system. Its flannel asks for 200 with its network policy controller. On RKE2, kube-proxy asks for 250 and canal for 260. Without workers, a control plane counts 1080 millicores on kubeadm, 430 on k3s, 910 on Talos and 1605 on RKE2.
 
