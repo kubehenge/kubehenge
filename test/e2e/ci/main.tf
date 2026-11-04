@@ -53,6 +53,11 @@ variable "node_memory_mb" {
   default = 4096
 }
 
+variable "node_memory_min_mb" {
+  type    = number
+  default = null
+}
+
 variable "version_overrides" {
   type    = map(string)
   default = {}
@@ -99,9 +104,10 @@ module "management_cluster" {
   workload_datastores        = distinct([var.datastore, "local", "own"])
   cluster_datastore_allocate = true
 
-  node_addresses = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
-  node_cores     = var.node_cores
-  node_memory_mb = var.node_memory_mb
+  node_addresses     = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
+  node_cores         = var.node_cores
+  node_memory_mb     = var.node_memory_mb
+  node_memory_min_mb = var.node_memory_min_mb
   # As the templates', test/e2e/ci/run.sh.
   cpu_type = "host"
 

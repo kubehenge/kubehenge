@@ -279,6 +279,8 @@ Under pressure the machine keeps its page cache rather than the guests' memory (
 
 A guest keeps all the memory it was given, mostly page cache. While the machine has under 2 GiB available, the recorder asks each guest through its agent to drop its page cache, each at most every 2 minutes (`KUBEHENGE_E2E_TRIM_BELOW`, 0 turns it off). Free page reporting hands the freed memory back. Talos guests run no commands, so they keep theirs. "The guests' load" lists each guest that dropped its cache.
 
+The management node's balloon gives memory back instead. Its minimum is 3072 MiB (`KUBEHENGE_E2E_MANAGEMENT_MEMORY_MIN`). Proxmox VE inflates the balloon towards it once the machine passes 80 % memory use. On a test host that returned about 1 GiB within 200 s.
+
 ### How much the guests may take
 
 The runner has 15983 MiB of memory. Besides the guests' QEMU processes, about 3.3 GiB of it is not available:

@@ -408,8 +408,11 @@ resource "proxmox_virtual_environment_vm" "node" {
     type  = var.cpu_type
   }
 
+  # The balloon device is there even without a minimum, as free page reporting runs through it and
+  # hands the host back what Talos frees.
   memory {
     dedicated = var.node_memory_mb
+    floating  = coalesce(var.node_memory_min_mb, var.node_memory_mb)
   }
 
   disk {
