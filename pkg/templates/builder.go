@@ -1011,8 +1011,8 @@ func (b *Builder) exec(ctx context.Context, vm *proxmox.VirtualMachine, command 
 	if err != nil {
 		return fmt.Errorf("running %q: %w", strings.Join(command, " "), err)
 	}
-	if status.ExitCode != 0 {
-		return fmt.Errorf("%q exited %d: %s", strings.Join(command, " "), status.ExitCode, status.Output())
+	if failure := status.Failure(); failure != "" {
+		return fmt.Errorf("%q %s: %s", strings.Join(command, " "), failure, status.Output())
 	}
 	return nil
 }
