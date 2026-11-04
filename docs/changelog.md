@@ -255,6 +255,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Contributing
 
+- capmox moves to its v0.9.2 release, which carries all but two of the fixes Kubehenge built on top of v0.9.1.
+  - Kubehenge's build adds only those two: a failed clone forgets its VM ID, and a VM is confirmed as the machine's before it is destroyed.
 - An end-to-end run builds the binary and the images once for all its lanes.
 - Its lanes restore the kubeadm, RKE2 and k3s templates from the Actions cache instead of baking them ([testing.md](testing.md#end-to-end-without-a-proxmox-ve-host)).
 - RKE2's and k3s's workload tests run in two halves, `etcd` and `machines`, on a machine each ([testing.md](testing.md#running-part-of-it)).

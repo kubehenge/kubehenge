@@ -30,7 +30,7 @@ locals {
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api
     cluster_api = "v1.14.3"
     # renovate: datasource=github-releases depName=ionos-cloud/cluster-api-provider-proxmox
-    capmox = "v0.9.1"
+    capmox = "v0.9.2"
     # renovate: datasource=github-releases depName=rancher/cluster-api-provider-rke2
     rke2 = "v0.27.1"
     # renovate: datasource=github-releases depName=k3s-io/cluster-api-k3s
@@ -115,9 +115,9 @@ locals {
     # renovate: datasource=github-release-attachments depName=k3s-io/cluster-api-k3s
     "k3s-io/cluster-api-k3s/releases/download/v0.4.0/control-plane-components.yaml" = "2e3754bb42be197c31b7567496767f22091f4da74453eb366d29c8bd06e28270"
     # renovate: datasource=github-release-attachments depName=ionos-cloud/cluster-api-provider-proxmox
-    "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.1/metadata.yaml" = "df2916a79503ac053f6a9866a8de025e780e24d6d472f00f59f84898b5a1c572"
+    "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.2/metadata.yaml" = "df2916a79503ac053f6a9866a8de025e780e24d6d472f00f59f84898b5a1c572"
     # renovate: datasource=github-release-attachments depName=ionos-cloud/cluster-api-provider-proxmox
-    "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.1/infrastructure-components.yaml" = "424fb38189659147df452490bb2b11f9f4ae3a75c7179b92a85041658bfd74d5"
+    "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.2/infrastructure-components.yaml" = "6817322435b42cfda07a8f94006bacb709afb83445ce24545af253c7904755d8"
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
     "kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/download/v1.1.1/metadata.yaml" = "eb280ab315f478324973a7b65739a655d57e3c22a1356efd9f5127534d3502b7"
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
@@ -155,7 +155,7 @@ locals {
     # renovate: datasource=docker depName=ghcr.io/k3s-io/cluster-api-k3s/controlplane-controller
     "ControlPlaneProvider/k3s" = "ghcr.io/k3s-io/cluster-api-k3s/controlplane-controller:v0.4.0@sha256:4f7305f8871954afa2c2e37a0b19eac3b352e2028bc56617dc78822da5975c20"
     # renovate: datasource=docker depName=ghcr.io/ionos-cloud/cluster-api-provider-proxmox
-    "InfrastructureProvider/proxmox" = "ghcr.io/ionos-cloud/cluster-api-provider-proxmox:v0.9.1@sha256:17b01f3e160d930eb5bd2a75853e0aaac70821130f49eef0228483482a36d0f3"
+    "InfrastructureProvider/proxmox" = "ghcr.io/ionos-cloud/cluster-api-provider-proxmox:v0.9.2@sha256:682df819bb9a3b42eb12b784e47a29044555cc4d98178c71e220d97a84183252"
     # renovate: datasource=docker depName=registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller
     "IPAMProvider/in-cluster" = "registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v1.1.1@sha256:49a4cc0c5d7cd8deef20105e71ce168407ddcaab612f5819947163bd4b66ff0b"
     # renovate: datasource=docker depName=registry.k8s.io/cluster-api-helm/cluster-api-helm-controller
@@ -166,31 +166,23 @@ locals {
     "ControlPlaneProvider/talos" = "ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.6.0@sha256:fdd30ae41424e6f36b30c5aa4ab13f46bf159050b365ed2d0194c053523c7bd2"
   }
 
-  # capmox up to v0.9.1 refuses the changed machine template of a kubeadm cluster's upgrade (#735);
-  # the fix (#832) is on its main branch but in no release yet. Until one carries it, capmox v0.9.1
-  # runs as built from that commit, on v0.9.1's own manifests: main has changed no CRD, RBAC or
-  # webhook since. The build also carries scripts/capmox-patches: a reconcile that read the machine
-  # before a task's reference was written clears that reference, so the next change to the VM can
-  # time out on the lock the task still holds, and one patch waits for any task still running on
-  # the VM. Another reads the machine from the API server before cloning: the cached copy can
-  # predate the previous reconcile's clone, and cloning from it leaves a second VM behind. A third
-  # forgets the VM ID of a clone that failed, which another VM may have taken while the clone
-  # started: kept, the machine would wait on that VM for ever and delete it with itself. A fourth
-  # destroys a deleted machine's VM only once the VM under its ID is confirmed as the machine's,
-  # by name and SMBIOS UUID: Proxmox VE hands a freed ID to the next clone, and the delete's next
-  # pass would otherwise destroy that clone.
-  # scripts/provider-image.sh builds it reproducibly,
-  # and a release publishes it only when it comes out with this digest. It applies only while capmox
-  # is at `release`.
+  # capmox v0.9.2 lacks two fixes, which scripts/capmox-patches adds to the release. A failed clone
+  # forgets its VM ID, which another VM may have taken while the clone started: kept, the machine
+  # would wait on that VM for ever and delete it with itself. A deleted machine's VM is destroyed
+  # only once the VM under its ID is confirmed as the machine's, by name and SMBIOS UUID: Proxmox VE
+  # hands a freed ID to the next clone, and the delete's next pass would otherwise destroy that
+  # clone. The build runs on the release's own manifests. scripts/provider-image.sh builds it
+  # reproducibly, and a release publishes it only when it comes out with this digest. It applies
+  # only while capmox is at `release`.
   capmox_build = {
     upstream = "ionos-cloud/cluster-api-provider-proxmox"
     package  = "./cmd"
-    release  = "v0.9.1"
-    commit   = "69603d33fd4b2ce3847633c74aa6e208669ff7da"
+    release  = "v0.9.2"
+    commit   = "0691ffd179cef609cad6f26fc3beed82927f30a3"
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:c3478217d2469be42379966d327028be6213d88e443fe1c678a9e9ee883f4b5e"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:a69b8eeeeb2db12cd4d8a6f7f91223ecb42578d1c2cc60aa04f0e40b5cf2abfc"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and
