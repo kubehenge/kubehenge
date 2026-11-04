@@ -61,8 +61,8 @@ type Ticket struct {
 	Token string
 }
 
-// authorize lets req act as the ticket's user.
-func (t *Ticket) authorize(req *http.Request) {
+// authorise lets req act as the ticket's user.
+func (t *Ticket) authorise(req *http.Request) {
 	if t.Token != "" {
 		req.Header.Set("Authorization", "PVEAPIToken="+t.Token)
 		return
@@ -281,7 +281,7 @@ func (a *Accounts) get(ctx context.Context, t *Ticket, path string, out any) err
 	if err != nil {
 		return err
 	}
-	t.authorize(req)
+	t.authorise(req)
 	return a.do(req, out)
 }
 

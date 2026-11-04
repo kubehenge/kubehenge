@@ -1,0 +1,41 @@
+---
+name: links
+
+# The outside links of the README, docs/ and the built website, every night: a link that dies
+# outside fails here, never on a pull request. The website build checks the links between pages.
+on:
+  schedule:
+    - cron: '41 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: links
+  cancel-in-progress: true
+
+jobs:
+  links:
+    name: Links
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The pages' last-updated dates come from their history.
+          fetch-depth: 0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: website-${{ hashFiles('website/package-lock.json') }}
+          restore-keys: website-
+      - name: Tools
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin" node lychee
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: make links
+        env:
+          # GitHub's rate limit for a signed-in reader, as most outside links point there.
+          GITHUB_TOKEN: ${{ github.token }}

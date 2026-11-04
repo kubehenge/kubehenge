@@ -61,6 +61,12 @@ Details and reasons: `docs/architecture.md`.
 
 - **Strictest checks.** Every linter, formatter and type checker runs at its strictest setting. A rule is switched off only where it contradicts another or the language's own conventions.
   - A single finding is suppressed only where the rule is wrong for that line. Either way the reason stands beside it.
+- **CSS.** stylelint checks the interface's and the website's CSS, with a strict property order and logical properties (`web/stylelint.config.mjs`).
+- **Accessibility.** The frontend's unit tests run axe over every page and dialog in its main states, and none may fail.
+- **Spelling.** typos checks every file in British English. An American spelling passes only as an outside name, with its reason in `.typos.toml`.
+- **Renovate.** `make lint` runs Renovate's validator over `renovate.json` and fails on a warning or a needed migration.
+- **Website.** Lighthouse CI checks the built site on each pull request that changes it (`make website-check`, limits in `website/lighthouserc.cjs`).
+- **Links.** lychee checks the outside links of the README, `docs/` and the website every night (`make links`).
 - **Logs escape what they carry.** Go code logs through `log/slog` and the controller through controller-runtime's zap in JSON. Both escape a value, so nothing a user sends can forge a log line.
   - The linters refuse the `log` package and zap's console output. CodeQL's log injection query is off on that account (`.github/codeql-config.yml`).
 

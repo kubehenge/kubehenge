@@ -134,6 +134,36 @@ jobs:
         with:
           path: website/.vitepress/dist
 
+  # Lighthouse CI over the built site on loopback, mobile and desktop, against the limits in
+  # website/lighthouserc.cjs. The reports stay with the run, never on a public host.
+  lighthouse:
+    name: Lighthouse
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: website-${{ hashFiles('website/package-lock.json') }}
+          restore-keys: website-
+      - name: Node
+        run: |
+          scripts/tools.sh "$RUNNER_TEMP/bin" node
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: make website-check
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lighthouse
+          path: website/.vitepress/lighthouse
+          if-no-files-found: ignore
+          retention-days: 14
+
   deploy:
     name: Deploy
     needs: build

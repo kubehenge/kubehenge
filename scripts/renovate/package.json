@@ -1,0 +1,8 @@
+{
+  "name": "kubehenge-renovate",
+  "private": true,
+  "description": "Renovate's config validator, which make lint runs over renovate.json.",
+  "devDependencies": {
+    "renovate": "44.210.0"
+  }
+}

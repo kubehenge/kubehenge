@@ -3,4 +3,7 @@
 /public/logo.svg
 /.vitepress/cache/
 /.vitepress/dist/
+# Lighthouse CI's runs and reports, from `make website-check`.
+/.lighthouseci/
+/.vitepress/lighthouse/
 /node_modules/

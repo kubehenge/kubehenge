@@ -237,7 +237,7 @@ func TestDeployKeyIsAnOpenSSHKeyPair(t *testing.T) {
 	}
 }
 
-func TestKnownHostsHaveToNameTheRepositorysHost(t *testing.T) {
+func TestKnownHostsHaveToNameTheRepositoryHost(t *testing.T) {
 	t.Parallel()
 	const key = " ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n"
 	const repository, onPort = "ssh://git@git.example.org/a/b.git", "ssh://git@git.example.org:2222/a/b.git"

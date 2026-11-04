@@ -114,8 +114,8 @@ func newDeployKey(comment string) ([]byte, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("writing the deploy key's public half: %w", err)
 	}
-	authorized := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPublic))) + " " + comment + "\n"
-	return pem.EncodeToMemory(block), []byte(authorized), nil
+	authorisedKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPublic))) + " " + comment + "\n"
+	return pem.EncodeToMemory(block), []byte(authorisedKey), nil
 }
 
 // checkKnownHosts holds the host keys a cluster gives for its repository to known_hosts lines

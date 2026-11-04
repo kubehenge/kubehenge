@@ -67,7 +67,7 @@ func (a *Accounts) send(ctx context.Context, t *Ticket, method, path string, for
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	t.authorize(req)
+	t.authorise(req)
 	if out == nil {
 		var ignored any
 		out = &ignored

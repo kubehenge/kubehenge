@@ -86,6 +86,18 @@
       "versioning": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)\\+k3s(?<build>\\d+)$"
     },
     {
+      "description": "lychee's release tags carry its name before the version.",
+      "matchPackageNames": ["lycheeverse/lychee"],
+      "versioning": "regex:^lychee-v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$"
+    },
+    {
+      "description": "Until stylelint-order and stylelint-plugin-logical-css accept stylelint 18, stylelint and its standard config stay on the major line those take.",
+      "matchFileNames": ["web/package.json"],
+      "matchPackageNames": ["stylelint", "stylelint-config-standard"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
       "description": "A runner image this datasource knows about is not yet a label GitHub schedules jobs on, and moving to a new image is a decision to take once, not every week.",
       "matchDatasources": ["github-runners"],
       "matchUpdateTypes": ["major"],

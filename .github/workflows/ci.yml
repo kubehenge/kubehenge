@@ -45,7 +45,9 @@ jobs:
             ~/go/pkg/mod
             ~/.npm
             ~/.cache/uv
-          key: ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
+          key: >-
+            ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock',
+            'scripts/renovate/package-lock.json') }}
           restore-keys: ci-
       - name: Tools
         run: |
