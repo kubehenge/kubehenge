@@ -27,6 +27,12 @@ same() {
 
 printf -- '-id\000101\000-name\000cp\000' > "${root}/proc/7101/cmdline"
 printf -- '-id\000102\000-name\000talos\000' > "${root}/proc/7102/cmdline"
+# VM 101's counters. VM 102 has none, so a sample leaves it out.
+mkdir "${root}/proc/7101/net"
+echo '7101 (kvm) S 0 0 0 0 0 0 0 0 0 0 300 200 0' > "${root}/proc/7101/stat"
+printf 'VmRSS:\t2048 kB\nVmSwap:\t0 kB\n' > "${root}/proc/7101/status"
+printf 'Inter-|\n face |\ntap101i0: 0 0 0 0 0 0 0 0 4096 0 0 0 0 0 0 0\n' > "${root}/proc/7101/net/dev"
+echo 'read_bytes: 8192' > "${root}/proc/7101/io"
 memory() { printf 'MemTotal: 16000000 kB\nMemAvailable: %s kB\n' "$(($1 * 1024))" > "${root}/proc/meminfo"; }
 
 # Each ask goes to asked; VM 102 refuses, as Talos's agent runs no commands.
@@ -47,13 +53,13 @@ case "\$*" in
     *) printf '00:%02d:%02d\n' \$(((now / 60) % 60)) \$((now % 60)) ;;
 esac
 EOF
-# Ends record after ten rounds.
+# Fails the tenth round, which ends record, as it runs under set -e.
 cat > "${bin}/sleep" << EOF
 #!/bin/sh
 echo \$((\$(cat "${root}/now") + 15)) > "${root}/now"
 rounds=\$((\$(cat "${root}/rounds" 2> /dev/null || echo 0) + 1))
 echo "\${rounds}" > "${root}/rounds"
-[ "\${rounds}" -lt 10 ] || kill "\${PPID}"
+[ "\${rounds}" -lt 10 ]
 EOF
 chmod +x "${bin}"/*
 
@@ -65,9 +71,8 @@ run() {
     rm -f "${root}/asked" "${root}/rounds" "${root}/guests.txt" "${root}/guests.txt.trims"
     command=$2
     shift 2
-    # The stand-in sleep ends record, and the shell reports that on its own error output.
-    (env PATH="${bin}:${PATH}" KUBEHENGE_E2E_GUESTS_PROC="${root}/proc" "$@" \
-        sh "${guests}" "${command}" "${root}/guests.txt" > /dev/null 2>&1) 2> /dev/null || true
+    env PATH="${bin}:${PATH}" KUBEHENGE_E2E_GUESTS_PROC="${root}/proc" "$@" \
+        sh "${guests}" "${command}" "${root}/guests.txt" > /dev/null 2>&1 || true
 }
 # Sets asks to the number of asks, first_ask to the first and trims to what was noted.
 read_back() {
@@ -101,8 +106,11 @@ read_back
 same "record asks each guest again only after 2 minutes" 4 "${asks}"
 same "record notes each time the guest dropped it" "00:01:00 101 1500
 00:03:00 101 1500" "${trims}"
+first_sample=$(sed -n 1p "${root}/guests.txt")
+same "record samples each VM from the same processes it lists" "00:01:00 7101 101 cp 500 2048 0 4096 8192 - - -" \
+    "${first_sample}"
 summary=$(sh "${guests}" summary "${root}/guests.txt" 2>&1 || true)
-line=$(printf '%s\n' "${summary}" | grep '^  101:' || true)
+line=$(printf '%s\n' "${summary}" | sed -n '/^guests that dropped/,$p' | grep '^  101:' || true)
 same "the summary names the guest that dropped its cache" \
     "  101: 2 times, first at 00:01:00 (1500), last at 00:03:00 (1500)" "${line}"
 
