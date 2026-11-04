@@ -1181,6 +1181,19 @@ const sweepable = (container: Element, c: Case): HTMLButtonElement[] =>
     (b): b is HTMLButtonElement => b instanceof HTMLButtonElement && !b.disabled && b.closest("dialog") === null,
   );
 
+// changedParts gives the outermost elements a click's mutations touched. The page as a whole was
+// checked once before the sweep, so each click only needs what it changed checked.
+function changedParts(records: readonly MutationRecord[], container: Element): Element[] {
+  const touched = new Set<Element>();
+  for (const r of records) {
+    const element = r.target instanceof Element ? r.target : r.target.parentElement;
+    if (element?.isConnected === true && container.contains(element)) {
+      touched.add(element);
+    }
+  }
+  return [...touched].filter((e) => ![...touched].some((o) => o !== e && o.contains(e)));
+}
+
 // sweep clicks every button of the page in turn. What opens, a dialog or another state, is checked
 // and put away again. A click that leaves the page, or changes its buttons, starts the page afresh.
 async function sweep(c: Case, routes: Record<string, Route>, user: UserEvent): Promise<void> {
@@ -1201,12 +1214,18 @@ async function sweep(c: Case, routes: Record<string, Route>, user: UserEvent): P
       }
       const words = button.textContent.trim();
       const label = words === "" ? (button.getAttribute("aria-label") ?? "button") : words;
-      const before = container.innerHTML;
+      const records: MutationRecord[] = [];
+      const watch = new MutationObserver((r) => {
+        records.push(...r);
+      });
+      watch.observe(container, { subtree: true, childList: true, attributes: true, characterData: true });
       await user.click(button);
       await settle(container);
-      // A click that changed nothing shows nothing new to check.
-      if (container.innerHTML !== before) {
-        await expectNoViolations(container, `${c.name}, after "${label}"`);
+      records.push(...watch.takeRecords());
+      watch.disconnect();
+      const parts = changedParts(records, container);
+      if (parts.length > 0) {
+        await expectNoViolations(container, `${c.name}, after "${label}"`, parts);
       }
       const dialog = container.querySelector("dialog[open]");
       if (dialog !== null) {
@@ -1229,9 +1248,7 @@ async function sweep(c: Case, routes: Record<string, Route>, user: UserEvent): P
   }
 }
 
-// A case runs axe over the whole page once per button its sweep clicks. The rich machines page has
-// 25 of them, which take about 20 s on CI's runner.
-describe("accessibility", { timeout: 45_000 }, () => {
+describe("accessibility", () => {
   it.each(cases)("$name", async (c) => {
     const routes = { ...signedIn, ...c.routes };
     window.history.replaceState(null, "", c.path);
