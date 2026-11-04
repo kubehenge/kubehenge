@@ -4,7 +4,10 @@
 #
 #   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory, swap,
 #                                          bytes received, bytes read from disk and time stalled
-#   test/e2e/ci/guests.sh now              the same once, to standard output
+#                                          and, while memory is short, has the guests drop their page
+#                                          cache, noting each in <file>.trims
+#   test/e2e/ci/guests.sh now              the same sample once, to standard output
+#   test/e2e/ci/guests.sh trim <file>      the page cache step once
 #   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs, memory, download and
 #                                          disk read rates and stalls by VM, and each VM's peaks:
 #                                          what a test's steps ask of the machine
@@ -31,9 +34,11 @@
 # a node whose API does not answer the first is asked nothing more.
 set -eu
 
+proc=${KUBEHENGE_E2E_GUESTS_PROC:-/proc}
+
 # A VM's QEMU process names its VM ID and name on its command line.
 qemu_arg() { # pid option
-    tr '\0' '\n' < "/proc/$1/cmdline" | sed -n "/^$2\$/{n;s/,.*//;p;q;}"
+    tr '\0' '\n' < "${proc}/$1/cmdline" | sed -n "/^$2\$/{n;s/,.*//;p;q;}"
 }
 
 # sample: one line per running VM: the time, its QEMU process, VM ID and name, CPU ticks, resident
@@ -76,18 +81,63 @@ sample() {
     done
 }
 
+# MiB of memory available on this machine below which record has the guests drop their page cache.
+# A guest keeps all the memory it was given resident, mostly page cache of what it read once, so
+# the machine swaps guest memory out while the guests hold little they need. A guest dropping its
+# page cache frees only clean pages no process maps, and free page reporting hands them back:
+# 2 GiB of one guest's within 20 s on Proxmox VE. 0 turns it off.
+trim_below=${KUBEHENGE_E2E_TRIM_BELOW:-2048}
+# Seconds before the same guest is asked again, as its page cache fills again from what it reads.
+trim_every=120
+
+# trim <trims file>: while memory is short, asks each running guest not asked in the last
+# trim_every seconds to drop its page cache, and notes each guest that did with the MiB the machine
+# had available. A guest whose agent runs no commands, such as Talos's or one still booting, is
+# asked again in trim_every seconds.
+trim() {
+    [ "${trim_below}" -gt 0 ] || return 0
+    available=$(awk '/^MemAvailable:/ { print int($2 / 1024) }' "${proc}/meminfo")
+    [ "${available}" -lt "${trim_below}" ] || return 0
+    now=$(date +%s)
+    for pid in $(pgrep -x kvm || true); do
+        vmid=$(qemu_arg "${pid}" -id 2> /dev/null)
+        case ${vmid} in
+            '' | *[!0-9]*) continue ;;
+            *) ;;
+        esac
+        eval "last=\${trimmed_${vmid}:-}"
+        [ -z "${last}" ] || [ $((now - last)) -ge "${trim_every}" ] || continue
+        eval "trimmed_${vmid}=${now}"
+        if timeout -k 5 30 docker exec kubehenge-e2e-pve qm guest exec "${vmid}" --timeout 20 -- \
+            sh -c 'echo 1 > /proc/sys/vm/drop_caches' < /dev/null > /dev/null 2>&1; then
+            at=$(date -u +%T)
+            printf '%s %s %s\n' "${at}" "${vmid}" "${available}" >> "$1"
+        fi
+    done
+}
+
 record() {
     while :; do
         sample
+        trim "$1"
         sleep 15
     done
 }
 
 summary() {
-    [ -s "$1" ] || {
+    if [ -s "$1" ]; then
+        load "$1"
+    else
         echo "no VM was sampled"
-        return 0
-    }
+    fi
+    [ -s "$1.trims" ] || return 0
+    echo "guests that dropped their page cache, with the MiB the machine had available then:"
+    awk '{ n[$2]++; if (!($2 in first)) first[$2] = $1 " (" $3 ")"; last[$2] = $1 " (" $3 ")" }
+        END { for (vm in n) printf "  %s: %d times, first at %s, last at %s\n", vm, n[vm], first[vm], last[vm] }' "$1.trims"
+}
+
+# load <record>: the record's minutes and peaks by VM.
+load() {
     hz=$(getconf CLK_TCK)
     awk -v hz="${hz}" '
         function seconds(t, p) { split(t, p, ":"); return p[1] * 3600 + p[2] * 60 + p[3] }
@@ -544,8 +594,9 @@ collect() {
 }
 
 case ${1:-} in
-    record) record > "${2:?usage: $0 record <file>}" ;;
+    record) record "${2:?usage: $0 record <file>}.trims" > "$2" ;;
     now) sample ;;
+    trim) trim "${2:?usage: $0 trim <file>}.trims" ;;
     summary) summary "${2:?usage: $0 summary <file>}" ;;
     collect) collect "${2:?usage: $0 collect <directory> [<work directory>]}" "${3:-${RUNNER_TEMP:+${RUNNER_TEMP}/e2e}}" ;;
     *)

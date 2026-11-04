@@ -277,6 +277,8 @@ The log's "The guests' load" step sums it up per minute. It gives each VM's busi
 
 Under pressure the machine keeps its page cache rather than the guests' memory (`vm.swappiness=10`) and starts reclaiming earlier (`vm.watermark_scale_factor=200`). Cloning a template then evicts cached disk blocks instead of a running control plane.
 
+A guest keeps all the memory it was given, mostly page cache. While the machine has under 2 GiB available, the recorder asks each guest through its agent to drop its page cache, each at most every 2 minutes (`KUBEHENGE_E2E_TRIM_BELOW`, 0 turns it off). Free page reporting hands the freed memory back. Talos guests run no commands, so they keep theirs. "The guests' load" lists each guest that dropped its cache.
+
 ### How much the guests may take
 
 The runner has 15983 MiB of memory. Besides the guests' QEMU processes, about 3.3 GiB of it is not available:

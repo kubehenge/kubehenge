@@ -332,7 +332,8 @@ jobs:
                 jq -r '.[].t'
             done > "$out/proxmox-failed-tasks.txt" 2>&1 || true
           cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
-            "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests-record.log" "$RUNNER_TEMP/guard.txt" \
+            "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests.txt.trims" \
+            "$RUNNER_TEMP/guests-record.log" "$RUNNER_TEMP/guard.txt" \
             "$RUNNER_TEMP/guard.txt.fail" "$RUNNER_TEMP/guard.log" "$out/" 2>/dev/null || true
           # From inside the VMs, which answers even when a cluster's API does not.
           test/e2e/ci/guests.sh collect "$out/guests" || true
