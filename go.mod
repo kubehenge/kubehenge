@@ -4,7 +4,6 @@ go 1.27.3
 
 // npm's packages may carry Go code of their own, which is not Kubehenge's to build or lint.
 ignore (
-	./scripts/renovate/node_modules
 	./web/node_modules
 	./website/node_modules
 )

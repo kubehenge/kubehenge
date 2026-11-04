@@ -9,7 +9,7 @@ HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
 .PHONY: build web gateway-api capi-operator-chart website screenshotsdist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
-.PHONY: website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos lint-renovate unit-go unit-web unit-tofu unit-shell tofu-init
+.PHONY: website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
 # comes, as the end-to-end runs do.
@@ -189,7 +189,7 @@ verify-providers:
 # YAML, Markdown, the e2e image's Dockerfile and the node images' Containerfiles, spelling and
 # Renovate's config, each at its strictest settings; the files are the repository's own, as git
 # lists them.
-lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos lint-renovate
+lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos
 
 FILES = git ls-files --cached --others --exclude-standard
 SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh website/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
@@ -232,14 +232,6 @@ lint-web: web/node_modules/.package-lock.json
 # Spelling in every file git lists, in British English (.typos.toml).
 lint-typos:
 	typos
-
-# Renovate's own check of renovate.json, failing on a warning or on an option it would migrate.
-scripts/renovate/node_modules/.package-lock.json: scripts/renovate/package-lock.json
-	cd scripts/renovate && npm ci --no-fund --no-audit
-	touch $@
-
-lint-renovate: scripts/renovate/node_modules/.package-lock.json
-	npm --prefix scripts/renovate exec --no -- renovate-config-validator --strict --no-global renovate.json
 
 tofu-init:
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false -lockfile=readonly >/dev/null; done

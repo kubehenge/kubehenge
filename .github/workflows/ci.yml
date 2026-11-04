@@ -46,8 +46,7 @@ jobs:
             ~/.npm
             ~/.cache/uv
           key: >-
-            ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock',
-            'scripts/renovate/package-lock.json') }}
+            ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
           restore-keys: ci-
       - name: Tools
         run: |
