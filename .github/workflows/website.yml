@@ -185,3 +185,31 @@ jobs:
     steps:
       - id: deploy
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  # The published pages, sent to IndexNow, which passes them on to Bing, Yandex and the other
+  # engines that take part. Google reads the sitemap that robots.txt names. The key is public by
+  # design: the engines check that the site serves it.
+  indexnow:
+    name: IndexNow
+    needs: deploy
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && github.event_name == 'push' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Send the pages
+        env:
+          SITE: https://kubehenge.dev
+          KEY: de4648cfd1ca935797a72233390428d9
+        run: |
+          set -eu
+          curl --fail --silent --show-error --retry 3 "$SITE/sitemap.xml" |
+            grep -o '<loc>[^<]*</loc>' | sed 's/<[^>]*>//g' > pages.txt
+          [ -s pages.txt ] || { echo "::error::$SITE/sitemap.xml lists no pages"; exit 1; }
+          jq -R . pages.txt | jq -s --arg host "${SITE#https://}" --arg key "$KEY" \
+            --arg location "$SITE/$KEY.txt" \
+            '{host: $host, key: $key, keyLocation: $location, urlList: .}' > body.json
+          curl --fail-with-body --silent --show-error --retry 3 --request POST \
+            --header 'Content-Type: application/json; charset=utf-8' --data @body.json \
+            https://api.indexnow.org/indexnow
+          echo "Sent $(wc -l < pages.txt) pages."
