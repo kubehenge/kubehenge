@@ -34,8 +34,7 @@ check_nodes() {
 }
 
 # providers_ready: whether every provider runs the version its spec names and is Ready. Not with
-# kubectl wait, which takes a condition from an older generation as unmet: the operator leaves Ready
-# as it was when an upgraded provider's Deployment stays available, observed generation and all.
+# kubectl wait, which cannot compare two fields of the object, the installed version with the spec's.
 providers_ready() {
     kubectl get "${provider_kinds}" --all-namespaces -o json | jq -e '.items | length > 0 and all(.[];
         .status.installedVersion == .spec.version and any(.status.conditions[]?; .type == "Ready" and .status == "True"))' > /dev/null
