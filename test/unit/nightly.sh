@@ -22,27 +22,57 @@ bad() {
 
 seen=$(mktemp)
 trap 'rm -f "${seen}"' EXIT
+# bare <lane>: sets bare to the lane's tests without their options.
+strip_options() {
+    bare='' rest=$1,
+    while [ -n "${rest}" ]; do
+        part=${rest%%,*}
+        rest=${rest#*,}
+        bare=${bare:+${bare},}${part%%+*}
+    done
+}
+
+# The lists below are read once and matched in the shell, as each process started costs most of
+# this test's time on Windows. Each holds its words between spaces.
 # jq on Windows ends its lines with CR LF.
 lanes=$(sh "${ci}/scope.sh" --all | jq -r '.[]' | tr -d '\r')
+queue=" $(printf '%s' "${lanes}" | tr '\n' ' ') management-cluster-upgrade rancher control-plane-ha two-nodes "
+all_lanes=" $(printf '%s' "${lanes}" | tr '\n,' '  ') "
+node_oses=" $(jq -r '.available[]' "${chart}/files/node-oses.json" | tr -d '\r' | tr '\n' ' ') "
+# cnis <distribution>: the CNIs its class offers.
+cnis() {
+    awk '/- name: cni$/ { f = 1 } f && /enum:/ { gsub(/.*\[|\].*/, ""); gsub(/,/, " "); print; exit }' "${chart}/templates/$1.yaml"
+}
+cnis_kubeadm=$(cnis kubeadm)
+cnis_rke2=$(cnis rke2)
+cnis_k3s=$(cnis k3s)
+cnis_talos=$(cnis talos)
 nights=24
 night=0
 while [ "${night}" -lt "${nights}" ]; do
     list=$(sh "${ci}/nightly.sh" $((20000 + night)))
     if printf '%s' "${list}" | jq -e 'type == "array" and length == (unique | length)' > /dev/null; then ok; else bad "night ${night}: not a list of distinct tests: ${list}"; fi
-    # jq on Windows ends its lines with CR LF.
-    for t in $(sh "${ci}/scope.sh" --all | jq -r '.[]' | tr -d '\r') management-cluster-upgrade rancher control-plane-ha two-nodes; do
-        if printf '%s' "${list}" | jq -e --arg t "${t}" 'index($t) != null' > /dev/null; then ok; else bad "night ${night} leaves ${t} out"; fi
+    tests=" $(printf '%s' "${list}" | jq -r '.[]' | tr -d '\r' | tr '\n' ' ') "
+    for t in ${queue}; do
+        case ${tests} in
+            *" ${t} "*) ok ;;
+            *) bad "night ${night} leaves ${t} out" ;;
+        esac
     done
     # Every lane is one the merge queue runs, its tests without their options, or one of the
     # nightly run's own four: none runs only at night by accident.
-    for lane in $(printf '%s' "${list}" | jq -r '.[]' | tr -d '\r'); do
-        bare=$(printf '%s' "${lane}" | tr , '\n' | sed 's/+.*//' | paste -sd, -)
-        case " $(printf '%s' "${lanes}" | tr '\n' ' ') management-cluster-upgrade rancher control-plane-ha two-nodes " in
+    for lane in ${tests}; do
+        strip_options "${lane}"
+        case ${queue} in
             *" ${bare} "*) ok ;;
             *) bad "night ${night} runs the lane ${lane}, which the merge queue does not run as ${bare}" ;;
         esac
     done
-    for lane in $(printf '%s' "${list}" | jq -r '.[] | select(contains("+"))' | tr -d '\r'); do
+    for lane in ${tests}; do
+        case ${lane} in
+            *+*) ;;
+            *) continue ;;
+        esac
         # The options are the first test's, and the lane's other test runs as in the merge queue.
         name=${lane%%,*}
         case ${lane#"${name}"} in
@@ -61,7 +91,13 @@ while [ "${night}" -lt "${nights}" ]; do
         test=${test%-addons-?}
         test=${test%-etcd}
         test=${test%-machines}
-        enum=$(awk '/- name: cni$/ { f = 1 } f && /enum:/ { gsub(/.*\[|\].*/, ""); gsub(/,/, " "); print; exit }' "${chart}/templates/${test}.yaml")
+        case ${test} in
+            kubeadm) enum=${cnis_kubeadm} ;;
+            rke2) enum=${cnis_rke2} ;;
+            k3s) enum=${cnis_k3s} ;;
+            talos) enum=${cnis_talos} ;;
+            *) enum='' ;;
+        esac
         case " ${enum} " in
             *" ${KUBEHENGE_E2E_CNI} "*) ok ;;
             *) bad "${name}: ${test}'s class has no CNI ${KUBEHENGE_E2E_CNI}" ;;
@@ -70,10 +106,11 @@ while [ "${night}" -lt "${nights}" ]; do
             ok
         elif [ "${test}" = talos ]; then
             bad "${name} gives Talos a node OS"
-        elif jq -e --arg os "${KUBEHENGE_E2E_NODE_OS}" '.available | index($os) != null' "${chart}/files/node-oses.json" > /dev/null; then
-            ok
         else
-            bad "${name}: no node OS ${KUBEHENGE_E2E_NODE_OS}"
+            case ${node_oses} in
+                *" ${KUBEHENGE_E2E_NODE_OS} "*) ok ;;
+                *) bad "${name}: no node OS ${KUBEHENGE_E2E_NODE_OS}" ;;
+            esac
         fi
         printf '%s %s %s %s\n' "${test}" "${KUBEHENGE_E2E_CNI}" "${KUBEHENGE_E2E_NODE_OS:--}" "${KUBEHENGE_E2E_CIS:-true}" >> "${seen}"
         # Each variant runs as every part of its distribution's test, in the part's own lane.
@@ -86,12 +123,14 @@ while [ "${night}" -lt "${nights}" ]; do
             esac
             parts=$((parts + 1))
             twin=${first}+${name#*+}${part#"${first}"}
-            if printf '%s' "${list}" | jq -e --arg t "${twin}" 'index($t) != null' > /dev/null; then ok; else bad "night ${night} runs ${name} without ${twin}"; fi
+            case ${tests} in
+                *" ${twin} "*) ok ;;
+                *) bad "night ${night} runs ${name} without ${twin}" ;;
+            esac
         done
         if [ "${parts}" -ge 3 ]; then ok; else bad "${test} runs in ${parts} parts, not its lifecycle and at least two add-on parts"; fi
         # Every step of the lifecycle runs with the options: whole, or as both its halves.
         lifecycle=no
-        all_lanes=" $(printf '%s' "${lanes}" | tr '\n,' '  ') "
         case ${all_lanes} in
             *" ${test} "*) lifecycle=yes ;;
             *" ${test}-etcd "*)
@@ -109,8 +148,11 @@ done
 
 # Every other CNI of each class, on every other node OS, hardened and not.
 others=$(jq -r '(.default | "\(.family)-\(.release)") as $d | .available[] | select(. != $d)' "${chart}/files/node-oses.json" | tr -d '\r')
+seen_lines="
+$(cat "${seen}")
+"
 for distribution in kubeadm rke2 k3s talos; do
-    enum=$(awk '/- name: cni$/ { f = 1 } f && /enum:/ { gsub(/.*\[|\].*/, ""); gsub(/,/, " "); print; exit }' "${chart}/templates/${distribution}.yaml")
+    enum=$(cnis "${distribution}")
     own=$(awk '/- name: cni$/ { f = 1 } f && /default:/ { print $2; exit } f && /include/ { exit }' "${chart}/templates/${distribution}.yaml")
     oses=${others}
     [ "${distribution}" != talos ] || oses=-
@@ -118,7 +160,12 @@ for distribution in kubeadm rke2 k3s talos; do
         [ "${cni}" != "${own:-cilium}" ] || continue
         for os in ${oses}; do
             for cis in true false; do
-                if grep -qxF "${distribution} ${cni} ${os} ${cis}" "${seen}"; then ok; else bad "in ${nights} nights no ${distribution} on ${cni}, node OS ${os}, CIS ${cis}"; fi
+                case ${seen_lines} in
+                    *"
+${distribution} ${cni} ${os} ${cis}
+"*) ok ;;
+                    *) bad "in ${nights} nights no ${distribution} on ${cni}, node OS ${os}, CIS ${cis}" ;;
+                esac
             done
         done
     done
