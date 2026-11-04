@@ -1229,7 +1229,9 @@ async function sweep(c: Case, routes: Record<string, Route>, user: UserEvent): P
   }
 }
 
-describe("accessibility", () => {
+// A case runs axe over the whole page once per button its sweep clicks. The rich machines page has
+// 25 of them, which take about 20 s on CI's runner.
+describe("accessibility", { timeout: 45_000 }, () => {
   it.each(cases)("$name", async (c) => {
     const routes = { ...signedIn, ...c.routes };
     window.history.replaceState(null, "", c.path);
