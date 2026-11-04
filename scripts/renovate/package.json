@@ -4,5 +4,8 @@
   "description": "Renovate's config validator, which make lint runs over renovate.json.",
   "devDependencies": {
     "renovate": "44.210.0"
+  },
+  "overrides": {
+    "glob@>=9.0.0 <14.0.2": "14.0.3"
   }
 }
