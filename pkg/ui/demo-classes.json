@@ -211,7 +211,7 @@
               "default": {
                 "cores": 2,
                 "diskGiB": 40,
-                "memoryMiB": 4096
+                "memoryMiB": 6144
               },
               "properties": {
                 "cores": {
@@ -226,7 +226,7 @@
                   "type": "integer"
                 },
                 "memoryMiB": {
-                  "default": 4096,
+                  "default": 6144,
                   "minimum": 1024,
                   "multipleOf": 8,
                   "type": "integer"
@@ -1528,7 +1528,7 @@
               "default": {
                 "cores": 2,
                 "diskGiB": 40,
-                "memoryMiB": 4096
+                "memoryMiB": 6144
               },
               "properties": {
                 "cores": {
@@ -1543,7 +1543,7 @@
                   "type": "integer"
                 },
                 "memoryMiB": {
-                  "default": 4096,
+                  "default": 6144,
                   "minimum": 2048,
                   "multipleOf": 8,
                   "type": "integer"
@@ -2842,7 +2842,7 @@
               "default": {
                 "cores": 2,
                 "diskGiB": 40,
-                "memoryMiB": 4096
+                "memoryMiB": 6144
               },
               "properties": {
                 "cores": {
@@ -2857,7 +2857,7 @@
                   "type": "integer"
                 },
                 "memoryMiB": {
-                  "default": 4096,
+                  "default": 6144,
                   "minimum": 4096,
                   "multipleOf": 8,
                   "type": "integer"
@@ -4159,7 +4159,7 @@
               "default": {
                 "cores": 2,
                 "diskGiB": 40,
-                "memoryMiB": 4096
+                "memoryMiB": 6144
               },
               "properties": {
                 "cores": {
@@ -4174,7 +4174,7 @@
                   "type": "integer"
                 },
                 "memoryMiB": {
-                  "default": 4096,
+                  "default": 6144,
                   "minimum": 1024,
                   "multipleOf": 8,
                   "type": "integer"

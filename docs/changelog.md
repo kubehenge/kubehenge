@@ -5,6 +5,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 ## [Unreleased]
 
 - The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000. A change reaches running nodes without a reboot.
+- A new cluster's workers get 6144 MiB by default, up from 4096 MiB. That holds every add-on but Rancher, logs, backups and GitOps, with about 2 GiB to spare. The minimums stay as they were.
 
 ## [0.4.1] - 2026-11-05
 
