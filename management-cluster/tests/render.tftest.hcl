@@ -94,8 +94,14 @@ run "nodes" {
   }
 
   assert {
-    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.cpu[0].units == 1000])
-    error_message = "management VMs must weigh ten times a default VM in the host's CPU scheduling"
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.cpu[0].units == 200])
+    error_message = "management VMs must weigh twice a default VM in the host's CPU scheduling"
+  }
+
+  # The provider reboots a VM for any change of its CPU or memory, every node at once.
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.reboot_after_update == false])
+    error_message = "a change of the management VMs' hardware must never reboot them"
   }
 
   assert {

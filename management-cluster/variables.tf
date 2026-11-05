@@ -166,9 +166,9 @@ variable "node_cores" {
 }
 
 variable "node_cpu_units" {
-  description = "Proxmox VE CPU weight of each control-plane node. When the host's CPUs are contended, a node gets this share against 100 for a VM at Proxmox VE's default, so the API server keeps answering."
+  description = "Proxmox VE CPU weight of each control-plane node. When the host's CPUs are contended, a node gets this share against 100 for a VM at Proxmox VE's default, so the API server keeps answering. A change reaches running nodes at once, without a reboot."
   type        = number
-  default     = 1000
+  default     = 200
 
   validation {
     condition     = var.node_cpu_units >= 1 && var.node_cpu_units <= 10000 && floor(var.node_cpu_units) == var.node_cpu_units

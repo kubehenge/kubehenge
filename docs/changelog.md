@@ -4,6 +4,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+- The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000. A change reaches running nodes without a reboot.
+
 ## [0.4.1] - 2026-11-05
 
 The first release of 0.4. The v0.4.0 tag was never published.

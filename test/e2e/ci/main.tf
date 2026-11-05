@@ -108,6 +108,9 @@ module "management_cluster" {
   node_cores         = var.node_cores
   node_memory_mb     = var.node_memory_mb
   node_memory_min_mb = var.node_memory_min_mb
+  # The runner's guests have more vCPUs than it has CPUs, more contention than a real host sees
+  # (docs/testing.md).
+  node_cpu_units = 1000
   # As the templates', test/e2e/ci/run.sh.
   cpu_type = "host"
 
