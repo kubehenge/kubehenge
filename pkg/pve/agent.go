@@ -28,11 +28,12 @@ func Backoff(interval time.Duration) time.Duration {
 }
 
 // ExecStatus is the guest agent's report on a command. go-proxmox's own type declares
-// err-truncated a bool, which Proxmox VE sends as a number, so commands with long error output fail
-// to decode there.
+// err-truncated and signal bools, which Proxmox VE sends as numbers, so any command that writes to
+// standard error, or is killed by a signal, fails to decode there.
 type ExecStatus struct {
 	Exited       int    `json:"exited"`
 	ExitCode     int    `json:"exitcode"`
+	Signal       int    `json:"signal"`
 	OutData      string `json:"out-data"`
 	ErrData      string `json:"err-data"`
 	OutTruncated any    `json:"out-truncated"`
@@ -42,6 +43,18 @@ type ExecStatus struct {
 // Output is what the command printed, on standard output and standard error.
 func (s *ExecStatus) Output() string {
 	return strings.TrimSpace(s.OutData + "\n" + s.ErrData)
+}
+
+// Failure says how the command failed, or is empty when it exited 0. A command killed by a signal
+// has no exit code in the report.
+func (s *ExecStatus) Failure() string {
+	switch {
+	case s.Signal != 0:
+		return fmt.Sprintf("was killed by signal %d", s.Signal)
+	case s.ExitCode != 0:
+		return fmt.Sprintf("exited %d", s.ExitCode)
+	}
+	return ""
 }
 
 // GuestExec runs a command in a VM through its QEMU guest agent, with input on its standard input,

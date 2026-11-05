@@ -52,8 +52,8 @@ func (g *ProxmoxGuests) Run(ctx context.Context, vmid int64, script string, time
 		return "", fmt.Errorf("VM %d: %w", vmid, err)
 	}
 	out := status.Output()
-	if status.ExitCode != 0 {
-		return out, fmt.Errorf("VM %d: exited %d: %s", vmid, status.ExitCode, tail(out, outputTail))
+	if failure := status.Failure(); failure != "" {
+		return out, fmt.Errorf("VM %d: %s: %s", vmid, failure, tail(out, outputTail))
 	}
 	return out, nil
 }
