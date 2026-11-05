@@ -582,6 +582,7 @@ tofu output -raw talosconfig > talosconfig
 | `gateway`, `dns_servers` | required | The nodes' gateway and DNS servers. |
 | `pod_subnets`, `service_subnets` | `["10.244.0.0/16"]`, `["10.96.0.0/12"]` | The management cluster's own ranges. The plan refuses ranges that overlap the nodes' network. |
 | `node_cores`, `node_memory_mb`, `node_disk_gb` | `4`, `4096`, `32` | Size of each node. |
+| `node_cpu_units` | `1000` | Proxmox VE CPU weight of each node, from 1 to 10000. Proxmox VE's default is 100, so when the host's CPUs are contended the nodes get ten times a default VM's share. |
 | `node_memory_min_mb` | none | Least memory Proxmox VE's ballooning takes each node down to while its host is above 80 % memory use. At least 2048. |
 | `cpu_type` | `x86-64-v2-AES` | QEMU CPU type. Talos needs at least x86-64-v2. `host` spares the nodes mitigations their CPU does not need. It lets them migrate only between nodes with the same CPU ([templates.md](templates.md#how-clusters-find-them)). |
 

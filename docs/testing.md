@@ -275,6 +275,8 @@ Each try records what the machine and its VMs take every 15 seconds (`test/e2e/c
 
 The log's "The guests' load" step sums it up per minute. It gives each VM's busiest minute, most memory, fastest reads and longest waits. A VM stalled on the machine's CPUs shows as CPU waits. One stalled on its disk shows as disk waits and reads.
 
+The guests' vCPUs outnumber the runner's CPUs, so the guests compete for them. The management node runs at a higher CPU weight (`node_cpu_units`), which keeps its API server answering while the workload guests are busy.
+
 Under pressure the machine keeps its page cache rather than the guests' memory (`vm.swappiness=10`) and starts reclaiming earlier (`vm.watermark_scale_factor=200`). Cloning a template then evicts cached disk blocks instead of a running control plane.
 
 A guest keeps all the memory it was given, mostly page cache. While the machine has under 2 GiB available, the recorder asks each guest through its agent to drop its page cache, each at most every 2 minutes (`KUBEHENGE_E2E_TRIM_BELOW`, 0 turns it off). Free page reporting hands the freed memory back. Talos guests run no commands, so they keep theirs. "The guests' load" lists each guest that dropped its cache.

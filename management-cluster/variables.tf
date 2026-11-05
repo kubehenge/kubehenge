@@ -165,6 +165,17 @@ variable "node_cores" {
   default     = 4
 }
 
+variable "node_cpu_units" {
+  description = "Proxmox VE CPU weight of each control-plane node. When the host's CPUs are contended, a node gets this share against 100 for a VM at Proxmox VE's default, so the API server keeps answering."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.node_cpu_units >= 1 && var.node_cpu_units <= 10000 && floor(var.node_cpu_units) == var.node_cpu_units
+    error_message = "node_cpu_units must be a whole number from 1 to 10000, the weights Proxmox VE keeps under cgroup v2."
+  }
+}
+
 variable "node_memory_mb" {
   description = "Memory per control-plane node, in MiB."
   type        = number
