@@ -13,10 +13,10 @@ name=$1
 guard=$2
 guests=$3
 dir=$(dirname "$0")
-api="repos/${GITHUB_REPOSITORY}/check-runs"
+api="repos/${GITHUB_REPOSITORY:?}/check-runs"
 
 # Without the right to write checks, as in a fork's run, there is nothing to keep it in.
-id=$(gh api "${api}" -f name="${name}" -f head_sha="${GITHUB_SHA}" -f status=in_progress \
+id=$(gh api "${api}" -f name="${name}" -f head_sha="${GITHUB_SHA:?}" -f status=in_progress \
     --jq .id) || exit 0
 
 report() {
@@ -34,6 +34,7 @@ report() {
 # send <jq filter>: a check run's text holds at most 65535 characters, so a long summary keeps its
 # latest minutes.
 send() {
+    # shellcheck disable=SC2310 # a report that fails to go out is tried again the next minute.
     report 2>&1 | tail -c 60000 | jq -Rs "$1" | gh api -X PATCH "${api}/${id}" --input - > /dev/null ||
         true
 }
