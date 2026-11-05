@@ -332,6 +332,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Registrar, cloud *provisioner.Proxmox, rancherMinors provisioner.KubernetesMinors) *provisioner.Hooks {
 	return &provisioner.Hooks{
 		Reader:            mgr.GetAPIReader(),
+		Classes:           mgr.GetClient(),
 		ClassNamespace:    o.r.ClassNamespace,
 		Registrar:         registrar,
 		RancherKubernetes: rancherMinors,

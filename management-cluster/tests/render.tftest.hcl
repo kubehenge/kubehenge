@@ -94,6 +94,11 @@ run "nodes" {
   }
 
   assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.cpu[0].units == 1000])
+    error_message = "management VMs must weigh ten times a default VM in the host's CPU scheduling"
+  }
+
+  assert {
     condition = (
       length(toset([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].mac_address])) == 3 &&
       alltrue([for vm in proxmox_virtual_environment_vm.node : can(regex("^BC:24:11(:[0-9A-F]{2}){3}$", vm.network_device[0].mac_address))])
@@ -732,6 +737,39 @@ run "node_memory_min_refuses_less_than_talos_needs" {
   expect_failures = [var.node_memory_min_mb]
 }
 
+run "node_cpu_units" {
+  command = apply
+
+  variables {
+    node_cpu_units = 4000
+  }
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.cpu[0].units == 4000])
+    error_message = "node_cpu_units must reach every management VM"
+  }
+}
+
+run "node_cpu_units_refuses_more_than_cgroup_v2_keeps" {
+  command = plan
+
+  variables {
+    node_cpu_units = 10001
+  }
+
+  expect_failures = [var.node_cpu_units]
+}
+
+run "node_cpu_units_refuses_none" {
+  command = plan
+
+  variables {
+    node_cpu_units = 0
+  }
+
+  expect_failures = [var.node_cpu_units]
+}
+
 run "extra_cluster_namespaces_refuse_system_ones" {
   command = plan
 
@@ -786,6 +824,23 @@ run "providers" {
       "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/k3s", "ControlPlaneProvider/talos",
     ])
     error_message = "the distributions' providers, and only they, must leave their replica count to Kubehenge's controller"
+  }
+
+  assert {
+    condition = toset([
+      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
+      if anytrue([
+        for patch in try(p.spec.patches, []) : try(
+          [for op in yamldecode(patch.patch) : op.path if strcontains(op.path, "/livenessProbe/")], []
+        ) == ["/spec/template/spec/containers/0/livenessProbe/timeoutSeconds", "/spec/template/spec/containers/0/livenessProbe/failureThreshold"]
+      ])
+      ]) == toset([
+      "CoreProvider/cluster-api",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/talos",
+      "InfrastructureProvider/proxmox", "IPAMProvider/in-cluster", "AddonProvider/helm",
+    ])
+    error_message = "every provider but the two k3s ones, which have no probes, gets the patient probes"
   }
 
   assert {
