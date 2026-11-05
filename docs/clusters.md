@@ -835,6 +835,9 @@ A deleted cluster can still be named in `readFrom` with kubectl while its Secret
 
 With **Take volume snapshots** (the `csi` variable's `volumeSnapshots`), the cluster's CSI plugin takes VolumeSnapshots of its volumes. It restores them into new volumes and clones volumes (a PersistentVolumeClaim whose `dataSource` is another claim).
 
+> [!WARNING]
+> A snapshot copies the volume while its pods may still write to it, so the copy can mix old and new data. Stop the workload or pause its writes first, such as with a database's own backup mode.
+
 Proxmox VE's own volume copy is for `root@pam` alone. So a small proxy beside the plugin, `kubehenge-csi-proxy`, makes each copy with the cluster's own token instead. It imports the volume into a new disk of one of the cluster's holder VMs and keeps it there as an unused disk. The proxy records, in the cluster, the name the plugin knows each copy by.
 
 - **What it grants:** copies of the cluster's own volumes, onto the cluster's own storage, and nothing else.
