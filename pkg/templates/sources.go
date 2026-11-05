@@ -46,6 +46,10 @@ const (
 	sourcesTimeout = 2 * time.Minute
 	// maxResponseBytes is far above any checksum list, key or schematic answer.
 	maxResponseBytes = 16 << 20
+	// A publisher's dropped connection or passing 5xx would otherwise fail a build of many minutes,
+	// where the same request seconds later gets through.
+	sourcesAttempts  = 4
+	sourcesFirstWait = 2 * time.Second
 )
 
 // Sources fetches image metadata and repository keys from the publishers.
@@ -55,6 +59,8 @@ type Sources struct {
 	// Mirrors serve a publisher's files from another place, by the publisher's address
 	// (https://host); a test points them at its own server.
 	Mirrors map[string]string
+	// retryWait replaces sourcesFirstWait, so that a test retries without waiting.
+	retryWait time.Duration
 }
 
 // DefaultSources uses the public Talos Image Factory and every publisher's own address.
@@ -134,7 +140,7 @@ func oneKey(armoured []byte) (*openpgp.Entity, error) {
 // TalosSchematicID registers TalosSchematic with the Image Factory, which names it by its content,
 // the same ID on every call.
 func (s *Sources) TalosSchematicID(ctx context.Context) (string, error) {
-	body, err := s.do(ctx, http.MethodPost, s.TalosFactoryURL+"/schematics", strings.NewReader(TalosSchematic))
+	body, err := s.do(ctx, http.MethodPost, s.TalosFactoryURL+"/schematics", []byte(TalosSchematic))
 	if err != nil {
 		return "", fmt.Errorf("registering the Talos schematic: %w", err)
 	}
@@ -312,22 +318,49 @@ func fingerprint(e *openpgp.Entity) string {
 	return strings.ToUpper(hex.EncodeToString(e.PrimaryKey.Fingerprint))
 }
 
-func (s *Sources) do(ctx context.Context, method, address string, body io.Reader) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, address, body)
+// do sends a request, again after a failure that may pass: no answer, a broken answer, a 5xx or a
+// 429. Every request it sends may be repeated, as the schematic's ID is its content.
+func (s *Sources) do(ctx context.Context, method, address string, body []byte) ([]byte, error) {
+	wait := s.retryWait
+	if wait == 0 {
+		wait = sourcesFirstWait
+	}
+	for attempt := 1; ; attempt++ {
+		data, passing, err := s.once(ctx, method, address, body)
+		if err == nil || !passing || attempt == sourcesAttempts {
+			return data, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(wait):
+		}
+		wait *= 2
+	}
+}
+
+// once sends a request once and says whether its failure may pass.
+func (s *Sources) once(ctx context.Context, method, address string, body []byte) ([]byte, bool, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, address, reader)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", method, address, err)
+		return nil, false, fmt.Errorf("%s %s: %w", method, address, err)
 	}
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", method, address, err)
+		return nil, ctx.Err() == nil, fmt.Errorf("%s %s: %w", method, address, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: reading the answer: %w", method, address, err)
+		return nil, ctx.Err() == nil, fmt.Errorf("%s %s: reading the answer: %w", method, address, err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("%s %s: %s", method, address, resp.Status)
+		passing := resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests
+		return nil, passing, fmt.Errorf("%s %s: %s", method, address, resp.Status)
 	}
-	return data, nil
+	return data, false, nil
 }

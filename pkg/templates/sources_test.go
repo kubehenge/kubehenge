@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -350,5 +351,115 @@ func TestRepositoryKeyChecksTheFingerprint(t *testing.T) {
 	files[k8sKeyPath] = append(readFixture(t, "pkgs.k8s.io-Release.key"), almaLinux10Key...)
 	if _, err := s.RepositoryKey(context.Background(), k); err == nil {
 		t.Error("a second key served beside it was accepted")
+	}
+}
+
+// failingPublisher answers the first failures requests with status, then with the request's body.
+func failingPublisher(t *testing.T, failures int32, status int) (*Sources, *atomic.Int32) {
+	t.Helper()
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) <= failures {
+			w.WriteHeader(status)
+			return
+		}
+		_, _ = io.Copy(w, r.Body)
+	}))
+	t.Cleanup(srv.Close)
+	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, retryWait: time.Millisecond}, &requests
+}
+
+func TestAPassingFailureIsTriedAgain(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusTooManyRequests} {
+		s, requests := failingPublisher(t, 2, status)
+		body, err := s.do(context.Background(), http.MethodPost, s.TalosFactoryURL+"/schematics", []byte(TalosSchematic))
+		if err != nil {
+			t.Fatalf("%d twice, then 200: %v", status, err)
+		}
+		if string(body) != TalosSchematic {
+			t.Errorf("%d: the third request carried %q, not the whole body", status, body)
+		}
+		if got := requests.Load(); got != 3 {
+			t.Errorf("%d: %d requests, want 3", status, got)
+		}
+	}
+}
+
+func TestALastingFailureIsNotTriedAgain(t *testing.T) {
+	t.Parallel()
+	for _, status := range []int{http.StatusNotFound, http.StatusForbidden, http.StatusBadRequest} {
+		s, requests := failingPublisher(t, 1, status)
+		if _, err := s.do(context.Background(), http.MethodGet, s.TalosFactoryURL+"/versions", nil); err == nil {
+			t.Errorf("%d was taken as success", status)
+		}
+		if got := requests.Load(); got != 1 {
+			t.Errorf("%d: %d requests, want 1", status, got)
+		}
+	}
+}
+
+func TestRetriesEndAfterTheLastAttempt(t *testing.T) {
+	t.Parallel()
+	s, requests := failingPublisher(t, sourcesAttempts+1, http.StatusServiceUnavailable)
+	_, err := s.do(context.Background(), http.MethodGet, s.TalosFactoryURL+"/versions", nil)
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Errorf("error %v, want the last answer's 503", err)
+	}
+	if got := requests.Load(); got != sourcesAttempts {
+		t.Errorf("%d requests, want %d", got, sourcesAttempts)
+	}
+}
+
+func TestADroppedConnectionIsTriedAgain(t *testing.T) {
+	t.Parallel()
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(srv.Close)
+	s := &Sources{HTTP: srv.Client(), retryWait: time.Millisecond}
+	body, err := s.do(context.Background(), http.MethodGet, srv.URL, nil)
+	if err != nil || string(body) != "ok" {
+		t.Errorf("got %q, %v after a dropped connection, want ok", body, err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Errorf("%d requests, want 2", got)
+	}
+}
+
+func TestACancelledBuildStopsRetrying(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		cancel()
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	s := &Sources{HTTP: srv.Client(), retryWait: time.Hour}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.do(ctx, http.MethodGet, srv.URL, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a cancelled build was taken as success")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("still waiting to retry after the build was cancelled")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("%d requests, want 1", got)
 	}
 }

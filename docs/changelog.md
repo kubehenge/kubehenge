@@ -148,6 +148,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - Applying the management-cluster module no longer returns while the Cluster API Operator reinstalls core Cluster API right after upgrading it. The providers' release now waits until the providers have stayed unchanged for 30 seconds.
 - A template build or a cluster's storage set-up no longer fails when Proxmox VE kills a VM create before it starts. It goes on under the next VM ID and logs how to remove the VM left locked.
 - `kubehenge template create` tries a failed build again after 2 and 8 minutes, as the interface and the refresh do.
+- A template build asks a publisher for a checksum, signature, key or Talos schematic up to four times, 2, 4 and 8 seconds apart. One dropped connection or 5xx answer no longer fails the build.
 - Deleting a template build checks that its VM ID still holds that template. Proxmox VE gives a freed ID to the next VM created.
 - An add-on whose publisher moves a version's tag to a new build still installs and upgrades. The Add-on Provider for Helm refused the pinned chart once the tag pointed elsewhere, which stopped the newest CSI plugin.
 - Rancher installs the Turtles, webhook and Fleet charts Kubehenge names, from the chart repository inside its pinned image. With Rancher 2.15.3 these are Turtles 0.27.4, the webhook 0.11.4, Fleet 0.16.3 and shell 0.8.3.
