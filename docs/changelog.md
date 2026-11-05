@@ -20,6 +20,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
+- A cluster's `network` variable takes an `mtu` (1280 to 65520) and `queues` (1 to 64) for its nodes' interface. The MTU reaches the Proxmox VE interface and the node's own.
+- An interface MTU above the bridge's is refused, in the wizard and by the controller, where Proxmox VE lists the bridge's MTU.
 
 ## [0.4.2] - 2026-11-05
 

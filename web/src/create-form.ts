@@ -36,7 +36,22 @@ import {
 } from "./GitOps";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
-import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
+import {
+  addressBits,
+  addressCount,
+  inList,
+  ipv4,
+  isMTU,
+  isQueues,
+  isVLAN,
+  list,
+  maxMTU,
+  maxQueues,
+  minMTU,
+  networkOf,
+  rangeProblem,
+  whole,
+} from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -124,6 +139,10 @@ export interface Form {
   endpoint: string;
   bridge: string;
   vlan: string;
+  /** The nodes' interface MTU, empty to leave Proxmox VE's default. */
+  mtu: string;
+  /** The nodes' interface queues, empty for one. */
+  queues: string;
   addresses: string;
   prefix: number;
   gateway: string;
@@ -592,6 +611,8 @@ export const newForm = (): Form => ({
   endpoint: "",
   bridge: "",
   vlan: "",
+  mtu: "",
+  queues: "",
   addresses: "",
   prefix: 24,
   gateway: "",
@@ -808,6 +829,12 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (form.vlan) {
     network["vlan"] = Number(form.vlan);
   }
+  if (form.mtu) {
+    network["mtu"] = Number(form.mtu);
+  }
+  if (form.queues) {
+    network["queues"] = Number(form.queues);
+  }
   const variables: Record<string, unknown> = {
     controlPlaneEndpoint: form.endpoint,
     network,
@@ -919,6 +946,8 @@ export function summary(
       autoscales(form, c) ? `${form.workerReplicas} to ${form.workerMax}, autoscaled` : String(form.workerReplicas),
     ],
     ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
+    ...(form.mtu ? [["MTU", form.mtu] as [string, string]] : []),
+    ...(form.queues ? [["Queues", form.queues] as [string, string]] : []),
     ["API address", form.endpoint],
     ["Node addresses", list(form.addresses).join(", ")],
     ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
@@ -1039,6 +1068,8 @@ export type FieldKey =
   | "addons"
   | "bridge"
   | "vlan"
+  | "mtu"
+  | "queues"
   | "endpoint"
   | "addresses"
   | "prefix"
@@ -1169,6 +1200,12 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   if (form.vlan && !isVLAN(form.vlan)) {
     p.vlan = "A whole number from 1 to 4094";
+  }
+  if (form.mtu && !isMTU(form.mtu)) {
+    p.mtu = `A whole number from ${minMTU} to ${maxMTU}`;
+  }
+  if (form.queues && !isQueues(form.queues)) {
+    p.queues = `A whole number from 1 to ${maxQueues}`;
   }
   if (!whole(form.prefix, 1, addressBits)) {
     p.prefix = `A whole number from 1 to ${addressBits}`;
@@ -1471,6 +1508,18 @@ export function snapshotsProblems(step: Step, form: Form, offer: SnapshotsOffer)
     return {};
   }
   return { volumeSnapshots: offer.problem };
+}
+
+/** bridgeMtuProblems holds the network step's MTU to the chosen bridge's, where a node lists it. */
+export function bridgeMtuProblems(step: Step, form: Form, bridges: Bridge[]): Problems {
+  if (step !== "Network" || !form.mtu || !isMTU(form.mtu)) {
+    return {};
+  }
+  const mtu = bridges.find((b) => b.bridge === form.bridge)?.mtu;
+  if (mtu === undefined || Number(form.mtu) <= mtu) {
+    return {};
+  }
+  return { mtu: `The bridge has MTU ${mtu}. Use ${mtu} or less` };
 }
 
 /** csiProblems holds the machines step to the CSI plugin's release a new cluster chose. */

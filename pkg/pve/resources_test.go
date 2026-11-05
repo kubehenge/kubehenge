@@ -178,7 +178,7 @@ func TestBridgesOfANodeNeedSysAuditOnIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Bridge{{Bridge: "vmbr0", Node: "one", VLANAware: true, Comment: "uplink"}, {Bridge: "vmbr1", Node: "one"}}
+	want := []Bridge{{Bridge: "vmbr0", Node: "one", VLANAware: true, Comment: "uplink", MTU: 1500}, {Bridge: "vmbr1", Node: "one", MTU: 1500}}
 	if !reflect.DeepEqual(bridges, want) {
 		t.Errorf("bridges %+v, want %+v", bridges, want)
 	}

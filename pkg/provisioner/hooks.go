@@ -75,6 +75,9 @@ type Hooks struct {
 	RancherKubernetes KubernetesMinors
 	// Nodes is asked which Proxmox VE nodes are online for a cluster the Placer has not marked yet.
 	Nodes Nodes
+	// Bridges is asked for a bridge's MTU, which the validator holds a cluster's interface MTU to.
+	// Nil, no bridge is looked at.
+	Bridges BridgeMTUs
 	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
 	// and the validator refuses a release it does not pin.
 	Releases *ReleaseChecksums

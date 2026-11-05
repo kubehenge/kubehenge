@@ -27,6 +27,17 @@ export const maxVLAN = 4094;
 /** isVLAN tells whether text is a VLAN tag. */
 export const isVLAN = (v: string): boolean => whole(Number(v), 1, maxVLAN);
 
+// Proxmox VE takes an MTU from 576, but the nodes' IPv6 does not work below 1280.
+export const minMTU = 1280;
+export const maxMTU = 65_520;
+export const maxQueues = 64;
+
+/** isMTU tells whether text is an interface MTU the nodes take. */
+export const isMTU = (v: string): boolean => whole(Number(v), minMTU, maxMTU);
+
+/** isQueues tells whether text is a number of queues for the nodes' interface. */
+export const isQueues = (v: string): boolean => whole(Number(v), 1, maxQueues);
+
 /** toInt reads a dotted IPv4 address as a number. Undefined when it is none. */
 export function toInt(address: string): number | undefined {
   if (!ipv4.test(address)) {

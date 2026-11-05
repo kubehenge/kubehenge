@@ -1,6 +1,7 @@
 package pve
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -58,6 +59,23 @@ type Bridge struct {
 	// CIDR and Gateway are the node's own IPv4 address on the bridge and its gateway, where it has them.
 	CIDR    string `json:"cidr,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
+	// MTU is the bridge's, 1500 where Proxmox VE lists none: a node's interface on it takes no more.
+	MTU int `json:"mtu,omitempty"`
+}
+
+// defaultBridgeMTU is what a Linux bridge has where Proxmox VE lists no MTU.
+const defaultBridgeMTU = 1500
+
+// number reads a number Proxmox VE sends as a string or as a number.
+type number int
+
+func (n *number) UnmarshalJSON(raw []byte) error {
+	v, err := strconv.Atoi(strings.Trim(string(raw), `"`))
+	if err != nil {
+		return fmt.Errorf("reading %s as a number: %w", raw, err)
+	}
+	*n = number(v)
+	return nil
 }
 
 // HARule is an enabled node-affinity rule of Proxmox VE's HA: the nodes its resources keep to, or
@@ -187,6 +205,7 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 		Comments  string `json:"comments"`
 		CIDR      string `json:"cidr"`
 		Gateway   string `json:"gateway"`
+		MTU       number `json:"mtu"`
 	}
 	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/network?type=any_bridge", &res); err != nil {
 		return nil, err
@@ -195,7 +214,7 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 	for _, r := range res {
 		bridges = append(bridges, Bridge{
 			Bridge: r.Iface, Node: node, VLANAware: r.VLANAware != 0, Comment: strings.TrimSpace(r.Comments),
-			CIDR: r.CIDR, Gateway: r.Gateway,
+			CIDR: r.CIDR, Gateway: r.Gateway, MTU: cmp.Or(int(r.MTU), defaultBridgeMTU),
 		})
 	}
 	return bridges, nil

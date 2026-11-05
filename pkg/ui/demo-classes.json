@@ -69,8 +69,20 @@
                   "format": "ipv4",
                   "type": "string"
                 },
+                "mtu": {
+                  "description": "MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own, and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.",
+                  "maximum": 65520,
+                  "minimum": 1280,
+                  "type": "integer"
+                },
                 "prefix": {
                   "maximum": 32,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "queues": {
+                  "description": "Queues of the Proxmox VE network interface, one per vCPU at most. Unset, it has one.",
+                  "maximum": 64,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -1386,8 +1398,20 @@
                   "format": "ipv4",
                   "type": "string"
                 },
+                "mtu": {
+                  "description": "MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own, and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.",
+                  "maximum": 65520,
+                  "minimum": 1280,
+                  "type": "integer"
+                },
                 "prefix": {
                   "maximum": 32,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "queues": {
+                  "description": "Queues of the Proxmox VE network interface, one per vCPU at most. Unset, it has one.",
+                  "maximum": 64,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -2700,8 +2724,20 @@
                   "format": "ipv4",
                   "type": "string"
                 },
+                "mtu": {
+                  "description": "MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own, and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.",
+                  "maximum": 65520,
+                  "minimum": 1280,
+                  "type": "integer"
+                },
                 "prefix": {
                   "maximum": 32,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "queues": {
+                  "description": "Queues of the Proxmox VE network interface, one per vCPU at most. Unset, it has one.",
+                  "maximum": 64,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -4017,8 +4053,20 @@
                   "format": "ipv4",
                   "type": "string"
                 },
+                "mtu": {
+                  "description": "MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own, and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.",
+                  "maximum": 65520,
+                  "minimum": 1280,
+                  "type": "integer"
+                },
                 "prefix": {
                   "maximum": 32,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "queues": {
+                  "description": "Queues of the Proxmox VE network interface, one per vCPU at most. Unset, it has one.",
+                  "maximum": 64,
                   "minimum": 1,
                   "type": "integer"
                 },
