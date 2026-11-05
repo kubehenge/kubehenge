@@ -868,18 +868,18 @@ else
     # Asked before the long steps rather than during them.
     if [ -z "${storage}" ]; then
         storage=$(choose_storage rootdir "the appliance's disks" --storage)
-        [ -n "${storage}" ] || fail "no enabled, active storage here takes container disks (content rootdir); enable one, or name one with --storage"
+        [ -n "${storage}" ] || fail "no enabled, active storage here takes container disks (content rootdir). Enable one, or name one with --storage"
     else
         # shellcheck disable=SC2310 # takes is a predicate; its status is the answer.
-        takes "${storage}" rootdir || fail "storage ${storage} is disabled, inactive or takes no container disks here; name another with --storage"
+        takes "${storage}" rootdir || fail "storage ${storage} is disabled, inactive or takes no container disks here. Name another with --storage"
     fi
     if [ -z "${template_storage}" ]; then
         template_storage=$(template_held)
         [ -n "${template_storage}" ] || template_storage=$(choose_storage vztmpl "the container template" --template-storage)
-        [ -n "${template_storage}" ] || fail "no enabled, active storage here takes container templates (content vztmpl); enable one, or name one with --template-storage"
+        [ -n "${template_storage}" ] || fail "no enabled, active storage here takes container templates (content vztmpl). Enable one, or name one with --template-storage"
     else
         # shellcheck disable=SC2310 # takes is a predicate; its status is the answer.
-        takes "${template_storage}" vztmpl || fail "storage ${template_storage} is disabled, inactive or takes no container templates here; name another with --template-storage"
+        takes "${template_storage}" vztmpl || fail "storage ${template_storage} is disabled, inactive or takes no container templates here. Name another with --template-storage"
     fi
     case "${ip}" in
         dhcp) net="name=eth0,bridge=${bridge},ip=dhcp" ;;
@@ -1082,7 +1082,7 @@ else
 fi
 
 step "container template ${TEMPLATE} on ${template_storage}"
-template_file=$(pvesm path "${template_storage}:vztmpl/${TEMPLATE}") || fail "storage ${template_storage} gives no path for the container template; name another with --template-storage"
+template_file=$(pvesm path "${template_storage}:vztmpl/${TEMPLATE}") || fail "storage ${template_storage} gives no path for the container template. Name another with --template-storage"
 if [ -f "${template_file}" ] && echo "${TEMPLATE_SHA512}  ${template_file}" | sha512sum -c --quiet - 2> /dev/null; then
     ok "already there, checksum verified"
 else

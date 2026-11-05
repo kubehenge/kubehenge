@@ -78,7 +78,7 @@ Each provider runs its release's own image, by the digest `versions.tf` names, w
 
 Both are built reproducibly, so the published images can be rebuilt from their sources and compared ([releasing.md](releasing.md)). A release of each that carries its fixes replaces the build.
 
-Every provider's probes allow 5 s, and its liveness probe six misses. The k3s providers have no probes. Upstream's 1 s probe restarts Cluster API's only replica on a busy host, and its webhooks then refuse every change.
+Each provider's probes allow 5 s, and its liveness probe tolerates six misses. The k3s providers have no probes. On a busy host, upstream's 1 s probe restarts Cluster API's only replica. Its webhooks then refuse every change.
 
 Talos's two providers come from Kubehenge's own forks of them, [cluster-api-bootstrap-provider-talos](https://github.com/kubehenge/cluster-api-bootstrap-provider-talos) and [cluster-api-control-plane-provider-talos](https://github.com/kubehenge/cluster-api-control-plane-provider-talos). Sidero Labs' releases are on Cluster API's v1beta1 contract, which Cluster API's core removes. Its control-plane provider has no `TalosControlPlaneTemplate`, which a ClusterClass needs. The forks carry both, with fixes of their own. They are maintained primarily for Kubehenge and open to anyone who runs Talos with Cluster API.
 
