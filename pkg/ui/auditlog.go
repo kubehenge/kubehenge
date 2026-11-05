@@ -167,13 +167,18 @@ func stampedLine(line []byte) (time.Time, []byte, bool) {
 }
 
 // auditOpener opens one API server pod's log from since (the whole log when zero), with the
-// kubelet's timestamps, and follows it as the API server writes it.
-type auditOpener func(ctx context.Context, pod string, since time.Time) (io.ReadCloser, error)
+// kubelet's timestamps. It follows the current container's log as the API server writes it, or
+// reads the previous container's to its end.
+type auditOpener func(ctx context.Context, pod string, since time.Time, previous bool) (io.ReadCloser, error)
 
 // auditPod is how far the follower has read one API server pod, and the stream that reads it.
 type auditPod struct {
-	// identity tells one run of the pod from another: a restarted container starts a new log.
-	identity string
+	// uid and restarts tell one run of the pod's container from another, each with a log of its own.
+	uid      string
+	restarts int
+	// previous says the stream first reads the previous container's log from from, for the lines
+	// written after the last read. The current container's log is then read from its start.
+	previous bool
 	// from is where the next stream starts, the last line read cut to the whole second SinceTime has.
 	from time.Time
 	// last is the time of the last line read.
@@ -287,7 +292,8 @@ func (s *Server) followAuditPods(ctx context.Context, f *auditFollower) error {
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		listed[pod.Name] = true
-		s.keepStreaming(ctx, f, open, pod.Name, podIdentity(pod))
+		uid, restarts := podRun(pod)
+		s.keepStreaming(ctx, f, open, pod.Name, uid, restarts)
 	}
 	maps.DeleteFunc(f.pods, func(name string, p *auditPod) bool {
 		if listed[name] {
@@ -300,30 +306,33 @@ func (s *Server) followAuditPods(ctx context.Context, f *auditFollower) error {
 	return nil
 }
 
-// podIdentity changes when the pod's API server container restarts, which starts a new log.
-func podIdentity(pod *corev1.Pod) string {
-	var id strings.Builder
-	id.WriteString(string(pod.UID))
+// podRun is the pod's UID and its containers' restarts. Each restart starts a new log, and the
+// kubelet keeps the one before it. The API server's pod has one container.
+func podRun(pod *corev1.Pod) (string, int) {
+	restarts := 0
 	for i := range pod.Status.ContainerStatuses {
-		id.WriteString("/" + strconv.Itoa(int(pod.Status.ContainerStatuses[i].RestartCount)))
+		restarts += int(pod.Status.ContainerStatuses[i].RestartCount)
 	}
-	return id.String()
+	return string(pod.UID), restarts
 }
 
 // keepStreaming opens a stream on one API server's log unless one is open and live. f.mu is held.
-func (s *Server) keepStreaming(ctx context.Context, f *auditFollower, open auditOpener, name, identity string) {
+func (s *Server) keepStreaming(ctx context.Context, f *auditFollower, open auditOpener, name, uid string, restarts int) {
 	p := f.pods[name]
 	switch {
 	case p == nil:
-		p = &auditPod{identity: identity, from: f.start}
+		p = &auditPod{uid: uid, restarts: restarts, from: f.start}
 		f.pods[name] = p
-	case p.identity != identity:
+	case p.uid != uid:
 		if !p.finished {
-			s.Log.WarnContext(ctx, "an API server restarted before the interface read all of its log, so its audit lines after the last read are lost",
-				"pod", name, "lastRead", p.last)
+			s.warnLost(ctx, name, p.last, "a new API server pod replaced it")
 		}
 		p.end()
-		p = &auditPod{identity: identity}
+		p = &auditPod{uid: uid, restarts: restarts}
+		f.pods[name] = p
+	case p.restarts != restarts:
+		p.end()
+		p = s.restarted(ctx, name, p, restarts)
 		f.pods[name] = p
 	case p.streaming() && s.now().Sub(p.heard) < auditQuiet:
 		return
@@ -333,7 +342,7 @@ func (s *Server) keepStreaming(ctx context.Context, f *auditFollower, open audit
 	}
 	streamCtx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
-	p.stop, p.done, p.heard, p.finished, p.fresh = stop, done, s.now(), false, true
+	p.stop, p.done, p.heard, p.finished = stop, done, s.now(), false
 	f.streams.Go(func() {
 		defer close(done)
 		defer stop()
@@ -341,17 +350,72 @@ func (s *Server) keepStreaming(ctx context.Context, f *auditFollower, open audit
 	})
 }
 
-// streamPod reads one API server's log as it is written, until the stream or ctx ends.
+// restarted is the position after the pod's container restarted. The kubelet keeps only the log
+// of the container before the current one.
+//   - One restart: that log is the one the stream read. It is read on from the last line read.
+//   - Two: the stream's own container was read to its end or its last lines are gone. The
+//     previous log is read whole.
+//   - More: the logs of the containers in between are gone.
+func (s *Server) restarted(ctx context.Context, name string, p *auditPod, restarts int) *auditPod {
+	next := &auditPod{uid: p.uid, restarts: restarts, previous: true}
+	switch n := restarts - p.restarts; {
+	case n == 1 && p.finished:
+		next.previous = false
+	case n == 1:
+		next.from, next.last = p.from, p.last
+	case n == 2 && p.finished:
+	default:
+		s.warnLost(ctx, name, p.last, "the API server restarted more often than the kubelet keeps logs for")
+	}
+	return next
+}
+
+func (s *Server) warnLost(ctx context.Context, name string, last time.Time, why string) {
+	s.Log.WarnContext(ctx, "the interface could not read all of an API server's log, so its audit lines after the last read are lost",
+		"pod", name, "lastRead", last, "why", why)
+}
+
+// streamPod reads the previous container's log where asked, then follows the current one's as
+// it is written, until the stream or ctx ends.
 func (s *Server) streamPod(ctx context.Context, f *auditFollower, open auditOpener, name string, p *auditPod) {
 	f.mu.Lock()
-	from := p.from
+	from, previous, last := p.from, p.previous, p.last
 	f.mu.Unlock()
-	stream, err := open(ctx, name, from)
+	if previous {
+		err := s.readPodLog(ctx, f, open, name, p, from, true)
+		switch {
+		case apierrors.IsBadRequest(err) || apierrors.IsNotFound(err):
+			s.warnLost(ctx, name, last, "the previous container's log is gone")
+		case err != nil:
+			// Read again at the next tick, as the previous log may still be there.
+			s.warnStream(ctx, name, err)
+			return
+		}
+		f.mu.Lock()
+		p.previous, p.from, p.last = false, time.Time{}, time.Time{}
+		f.mu.Unlock()
+		from = time.Time{}
+	}
+	err := s.readPodLog(ctx, f, open, name, p, from, false)
 	if err != nil {
 		s.warnStream(ctx, name, err)
 		return
 	}
+	f.mu.Lock()
+	p.finished = true
+	f.mu.Unlock()
+}
+
+// readPodLog reads one log of a pod from from until it ends, nil when it ended whole.
+func (s *Server) readPodLog(ctx context.Context, f *auditFollower, open auditOpener, name string, p *auditPod, from time.Time, previous bool) error {
+	stream, err := open(ctx, name, from, previous)
+	if err != nil {
+		return err //nolint:wrapcheck // podLogOpener names the step
+	}
 	defer func() { _ = stream.Close() }()
+	f.mu.Lock()
+	p.fresh = true
+	f.mu.Unlock()
 	br := bufio.NewReaderSize(stream, scanStart)
 	for {
 		line, err := br.ReadBytes('\n')
@@ -360,19 +424,14 @@ func (s *Server) streamPod(ctx context.Context, f *auditFollower, open auditOpen
 		at, message, ok := stampedLine(bytes.TrimRight(line, "\r\n"))
 		if ok && bytes.HasSuffix(line, []byte{'\n'}) {
 			if keepErr := s.auditLine(ctx, f, name, p, at, message); keepErr != nil {
-				s.warnStream(ctx, name, keepErr)
-				return
+				return keepErr
 			}
 		}
 		if errors.Is(err, io.EOF) {
-			f.mu.Lock()
-			p.finished = true
-			f.mu.Unlock()
-			return
+			return nil
 		}
 		if err != nil {
-			s.warnStream(ctx, name, err)
-			return
+			return fmt.Errorf("reading the log: %w", err)
 		}
 	}
 }
@@ -404,8 +463,8 @@ func (s *Server) warnStream(ctx context.Context, name string, err error) {
 }
 
 func podLogOpener(cs kubernetes.Interface) auditOpener {
-	return func(ctx context.Context, pod string, since time.Time) (io.ReadCloser, error) {
-		opts := &corev1.PodLogOptions{Timestamps: true, Follow: true}
+	return func(ctx context.Context, pod string, since time.Time, previous bool) (io.ReadCloser, error) {
+		opts := &corev1.PodLogOptions{Timestamps: true, Follow: !previous, Previous: previous}
 		if !since.IsZero() {
 			from := metav1.NewTime(since)
 			opts.SinceTime = &from

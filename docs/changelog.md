@@ -4,7 +4,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
-- Activity no longer misses a kubectl change made in the seconds before the kubelet rotates the API server's log. The interface follows each log as it is written, where it read it once a minute.
+- Activity no longer misses a kubectl change made just before the kubelet rotates the API server's log or the API server restarts. The interface follows each log as it is written and reads a restarted container's last lines from its previous log.
 
 ## [0.4.2] - 2026-11-05
 

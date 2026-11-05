@@ -32,14 +32,18 @@ type fakeLogLine struct {
 // apiServerFake serves the API server pods and their logs over HTTP, as the API server and the
 // kubelet do. A log is served with timestamps from SinceTime in whole seconds, followed or cut at
 // LimitBytes. Only each log's current file is served: rotate drops the lines before it, but a
-// stream that follows the log goes on into the new file.
+// stream that follows the log goes on into the new file. The previous container's log is served
+// where the kubelet still has it.
 type apiServerFake struct {
 	mu        sync.Mutex
 	pods      map[string]*corev1.Pod
 	files     map[string][]fakeLogLine
 	followers map[string][]*fakeFollower
-	opens     map[string][]time.Time
-	srv       *httptest.Server
+	// previous is the previous container's log, by pod, where there is one.
+	previous map[string][]fakeLogLine
+	// opens and previousOpens are where each read of the current and the previous log started.
+	opens, previousOpens map[string][]time.Time
+	srv                  *httptest.Server
 }
 
 // fakeFollower is one stream that follows a log. A value on quit ends it, a nil one as the end of
@@ -53,7 +57,8 @@ func newAPIServerFake(t *testing.T, pods ...string) *apiServerFake {
 	t.Helper()
 	api := &apiServerFake{
 		pods: map[string]*corev1.Pod{}, files: map[string][]fakeLogLine{},
-		followers: map[string][]*fakeFollower{}, opens: map[string][]time.Time{},
+		followers: map[string][]*fakeFollower{}, previous: map[string][]fakeLogLine{},
+		opens: map[string][]time.Time{}, previousOpens: map[string][]time.Time{},
 	}
 	for _, name := range pods {
 		api.pods[name] = &corev1.Pod{
@@ -185,14 +190,13 @@ func (api *apiServerFake) serve(w http.ResponseWriter, r *http.Request) {
 	if s := r.URL.Query().Get("sinceTime"); s != "" {
 		since, _ = time.Parse(time.RFC3339, s)
 	}
+	if r.URL.Query().Get("previous") == "true" {
+		api.servePrevious(w, pod, since)
+		return
+	}
 	api.mu.Lock()
 	api.opens[pod] = append(api.opens[pod], since)
-	var backlog strings.Builder
-	for _, line := range api.files[pod] {
-		if !line.at.Before(since) {
-			backlog.WriteString(line.String())
-		}
-	}
+	backlog := linesSince(api.files[pod], since)
 	var f *fakeFollower
 	if r.URL.Query().Get("follow") == "true" {
 		f = &fakeFollower{lines: make(chan string, 1<<12), quit: make(chan error, 1)}
@@ -201,7 +205,7 @@ func (api *apiServerFake) serve(w http.ResponseWriter, r *http.Request) {
 	api.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain")
 	if f == nil {
-		out := backlog.String()
+		out := backlog
 		if limit, err := strconv.Atoi(r.URL.Query().Get("limitBytes")); err == nil && limit < len(out) {
 			out = out[:limit]
 		}
@@ -209,7 +213,64 @@ func (api *apiServerFake) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer api.unfollow(pod, f)
-	api.follow(w, r, f, backlog.String())
+	api.follow(w, r, f, backlog)
+}
+
+func linesSince(lines []fakeLogLine, since time.Time) string {
+	var b strings.Builder
+	for _, line := range lines {
+		if !line.at.Before(since) {
+			b.WriteString(line.String())
+		}
+	}
+	return b.String()
+}
+
+// servePrevious serves the previous container's log, or the kubelet's refusal when it has none.
+func (api *apiServerFake) servePrevious(w http.ResponseWriter, pod string, since time.Time) {
+	api.mu.Lock()
+	api.previousOpens[pod] = append(api.previousOpens[pod], since)
+	lines, ok := api.previous[pod]
+	api.mu.Unlock()
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"BadRequest","code":400,`+
+			`"message":"previous terminated container \"kube-apiserver\" in pod \"`+pod+`\" not found"}`)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	_, _ = io.WriteString(w, linesSince(lines, since))
+}
+
+// restart restarts a pod's container: its log becomes the previous one, and the restart before
+// it is gone. With keep false, the kubelet has lost the previous log too.
+func (api *apiServerFake) restart(pod string, keep bool) {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if keep {
+		api.previous[pod] = api.files[pod]
+	} else {
+		delete(api.previous, pod)
+	}
+	api.files[pod] = nil
+	for _, f := range api.followers[pod] {
+		f.quit <- nil
+	}
+	api.followers[pod] = nil
+	p := api.pods[pod]
+	restarts := int32(0)
+	if len(p.Status.ContainerStatuses) > 0 {
+		restarts = p.Status.ContainerStatuses[0].RestartCount
+	}
+	p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "kube-apiserver", RestartCount: restarts + 1}}
+}
+
+// previousFrom is where each read of the first pod's previous log started.
+func (api *apiServerFake) previousFrom() []time.Time {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return slices.Clone(api.previousOpens[apiServerA])
 }
 
 func (*apiServerFake) follow(w http.ResponseWriter, r *http.Request, f *fakeFollower, backlog string) {

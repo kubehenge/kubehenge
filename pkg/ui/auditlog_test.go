@@ -292,42 +292,108 @@ func TestAnAuditRotationGapIsWarnedAboutOnce(t *testing.T) {
 	}
 }
 
-// An API server pod replaced, or its container restarted, starts a new log, which is read from its
-// start. Lines are said to be lost only when the stream did not reach the old container's end.
-func TestARestartedAPIServerIsReadFromItsStart(t *testing.T) {
+// ended waits until the follower has seen the stream on the first pod's log end.
+func (r *auditRig) ended(t *testing.T) {
+	t.Helper()
+	r.wait(t, "the stream to end", func(f *auditFollower) bool { return !f.pods[apiServerA].streaming() })
+}
+
+// A restarted API server's new log is read from its start. The lines its old container wrote after
+// the last read come from the previous log, each kept once. Lines are said to be lost only where
+// the kubelet no longer has them.
+func TestARestartedAPIServerKeepsItsOldContainersLastLines(t *testing.T) {
 	t.Parallel()
+	const lost = "could not read all"
 	for name, tc := range map[string]struct {
-		change func(*corev1.Pod)
-		end    error
-		warns  int
+		change   func(t *testing.T, r *auditRig)
+		kept     []string
+		lost     int
+		previous []time.Time
 	}{
-		"a new pod, the old log read to its end": {func(p *corev1.Pod) { p.UID = "replacement" }, nil, 0},
-		"a restart, the stream cut": {
-			func(p *corev1.Pod) {
-				p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "kube-apiserver", RestartCount: 1}}
-			}, errConnectionLost, 1,
+		"a restart the stream ran to its end": {
+			change: func(t *testing.T, r *auditRig) {
+				t.Helper()
+				r.api.add(apiServerA, 10, "tail")
+				r.waitRead(t, apiServerA, 10)
+				r.api.restart(apiServerA, true)
+				r.ended(t)
+			},
+			kept: []string{"c09", "fresh", "tail"},
+		},
+		"a restart after the stream was cut": {
+			change: func(t *testing.T, r *auditRig) {
+				t.Helper()
+				r.cut(t, errConnectionLost)
+				r.api.add(apiServerA, 10, "tail")
+				r.api.restart(apiServerA, true)
+			},
+			kept: []string{"c09", "fresh", "tail"}, previous: []time.Time{auditBase.Add(9 * time.Second)},
+		},
+		"a restart whose previous log is gone": {
+			change: func(t *testing.T, r *auditRig) {
+				t.Helper()
+				r.cut(t, errConnectionLost)
+				r.api.add(apiServerA, 10, "tail")
+				r.api.restart(apiServerA, false)
+			},
+			kept: []string{"c09", "fresh"}, lost: 1, previous: []time.Time{auditBase.Add(9 * time.Second)},
+		},
+		"two restarts after the stream was cut": {
+			change: func(t *testing.T, r *auditRig) {
+				t.Helper()
+				r.cut(t, errConnectionLost)
+				r.api.add(apiServerA, 10, "tail")
+				r.api.restart(apiServerA, true)
+				r.api.add(apiServerA, 0, "between")
+				r.api.restart(apiServerA, true)
+			},
+			kept: []string{"between", "c09", "fresh"}, lost: 1, previous: []time.Time{{}},
+		},
+		"a new pod after the old log ended": {
+			change: func(t *testing.T, r *auditRig) {
+				t.Helper()
+				r.cut(t, nil)
+				r.api.pod(apiServerA, func(p *corev1.Pod) { p.UID = "replacement" })
+				r.api.rotate(apiServerA)
+			},
+			kept: []string{"c09", "fresh"},
+		},
+		"a new pod after the stream was cut": {
+			change: func(t *testing.T, r *auditRig) {
+				t.Helper()
+				r.cut(t, errConnectionLost)
+				r.api.pod(apiServerA, func(p *corev1.Pod) { p.UID = "replacement" })
+				r.api.rotate(apiServerA)
+			},
+			kept: []string{"c09", "fresh"}, lost: 1,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := newAuditRig(t, apiServerA)
-			for n := range 10 {
+			for n := range 9 {
 				r.api.add(apiServerA, n, "")
 			}
+			r.api.add(apiServerA, 9, "c09")
 			r.tick(t)
 			r.waitRead(t, apiServerA, 9)
-			r.cut(t, tc.end)
-			r.api.pod(apiServerA, tc.change)
-			r.api.rotate(apiServerA)
+			tc.change(t, r)
 			r.api.add(apiServerA, 1, "fresh")
 			r.tick(t)
-			waitAuditKept(t, r.s, "created configmaps fresh")
+			want := make([]string, 0, len(tc.kept))
+			for _, id := range tc.kept {
+				want = append(want, "created configmaps "+id)
+			}
+			waitAuditKept(t, r.s, want...)
 			r.tick(t)
-			if n := r.warnings("restarted"); n != tc.warns {
-				t.Errorf("%d warnings of a restart, want %d: %s", n, tc.warns, r.out)
+			if n := r.warnings(lost); n != tc.lost {
+				t.Errorf("%d warnings of lines lost, want %d: %s", n, tc.lost, r.out)
+			}
+			if got := r.api.previousFrom(); !slices.EqualFunc(got, tc.previous, time.Time.Equal) {
+				t.Errorf("the previous log was read from %v, want %v", got, tc.previous)
 			}
 			if opens := r.api.openedFrom(); len(opens) != 2 || !opens[1].IsZero() {
-				t.Errorf("the streams opened from %v, want the second at the log's start", opens)
+				t.Errorf("the current logs were read from %v, want the new one from its start", opens)
 			}
 		})
 	}
