@@ -1013,9 +1013,25 @@ run "api_audit_log" {
     error_message = "the API server writes its audit log to its output, and still keeps events a day"
   }
 
+}
+
+run "audit_policy_is_the_workload_clusters" {
+  command = plan
+
   assert {
-    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "KubeAuditPolicyConfig")
-    error_message = "the API server keeps Talos's own audit policy, so nothing it recorded is lost"
+    condition = anytrue([
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) :
+      try(yamldecode(d).kind == "KubeAuditPolicyConfig" && yamldecode(d).configuration == yamldecode(file("${path.module}/../charts/kubehenge/files/audit-policy.yaml")), false)
+    ])
+    error_message = "the API server audits with the workload clusters' policy, from its one file"
+  }
+
+  assert {
+    condition = anytrue([
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[0]) :
+      try(yamldecode(d).kind == "KubeAuditPolicyConfig" && yamldecode(d)["$patch"] == "delete", false)
+    ])
+    error_message = "Talos's own audit policy is removed before the policy is added"
   }
 }
 

@@ -56,17 +56,17 @@ sample() {
         if [ -z "${vmid}" ] || [ -z "${name}" ]; then
             continue
         fi
-        ticks=$(awk '{ print $14 + $15 }' "/proc/${pid}/stat" 2> /dev/null) || continue
+        ticks=$(awk '{ print $14 + $15 }' "${proc}/${pid}/stat" 2> /dev/null) || continue
         memory=$(awk '/^VmRSS:/ { r = $2 } /^VmSwap:/ { s = $2 } END { print r + 0, s + 0 }' \
-            "/proc/${pid}/status" 2> /dev/null) || continue
+            "${proc}/${pid}/status" 2> /dev/null) || continue
         # What the VM received is what its tap devices sent, in the network namespace QEMU runs in.
         # The kernel pads names to six characters, so a tap's name has no space before it.
         received=$(awk -F '[: ]+' -v tap="tap${vmid}i" '{ sub(/^ +/, "") } index($1, tap) == 1 { b += $10 } END { print b + 0 }' \
-            "/proc/${pid}/net/dev" 2> /dev/null) || continue
+            "${proc}/${pid}/net/dev" 2> /dev/null) || continue
         # Only QEMU's owner and root may read its I/O counts.
-        disk_read=$({ cat "/proc/${pid}/io" 2> /dev/null || sudo -n cat "/proc/${pid}/io" 2> /dev/null; } |
+        disk_read=$({ cat "${proc}/${pid}/io" 2> /dev/null || sudo -n cat "${proc}/${pid}/io" 2> /dev/null; } |
             awk '$1 == "read_bytes:" { print $2 }')
-        cgroup=$(sed -n 's/^0:://p' "/proc/${pid}/cgroup" 2> /dev/null || true)
+        cgroup=$(sed -n 's/^0:://p' "${proc}/${pid}/cgroup" 2> /dev/null || true)
         stalls=''
         for kind in cpu memory io; do
             stall=''

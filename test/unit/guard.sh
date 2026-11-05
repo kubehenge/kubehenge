@@ -290,11 +290,13 @@ if command -v setsid > /dev/null 2>&1; then
     (sleep 2 && memory 4096000 6144000 2.00 4) &
     start=$(date +%s)
     code=0
-    out=$(sh "${guard}" run "${root}/test.pid" "${record}" sh -c 'trap "" TERM; sleep 60') || code=$?
+    out=$(sh "${guard}" run "${root}/test.pid" "${record}" sh -c 'trap "" TERM; sleep 60' 2> "${root}/ended.err") || code=$?
     took=$(($(date +%s) - start))
     kill "${watcher}"
     watcher=''
+    ended=$(cat "${root}/ended.err")
     truth "an ended test fails" [ "${code}" -ne 0 ]
+    holds "killed, as it ignored the request to end" "Killed" "${ended}"
     truth "within the watch's wait for it to end" [ "${took}" -lt 40 ]
     holds "an annotation says why" "::error title=The runner ran out of room::the runner is running out of room, so the test was ended while it can still report: the OOM killer ended 1 process" "${out}"
     holds "the report gives the sample" "the sample: " "${out}"

@@ -44,7 +44,7 @@ The interface writes a request that `kubehenge-update`, a service running as roo
   - A mirror of the index and its signatures can be named with `KUBEHENGE_RELEASE_INDEX=<URL>` in the appliance's `/etc/kubehenge/appliance.env`. The interface and the updater apply the same checks to it, so a mirror has to copy the index at least weekly.
 - It installs only a release named in that index, newer than the installed one, and only an archive matching the checksum in the index. It also installs the OpenTofu release that release names, checked the same way.
 - It swaps the files by rename and restarts the interface. It holds the lock the management cluster's runs take, so an upgrade never cuts a run off and no run starts during an upgrade.
-- It keeps the installed release aside until the new one answers on its own certificate within 2 minutes and keeps running for 20 seconds more.
+- It keeps the installed release aside until the new one answers on its own certificate within 2 minutes. The new one must then run 20 seconds without a restart.
   - Otherwise, or if the restart fails, the updater restores the previous release and restarts it. The upgrade's error then reads `release … did not start: …; rolled back to …`.
 
 ### From the Proxmox VE shell
@@ -58,7 +58,7 @@ curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/inst
 - It checks every download against the checksums it carries, as when installing ([install.md](install.md#install-the-appliance)). `--release <file> --sha256 <hex>` installs a local archive instead.
 - It refuses a container that is not Kubehenge's appliance (tagged `kubehenge`) and a release older than the installed one. The same release may be installed again.
 - It keeps the appliance's state, settings and certificate. It also keeps a newer OpenTofu that the appliance's own upgrades brought.
-- It stops, changing nothing, while the management cluster is being applied or removed, a VM template is being built, or the appliance is being upgraded.
+- It stops, changing nothing, while the management cluster is applied or removed, a VM template is built, or the appliance is upgraded.
 - Like the updater, it keeps the installed release aside until the new one serves. Otherwise it rolls back with the same error.
 
 #### CA and certificate options
@@ -91,10 +91,10 @@ Each Kubehenge release pins the versions of Talos, Kubernetes, Cluster API, ever
 
 On the Administration page, the **Management cluster** section shows the settings of the last run. **Apply again…** asks for the state passphrase given when the management cluster was created and applies them as they are. **Edit settings** opens them for changes first, applied with the same passphrase. Applying again:
 
-- upgrades Talos node by node, each drained first when there are several;
-- upgrades Kubernetes component by component;
-- upgrades each Cluster API provider through the Cluster API Operator, and Kubehenge's ClusterClasses and controller;
-- puts back anything that drifted from the settings.
+- upgrades Talos node by node, each drained first when there are several
+- upgrades Kubernetes component by component
+- upgrades each Cluster API provider through the Cluster API Operator, and Kubehenge's ClusterClasses and controller
+- puts back anything that drifted from the settings
 
 The same page can move the management cluster to other Proxmox VE nodes or add nodes to it. A VM given another node is migrated there.
 
@@ -124,10 +124,10 @@ The [changelog](changelog.md) says which classes a release changes. Apply such a
 
 **Management cluster**, under the automatic upgrades in the Kubehenge box, is **Upgrade by hand** by default. Set to **Upgrade automatically**, the appliance applies the management cluster again once it runs a newer Kubehenge release than the one that last applied it. The run happens:
 
-- in the hour Kubehenge's own upgrades use (**Hour**, **Time zone**), whether or not those are on;
-- at most once a day, never during another run or a template build;
-- only after any Kubehenge upgrade asked for in the same hour has begun, so the run applies the newer release;
-- as an ordinary run, marked on the page as started automatically.
+- in the hour Kubehenge's own upgrades use (**Hour**, **Time zone**), whether or not those are on
+- at most once a day, never during another run or a template build
+- only after any Kubehenge upgrade asked for in the same hour has begun, so the run applies the newer release
+- as an ordinary run, marked on the page as started automatically
 
 A run that fails stays on the page with its error and log. It is tried again in the next day's hour, not before. **Upgrade…** runs it at once.
 
@@ -200,8 +200,8 @@ The upgrade shows as a run, with each step and how many nodes it has replaced so
 
 Kubehenge's controller looks at every cluster every five minutes. It starts an upgrade only:
 
-- inside the cluster's window;
-- while the cluster is available, with every node at the same version and no rollout running;
+- inside the cluster's window
+- while the cluster is available, with every node at the same version and no rollout running
 - one step at a time, the next once the cluster is settled again.
   - `patch` mode steps to the newest release of the cluster's minor version.
   - `minor` mode steps to the newest release of the next minor version once the distribution's stable release has reached it, otherwise as `patch` does.

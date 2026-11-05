@@ -36,7 +36,7 @@ What each release changed is in the [changelog](changelog.md).
 
 ### Appliance and interface
 
-- The appliance, an LXC container installed by one line in the Proxmox VE shell, whose interface creates the management cluster and keeps it upgraded. One Terraform/OpenTofu apply creates the same management cluster.
+- The appliance, an LXC container installed from the Proxmox VE shell, whose interface creates the management cluster and keeps it upgraded. One Terraform/OpenTofu apply creates the same management cluster.
 - The interface creates, lists, scales, upgrades and deletes clusters, with changes staged and applied together after a plan. It picks each cluster's distribution and add-ons and downloads its kubeconfig.
 - Permissions follow Proxmox VE's on each cluster's pool. Optionally, the shared Headlamp opens each cluster signed in as cluster-admin for those who may download its kubeconfig.
 - The appliance upgrades itself and, by choice, the management cluster, without a shell. Each cluster can upgrade Kubernetes automatically inside a maintenance window its owner sets.

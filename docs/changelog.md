@@ -4,13 +4,15 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-05
+
 ### Before you upgrade
 
 - Pod Security Admission's default level moves from `privileged` to `baseline`. A cluster that sets `podSecurity.admission` keeps its level.
   - One that never set it moves to `baseline`, which replaces its control-plane machines. Set `privileged` on it first to keep pods that need more.
 - Velero and RKE2's or k3s's own etcd upload wait until a cluster has its own backup access key. Store one for each cluster in its backups ([clusters.md](clusters.md#back-up-and-restore)).
 - The module's `cluster_volume_snapshots` is gone. Remove it from the module's variables.
-- The management-cluster module needs the Proxmox VE provider 0.119. Run `tofu init -upgrade`.
+- The management-cluster module needs the Proxmox VE provider 0.120. Run `tofu init -upgrade`.
 - OpenID sign-in needs `--public-url`. The appliance sets it.
 - Only `kubehenge template`, `controller`, `serve` and `csi-proxy` take `--proxmox-url`, `--proxmox-ca` and `--proxmox-insecure`. Remove them from scripts that pass them to other commands.
 - The API server now refuses Clusters that break the interface's rules (listed under Fixes). Check the Clusters kept in Git first.
@@ -143,10 +145,12 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Fixes
 
+- Activity no longer misses kubectl changes that sit behind a long stretch of other requests in the API server's log. It reads each log to its end and warns when the kubelet rotated lines away unread.
 - An etcd restore or reset of an RKE2 cluster hardened to the CIS benchmark takes about 2 minutes, not 17. While RKE2 reset etcd, etcd could not read its own data and the reset waited out RKE2's 15-minute limit.
 - Applying the management-cluster module no longer returns while the Cluster API Operator reinstalls core Cluster API right after upgrading it. The providers' release now waits until the providers have stayed unchanged for 30 seconds.
 - A template build or a cluster's storage set-up no longer fails when Proxmox VE kills a VM create before it starts. It goes on under the next VM ID and logs how to remove the VM left locked.
 - `kubehenge template create` tries a failed build again after 2 and 8 minutes, as the interface and the refresh do.
+- A template build asks a publisher for a checksum, signature, key or Talos schematic up to four times, 2, 4 and 8 seconds apart. One dropped connection or 5xx answer no longer fails the build.
 - Deleting a template build checks that its VM ID still holds that template. Proxmox VE gives a freed ID to the next VM created.
 - An add-on whose publisher moves a version's tag to a new build still installs and upgrades. The Add-on Provider for Helm refused the pinned chart once the tag pointed elsewhere, which stopped the newest CSI plugin.
 - Rancher installs the Turtles, webhook and Fleet charts Kubehenge names, from the chart repository inside its pinned image. With Rancher 2.15.3 these are Turtles 0.27.4, the webhook 0.11.4, Fleet 0.16.3 and shell 0.8.3.
@@ -183,7 +187,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - RKE2 and kubeadm templates now carry the `iptables` the CNI's portmap plugin runs, on nftables. A template build checks it.
 - Calico no longer reports itself degraded on the AlmaLinux, Rocky Linux and openSUSE Leap templates. SELinux kept the Tigera operator from reading the MTU Calico found in `/var/lib/calico`.
   - The templates label it for containers to read, and a template build checks it.
-- kubeadm and k3s clusters with Calico no longer run Calico's flow-log aggregator Goldmane and its viewer Whisker, as RKE2's own Calico already did not. Nothing read them, and on small nodes they took the pods' CPU.
+- kubeadm and k3s clusters with Calico no longer run Calico's flow-log aggregator Goldmane and its viewer Whisker. Nothing read them and they took CPU on small nodes. RKE2's own Calico already left them out.
 - A kubeadm control plane's own 3376 MiB is its measured use plus 25%. With every add-on but Rancher it needs 4976 MiB.
   - On 4096 MiB with Calico and every add-on, the API server hit its memory limit. It stalled for over a minute as Argo CD's resource types came in, and controllers restarted.
 - AlmaLinux and Rocky Linux nodes keep pressure stall information, which their kernels leave off, for the kubelet's pressure metrics.
@@ -196,7 +200,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - 1, 3, 5 or 7 control-plane nodes
   - at most 100 workers in each pool
   - node addresses and a control-plane endpoint on the gateway's network, with the endpoint outside the node addresses
-- Without a spare node address, as autoscaled pools already had, a fixed pool's rollout waited for ever.
+- A fixed pool with no spare node address waited for ever in its rollout. It now needs one, as autoscaled pools already did.
 - Two clusters on the same bridge and VLAN can no longer be given the same node addresses or control-plane endpoint.
 - With `proxmox_insecure`, etcd restores through the guest agent skip the check of Proxmox VE's certificate, as the controller's other connections do.
 - A Talos node whose machine is deleted while it is upgraded in place, as when the cluster scales down onto it, has its upgrade dropped.

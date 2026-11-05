@@ -78,6 +78,8 @@ data "talos_machine_configuration" "node" {
       yamlencode({ apiVersion = "v1alpha1", kind = "HostnameConfig", "$patch" = "delete" }),
       # No membership reports to Sidero's public discovery service; nothing here uses it.
       yamlencode({ apiVersion = "v1alpha1", kind = "DiscoveryServiceConfig", name = "default", "$patch" = "delete" }),
+      # Replaces Talos's default audit policy, so the policy below is the only one.
+      yamlencode({ apiVersion = "v1alpha1", kind = "KubeAuditPolicyConfig", "$patch" = "delete" }),
     ]),
     join("---\n", concat([
       yamlencode({ apiVersion = "v1alpha1", kind = "HostnameConfig", hostname = local.nodes[count.index].name }),
@@ -107,12 +109,19 @@ data "talos_machine_configuration" "node" {
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeControllerManagerConfig", extraArgs = local.patient_lease_args }),
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeSchedulerConfig", extraArgs = local.patient_lease_args }),
       # Events kept a day rather than an hour: a failed run stays listed that long, and its events
-      # are its log. With api_audit_log, Talos's audit policy logs to the API server's output
-      # instead of its file, where the interface reads the changes people made as a pod log.
+      # are its log. With api_audit_log, the audit log goes to the API server's output instead of
+      # its file, where the interface reads the changes people made as a pod log.
       yamlencode({
         apiVersion = "v1alpha1"
         kind       = "KubeAPIServerConfig"
         extraArgs  = merge({ event-ttl = "24h" }, var.api_audit_log ? { audit-log-path = "-" } : {})
+      }),
+      # The workload clusters' audit policy, from its one file. It leaves out lease renewals and
+      # health checks, which would fill the log's 10 MiB within minutes.
+      yamlencode({
+        apiVersion    = "v1alpha1"
+        kind          = "KubeAuditPolicyConfig"
+        configuration = yamldecode(file("${path.module}/../charts/kubehenge/files/audit-policy.yaml"))
       }),
       yamlencode({
         apiVersion = "v1alpha1"

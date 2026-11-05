@@ -151,6 +151,38 @@ func TestGuestExecWaitsLongerEachTimeAndReportsTheExit(t *testing.T) {
 	}
 }
 
+func TestGuestExecReportsACommandKilledByASignal(t *testing.T) {
+	t.Parallel()
+	// What Proxmox VE sends for a command killed with SIGKILL: no exit code at all.
+	g := &guestAgent{status: func(int) (int, any) {
+		return http.StatusOK, map[string]any{"exited": 1, "signal": 9}
+	}}
+	c, vm := g.vm(t, nil)
+	status, err := GuestExec(context.Background(), c, vm, []string{"/bin/bash", "-s"}, "kill -9 $$", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status.Failure(); got != "was killed by signal 9" {
+		t.Errorf("failure %q", got)
+	}
+}
+
+func TestExecStatusFailure(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		status ExecStatus
+		want   string
+	}{
+		{ExecStatus{Exited: 1}, ""},
+		{ExecStatus{Exited: 1, ExitCode: 3}, "exited 3"},
+		{ExecStatus{Exited: 1, Signal: 15}, "was killed by signal 15"},
+	} {
+		if got := c.status.Failure(); got != c.want {
+			t.Errorf("%+v: failure %q, want %q", c.status, got, c.want)
+		}
+	}
+}
+
 func TestGuestExecGivesUpOnceTheTimeoutHasPassed(t *testing.T) {
 	t.Parallel()
 	g := &guestAgent{}

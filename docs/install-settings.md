@@ -1,6 +1,6 @@
 # Setup settings in depth
 
-What the management cluster's opt-in settings grant and risk, and the backup targets' fields. Each setting works the same as the module's variable of the same purpose ([install.md](install.md#variables)).
+What each opt-in setting of the management cluster grants and risks, and the fields of a backup target. Every setting has a matching module variable ([install.md](install.md#variables)).
 
 ## Proxmox VE HA
 
@@ -21,7 +21,7 @@ Reading Proxmox VE's HA rules takes `Sys.Audit` on `/`, which reaches the whole 
   - Those who hold `Sys.Audit` on `/` read the rules from Proxmox VE as before.
 - **What it risks:** everyone who may create or change a cluster learns the rules' names and which nodes they cover. That might tell them how the nodes are grouped (by rack, hardware or tenant).
   - Name rules with that in mind. Nothing else of Proxmox VE's configuration reaches them.
-- **Switching it off** has the controller remove the ConfigMap and takes the interface's access to it away.
+- **Switching it off** removes the ConfigMap and the interface's access to it.
 
 ## CSI plugin
 
@@ -59,7 +59,7 @@ The store must take server-side encryption with keys the client sends (SSE-C). E
 
 Velero signs in to a target with an S3 access key of the cluster's own, limited by the store to the cluster's folder. Whoever creates or looks after a cluster with `Sys.Modify` on its pool stores it on the cluster ([clusters.md](clusters.md#change-settings)).
 
-**Shared backup key**, shown below the targets once the management cluster runs, stores one key. Kubehenge uses it for its own etcd snapshots of every cluster without a key of its own. It reaches every cluster's folder and stays in the management cluster, never in a cluster.
+The shared backup key, shown below the targets once the management cluster runs, holds one key. Kubehenge uses it for the etcd snapshots of every cluster without a key of its own. It reaches every cluster's folder and stays in the management cluster, never in a cluster.
 
 ## Management cluster etcd backups
 
@@ -94,7 +94,7 @@ It can touch no VM outside the template pool, no cluster's VM and none of the ma
 - **Proxmox VE deletes a file on a storage only for `Datastore.Allocate`**, which reaches every file and volume on that storage.
   - By default the builds use the storages of the Talos image and the cloud-init images, often `local`. So the token could delete other ISOs, images or backups kept there.
   - Give the builds storages of their own that hold nothing else (`template_refresh.import_datastore` and `iso_datastore`).
-- **Kubehenge's controller can read every Secret in the management cluster**, which it needs for the clusters' credentials. So whoever takes over the controller holds this token too, as it holds Cluster API's.
+- **Kubehenge's controller can read every Secret in the management cluster**, which it needs for the clusters' credentials. So whoever takes over the controller also holds this token, as they already hold Cluster API's.
 
 Switching the refresh off removes the user, its token and the CronJob. The templates stay.
 
@@ -110,7 +110,7 @@ Unticking **HA group labels** in the setup, or `cluster_sys_audit = false`, remo
 
 ## Nodes' boot logs
 
-A node that never joins its cluster says why in its boot log ([troubleshooting.md](troubleshooting.md#a-nodes-boot-log)). Talos nodes' logs are read through their Talos API. Every kubeadm, RKE2 and k3s node keeps the end of its boot's journals in a file of its own, beside cloud-init's output. The controller reads both through the VM's QEMU guest agent. The setting is on by default.
+A node that never joins its cluster says why in its boot log ([troubleshooting.md](troubleshooting.md#a-nodes-boot-log)). Talos nodes' logs come through their Talos API. Every kubeadm, RKE2 and k3s node keeps the end of its boot's journals in a file of its own, beside cloud-init's output. The controller reads those files through the VM's QEMU guest agent. The setting is on by default.
 
 - **What it grants:** Kubehenge's controller's token holds `VM.GuestAgent.FileRead` on the workload pool, propagated.
   - With it, the token may read files in every cluster VM through the guest agent. It runs no commands and writes nothing.
@@ -122,9 +122,9 @@ A node that never joins its cluster says why in its boot log ([troubleshooting.m
 
 ## kubectl changes
 
-The interface records what people do through it. A change made with kubectl or through the management cluster's API passes it by. With **kubectl changes** on, the management cluster's API server logs each such change, and Activity lists it with its user. The setting is off by default.
+The interface records what people do through it. A change made with kubectl or through the management cluster's API is not recorded. With **kubectl changes** on, the management cluster's API server logs each such change, and Activity lists it with its user. The setting is off by default.
 
-- **What the API server logs:** everything Talos's audit policy logs, now to its output rather than Talos's file on the nodes.
+- **What the API server logs:** the events the workload clusters' audit policy logs. They go to the API server's output instead of Talos's file on the nodes.
   - `kubectl logs -n kube-system -l k8s-app=kube-apiserver` reads it.
   - The kubelet keeps the last 50 MiB of it per API server. Talos's file keeps up to 1.1 GB for 30 days, so ship the pod logs elsewhere to keep more.
   - Activity lists each create, change and deletion for 90 days, with its user, address and object, never its content.
@@ -143,7 +143,7 @@ Without it, everyone signs in to each cluster in the shared Headlamp with a toke
   - The issuer's token lasts an hour and is renewed every 20 minutes. It sits in the Secret `<cluster>-headlamp-issuer` beside the Cluster, as the Health page's token does.
   - When such a user first opens a cluster, the interface makes a token of `kubehenge-headlamp` for their session. It lasts an hour at most and no longer than the session (ten minutes at the least, the shortest Kubernetes makes).
   - The interface keeps the token in memory and puts it on the requests it passes to Headlamp for that cluster. It never reaches the browser.
-  - A token of the user's own, or a sign-in through the cluster's identity provider, takes its place while Headlamp keeps it. Logging out of the cluster in Headlamp drops the session's token until the user opens the cluster from the interface again.
+  - A token of the user's own, or an identity-provider sign-in, replaces it. Logging out of the cluster in Headlamp drops the session's token until the user opens the cluster from the interface again.
 - **What it risks:**
   - Whoever reads Secrets in the interface's namespaces can act as cluster-admin in those clusters while the issuer's token lasts. That is the interface and the management cluster's administrators, who can read the admin kubeconfigs there already.
   - Headlamp acts as `kubehenge-headlamp`, so the cluster's audit log names that account rather than the Proxmox VE user.

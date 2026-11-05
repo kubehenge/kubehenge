@@ -2,8 +2,10 @@ package ui
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -147,31 +149,100 @@ func auditEntry(line []byte) *activityEntry {
 	return e
 }
 
-// auditEntries reads the audit events among a log's lines, oldest first.
-func auditEntries(r io.Reader) ([]activityEntry, error) {
-	var out []activityEntry
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, scanStart), auditLineMax)
-	for sc.Scan() {
-		if e := auditEntry(sc.Bytes()); e != nil {
-			out = append(out, *e)
+// auditSlice is what one read of an API server's log holds.
+type auditSlice struct {
+	entries []activityEntry
+	// first and last are the kubelet's times on the first and last complete line read, whatever the
+	// line was.
+	first, last time.Time
+	// full says the read hit its byte limit, so the log may go on.
+	full bool
+}
+
+// readAuditSlice reads a log the kubelet served with timestamps, up to limit bytes. A last line the
+// limit cut short is not read.
+func readAuditSlice(r io.Reader, limit int64) (auditSlice, error) {
+	var out auditSlice
+	br := bufio.NewReaderSize(r, scanStart)
+	var n int64
+	for {
+		line, err := br.ReadBytes('\n')
+		n += int64(len(line))
+		out.full = n >= limit
+		complete := bytes.HasSuffix(line, []byte{'\n'})
+		if len(line) > 0 && (complete || !out.full) {
+			out.addLine(bytes.TrimRight(line, "\r\n"))
+		}
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+		if err != nil {
+			return out, err //nolint:wrapcheck // the caller names the log
 		}
 	}
-	return out, sc.Err() //nolint:wrapcheck // the caller names the log
+}
+
+func (s *auditSlice) addLine(line []byte) {
+	stamp, message, ok := bytes.Cut(line, []byte{' '})
+	if !ok {
+		return
+	}
+	at, err := time.Parse(time.RFC3339Nano, string(stamp))
+	if err != nil {
+		return
+	}
+	if s.first.IsZero() {
+		s.first = at
+	}
+	s.last = at
+	if e := auditEntry(message); e != nil {
+		s.entries = append(s.entries, *e)
+	}
+}
+
+// auditOpener opens one API server pod's log from since (the whole log when zero), with the
+// kubelet's timestamps, at most limit bytes of it.
+type auditOpener func(ctx context.Context, pod string, since time.Time, limit int64) (io.ReadCloser, error)
+
+// auditPod is how far the follower has read one API server pod.
+type auditPod struct {
+	// identity tells one run of the pod from another: a restarted container starts a new log.
+	identity string
+	// from is where the next read starts, the last line read cut to the whole second SinceTime has.
+	from time.Time
+	// last is the time of the last line read.
+	last time.Time
 }
 
 // auditFollower keeps what it has read of the API servers' logs.
 type auditFollower struct {
-	// since is the time the next read starts at.
-	since time.Time
-	// seen are the audit IDs read at or after since, so a line read again is not kept twice.
+	// start is where the first read of a pod starts.
+	start time.Time
+	// pods are the positions in the logs, by pod name.
+	pods map[string]*auditPod
+	// seen are the audit IDs of the lines kept, so a line read again is not kept twice.
 	seen map[string]time.Time
+	// open reads a pod's log. Nil reads it from the cluster. limit is a read's size, or
+	// auditReadBytes when zero. Tests set both.
+	open  auditOpener
+	limit int64
+}
+
+func newAuditFollower() *auditFollower {
+	return &auditFollower{pods: map[string]*auditPod{}, seen: map[string]time.Time{}}
+}
+
+func (f *auditFollower) readBytes() int64 {
+	if f.limit > 0 {
+		return f.limit
+	}
+	return auditReadBytes
 }
 
 // followAuditLog copies the changes people make through the management cluster's API server into
 // the activity log, while the chart says the API server writes them, until ctx ends.
 func (s *Server) followAuditLog(ctx context.Context, every time.Duration) {
-	f := &auditFollower{seen: map[string]time.Time{}}
+	f := newAuditFollower()
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -186,7 +257,7 @@ func (s *Server) followAuditLog(ctx context.Context, every time.Duration) {
 	}
 }
 
-// readAuditLog reads each API server's lines since the last read.
+// readAuditLog reads each API server's log to its end, from where the last read stopped.
 func (s *Server) readAuditLog(ctx context.Context, f *auditFollower) error {
 	kube := s.currentKube()
 	if kube == nil || s.NewClientset == nil {
@@ -200,29 +271,116 @@ func (s *Server) readAuditLog(ctx context.Context, f *auditFollower) error {
 	if err != nil {
 		return fmt.Errorf("reaching the management cluster: %w", err)
 	}
-	if f.since.IsZero() {
+	if f.start.IsZero() {
 		s.startAuditFollower(f)
 	}
 	pods, err := cs.CoreV1().Pods(metav1.NamespaceSystem).List(ctx, metav1.ListOptions{LabelSelector: "k8s-app=kube-apiserver"})
 	if err != nil {
 		return fmt.Errorf("listing the API servers: %w", err)
 	}
-	var read []activityEntry
-	for i := range pods.Items {
-		got, err := podAuditEntries(ctx, cs, pods.Items[i].Name, f.since)
-		if err != nil {
-			return err
-		}
-		read = append(read, got...)
+	open := f.open
+	if open == nil {
+		open = podLogOpener(cs)
 	}
-	return s.keepAuditEntries(f, read)
+	listed := map[string]bool{}
+	var read []activityEntry
+	var readErr error
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		listed[pod.Name] = true
+		got, err := s.followPod(ctx, f, open, pod.Name, podIdentity(pod))
+		read = append(read, got...)
+		if err != nil {
+			readErr = errors.Join(readErr, err)
+		}
+	}
+	maps.DeleteFunc(f.pods, func(name string, _ *auditPod) bool { return !listed[name] })
+	if err := s.keepAuditEntries(f, read); err != nil {
+		return err
+	}
+	f.forgetOld()
+	return readErr
 }
 
-// keepAuditEntries adds the entries not kept before to the activity log, oldest first, and moves
-// the next read's start on to the newest.
+// podIdentity changes when the pod's API server container restarts, which starts a new log.
+func podIdentity(pod *corev1.Pod) string {
+	var id strings.Builder
+	id.WriteString(string(pod.UID))
+	for i := range pod.Status.ContainerStatuses {
+		id.WriteString("/" + strconv.Itoa(int(pod.Status.ContainerStatuses[i].RestartCount)))
+	}
+	return id.String()
+}
+
+// followPod reads one API server's log until a read comes back short of the limit. The position
+// moves by every line read, kept or not, so a stretch of lines nobody made is not read again. The
+// entries read before an error are returned with it, since the position has moved past them.
+func (s *Server) followPod(ctx context.Context, f *auditFollower, open auditOpener, name, identity string) ([]activityEntry, error) {
+	st := f.pods[name]
+	switch {
+	case st == nil:
+		st = &auditPod{identity: identity, from: f.start}
+		f.pods[name] = st
+	case st.identity != identity:
+		s.Log.WarnContext(ctx, "an API server restarted, so its audit log lines since the last read are gone", "pod", name, "lastRead", st.last)
+		st = &auditPod{identity: identity}
+		f.pods[name] = st
+	}
+	var read []activityEntry
+	for {
+		slice, err := readAuditPod(ctx, open, name, st.from, f.readBytes())
+		if err != nil {
+			return read, err
+		}
+		read = append(read, slice.entries...)
+		if !st.last.IsZero() && slice.first.After(st.last) {
+			s.Log.WarnContext(ctx, "the API server's log was rotated before the interface read all of it, so its audit lines in this time are lost",
+				"pod", name, "from", st.last, "to", slice.first)
+		}
+		if !slice.last.IsZero() {
+			st.last = maxTime(st.last, slice.last)
+		}
+		next := st.last.Truncate(time.Second)
+		if !slice.full {
+			if !st.last.IsZero() {
+				st.from = next
+			}
+			return read, nil
+		}
+		if slice.last.IsZero() || !next.After(st.from) {
+			return read, fmt.Errorf("reading %s's log: a second of it is larger than one read of %d bytes", name, f.readBytes())
+		}
+		st.from = next
+	}
+}
+
+func readAuditPod(ctx context.Context, open auditOpener, pod string, from time.Time, limit int64) (auditSlice, error) {
+	stream, err := open(ctx, pod, from, limit)
+	if err != nil {
+		return auditSlice{}, fmt.Errorf("reading %s's log: %w", pod, err)
+	}
+	defer func() { _ = stream.Close() }()
+	slice, err := readAuditSlice(stream, limit)
+	if err != nil {
+		return auditSlice{}, fmt.Errorf("reading %s's log: %w", pod, err)
+	}
+	return slice, nil
+}
+
+func podLogOpener(cs kubernetes.Interface) auditOpener {
+	return func(ctx context.Context, pod string, since time.Time, limit int64) (io.ReadCloser, error) {
+		opts := &corev1.PodLogOptions{Timestamps: true, LimitBytes: &limit}
+		if !since.IsZero() {
+			from := metav1.NewTime(since)
+			opts.SinceTime = &from
+		}
+		return cs.CoreV1().Pods(metav1.NamespaceSystem).GetLogs(pod, opts).Stream(ctx)
+	}
+}
+
+// keepAuditEntries adds the entries not kept before to the activity log, oldest first.
 func (s *Server) keepAuditEntries(f *auditFollower, read []activityEntry) error {
 	slices.SortFunc(read, func(a, b activityEntry) int { return a.At.Compare(b.At) })
-	var newest time.Time
 	for i := range read {
 		e := &read[i]
 		id := e.Details[auditIDKey]
@@ -233,51 +391,42 @@ func (s *Server) keepAuditEntries(f *auditFollower, read []activityEntry) error 
 		if err := s.activityLog.add(e); err != nil {
 			return fmt.Errorf("keeping the activity log: %w", err)
 		}
-		newest = maxTime(newest, e.At)
 	}
-	f.moveOn(newest)
 	return nil
 }
 
-// moveOn starts the next read at newest, the time of the newest line kept, when it is later. The
-// log's times are whole seconds, so the read starts a second early, and the IDs of that second keep
-// its lines from being kept twice.
-func (f *auditFollower) moveOn(newest time.Time) {
-	if from := newest.Add(-time.Second); from.After(f.since) {
-		f.since = from
+// auditSeenMargin is how long before a read's start an audit ID is still remembered. An event's
+// own time precedes the kubelet's time on its line.
+const auditSeenMargin = time.Minute
+
+// forgetOld drops the IDs of lines no later read can reach.
+func (f *auditFollower) forgetOld() {
+	var oldest time.Time
+	for _, st := range f.pods {
+		if oldest.IsZero() || st.from.Before(oldest) {
+			oldest = st.from
+		}
 	}
-	maps.DeleteFunc(f.seen, func(_ string, at time.Time) bool { return at.Before(f.since) })
+	if oldest.IsZero() {
+		return
+	}
+	maps.DeleteFunc(f.seen, func(_ string, at time.Time) bool { return at.Before(oldest.Add(-auditSeenMargin)) })
 }
 
 // startAuditFollower starts after the newest change the activity log holds of the API server's,
-// or a day back.
+// or a day back. A second early, since the kubelet's times are whole seconds.
 func (s *Server) startAuditFollower(f *auditFollower) {
-	f.since = s.now().Add(-auditFirstLook)
-	kept, err := s.activityLog.since(f.since, activityInMemory, func(e *activityEntry) bool { return e.Details[auditVia] == auditViaAPI })
+	f.start = s.now().Add(-auditFirstLook)
+	kept, err := s.activityLog.since(f.start, activityInMemory, func(e *activityEntry) bool { return e.Details[auditVia] == auditViaAPI })
 	if err != nil {
 		return
 	}
-	var newest time.Time
 	for i := range kept {
 		f.seen[kept[i].Details[auditIDKey]] = kept[i].At
-		newest = maxTime(newest, kept[i].At)
+		if from := kept[i].At.Add(-time.Second); from.After(f.start) {
+			f.start = from
+		}
 	}
-	f.moveOn(newest)
-}
-
-func podAuditEntries(ctx context.Context, cs kubernetes.Interface, pod string, since time.Time) ([]activityEntry, error) {
-	from := metav1.NewTime(since)
-	limit := int64(auditReadBytes)
-	stream, err := cs.CoreV1().Pods(metav1.NamespaceSystem).GetLogs(pod, &corev1.PodLogOptions{SinceTime: &from, LimitBytes: &limit}).Stream(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s's log: %w", pod, err)
-	}
-	defer func() { _ = stream.Close() }()
-	got, err := auditEntries(stream)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s's log: %w", pod, err)
-	}
-	return got, nil
 }
 
 // auditLogOn learns from the interface's ConfigMap whether the API server writes its audit log

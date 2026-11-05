@@ -323,6 +323,11 @@ jobs:
           # Proxmox VE logs its API's requests here, not to the journal.
           pve cat /var/log/pveproxy/access.log > "$out/pveproxy-access.log" || true
           pve qm list > "$out/vms.txt" || true
+          # What the appliance's Activity pages read, in the lane that installs the appliance as
+          # container 900 (test/e2e/ci/run.sh).
+          activity=/var/lib/kubehenge/activity.jsonl
+          pve pct exec 900 -- cat "$activity" > "$out/activity.jsonl" 2>/dev/null ||
+            rm -f "$out/activity.jsonl"
           # The journal has only a failed task's command and exit status; what the command wrote,
           # such as why an SSH connection or a volume copy failed, is in the task's own log.
           pve pvesh get /nodes/pve/tasks --errors 1 --limit 100 --output-format json |

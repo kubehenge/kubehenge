@@ -35,7 +35,7 @@ A pushed tag starts `.github/workflows/release.yml`. It calls `.github/workflows
 7. `verify` checks everything from the files alone, as a user would, with `release-build.yml` at this tag as the builder. It checks the checksums, each file's provenance, the archive's SBOM, and each image's provenance, SBOM and signature.
 8. `publish` creates the release with every file, publishes it as the latest and starts the website's workflow. Its notes are the version's changelog section, opened before 1.0.0 by the README's alpha warning. A draft left by a failed run is made again, but a published release is never rewritten.
 
-This is SLSA Build Level 3 on GitHub Actions. The build runs in a reusable workflow on GitHub-hosted runners, used once. The certificate Sigstore issues therefore names `release-build.yml`, not whatever called it. A verifier that insists on it (`--signer-workflow`, `--certificate-identity`) insists on its exact steps at the tag, which no caller can change. No build cache another workflow's run could have written reaches the release.
+This is SLSA Build Level 3 on GitHub Actions. The build runs in a reusable workflow on GitHub-hosted runners, used once. The certificate Sigstore issues therefore names `release-build.yml`, not whatever called it. A verifier that insists on it (`--signer-workflow`, `--certificate-identity`) gets that workflow's exact steps at the tag, which no caller can change. No build cache that another workflow's run could have written reaches the release.
 
 ### The index appliances read
 
