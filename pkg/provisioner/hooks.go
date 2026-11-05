@@ -267,9 +267,10 @@ func (h *Hooks) storedCluster(ctx context.Context, sent *clusterv1.Cluster) (*cl
 
 // refusal is the first reason BeforeClusterCreate refuses the cluster for, or nil.
 func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
+	reads := h.reads()
 	for _, check := range []func() error{
-		func() error { return h.checkNodeOS(ctx, cluster) },
-		func() error { return h.checkPlacement(ctx, cluster) },
+		func() error { return h.checkNodeOS(ctx, reads, cluster) },
+		func() error { return h.checkPlacement(ctx, reads, cluster) },
 		func() error { return checkStorageListed(cluster, class) },
 		func() error { return checkRanges(cluster, class) },
 		func() error { return h.checkAddresses(ctx, cluster) },

@@ -129,7 +129,7 @@ func TestSitesTakeTheCPULevelFromTheTemplate(t *testing.T) {
 	}
 	// The same check refuses a cluster none of whose allowed nodes reaches the template's level.
 	h := &Hooks{Nodes: &fakeNodes{online: []string{"pve1"}, levels: map[string]int{"pve1": 3}}, Sites: fakeSites{sites: &Sites{Templates: []TemplateSite{templateSiteOf(t, c, "pve1", "x86-64-v4")}}}}
-	if err := h.checkNodeOS(t.Context(), c); err == nil || !strings.Contains(err.Error(), "no allowed node (pve1)") {
+	if err := h.checkNodeOS(t.Context(), h.reads(), c); err == nil || !strings.Contains(err.Error(), "no allowed node (pve1)") {
 		t.Errorf("checkNodeOS = %v, want a refusal for a v4 template on a v3 node", err)
 	}
 }
@@ -158,7 +158,7 @@ func TestHooksRefuseAClusterNoNodeCanCloneForOrStoreOn(t *testing.T) {
 
 	// Without a node restriction the template's node is enough.
 	open := storedCluster("team-a", "open", "ceph")
-	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), nil, open, &clusterv1.ClusterClass{}); len(errs) > 0 {
+	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), h.reads(), nil, open, &clusterv1.ClusterClass{}); len(errs) > 0 {
 		t.Errorf("the validator refused a cluster the template's node can host: %v", errs)
 	}
 }
@@ -198,12 +198,15 @@ func TestAdmissionAdmitsAClusterWhenProxmoxVECannotBeReadInTime(t *testing.T) {
 		h.Nodes, h.Sites, h.AdmissionBudget = &fakeNodes{online: []string{"pve1"}}, src, 20*time.Millisecond
 		v := &ClusterValidator{Hooks: h}
 		start := time.Now()
-		if errs := v.validatePlacement(t.Context(), nil, web, class); len(errs) > 0 {
+		ctx, cancel := h.admissionContext(t.Context())
+		reads := h.reads()
+		if errs := v.validatePlacement(ctx, reads, nil, web, class); len(errs) > 0 {
 			t.Errorf("%s: validatePlacement refused the cluster: %v", name, errs)
 		}
-		if errs := v.validateNodeOS(t.Context(), nil, web); len(errs) > 0 {
+		if errs := v.validateNodeOS(ctx, reads, nil, web); len(errs) > 0 {
 			t.Errorf("%s: validateNodeOS refused the cluster: %v", name, errs)
 		}
+		cancel()
 		if took := time.Since(start); took > time.Second {
 			t.Errorf("%s: admission took %s, past its budget", name, took)
 		}
@@ -211,8 +214,55 @@ func TestAdmissionAdmitsAClusterWhenProxmoxVECannotBeReadInTime(t *testing.T) {
 	// Nodes that cannot be read are the same.
 	h, _ := hooksFor(t)
 	h.Nodes, h.Sites = &fakeNodes{err: errors.New("connection refused")}, fakeSites{sites: &Sites{}}
-	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), nil, web, class); len(errs) > 0 {
+	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), h.reads(), nil, web, class); len(errs) > 0 {
 		t.Errorf("an unreadable node list refused the cluster: %v", errs)
+	}
+}
+
+// lateNodes answers after the context is done.
+type lateNodes struct{ asked int }
+
+func (l *lateNodes) OnlineNodes(ctx context.Context) ([]Node, error) {
+	l.asked++
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestAdmissionSpendsOneBudgetOnAllItsChecksOfProxmoxVE(t *testing.T) {
+	t.Parallel()
+	const budget = 400 * time.Millisecond
+	web := storedCluster("team-a", "web", "ceph")
+	h, _ := hooksFor(t)
+	nodes := &lateNodes{}
+	h.Nodes, h.Sites, h.AdmissionBudget = nodes, lateSites{}, budget
+	start := time.Now()
+	// The cluster's size is refused for its own reasons. Neither check of Proxmox VE may refuse it.
+	if _, err := (&ClusterValidator{Hooks: h}).ValidateCreate(t.Context(), web); err != nil && strings.Contains(err.Error(), "spec.topology.variables") {
+		t.Fatalf("a Proxmox VE that never answers refused the cluster: %v", err)
+	}
+	// The node OS check and the placement check each wait for the nodes. Separate budgets would
+	// take twice the one.
+	if took := time.Since(start); took >= budget*3/2 {
+		t.Errorf("admission took %s, want one budget of %s", took, budget)
+	}
+	if nodes.asked != 1 {
+		t.Errorf("the node list was read %d times, want once", nodes.asked)
+	}
+}
+
+func TestAdmissionReadsTheNodesOnceForBothChecks(t *testing.T) {
+	t.Parallel()
+	shared := StorageSite{Shared: true, Nodes: []string{"pve1"}, Active: []string{"pve1"}}
+	web := storedCluster("team-a", "web", "ceph")
+	h, _ := hooksFor(t)
+	nodes := &fakeNodes{online: []string{"pve1"}}
+	sites := &Sites{Storages: map[string]StorageSite{"ceph": shared}, Templates: []TemplateSite{templateSiteOf(t, web, "pve1", "", "ceph")}}
+	h.Nodes, h.Sites = nodes, fakeSites{sites: sites}
+	if _, err := (&ClusterValidator{Hooks: h}).ValidateCreate(t.Context(), web); err != nil && strings.Contains(err.Error(), "spec.topology.variables") {
+		t.Fatalf("ValidateCreate = %v", err)
+	}
+	if nodes.asked != 1 {
+		t.Errorf("a create that needs both checks read the nodes %d times, want once", nodes.asked)
 	}
 }
 
@@ -228,7 +278,7 @@ func TestCreationHookHoldsAClusterAdmissionLetIn(t *testing.T) {
 	src := &onceBroken{sites: sites}
 	h, _ := hooksFor(t)
 	h.Nodes, h.Sites = &fakeNodes{online: []string{"pve1", "pve2"}}, src
-	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), nil, web, &clusterv1.ClusterClass{}); len(errs) > 0 {
+	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), h.reads(), nil, web, &clusterv1.ClusterClass{}); len(errs) > 0 {
 		t.Fatalf("admission refused on a failed read: %v", errs)
 	}
 	resp := callBeforeClusterCreate(t, h, web)
@@ -355,7 +405,7 @@ func TestStorageOutsideTheModulesListIsRefused(t *testing.T) {
 	if err = h.refusal(t.Context(), storedCluster("team-a", "web", "scratch"), class); err == nil || !strings.Contains(err.Error(), "workload_datastores") {
 		t.Errorf("BeforeClusterCreate's checks let an unlisted storage through: %v", err)
 	}
-	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), nil, storedCluster("team-a", "web", "scratch"), class); len(errs) == 0 {
+	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), h.reads(), nil, storedCluster("team-a", "web", "scratch"), class); len(errs) == 0 {
 		t.Error("the validator let an unlisted storage through")
 	}
 	if err := checkStorageListed(storedCluster("team-a", "web", "scratch"), &clusterv1.ClusterClass{}); err != nil {

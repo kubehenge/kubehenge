@@ -128,7 +128,7 @@ func nodesFor(online []Node, need int) []string {
 // online Proxmox VE nodes the cluster may use offers. While none of those is online there is nothing
 // to judge by, and the cluster waits for its nodes as any other does. A Talos cluster has no node
 // OS: Talos is its own.
-func (h *Hooks) checkNodeOS(ctx context.Context, c *clusterv1.Cluster) error {
+func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.Cluster) error {
 	if isTalos(c) {
 		return nil
 	}
@@ -142,7 +142,7 @@ func (h *Hooks) checkNodeOS(ctx context.Context, c *clusterv1.Cluster) error {
 	if h.Nodes == nil {
 		return nil
 	}
-	online, sites, err := h.allowedOnline(ctx, c)
+	online, sites, err := reads.allowedOnline(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -162,26 +162,66 @@ func (h *Hooks) checkNodeOS(ctx context.Context, c *clusterv1.Cluster) error {
 		f.Title(), r.Name, templates.CPUTypeOf(r), strings.Join(names, ", "))
 }
 
+// pveReads is what one admission or hook call reads from Proxmox VE. Each read happens at most once
+// per call, its failure included, so every check that needs it shares one look and one time budget.
+// A check that needs another read of Proxmox VE adds a memoised method here.
+type pveReads struct {
+	h      *Hooks
+	online memo[[]Node]
+	sites  memo[*Sites]
+}
+
+// memo is one read, made on first use.
+type memo[T any] struct {
+	done  bool
+	value T
+	err   error
+}
+
+func (m *memo[T]) get(read func() (T, error)) (T, error) {
+	if !m.done {
+		m.value, m.err = read()
+		m.done = true
+	}
+	return m.value, m.err
+}
+
+// reads starts a call's reads of Proxmox VE.
+func (h *Hooks) reads() *pveReads { return &pveReads{h: h} }
+
 // allowedOnline are the online nodes the cluster may use, with where the storages and templates
 // are when the hooks can look at them.
-func (h *Hooks) allowedOnline(ctx context.Context, c *clusterv1.Cluster) ([]Node, *Sites, error) {
+func (r *pveReads) allowedOnline(ctx context.Context, c *clusterv1.Cluster) ([]Node, *Sites, error) {
 	chosen, _, err := optionalVariable[[]string](c, allowedNodesVariable)
 	if err != nil {
 		return nil, nil, err
 	}
-	online, err := h.Nodes.OnlineNodes(ctx)
+	all, err := r.online.get(func() ([]Node, error) {
+		nodes, err := r.h.Nodes.OnlineNodes(ctx)
+		if err != nil {
+			return nil, &pveReadError{fmt.Errorf("reading the Proxmox VE nodes: %w", err)}
+		}
+		return nodes, nil
+	})
 	if err != nil {
-		return nil, nil, &pveReadError{fmt.Errorf("reading the Proxmox VE nodes: %w", err)}
+		return nil, nil, err
 	}
+	online := slices.Clone(all)
 	if len(chosen) > 0 {
 		online = slices.DeleteFunc(online, func(n Node) bool { return !slices.Contains(chosen, n.Name) })
 	}
-	if h.Sites == nil {
+	if r.h.Sites == nil {
 		return online, nil, nil
 	}
-	sites, err := h.Sites.Sites(ctx)
+	sites, err := r.sites.get(func() (*Sites, error) {
+		s, err := r.h.Sites.Sites(ctx)
+		if err != nil {
+			return nil, &pveReadError{fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)}
+		}
+		return s, nil
+	})
 	if err != nil {
-		return nil, nil, &pveReadError{fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)}
+		return nil, nil, err
 	}
 	return online, sites, nil
 }
@@ -213,11 +253,11 @@ func admitOnReadFailure(ctx context.Context, err error) error {
 // checkPlacement refuses a cluster whose storage is available on none of the online nodes it may
 // use, or whose templates cannot be cloned on any of them. While none is online there is nothing
 // to judge by.
-func (h *Hooks) checkPlacement(ctx context.Context, c *clusterv1.Cluster) error {
+func (h *Hooks) checkPlacement(ctx context.Context, r *pveReads, c *clusterv1.Cluster) error {
 	if h.Nodes == nil || h.Sites == nil {
 		return nil
 	}
-	online, sites, err := h.allowedOnline(ctx, c)
+	online, sites, err := r.allowedOnline(ctx, c)
 	if err != nil {
 		return err
 	}
