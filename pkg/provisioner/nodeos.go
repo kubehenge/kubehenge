@@ -1,10 +1,13 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -168,7 +171,7 @@ func (h *Hooks) allowedOnline(ctx context.Context, c *clusterv1.Cluster) ([]Node
 	}
 	online, err := h.Nodes.OnlineNodes(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading the Proxmox VE nodes: %w", err)
+		return nil, nil, &pveReadError{fmt.Errorf("reading the Proxmox VE nodes: %w", err)}
 	}
 	if len(chosen) > 0 {
 		online = slices.DeleteFunc(online, func(n Node) bool { return !slices.Contains(chosen, n.Name) })
@@ -178,9 +181,34 @@ func (h *Hooks) allowedOnline(ctx context.Context, c *clusterv1.Cluster) ([]Node
 	}
 	sites, err := h.Sites.Sites(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)
+		return nil, nil, &pveReadError{fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)}
 	}
 	return online, sites, nil
+}
+
+// pveReadError is a failed or late read of Proxmox VE, as against a cluster that is wrong.
+// Admission lets the cluster in then, and the creation hook, which retries, judges it.
+type pveReadError struct{ err error }
+
+func (e *pveReadError) Error() string { return e.err.Error() }
+func (e *pveReadError) Unwrap() error { return e.err }
+
+// defaultAdmissionBudget is how long admission reads Proxmox VE. The webhook itself times out at 5 s.
+const defaultAdmissionBudget = 2 * time.Second
+
+// admissionContext bounds what admission reads from Proxmox VE well inside the webhook's timeout.
+func (h *Hooks) admissionContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, cmp.Or(h.AdmissionBudget, defaultAdmissionBudget))
+}
+
+// admitOnReadFailure drops a failed read of Proxmox VE, logging it, and keeps every other error.
+func admitOnReadFailure(ctx context.Context, err error) error {
+	var read *pveReadError
+	if errors.As(err, &read) {
+		ctrl.LoggerFrom(ctx).Error(err, "admitting a cluster without the Proxmox VE checks; the creation hook judges it")
+		return nil
+	}
+	return err
 }
 
 // checkPlacement refuses a cluster whose storage is available on none of the online nodes it may

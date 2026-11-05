@@ -199,12 +199,14 @@ type datacenterTags struct {
 }
 
 // TagsRefusal says why the datacenter's tag options would refuse tags to a user without Sys.Modify
-// on /, or returns "". access and registered are the user-tag-access and registered-tags options.
-func TagsRefusal(access, registered string, tags []string) string {
+// on /, or returns "". access and registered are the user-tag-access and registered-tags options,
+// and visible the tags already on guests the token can audit. Tags match exactly, as Proxmox VE's
+// own check does, and only Sys.Modify on / bypasses it.
+func TagsRefusal(access, registered string, tags, visible []string) string {
 	var blocked []string
 	for _, r := range strings.FieldsFunc(registered, isTagSeparator) {
-		if slices.Contains(tags, strings.ToLower(r)) {
-			blocked = append(blocked, strings.ToLower(r))
+		if slices.Contains(tags, r) {
+			blocked = append(blocked, r)
 		}
 	}
 	if len(blocked) > 0 {
@@ -225,19 +227,40 @@ func TagsRefusal(access, registered string, tags []string) string {
 	case "none":
 		return "the datacenter option user-tag-access is none, so users cannot set tags. " +
 			"In Datacenter, Options, User Tag Access choose list and allow " + strings.Join(tags, ", ")
-	case "list":
-		var missing []string
+	case "list", "existing":
 		allowed := strings.FieldsFunc(list, isTagSeparator)
+		kinds := "tags in its list"
+		if allow == "existing" {
+			allowed = append(allowed, visible...)
+			kinds = "tags in its list or already on a guest"
+		}
+		var missing []string
 		for _, tag := range tags {
-			if !slices.ContainsFunc(allowed, func(a string) bool { return strings.EqualFold(a, tag) }) {
+			if !slices.Contains(allowed, tag) {
 				missing = append(missing, tag)
 			}
 		}
 		if len(missing) > 0 {
-			return "the datacenter option user-tag-access allows only a list of tags. In Datacenter, Options, User Tag Access add " + strings.Join(missing, ", ")
+			return "the datacenter option user-tag-access allows only " + kinds +
+				". In Datacenter, Options, User Tag Access add " + strings.Join(missing, ", ") + " to the list"
 		}
 	}
 	return ""
+}
+
+// visibleTags are the tags on the guests the token can audit.
+func visibleTags(ctx context.Context, c *proxmox.Client) []string {
+	var guests []struct {
+		Tags string `json:"tags"`
+	}
+	if err := c.Get(ctx, "/cluster/resources?type=vm", &guests); err != nil {
+		return nil
+	}
+	var out []string
+	for _, g := range guests {
+		out = append(out, strings.FieldsFunc(g.Tags, isTagSeparator)...)
+	}
+	return out
 }
 
 func isTagSeparator(r rune) bool { return r == ';' || r == ',' || r == ' ' }
@@ -249,7 +272,11 @@ func CheckTags(ctx context.Context, c *proxmox.Client, tags []string) error {
 	if err := c.Get(ctx, "/cluster/options", &options); err != nil {
 		return nil //nolint:nilerr // a token that cannot read the options cannot be judged by them
 	}
-	why := TagsRefusal(options.Access, options.Registered, tags)
+	var visible []string
+	if strings.Contains(options.Access, "user-allow=existing") {
+		visible = visibleTags(ctx, c)
+	}
+	why := TagsRefusal(options.Access, options.Registered, tags, visible)
 	if why == "" || holds(ctx, c, "/", "Sys.Modify") {
 		return nil
 	}

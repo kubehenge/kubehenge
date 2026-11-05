@@ -78,6 +78,8 @@ type Hooks struct {
 	// Sites is asked where the storages and templates can be used: a cluster whose storage or
 	// templates reach none of its nodes is refused. Nil judges by the nodes alone.
 	Sites SiteSource
+	// AdmissionBudget bounds admission's reads of Proxmox VE. Zero means 2 s.
+	AdmissionBudget time.Duration
 	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
 	// and the validator refuses a release it does not pin.
 	Releases *ReleaseChecksums

@@ -163,6 +163,80 @@ func TestHooksRefuseAClusterNoNodeCanCloneForOrStoreOn(t *testing.T) {
 	}
 }
 
+// lateSites answers after the context is done, as a Proxmox VE that does not answer in time.
+type lateSites struct{}
+
+func (lateSites) Sites(ctx context.Context) (*Sites, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// onceBroken fails its first look and then answers with sites.
+type onceBroken struct {
+	sites *Sites
+	asked int
+}
+
+func (o *onceBroken) Sites(context.Context) (*Sites, error) {
+	o.asked++
+	if o.asked == 1 {
+		return nil, errors.New("connection refused")
+	}
+	return o.sites, nil
+}
+
+func TestAdmissionAdmitsAClusterWhenProxmoxVECannotBeReadInTime(t *testing.T) {
+	t.Parallel()
+	web := storedCluster("team-a", "web", "ceph")
+	class := &clusterv1.ClusterClass{}
+	for name, src := range map[string]SiteSource{
+		"late":      lateSites{},
+		"erroring":  fakeSites{err: errors.New("connection refused")},
+		"unreached": &onceBroken{},
+	} {
+		h, _ := hooksFor(t)
+		h.Nodes, h.Sites, h.AdmissionBudget = &fakeNodes{online: []string{"pve1"}}, src, 20*time.Millisecond
+		v := &ClusterValidator{Hooks: h}
+		start := time.Now()
+		if errs := v.validatePlacement(t.Context(), nil, web, class); len(errs) > 0 {
+			t.Errorf("%s: validatePlacement refused the cluster: %v", name, errs)
+		}
+		if errs := v.validateNodeOS(t.Context(), nil, web); len(errs) > 0 {
+			t.Errorf("%s: validateNodeOS refused the cluster: %v", name, errs)
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Errorf("%s: admission took %s, past its budget", name, took)
+		}
+	}
+	// Nodes that cannot be read are the same.
+	h, _ := hooksFor(t)
+	h.Nodes, h.Sites = &fakeNodes{err: errors.New("connection refused")}, fakeSites{sites: &Sites{}}
+	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), nil, web, class); len(errs) > 0 {
+		t.Errorf("an unreadable node list refused the cluster: %v", errs)
+	}
+}
+
+func TestCreationHookHoldsAClusterAdmissionLetIn(t *testing.T) {
+	t.Parallel()
+	local := StorageSite{Nodes: []string{"pve1", "pve2"}, Active: []string{"pve1", "pve2"}}
+	web := storedCluster("team-a", "web", "local-lvm")
+	web.Spec.Topology.Variables = append(web.Spec.Topology.Variables, variableOf(allowedNodesVariable, `["pve2"]`))
+	sites := &Sites{
+		Storages:  map[string]StorageSite{"local-lvm": local},
+		Templates: []TemplateSite{templateSiteOf(t, web, "pve1", "", "local-lvm")},
+	}
+	src := &onceBroken{sites: sites}
+	h, _ := hooksFor(t)
+	h.Nodes, h.Sites = &fakeNodes{online: []string{"pve1", "pve2"}}, src
+	if errs := (&ClusterValidator{Hooks: h}).validatePlacement(t.Context(), nil, web, &clusterv1.ClusterClass{}); len(errs) > 0 {
+		t.Fatalf("admission refused on a failed read: %v", errs)
+	}
+	resp := callBeforeClusterCreate(t, h, web)
+	if resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "can be cloned only on node pve1") {
+		t.Errorf("BeforeClusterCreate = %s %q, want the template that reaches no allowed node", resp.Status, resp.Message)
+	}
+}
+
 func TestPlacementPatchFollowsTheSites(t *testing.T) {
 	t.Parallel()
 	c := cluster()

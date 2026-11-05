@@ -28,7 +28,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - Placement takes the CPU level from the chosen template's own `cpu` setting when it names one, such as `x86-64-v4`.
 - A Proxmox VE node that shows online but whose status cannot be read is left out of placement and counted in the clusters' `NodesSkipped` condition. It no longer stops every cluster from being placed.
 - A failure creating a cluster's Proxmox VE pool, user, token or volume owner is a `ProxmoxObjectsFailed` Warning Event. The creation hook's message reads `Proxmox VE objects:` followed by the error.
-- Template builds and new clusters check the datacenter's `user-tag-access` and `registered-tags` first. They name the option and the tags to allow when the tags would be refused.
+- Template builds and new clusters check the datacenter's `user-tag-access` and `registered-tags` first, as Proxmox VE does. Tags match with their case, `existing` allows tags already on guests the token can audit, and only `Sys.Modify` on `/` bypasses the options.
+- Cluster admission reads Proxmox VE for 2 seconds at most and reads each template's configuration once. A failed or late read admits the cluster, and the creation hook, which retries, checks its storage and templates.
 - `--node` of `kubehenge template create` and `refresh`, and the chart's `templateRefresh.node`, take several nodes. The build runs on the first that is online and whose CPU runs the node OS.
 - A cluster whose name matches an existing Proxmox VE pool that holds other VMs is refused instead of taking the pool over.
 

@@ -59,7 +59,7 @@ func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
 		}
 		s.Storages[u.Storage] = site
 	}
-	inv, err := (&templates.Builder{Client: p.Client}).Inventory(ctx)
+	inv, err := (&templates.Builder{Client: p.Client, SiteCache: &p.siteCache}).Inventory(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing the Proxmox VE templates: %w", err)
 	}

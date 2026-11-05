@@ -26,6 +26,9 @@ type Builder struct {
 	// Candidates, when set, are the nodes a build may run on. Create uses the first that is online and
 	// whose CPU runs the template's node OS, and sets Node to it.
 	Candidates []string
+	// SiteCache, when set, keeps each template's site between Inventory calls, so a repeated call
+	// reads no template configuration.
+	SiteCache *SiteCache
 	// ImportStorage is a file storage with the `import` content type, where images are downloaded.
 	ImportStorage string
 	// Storage holds the templates' disks. On a Proxmox VE cluster it should be shared, so clones can
@@ -171,8 +174,20 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 		site     Site
 	}
 	var found []placed
+	seen := map[int]bool{}
 	for _, r := range resources {
 		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
+			continue
+		}
+		id, err := vmID(r)
+		if err != nil {
+			return Inventory{}, err
+		}
+		seen[id] = true
+		if name, site, ok := b.SiteCache.get(id); ok {
+			out := *r
+			out.Name, out.Template = name, 1
+			found = append(found, placed{&out, site})
 			continue
 		}
 		c, err := b.config(ctx, r)
@@ -180,9 +195,12 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 			return Inventory{}, err
 		}
 		if bool(c.Template) {
-			found = append(found, placed{confirmed(r, c), siteOf(c)})
+			site := siteOf(c)
+			b.SiteCache.put(id, c.Name, site)
+			found = append(found, placed{confirmed(r, c), site})
 		}
 	}
+	b.SiteCache.keepOnly(seen)
 	slices.SortFunc(found, func(x, y placed) int { return strings.Compare(x.resource.Name, y.resource.Name) })
 	var inv Inventory
 	for _, p := range found {

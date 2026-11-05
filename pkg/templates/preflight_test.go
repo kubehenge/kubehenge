@@ -15,6 +15,8 @@ import (
 type preflightPVE struct {
 	storages []map[string]any
 	options  map[string]any
+	// guests are the VMs the token can audit.
+	guests []map[string]any
 	// granted maps a path to the privileges the token holds there.
 	granted map[string][]string
 }
@@ -28,6 +30,8 @@ func (p *preflightPVE) client(t *testing.T) *proxmox.Client {
 			data = p.storages
 		case "/cluster/options":
 			data = p.options
+		case "/cluster/resources":
+			data = p.guests
 		case "/access/permissions":
 			path := r.URL.Query().Get("path")
 			held := map[string]int{}
@@ -151,16 +155,22 @@ func TestTagsRefusal(t *testing.T) {
 	tags := []string{"kubehenge", "volumes"}
 	for _, tc := range []struct {
 		name, access, registered, want string
+		visible                        []string
 	}{
-		{"the default", "", "", ""},
-		{"free", "user-allow=free", "", ""},
-		{"none", "user-allow=none", "", "user-tag-access is none"},
-		{"a list without the tags", "user-allow=list,user-allow-list=prod", "", "add kubehenge, volumes"},
-		{"a list with them", "user-allow=list,user-allow-list=prod;kubehenge;Volumes", "", ""},
-		{"registered", "", "Kubehenge;prod", "registered-tags lists kubehenge"},
-		{"registered without them", "", "prod", ""},
+		{"the default", "", "", "", nil},
+		{"free", "user-allow=free", "", "", nil},
+		{"none", "user-allow=none", "", "user-tag-access is none", nil},
+		{"a list without the tags", "user-allow=list,user-allow-list=prod", "", "add kubehenge, volumes", nil},
+		{"a list with them", "user-allow=list,user-allow-list=prod;kubehenge;volumes", "", "", nil},
+		{"a list matches case exactly", "user-allow=list,user-allow-list=Kubehenge;volumes", "", "add kubehenge to the list", nil},
+		{"registered", "", "prod;volumes", "registered-tags lists volumes", nil},
+		{"registered matches case exactly", "", "Kubehenge;prod", "", nil},
+		{"registered without them", "", "prod", "", nil},
+		{"existing: on a visible guest", "user-allow=existing", "", "", []string{"kubehenge", "volumes"}},
+		{"existing: in the list", "user-allow=existing,user-allow-list=volumes", "", "", []string{"kubehenge"}},
+		{"existing: in neither", "user-allow=existing,user-allow-list=prod", "", "add volumes to the list", []string{"kubehenge"}},
 	} {
-		got := TagsRefusal(tc.access, tc.registered, tags)
+		got := TagsRefusal(tc.access, tc.registered, tags, tc.visible)
 		if tc.want == "" && got != "" || !strings.Contains(got, tc.want) {
 			t.Errorf("%s: TagsRefusal = %q, want %q", tc.name, got, tc.want)
 		}
@@ -178,6 +188,23 @@ func TestCheckTagsNamesTheOptionUnlessTheTokenMaySetAnyTag(t *testing.T) {
 	pve.granted = map[string][]string{"/": {"Sys.Modify"}}
 	if err = CheckTags(t.Context(), pve.client(t), tags); err != nil {
 		t.Errorf("CheckTags = %v for a token with Sys.Modify", err)
+	}
+	// VM.Allocate does not bypass the option, only Sys.Modify on / does.
+	pve.granted = map[string][]string{"/pool/kubehenge-templates": {"VM.Allocate"}}
+	if err = CheckTags(t.Context(), pve.client(t), tags); err == nil {
+		t.Error("CheckTags let a token without Sys.Modify through")
+	}
+	// Under existing, the tags on guests the token can audit are allowed.
+	pve = &preflightPVE{
+		options: map[string]any{"user-tag-access": "user-allow=existing"},
+		guests:  []map[string]any{{"vmid": 1, "tags": "kubehenge;kubehenge-building;rke2"}},
+	}
+	if err = CheckTags(t.Context(), pve.client(t), tags); err != nil {
+		t.Errorf("CheckTags = %v with every tag on a visible guest", err)
+	}
+	pve.guests = nil
+	if err = CheckTags(t.Context(), pve.client(t), tags); err == nil || !strings.Contains(err.Error(), "already on a guest") {
+		t.Errorf("CheckTags = %v with the tags on no guest", err)
 	}
 }
 

@@ -159,7 +159,9 @@ func (v *ClusterValidator) validateNodeOS(ctx context.Context, old, c *clusterv1
 	if old != nil && !variableChanged(old, c, NodeOSVariable) && !variableChanged(old, c, allowedNodesVariable) {
 		return nil
 	}
-	if err := v.Hooks.checkNodeOS(ctx, c); err != nil {
+	ctx, cancel := v.Hooks.admissionContext(ctx)
+	defer cancel()
+	if err := admitOnReadFailure(ctx, v.Hooks.checkNodeOS(ctx, c)); err != nil {
 		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology", "variables").Key(NodeOSVariable), err.Error())}
 	}
 	return nil
@@ -179,7 +181,9 @@ func (v *ClusterValidator) validatePlacement(ctx context.Context, old, c *cluste
 	if old != nil && !variableChanged(old, c, "storage") && !variableChanged(old, c, allowedNodesVariable) && !variableChanged(old, c, NodeOSVariable) {
 		return errs
 	}
-	if err := v.Hooks.checkPlacement(ctx, c); err != nil {
+	ctx, cancel := v.Hooks.admissionContext(ctx)
+	defer cancel()
+	if err := admitOnReadFailure(ctx, v.Hooks.checkPlacement(ctx, c)); err != nil {
 		errs = append(errs, field.Forbidden(variables.Key(allowedNodesVariable), err.Error()))
 	}
 	return errs
