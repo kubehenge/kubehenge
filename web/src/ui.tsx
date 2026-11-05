@@ -725,12 +725,15 @@ export function Choice({
   id,
   value,
   options,
+  labels,
   optional,
   onChoose,
 }: {
   id: string;
   value: string;
   options: string[];
+  // What an option reads as, where that differs from its value.
+  labels?: Record<string, string>;
   // What leaving it unchosen means, for a choice that may be left.
   optional?: string;
   onChoose: (v: string) => void;
@@ -742,7 +745,7 @@ export function Choice({
       </option>
       {options.map((o) => (
         <option key={o} value={o}>
-          {o}
+          {labels?.[o] ?? o}
         </option>
       ))}
     </select>

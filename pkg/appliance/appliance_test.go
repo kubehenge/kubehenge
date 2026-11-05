@@ -99,6 +99,8 @@ func TestNetworkValidated(t *testing.T) {
 		"mirror scheme":     {func(s *Settings) { s.RegistryMirrors = map[string][]string{"docker.io": {"mirror:5000"}} }, "Registry mirrors: mirror:5000"},
 		"mirror registry":   {func(s *Settings) { s.RegistryMirrors = map[string][]string{"a/b": {"https://m"}} }, `Registry mirrors: "a/b"`},
 		"nothing for usage": {func(s *Settings) { s.WorkloadBridges = nil }, "What clusters may use"},
+		"VNet no zone":      {func(s *Settings) { s.WorkloadBridges = []string{"/web"} }, `"/web" is no bridge, write a VNet as zone/vnet`},
+		"VNet two slashes":  {func(s *Settings) { s.Bridge = "evpn/web/x" }, "Bridge: choose one"},
 	} {
 		s := settings("pve1")
 		c.change(s)

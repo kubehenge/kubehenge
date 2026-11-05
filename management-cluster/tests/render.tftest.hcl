@@ -667,6 +667,55 @@ run "template_refresh_on_one_storage" {
   }
 }
 
+run "vnets_are_granted_in_their_zones" {
+  command = plan
+
+  variables {
+    bridge           = "vlanz/mgmt"
+    workload_bridges = ["vmbr0", "evpn1/web", "vlanz/corp"]
+    template_refresh = { bridge = "evpn1/build" }
+  }
+
+  assert {
+    condition = toset([for k in keys(proxmox_acl.cluster_api) : k if strcontains(k, "/sdn/")]) == toset([
+      "/sdn/zones/localnetwork/vmbr0 PVESDNUser",
+      "/sdn/zones/evpn1/web PVESDNUser",
+      "/sdn/zones/vlanz/corp PVESDNUser",
+    ])
+    error_message = "a VNet is granted in its own zone and a node's bridge in localnetwork, never a VNet under localnetwork"
+  }
+
+  assert {
+    condition = toset([for k in keys(proxmox_acl.template_builder) : k if strcontains(k, "/sdn/")]) == toset([
+      "/sdn/zones/evpn1/build PVESDNUser",
+    ])
+    error_message = "the template builder gets its VNet in the VNet's zone"
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.kubehenge.values[0]).clusters.bridges == ["vmbr0", "web", "corp"] &&
+      yamldecode(helm_release.kubehenge.values[0]).templateRefresh.bridge == "build"
+    )
+    error_message = "the ClusterClasses and the build take the VNets' names, which a VM's network device uses"
+  }
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].bridge == "mgmt"])
+    error_message = "the management VMs attach to the VNet by its name"
+  }
+}
+
+run "bridge_with_two_slashes_is_refused" {
+  command = plan
+
+  variables {
+    workload_bridges = ["evpn1/web/x"]
+  }
+
+  expect_failures = [var.workload_bridges]
+}
+
 run "template_refresh_off" {
   command = plan
 

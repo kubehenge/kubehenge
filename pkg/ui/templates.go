@@ -341,6 +341,17 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	if req.VLAN > 0 {
+		network, err := s.Accounts.Network(r.Context(), u.ticket, b.Bridge)
+		if err != nil {
+			s.proxmoxError(w, r, err)
+			return
+		}
+		if network.TagsTraffic() {
+			writeError(w, http.StatusUnprocessableEntity, vlanOnTaggedNetwork(b.Bridge))
+			return
+		}
+	}
 	// Each build is a template of its own, which clusters move to inside their windows. A Talos
 	// release's template is made once: its nodes take updates as Talos releases.
 	if t.Refreshed() {

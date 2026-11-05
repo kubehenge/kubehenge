@@ -409,7 +409,7 @@ resource "helm_release" "kubehenge" {
       }
       clusters = {
         storages = var.workload_datastores
-        bridges  = var.workload_bridges
+        bridges  = [for b in var.workload_bridges : local.bridges[b].name]
       }
       proxmox = {
         url          = var.proxmox_endpoint
@@ -438,7 +438,7 @@ resource "helm_release" "kubehenge" {
         importStorage = local.template_builder.import
         isoStorage    = local.template_builder.iso
         pool          = proxmox_virtual_environment_pool.templates.pool_id
-        bridge        = local.template_builder.bridge
+        bridge        = local.bridges[local.template_builder.bridge].name
         vlan          = var.template_refresh.vlan
         address       = var.template_refresh.address == null ? "" : var.template_refresh.address
         gateway       = var.template_refresh.gateway == null ? "" : var.template_refresh.gateway

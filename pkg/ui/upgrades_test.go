@@ -162,6 +162,37 @@ func TestSetupNeedsAnAdministrator(t *testing.T) {
 	expect(t, d.do("POST", "/api/setup", `{"settings":{},"passphrase":"correct horse battery staple"}`), http.StatusForbidden)
 }
 
+// The module grants SDN.Use on the zone the settings name, so a VNet written as a plain bridge or in
+// the wrong zone would get an ACL that Proxmox VE never checks.
+func TestSetupHoldsBridgesToTheirZones(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+	a := h.browser()
+	a.signIn("admin@pve")
+	setUp := func(settings string) *httptest.ResponseRecorder {
+		return a.do("POST", "/api/setup", `{"settings":`+settings+`,"passphrase":"correct horse battery staple"}`)
+	}
+	for name, c := range map[string]struct{ settings, want string }{
+		"management VNet as a plain bridge": {`{"bridge":"tenants"}`, "write it as evpn/tenants"},
+		"workload VNet in another zone":     {`{"bridge":"vmbr0","workloadBridges":["vmbr0","localnetwork/tenants"]}`, "write it as evpn/tenants"},
+		"node bridge in a zone":             {`{"bridge":"evpn/vmbr0"}`, "write it as vmbr0"},
+		"VLAN on a VLAN zone":               {`{"bridge":"vlanz/corp","vlan":20}`, "VNet corp is in a VLAN zone and tags already"},
+	} {
+		rec := setUp(c.settings)
+		expect(t, rec, http.StatusUnprocessableEntity)
+		if !strings.Contains(rec.Body.String(), c.want) {
+			t.Errorf("%s: answer %s, want %q", name, rec.Body, c.want)
+		}
+	}
+	// Right zones pass this check and meet the settings' own, which says what else is missing.
+	rec := setUp(`{"bridge":"vlanz/corp","workloadBridges":["vmbr0","evpn/tenants"]}`)
+	expect(t, rec, http.StatusUnprocessableEntity)
+	if strings.Contains(rec.Body.String(), "write it as") || strings.Contains(rec.Body.String(), "tags already") {
+		t.Errorf("answer = %s", rec.Body)
+	}
+}
+
 // Restores through the guest agent grant Kubehenge a token with VM.GuestAgent.Unrestricted, which
 // only who holds it may hand on.
 func TestSetupWithEtcdRestoresNeedsTheGuestAgent(t *testing.T) {

@@ -61,7 +61,7 @@ type Resources interface {
 	Bridges(ctx context.Context, t *pve.Ticket, node string) ([]pve.Bridge, error)
 	DNS(ctx context.Context, t *pve.Ticket, node string) ([]string, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
-	Zone(ctx context.Context, t *pve.Ticket, bridge string) (string, error)
+	Network(ctx context.Context, t *pve.Ticket, bridge string) (pve.Network, error)
 }
 
 // Guests are the VMs a signed-in user sees in Proxmox VE, and how they run.

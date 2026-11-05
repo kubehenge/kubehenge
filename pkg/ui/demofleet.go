@@ -670,7 +670,9 @@ func (*demoAccounts) NodeAffinityRules(context.Context, *pve.Ticket) ([]pve.HARu
 	return nil, nil
 }
 
-func (*demoAccounts) Zone(context.Context, *pve.Ticket, string) (string, error) { return "", nil }
+func (*demoAccounts) Network(context.Context, *pve.Ticket, string) (pve.Network, error) {
+	return pve.Network{Zone: pve.LocalZone}, nil
+}
 
 func (a *demoAccounts) PoolMembers(_ context.Context, _ *pve.Ticket, pool string) ([]pve.Member, error) {
 	return a.fleet.members[pool], nil

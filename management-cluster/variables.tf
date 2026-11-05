@@ -50,9 +50,14 @@ variable "vm_datastore" {
 }
 
 variable "bridge" {
-  description = "Bridge the management cluster's VMs attach to."
+  description = "Bridge the management cluster's VMs attach to: a node's bridge, such as vmbr0, or an SDN VNet as zone/vnet, such as evpn1/web."
   type        = string
   default     = "vmbr0"
+
+  validation {
+    condition     = can(regex("^([A-Za-z][A-Za-z0-9-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*$", var.bridge))
+    error_message = "bridge is a node's bridge, such as vmbr0, or a VNet as zone/vnet, such as evpn1/web."
+  }
 }
 
 variable "vlan_id" {
@@ -236,9 +241,14 @@ variable "workload_datastores" {
 }
 
 variable "workload_bridges" {
-  description = "Bridges the clusters Kubehenge creates may attach to, with any VLAN on them."
+  description = "Bridges the clusters Kubehenge creates may attach to, with any VLAN on them (but none on a VNet of a VLAN zone, which tags already). A node's bridge is written by name, such as vmbr0, and gets PVESDNUser on /sdn/zones/localnetwork/<bridge>. An SDN VNet is written zone/vnet, such as evpn1/web, and gets it on /sdn/zones/<zone>/<vnet>."
   type        = list(string)
   default     = ["vmbr0"]
+
+  validation {
+    condition     = alltrue([for b in var.workload_bridges : can(regex("^([A-Za-z][A-Za-z0-9-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*$", b))])
+    error_message = "workload_bridges lists node bridges, such as vmbr0, and VNets as zone/vnet, such as evpn1/web."
+  }
 }
 
 variable "bootstrap_datastore" {
@@ -333,7 +343,7 @@ variable "cluster_datastore_allocate" {
 
 variable "template_refresh" {
   description = <<-EOT
-    Build the node OS VM templates again every week, with the updates each node OS published since, and move each cluster's nodes to the new build inside its maintenance window once the build is soak_hours old. The two newest builds of each template stay, and any older one a cluster still clones from. The builds run in the management cluster with an API token of their own, which may create and delete VMs in the template pool, download to import_datastore and write to iso_datastore; it gets full control of those two storages (Proxmox VE deletes a file there only for Datastore.Allocate), so dedicated ones are best. The node defaults to the first of proxmox_nodes, storage to the first of workload_datastores, import_datastore to image_datastore and iso_datastore to bootstrap_datastore. The VM that builds a node image attaches to bridge (default the first of workload_bridges) and takes address (with prefix, gateway and dns), or DHCP when address is null. creator_builds lets those who may create clusters have a missing template built, such as for a Kubernetes version no kubeadm template exists for yet.
+    Build the node OS VM templates again every week, with the updates each node OS published since, and move each cluster's nodes to the new build inside its maintenance window once the build is soak_hours old. The two newest builds of each template stay, and any older one a cluster still clones from. The builds run in the management cluster with an API token of their own, which may create and delete VMs in the template pool, download to import_datastore and write to iso_datastore; it gets full control of those two storages (Proxmox VE deletes a file there only for Datastore.Allocate), so dedicated ones are best. The node defaults to the first of proxmox_nodes, storage to the first of workload_datastores, import_datastore to image_datastore and iso_datastore to bootstrap_datastore. The VM that builds a node image attaches to bridge (default the first of workload_bridges, a VNet written zone/vnet as there) and takes address (with prefix, gateway and dns), or DHCP when address is null. creator_builds lets those who may create clusters have a missing template built, such as for a Kubernetes version no kubeadm template exists for yet.
   EOT
   type = object({
     enabled          = optional(bool, true)
@@ -374,6 +384,10 @@ variable "template_refresh" {
   validation {
     condition     = var.template_refresh.address == null ? var.template_refresh.gateway == null : can(cidrhost(var.template_refresh.address, 0)) && var.template_refresh.gateway != null
     error_message = "template_refresh.address is an address with prefix, such as 192.0.2.50/24, and needs a gateway; without it, the VM takes DHCP and gateway stays null."
+  }
+  validation {
+    condition     = var.template_refresh.bridge == null || can(regex("^([A-Za-z][A-Za-z0-9-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*$", var.template_refresh.bridge))
+    error_message = "template_refresh.bridge is a node's bridge, such as vmbr0, or a VNet as zone/vnet, such as evpn1/web."
   }
 }
 

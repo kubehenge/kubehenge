@@ -58,6 +58,62 @@ type Bridge struct {
 	// CIDR and Gateway are the node's own IPv4 address on the bridge and its gateway, where it has them.
 	CIDR    string `json:"cidr,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
+	// Zone is the SDN zone of a VNet. A node's own bridge has none and sits in LocalZone.
+	Zone string `json:"zone,omitempty"`
+	// ZoneType is the type of the VNet's zone: simple, vlan, qinq, vxlan or evpn. Empty where the
+	// user may not read the zone.
+	ZoneType string `json:"zoneType,omitempty"`
+	// Alias is the VNet's display name, which Proxmox VE's interface shows beside its ID.
+	Alias string `json:"alias,omitempty"`
+}
+
+// LocalZone is the SDN zone of the bridges in a node's network configuration.
+const LocalZone = "localnetwork"
+
+// Ref is how a bridge is written in settings and in the management-cluster module: a VNet as
+// zone/vnet, a node's bridge as its name.
+func (b Bridge) Ref() string {
+	if b.Zone == "" {
+		return b.Bridge
+	}
+	return b.Zone + "/" + b.Bridge
+}
+
+// InZone is the zone Proxmox VE checks SDN.Use in for the bridge.
+func (b Bridge) InZone() string {
+	if b.Zone == "" {
+		return LocalZone
+	}
+	return b.Zone
+}
+
+// SplitBridge splits a bridge reference into its zone and the name a VM's network device takes.
+func SplitBridge(ref string) (zone, name string) {
+	if zone, name, ok := strings.Cut(ref, "/"); ok {
+		return zone, name
+	}
+	return LocalZone, ref
+}
+
+// Network is where Proxmox VE checks the use of a bridge or VNet, and whether the VNet tags its
+// traffic already.
+type Network struct {
+	Zone string
+	// ZoneType is empty for a node's bridge and where the user may not read the zone.
+	ZoneType  string
+	VLANAware bool
+}
+
+// TagsTraffic tells whether the network puts every frame in a VLAN of its own, so that a VLAN tag on
+// a VM's device would add a second one. A VLAN-aware VNet leaves the tag to the device.
+func (n Network) TagsTraffic() bool { return n.ZoneType == "vlan" && !n.VLANAware }
+
+// flag is a Proxmox VE boolean, which its API writes as 1 or true.
+type flag bool
+
+func (f *flag) UnmarshalJSON(b []byte) error {
+	*f = string(b) == "1" || string(b) == "true"
+	return nil
 }
 
 // HARule is an enabled node-affinity rule of Proxmox VE's HA: the nodes its resources keep to, or
@@ -198,7 +254,55 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 			CIDR: r.CIDR, Gateway: r.Gateway,
 		})
 	}
-	return bridges, nil
+	return append(bridges, a.vnets(ctx, t, node)...), nil
+}
+
+// vnets lists the VNets a node carries: those of zones that name it or no node. The user sees the
+// VNets they hold SDN.Audit on. Where SDN is absent or unreadable the node has its bridges only.
+func (a *Accounts) vnets(ctx context.Context, t *Ticket, node string) []Bridge {
+	var vnets []struct {
+		VNet      string `json:"vnet"`
+		Zone      string `json:"zone"`
+		Alias     string `json:"alias"`
+		VLANAware flag   `json:"vlanaware"`
+	}
+	if a.get(ctx, t, "/cluster/sdn/vnets", &vnets) != nil {
+		return nil
+	}
+	var zones []struct {
+		Zone  string `json:"zone"`
+		Type  string `json:"type"`
+		Nodes string `json:"nodes"`
+	}
+	// Without the zones every VNet is offered, on the strength of its own zone name.
+	_ = a.get(ctx, t, "/cluster/sdn/zones", &zones)
+	type zoneInfo struct {
+		kind  string
+		nodes []string
+	}
+	known := map[string]zoneInfo{}
+	for _, z := range zones {
+		info := zoneInfo{kind: z.Type}
+		for n := range strings.SplitSeq(z.Nodes, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				info.nodes = append(info.nodes, n)
+			}
+		}
+		known[z.Zone] = info
+	}
+	var bridges []Bridge
+	for _, v := range vnets {
+		z := known[v.Zone]
+		if v.VNet == "" || v.Zone == "" || len(z.nodes) > 0 && !slices.Contains(z.nodes, node) {
+			continue
+		}
+		bridges = append(bridges, Bridge{
+			Bridge: v.VNet, Node: node, VLANAware: bool(v.VLANAware), Zone: v.Zone, ZoneType: z.kind,
+			Alias: strings.TrimSpace(v.Alias),
+		})
+	}
+	slices.SortFunc(bridges, func(x, y Bridge) int { return strings.Compare(x.Bridge, y.Bridge) })
+	return bridges
 }
 
 // DNS lists the DNS servers a node resolves with, in its order. Proxmox VE shows them to users with
@@ -276,23 +380,33 @@ func EnabledRules(res []HARuleEntry) []HARule {
 	return rules
 }
 
-// Zone returns the SDN zone of the bridge a VM connects to: a VNet's own zone, or localnetwork for
-// a plain bridge, as Proxmox VE decides where SDN.Use is checked.
-func (a *Accounts) Zone(ctx context.Context, t *Ticket, bridge string) (string, error) {
+// Network looks up the bridge a VM connects to: a VNet's own zone, or LocalZone for a plain bridge,
+// as Proxmox VE decides where SDN.Use is checked.
+func (a *Accounts) Network(ctx context.Context, t *Ticket, bridge string) (Network, error) {
 	var vnet struct {
-		Zone string `json:"zone"`
+		Zone      string `json:"zone"`
+		VLANAware flag   `json:"vlanaware"`
 	}
 	err := a.get(ctx, t, "/cluster/sdn/vnets/"+url.PathEscape(bridge), &vnet)
 	if notFound(err) {
-		return "localnetwork", nil
+		return Network{Zone: LocalZone}, nil
 	}
 	if err != nil {
-		return "", err
+		return Network{}, err
 	}
 	if vnet.Zone == "" {
-		return "", fmt.Errorf("proxmox VE names no zone for VNet %s", bridge)
+		return Network{}, fmt.Errorf("proxmox VE names no zone for VNet %s", bridge)
 	}
-	return vnet.Zone, nil
+	n := Network{Zone: vnet.Zone, VLANAware: bool(vnet.VLANAware)}
+	var zone struct {
+		Type string `json:"type"`
+	}
+	// Proxmox VE may refuse the zone to a user who may use the VNet. Without its type nothing is
+	// known of the tagging, so nothing is refused for it.
+	if a.get(ctx, t, "/cluster/sdn/zones/"+url.PathEscape(vnet.Zone), &zone) == nil {
+		n.ZoneType = zone.Type
+	}
+	return n, nil
 }
 
 // BackupCovers tells whether an enabled backup job of the Proxmox VE cluster includes the guest,
