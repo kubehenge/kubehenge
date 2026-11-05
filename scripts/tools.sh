@@ -30,8 +30,9 @@ tool() {
     # shellcheck disable=SC2310 # wanted only matches a word, nothing in it can fail.
     wanted "$1" || return 0
     # --retry alone leaves out a connection the host resets mid-transfer (curl's exit 92); the
-    # checksum makes trying again safe.
-    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
+    # checksum makes trying again safe. Eight tries back off over about four minutes, which outlasts
+    # the spells of 504s GitHub's release downloads give; five gave up after half a minute.
+    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
         echo "tools: could not download $2" >&2
         exit 1
     }
@@ -55,7 +56,7 @@ release() {
 tree() {
     # shellcheck disable=SC2310
     wanted "$1" || return 0
-    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
+    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
         echo "tools: could not download $2" >&2
         exit 1
     }

@@ -31,7 +31,7 @@ for repo in base.repos.iter_enabled():
 EOF
     while read -r id url; do
         [ ! -s "$1/${id}" ] || continue
-        curl -fsS --retry 5 --retry-delay 10 --retry-all-errors "${url}" > "$1/.fetched" || return 1
+        curl -fsS --retry 8 --retry-delay 10 --retry-all-errors "${url}" > "$1/.fetched" || return 1
         # One mirror to a line, the last one too, which the service ends without a newline.
         awk 'NF && !/^#/' "$1/.fetched" > "$1/.mirrors"
         if [ ! -s "$1/.mirrors" ]; then

@@ -45,7 +45,7 @@ while read -r component repository; do
     while read -r release file digest; do
         [ "${release}" = "${version}" ] || fail "${file} of kubehenge/${repository} is pinned at ${release}, the tested version at ${version}"
         mkdir -p "${work}/${repository}"
-        curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o "${work}/${repository}/${file}" \
+        curl -fsSL --proto '=https' --retry 8 --retry-all-errors -o "${work}/${repository}/${file}" \
             "https://github.com/kubehenge/${repository}/releases/download/${release}/${file}" ||
             fail "could not download ${file} of kubehenge/${repository} ${release}"
         echo "${digest}  ${work}/${repository}/${file}" | sha256sum --check --strict --quiet ||

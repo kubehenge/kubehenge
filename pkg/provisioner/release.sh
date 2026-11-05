@@ -27,7 +27,7 @@ work=$(mktemp -d -p /var/tmp)
 trap 'rm -rf "${work}"' EXIT
 
 fetch() {
-    curl --fail --silent --show-error --location --proto '=https' --retry 5 --retry-all-errors --output "${work}/$2" "$1"
+    curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors --output "${work}/$2" "$1"
 }
 
 fetch "${release}/sha256sum-amd64.txt" sha256sum-amd64.txt
