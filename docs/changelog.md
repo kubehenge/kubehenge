@@ -11,7 +11,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The installer asks which storage takes the appliance's disks, and which the container template, where several fit (`--storage`, `--template-storage`). A disabled storage, such as `local` on some nodes, is never used.
 - The installer downloads the container template itself, checked against a SHA-512 it carries, without `pveam` and its template indexes. A template already on a storage is used where it is.
 - The installer shows a progress bar for each download and a line for each finished step, the verified checksums included. It downloads through the datacenter's HTTP proxy, where one is set.
-- Downloads from GitHub, the installer's and the template builds' included, keep trying for about four minutes, which outlasts GitHub's spells of failed release downloads.
+- Downloads from GitHub, the installer's included, keep trying for about four minutes, which outlasts GitHub's spells of failed release downloads.
 - The docs warn that a volume snapshot copies a volume its pods may still write to. Stop the workload or pause its writes first.
 
 ## [0.4.1] - 2026-11-05
