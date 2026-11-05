@@ -502,11 +502,12 @@ func TestInstallStopsWhenThePullNamesNoImage(t *testing.T) {
 // changed yet, so the install is tried again, while a registry's verdict on the image is final.
 func TestAFailedPullIsTriedAgainUnlessTheRegistryRefusedIt(t *testing.T) {
 	t.Parallel()
+	reset := status.Error(codes.Unknown, "failed to pull image: failed to copy: read: connection reset by peer")
 	for name, tc := range map[string]struct {
 		err       error
 		transient bool
 	}{
-		"reset": {status.Error(codes.Unknown, "failed to pull image: failed to copy: read tcp 192.0.2.20:52798->198.51.100.7:443: read: connection reset by peer"), true},
+		"reset":         {reset, true},
 		"no such image": {status.Error(codes.NotFound, "no such image"), false},
 		"denied":        {status.Error(codes.PermissionDenied, "pull access denied"), false},
 	} {
