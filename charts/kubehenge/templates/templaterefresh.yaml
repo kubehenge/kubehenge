@@ -138,7 +138,7 @@ spec:
               args:
                 - template
                 - refresh
-                - --node={{ required "templateRefresh.node: the Proxmox VE node the weekly template builds run on (or templateRefresh.enabled=false)" .node }}
+                - --node={{ required "templateRefresh.node: the Proxmox VE node the weekly template builds run on (or templateRefresh.enabled=false)" (.node | toStrings | join ",") }}
                 - --storage={{ required "templateRefresh.storage: the storage of the templates' disks (or templateRefresh.enabled=false)" .storage }}
                 - --import-storage={{ required "templateRefresh.importStorage: the storage the cloud images are downloaded to (or templateRefresh.enabled=false)" .importStorage }}
                 {{- with .isoStorage }}

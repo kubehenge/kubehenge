@@ -482,6 +482,7 @@ function BuildDialog({
     importStorage: filled(entered.importStorage) ? entered.importStorage : (sole(onNode("import")) ?? ""),
     bridge: filled(entered.bridge) ? entered.bridge : (sole(bridgeNames) ?? ""),
   };
+  const unshared = storages.some((s) => s.storage === form.storage && s.node === form.node && !s.shared);
   const problems = buildProblems(form);
   const shown = (k: keyof BuildForm): string | undefined => (touched.has(k) ? problems[k] : undefined);
   const releaseField = (id: string): JSX.Element => {
@@ -578,7 +579,13 @@ function BuildDialog({
           />
         )}
       </Field>
-      <Field label="Template disk" hint="Shared storage lets clones start on any node" error={shown("storage")}>
+      <Field
+        label="Template disk"
+        hint={
+          unshared ? `Not shared: clones start only on ${form.node}` : "Shared storage lets clones start on any node"
+        }
+        error={shown("storage")}
+      >
         {(id) => <Choice id={id} value={form.storage} options={diskStorages} onChoose={(v) => set("storage", v)} />}
       </Field>
       <Field label="Downloaded image" error={shown("importStorage")}>

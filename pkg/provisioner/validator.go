@@ -80,6 +80,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateTopology(old, c)...)
 	errs = append(errs, v.validatePinned(old, c)...)
 	errs = append(errs, v.validateNodeOS(ctx, old, c)...)
+	errs = append(errs, v.validatePlacement(ctx, old, c, class)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
@@ -162,6 +163,26 @@ func (v *ClusterValidator) validateNodeOS(ctx context.Context, old, c *clusterv1
 		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology", "variables").Key(NodeOSVariable), err.Error())}
 	}
 	return nil
+}
+
+// validatePlacement holds a cluster to a storage the management cluster gives rights on, and to
+// storage and templates that reach some node it may use, when it is created or the storage, the
+// nodes or the node OS change.
+func (v *ClusterValidator) validatePlacement(ctx context.Context, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	variables := field.NewPath("spec", "topology", "variables")
+	var errs field.ErrorList
+	if old == nil || variableChanged(old, c, "storage") {
+		if err := checkStorageListed(c, class); err != nil {
+			errs = append(errs, field.Forbidden(variables.Key("storage"), err.Error()))
+		}
+	}
+	if old != nil && !variableChanged(old, c, "storage") && !variableChanged(old, c, allowedNodesVariable) && !variableChanged(old, c, NodeOSVariable) {
+		return errs
+	}
+	if err := v.Hooks.checkPlacement(ctx, c); err != nil {
+		errs = append(errs, field.Forbidden(variables.Key(allowedNodesVariable), err.Error()))
+	}
+	return errs
 }
 
 // validateGrants holds the privileges a cluster asks for beyond its pool to what the management

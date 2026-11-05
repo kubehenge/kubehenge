@@ -313,4 +313,22 @@ describe("vM templates", () => {
     expect(builds.getByText("Starting within a minute")).toBeInTheDocument();
     expect(calls.filter((c) => c.key === "POST /api/templates/refresh")).toHaveLength(1);
   });
+
+  it("says when the template disk is on storage that is not shared", async () => {
+    fakeServer({
+      "GET /api/templates": { body: { templates: [] } },
+      "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] },
+      "GET /api/proxmox/storages": {
+        body: [
+          { storage: "local-lvm", node: "pve1", shared: false, content: ["images"], avail: 0, total: 0, usable: true },
+        ],
+      },
+      "GET /api/proxmox/nodes/pve1/bridges": { body: [] },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<Templates />);
+    await user.click(await screen.findByRole("button", { name: "Build template" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Build template" }));
+    await waitFor(() => expect(dialog.getByText("Not shared: clones start only on pve1")).toBeInTheDocument());
+  });
 });

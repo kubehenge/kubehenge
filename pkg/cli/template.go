@@ -296,9 +296,9 @@ type builderFlags struct {
 
 func (b *builderFlags) add(cmd *cobra.Command) {
 	f := cmd.Flags()
-	f.StringVar(&b.builder.Node, "node", "", "Proxmox VE node to create the template on (required)")
+	f.StringVar(&b.builder.Node, "node", "", "Proxmox VE node to create the template on (required). Several, separated by commas, build on the first that is online and whose CPU runs the node OS")
 	f.StringVar(&b.builder.ImportStorage, "import-storage", "local", "file storage with the import content type, for the downloaded image")
-	f.StringVar(&b.builder.Storage, "storage", "local-lvm", "storage for the template's disk. Shared storage lets clones start on any node")
+	f.StringVar(&b.builder.Storage, "storage", "", "storage for the template's disk (default: the shared storage with the most room that takes disk images). A template on storage that is not shared can be cloned on its own node only")
 	f.StringVar(&b.builder.ISOStorage, "iso-storage", "", "storage for the cloud-init ISO while preparing an image, else the node's first ISO storage")
 	poolFlag(cmd, &b.builder.Pool, "pool the template is put in and looked for in, or empty to look in every pool")
 	f.StringVar(&b.builder.Bridge, "bridge", "vmbr0", "bridge for the VM that prepares an image")
@@ -311,10 +311,21 @@ func (b *builderFlags) add(cmd *cobra.Command) {
 	_ = cmd.MarkFlagRequired("node")
 }
 
+// splitNodes are the nodes a --node value names.
+func splitNodes(value string) []string {
+	var nodes []string
+	for _, n := range strings.Split(value, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			nodes = append(nodes, n)
+		}
+	}
+	return nodes
+}
+
 // connect signs the builder in, with its log on the command's standard error.
 func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates.Builder, error) {
 	// Cobra's required check passes --node "", which would reach the API as /nodes//.
-	if strings.TrimSpace(b.builder.Node) == "" {
+	if len(splitNodes(b.builder.Node)) == 0 {
 		return nil, errors.New("--node needs the Proxmox VE node to build on, such as --node pve1")
 	}
 	var err error
@@ -333,6 +344,19 @@ func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates
 	b.builder.Client, b.builder.Sources = c.Client, c.Sources
 	// Progress is best effort. A closed stderr must not fail the build.
 	b.builder.Log = func(format string, a ...any) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...) }
+	nodes := splitNodes(b.builder.Node)
+	if len(nodes) > 1 {
+		b.builder.Candidates = nodes
+	}
+	b.builder.Node = nodes[0]
+	storage, note, err := resolveStorage(cmd.Context(), c.Client, b.builder.Storage, nodes)
+	if err != nil {
+		return nil, err
+	}
+	b.builder.Storage = storage
+	if note != "" {
+		b.builder.Log("%s", note)
+	}
 	return &b.builder, nil
 }
 

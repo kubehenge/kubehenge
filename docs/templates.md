@@ -135,8 +135,10 @@ A cluster creator's request names a Talos template as `talos-v1.14.5`.
 
 ## Requirements
 
-- In a Proxmox VE cluster, templates should go on shared storage, so that clones can start on any node.
-- The storage given with `--import-storage` (`local` by default) must allow the `import` content type.
+- In a Proxmox VE cluster, templates should go on shared storage, so that clones can start on any node. Without `--storage`, the command takes the shared storage with the most room that allows disk images, and asks for `--storage` when there is none.
+  - On storage that is not shared, the command says so. Clusters then run only on the template's node.
+- The storage given with `--import-storage` (`local` by default) must allow the `import` content type. The ISO storage must allow `iso`, and without `--iso-storage` is the first one the token can write to. The build checks the content types, `Datastore.AllocateSpace` and the datacenter's tag options before it downloads anything.
+- `--node` takes several nodes separated by commas. The build runs on the first that is online and whose CPU runs the node OS. The chart's `templateRefresh.node` takes a list the same way.
 - The API token needs what the weekly build's own token holds ([install-settings.md](install-settings.md#what-the-template-builds-may-do)):
   - On the template pool (`--pool`, `kubehenge-templates` by default), propagated: `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.Config.CDROM`, `VM.Config.CPU`, `VM.Config.Disk`, `VM.Config.HWType`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Options`, `VM.GuestAgent.Unrestricted` and `VM.PowerMgmt`.
   - On the storages of `--import-storage` and `--iso-storage`: `Datastore.Allocate`, `Datastore.AllocateTemplate` and `Datastore.Audit`.

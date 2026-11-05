@@ -115,12 +115,20 @@ func (h *bakeHost) answer(r *http.Request) (any, string) {
 		return h.resources(), ""
 	case path == "/nodes/pve1/status":
 		return map[string]any{"cpuinfo": map[string]any{"flags": h.flags}}, ""
+	case path == "/cluster/options":
+		return map[string]any{}, ""
+	case path == "/access/permissions":
+		granted := map[string]int{privAllocateSpace: 1}
+		return map[string]any{r.URL.Query().Get("path"): granted}, ""
 	case path == "/nodes/pve1/storage":
 		content := "iso,import"
 		if h.noISO {
 			content = "import"
 		}
-		return []any{map[string]any{"storage": "local", "content": content, "enabled": 1}}, ""
+		return []any{
+			map[string]any{"storage": "local", "content": content, "enabled": 1, "active": 1},
+			map[string]any{"storage": "local-lvm", "content": "images", "enabled": 1, "active": 1},
+		}, ""
 	case path == "/nodes/pve1/qemu" && r.Method == http.MethodPost:
 		return h.create(r), ""
 	case task != nil:

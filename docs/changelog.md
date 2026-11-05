@@ -20,6 +20,17 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
+- A template on storage that is not shared can be cloned only on its own node. Clusters now run only on the nodes that can clone their template. A cluster whose allowed nodes leave none is refused, with the template, its storage and the fix named.
+- `kubehenge template create` and the build dialog say when the template's storage is not shared. Without `--storage` the command takes the shared storage with the most room that allows disk images, else asks for `--storage`.
+- A cluster's storage must be available on at least one online node it may use. Placement leaves out the nodes where it is not.
+- A cluster storage outside the management cluster's `workload_datastores` is refused with the setting to add it to. Before, the clusters' tokens failed with a permission error.
+- A template build checks the import, ISO and disk storages' content types and its own `Datastore.AllocateSpace` before downloading. Without `--iso-storage` it takes the first ISO storage the token can write to.
+- Placement takes the CPU level from the chosen template's own `cpu` setting when it names one, such as `x86-64-v4`.
+- A Proxmox VE node that shows online but whose status cannot be read is left out of placement and counted in the clusters' `NodesSkipped` condition. It no longer stops every cluster from being placed.
+- A failure creating a cluster's Proxmox VE pool, user, token or volume owner is a `ProxmoxObjectsFailed` Warning Event. The creation hook's message reads `Proxmox VE objects:` followed by the error.
+- Template builds and new clusters check the datacenter's `user-tag-access` and `registered-tags` first. They name the option and the tags to allow when the tags would be refused.
+- `--node` of `kubehenge template create` and `refresh`, and the chart's `templateRefresh.node`, take several nodes. The build runs on the first that is online and whose CPU runs the node OS.
+- A cluster whose name matches an existing Proxmox VE pool that holds other VMs is refused instead of taking the pool over.
 
 ## [0.4.2] - 2026-11-05
 

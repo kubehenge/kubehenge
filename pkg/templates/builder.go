@@ -23,6 +23,9 @@ type Builder struct {
 	Client  *proxmox.Client
 	Sources *Sources
 	Node    string
+	// Candidates, when set, are the nodes a build may run on. Create uses the first that is online and
+	// whose CPU runs the template's node OS, and sets Node to it.
+	Candidates []string
 	// ImportStorage is a file storage with the `import` content type, where images are downloaded.
 	ImportStorage string
 	// Storage holds the templates' disks. On a Proxmox VE cluster it should be shared, so clones can
@@ -49,6 +52,8 @@ type Builder struct {
 	selectablePoll   time.Duration
 	// execRetry paces waitForExec. Zero means defaultExecRetry.
 	execRetry time.Duration
+	// isoChosen is the ISO storage the pre-flight found a bake can write to, when ISOStorage is empty.
+	isoChosen string
 }
 
 // Network is a static address for a VM being baked. Without it the VM asks DHCP.
@@ -142,6 +147,17 @@ type Inventory struct {
 	Templates []*proxmox.ClusterResource
 	// Storages are those the templates have disks on, sorted.
 	Storages []string
+	// Sites say, for each of Templates in the same order, where its disks are and which CPU type it
+	// carries: a clone runs on a node only if the disks are reachable from it.
+	Sites []Site
+}
+
+// Site is where one template's disks are.
+type Site struct {
+	// Storages are the storages of the template's disks, sorted.
+	Storages []string
+	// CPU is the template's QEMU CPU type setting, empty for Proxmox VE's default.
+	CPU string
 }
 
 // Inventory lists the templates as List does, with the storages their disks are on.
@@ -163,14 +179,33 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 			continue
 		}
 		inv.Templates = append(inv.Templates, confirmed(r, c))
+		site := Site{CPU: c.CPU}
 		disks := slices.Collect(maps.Values(c.MergeDisks()))
 		for _, disk := range append(disks, c.EFIDisk0, c.TPMState0) {
-			if s := diskStorage(disk); s != "" && !slices.Contains(inv.Storages, s) {
+			s := diskStorage(disk)
+			if s == "" {
+				continue
+			}
+			if !slices.Contains(site.Storages, s) {
+				site.Storages = append(site.Storages, s)
+			}
+			if !slices.Contains(inv.Storages, s) {
 				inv.Storages = append(inv.Storages, s)
 			}
 		}
+		slices.Sort(site.Storages)
+		inv.Sites = append(inv.Sites, site)
 	}
-	slices.SortFunc(inv.Templates, func(x, y *proxmox.ClusterResource) int { return strings.Compare(x.Name, y.Name) })
+	order := make([]int, len(inv.Templates))
+	for i := range order {
+		order[i] = i
+	}
+	slices.SortFunc(order, func(x, y int) int { return strings.Compare(inv.Templates[x].Name, inv.Templates[y].Name) })
+	sorted, sites := make([]*proxmox.ClusterResource, len(order)), make([]Site, len(order))
+	for i, from := range order {
+		sorted[i], sites[i] = inv.Templates[from], inv.Sites[from]
+	}
+	inv.Templates, inv.Sites = sorted, sites
 	slices.Sort(inv.Storages)
 	return inv, nil
 }
@@ -220,8 +255,14 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	case !errors.Is(err, ErrNoTemplate):
 		return 0, err
 	}
+	if err = b.pickNode(ctx, t); err != nil {
+		return 0, err
+	}
 	cpuType, recipe, err := b.prepare(ctx, t)
 	if err != nil {
+		return 0, err
+	}
+	if b.isoChosen, err = b.preflight(ctx, t, recipe != nil); err != nil {
 		return 0, err
 	}
 	image, err := b.Sources.Resolve(ctx, t.Image)
@@ -1032,6 +1073,9 @@ func (b *Builder) output(ctx context.Context, vm *proxmox.VirtualMachine, comman
 func (b *Builder) isoStorage(ctx context.Context, node *proxmox.Node) (string, error) {
 	if b.ISOStorage != "" {
 		return b.ISOStorage, nil
+	}
+	if b.isoChosen != "" {
+		return b.isoChosen, nil
 	}
 	s, err := node.StorageISO(ctx)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -31,18 +32,25 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 		return nil, fmt.Errorf("listing nodes: %w", err)
 	}
 	var online []Node
+	var skipped []string
 	for _, n := range nodes {
 		if n.Status != nodeOnline {
 			continue
 		}
+		// A node that shows online but whose status cannot be read (a reboot, a token without
+		// Sys.Audit on it) would otherwise leave every cluster unplaced.
 		level, err := p.cpuLevel(ctx, n.Node)
 		if err != nil {
-			return nil, err
+			ctrl.LoggerFrom(ctx).Error(err, "leaving a node out of placement", "node", n.Node)
+			skipped = append(skipped, n.Node)
+			continue
 		}
 		online = append(online, Node{Name: n.Node, CPULevel: level})
 	}
 	slices.SortFunc(online, func(a, b Node) int { return strings.Compare(a.Name, b.Name) })
+	slices.Sort(skipped)
 	p.mu.Lock()
+	p.skipped = skipped
 	for name := range p.cpuLevels {
 		if !slices.ContainsFunc(online, func(n Node) bool { return n.Name == name }) {
 			delete(p.cpuLevels, name)
@@ -50,6 +58,13 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 	}
 	p.mu.Unlock()
 	return online, nil
+}
+
+// Unreadable are the nodes the last OnlineNodes left out because their status could not be read.
+func (p *Proxmox) Unreadable() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.skipped)
 }
 
 // pveNodeStatus is the part of a node's status that names its CPU's features.
@@ -121,28 +136,63 @@ func (h *Hooks) checkNodeOS(ctx context.Context, c *clusterv1.Cluster) error {
 	if _, _, err = templates.Available(o); err != nil {
 		return err //nolint:wrapcheck // says all a person needs
 	}
-	if h.Nodes == nil || templates.CPULevel(o) <= 1 {
+	if h.Nodes == nil {
 		return nil
 	}
-	chosen, _, err := optionalVariable[[]string](c, allowedNodesVariable)
+	online, sites, err := h.allowedOnline(ctx, c)
 	if err != nil {
 		return err
 	}
-	online, err := h.Nodes.OnlineNodes(ctx)
-	if err != nil {
-		return fmt.Errorf("reading the Proxmox VE nodes: %w", err)
+	need := templates.CPULevel(o)
+	if sites != nil {
+		need = sites.cpuNeed(c, need)
 	}
-	if len(chosen) > 0 {
-		online = slices.DeleteFunc(online, func(n Node) bool { return !slices.Contains(chosen, n.Name) })
-	}
-	if len(online) == 0 || len(nodesFor(online, templates.CPULevel(o))) > 0 {
+	if need <= 1 || len(online) == 0 || len(nodesFor(online, need)) > 0 {
 		return nil
 	}
-	f, r, _ := templates.ReleaseOf(o)
 	names := make([]string, len(online))
 	for i, n := range online {
 		names[i] = n.Name
 	}
+	f, r, _ := templates.ReleaseOf(o)
 	return fmt.Errorf("%s %s needs CPU type %s, which no allowed node (%s) offers. Choose another node OS",
 		f.Title(), r.Name, templates.CPUTypeOf(r), strings.Join(names, ", "))
+}
+
+// allowedOnline are the online nodes the cluster may use, with where the storages and templates
+// are when the hooks can look at them.
+func (h *Hooks) allowedOnline(ctx context.Context, c *clusterv1.Cluster) ([]Node, *Sites, error) {
+	chosen, _, err := optionalVariable[[]string](c, allowedNodesVariable)
+	if err != nil {
+		return nil, nil, err
+	}
+	online, err := h.Nodes.OnlineNodes(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading the Proxmox VE nodes: %w", err)
+	}
+	if len(chosen) > 0 {
+		online = slices.DeleteFunc(online, func(n Node) bool { return !slices.Contains(chosen, n.Name) })
+	}
+	if h.Sites == nil {
+		return online, nil, nil
+	}
+	sites, err := h.Sites.Sites(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)
+	}
+	return online, sites, nil
+}
+
+// checkPlacement refuses a cluster whose storage is available on none of the online nodes it may
+// use, or whose templates cannot be cloned on any of them. While none is online there is nothing
+// to judge by.
+func (h *Hooks) checkPlacement(ctx context.Context, c *clusterv1.Cluster) error {
+	if h.Nodes == nil || h.Sites == nil {
+		return nil
+	}
+	online, sites, err := h.allowedOnline(ctx, c)
+	if err != nil {
+		return err
+	}
+	return sites.Refusal(c, online)
 }

@@ -184,7 +184,8 @@ templateRefresh:
   secret: kubehenge-template-builder
   # Where the templates are built, as kubehenge template create's flags of the same names: the node,
   # the storage of their disks, the file storage the image is downloaded to (import content), the
-  # storage of the cloud-init ISO while an image is prepared, and the template pool.
+  # storage of the cloud-init ISO while an image is prepared, and the template pool. The node may be
+  # a list: a build runs on the first of them that is online and whose CPU runs the node OS.
   node: ""
   storage: ""
   importStorage: ""
