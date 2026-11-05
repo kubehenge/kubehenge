@@ -435,6 +435,26 @@ func TestTalosUpgraderTriesATransientInstallAgain(t *testing.T) {
 	}
 }
 
+// A registry that drops the connection while the node pulls the installer leaves the upgrade
+// waiting for its next try, not failed.
+func TestTalosUpgraderTriesAPullTheRegistryBrokeOffAgain(t *testing.T) {
+	t.Parallel()
+	r := newTalosRig(t, talosCluster("web", "v1.14.4"), talosMachine("web-cp-0", "192.0.2.10", "v1.14.3"))
+	r.talos.installErr = &talosPullError{fmt.Errorf("192.0.2.10: pulling %s: %w", testInstaller,
+		status.Error(codes.Unknown, "failed to copy: read: connection reset by peer"))}
+	c := r.run(t)
+	p, _ := parseTalosProgress(c.Annotations[TalosUpgradingAnnotation])
+	if p.tries != 1 || c.Annotations[TalosUpgradeFailedAnnotation] != "" {
+		t.Fatalf("after a reset pull: %v", c.Annotations)
+	}
+	r.talos.installErr = nil
+	r.now = r.now.Add(talosRetryAfter)
+	r.run(t)
+	if len(r.talos.installed) != 1 || !slices.Equal(r.talos.rebooted, []string{"192.0.2.10"}) {
+		t.Fatalf("installed %v, rebooted %v", r.talos.installed, r.talos.rebooted)
+	}
+}
+
 func TestTalosUpgraderFailsAfterTheLastTry(t *testing.T) {
 	t.Parallel()
 	r := newTalosRig(t, talosCluster("web", "v1.14.4"), talosMachine("web-cp-0", "192.0.2.10", "v1.14.3"))

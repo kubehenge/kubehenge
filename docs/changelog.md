@@ -7,6 +7,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 ## [0.4.2] - 2026-11-05
 
 - Activity no longer misses a kubectl change made just before the kubelet rotates an API server's log or the API server restarts. The interface follows each log as it is written. After a restart it reads the old container's last lines.
+- A Talos upgrade tries a node's installer pull again when the registry drops the connection, rather than failing the upgrade. A registry that refuses the image still fails it at once.
 - The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000. A change reaches running nodes without a reboot.
 - A new cluster's workers get 6144 MiB by default, up from 4096 MiB (the minimums are unchanged). That fits all add-ons together except Rancher, logs, backups and GitOps, with about 2 GiB to spare.
 - Where several storages fit, the installer asks which takes the appliance's disks and which the container template (`--storage`, `--template-storage`). A disabled storage, such as `local` on some nodes, is never used.

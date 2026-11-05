@@ -124,6 +124,12 @@ const talosStallTimeout = 3 * time.Minute
 // errTalosStalled ends an install the node stopped reporting on.
 var errTalosStalled = fmt.Errorf("no word from the node for %s", talosStallTimeout)
 
+// talosPullError is a failed pull of the installer, before anything on the node has changed.
+type talosPullError struct{ err error }
+
+func (e *talosPullError) Error() string { return e.err.Error() }
+func (e *talosPullError) Unwrap() error { return e.err }
+
 // stallGuard is ctx ended with errTalosStalled once heard has not been called for d. stop ends it.
 func stallGuard(ctx context.Context, d time.Duration) (context.Context, func(), func()) {
 	sctx, cancel := context.WithCancelCause(ctx)
@@ -289,7 +295,7 @@ func (n *talosNode) Close() error {
 func (n *talosNode) pullAndInstall(ctx context.Context, image string, heard func()) error {
 	pull, err := n.c.ImageClient.Pull(ctx, &machine.ImageServicePullRequest{Containerd: systemContainerd, ImageRef: image})
 	if err != nil {
-		return fmt.Errorf("%s: pulling %s: %w", n.address, image, err)
+		return &talosPullError{fmt.Errorf("%s: pulling %s: %w", n.address, image, err)}
 	}
 	name := ""
 	for {
@@ -298,7 +304,7 @@ func (n *talosNode) pullAndInstall(ctx context.Context, image string, heard func
 			break
 		}
 		if recvErr != nil {
-			return fmt.Errorf("%s: pulling %s: %w", n.address, image, recvErr)
+			return &talosPullError{fmt.Errorf("%s: pulling %s: %w", n.address, image, recvErr)}
 		}
 		heard()
 		if got := resp.GetName(); got != "" {
