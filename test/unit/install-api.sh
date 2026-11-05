@@ -247,6 +247,11 @@ printf 'y\n' > "${tty}"
 expect "the certificate alone served, said yes to: that certificate" "${org_node} 1" chosen_ca
 tty=${root}/no-terminal
 
+# The hosts to try, for a container that cannot resolve the best one.
+ordered() { ordered_api_hosts "$1" "${certs}/cluster-names.crt" 192.0.2.11 pve1.example.org | paste -sd , -; }
+expect "the one chosen first, then the rest by rank, none twice" "api.example.org,pve.example.org,pve1.example.org,192.0.2.11" ordered api.example.org
+expect "the best first when it was chosen" "pve.example.org,api.example.org,pve1.example.org,192.0.2.11" ordered pve.example.org
+
 if [ "${failures}" -ne 0 ]; then
     echo "install-api: ${failures} of $((passes + failures)) checks failed"
     exit 1

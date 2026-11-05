@@ -4,6 +4,19 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+- The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
+- New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
+- The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
+- The installer stops when the cluster has an appliance already. `--upgrade` and `--certificate` on the wrong node name the node that runs the container.
+- The installer asks about the Proxmox VE interface entry on the same terminal as its other questions, also when piped into `sh`.
+- A dropped session or an interrupt now removes the half-made container and the temporary files.
+- The installer stops early, in plain words, without quorum, with a resolver that names only loopback servers, or with too little room for the downloads.
+- A failed download gives curl's exit code and the HTTP status.
+- An option without its value reports `<option> needs a value`. A storage name is matched as written.
+- New `--tofu <file>` option installs OpenTofu from a local archive, checked against the script's checksum.
+- A container that cannot resolve the API's name makes the installer take the next name or address the certificate covers. It names every one it tried when none works.
+- The usage text and the docs describe how `--template-storage` is chosen.
+
 ## [0.4.2] - 2026-11-05
 
 - Activity no longer misses a kubectl change made just before the kubelet rotates an API server's log or the API server restarts. The interface follows each log as it is written. After a restart it reads the old container's last lines.

@@ -63,6 +63,13 @@ TEMPLATE_URL=http://download.proxmox.com/images/system/${TEMPLATE}
 cluster_ca=/etc/pve/pve-root-ca.pem
 system_ca=/etc/ssl/certs/ca-certificates.crt
 tty=/dev/tty
+corosync_conf=/etc/pve/corosync.conf
+resolv_conf=/etc/resolv.conf
+# The disks need 8 GiB for the root and 1 GiB for the key volume. The working directory holds both
+# downloaded archives and what they unpack to, the template storage the 120 MB template.
+disks_kib=9437184
+work_kib=1048576
+template_kib=204800
 # The volume holding the key that seals what automatic upgrades keep, which Proxmox VE's backups
 # leave out, so that no backup holds both the sealed passphrase and token and what opens them.
 key_dir=/var/lib/kubehenge-keys
@@ -351,22 +358,41 @@ choose_api_host() {
     echo "${best}"
 }
 
-# storages <content>: "<name> <type> <free KiB>" a line for each enabled, active storage on this
-# node that takes the content, the most free space first.
+# storages <content> [<least free KiB>]: "<name> <type> <free KiB>" a line for each enabled, active
+# storage on this node that takes the content and has that much free, best first: local block
+# storage, then directories, NFS, CIFS, CephFS and the rest, and within a kind the most free space.
+# A share is slower and goes away with its network, which the appliance's state should not.
 storages() {
-    pvesm status --content "$1" --enabled 1 2> /dev/null | awk 'NR > 1 && $3 == "active" { print $1, $2, $6 }' | sort -s -k 3,3nr
+    pvesm status --content "$1" --enabled 1 2> /dev/null | awk -v least="${2:-0}" '
+        NR > 1 && $3 == "active" && $6 >= least {
+            rank = 6
+            if ($2 == "zfspool" || $2 == "lvmthin" || $2 == "lvm" || $2 == "rbd") rank = 1
+            else if ($2 == "dir" || $2 == "btrfs") rank = 2
+            else if ($2 == "nfs") rank = 3
+            else if ($2 == "cifs") rank = 4
+            else if ($2 == "cephfs") rank = 5
+            print rank, $1, $2, $6
+        }' | sort -s -k 1,1n -k 4,4nr | cut -d ' ' -f 2-
 }
 
-# takes <storage> <content>: whether the storage is enabled and active here and takes the content.
+# storages_short <content> <least free KiB>: "<name> (<GiB> GiB free), ..." for each storage that
+# takes the content but has less free than that.
+storages_short() {
+    pvesm status --content "$1" --enabled 1 2> /dev/null |
+        awk -v least="$2" 'NR > 1 && $3 == "active" && $6 < least { printf "%s%s (%.1f GiB free)", sep, $1, $6 / 1048576; sep = ", " }'
+}
+
+# takes <storage> <content> [<least free KiB>]: whether the storage is enabled and active here, takes
+# the content and has that much free. The name is matched as written, dots included.
 takes() {
-    storages "$2" | cut -d ' ' -f 1 | grep -qx -- "$1"
+    storages "$2" "${3:-0}" | cut -d ' ' -f 1 | grep -qxF -- "$1"
 }
 
-# choose_storage <content> <what goes there> <option>: the storage for it. That is the only one
-# that takes it, else the one the administrator picks on the terminal, else the one with the most
-# free space. Nothing when none takes it.
+# choose_storage <content> <what goes there> <option> [<least free KiB>]: the storage for it. That
+# is the only one that takes it, else the one the administrator picks on the terminal, else the
+# best ranked (see storages). Nothing when none takes it.
 choose_storage() {
-    candidates=$(storages "$1")
+    candidates=$(storages "$1" "${4:-0}")
     [ -n "${candidates}" ] || return 0
     best=$(printf '%s\n' "${candidates}" | head -n 1 | cut -d ' ' -f 1)
     count=$(printf '%s\n' "${candidates}" | wc -l)
@@ -388,10 +414,11 @@ choose_storage() {
         printf '%s\n' "${candidates}" | sed -n "${choice}p" | cut -d ' ' -f 1
         return
     fi
+    best_type=$(printf '%s\n' "${candidates}" | head -n 1 | cut -d ' ' -f 2)
     if [ "${count}" -gt 1 ]; then
-        echo "kubehenge: storage ${best} for $2, the one with the most free space ($3 names another)" >&2
+        echo "kubehenge: storage ${best} (${best_type}) for $2, the best of ${count} by type and free space ($3 names another)" >&2
     else
-        echo "kubehenge: storage ${best} for $2, the only one here that takes it ($3 names another)" >&2
+        echo "kubehenge: storage ${best} (${best_type}) for $2, the only one here that takes it ($3 names another)" >&2
     fi
     echo "${best}"
 }
@@ -722,13 +749,211 @@ fetch() {
     [ ! -t 2 ] || progress=--progress-bar
     ok "downloading $4"
     # shellcheck disable=SC2086 # the unquoted expansion is two words on purpose, the URL one of them.
-    curl -fSL ${download_proxy:+--proxy "${download_proxy}"} "${progress}" --proto "${5:-=https}" --retry 8 --retry-all-errors --tlsv1.2 -o "$2" "$1" || fail "could not download $1"
+    rc=0
+    http=$(curl -fSL ${download_proxy:+--proxy "${download_proxy}"} "${progress}" --proto "${5:-=https}" --retry 8 --retry-all-errors --tlsv1.2 -w '%{http_code}' -o "$2" "$1") || rc=$?
+    if [ "${rc}" -ne 0 ]; then
+        # 000 is curl's word for no HTTP answer at all.
+        [ "${http}" != 000 ] || http=''
+        fail "could not download $1 (curl exit ${rc}${http:+, HTTP status ${http}})"
+    fi
     case "${#3}" in
         128) sum=sha512sum ;;
         *) sum=sha256sum ;;
     esac
     echo "$3  $2" | "${sum}" -c --quiet - || fail "$1 does not match its checksum"
     ok "$4: checksum verified"
+}
+
+# local_archive <file> <SHA-256> <destination> <what it is>: copies a file the administrator gave
+# and checks it.
+local_archive() {
+    cp "$1" "$3"
+    echo "$2  $3" | sha256sum -c --quiet - || fail "$1 does not match its checksum"
+    ok "$4: checksum verified"
+}
+
+# need_space <directory> <KiB> <what needs it> <what to do>: stops unless the file system holding the
+# directory has that much free.
+need_space() {
+    free_kib=$(df -Pk "$1" 2> /dev/null | awk 'NR == 2 { print $4 }')
+    [ -z "${free_kib}" ] || [ "${free_kib}" -ge "$2" ] ||
+        fail "$1 has $((free_kib / 1024)) MiB free and $3 needs $(($2 / 1024)) MiB. $4"
+}
+
+# is_ipv4 <address>: whether it is a dotted IPv4 address.
+is_ipv4() {
+    printf '%s' "$1" | grep -Eqx '([0-9]{1,3}\.){3}[0-9]{1,3}' || return 1
+    for octet in $(printf '%s' "$1" | tr . ' '); do
+        [ "${octet}" -le 255 ] || return 1
+    done
+}
+
+# is_ipv4_cidr <address/prefix>: whether it is an IPv4 address with a prefix length of 1 to 32.
+is_ipv4_cidr() {
+    case "$1" in
+        */*) ;;
+        *) return 1 ;;
+    esac
+    # shellcheck disable=SC2310 # is_ipv4 is a predicate; its status is the answer.
+    is_ipv4 "${1%/*}" || return 1
+    in_range "${1#*/}" 1 32
+}
+
+# in_range <value> <least> <most>: whether the value is a whole number between them.
+in_range() {
+    case "$1" in
+        '' | *[!0-9]*) return 1 ;;
+        *) ;;
+    esac
+    [ "${#1}" -le 6 ] && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+
+# container_net: the container's net0 setting, from $bridge, $vlan, $mtu, $ip and $gateway.
+container_net() {
+    printf 'name=eth0,bridge=%s%s%s,ip=%s' "${bridge}" "${vlan:+,tag=${vlan}}" "${mtu:+,mtu=${mtu}}" "${ip}"
+    [ "${ip}" = dhcp ] || printf '%s' "${gateway:+,gw=${gateway}}"
+}
+
+# node_bridges: the bridges, Open vSwitch bridges and SDN VNets a container on this node can attach
+# to, one a line.
+node_bridges() {
+    { pvesh get "/nodes/${node}/network" --output-format json 2> /dev/null | tr '{' '\n' |
+        grep -E '"type" *: *"(bridge|OVSBridge)"' | sed -n 's/.*"iface" *: *"\([^"]*\)".*/\1/p' || true; } | sort -u
+    # Where SDN is not set up, the call fails and there are none.
+    pvesh get /cluster/sdn/vnets --output-format json 2> /dev/null | tr '{' '\n' |
+        sed -n 's/.*"vnet" *: *"\([^"]*\)".*/\1/p' | sort -u || true
+}
+
+# bridge_exists <bridge>: whether it is one of node_bridges.
+bridge_exists() {
+    node_bridges | grep -qxF -- "$1"
+}
+
+# default_bridge: the bridge holding this node's default route, else vmbr0 where it exists. A node
+# whose management address sits on a bond or a VLAN interface has neither, and fails.
+default_bridge() {
+    route_dev=$(ip -4 route show default 2> /dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n 1)
+    # shellcheck disable=SC2310 # bridge_exists is a predicate; its status is the answer.
+    if [ -n "${route_dev}" ] && bridge_exists "${route_dev}"; then
+        printf '%s\n' "${route_dev}"
+        return
+    fi
+    # shellcheck disable=SC2310 # bridge_exists is a predicate; its status is the answer.
+    if bridge_exists vmbr0; then
+        echo vmbr0
+        return
+    fi
+    return 1
+}
+
+# bridge_list: node_bridges as "a, b", or "none".
+bridge_list() {
+    listed_bridges=$(node_bridges | paste -sd , - | sed 's/,/, /g')
+    printf '%s' "${listed_bridges:-none}"
+}
+
+# appliance_containers: "<ID> <node>" for each container of the cluster tagged kubehenge, as a
+# whole tag among the ones Proxmox VE separates with semicolons.
+appliance_containers() {
+    pvesh get /cluster/resources --type vm --output-format json 2> /dev/null | tr '{' '\n' | awk '
+        /"type" *: *"lxc"/ && match($0, /"tags" *: *"[^"]*"/) {
+            tags = substr($0, RSTART, RLENGTH)
+            sub(/^"tags" *: *"/, "", tags)
+            sub(/"$/, "", tags)
+            found = 0
+            n = split(tags, parts, ";")
+            for (i = 1; i <= n; i++) if (parts[i] == "kubehenge") found = 1
+            if (!found || !match($0, /"vmid" *: *[0-9]+/)) next
+            id = substr($0, RSTART, RLENGTH)
+            sub(/.*: */, "", id)
+            if (!match($0, /"node" *: *"[^"]*"/)) next
+            host = substr($0, RSTART, RLENGTH)
+            sub(/^"node" *: *"/, "", host)
+            sub(/"$/, "", host)
+            print id, host
+        }'
+}
+
+# refuse_second_appliance: stops when a container of the cluster is already an appliance.
+refuse_second_appliance() {
+    existing=$(appliance_containers | head -n 1)
+    [ -z "${existing}" ] || fail "an appliance exists as container ${existing% *} on ${existing#* }. Run this with --upgrade on that node."
+}
+
+# require_appliance: stops unless container $ctid is an appliance on this node.
+require_appliance() {
+    where=$(appliance_containers | awk -v id="${ctid}" '$1 == id { print $2; exit }')
+    if [ -n "${where}" ] && [ "${where}" != "${node}" ]; then
+        fail "container ${ctid} runs on node ${where}. Run this there."
+    fi
+    [ -n "${where}" ] && return 0
+    # The cluster's list may fail where this node's own configuration answers.
+    pct config "${ctid}" 2> /dev/null | sed -n 's/^tags: *//p' | tr ';' '\n' | grep -qxF kubehenge ||
+        fail "container ${ctid} is not Kubehenge's appliance"
+}
+
+# want_pve_entry: yes or no, asked on the terminal the other questions use.
+want_pve_entry() {
+    # shellcheck disable=SC2310 # interactive is a predicate; its status is the answer.
+    if ! interactive; then
+        echo no
+        return
+    fi
+    reply=$(ask "Add a Kubernetes button to this node's Proxmox VE interface, opening the appliance? [y/N]")
+    case "${reply}" in
+        [Yy] | [Yy][Ee][Ss]) echo yes ;;
+        *) echo no ;;
+    esac
+}
+
+# install_traps <command>: runs the command when the script ends, and also when the session drops
+# or is interrupted, which would otherwise leave the container and the files half made.
+install_traps() {
+    # shellcheck disable=SC2064 # the command is the argument as given.
+    trap "$1" EXIT
+    trap 'exit 1' HUP INT TERM
+}
+
+# cluster_quorate: whether this node can change the cluster's configuration. A node in no cluster
+# always can.
+cluster_quorate() {
+    quorum_report=$(pvecm status 2> /dev/null) || quorum_report=''
+    if printf '%s\n' "${quorum_report}" | grep -Eq '^Quorate:[[:space:]]+Yes'; then
+        return 0
+    fi
+    [ -z "${quorum_report}" ] && [ ! -e "${corosync_conf}" ]
+}
+
+# loopback_resolver_only: whether the node's resolver file names name servers, all on loopback.
+loopback_resolver_only() {
+    resolvers=$(sed -n 's/^nameserver[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p' "${resolv_conf}" 2> /dev/null)
+    [ -n "${resolvers}" ] && ! printf '%s\n' "${resolvers}" | grep -qvE '^(127\.|::1$)'
+}
+
+# ordered_api_hosts <chosen> <certificate> <bridge address> <FQDN>: the host chosen, then the other
+# candidates of api_candidates in rank order, one a line.
+ordered_api_hosts() {
+    {
+        echo "$1"
+        shift
+        api_candidates "$@" | cut -d ' ' -f 2
+    } | awk 'NF && !seen[$0]++'
+}
+
+# resolvable_api_host <hosts, one a line>: the first that is an address, or a name the container
+# resolves. The node's own hosts file may be all that knows a node's name.
+resolvable_api_host() {
+    for candidate in $1; do
+        case "${candidate}" in
+            *[!0-9.]*)
+                pct exec "${ctid}" -- getent hosts "${candidate}" > /dev/null 2>&1 || continue
+                ;;
+            *) ;;
+        esac
+        echo "${candidate}"
+        return 0
+    done
+    return 1
 }
 
 # The tests source this file for its functions alone.
@@ -744,11 +969,13 @@ Installs Kubehenge's appliance on this Proxmox VE node, as root.
 
 Options:
   --ctid <id>                 the container's ID; default the next free one
-  --storage <storage>         where the container's disks go; default the only storage that takes them, else asked
-  --template-storage <storage> where the container template goes; default where it already is, else as --storage
-  --bridge <bridge>           the bridge the container attaches to; default vmbr0
-  --ip dhcp|<address/prefix>  the container's address, such as 192.0.2.40/24; default dhcp
-  --gateway <address>         the default gateway, with a static --ip
+  --storage <storage>         where the container's disks go, 9 GiB; default the only storage that takes them, else asked
+  --template-storage <storage> where the container template goes; default where it already is, else the only storage that takes it, else asked
+  --bridge <bridge>           a bridge, Open vSwitch bridge or SDN VNet the container attaches to; default the bridge of the node's default route, else vmbr0
+  --vlan <tag>                the VLAN tag of the container's network, 1 to 4094; default none
+  --mtu <bytes>               the MTU of the container's network, 576 to 65535; default the bridge's
+  --ip dhcp|<address/prefix>  the container's IPv4 address, such as 192.0.2.40/24; default dhcp
+  --gateway <address>         the default gateway, an IPv4 address, with a static --ip
   --dns <address>,...         the name servers the container asks; default this node's
   --hostname <name>           the container's host name, also in its certificate; default kubehenge
   --name <DNS name>           a DNS name people reach the appliance by, put into its certificate
@@ -759,6 +986,7 @@ Options:
   --proxmox-insecure          reach the Proxmox VE API without verifying its certificate
   --release <file>            install this release archive instead of downloading it
   --sha256 <hex>              the archive's SHA-256, with --release
+  --tofu <file>               install OpenTofu from this release archive instead of downloading it, checked against the checksum this script carries
   --pve-entry, --no-pve-entry add the Kubernetes entry to this node's Proxmox VE interface, or not; default ask
   --upgrade                   upgrade the appliance in container --ctid
   --certificate               replace the certificate of the appliance in container --ctid
@@ -768,7 +996,7 @@ More: https://kubehenge.dev/docs/install
 EOF
 }
 
-ctid='' storage='' template_storage='' bridge=vmbr0 ip=dhcp gateway='' dns='' proxmox_url='' proxmox_ca='' proxmox_insecure='' hostname=kubehenge
+ctid='' storage='' template_storage='' bridge='' vlan='' mtu='' tofu_archive='' ip=dhcp gateway='' dns='' proxmox_url='' proxmox_ca='' proxmox_insecure='' hostname=kubehenge
 release='' release_sha='' upgrade='' pve_entry='' certificate='' name='' no_name='' cert_file='' key_file=''
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -806,6 +1034,12 @@ while [ $# -gt 0 ]; do
             shift
             continue
             ;;
+        --name | --cert | --key | --ctid | --storage | --template-storage | --bridge | --vlan | --mtu | --ip | --gateway | --dns | --proxmox-url | --proxmox-ca | --hostname | --release | --sha256 | --tofu)
+            [ $# -ge 2 ] || fail "$1 needs a value"
+            ;;
+        *) ;;
+    esac
+    case "$1" in
         --name) name=$2 ;;
         --cert) cert_file=$2 ;;
         --key) key_file=$2 ;;
@@ -813,6 +1047,9 @@ while [ $# -gt 0 ]; do
         --storage) storage=$2 ;;
         --template-storage) template_storage=$2 ;;
         --bridge) bridge=$2 ;;
+        --vlan) vlan=$2 ;;
+        --mtu) mtu=$2 ;;
+        --tofu) tofu_archive=$2 ;;
         --ip) ip=$2 ;;
         --gateway) gateway=$2 ;;
         --dns) dns=$2 ;;
@@ -851,6 +1088,25 @@ fi
 if [ -n "${proxmox_insecure}" ] && [ -n "${certificate}" ]; then
     fail "--proxmox-insecure goes with an install or --upgrade"
 fi
+# shellcheck disable=SC2310 # is_ipv4_cidr is a predicate; its status is the answer.
+if [ "${ip}" != dhcp ] && ! is_ipv4_cidr "${ip}"; then
+    fail "--ip is dhcp or an IPv4 address with its prefix length, such as 192.0.2.5/24"
+fi
+# shellcheck disable=SC2310 # is_ipv4 is a predicate; its status is the answer.
+if [ -n "${gateway}" ] && ! is_ipv4 "${gateway}"; then
+    fail "--gateway is an IPv4 address, such as 192.0.2.1"
+fi
+# shellcheck disable=SC2310 # in_range is a predicate; its status is the answer.
+if [ -n "${vlan}" ] && ! in_range "${vlan}" 1 4094; then
+    fail "--vlan is a VLAN tag from 1 to 4094"
+fi
+# shellcheck disable=SC2310 # in_range is a predicate; its status is the answer.
+if [ -n "${mtu}" ] && ! in_range "${mtu}" 576 65535; then
+    fail "--mtu is a number of bytes from 576 to 65535"
+fi
+if [ -n "${tofu_archive}" ] && [ ! -r "${tofu_archive}" ]; then
+    fail "--tofu names a readable OpenTofu release archive"
+fi
 if [ -n "${no_name}" ] && { [ -z "${certificate}" ] || [ -n "${name}" ]; }; then
     fail "--no-name goes with --certificate and without --name"
 fi
@@ -858,12 +1114,17 @@ if [ -n "${cert_file}${key_file}" ] && { [ ! -r "${cert_file}" ] || [ ! -r "${ke
     fail "--cert and --key name a readable PEM certificate and its key"
 fi
 
+node=$(hostname)
+# shellcheck disable=SC2310 # cluster_quorate is a predicate; its status is the answer.
+cluster_quorate || fail "this node has no quorum in its Proxmox VE cluster, so it cannot change any container. Start the other nodes, then run this again."
+
 if [ -n "${certificate}" ]; then
     [ -n "${ctid}" ] || fail "--certificate needs --ctid"
-    pct config "${ctid}" 2> /dev/null | grep -q '^tags:.*kubehenge' || fail "container ${ctid} is not Kubehenge's appliance"
+    require_appliance
     pct status "${ctid}" | grep -q running || pct start "${ctid}"
     work=$(mktemp -d)
-    trap 'rm -rf "$work"' EXIT
+    # shellcheck disable=SC2016 # expanded when the trap runs.
+    install_traps 'rm -rf "$work"'
     ctip=$(appliance_ip)
     [ -n "${ctip}" ] || fail "container ${ctid} has no IPv4 address"
     if [ -z "${name}${no_name}" ]; then
@@ -896,19 +1157,36 @@ if [ -n "${release}" ]; then
 fi
 [ -n "${KUBEHENGE_SHA256}" ] || fail "this script carries no release checksum; use --release <file> --sha256 <hex>"
 
-node=$(hostname)
 if [ -n "${upgrade}" ]; then
     [ -n "${ctid}" ] || fail "--upgrade needs --ctid"
-    pct config "${ctid}" 2> /dev/null | grep -q '^tags:.*kubehenge' || fail "container ${ctid} is not Kubehenge's appliance"
+    require_appliance
 else
+    refuse_second_appliance
+    # The bridge and the name servers are checked before the long steps, which cannot help a
+    # container that will not start or reach anything.
+    bridges_here=$(bridge_list)
+    # shellcheck disable=SC2310 # default_bridge and bridge_exists are predicates.
+    if [ -z "${bridge}" ]; then
+        bridge=$(default_bridge) || fail "no bridge carries this node's default route and there is no vmbr0. Name one of ${bridges_here} with --bridge"
+    elif ! bridge_exists "${bridge}"; then
+        fail "${bridge} is no bridge, Open vSwitch bridge or SDN VNet of this node. Name one of ${bridges_here} with --bridge"
+    fi
+    # shellcheck disable=SC2310 # loopback_resolver_only is a predicate; its status is the answer.
+    if [ -z "${dns}" ] && loopback_resolver_only; then
+        fail "${resolv_conf} names only name servers on this node's loopback, which the container cannot reach. Give the name servers it asks with --dns, such as 192.0.2.53,192.0.2.54"
+    fi
     [ -n "${ctid}" ] || ctid=$(pvesh get /cluster/nextid)
     # Asked before the long steps rather than during them.
     if [ -z "${storage}" ]; then
-        storage=$(choose_storage rootdir "the appliance's disks" --storage)
-        [ -n "${storage}" ] || fail "no enabled, active storage here takes container disks (content rootdir). Enable one, or name one with --storage"
+        storage=$(choose_storage rootdir "the appliance's disks" --storage "${disks_kib}")
+        if [ -z "${storage}" ]; then
+            short=$(storages_short rootdir "${disks_kib}")
+            [ -z "${short}" ] || fail "no storage that takes container disks has the 9 GiB free that the appliance needs (8 for its root disk, 1 for its key volume): ${short}. Free space, or name another with --storage"
+            fail "no enabled, active storage here takes container disks (content rootdir). Enable one, or name one with --storage"
+        fi
     else
         # shellcheck disable=SC2310 # takes is a predicate; its status is the answer.
-        takes "${storage}" rootdir || fail "storage ${storage} is disabled, inactive or takes no container disks here. Name another with --storage"
+        takes "${storage}" rootdir "${disks_kib}" || fail "storage ${storage} is disabled, inactive, takes no container disks here or has under 9 GiB free for them. Name another with --storage"
     fi
     if [ -z "${template_storage}" ]; then
         template_storage=$(template_held)
@@ -918,24 +1196,10 @@ else
         # shellcheck disable=SC2310 # takes is a predicate; its status is the answer.
         takes "${template_storage}" vztmpl || fail "storage ${template_storage} is disabled, inactive or takes no container templates here. Name another with --template-storage"
     fi
-    case "${ip}" in
-        dhcp) net="name=eth0,bridge=${bridge},ip=dhcp" ;;
-        */*) net="name=eth0,bridge=${bridge},ip=${ip}${gateway:+,gw=${gateway}}" ;;
-        *) fail "--ip is dhcp or an address with its prefix length, such as 192.0.2.5/24" ;;
-    esac
+    net=$(container_net)
     # The entry changes Proxmox VE's own interface, so it goes in only on the administrator's word,
     # asked before the long steps rather than after them.
-    if [ -z "${pve_entry}" ]; then
-        pve_entry=no
-        if [ -t 0 ]; then
-            printf "Add a Kubernetes button to this node's Proxmox VE interface, opening the appliance? [y/N] "
-            read -r answer || answer=''
-            case "${answer}" in
-                [Yy] | [Yy][Ee][Ss]) pve_entry=yes ;;
-                *) ;;
-            esac
-        fi
-    fi
+    [ -n "${pve_entry}" ] || pve_entry=$(want_pve_entry)
 fi
 
 work=$(mktemp -d)
@@ -958,23 +1222,25 @@ cleanup() {
     [ -z "${partial}" ] || rm -f "${partial}"
     rm -rf "${work}"
 }
-trap cleanup EXIT
+install_traps cleanup
+need_space "${work}" "${work_kib}" "the downloaded archives and what they unpack to" "Free space there, or set TMPDIR to a directory on a larger file system."
 
 # Downloads go through the proxy Proxmox VE's own downloads use, unless the environment names one.
 read_download_proxy /etc/pve/datacenter.cfg
 
+step "getting and checking Kubehenge ${KUBEHENGE_VERSION} and OpenTofu ${TOFU_VERSION}"
 if [ -n "${release}" ]; then
-    step "checking ${release} and downloading OpenTofu ${TOFU_VERSION}"
-    cp "${release}" "${work}/kubehenge.tar.gz"
-    echo "${KUBEHENGE_SHA256}  ${work}/kubehenge.tar.gz" | sha256sum -c --quiet - || fail "${release} does not match its checksum"
-    ok "${release}: checksum verified"
+    local_archive "${release}" "${KUBEHENGE_SHA256}" "${work}/kubehenge.tar.gz" "${release}"
 else
-    step "downloading and checking Kubehenge ${KUBEHENGE_VERSION} and OpenTofu ${TOFU_VERSION}"
     fetch "https://github.com/kubehenge/kubehenge/releases/download/v${KUBEHENGE_VERSION}/kubehenge_${KUBEHENGE_VERSION}_linux_amd64.tar.gz" \
         "${work}/kubehenge.tar.gz" "${KUBEHENGE_SHA256}" "Kubehenge ${KUBEHENGE_VERSION}"
 fi
-fetch "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.tar.gz" \
-    "${work}/tofu.tar.gz" "${TOFU_SHA256}" "OpenTofu ${TOFU_VERSION}"
+if [ -n "${tofu_archive}" ]; then
+    local_archive "${tofu_archive}" "${TOFU_SHA256}" "${work}/tofu.tar.gz" "${tofu_archive}"
+else
+    fetch "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.tar.gz" \
+        "${work}/tofu.tar.gz" "${TOFU_SHA256}" "OpenTofu ${TOFU_VERSION}"
+fi
 mkdir "${work}/kubehenge" "${work}/tofu"
 tar -xzf "${work}/kubehenge.tar.gz" -C "${work}/kubehenge"
 tar -xzf "${work}/tofu.tar.gz" -C "${work}/tofu" tofu
@@ -1106,6 +1372,10 @@ if [ -z "${proxmox_url}" ]; then
         fail "Proxmox VE's certificate (${served}) is valid for no name or address of this cluster's nodes, only for ${named:-none}; give the URL the appliance and the clusters reach the API at, by a name or address the certificate is valid for, with --proxmox-url"
     fi
     proxmox_url=https://${api}:8006
+    api_hosts=$(ordered_api_hosts "${api}" "${served}" "${pveip}" "${fqdn}")
+else
+    api_endpoint
+    api_hosts=${api_host}
 fi
 if [ -n "${proxmox_insecure}" ]; then
     api_ca=${cluster_ca}
@@ -1120,6 +1390,7 @@ if [ -f "${template_file}" ] && echo "${TEMPLATE_SHA512}  ${template_file}" | sh
     ok "already there, checksum verified"
 else
     mkdir -p "$(dirname "${template_file}")"
+    need_space "$(dirname "${template_file}")" "${template_kib}" "the container template" "Free space on storage ${template_storage}, or name another with --template-storage."
     # Downloaded beside its place and moved there once checked, so no half or wrong file is left as
     # the template.
     partial=${template_file}.part
@@ -1148,6 +1419,18 @@ done
 [ -n "${ctip}" ] || fail "container ${ctid} got no IPv4 address"
 ok "running, at ${ctip}"
 public=${name:-${ctip}}
+
+# This node's hosts file may be all that knows a node's name, and the container does not read it.
+# shellcheck disable=SC2310 # resolvable_api_host is a predicate; its status is the answer.
+reachable=$(resolvable_api_host "${api_hosts}") || {
+    tried=$(printf '%s\n' "${api_hosts}" | paste -sd , - | sed 's/,/, /g')
+    fail "the container cannot resolve any host the Proxmox VE API could be reached at (tried ${tried}). Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns"
+}
+first_host=$(printf '%s\n' "${api_hosts}" | head -n 1)
+if [ "${reachable}" != "${first_host}" ]; then
+    echo "kubehenge: the container cannot resolve ${first_host}, so the appliance and the clusters reach the Proxmox VE API at ${reachable}" >&2
+    proxmox_url=https://${reachable}:8006
+fi
 
 if [ -n "${cert_file}" ]; then
     step "checking the certificate for ${public}"
