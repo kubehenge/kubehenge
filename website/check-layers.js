@@ -5,7 +5,7 @@
 // a phone and a desktop size.
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { dirname, extname, join, posix } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
@@ -23,7 +23,8 @@ const types = {
 };
 
 const server = createServer(async (req, res) => {
-  const path = posix.normalize(decodeURIComponent(new URL(req.url, "http://x").pathname));
+  const path = decodeURIComponent(new URL(req.url, "http://x").pathname);
+  if (path.includes("..")) return res.writeHead(400).end();
   const file = join(dist, path.endsWith("/") ? `${path}index.html` : path);
   try {
     const body = await readFile(extname(file) ? file : `${file}.html`);
