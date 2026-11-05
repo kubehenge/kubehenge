@@ -197,9 +197,9 @@ func (r *pveReads) allowedOnline(ctx context.Context, c *clusterv1.Cluster) ([]N
 		return nil, nil, err
 	}
 	all, err := r.online.get(func() ([]Node, error) {
-		nodes, err := r.h.Nodes.OnlineNodes(ctx)
-		if err != nil {
-			return nil, &pveReadError{fmt.Errorf("reading the Proxmox VE nodes: %w", err)}
+		nodes, readErr := r.h.Nodes.OnlineNodes(ctx)
+		if readErr != nil {
+			return nil, &pveReadError{fmt.Errorf("reading the Proxmox VE nodes: %w", readErr)}
 		}
 		return nodes, nil
 	})
@@ -214,9 +214,9 @@ func (r *pveReads) allowedOnline(ctx context.Context, c *clusterv1.Cluster) ([]N
 		return online, nil, nil
 	}
 	sites, err := r.sites.get(func() (*Sites, error) {
-		s, err := r.h.Sites.Sites(ctx)
-		if err != nil {
-			return nil, &pveReadError{fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)}
+		s, readErr := r.h.Sites.Sites(ctx)
+		if readErr != nil {
+			return nil, &pveReadError{fmt.Errorf("reading the Proxmox VE storages and templates: %w", readErr)}
 		}
 		return s, nil
 	})
