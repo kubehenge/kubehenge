@@ -243,18 +243,19 @@ func (api *apiServerFake) servePrevious(w http.ResponseWriter, pod string, since
 	_, _ = io.WriteString(w, linesSince(lines, since))
 }
 
-// forgetPrevious has the kubelet lose a pod's previous log.
-func (api *apiServerFake) forgetPrevious(pod string) {
+// forgetPrevious has the kubelet lose the first pod's previous log.
+func (api *apiServerFake) forgetPrevious() {
 	api.mu.Lock()
 	defer api.mu.Unlock()
-	delete(api.previous, pod)
+	delete(api.previous, apiServerA)
 }
 
-// restart restarts a pod's container: its log becomes the previous one, and the one before it is
-// gone.
-func (api *apiServerFake) restart(pod string) {
+// restart restarts the first pod's container: its log becomes the previous one, and the one before
+// it is gone.
+func (api *apiServerFake) restart() {
 	api.mu.Lock()
 	defer api.mu.Unlock()
+	const pod = apiServerA
 	api.previous[pod] = api.files[pod]
 	api.files[pod] = nil
 	for _, f := range api.followers[pod] {

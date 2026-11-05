@@ -315,7 +315,7 @@ func TestARestartedAPIServerKeepsItsOldContainersLastLines(t *testing.T) {
 				t.Helper()
 				r.api.add(apiServerA, 10, "tail")
 				r.waitRead(t, apiServerA, 10)
-				r.api.restart(apiServerA)
+				r.api.restart()
 				r.ended(t)
 			},
 			kept: []string{"c09", "fresh", "tail"},
@@ -325,7 +325,7 @@ func TestARestartedAPIServerKeepsItsOldContainersLastLines(t *testing.T) {
 				t.Helper()
 				r.cut(t, errConnectionLost)
 				r.api.add(apiServerA, 10, "tail")
-				r.api.restart(apiServerA)
+				r.api.restart()
 			},
 			kept: []string{"c09", "fresh", "tail"}, previous: []time.Time{auditBase.Add(9 * time.Second)},
 		},
@@ -334,8 +334,8 @@ func TestARestartedAPIServerKeepsItsOldContainersLastLines(t *testing.T) {
 				t.Helper()
 				r.cut(t, errConnectionLost)
 				r.api.add(apiServerA, 10, "tail")
-				r.api.restart(apiServerA)
-				r.api.forgetPrevious(apiServerA)
+				r.api.restart()
+				r.api.forgetPrevious()
 			},
 			kept: []string{"c09", "fresh"}, lost: 1, previous: []time.Time{auditBase.Add(9 * time.Second)},
 		},
@@ -344,9 +344,9 @@ func TestARestartedAPIServerKeepsItsOldContainersLastLines(t *testing.T) {
 				t.Helper()
 				r.cut(t, errConnectionLost)
 				r.api.add(apiServerA, 10, "tail")
-				r.api.restart(apiServerA)
+				r.api.restart()
 				r.api.add(apiServerA, 0, "between")
-				r.api.restart(apiServerA)
+				r.api.restart()
 			},
 			kept: []string{"between", "c09", "fresh"}, lost: 1, previous: []time.Time{{}},
 		},
