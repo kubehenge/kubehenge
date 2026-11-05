@@ -2,6 +2,7 @@ package templates
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -226,13 +227,11 @@ func TagsRefusal(access, registered string, tags, visible []string) string {
 	switch allow {
 	case "none":
 		return "the datacenter option user-tag-access is none, so users cannot set tags. " +
-			"In Datacenter, Options, User Tag Access choose list and allow " + strings.Join(tags, ", ")
+			"Choose list in Datacenter, Options, User Tag Access and add " + strings.Join(tags, ", ")
 	case "list", "existing":
 		allowed := strings.FieldsFunc(list, isTagSeparator)
-		kinds := "tags in its list"
 		if allow == "existing" {
 			allowed = append(allowed, visible...)
-			kinds = "tags in its list or already on a guest"
 		}
 		var missing []string
 		for _, tag := range tags {
@@ -241,8 +240,8 @@ func TagsRefusal(access, registered string, tags, visible []string) string {
 			}
 		}
 		if len(missing) > 0 {
-			return "the datacenter option user-tag-access allows only " + kinds +
-				". In Datacenter, Options, User Tag Access add " + strings.Join(missing, ", ") + " to the list"
+			return "the datacenter option user-tag-access refuses " + strings.Join(missing, ", ") +
+				". Add them to its list in Datacenter, Options, User Tag Access"
 		}
 	}
 	return ""
@@ -280,5 +279,5 @@ func CheckTags(ctx context.Context, c *proxmox.Client, tags []string) error {
 	if why == "" || holds(ctx, c, "/", "Sys.Modify") {
 		return nil
 	}
-	return lasting(fmt.Errorf("the tags %s would be refused: %s", strings.Join(tags, ", "), why))
+	return lasting(errors.New(why))
 }

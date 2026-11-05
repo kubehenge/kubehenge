@@ -160,15 +160,15 @@ func TestTagsRefusal(t *testing.T) {
 		{"the default", "", "", "", nil},
 		{"free", "user-allow=free", "", "", nil},
 		{"none", "user-allow=none", "", "user-tag-access is none", nil},
-		{"a list without the tags", "user-allow=list,user-allow-list=prod", "", "add kubehenge, volumes", nil},
+		{"a list without the tags", "user-allow=list,user-allow-list=prod", "", "refuses kubehenge, volumes.", nil},
 		{"a list with them", "user-allow=list,user-allow-list=prod;kubehenge;volumes", "", "", nil},
-		{"a list matches case exactly", "user-allow=list,user-allow-list=Kubehenge;volumes", "", "add kubehenge to the list", nil},
+		{"a list matches case exactly", "user-allow=list,user-allow-list=Kubehenge;volumes", "", "refuses kubehenge.", nil},
 		{"registered", "", "prod;volumes", "registered-tags lists volumes", nil},
 		{"registered matches case exactly", "", "Kubehenge;prod", "", nil},
 		{"registered without them", "", "prod", "", nil},
 		{"existing: on a visible guest", "user-allow=existing", "", "", []string{"kubehenge", "volumes"}},
 		{"existing: in the list", "user-allow=existing,user-allow-list=volumes", "", "", []string{"kubehenge"}},
-		{"existing: in neither", "user-allow=existing,user-allow-list=prod", "", "add volumes to the list", []string{"kubehenge"}},
+		{"existing: in neither", "user-allow=existing,user-allow-list=prod", "", "refuses volumes.", []string{"kubehenge"}},
 	} {
 		got := TagsRefusal(tc.access, tc.registered, tags, tc.visible)
 		if tc.want == "" && got != "" || !strings.Contains(got, tc.want) {
@@ -203,7 +203,7 @@ func TestCheckTagsNamesTheOptionUnlessTheTokenMaySetAnyTag(t *testing.T) {
 		t.Errorf("CheckTags = %v with every tag on a visible guest", err)
 	}
 	pve.guests = nil
-	if err = CheckTags(t.Context(), pve.client(t), tags); err == nil || !strings.Contains(err.Error(), "already on a guest") {
+	if err = CheckTags(t.Context(), pve.client(t), tags); err == nil || !strings.Contains(err.Error(), "refuses kubehenge, kubehenge-building, rke2.") {
 		t.Errorf("CheckTags = %v with the tags on no guest", err)
 	}
 }

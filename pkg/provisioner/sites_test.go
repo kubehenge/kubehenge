@@ -62,7 +62,7 @@ func TestSitesKeepAClusterToTheNodesThatCanCloneItsTemplate(t *testing.T) {
 			"node-local storage with the node not allowed", local,
 			[]string{"pve2", "pve3"},
 			[]string{},
-			"template kubehenge-rke2-build is on storage templates, which is not shared, so it can be cloned only on node pve1",
+			"template kubehenge-rke2-build is on storage templates, which is not shared, so it clones only on node pve1",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestSitesIntersectPlacementWithTheClusterStorage(t *testing.T) {
 		t.Errorf("Hosts = %v, want only pve2, where the storage is available", got)
 	}
 	err := s.Refusal(c, []Node{{"pve1", 3}, {"pve3", 3}})
-	if err == nil || !strings.Contains(err.Error(), "storage nvme is not available on any node this cluster may use (pve1, pve3)") {
+	if err == nil || !strings.Contains(err.Error(), "storage nvme is available only on pve2, not on the nodes this cluster may use (pve1, pve3)") {
 		t.Errorf("Refusal = %v, want the storage named with the nodes", err)
 	}
 	if err = s.Refusal(c, threeNodes()); err != nil {
@@ -152,7 +152,7 @@ func TestHooksRefuseAClusterNoNodeCanCloneForOrStoreOn(t *testing.T) {
 		t.Errorf("BeforeClusterCreate = %s %q, want the template, its storage and the fix", resp.Status, resp.Message)
 	}
 	_, err := (&ClusterValidator{Hooks: h}).ValidateCreate(t.Context(), web)
-	if err == nil || !strings.Contains(err.Error(), "can be cloned only on node pve1") {
+	if err == nil || !strings.Contains(err.Error(), "clones only on node pve1") {
 		t.Errorf("the validator let the cluster in: %v", err)
 	}
 
@@ -282,7 +282,7 @@ func TestCreationHookHoldsAClusterAdmissionLetIn(t *testing.T) {
 		t.Fatalf("admission refused on a failed read: %v", errs)
 	}
 	resp := callBeforeClusterCreate(t, h, web)
-	if resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "can be cloned only on node pve1") {
+	if resp.Status != runtimehooksv1.ResponseStatusFailure || !strings.Contains(resp.Message, "clones only on node pve1") {
 		t.Errorf("BeforeClusterCreate = %s %q, want the template that reaches no allowed node", resp.Status, resp.Message)
 	}
 }

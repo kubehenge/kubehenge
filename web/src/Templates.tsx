@@ -581,9 +581,7 @@ function BuildDialog({
       </Field>
       <Field
         label="Template disk"
-        hint={
-          unshared ? `Not shared: clones start only on ${form.node}` : "Shared storage lets clones start on any node"
-        }
+        hint={unshared ? `Clones start only on ${form.node}` : "Shared storage lets clones start on any node"}
         error={shown("storage")}
       >
         {(id) => <Choice id={id} value={form.storage} options={diskStorages} onChoose={(v) => set("storage", v)} />}

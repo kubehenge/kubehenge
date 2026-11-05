@@ -329,6 +329,6 @@ describe("vM templates", () => {
     render(<Templates />);
     await user.click(await screen.findByRole("button", { name: "Build template" }));
     const dialog = within(screen.getByRole("dialog", { name: "Build template" }));
-    await waitFor(() => expect(dialog.getByText("Not shared: clones start only on pve1")).toBeInTheDocument());
+    await waitFor(() => expect(dialog.getByText("Clones start only on pve1")).toBeInTheDocument());
   });
 });

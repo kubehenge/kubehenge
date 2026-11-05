@@ -226,8 +226,8 @@ func storageRefusal(s *Sites, c *clusterv1.Cluster, names []string) error {
 		return fmt.Errorf("storage %s is not available on any node (it is configured on %s). Bring it online or choose another storage",
 			storage, strings.Join(site.Nodes, ", "))
 	}
-	return fmt.Errorf("storage %s is not available on any node this cluster may use (%s). It is available on %s. Choose another storage or allow one of those nodes",
-		storage, strings.Join(names, ", "), strings.Join(site.Active, ", "))
+	return fmt.Errorf("storage %s is available only on %s, not on the nodes this cluster may use (%s). Choose another storage or allow one of those nodes",
+		storage, strings.Join(site.Active, ", "), strings.Join(names, ", "))
 }
 
 func templateRefusal(s *Sites, t *TemplateSite, names []string) error {
@@ -235,9 +235,8 @@ func templateRefusal(s *Sites, t *TemplateSite, names []string) error {
 		if site, ok := s.Storages[name]; ok && site.Shared {
 			continue
 		}
-		return fmt.Errorf("template %s is on storage %s, which is not shared, so it can be cloned only on node %s. None of the nodes this cluster may use (%s) is that node. "+
-			"Put the templates on shared storage or allow node %s",
-			t.Name, name, t.Node, strings.Join(names, ", "), t.Node)
+		return fmt.Errorf("template %s is on storage %s, which is not shared, so it clones only on node %s. "+
+			"Put the templates on shared storage or allow node %s", t.Name, name, t.Node, t.Node)
 	}
 	return fmt.Errorf("template %s is on storage %s, which is not available on any node this cluster may use (%s). Bring the storage online on one of them or allow another node",
 		t.Name, strings.Join(t.Storages, ", "), strings.Join(names, ", "))
