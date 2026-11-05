@@ -200,6 +200,6 @@ locals {
     # The provider's own image is built with Go 1.25 on distroless static.
     go         = "go1.25.14"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:7a17040386410f2d24be6d09e982c912061107849f2587d059631a6d496730b2"
+    image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:dc0b9a44f8db0841e087018e1b093fd257ff4526e5d35e3bef29af5ca3cfe82d"
   }
 }
