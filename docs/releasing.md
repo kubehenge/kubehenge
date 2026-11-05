@@ -27,7 +27,7 @@ A pushed tag starts `.github/workflows/release.yml`. It calls `.github/workflows
    - it names a commit of main with a verified signature
    - that commit passed every check main's ruleset requires in the merge queue's run on it, the end-to-end tests among them
    - `docs/changelog.md` has a section for the version and `pkg/release/release.pub` is there.
-2. `test` stops the release on a vulnerability published since the merge, in a Go module or an action. The merge queue ran every other test on this commit.
+2. `test` stops the release on a vulnerability published since the merge, in a Go module or an action (`make advisories`). The merge queue ran every other test on this commit.
 3. `build` pushes the three images and builds the archive, `install.sh` and `index.json`. The index is the previous release's signed index, checked against the release keys, with this release added.
 4. `sign` signs `index.json` into `index.json.sig` with the archive's `kubehenge` binary, which accepts only the keys it was built to trust. The release's only job that holds the key (the `release` environment's `RELEASE_KEY` secret), it checks out nothing and checks the archive against its checksum.
 5. `sbom` writes the SPDX SBOMs of the archive and of each image with syft (`scripts/sbom.sh`, `scripts/syft.yaml`) and checks each lists what ships. For the archive that is everything the table above names, for an image its program's Go module and the base image's packages.

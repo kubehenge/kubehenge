@@ -8,8 +8,8 @@ CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
 
-.PHONY: build web gateway-api capi-operator-chart website screenshotsdist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
-.PHONY: website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
+.PHONY: build web gateway-api capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
 # comes, as the end-to-end runs do.
@@ -261,6 +261,12 @@ lint-shell:
 ZIZMOR_FLAGS ?=
 lint-actions:
 	actionlint .github/workflows/*.yml
+	$(ZIZMOR) --persona=auditor $(ZIZMOR_FLAGS) .github/workflows/
+
+# What can change without a commit: advisories published for the Go modules and the actions. The
+# release runs this alone, as the merge queue already ran every other check on the commit.
+advisories: web gateway-api
+	$(GOVULNCHECK) ./...
 	$(ZIZMOR) --persona=auditor $(ZIZMOR_FLAGS) .github/workflows/
 
 lint-yaml:

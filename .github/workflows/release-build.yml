@@ -199,12 +199,9 @@ jobs:
           persist-credentials: false
       - name: Tools
         run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin"
+          scripts/tools.sh "$RUNNER_TEMP/bin" go node uv
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      # govulncheck builds the packages, which embed the interface and Gateway API's manifests.
-      - run: make web gateway-api
-      - run: go tool govulncheck ./...
-      - run: make lint-actions
+      - run: make advisories
         env:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.
           GH_TOKEN: ${{ github.token }}

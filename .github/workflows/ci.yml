@@ -21,6 +21,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# A merge group runs `test` and `workflows` because their result depends on the combination: two
+# pull requests can each pass alone and break lint, a unit test or a generated file together.
+# `Dependencies` reads one pull request's diff, so it is skipped there. codeql.yml reports without
+# analysing, and e2e.yml keeps running in full.
 jobs:
   # Lint, unit and integration tiers: Go, the frontend, the OpenTofu module against mocked
   # providers, the Helm charts, the shell scripts, and the chart and controllers against a real API
