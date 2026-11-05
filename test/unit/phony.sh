@@ -8,7 +8,8 @@ set -eu
 
 makefile=$(dirname "$0")/../../Makefile
 
-targets=$(sed -n 's/^\([A-Za-z0-9_.%-]*\):.*/\1/p' "${makefile}")
+# A rule's target may be a variable, such as $(UNIT_SHELL), named the same way in .PHONY.
+targets=$(sed -n 's/^\([A-Za-z0-9_.%-]*\|[$][(][A-Z_]*[)]\):.*/\1/p' "${makefile}")
 phony=$(sed -n 's/^\.PHONY:\(.*\)/\1/p' "${makefile}" | tr -s '[:blank:]' '\n' | sed '/^$/d')
 missing=$(printf '%s\n' "${phony}" | grep -vxF -e "${targets}" || true)
 

@@ -4,6 +4,16 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-05
+
+- The management cluster keeps answering while its Proxmox VE host is busy:
+  - Its nodes get a CPU weight of 1000, ten times a default VM's (`node_cpu_units`).
+  - Cluster API's providers allow 5 s for each health probe and six missed liveness probes before a restart.
+  - Kubehenge's Cluster webhook reads the ClusterClass from its cache.
+- The Add-on Provider for Helm keeps each pinned chart once downloaded. It downloaded and parsed the chart repository's whole index on every reconcile, over 100 MiB of memory for a large one.
+- An abandoned deletion ends as soon as no ProxmoxMachine and no ProxmoxCluster of the cluster is left, instead of after five minutes. The five minutes still apply while a VM could be left behind.
+- capmox and the Add-on Provider for Helm are built with ko from `scripts/ko.sh`, so their image digests are the same on any host.
+
 ## [0.4.0] - 2026-11-05
 
 ### Before you upgrade
@@ -146,14 +156,12 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 ### Fixes
 
 - Activity no longer misses kubectl changes that sit behind a long stretch of other requests in the API server's log. It reads each log to its end and warns when the kubelet rotated lines away unread.
-- An abandoned deletion ends as soon as no ProxmoxMachine and no ProxmoxCluster of the cluster is left, instead of after five minutes. The five minutes still apply while a VM could be left behind.
 - An etcd restore or reset of an RKE2 cluster hardened to the CIS benchmark takes about 2 minutes, not 17. While RKE2 reset etcd, etcd could not read its own data and the reset waited out RKE2's 15-minute limit.
 - Applying the management-cluster module no longer returns while the Cluster API Operator reinstalls core Cluster API right after upgrading it. The providers' release now waits until the providers have stayed unchanged for 30 seconds.
 - A template build or a cluster's storage set-up no longer fails when Proxmox VE kills a VM create before it starts. It goes on under the next VM ID and logs how to remove the VM left locked.
 - `kubehenge template create` tries a failed build again after 2 and 8 minutes, as the interface and the refresh do.
 - A template build asks a publisher for a checksum, signature, key or Talos schematic up to four times, 2, 4 and 8 seconds apart. One dropped connection or 5xx answer no longer fails the build.
 - Deleting a template build checks that its VM ID still holds that template. Proxmox VE gives a freed ID to the next VM created.
-- The Add-on Provider for Helm keeps each pinned chart once downloaded. It downloaded and parsed the chart repository's whole index on every reconcile, over 100 MiB of memory for a large one.
 - An add-on whose publisher moves a version's tag to a new build still installs and upgrades. The Add-on Provider for Helm refused the pinned chart once the tag pointed elsewhere, which stopped the newest CSI plugin.
 - Rancher installs the Turtles, webhook and Fleet charts Kubehenge names, from the chart repository inside its pinned image. With Rancher 2.15.3 these are Turtles 0.27.4, the webhook 0.11.4, Fleet 0.16.3 and shell 0.8.3.
 - A k3s or RKE2 upgrade whose Gateway API chart carries an older release than Kubehenge's installs that chart. Kubehenge's admission policy refused the chart's CRDs, and k3s's helm controller then never retried it.
