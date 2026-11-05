@@ -47,13 +47,17 @@ The agent also hands out the node's boot log to holders of `VM.GuestAgent.FileRe
 
 The node's SELinux policy lets the agent read those files and no others of `/var/log`. Every build proves through Proxmox VE that it hands them out ([troubleshooting.md](troubleshooting.md#a-nodes-boot-log)).
 
-### Image and package checks
+### Image checks
 
 Each Kubehenge release makes templates from one build of each node OS's cloud image. Before Proxmox VE downloads it, the image is checked against its publisher's signature over its checksum. The publisher's key is embedded in Kubehenge and known by its fingerprint.
 
+### Package checks
+
 Every package a build installs is signed, and checked against a key accepted only with its known fingerprint. The keys are the family's own, pkgs.k8s.io's for kubeadm and Rancher's for the RKE2 and k3s policies. For kubeadm's containerd, which the EL families do not carry, the key is EPEL's (on AlmaLinux, AlmaLinux's own build of EPEL for `x86-64-v2`).
 
-The indexes of pkgs.k8s.io's and Rancher's repositories are signed and checked too. k3s publishes its policy for EL 10 only in its testing channel, whose index it signs (its stable channel has only EL 9's, unsigned). An image-mode build takes `bootc-base-imagectl`, which composes the minimal system, and its manifests from CentOS Stream's bootc image, pinned by digest.
+The indexes of pkgs.k8s.io's and Rancher's repositories are signed and checked too. k3s publishes its policy for EL 10 only in its testing channel, whose index it signs. Its stable channel has only EL 9's, unsigned.
+
+An image-mode build takes `bootc-base-imagectl`, which composes the minimal system, and its manifests from CentOS Stream's bootc image, pinned by digest.
 
 ## Create
 

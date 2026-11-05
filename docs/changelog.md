@@ -12,7 +12,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - One that never set it moves to `baseline`, which replaces its control-plane machines. Set `privileged` on it first to keep pods that need more.
 - Velero and RKE2's or k3s's own etcd upload wait until a cluster has its own backup access key. Store one for each cluster in its backups ([clusters.md](clusters.md#back-up-and-restore)).
 - The module's `cluster_volume_snapshots` is gone. Remove it from the module's variables.
-- The management-cluster module needs the Proxmox VE provider 0.119. Run `tofu init -upgrade`.
+- The management-cluster module needs the Proxmox VE provider 0.120. Run `tofu init -upgrade`.
 - OpenID sign-in needs `--public-url`. The appliance sets it.
 - Only `kubehenge template`, `controller`, `serve` and `csi-proxy` take `--proxmox-url`, `--proxmox-ca` and `--proxmox-insecure`. Remove them from scripts that pass them to other commands.
 - The API server now refuses Clusters that break the interface's rules (listed under Fixes). Check the Clusters kept in Git first.
@@ -187,7 +187,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - RKE2 and kubeadm templates now carry the `iptables` the CNI's portmap plugin runs, on nftables. A template build checks it.
 - Calico no longer reports itself degraded on the AlmaLinux, Rocky Linux and openSUSE Leap templates. SELinux kept the Tigera operator from reading the MTU Calico found in `/var/lib/calico`.
   - The templates label it for containers to read, and a template build checks it.
-- kubeadm and k3s clusters with Calico no longer run Calico's flow-log aggregator Goldmane and its viewer Whisker, as RKE2's own Calico already did not. Nothing read them, and on small nodes they took the pods' CPU.
+- kubeadm and k3s clusters with Calico no longer run Calico's flow-log aggregator Goldmane and its viewer Whisker. Nothing read them and they took CPU on small nodes. RKE2's own Calico already left them out.
 - A kubeadm control plane's own 3376 MiB is its measured use plus 25%. With every add-on but Rancher it needs 4976 MiB.
   - On 4096 MiB with Calico and every add-on, the API server hit its memory limit. It stalled for over a minute as Argo CD's resource types came in, and controllers restarted.
 - AlmaLinux and Rocky Linux nodes keep pressure stall information, which their kernels leave off, for the kubelet's pressure metrics.
@@ -200,7 +200,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - 1, 3, 5 or 7 control-plane nodes
   - at most 100 workers in each pool
   - node addresses and a control-plane endpoint on the gateway's network, with the endpoint outside the node addresses
-- Without a spare node address, as autoscaled pools already had, a fixed pool's rollout waited for ever.
+- A fixed pool with no spare node address waited for ever in its rollout. It now needs one, as autoscaled pools already did.
 - Two clusters on the same bridge and VLAN can no longer be given the same node addresses or control-plane endpoint.
 - With `proxmox_insecure`, etcd restores through the guest agent skip the check of Proxmox VE's certificate, as the controller's other connections do.
 - A Talos node whose machine is deleted while it is upgraded in place, as when the cluster scales down onto it, has its upgrade dropped.

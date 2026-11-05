@@ -198,7 +198,7 @@ The task log shows what each Kubehenge account did. In an appliance's management
   - Clusters outside the interface's namespaces are read-only there.
 - **No bridges to choose from:** Proxmox VE lists a node's bridges only with `Sys.Audit` on the node. Type the bridge's name instead. A bridge marked "no SDN.Use" needs that privilege on `/sdn/zones/localnetwork/<bridge>`.
 - **`"Session ended. Sign in again."`:** Proxmox VE no longer accepts the session. A session lasts eight hours at most.
-- **Sign-in refused after several tries:** five failures for one user from one address within 15 minutes lock that user out from there for the rest of the 15 minutes. Twenty from one address, whichever users they name, lock the address out.
+- **Sign-in refused after several tries:** five failures within 15 minutes lock a user out from that address until the 15 minutes are up. Twenty failures from one address, whichever users they name, lock the address out.
 - **"Security keys work only in Proxmox VE":** a WebAuthn key answers only on Proxmox VE's own page. Sign in with a TOTP code or recovery key, or through an OpenID realm.
 - **An OpenID sign-in does not come back:** register `https://<appliance>/api/openid/callback` with the identity provider, and `https://<appliance>:8443/oidc-callback` for the shared Headlamp. A Headlamp sign-in can only be finished in the browser that started it.
 
@@ -358,7 +358,7 @@ Three control planes keep a majority through the loss of one, rolls included.
 
 ### Not enough memory for the add-ons
 
-A message saying "add-ons (…) need … MiB of memory on workers, which have … MiB for them" means the workers together lack the memory the named add-ons take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off.
+A message saying "add-ons (…) need … MiB of memory on workers, which have … MiB for them" means the workers lack the memory the named add-ons take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off.
 
 Rancher's agent counts in every cluster that registers with Rancher. Set `rancher` to `{register: false}` for a cluster that never will. A message saying "… on control planes without workers …" means the same for the control planes of a cluster without workers.
 
@@ -366,13 +366,13 @@ A cluster that already fell short can still be changed, as for control planes ab
 
 ### Not enough CPU for the add-ons
 
-A message saying "add-ons (…) need … millicores of CPU on workers, which have … millicores for them" means the CPU the add-ons' pods request does not fit in what the workers' cores leave beside their own pods' ([clusters.md](clusters.md#machines)).
+A message saying "add-ons (…) need … millicores of CPU on workers, which have … millicores for them" means the add-ons' CPU requests do not fit in what the workers' cores leave beside their own pods ([clusters.md](clusters.md#machines)).
 
 Give the workers more cores (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Kyverno and Istio ask for the most. The control-plane form of the message, and a cluster that already fell short, are as for memory above.
 
 ### Istio
 
-- **Pods in the mesh reach nothing, or fail their probes, under a NetworkPolicy:** ztunnel carries the enrolled pods' traffic on port 15008/TCP, and the kubelet's probes reach them from 169.254.7.127. A policy that denies by default has to allow both ([Istio's notes](https://istio.io/latest/docs/ambient/usage/networkpolicy/)).
+- **Pods in the mesh reach nothing, or fail their probes, under a NetworkPolicy:** ztunnel carries the enrolled pods' traffic on port 15008/TCP. The kubelet's probes reach them from 169.254.7.127. A policy that denies by default has to allow both ([Istio's notes](https://istio.io/latest/docs/ambient/usage/networkpolicy/)).
 - **Switching Istio off takes long:** Kubehenge waits until no pod's traffic is redirected through ztunnel any more (the pod annotation `ambient.istio.io/redirection`). That needs the cluster reachable and istio-cni running on the pod's node. A pod whose node is gone keeps the annotation, so delete the pod.
 - **Waypoints are not created:** they need the Gateway API's CRDs, which every cluster has once the annotation `kubehenge.dev/gateway-api` is on its Cluster ([clusters.md](clusters.md#routes-through-the-gateway-api)).
 
@@ -489,7 +489,7 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.t
   - "the repository's token, stored as the cluster's gitops credential": store the user name and token under the cluster's **Options**.
   - For Flux's web interface the message reads "a client secret, which Flux's web interface signs in with" and the like. Store the client secret under **Options**, or create the Secret the message names. Syncing goes on meanwhile.
 - **"knownHosts: Required value"** or **"no host key is for …, the repository's host"**, when saving a cluster: a repository reached over `ssh://` needs its host's keys in `gitops.knownHosts`.
-  - Write them as an SSH `known_hosts` file holds them, with a line for the host and port of the URL (`[host]:port` for a port other than 22).
+  - Write them as a `known_hosts` file does, with a line for the URL's host and port (`[host]:port` for a port other than 22).
   - Take them from the forge's published keys, or from `ssh-keygen -F <host>` on a machine that already trusts it.
   - `ssh-keyscan` reads them over the network unchecked, so compare its fingerprints with the forge's before using them.
 
@@ -544,7 +544,7 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.metadata.annotations.ku
 - **Hook BeforeClusterDelete:** a cluster registered with Rancher leaves it first, while its VMs still run. The reason is Rancher's.
 - **Machine … Drain not completed:** a node's pods are being evicted, and a PodDisruptionBudget, or a pod that does not stop, holds that up. Delete the pod in the cluster, or abandon the deletion.
 - **ProxmoxMachine … (a VM on an offline node):** capmox cannot delete the VM. Bring the node back.
-- **Cluster … removing the Proxmox VE objects:** Kubehenge's controller waits while a Proxmox VE node that may hold some of the cluster's volumes on local storage is offline. It also waits while Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
+- **Cluster … removing the Proxmox VE objects:** Kubehenge's controller waits while an offline Proxmox VE node may hold some of the cluster's volumes on local storage. It also waits while Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
 
 The Cluster gets the condition `DeletionStalled` and a warning event of the same name once the deletion has waited 20 minutes (the module's `watch.stall_minutes`). The fleet and the cluster's **Health** view list it.
 

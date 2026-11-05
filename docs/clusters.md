@@ -6,7 +6,7 @@ Every cluster Kubehenge creates is a Cluster API Cluster built from one of Kubeh
 
 - **The Proxmox VE cloud controller manager** initialises new nodes and labels them with a region and a zone. The region is the Proxmox VE cluster's name (the node's, on a single node outside any cluster) and the zone is the node.
 - **The Proxmox CSI plugin**, with a default StorageClass `proxmox`: ext4 volumes on the cluster's storage, deleted when released.
-- **A control-plane virtual IP**, held by kube-vip on one control-plane node and moved to another when it fails.
+- **A control-plane virtual IP**, held by one control-plane node and moved to another when it fails. kube-vip holds it, and on Talos Talos itself does.
 - **A CNI**: the distribution's own, or the one chosen at creation.
 - **An ingress controller**, Traefik, on ports 80 and 443 of every node, the control planes included. A host name pointing at the cluster's API address or at any node reaches it.
   - RKE2 and k3s bring their own. Kubehenge installs it into kubeadm and Talos clusters, in `kube-system`.
@@ -75,7 +75,7 @@ The interface's pod pings without privileges through the `net.ipv4.ping_group_ra
 
 The nodes' network is the gateway with the prefix length. Pod and service ranges must stay clear of it and of each other, or traffic for the nodes would be routed into the cluster.
 
-Kubehenge sets both ranges on every cluster it creates. It takes those you give, and refuses them if they overlap. Otherwise it takes the distribution's own when they are clear of the nodes' network (`10.244.0.0/16` and `10.96.0.0/12` for kubeadm and Talos, `10.42.0.0/16` and `10.43.0.0/16` for RKE2 and k3s). Otherwise it takes the first of a few private ranges that are clear.
+Kubehenge sets both ranges on every cluster it creates. It takes those you give, and refuses them if they overlap. Otherwise it takes the distribution's own, when they are clear of the nodes' network (`10.244.0.0/16` and `10.96.0.0/12` for kubeadm and Talos, `10.42.0.0/16` and `10.43.0.0/16` for RKE2 and k3s). Otherwise it takes the first of a few private ranges that are clear.
 
 #### Load balancer
 
@@ -84,7 +84,7 @@ Without one, kubeadm and RKE2 clusters give Services of type `LoadBalancer` no a
 With one, each such Service takes an address of its own from the load-balancer addresses. One node at a time answers for it on the nodes' network. When that node fails, another takes over. Choose:
 
 - **MetalLB** (recommended), in layer 2 mode, in the `metallb-system` namespace.
-- **kube-vip**, which already holds the API address, in `kube-system`, with kube-vip's cloud provider handing out the addresses.
+- **kube-vip**, in `kube-system`, with kube-vip's cloud provider handing out the addresses.
 
 The addresses must be unused and on the nodes' network. They must differ from the node addresses, the API address, the gateway and the network's own and broadcast addresses. Kubehenge refuses a clash with these, or with another cluster's addresses on the same bridge and VLAN. It checks when the cluster is created and whenever its addresses change.
 
@@ -153,7 +153,7 @@ The defaults are 2 cores and 4096 MiB, with a 30 GiB disk for the control plane 
 
 With more workers the guides ask for more. Kubehenge refuses a cluster whose control planes fall short, when it is created and when its workers or machines change. RKE2 and kubeadm need 4 cores and 8192 MiB from 226 workers. They need 8 cores and 16384 MiB from 451 and 16 cores and 32768 MiB from 1,301. For k3s the same sizes start at 351, 901 and 1,801 workers.
 
-A worker needs at least 1024 MiB on k3s, 2048 MiB on kubeadm, and 2 cores and 4096 MiB on RKE2. It never gets less than its distribution's minimum for a node.
+A worker needs at least 1024 MiB on k3s and Talos, 2048 MiB on kubeadm, and 2 cores and 4096 MiB on RKE2. It never gets less than its distribution's minimum for a node.
 
 A cluster without workers runs its workloads on its control planes, so each needs a worker's least on top. On k3s that is 3 cores and 5120 MiB, on kubeadm 3 cores and 6144 MiB, and on RKE2 4 cores and 8192 MiB.
 
@@ -173,7 +173,7 @@ The CPU is what the add-ons' pods request as Kubehenge installs them. It counts 
 | Monitoring | 1536 MiB | 32 MiB | 616 MiB | 300 millicores |
 | Logs | 512 MiB | 56 MiB | none | 75 millicores |
 | Backups | 384 MiB | 184 MiB | 24 MiB | 70 millicores |
-| Kyverno | 512 MiB | 552 MiB | 520 MiB | 500 millicores |
+| Kyverno | 640 MiB | 552 MiB | 520 MiB | 500 millicores |
 | Istio | 384 MiB | 288 MiB | 504 MiB | 400 millicores |
 | Cilium Cluster Mesh | 128 MiB | none | none | 30 millicores |
 | Load balancer | 128 MiB | none | none | 60 millicores |
@@ -196,9 +196,9 @@ A CNI other than the class's default adds to each control plane. This counts onc
 
 With every add-on but Rancher, a k3s control plane needs 5032 MiB with Cilium and 5680 MiB with Calico.
 
-A single k3s worker with every add-on but Rancher and GitOps needs 4672 MiB. It needs 4288 MiB without backups, 4160 MiB without logs, or 3776 MiB without either. GitOps with Argo CD on top takes each 512 MiB further.
+A single k3s worker with every add-on but Rancher and GitOps needs 4928 MiB. It needs 4544 MiB without backups, 4416 MiB without logs, or 4032 MiB without either. GitOps with Argo CD on top takes each 512 MiB further.
 
-The default machines hold every add-on but Rancher, logs, backups and GitOps with the distribution's default CNI, and on kubeadm with Cilium. A second worker makes room for logs and backups too.
+On k3s the default machines hold every add-on but Rancher, logs, backups and GitOps, with the default CNI. On kubeadm (with Cilium), RKE2 and Talos they hold the same without Kyverno. A second worker makes room for logs and backups too.
 
 For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there. That is 150 millicores on kubeadm, 350 on k3s, 390 on Talos and 775 on RKE2. Talos keeps 50 of them back for the system. Its flannel asks for 200 with its network policy controller. On RKE2, kube-proxy asks for 250 and canal for 260. Without workers, a control plane counts 1080 millicores on kubeadm, 430 on k3s, 910 on Talos and 1605 on RKE2.
 
@@ -391,7 +391,7 @@ The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upg
   - Those with `VM.Allocate` on the cluster's pool get **Replace** on each machine, which sets the annotation `cluster.x-k8s.io/remediate-machine`. They also get **Keep** to take it back before the replacement starts.
   - While the replacement waits, as for a control plane that cannot lose a member, the machine says why.
   - On a worker they also get **Delete**. It drains the machine and deletes its VM and disks, and its pool shrinks by one.
-  - As with kubectl, **Delete** marks the machine with `cluster.x-k8s.io/delete-machine=` and lowers the pool's `replicas` in the Cluster, so Cluster API deletes that machine before any other.
+  - As with kubectl, **Delete** marks the machine with `cluster.x-k8s.io/delete-machine=` and lowers the pool's `replicas` in the Cluster. Cluster API then deletes that machine first.
   - An autoscaled pool's workers are the autoscaler's to delete.
   - **Cordon** keeps new pods off a machine's node and **Uncordon** lets them on again, as `kubectl cordon` and `kubectl uncordon` do. The node shows as cordoned.
   - Those with `VM.PowerMgmt` get **Reboot**, which has Proxmox VE shut the VM down and start it again. Those with `VM.Console` get **Console**, which opens the VM's console in Proxmox VE's web interface, signed in there as it asks.
@@ -462,7 +462,7 @@ An autoscaled pool is sized by the [cluster autoscaler](https://github.com/kuber
 - **Addresses.** The node addresses must hold every pool at its most, the control planes and one more for a rollout.
   - The Scale dialog shows the room left on the most.
   - Kubehenge refuses a change that leaves fewer addresses than that, unless the cluster was already short by as much.
-- **Room on Proxmox VE.** The Scale dialog warns when a pool's remaining workers need more memory than the cluster's allowed Proxmox VE nodes have free.
+- **Room on Proxmox VE.** The Scale dialog warns when a pool's remaining workers need more memory than the allowed Proxmox VE nodes have free.
   - It is only advice, since memory frees and fills as other VMs come and go.
   - A worker that finds no room waits. The cluster's events show `AutoscalerNoRoom` with the Proxmox VE provider's reason, and after 30 minutes the autoscaler gives the machine up and tries again.
   - Shared storage suits autoscaled pools best, as it lets a new worker start on whichever allowed node has the room.
@@ -795,7 +795,7 @@ The **Backups** view says whether Velero reaches the target and when it last bac
 - **Results**, beside a finished restore, lists Velero's errors and warnings for it, up to 500 of each.
   - They are Velero's own, the cluster-wide ones and those of each namespace.
   - Kubehenge reads them from the target with the cluster's SSE-C key. It needs `VM.Audit` on the cluster's pool.
-- **Delete**, beside a finished backup, has Velero delete it before it runs out, from the target too, with the volume data no other backup shares.
+- **Delete**, beside a finished backup, has Velero delete it before it runs out. It goes from the target too, with the volume data no other backup shares.
   - The backup's name has to be typed to confirm it, which the server checks too.
   - The backup shows as deleting until Velero is done, and why Velero did not delete it, if it did not.
   - It needs `VM.Allocate` on the cluster's pool.
@@ -817,7 +817,7 @@ Each links to the Backups view. Kubehenge reads this from Velero's own schedule 
 
 ### Restore into another cluster
 
-A cluster reads the backups of others of its namespace that back up to the same target. It does so when the `backups` variable's `readFrom` names them, or **Read the backups of** in the Backups dialog ticks them. Its Velero then lists their backups beside its own, in a read-only location named `cluster-<name>` for each.
+A cluster reads the backups of others of its namespace that back up to the same target. It does so when the `backups` variable's `readFrom` names them, or **Restore from other clusters** in the Backups dialog ticks them. Its Velero then lists their backups beside its own, in a read-only location named `cluster-<name>` for each.
 
 The Backups view shows them in a table of their own, to restore into the cluster. The source cluster's Backups view offers its own backups to restore into each cluster that reads them. Deleting a backup stays with the cluster that made it.
 
@@ -892,7 +892,7 @@ age --decrypt --identity web.key --output snapshot.db 20261021T120000Z-v1.36.5-r
 
 ### The distribution's own upload
 
-On RKE2 and k3s, **Also take RKE2 snapshots** (`distributionUpload: true`, off by default) has the cluster's servers upload their own snapshots to the same target too.
+On RKE2 and k3s, **Also take RKE2 snapshots** (**Also take k3s snapshots** on k3s) has the cluster's servers upload their own snapshots to the same target. The variable is `distributionUpload: true`, off by default.
 
 They go under `<prefix>/<namespace>.<name>/rke2-etcd` or `k3s-etcd`. They run on the cluster's schedule and keep as many. They go on while the management cluster is down. Kubehenge's own snapshots do not.
 
