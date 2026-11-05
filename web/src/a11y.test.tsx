@@ -219,7 +219,9 @@ const admin: Record<string, Route> = {
   "GET /api/credentials/notify-webhook": { body: { purpose: "notify-webhook", set: false, canChange: true } },
   "GET /api/credentials/notify-ntfy": { body: { purpose: "notify-ntfy", set: false, canChange: true } },
   "GET /api/credentials/notify-email": { body: { purpose: "notify-email", set: false, canChange: true } },
-  "GET /api/notifications": { body: { targets: [] } },
+  "GET /api/notifications": {
+    body: [{ kind: "notify-webhook" }, { kind: "notify-ntfy" }, { kind: "notify-email" }],
+  },
   "GET /api/activity?days=7": { body: activity },
   ...nodes,
   ...storages,
@@ -593,7 +595,7 @@ const template = {
 const richAdmin: Record<string, Route> = {
   ...admin,
   "GET /api/runs": { body: runs },
-  "GET /api/clusters/default/db/events?since=2026-01-02T03%3A04%3A05Z": { body: richActivity.events },
+  "GET /api/clusters/default/db/events?since=2026-01-02T03%3A04%3A05Z": { body: richActivity.events.items },
   "GET /api/setup": {
     body: {
       appliance: true,
@@ -691,7 +693,11 @@ const tal = cluster("tal", {
     failed: "tal-cp-1 to v1.12.0 at 2026-01-02T03:04:05Z: etcd unhealthy",
   },
   nodeOS: { family: "talos", release: "1", title: "Talos", cpuType: "x86-64-v2-AES", mac: "enforcing" },
-  nodeImage: { family: "talos", release: "1" },
+  nodeImage: {
+    refreshes: true,
+    since: when,
+    builds: [{ template: "kubehenge-talos-1", build: "build-202601020304", built: when }],
+  },
   recovery: { snapshot: "snap-1", by: "root@pam", requestedAt: when, phase: "Failed", message: "etcd refused" },
   mesh: [{ cluster: "default/web", state: "Connected" }],
   gitops: { public: "ssh-ed25519 AAAA", fingerprint: "SHA256:abc" },
@@ -1248,7 +1254,10 @@ async function sweep(c: Case, routes: Record<string, Route>, user: UserEvent): P
   }
 }
 
-describe("accessibility", () => {
+// A case clicks every button of its page and runs every axe rule on what each click changed: about
+// 20 runs of 150 ms on the slowest page here, 5 s to 6 s on this machine. A hosted CI runner takes
+// three to four times as long, so the global 20 s leaves the slowest cases with no headroom.
+describe("accessibility", { timeout: 60_000 }, () => {
   it.each(cases)("$name", async (c) => {
     const routes = { ...signedIn, ...c.routes };
     window.history.replaceState(null, "", c.path);
