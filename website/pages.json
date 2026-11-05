@@ -4,19 +4,19 @@
     "lastmod": "2026-11-01"
   },
   "/docs/architecture": {
-    "fingerprint": "6dd9cc6043b68b2fa0607458b362e9f2ff664a6f337f0a706a1f6ad33a27d031",
+    "fingerprint": "e34f8deff70bebe1124aebc28b8bb392373b6b809d07724268cdb26c8adde81d",
     "lastmod": "2026-11-05"
   },
   "/docs/changelog": {
-    "fingerprint": "50dc41c9b2a65164f03fb6031fcebddc5f242cc45cbd1bed1b1bd0a946edf8e5",
+    "fingerprint": "5ad19d53a93681ea0b1fd92a29d2c1f51aaa69499e954aa5a82e05f1dead4fb4",
     "lastmod": "2026-11-05"
   },
   "/docs/clusters": {
-    "fingerprint": "9c8ef94464be30155a3ef675e02a28d18cc3e7551ec0431134e885ffe15be36f",
+    "fingerprint": "dad8cc56389995a5f1d03c63c6ec6dff537c225f6cb00d758e71a0012a1e7c4a",
     "lastmod": "2026-11-05"
   },
   "/docs/install": {
-    "fingerprint": "37d8a21f94a2f7c39a42358dfe2465aea073530380fdf6109093c27a818689ec",
+    "fingerprint": "ae0644f78a0443c320f8ab84117092dea51bbd109ffad246e5e8c45667d86029",
     "lastmod": "2026-11-05"
   },
   "/docs/install-settings": {
@@ -36,7 +36,7 @@
     "lastmod": "2026-11-05"
   },
   "/docs/testing": {
-    "fingerprint": "7fb2976aa30148c20a35c043aae69918e6ba80ec322f040b6368311de1d29117",
+    "fingerprint": "0f544978c5692e0b2287ffacde80e3e22211b948d103f26ffad81fe3ba02937b",
     "lastmod": "2026-11-05"
   },
   "/docs/troubleshooting": {

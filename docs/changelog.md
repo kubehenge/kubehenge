@@ -6,12 +6,15 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [0.4.2] - 2026-11-05
 
+- Activity no longer misses a kubectl change made just before the kubelet rotates an API server's log or the API server restarts. The interface follows each log as it is written. After a restart it reads the old container's last lines.
+- A Talos upgrade tries a node's installer pull again when the registry drops the connection, rather than failing the upgrade. A registry that refuses the image still fails it at once.
 - The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000. A change reaches running nodes without a reboot.
-- A new cluster's workers get 6144 MiB by default, up from 4096 MiB. That holds every add-on but Rancher, logs, backups and GitOps, with about 2 GiB to spare. The minimums stay as they were.
-- The installer asks which storage takes the appliance's disks, and which the container template, where several fit (`--storage`, `--template-storage`). A disabled storage, such as `local` on some nodes, is never used.
-- The installer downloads the container template itself, checked against a SHA-512 it carries, without `pveam` and its template indexes. A template already on a storage is used where it is.
-- The installer shows a progress bar for each download and a line for each finished step, the verified checksums included. It downloads through the datacenter's HTTP proxy, where one is set.
-- Downloads from GitHub, the installer's included, keep trying for about four minutes, which outlasts GitHub's spells of failed release downloads. The appliance's OpenTofu tries its providers eight times, up from two.
+- A new cluster's workers get 6144 MiB by default, up from 4096 MiB (the minimums are unchanged). That fits all add-ons together except Rancher, logs, backups and GitOps, with about 2 GiB to spare.
+- Where several storages fit, the installer asks which takes the appliance's disks and which the container template (`--storage`, `--template-storage`). A disabled storage, such as `local` on some nodes, is never used.
+- The installer downloads the container template itself and checks it against a SHA-512 it carries, without `pveam` or its template indexes. A template already on a storage is used where it is.
+- The installer shows a progress bar for each download and a line for each finished step, including each verified checksum.
+- Only the installer's own downloads go through the datacenter's HTTP proxy, where one is set. The installer prints the proxy without its credentials.
+- Downloads from GitHub, including the installer's and the template builds', are retried for about four minutes, to outlast GitHub's failed release downloads. The appliance's OpenTofu tries each provider download up to eight times, up from two.
 - The docs warn that a volume snapshot copies a volume its pods may still write to. Stop the workload or pause its writes first.
 
 ## [0.4.1] - 2026-11-05
@@ -224,7 +227,7 @@ The first release of 0.4. The v0.4.0 tag was never published.
   - Its nodes get a CPU weight of 1000, ten times a default VM's (`node_cpu_units`).
   - Cluster API's providers allow 5 s for each health probe and six missed liveness probes before a restart.
   - Kubehenge's Cluster webhook reads the ClusterClass from its cache.
-- The Add-on Provider for Helm keeps each pinned chart once downloaded. It downloaded and parsed the chart repository's whole index on every reconcile, over 100 MiB of memory for a large one.
+- The Add-on Provider for Helm keeps each pinned chart once downloaded. It used to download and parse the chart repository's whole index on every reconcile, which took over 100 MiB of memory for a large one.
 - An abandoned deletion ends as soon as no ProxmoxMachine and no ProxmoxCluster of the cluster is left, instead of after five minutes. The five minutes still apply while a VM could be left behind.
 - capmox and the Add-on Provider for Helm are built with ko from `scripts/ko.sh`, so their image digests are the same on any host.
 - A release builds its index from the last published one when that one carries no expiry, as 0.3.1's does. An appliance still refuses such an index.

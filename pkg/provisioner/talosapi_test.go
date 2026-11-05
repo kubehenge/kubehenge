@@ -498,6 +498,37 @@ func TestInstallStopsWhenThePullNamesNoImage(t *testing.T) {
 	}
 }
 
+// Talos reports a pull the registry's connection broke off as Unknown. Nothing on the node has
+// changed yet, so the install is tried again, while a registry's verdict on the image is final.
+func TestAFailedPullIsTriedAgainUnlessTheRegistryRefusedIt(t *testing.T) {
+	t.Parallel()
+	reset := status.Error(codes.Unknown, "failed to pull image: failed to copy: read: connection reset by peer")
+	for name, tc := range map[string]struct {
+		err       error
+		transient bool
+	}{
+		"reset":         {reset, true},
+		"no such image": {status.Error(codes.NotFound, "no such image"), false},
+		"denied":        {status.Error(codes.PermissionDenied, "pull access denied"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			node, _ := dialFake(t, &fakeTalosAPI{fail: map[string]error{"Pull": tc.err}})
+			err := node.Install(t.Context(), testInstaller)
+			if err == nil || !strings.Contains(err.Error(), "pulling "+testInstaller) {
+				t.Fatalf("a failed pull: %v", err)
+			}
+			if got := transientInstall(err); got != tc.transient {
+				t.Errorf("transient %v for %v", got, err)
+			}
+		})
+	}
+	installing := status.Error(codes.Unknown, "writing the boot loader failed")
+	if transientInstall(fmt.Errorf("192.0.2.20: installing: %w", installing)) {
+		t.Error("an install's own failure was taken as one to try again")
+	}
+}
+
 func TestInstallReportsTheNodesRefusals(t *testing.T) {
 	t.Parallel()
 	api := &fakeTalosAPI{fail: map[string]error{"Pull": status.Error(codes.NotFound, "no such image")}}

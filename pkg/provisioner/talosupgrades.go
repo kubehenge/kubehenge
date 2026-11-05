@@ -496,6 +496,12 @@ func transientInstall(err error) bool {
 	switch status.Code(err) { //nolint:exhaustive // every other code is the node's or the image's verdict
 	case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Aborted:
 		return true
+	case codes.NotFound, codes.PermissionDenied, codes.Unauthenticated, codes.InvalidArgument:
+		return false
+	}
+	// Talos reports every other failed pull as Unknown, a registry's connection reset included.
+	if _, pulling := errors.AsType[*talosPullError](err); pulling {
+		return true
 	}
 	return errors.Is(err, context.DeadlineExceeded)
 }

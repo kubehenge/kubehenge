@@ -149,7 +149,7 @@ Unticked, the cloud controller manager logs a permission error for each node eve
 
 #### Sizes
 
-A control plane defaults to 2 cores, 4096 MiB and a 30 GiB disk. A kubeadm one defaults to 4800 MiB, which it needs with Calico. A worker defaults to 2 cores, 6144 MiB and a 40 GiB disk. That holds every add-on but Rancher, logs, backups and GitOps, with about 2 GiB to spare.
+A control plane defaults to 2 cores, 4096 MiB and a 30 GiB disk. A kubeadm one defaults to 4800 MiB, which it needs with Calico. A worker defaults to 2 cores, 6144 MiB and a 40 GiB disk. That fits all add-ons together except Rancher, logs, backups and GitOps, with about 2 GiB to spare.
 
 Disks are at least 20 GiB. A control-plane node needs at least 2 cores and 4096 MiB, the first row of the k3s and RKE2 server sizing guides. For kubeadm, which documents no sizes, RKE2's guide applies.
 
@@ -836,7 +836,7 @@ A deleted cluster can still be named in `readFrom` with kubectl while its Secret
 With **Take volume snapshots** (the `csi` variable's `volumeSnapshots`), the cluster's CSI plugin takes VolumeSnapshots of its volumes. It restores them into new volumes and clones volumes (a PersistentVolumeClaim whose `dataSource` is another claim).
 
 > [!WARNING]
-> A snapshot copies the volume while its pods may still write to it, so the copy can mix old and new data. Stop the workload or pause its writes first, such as with a database's own backup mode.
+> A snapshot copies the volume while its pods may still write to it, so the copy can mix old and new data. Stop the workload or pause its writes first, for example with a database's own backup mode.
 
 Proxmox VE's own volume copy is for `root@pam` alone. So a small proxy beside the plugin, `kubehenge-csi-proxy`, makes each copy with the cluster's own token instead. It imports the volume into a new disk of one of the cluster's holder VMs and keeps it there as an unused disk. The proxy records, in the cluster, the name the plugin knows each copy by.
 

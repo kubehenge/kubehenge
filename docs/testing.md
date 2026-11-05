@@ -280,7 +280,7 @@ Each try records what the machine and its VMs take every 15 seconds (`test/e2e/c
 
 The log's "The guests' load" step sums it up per minute. It gives each VM's busiest minute, most memory, fastest reads and longest waits. A VM stalled on the machine's CPUs shows as CPU waits. One stalled on its disk shows as disk waits and reads.
 
-The guests' vCPUs outnumber the runner's CPUs, so the guests compete for them. The management node runs at a higher CPU weight (`node_cpu_units`), which keeps its API server answering while the workload guests are busy.
+The guests' vCPUs outnumber the runner's CPUs and compete for them. The management node runs at a higher CPU weight (`node_cpu_units`), which keeps its API server answering while the workload guests are busy.
 
 Under pressure the machine keeps its page cache rather than the guests' memory (`vm.swappiness=10`) and starts reclaiming earlier (`vm.watermark_scale_factor=200`). Cloning a template then evicts cached disk blocks instead of a running control plane.
 
@@ -378,7 +378,7 @@ The guard judges memory by what slows a test: every task waiting on memory, and 
 
 Past either line the guests have strained the runner. That ends no test, since such guests slow down rather than fail at once. The guard names it when the test ends. Beside a failure such as a lost lease it is an error. When the test passed it is a warning. A minute or more under 1 GiB available is printed as a figure.
 
-A runner that is lost uploads no artifacts. So the test's log also gets the guard's latest sample once a minute, as a `runner:` line.
+A runner that is lost uploads no artifacts, and GitHub may keep none of its log either. So the test's log gets the guard's latest sample once a minute, as a `runner:` line. A check run named `runner (<lane>)` gets the same sample each minute, with the guard's peaks and each VM's load (`test/e2e/ci/beacon.sh`). A lost runner leaves that check run in progress.
 
 ### What a failed test leaves
 

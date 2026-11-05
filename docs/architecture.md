@@ -78,7 +78,7 @@ Each provider runs its release's own image, by the digest `versions.tf` names, w
 
 Both are built reproducibly, so the published images can be rebuilt from their sources and compared ([releasing.md](releasing.md)). A release of each that carries its fixes replaces the build.
 
-Every provider's probes allow 5 s, and its liveness probe six misses. The k3s providers have no probes. Upstream's 1 s probe restarts Cluster API's only replica on a busy host, and its webhooks then refuse every change.
+Each provider's probes allow 5 s, and its liveness probe tolerates six misses. The k3s providers have no probes. On a busy host, upstream's 1 s probe restarts Cluster API's only replica. Its webhooks then refuse every change.
 
 Talos's two providers come from Kubehenge's own forks of them, [cluster-api-bootstrap-provider-talos](https://github.com/kubehenge/cluster-api-bootstrap-provider-talos) and [cluster-api-control-plane-provider-talos](https://github.com/kubehenge/cluster-api-control-plane-provider-talos). Sidero Labs' releases are on Cluster API's v1beta1 contract, which Cluster API's core removes. Its control-plane provider has no `TalosControlPlaneTemplate`, which a ClusterClass needs. The forks carry both, with fixes of their own. They are maintained primarily for Kubehenge and open to anyone who runs Talos with Cluster API.
 
@@ -885,7 +885,9 @@ The interface logs each sign-in and change with its user, as it always has. Each
 
 The management cluster's API server audits with the policy of the workload clusters (`charts/kubehenge/files/audit-policy.yaml`), which the module sets through Talos's `KubeAuditPolicyConfig`. With `api_audit_log`, it writes those events to its output instead of Talos's file on the node.
 
-- The interface reads the API server pods' logs every minute, each to its end. It keeps its place in each log by the last line read, and warns when the kubelet rotated lines away before it read them.
+- The interface follows each API server pod's log as it is written, so it normally reads each line before the kubelet rotates the file away.
+- A stream that ends, or brings nothing for 5 minutes, opens again within a minute at the last line read. The interface warns when the kubelet rotated lines away in between.
+- After an API server restarts, the interface first reads the old container's last lines from the kubelet's previous log. It warns when the kubelet no longer has them.
 - It adds each create, change and deletion once, by its audit ID.
 - A GitOps tool's or a script's service account counts as a person.
 - Nodes, the control plane's own users and the service accounts in the namespaces the module installs are left out. The interface's account is among them, its changes being in its own record.

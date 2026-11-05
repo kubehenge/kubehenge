@@ -13,7 +13,7 @@ COSIGN_SHA256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
 
 work=$(mktemp -d -p /var/tmp)
 trap 'rm -rf "${work}"' EXIT
-curl --fail --silent --show-error --location --proto '=https' --retry 5 --retry-all-errors \
+curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors \
     --output "${work}/cosign" "https://github.com/sigstore/cosign/releases/download/${COSIGN}/cosign-linux-amd64"
 echo "${COSIGN_SHA256}  ${work}/cosign" | sha256sum --check --strict --quiet
 chmod 0755 "${work}/cosign"

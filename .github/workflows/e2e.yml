@@ -143,6 +143,9 @@ jobs:
       matrix:
         test: ${{ fromJSON(needs.scope.outputs.tests) }}
     uses: ./.github/workflows/e2e-lane.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read
+      checks: write # Each try's runner beacon (test/e2e/ci/beacon.sh).
     with:
       test: ${{ matrix.test }}
       fresh: ${{ github.event_name == 'schedule' || inputs.fresh == true }}

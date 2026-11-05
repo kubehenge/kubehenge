@@ -53,7 +53,7 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 
 | Who | Reaches |
 | --- | --- |
-| The node running the installer | GitHub, for Kubehenge's release and OpenTofu. `download.proxmox.com`, for the container template, unless a storage holds it already. Through the datacenter's HTTP proxy, where one is set. |
+| The node running the installer | GitHub, for Kubehenge's release and OpenTofu. `download.proxmox.com`, for the container template, unless a storage holds it already. The installer downloads through the datacenter's HTTP proxy, where one is set. |
 | The appliance | GitHub, for the release index and upgrades. While it applies the management cluster: the OpenTofu registry, `quay.io` (cert-manager's chart) and the Talos Image Factory. While it makes VM templates: the Talos Image Factory (`factory.talos.dev`), the node OSes' image mirrors for their signed checksums (`repo.almalinux.org`, `dl.rockylinux.org`), and the package repositories' signing keys (`pkgs.k8s.io`, `rpm.rancher.io`). |
 | The Proxmox VE nodes | the Talos Image Factory and the node OSes' image mirrors, which Proxmox VE downloads disk images from |
 | The management cluster's nodes | Container registries and the Cluster API providers' release files. RKE2's and k3s's release channels, for automatic upgrades, and their releases' checksum files and install scripts on GitHub, read once per release. The add-on chart repositories: `ghcr.io` (the Proxmox VE cloud controller manager and CSI plugin), `helm.cilium.io`, `docs.tigera.io`, `kubernetes-sigs.github.io` (Headlamp), `releases.rancher.com` and `charts.jetstack.io`. |
@@ -115,7 +115,7 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 
 ### What it does
 
-1. Checks that it runs as root on a Proxmox VE 9 node. It asks which storages to use where several fit, and whether to add the interface entry, unless options answered already.
+1. Checks that it runs as root on a Proxmox VE 9 node. Unless options answered already, it asks which storage to use where several fit and whether to add the interface entry.
 2. Downloads Kubehenge's release archive and OpenTofu, and checks both against the checksums it carries.
 3. Chooses the Proxmox VE API's address and CA ([below](#the-proxmox-ve-api)), and asks on the terminal where it needs your word. It checks that the API's certificate is valid for that address.
 4. Uses the container template where a storage holds it, or downloads it and checks it against its checksum. Then it creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its IPv4 address.
@@ -585,7 +585,7 @@ tofu output -raw talosconfig > talosconfig
 | `gateway`, `dns_servers` | required | The nodes' gateway and DNS servers. |
 | `pod_subnets`, `service_subnets` | `["10.244.0.0/16"]`, `["10.96.0.0/12"]` | The management cluster's own ranges. The plan refuses ranges that overlap the nodes' network. |
 | `node_cores`, `node_memory_mb`, `node_disk_gb` | `4`, `4096`, `32` | Size of each node. |
-| `node_cpu_units` | `200` | Proxmox VE CPU weight of each node, from 1 to 10000. Proxmox VE's default is 100, so when the host's CPUs are contended the nodes get twice a default VM's share. A change reaches running nodes at once, without a reboot. |
+| `node_cpu_units` | `200` | Proxmox VE CPU weight of each node, from 1 to 10000. Proxmox VE's default is 100. When the host's CPUs are contended, the nodes get twice a default VM's share. A change reaches running nodes at once, without a reboot. |
 | `node_memory_min_mb` | none | Least memory Proxmox VE's ballooning takes each node down to while its host is above 80 % memory use. From 2048 up to `node_memory_mb`. |
 | `cpu_type` | `x86-64-v2-AES` | QEMU CPU type. Talos needs at least x86-64-v2. `host` spares the nodes mitigations their CPU does not need. It lets them migrate only between nodes with the same CPU ([templates.md](templates.md#how-clusters-find-them)). |
 | `workload_pool` | `kubehenge` | Pool for the clusters' VMs, each cluster in a pool of its own under it. A pool name, nested at most one level. |

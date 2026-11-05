@@ -25,6 +25,9 @@ jobs:
   try-1:
     name: try 1
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read
+      checks: write # The try's runner beacon (test/e2e/ci/beacon.sh).
     with:
       test: ${{ inputs.test }}
       fresh: ${{ inputs.fresh }}
@@ -33,6 +36,9 @@ jobs:
     needs: try-1
     if: needs.try-1.outputs.handed-back == 'true'
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read
+      checks: write # The try's runner beacon (test/e2e/ci/beacon.sh).
     with:
       test: ${{ inputs.test }}
       fresh: ${{ inputs.fresh }}
@@ -41,6 +47,9 @@ jobs:
     needs: try-2
     if: needs.try-2.outputs.handed-back == 'true'
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read
+      checks: write # The try's runner beacon (test/e2e/ci/beacon.sh).
     with:
       test: ${{ inputs.test }}
       fresh: ${{ inputs.fresh }}
@@ -49,6 +58,9 @@ jobs:
     needs: try-3
     if: needs.try-3.outputs.handed-back == 'true'
     uses: ./.github/workflows/e2e-try.yml # zizmor: ignore[self-repository]
+    permissions:
+      contents: read
+      checks: write # The try's runner beacon (test/e2e/ci/beacon.sh).
     with:
       test: ${{ inputs.test }}
       fresh: ${{ inputs.fresh }}
