@@ -15,6 +15,16 @@ type cachedSite struct {
 	site Site
 }
 
+// Len is the number of templates held.
+func (c *SiteCache) Len() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.entries)
+}
+
 // get is safe on a nil cache, which holds nothing.
 func (c *SiteCache) get(id int) (string, Site, bool) {
 	if c == nil {
@@ -50,14 +60,4 @@ func (c *SiteCache) keepOnly(listed map[int]bool) {
 			delete(c.entries, id)
 		}
 	}
-}
-
-// Len is the number of templates held.
-func (c *SiteCache) Len() int {
-	if c == nil {
-		return 0
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.entries)
 }

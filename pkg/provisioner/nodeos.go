@@ -203,8 +203,7 @@ func (h *Hooks) admissionContext(ctx context.Context) (context.Context, context.
 
 // admitOnReadFailure drops a failed read of Proxmox VE, logging it, and keeps every other error.
 func admitOnReadFailure(ctx context.Context, err error) error {
-	var read *pveReadError
-	if errors.As(err, &read) {
+	if _, ok := errors.AsType[*pveReadError](err); ok {
 		ctrl.LoggerFrom(ctx).Error(err, "admitting a cluster without the Proxmox VE checks; the creation hook judges it")
 		return nil
 	}
