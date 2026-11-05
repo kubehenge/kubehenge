@@ -47,6 +47,9 @@ jobs:
   test:
     name: ${{ inputs.test }}
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      checks: write # The runner's beacon (test/e2e/ci/beacon.sh) keeps its record in a check run.
     # node-image-refresh, eight template builds from the families' mirrors, has taken from 63 to 112
     # minutes when it passed.
     timeout-minutes: 150
@@ -237,6 +240,17 @@ jobs:
           nohup sudo sh -c "$sample" > "$RUNNER_TEMP/kvm.txt" 2> /dev/null &
           nohup test/e2e/ci/guests.sh record "$RUNNER_TEMP/guests.txt" \
             > "$RUNNER_TEMP/guests-record.log" 2>&1 &
+      # A runner lost to GitHub keeps neither its log nor its artifacts, so the record goes to a check
+      # run as well, once a minute.
+      - name: The runner's beacon
+        if: env.E2E_RUN == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST: ${{ inputs.test }}
+        run: |
+          nohup test/e2e/ci/beacon.sh "runner (${TEST})" "$RUNNER_TEMP/guard.txt" \
+            "$RUNNER_TEMP/guests.txt" > "$RUNNER_TEMP/beacon.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/beacon.pid"
       - name: Proxmox VE
         if: env.E2E_RUN == 'true'
         run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
@@ -267,6 +281,14 @@ jobs:
         run: >-
           test/e2e/ci/guard.sh run "$RUNNER_TEMP/test.pid" "$RUNNER_TEMP/guard.txt"
           test/e2e/ci/run.sh "$RUNNER_TEMP/e2e" "$TEST" 2>&1 | tee "$RUNNER_TEMP/test.log"
+      - name: Stop the beacon
+        if: ${{ always() && env.E2E_RUN == 'true' }}
+        run: |
+          pid=$(cat "$RUNNER_TEMP/beacon.pid" 2>/dev/null) || exit 0
+          kill -TERM "$pid" 2>/dev/null || exit 0
+          # Its last report and the check run's end take a few seconds.
+          timeout 60 tail --pid="$pid" -f /dev/null || true
+          cat "$RUNNER_TEMP/beacon.log"
       # The test that failed, which in a lane of two (test/e2e/ci/scope.sh) run.sh names.
       - name: The failed test
         id: failed

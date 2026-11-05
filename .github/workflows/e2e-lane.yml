@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: read
+  checks: write # Each try's runner beacon (test/e2e/ci/beacon.sh).
 
 jobs:
   try-1:
