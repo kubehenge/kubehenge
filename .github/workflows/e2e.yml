@@ -60,7 +60,9 @@ jobs:
             # difference from main's commit under it.
             merge_group)
               git fetch --no-tags --depth=1 origin "$GROUP_BASE"
-              tests=$(git diff --name-only "$GROUP_BASE" HEAD |
+              # Without renames a moved file lists both paths, and quotepath off keeps a path with
+              # non-ASCII characters whole.
+              tests=$(git -c core.quotepath=off diff --name-only --no-renames "$GROUP_BASE" HEAD |
                 test/e2e/ci/scope.sh --base "$GROUP_BASE")
               ;;
             # run.sh refuses a name it cannot read before anything is built.
