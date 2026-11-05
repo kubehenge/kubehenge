@@ -714,6 +714,10 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A worker left at the class's default holds them with a GiB to spare for the cluster's own work.
+	if spare := worker - (room.Base + room.Need); spare < 1024 {
+		t.Errorf("%s: every add-on on the default worker of %d MiB leaves %d MiB", class.Name, worker, spare)
+	}
 	sized := func(workerMiB, controlPlaneMiB int) *clusterv1.Cluster {
 		return withAddons(defaults.DeepCopy(), map[string]string{
 			"workerMachine":       fmt.Sprintf(`{"memoryMiB":%d}`, workerMiB),

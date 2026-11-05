@@ -173,7 +173,7 @@ The task log shows what each Kubehenge account did. In an appliance's management
 `install.sh` stops at the first problem and says what it was. Until the interface has reached the Proxmox VE API, it then removes the container it created ("removing container … after the failure"), so running it again starts clean.
 
 - **"run this as root on a Proxmox VE node"**, **"this is not a Proxmox VE node"** or **"Kubehenge needs Proxmox VE 9":** run it as root, in the shell of a Proxmox VE 9 node.
-- **`"no active storage here takes container disks (content rootdir); name one with --storage"`:** allow the `rootdir` content type on a storage of the node ([install.md](install.md#storage)), or name one with `--storage`.
+- **`"no enabled, active storage here takes container disks (content rootdir)"`:** allow the `rootdir` content type on an enabled storage of the node ([install.md](install.md#storage)), or name one with `--storage`. The same goes for `vztmpl` and `--template-storage`, where the container template goes.
 - **"could not download …":** the node has to reach GitHub, for Kubehenge's release and OpenTofu ([install.md](install.md#internet-access)). The installer has already tried the download five more times.
 - **"… does not match its checksum":** the file is not the one this `install.sh` names, and nothing of it was installed.
   - Check that nothing between the node and GitHub changes downloads, and fetch `install.sh` again from the release you mean to install.

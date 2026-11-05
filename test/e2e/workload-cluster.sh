@@ -1778,7 +1778,7 @@ if [ "${restores_etcd}" = true ]; then
     sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
     taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
     [ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
-    curl -sS --fail -L -o "${work}/etcd.tar.gz" \
+    curl -sS --fail -L --proto '=https' --retry 8 --retry-all-errors -o "${work}/etcd.tar.gz" \
         "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
     printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
         fail "etcd's download does not have its SHA-256"

@@ -231,7 +231,7 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
   required: false
   schema:
     openAPIV3Schema:
-      {{- include "kubehenge.machineSchema" (dict "cores" 2 "minCores" .workerMinCores "memoryMiB" 4096 "minMemoryMiB" .workerMinMemoryMiB "diskGiB" .workerDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
+      {{- include "kubehenge.machineSchema" (dict "cores" 2 "minCores" .workerMinCores "memoryMiB" 6144 "minMemoryMiB" .workerMinMemoryMiB "diskGiB" .workerDiskGiB "minDiskGiB" .minDiskGiB) | nindent 6 }}
 {{- end -}}
 
 {{/*

@@ -149,7 +149,9 @@ Unticked, the cloud controller manager logs a permission error for each node eve
 
 #### Sizes
 
-The defaults are 2 cores and 4096 MiB, with a 30 GiB disk for the control plane and 40 GiB for workers. A kubeadm control plane defaults to 4800 MiB, which it needs with Calico. Disks are at least 20 GiB. A control-plane node needs at least 2 cores and 4096 MiB, the first row of the k3s and RKE2 server sizing guides. For kubeadm, which documents no sizes, RKE2's guide applies.
+A control plane defaults to 2 cores, 4096 MiB and a 30 GiB disk. A kubeadm one defaults to 4800 MiB, which it needs with Calico. A worker defaults to 2 cores, 6144 MiB and a 40 GiB disk. That holds every add-on but Rancher, logs, backups and GitOps, with about 2 GiB to spare.
+
+Disks are at least 20 GiB. A control-plane node needs at least 2 cores and 4096 MiB, the first row of the k3s and RKE2 server sizing guides. For kubeadm, which documents no sizes, RKE2's guide applies.
 
 With more workers the guides ask for more. Kubehenge refuses a cluster whose control planes fall short, when it is created and when its workers or machines change. RKE2 and kubeadm need 4 cores and 8192 MiB from 226 workers. They need 8 cores and 16384 MiB from 451 and 16 cores and 32768 MiB from 1,301. For k3s the same sizes start at 351, 901 and 1,801 workers.
 
@@ -833,6 +835,9 @@ A deleted cluster can still be named in `readFrom` with kubectl while its Secret
 
 With **Take volume snapshots** (the `csi` variable's `volumeSnapshots`), the cluster's CSI plugin takes VolumeSnapshots of its volumes. It restores them into new volumes and clones volumes (a PersistentVolumeClaim whose `dataSource` is another claim).
 
+> [!WARNING]
+> A snapshot copies the volume while its pods may still write to it, so the copy can mix old and new data. Stop the workload or pause its writes first, such as with a database's own backup mode.
+
 Proxmox VE's own volume copy is for `root@pam` alone. So a small proxy beside the plugin, `kubehenge-csi-proxy`, makes each copy with the cluster's own token instead. It imports the volume into a new disk of one of the cluster's holder VMs and keeps it there as an unused disk. The proxy records, in the cluster, the name the plugin knows each copy by.
 
 - **What it grants:** copies of the cluster's own volumes, onto the cluster's own storage, and nothing else.
@@ -1137,7 +1142,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)). Default true, where the management cluster has Proxmox VE HA and the storage is shared. |
 | `csi` | no | `datastoreAllocate` (default false) runs the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on its storage ([above](#persistent-volumes)). It needs a management cluster that lets clusters choose it and a storage of the cluster's own. `volumeSnapshots` (default false) takes volume snapshots, with the cluster's own volumes copied with its own token ([above](#volume-snapshots)), on storage local to each node. |
 | `ccm` | no | `haGroups` has the cloud controller manager label the nodes with their Proxmox VE HA groups, with `Sys.Audit` on `/` for the cluster's token ([above](#machines)). Default true, unless the management cluster switched the labels off for every cluster. Then it may not be true. |
-| `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20). A disk only grows. |
+| `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096 for the control plane and 6144 for workers, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20). A disk only grows. |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s and Talos: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
 | `nodeOS` | no | kubeadm, RKE2 and k3s: `family` and `release`, a node OS Kubehenge builds templates of ([templates.md](templates.md#node-oses)). Default AlmaLinux 10. Changing it replaces every node ([above](#change-settings)). |
 | `cis` | no | Harden the cluster to the CIS Kubernetes Benchmark ([above](#add-ons)). Default false. The class refuses a change once the cluster exists. |

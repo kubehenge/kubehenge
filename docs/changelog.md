@@ -4,6 +4,16 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-05
+
+- The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000. A change reaches running nodes without a reboot.
+- A new cluster's workers get 6144 MiB by default, up from 4096 MiB. That holds every add-on but Rancher, logs, backups and GitOps, with about 2 GiB to spare. The minimums stay as they were.
+- The installer asks which storage takes the appliance's disks, and which the container template, where several fit (`--storage`, `--template-storage`). A disabled storage, such as `local` on some nodes, is never used.
+- The installer downloads the container template itself, checked against a SHA-512 it carries, without `pveam` and its template indexes. A template already on a storage is used where it is.
+- The installer shows a progress bar for each download and a line for each finished step, the verified checksums included. It downloads through the datacenter's HTTP proxy, where one is set.
+- Downloads from GitHub, the installer's included, keep trying for about four minutes, which outlasts GitHub's spells of failed release downloads. The appliance's OpenTofu tries its providers eight times, up from two.
+- The docs warn that a volume snapshot copies a volume its pods may still write to. Stop the workload or pause its writes first.
+
 ## [0.4.1] - 2026-11-05
 
 The first release of 0.4. The v0.4.0 tag was never published.

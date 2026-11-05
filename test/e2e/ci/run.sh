@@ -138,7 +138,7 @@ if [ "${test%-addons-?}" = talos ]; then
     }
     # The newest release before it that the Image Factory serves, the templates' source, which is
     # the patch before it unless it opens a minor version.
-    talos_from=${KUBEHENGE_E2E_TALOS_FROM:-$(curl -fsS --retry 5 --retry-all-errors https://factory.talos.dev/versions |
+    talos_from=${KUBEHENGE_E2E_TALOS_FROM:-$(curl -fsS --retry 8 --retry-all-errors https://factory.talos.dev/versions |
         jq -r --arg to "${talos_to}" '
             def key: ltrimstr("v") | split(".") | map(tonumber);
             ($to | key) as $t | [.[] | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$")) | select(key < $t)] | max_by(key) // empty')}

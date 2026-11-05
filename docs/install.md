@@ -21,8 +21,8 @@ Then [create clusters](clusters.md).
 
 | For | Content type | Notes |
 | --- | --- | --- |
-| The appliance's disk, 8 GB, and a 1 GB volume for its keys | `rootdir` | The first active storage that allows it, unless `--storage` names one. Backup jobs skip the key volume. |
-| The container template | `vztmpl`, on `local` | The installer downloads Debian's standard container template there through `pveam` if it is missing. |
+| The appliance's disk, 8 GB, and a 1 GB volume for its keys | `rootdir` | The only enabled, active storage that allows it. Where several do, the installer asks, and `--storage` answers in advance. Backup jobs skip the key volume. |
+| The container template | `vztmpl` | Debian's standard container template. The installer uses it where it already is, or downloads it to a storage chosen like the disk's (`--template-storage`). |
 | The Talos disk image, and the images VM templates start from | `import` | Proxmox VE's `local` storage does not allow `import` until you add it (Datacenter, Storage, Edit, Content). |
 | The management cluster's disks | `images` | 32 GB per node. |
 | Cloud-init images | `iso` | Cluster API keeps each new cluster VM's cloud-init ISO here and gets full control of the storage. Give it a directory storage of its own with the content type `ISO image` alone (Datacenter, Storage, Add, Directory). In the shell, that is `pvesm add dir kubehenge-iso --path /var/lib/kubehenge-iso --content iso`. Choose it as **Cloud-init images** in the setup. |
@@ -53,7 +53,7 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 
 | Who | Reaches |
 | --- | --- |
-| The node running the installer | GitHub, for Kubehenge's release and OpenTofu. The container template mirror, through `pveam`. |
+| The node running the installer | GitHub, for Kubehenge's release and OpenTofu. `download.proxmox.com`, for the container template, unless a storage holds it already. Through the datacenter's HTTP proxy, where one is set. |
 | The appliance | GitHub, for the release index and upgrades. While it applies the management cluster: the OpenTofu registry, `quay.io` (cert-manager's chart) and the Talos Image Factory. While it makes VM templates: the Talos Image Factory (`factory.talos.dev`), the node OSes' image mirrors for their signed checksums (`repo.almalinux.org`, `dl.rockylinux.org`), and the package repositories' signing keys (`pkgs.k8s.io`, `rpm.rancher.io`). |
 | The Proxmox VE nodes | the Talos Image Factory and the node OSes' image mirrors, which Proxmox VE downloads disk images from |
 | The management cluster's nodes | Container registries and the Cluster API providers' release files. RKE2's and k3s's release channels, for automatic upgrades, and their releases' checksum files and install scripts on GitHub, read once per release. The add-on chart repositories: `ghcr.io` (the Proxmox VE cloud controller manager and CSI plugin), `helm.cilium.io`, `docs.tigera.io`, `kubernetes-sigs.github.io` (Headlamp), `releases.rancher.com` and `charts.jetstack.io`. |
@@ -69,9 +69,9 @@ The management cluster's nodes can pull through registry mirrors instead ([setup
 | The appliance | 2 | 1 GiB, and 512 MiB swap | 8 GB |
 | Each management cluster node (one or three) | 4 | 4 GiB | 32 GB |
 | A cluster's control-plane node, by default | 2 | 4 GiB (kubeadm: 4800 MiB) | 30 GiB |
-| A cluster's worker, by default | 2 | 4 GiB | 40 GiB |
+| A cluster's worker, by default | 2 | 6 GiB | 40 GiB |
 
-The appliance, a one-node management cluster and a cluster at the create wizard's defaults (one control plane, one worker) take about 110 GB of disk. They take 10 vCPUs and 13 GiB of memory, beside the appliance's swap. Three management cluster nodes add 8 vCPUs, 8 GiB and 64 GB. Add-ons raise a cluster's machines to what they need ([clusters.md](clusters.md#machines)).
+The appliance, a one-node management cluster and a cluster at the create wizard's defaults (one control plane, one worker) take about 110 GB of disk. They take 10 vCPUs and 15 GiB of memory, beside the appliance's swap. Three management cluster nodes add 8 vCPUs, 8 GiB and 64 GB. Add-ons raise a cluster's machines to what they need ([clusters.md](clusters.md#machines)).
 
 Each node OS template build takes 12 GiB on the template storage. The two newest builds of each stay. While one is made, the VM that prepares it takes 2 vCPUs, up to 4 GiB of memory and 20 GiB of disk more.
 
@@ -89,14 +89,15 @@ The same with a static address:
 sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 ```
 
-`install.sh` carries the version of its release and the SHA-256 checksums of the release archive and of the OpenTofu release it installs. It checks each download against them before using it. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
+`install.sh` carries the version of its release and the checksums of the release archive, the OpenTofu release and the container template it installs. It checks each download against them before using it. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
 
 ### Options
 
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--ctid <id>` | the next free ID | The container's ID. |
-| `--storage <storage>` | the first active storage that takes container disks | Where the container's disk goes. |
+| `--storage <storage>` | the only storage that takes container disks, else asked | Where the container's disks go. Without a terminal, the one with the most free space. |
+| `--template-storage <storage>` | where the template already is, else as `--storage` | Where the container template goes. |
 | `--bridge <bridge>` | `vmbr0` | The bridge the container attaches to. |
 | `--ip dhcp` or `--ip <address>/<prefix>` | `dhcp` | The container's address, such as `192.0.2.40/24`. |
 | `--gateway <address>` | none | The default gateway, with a static `--ip`. |
@@ -114,10 +115,10 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 
 ### What it does
 
-1. Checks that it runs as root on a Proxmox VE 9 node. Unless `--pve-entry` or `--no-pve-entry` answered already, it asks whether to add the interface entry.
-2. Downloads Kubehenge's release archive and OpenTofu, and checks both against the checksums it carries. `pveam` checks the container template against its signed index.
+1. Checks that it runs as root on a Proxmox VE 9 node. It asks which storages to use where several fit, and whether to add the interface entry, unless options answered already.
+2. Downloads Kubehenge's release archive and OpenTofu, and checks both against the checksums it carries.
 3. Chooses the Proxmox VE API's address and CA ([below](#the-proxmox-ve-api)), and asks on the terminal where it needs your word. It checks that the API's certificate is valid for that address.
-4. Creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its IPv4 address.
+4. Uses the container template where a storage holds it, or downloads it and checks it against its checksum. Then it creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its IPv4 address.
 5. Makes a certificate for the container's host name, address and `--name`, or checks the one given with `--cert`.
    - A made certificate is signed by the Proxmox VE cluster's CA, whose key never leaves the node. It is self-signed when the node cannot read that key.
    - It is valid for 825 days, the longest browsers accept from a private CA.
@@ -584,7 +585,7 @@ tofu output -raw talosconfig > talosconfig
 | `gateway`, `dns_servers` | required | The nodes' gateway and DNS servers. |
 | `pod_subnets`, `service_subnets` | `["10.244.0.0/16"]`, `["10.96.0.0/12"]` | The management cluster's own ranges. The plan refuses ranges that overlap the nodes' network. |
 | `node_cores`, `node_memory_mb`, `node_disk_gb` | `4`, `4096`, `32` | Size of each node. |
-| `node_cpu_units` | `1000` | Proxmox VE CPU weight of each node, from 1 to 10000. Proxmox VE's default is 100, so when the host's CPUs are contended the nodes get ten times a default VM's share. |
+| `node_cpu_units` | `200` | Proxmox VE CPU weight of each node, from 1 to 10000. Proxmox VE's default is 100, so when the host's CPUs are contended the nodes get twice a default VM's share. A change reaches running nodes at once, without a reboot. |
 | `node_memory_min_mb` | none | Least memory Proxmox VE's ballooning takes each node down to while its host is above 80 % memory use. From 2048 up to `node_memory_mb`. |
 | `cpu_type` | `x86-64-v2-AES` | QEMU CPU type. Talos needs at least x86-64-v2. `host` spares the nodes mitigations their CPU does not need. It lets them migrate only between nodes with the same CPU ([templates.md](templates.md#how-clusters-find-them)). |
 | `workload_pool` | `kubehenge` | Pool for the clusters' VMs, each cluster in a pool of its own under it. A pool name, nested at most one level. |

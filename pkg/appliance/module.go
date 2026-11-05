@@ -249,6 +249,10 @@ func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
 		"TF_IN_AUTOMATION=1",
 		"TF_INPUT=0",
 		"TF_PLUGIN_CACHE_DIR=" + cache,
+		// More tries than OpenTofu's own, which spells of 504s from GitHub's release downloads
+		// outlast. Each backs off longer, about two minutes in all.
+		"TF_PROVIDER_DOWNLOAD_RETRY=8",
+		"TF_REGISTRY_DISCOVERY_RETRY=8",
 		"TF_ENCRYPTION=" + encryption(passphrase),
 	}
 	env = append(env, auth...)
