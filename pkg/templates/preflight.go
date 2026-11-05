@@ -120,9 +120,9 @@ func wrongContent(storage, content string) error {
 }
 
 // checkBuild runs the pre-flight, and for a bake, which writes a cloud-init ISO, chooses where.
-func (b *Builder) checkBuild(ctx context.Context, t *Template, bake bool) error {
+func (b *Builder) checkBuild(ctx context.Context, t *Template, recipe *Recipe) error {
 	list, err := b.preflight(ctx, t)
-	if err != nil || !bake {
+	if err != nil || recipe == nil {
 		return err
 	}
 	b.isoChosen, err = b.chooseISO(ctx, list)
