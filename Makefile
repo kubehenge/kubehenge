@@ -1,4 +1,9 @@
 TOFU ?= tofu
+# OpenTofu tries a registry request, a provider's checksums among them, only twice by default.
+# Spells of 504s from GitHub's release downloads outlast that, while eight back off over about two
+# minutes.
+export TF_PROVIDER_DOWNLOAD_RETRY ?= 8
+export TF_REGISTRY_DISCOVERY_RETRY ?= 8
 MODULES := management-cluster
 # Where `make image` pushes the controller's image, `make capmox-image` capmox's and
 # `make helm-addon-image` the Add-on Provider for Helm's; KO_FLAGS such as --tags or
