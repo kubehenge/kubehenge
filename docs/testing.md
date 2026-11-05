@@ -281,7 +281,9 @@ Under pressure the machine keeps its page cache rather than the guests' memory (
 
 A guest keeps all the memory it was given, mostly page cache. While the machine has under 2 GiB available, the recorder asks each guest through its agent to drop its page cache, each at most every 2 minutes (`KUBEHENGE_E2E_TRIM_BELOW`, 0 turns it off). Free page reporting hands the freed memory back. Talos guests run no commands, so they keep theirs. "The guests' load" lists each guest that dropped its cache.
 
-The management node's balloon gives memory back instead. Its minimum is 3072 MiB (`KUBEHENGE_E2E_MANAGEMENT_MEMORY_MIN`). Proxmox VE inflates the balloon towards it once the machine passes 80 % memory use. On a test host that returned about 1 GiB within 200 s.
+The management node's balloon gives memory back instead. Its minimum is 3584 MiB (`KUBEHENGE_E2E_MANAGEMENT_MEMORY_MIN`). It gives back at most 512 MiB. Proxmox VE inflates the balloon towards it once the machine passes 80 % memory use.
+
+The add-on tests use up to 2752 MB on the node. At a minimum of 3072 MiB the node saw only 2874 MB. Its page cache thrashed, and every controller lost its lease.
 
 ### How much the guests may take
 
@@ -316,7 +318,7 @@ Every node is at the least Kubehenge allows for what its test switches on. The m
 | `talos-addons-b` | 2368 | 10560 | 10560 | 10560 |
 | `talos-addons-c` | 2240 | 10432 | 10432 | 10432 |
 
-`kubeadm-addons-a` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176 and 11856 MiB. At that size `management-cluster-upgrade`, where every provider restarts at once, used 2212 MiB at most on the node. It kept 1181 MiB available, and its memory pressure stayed at 0.18 % of 10 seconds at most. The guard's samples show what the management node uses in every run (below).
+`kubeadm-addons-a` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176 and 11856 MiB. The guard's samples show what the management node uses in every run (below).
 
 These tests outgrow 12 GiB as well. Only the RKE2 ones read back from swap past the guard's line, 570 to 1220 MiB in a minute:
 

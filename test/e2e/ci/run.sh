@@ -280,8 +280,9 @@ if [ -n "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:-}" ]; then
     echo "the management node has ${TF_VAR_node_memory_mb} MiB of memory"
 fi
 # Talos keeps its page cache, so the management node gives memory back only through its balloon.
-# It used 2212 MiB at most (docs/testing.md), which leaves room above 3072.
-export TF_VAR_node_memory_min_mb="${KUBEHENGE_E2E_MANAGEMENT_MEMORY_MIN:-3072}"
+# It used up to 2752 MB with the add-on tests (docs/testing.md). At 3072 MiB it saw only 2874 MB
+# and thrashed, so the minimum leaves it about 3350 MB.
+export TF_VAR_node_memory_min_mb="${KUBEHENGE_E2E_MANAGEMENT_MEMORY_MIN:-3584}"
 
 # The tests' own output is shown as it comes rather than when each make target ends.
 e2e() { make -C "${repo}" OUTPUT_SYNC=none "$@"; }
