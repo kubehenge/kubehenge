@@ -406,11 +406,12 @@ func (s *Server) streamPod(ctx context.Context, f *auditFollower, open auditOpen
 	f.mu.Unlock()
 }
 
-// readPodLog reads one log of a pod from from until it ends, nil when it ended whole.
+// readPodLog reads one log of a pod, from the given time until it ends, and is nil when it ended
+// whole.
 func (s *Server) readPodLog(ctx context.Context, f *auditFollower, open auditOpener, name string, p *auditPod, from time.Time, previous bool) error {
 	stream, err := open(ctx, name, from, previous)
 	if err != nil {
-		return err //nolint:wrapcheck // podLogOpener names the step
+		return err
 	}
 	defer func() { _ = stream.Close() }()
 	f.mu.Lock()

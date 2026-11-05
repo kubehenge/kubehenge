@@ -236,23 +236,26 @@ func (api *apiServerFake) servePrevious(w http.ResponseWriter, pod string, since
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"BadRequest","code":400,`+
-			`"message":"previous terminated container \"kube-apiserver\" in pod \"`+pod+`\" not found"}`)
+			`"message":"previous terminated container \"kube-apiserver\" not found"}`)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	_, _ = io.WriteString(w, linesSince(lines, since))
 }
 
-// restart restarts a pod's container: its log becomes the previous one, and the restart before
-// it is gone. With keep false, the kubelet has lost the previous log too.
-func (api *apiServerFake) restart(pod string, keep bool) {
+// forgetPrevious has the kubelet lose a pod's previous log.
+func (api *apiServerFake) forgetPrevious(pod string) {
 	api.mu.Lock()
 	defer api.mu.Unlock()
-	if keep {
-		api.previous[pod] = api.files[pod]
-	} else {
-		delete(api.previous, pod)
-	}
+	delete(api.previous, pod)
+}
+
+// restart restarts a pod's container: its log becomes the previous one, and the one before it is
+// gone.
+func (api *apiServerFake) restart(pod string) {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	api.previous[pod] = api.files[pod]
 	api.files[pod] = nil
 	for _, f := range api.followers[pod] {
 		f.quit <- nil
