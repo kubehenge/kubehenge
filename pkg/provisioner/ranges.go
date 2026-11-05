@@ -126,13 +126,9 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 	if !Owns(c, d.Hooks.ClassNamespace) || !c.DeletionTimestamp.IsZero() || len(n.Pods.CIDRBlocks) > 0 && len(n.Services.CIDRBlocks) > 0 {
 		return nil
 	}
-	class := &clusterv1.ClusterClass{}
-	if err := d.Hooks.Reader.Get(ctx, client.ObjectKey{Namespace: d.Hooks.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}, class); err != nil {
-		if apierrors.IsNotFound(err) {
-			// Cluster API refuses a cluster of a class that does not exist.
-			return nil
-		}
-		return fmt.Errorf("reading the cluster's ClusterClass: %w", err)
+	class, err := d.Hooks.classOf(c)(ctx)
+	if err != nil || class == nil {
+		return err
 	}
 	nodes, err := nodesPrefix(c)
 	if err != nil {
@@ -183,7 +179,11 @@ func (d *ClusterDefaulter) otherRanges(ctx context.Context, c *clusterv1.Cluster
 		return nil, fmt.Errorf("listing the clusters: %w", err)
 	}
 	var classes clusterv1.ClusterClassList
-	if err := d.Hooks.Reader.List(ctx, &classes, client.InNamespace(d.Hooks.ClassNamespace)); err != nil {
+	classReader := d.Hooks.Reader
+	if d.Hooks.Classes != nil {
+		classReader = d.Hooks.Classes
+	}
+	if err := classReader.List(ctx, &classes, client.InNamespace(d.Hooks.ClassNamespace)); err != nil {
 		return nil, fmt.Errorf("listing the cluster classes: %w", err)
 	}
 	others := &otherRanges{}

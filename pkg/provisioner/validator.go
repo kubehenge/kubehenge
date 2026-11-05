@@ -10,7 +10,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
@@ -49,6 +48,10 @@ func (*ClusterValidator) ValidateDelete(context.Context, *clusterv1.Cluster) (ad
 }
 
 func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Cluster) (admission.Warnings, error) {
+	return v.validateOf(ctx, old, c, v.Hooks.classOf(c))
+}
+
+func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Cluster, classOf classReader) (admission.Warnings, error) {
 	if !Owns(c, v.Hooks.ClassNamespace) {
 		return nil, nil
 	}
@@ -59,13 +62,9 @@ func (v *ClusterValidator) validate(ctx context.Context, old, c *clusterv1.Clust
 	if err != nil {
 		return nil, err
 	}
-	class := &clusterv1.ClusterClass{}
-	if err := v.Hooks.Reader.Get(ctx, client.ObjectKey{Namespace: v.Hooks.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}, class); err != nil {
-		if apierrors.IsNotFound(err) {
-			// Cluster API refuses a cluster of a class that does not exist.
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading the cluster's ClusterClass: %w", err)
+	class, err := classOf(ctx)
+	if err != nil || class == nil {
+		return nil, err
 	}
 	var warnings admission.Warnings
 	if rollsOnlyControlPlane(old, c, class) {

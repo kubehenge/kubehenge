@@ -65,7 +65,10 @@ func (a *Announcer) Start(ctx context.Context) error {
 // Hooks are Cluster API lifecycle hooks, served as a Runtime Extension.
 type Hooks struct {
 	// Reader should read past any cache: the hook must see the Secret the moment it is written.
-	Reader         client.Reader
+	Reader client.Reader
+	// Classes reads ClusterClasses for the admission webhooks from the controller's cache, so that
+	// they make no request to the API server that is waiting for their answer. Empty, they use Reader.
+	Classes        client.Reader
 	ClassNamespace string
 	Registrar      *Registrar
 	// RancherKubernetes is what the Rancher release Kubehenge installs runs on.
