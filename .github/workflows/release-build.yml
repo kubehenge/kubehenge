@@ -182,13 +182,15 @@ jobs:
           retention-days: 1
           overwrite: true
 
-  # Lint and unit tests again: a vulnerability published since the merge, in a Go module or an
-  # action, fails here before anything ships with it.
+  # Only what can change without a commit: a vulnerability published since the merge, in a Go
+  # module or an action, fails here before anything ships with it. The gate has shown that the merge
+  # queue ran every lint, unit and integration test on this commit, with a warm build cache this job
+  # may not use.
   test:
     name: test
     needs: gate
     runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    timeout-minutes: 20
     permissions:
       contents: read # Reads the tagged source.
     steps:
@@ -199,11 +201,13 @@ jobs:
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - run: make test
+      # govulncheck builds the packages, which embed the interface and Gateway API's manifests.
+      - run: make web gateway-api
+      - run: go tool govulncheck ./...
+      - run: make lint-actions
         env:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.
           GH_TOKEN: ${{ github.token }}
-      - run: make integration
 
   # The images, pushed to ghcr.io, and the appliance archive, whose chart runs the controller image
   # by digest, with install.sh and the index to sign.
