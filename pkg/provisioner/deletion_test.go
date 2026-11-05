@@ -28,7 +28,24 @@ var (
 	deletedAt  = time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
 	controlGVK = schema.GroupVersionKind{Group: "controlplane.cluster.x-k8s.io", Version: "v1beta2", Kind: "RKE2ControlPlane"}
 	webKey     = client.ObjectKey{Namespace: "team-a", Name: "web"}
+
+	proxmoxClusterGVK = proxmoxMachineGVK.GroupVersion().WithKind("ProxmoxCluster")
 )
+
+// flakyCloud cannot remove a cluster's Proxmox VE objects for its first failures calls.
+type flakyCloud struct {
+	fakeCloud
+
+	failures int
+}
+
+func (f *flakyCloud) Remove(ctx context.Context, names Names, held Credentials) error {
+	if f.failures > 0 {
+		f.failures--
+		return errors.New("node pve2 is offline")
+	}
+	return f.fakeCloud.Remove(ctx, names, held)
+}
 
 // failingCloud cannot remove a cluster's Proxmox VE objects, as when a node holding its volumes is
 // down.
@@ -59,7 +76,7 @@ func newDeletionFixture(t *testing.T, cloud Cloud, edit func(*clusterv1.Cluster)
 	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{clusterv1.GroupVersion, proxmoxMachineGVK.GroupVersion(), controlGVK.GroupVersion()})
 	mapper.Add(clusterv1.GroupVersion.WithKind("Machine"), meta.RESTScopeNamespace)
 	mapper.Add(clusterv1.GroupVersion.WithKind("Cluster"), meta.RESTScopeNamespace)
-	for _, gvk := range []schema.GroupVersionKind{proxmoxMachineGVK, controlGVK} {
+	for _, gvk := range []schema.GroupVersionKind{proxmoxMachineGVK, proxmoxClusterGVK, controlGVK} {
 		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
 		list := gvk
 		list.Kind += "List"
@@ -294,6 +311,173 @@ func TestAbandonedDeletionLeavesThePool(t *testing.T) {
 	}
 	got := strings.Join(f.drained(), "\n")
 	if !strings.Contains(got, "left behind: VM 101 on pve1, Pool kubehenge/team-a.web and user") {
+		t.Errorf("events:\n%s", got)
+	}
+}
+
+// drop removes an object as its controller would, finalizers and all.
+func (f *deletionFixture) drop(gvk schema.GroupVersionKind, name string) {
+	f.t.Helper()
+	o := &unstructured.Unstructured{}
+	o.SetGroupVersionKind(gvk)
+	o.SetNamespace("team-a")
+	o.SetName(name)
+	ctx := context.Background()
+	err := f.kube.Patch(ctx, o, client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"finalizers":null}}`)))
+	if client.IgnoreNotFound(err) != nil {
+		f.t.Fatal(err)
+	}
+	err = f.kube.Delete(ctx, o)
+	if client.IgnoreNotFound(err) != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// addProxmoxCluster adds web's ProxmoxCluster, which capmox keeps until no ProxmoxMachine is left.
+func (f *deletionFixture) addProxmoxCluster() {
+	f.t.Helper()
+	pc := &unstructured.Unstructured{}
+	pc.SetGroupVersionKind(proxmoxClusterGVK)
+	pc.SetNamespace("team-a")
+	pc.SetName("web")
+	pc.SetLabels(map[string]string{clusterv1.ClusterNameLabel: "web"})
+	pc.SetFinalizers([]string{"proxmoxcluster.infrastructure.cluster.x-k8s.io"})
+	if err := f.kube.Create(context.Background(), pc); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// reconcileUntilGone reconciles up to n times and tells whether the cluster is gone by then.
+func (f *deletionFixture) reconcileUntilGone(n int) bool {
+	f.t.Helper()
+	for range n {
+		f.reconcile()
+		if f.cluster() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func abandoning(c *clusterv1.Cluster) {
+	c.Annotations = map[string]string{AbandonAnnotation: "web", runtimev1.OkToDeleteAnnotation: ""}
+}
+
+// With no ProxmoxMachine and no ProxmoxCluster left, nothing outside the management cluster can be
+// left behind, so an abandoned deletion does not wait out the grace.
+func TestAbandonedDeletionWithoutVMsReleasesAtOnce(t *testing.T) {
+	t.Parallel()
+	f := newDeletionFixture(t, &fakeCloud{}, abandoning)
+	f.drop(proxmoxMachineGVK, "web-md-0-a")
+	if !f.reconcileUntilGone(5) {
+		t.Fatal("the cluster is still there before the grace is up")
+	}
+	for _, o := range []struct {
+		gvk  schema.GroupVersionKind
+		name string
+	}{{clusterv1.GroupVersion.WithKind("Machine"), "web-md-0-a"}, {controlGVK, "web-cp"}} {
+		if !f.gone(o.gvk, o.name) {
+			t.Errorf("%s %s is still there", o.gvk.Kind, o.name)
+		}
+	}
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "deletion abandoned; left behind: nothing") {
+		t.Errorf("events:\n%s", got)
+	}
+}
+
+// A ProxmoxMachine left may still have its VM, so the grace is waited out in full.
+func TestAbandonedDeletionWithAVMWaitsTheGrace(t *testing.T) {
+	t.Parallel()
+	f := newDeletionFixture(t, &fakeCloud{}, abandoning)
+	for range 6 {
+		f.reconcile()
+		f.now = f.now.Add(AbandonGrace / 6)
+	}
+	if f.cluster() == nil || f.gone(proxmoxMachineGVK, "web-md-0-a") {
+		t.Fatal("released before the grace was up")
+	}
+	f.now = f.now.Add(time.Second)
+	if !f.reconcileUntilGone(5) {
+		t.Fatal("the cluster is still there after the grace")
+	}
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "left behind: VM 101 on pve1") {
+		t.Errorf("events:\n%s", got)
+	}
+}
+
+// capmox keeps a ProxmoxCluster until no ProxmoxMachine is left, then takes its finalizer off the
+// credentials Secret. Releasing it early would leave that Secret's finalizer for good, so it is waited for.
+func TestAbandonedDeletionWaitsForTheProxmoxCluster(t *testing.T) {
+	t.Parallel()
+	f := newDeletionFixture(t, &fakeCloud{}, abandoning)
+	f.drop(proxmoxMachineGVK, "web-md-0-a")
+	f.addProxmoxCluster()
+	for range 6 {
+		f.reconcile()
+	}
+	if f.cluster() == nil || f.gone(proxmoxClusterGVK, "web") {
+		t.Fatal("released with the ProxmoxCluster still there")
+	}
+	f.drop(proxmoxClusterGVK, "web")
+	if !f.reconcileUntilGone(5) {
+		t.Fatal("the cluster is still there after its ProxmoxCluster went")
+	}
+}
+
+// When the grace runs out, everything is released and what is left behind is named.
+func TestAbandonedDeletionGraceReleasesEverything(t *testing.T) {
+	t.Parallel()
+	f := newDeletionFixture(t, &fakeCloud{}, abandoning)
+	f.addProxmoxCluster()
+	f.reconcile()
+	f.now = f.now.Add(AbandonGrace)
+	if !f.reconcileUntilGone(5) {
+		t.Fatal("the cluster is still there after the grace")
+	}
+	for _, o := range []struct {
+		gvk  schema.GroupVersionKind
+		name string
+	}{{proxmoxMachineGVK, "web-md-0-a"}, {proxmoxClusterGVK, "web"}, {controlGVK, "web-cp"}} {
+		if !f.gone(o.gvk, o.name) {
+			t.Errorf("%s %s is still there", o.gvk.Kind, o.name)
+		}
+	}
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "deletion abandoned; left behind: VM 101 on pve1") {
+		t.Errorf("events:\n%s", got)
+	}
+}
+
+// A removal of the Proxmox VE objects that fails is recorded as left behind once the grace is up,
+// and not before.
+func TestAbandonedDeletionWithoutVMsRecordsAFailedRemoval(t *testing.T) {
+	t.Parallel()
+	f := newDeletionFixture(t, &failingCloud{}, abandoning)
+	f.drop(proxmoxMachineGVK, "web-md-0-a")
+	for range 5 {
+		f.reconcile()
+	}
+	if f.cluster() == nil {
+		t.Fatal("released before the grace, with the pool still there")
+	}
+	f.now = f.now.Add(AbandonGrace)
+	if !f.reconcileUntilGone(5) {
+		t.Fatal("the cluster is still there after the grace")
+	}
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "left behind: Pool kubehenge/team-a.web and user") {
+		t.Errorf("events:\n%s", got)
+	}
+}
+
+// A removal that fails and then works within the grace leaves nothing behind, and the deletion ends
+// when it works.
+func TestAbandonedDeletionWithoutVMsRetriesTheRemoval(t *testing.T) {
+	t.Parallel()
+	f := newDeletionFixture(t, &flakyCloud{failures: 2}, abandoning)
+	f.drop(proxmoxMachineGVK, "web-md-0-a")
+	if !f.reconcileUntilGone(10) {
+		t.Fatal("the cluster is still there before the grace is up")
+	}
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "left behind: nothing") {
 		t.Errorf("events:\n%s", got)
 	}
 }

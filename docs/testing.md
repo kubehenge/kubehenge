@@ -239,7 +239,7 @@ A machine whose KVM lacks pause-loop exiting hands its test to a fresh one, up t
 
 ### The Actions cache
 
-The repository's cache holds 10 GB. Past that, GitHub evicts the entries read least recently. Only runs on main save, and main keeps each family's newest entry alone (`scripts/cache-prune.sh`, run by `cache.yml` and `e2e-image.yml`). A closed pull request's entries are deleted.
+The repository's cache holds 10 GB. Past that, GitHub evicts the entries read least recently. Only runs on main save, and main keeps each family's newest entry alone (`scripts/cache-prune.sh`, run by `cache.yml` and `e2e-image.yml`). A closed pull request's entries are deleted, and so are those a dispatch saved on its branch.
 
 | Family | Saved by | Size |
 | --- | --- | --- |

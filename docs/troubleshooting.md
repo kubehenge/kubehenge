@@ -556,7 +556,7 @@ Abandon a deletion that can never finish, such as one for a cluster whose nodes 
 kubectl -n <namespace> annotate cluster <name> kubehenge.dev/abandon-deletion=<name>
 ```
 
-Kubehenge's controller then has the machines deleted without draining their nodes or waiting for their volumes. It deletes everything of the cluster that is not being deleted yet, and lets Cluster API go on without the BeforeClusterDelete hook. What has not finished five minutes later loses its finalizers, the Cluster's own last.
+Kubehenge's controller then has the machines deleted without draining their nodes or waiting for their volumes. It deletes everything of the cluster that is not being deleted yet, and lets Cluster API go on without the BeforeClusterDelete hook. What has not finished five minutes later loses its finalizers, the Cluster's own last. That happens sooner once the cluster has no ProxmoxMachine (a VM) and no ProxmoxCluster left.
 
 Kubehenge may leave things behind in Proxmox VE, such as a VM on a node that never came back, and the cluster's pool and user. Each is named in its own `LeftBehind` event and in a `DeletionAbandoned` event. The cluster's page lists them while they are still there. A registration in Rancher stays as well. Delete these by hand, a VM once its node is back. The events stay as long as the management cluster keeps events, an hour by default:
 
