@@ -1,0 +1,54 @@
+{
+  "/": {
+    "fingerprint": "5b63c28c552ddc6b62e34a9100f078eb228117264094ad2e5751d32f2d279dfb",
+    "lastmod": "2026-11-01"
+  },
+  "/docs/architecture": {
+    "fingerprint": "7cdc5866e1370f413577a632303e2a7ea8120d9961c22f013b31cefa1ad6b646",
+    "lastmod": "2026-11-04"
+  },
+  "/docs/changelog": {
+    "fingerprint": "e28398d06df147d61e10503ba5e170768655130f3bfa7f84b60e7b1946e9780c",
+    "lastmod": "2026-11-04"
+  },
+  "/docs/clusters": {
+    "fingerprint": "0ff08120845dbc35cf2ca81e071f4bdd1ed6701cbd7dc39168ad0f2708e3548f",
+    "lastmod": "2026-11-04"
+  },
+  "/docs/install": {
+    "fingerprint": "acf4f2ba9f2a9764dbefb8da8466d3a8cb073b46f403f1644defd538c909c9cc",
+    "lastmod": "2026-11-04"
+  },
+  "/docs/install-settings": {
+    "fingerprint": "a303c85d529935047908176cabd21b4dbc4bac7ae506f9540eb603afa799c0e9",
+    "lastmod": "2026-11-02"
+  },
+  "/docs/releasing": {
+    "fingerprint": "b46f4ada7d23951b45f3208c3d13e1b280456961eb5eb191df15d41ec04caae4",
+    "lastmod": "2026-11-04"
+  },
+  "/docs/roadmap": {
+    "fingerprint": "ae5c201a5b5c2154bc9c5736b0300d381f0a00c1c18692b935938014dbc70d07",
+    "lastmod": "2026-11-04"
+  },
+  "/docs/templates": {
+    "fingerprint": "cd43d51ae08064475e818168df37d9513a37699611b43931e33804ae1f47f826",
+    "lastmod": "2026-11-01"
+  },
+  "/docs/testing": {
+    "fingerprint": "19b11d309919e1fe16cd081b0f0fa13f723d555cd8e60a312402245fedb5ffc1",
+    "lastmod": "2026-11-04"
+  },
+  "/docs/troubleshooting": {
+    "fingerprint": "b020cabff7966a1fc5c25392d001944a68932df214f4cf2dd722a325cd0d61c7",
+    "lastmod": "2026-11-03"
+  },
+  "/docs/uninstalling": {
+    "fingerprint": "fabb4e2dfbfb4b71b3f99f0c45b1ec723ae33b3a64f6f5f979f220a21fbc2d69",
+    "lastmod": "2026-11-01"
+  },
+  "/docs/upgrading": {
+    "fingerprint": "de330eca20eea2e7eb8476b7d405245a5a9e5552ef36ab46a5c36ec94c70b055",
+    "lastmod": "2026-11-03"
+  }
+}

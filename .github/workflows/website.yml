@@ -117,6 +117,14 @@ jobs:
           scripts/tools.sh "$RUNNER_TEMP/bin" node
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: make website
+      # The build brings website/pages.json up to date, so a difference is a page change committed
+      # without its new fingerprint and date.
+      - name: Page dates
+        run: |
+          [ -z "$(git status --porcelain -- website/pages.json)" ] && exit 0
+          git --no-pager diff -- website/pages.json
+          echo "::error file=website/pages.json::Out of date: run make website and commit it."
+          exit 1
       - if: >-
           github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
           && steps.cache.outputs.cache-hit != 'true'
@@ -186,26 +194,40 @@ jobs:
       - id: deploy
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
-  # The published pages, sent to IndexNow, which passes them on to Bing, Yandex and the other
-  # engines that take part. Google reads the sitemap that robots.txt names. The key is public by
-  # design: the engines check that the site serves it.
+  # The pages this push changed, sent to IndexNow, which passes them on to Bing, Yandex and the
+  # other engines that take part. A page changed when its fingerprint in website/pages.json moved.
+  # Google reads the sitemap that robots.txt names. The key is public by design: the engines check
+  # that the site serves it.
   indexnow:
     name: IndexNow
     needs: deploy
     if: ${{ !cancelled() && needs.deploy.result == 'success' && github.event_name == 'push' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      contents: read # Reads pages.json before and after the push.
     steps:
-      - name: Send the pages
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Send the changed pages
         env:
           SITE: https://kubehenge.dev
           KEY: de4648cfd1ca935797a72233390428d9
+          BEFORE: ${{ github.event.before }}
         run: |
           set -eu
-          curl --fail --silent --show-error --retry 3 "$SITE/sitemap.xml" |
-            grep -o '<loc>[^<]*</loc>' | sed 's/<[^>]*>//g' > pages.txt
-          [ -s pages.txt ] || { echo "::error::$SITE/sitemap.xml lists no pages"; exit 1; }
+          git show "$BEFORE:website/pages.json" > before.json 2> /dev/null ||
+            echo '{}' > before.json
+          jq -r --slurpfile before before.json --arg site "$SITE" '
+            to_entries[]
+            | select(.value.fingerprint != $before[0][.key].fingerprint)
+            | $site + .key' website/pages.json > pages.txt
+          if [ ! -s pages.txt ]; then
+            echo "No page changed."
+            exit 0
+          fi
           jq -R . pages.txt | jq -s --arg host "${SITE#https://}" --arg key "$KEY" \
             --arg location "$SITE/$KEY.txt" \
             '{host: $host, key: $key, keyLocation: $location, urlList: .}' > body.json

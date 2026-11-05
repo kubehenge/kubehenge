@@ -167,8 +167,8 @@ locals {
   }
 
   # capmox v0.9.2 lacks two fixes, which scripts/capmox-patches adds to the release. A failed clone
-  # forgets its VM ID, which another VM may have taken while the clone started: kept, the machine
-  # would wait on that VM for ever and delete it with itself. A deleted machine's VM is destroyed
+  # forgets its VM ID. Kept while the ID stays free, the machine keeps looking for a VM that was
+  # never made, and never clones again. A deleted machine's VM is destroyed
   # only once the VM under its ID is confirmed as the machine's, by name and SMBIOS UUID: Proxmox VE
   # hands a freed ID to the next clone, and the delete's next pass would otherwise destroy that
   # clone. The build runs on the release's own manifests. scripts/provider-image.sh builds it

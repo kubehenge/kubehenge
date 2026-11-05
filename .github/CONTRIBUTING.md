@@ -65,6 +65,7 @@ Details and reasons: `docs/architecture.md`.
 - **Accessibility.** The frontend's unit tests run axe over every page and dialog in its main states, and none may fail.
 - **Spelling.** typos checks every file in British English. An American spelling passes only as an outside name, with its reason in `.typos.toml`.
 - **Website.** Lighthouse CI checks the built site on each pull request that changes it (`make website-check`, limits in `website/lighthouserc.cjs`).
+- **Page dates.** `make website` updates `website/pages.json`, each page's fingerprint and the day its content last changed. Commit it with the page, or the website check fails.
 - **Links.** lychee checks the outside links of the README, `docs/` and the website every night (`make links`).
 - **Logs escape what they carry.** Go code logs through `log/slog` and the controller through controller-runtime's zap in JSON. Both escape a value, so nothing a user sends can forge a log line.
   - The linters refuse the `log` package and zap's console output. CodeQL's log injection query is off on that account (`.github/codeql-config.yml`).

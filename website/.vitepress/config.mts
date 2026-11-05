@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import Beasties from "beasties";
 import { defineConfig, type HeadConfig } from "vitepress";
@@ -34,6 +36,49 @@ function contentSecurityPolicy(html: string) {
     "form-action 'self'",
     "require-trusted-types-for 'script'",
   ].join("; ");
+}
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, "..", "..");
+
+// Each page's fingerprint and the day it last changed. Search engines trust a sitemap date only
+// if it moves when the page does, and IndexNow is sent only the pages whose fingerprint moved.
+const pagesFile = join(here, "..", "pages.json");
+
+interface Page {
+  fingerprint: string;
+  lastmod: string;
+}
+
+// fingerprint hashes what a reader or a search result shows of a page: its title, description,
+// main text and images. The doc footer (edit link, dates, next and previous pages) and the content
+// hashes in asset names are left out, as they move without the page.
+function fingerprint(html: string): string {
+  const head = [/<title>([\s\S]*?)<\/title>/u, /<meta name="description" content="([^"]*)"/u].map(
+    (pattern) => pattern.exec(html)?.[1] ?? "",
+  );
+  const main = (/<main[\s>][\s\S]*<\/main>/u.exec(html)?.[0] ?? "")
+    .replace(/<footer class="VPDocFooter"[\s\S]*?<\/footer>/u, "")
+    .replaceAll(/<(script|style)\b[\s\S]*?<\/\1>/gu, "")
+    .replaceAll(/<!--[\s\S]*?-->/gu, "")
+    .replaceAll(/\sdata-v-\w+(?:="[^"]*")?/gu, "");
+  const images = [...main.matchAll(/<img\b[^>]*>|<svg\b[\s\S]*?<\/svg>/gu)].map((m) =>
+    m[0].replaceAll(/(\/assets\/[^"]+)\.[\w-]{8}(\.\w+")/gu, "$1$2"),
+  );
+  const text = main
+    .replaceAll(/<[^>]+>/gu, " ")
+    .replaceAll(/\s+/gu, " ")
+    .trim();
+  return createHash("sha256")
+    .update(JSON.stringify([head, images, text]))
+    .digest("hex");
+}
+
+// A page new to pages.json starts at its source's last commit, or today while that is uncommitted.
+function firstSeen(url: string, today: string): string {
+  const source = url === "" ? "website/index.md" : `${url}.md`;
+  const day = execFileSync("git", ["log", "-1", "--format=%cs", "--", source], { cwd: root, encoding: "utf8" });
+  return day.trim() || today;
 }
 
 export default defineConfig({
@@ -126,7 +171,36 @@ export default defineConfig({
       );
     }
   },
-  sitemap: { hostname: site },
+  sitemap: {
+    hostname: site,
+    lastmodDateOnly: true,
+    // Runs once every page is written, so each date comes from the page as built.
+    transformItems(items) {
+      const known: Record<string, Page | undefined> = existsSync(pagesFile)
+        ? JSON.parse(readFileSync(pagesFile, "utf8"))
+        : {};
+      const today = new Date().toISOString().slice(0, 10);
+      const pages: Record<string, Page> = {};
+      for (const item of items) {
+        const path = `/${item.url}`;
+        const html = readFileSync(join(here, "dist", `${item.url === "" ? "index" : item.url}.html`), "utf8");
+        const print = fingerprint(html);
+        const was = known[path];
+        const page =
+          was?.fingerprint === print
+            ? was
+            : { fingerprint: print, lastmod: was === undefined ? firstSeen(item.url, today) : today };
+        pages[path] = page;
+        item.lastmod = page.lastmod;
+      }
+      const sorted = Object.fromEntries(Object.entries(pages).sort(([a], [b]) => a.localeCompare(b)));
+      const text = `${JSON.stringify(sorted, null, 2)}\n`;
+      if (!existsSync(pagesFile) || readFileSync(pagesFile, "utf8") !== text) {
+        writeFileSync(pagesFile, text);
+      }
+      return items;
+    },
+  },
   themeConfig: {
     logo: { src: "/logo.svg", alt: "" },
     nav: [

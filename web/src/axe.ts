@@ -30,19 +30,25 @@ const unavailable: Record<string, string> = {
   // Needs real layout and painted colours, which happy-dom does not compute.
   "color-contrast": "needs rendered colours and layout",
   "color-contrast-enhanced": "needs rendered colours and layout",
+  // Every box is 0 by 0 here, so it passes every target while it builds a grid of the whole page.
+  "target-size": "needs layout",
 };
 
 // Rules axe leaves off by default (experimental ones) are switched on too.
 const rules = Object.fromEntries(axe.getRules().map(({ ruleId }) => [ruleId, { enabled: !(ruleId in unavailable) }]));
 
 /**
- * expectNoViolations runs every axe rule over a rendered container, and checks every open dialog
- * and button for a readable name. It fails with each violation's rule, help text and the offending
- * nodes' HTML.
+ * expectNoViolations runs every axe rule over a rendered container, or only over the parts of it
+ * given, and checks every open dialog and button of the container for a readable name. It fails
+ * with each violation's rule, help text and the offending nodes' HTML.
  */
-export async function expectNoViolations(container: HTMLElement, where: string): Promise<void> {
+export async function expectNoViolations(
+  container: HTMLElement,
+  where: string,
+  parts?: readonly Element[],
+): Promise<void> {
   expect(unnamed(container).join("\n"), `unnamed dialogs and buttons on ${where}`).toBe("");
-  const result = await axe.run(container, {
+  const result = await axe.run(parts === undefined ? container : [...parts], {
     rules,
     resultTypes: ["violations"],
   });

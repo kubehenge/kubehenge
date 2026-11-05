@@ -285,8 +285,12 @@ unit-web: web/node_modules/.package-lock.json
 unit-tofu: tofu-init capi-operator-chart
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m test; done
 
-unit-shell:
-	set -e; for t in test/unit/*.sh; do sh $$t; done
+UNIT_SHELL := $(patsubst test/unit/%.sh,unit-shell-%,$(wildcard test/unit/*.sh))
+.PHONY: $(UNIT_SHELL)
+unit-shell: $(UNIT_SHELL)
+
+$(UNIT_SHELL): unit-shell-%: test/unit/%.sh
+	sh $<
 
 test: lint unit
 
