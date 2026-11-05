@@ -166,7 +166,11 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
-	var inv Inventory
+	type placed struct {
+		resource *proxmox.ClusterResource
+		site     Site
+	}
+	var found []placed
 	for _, r := range resources {
 		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
 			continue
@@ -175,39 +179,36 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 		if err != nil {
 			return Inventory{}, err
 		}
-		if !bool(c.Template) {
-			continue
+		if bool(c.Template) {
+			found = append(found, placed{confirmed(r, c), siteOf(c)})
 		}
-		inv.Templates = append(inv.Templates, confirmed(r, c))
-		site := Site{CPU: c.CPU}
-		disks := slices.Collect(maps.Values(c.MergeDisks()))
-		for _, disk := range append(disks, c.EFIDisk0, c.TPMState0) {
-			s := diskStorage(disk)
-			if s == "" {
-				continue
-			}
-			if !slices.Contains(site.Storages, s) {
-				site.Storages = append(site.Storages, s)
-			}
+	}
+	slices.SortFunc(found, func(x, y placed) int { return strings.Compare(x.resource.Name, y.resource.Name) })
+	var inv Inventory
+	for _, p := range found {
+		inv.Templates = append(inv.Templates, p.resource)
+		inv.Sites = append(inv.Sites, p.site)
+		for _, s := range p.site.Storages {
 			if !slices.Contains(inv.Storages, s) {
 				inv.Storages = append(inv.Storages, s)
 			}
 		}
-		slices.Sort(site.Storages)
-		inv.Sites = append(inv.Sites, site)
 	}
-	order := make([]int, len(inv.Templates))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortFunc(order, func(x, y int) int { return strings.Compare(inv.Templates[x].Name, inv.Templates[y].Name) })
-	sorted, sites := make([]*proxmox.ClusterResource, len(order)), make([]Site, len(order))
-	for i, from := range order {
-		sorted[i], sites[i] = inv.Templates[from], inv.Sites[from]
-	}
-	inv.Templates, inv.Sites = sorted, sites
 	slices.Sort(inv.Storages)
 	return inv, nil
+}
+
+// siteOf reads where a template's disks are from its configuration.
+func siteOf(c *proxmox.VirtualMachineConfig) Site {
+	site := Site{CPU: c.CPU}
+	disks := slices.Collect(maps.Values(c.MergeDisks()))
+	for _, disk := range append(disks, c.EFIDisk0, c.TPMState0) {
+		if s := diskStorage(disk); s != "" && !slices.Contains(site.Storages, s) {
+			site.Storages = append(site.Storages, s)
+		}
+	}
+	slices.Sort(site.Storages)
+	return site
 }
 
 // diskStorage is the storage of a disk as a VM's configuration names it, storage:volume followed by
@@ -262,7 +263,7 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	if b.isoChosen, err = b.preflight(ctx, t, recipe != nil); err != nil {
+	if err = b.checkBuild(ctx, t, recipe != nil); err != nil {
 		return 0, err
 	}
 	image, err := b.Sources.Resolve(ctx, t.Image)

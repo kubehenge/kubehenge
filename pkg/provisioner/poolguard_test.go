@@ -17,7 +17,7 @@ func poolServer(t *testing.T, comment string, guests int, options map[string]any
 		var data any
 		switch r.URL.Path {
 		case "/api2/json/pools":
-			members := []map[string]any{}
+			members := make([]map[string]any, 0, guests)
 			for range guests {
 				members = append(members, map[string]any{"type": "qemu", "vmid": 100, "name": "someone-elses", "node": "pve1"})
 			}

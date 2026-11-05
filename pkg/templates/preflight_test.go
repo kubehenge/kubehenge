@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -43,6 +44,16 @@ func (p *preflightPVE) client(t *testing.T) *proxmox.Client {
 	return proxmox.NewClient(srv.URL + "/api2/json")
 }
 
+// preflightWithISO runs the checks of a bake: the pre-flight, then the choice of ISO storage.
+func preflightWithISO(t *testing.T, b *Builder, tmpl *Template) (string, error) {
+	t.Helper()
+	list, err := b.preflight(t.Context(), tmpl)
+	if err != nil {
+		return "", err
+	}
+	return b.chooseISO(t.Context(), list)
+}
+
 func storageOf(name, content string) map[string]any {
 	return map[string]any{"storage": name, "content": content, "enabled": 1, "active": 1}
 }
@@ -63,33 +74,45 @@ func TestPreflightRefusesStoragesTheBuildCannotUseBeforeDownloading(t *testing.T
 	}{
 		{
 			"an import storage without the import content",
-			[]map[string]any{storageOf("local", "iso,images"), storageOf("local-lvm", "images")}, writable,
-			Builder{}, `storage local does not take import content. In Proxmox VE open Datacenter, Storage, local, Edit, Content and add "Import"`,
+			[]map[string]any{storageOf("local", "iso,images"), storageOf("local-lvm", "images")},
+			writable,
+			Builder{},
+			`storage local does not take import content. In Proxmox VE open Datacenter, Storage, local, Edit, Content and add "Import"`,
 		},
 		{
 			"a disk storage without images",
-			[]map[string]any{storageOf("local", "import,iso"), storageOf("local-lvm", "rootdir")}, writable,
-			Builder{}, "storage local-lvm does not take images content",
+			[]map[string]any{storageOf("local", "import,iso"), storageOf("local-lvm", "rootdir")},
+			writable,
+			Builder{},
+			"storage local-lvm does not take images content",
 		},
 		{
 			"an import storage the token cannot write",
-			[]map[string]any{storageOf("local", "import,iso"), storageOf("local-lvm", "images")}, nil,
-			Builder{}, "lacks Datastore.AllocateSpace on /storage/local",
+			[]map[string]any{storageOf("local", "import,iso"), storageOf("local-lvm", "images")},
+			nil,
+			Builder{},
+			"lacks Datastore.AllocateSpace on /storage/local",
 		},
 		{
 			"no storage for ISO images",
-			[]map[string]any{storageOf("local", "import"), storageOf("local-lvm", "images")}, writable,
-			Builder{}, `no storage on node pve1 takes ISO images. In Proxmox VE open Datacenter, Storage, a file storage, Edit, Content and add "ISO image"`,
+			[]map[string]any{storageOf("local", "import"), storageOf("local-lvm", "images")},
+			writable,
+			Builder{},
+			`no storage on node pve1 takes ISO images. In Proxmox VE open Datacenter, Storage, a file storage, Edit, Content and add "ISO image"`,
 		},
 		{
 			"an ISO storage named that does not take ISO images",
-			[]map[string]any{storageOf("local", "import"), storageOf("local-lvm", "images")}, writable,
-			Builder{ISOStorage: "local-lvm"}, "storage local-lvm does not take iso content",
+			[]map[string]any{storageOf("local", "import"), storageOf("local-lvm", "images")},
+			writable,
+			Builder{ISOStorage: "local-lvm"},
+			"storage local-lvm does not take iso content",
 		},
 		{
 			"read-only ISO storages only",
-			[]map[string]any{storageOf("local", "import"), storageOf("nfs", "iso"), storageOf("local-lvm", "images")}, writable,
-			Builder{}, "lacks Datastore.AllocateSpace on every storage of node pve1 that takes ISO images (nfs)",
+			[]map[string]any{storageOf("local", "import"), storageOf("nfs", "iso"), storageOf("local-lvm", "images")},
+			writable,
+			Builder{},
+			"lacks Datastore.AllocateSpace on every storage of node pve1 that takes ISO images (nfs)",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,7 +120,7 @@ func TestPreflightRefusesStoragesTheBuildCannotUseBeforeDownloading(t *testing.T
 			pve := &preflightPVE{storages: tc.storages, options: map[string]any{}, granted: tc.granted}
 			b := tc.builder
 			b.Client, b.Node, b.ImportStorage, b.Storage = pve.client(t), "pve1", "local", "local-lvm"
-			_, err := b.preflight(t.Context(), &tmpl, true)
+			_, err := preflightWithISO(t, &b, &tmpl)
 			if err == nil || !strings.Contains(err.Error(), tc.want) || !Final(err) {
 				t.Errorf("preflight = %v, want a final error with %q", err, tc.want)
 			}
@@ -117,7 +140,7 @@ func TestPreflightChoosesTheISOStorageTheTokenCanWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iso, err := b.preflight(t.Context(), &tmpl, true)
+	iso, err := preflightWithISO(t, b, &tmpl)
 	if err != nil || iso != "isos" {
 		t.Errorf("preflight = %q, %v; want isos, the first the token can write", iso, err)
 	}
@@ -164,11 +187,8 @@ func TestPickNodeTakesTheFirstOnlineNodeThatRunsTheNodeOS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	flags := map[string]string{
-		"pve1": "",
-		"pve2": strings.Join(append(append([]string{}, cpuLevelFlags[2]...), cpuLevelFlags[3]...), " "),
-		"pve3": strings.Join(append(append([]string{}, cpuLevelFlags[2]...), cpuLevelFlags[3]...), " "),
-	}
+	v3 := strings.Join(slices.Concat(cpuLevelFlags[2], cpuLevelFlags[3]), " ")
+	flags := map[string]string{"pve1": "", "pve2": v3, "pve3": v3}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api2/json")
 		var data any

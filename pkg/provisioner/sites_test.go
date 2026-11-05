@@ -59,7 +59,9 @@ func TestSitesKeepAClusterToTheNodesThatCanCloneItsTemplate(t *testing.T) {
 		{"node-local storage keeps clones on the template's node", local, nil, []string{"pve1"}, ""},
 		{"shared storage reaches every node", shared, nil, []string{"pve1", "pve2", "pve3"}, ""},
 		{
-			"node-local storage with the node not allowed", local, []string{"pve2", "pve3"}, []string{},
+			"node-local storage with the node not allowed", local,
+			[]string{"pve2", "pve3"},
+			[]string{},
 			"template kubehenge-rke2-build is on storage templates, which is not shared, so it can be cloned only on node pve1",
 		},
 	} {
@@ -73,7 +75,7 @@ func TestSitesKeepAClusterToTheNodesThatCanCloneItsTemplate(t *testing.T) {
 			if len(tc.allowed) > 0 {
 				online = slices.DeleteFunc(online, func(n Node) bool { return !slices.Contains(tc.allowed, n.Name) })
 			}
-			if got := s.Hosts(c, online, 2); !slices.Equal(got, tc.want) && !(len(got) == 0 && len(tc.want) == 0) {
+			if got := s.Hosts(c, online, 2); !slices.Equal(got, tc.want) && (len(got) != 0 || len(tc.want) != 0) {
 				t.Errorf("Hosts = %v, want %v", got, tc.want)
 			}
 			err := s.Refusal(c, online)
@@ -199,8 +201,12 @@ func TestPlacerRecordsOnlyTheNodesTheTemplateCanBeClonedOn(t *testing.T) {
 }
 
 type skippingFake struct {
-	fakeNodes
+	nodes   *fakeNodes
 	skipped []string
+}
+
+func (s *skippingFake) OnlineNodes(ctx context.Context) ([]Node, error) {
+	return s.nodes.OnlineNodes(ctx)
 }
 
 func (s *skippingFake) Unreadable() []string { return s.skipped }
@@ -208,7 +214,7 @@ func (s *skippingFake) Unreadable() []string { return s.skipped }
 func TestOnlineNodesSkipsANodeWhoseStatusCannotBeRead(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var data any = []any{}
+		var data any
 		switch r.URL.Path {
 		case "/api2/json/nodes":
 			data = []map[string]any{{"node": "pve1", "status": "online"}, {"node": "pve2", "status": "online"}}
@@ -235,7 +241,7 @@ func TestPlacerCountsTheNodesItLeftOut(t *testing.T) {
 	t.Parallel()
 	web := cluster()
 	_, c := newReconciler(t, nil, web)
-	nodes := &skippingFake{fakeNodes: fakeNodes{online: []string{"pve1"}}, skipped: []string{"pve2"}}
+	nodes := &skippingFake{nodes: &fakeNodes{online: []string{"pve1"}}, skipped: []string{"pve2"}}
 	p := &Placer{Client: c, ClassNamespace: "kubehenge-system", Nodes: nodes}
 	p.placeAll(t.Context())
 	read := func() *metav1.Condition {

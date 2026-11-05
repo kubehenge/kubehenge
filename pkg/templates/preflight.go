@@ -10,6 +10,12 @@ import (
 	"github.com/luthermonson/go-proxmox"
 )
 
+// listedNode is a node as /nodes lists it.
+type listedNode struct {
+	Node   string `json:"node"`
+	Status string `json:"status"`
+}
+
 // pickNode sets Node to the first of Candidates that is online and whose CPU runs the template's
 // node OS, so that a node in maintenance costs no build.
 func (b *Builder) pickNode(ctx context.Context, t *Template) error {
@@ -20,21 +26,13 @@ func (b *Builder) pickNode(ctx context.Context, t *Template) error {
 	if t.Bake != nil {
 		need = CPULevel(t.Bake.NodeOS)
 	}
-	var listed []struct {
-		Node   string `json:"node"`
-		Status string `json:"status"`
-	}
+	var listed []listedNode
 	if err := b.Client.Get(ctx, "/nodes", &listed); err != nil {
 		return fmt.Errorf("listing the nodes to build on: %w", err)
 	}
 	var why []string
 	for _, name := range b.Candidates {
-		i := slices.IndexFunc(listed, func(n struct {
-			Node   string `json:"node"`
-			Status string `json:"status"`
-		}) bool {
-			return n.Node == name
-		})
+		i := slices.IndexFunc(listed, func(n listedNode) bool { return n.Node == name })
 		if i < 0 || listed[i].Status != "online" {
 			why = append(why, name+" is not online")
 			continue
@@ -69,7 +67,7 @@ type nodeStorage struct {
 	Shared  int    `json:"shared"`
 }
 
-func (s nodeStorage) takes(content string) bool {
+func (s *nodeStorage) takes(content string) bool {
 	return slices.Contains(strings.Split(s.Content, ","), content)
 }
 
@@ -121,14 +119,23 @@ func wrongContent(storage, content string) error {
 		storage, content, storage, storageContentName[content]))
 }
 
+// checkBuild runs the pre-flight, and for a bake, which writes a cloud-init ISO, chooses where.
+func (b *Builder) checkBuild(ctx context.Context, t *Template, bake bool) error {
+	list, err := b.preflight(ctx, t)
+	if err != nil || !bake {
+		return err
+	}
+	b.isoChosen, err = b.chooseISO(ctx, list)
+	return err
+}
+
 // preflight refuses, before anything is downloaded, a build that Proxmox VE would refuse later
 // with its own text: a storage without the content type the build puts there, a token that cannot
-// write to it, and tags the datacenter does not let the builder set. needISO is false for a build
-// without a bake, which has no cloud-init ISO.
-func (b *Builder) preflight(ctx context.Context, t *Template, needISO bool) (isoStorage string, err error) {
+// write to it, and tags the datacenter does not let the builder set. It returns the node's storages.
+func (b *Builder) preflight(ctx context.Context, t *Template) ([]nodeStorage, error) {
 	list, err := listNodeStorages(ctx, b.Client, b.Node)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	find := func(name string) (nodeStorage, bool) {
 		i := slices.IndexFunc(list, func(s nodeStorage) bool { return s.Storage == name })
@@ -141,20 +148,15 @@ func (b *Builder) preflight(ctx context.Context, t *Template, needISO bool) (iso
 		s, ok := find(check.name)
 		switch {
 		case !ok:
-			return "", lasting(fmt.Errorf("storage %s is not on node %s or not visible to the builder's token", check.name, b.Node))
+			return nil, lasting(fmt.Errorf("storage %s is not on node %s or not visible to the builder's token", check.name, b.Node))
 		case !s.takes(check.content):
-			return "", wrongContent(check.name, check.content)
+			return nil, wrongContent(check.name, check.content)
 		}
 	}
 	if !holds(ctx, b.Client, "/storage/"+b.ImportStorage, privAllocateSpace) {
-		return "", lasting(fmt.Errorf("the builder's token lacks %s on /storage/%s, where the image is downloaded", privAllocateSpace, b.ImportStorage))
+		return nil, lasting(fmt.Errorf("the builder's token lacks %s on /storage/%s, where the image is downloaded", privAllocateSpace, b.ImportStorage))
 	}
-	if needISO {
-		if isoStorage, err = b.chooseISO(ctx, list); err != nil {
-			return "", err
-		}
-	}
-	return isoStorage, CheckTags(ctx, b.Client, append(slices.Clone(t.Tags), kubehengeTag, buildingTag))
+	return list, CheckTags(ctx, b.Client, append(slices.Clone(t.Tags), kubehengeTag, buildingTag))
 }
 
 // chooseISO is the storage for a bake's cloud-init ISO: the one asked for, which has to take ISO
@@ -210,7 +212,7 @@ func TagsRefusal(access, registered string, tags []string) string {
 			"Remove them from Datacenter, Options, Registered Tags, or let the token hold Sys.Modify", strings.Join(blocked, ", "))
 	}
 	allow, list := "free", ""
-	for _, part := range strings.Split(access, ",") {
+	for part := range strings.SplitSeq(access, ",") {
 		key, value, _ := strings.Cut(strings.TrimSpace(part), "=")
 		switch key {
 		case "user-allow":

@@ -314,7 +314,7 @@ func (b *builderFlags) add(cmd *cobra.Command) {
 // splitNodes are the nodes a --node value names.
 func splitNodes(value string) []string {
 	var nodes []string
-	for _, n := range strings.Split(value, ",") {
+	for n := range strings.SplitSeq(value, ",") {
 		if n = strings.TrimSpace(n); n != "" {
 			nodes = append(nodes, n)
 		}

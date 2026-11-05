@@ -145,7 +145,7 @@ func (h *Hooks) checkNodeOS(ctx context.Context, c *clusterv1.Cluster) error {
 	}
 	need := templates.CPULevel(o)
 	if sites != nil {
-		need = sites.cpuNeed(c, need)
+		need = cpuNeed(sites, c, need)
 	}
 	if need <= 1 || len(online) == 0 || len(nodesFor(online, need)) > 0 {
 		return nil

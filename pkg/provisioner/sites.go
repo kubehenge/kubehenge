@@ -73,6 +73,47 @@ func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
 	return s, nil
 }
 
+// Hosts are the names of the online nodes that can run the cluster's VMs: whose CPU reaches the
+// level its templates run at, where its storage is available, and from which its templates can be
+// cloned.
+func (s *Sites) Hosts(c *clusterv1.Cluster, online []Node, fallbackLevel int) []string {
+	hosts := nodesFor(online, cpuNeed(s, c, fallbackLevel))
+	if storage, _, err := optionalVariable[string](c, "storage"); err == nil && storage != "" {
+		if site, ok := s.Storages[storage]; ok {
+			hosts = slices.DeleteFunc(hosts, func(n string) bool { return !slices.Contains(site.Active, n) })
+		}
+	}
+	for _, line := range templateLines(c) {
+		if reach, _, constrained := lineReach(s, line); constrained {
+			hosts = slices.DeleteFunc(hosts, func(n string) bool { return !slices.Contains(reach, n) })
+		}
+	}
+	return hosts
+}
+
+// Refusal says why the cluster has no node among allowed to run on, for its storage or for its
+// templates, or returns nil.
+func (s *Sites) Refusal(c *clusterv1.Cluster, allowed []Node) error {
+	if len(allowed) == 0 {
+		return nil
+	}
+	names := make([]string, len(allowed))
+	for i, n := range allowed {
+		names[i] = n.Name
+	}
+	if err := storageRefusal(s, c, names); err != nil {
+		return err
+	}
+	for _, line := range templateLines(c) {
+		reach, found, constrained := lineReach(s, line)
+		if !constrained || slices.ContainsFunc(names, func(n string) bool { return slices.Contains(reach, n) }) {
+			continue
+		}
+		return templateRefusal(s, &found[0], names)
+	}
+	return nil
+}
+
 // templateLines are the template lines a cluster's machines are cloned from. A cluster whose lines
 // cannot be worked out is judged by other checks, which report why.
 func templateLines(c *clusterv1.Cluster) [][]string {
@@ -95,7 +136,7 @@ func templateLines(c *clusterv1.Cluster) [][]string {
 }
 
 // newest are the templates of the newest build of a line.
-func (s *Sites) newest(line []string) []TemplateSite {
+func newest(s *Sites, line []string) []TemplateSite {
 	key := templates.LineKey(line)
 	var out []TemplateSite
 	for _, t := range s.Templates {
@@ -104,7 +145,7 @@ func (s *Sites) newest(line []string) []TemplateSite {
 		}
 		switch {
 		case len(out) == 0 || t.Built.After(out[0].Built):
-			out = []TemplateSite{t}
+			out = append(out[:0], t)
 		case t.Built.Equal(out[0].Built):
 			out = append(out, t)
 		}
@@ -115,7 +156,8 @@ func (s *Sites) newest(line []string) []TemplateSite {
 // reach are the nodes a template can be cloned on: those every one of its storages reaches. A
 // storage is reached from every node it is available on when it is shared, otherwise only from the
 // template's own node. ok is false for a template with no disk on a storage.
-func (s *Sites) reach(t *TemplateSite) (nodes []string, ok bool) {
+func reach(s *Sites, t *TemplateSite) ([]string, bool) {
+	var nodes []string
 	for i, name := range t.Storages {
 		site, known := s.Storages[name]
 		var here []string
@@ -135,14 +177,15 @@ func (s *Sites) reach(t *TemplateSite) (nodes []string, ok bool) {
 }
 
 // lineReach are the nodes any template of the newest build of a line can be cloned on.
-func (s *Sites) lineReach(line []string) (nodes []string, found []TemplateSite, constrained bool) {
-	found = s.newest(line)
+func lineReach(s *Sites, line []string) ([]string, []TemplateSite, bool) {
+	var nodes []string
+	found := newest(s, line)
 	for i := range found {
-		reach, ok := s.reach(&found[i])
+		reached, ok := reach(s, &found[i])
 		if !ok {
 			return nil, found, false
 		}
-		for _, n := range reach {
+		for _, n := range reached {
 			if !slices.Contains(nodes, n) {
 				nodes = append(nodes, n)
 			}
@@ -153,10 +196,10 @@ func (s *Sites) lineReach(line []string) (nodes []string, found []TemplateSite, 
 
 // cpuNeed is the x86-64 level the cluster's nodes need of its hosts: the one its templates' own cpu
 // setting presents when they set one, else fallback, the node OS's.
-func (s *Sites) cpuNeed(c *clusterv1.Cluster, fallback int) int {
+func cpuNeed(s *Sites, c *clusterv1.Cluster, fallback int) int {
 	need, set := 0, false
 	for _, line := range templateLines(c) {
-		for _, t := range s.newest(line) {
+		for _, t := range newest(s, line) {
 			if level, ok := templates.SettingLevel(t.CPU); ok {
 				need, set = max(need, level), true
 			}
@@ -168,48 +211,7 @@ func (s *Sites) cpuNeed(c *clusterv1.Cluster, fallback int) int {
 	return need
 }
 
-// Hosts are the names of the online nodes that can run the cluster's VMs: whose CPU reaches the
-// level its templates run at, where its storage is available, and from which its templates can be
-// cloned.
-func (s *Sites) Hosts(c *clusterv1.Cluster, online []Node, fallbackLevel int) []string {
-	hosts := nodesFor(online, s.cpuNeed(c, fallbackLevel))
-	if storage, _, err := optionalVariable[string](c, "storage"); err == nil && storage != "" {
-		if site, ok := s.Storages[storage]; ok {
-			hosts = slices.DeleteFunc(hosts, func(n string) bool { return !slices.Contains(site.Active, n) })
-		}
-	}
-	for _, line := range templateLines(c) {
-		if reach, _, constrained := s.lineReach(line); constrained {
-			hosts = slices.DeleteFunc(hosts, func(n string) bool { return !slices.Contains(reach, n) })
-		}
-	}
-	return hosts
-}
-
-// Refusal says why the cluster has no node among allowed to run on, for its storage or for its
-// templates, or returns nil.
-func (s *Sites) Refusal(c *clusterv1.Cluster, allowed []Node) error {
-	if len(allowed) == 0 {
-		return nil
-	}
-	names := make([]string, len(allowed))
-	for i, n := range allowed {
-		names[i] = n.Name
-	}
-	if err := s.storageRefusal(c, names); err != nil {
-		return err
-	}
-	for _, line := range templateLines(c) {
-		reach, found, constrained := s.lineReach(line)
-		if !constrained || slices.ContainsFunc(names, func(n string) bool { return slices.Contains(reach, n) }) {
-			continue
-		}
-		return s.templateRefusal(&found[0], names)
-	}
-	return nil
-}
-
-func (s *Sites) storageRefusal(c *clusterv1.Cluster, names []string) error {
+func storageRefusal(s *Sites, c *clusterv1.Cluster, names []string) error {
 	storage, _, err := optionalVariable[string](c, "storage")
 	if err != nil || storage == "" || len(s.Storages) == 0 {
 		return err
@@ -228,7 +230,7 @@ func (s *Sites) storageRefusal(c *clusterv1.Cluster, names []string) error {
 		storage, strings.Join(names, ", "), strings.Join(site.Active, ", "))
 }
 
-func (s *Sites) templateRefusal(t *TemplateSite, names []string) error {
+func templateRefusal(s *Sites, t *TemplateSite, names []string) error {
 	for _, name := range t.Storages {
 		if site, ok := s.Storages[name]; ok && site.Shared {
 			continue

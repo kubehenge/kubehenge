@@ -21,7 +21,7 @@ type storageResource struct {
 	MaxDisk int64  `json:"maxdisk"`
 }
 
-func (s storageResource) takes(content string) bool {
+func (s *storageResource) takes(content string) bool {
 	return slices.Contains(strings.Split(s.Content, ","), content)
 }
 
@@ -61,15 +61,16 @@ func sharedNote(list []storageResource, storage string, nodes []string) string {
 
 // resolveStorage fills in the builder's storage when none was given, and returns a note when the
 // storage is not shared.
-func resolveStorage(ctx context.Context, c *proxmox.Client, storage string, nodes []string) (chosen, note string, err error) {
+func resolveStorage(ctx context.Context, c *proxmox.Client, storage string, nodes []string) (string, string, error) {
 	var list []storageResource
-	if err = c.Get(ctx, "/cluster/resources?type=storage", &list); err != nil {
+	if err := c.Get(ctx, "/cluster/resources?type=storage", &list); err != nil {
 		if storage != "" {
 			return storage, "", nil
 		}
 		return "", "", fmt.Errorf("listing the storages to choose one for the template: %w. Name the storage with --storage", err)
 	}
 	if storage == "" {
+		var err error
 		if storage, err = defaultTemplateStorage(list, nodes); err != nil {
 			return "", "", err
 		}

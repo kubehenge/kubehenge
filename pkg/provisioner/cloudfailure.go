@@ -25,8 +25,7 @@ func (e *cloudError) Unwrap() error { return e.err }
 
 // failureReason is the reason a failed reconcile is recorded under.
 func failureReason(err error) string {
-	var cloud *cloudError
-	if errors.As(err, &cloud) {
+	if _, ok := errors.AsType[*cloudError](err); ok {
 		return CloudFailedReason
 	}
 	return ReconcileFailedReason

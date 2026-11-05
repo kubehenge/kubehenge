@@ -296,27 +296,33 @@ type poolMember struct {
 
 // poolMembers lists a pool's VMs, and whether the pool exists.
 func (p *Proxmox) poolMembers(ctx context.Context, pool string) ([]poolMember, bool, error) {
-	members, _, found, err := p.poolDetails(ctx, pool)
-	return members, found, err
+	info, err := p.poolDetails(ctx, pool)
+	return info.Members, info.Found, err
 }
 
-// poolDetails lists a pool's VMs and its comment, and whether the pool exists.
-func (p *Proxmox) poolDetails(ctx context.Context, pool string) (members []poolMember, comment string, found bool, err error) {
-	var pools []struct {
-		Comment string       `json:"comment"`
-		Members []poolMember `json:"members"`
-	}
-	err = p.Client.Get(ctx, "/pools?"+url.Values{"poolid": {pool}}.Encode(), &pools)
+// poolInfo is a pool as Proxmox VE lists it.
+type poolInfo struct {
+	Comment string       `json:"comment"`
+	Members []poolMember `json:"members"`
+	// Found is false for a pool that does not exist.
+	Found bool `json:"-"`
+}
+
+// poolDetails reads a pool's VMs and its comment.
+func (p *Proxmox) poolDetails(ctx context.Context, pool string) (poolInfo, error) {
+	var pools []poolInfo
+	err := p.Client.Get(ctx, "/pools?"+url.Values{"poolid": {pool}}.Encode(), &pools)
 	if isMissing(err) {
-		return nil, "", false, nil
+		return poolInfo{}, nil
 	}
 	if err != nil {
-		return nil, "", false, fmt.Errorf("reading pool %s: %w", pool, err)
+		return poolInfo{}, fmt.Errorf("reading pool %s: %w", pool, err)
 	}
 	if len(pools) == 0 {
-		return nil, "", false, nil
+		return poolInfo{}, nil
 	}
-	return pools[0].Members, pools[0].Comment, true, nil
+	pools[0].Found = true
+	return pools[0], nil
 }
 
 // poolComment marks a pool as one Kubehenge made for a cluster.
@@ -324,17 +330,17 @@ const poolComment = "Kubernetes cluster created by Kubehenge"
 
 // ensurePool creates the cluster's pool if it is missing, and returns its members.
 func (p *Proxmox) ensurePool(ctx context.Context, pool string) ([]poolMember, error) {
-	members, comment, found, err := p.poolDetails(ctx, pool)
+	info, err := p.poolDetails(ctx, pool)
 	if err != nil {
-		return members, err
+		return nil, err
 	}
-	if found {
+	if info.Found {
 		// A pool Kubehenge made carries its comment. Another with VMs in it would make those VMs
 		// part of the cluster, to be deleted with it.
-		if comment != poolComment && slices.ContainsFunc(members, func(m poolMember) bool { return m.Type == qemuType || m.Type == "lxc" }) {
-			return nil, fmt.Errorf("pool %s already exists with %d guest(s) that Kubehenge did not create. Use another cluster name or move the guests out of the pool", pool, len(members))
+		if info.Comment != poolComment && slices.ContainsFunc(info.Members, func(m poolMember) bool { return m.Type == qemuType || m.Type == "lxc" }) {
+			return nil, fmt.Errorf("pool %s already exists with %d guest(s) that Kubehenge did not create. Use another cluster name or move the guests out of the pool", pool, len(info.Members))
 		}
-		return members, nil
+		return info.Members, nil
 	}
 	err = p.Client.Post(ctx, "/pools", map[string]any{"poolid": pool, "comment": poolComment}, nil)
 	if err != nil && !isExisting(err) {
