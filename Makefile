@@ -7,6 +7,8 @@ IMAGE ?= ghcr.io/kubehenge/kubehenge
 CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
 KO_FLAGS ?=
+# Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
+KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
 
 .PHONY: build web gateway-api capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
 .PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
@@ -169,16 +171,17 @@ index: gateway-api
 # reference by digest. ko's own SBOM would be pushed beside it unsigned; the release attests one
 # instead (scripts/sbom.sh).
 image: web gateway-api
-	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge ko build --bare --sbom=none $(KO_FLAGS) ./cmd/kubehenge
+	sh scripts/ko.sh $(KO_DIR)
+	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge $(KO_DIR)/ko build --bare --sbom=none $(KO_FLAGS) ./cmd/kubehenge
 
 # Build and push the provider images the management cluster runs as Kubehenge builds them
 # (capmox_build and helm_addon_build in management-cluster/versions.tf), check their digests and
 # print their references by digest.
 capmox-image:
-	sh scripts/provider-image.sh capmox $(CAPMOX_IMAGE) $(KO_FLAGS)
+	sh scripts/provider-image.sh $(KO_DIR) capmox $(CAPMOX_IMAGE) $(KO_FLAGS)
 
 helm-addon-image:
-	sh scripts/provider-image.sh helm-addon $(HELM_ADDON_IMAGE) $(KO_FLAGS)
+	sh scripts/provider-image.sh $(KO_DIR) helm-addon $(HELM_ADDON_IMAGE) $(KO_FLAGS)
 
 # Check the providers the management cluster runs from Kubehenge's forks: their files and images
 # by the digests versions.tf names, and their provenance and signatures from each fork's release.

@@ -6,6 +6,14 @@ import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 
+// zlib writes the build host's system into byte 9 of the gzip header (3 on Unix, 10 on Windows),
+// which would make the binary embedding these files differ by host. 255 is "unknown", as Go writes it.
+function gzip(raw: Buffer): Buffer {
+  const data = gzipSync(raw, { level: 9 });
+  data[9] = 255;
+  return data;
+}
+
 // precompress writes a Brotli and a gzip form beside each text file of the build, once, so the
 // interface serves the smallest one the browser takes without compressing anything per request.
 // It compresses the files as written: Vite still rewrites chunks during generateBundle (its module
@@ -29,7 +37,7 @@ function precompress(): Plugin {
                 [constants.BROTLI_PARAM_SIZE_HINT]: raw.length,
               },
             }),
-            gz: gzipSync(raw, { level: 9 }),
+            gz: gzip(raw),
           };
           // A form no smaller than the file is no use to anyone.
           const smaller = Object.entries(forms).filter(([, data]) => data.length < raw.length);

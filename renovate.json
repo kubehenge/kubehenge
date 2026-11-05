@@ -113,6 +113,14 @@
       ]
     },
     {
+      "description": "ko and the Go it is built with decide the digest of every image, the provider builds' that versions.tf names among them. They come in a pull request of their own so that the Monday one is not held up until those digests are built again.",
+      "matchFileNames": ["scripts/ko.sh"],
+      "groupName": "ko",
+      "prBodyNotes": [
+        "Run `make capmox-image` and `make helm-addon-image`. Each refuses the image and names the digest it built. Put those digests into `capmox_build` and `helm_addon_build` in `management-cluster/versions.tf`."
+      ]
+    },
+    {
       "description": "Kubehenge's forks of the Talos providers publish pre-releases, which Renovate otherwise offers only within the same version; every one is taken, its files, image and signatures checked by make verify-providers.",
       "matchPackageNames": [
         "kubehenge/cluster-api-bootstrap-provider-talos",
@@ -194,10 +202,11 @@
       ]
     },
     {
-      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, Go, Node, Helm and kubectl in scripts/tools.sh, and the newest RKE2 and k3s releases, which the release pins have to hold (`make release-pins` on the update's pull request). An image's digest moves with its tag.",
+      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, Go, Node, Helm and kubectl in scripts/tools.sh, ko and the Go it is built with in scripts/ko.sh, and the newest RKE2 and k3s releases, which the release pins have to hold (`make release-pins` on the update's pull request). An image's digest moves with its tag.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",
+        "/^scripts/ko\\.sh$/",
         "/^management-cluster/versions\\.tf$/",
         "/^pkg/templates/plan\\.go$/",
         "/^charts/kubehenge/values\\.yaml$/",
