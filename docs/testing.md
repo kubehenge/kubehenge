@@ -378,7 +378,7 @@ The guard judges memory by what slows a test: every task waiting on memory, and 
 
 Past either line the guests have strained the runner. That ends no test, since such guests slow down rather than fail at once. The guard names it when the test ends. Beside a failure such as a lost lease it is an error. When the test passed it is a warning. A minute or more under 1 GiB available is printed as a figure.
 
-A runner that is lost uploads no artifacts, and GitHub may keep none of its log either. So the test's log gets the guard's latest sample once a minute, as a `runner:` line. A check run named `runner (<lane>)` gets the same each minute, with the guard's peaks and each VM's load (`test/e2e/ci/beacon.sh`). A lost runner leaves it in progress.
+A runner that is lost uploads no artifacts, and GitHub may keep none of its log either. So the test's log gets the guard's latest sample once a minute, as a `runner:` line. A check run named `runner (<lane>)` gets the same sample each minute, with the guard's peaks and each VM's load (`test/e2e/ci/beacon.sh`). A lost runner leaves that check run in progress.
 
 ### What a failed test leaves
 

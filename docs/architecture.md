@@ -885,7 +885,7 @@ The interface logs each sign-in and change with its user, as it always has. Each
 
 The management cluster's API server audits with the policy of the workload clusters (`charts/kubehenge/files/audit-policy.yaml`), which the module sets through Talos's `KubeAuditPolicyConfig`. With `api_audit_log`, it writes those events to its output instead of Talos's file on the node.
 
-- The interface follows each API server pod's log as it is written. It reads every line before the kubelet can rotate the file away.
+- The interface follows each API server pod's log as it is written, so it normally reads each line before the kubelet rotates the file away.
 - A stream that ends, or brings nothing for 5 minutes, opens again within a minute at the last line read. The interface warns when the kubelet rotated lines away in between.
 - After an API server restarts, the interface first reads the old container's last lines from the kubelet's previous log. It warns when the kubelet no longer has them.
 - It adds each create, change and deletion once, by its audit ID.

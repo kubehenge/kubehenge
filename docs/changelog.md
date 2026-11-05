@@ -6,14 +6,14 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [0.4.2] - 2026-11-05
 
-- Activity no longer misses a kubectl change made just before the kubelet rotates the API server's log or the API server restarts. The interface follows each log as it is written and reads a restarted container's last lines from its previous log.
+- Activity no longer misses a kubectl change made just before the kubelet rotates an API server's log or the API server restarts. The interface follows each log as it is written. After a restart it reads the old container's last lines.
 - The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000. A change reaches running nodes without a reboot.
 - A new cluster's workers get 6144 MiB by default, up from 4096 MiB (the minimums are unchanged). That fits all add-ons together except Rancher, logs, backups and GitOps, with about 2 GiB to spare.
 - Where several storages fit, the installer asks which takes the appliance's disks and which the container template (`--storage`, `--template-storage`). A disabled storage, such as `local` on some nodes, is never used.
 - The installer downloads the container template itself and checks it against a SHA-512 it carries, without `pveam` or its template indexes. A template already on a storage is used where it is.
 - The installer shows a progress bar for each download and a line for each finished step, including each verified checksum.
-- The installer's downloads, and only those, go through the datacenter's HTTP proxy where one is set. It shows the proxy without its credentials.
-- Downloads from GitHub, the installer's and the template builds' included, are retried for about four minutes, to outlast GitHub's periods of failed release downloads. The appliance's OpenTofu tries each provider download up to eight times, up from two.
+- Only the installer's own downloads go through the datacenter's HTTP proxy, where one is set. The installer prints the proxy without its credentials.
+- Downloads from GitHub, including the installer's and the template builds', are retried for about four minutes, to outlast GitHub's failed release downloads. The appliance's OpenTofu tries each provider download up to eight times, up from two.
 - The docs warn that a volume snapshot copies a volume its pods may still write to. Stop the workload or pause its writes first.
 
 ## [0.4.1] - 2026-11-05
