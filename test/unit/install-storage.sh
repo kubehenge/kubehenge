@@ -73,7 +73,7 @@ rootdir nfs-down nfs inactive 0 0 0 0.00%
 vztmpl nas nfs active 900000000 100000000 800000000 11.11%
 EOF
 expect "the only active storage that takes it" local-lvm choose rootdir
-expect_in "it says why" "storage local-lvm for the appliance's disks, the only one here that takes it (--storage names another)" said
+expect_in "it says why" "storage local-lvm (lvmthin) for the appliance's disks, the only one here that takes it (--storage names another)" said
 # shellcheck disable=SC2310 # takes is a predicate; its status is the answer.
 takes_answer() { if takes "$1" "$2"; then echo yes; else echo no; fi; }
 expect "an active storage that takes it" yes takes_answer local-lvm rootdir
@@ -88,7 +88,7 @@ rootdir ceph rbd active 900000000 100000000 800000000 11.11%
 rootdir zfs zfspool active 500000000 100000000 400000000 20.00%
 EOF
 expect "without a terminal, the one with the most free space" ceph choose rootdir
-expect_in "it says which and why" "storage ceph for the appliance's disks, the one with the most free space" said
+expect_in "it says which and why" "storage ceph (rbd) for the appliance's disks, the best of 3 by type and free space" said
 tty=${root}/answers
 printf '3\n' > "${tty}"
 expect "picked on the terminal, listed by free space" local-lvm choose rootdir
@@ -125,6 +125,73 @@ fetched() { (fetch "file:///${source_path#/}" "${root}/got" "$1" "the file" '=fi
 expect_in "a SHA-256 that matches" "the file: checksum verified" fetched "${sha256}"
 expect_in "a SHA-512 that matches" "the file: checksum verified" fetched "${sha512}"
 expect_in "a SHA-512 that does not: stops" "does not match its checksum" fetched "${wrong}"
+
+# Storages are ranked by type before free space, and one without room for the disks is left out.
+cat > "${root}/status" << 'EOF'
+rootdir nfs-big nfs active 900000000 100000000 800000000 11.11%
+rootdir cifs-big cifs active 900000000 100000000 850000000 11.11%
+rootdir ceph-fs cephfs active 900000000 100000000 860000000 11.11%
+rootdir dir-mid dir active 500000000 100000000 400000000 20.00%
+rootdir lvm-small lvmthin active 100000000 80000000 20000000 80.00%
+rootdir zfs-more zfspool active 100000000 80000000 30000000 80.00%
+rootdir odd-big glusterfs active 900000000 100000000 870000000 11.11%
+EOF
+ranked() { storages rootdir | cut -d ' ' -f 1 | paste -sd , -; }
+expect "local block, then directories, NFS, CIFS, CephFS, the rest, each by free space" \
+    "zfs-more,lvm-small,dir-mid,nfs-big,cifs-big,ceph-fs,odd-big" ranked
+expect "a share with more room does not beat local block storage" zfs-more choose rootdir
+expect_in "it names the type" "storage zfs-more (zfspool) for the appliance's disks" said
+nine=9437184
+choose_disks() { choose_storage rootdir "${disks}" --storage "${nine}" 2> "${root}/said"; }
+cat > "${root}/status" << 'EOF'
+rootdir lvm-small lvmthin active 100000000 94000000 5000000 94.00%
+rootdir nfs-big nfs active 900000000 100000000 800000000 11.11%
+EOF
+expect "a storage under 9 GiB free is left out" nfs-big choose_disks
+cat > "${root}/status" << 'EOF'
+rootdir lvm-small lvmthin active 100000000 94000000 5000000 94.00%
+rootdir exact dir active 100000000 94000000 9437184 94.00%
+EOF
+expect "9 GiB exactly is enough" exact choose_disks
+cat > "${root}/status" << 'EOF'
+rootdir lvm-small lvmthin active 100000000 94000000 5000000 94.00%
+rootdir dir-small dir active 100000000 94000000 9000000 94.00%
+EOF
+expect "none with room: nothing" "" choose_disks
+expect "and the reason lists them" "lvm-small (4.8 GiB free), dir-small (8.6 GiB free)" storages_short rootdir "${nine}"
+# shellcheck disable=SC2310 # takes is a predicate; its status is the answer.
+takes_least() { if takes "$1" "$2" "$3"; then echo yes; else echo no; fi; }
+expect "a named storage without room does not do" no takes_least lvm-small rootdir "${nine}"
+expect "a named storage with room does" yes takes_least lvm-small rootdir 1000
+cat > "${root}/status" << 'EOF'
+rootdir nfs-1 nfs active 100000000 94000000 50000000 94.00%
+EOF
+expect "a name is matched as written: a dot is no wildcard" no takes_least nfs.1 rootdir 0
+expect "the name itself matches" yes takes_least nfs-1 rootdir 0
+
+# A failed download says curl's exit code, and the HTTP status where there was one.
+mkdir "${root}/curlbin"
+cat > "${root}/curlbin/curl" << 'EOF'
+#!/bin/sh
+printf '%s' "${STUB_STATUS}"
+exit "${STUB_EXIT}"
+EOF
+chmod +x "${root}/curlbin/curl"
+failed_download() { (PATH=${root}/curlbin:${PATH} STUB_EXIT=$1 STUB_STATUS=$2 fetch "https://example.org/x" "${root}/got" "${sha256}" "the file") 2>&1; }
+expect_in "a missing file: exit 22 and 404" "could not download https://example.org/x (curl exit 22, HTTP status 404)" failed_download 22 404
+expect_in "a proxy refusing: 407" "(curl exit 22, HTTP status 407)" failed_download 22 407
+expect_in "no HTTP answer: the exit code alone" "could not download https://example.org/x (curl exit 28)" failed_download 28 000
+
+# A file the administrator gave is checked like a download.
+local_copy() { (local_archive "${root}/source" "$1" "${root}/copy" "the archive") 2>&1; }
+expect_in "a local archive that matches" "the archive: checksum verified" local_copy "${sha256}"
+expect_in "a local archive that does not" "does not match its checksum" local_copy "${sha512}"
+
+# Free space.
+space() { (need_space "${root}" "$1" "the thing" "Free some.") 2>&1; }
+expect "enough room: silent" "" space 1
+expect_in "too little room: says what needs how much and what to do" "needs" space 99999999999999
+expect_in "and the fix" "Free some." space 99999999999999
 
 if [ "${failures}" -ne 0 ]; then
     echo "install-storage: ${failures} of $((passes + failures)) checks failed"

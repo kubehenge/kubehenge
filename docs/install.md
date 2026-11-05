@@ -21,7 +21,7 @@ Then [create clusters](clusters.md).
 
 | For | Content type | Notes |
 | --- | --- | --- |
-| The appliance's disk, 8 GB, and a 1 GB volume for its keys | `rootdir` | The only enabled, active storage that allows it. Where several do, the installer asks, and `--storage` answers in advance. Backup jobs skip the key volume. |
+| The appliance's disk, 8 GB, and a 1 GB volume for its keys | `rootdir` | The only enabled, active storage with 9 GiB free that allows it. Where several do, the installer asks, and `--storage` answers in advance. Backup jobs skip the key volume. |
 | The container template | `vztmpl` | Debian's standard container template. The installer uses it where it already is, or downloads it to a storage chosen like the disk's (`--template-storage`). |
 | The Talos disk image, and the images VM templates start from | `import` | Proxmox VE's `local` storage does not allow `import` until you add it (Datacenter, Storage, Edit, Content). |
 | The management cluster's disks | `images` | 32 GB per node. |
@@ -96,29 +96,33 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 | Option | Default | What it does |
 | --- | --- | --- |
 | `--ctid <id>` | the next free ID | The container's ID. |
-| `--storage <storage>` | the only storage that takes container disks, else asked | Where the container's disks go. Without a terminal, the one with the most free space. |
-| `--template-storage <storage>` | where the template already is, else as `--storage` | Where the container template goes. |
-| `--bridge <bridge>` | `vmbr0` | The bridge the container attaches to. |
-| `--ip dhcp` or `--ip <address>/<prefix>` | `dhcp` | The container's address, such as `192.0.2.40/24`. |
-| `--gateway <address>` | none | The default gateway, with a static `--ip`. |
-| `--dns <address>,...` | this node's name servers | The name servers the container asks, such as `192.0.2.53,192.0.2.54`. Needed where the node's own are out of the container's reach, such as a resolver on the node's loopback address. |
+| `--storage <storage>` | the only storage that takes container disks, else asked | Where the container's disks go, 9 GiB. Storages with less free are left out. Without a terminal, the best by type (local block storage, then directories, NFS, CIFS, CephFS), then by free space. |
+| `--template-storage <storage>` | where the template already is, else the only storage that takes it, else asked | Where the container template goes. Without a terminal, ranked like `--storage`. |
+| `--bridge <bridge>` | the bridge of the node's default route, else `vmbr0` | A bridge, Open vSwitch bridge or SDN VNet of the node, which the container attaches to. The installer stops before it downloads anything if there is none of that name. |
+| `--vlan <tag>` | none | The VLAN tag of the container's network, 1 to 4094. |
+| `--mtu <bytes>` | the bridge's | The MTU of the container's network, 576 to 65535. |
+| `--ip dhcp` or `--ip <address>/<prefix>` | `dhcp` | The container's IPv4 address, such as `192.0.2.40/24`. |
+| `--gateway <address>` | none | The default gateway, an IPv4 address, with a static `--ip`. |
+| `--dns <address>,...` | this node's name servers | The name servers the container asks, such as `192.0.2.53,192.0.2.54`. Required where the node's `/etc/resolv.conf` names only loopback addresses, which the container cannot reach. |
 | `--hostname <name>` | `kubehenge` | The container's host name, also written into its certificate. |
 | `--name <DNS name>` | none | A DNS name, such as `kubehenge.example.org`, that people reach the appliance by instead of its address. It goes into the certificate and into the redirect URLs for identity providers. Point it at the appliance's address in your DNS. |
 | `--cert <file> --key <file>` | a certificate signed by the Proxmox VE cluster's CA | Serves a certificate of your own instead, such as one from your organisation's CA. It must be valid for `--name` (or the address, without one) and its key must match. |
 | `--proxmox-url <URL>` | chosen from the API's certificate ([below](#the-proxmox-ve-api)) | The Proxmox VE API as the appliance and the clusters' VMs reach it, such as `https://pve.example.org:8006`. The API's certificate must be valid for it. The installer stops unless the appliance gets an answer there. |
 | `--proxmox-ca <file>` | found by the installer ([below](#the-ca)) | The CA that signed the API's certificate, such as your organisation's where it replaced Proxmox VE's own. The file may be a whole trust store, and the appliance gets only the certificates the API's rests on. The installer stops before it creates anything unless this CA signed the API's certificate for the URL. |
 | `--proxmox-insecure` | off | Nothing checks the Proxmox VE API's certificate. That covers OpenTofu, Cluster API, Kubehenge's controller, the template builds and every cluster's cloud controller manager and CSI plugin. The Administration page shows that it is on. Not with `--proxmox-ca`. |
-| `--release <file> --sha256 <hex>` | the published release the script names | Installs a release archive from a file instead, checked against the given checksum. OpenTofu is still downloaded. |
+| `--release <file> --sha256 <hex>` | the published release the script names | Installs a release archive from a file instead, checked against the given checksum. OpenTofu is still downloaded unless `--tofu` names it. |
+| `--tofu <file>` | the published OpenTofu release | Installs OpenTofu from a release archive (`tofu_<version>_linux_amd64.tar.gz`) instead of downloading it. It is checked against the checksum in `install.sh`, so the version must be the one the script names. Together with `--release` and a template on a storage, the node needs no internet access. |
 | `--pve-entry` or `--no-pve-entry` | asked | Whether to add a Kubernetes entry to this node's Proxmox VE interface ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
 | `--upgrade --ctid <id>` | | Upgrades an installed appliance instead ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). |
 | `--certificate --ctid <id>` | | Replaces an installed appliance's certificate instead ([below](#the-appliances-certificate)). |
 
 ### What it does
 
-1. Checks that it runs as root on a Proxmox VE 9 node. Unless options answered already, it asks which storage to use where several fit and whether to add the interface entry.
+1. Checks that it runs as root on a Proxmox VE 9 node with quorum, that the cluster has no appliance yet and that the bridge exists. It asks which storage to use where several fit and whether to add the interface entry, unless options answered already.
 2. Downloads Kubehenge's release archive and OpenTofu, and checks both against the checksums it carries.
 3. Chooses the Proxmox VE API's address and CA ([below](#the-proxmox-ve-api)), and asks on the terminal where it needs your word. It checks that the API's certificate is valid for that address.
 4. Uses the container template where a storage holds it, or downloads it and checks it against its checksum. Then it creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its IPv4 address.
+   - If the container cannot resolve the API's name, it takes the next name or address the certificate covers.
 5. Makes a certificate for the container's host name, address and `--name`, or checks the one given with `--cert`.
    - A made certificate is signed by the Proxmox VE cluster's CA, whose key never leaves the node. It is self-signed when the node cannot read that key.
    - It is valid for 825 days, the longest browsers accept from a private CA.
