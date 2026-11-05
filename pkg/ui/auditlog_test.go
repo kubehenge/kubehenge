@@ -1,24 +1,19 @@
 package ui
 
 import (
-	"context"
+	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
-	kubefake "k8s.io/client-go/kubernetes/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -62,11 +57,16 @@ func TestTheAuditLogReadsTheChangesPeopleMade(t *testing.T) {
 		`{"not":"an event"}`,
 	}, "\n")
 	stamped := "2026-10-13T08:30:00.123456789Z " + strings.ReplaceAll(log, "\n", "\n2026-10-13T08:30:00.123456789Z ") + "\n"
-	slice, err := readAuditSlice(strings.NewReader(stamped), auditReadBytes)
-	if err != nil {
-		t.Fatal(err)
+	var got []activityEntry
+	for line := range strings.Lines(stamped) {
+		at, message, ok := stampedLine([]byte(strings.TrimSuffix(line, "\n")))
+		if !ok || !at.Equal(time.Date(2026, 10, 13, 8, 30, 0, 123456789, time.UTC)) {
+			t.Fatalf("the kubelet's time on %q = %v, %v", line, at, ok)
+		}
+		if e := auditEntry(message); e != nil {
+			got = append(got, *e)
+		}
 	}
-	got := slice.entries
 	if len(got) != 5 {
 		t.Fatalf("entries = %+v, want the five changes that completed", got)
 	}
@@ -160,253 +160,249 @@ func TestTheAuditLogKeepsEachChangeOnce(t *testing.T) {
 
 var auditBase = time.Date(2026, 10, 13, 8, 30, 0, 0, time.UTC)
 
-type auditLogLine struct {
-	at   time.Time
-	text string
-}
+const apiServerA = "kube-apiserver-a"
 
-// fakeAuditLogs serves pods' logs as the kubelet does: with its timestamps, from SinceTime in whole
-// seconds, and cut after the byte limit, in the middle of a line if need be.
-type fakeAuditLogs struct {
-	lines map[string][]auditLogLine
-	opens map[string][]time.Time
-}
+var errConnectionLost = errors.New("connection lost")
 
-func newFakeAuditLogs() *fakeAuditLogs {
-	return &fakeAuditLogs{lines: map[string][]auditLogLine{}, opens: map[string][]time.Time{}}
-}
-
-// add appends a line n seconds after the base, a change of a person's when id is not empty and
-// filler of about 250 bytes otherwise.
-func (l *fakeAuditLogs) add(pod string, n int, id string) {
-	text := auditLine("filler", "get", "admin", "ResponseComplete",
-		`,"objectRef":{"resource":"pods","namespace":"x","name":"y"},"annotations":{"pad":"`+strings.Repeat("p", 60)+`"}`)
-	if id != "" {
-		text = auditLine(id, "create", "admin", "ResponseComplete",
-			`,"objectRef":{"resource":"configmaps","namespace":"default","name":"`+id+`"},"responseStatus":{"code":201}`)
-	}
-	at := auditBase.Add(time.Duration(n) * time.Second)
-	text = strings.Replace(text, "2026-10-13T08:30:00.123456Z", at.Format(time.RFC3339Nano), 1)
-	l.lines[pod] = append(l.lines[pod], auditLogLine{at: at, text: text})
-}
-
-func (l *fakeAuditLogs) open(_ context.Context, pod string, since time.Time, limit int64) (io.ReadCloser, error) {
-	l.opens[pod] = append(l.opens[pod], since)
-	var b strings.Builder
-	for _, line := range l.lines[pod] {
-		if line.at.Before(since.Truncate(time.Second)) {
-			continue
-		}
-		b.WriteString(line.at.Format(time.RFC3339Nano) + " " + line.text + "\n")
-	}
-	out := b.String()
-	if int64(len(out)) > limit {
-		out = out[:limit]
-	}
-	return io.NopCloser(strings.NewReader(out)), nil
-}
-
-// auditRig is a server that follows fake API server pods.
+// auditRig is a follower of the fake API server's pods, whose ticks the test makes.
 type auditRig struct {
-	s    *Server
-	f    *auditFollower
-	logs *fakeAuditLogs
-	out  *strings.Builder
-	// pods are the API server pods the cluster lists, which a test changes between reads.
-	pods map[string]*corev1.Pod
+	api   *apiServerFake
+	s     *Server
+	f     *auditFollower
+	out   *syncBuffer
+	clock atomic.Int64
 }
 
-func newAuditRig(t *testing.T, limit int64, pods ...string) *auditRig {
+func newAuditRig(t *testing.T, pods ...string) *auditRig {
 	t.Helper()
-	on := &corev1.ConfigMap{Data: map[string]string{apiAuditLogKey: "true"}}
-	on.Namespace, on.Name = "kubehenge-system", interfaceConfigMap
-	r := &auditRig{logs: newFakeAuditLogs(), out: &strings.Builder{}, pods: map[string]*corev1.Pod{}}
-	for _, name := range pods {
-		r.pods[name] = &corev1.Pod{
-			Name: name, Namespace: metav1.NamespaceSystem, UID: types.UID("uid-" + name), Labels: map[string]string{"k8s-app": "kube-apiserver"},
-		}
-	}
-	r.s = &Server{
-		Kube: fake.NewClientBuilder().WithObjects(on).Build(), ClassNamespace: "kubehenge-system",
-		Log: slog.New(slog.NewTextHandler(r.out, nil)),
-		NewClientset: func() (kubernetes.Interface, error) {
-			objects := make([]runtime.Object, 0, len(r.pods))
-			for _, pod := range r.pods {
-				objects = append(objects, pod.DeepCopy())
-			}
-			return kubefake.NewClientset(objects...), nil
-		},
-	}
-	r.s.init()
-	r.s.clock = func() time.Time { return auditBase.Add(time.Hour) }
-	r.f = newAuditFollower()
-	r.f.open, r.f.limit = r.logs.open, limit
+	r := &auditRig{api: newAPIServerFake(t, pods...), out: &syncBuffer{}, f: newAuditFollower()}
+	r.clock.Store(auditBase.Add(time.Hour).UnixNano())
+	r.s = r.api.server(t, r.out, func() time.Time { return time.Unix(0, r.clock.Load()).UTC() })
+	t.Cleanup(r.f.stopAll)
 	return r
 }
 
-func (r *auditRig) read(t *testing.T) {
+func (r *auditRig) tick(t *testing.T) {
 	t.Helper()
-	if err := r.s.readAuditLog(t.Context(), r.f); err != nil {
+	if err := r.s.followAuditPods(t.Context(), r.f); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func (r *auditRig) kept(t *testing.T) []string {
+// wait waits until done holds of the follower, and fails after a few seconds.
+func (r *auditRig) wait(t *testing.T, what string, done func(f *auditFollower) bool) {
 	t.Helper()
-	got, err := r.s.activityLog.since(auditBase.Add(-time.Hour), 1000, func(*activityEntry) bool { return true })
-	if err != nil {
-		t.Fatal(err)
+	for range 300 {
+		r.f.mu.Lock()
+		ok := done(r.f)
+		r.f.mu.Unlock()
+		if ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	whats := make([]string, 0, len(got))
-	for i := range got {
-		whats = append(whats, got[i].What)
-	}
-	slices.Sort(whats)
-	return whats
+	t.Fatalf("waited in vain for %s", what)
 }
 
-// A read of lines nobody made still moves the position on, so the next read starts after them and
-// finds the change that follows.
-func TestAnAuditReadWithNoChangeMovesOn(t *testing.T) {
+// waitRead waits until the follower has read a pod's log to the line n seconds after auditBase.
+func (r *auditRig) waitRead(t *testing.T, pod string, n int) {
+	t.Helper()
+	want := auditBase.Add(time.Duration(n) * time.Second)
+	r.wait(t, fmt.Sprintf("%s's log read to %v", pod, want), func(f *auditFollower) bool {
+		return f.pods[pod] != nil && !f.pods[pod].last.Before(want)
+	})
+}
+
+// cut ends the stream on a pod's log, with err as a connection lost and nil as a container that
+// stopped, and waits until the follower has seen it end.
+func (r *auditRig) cut(t *testing.T, pod string, err error) {
+	t.Helper()
+	r.api.end(pod, err)
+	r.wait(t, pod+"'s stream to end", func(f *auditFollower) bool { return !f.pods[pod].streaming() })
+}
+
+func (r *auditRig) warnings(about string) int { return strings.Count(r.out.String(), about) }
+
+// A stream that ended opens again at the next tick, from the second of the last line read, and the
+// change written meanwhile is kept.
+func TestAnAuditStreamOpensAgainWhereTheLastEnded(t *testing.T) {
 	t.Parallel()
-	r := newAuditRig(t, 1<<20, "kube-apiserver-a")
+	r := newAuditRig(t, apiServerA)
 	for n := range 20 {
-		r.logs.add("kube-apiserver-a", n, "")
+		r.api.add(apiServerA, n, "")
 	}
-	r.read(t)
-	if got := r.f.pods["kube-apiserver-a"].from; !got.Equal(auditBase.Add(19 * time.Second)) {
-		t.Errorf("the position after lines of nobody's changes = %v", got)
-	}
-	r.logs.add("kube-apiserver-a", 25, "late")
-	r.read(t)
-	opens := r.logs.opens["kube-apiserver-a"]
-	if got := opens[len(opens)-1]; !got.Equal(auditBase.Add(19 * time.Second)) {
-		t.Errorf("the second read started at %v", got)
-	}
-	if got := r.kept(t); !slices.Equal(got, []string{"created configmaps late"}) {
-		t.Errorf("kept %v", got)
+	r.tick(t)
+	r.waitRead(t, apiServerA, 19)
+	r.cut(t, apiServerA, errConnectionLost)
+	r.api.add(apiServerA, 25, "late")
+	r.tick(t)
+	waitAuditKept(t, r.s, "created configmaps late")
+	if opens := r.api.openedFrom(apiServerA); len(opens) != 2 || !opens[1].Equal(auditBase.Add(19*time.Second)) {
+		t.Errorf("the streams opened from %v, want the second from the last line read", opens)
 	}
 }
 
-// A log of many reads' size is read whole in one go, so a change at its end is kept.
-func TestAnAuditReadGoesToTheEndOfALongLog(t *testing.T) {
-	t.Parallel()
-	r := newAuditRig(t, 2048, "kube-apiserver-a")
-	for n := range 80 {
-		r.logs.add("kube-apiserver-a", n, "")
-	}
-	r.logs.add("kube-apiserver-a", 80, "last")
-	r.read(t)
-	if got := r.kept(t); !slices.Equal(got, []string{"created configmaps last"}) {
-		t.Errorf("kept %v", got)
-	}
-	if n := len(r.logs.opens["kube-apiserver-a"]); n < 5 {
-		t.Errorf("the log was read in %d slices, want it cut up", n)
-	}
-}
-
-// Each API server pod has a position of its own: a change in the log of one that lags behind the
-// other is kept.
+// A change written to an open stream is kept without waiting for a tick, and each API server pod
+// has a position of its own.
 func TestAuditPositionsAreKeptPerPod(t *testing.T) {
 	t.Parallel()
-	r := newAuditRig(t, 1<<20, "kube-apiserver-a", "kube-apiserver-b")
+	r := newAuditRig(t, apiServerA, "kube-apiserver-b")
 	for n := range 10 {
-		r.logs.add("kube-apiserver-a", n, "")
+		r.api.add(apiServerA, n, "")
 	}
 	for n := range 50 {
-		r.logs.add("kube-apiserver-b", n, "")
+		r.api.add("kube-apiserver-b", n, "")
 	}
-	r.read(t)
-	a, b := r.f.pods["kube-apiserver-a"].from, r.f.pods["kube-apiserver-b"].from
+	r.tick(t)
+	r.waitRead(t, apiServerA, 9)
+	r.waitRead(t, "kube-apiserver-b", 49)
+	r.f.mu.Lock()
+	a, b := r.f.pods[apiServerA].from, r.f.pods["kube-apiserver-b"].from
+	r.f.mu.Unlock()
 	if !a.Equal(auditBase.Add(9*time.Second)) || !b.Equal(auditBase.Add(49*time.Second)) {
 		t.Errorf("positions = %v and %v", a, b)
 	}
-	r.logs.add("kube-apiserver-a", 20, "behind")
-	r.read(t)
-	if got := r.kept(t); !slices.Equal(got, []string{"created configmaps behind"}) {
-		t.Errorf("kept %v", got)
-	}
+	r.api.add(apiServerA, 20, "behind")
+	waitAuditKept(t, r.s, "created configmaps behind")
 }
 
-// Lines the kubelet rotated away before they were read are warned about once, as is a restarted
-// API server.
+// Lines the kubelet rotated away while no stream followed the log are warned about once.
 func TestAnAuditRotationGapIsWarnedAboutOnce(t *testing.T) {
 	t.Parallel()
-	r := newAuditRig(t, 1<<20, "kube-apiserver-a")
+	r := newAuditRig(t, apiServerA)
 	for n := range 10 {
-		r.logs.add("kube-apiserver-a", n, "")
+		r.api.add(apiServerA, n, "")
 	}
-	r.read(t)
-	r.logs.lines["kube-apiserver-a"] = nil
-	r.logs.add("kube-apiserver-a", 100, "")
-	r.logs.add("kube-apiserver-a", 101, "after")
-	r.read(t)
-	r.logs.add("kube-apiserver-a", 102, "")
-	r.read(t)
-	r.read(t)
-	if n := strings.Count(r.out.String(), "rotated"); n != 1 {
+	r.tick(t)
+	r.waitRead(t, apiServerA, 9)
+	r.cut(t, apiServerA, errConnectionLost)
+	r.api.rotate(apiServerA)
+	r.api.add(apiServerA, 100, "")
+	r.api.add(apiServerA, 101, "after")
+	r.tick(t)
+	waitAuditKept(t, r.s, "created configmaps after")
+	r.api.add(apiServerA, 102, "")
+	r.waitRead(t, apiServerA, 102)
+	r.cut(t, apiServerA, errConnectionLost)
+	r.api.add(apiServerA, 103, "")
+	r.tick(t)
+	r.waitRead(t, apiServerA, 103)
+	if n := r.warnings("rotated"); n != 1 {
 		t.Errorf("%d warnings of a rotation, want 1: %s", n, r.out)
-	}
-	if got := r.kept(t); !slices.Equal(got, []string{"created configmaps after"}) {
-		t.Errorf("kept %v", got)
 	}
 }
 
-// An API server pod replaced, or its container restarted, starts a new log: the interface says that
-// the lines since its last read are gone, once, and reads the new log from its start.
-func TestARestartedAPIServerIsWarnedAboutOnceAndReadFromItsStart(t *testing.T) {
+// An API server pod replaced, or its container restarted, starts a new log, which is read from its
+// start. Lines are said to be lost only when the stream did not reach the old container's end.
+func TestARestartedAPIServerIsReadFromItsStart(t *testing.T) {
 	t.Parallel()
-	for name, change := range map[string]func(*corev1.Pod){
-		"a new pod": func(p *corev1.Pod) { p.UID = "replacement" },
-		"a restart": func(p *corev1.Pod) {
-			p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "kube-apiserver", RestartCount: 1}}
+	for name, tc := range map[string]struct {
+		change func(*corev1.Pod)
+		end    error
+		warns  int
+	}{
+		"a new pod, the old log read to its end": {func(p *corev1.Pod) { p.UID = "replacement" }, nil, 0},
+		"a restart, the stream cut": {
+			func(p *corev1.Pod) {
+				p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "kube-apiserver", RestartCount: 1}}
+			}, errConnectionLost, 1,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			r := newAuditRig(t, 1<<20, "kube-apiserver-a")
+			r := newAuditRig(t, apiServerA)
 			for n := range 10 {
-				r.logs.add("kube-apiserver-a", n, "")
+				r.api.add(apiServerA, n, "")
 			}
-			r.read(t)
-			change(r.pods["kube-apiserver-a"])
-			r.logs.lines["kube-apiserver-a"] = nil
-			r.logs.add("kube-apiserver-a", 1, "fresh")
-			r.read(t)
-			r.read(t)
-			if n := strings.Count(r.out.String(), "restarted"); n != 1 {
-				t.Errorf("%d warnings of a restart, want 1: %s", n, r.out)
+			r.tick(t)
+			r.waitRead(t, apiServerA, 9)
+			r.cut(t, apiServerA, tc.end)
+			r.api.pod(apiServerA, tc.change)
+			r.api.rotate(apiServerA)
+			r.api.add(apiServerA, 1, "fresh")
+			r.tick(t)
+			waitAuditKept(t, r.s, "created configmaps fresh")
+			r.tick(t)
+			if n := r.warnings("restarted"); n != tc.warns {
+				t.Errorf("%d warnings of a restart, want %d: %s", n, tc.warns, r.out)
 			}
-			opens := r.logs.opens["kube-apiserver-a"]
-			if len(opens) != 3 || !opens[1].IsZero() {
-				t.Errorf("the reads started at %v, want the second at the log's start", opens)
-			}
-			if got := r.kept(t); !slices.Equal(got, []string{"created configmaps fresh"}) {
-				t.Errorf("kept %v", got)
+			if opens := r.api.openedFrom(apiServerA); len(opens) != 2 || !opens[1].IsZero() {
+				t.Errorf("the streams opened from %v, want the second at the log's start", opens)
 			}
 		})
 	}
 }
 
-// A line is kept once however often it is read: on the boundary second of a slice, and on the
-// reads that follow.
+// A line is kept once however often it is read: on the boundary second a stream opens again at,
+// and on the streams that follow.
 func TestAnAuditLineIsNeverKeptTwice(t *testing.T) {
 	t.Parallel()
-	r := newAuditRig(t, 1500, "kube-apiserver-a")
+	r := newAuditRig(t, apiServerA)
 	for n := range 30 {
-		r.logs.add("kube-apiserver-a", n, "")
+		r.api.add(apiServerA, n, "")
 		if n%3 == 0 {
-			r.logs.add("kube-apiserver-a", n, fmt.Sprintf("c%02d", n))
+			r.api.add(apiServerA, n, fmt.Sprintf("c%02d", n))
 		}
 	}
-	r.read(t)
-	r.read(t)
-	r.logs.add("kube-apiserver-a", 30, "c30")
-	r.read(t)
-	r.read(t)
-	got := r.kept(t)
-	if len(got) != 11 || len(slices.Compact(slices.Clone(got))) != 11 {
-		t.Errorf("kept %d changes, want 11 different ones: %v", len(got), got)
+	r.tick(t)
+	r.api.add(apiServerA, 30, "c30")
+	r.waitRead(t, apiServerA, 30)
+	for n := 31; n < 33; n++ {
+		r.cut(t, apiServerA, errConnectionLost)
+		r.tick(t)
+		r.api.add(apiServerA, n, "")
+		r.waitRead(t, apiServerA, n)
+	}
+	want := []string{"created configmaps c30"}
+	for n := 0; n < 30; n += 3 {
+		want = append(want, fmt.Sprintf("created configmaps c%02d", n))
+	}
+	slices.Sort(want)
+	waitAuditKept(t, r.s, want...)
+}
+
+// A stream that brings no line for a while hangs on a dead connection, so the next tick opens it
+// again.
+func TestAQuietAuditStreamOpensAgain(t *testing.T) {
+	t.Parallel()
+	r := newAuditRig(t, apiServerA)
+	r.api.add(apiServerA, 0, "")
+	r.tick(t)
+	r.waitRead(t, apiServerA, 0)
+	r.tick(t)
+	if opens := r.api.openedFrom(apiServerA); len(opens) != 1 {
+		t.Fatalf("a live stream was opened again: %v", opens)
+	}
+	r.clock.Add(int64(auditQuiet))
+	r.tick(t)
+	r.api.add(apiServerA, 1, "after")
+	waitAuditKept(t, r.s, "created configmaps after")
+	if opens := r.api.openedFrom(apiServerA); len(opens) != 2 || r.warnings("no line") != 1 {
+		t.Errorf("the streams opened from %v, with %d warnings of a quiet stream", opens, r.warnings("no line"))
+	}
+}
+
+// Switching the audit log off ends the streams.
+func TestSwitchingTheAuditLogOffEndsItsStreams(t *testing.T) {
+	t.Parallel()
+	r := newAuditRig(t, apiServerA)
+	r.api.add(apiServerA, 0, "")
+	r.tick(t)
+	r.waitRead(t, apiServerA, 0)
+	off := &corev1.ConfigMap{}
+	if err := r.s.Kube.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge-system", Name: interfaceConfigMap}, off); err != nil {
+		t.Fatal(err)
+	}
+	off.Data[apiAuditLogKey] = "false"
+	if err := r.s.Kube.Update(t.Context(), off); err != nil {
+		t.Fatal(err)
+	}
+	r.tick(t)
+	r.f.mu.Lock()
+	streaming := r.f.pods[apiServerA].streaming()
+	r.f.mu.Unlock()
+	if streaming {
+		t.Error("a stream still follows the API server's log with the audit log off")
 	}
 }
 

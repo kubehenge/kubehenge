@@ -4,6 +4,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+- Activity no longer misses a kubectl change made in the seconds before the kubelet rotates the API server's log. The interface follows each log as it is written, where it read it once a minute.
+
 ## [0.4.2] - 2026-11-05
 
 - The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000. A change reaches running nodes without a reboot.
