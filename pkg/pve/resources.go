@@ -72,7 +72,7 @@ const LocalZone = "localnetwork"
 
 // Ref is how a bridge is written in settings and in the management-cluster module: a VNet as
 // zone/vnet, a node's bridge as its name.
-func (b Bridge) Ref() string {
+func (b *Bridge) Ref() string {
 	if b.Zone == "" {
 		return b.Bridge
 	}
@@ -80,7 +80,7 @@ func (b Bridge) Ref() string {
 }
 
 // InZone is the zone Proxmox VE checks SDN.Use in for the bridge.
-func (b Bridge) InZone() string {
+func (b *Bridge) InZone() string {
 	if b.Zone == "" {
 		return LocalZone
 	}
@@ -88,7 +88,7 @@ func (b Bridge) InZone() string {
 }
 
 // SplitBridge splits a bridge reference into its zone and the name a VM's network device takes.
-func SplitBridge(ref string) (zone, name string) {
+func SplitBridge(ref string) (string, string) {
 	if zone, name, ok := strings.Cut(ref, "/"); ok {
 		return zone, name
 	}

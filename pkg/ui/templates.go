@@ -342,9 +342,9 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		return
 	}
 	if req.VLAN > 0 {
-		network, err := s.Accounts.Network(r.Context(), u.ticket, b.Bridge)
-		if err != nil {
-			s.proxmoxError(w, r, err)
+		network, networkErr := s.Accounts.Network(r.Context(), u.ticket, b.Bridge)
+		if networkErr != nil {
+			s.proxmoxError(w, r, networkErr)
 			return
 		}
 		if network.TagsTraffic() {
