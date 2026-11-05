@@ -77,7 +77,7 @@ func (p *Proxmox) BridgeMTU(ctx context.Context, bridge string, nodes []string) 
 }
 
 // checkNodeNIC holds the interface options of a cluster's nodes to Proxmox VE's and capmox's bounds.
-func checkNodeNIC(n nodeNetwork) field.ErrorList {
+func checkNodeNIC(n *nodeNetwork) field.ErrorList {
 	path := field.NewPath("spec", "topology", "variables").Key("network")
 	var errs field.ErrorList
 	if n.MTU != nil && (*n.MTU < MinNodeMTU || *n.MTU > MaxNodeMTU) {
@@ -90,7 +90,7 @@ func checkNodeNIC(n nodeNetwork) field.ErrorList {
 }
 
 // checkBridgeMTU refuses an interface MTU above the bridge's: its larger frames never pass.
-func checkBridgeMTU(n nodeNetwork, bridge int) *field.Error {
+func checkBridgeMTU(n *nodeNetwork, bridge int) *field.Error {
 	if n.MTU == nil || *n.MTU <= bridge {
 		return nil
 	}
@@ -109,7 +109,7 @@ func (v *ClusterValidator) validateNodeNIC(ctx context.Context, old, c *clusterv
 		// The class's schema refuses a network that is missing or malformed.
 		return nil
 	}
-	if errs := checkNodeNIC(n); len(errs) > 0 || n.MTU == nil || v.Hooks.Bridges == nil {
+	if errs := checkNodeNIC(&n); len(errs) > 0 || n.MTU == nil || v.Hooks.Bridges == nil {
 		return errs
 	}
 	allowed, _, _ := optionalVariable[[]string](c, allowedNodesVariable)
@@ -117,7 +117,7 @@ func (v *ClusterValidator) validateNodeNIC(ctx context.Context, old, c *clusterv
 	if !readable {
 		return nil
 	}
-	if err := checkBridgeMTU(n, bridge); err != nil {
+	if err := checkBridgeMTU(&n, bridge); err != nil {
 		return field.ErrorList{err}
 	}
 	return nil

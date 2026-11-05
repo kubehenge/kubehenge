@@ -40,6 +40,9 @@ const bridge = (mtu: number | undefined): Bridge => ({
 
 const filled: Form = { ...newForm(), bridge: "vmbr0", gateway: "10.0.0.1", dnsServers: "10.0.0.1" };
 
+const problems = (mtu: string, queues = ""): Partial<Record<FieldKey, string>> =>
+  fieldProblems("Network", { ...filled, mtu, queues }, withNic);
+
 describe("a cluster's interface options", () => {
   it("asks for the MTU and queues where the class has them", async () => {
     const set = vi.fn<(k: keyof Form, v: unknown) => void>();
@@ -70,12 +73,12 @@ describe("a cluster's interface options", () => {
       MTU: "1450",
       Queues: "2",
     });
-    expect(Object.keys(Object.fromEntries(summary(filled, withNic)))).not.toContain("MTU");
+    const plain = summary(filled, withNic).map(([label]) => label);
+    expect(plain).not.toContain("MTU");
+    expect(plain).not.toContain("Queues");
   });
 
   it("refuses an MTU or queue count out of bounds", () => {
-    const problems = (mtu: string, queues = ""): Partial<Record<FieldKey, string>> =>
-      fieldProblems("Network", { ...filled, mtu, queues }, withNic);
     for (const ok of ["", "1280", "1450", "9000", "65520"]) {
       expect(problems(ok)).not.toHaveProperty("mtu");
     }
@@ -104,15 +107,25 @@ describe("a cluster's interface options", () => {
   });
 
   it("starts a new cluster with the options of the one it starts from", () => {
-    const existing = {
+    const existing: Cluster = {
       namespace: "default",
       name: "web",
       class: "kubehenge-k3s",
+      distribution: "k3s",
+      version: "v1.36.5+k3s1",
+      generation: 1,
+      created: "2026-10-01T00:00:00Z",
+      deleting: false,
+      phase: "Provisioned",
+      available: true,
+      conditions: [],
+      controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+      workers: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+      workerPools: [{ name: "md-0", class: "worker", replicas: 1 }],
       variables: { network: { bridge: "vmbr0", mtu: 1450, queues: 2 } },
-      workerPools: [],
-      controlPlane: { desired: 1 },
-      workers: { desired: 1 },
-    } as unknown as Cluster;
+      pool: "/pool/kubehenge/default.web",
+      allowed: { change: true, kubeconfig: true },
+    };
     expect(fromCluster(existing, newForm())).toMatchObject({ mtu: "1450", queues: "2" });
   });
 });

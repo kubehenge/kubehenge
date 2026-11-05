@@ -816,6 +816,17 @@ function distributionVariables(form: Form): Record<string, unknown> {
   return variables;
 }
 
+// interfaceOptions are the nodes' interface settings the user entered: the VLAN tag, MTU and queues.
+function interfaceOptions(form: Form): Record<string, number> {
+  const options: Record<string, number> = {};
+  for (const key of ["vlan", "mtu", "queues"] as const) {
+    if (form[key]) {
+      options[key] = Number(form[key]);
+    }
+  }
+  return options;
+}
+
 // request turns the form into the API's request, with only the variables the class defines.
 export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
@@ -825,16 +836,8 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     prefix: form.prefix,
     gateway: form.gateway,
     dnsServers: list(form.dnsServers),
+    ...interfaceOptions(form),
   };
-  if (form.vlan) {
-    network["vlan"] = Number(form.vlan);
-  }
-  if (form.mtu) {
-    network["mtu"] = Number(form.mtu);
-  }
-  if (form.queues) {
-    network["queues"] = Number(form.queues);
-  }
   const variables: Record<string, unknown> = {
     controlPlaneEndpoint: form.endpoint,
     network,
@@ -928,6 +931,17 @@ function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string
   return rows;
 }
 
+function interfaceRows(form: Form): [string, string][] {
+  const rows: [string, string][] = [];
+  if (form.mtu) {
+    rows.push(["MTU", form.mtu]);
+  }
+  if (form.queues) {
+    rows.push(["Queues", form.queues]);
+  }
+  return rows;
+}
+
 // summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
@@ -946,8 +960,7 @@ export function summary(
       autoscales(form, c) ? `${form.workerReplicas} to ${form.workerMax}, autoscaled` : String(form.workerReplicas),
     ],
     ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
-    ...(form.mtu ? [["MTU", form.mtu] as [string, string]] : []),
-    ...(form.queues ? [["Queues", form.queues] as [string, string]] : []),
+    ...interfaceRows(form),
     ["API address", form.endpoint],
     ["Node addresses", list(form.addresses).join(", ")],
     ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
@@ -1193,11 +1206,8 @@ function addressProblems(form: Form): Problems {
   return p;
 }
 
-function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
+function interfaceProblems(form: Form): Problems {
   const p: Problems = {};
-  if (!form.bridge) {
-    p.bridge = "Choose a bridge";
-  }
   if (form.vlan && !isVLAN(form.vlan)) {
     p.vlan = "A whole number from 1 to 4094";
   }
@@ -1207,6 +1217,15 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (form.queues && !isQueues(form.queues)) {
     p.queues = `A whole number from 1 to ${maxQueues}`;
   }
+  return p;
+}
+
+function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
+  if (!form.bridge) {
+    p.bridge = "Choose a bridge";
+  }
+  Object.assign(p, interfaceProblems(form));
   if (!whole(form.prefix, 1, addressBits)) {
     p.prefix = `A whole number from 1 to ${addressBits}`;
   }
