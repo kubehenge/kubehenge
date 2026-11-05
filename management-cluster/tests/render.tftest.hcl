@@ -827,6 +827,23 @@ run "providers" {
   }
 
   assert {
+    condition = toset([
+      for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : "${p.kind}/${p.name}"
+      if anytrue([
+        for patch in try(p.spec.patches, []) : try(
+          [for op in yamldecode(patch.patch) : op.path if strcontains(op.path, "/livenessProbe/")], []
+        ) == ["/spec/template/spec/containers/0/livenessProbe/timeoutSeconds", "/spec/template/spec/containers/0/livenessProbe/failureThreshold"]
+      ])
+      ]) == toset([
+      "CoreProvider/cluster-api",
+      "BootstrapProvider/kubeadm", "BootstrapProvider/rke2", "BootstrapProvider/talos",
+      "ControlPlaneProvider/kubeadm", "ControlPlaneProvider/rke2", "ControlPlaneProvider/talos",
+      "InfrastructureProvider/proxmox", "IPAMProvider/in-cluster", "AddonProvider/helm",
+    ])
+    error_message = "every provider but the two k3s ones, which have no probes, gets the patient probes"
+  }
+
+  assert {
     condition = {
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
       "${p.kind}/${p.name}" => [
