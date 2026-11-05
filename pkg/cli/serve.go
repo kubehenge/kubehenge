@@ -159,6 +159,12 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	if s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
 		return err
 	}
+	// Without a logger, controller-runtime drops its own messages and says so once.
+	logger, err := o.logs.zapLogger()
+	if err != nil {
+		return err
+	}
+	ctrl.SetLogger(logger)
 
 	if o.a.Dir == "" {
 		cfg, cfgErr := ctrl.GetConfig()

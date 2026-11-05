@@ -48,12 +48,18 @@ ha_rule=kubehenge-e2e-placement ha_vmid=
 password=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')
 passphrase=$(head -c 24 /dev/urandom | base64 | tr -d '/+=')
 work=$(mktemp -d)
+audit_waiting=
 
 finish() {
     status=$?
     if [ "${status}" -ne 0 ] && pct status "${ctid}" > /dev/null 2>&1; then
         echo "-- the appliance's log" >&2
         pct exec "${ctid}" -- journalctl -u kubehenge.service -n 100 --no-pager >&2 || true
+    fi
+    if [ "${status}" -ne 0 ] && [ -n "${audit_waiting}" ]; then
+        # A failure here must not keep the cleanup below from running.
+        set +e
+        audit_report
     fi
     [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
     if [ -n "${ha_vmid}" ]; then
@@ -506,13 +512,35 @@ created=$(curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/manageme
     -d '{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "kubehenge-e2e-audit"}}' \
     "${management_api}/api/v1/namespaces/default/configmaps")
 [ "${created}" = 201 ] || fail "creating a ConfigMap with the admin kubeconfig: ${created} instead of 201"
+management_get() {
+    curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" "${management_api}$1"
+}
+# How far the reader got and how long the API server's log is: a ConfigMap missing from Activity is
+# either past the reader or never read.
+audit_report() {
+    echo "-- the Activity check: the API server's log" >&2
+    management_get '/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app%3Dkube-apiserver' > "${work}/apiservers.json"
+    jq -r '.items[].metadata.name' "${work}/apiservers.json" > "${work}/apiservers.txt"
+    while read -r pod; do
+        management_get "/api/v1/namespaces/kube-system/pods/${pod}/log?timestamps=true" > "${work}/apiserver.log"
+        size=$(wc -c < "${work}/apiserver.log")
+        first=$(head -n 1 "${work}/apiserver.log")
+        last=$(tail -n 1 "${work}/apiserver.log")
+        echo "${pod}: ${size} bytes, from ${first%% *} to ${last%% *}" >&2
+    done < "${work}/apiservers.txt"
+}
 audited() {
     request "${work}/admin.jar" "${ui}/api/activity?days=1"
+    seen=$(jq -r '[.entries[] | select(.details.via == "kubectl or the API")] |
+        if length == 0 then "the reader holds no kubectl entry"
+        else "the reader holds \(length) kubectl entries, the newest at \(map(.at) | max)" end' "${work}/body") || seen=
     jq -e '.entries | any(.what == "created configmaps kubehenge-e2e-audit" and .details.via == "kubectl or the API"
         and .details.namespace == "default" and .user != "")' "${work}/body" > /dev/null
 }
 # The interface reads the API server's log every minute.
+audit_waiting=1
 until_true 300 "the ConfigMap's creation on Activity" audited
+audit_waiting=
 handed="handed out the management cluster's credential"
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 body_has "the credential's download is not on Activity with the administrator" --arg u "${admin}" --arg w "${handed}" \
