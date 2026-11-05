@@ -41,6 +41,7 @@ curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o "${archive}" "https:
     exit 1
 }
 tar -xzf "${archive}" -C "${src}" --strip-components=1
+# The fixes apply in name order, since a later one may change what an earlier one added.
 for fix in "${scripts}/${provider}-patches"/*.patch; do
     [ -e "${fix}" ] || continue
     patch -d "${src}" -p1 --batch --forward --quiet < "${fix}"
