@@ -678,6 +678,42 @@ fi
 exit 77
 '
 
+# proxy_label <proxy URL>: scheme://host:port of it, without credentials or path, as safe to print.
+proxy_label() {
+    case "$1" in
+        *://*)
+            label_scheme=${1%%://*}
+            label_rest=${1#*://}
+            ;;
+        *)
+            label_scheme=http
+            label_rest=$1
+            ;;
+    esac
+    label_rest=${label_rest##*@}
+    printf '%s://%s' "${label_scheme}" "${label_rest%%/*}"
+}
+
+# read_download_proxy <datacenter options file>: sets $download_proxy to the HTTP proxy of Proxmox
+# VE's datacenter options, empty when the environment names one (curl reads that itself) or none is
+# set. It is passed to fetch alone: exported, it would send the requests to the container and to
+# the Proxmox VE API through the proxy too.
+read_download_proxy() {
+    download_proxy=''
+    [ -z "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}" ] || return 0
+    download_proxy=$(sed -n 's/^http_proxy:[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' "$1" 2> /dev/null | head -n 1)
+    [ -n "${download_proxy}" ] || return 0
+    shown=$(proxy_label "${download_proxy}")
+    echo "kubehenge: downloading through ${shown}, the HTTP proxy of the datacenter options"
+}
+
+# appliance_realms <public host> <address> <CA file>: the HTTP status of the appliance's realms
+# list. The container is on this node's network, so the datacenter's or the environment's proxy
+# never sees the request, which it could not route to a private address.
+appliance_realms() {
+    curl -s --noproxy '*' --cacert "$3" --resolve "$1:443:$2" -o /dev/null -w '%{http_code}' "https://$1/api/realms" || true
+}
+
 # fetch <url> <file> <SHA-256 or SHA-512> <what it is> [<protocols>]: downloads and checks a file, with
 # a progress bar on a terminal. Any failed transfer is tried again, a connection reset mid-way
 # included, which --retry alone leaves out. HTTPS only, unless the protocols say otherwise.
@@ -685,7 +721,8 @@ fetch() {
     progress=-s
     [ ! -t 2 ] || progress=--progress-bar
     ok "downloading $4"
-    curl -fSL "${progress}" --proto "${5:-=https}" --retry 8 --retry-all-errors --tlsv1.2 -o "$2" "$1" || fail "could not download $1"
+    # shellcheck disable=SC2086 # the unquoted expansion is two words on purpose, the URL one of them.
+    curl -fSL ${download_proxy:+--proxy "${download_proxy}"} "${progress}" --proto "${5:-=https}" --retry 8 --retry-all-errors --tlsv1.2 -o "$2" "$1" || fail "could not download $1"
     case "${#3}" in
         128) sum=sha512sum ;;
         *) sum=sha256sum ;;
@@ -924,11 +961,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Downloads go through the proxy Proxmox VE's own downloads use, unless the environment names one.
-datacenter_proxy=$(sed -n 's/^http_proxy: *//p' /etc/pve/datacenter.cfg 2> /dev/null | head -n 1)
-if [ -n "${datacenter_proxy}" ] && [ -z "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}" ]; then
-    export http_proxy="${datacenter_proxy}" https_proxy="${datacenter_proxy}"
-    echo "kubehenge: downloading through ${datacenter_proxy}, the HTTP proxy of the datacenter options"
-fi
+read_download_proxy /etc/pve/datacenter.cfg
 
 if [ -n "${release}" ]; then
     step "checking ${release} and downloading OpenTofu ${TOFU_VERSION}"
@@ -1170,7 +1203,7 @@ ok "the service is running"
 # just installed: curl takes any certificate in --cacert as a trust anchor, the leaf included, so
 # this holds for one Proxmox VE's CA signed, a self-signed one and the administrator's own alike.
 for _ in $(seq 1 10); do
-    realms=$(curl -s --cacert "${work}/tls.crt" --resolve "${public}:443:${ctip}" -o /dev/null -w '%{http_code}' "https://${public}/api/realms" || true)
+    realms=$(appliance_realms "${public}" "${ctip}" "${work}/tls.crt")
     [ "${realms}" != 200 ] || break
     sleep 2
 done
