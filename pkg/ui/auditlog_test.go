@@ -212,23 +212,30 @@ type auditRig struct {
 	f    *auditFollower
 	logs *fakeAuditLogs
 	out  *strings.Builder
+	// pods are the API server pods the cluster lists, which a test changes between reads.
+	pods map[string]*corev1.Pod
 }
 
 func newAuditRig(t *testing.T, limit int64, pods ...string) *auditRig {
 	t.Helper()
 	on := &corev1.ConfigMap{Data: map[string]string{apiAuditLogKey: "true"}}
 	on.Namespace, on.Name = "kubehenge-system", interfaceConfigMap
-	objects := make([]runtime.Object, 0, len(pods))
+	r := &auditRig{logs: newFakeAuditLogs(), out: &strings.Builder{}, pods: map[string]*corev1.Pod{}}
 	for _, name := range pods {
-		objects = append(objects, &corev1.Pod{
+		r.pods[name] = &corev1.Pod{
 			Name: name, Namespace: metav1.NamespaceSystem, UID: types.UID("uid-" + name), Labels: map[string]string{"k8s-app": "kube-apiserver"},
-		})
+		}
 	}
-	r := &auditRig{logs: newFakeAuditLogs(), out: &strings.Builder{}}
 	r.s = &Server{
 		Kube: fake.NewClientBuilder().WithObjects(on).Build(), ClassNamespace: "kubehenge-system",
-		Log:          slog.New(slog.NewTextHandler(r.out, nil)),
-		NewClientset: func() (kubernetes.Interface, error) { return kubefake.NewClientset(objects...), nil },
+		Log: slog.New(slog.NewTextHandler(r.out, nil)),
+		NewClientset: func() (kubernetes.Interface, error) {
+			objects := make([]runtime.Object, 0, len(r.pods))
+			for _, pod := range r.pods {
+				objects = append(objects, pod.DeepCopy())
+			}
+			return kubefake.NewClientset(objects...), nil
+		},
 	}
 	r.s.init()
 	r.s.clock = func() time.Time { return auditBase.Add(time.Hour) }
@@ -342,6 +349,42 @@ func TestAnAuditRotationGapIsWarnedAboutOnce(t *testing.T) {
 	}
 	if got := r.kept(t); !slices.Equal(got, []string{"created configmaps after"}) {
 		t.Errorf("kept %v", got)
+	}
+}
+
+// An API server pod replaced, or its container restarted, starts a new log: the interface says that
+// the lines since its last read are gone, once, and reads the new log from its start.
+func TestARestartedAPIServerIsWarnedAboutOnceAndReadFromItsStart(t *testing.T) {
+	t.Parallel()
+	for name, change := range map[string]func(*corev1.Pod){
+		"a new pod": func(p *corev1.Pod) { p.UID = "replacement" },
+		"a restart": func(p *corev1.Pod) {
+			p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "kube-apiserver", RestartCount: 1}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newAuditRig(t, 1<<20, "kube-apiserver-a")
+			for n := range 10 {
+				r.logs.add("kube-apiserver-a", n, "")
+			}
+			r.read(t)
+			change(r.pods["kube-apiserver-a"])
+			r.logs.lines["kube-apiserver-a"] = nil
+			r.logs.add("kube-apiserver-a", 1, "fresh")
+			r.read(t)
+			r.read(t)
+			if n := strings.Count(r.out.String(), "restarted"); n != 1 {
+				t.Errorf("%d warnings of a restart, want 1: %s", n, r.out)
+			}
+			opens := r.logs.opens["kube-apiserver-a"]
+			if len(opens) != 3 || !opens[1].IsZero() {
+				t.Errorf("the reads started at %v, want the second at the log's start", opens)
+			}
+			if got := r.kept(t); !slices.Equal(got, []string{"created configmaps fresh"}) {
+				t.Errorf("kept %v", got)
+			}
+		})
 	}
 }
 
