@@ -240,8 +240,8 @@ jobs:
           nohup sudo sh -c "$sample" > "$RUNNER_TEMP/kvm.txt" 2> /dev/null &
           nohup test/e2e/ci/guests.sh record "$RUNNER_TEMP/guests.txt" \
             > "$RUNNER_TEMP/guests-record.log" 2>&1 &
-      # A runner lost to GitHub keeps neither its log nor its artifacts, so the record goes to a check
-      # run as well, once a minute.
+      # A runner lost to GitHub keeps neither its log nor its artifacts. So the record goes to a
+      # check run as well, once a minute.
       - name: The runner's beacon
         if: env.E2E_RUN == 'true'
         env:
