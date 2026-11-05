@@ -988,6 +988,7 @@ check_container_gateway() {
     container_gw=$(container_gateway || true)
     [ -n "${container_gw}" ] || return 0
     ping_rc=0
+    # shellcheck disable=SC2016 # expanded by the container's shell
     pct exec "${ctid}" -- sh -c 'command -v ping > /dev/null || exit 127; ping -c 1 -W 3 "$1" > /dev/null' sh "${container_gw}" > /dev/null 2>&1 || ping_rc=$?
     case "${ping_rc}" in
         0 | 127) ;;
