@@ -179,10 +179,14 @@ The task log shows what each Kubehenge account did. In an appliance's management
   - Check that nothing between the node and GitHub changes downloads, and fetch `install.sh` again from the release you mean to install.
   - With `--release <file>`, check the file and the checksum given with `--sha256`.
 - **The Proxmox VE API's certificate is not valid for the URL, or its CA is not trusted:** the installer stops before it creates anything. The message names what to give: `--proxmox-url`, or the CA with `--proxmox-ca` ([install.md](install.md#the-proxmox-ve-api)).
+- **"this node cannot connect to the Proxmox VE API at …":** the node could not open a connection to port 8006, so this is no certificate problem. Check the node's firewall, and `LISTEN_IP` in `/etc/default/pveproxy`. Or give a URL it reaches with `--proxmox-url`.
 - **"an appliance exists as container … on …":** the cluster has one already. Run `install.sh --upgrade --ctid <id>` on the node it names. "Container … runs on node …" means the same for `--upgrade` and `--certificate`.
 - **"this node has no quorum":** Proxmox VE refuses container changes without it. Start the other nodes of the cluster.
 - **"… is no bridge, Open vSwitch bridge or SDN VNet of this node":** name one of those the message lists with `--bridge`.
-- **"container … got no IPv4 address":** with `--ip dhcp`, no DHCP server on the bridge answered within two minutes. Give a static `--ip` with `--gateway`, or check the bridge (`--bridge`).
+- **"container … got no IPv4 address":** with `--ip dhcp`, no DHCP server on the bridge answered within two minutes. Check `--vlan` and `--bridge`, or give a static `--ip` with `--gateway`.
+- **"container … cannot reach its gateway …":** the container has its address, but its gateway does not answer a ping. Check that `--vlan` is the network the address belongs to, and that `--gateway` is on that network.
+- **"the container cannot resolve any host the Proxmox VE API could be reached at …":** no name server the container uses answers for the API's name. Name working ones with `--dns`, or give an address with `--proxmox-url`.
+- **"container … cannot connect to the Proxmox VE API at … on port …":** the container resolves the API but cannot open a connection to it. Check the node's firewall for port 8006 and `LISTEN_IP` in `/etc/default/pveproxy`. Without a default route in the container, give `--gateway`.
 - **`"the service did not start; its log follows"`:** the interface stopped right after it started. The installer prints its log, whose last lines say why, then removes the container. If they don't help, [report the problem](#reporting-a-problem) with the installer's output.
 - **`"the appliance cannot use Proxmox VE's API at …; give a URL it reaches, whose certificate names it, with --proxmox-url"`:** the interface runs, but got no answer from the API within about 20 seconds. The installer prints its log before it removes the container.
   - The container has to reach that name or address on port 8006 from its own network, and resolve the name through its name servers (`--dns`).

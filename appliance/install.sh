@@ -545,10 +545,21 @@ served_authority() {
     cp "${served_root:-${served_top:-${served_dir}/1.pem}}" "$1"
 }
 
+# api_connects: whether the API at $proxmox_url answers a TLS handshake with a certificate, whatever
+# that certificate is.
+api_connects() {
+    api_endpoint
+    api_handshake | grep -q -e '-----BEGIN CERTIFICATE-----'
+}
+
 # check_api <CA file>: stops unless the API's certificate is one that CA signed for the URL.
 check_api() {
     # shellcheck disable=SC2310 # api_trusted is a predicate; its status is the answer.
     api_trusted "$1" && return
+    # shellcheck disable=SC2310 # api_connects is a predicate; its status is the answer.
+    if ! api_connects; then
+        fail "this node cannot connect to the Proxmox VE API at ${proxmox_url}. Check that port ${api_connect##*:} is open in the node's firewall and that pveproxy listens on it (LISTEN_IP in /etc/default/pveproxy), or give another URL with --proxmox-url"
+    fi
     if [ -n "${proxmox_ca}" ]; then
         fail "the Proxmox VE API at ${proxmox_url} serves no certificate that ${proxmox_ca} signed for it"
     fi
@@ -954,6 +965,48 @@ resolvable_api_host() {
         return 0
     done
     return 1
+}
+
+# require_resolvable_api_host <hosts, one a line>: resolvable_api_host, or stops naming the hosts
+# tried.
+require_resolvable_api_host() {
+    # shellcheck disable=SC2310 # resolvable_api_host is a predicate; its status is the answer.
+    resolvable_api_host "$1" && return
+    tried=$(printf '%s\n' "$1" | paste -sd , - | sed 's/,/, /g')
+    fail "the container cannot resolve any host the Proxmox VE API could be reached at (tried ${tried}). Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns"
+}
+
+# container_gateway: the default gateway the container has, or nothing.
+container_gateway() {
+    pct exec "${ctid}" -- sh -c "ip -4 route show default | sed -n 's/^default via \([0-9.]*\).*/\1/p' | head -n 1" 2> /dev/null | head -n 1
+}
+
+# check_container_gateway: stops unless the container's gateway answers a ping. A container without
+# a gateway, or without ping, passes: the later steps find what is wrong.
+check_container_gateway() {
+    # shellcheck disable=SC2310 # the container may have no route; an empty gateway is skipped.
+    container_gw=$(container_gateway || true)
+    [ -n "${container_gw}" ] || return 0
+    ping_rc=0
+    pct exec "${ctid}" -- sh -c 'command -v ping > /dev/null || exit 127; ping -c 1 -W 3 "$1" > /dev/null' sh "${container_gw}" > /dev/null 2>&1 || ping_rc=$?
+    case "${ping_rc}" in
+        0 | 127) ;;
+        *) fail "container ${ctid} at ${ctip} cannot reach its gateway ${container_gw}. Check that --vlan matches the network of the address, and that --gateway is on it" ;;
+    esac
+}
+
+# check_container_api_port <host>: stops unless the container connects to the API's port on that
+# host. Bash opens the connection, which the template has without anything installed.
+check_container_api_port() {
+    api_endpoint
+    api_port=${api_connect##*:}
+    # shellcheck disable=SC2016 # expanded by the container's shell
+    if ! pct exec "${ctid}" -- timeout 5 bash -c 'exec 3<>"/dev/tcp/$1/$2"' bash "$1" "${api_port}" > /dev/null 2>&1; then
+        no_route=''
+        # shellcheck disable=SC2310 # the container may have no route; an empty gateway is the answer.
+        [ -n "$(container_gateway || true)" ] || no_route=" The container has no default route, so give --gateway."
+        fail "container ${ctid} cannot connect to the Proxmox VE API at $1 on port ${api_port}. Check the node's firewall for that port and pveproxy's LISTEN_IP in /etc/default/pveproxy.${no_route}"
+    fi
 }
 
 # The tests source this file for its functions alone.
@@ -1416,21 +1469,20 @@ for _ in $(seq 1 60); do
     [ -n "${ctip}" ] && break
     sleep 2
 done
-[ -n "${ctip}" ] || fail "container ${ctid} got no IPv4 address"
+[ -n "${ctip}" ] || fail "container ${ctid} got no IPv4 address. Check that --vlan is the right one and that a DHCP server answers on it, or give --ip and --gateway"
 ok "running, at ${ctip}"
 public=${name:-${ctip}}
+check_container_gateway
 
 # This node's hosts file may be all that knows a node's name, and the container does not read it.
 # shellcheck disable=SC2310 # resolvable_api_host is a predicate; its status is the answer.
-reachable=$(resolvable_api_host "${api_hosts}") || {
-    tried=$(printf '%s\n' "${api_hosts}" | paste -sd , - | sed 's/,/, /g')
-    fail "the container cannot resolve any host the Proxmox VE API could be reached at (tried ${tried}). Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns"
-}
+reachable=$(require_resolvable_api_host "${api_hosts}")
 first_host=$(printf '%s\n' "${api_hosts}" | head -n 1)
 if [ "${reachable}" != "${first_host}" ]; then
     echo "kubehenge: the container cannot resolve ${first_host}, so the appliance and the clusters reach the Proxmox VE API at ${reachable}" >&2
     proxmox_url=https://${reachable}:8006
 fi
+check_container_api_port "${reachable}"
 
 if [ -n "${cert_file}" ]; then
     step "checking the certificate for ${public}"

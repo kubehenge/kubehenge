@@ -16,6 +16,9 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - New `--tofu <file>` option installs OpenTofu from a local archive, checked against the script's checksum.
 - A container that cannot resolve the API's name makes the installer take the next name or address the certificate covers. It names every one it tried when none works.
 - The usage text and the docs describe how `--template-storage` is chosen.
+- Once the container has an address, the installer checks its network from inside it. It tests the gateway, the name server and the API's port in turn, and a failure names the option to check (`--vlan`, `--gateway`, `--dns` or the node's firewall).
+- A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
+- A container that gets no DHCP address now names `--vlan` and the DHCP server.
 
 ## [0.4.2] - 2026-11-05
 

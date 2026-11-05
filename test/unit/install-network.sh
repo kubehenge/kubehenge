@@ -50,11 +50,26 @@ cat > "${bin}/pvecm" << EOF
 #!/bin/sh
 cat "${root}/quorum" 2> /dev/null || exit 1
 EOF
-# pct exec <id> -- getent hosts <name>: succeeds for the names in $root/resolvable.
+# pct exec <id> -- <command>: getent succeeds for the names in $root/resolvable. The route query
+# prints $root/gateway. ping succeeds for the gateways in $root/pinging, and is missing (127) where
+# $root/noping exists. A connection by bash succeeds for the host:port lines of $root/open.
 cat > "${bin}/pct" << EOF
 #!/bin/sh
 case "\$1" in
-    exec) grep -qxF -- "\$6" "${root}/resolvable" ;;
+    exec)
+        case "\$4" in
+            getent) grep -qxF -- "\$6" "${root}/resolvable" ;;
+            timeout) grep -qxF -- "\${10}:\${11}" "${root}/open" ;;
+            sh)
+                case "\$6" in
+                    *'route show'*) cat "${root}/gateway" 2> /dev/null ;;
+                    *) [ ! -e "${root}/noping" ] || exit 127
+                       grep -qxF -- "\$8" "${root}/pinging" ;;
+                esac
+                ;;
+            *) exit 2 ;;
+        esac
+        ;;
     config) cat "${root}/config" 2> /dev/null ;;
     *) exit 2 ;;
 esac
@@ -158,6 +173,30 @@ expect "the first name the container resolves" pve.example.org resolvable_api_ho
 printf 'other\n' > "${root}/resolvable"
 expect "an address when no name resolves" 192.0.2.11 resolvable_api_host "${hosts}"
 expect "none when no name resolves and there is no address" no yes_or_no resolvable_api_host "$(printf 'a.example.org\nb.example.org\n')"
+
+# The network seen from inside the container.
+ctid=105 ctip=192.0.2.40
+printf '192.0.2.1\n' > "${root}/gateway"
+printf '192.0.2.1\n' > "${root}/pinging"
+expect "a gateway that answers" "" check_container_gateway
+: > "${root}/pinging"
+expect "a gateway that does not answer" "kubehenge: container 105 at 192.0.2.40 cannot reach its gateway 192.0.2.1. Check that --vlan matches the network of the address, and that --gateway is on it" check_container_gateway
+touch "${root}/noping"
+expect "a template without ping" "" check_container_gateway
+rm "${root}/noping"
+: > "${root}/gateway"
+expect "no gateway: nothing to ping" "" check_container_gateway
+
+proxmox_url=https://192.0.2.11:8006
+printf '192.0.2.11:8006\n' > "${root}/open"
+expect "the API's port open" "" check_container_api_port 192.0.2.11
+: > "${root}/open"
+printf '192.0.2.1\n' > "${root}/gateway"
+expect "the API's port closed" "kubehenge: container 105 cannot connect to the Proxmox VE API at 192.0.2.11 on port 8006. Check the node's firewall for that port and pveproxy's LISTEN_IP in /etc/default/pveproxy." check_container_api_port 192.0.2.11
+: > "${root}/gateway"
+expect "the API's port closed, no default route" "kubehenge: container 105 cannot connect to the Proxmox VE API at 192.0.2.11 on port 8006. Check the node's firewall for that port and pveproxy's LISTEN_IP in /etc/default/pveproxy. The container has no default route, so give --gateway." check_container_api_port 192.0.2.11
+printf 'other\n' > "${root}/resolvable"
+expect "no name resolving" "kubehenge: the container cannot resolve any host the Proxmox VE API could be reached at (tried pve.example.org). Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns" require_resolvable_api_host pve.example.org
 
 # The question about the entry.
 answers=${root}/answers
