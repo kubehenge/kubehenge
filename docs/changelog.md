@@ -4,6 +4,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-05
+
 ### Before you upgrade
 
 - Pod Security Admission's default level moves from `privileged` to `baseline`. A cluster that sets `podSecurity.admission` keeps its level.
