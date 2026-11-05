@@ -84,7 +84,7 @@ This takes the line out of Proxmox VE's page template and removes the entry's sc
 
 These stay on Proxmox VE after removal:
 
-- **The Debian container template** the installer downloaded to the `local` storage. `pveam list local` shows it, `pveam remove` deletes it.
+- **The Debian container template** the installer downloaded, on the storage it named. `pveam list <storage>` shows it, `pveam remove` deletes it.
 - **Backups of the appliance** in your backup storages. They hold the management cluster's state, encrypted with the state passphrase.
 - **API tokens you made** for Terraform/OpenTofu or for `kubehenge template create`. Remove them with `pveum user token remove`.
 - **ACLs and roles you added** to share clusters, on the workload pool, storages and bridges.

@@ -4,7 +4,7 @@
 #
 # Run as root in the node's shell:
 #
-#   sh install.sh [--ctid <id>] [--storage <storage>] [--bridge <bridge>] [--ip dhcp|<address/prefix>]
+#   sh install.sh [--ctid <id>] [--storage <storage>] [--template-storage <storage>] [--bridge <bridge>] [--ip dhcp|<address/prefix>]
 #                 [--gateway <address>] [--dns <address>,...] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
 #                 [--hostname <name>] [--name <DNS name>] [--cert <file> --key <file>] [--release <file> --sha256 <hex>]
 #                 [--pve-entry | --no-pve-entry]
@@ -32,8 +32,13 @@
 # --proxmox-insecure stops the checks; the management cluster takes either once it is applied
 # again from the interface.
 #
-# Everything it downloads is checked against a checksum this script carries; the container template
-# comes through pveam, which checks it against Proxmox's signed index. --release installs a local
+# The appliance's disks and the container template go to a storage that takes them, asked on the
+# terminal when several do; --storage and --template-storage name them in advance. A template
+# already on a storage here is used where it is.
+#
+# Everything it downloads is checked against a checksum this script carries, the container template
+# included, and goes through the HTTP proxy of Proxmox VE's datacenter options unless the
+# environment names one. --release installs a local
 # release archive instead of the published one, with its checksum given. --upgrade replaces the
 # software of an installed appliance with a release no older, keeps its state, and waits for no
 # run of the management cluster: it stops if one is going on. Should the new release's interface
@@ -48,7 +53,11 @@ KUBEHENGE_SHA256=
 TOFU_TAG=v1.13.2
 TOFU_SHA256=ac05d9952662c7db28dd57e93f0a68018837bfdf9342384ec0987977c16a9645
 TOFU_VERSION=${TOFU_TAG#v}
+# The container template and its SHA-512 from Proxmox's template index (aplinfo-pve-9.dat). Proxmox
+# serves templates over plain HTTP, so the checksum is what vouches for it.
 TEMPLATE=debian-13-standard_13.6-1_amd64.tar.zst
+TEMPLATE_SHA512=4c0c27ca6ceab5ef0b84db57825a00f26157ef1854bafe97297813e1cbe8ecb8cc9c453cab6b3b0efe1ba193a50c47ece1e41d950e411b8730b835b71e9e754b
+TEMPLATE_URL=http://download.proxmox.com/images/system/${TEMPLATE}
 # This Proxmox VE cluster's CA, this node's trust store, and the terminal questions are asked on,
 # which stays the administrator's when the script is piped into sh.
 cluster_ca=/etc/pve/pve-root-ca.pem
@@ -63,6 +72,8 @@ fail() {
     exit 1
 }
 step() { printf '\n== %s\n' "$*"; }
+# ok <what>: a line under the step saying what it finished.
+ok() { printf '   %s\n' "$*"; }
 # older <a> <b>: whether version a comes before version b.
 older() {
     [ "$1" != "$2" ] || return 1
@@ -340,6 +351,61 @@ choose_api_host() {
     echo "${best}"
 }
 
+# storages <content>: "<name> <type> <free KiB>" a line for each enabled, active storage on this
+# node that takes the content, the most free space first.
+storages() {
+    pvesm status --content "$1" --enabled 1 2> /dev/null | awk 'NR > 1 && $3 == "active" { print $1, $2, $6 }' | sort -s -k 3,3nr
+}
+
+# takes <storage> <content>: whether the storage is enabled and active here and takes the content.
+takes() {
+    storages "$2" | cut -d ' ' -f 1 | grep -qx -- "$1"
+}
+
+# choose_storage <content> <what goes there> <option>: the storage for it. That is the only one
+# that takes it, else the one the administrator picks on the terminal, else the one with the most
+# free space. Nothing when none takes it.
+choose_storage() {
+    candidates=$(storages "$1")
+    [ -n "${candidates}" ] || return 0
+    best=$(printf '%s\n' "${candidates}" | head -n 1 | cut -d ' ' -f 1)
+    count=$(printf '%s\n' "${candidates}" | wc -l)
+    # shellcheck disable=SC2310 # interactive is a predicate; its status is the answer.
+    if [ "${count}" -gt 1 ] && interactive; then
+        printf '\nStorages here for %s:\n' "$2" >&2
+        printf '%s\n' "${candidates}" | awk '{ printf "  %d) %s (%s, %.1f GiB free)\n", NR, $1, $2, $3 / 1048576 }' >&2
+        # One reading of the terminal for every try, so that each answer is the next line typed.
+        while :; do
+            printf 'Which one for %s? [1] ' "$2" >&2
+            choice=''
+            read -r choice || true
+            choice=${choice:-1}
+            case "${choice}" in
+                *[!0-9]*) ;;
+                *) [ "${choice}" -lt 1 ] || [ "${choice}" -gt "${count}" ] || break ;;
+            esac
+        done < "${tty}"
+        printf '%s\n' "${candidates}" | sed -n "${choice}p" | cut -d ' ' -f 1
+        return
+    fi
+    if [ "${count}" -gt 1 ]; then
+        echo "kubehenge: storage ${best} for $2, the one with the most free space ($3 names another)" >&2
+    else
+        echo "kubehenge: storage ${best} for $2, the only one here that takes it ($3 names another)" >&2
+    fi
+    echo "${best}"
+}
+
+# template_held: the storage here that already holds the container template, if one does.
+template_held() {
+    for held in $(storages vztmpl | cut -d ' ' -f 1); do
+        if pvesm list "${held}" --content vztmpl 2> /dev/null | grep -q "vztmpl/${TEMPLATE} "; then
+            echo "${held}"
+            return
+        fi
+    done
+}
+
 # api_endpoint: sets $api_host to the name or address in $proxmox_url, $api_connect to where
 # openssl connects for it, and $api_check to the openssl option checking a certificate for it.
 api_endpoint() {
@@ -612,6 +678,22 @@ fi
 exit 77
 '
 
+# fetch <url> <file> <SHA-256 or SHA-512> <what it is> [<protocols>]: downloads and checks a file, with
+# a progress bar on a terminal. Any failed transfer is tried again, a connection reset mid-way
+# included, which --retry alone leaves out. HTTPS only, unless the protocols say otherwise.
+fetch() {
+    progress=-s
+    [ ! -t 2 ] || progress=--progress-bar
+    ok "downloading $4"
+    curl -fSL "${progress}" --proto "${5:-=https}" --retry 5 --retry-all-errors --tlsv1.2 -o "$2" "$1" || fail "could not download $1"
+    case "${#3}" in
+        128) sum=sha512sum ;;
+        *) sum=sha256sum ;;
+    esac
+    echo "$3  $2" | "${sum}" -c --quiet - || fail "$1 does not match its checksum"
+    ok "$4: checksum verified"
+}
+
 # The tests source this file for its functions alone.
 [ -z "${KUBEHENGE_INSTALL_FUNCTIONS:-}" ] || return 0
 
@@ -625,7 +707,8 @@ Installs Kubehenge's appliance on this Proxmox VE node, as root.
 
 Options:
   --ctid <id>                 the container's ID; default the next free one
-  --storage <storage>         where the container's disk goes; default the first active storage that takes container disks
+  --storage <storage>         where the container's disks go; default the only storage that takes them, else asked
+  --template-storage <storage> where the container template goes; default where it already is, else as --storage
   --bridge <bridge>           the bridge the container attaches to; default vmbr0
   --ip dhcp|<address/prefix>  the container's address, such as 192.0.2.40/24; default dhcp
   --gateway <address>         the default gateway, with a static --ip
@@ -648,7 +731,7 @@ More: https://kubehenge.dev/docs/install
 EOF
 }
 
-ctid='' storage='' bridge=vmbr0 ip=dhcp gateway='' dns='' proxmox_url='' proxmox_ca='' proxmox_insecure='' hostname=kubehenge
+ctid='' storage='' template_storage='' bridge=vmbr0 ip=dhcp gateway='' dns='' proxmox_url='' proxmox_ca='' proxmox_insecure='' hostname=kubehenge
 release='' release_sha='' upgrade='' pve_entry='' certificate='' name='' no_name='' cert_file='' key_file=''
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -691,6 +774,7 @@ while [ $# -gt 0 ]; do
         --key) key_file=$2 ;;
         --ctid) ctid=$2 ;;
         --storage) storage=$2 ;;
+        --template-storage) template_storage=$2 ;;
         --bridge) bridge=$2 ;;
         --ip) ip=$2 ;;
         --gateway) gateway=$2 ;;
@@ -781,10 +865,21 @@ if [ -n "${upgrade}" ]; then
     pct config "${ctid}" 2> /dev/null | grep -q '^tags:.*kubehenge' || fail "container ${ctid} is not Kubehenge's appliance"
 else
     [ -n "${ctid}" ] || ctid=$(pvesh get /cluster/nextid)
+    # Asked before the long steps rather than during them.
     if [ -z "${storage}" ]; then
-        # The first active storage that takes container disks.
-        storage=$(pvesm status --content rootdir --enabled 1 2> /dev/null | awk 'NR > 1 && $3 == "active" { print $1; exit }')
-        [ -n "${storage}" ] || fail "no active storage here takes container disks (content rootdir); name one with --storage"
+        storage=$(choose_storage rootdir "the appliance's disks" --storage)
+        [ -n "${storage}" ] || fail "no enabled, active storage here takes container disks (content rootdir); enable one, or name one with --storage"
+    else
+        # shellcheck disable=SC2310 # takes is a predicate; its status is the answer.
+        takes "${storage}" rootdir || fail "storage ${storage} is disabled, inactive or takes no container disks here; name another with --storage"
+    fi
+    if [ -z "${template_storage}" ]; then
+        template_storage=$(template_held)
+        [ -n "${template_storage}" ] || template_storage=$(choose_storage vztmpl "the container template" --template-storage)
+        [ -n "${template_storage}" ] || fail "no enabled, active storage here takes container templates (content vztmpl); enable one, or name one with --template-storage"
+    else
+        # shellcheck disable=SC2310 # takes is a predicate; its status is the answer.
+        takes "${template_storage}" vztmpl || fail "storage ${template_storage} is disabled, inactive or takes no container templates here; name another with --template-storage"
     fi
     case "${ip}" in
         dhcp) net="name=eth0,bridge=${bridge},ip=dhcp" ;;
@@ -809,6 +904,7 @@ fi
 work=$(mktemp -d)
 created=''
 started=''
+partial=''
 # A failed install leaves no half-made container behind, so running it again starts clean.
 cleanup() {
     status=$?
@@ -822,31 +918,34 @@ cleanup() {
         pct stop "${ctid}" > /dev/null 2>&1 || true
         pct destroy "${ctid}" --purge > /dev/null 2>&1 || true
     fi
+    [ -z "${partial}" ] || rm -f "${partial}"
     rm -rf "${work}"
 }
 trap cleanup EXIT
 
-# fetch <url> <file> <sha256>: downloads and checks a file. Any failed transfer is tried again, a
-# connection reset mid-way included, which --retry alone leaves out.
-fetch() {
-    curl -fsSL --proto '=https' --retry 5 --retry-all-errors --tlsv1.2 -o "$2" "$1" || fail "could not download $1"
-    echo "$3  $2" | sha256sum -c --quiet - || fail "$1 does not match its checksum"
-}
+# Downloads go through the proxy Proxmox VE's own downloads use, unless the environment names one.
+datacenter_proxy=$(sed -n 's/^http_proxy: *//p' /etc/pve/datacenter.cfg 2> /dev/null | head -n 1)
+if [ -n "${datacenter_proxy}" ] && [ -z "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}" ]; then
+    export http_proxy="${datacenter_proxy}" https_proxy="${datacenter_proxy}"
+    echo "kubehenge: downloading through ${datacenter_proxy}, the HTTP proxy of the datacenter options"
+fi
 
 if [ -n "${release}" ]; then
     step "checking ${release} and downloading OpenTofu ${TOFU_VERSION}"
     cp "${release}" "${work}/kubehenge.tar.gz"
     echo "${KUBEHENGE_SHA256}  ${work}/kubehenge.tar.gz" | sha256sum -c --quiet - || fail "${release} does not match its checksum"
+    ok "${release}: checksum verified"
 else
     step "downloading and checking Kubehenge ${KUBEHENGE_VERSION} and OpenTofu ${TOFU_VERSION}"
     fetch "https://github.com/kubehenge/kubehenge/releases/download/v${KUBEHENGE_VERSION}/kubehenge_${KUBEHENGE_VERSION}_linux_amd64.tar.gz" \
-        "${work}/kubehenge.tar.gz" "${KUBEHENGE_SHA256}"
+        "${work}/kubehenge.tar.gz" "${KUBEHENGE_SHA256}" "Kubehenge ${KUBEHENGE_VERSION}"
 fi
 fetch "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.tar.gz" \
-    "${work}/tofu.tar.gz" "${TOFU_SHA256}"
+    "${work}/tofu.tar.gz" "${TOFU_SHA256}" "OpenTofu ${TOFU_VERSION}"
 mkdir "${work}/kubehenge" "${work}/tofu"
 tar -xzf "${work}/kubehenge.tar.gz" -C "${work}/kubehenge"
 tar -xzf "${work}/tofu.tar.gz" -C "${work}/tofu" tofu
+ok "unpacked"
 # A release archive names its version, which a --release file need not share with this script.
 if [ -f "${work}/kubehenge/share/kubehenge/VERSION" ]; then
     KUBEHENGE_VERSION=$(head -c 64 "${work}/kubehenge/share/kubehenge/VERSION" | tr -cd '0-9A-Za-z.+-')
@@ -982,16 +1081,24 @@ else
     choose_api_ca
 fi
 
-step "container template ${TEMPLATE}"
-if ! pveam list local | grep -q "${TEMPLATE}"; then
-    pveam update > /dev/null
-    pveam download local "${TEMPLATE}"
+step "container template ${TEMPLATE} on ${template_storage}"
+template_file=$(pvesm path "${template_storage}:vztmpl/${TEMPLATE}") || fail "storage ${template_storage} gives no path for the container template; name another with --template-storage"
+if [ -f "${template_file}" ] && echo "${TEMPLATE_SHA512}  ${template_file}" | sha512sum -c --quiet - 2> /dev/null; then
+    ok "already there, checksum verified"
+else
+    mkdir -p "$(dirname "${template_file}")"
+    # Downloaded beside its place and moved there once checked, so no half or wrong file is left as
+    # the template.
+    partial=${template_file}.part
+    fetch "${TEMPLATE_URL}" "${partial}" "${TEMPLATE_SHA512}" "the container template" '=http,https'
+    mv "${partial}" "${template_file}"
+    partial=''
 fi
 
 step "creating container ${ctid} on ${node}"
 # Without --nameserver the container is given this node's name servers.
 nameservers=$(printf '%s' "${dns}" | tr , ' ')
-pct create "${ctid}" "local:vztmpl/${TEMPLATE}" \
+pct create "${ctid}" "${template_storage}:vztmpl/${TEMPLATE}" \
     --hostname "${hostname}" --cores 2 --memory 1024 --swap 512 \
     --rootfs "${storage}:8" --mp0 "${storage}:1,mp=${key_dir},backup=0" \
     --net0 "${net}" ${dns:+--nameserver "${nameservers}"} \
@@ -1006,14 +1113,17 @@ for _ in $(seq 1 60); do
     sleep 2
 done
 [ -n "${ctip}" ] || fail "container ${ctid} got no IPv4 address"
+ok "running, at ${ctip}"
 public=${name:-${ctip}}
 
 if [ -n "${cert_file}" ]; then
     step "checking the certificate for ${public}"
     own_certificate "${public}"
+    ok "it matches its key and is valid for ${public}"
 else
     step "certificate for ${public}, signed by this cluster's CA"
     make_certificate "${hostname}" "${ctip}" "${name}"
+    ok "made"
 fi
 
 step "installing into the container"
@@ -1028,6 +1138,9 @@ printf 'KUBEHENGE_PROXMOX_URL=%s\nKUBEHENGE_PUBLIC_URL=https://%s\nKUBEHENGE_APP
 pct push "${ctid}" "${work}/appliance.env" /etc/kubehenge/appliance.env --perms 0644
 printf 'HEADLAMP_CONFIG_OIDC_CALLBACK_URL=https://%s:8443/oidc-callback\n' "${public}" > "${work}/headlamp.env"
 pct push "${ctid}" "${work}/headlamp.env" /etc/kubehenge/headlamp.env --perms 0644
+ok "software, certificate and settings in place"
+
+step "starting Kubehenge ${KUBEHENGE_VERSION}"
 
 # Runs inside the container. The appliance is reached only through its interface and pct, so the
 # SSH and mail servers of the template are switched off.
@@ -1051,6 +1164,7 @@ pct exec "${ctid}" -- sh -c '
 started=1
 sleep 2
 pct exec "${ctid}" -- systemctl is-active --quiet kubehenge.service || fail "the service did not start; its log follows"
+ok "the service is running"
 # The realms are what the interface asks Proxmox VE before anyone signs in: an answer shows that it
 # reaches the API and trusts its certificate. The appliance's own certificate is checked as the one
 # just installed: curl takes any certificate in --cacert as a trust anchor, the leaf included, so
@@ -1061,6 +1175,7 @@ for _ in $(seq 1 10); do
     sleep 2
 done
 [ "${realms}" = 200 ] || fail "the appliance cannot use Proxmox VE's API at ${proxmox_url}; give a URL it reaches, whose certificate names it, with --proxmox-url (its log follows)"
+ok "it serves its certificate and reaches the Proxmox VE API at ${proxmox_url}"
 
 # The appliance works from here on; nothing after this removes it.
 created=''
