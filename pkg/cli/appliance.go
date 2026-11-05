@@ -497,7 +497,7 @@ func (o *applianceOptions) signIn(ctx context.Context) (*applianceSession, error
 	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return nil, fmt.Errorf("a cookie jar: %w", err)
+		return nil, fmt.Errorf("starting the session: %w", err)
 	}
 	client.Jar, client.Timeout = jar, applianceRequestTimeout
 	s := &applianceSession{http: client, base: base}

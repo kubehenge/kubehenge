@@ -179,7 +179,7 @@ export function gitOpsProblems(g: GitOpsChoice): Partial<Record<GitOpsField, str
     p.existingSecret = "Enter the Secret's name";
   }
   if (knownHostsNeeded(g) && !filled(g.knownHosts.trim())) {
-    p.knownHosts = "The host's keys.";
+    p.knownHosts = "Enter the host's keys";
   }
   if (g.clientSecret === "existingSecret" && !filled(g.clientSecretName.trim())) {
     p.clientSecretName = "Enter the Secret's name";

@@ -38,8 +38,8 @@ func (o *applianceOptions) activityCommand() *cobra.Command {
 		Use:   "activity",
 		Short: "Show who did what through the interface, newest first",
 		Long: `Show who did what through the interface, newest first: sign-ins, refused sign-ins and every
-change. The whole appliance's needs Sys.Audit on /. One cluster's, with --cluster, needs only to see
-the cluster. --json adds the management cluster's events of the last day.`,
+change. The activity of the whole appliance needs Sys.Audit on /. With --cluster, seeing that cluster
+is enough. --json adds the management cluster's events of the last day.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			path := "/api/activity"
