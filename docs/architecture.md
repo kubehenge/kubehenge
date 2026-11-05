@@ -881,9 +881,10 @@ A Talos node's log is read through its Talos API with the cluster's talosconfig.
 
 The interface logs each sign-in and change with its user, as it always has. Each such line also goes into `activity.jsonl` in the appliance's folder, which the Activity pages read. It keeps 90 days and stays under 8 MiB by dropping its older half.
 
-With `api_audit_log`, the management cluster's API server writes Talos's audit policy's events to its output instead of Talos's file on the node.
+The management cluster's API server audits with the policy of the workload clusters (`charts/kubehenge/files/audit-policy.yaml`), which the module sets through Talos's `KubeAuditPolicyConfig`. With `api_audit_log`, it writes those events to its output instead of Talos's file on the node.
 
-- The interface reads the API server pods' logs every minute. It adds each create, change and deletion once, by its audit ID.
+- The interface reads the API server pods' logs every minute, each to its end. It keeps its place in each log by the last line read, and warns when the kubelet rotated lines away before it read them.
+- It adds each create, change and deletion once, by its audit ID.
 - A GitOps tool's or a script's service account counts as a person.
 - Nodes, the control plane's own users and the service accounts in the namespaces the module installs are left out. The interface's account is among them, its changes being in its own record.
 - For that it may list pods and read their logs in `kube-system`, and only then.
