@@ -56,9 +56,9 @@ func newAPIServerFake(t *testing.T, pods ...string) *apiServerFake {
 		followers: map[string][]*fakeFollower{}, opens: map[string][]time.Time{},
 	}
 	for _, name := range pods {
-		api.pods[name] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		api.pods[name] = &corev1.Pod{
 			Name: name, Namespace: metav1.NamespaceSystem, UID: types.UID("uid-" + name), Labels: map[string]string{"k8s-app": "kube-apiserver"},
-		}}
+		}
 	}
 	api.srv = httptest.NewServer(http.HandlerFunc(api.serve))
 	t.Cleanup(api.srv.Close)
@@ -152,28 +152,28 @@ func (api *apiServerFake) pod(name string, change func(*corev1.Pod)) {
 	change(api.pods[name])
 }
 
-func (api *apiServerFake) openedFrom(pod string) []time.Time {
+// openedFrom is where each stream on the first pod's log started.
+func (api *apiServerFake) openedFrom() []time.Time {
 	api.mu.Lock()
 	defer api.mu.Unlock()
-	return slices.Clone(api.opens[pod])
-}
-
-func (api *apiServerFake) streams(pod string) int {
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	return len(api.followers[pod])
+	return slices.Clone(api.opens[apiServerA])
 }
 
 func (api *apiServerFake) serve(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/api/v1/namespaces/kube-system/pods" {
 		api.mu.Lock()
-		list := corev1.PodList{TypeMeta: metav1.TypeMeta{Kind: "PodList", APIVersion: "v1"}}
+		list := corev1.PodList{Kind: "PodList", APIVersion: "v1"}
 		for _, pod := range api.pods {
 			list.Items = append(list.Items, *pod.DeepCopy())
 		}
 		api.mu.Unlock()
+		raw, err := json.Marshal(list)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(list)
+		_, _ = w.Write(raw)
 		return
 	}
 	if path.Base(r.URL.Path) != "log" {
@@ -214,9 +214,10 @@ func (api *apiServerFake) serve(w http.ResponseWriter, r *http.Request) {
 
 func (*apiServerFake) follow(w http.ResponseWriter, r *http.Request, f *fakeFollower, backlog string) {
 	flush := func(s string) bool {
-		_, err := io.WriteString(w, s)
-		w.(http.Flusher).Flush()
-		return err == nil
+		if _, err := io.WriteString(w, s); err != nil {
+			return false
+		}
+		return http.NewResponseController(w).Flush() == nil
 	}
 	if !flush(backlog) {
 		return
@@ -237,7 +238,9 @@ func (*apiServerFake) follow(w http.ResponseWriter, r *http.Request, f *fakeFoll
 			for {
 				select {
 				case line := <-f.lines:
-					flush(line)
+					if !flush(line) {
+						return
+					}
 				default:
 					return
 				}

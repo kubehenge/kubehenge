@@ -213,12 +213,12 @@ func (r *auditRig) waitRead(t *testing.T, pod string, n int) {
 	})
 }
 
-// cut ends the stream on a pod's log, with err as a connection lost and nil as a container that
-// stopped, and waits until the follower has seen it end.
-func (r *auditRig) cut(t *testing.T, pod string, err error) {
+// cut ends the stream on the first pod's log, with err as a connection lost and nil as a container
+// that stopped, and waits until the follower has seen it end.
+func (r *auditRig) cut(t *testing.T, err error) {
 	t.Helper()
-	r.api.end(pod, err)
-	r.wait(t, pod+"'s stream to end", func(f *auditFollower) bool { return !f.pods[pod].streaming() })
+	r.api.end(apiServerA, err)
+	r.wait(t, "the stream to end", func(f *auditFollower) bool { return !f.pods[apiServerA].streaming() })
 }
 
 func (r *auditRig) warnings(about string) int { return strings.Count(r.out.String(), about) }
@@ -233,11 +233,11 @@ func TestAnAuditStreamOpensAgainWhereTheLastEnded(t *testing.T) {
 	}
 	r.tick(t)
 	r.waitRead(t, apiServerA, 19)
-	r.cut(t, apiServerA, errConnectionLost)
+	r.cut(t, errConnectionLost)
 	r.api.add(apiServerA, 25, "late")
 	r.tick(t)
 	waitAuditKept(t, r.s, "created configmaps late")
-	if opens := r.api.openedFrom(apiServerA); len(opens) != 2 || !opens[1].Equal(auditBase.Add(19*time.Second)) {
+	if opens := r.api.openedFrom(); len(opens) != 2 || !opens[1].Equal(auditBase.Add(19*time.Second)) {
 		t.Errorf("the streams opened from %v, want the second from the last line read", opens)
 	}
 }
@@ -275,7 +275,7 @@ func TestAnAuditRotationGapIsWarnedAboutOnce(t *testing.T) {
 	}
 	r.tick(t)
 	r.waitRead(t, apiServerA, 9)
-	r.cut(t, apiServerA, errConnectionLost)
+	r.cut(t, errConnectionLost)
 	r.api.rotate(apiServerA)
 	r.api.add(apiServerA, 100, "")
 	r.api.add(apiServerA, 101, "after")
@@ -283,7 +283,7 @@ func TestAnAuditRotationGapIsWarnedAboutOnce(t *testing.T) {
 	waitAuditKept(t, r.s, "created configmaps after")
 	r.api.add(apiServerA, 102, "")
 	r.waitRead(t, apiServerA, 102)
-	r.cut(t, apiServerA, errConnectionLost)
+	r.cut(t, errConnectionLost)
 	r.api.add(apiServerA, 103, "")
 	r.tick(t)
 	r.waitRead(t, apiServerA, 103)
@@ -316,7 +316,7 @@ func TestARestartedAPIServerIsReadFromItsStart(t *testing.T) {
 			}
 			r.tick(t)
 			r.waitRead(t, apiServerA, 9)
-			r.cut(t, apiServerA, tc.end)
+			r.cut(t, tc.end)
 			r.api.pod(apiServerA, tc.change)
 			r.api.rotate(apiServerA)
 			r.api.add(apiServerA, 1, "fresh")
@@ -326,7 +326,7 @@ func TestARestartedAPIServerIsReadFromItsStart(t *testing.T) {
 			if n := r.warnings("restarted"); n != tc.warns {
 				t.Errorf("%d warnings of a restart, want %d: %s", n, tc.warns, r.out)
 			}
-			if opens := r.api.openedFrom(apiServerA); len(opens) != 2 || !opens[1].IsZero() {
+			if opens := r.api.openedFrom(); len(opens) != 2 || !opens[1].IsZero() {
 				t.Errorf("the streams opened from %v, want the second at the log's start", opens)
 			}
 		})
@@ -348,7 +348,7 @@ func TestAnAuditLineIsNeverKeptTwice(t *testing.T) {
 	r.api.add(apiServerA, 30, "c30")
 	r.waitRead(t, apiServerA, 30)
 	for n := 31; n < 33; n++ {
-		r.cut(t, apiServerA, errConnectionLost)
+		r.cut(t, errConnectionLost)
 		r.tick(t)
 		r.api.add(apiServerA, n, "")
 		r.waitRead(t, apiServerA, n)
@@ -370,14 +370,14 @@ func TestAQuietAuditStreamOpensAgain(t *testing.T) {
 	r.tick(t)
 	r.waitRead(t, apiServerA, 0)
 	r.tick(t)
-	if opens := r.api.openedFrom(apiServerA); len(opens) != 1 {
+	if opens := r.api.openedFrom(); len(opens) != 1 {
 		t.Fatalf("a live stream was opened again: %v", opens)
 	}
 	r.clock.Add(int64(auditQuiet))
 	r.tick(t)
 	r.api.add(apiServerA, 1, "after")
 	waitAuditKept(t, r.s, "created configmaps after")
-	if opens := r.api.openedFrom(apiServerA); len(opens) != 2 || r.warnings("no line") != 1 {
+	if opens := r.api.openedFrom(); len(opens) != 2 || r.warnings("no line") != 1 {
 		t.Errorf("the streams opened from %v, with %d warnings of a quiet stream", opens, r.warnings("no line"))
 	}
 }

@@ -358,7 +358,10 @@ func (s *Server) streamPod(ctx context.Context, f *auditFollower, open auditOpen
 		// it whole.
 		if bytes.HasSuffix(line, []byte{'\n'}) {
 			if at, message, ok := stampedLine(bytes.TrimRight(line, "\r\n")); ok {
-				if keepErr := s.auditLine(ctx, f, name, p, at, message, first); keepErr != nil {
+				if first {
+					s.warnGap(ctx, f, name, p, at)
+				}
+				if keepErr := s.auditLine(f, p, at, message); keepErr != nil {
 					s.warnStream(ctx, name, keepErr)
 					return
 				}
@@ -378,14 +381,21 @@ func (s *Server) streamPod(ctx context.Context, f *auditFollower, open auditOpen
 	}
 }
 
-// auditLine moves the pod's position to a line read and keeps its change, if it is one.
-func (s *Server) auditLine(ctx context.Context, f *auditFollower, name string, p *auditPod, at time.Time, message []byte, first bool) error {
+// warnGap says lines are lost when a stream's first line is later than the last line read before,
+// since the stream starts in that line's second.
+func (s *Server) warnGap(ctx context.Context, f *auditFollower, name string, p *auditPod, at time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if first && !p.last.IsZero() && at.After(p.last) {
+	if !p.last.IsZero() && at.After(p.last) {
 		s.Log.WarnContext(ctx, "the API server's log was rotated while the interface did not follow it, so its audit lines in this time are lost",
 			"pod", name, "from", p.last, "to", at)
 	}
+}
+
+// auditLine moves the pod's position to a line read and keeps its change, if it is one.
+func (s *Server) auditLine(f *auditFollower, p *auditPod, at time.Time, message []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	p.last = maxTime(p.last, at)
 	p.from = p.last.Truncate(time.Second)
 	p.heard = s.now()
