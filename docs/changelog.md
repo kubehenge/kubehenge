@@ -13,6 +13,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The Add-on Provider for Helm keeps each pinned chart once downloaded. It downloaded and parsed the chart repository's whole index on every reconcile, over 100 MiB of memory for a large one.
 - An abandoned deletion ends as soon as no ProxmoxMachine and no ProxmoxCluster of the cluster is left, instead of after five minutes. The five minutes still apply while a VM could be left behind.
 - capmox and the Add-on Provider for Helm are built with ko from `scripts/ko.sh`, so their image digests are the same on any host.
+- A release builds its index from the last published one when that one carries no expiry, as 0.3.1's does. An appliance still refuses such an index.
 
 ## [0.4.0] - 2026-11-05
 
