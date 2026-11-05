@@ -685,7 +685,7 @@ fetch() {
     progress=-s
     [ ! -t 2 ] || progress=--progress-bar
     ok "downloading $4"
-    curl -fSL "${progress}" --proto "${5:-=https}" --retry 5 --retry-all-errors --tlsv1.2 -o "$2" "$1" || fail "could not download $1"
+    curl -fSL "${progress}" --proto "${5:-=https}" --retry 8 --retry-all-errors --tlsv1.2 -o "$2" "$1" || fail "could not download $1"
     case "${#3}" in
         128) sum=sha512sum ;;
         *) sum=sha256sum ;;
