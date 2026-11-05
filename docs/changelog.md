@@ -4,7 +4,9 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-11-05
+## [0.4.1] - 2026-11-05
+
+The first release of 0.4. The v0.4.0 tag was never published.
 
 ### Before you upgrade
 
@@ -208,6 +210,14 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
   - An install that stalls for three minutes or finds the node unreachable is tried again up to four times, a minute, two and four apart.
 - An etcd restore that succeeded is no longer recorded as failed with "the controller restarted during the restore". That happened when Cluster API wrote the Cluster while the restore recorded its end.
 - Conditions, and the certificate watch's roll of a second worker pool, no longer fail on the controller's own write just before them.
+- The management cluster keeps answering while its Proxmox VE host is busy:
+  - Its nodes get a CPU weight of 1000, ten times a default VM's (`node_cpu_units`).
+  - Cluster API's providers allow 5 s for each health probe and six missed liveness probes before a restart.
+  - Kubehenge's Cluster webhook reads the ClusterClass from its cache.
+- The Add-on Provider for Helm keeps each pinned chart once downloaded. It downloaded and parsed the chart repository's whole index on every reconcile, over 100 MiB of memory for a large one.
+- An abandoned deletion ends as soon as no ProxmoxMachine and no ProxmoxCluster of the cluster is left, instead of after five minutes. The five minutes still apply while a VM could be left behind.
+- capmox and the Add-on Provider for Helm are built with ko from `scripts/ko.sh`, so their image digests are the same on any host.
+- A release builds its index from the last published one when that one carries no expiry, as 0.3.1's does. An appliance still refuses such an index.
 
 ### Recovery, health and upgrades
 

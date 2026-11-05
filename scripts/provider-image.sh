@@ -4,15 +4,19 @@
 # from its upstream commit with the fixes in scripts/<provider>-patches, pushes it to <repository>
 # and prints <repository>@<digest>. The build is reproducible: it fails unless the image comes out
 # with the digest versions.tf names, so what a release publishes is what anyone gets from that commit
-# and those patches. Further arguments go to ko, such as --insecure-registry.
+# and those patches. It builds with the ko scripts/ko.sh puts in <ko directory>. Further arguments
+# go to ko, such as --insecure-registry.
 #
-#   scripts/provider-image.sh <provider> <repository> [ko flags]
+#   scripts/provider-image.sh <ko directory> <provider> <repository> [ko flags]
 set -eu
 
-provider=${1:?usage: $0 <provider> <repository> [ko flags]}
-repository=${2:?usage: $0 <provider> <repository> [ko flags]}
-shift 2
+usage="usage: $0 <ko directory> <provider> <repository> [ko flags]"
+kodir=${1:?${usage}}
+provider=${2:?${usage}}
+repository=${3:?${usage}}
+shift 3
 scripts=$(cd "$(dirname "$0")" && pwd)
+sh "${scripts}/ko.sh" "${kodir}"
 versions=${scripts}/../management-cluster/versions.tf
 block=$(echo "${provider}" | tr - _)_build
 field() {
@@ -41,6 +45,7 @@ curl -fsSL --proto '=https' --retry 5 --retry-all-errors -o "${archive}" "https:
     exit 1
 }
 tar -xzf "${archive}" -C "${src}" --strip-components=1
+# The fixes apply in name order, since a later one may change what an earlier one added.
 for fix in "${scripts}/${provider}-patches"/*.patch; do
     [ -e "${fix}" ] || continue
     patch -d "${src}" -p1 --batch --forward --quiet < "${fix}"
@@ -48,7 +53,7 @@ done
 
 build() {
     (cd "${src}" && GOTOOLCHAIN=${go} GOFLAGS='-trimpath -buildvcs=false' CGO_ENABLED=0 KO_DEFAULTBASEIMAGE=${base} \
-        KO_DOCKER_REPO=${repository} ko build --bare --platform=linux/amd64 --sbom=none \
+        KO_DOCKER_REPO=${repository} "${kodir}/ko" build --bare --platform=linux/amd64 --sbom=none \
         --tags "${release}-$(printf %.12s "${commit}")" "$@" "${package}")
 }
 # Checked before anything is pushed; the second build comes from Go's cache.

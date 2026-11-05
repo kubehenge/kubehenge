@@ -74,9 +74,11 @@ Another hook (`kubehenge wait providers`) holds the release until the providers 
 - Every provider Deployment has rolled out.
 - All of that holds for 30 seconds with the same Deployments. Right after an install, the operator can install a provider again from a stale read and recreate its Deployments.
 
-Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.2 with two fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`).
+Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.2 with two fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`). That build also keeps each pinned chart once downloaded. A reconcile then reads no chart repository index.
 
 Both are built reproducibly, so the published images can be rebuilt from their sources and compared ([releasing.md](releasing.md)). A release of each that carries its fixes replaces the build.
+
+Every provider's probes allow 5 s, and its liveness probe six misses. The k3s providers have no probes. Upstream's 1 s probe restarts Cluster API's only replica on a busy host, and its webhooks then refuse every change.
 
 Talos's two providers come from Kubehenge's own forks of them, [cluster-api-bootstrap-provider-talos](https://github.com/kubehenge/cluster-api-bootstrap-provider-talos) and [cluster-api-control-plane-provider-talos](https://github.com/kubehenge/cluster-api-control-plane-provider-talos). Sidero Labs' releases are on Cluster API's v1beta1 contract, which Cluster API's core removes. Its control-plane provider has no `TalosControlPlaneTemplate`, which a ClusterClass needs. The forks carry both, with fixes of their own. They are maintained primarily for Kubehenge and open to anyone who runs Talos with Cluster API.
 

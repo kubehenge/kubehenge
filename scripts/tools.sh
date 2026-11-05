@@ -114,11 +114,6 @@ release golangci-lint golangci/golangci-lint "${GOLANGCI_LINT}" \
     "golangci-lint-${GOLANGCI_LINT#v}-linux-amd64.tar.gz" "${GOLANGCI_LINT_SHA256}" \
     "golangci-lint-${GOLANGCI_LINT#v}-linux-amd64/golangci-lint"
 
-# renovate: datasource=github-release-attachments depName=ko-build/ko
-KO=v0.19.1
-KO_SHA256=635ac6ea3fd376c935fee597fbb29ab2c2449f49ef1655085fe3aa9c25fed7a5
-release ko ko-build/ko "${KO}" "ko_${KO#v}_Linux_x86_64.tar.gz" "${KO_SHA256}" ko
-
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 KUBECTL=v1.37.2
 KUBECTL_SHA256=c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4

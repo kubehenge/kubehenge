@@ -40,21 +40,29 @@ jobs:
     permissions:
       contents: read # Reads the source it analyses.
       security-events: write # Uploads the findings to code scanning.
+    # A merge group reports the three required checks without analysing: each pull request was
+    # analysed alone, a pattern CodeQL finds rarely depends on another queued change, and the
+    # weekly and main runs catch the rest. Every step is skipped rather than the job, because a
+    # matrix job skipped by a job-level `if` reports under its unexpanded name, which satisfies no
+    # required check.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - if: github.event_name != 'merge_group'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Go
-        if: matrix.language == 'go'
+        if: github.event_name != 'merge_group' && matrix.language == 'go'
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" go
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           echo GOTOOLCHAIN=local >> "$GITHUB_ENV"
-      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - if: github.event_name != 'merge_group'
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           config-file: ./.github/codeql-config.yml
-      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - if: github.event_name != 'merge_group'
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: /language:${{ matrix.language }}

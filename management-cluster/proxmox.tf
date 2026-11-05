@@ -406,6 +406,7 @@ resource "proxmox_virtual_environment_vm" "node" {
   cpu {
     cores = var.node_cores
     type  = var.cpu_type
+    units = var.node_cpu_units
   }
 
   # The balloon device is there even without a minimum, as free page reporting runs through it and

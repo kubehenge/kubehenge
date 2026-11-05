@@ -27,8 +27,8 @@ import (
 
 // AbandonAnnotation on a Cluster being deleted, set to the cluster's name to confirm it, gives up on
 // what the deletion waits for. Machines are deleted without draining their nodes, everything of the
-// cluster left is deleted, and whatever has not finished deleting AbandonGrace later loses its
-// finalizers: what it held outside the management cluster, such as a VM Proxmox VE would not
+// cluster left is deleted, and whatever has not finished deleting AbandonGrace later, or as soon as
+// no VM can be left, loses its finalizers: what it held outside the management cluster, such as a VM Proxmox VE would not
 // delete, is left behind and named in a LeftBehind event.
 const AbandonAnnotation = "kubehenge.dev/abandon-deletion"
 
@@ -39,10 +39,17 @@ const DeletionStatusAnnotation = "kubehenge.dev/deletion-status"
 // DeletionStalledCondition on a Cluster says that its deletion has waited longer than it should.
 const DeletionStalledCondition = "DeletionStalled"
 
-// AbandonGrace is how long, once a deletion is abandoned, what is left of the cluster has to finish
-// deleting by itself: long enough for a control plane's machines to be deleted one after another,
-// each VM by capmox, wherever Proxmox VE answers for it.
+// AbandonGrace is the longest, once a deletion is abandoned, that what is left of the cluster has to
+// finish deleting by itself: long enough for a control plane's machines to be deleted one after
+// another, each VM by capmox, wherever Proxmox VE answers for it. It ends sooner, as soon as no
+// ProxmoxMachine and no ProxmoxCluster is left, since nothing outside the management cluster can
+// then be left behind by releasing the rest.
 const AbandonGrace = 5 * time.Minute
+
+const (
+	kindProxmoxMachine = "ProxmoxMachine"
+	kindProxmoxCluster = "ProxmoxCluster"
+)
 
 const (
 	// deletionLook is how often a cluster being deleted is looked at, for what it waits on.
@@ -127,7 +134,7 @@ var deletionKinds = func() []schema.GroupKind {
 		clusterv1.GroupVersion.Group:    {"MachineDeployment", "MachineSet", "Machine"},
 		"controlplane.cluster.x-k8s.io": {"KubeadmControlPlane", "RKE2ControlPlane", "KThreesControlPlane", "TalosControlPlane"},
 		"bootstrap.cluster.x-k8s.io":    {"KubeadmConfig", "RKE2Config", "KThreesConfig", "TalosConfig"},
-		infrastructureGroup:             {"ProxmoxMachine", "ProxmoxCluster"},
+		infrastructureGroup:             {kindProxmoxMachine, kindProxmoxCluster},
 		"ipam.cluster.x-k8s.io":         {"IPAddressClaim", "IPAddress"},
 		"addons.cluster.x-k8s.io":       {"HelmReleaseProxy"},
 	} {
@@ -203,7 +210,7 @@ func deletingReason(o *unstructured.Unstructured) string {
 // leftOf is what an object holds outside the management cluster that goes with it only when its
 // deletion finishes: a ProxmoxMachine's VM. Empty for anything else.
 func leftOf(o *unstructured.Unstructured) string {
-	if o.GetKind() != "ProxmoxMachine" {
+	if o.GetKind() != kindProxmoxMachine {
 		return ""
 	}
 	vmid, _, _ := unstructured.NestedInt64(o.Object, "spec", "virtualMachineID")
@@ -338,7 +345,8 @@ func (r *Reconciler) abandon(ctx context.Context, cluster *clusterv1.Cluster, ob
 		r.event(cluster, corev1.EventTypeWarning, "AbandoningDeletion",
 			"abandoning the deletion: what has not finished deleting by %s is left behind", now.Add(AbandonGrace).UTC().Format(time.TimeOnly+" MST"))
 	}
-	due := !now.Before(st.Abandoned.Add(AbandonGrace))
+	// The grace is for what is held outside the management cluster. Without that, it only delays.
+	due := pastGrace(now, st.Abandoned) || !holdsOutside(objects)
 	var errs []error
 	if beforeDeleteWaits(cluster) {
 		errs = append(errs, r.markOkToDelete(ctx, cluster))
@@ -355,18 +363,37 @@ func (r *Reconciler) abandon(ctx context.Context, cluster *clusterv1.Cluster, ob
 			st.LeftBehind = r.leave(cluster, st.LeftBehind, left)
 		}
 	}
-	if len(objects) > 0 || !due {
+	if len(objects) > 0 {
 		errs = append(errs, r.recordDeletion(ctx, cluster, &st))
-		if len(objects) == 0 {
-			// Kubehenge's own part ends as it would have, now that nothing of the cluster is left. What
-			// it cannot remove is tried once more when the grace is up.
-			if _, err := r.removeProxmox(ctx, cluster); err != nil {
-				ctrl.LoggerFrom(ctx).Info("removing the abandoned cluster's Proxmox VE objects", "error", err.Error())
-			}
-		}
 		return ctrl.Result{RequeueAfter: waitInterval}, errors.Join(errs...)
 	}
+	if !pastGrace(now, st.Abandoned) {
+		// Kubehenge's own part ends as it would have, now that nothing of the cluster is left. What it
+		// cannot remove is tried again until the grace is up, and then recorded as left behind.
+		errs = append(errs, r.recordDeletion(ctx, cluster, &st))
+		if _, err := r.removeProxmox(ctx, cluster); err != nil {
+			ctrl.LoggerFrom(ctx).Info("removing the abandoned cluster's Proxmox VE objects", "error", err.Error())
+		}
+		if controllerutil.ContainsFinalizer(cluster, Finalizer) {
+			return ctrl.Result{RequeueAfter: waitInterval}, errors.Join(errs...)
+		}
+	}
 	return ctrl.Result{}, r.releaseAbandoned(ctx, cluster, &st)
+}
+
+func pastGrace(now time.Time, abandoned *metav1.Time) bool {
+	return !now.Before(abandoned.Add(AbandonGrace))
+}
+
+// holdsOutside tells whether any of a cluster's objects can still hold something outside the
+// management cluster: a ProxmoxMachine names a VM, and capmox lets a ProxmoxCluster go only once no
+// ProxmoxMachine is left, then takes its finalizer off the credentials Secret it referenced.
+// Releasing it early would leave that Secret's finalizer, which nothing else removes. Every other
+// kind in deletionKinds is a Cluster API, bootstrap, IPAM or add-on object of the management cluster.
+func holdsOutside(objects []*unstructured.Unstructured) bool {
+	return slices.ContainsFunc(objects, func(o *unstructured.Unstructured) bool {
+		return o.GetKind() == kindProxmoxMachine || o.GetKind() == kindProxmoxCluster
+	})
 }
 
 // releaseAbandoned tries once more to remove an abandoned cluster's Proxmox VE objects, then takes

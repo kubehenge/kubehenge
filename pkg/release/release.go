@@ -88,6 +88,9 @@ func Parse(index []byte, signatures string, keys []ed25519.PublicKey, now time.T
 	if err != nil {
 		return nil, err
 	}
+	if ix.Expires.IsZero() {
+		return nil, fmt.Errorf("%w: it carries no expiry", ErrExpired)
+	}
 	if !now.Before(ix.Expires) {
 		return nil, fmt.Errorf("%w on %s; the publishers sign it again every week", ErrExpired, ix.Expires.UTC().Format(time.DateOnly))
 	}
@@ -95,7 +98,8 @@ func Parse(index []byte, signatures string, keys []ed25519.PublicKey, now time.T
 }
 
 // Verify verifies an index against keys and decodes it whatever its expiry, for signing it again:
-// one line of signatures has to verify under one of the keys.
+// one line of signatures has to verify under one of the keys. An index signed before indexes
+// carried an expiry has none, and the index built from it gets one.
 func Verify(index []byte, signatures string, keys []ed25519.PublicKey) (*Index, error) {
 	if len(keys) == 0 {
 		return nil, errors.New("this build carries no release key, so it upgrades nothing")
@@ -106,9 +110,6 @@ func Verify(index []byte, signatures string, keys []ed25519.PublicKey) (*Index, 
 	var ix Index
 	if err := json.Unmarshal(index, &ix); err != nil {
 		return nil, fmt.Errorf("release index: %w", err)
-	}
-	if ix.Expires.IsZero() {
-		return nil, errors.New("release index: no expiry")
 	}
 	for _, r := range ix.Releases {
 		if err := r.validate(); err != nil {

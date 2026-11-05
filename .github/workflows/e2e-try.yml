@@ -76,21 +76,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Go's and npm's caches as the nightly run's build job saved them (e2e.yml), for what still
-      # reads Go here: the appliance's releases, the management cluster's tests and the templates'
-      # keys.
-      - id: go-cache
-        if: env.E2E_RUN == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-            ~/.npm
-          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
-          restore-keys: |
-            e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
-            e2e-go-
       # The image of Proxmox VE as the nightly run or a change on main (e2e-image.yml) last built
       # it. Its packages are a day old at most. The nightly run builds it afresh.
       - id: pve-cache
@@ -119,6 +104,22 @@ jobs:
             echo E2E_RUN=false >> "$GITHUB_ENV"
             echo handed-back=true >> "$GITHUB_OUTPUT"
           fi
+      # Go's and npm's caches as the nightly run's build job saved them (e2e.yml), for what still
+      # reads Go here: the appliance's releases, the management cluster's tests and the templates'
+      # keys. After the image, whose load time can hand the try back: this restore takes up to a
+      # minute.
+      - id: go-cache
+        if: env.E2E_RUN == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            ~/.npm
+          key: e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-${{ github.run_id }}
+          restore-keys: |
+            e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
+            e2e-go-
       - name: Tools
         if: env.E2E_RUN == 'true'
         run: |
@@ -144,25 +145,34 @@ jobs:
       # branch and merge group reads them. The nightly run, and a dispatch asked to, bakes every
       # template afresh from the mirrors and only looks the keys up, keeping a template whose key
       # the cache lacks.
+      # Every template is kept under the one path vz/template-1, whatever its slot, as e2e-image.yml
+      # bakes it: an entry's version covers its path, and one saved under another path is never
+      # found. The second slot's is restored first and moved to vz/template-2.
       - name: Template keys
         id: templates
         if: env.E2E_RUN == 'true'
         env:
           TEST: ${{ inputs.test }}
         run: test/e2e/ci/templates.sh keys "$TEST" | tee -a "$GITHUB_OUTPUT"
+      - id: template-2
+        if: env.E2E_RUN == 'true' && steps.templates.outputs.key2 != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/e2e/vz/template-1
+          key: ${{ steps.templates.outputs.key2 }}
+          lookup-only: ${{ inputs.fresh }}
+      # A lookup alone restores nothing to move.
+      - name: The second template's slot
+        if: steps.template-2.outputs.cache-hit == 'true'
+        run: |
+          vz="$RUNNER_TEMP/e2e/vz"
+          if [ -d "$vz/template-1" ]; then mv "$vz/template-1" "$vz/template-2"; fi
       - id: template-1
         if: env.E2E_RUN == 'true' && steps.templates.outputs.key1 != ''
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/e2e/vz/template-1
           key: ${{ steps.templates.outputs.key1 }}
-          lookup-only: ${{ inputs.fresh }}
-      - id: template-2
-        if: env.E2E_RUN == 'true' && steps.templates.outputs.key2 != ''
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/e2e/vz/template-2
-          key: ${{ steps.templates.outputs.key2 }}
           lookup-only: ${{ inputs.fresh }}
       # Only the nightly run and a dispatch keep templates: a merge group's cache would serve no
       # other run.
@@ -306,11 +316,21 @@ jobs:
         with:
           path: ${{ runner.temp }}/e2e/vz/template-1
           key: ${{ steps.templates.outputs.key1 }}
+      # The second slot's goes under the first's path too, which the first's entry no longer needs.
+      # Proxmox VE wrote both as root. A test that failed before backing the second up leaves the
+      # path empty, and the save below then keeps nothing.
+      - name: The second template for the cache
+        if: >-
+          !cancelled() && contains(format(' {0} ', env.KUBEHENGE_E2E_KEEP_TEMPLATES), ' 2 ')
+        run: |
+          vz="$RUNNER_TEMP/e2e/vz"
+          sudo rm -rf "$vz/template-1"
+          if [ -d "$vz/template-2" ]; then sudo mv "$vz/template-2" "$vz/template-1"; fi
       - if: >-
           !cancelled() && contains(format(' {0} ', env.KUBEHENGE_E2E_KEEP_TEMPLATES), ' 2 ')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/e2e/vz/template-2
+          path: ${{ runner.temp }}/e2e/vz/template-1
           key: ${{ steps.templates.outputs.key2 }}
       - name: Collect
         if: failure()

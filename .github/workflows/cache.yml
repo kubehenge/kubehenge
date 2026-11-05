@@ -2,7 +2,8 @@
 name: cache
 
 # Keeps the Actions cache within its 10 GB (docs/testing.md#the-actions-cache). Only main saves, so
-# main keeps each family's newest entry alone, and a closed pull request's entries go with it.
+# main keeps each family's newest entry alone, and a closed pull request's entries go with it, its
+# branch's too.
 on:
   push:
     branches: [main]
@@ -39,9 +40,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           PULL: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             scripts/cache-prune.sh all "refs/pull/$PULL/merge"
+            # A dispatch on the branch keeps its templates there, which no merge group reads.
+            scripts/cache-prune.sh all "refs/heads/$BRANCH"
           else
             scripts/cache-prune.sh newest refs/heads/main
           fi

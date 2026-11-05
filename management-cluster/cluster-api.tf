@@ -88,23 +88,33 @@ locals {
     resourceNamespace = ""
   } }
 
+  # A 1 s probe on a busy host restarts Cluster API's only replica after three misses, and its
+  # webhooks then refuse every change until it is back. These are the probe timings of Kubehenge's
+  # own controller. An operation list, as a merge patch would replace the whole containers list. The
+  # k3s providers have no probes to add to.
+  patient_probes = { target = { kind = "Deployment" }, patch = yamlencode([
+    { op = "add", path = "/spec/template/spec/containers/0/livenessProbe/timeoutSeconds", value = 5 },
+    { op = "add", path = "/spec/template/spec/containers/0/livenessProbe/failureThreshold", value = 6 },
+    { op = "add", path = "/spec/template/spec/containers/0/readinessProbe/timeoutSeconds", value = 5 },
+  ]) }
+
   # The providers Kubehenge's ClusterClasses use, and no others; each gets only the variables it
   # uses.
   provider_specs = [
     { kind = "CoreProvider", name = "cluster-api", namespace = "capi-system", spec = {
       version      = local.versions.cluster_api
       configSecret = local.cluster_api_config
-      patches      = [local.config_hash_patch[local.cluster_api_config.name]]
+      patches      = [local.config_hash_patch[local.cluster_api_config.name], local.patient_probes]
       manager      = local.patient_leases
     } },
     { kind = "BootstrapProvider", name = "kubeadm", namespace = "kubeadm-bootstrap-system", spec = {
       version = local.versions.cluster_api
-      patches = [local.replicas_left_to_scaling]
+      patches = [local.replicas_left_to_scaling, local.patient_probes]
       manager = local.patient_leases
     } },
     { kind = "BootstrapProvider", name = "rke2", namespace = "rke2-bootstrap-system", spec = {
       version = local.versions.rke2
-      patches = [local.replicas_left_to_scaling]
+      patches = [local.replicas_left_to_scaling, local.patient_probes]
       manager = local.patient_leases
     } },
     { kind = "BootstrapProvider", name = "k3s", namespace = "k3s-bootstrap-system", spec = {
@@ -114,12 +124,12 @@ locals {
     { kind = "ControlPlaneProvider", name = "kubeadm", namespace = "kubeadm-control-plane-system", spec = {
       version      = local.versions.cluster_api
       configSecret = local.cluster_api_config
-      patches      = [local.config_hash_patch[local.cluster_api_config.name], local.replicas_left_to_scaling]
+      patches      = [local.config_hash_patch[local.cluster_api_config.name], local.replicas_left_to_scaling, local.patient_probes]
       manager      = local.patient_leases
     } },
     { kind = "ControlPlaneProvider", name = "rke2", namespace = "rke2-control-plane-system", spec = {
       version = local.versions.rke2
-      patches = [local.replicas_left_to_scaling]
+      patches = [local.replicas_left_to_scaling, local.patient_probes]
       manager = local.patient_leases
     } },
     { kind = "ControlPlaneProvider", name = "k3s", namespace = "k3s-control-plane-system", spec = {
@@ -129,11 +139,11 @@ locals {
     # Talos's providers take no lease flags either: only --enable-leader-election.
     { kind = "BootstrapProvider", name = "talos", namespace = "talos-bootstrap-system", spec = {
       version = local.versions.talos_bootstrap
-      patches = [local.replicas_left_to_scaling]
+      patches = [local.replicas_left_to_scaling, local.patient_probes]
     } },
     { kind = "ControlPlaneProvider", name = "talos", namespace = "talos-control-plane-system", spec = {
       version = local.versions.talos_control_plane
-      patches = [local.replicas_left_to_scaling]
+      patches = [local.replicas_left_to_scaling, local.patient_probes]
     } },
     { kind = "InfrastructureProvider", name = "proxmox", namespace = local.capmox_namespace, spec = {
       version      = local.versions.capmox
@@ -144,12 +154,14 @@ locals {
           patch  = yamlencode(local.capmox_verify_tls)
         },
         local.config_hash_patch[local.capmox_config.name],
+        local.patient_probes,
       ]
       manager = local.patient_leases
     } },
-    { kind = "IPAMProvider", name = "in-cluster", namespace = "in-cluster-ipam-system", spec = { version = local.versions.ipam_in_cluster } },
+    { kind = "IPAMProvider", name = "in-cluster", namespace = "in-cluster-ipam-system", spec = { version = local.versions.ipam_in_cluster, patches = [local.patient_probes] } },
     { kind = "AddonProvider", name = "helm", namespace = "helm-addon-system", spec = {
       version = local.versions.helm_addon
+      patches = [local.patient_probes]
       manager = local.patient_leases
     } },
   ]

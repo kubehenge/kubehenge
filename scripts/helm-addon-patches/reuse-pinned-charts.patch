@@ -1,0 +1,337 @@
+diff --git a/internal/helm_client.go b/internal/helm_client.go
+--- a/internal/helm_client.go
++++ b/internal/helm_client.go
+@@ -29,6 +29,7 @@ import (
+ 	"os"
+ 	"path"
+ 	"path/filepath"
++	"regexp"
+ 	"strings"
+ 	"time"
+
+@@ -228,14 +229,10 @@ func (c *HelmClient) InstallHelmRelease(ctx context.Context, restConfig *rest.Co
+ 	}
+ 	installClient.ReleaseName = spec.ReleaseName
+
+-	log.V(2).Info("Locating chart...")
+-	cp, err := installClient.LocateChart(chartName, settings)
++	cp, err := locateChart(ctx, &installClient.ChartPathOptions, settings, chartName, spec.RepoURL, version, digest)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	if err := verifyChart(cp, spec.RepoURL, version, digest); err != nil {
+-		return nil, err
+-	}
+ 	log.V(2).Info("Located chart at path", "path", cp)
+
+ 	log.V(2).Info("Writing values to file")
+@@ -418,6 +415,99 @@ func verifyChart(chartPath, repoURL, version, digest string) error {
+ 	return nil
+ }
+
++var (
++	sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
++	// A name or version that matches this cannot take a cached archive's path out of its folder.
++	pinnedChartPart = regexp.MustCompile(`^[A-Za-z0-9._+-]*$`)
++)
++
++// pinnedChartPath is where the archive of a chart pinned to its digest is cached, or "" if it is not cached.
++// Only an HTTP repository's archive is cached. Its digest is the archive's own, so a cached copy can be checked again.
++// An OCI chart's digest is its manifest's, and pulling it reads no repository index.
++// The path holds the chart's name and version too, so that a spec naming another chart by the same digest still fails.
++func pinnedChartPath(cacheDir, repoURL, chartName, version, digest string) string {
++	sum, ok := strings.CutPrefix(digest, "sha256:")
++	if !ok || registry.IsOCI(repoURL) || !sha256Hex.MatchString(sum) ||
++		!pinnedChartPart.MatchString(chartName) || !pinnedChartPart.MatchString(version) {
++		return ""
++	}
++
++	return filepath.Join(cacheDir, "pinned", chartName+"-"+version+"-"+sum+".tgz")
++}
++
++// locateChart locates and verifies a spec's chart. For an HTTP repository Helm downloads and parses the repository's
++// whole index each time, which takes over 100 MiB of heap for a large one. An archive pinned to its digest cannot
++// change, so it is located once and then read from the cache for as long as it still has that digest.
++func locateChart(ctx context.Context, options *helmAction.ChartPathOptions, settings *helmCli.EnvSettings, chartName, repoURL, version, digest string) (string, error) {
++	log := ctrl.LoggerFrom(ctx)
++
++	cached := pinnedChartPath(settings.RepositoryCache, repoURL, chartName, version, digest)
++	if cached != "" {
++		err := verifyChart(cached, repoURL, version, digest)
++		if err == nil {
++			log.V(2).Info("Using cached chart", "path", cached)
++
++			return cached, nil
++		}
++		if !errors.Is(err, os.ErrNotExist) {
++			log.Info("Removing cached chart", "path", cached, "reason", err.Error())
++			if err := os.Remove(cached); err != nil && !errors.Is(err, os.ErrNotExist) {
++				return "", err
++			}
++		}
++	}
++
++	log.V(2).Info("Locating chart...")
++	cp, err := options.LocateChart(chartName, settings)
++	if err != nil {
++		return "", err
++	}
++	if err := verifyChart(cp, repoURL, version, digest); err != nil {
++		return "", err
++	}
++	if cached == "" {
++		return cp, nil
++	}
++	if err := cacheChart(cp, cached); err != nil {
++		// Without the cached copy the next reconcile locates the chart again, as it would without the cache.
++		log.Error(err, "Cannot cache chart", "path", cached)
++
++		return cp, nil
++	}
++
++	return cached, nil
++}
++
++// cacheChart copies a chart archive to path by way of a temporary file, so that a concurrent reconcile of the same
++// chart never reads a half-written archive.
++func cacheChart(chartPath, path string) error {
++	dir := filepath.Dir(path)
++	if err := os.MkdirAll(dir, 0o755); err != nil {
++		return err
++	}
++	src, err := os.Open(chartPath)
++	if err != nil {
++		return err
++	}
++	defer func() { _ = src.Close() }()
++	tmp, err := os.CreateTemp(dir, ".partial-*")
++	if err != nil {
++		return err
++	}
++	// Once renamed, the temporary file is gone and this removes nothing.
++	defer func() { _ = os.Remove(tmp.Name()) }()
++	if _, err := io.Copy(tmp, src); err != nil {
++		_ = tmp.Close()
++
++		return err
++	}
++	if err := tmp.Close(); err != nil {
++		return err
++	}
++
++	return os.Rename(tmp.Name(), path)
++}
++
+ // UpgradeHelmReleaseIfChanged upgrades a Helm release. The boolean refers to if an upgrade was attempted.
+ func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig *rest.Config, credentialsPath, caFilePath string, spec addonsv1alpha1.HelmReleaseProxySpec, existing *helmRelease.Release) (*helmRelease.Release, error) {
+ 	log := ctrl.LoggerFrom(ctx)
+@@ -449,14 +539,10 @@ func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig
+ 	upgradeClient.Version = locateVersion(spec.RepoURL, version, digest)
+ 	upgradeClient.Namespace = spec.ReleaseNamespace
+
+-	log.V(2).Info("Locating chart...")
+-	cp, err := upgradeClient.LocateChart(chartName, settings)
++	cp, err := locateChart(ctx, &upgradeClient.ChartPathOptions, settings, chartName, spec.RepoURL, version, digest)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	if err := verifyChart(cp, spec.RepoURL, version, digest); err != nil {
+-		return nil, err
+-	}
+ 	log.V(2).Info("Located chart at path", "path", cp)
+
+ 	log.V(2).Info("Writing values to file")
+diff --git a/internal/helm_client_test.go b/internal/helm_client_test.go
+--- a/internal/helm_client_test.go
++++ b/internal/helm_client_test.go
+@@ -17,6 +17,7 @@ limitations under the License.
+ package internal
+
+ import (
++	"context"
+ 	"crypto/sha256"
+ 	"encoding/hex"
+ 	"encoding/json"
+@@ -26,6 +27,7 @@ import (
+ 	"path/filepath"
+ 	"strconv"
+ 	"strings"
++	"sync/atomic"
+ 	"testing"
+ 	"time"
+
+@@ -37,6 +39,7 @@ import (
+ 	"helm.sh/helm/v3/pkg/chartutil"
+ 	helmCli "helm.sh/helm/v3/pkg/cli"
+ 	"helm.sh/helm/v3/pkg/registry"
++	"helm.sh/helm/v3/pkg/repo"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	addonsv1alpha1 "sigs.k8s.io/cluster-api-addon-provider-helm/api/v1alpha1"
+ )
+@@ -527,3 +530,166 @@ func TestLocatePinnedOCIChartAfterItsTagMoved(t *testing.T) {
+ 	g.Expect(err).NotTo(HaveOccurred())
+ 	g.Expect(c.Values).To(HaveKeyWithValue("pinned", true))
+ }
++
++// httpRepository serves a chart archive as an HTTP chart repository does and counts the requests for its index
++// and for the archive.
++type httpRepository struct {
++	*httptest.Server
++	archive       []byte
++	digest        string
++	indexRequests atomic.Int32
++	chartRequests atomic.Int32
++	settings      *helmCli.EnvSettings
++}
++
++func newHTTPRepository(t *testing.T, chartPath string) *httpRepository {
++	t.Helper()
++	g := NewWithT(t)
++
++	c, err := helmLoader.Load(chartPath)
++	g.Expect(err).NotTo(HaveOccurred())
++	archive, err := os.ReadFile(chartPath)
++	g.Expect(err).NotTo(HaveOccurred())
++	sum := sha256.Sum256(archive)
++	digest := "sha256:" + hex.EncodeToString(sum[:])
++	archiveName := filepath.Base(chartPath)
++
++	index := repo.NewIndexFile()
++	g.Expect(index.MustAdd(c.Metadata, archiveName, "", digest)).To(Succeed())
++	indexPath := filepath.Join(t.TempDir(), "index.yaml")
++	g.Expect(index.WriteFile(indexPath, 0o600)).To(Succeed())
++	indexData, err := os.ReadFile(indexPath)
++	g.Expect(err).NotTo(HaveOccurred())
++
++	r := &httpRepository{archive: archive, digest: digest}
++	// httptest listens on 127.0.0.1 only.
++	r.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
++		switch req.URL.Path {
++		case "/index.yaml":
++			r.indexRequests.Add(1)
++			_, _ = w.Write(indexData)
++		case "/" + archiveName:
++			r.chartRequests.Add(1)
++			_, _ = w.Write(archive)
++		default:
++			http.NotFound(w, req)
++		}
++	}))
++	t.Cleanup(r.Close)
++
++	// Helm writes the index it downloads under its cache home while it reads it.
++	t.Setenv("HELM_CACHE_HOME", t.TempDir())
++	r.settings = helmCli.New()
++	r.settings.RepositoryCache = t.TempDir()
++	r.settings.RepositoryConfig = filepath.Join(t.TempDir(), "repositories.yaml")
++
++	return r
++}
++
++// locate locates the chart nginx as InstallHelmRelease and UpgradeHelmReleaseIfChanged do.
++func (r *httpRepository) locate(version, digest string) (string, error) {
++	install := helmAction.NewInstall(&helmAction.Configuration{})
++	install.RepoURL = r.URL
++	install.Version = locateVersion(r.URL, version, digest)
++
++	return locateChart(context.Background(), &install.ChartPathOptions, r.settings, "nginx", r.URL, version, digest)
++}
++
++func (r *httpRepository) cachePath(version, digest string) string {
++	return pinnedChartPath(r.settings.RepositoryCache, r.URL, "nginx", version, digest)
++}
++
++func TestLocateChartReadsPinnedArchiveOnce(t *testing.T) {
++	g := NewWithT(t)
++	r := newHTTPRepository(t, savedChart(t, "1.2.3", ""))
++
++	first, err := r.locate("1.2.3", r.digest)
++	g.Expect(err).NotTo(HaveOccurred())
++	second, err := r.locate("1.2.3", r.digest)
++	g.Expect(err).NotTo(HaveOccurred())
++
++	g.Expect(r.indexRequests.Load()).To(BeEquivalentTo(1))
++	g.Expect(r.chartRequests.Load()).To(BeEquivalentTo(1))
++	g.Expect(first).To(Equal(r.cachePath("1.2.3", r.digest)))
++	g.Expect(second).To(Equal(first))
++	g.Expect(os.ReadFile(second)).To(Equal(r.archive))
++}
++
++func TestLocateChartReplacesCorruptedCache(t *testing.T) {
++	g := NewWithT(t)
++	r := newHTTPRepository(t, savedChart(t, "1.2.3", ""))
++	cached := r.cachePath("1.2.3", r.digest)
++	g.Expect(os.MkdirAll(filepath.Dir(cached), 0o755)).To(Succeed())
++	g.Expect(os.WriteFile(cached, []byte("not the pinned archive"), 0o600)).To(Succeed())
++
++	chartPath, err := r.locate("1.2.3", r.digest)
++	g.Expect(err).NotTo(HaveOccurred())
++
++	g.Expect(r.indexRequests.Load()).To(BeEquivalentTo(1))
++	g.Expect(r.chartRequests.Load()).To(BeEquivalentTo(1))
++	g.Expect(chartPath).To(Equal(cached))
++	g.Expect(os.ReadFile(cached)).To(Equal(r.archive))
++}
++
++func TestLocateChartWithoutDigestReadsIndexEachTime(t *testing.T) {
++	g := NewWithT(t)
++	r := newHTTPRepository(t, savedChart(t, "2.0.0", ""))
++
++	for range 2 {
++		_, err := r.locate("2.0.0", "")
++		g.Expect(err).NotTo(HaveOccurred())
++	}
++
++	g.Expect(r.indexRequests.Load()).To(BeEquivalentTo(2))
++	g.Expect(r.chartRequests.Load()).To(BeEquivalentTo(2))
++	g.Expect(filepath.Join(r.settings.RepositoryCache, "pinned")).NotTo(BeADirectory())
++}
++
++func TestLocateChartCachesNoArchiveOfAnotherDigest(t *testing.T) {
++	g := NewWithT(t)
++	r := newHTTPRepository(t, savedChart(t, "1.2.3", ""))
++	other := "sha256:" + hex.EncodeToString(make([]byte, sha256.Size))
++
++	for range 2 {
++		_, err := r.locate("1.2.3", other)
++		g.Expect(err).To(HaveOccurred())
++	}
++
++	g.Expect(r.indexRequests.Load()).To(BeEquivalentTo(2))
++	g.Expect(r.cachePath("1.2.3", other)).NotTo(BeAnExistingFile())
++}
++
++func TestPinnedChartPath(t *testing.T) {
++	t.Parallel()
++
++	const cacheDir, httpRepo, ociRepo = "cache", "https://charts.example.com", "oci://registry.example.com/charts"
++	sum := hex.EncodeToString(make([]byte, sha256.Size))
++
++	testCases := []struct {
++		name      string
++		repoURL   string
++		chartName string
++		version   string
++		digest    string
++		want      string
++	}{
++		{
++			name: "pinned HTTP chart", repoURL: httpRepo, chartName: "nginx", version: "1.2.3+build.1", digest: "sha256:" + sum,
++			want: filepath.Join(cacheDir, "pinned", "nginx-1.2.3+build.1-"+sum+".tgz"),
++		},
++		{name: "no digest", repoURL: httpRepo, chartName: "nginx", version: "1.2.3"},
++		{name: "OCI chart", repoURL: ociRepo, chartName: "nginx", version: "1.2.3", digest: "sha256:" + sum},
++		{name: "other algorithm", repoURL: httpRepo, chartName: "nginx", version: "1.2.3", digest: "sha512:" + sum},
++		{name: "short digest", repoURL: httpRepo, chartName: "nginx", version: "1.2.3", digest: "sha256:abc"},
++		{name: "digest with a path", repoURL: httpRepo, chartName: "nginx", version: "1.2.3", digest: "sha256:../" + sum[3:]},
++		{name: "name with a path", repoURL: httpRepo, chartName: "../nginx", version: "1.2.3", digest: "sha256:" + sum},
++		{name: "version with a path", repoURL: httpRepo, chartName: "nginx", version: "1.2.3/..", digest: "sha256:" + sum},
++	}
++
++	for _, tc := range testCases {
++		t.Run(tc.name, func(t *testing.T) {
++			t.Parallel()
++			NewWithT(t).Expect(pinnedChartPath(cacheDir, tc.repoURL, tc.chartName, tc.version, tc.digest)).To(Equal(tc.want))
++		})
++	}
++}

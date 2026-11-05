@@ -107,10 +107,15 @@ func TestParseRefusesAnExpiredIndex(t *testing.T) {
 	if _, err := Verify(raw, sig, keys); err != nil {
 		t.Fatalf("verifying an expired index: %v", err)
 	}
+	// An index signed before indexes carried an expiry: an appliance refuses it, signing it again
+	// takes it.
 	pub, priv := newKey(t)
 	unbounded := []byte(`{"releases":[]}`)
-	if _, err := Verify(unbounded, Sign(unbounded, priv), []ed25519.PublicKey{pub}); err == nil {
-		t.Fatal("took an index without an expiry")
+	if _, err := Parse(unbounded, Sign(unbounded, priv), []ed25519.PublicKey{pub}, testNow); !errors.Is(err, ErrExpired) {
+		t.Fatalf("an index without an expiry: %v", err)
+	}
+	if _, err := Verify(unbounded, Sign(unbounded, priv), []ed25519.PublicKey{pub}); err != nil {
+		t.Fatalf("verifying an index without an expiry: %v", err)
 	}
 	var ix Index
 	ix.Renew(time.Date(2026, 10, 1, 12, 0, 0, 999, time.FixedZone("CET", 3600)))
