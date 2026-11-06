@@ -1679,11 +1679,13 @@ fieldset.choices .check {
   border: none;
 }
 
-/* Without a box there is no border or padding to give up: the label column starts where the
-   card's other fields do. */
+/* A card's fields, like a box's, start their controls where the fields around the card do: the
+   label column gives up the card's border and left padding. */
 @media (width > 600px) {
-  .addon-card > fieldset.group > .field {
-    grid-template-columns: 190px 1fr;
+  .addon-card > .field,
+  .addon-card > fieldset.group > .field,
+  .addon-card > fieldset.group > details > .field {
+    grid-template-columns: calc(190px - 12px - 1px) 1fr;
   }
 }
 
