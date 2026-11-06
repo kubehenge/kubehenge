@@ -104,7 +104,7 @@ func (p *Placer) placeAll(ctx context.Context) {
 		if sites != nil {
 			hosts = sites.Hosts(c, online, level)
 		}
-		hosts, short := p.fitMemory(ctx, c, online, hosts)
+		hosts, short := fitMemory(ctx, p.Client, p.ClassNamespace, c, online, hosts)
 		p.markShort(ctx, c, short)
 		p.record(ctx, c, hosts)
 	}
@@ -272,12 +272,14 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster) ([]
 	if err != nil {
 		return nil, fmt.Errorf("reading the Proxmox VE nodes: %w", err)
 	}
-	if h.Sites == nil {
-		return nodesFor(online, level), nil
+	hosts := nodesFor(online, level)
+	if h.Sites != nil {
+		sites, err := h.Sites.Sites(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)
+		}
+		hosts = sites.Hosts(cluster, online, level)
 	}
-	sites, err := h.Sites.Sites(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)
-	}
-	return sites.Hosts(cluster, online, level), nil
+	hosts, _ = fitMemory(ctx, h.Reader, h.ClassNamespace, cluster, online, hosts)
+	return hosts, nil
 }

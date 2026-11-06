@@ -4,7 +4,7 @@ import { AddOnsStep } from "./AddOnsStep";
 import { api, bridgesOf, dnsOf } from "./api";
 import { clusterPath } from "./cluster-paths";
 import {
-  bridgeNodeProblems,
+  nodeProblems,
   classBridges,
   classStorages,
   createRoom,
@@ -242,10 +242,7 @@ export function CreateCluster({
   const following = steps[index + 1];
   const byField = {
     ...fieldProblems(step, form, cls),
-    ...bridgeNodeProblems(step, form, {
-      bridgesByNode,
-      online: nodes.filter((x) => x.online).map((x) => x.node),
-    }),
+    ...nodeProblems(step, form, { bridgesByNode, nodes, placed: Boolean(variable(cls, "allowedNodes")) }),
     ...csiProblems(step, form, csi),
     ...snapshotsProblems(step, form, snapshots),
   };

@@ -96,10 +96,13 @@ func recordedNodes(c *clusterv1.Cluster) ([]string, bool) {
 // When none has, the placement stays as it was, narrowed to the hosts that can still run the
 // cluster at all. A cluster with no placement yet takes the hosts as they are. Where the cluster's
 // machines cannot be sized, nothing is narrowed.
-func (p *Placer) fitMemory(ctx context.Context, c *clusterv1.Cluster, online []Node, hosts []string) ([]string, *roomOn) {
+func fitMemory(ctx context.Context, reader client.Reader, classNamespace string, c *clusterv1.Cluster, online []Node, hosts []string) ([]string, *roomOn) {
+	if reader == nil {
+		return hosts, nil
+	}
 	class := &clusterv1.ClusterClass{}
-	key := client.ObjectKey{Namespace: p.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}
-	if err := p.Client.Get(ctx, key, class); err != nil {
+	key := client.ObjectKey{Namespace: classNamespace, Name: c.Spec.Topology.ClassRef.Name}
+	if err := reader.Get(ctx, key, class); err != nil {
 		ctrl.LoggerFrom(ctx).WithName("placer").Error(err, "reading the cluster's class for its machines' memory", "cluster", client.ObjectKeyFromObject(c))
 		return hosts, nil
 	}

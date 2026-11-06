@@ -165,6 +165,23 @@ func TestPlacerDoesNotFlapAroundTheThreshold(t *testing.T) {
 	}
 }
 
+func TestCreationHookLeavesOutNodesWithoutRoom(t *testing.T) {
+	t.Parallel()
+	h, _ := hooksFor(t)
+	nodes := &memNodes{free: map[string]int64{"pve1": 20_000, "pve2": 2048}}
+	h.Nodes = nodes
+	web := bigWorkers(t, nil)
+	got, err := h.onlineNodes(t.Context(), web)
+	if err != nil || !slices.Equal(got, []string{"pve1"}) {
+		t.Errorf("onlineNodes = %v, %v; want only the node with room", got, err)
+	}
+	nodes.set("pve1", 1000)
+	got, err = h.onlineNodes(t.Context(), web)
+	if err != nil || !slices.Equal(got, []string{"pve1", "pve2"}) {
+		t.Errorf("onlineNodes = %v, %v; want every capable node while none has room", got, err)
+	}
+}
+
 func TestLargestMachineIsTheBiggestPool(t *testing.T) {
 	t.Parallel()
 	web := bigWorkers(t, nil)
