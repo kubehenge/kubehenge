@@ -25,6 +25,7 @@ import type {
   Bridge,
   Job,
   ManagementSettings,
+  NodeDNS,
   OIDCProvider,
   PveNode,
   SetupFindings,
@@ -1617,7 +1618,7 @@ function SetupWizard({
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const [storages, setStorages] = useState<Storage[]>();
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
-  const [dnsByNode, setDNSByNode] = useState<Record<string, string[]>>({});
+  const [dnsByNode, setDNSByNode] = useState<Record<string, NodeDNS>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [form, setForm] = useState<SetupForm>(() => formOf(status.settings));
@@ -1978,7 +1979,7 @@ const submitLabel = (manage: boolean, last: boolean): string => {
 interface Found {
   storages: Storage[] | undefined;
   bridgesByNode: Record<string, Bridge[]>;
-  dnsByNode: Record<string, string[]>;
+  dnsByNode: Record<string, NodeDNS>;
   fixed: ManagementSettings | undefined;
 }
 
@@ -2027,7 +2028,7 @@ function withDefaults(
   const uplinkBridge = uplink(home);
   const bridge = keepOffered(orElse(form.bridge, uplinkBridge ? bridgeRef(uplinkBridge) : ""), bridges, bridgesKnown);
   const onBridge = home.find((b) => bridgeRef(b) === bridge);
-  const detect = (k: "gateway" | "dnsServers", value: string): string =>
+  const detect = (k: "gateway" | "dnsServers" | "searchDomains", value: string): string =>
     form[k] === "" && !touched.has(k) ? value : form[k];
   const untouchedNone = (k: "workloadDatastores" | "workloadBridges", value: string): string[] =>
     form[k].length === 0 && !touched.has(k) && value !== "" ? [value] : form[k];
@@ -2039,7 +2040,8 @@ function withDefaults(
       bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
       bridge,
       gateway: detect("gateway", onBridge?.gateway ?? ""),
-      dnsServers: detect("dnsServers", (found.dnsByNode[first] ?? []).join(", ")),
+      dnsServers: detect("dnsServers", (found.dnsByNode[first]?.servers ?? []).join(", ")),
+      searchDomains: detect("searchDomains", found.dnsByNode[first]?.search ?? ""),
       workloadDatastores: untouchedNone("workloadDatastores", vmDatastore),
       workloadBridges: untouchedNone("workloadBridges", bridge),
       refreshStorage: offeredRefreshStorage(form),

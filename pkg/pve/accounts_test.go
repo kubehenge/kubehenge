@@ -148,6 +148,9 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 	mux.HandleFunc("GET /api2/json/nodes/one/dns", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, map[string]any{"search": "example.org", "dns1": "192.0.2.53", "dns2": "2001:db8::53"})
 	})
+	mux.HandleFunc("GET /api2/json/nodes/two/dns", func(w http.ResponseWriter, _ *http.Request) {
+		reply(w, map[string]any{})
+	})
 	mux.HandleFunc("GET /api2/json/access/domains", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, []map[string]any{{"realm": "pve", "type": "pve", "default": 1}, {"realm": "pam", "type": "pam"}})
 	})
@@ -296,8 +299,13 @@ func TestBridgesAndDNSOfANode(t *testing.T) {
 		t.Fatalf("Bridges = %+v, %v; want %+v", bridges, err, want)
 	}
 	dns, err := a.DNS(context.Background(), tk, "one")
-	if err != nil || !reflect.DeepEqual(dns, []string{"192.0.2.53", "2001:db8::53"}) {
+	if err != nil || !reflect.DeepEqual(dns, NodeDNS{Servers: []string{"192.0.2.53", "2001:db8::53"}, Search: "example.org"}) {
 		t.Fatalf("DNS = %v, %v", dns, err)
+	}
+	// A node with no search domain answers an empty one, and no servers an empty list.
+	bare, err := a.DNS(context.Background(), tk, "two")
+	if err != nil || !reflect.DeepEqual(bare, NodeDNS{Servers: []string{}}) {
+		t.Fatalf("DNS of a node without a search domain = %v, %v", bare, err)
 	}
 }
 

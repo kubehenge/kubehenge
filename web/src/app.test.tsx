@@ -1464,7 +1464,7 @@ describe("create", () => {
           { bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true, cidr: "10.0.0.5/16", gateway: "10.0.0.1" },
         ],
       }),
-      "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.0.0.53"] } }),
+      "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.0.0.53"], search: "corp.example" } }),
       "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": freeOn,
       "GET /api/proxmox/ha-rules": () => ({
         body: {
@@ -1492,6 +1492,7 @@ describe("create", () => {
     await waitFor(() => expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0"));
     // The bridge's network gives the prefix length, gateway and DNS servers, and the examples.
     await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("10.0.0.53"));
+    expect(screen.getByLabelText("Search domains")).toHaveValue("corp.example");
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
     expect(screen.getByLabelText("Prefix length")).toHaveValue(16);
     expect(screen.getByLabelText("API address")).toHaveAttribute("placeholder", "10.0.0.20");

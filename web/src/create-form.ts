@@ -62,6 +62,7 @@ import {
 import { forRelease, talosRelease } from "./Talos";
 import type {
   Bridge,
+  NodeDNS,
   Cluster,
   ClusterClass,
   CreateRequest,
@@ -527,6 +528,7 @@ export interface BridgeNetwork {
   cidr?: string | undefined;
   gateway?: string | undefined;
   dns: string[];
+  search: string;
 }
 
 /**
@@ -536,7 +538,7 @@ export interface BridgeNetwork {
 export function bridgeNetwork(
   bridge: string,
   bridgesByNode: Record<string, Bridge[]>,
-  dnsByNode: Record<string, string[]>,
+  dnsByNode: Record<string, NodeDNS>,
 ): { net?: BridgeNetwork; network?: string; node?: string } {
   const on = Object.values(bridgesByNode)
     .flat()
@@ -544,7 +546,8 @@ export function bridgeNetwork(
   if (on === undefined) {
     return {};
   }
-  const net = { cidr: on.cidr, gateway: on.gateway, dns: dnsByNode[on.node] ?? [] };
+  const dns = dnsByNode[on.node];
+  const net = { cidr: on.cidr, gateway: on.gateway, dns: dns?.servers ?? [], search: dns?.search ?? "" };
   const network = on.cidr === undefined ? undefined : networkOf(on.cidr);
   return network === undefined ? { net, node: on.node } : { net, network, node: on.node };
 }
@@ -585,6 +588,7 @@ export function withBridgeNetwork(f: Form, net: BridgeNetwork | undefined, touch
     prefix: touched("prefix") || !whole(bits, 1, addressBits) ? f.prefix : bits,
     gateway: f.gateway === "" && !touched("gateway") ? (net.gateway ?? "") : f.gateway,
     dnsServers: f.dnsServers === "" && !touched("dnsServers") ? net.dns.join(", ") : f.dnsServers,
+    searchDomains: f.searchDomains === "" && !touched("searchDomains") ? net.search : f.searchDomains,
   };
 }
 

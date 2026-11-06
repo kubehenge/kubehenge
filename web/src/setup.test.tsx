@@ -88,7 +88,7 @@ const oneNode = {
       { bridge: "vmbr1", node: "pve1", vlanAware: true, usable: true },
     ],
   },
-  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53", "198.51.100.53"] } },
+  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53", "198.51.100.53"], search: "corp.example" } },
 };
 
 const next = async (user: UserEvent): Promise<void> => user.click(screen.getByRole("button", { name: "Next" }));
@@ -371,6 +371,7 @@ describe("setup", () => {
 
     // The bridge the node reaches its gateway through, that gateway and the node's DNS servers.
     await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
+    expect(screen.getByLabelText("Search domains")).toHaveValue("corp.example");
     expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0");
     expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1");
     const addresses = screen.getByLabelText("Node addresses");
@@ -421,12 +422,51 @@ describe("setup", () => {
         bridge: "vmbr0",
         gateway: "192.0.2.1",
         dnsServers: ["192.0.2.53", "198.51.100.53"],
+        searchDomains: ["corp.example"],
         workloadDatastores: ["local-lvm", "local"],
         workloadBridges: ["vmbr0"],
         headlampSignIn: true,
         headlampActions: true,
       },
     });
+  });
+
+  it.each([
+    ["a node without a search domain", { servers: ["192.0.2.53"], search: "" }, ""],
+    ["a node with one", { servers: ["192.0.2.53"], search: "corp.example" }, "corp.example"],
+  ])("prefills Search domains from %s", async (_kind, dns, expected) => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/proxmox/nodes/pve1/dns": { body: dns },
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53"));
+    expect(screen.getByLabelText("Search domains")).toHaveValue(expected);
+  });
+
+  it("keeps Search domains as the user left them", async () => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    await next(user);
+    const search = screen.getByLabelText("Search domains");
+    await waitFor(() => expect(search).toHaveValue("corp.example"));
+    await user.clear(search);
+    expect(search).toHaveValue("");
+    await user.type(search, "lab.example");
+    expect(search).toHaveValue("lab.example");
   });
 
   it("lists VNets with their alias and zone and sends the one chosen as zone/vnet", async () => {
