@@ -689,8 +689,7 @@ describe("setup", () => {
       "GET /api/clusters": { body: [] },
     });
     render(<App />);
-    const alert = await screen.findByText(/Appliance address changed to 192\.0\.2\.41\./u);
-    expect(alert).toHaveTextContent("Its certificate is for 192.0.2.40.");
+    const alert = await screen.findByText(/Appliance address moved from 192\.0\.2\.40 to 192\.0\.2\.41\./u);
     expect(within(alert).getByText("sh install.sh --certificate --ctid 105")).toBeInTheDocument();
   });
 

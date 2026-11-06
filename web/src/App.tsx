@@ -195,8 +195,8 @@ function Shell({
       )}
       {setup?.addressMoved && (
         <p className="warning" role="alert">
-          Appliance address changed to {setup.addressMoved.to.join(", ") || "none"}. Its certificate is for{" "}
-          {setup.addressMoved.from.join(", ")}. Renew it on the Proxmox VE node:{" "}
+          Appliance address moved from {setup.addressMoved.from.join(", ")} to{" "}
+          {setup.addressMoved.to.join(", ") || "none"}. Renew the certificate on the Proxmox VE node:{" "}
           <code>sh install.sh --certificate --ctid {setup.applianceVMID ?? "<appliance ID>"}</code>
         </p>
       )}
