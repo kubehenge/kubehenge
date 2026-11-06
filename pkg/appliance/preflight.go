@@ -109,6 +109,7 @@ func (s *Settings) Preflight(inv *Inventory, owned bool) Findings { //nolint:rev
 	s.checkNodesExist(inv, &f)
 	s.checkStorages(inv, &f)
 	s.checkBridge(inv, &f)
+	s.checkBuildPlace(inv, &f)
 	// The VMs of an earlier run hold the memory, disks and addresses already.
 	if !owned {
 		s.checkMemory(inv, &f)
@@ -126,14 +127,26 @@ func (s *Settings) checkNodesExist(inv *Inventory, f *Findings) {
 		return
 	}
 	for _, name := range s.Nodes {
-		i := slices.IndexFunc(inv.Nodes, func(n pve.Node) bool { return n.Node == name })
-		switch {
-		case i < 0:
-			f.Errors = append(f.Errors, fmt.Sprintf("Node %s is not in the Proxmox VE cluster. Choose a node that is.", name))
-		case !inv.Nodes[i].Online:
-			f.Errors = append(f.Errors, fmt.Sprintf("Node %s is offline. Start it, or choose another node.", name))
-		}
+		checkNodeExists(inv, f, name, "Choose a node that is.", "Start it, or choose another node.")
 	}
+}
+
+// checkNodeExists reports whether the node is in the cluster and online, or adds the error with the
+// fix for a missing node or for an offline one. A nil inventory of nodes passes.
+func checkNodeExists(inv *Inventory, f *Findings, name, missingFix, offlineFix string) bool {
+	if inv.Nodes == nil {
+		return true
+	}
+	i := slices.IndexFunc(inv.Nodes, func(n pve.Node) bool { return n.Node == name })
+	switch {
+	case i < 0:
+		f.Errors = append(f.Errors, fmt.Sprintf("Node %s is not in the Proxmox VE cluster. %s", name, missingFix))
+	case !inv.Nodes[i].Online:
+		f.Errors = append(f.Errors, fmt.Sprintf("Node %s is offline. %s", name, offlineFix))
+	default:
+		return true
+	}
+	return false
 }
 
 // checkStorages checks the three storages on every chosen node: present and enabled there, active,
@@ -146,16 +159,22 @@ func (s *Settings) checkStorages(inv *Inventory, f *Findings) {
 		{s.VMDatastore, "images"}, {s.ImageDatastore, "import"}, {s.BootstrapDatastore, "iso"},
 	} {
 		for _, node := range s.Nodes {
-			st := slices.IndexFunc(inv.Storages, func(x pve.Storage) bool { return x.Storage == c.name && x.Node == node })
-			switch {
-			case st < 0:
-				f.Errors = append(f.Errors, fmt.Sprintf("Storage %s is not enabled on node %s. Enable it there under Datacenter, Storage, Edit, Nodes, or choose another storage.", c.name, node))
-			case !inv.Storages[st].Active:
-				f.Errors = append(f.Errors, fmt.Sprintf("Storage %s is not active on node %s. Check its connection there, or choose another storage.", c.name, node))
-			case !slices.Contains(inv.Storages[st].Content, c.content):
-				f.Errors = append(f.Errors, fmt.Sprintf("Storage %s on node %s lacks the %s content type. Add it under Datacenter, Storage, Edit, Content.", c.name, node, c.content))
-			}
+			checkStorageOn(inv, f, c.name, c.content, node, "choose another storage")
 		}
+	}
+}
+
+// checkStorageOn checks one storage on one node: enabled there, active and with the content type.
+// fix ends the message of a missing or inactive one.
+func checkStorageOn(inv *Inventory, f *Findings, name, content, node, fix string) {
+	st := slices.IndexFunc(inv.Storages, func(x pve.Storage) bool { return x.Storage == name && x.Node == node })
+	switch {
+	case st < 0:
+		f.Errors = append(f.Errors, fmt.Sprintf("Storage %s is not enabled on node %s. Enable it there under Datacenter, Storage, Edit, Nodes, or %s.", name, node, fix))
+	case !inv.Storages[st].Active:
+		f.Errors = append(f.Errors, fmt.Sprintf("Storage %s is not active on node %s. Check its connection there, or %s.", name, node, fix))
+	case !slices.Contains(inv.Storages[st].Content, content):
+		f.Errors = append(f.Errors, fmt.Sprintf("Storage %s on node %s lacks the %s content type. Add it under Datacenter, Storage, Edit, Content.", name, node, content))
 	}
 }
 
@@ -201,7 +220,6 @@ func diskShortage(st *pve.Storage, has string, f *Findings) {
 // checkBridge holds every bridge to the zone Proxmox VE has it in, since the module grants SDN.Use
 // in the zone the settings name, and checks that each management node carries the management one.
 func (s *Settings) checkBridge(inv *Inventory, f *Findings) {
-	zone, name := pve.SplitBridge(s.Bridge)
 	for i, ref := range append([]string{s.Bridge}, s.WorkloadBridges...) {
 		z, n := pve.SplitBridge(ref)
 		network, known := inv.Networks[n]
@@ -221,18 +239,66 @@ func (s *Settings) checkBridge(inv *Inventory, f *Findings) {
 		}
 	}
 	for _, node := range s.Nodes {
-		bridges, known := inv.Bridges[node]
-		if !known || slices.ContainsFunc(bridges, func(b pve.Bridge) bool { return b.Bridge == name }) {
-			continue
-		}
-		if zone == pve.LocalZone {
-			f.Errors = append(f.Errors, fmt.Sprintf("Node %s has no bridge %s. Create it under %s, System, Network, or choose another bridge.", node, name, node))
-			continue
-		}
-		// A VNet the user may not read is missing from every node, and Proxmox VE judges it at the clone.
-		if _, readable := inv.Networks[name]; readable {
-			f.Errors = append(f.Errors, fmt.Sprintf("Node %s does not carry VNet %s. Add the node to zone %s, or choose another bridge.", node, name, zone))
-		}
+		checkBridgeOn(inv, f, s.Bridge, node, "choose another bridge")
+	}
+}
+
+// checkBridgeOn checks that the node carries the bridge, a VNet as zone/vnet. fix ends the message
+// of a missing one.
+func checkBridgeOn(inv *Inventory, f *Findings, ref, node, fix string) {
+	zone, name := pve.SplitBridge(ref)
+	bridges, known := inv.Bridges[node]
+	if !known || slices.ContainsFunc(bridges, func(b pve.Bridge) bool { return b.Bridge == name }) {
+		return
+	}
+	if zone == pve.LocalZone {
+		f.Errors = append(f.Errors, fmt.Sprintf("Node %s has no bridge %s. Create it under %s, System, Network, or %s.", node, name, node, fix))
+		return
+	}
+	// A VNet the user may not read is missing from every node, and Proxmox VE judges it at the clone.
+	if _, readable := inv.Networks[name]; readable {
+		f.Errors = append(f.Errors, fmt.Sprintf("Node %s does not carry VNet %s. Add the node to zone %s, or %s.", node, name, zone, fix))
+	}
+}
+
+// buildPlace is where the weekly template build runs: the node, the storage for the template
+// disks and the bridge, each defaulting as the module has it.
+func (s *Settings) buildPlace() (node, storage, bridge string) {
+	r := s.TemplateRefresh
+	if r == nil {
+		r = &TemplateRefresh{}
+	}
+	node, storage, bridge = r.Node, r.Storage, r.Bridge
+	if node == "" && len(s.Nodes) > 0 {
+		node = s.Nodes[0]
+	}
+	if storage == "" && len(s.WorkloadDatastores) > 0 {
+		storage = s.WorkloadDatastores[0]
+	}
+	if bridge == "" && len(s.WorkloadBridges) > 0 {
+		bridge = s.WorkloadBridges[0]
+	}
+	return node, storage, bridge
+}
+
+// checkBuildPlace checks that the build node exists and is online, and that it carries the build
+// storage and bridge. The VM that builds a node image gets no disk or network otherwise.
+func (s *Settings) checkBuildPlace(inv *Inventory, f *Findings) {
+	if !s.RefreshesTemplates() {
+		return
+	}
+	node, storage, bridge := s.buildPlace()
+	if node == "" {
+		return
+	}
+	if !checkNodeExists(inv, f, node, "Set the template build node to one that is, or leave it empty.", "Start it, or set another template build node.") {
+		return
+	}
+	if inv.Storages != nil && storage != "" {
+		checkStorageOn(inv, f, storage, "images", node, "set another template build storage or node")
+	}
+	if bridge != "" {
+		checkBridgeOn(inv, f, bridge, node, "set another template build bridge or node")
 	}
 }
 
