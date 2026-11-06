@@ -32,7 +32,7 @@ describe("a poll's freshness", () => {
         await vi.advanceTimersByTimeAsync(5 * pollIdle);
       });
       expect(screen.getByText("Read")).toBeInTheDocument();
-      expect(firstOnly).toHaveBeenCalledTimes(1);
+      expect(firstOnly).toHaveBeenCalledOnce();
 
       hidden.mockReturnValue(false);
       await act(async () => {
