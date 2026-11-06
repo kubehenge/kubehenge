@@ -26,6 +26,7 @@ import type {
   ManagementSettings,
   OIDCProvider,
   PveNode,
+  SetupFindings,
   SetupStatus,
   Storage,
 } from "./types";
@@ -72,6 +73,7 @@ export interface SetupForm {
   apiAddress: string;
   gateway: string;
   dnsServers: string;
+  timeServers: string;
   workloadDatastores: string[];
   workloadBridges: string[];
   bootstrapDatastore: string;
@@ -190,6 +192,7 @@ export function settings(f: SetupForm): ManagementSettings {
     apiAddress: f.apiAddress,
     gateway: f.gateway,
     dnsServers: list(f.dnsServers),
+    ...(list(f.timeServers).length > 0 ? { timeServers: list(f.timeServers) } : {}),
     workloadDatastores: f.workloadDatastores,
     workloadBridges: f.workloadBridges,
     bootstrapDatastore: f.bootstrapDatastore,
@@ -307,6 +310,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     apiAddress: saved.apiAddress,
     gateway: saved.gateway,
     dnsServers: saved.dnsServers.join(", "),
+    timeServers: (saved.timeServers ?? []).join(", "),
     workloadDatastores: saved.workloadDatastores,
     workloadBridges: saved.workloadBridges,
     bootstrapDatastore: saved.bootstrapDatastore,
@@ -343,6 +347,7 @@ export type SetupField =
   | "apiAddress"
   | "gateway"
   | "dnsServers"
+  | "timeServers"
   | "workload"
   | "bootstrapDatastore"
   | "clusterOIDC"
@@ -370,6 +375,7 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "apiAddress",
     "gateway",
     "dnsServers",
+    "timeServers",
     "mirrors",
     "podSubnets",
     "serviceSubnets",
@@ -516,6 +522,9 @@ function networkProblems(f: SetupForm, was: ManagementSettings | undefined): Set
     p.dnsServers = "Enter at least one DNS server.";
   } else if (dns.some((d) => !isIP(d))) {
     p.dnsServers = "Enter IP addresses only.";
+  }
+  if (list(f.timeServers).some((t) => /[\s/:]/u.test(t) && !isIP(t))) {
+    p.timeServers = "Enter host names or IP addresses only.";
   }
   return p;
 }
@@ -782,6 +791,7 @@ function ManagedSummary({
     ["API address", s.apiAddress],
     ["Gateway", s.gateway],
     ["DNS servers", s.dnsServers.join(", ")],
+    ["Time servers", timeServersOf(s)],
     ["Cluster storages", s.workloadDatastores.join(", ")],
     ["Cluster bridges", s.workloadBridges.join(", ")],
     ...optInRows(s),
@@ -1473,15 +1483,29 @@ function EtcdRestoreConfirm({
   );
 }
 
-function AdvancedFields({
+export function AdvancedFields({
   form,
   set,
   shown,
   fixed,
   open,
+  warnings,
   onOpen,
-}: FieldsProps & { fixed: boolean; open: boolean; onOpen: (open: boolean) => void }): JSX.Element {
+}: FieldsProps & {
+  fixed: boolean;
+  open: boolean;
+  warnings: string[];
+  onOpen: (open: boolean) => void;
+}): JSX.Element {
   const rangeHint = fixed ? fixedHint : "Empty picks a free range";
+  const about = (label: string): JSX.Element[] =>
+    warnings
+      .filter((w) => w.startsWith(`The ${label} range`))
+      .map((w) => (
+        <output key={w} className="field-warning">
+          {w}
+        </output>
+      ));
   return (
     <details className="advanced" open={open} onToggle={(e) => onOpen(e.currentTarget.open)}>
       <summary>Advanced</summary>
@@ -1497,6 +1521,7 @@ function AdvancedFields({
           <input id={id} readOnly={fixed} value={form.podSubnets} onChange={(e) => set("podSubnets", e.target.value)} />
         )}
       </Field>
+      {about("pod")}
       <Field label="Service ranges" hint={rangeHint} error={shown("serviceSubnets")}>
         {(id) => (
           <input
@@ -1507,6 +1532,7 @@ function AdvancedFields({
           />
         )}
       </Field>
+      {about("service")}
     </details>
   );
 }
@@ -1647,6 +1673,18 @@ function SetupWizard({
   const following = setupSteps[index + 1];
   const previous = setupSteps[index - 1];
 
+  // Proxmox VE is asked about the settings once they are complete: on the last step, or at once on
+  // the Administration page.
+  const complete = setupSteps.every((s) => !problemsIn(s));
+  const reviewing = complete && (!stepped || following === undefined);
+  const findings = usePreflight(complete, effective);
+  const blocked = stopsRun(reviewing, findings);
+  const blockedId = useId();
+  const missing = {
+    images: missingContent(storages, form.nodes, { content: "import", offered: offers.images }),
+    isos: missingContent(storages, form.nodes, { content: "iso", offered: offers.isos }),
+  };
+
   const { clusterStorages, clusterBridges } = clusterChoices(form, found, nodes);
 
   const start = async (): Promise<void> => {
@@ -1673,7 +1711,7 @@ function SetupWizard({
     requestAnimationFrame(() => wizardRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
   };
   const submit = (): void => {
-    if (busy) {
+    if (busy || blocked) {
       return;
     }
     if (stepped && following !== undefined) {
@@ -1710,8 +1748,10 @@ function SetupWizard({
     passphraseHint: passphraseHint(manage, status.resumes),
     firstRun,
     advancedOpen,
+    rangeWarnings: rangeWarningsOf(findings),
     handleAdvanced: setAdvancedOpen,
     handleAskRestore: () => setAskingRestore(true),
+    missing,
   });
 
   return (
@@ -1760,7 +1800,13 @@ function SetupWizard({
             </section>
           ))
         )}
+        <PreflightFindings findings={reviewing ? findings : undefined} />
         <ErrorBox message={error} />
+        {blocked && (
+          <p id={blockedId} className="hint">
+            Fix the errors above to apply.
+          </p>
+        )}
         <div className="actions">
           {onCancel && (
             <button type="button" onClick={onCancel}>
@@ -1780,7 +1826,7 @@ function SetupWizard({
               Back
             </button>
           )}
-          <button type="submit" className="primary" disabled={busy}>
+          <button type="submit" className="primary" disabled={busy || blocked} aria-describedby={blockedId}>
             {submitLabel(manage, following === undefined)}
           </button>
         </div>
@@ -1794,6 +1840,107 @@ function SetupWizard({
         }}
       />
     </section>
+  );
+}
+
+const timeServersOf = (s: ManagementSettings): string => s.timeServers?.join(", ") ?? "Talos defaults";
+
+// checkDelay waits for typing to stop before Proxmox VE is asked, as the answer probes addresses.
+const checkDelay = 600;
+
+// usePreflight asks what the settings would run into, once typing has stopped. Its findings belong to
+// the settings they were read for, so a change hides them until the next answer. Without settings
+// nothing is asked.
+function usePreflight(complete: boolean, form: SetupForm): SetupFindings | undefined {
+  const current = settings(form);
+  const key = complete ? JSON.stringify(current) : "";
+  const [checked, setChecked] = useState<{ key: string; findings: SetupFindings }>();
+  useEffect(() => {
+    let stale = false;
+    async function check(): Promise<void> {
+      try {
+        const answer = await api.setupCheck(current);
+        if (!stale) {
+          setChecked({ key, findings: answer });
+        }
+      } catch {
+        // The run itself refuses what the check would have said.
+      }
+    }
+    const timer =
+      key === ""
+        ? undefined
+        : setTimeout(() => {
+            void check();
+          }, checkDelay);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+    // current is key's content.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return checked?.key === key ? checked.findings : undefined;
+}
+
+// stopsRun tells whether the run would refuse these settings, on the last step, where errors are
+// listed. Warnings never stop it.
+const stopsRun = (reviewing: boolean, findings: SetupFindings | undefined): boolean =>
+  reviewing && (findings?.errors.length ?? 0) > 0;
+
+// rangeWarning matches the pre-flight warnings that belong beside the pod and service range fields.
+const rangeWarning = /^The (?:pod|service) range /u;
+
+const rangeWarningsOf = (findings: SetupFindings | undefined): string[] =>
+  findings?.warnings.filter((w) => rangeWarning.test(w)) ?? [];
+
+// missingContent says which nodes lack a storage with the content type and how to add one, where the
+// wizard has none to offer. It is undefined while the storages are unread or any is offered.
+export function missingContent(
+  storages: Storage[] | undefined,
+  nodes: string[],
+  { content, offered }: { content: string; offered: string[] },
+): string | undefined {
+  if (storages === undefined || nodes.length === 0 || offered.length > 0) {
+    return undefined;
+  }
+  const lacking = nodes.filter((n) => !storages.some((s) => s.node === n && s.active && s.content.includes(content)));
+  return `No ${content} storage on ${(lacking.length > 0 ? lacking : nodes).join(", ")}. Add one under Datacenter, Storage, Edit, Content.`;
+}
+
+// PreflightFindings lists what Proxmox VE would refuse or what is likely a mistake, and the pod and
+// service ranges the cluster gets.
+export function PreflightFindings({ findings }: { findings: SetupFindings | undefined }): JSX.Element | null {
+  if (findings === undefined) {
+    return null;
+  }
+  const pods = findings.podRanges ?? [];
+  const services = findings.serviceRanges ?? [];
+  return (
+    <>
+      {findings.errors.length > 0 && (
+        <ul className="health-short findings findings-errors" role="alert" aria-label="Errors">
+          {findings.errors.map((m) => (
+            <li key={m}>{m}</li>
+          ))}
+        </ul>
+      )}
+      {findings.warnings.length > 0 && (
+        <ul className="health-short findings" aria-label="Warnings">
+          {findings.warnings.map((m) => (
+            <li key={m}>{m}</li>
+          ))}
+        </ul>
+      )}
+      {(pods.length > 0 || services.length > 0) && (
+        <dl className="summary findings-ranges">
+          <dt>Pod ranges</dt>
+          <dd className="mono">{pods.join(", ")}</dd>
+          <dt>Service ranges</dt>
+          <dd className="mono">{services.join(", ")}</dd>
+        </dl>
+      )}
+    </>
   );
 }
 
@@ -1944,8 +2091,10 @@ function setupFields({
   passphraseHint: string;
   firstRun: boolean;
   advancedOpen: boolean;
+  rangeWarnings: string[];
   handleAdvanced: (open: boolean) => void;
   handleAskRestore: () => void;
+  missing: { images: string | undefined; isos: string | undefined };
 }): Record<SetupStep, ReactNode> {
   const { nodes, toggle, fixed } = more;
   return {
@@ -1981,7 +2130,11 @@ function setupFields({
             )
           }
         </Field>
-        <Field label="Talos image" hint="Storages with the import content type" error={shown("imageDatastore")}>
+        <Field
+          label="Talos image"
+          hint="Storages with the import content type"
+          error={more.missing.images ?? shown("imageDatastore")}
+        >
           {(id) => (
             <Choice
               id={id}
@@ -1994,7 +2147,7 @@ function setupFields({
         <Field
           label="Cloud-init images"
           hint="ISO storage that Kubehenge gets full control of"
-          error={shown("bootstrapDatastore")}
+          error={more.missing.isos ?? shown("bootstrapDatastore")}
         >
           {(id) => (
             <Choice
@@ -2069,12 +2222,20 @@ function setupFields({
         <Field label="DNS servers" hint="Separated by commas" error={shown("dnsServers")}>
           {(id) => <input id={id} value={effective.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
         </Field>
+        <Field
+          label="Time servers"
+          hint="Commas between servers, empty for Talos defaults"
+          error={shown("timeServers")}
+        >
+          {(id) => <input id={id} value={effective.timeServers} onChange={(e) => set("timeServers", e.target.value)} />}
+        </Field>
         <AdvancedFields
           form={form}
           set={set}
           shown={shown}
           fixed={fixed !== undefined}
-          open={more.advancedOpen}
+          open={more.advancedOpen || more.rangeWarnings.length > 0}
+          warnings={more.rangeWarnings}
           onOpen={more.handleAdvanced}
         />
       </>

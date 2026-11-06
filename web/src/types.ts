@@ -582,6 +582,8 @@ export interface Storage {
   node: string;
   shared: boolean;
   content: string[];
+  /** Whether Proxmox VE reports it available on the node. */
+  active: boolean;
   avail: number;
   total: number;
   usable: boolean;
@@ -659,6 +661,8 @@ export interface ManagementSettings {
   apiAddress: string;
   gateway: string;
   dnsServers: string[];
+  /** NTP servers for the nodes. Unset keeps Talos's default ones. */
+  timeServers?: string[];
   workloadDatastores: string[];
   workloadBridges: string[];
   bootstrapDatastore: string;
@@ -1009,6 +1013,16 @@ export interface ManagementHealth {
   nodes?: { name: string; ready: boolean; message?: string; kubelet?: string }[];
   /** Its deployments: Cluster API's providers, Kubehenge's controller and the cluster's own. */
   controllers?: { namespace: string; name: string; ready: number; wanted: number }[];
+  /** Whether the controller reaches the Proxmox VE API from inside the cluster. Unset until it has asked. */
+  proxmox?: { ok: boolean; error?: string; checked: string };
+}
+
+/** What the setup would run into: errors stop it, warnings do not. */
+export interface SetupFindings {
+  errors: string[];
+  warnings: string[];
+  podRanges?: string[];
+  serviceRanges?: string[];
 }
 
 /** A component of the management cluster whose version applying the appliance's release changes. */

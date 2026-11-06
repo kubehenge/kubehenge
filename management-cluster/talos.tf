@@ -127,7 +127,7 @@ data "talos_machine_configuration" "node" {
         apiVersion = "v1alpha1"
         kind       = "LinkAliasConfig"
         name       = "lan"
-        selector   = { match = "mac(link.permanent_addr) == \"${lower(local.nodes[count.index].mac)}\"" }
+        selector   = { match = "mac(link.permanent_addr) == \"${lower(proxmox_virtual_environment_vm.node[count.index].mac_addresses[0])}\"" }
       }),
       yamlencode({
         apiVersion = "v1alpha1"
@@ -143,7 +143,14 @@ data "talos_machine_configuration" "node" {
         name       = registry
         endpoints  = [for e in endpoints : { url = e }]
       })
-    ])),
+      ],
+      # Without servers, Talos keeps its default public ones, which a site may block on UDP 123.
+      length(var.time_servers) == 0 ? [] : [yamlencode({
+        apiVersion = "v1alpha1"
+        kind       = "TimeSyncConfig"
+        ntp        = { servers = var.time_servers }
+      })],
+    )),
   ]
 }
 

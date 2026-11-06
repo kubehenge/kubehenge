@@ -438,10 +438,11 @@ resource "proxmox_virtual_environment_vm" "node" {
   }
 
   network_device {
-    bridge      = local.bridges[var.bridge].name
-    vlan_id     = var.vlan_id
-    model       = "virtio"
-    mac_address = local.nodes[count.index].mac
+    bridge  = local.bridges[var.bridge].name
+    vlan_id = var.vlan_id
+    model   = "virtio"
+    # No mac_address: Proxmox VE assigns a unique one, and the provider keeps what the VM has. The
+    # Talos link alias selects it from the VM once it exists.
   }
 
   # Talos reads its address from the NoCloud drive, so the nodes need no DHCP.

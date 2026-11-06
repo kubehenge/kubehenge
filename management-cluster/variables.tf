@@ -107,6 +107,17 @@ variable "dns_servers" {
   type        = list(string)
 }
 
+variable "time_servers" {
+  description = "NTP servers the management cluster's nodes keep their clocks with, as host names or addresses. Empty keeps Talos's default public servers."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for s in var.time_servers : trimspace(s) != "" && !strcontains(s, "/") && !strcontains(s, " ")])
+    error_message = "time_servers are host names or addresses, without a scheme, path or space."
+  }
+}
+
 variable "version_overrides" {
   description = "Versions to use instead of the tested set in versions.tf, by the same keys, for holding a component back. A provider held back needs its image in provider_images and its files' digests in provider_manifests. Lowering a version on a running cluster is not supported."
   type        = map(string)

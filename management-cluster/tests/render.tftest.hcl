@@ -10,6 +10,12 @@ mock_provider "proxmox" {
       id = "local:import/talos-v1.14.4-ce4c980550dd-nocloud-amd64.qcow2"
     }
   }
+  # What Proxmox VE assigns a VM whose configuration sets no MAC address.
+  mock_resource "proxmox_virtual_environment_vm" {
+    defaults = {
+      mac_addresses = ["BC:24:11:AA:BB:CC"]
+    }
+  }
 }
 
 mock_provider "talos" {
@@ -102,14 +108,6 @@ run "nodes" {
   assert {
     condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.reboot_after_update == false])
     error_message = "a change of the management VMs' hardware must never reboot them"
-  }
-
-  assert {
-    condition = (
-      length(toset([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].mac_address])) == 3 &&
-      alltrue([for vm in proxmox_virtual_environment_vm.node : can(regex("^BC:24:11(:[0-9A-F]{2}){3}$", vm.network_device[0].mac_address))])
-    )
-    error_message = "nodes need distinct MAC addresses in Proxmox VE's range"
   }
 
   assert {
@@ -1447,4 +1445,69 @@ run "rejects_a_node_twice" {
   }
 
   expect_failures = [var.proxmox_nodes]
+}
+
+run "time_servers_become_time_sync_config" {
+  command = apply
+
+  variables {
+    time_servers = ["ntp1.example.org", "192.0.2.5"]
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if yamldecode(d).kind == "TimeSyncConfig"
+      ] == [{
+        apiVersion = "v1alpha1"
+        kind       = "TimeSyncConfig"
+        ntp        = { servers = ["ntp1.example.org", "192.0.2.5"] }
+    }]
+    error_message = "time servers must become one TimeSyncConfig document, servers in order"
+  }
+}
+
+run "no_time_servers_keep_talos_defaults" {
+  command = apply
+
+  assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "TimeSyncConfig")
+    error_message = "without time servers the nodes keep Talos's default ones"
+  }
+}
+
+run "time_servers_refuse_urls" {
+  command = plan
+
+  variables {
+    time_servers = ["http://ntp.example.org"]
+  }
+
+  expect_failures = [var.time_servers]
+}
+
+run "every_helm_release_that_waits_has_a_long_timeout" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for r in [helm_release.cert_manager, helm_release.cluster_api_operator, helm_release.cluster_api_providers, helm_release.kubehenge] :
+      r.wait && r.timeout == 900
+    ])
+    error_message = "a release that waits needs Helm's timeout raised from 300 to 900 seconds for slow image pulls"
+  }
+}
+
+run "the_link_alias_selects_the_mac_proxmox_ve_assigned" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for i in [0, 1, 2] : anytrue([
+        for d in split("---\n", data.talos_machine_configuration.node[i].config_patches[1]) :
+        try(yamldecode(d).kind == "LinkAliasConfig" && yamldecode(d).selector.match == "mac(link.permanent_addr) == \"bc:24:11:aa:bb:cc\"", false)
+      ])
+    ])
+    error_message = "each node's link alias must select the MAC its VM has, lower case, since the module sets none"
+  }
 }
