@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -12,6 +13,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -254,6 +259,97 @@ func TestLogOutputCredentialPurposes(t *testing.T) {
 		if _, ok := CredentialPurposeNamed(name); ok {
 			t.Errorf("%s is a purpose", name)
 		}
+	}
+}
+
+func TestLogOutputsSecretFollowsTheCredentials(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	credential := &corev1.Secret{
+		Namespace: "team-a", Name: "web.log-splunk", Type: CredentialType,
+		Labels: map[string]string{CredentialLabel: "log-splunk"},
+		Data:   map[string][]byte{"token": []byte("first")},
+	}
+	c := cluster()
+	r, kube := newReconciler(t, &fakeCloud{}, c, credential)
+	workload := fake.NewClientBuilder().WithScheme(newRemoteScheme()).Build()
+	reach := func() {
+		r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
+	}
+	// An unreachable cluster fails any call that needs it, which proves a call that does not.
+	unreachable := func() { r.Remotes = &Remotes{} }
+	outputs := Logs{Collector: collectorNode, Outputs: []LogOutput{{Name: "splunk", Kind: logOutputOTLP, Endpoint: "https://o.example.com", Auth: logAuthBearer}}}
+	held := func(namespace string) (string, bool) {
+		s := &corev1.Secret{}
+		err := workload.Get(ctx, client.ObjectKey{Namespace: namespace, Name: logOutputsSecret}, s)
+		return string(s.Data["splunk.token"]), err == nil
+	}
+	wait := func(logs Logs) {
+		t.Helper()
+		if err := kube.Get(ctx, client.ObjectKeyFromObject(c), c); err != nil {
+			t.Fatal(err)
+		}
+		if waits, err := r.logOutputsWait(ctx, c, logs); err != nil || waits {
+			t.Fatalf("waits %v: %v", waits, err)
+		}
+	}
+
+	reach()
+	wait(outputs)
+	for _, namespace := range []string{logsNamespace, logsNodeNamespace} {
+		if token, ok := held(namespace); !ok || token != "first" {
+			t.Errorf("%s holds %q, %t", namespace, token, ok)
+		}
+	}
+	if c.Annotations[logOutputsAnnotation] == "" {
+		t.Error("the Cluster does not record the Secret")
+	}
+
+	unreachable()
+	wait(outputs)
+
+	reach()
+	credential.Data["token"] = []byte("second")
+	if err := kube.Update(ctx, credential); err != nil {
+		t.Fatal(err)
+	}
+	wait(outputs)
+	if token, _ := held(logsNamespace); token != "second" {
+		t.Errorf("a changed credential is not written: %q", token)
+	}
+
+	wait(Logs{Collector: collectorAPI, Outputs: outputs.Outputs})
+	if _, ok := held(logsNodeNamespace); ok {
+		t.Error("the node Alloy's namespace keeps the Secret under the API collector")
+	}
+	if _, ok := held(logsNamespace); !ok {
+		t.Error("the Secret went from the API Alloy's namespace")
+	}
+
+	wait(Logs{Collector: collectorAPI, Outputs: []LogOutput{allOutputs[1]}})
+	for _, namespace := range []string{logsNamespace, logsNodeNamespace} {
+		if _, ok := held(namespace); ok {
+			t.Errorf("%s keeps the Secret with no credential in use", namespace)
+		}
+	}
+	if _, set := c.Annotations[logOutputsAnnotation]; set {
+		t.Error("the Cluster still records the Secret")
+	}
+	unreachable()
+	wait(Logs{})
+}
+
+func TestLogOutputsMissingCredentialWritesNothing(t *testing.T) {
+	t.Parallel()
+	c := cluster()
+	r, _ := newReconciler(t, &fakeCloud{}, c)
+	r.Remotes = &Remotes{}
+	waits, err := r.logOutputsWait(context.Background(), c, Logs{Outputs: allOutputs[:1]})
+	if err != nil || waits {
+		t.Fatalf("waits %v: %v", waits, err)
+	}
+	if c.Annotations[logOutputsAnnotation] != "" {
+		t.Error("the Cluster records a Secret that was never written")
 	}
 }
 

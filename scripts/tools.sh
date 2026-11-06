@@ -154,6 +154,13 @@ TYPOS=v1.52.0
 TYPOS_SHA256=6155d4114f9a0f5b8f6d4fda96266c9d5f6add71df80da7f684ee5e72eb14588
 release typos crate-ci/typos "${TYPOS}" "typos-${TYPOS}-x86_64-unknown-linux-musl.tar.gz" "${TYPOS_SHA256}" ./typos
 
+# `alloy validate` proves that the Alloy configurations the controller generates parse, and that
+# their components and arguments exist. It is the release the charts run: TestAlloyToolIsTheChartsRelease holds the two together.
+# renovate: datasource=github-release-attachments depName=grafana/alloy
+ALLOY=v1.21.3
+ALLOY_SHA256=50d23af2d0f98c00beac6ce9a365693e60f87fb76b6cad6fe1d161e80588af6d
+release alloy grafana/alloy "${ALLOY}" alloy-linux-amd64.zip "${ALLOY_SHA256}" alloy-linux-amd64.zip
+
 # The nightly link check runs it (make links).
 # renovate: datasource=github-release-attachments depName=lycheeverse/lychee
 LYCHEE=lychee-v0.24.2

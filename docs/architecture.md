@@ -432,7 +432,11 @@ Prometheus keeps ten days of metrics on a 20 GiB volume from the cluster's defau
 
 Logs (`logs: {enabled: true, collector: node|api, retentionDays: 7, sizeGiB: 10}`) need monitoring, whose Grafana reads them. The validating webhook and the interface refuse them without it, and refuse switching monitoring off under them.
 
-`logs.outputs` adds up to four destinations beside Loki, which always runs with logs. Each source's `forward_to` lists Loki and every output that takes its stream. Syslog and OTLP outputs pass through `otelcol.receiver.loki`, and Loki outputs are another `loki.write`. An output's credential is a stored credential with the purpose `log-<name>`, which the controller copies as an optional Secret into both Alloy namespaces. The configuration refers to its files with `local.file`, so no secret is in the chart values.
+`logs.outputs` adds up to four destinations beside Loki, which always runs with logs. Each source's `forward_to` lists Loki and every output that takes its stream.
+
+Syslog and OTLP outputs pass through `otelcol.receiver.loki`. Loki outputs are another `loki.write`.
+
+An output's credential is a stored credential with the purpose `log-<name>`. The controller copies it as an optional Secret into both Alloy namespaces. It records on the Cluster what it wrote, and reaches the workload cluster only when that changes. The configuration reads the files with `local.file`, so no secret is in the chart values.
 
 Loki runs as one binary in the `logging` namespace, with its chunks and index on a volume from the cluster's default storage class. The volume only grows and is kept when logs are switched off. Loki deletes logs after `retentionDays`. Nothing deletes them by size, so `sizeGiB` has to hold the days kept.
 

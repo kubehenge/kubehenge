@@ -444,19 +444,20 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 
 ### Log outputs
 
-Alloy reports a refused or unreachable output in its own log. Read it in the Alloy that carries the stream, `alloy-node` in `logging-node` for containers, nodes and audit, and `alloy` in `logging` for events:
+Alloy reports a refused or unreachable output in its own log. Containers, nodes and audit go through `alloy-node` in `logging-node`, and events through `alloy` in `logging`:
 
 ```bash
 kubectl -n logging-node logs ds/alloy-node | grep out_<name>
 ```
 
-Component names are `out_<name>` with hyphens as underscores. Alloy retries and drops what the endpoint keeps refusing, so Loki still has the logs.
+Component names are `out_<name>`, with hyphens as underscores. Alloy drops what an endpoint keeps refusing, and Loki still has those logs.
 
-- **A `LogOutputCredentialMissing` event on the Cluster:** the stored credential `<cluster>.log-<name>` lacks `username` and `password`, or `token`. Store it again under **Options**. Alloy runs meanwhile, and the output reports an unreadable file.
+- **A `LogOutputCredentialMissing` event on the Cluster:** the stored credential `<cluster>.log-<name>` lacks `username` and `password`, or `token`. Store it again under **Options**.
+  - Alloy runs meanwhile, and the output reports an unreadable file.
 - **`401` or `403` in Alloy's log:** the endpoint refused the credential. Store a new one.
 - **`x509: certificate signed by unknown authority`:** paste the endpoint's CA into **CA certificate**.
-- **Nothing arrives from a syslog output:** `tcp://` and `udp://` send in clear text, and a collector that expects TLS drops them. Use `tls://`. Check that a firewall passes the port from the nodes.
-- **The cluster is refused with "log output …":** the message names the rule, such as a scheme the kind does not take or credentials to a non-`https://` endpoint.
+- **Nothing arrives from a syslog output:** `tcp://` and `udp://` send in clear text, which a collector that expects TLS drops. Use `tls://`, and check that a firewall passes the port from the nodes.
+- **The cluster is refused with "log output …":** the message names the rule that was broken.
 
 ### etcd snapshots and restores
 

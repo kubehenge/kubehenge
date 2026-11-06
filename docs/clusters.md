@@ -238,16 +238,20 @@ Each add-on the class offers is a card with the memory its pods take by the clas
       - That gives it every container's log, short-lived pods' too, the node's journal and, on the control planes, the API server's audit log.
     - **Through the Kubernetes API**: one Alloy in `logging` reads the pods' logs through the API server, with no access to the host.
       - It is lighter, but misses the journal, the audit log and pods that end before it reads them.
-  - **Log outputs** send every log to up to 4 more destinations, beside Loki. Loki stays on with logs, since Grafana reads it, so an output adds a copy and replaces nothing.
-    - Each output has a **name** (lower-case, at most 20 characters), a **kind**, an **endpoint** and the streams it takes. None ticked sends all four: `containers`, `events`, `nodes` and `audit` (the API server's audit log, with the node collector).
-    - **Syslog** sends RFC 5424 messages to `tls://host:port` (TLS), `tcp://host:port` (plain) or `udp://host:port`. It takes no authentication.
+  - **Log outputs** send every log to up to 4 more destinations, beside Loki. Loki stays on with logs because Grafana reads it.
+    - Each output has a **name** (lower-case, at most 20 characters), a **kind**, an **endpoint** and the streams it takes.
+    - None ticked sends all four streams: `containers`, `events`, `nodes` and `audit`. `audit` is the API server's audit log, which the node collector reads.
+    - **Syslog** sends RFC 5424 messages to `tls://host:port`, `tcp://host:port` (clear text) or `udp://host:port`. It takes no authentication.
     - **OTLP over HTTP** sends to the receiver's base URL, such as `https://otlp.example.com:4318`. Alloy adds `/v1/logs`.
     - **Loki** sends to another Loki-compatible endpoint, such as Grafana Cloud. The endpoint is the whole push URL, ending in `/loki/api/v1/push`.
-    - Authentication is `none`, `basic` (user name and password) or `bearer` (a token), for OTLP and Loki over `https://`. A private CA's certificates go into **CA certificate**.
-    - The endpoint holds no user, query or fragment. Credentials are stored for the cluster under the purpose `log-<name>`, in **Edit logs** under **Options**. They hold `username` and `password`, or `token`.
-    - Kubehenge copies the credential as the Secret `kubehenge-log-outputs` into the namespaces of the cluster's Alloys. Alloy reads it from a file, so a changed credential needs no restart.
+    - Authentication is `none`, `basic` (user name and password) or `bearer` (a token). OTLP and Loki take it over `https://` only.
+    - A private CA's certificates go into **CA certificate**. The endpoint holds no user, query or fragment.
+    - Credentials are stored for the cluster under the purpose `log-<name>`, in **Edit logs** under **Options**. They hold `username` and `password`, or `token`.
+    - Kubehenge copies the credential into the Secret `kubehenge-log-outputs` in the namespaces of the cluster's Alloys. Alloy reads it from a file, so a changed credential needs no restart.
+    - Switching off the last output that has a credential deletes that Secret again. So does switching logs off.
     - With kubectl, store the credential as a Secret of type `kubehenge.dev/user-credential` named `<cluster>.log-<name>`. Label it `kubehenge.dev/user-credential: log-<name>` and `kubehenge.dev/credential-cluster: <cluster>`.
-    - Syslog needs an Alloy component at its public-preview stability level. Kubehenge starts that Alloy with `--stability.level=public-preview`. The line becomes the message, the `node` label the host name and the `job` label the application name.
+    - Syslog uses an Alloy component at its public-preview stability level. Kubehenge starts that Alloy with `--stability.level=public-preview`.
+    - The syslog message is the log line, with the `node` label as host name and the `job` label as application name.
     - Alloy has no generic HTTP log exporter, so there is no plain `http` kind. Splunk and Elastic take OTLP, syslog or Loki-compatible input.
 - **Backups** with Velero, to one of the S3 stores an administrator set ([install-settings.md](install-settings.md#backup-targets)). They run daily at 02:00 by default, each kept for 7 days.
   - Velero backs up every namespace but Kubernetes' own and the add-ons', with the data in its pods' volumes. The cluster writes under a folder of its own in the store, encrypted with keys of its own ([Back up and restore](#back-up-and-restore)).

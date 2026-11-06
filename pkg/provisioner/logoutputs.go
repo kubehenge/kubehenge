@@ -72,6 +72,10 @@ const (
 
 	syslogDefaultPort = 514
 
+	// logOutputsAnnotation records on the Cluster what was last written into its workload cluster
+	// as logOutputsSecret, so that the controller reaches it only when that changes.
+	logOutputsAnnotation = "kubehenge.dev/log-outputs-secret" //nolint:gosec // an annotation's name, not a credential
+
 	schemeTCP      = "tcp"
 	schemeTLS      = "tls"
 	schemeUDP      = "udp"
@@ -421,23 +425,14 @@ func outputVolume(outputs []LogOutput) ([]any, []any) {
 // before the Alloy chart, which mounts them as an optional Secret. It reports whether the chart has
 // to wait for the cluster's API. A missing credential holds nothing back: Alloy runs, and the
 // output reports the unreadable file.
+//
+// The Cluster's annotation holds what was last written (the credentials' resource versions and the
+// collector), so the workload cluster is reached only when that changes, and when the last output
+// with a credential goes the Secret is taken out of both namespaces once.
 func (r *Reconciler) logOutputsWait(ctx context.Context, cluster *clusterv1.Cluster, logs Logs) (bool, error) {
-	if len(needsCredentials(logs.Outputs)) == 0 {
-		return false, nil
-	}
-	stored := map[string]map[string][]byte{}
-	for _, o := range needsCredentials(logs.Outputs) {
-		s := &corev1.Secret{}
-		err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: CredentialName(cluster.Name, o.CredentialPurpose())}, s)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
-			return false, fmt.Errorf("reading the credential of log output %s: %w", o.Name, err)
-		}
-		if s.Type == CredentialType && s.Labels[CredentialLabel] == o.CredentialPurpose() {
-			stored[o.Name] = s.Data
-		}
+	stored, versions, err := r.logOutputCredentials(ctx, cluster, logs.Outputs)
+	if err != nil {
+		return false, err
 	}
 	data, missing := logOutputSecretData(logs.Outputs, stored)
 	if missing != "" {
@@ -446,21 +441,77 @@ func (r *Reconciler) logOutputsWait(ctx context.Context, cluster *clusterv1.Clus
 		}
 		return false, nil
 	}
+	want := ""
+	if len(data) > 0 {
+		want = logs.collector() + ";" + strings.Join(versions, ";")
+	}
+	if cluster.Annotations[logOutputsAnnotation] == want {
+		return false, nil
+	}
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
 		return true, err
 	}
-	namespaces := []string{logsNamespace}
-	if logs.collector() == collectorNode {
-		namespaces = append(namespaces, logsNodeNamespace)
-	}
-	for _, namespace := range namespaces {
-		if err = putLogOutputsSecret(ctx, workload.client, namespace, data); err != nil {
+	for _, namespace := range []string{logsNamespace, logsNodeNamespace} {
+		if len(data) > 0 && (namespace == logsNamespace || logs.collector() == collectorNode) {
+			err = putLogOutputsSecret(ctx, workload.client, namespace, data)
+		} else {
+			err = deleteLogOutputsSecret(ctx, workload.client, namespace)
+		}
+		if err != nil {
 			r.Remotes.forget(cluster)
 			return false, err
 		}
 	}
-	return false, nil
+	return false, r.markLogOutputs(ctx, cluster, want)
+}
+
+// logOutputCredentials reads the stored credentials of the outputs that need one, with the
+// resource version of each Secret for the annotation.
+func (r *Reconciler) logOutputCredentials(ctx context.Context, cluster *clusterv1.Cluster, outputs []LogOutput) (map[string]map[string][]byte, []string, error) {
+	stored := map[string]map[string][]byte{}
+	var versions []string
+	for _, o := range needsCredentials(outputs) {
+		s := &corev1.Secret{}
+		err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: CredentialName(cluster.Name, o.CredentialPurpose())}, s)
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading the credential of log output %s: %w", o.Name, err)
+		}
+		if s.Type == CredentialType && s.Labels[CredentialLabel] == o.CredentialPurpose() {
+			stored[o.Name] = s.Data
+			versions = append(versions, o.Name+"="+s.ResourceVersion)
+		}
+	}
+	return stored, versions, nil
+}
+
+// markLogOutputs records what was written into the workload cluster, or with nothing, that it
+// holds no credential Secret.
+func (r *Reconciler) markLogOutputs(ctx context.Context, cluster *clusterv1.Cluster, written string) error {
+	patch := client.MergeFrom(cluster.DeepCopy())
+	if written == "" {
+		delete(cluster.Annotations, logOutputsAnnotation)
+	} else {
+		if cluster.Annotations == nil {
+			cluster.Annotations = map[string]string{}
+		}
+		cluster.Annotations[logOutputsAnnotation] = written
+	}
+	if err := r.Client.Patch(ctx, cluster, patch); err != nil {
+		return fmt.Errorf("marking the log outputs' credentials as written: %w", err)
+	}
+	return nil
+}
+
+func deleteLogOutputsSecret(ctx context.Context, workload client.Client, namespace string) error {
+	s := &corev1.Secret{Namespace: namespace, Name: logOutputsSecret}
+	if err := workload.Delete(ctx, s); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("deleting Secret %s/%s: %w", namespace, logOutputsSecret, err)
+	}
+	return nil
 }
 
 func putLogOutputsSecret(ctx context.Context, workload client.Client, namespace string, data map[string][]byte) error {
