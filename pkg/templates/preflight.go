@@ -193,19 +193,23 @@ func (b *Builder) chooseISO(ctx context.Context, list []nodeStorage) (string, er
 		b.Node, storageContentName["iso"]))
 }
 
-// datacenterTags are the datacenter options that decide which tags a user may set.
-type datacenterTags struct {
-	Access     string `json:"user-tag-access"`
-	Registered string `json:"registered-tags"`
+// TagOptions are the datacenter options that decide which tags a user may set, in the shapes
+// /cluster/options gives them.
+type TagOptions struct {
+	Access struct {
+		// Allow is free, existing, list or none. Proxmox VE leaves it out for free.
+		Allow string   `json:"user-allow"`
+		List  []string `json:"user-allow-list"`
+	} `json:"user-tag-access"`
+	Registered []string `json:"registered-tags"`
 }
 
-// TagsRefusal says why the datacenter's tag options would refuse tags to a user without Sys.Modify
-// on /, or returns "". access and registered are the user-tag-access and registered-tags options,
-// and visible the tags already on guests the token can audit. Tags match exactly, as Proxmox VE's
+// Refusal says why the options would refuse tags to a user without Sys.Modify on /, or returns "".
+// visible are the tags already on guests the token can audit. Tags match exactly, as Proxmox VE's
 // own check does, and only Sys.Modify on / bypasses it.
-func TagsRefusal(access, registered string, tags, visible []string) string {
+func (o *TagOptions) Refusal(tags, visible []string) string {
 	var blocked []string
-	for _, r := range strings.FieldsFunc(registered, isTagSeparator) {
+	for _, r := range o.Registered {
 		if slices.Contains(tags, r) {
 			blocked = append(blocked, r)
 		}
@@ -214,23 +218,13 @@ func TagsRefusal(access, registered string, tags, visible []string) string {
 		return fmt.Sprintf("the datacenter option registered-tags lists %s, which only Sys.Modify on / may set. "+
 			"Remove them from Datacenter, Options, Registered Tags, or let the token hold Sys.Modify", strings.Join(blocked, ", "))
 	}
-	allow, list := "free", ""
-	for part := range strings.SplitSeq(access, ",") {
-		key, value, _ := strings.Cut(strings.TrimSpace(part), "=")
-		switch key {
-		case "user-allow":
-			allow = value
-		case "user-allow-list":
-			list = value
-		}
-	}
-	switch allow {
+	switch o.Access.Allow {
 	case "none":
 		return "the datacenter option user-tag-access is none, so users cannot set tags. " +
 			"Choose list in Datacenter, Options, User Tag Access and add " + strings.Join(tags, ", ")
 	case "list", "existing":
-		allowed := strings.FieldsFunc(list, isTagSeparator)
-		if allow == "existing" {
+		allowed := slices.Clone(o.Access.List)
+		if o.Access.Allow == "existing" {
 			allowed = append(allowed, visible...)
 		}
 		var missing []string
@@ -266,16 +260,18 @@ func isTagSeparator(r rune) bool { return r == ';' || r == ',' || r == ' ' }
 
 // CheckTags refuses tags that the datacenter's tag options would keep a user without Sys.Modify
 // on / from setting. A token that cannot read the options, or holds Sys.Modify, is not judged.
+// Neither are options in a shape this release cannot read: Proxmox VE's own check still refuses
+// the tag later, by name.
 func CheckTags(ctx context.Context, c *proxmox.Client, tags []string) error {
-	var options datacenterTags
+	var options TagOptions
 	if err := c.Get(ctx, "/cluster/options", &options); err != nil {
-		return nil //nolint:nilerr // a token that cannot read the options cannot be judged by them
+		return nil //nolint:nilerr // options that cannot be read cannot judge the tags
 	}
 	var visible []string
-	if strings.Contains(options.Access, "user-allow=existing") {
+	if options.Access.Allow == "existing" {
 		visible = visibleTags(ctx, c)
 	}
-	why := TagsRefusal(options.Access, options.Registered, tags, visible)
+	why := options.Refusal(tags, visible)
 	if why == "" || holds(ctx, c, "/", "Sys.Modify") {
 		return nil
 	}

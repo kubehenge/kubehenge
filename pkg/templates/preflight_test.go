@@ -150,29 +150,68 @@ func TestPreflightChoosesTheISOStorageTheTokenCanWrite(t *testing.T) {
 	}
 }
 
-func TestTagsRefusal(t *testing.T) {
+// pveOptions are datacenter options as /cluster/options answers them.
+func pveOptions(t *testing.T, answer string) map[string]any {
+	t.Helper()
+	var options map[string]any
+	if err := json.Unmarshal([]byte(answer), &options); err != nil {
+		t.Fatal(err)
+	}
+	return options
+}
+
+func TestTagOptionsRefusal(t *testing.T) {
 	t.Parallel()
 	tags := []string{"kubehenge", "volumes"}
 	for _, tc := range []struct {
-		name, access, registered, want string
-		visible                        []string
+		name, options, want string
+		visible             []string
 	}{
-		{"the default", "", "", "", nil},
-		{"free", "user-allow=free", "", "", nil},
-		{"none", "user-allow=none", "", "user-tag-access is none", nil},
-		{"a list without the tags", "user-allow=list,user-allow-list=prod", "", "refuses kubehenge, volumes.", nil},
-		{"a list with them", "user-allow=list,user-allow-list=prod;kubehenge;volumes", "", "", nil},
-		{"a list matches case exactly", "user-allow=list,user-allow-list=Kubehenge;volumes", "", "refuses kubehenge.", nil},
-		{"registered", "", "prod;volumes", "registered-tags lists volumes", nil},
-		{"registered matches case exactly", "", "Kubehenge;prod", "", nil},
-		{"registered without them", "", "prod", "", nil},
-		{"existing: on a visible guest", "user-allow=existing", "", "", []string{"kubehenge", "volumes"}},
-		{"existing: in the list", "user-allow=existing,user-allow-list=volumes", "", "", []string{"kubehenge"}},
-		{"existing: in neither", "user-allow=existing,user-allow-list=prod", "", "refuses volumes.", []string{"kubehenge"}},
+		{"the default", `{}`, "", nil},
+		{"free", `{"user-tag-access":{"user-allow":"free"}}`, "", nil},
+		{"none", `{"user-tag-access":{"user-allow":"none"}}`, "user-tag-access is none", nil},
+		{"a list without the tags", `{"user-tag-access":{"user-allow":"list","user-allow-list":["prod"]}}`, "refuses kubehenge, volumes.", nil},
+		{"a list with them", `{"user-tag-access":{"user-allow":"list","user-allow-list":["prod","kubehenge","volumes"]}}`, "", nil},
+		{"a list matches case exactly", `{"user-tag-access":{"user-allow":"list","user-allow-list":["Kubehenge","volumes"]}}`, "refuses kubehenge.", nil},
+		{"registered", `{"registered-tags":["prod","volumes"]}`, "registered-tags lists volumes", nil},
+		{"registered matches case exactly", `{"registered-tags":["Kubehenge","prod"]}`, "", nil},
+		{"registered without them", `{"registered-tags":["prod"]}`, "", nil},
+		{"existing: on a visible guest", `{"user-tag-access":{"user-allow":"existing"}}`, "", []string{"kubehenge", "volumes"}},
+		{"existing: in the list", `{"user-tag-access":{"user-allow":"existing","user-allow-list":["volumes"]}}`, "", []string{"kubehenge"}},
+		{"existing: in neither", `{"user-tag-access":{"user-allow":"existing","user-allow-list":["prod"]}}`, "refuses volumes.", []string{"kubehenge"}},
 	} {
-		got := TagsRefusal(tc.access, tc.registered, tags, tc.visible)
+		var o TagOptions
+		if err := json.Unmarshal([]byte(tc.options), &o); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		got := o.Refusal(tags, tc.visible)
 		if tc.want == "" && got != "" || !strings.Contains(got, tc.want) {
-			t.Errorf("%s: TagsRefusal = %q, want %q", tc.name, got, tc.want)
+			t.Errorf("%s: Refusal = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestCheckTagsReadsTheOptionsAsProxmoxVEAnswers feeds the answers of a Proxmox VE 9 node, as a
+// token without Sys.Modify got them, beside whether that token could then tag a guest.
+func TestCheckTagsReadsTheOptionsAsProxmoxVEAnswers(t *testing.T) {
+	t.Parallel()
+	tags := []string{"kubehenge", "building"}
+	const common = `"allowed-tags":["cloud-image","kubeadm","kubehenge"],"description":"","mac_prefix":"BC:24:11"`
+	for _, tc := range []struct {
+		name, options string
+		tagged        bool
+	}{
+		{"free", `{` + common + `}`, true},
+		{"existing", `{` + common + `,"user-tag-access":{"user-allow":"existing"}}`, false},
+		{"list without them", `{` + common + `,"user-tag-access":{"user-allow":"list","user-allow-list":["other"]}}`, false},
+		{"list with both", `{` + common + `,"user-tag-access":{"user-allow":"list","user-allow-list":["kubehenge","building"]}}`, true},
+		{"none", `{` + common + `,"user-tag-access":{"user-allow":"none"}}`, false},
+		{"registered", `{` + common + `,"registered-tags":["kubehenge"]}`, false},
+	} {
+		pve := &preflightPVE{options: pveOptions(t, tc.options), guests: []map[string]any{{"vmid": 100, "tags": "cloud-image;kubeadm;kubehenge"}}}
+		err := CheckTags(t.Context(), pve.client(t), tags)
+		if tc.tagged != (err == nil) {
+			t.Errorf("%s: CheckTags = %v, while Proxmox VE tagged the guest: %t", tc.name, err, tc.tagged)
 		}
 	}
 }
@@ -180,7 +219,7 @@ func TestTagsRefusal(t *testing.T) {
 func TestCheckTagsNamesTheOptionUnlessTheTokenMaySetAnyTag(t *testing.T) {
 	t.Parallel()
 	tags := []string{"kubehenge", "kubehenge-building", "rke2"}
-	pve := &preflightPVE{options: map[string]any{"user-tag-access": "user-allow=none"}}
+	pve := &preflightPVE{options: pveOptions(t, `{"user-tag-access":{"user-allow":"none"}}`)}
 	err := CheckTags(t.Context(), pve.client(t), tags)
 	if err == nil || !strings.Contains(err.Error(), "user-tag-access") || !Final(err) {
 		t.Errorf("CheckTags = %v, want a final error naming user-tag-access", err)
@@ -196,7 +235,7 @@ func TestCheckTagsNamesTheOptionUnlessTheTokenMaySetAnyTag(t *testing.T) {
 	}
 	// Under existing, the tags on guests the token can audit are allowed.
 	pve = &preflightPVE{
-		options: map[string]any{"user-tag-access": "user-allow=existing"},
+		options: pveOptions(t, `{"user-tag-access":{"user-allow":"existing"}}`),
 		guests:  []map[string]any{{"vmid": 1, "tags": "kubehenge;kubehenge-building;rke2"}},
 	}
 	if err = CheckTags(t.Context(), pve.client(t), tags); err != nil {
