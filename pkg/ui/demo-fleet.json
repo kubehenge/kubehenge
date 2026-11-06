@@ -56,7 +56,11 @@
       "workers": 4,
       "subnet": 10,
       "ageDays": 96,
-      "addOns": ["headlamp", "monitoring", "logs", "backups"]
+      "addOns": ["headlamp", "monitoring", "logs", "backups"],
+      "addonChanges": [
+        { "addon": "monitoring", "chart": "kube-prometheus-stack", "from": "84.3.0", "to": "85.0.1" },
+        { "addon": "headlamp", "chart": "headlamp", "from": "0.40.1", "to": "0.41.0" }
+      ]
     },
     {
       "name": "payments",
@@ -67,11 +71,7 @@
       "subnet": 20,
       "ageDays": 61,
       "addOns": ["headlamp", "monitoring"],
-      "crashing": "invoice-worker",
-      "addonChanges": [
-        { "addon": "monitoring", "chart": "kube-prometheus-stack", "from": "84.3.0", "to": "85.0.1" },
-        { "addon": "headlamp", "chart": "headlamp", "from": "0.40.1", "to": "0.41.0" }
-      ]
+      "crashing": "invoice-worker"
     },
     {
       "name": "edge",
