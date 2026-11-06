@@ -711,7 +711,7 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	if err := mgr.Add(reach); err != nil {
 		return fmt.Errorf("the Proxmox VE reachability check: %w", err)
 	}
-	return o.addHA(mgr, cloud.Client)
+	return o.addHA(mgr, cloud)
 }
 
 // addUpgrader adds what upgrades clusters automatically in their windows, what upgrades Talos
@@ -854,13 +854,14 @@ func (o *controllerOptions) addBootLogs(mgr manager.Manager, c *proxmox.Client) 
 // addHA adds the reconciler that has Proxmox VE HA keep clusters' control-plane VMs apart, with
 // --proxmox-ha. It writes HA in Jobs that alone hold the HA token. Without it, the reconciler takes
 // back the hooks it set before.
-func (o *controllerOptions) addHA(mgr manager.Manager, c *proxmox.Client) error {
+func (o *controllerOptions) addHA(mgr manager.Manager, cloud *provisioner.Proxmox) error {
 	r := &provisioner.HAReconciler{
 		Client:         mgr.GetClient(),
 		Machines:       mgr.GetCache(),
 		ClassNamespace: o.r.ClassNamespace,
 		WorkloadPool:   o.r.WorkloadPool,
-		Proxmox:        c,
+		Proxmox:        cloud.Client,
+		Nodes:          cloud,
 	}
 	if o.proxmoxHA {
 		r.HA = &provisioner.HAJobs{Jobs: o.tokenJob(mgr, provisioner.HAJobTemplate)}
