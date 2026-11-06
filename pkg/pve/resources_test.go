@@ -320,6 +320,16 @@ func TestNetworkOfABridge(t *testing.T) {
 			http.Error(w, "Permission check failed (/sdn/zones, SDN.Audit)", http.StatusForbidden)
 		case "broken":
 			refuseInStatusLine(t, w, "500 cfs-lock 'file-sdn_cfg' error: got lock request timeout")
+		case "vmbr1", "badparam":
+			// Newer releases refuse the name as a parameter, for a VNet that does not exist and for
+			// one the user may not see alike.
+			field, reason := "vnet", "could not find vnet '"+vnet+"'"
+			if vnet == "badparam" {
+				field, reason = "pending", "type check ('boolean') failed"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": nil, "errors": map[string]string{field: reason}})
 		default:
 			refuseInStatusLine(t, w, "500 sdn vnet object ID '"+vnet+"' does not exist")
 		}
@@ -331,6 +341,7 @@ func TestNetworkOfABridge(t *testing.T) {
 		"aware":      {Zone: "vlanz", ZoneType: "vlan", VLANAware: true},
 		"unreadable": {Zone: "locked"},
 		"vmbr0":      {Zone: LocalZone},
+		"vmbr1":      {Zone: LocalZone},
 	} {
 		if got, err := a.Network(ctx, alice, bridge); err != nil || got != want {
 			t.Errorf("%s: %+v, %v, want %+v", bridge, got, err, want)
@@ -342,9 +353,11 @@ func TestNetworkOfABridge(t *testing.T) {
 	if _, err := a.Network(ctx, alice, "hidden"); !errors.Is(err, ErrForbidden) {
 		t.Errorf("a VNet the user may not see: %v", err)
 	}
-	// Only "does not exist" means a plain bridge. Any other failure is no zone at all.
-	if n, err := a.Network(ctx, alice, "broken"); err == nil {
-		t.Errorf("a failed lookup gave %+v", n)
+	// Only a VNet Proxmox VE does not know means a plain bridge. Any other failure is no zone at all.
+	for _, bridge := range []string{"broken", "badparam"} {
+		if n, err := a.Network(ctx, alice, bridge); err == nil {
+			t.Errorf("%s: a failed lookup gave %+v", bridge, n)
+		}
 	}
 }
 

@@ -176,7 +176,8 @@ func TestSetupHoldsBridgesToTheirZones(t *testing.T) {
 	for name, c := range map[string]struct{ settings, want string }{
 		"management VNet as a plain bridge": {`{"bridge":"tenants"}`, "write it as evpn/tenants"},
 		"workload VNet in another zone":     {`{"bridge":"vmbr0","workloadBridges":["vmbr0","localnetwork/tenants"]}`, "write it as evpn/tenants"},
-		"node bridge in a zone":             {`{"bridge":"evpn/vmbr0"}`, "write it as vmbr0"},
+		"node bridge in a zone":             {`{"bridge":"evpn/vmbr0"}`, "Proxmox VE shows you no VNet vmbr0. A node's own bridge is written as vmbr0"},
+		"VNet that is not there":            {`{"bridge":"evpn/nosuch"}`, "Proxmox VE shows you no VNet nosuch"},
 		"VLAN on a VLAN zone":               {`{"bridge":"vlanz/corp","vlan":20}`, "VNet corp is in a VLAN zone and tags already"},
 	} {
 		rec := setUp(c.settings)
@@ -188,7 +189,7 @@ func TestSetupHoldsBridgesToTheirZones(t *testing.T) {
 	// Right zones pass this check and meet the settings' own, which says what else is missing.
 	rec := setUp(`{"bridge":"vlanz/corp","workloadBridges":["vmbr0","evpn/tenants"]}`)
 	expect(t, rec, http.StatusUnprocessableEntity)
-	if strings.Contains(rec.Body.String(), "write it as") || strings.Contains(rec.Body.String(), "tags already") {
+	if body := rec.Body.String(); strings.Contains(body, "write it as") || strings.Contains(body, "shows you no VNet") || strings.Contains(body, "tags already") {
 		t.Errorf("answer = %s", rec.Body)
 	}
 }

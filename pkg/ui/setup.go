@@ -312,11 +312,12 @@ func (s *Server) checkBridges(w http.ResponseWriter, r *http.Request, u user, se
 			return false
 		}
 		if network.Zone != zone {
-			want := name
+			// Proxmox VE answers alike for a VNet that does not exist and one the user may not see.
+			message := fmt.Sprintf("Bridge %s: Proxmox VE shows you no VNet %s. A node's own bridge is written as %s", ref, name, name)
 			if network.Zone != pve.LocalZone {
-				want = network.Zone + "/" + name
+				message = fmt.Sprintf("Bridge %s: write it as %s/%s", ref, network.Zone, name)
 			}
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("Bridge %s: write it as %s", ref, want))
+			writeError(w, http.StatusUnprocessableEntity, message)
 			return false
 		}
 		if i == 0 && settings.VLAN != nil && *settings.VLAN > 0 && network.TagsTraffic() {

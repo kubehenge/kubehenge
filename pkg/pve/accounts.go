@@ -115,9 +115,11 @@ type ticketResponse struct {
 	NeedTFA  int    `json:"NeedTFA"`
 }
 
-// APIError is any other refusal. Proxmox VE puts its reason in the HTTP status line.
+// APIError is any other refusal. Proxmox VE puts its reason in the HTTP status line, and the
+// reason for each parameter it refused in Errors.
 type APIError struct {
 	Method, Path, Status string
+	Errors               map[string]string
 }
 
 func (e *APIError) Error() string {
@@ -310,7 +312,12 @@ func (a *Accounts) do(req *http.Request, out any) error {
 	case resp.StatusCode == http.StatusForbidden:
 		return ErrForbidden
 	case resp.StatusCode != http.StatusOK:
-		return &APIError{Method: req.Method, Path: req.URL.Path, Status: resp.Status}
+		var refusal struct {
+			Errors map[string]string `json:"errors"`
+		}
+		// An answer that is not JSON still has its status line, which is the error.
+		_ = json.Unmarshal(body, &refusal)
+		return &APIError{Method: req.Method, Path: req.URL.Path, Status: resp.Status, Errors: refusal.Errors}
 	}
 	var envelope struct {
 		Data json.RawMessage `json:"data"`

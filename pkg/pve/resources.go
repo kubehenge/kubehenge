@@ -381,14 +381,15 @@ func EnabledRules(res []HARuleEntry) []HARule {
 }
 
 // Network looks up the bridge a VM connects to: a VNet's own zone, or LocalZone for a plain bridge,
-// as Proxmox VE decides where SDN.Use is checked.
+// as Proxmox VE decides where SDN.Use is checked. A VNet the user may not see reads as a plain
+// bridge on releases that answer both alike, and Proxmox VE still checks its zone at the clone.
 func (a *Accounts) Network(ctx context.Context, t *Ticket, bridge string) (Network, error) {
 	var vnet struct {
 		Zone      string `json:"zone"`
 		VLANAware flag   `json:"vlanaware"`
 	}
 	err := a.get(ctx, t, "/cluster/sdn/vnets/"+url.PathEscape(bridge), &vnet)
-	if notFound(err) {
+	if notFound(err) || unknownVNet(err) {
 		return Network{Zone: LocalZone}, nil
 	}
 	if err != nil {
@@ -611,4 +612,12 @@ func (a *Accounts) waitTask(ctx context.Context, t *Ticket, node, upid string) e
 func notFound(err error) bool {
 	apiErr, ok := errors.AsType[*APIError](err)
 	return ok && strings.Contains(apiErr.Status, "does not exist")
+}
+
+// unknownVNet tells whether Proxmox VE refused the vnet parameter as a VNet it knows none of. Newer
+// releases answer so for a VNet that does not exist and for one the user may not see alike, where
+// older ones said "does not exist" or refused the permission.
+func unknownVNet(err error) bool {
+	apiErr, ok := errors.AsType[*APIError](err)
+	return ok && strings.HasPrefix(apiErr.Errors["vnet"], "could not find vnet")
 }
