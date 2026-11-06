@@ -16,8 +16,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func pod(name string, status corev1.PodStatus) *corev1.Pod {
-	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "kubehenge-system", Name: name}, Status: status}
+func pod(name string, status *corev1.PodStatus) *corev1.Pod {
+	return &corev1.Pod{Namespace: "kubehenge-system", Name: name, Status: *status}
 }
 
 func TestPodWait(t *testing.T) {
@@ -51,7 +51,7 @@ func TestPodWait(t *testing.T) {
 		{"running and ready", ready(corev1.ConditionTrue), ""},
 		{"done", corev1.PodStatus{Phase: corev1.PodSucceeded}, ""},
 	} {
-		if got := podWait(pod("p", tc.status)); got != tc.want {
+		if got := podWait(pod("p", &tc.status)); got != tc.want {
 			t.Errorf("%s: podWait = %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -61,7 +61,7 @@ func TestWaitingPodsNamesAtMostMaxWaits(t *testing.T) {
 	t.Parallel()
 	kube := fake.NewClientset()
 	for i := range maxWaits + 2 {
-		p := pod(fmt.Sprintf("p%02d", i), corev1.PodStatus{Phase: corev1.PodFailed, Message: "evicted"})
+		p := pod(fmt.Sprintf("p%02d", i), &corev1.PodStatus{Phase: corev1.PodFailed, Message: "evicted"})
 		if _, err := kube.CoreV1().Pods(p.Namespace).Create(t.Context(), p, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +76,7 @@ func TestWaitingPodsNamesAtMostMaxWaits(t *testing.T) {
 // management cluster whose controller has no room.
 func TestAFailedApplyNamesWhatThePodsWaitFor(t *testing.T) {
 	t.Parallel()
-	pods := corev1.PodList{Items: []corev1.Pod{*pod("kubehenge-controller-1", corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{
+	pods := corev1.PodList{Items: []corev1.Pod{*pod("kubehenge-controller-1", &corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{
 		Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Message: "0/1 nodes are available: 1 Insufficient memory.",
 	}}})}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

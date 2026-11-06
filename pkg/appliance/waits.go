@@ -81,7 +81,9 @@ func podWait(p *corev1.Pod) string {
 	if c := condition(p, corev1.PodScheduled); c != nil && c.Status == corev1.ConditionFalse {
 		return "is not scheduled: " + short(c.Message)
 	}
-	for _, cs := range slices.Concat(p.Status.InitContainerStatuses, p.Status.ContainerStatuses) {
+	statuses := slices.Concat(p.Status.InitContainerStatuses, p.Status.ContainerStatuses)
+	for i := range statuses {
+		cs := &statuses[i]
 		if w := cs.State.Waiting; w != nil && w.Reason != "" && w.Reason != "PodInitializing" {
 			if w.Message == "" {
 				return fmt.Sprintf("waits: container %s is in %s", cs.Name, w.Reason)
