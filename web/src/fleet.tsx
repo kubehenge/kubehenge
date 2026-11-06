@@ -260,6 +260,10 @@ const isTrue = (c: Cluster, type: string): boolean => c.conditions.some((x) => x
 export const windowTime = (iso: string): string =>
   new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
 
+// windowShort is windowTime without the year, for the rail's narrow lines.
+const windowShort = (iso: string): string =>
+  new Date(iso).toLocaleString(undefined, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
 // addonStanding is what the add-ons hold up: a conflict that needs someone. Changes that wait for the
 // upgrade window leave the cluster as it is, since nothing runs until the window opens.
 function addonStanding(c: Cluster): Standing | undefined {
@@ -271,7 +275,7 @@ function addonStanding(c: Cluster): Standing | undefined {
 // restingReason is the line of a cluster that is available and has nothing going on.
 function restingReason(c: Cluster): string {
   if (isTrue(c, addonChangesPendingCondition) && c.addonChanges !== undefined) {
-    return `Add-on changes at ${windowTime(c.addonChanges.opens)}`;
+    return `Add-on changes ${windowShort(c.addonChanges.opens)}`;
   }
   return c.talos ? `Talos ${c.talos.version}, ${c.version}` : `${distributionName(c.distribution)} ${c.version}`;
 }

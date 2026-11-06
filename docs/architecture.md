@@ -333,7 +333,7 @@ A node OS template is a line of builds, each tagged with when it was made. Every
   - `GeneratePatches` selects the newest build of each line made by then that is past the soak time (24 hours by default, `--node-image-soak`).
   - The same cluster therefore gets the same build on every reconcile, scale-up and repair until the time moves.
 - **The time moves** in two places.
-  - Every five minutes the upgrader sets it to now for each cluster settled inside its maintenance window with a newer build soaked. It skips a cluster whose `upgrades.nodeImages` is false.
+  - Every five minutes the upgrader sets it to now for each cluster settled inside its upgrade window with a newer build soaked. It skips a cluster whose `upgrades.nodeImages` is false.
   - The `BeforeClusterUpgrade` hook sets it too, so that any Kubernetes upgrade takes the newest builds with it.
   - Outside the window, the upgrader records the hold, the build that waits and when the window opens in the annotation `kubehenge.dev/node-image-held`. The interface shows it.
 - **The refresh** holds a Lease so that one run builds at a time. It builds each line, then deletes all but its two newest builds.
@@ -368,7 +368,7 @@ It deletes the rest.
   - The controller upgrades nothing more in the cluster until an operator removes the record (**Try again** on the cluster's page).
   - A stalled install (no word for three minutes) or an unreachable or busy node is retried after one, two and four minutes. Nothing on the node changes before the reboot.
   - A node whose machine Cluster API deletes mid-upgrade, as when the cluster scales down onto it, has its upgrade dropped, not failed. A machine being deleted is never picked.
-- **Automatic patch upgrades.** Where the cluster's `upgrades.nodeImages` is on, the upgrader moves `talosVersion` to its minor version's newest patch release, inside the maintenance window. Talos releases get no soak time. A new minor version is always an operator's choice.
+- **Automatic patch upgrades.** Where the cluster's `upgrades.nodeImages` is on, the upgrader moves `talosVersion` to its minor version's newest patch release, inside the upgrade window. Talos releases get no soak time. A new minor version is always an operator's choice.
 
 ## Add-ons
 

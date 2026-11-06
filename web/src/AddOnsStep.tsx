@@ -18,6 +18,7 @@ import {
   addonMemory,
   type AddonKey,
   addonsProblem,
+  coresText,
   logsChosen,
   machineLeast,
   offersMesh,
@@ -368,7 +369,7 @@ function AddonRoom({ form, cls }: { form: StepProps["form"]; cls: ClusterClass |
   const names = [...new Set([...used.names, ...requested.names])];
   return (
     <p className="hint" id="addon-room">
-      {`Each ${node} needs at least ${least.memoryMiB} MiB and ${cores} cores`}
+      {`Each ${node} needs at least ${least.memoryMiB} MiB and ${coresText(cores)}`}
       <Info about="add-on resources">{`Add-ons use about ${amounts.join(" and ")}: ${names.join(", ")}.`}</Info>
     </p>
   );

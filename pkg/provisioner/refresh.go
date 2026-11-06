@@ -129,7 +129,7 @@ const MachinesBeingCreated = "machines being created"
 // templates.NormaliseTags orders them, joined with ";": the clusters whose node image time picks it
 // for a line their machines run, and MachinesBeingCreated where a machine waiting for its VM selects
 // it. These are the builds a refresh never deletes, and deleting one moves those clusters' nodes
-// at once, outside their maintenance windows.
+// at once, outside their upgrade windows.
 func BuildUsers(ctx context.Context, kube client.Reader, classNamespace string, list []*proxmox.ClusterResource, soak time.Duration) (map[string][]string, error) {
 	r := &TemplateRefresh{Kube: kube, ClassNamespace: classNamespace}
 	clusters, err := r.clusters(ctx)

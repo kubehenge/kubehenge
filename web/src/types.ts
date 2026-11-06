@@ -557,7 +557,7 @@ export interface TalosReleases {
 
 /** The VM template builds a cluster's nodes are cloned from. */
 export interface NodeImage {
-  /** The nodes move to new builds inside the maintenance window. */
+  /** The nodes move to new builds inside the upgrade window. */
   refreshes: boolean;
   /** The nodes run the newest builds offered by then. */
   since: string;

@@ -359,7 +359,7 @@ The first release of 0.4. The v0.4.0 tag was never published.
   - Templates come from the Talos Image Factory, one per release. They are built on the Administration page, from the create wizard where creators may ask for one, or with `kubehenge template create talos --talos-version`.
   - Changing `talosVersion` upgrades the nodes in place through the Talos API, one at a time. Control planes go first, each is drained first, and the upgrade moves a minor version at a time.
   - An upgrade that fails or rolls back stops the rest until **Try again** on the cluster's page.
-  - With node image updates on, the nodes move to new Talos patch releases inside the maintenance window.
+  - With node image updates on, the nodes move to new Talos patch releases inside the upgrade window.
   - The cluster page shows the release, the upgrade under way and the last one. It downloads the talosconfig for those who may download the kubeconfig.
   - etcd snapshots are taken and restored through the Talos API. The restore wipes etcd on every control plane, recovers it on the first and lets the others join again.
   - Talos's service and kernel logs reach Loki through the node collector, under `job="talos"`.
@@ -381,7 +381,7 @@ The first release of 0.4. The v0.4.0 tag was never published.
 - **Node OS refresh.** The management cluster builds the node OS VM templates again every week with their node OS's updates.
   - This is on by default, Sunday at 01:00 UTC, and is set on the Administration page or with the module's `template_refresh`.
   - The builds use an API token of its own that may build and delete templates in the template pool and nothing else. Each build is a template of its own.
-  - A cluster's nodes move to a new one inside its maintenance window once it is a day old, one at a time. They do so whether automatic Kubernetes upgrades are on or not, unless the cluster switches node image updates off.
+  - A cluster's nodes move to a new one inside its upgrade window once it is a day old, one at a time. They do so whether automatic Kubernetes upgrades are on or not, unless the cluster switches node image updates off.
   - The two newest builds of each template stay, with any a cluster still runs.
   - The cluster page shows which build the nodes run and when they next move.
   - The Administration page shows the last run with its log and has Build now.

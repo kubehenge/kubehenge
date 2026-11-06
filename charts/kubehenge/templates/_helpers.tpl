@@ -1355,7 +1355,7 @@ reads it.
       type: object
       description: >-
         Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template,
-        inside a maintenance window. Kubehenge's controller takes the newest release the mode
+        inside an upgrade window. Kubehenge's controller takes the newest release the mode
         allows, one minor version at a time and never past the distribution's stable channel, and
         starts only when the cluster is healthy and no rollout is running. A started rollout
         finishes even if the window ends first.

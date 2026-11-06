@@ -9,6 +9,18 @@ import { expectNoViolations } from "./axe";
 import { fakeServer, type Route } from "./fake-server";
 import { ManagementBackups } from "./ManagementBackups";
 
+// The pages the router loads on first use are transformed by Vite the first time they are imported.
+// On a loaded machine that took longer than a test's wait for its page to leave the Suspense
+// skeleton, so every one is imported while the file is collected, before any test waits on a page.
+await Promise.all([
+  import("./RunPage"),
+  import("./Administration"),
+  import("./Setup"),
+  import("./ClusterDetail"),
+  import("./CreateCluster"),
+  import("./Health"),
+]);
+
 const when = "2026-01-02T03:04:05Z";
 
 const machine = (name: string, role: "control-plane" | "worker") => ({

@@ -159,4 +159,4 @@ Both work in the template pool, `--pool` as for create. `--pool ''` covers every
 
 Delete refuses a build a cluster's machines are cloned from, as the Administration page does, and names the clusters. It reads which clusters those are from the management cluster `KUBECONFIG` points at (`--class-namespace` if Kubehenge is not in `kubehenge-system`).
 
-`--roll-clusters` deletes such a build anyway, for one found broken. The clusters that run it have their nodes replaced at once, outside their maintenance windows, with clones of the build before it. The last build of a template is never deleted while a cluster runs it.
+`--roll-clusters` deletes such a build anyway, for one found broken. The clusters that run it have their nodes replaced at once, outside their upgrade windows, with clones of the build before it. The last build of a template is never deleted while a cluster runs it.

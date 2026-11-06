@@ -894,8 +894,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
 }
 
 const gib = (mib: number): string => (mib % mibPerGiB === 0 ? `${mib / mibPerGiB} GiB` : `${mib} MiB`);
-const machine = (m: Machine): string =>
-  `${m.cores} ${m.cores === 1 ? "core" : "cores"}, ${gib(m.memoryMiB)} memory, ${m.diskGiB} GiB disk`;
+/** coresText counts cores, with "core" for one. */
+export const coresText = (n: number): string => `${n} ${n === 1 ? "core" : "cores"}`;
+const machine = (m: Machine): string => `${coresText(m.cores)}, ${gib(m.memoryMiB)} memory, ${m.diskGiB} GiB disk`;
 
 function rancherChoice(form: Form): string {
   if (form.rancherInstall) {

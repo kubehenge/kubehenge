@@ -224,7 +224,7 @@ function AutomaticBuilds({
           </>
         )}
         <dt>Rollout</dt>
-        <dd>After {refresh.soakHours} h, in maintenance windows</dd>
+        <dd>After {refresh.soakHours} h, in upgrade windows</dd>
         <dt>Kept</dt>
         <dd>2 newest builds, and any in use</dd>
       </dl>

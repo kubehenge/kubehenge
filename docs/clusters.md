@@ -499,7 +499,7 @@ The newest version the cluster may move to is chosen already. Under it the dialo
 - whether the node addresses leave one spare for the extra node a rollout adds
 - how many problems the cluster's Health page lists
 
-Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
+Automatic upgrades inside an upgrade window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
 
 A new Kubehenge release also moves the charts of the cluster's add-ons. In a cluster with an upgrade window, those changes wait for it. The dialog and the cluster's page list each one with its chart and the version it moves from and to. **Apply now** applies them at once, as `kubehenge cluster apply-addon-changes NAME` does ([upgrading.md](upgrading.md#add-on-changes)).
 
@@ -511,7 +511,7 @@ If the new machine is not ready after 20 minutes, the cluster's page says the ro
 
 The nodes of kubeadm, RKE2 and k3s clusters are clones of a VM template of their node OS. The management cluster builds the template again every week with the node OS's updates ([templates.md](templates.md#the-weekly-build)).
 
-Once a new build is a day old, each cluster's nodes are replaced with clones of it inside the cluster's maintenance window. They are replaced one at a time as in an upgrade. This happens only while the cluster is healthy and nothing else rolls out. It happens whether automatic Kubernetes upgrades are on or not.
+Once a new build is a day old, each cluster's nodes are replaced with clones of it inside the cluster's upgrade window. They are replaced one at a time as in an upgrade. This happens only while the cluster is healthy and nothing else rolls out. It happens whether automatic Kubernetes upgrades are on or not.
 
 The day gives a broken build time to be noticed before every cluster takes it. Deleting the build stops clusters that have not moved yet. Scaling up or replacing a failed node in between clones the build the other nodes run.
 
@@ -535,7 +535,7 @@ The controller upgrades no other node until **Try again** (which needs `VM.Alloc
 
 New machines, from scaling up or a repair, clone the template of the release the cluster was created on, or upgraded Kubernetes on last. They are upgraded to the cluster's release once they join, so a Talos upgrade replaces no machine. A Kubernetes upgrade moves new machines to the cluster's release once its template is in the pool.
 
-**Apply Talos patch releases** is on by default (`upgrades.nodeImages`, under Automatic upgrades). With it on, the controller moves the cluster to the newest patch release of its minor version inside the maintenance window. The cluster must be healthy and nothing else may roll out. A new minor version is always chosen by hand.
+**Apply Talos patch releases** is on by default (`upgrades.nodeImages`, under Automatic upgrades). With it on, the controller moves the cluster to the newest patch release of its minor version inside the upgrade window. The cluster must be healthy and nothing else may roll out. A new minor version is always chosen by hand.
 
 ## Change settings
 
