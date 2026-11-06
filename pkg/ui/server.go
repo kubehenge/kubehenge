@@ -297,6 +297,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/machines/{machine}/boot-log", s.managed(s.bootLog))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/boot-log", s.managed(s.askBootLog))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/talos-upgrade-failure", s.managed(s.retryTalosUpgrade))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/addon-changes", s.managed(s.applyAddonChanges))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.replaceMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.keepMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}", s.managed(s.deleteMachine))

@@ -4,6 +4,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+- Add-on chart and value changes from a new release wait for a cluster's maintenance window and show on its page and in the Upgrade dialog. **Apply now**, `kubehenge cluster apply-addon-changes` or the annotation `kubehenge.dev/apply-addon-changes` applies them at once.
+- Kubehenge no longer installs cert-manager, Kyverno or monitoring over a cluster's own install, and the condition `AddonConflict` names the definition. `useExisting.certManager` uses the cluster's own cert-manager, and the docs list what each add-on owns.
+- The docs list each add-on's namespaces, privileges and registries, from the code. The new `namespaceLabels` setting labels the add-on namespaces before their first pod.
+
 - The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
 - New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
 - The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.

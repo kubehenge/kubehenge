@@ -248,12 +248,27 @@ function held(c: Cluster): Standing | undefined {
   return { group: "needs", state: "warning", reason, view: "health", verdict: "Upgrade held" };
 }
 
+/** The condition Kubehenge sets while an add-on is not installed because the cluster already holds that software. */
+export const addonConflictCondition = "AddonConflict";
+
+/** The condition Kubehenge sets while add-on chart changes wait for the maintenance window. */
+export const addonChangesPendingCondition = "AddonChangesPending";
+
+// addonStanding is what the add-ons hold up: a conflict that needs someone, or changes that wait.
+function addonStanding(c: Cluster): Standing | undefined {
+  const isTrue = (type: string): boolean => c.conditions.some((x) => x.type === type && x.status === "True");
+  if (isTrue(addonConflictCondition)) {
+    return { group: "needs", state: "warning", reason: "Add-on conflict", view: "", verdict: "Add-on conflict" };
+  }
+  return isTrue(addonChangesPendingCondition) ? moving("Add-on changes wait", "Waiting") : undefined;
+}
+
 // underWay is the change going on in an available cluster, if one is.
 function underWay(c: Cluster): Standing | undefined {
   if (filled(c.talos?.upgrading)) {
     return moving(`Upgrading Talos on ${firstWord(c.talos.upgrading)}`, "Upgrading");
   }
-  const hold = held(c);
+  const hold = held(c) ?? addonStanding(c);
   if (hold !== undefined) {
     return hold;
   }

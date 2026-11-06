@@ -158,6 +158,8 @@ const kubeadmClass = {
     { name: "cis", required: false, schema: { type: "boolean", default: false } },
     { name: "rancher", required: false, schema: object },
     { name: "oidc", required: false, schema: { type: "array" } },
+    { name: "namespaceLabels", required: false, schema: object },
+    { name: "useExisting", required: false, schema: object },
   ],
 };
 
@@ -798,6 +800,39 @@ const stuckRoutes: Record<string, Route> = {
   "GET /api/clusters/default/stuck/control-plane-recovery?machine=stuck-cp-b": { body: { automatic: true } },
 };
 
+const waiting = cluster("waiting", {
+  conditions: [
+    { type: "Available", status: "True", since: when },
+    { type: "AddonChangesPending", status: "True", reason: "WindowClosed", message: "2 changes wait", since: when },
+    {
+      type: "AddonConflict",
+      status: "True",
+      reason: "Installed",
+      message: "cert-manager is already installed",
+      since: when,
+    },
+  ],
+  addonChanges: {
+    opens: "2026-01-03T02:00:00Z",
+    changes: [
+      { addon: "monitoring", chart: "kube-prometheus-stack", from: "70.0.0", to: "71.0.0" },
+      { addon: "headlamp", chart: "headlamp", from: "0.30.0", to: "0.30.0" },
+    ],
+  },
+  variables: { namespaceLabels: { team: "payments" }, useExisting: { certManager: true } },
+});
+const waitingRoutes: Record<string, Route> = {
+  ...detail,
+  "GET /api/clusters": { body: [waiting] },
+  "GET /api/clusters/default/waiting": { body: waiting },
+  "GET /api/clusters/default/waiting/health": { body: health },
+  "GET /api/clusters/default/waiting/backups": { body: backups },
+  "GET /api/clusters/default/waiting/etcd-snapshots": { body: etcd },
+  "GET /api/clusters/default/waiting/activity?days=7": { body: activity },
+  "GET /api/versions/kubeadm": { body: { versions: ["v1.36.2"], stable: "v1.36.2" } },
+  "POST /api/clusters/default/waiting/addon-changes": { status: 202 },
+};
+
 const oops = { status: 500, body: { error: "Disk on fire. Try again." } };
 const failing = (key: string): Record<string, Route> => ({ [key]: oops });
 const shown = text(/Disk on fire/u);
@@ -849,6 +884,33 @@ const cases: Case[] = [
     ready: loaded,
   },
   { name: "stalled control plane", path: "/clusters/default/stuck", routes: stuckRoutes, ready: loaded },
+  {
+    name: "waiting add-on changes",
+    path: "/clusters/default/waiting",
+    routes: waitingRoutes,
+    ready: loaded,
+    walk: async (check, user) => {
+      await screen.findByRole("group", { name: "Add-on changes" });
+      await user.click(screen.getByRole("button", { name: "Upgrade" }));
+      const dialog = await screen.findByRole("dialog", { name: "Upgrade waiting" });
+      await within(dialog).findByRole("group", { name: "Add-on changes" });
+      await check("Upgrade dialog with add-on changes");
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    },
+  },
+  {
+    name: "options with namespace labels",
+    path: "/clusters/default/waiting/options",
+    routes: waitingRoutes,
+    ready: loaded,
+    walk: async (check, user) => {
+      await user.click(await screen.findByRole("button", { name: "Edit namespace labels" }));
+      const dialog = await screen.findByRole("dialog", { name: "Edit namespace labels" });
+      await user.type(within(dialog).getByLabelText("Namespace labels"), "{Enter}broken");
+      await check("Edit namespace labels with a problem");
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    },
+  },
   {
     name: "guest agent restores",
     path: "/administration",
@@ -1060,6 +1122,10 @@ const cases: Case[] = [
       await check("Machines");
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Add-ons");
+      await user.click(screen.getByRole("checkbox", { name: "Use existing cert-manager" }));
+      await user.type(screen.getByLabelText("Namespace labels"), "team");
+      await check("Add-ons with a label problem");
+      await user.clear(screen.getByLabelText("Namespace labels"));
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Identity providers");
       await user.click(screen.getByRole("button", { name: "Next" }));
@@ -1153,6 +1219,7 @@ const dialogsExpected = [
   /^Uninstall Rancher$/u,
   /^Edit GitOps$/u,
   /^Edit certificates$/u,
+  /^Edit namespace labels$/u,
   /^Edit automatic upgrades$/u,
   /^Edit autoscaler$/u,
   /^Edit node OS$/u,

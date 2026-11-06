@@ -27,6 +27,7 @@ import {
 import type { StepProps } from "./CreateSteps";
 import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
+import { NamespaceLabelsField } from "./NamespaceLabels";
 import { PodSecurityFields, cisHint, cisInfo } from "./PodSecurity";
 import type { ClusterClass } from "./types";
 import {
@@ -494,6 +495,44 @@ function AddonCards({
   );
 }
 
+const existingCertManagerInfo =
+  "Kubehenge installs none and still makes its issuers and certificates in it. Fixed once the cluster exists.";
+
+// AddonInstalls are the choices about where the add-ons go and what they find: an existing
+// cert-manager, and the labels of the namespaces they are installed in.
+function AddonInstalls({ step: { form, set, cls, shown } }: { step: AddOnsProps }): JSX.Element | null {
+  const certManager = variable(cls, "useExisting") !== undefined;
+  const labels = variable(cls, "namespaceLabels") !== undefined;
+  if (!certManager && !labels) {
+    return null;
+  }
+  return (
+    <fieldset className="group">
+      <legend>Add-on installs</legend>
+      {certManager && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.existingCertManager}
+              onChange={(e) => set("existingCertManager", e.target.checked)}
+            />{" "}
+            Use existing cert-manager
+          </label>
+          <Info about="Existing cert-manager">{existingCertManagerInfo}</Info>
+        </>
+      )}
+      {labels && (
+        <NamespaceLabelsField
+          value={form.namespaceLabels}
+          onChange={(v) => set("namespaceLabels", v)}
+          error={shown("namespaceLabels")}
+        />
+      )}
+    </fieldset>
+  );
+}
+
 export function AddOnsStep(props: AddOnsProps): JSX.Element {
   const { form, set, cls } = props;
   return (
@@ -526,6 +565,7 @@ export function AddOnsStep(props: AddOnsProps): JSX.Element {
           />
         </fieldset>
       )}
+      <AddonInstalls step={props} />
       <AddonRoom form={form} cls={cls} />
 
       {variable(cls, "upgrades") && (

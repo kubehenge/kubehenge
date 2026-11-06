@@ -36,6 +36,7 @@ import {
 } from "./GitOps";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
+import { labelsText, parseLabels } from "./namespace-labels";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
@@ -157,6 +158,10 @@ export interface Form {
   rancherHostname: string;
   rancherRegister: boolean;
   certificates: CertificatesForm;
+  /** The labels of every namespace Kubehenge makes, one key=value per line. */
+  namespaceLabels: string;
+  /** Whether the cluster's cert-manager is one it already holds. It is fixed once the cluster exists. */
+  existingCertManager: boolean;
   // The DNS provider's credential, stored for the cluster once it is created. Never in the request.
   dns01Token: string;
   gitops: GitOpsChoice;
@@ -353,7 +358,8 @@ function addonTotal(
     istio: form.istio,
     clusterMesh: meshChosen(form),
     loadBalancer: form.loadBalancer !== "",
-    certManager: form.monitoring || form.rancherInstall || form.certificates.enabled,
+    certManager:
+      (form.monitoring || form.rancherInstall || form.certificates.enabled) && !usesExistingCertManager(form, c),
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
     backups: form.backups && variable(c, "backups") !== undefined,
@@ -624,6 +630,8 @@ export const newForm = (): Form => ({
   rancherHostname: "",
   rancherRegister: true,
   certificates: newCertificates(),
+  namespaceLabels: "",
+  existingCertManager: false,
   dns01Token: "",
   gitops: newGitOps(),
   oidc: [],
@@ -697,6 +705,10 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
   };
 }
 
+// usesExistingCertManager is whether the form ticks the existing cert-manager and the class offers it.
+const usesExistingCertManager = (form: Form, c: ClusterClass | undefined): boolean =>
+  form.existingCertManager && variable(c, "useExisting") !== undefined;
+
 // addOnVariables are the variables of the add-ons and the hardening a form chooses.
 function addOnVariables(form: Form, defined: Set<string>): Record<string, unknown> {
   const variables: Record<string, unknown> = {};
@@ -747,6 +759,19 @@ function addOnVariables(form: Form, defined: Set<string>): Record<string, unknow
   const gitops = gitOpsVariable(form.gitops);
   if (gitops !== undefined) {
     variables["gitops"] = gitops;
+  }
+  return { ...variables, ...installVariables(form, defined) };
+}
+
+// installVariables are the variables of where the add-ons go and what they find: set only when chosen.
+function installVariables(form: Form, defined: Set<string>): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
+  const labels = defined.has("namespaceLabels") ? parseLabels(form.namespaceLabels).labels : {};
+  if (Object.keys(labels).length > 0) {
+    variables["namespaceLabels"] = labels;
+  }
+  if (form.existingCertManager && defined.has("useExisting")) {
+    variables["useExisting"] = { certManager: true };
   }
   return variables;
 }
@@ -1019,6 +1044,18 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   if (defined.has("gitops")) {
     rows.push(["GitOps", gitOpsText(form.gitops)]);
   }
+  return [...rows, ...installRows(form, defined)];
+}
+
+// installRows sum up where the add-ons go and what they find.
+function installRows(form: Form, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [];
+  if (defined.has("useExisting")) {
+    rows.push(["Existing cert-manager", form.existingCertManager ? "Yes" : "No"]);
+  }
+  if (defined.has("namespaceLabels")) {
+    rows.push(["Namespace labels", labelsText(parseLabels(form.namespaceLabels).labels)]);
+  }
   return rows;
 }
 
@@ -1062,6 +1099,7 @@ export type FieldKey =
   | "backupRetention"
   | "backupKey"
   | "certificates"
+  | "namespaceLabels"
   | `gitops.${GitOpsField}`
   | "oidc";
 
@@ -1270,6 +1308,10 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   const certificates = variable(c, "certificates") ? Object.values(certificatesProblems(form.certificates)) : [];
   if (certificates.length > 0) {
     p.certificates = certificates.join(" ");
+  }
+  const labels = variable(c, "namespaceLabels") ? parseLabels(form.namespaceLabels).problem : undefined;
+  if (labels !== undefined) {
+    p.namespaceLabels = labels;
   }
   if (variable(c, "gitops") !== undefined) {
     const g = gitOpsProblems(form.gitops);

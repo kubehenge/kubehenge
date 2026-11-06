@@ -189,6 +189,10 @@ type Addons struct {
 	GitOps       GitOps
 	// CIS is the cluster's cis variable, which the add-ons make room for.
 	CIS bool
+	// UseExisting names the installs of the cluster that the add-ons use instead of their own.
+	UseExisting UseExisting
+	// NamespaceLabels are put on the namespaces the add-ons install into.
+	NamespaceLabels map[string]string
 	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
 	// Datastore.Allocate on its storage, as its csi variable asks.
 	CSINewest bool
@@ -206,6 +210,12 @@ type Addons struct {
 	backupSources []backupSource
 	// gitOpsFound is what the controller found for GitOps before writing the charts' values.
 	gitOpsFound gitOpsState
+	// rollout and pending are how the cluster's proxies were gated by its window, and the changes
+	// it held back.
+	rollout rolloutGate
+	pending []AddonChange
+	// conflicts are the add-ons left out because the cluster holds an install of their software.
+	conflicts []string
 	// talosServing is set when every controller manager and scheduler of a Talos cluster serves a
 	// certificate of the cluster CA (talosServesControlPlaneMetrics), so that their metrics are
 	// scraped as on the other distributions.
@@ -250,14 +260,20 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 	if a.GitOps, _, err = optionalVariable[GitOps](cluster, gitopsVariable); err != nil {
 		return a, err
 	}
+	if a.UseExisting, _, err = optionalVariable[UseExisting](cluster, useExistingVariable); err != nil {
+		return a, err
+	}
+	if a.NamespaceLabels, _, err = optionalVariable[map[string]string](cluster, namespaceLabelsVariable); err != nil {
+		return a, err
+	}
 	a.Rancher, err = rancherOf(cluster)
 	return a, err
 }
 
-// certManager reports whether the cluster runs cert-manager, which Rancher, monitoring and the
-// certificates add-on each need.
+// certManager reports whether Kubehenge installs cert-manager, which Rancher, monitoring and the
+// certificates add-on each need, unless the cluster brings its own.
 func (a *Addons) certManager() bool {
-	return a.Rancher.Install || a.Monitoring.Enabled || a.Certificates.on()
+	return !a.UseExisting.CertManager && (a.Rancher.Install || a.Monitoring.Enabled || a.Certificates.on())
 }
 
 // certManagerProxy names the cluster's cert-manager proxy, installed for whichever add-ons need it.

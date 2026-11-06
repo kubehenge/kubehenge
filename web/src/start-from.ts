@@ -1,6 +1,7 @@
 import { newForm, type Form, type Machine } from "./create-form";
 import { loadBalancerOf } from "./LoadBalancer";
 import { logsOf } from "./Logs";
+import { labelsLines, labelsOf } from "./namespace-labels";
 import { nodeOSKey } from "./node-os";
 import { oidcProviders } from "./OIDCProviders";
 import { placeOf } from "./Placement";
@@ -49,6 +50,8 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "istio",
   "rancherRegister",
   "oidc",
+  "namespaceLabels",
+  "existingCertManager",
 ]);
 
 function machineOf(v: unknown, fallback: Machine): Machine {
@@ -111,5 +114,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     istio: flag(record(v["istio"])["enabled"]) === true,
     rancherRegister: flag(record(v["rancher"])["register"]) !== false,
     oidc: oidcProviders(v["oidc"]),
+    namespaceLabels: labelsLines(labelsOf(v["namespaceLabels"])),
+    existingCertManager: flag(record(v["useExisting"])["certManager"]) === true,
   };
 }

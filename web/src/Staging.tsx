@@ -123,6 +123,7 @@ const settingLabels: Record<string, string[]> = {
   workerMachine: ["Worker size"],
   autoscaling: ["Autoscaling"],
   allowedNodes: ["Placement"],
+  namespaceLabels: ["Namespace labels"],
   autoscaler: ["Autoscaler"],
   backups: ["Backups"],
   ccm: ["HA group labels"],
