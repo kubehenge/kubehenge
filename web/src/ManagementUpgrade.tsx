@@ -152,7 +152,11 @@ export function AutomaticManagement({
           </select>
         )}
       </Field>
-      <ErrorBox message={error} />
+      <ErrorBox
+        message={
+          error ?? (m.keyLost === true ? "Its key is gone, as after a restore. Switch off and on again." : undefined)
+        }
+      />
       {asking && (
         <SwitchOn
           user={m.user}

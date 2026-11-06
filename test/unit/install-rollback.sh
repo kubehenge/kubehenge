@@ -72,11 +72,11 @@ release() {
     done
 }
 
-# upgrade <root>: the upgrade as install.sh runs it in the container; its output in $said and its
-# exit status in $status.
+# upgrade <root> [<API URL>]: the upgrade as install.sh runs it in the container; its output in
+# $said and its exit status in $status.
 upgrade() {
     status=0
-    said=$(sh -c "${upgrade_script}" sh "$1" 900 '' "${units}") || status=$?
+    said=$(sh -c "${upgrade_script}" sh "$1" 900 '' "${units}" "${2:-}") || status=$?
 }
 
 root=${work}/root
@@ -105,6 +105,17 @@ check "the old settings are back" [ "${settings}" = KUBEHENGE_PROXMOX_URL=https:
 check "nothing is left aside" [ ! -e "${root}/usr/local/share/.kubehenge-rollback" ]
 restarts=$(grep -c 'restart kubehenge.service' "${work}/systemctl.log")
 check "the old interface was restarted" [ "${restarts}" -eq 2 ]
+
+# --proxmox-url replaces the API's address, and a rollback puts the old one back.
+release "${root}" 0.1.0 0
+upgrade "${root}" https://pve2.example:8006
+check "a new API address is installed (status ${status}: ${said})" [ "${status}" -eq 0 ]
+check "the settings name the new API address" grep -qx KUBEHENGE_PROXMOX_URL=https://pve2.example:8006 "${root}/etc/kubehenge/appliance.env"
+moved=$(grep -c '^KUBEHENGE_PROXMOX_URL=' "${root}/etc/kubehenge/appliance.env")
+check "the settings name one API address" [ "${moved}" -eq 1 ]
+release "${root}" 0.1.0 1
+upgrade "${root}" https://pve2.example:8006
+check "a rolled-back release keeps the old API address" grep -qx KUBEHENGE_PROXMOX_URL=https://pve.example:8006 "${root}/etc/kubehenge/appliance.env"
 
 # A unit only the new release has goes with it.
 release "${root}" 0.1.0 1

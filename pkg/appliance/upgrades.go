@@ -241,6 +241,9 @@ type UnattendedInfo struct {
 	By    string
 	Since time.Time
 	User  string
+	// KeyLost tells that the key no longer opens what was kept. A restored backup has the sealed
+	// file but not the key volume, which backups leave out.
+	KeyLost bool
 }
 
 // UnattendedOn returns what may be shown of what the appliance keeps for unattended applies, or
@@ -250,7 +253,8 @@ func (a *Appliance) UnattendedOn() *UnattendedInfo {
 	if err != nil {
 		return nil
 	}
-	return &UnattendedInfo{By: f.By, Since: f.Since, User: f.User}
+	_, err = a.unattended()
+	return &UnattendedInfo{By: f.By, Since: f.Since, User: f.User, KeyLost: err != nil}
 }
 
 func (a *Appliance) unattendedFile() (*unattendedFile, error) {

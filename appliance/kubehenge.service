@@ -15,6 +15,8 @@ SupplementaryGroups=systemd-journal
 # (debug, info, warn, error) and KUBEHENGE_LOG_DEVELOPMENT=true, added by hand when the journal
 # should say more, which upgrades keep.
 EnvironmentFile=/etc/kubehenge/appliance.env
+# A restored backup brings the key volume back empty and owned by root, as backups leave it out.
+ExecStartPre=+/usr/bin/install -d -o kubehenge -g kubehenge -m 0700 /var/lib/kubehenge-keys
 ExecStart=/usr/local/bin/kubehenge serve \
     --appliance-dir /var/lib/kubehenge \
     --key-dir /var/lib/kubehenge-keys \

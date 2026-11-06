@@ -1051,6 +1051,8 @@ export interface ManagementAutomatic {
   since?: string;
   /** The Proxmox VE user the runs act as. */
   user: string;
+  /** The runs cannot open what was kept, as after a restore, until switched off and on. */
+  keyLost?: boolean;
 }
 
 export type UpgradePolicy = "off" | "patch" | "minor";

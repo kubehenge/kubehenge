@@ -441,6 +441,22 @@ The appliance keeps the record in its own folder for 90 days. Changes made with 
 
 The appliance holds the only copy of the management cluster's state. Add it to a Proxmox VE backup job (Datacenter, Backup) by its ID, its pool or all guests on its node. Once the management cluster exists, and until a backup job includes the appliance, administrators with `Sys.Audit` on `/` see a warning.
 
+The installer sets the container's protection, so Proxmox VE refuses to destroy it or restore a backup over it. Take it off with `pct set <ctid> --protection 0` first.
+
+Backups leave out the key of automatic upgrades. After a restore, switch automatic upgrades off and on again on the Administration page.
+
+#### Test a backup
+
+Restore it so that it cannot meet the running appliance. Two appliances on one management cluster each apply their own state to it.
+
+```sh
+pct restore <new ctid> <backup> --unique 1
+pct config <new ctid> | grep ^net0
+pct set <new ctid> --onboot 0 --net0 <that net0>,link_down=1
+```
+
+`--unique 1` gives the copy a MAC address of its own, and `link_down=1` keeps it off the network. A `pct clone` keeps the original's address too, and copies the key of automatic upgrades.
+
 ### Back up the management cluster's etcd
 
 The management cluster's etcd holds every cluster's objects. **Administration, Backups** snapshots it into one of the [backup targets](install-settings.md#backup-targets) every 6 hours unless set otherwise. It keeps the newest 28.

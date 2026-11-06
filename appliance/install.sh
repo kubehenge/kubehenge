@@ -8,7 +8,7 @@
 #                 [--gateway <address>] [--dns <address>,...] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
 #                 [--hostname <name>] [--name <DNS name>] [--cert <file> --key <file>] [--release <file> --sha256 <hex>]
 #                 [--pve-entry | --no-pve-entry]
-#   sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-ca <file> | --proxmox-insecure]
+#   sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
 #   sh install.sh --certificate --ctid <id> [--name <DNS name> | --no-name] [--cert <file> --key <file>]
 #
 # A new install asks whether to add a Kubernetes entry to this node's Proxmox VE interface, leading
@@ -623,14 +623,15 @@ units='kubehenge.service kubehenge-update.service kubehenge-update.path kubeheng
 # pushed the new release beside the old: it sets the installed software aside, puts the new in
 # place and restarts the interface on it. Should the interface not serve and keep running, the
 # check the appliance's own updater makes, it puts the old software back and restarts that.
-#   sh -c "${upgrade_script}" sh <root> <container ID> <true|false|""> <units>
+#   sh -c "${upgrade_script}" sh <root> <container ID> <true|false|""> <units> [<API URL>]
 # <root> is "" but in the tests; the third argument stops (true) or starts (false) the checks of
-# the API's certificate, or leaves them. Exits 76 rolled back, with the reason on standard output,
-# and 77 when putting the old software back failed too.
+# the API's certificate, or leaves them. An API URL replaces the one the appliance reaches Proxmox
+# VE at. Exits 76 rolled back, with the reason on standard output, and 77 when putting the old
+# software back failed too.
 # shellcheck disable=SC2016 # expanded by the container's shell
 upgrade_script='
 set -eu
-R=$1 ctid=$2 insecure=$3 units=$4
+R=$1 ctid=$2 insecure=$3 units=$4 url=${5:-}
 aside=$R/usr/local/share/.kubehenge-rollback bin=$R/usr/local/bin share=$R/usr/local/share
 env=$R/etc/kubehenge/appliance.env ca=$R/etc/kubehenge/proxmox-ca.pem trusted=$R/usr/local/share/ca-certificates/proxmox-ca.crt
 rm -rf "$aside" "$share/kubehenge.new"
@@ -666,6 +667,10 @@ ip=$(ip -4 -o addr show dev eth0 | sed -n "s/.* inet \([0-9.]*\).*/\1/p" | head 
 grep -q "^KUBEHENGE_PUBLIC_URL=" "$env" || echo "KUBEHENGE_PUBLIC_URL=https://$ip" >> "$env"
 if [ -n "$insecure" ]; then
     { grep -v "^KUBEHENGE_PROXMOX_INSECURE=" "$env" || true; [ "$insecure" = false ] || echo "KUBEHENGE_PROXMOX_INSECURE=true"; } > "$env.new"
+    chmod 0644 "$env.new" && mv "$env.new" "$env"
+fi
+if [ -n "$url" ]; then
+    { grep -v "^KUBEHENGE_PROXMOX_URL=" "$env" || true; echo "KUBEHENGE_PROXMOX_URL=$url"; } > "$env.new"
     chmod 0644 "$env.new" && mv "$env.new" "$env"
 fi
 [ -f "$R/etc/kubehenge/headlamp.env" ] ||
@@ -1018,7 +1023,7 @@ usage() {
 Installs Kubehenge's appliance on this Proxmox VE node, as root.
 
   sh install.sh [options]
-  sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-ca <file> | --proxmox-insecure]
+  sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
   sh install.sh --certificate --ctid <id> [--name <DNS name> | --no-name] [--cert <file> --key <file>]
 
 Options:
@@ -1353,15 +1358,28 @@ if [ -n "${upgrade}" ]; then
         echo "keeping OpenTofu ${installed_tofu}, newer than this script's ${TOFU_VERSION}"
         push_tofu=''
     fi
+    # --proxmox-url moves the appliance to another address of the API, such as once the node it
+    # named is gone.
+    current_url=$(pct exec "${ctid}" -- sed -n 's/^KUBEHENGE_PROXMOX_URL=//p' /etc/kubehenge/appliance.env)
+    new_url=''
+    [ -z "${proxmox_url}" ] || [ "${proxmox_url}" = "${current_url}" ] || new_url=${proxmox_url}
+    [ -n "${proxmox_url}" ] || proxmox_url=${current_url}
     # Whether the appliance checks the API's certificate changes only when told: --proxmox-insecure
-    # stops the checks, a CA given starts them again.
-    insecure=''
+    # stops the checks, a CA given starts them again. A new address may need another CA.
+    insecure='' new_ca=''
     if [ -n "${proxmox_insecure}" ]; then
         insecure=true
     elif [ -n "${proxmox_ca}" ]; then
-        insecure=false
-        [ -n "${proxmox_url}" ] || proxmox_url=$(pct exec "${ctid}" -- sed -n 's/^KUBEHENGE_PROXMOX_URL=//p' /etc/kubehenge/appliance.env)
+        insecure=false new_ca=1
         choose_api_ca
+    elif [ -n "${new_url}" ] && ! pct exec "${ctid}" -- grep -qx 'KUBEHENGE_PROXMOX_INSECURE=true' /etc/kubehenge/appliance.env; then
+        new_ca=1
+        choose_api_ca
+    fi
+    if [ -n "${new_url}" ]; then
+        api_endpoint
+        require_resolvable_api_host "${api_host}" > /dev/null
+        check_container_api_port "${api_host}"
     fi
     if ! pct config "${ctid}" | grep -Eq "^mp[0-9]+: .*mp=${key_dir}(,|$)"; then
         step "a volume for the key of automatic upgrades, left out of backups"
@@ -1371,7 +1389,7 @@ if [ -n "${upgrade}" ]; then
         pct set "${ctid}" "--mp${free}" "${rootfs_storage}:1,mp=${key_dir},backup=0"
     fi
     stage_software
-    [ -z "${proxmox_ca}" ] || stage_api_ca "${api_ca}"
+    [ -z "${new_ca}" ] || stage_api_ca "${api_ca}"
     # A certificate this script made is renewed once it has less than 60 days left; the restart
     # below puts it into use.
     pct exec "${ctid}" -- cat /etc/kubehenge/tls.crt > "${work}/current.crt"
@@ -1394,7 +1412,7 @@ if [ -n "${upgrade}" ]; then
     # during a run of the management-cluster module would cut the run off.
     step "starting Kubehenge ${KUBEHENGE_VERSION}, and checking that it serves"
     rc=0
-    reason=$(pct exec "${ctid}" -- flock -n -E 75 /var/lib/kubehenge sh -c "${upgrade_script}" sh '' "${ctid}" "${insecure}" "${units}") || rc=$?
+    reason=$(pct exec "${ctid}" -- flock -n -E 75 /var/lib/kubehenge sh -c "${upgrade_script}" sh '' "${ctid}" "${insecure}" "${units}" "${new_url}") || rc=$?
     before=${installed:-the release installed before}
     case "${rc}" in
         0) ;;
@@ -1408,6 +1426,7 @@ if [ -n "${upgrade}" ]; then
         *) fail "upgrading container ${ctid} failed${reason:+: ${reason}}" ;;
     esac
     printf '\nKubehenge %s is running in container %s. Apply the management cluster again from the interface to upgrade it too.\n' "${KUBEHENGE_VERSION}" "${ctid}"
+    [ -z "${new_url}" ] || printf 'The appliance reaches the Proxmox VE API at %s. The management cluster and the clusters do from its next apply.\n' "${new_url}"
     exit 0
 fi
 
@@ -1546,8 +1565,11 @@ done
 [ "${realms}" = 200 ] || fail "the appliance cannot use Proxmox VE's API at ${proxmox_url}; give a URL it reaches, whose certificate names it, with --proxmox-url (its log follows)"
 ok "it serves its certificate and reaches the Proxmox VE API at ${proxmox_url}"
 
-# The appliance works from here on; nothing after this removes it.
+# The appliance works from here on; nothing after this removes it. It holds the only copy of the
+# management cluster's state, so Proxmox VE refuses to destroy it or restore over it until its
+# protection is taken off.
 created=''
+pct set "${ctid}" --protection 1
 
 if [ "${pve_entry}" = yes ]; then
     step "Kubernetes entry in this node's Proxmox VE interface"

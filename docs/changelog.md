@@ -34,6 +34,11 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The setup warns of VMs sharing nodes and of an API address that is one node's. It also warns of pod or service ranges that overlap a node's networks, and shows the ranges chosen.
 - The management cluster's health shows when the controller cannot reach the Proxmox VE API from inside the cluster.
 - An answer from Proxmox VE larger than 1 MiB fails with an error naming the path.
+- An appliance whose certificate has expired upgrades again. Its health check took the expiry as a failed release and rolled back every upgrade.
+- After a restore, the Administration page says that automatic upgrades lost their key. Switching them off and on works again, as the service takes ownership of the empty key volume a restore brings.
+- Switching automatic upgrades on names the cause when it fails.
+- `install.sh --upgrade --proxmox-url <URL>` moves the appliance to another address of the Proxmox VE API, checked as an install checks it. It was accepted and ignored.
+- The installer protects the appliance's container, so Proxmox VE refuses to destroy it or restore over it. The docs say how to test a backup without a second appliance on the network.
 
 ## [0.4.2] - 2026-11-05
 

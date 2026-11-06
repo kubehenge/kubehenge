@@ -109,6 +109,9 @@ type managementAutomatic struct {
 	Since    *time.Time `json:"since,omitempty"`
 	// User is the Proxmox VE user the runs act as.
 	User string `json:"user"`
+	// KeyLost tells that the runs cannot open what was kept, as after a restore, until switched
+	// off and on.
+	KeyLost bool `json:"keyLost,omitempty"`
 }
 
 func (s *Server) managementAutomatic() *managementAutomatic {
@@ -118,7 +121,7 @@ func (s *Server) managementAutomatic() *managementAutomatic {
 	}
 	v := &managementAutomatic{Possible: a.Ready(), User: upgraderUser}
 	if kept := a.UnattendedOn(); kept != nil {
-		v.On, v.By, v.Since, v.User = true, kept.By, &kept.Since, kept.User
+		v.On, v.By, v.Since, v.User, v.KeyLost = true, kept.By, &kept.Since, kept.User, kept.KeyLost
 	}
 	return v
 }
@@ -175,7 +178,7 @@ func (s *Server) keepUnattended(w http.ResponseWriter, r *http.Request, u user) 
 		if delErr := s.Accounts.DeleteUser(r.Context(), u.ticket, upgraderUser); delErr != nil {
 			s.Log.ErrorContext(r.Context(), "deleting the automatic upgrades' Proxmox VE user again", "error", delErr)
 		}
-		writeError(w, http.StatusInternalServerError, "automatic upgrades could not be switched on")
+		writeError(w, http.StatusInternalServerError, "automatic upgrades could not be switched on: "+err.Error())
 		return
 	}
 	s.Log.WarnContext(r.Context(), "automatic upgrades of the management cluster switched on: the appliance keeps the state passphrase and an administrator's API token",
