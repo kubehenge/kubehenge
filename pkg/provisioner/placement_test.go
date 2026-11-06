@@ -211,7 +211,7 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(online, []Node{{"pve1", 2}, {"pve3", 3}}) {
+		if !slices.Equal(online, []Node{{Name: "pve1", CPULevel: 2}, {Name: "pve3", CPULevel: 3}}) {
 			t.Errorf("online = %v", online)
 		}
 	}
@@ -224,7 +224,7 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 
 func TestNodesForTheNodeOSesCPU(t *testing.T) {
 	t.Parallel()
-	online := []Node{{"pve1", 2}, {"pve2", 3}, {"pve3", 4}}
+	online := []Node{{Name: "pve1", CPULevel: 2}, {Name: "pve2", CPULevel: 3}, {Name: "pve3", CPULevel: 4}}
 	if got := nodesFor(online, templates.CPULevel(templates.DefaultNodeOS)); !slices.Equal(got, []string{"pve1", "pve2", "pve3"}) {
 		t.Errorf("AlmaLinux runs on %v", got)
 	}

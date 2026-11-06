@@ -170,8 +170,8 @@ func (v *ClusterValidator) validateNodeOS(ctx context.Context, reads *pveReads, 
 }
 
 // validatePlacement holds a cluster to a storage the management cluster gives rights on, and to
-// storage and templates that reach some node it may use, when it is created or the storage, the
-// nodes or the node OS change.
+// storage, bridge and templates that reach some node it may use, when it is created or the storage,
+// the network, the nodes or the node OS change.
 func (v *ClusterValidator) validatePlacement(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
 	variables := field.NewPath("spec", "topology", "variables")
 	var errs field.ErrorList
@@ -180,7 +180,7 @@ func (v *ClusterValidator) validatePlacement(ctx context.Context, reads *pveRead
 			errs = append(errs, field.Forbidden(variables.Key("storage"), err.Error()))
 		}
 	}
-	if old != nil && !variableChanged(old, c, "storage") && !variableChanged(old, c, allowedNodesVariable) && !variableChanged(old, c, NodeOSVariable) {
+	if old != nil && !slices.ContainsFunc([]string{"storage", allowedNodesVariable, NodeOSVariable, "network"}, func(name string) bool { return variableChanged(old, c, name) }) {
 		return errs
 	}
 	if err := admitOnReadFailure(ctx, v.Hooks.checkPlacement(ctx, reads, c)); err != nil {

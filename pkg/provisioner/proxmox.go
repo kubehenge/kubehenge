@@ -231,6 +231,9 @@ const (
 type pveNode struct {
 	Node   string `json:"node"`
 	Status string `json:"status"`
+	// Mem and MaxMem are the memory in use and the total, in bytes, of an online node.
+	Mem    int64 `json:"mem"`
+	MaxMem int64 `json:"maxmem"`
 }
 
 // removeLocalVolumes deletes the owner VM's volumes on node-local storages. Destroying the VM

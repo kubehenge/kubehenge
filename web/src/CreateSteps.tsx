@@ -796,7 +796,15 @@ export function MachinesStep({
 }): JSX.Element {
   return (
     <>
-      <Field label="Storage" error={shown("storage")}>
+      <Field
+        label="Storage"
+        error={shown("storage")}
+        hint={
+          usableStorages.some((s) => s.storage === form.storage && !s.shared)
+            ? "Volumes on node-local storage stay on one node."
+            : undefined
+        }
+      >
         {(id) => (
           <select id={id} value={form.storage} onChange={(e) => set("storage", e.target.value)}>
             <option value="" disabled>

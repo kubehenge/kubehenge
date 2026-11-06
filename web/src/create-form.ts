@@ -1481,6 +1481,33 @@ export function csiProblems(step: Step, form: Form, csi: CSIOffer): Problems {
   return { datastoreAllocate: csi.problem };
 }
 
+/**
+ * bridgeNodeProblems holds the network step to a bridge that exists on a node the cluster may use,
+ * as the API server does. A node whose bridges are not listed to the user counts as having it, and
+ * so does a name no node lists, which may be a VNet.
+ */
+export function bridgeNodeProblems(
+  step: Step,
+  form: Form,
+  nodes: { bridgesByNode: Record<string, Bridge[]>; online: string[] },
+): Problems {
+  if (step !== "Network" || !form.bridge) {
+    return {};
+  }
+  const on = (node: string): boolean | undefined => {
+    const known = nodes.bridgesByNode[node];
+    return known === undefined || known.length === 0 ? undefined : known.some((b) => b.bridge === form.bridge);
+  };
+  const allowed = allowedNodes(form.place) ?? nodes.online;
+  const holders = Object.keys(nodes.bridgesByNode).filter((node) => on(node) === true);
+  if (holders.length === 0 || allowed.length === 0 || allowed.some((node) => on(node) !== false)) {
+    return {};
+  }
+  return {
+    bridge: `${form.bridge} is only on ${holders.join(", ")}. Allow one of those nodes or choose another bridge.`,
+  };
+}
+
 // offeredStorages are the storages, once each, that take disks, the user may use and the class
 // allows.
 export function offeredStorages(storages: Storage[], allowed: string[] | undefined): Storage[] {

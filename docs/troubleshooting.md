@@ -311,7 +311,9 @@ When creating one failed, the message reads `Proxmox VE objects:` followed by th
 
 A Proxmox VE node that shows online but whose status cannot be read is left out of every cluster's placement. Each cluster then has a `NodesSkipped` condition naming the node, and it clears once the node answers.
 
-A cluster is refused when its storage is available on none of the nodes it may use, or its template cannot be cloned on any of them. The message names the storage or template and the fix. A storage outside the management cluster's `workload_datastores` is refused too, because the clusters' tokens hold no rights there. When Proxmox VE cannot be read within about 2 seconds at admission, the cluster is let in and the creation hook, which retries, makes the same check.
+A cluster is refused when its storage or bridge is available on none of the nodes it may use. It is refused too when its template cannot be cloned on any of them. The message names the storage, bridge or template and the fix.
+
+A VNet counts as present on the nodes where its zone is applied. Kubehenge reads that only where its token can see the zone. Otherwise it keeps every node. A storage outside the management cluster's `workload_datastores` is refused too, because the clusters' tokens hold no rights there. When Proxmox VE cannot be read within about 2 seconds at admission, the cluster is let in and the creation hook, which retries, makes the same check.
 
 The first cluster of a distribution also waits while that distribution's Cluster API controllers start ([architecture.md](architecture.md#management-cluster)). Until then its conditions say the ClusterClass is not successfully reconciled. This takes a minute or so. If it lasts longer, look at:
 
@@ -546,6 +548,22 @@ Kubehenge's controller looks every 15 seconds at the VMs of every cluster's mach
   - A thin storage can run out while every disk on it still has room. QEMU then pauses each VM whose write finds none.
 
 A warning event of the condition's name records each start and change. `VMsRunning` and `StorageFreed` record the end.
+
+### Not enough free memory on the nodes
+
+New machines of an upgrade or replacement wait at "Cloning", and the cluster has a `NodesLackMemory` condition. Its message names the memory the cluster's largest machine needs and the free memory of the best node. No node it may use has the room.
+
+Kubehenge judges a node by the memory Proxmox VE reports free, not by what the guests on it are configured with. Free memory, or stop guests. Allow more nodes under **Placement**, or give the machines less memory. The placement stays as it was meanwhile, and the condition clears once a node has room.
+
+### Pods Pending with "volume node affinity conflict"
+
+The pod's volume is on storage local to one node, and no worker runs there. It happens after an upgrade, a node image refresh or a repair replaced the worker that stood on that node.
+
+1. Find the volume's node: `kubectl get pv <name> -o jsonpath='{.spec.nodeAffinity}'`. The `topology.kubernetes.io/zone` value is the Proxmox VE node.
+2. Check that a worker runs on that node: `kubectl get nodes -L topology.kubernetes.io/zone`.
+3. Without one, scale the pool up until a worker lands there, or move the volume with the CSI plugin's `pvecsictl migrate` ([clusters.md](clusters.md#volumes-on-node-local-storage)).
+
+Shared storage avoids the problem.
 
 ### Autoscaling
 

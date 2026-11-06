@@ -32,6 +32,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - Cluster admission reads Proxmox VE for 2 seconds at most and reads each template's configuration once. A failed or late read admits the cluster, and the creation hook, which retries, checks its storage and templates.
 - `--node` of `kubehenge template create` and `refresh`, and the chart's `templateRefresh.node`, take several nodes. The build runs on the first that is online and whose CPU runs the node OS.
 - A cluster whose name matches an existing Proxmox VE pool that holds other VMs is refused instead of taking the pool over.
+- New machines are no longer refused with "cannot reserve … of memory" on an overcommitted Proxmox VE host. Placement leaves out the nodes whose free memory cannot take the cluster's largest machine, and keeps its last placement with a `NodesLackMemory` condition when none can.
+- A cluster's bridge or VNet must exist on a node the cluster may use, or the cluster is refused. Placement leaves out the nodes without it.
+- The create wizard says that volumes on node-local storage stay on one node. The docs explain how replacements interact with them and how to move a volume, and troubleshooting covers "volume node affinity conflict".
+- The interface marks the `NodesSkipped` and `NodesLackMemory` conditions as problems while they are true.
 
 ## [0.4.2] - 2026-11-05
 

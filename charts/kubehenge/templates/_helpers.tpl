@@ -27,6 +27,11 @@ template:
       gateway: 192.0.2.254
     dnsServers:
       - 192.0.2.253
+    # capmox otherwise subtracts the configured memory of every guest, stopped ones too, from a
+    # node's total, and places no VM on an overcommitted host. Proxmox VE refuses a start only for
+    # memory really in use, which the Placer checks.
+    schedulerHints:
+      memoryAdjustment: 0
 {{- end -}}
 
 {{/*
