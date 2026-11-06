@@ -36,7 +36,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - An answer from Proxmox VE larger than 1 MiB fails with an error naming the path.
 - A Talos node drained before its upgrade reboot records the event `TalosDrained` on its Cluster.
 - Kyverno's two admission controllers run on different nodes, so draining a node no longer waits on them. With one worker, the second runs on a control-plane node.
-- A removed machine waits at most 15 minutes for its node to drain and 10 for its volumes to detach. A disruption budget or a stuck detach no longer holds a rollout for ever. `kubehenge cluster timeouts`, the interface and the Cluster change them.
+- A removed machine waits at most 60 minutes for its node to drain and 10 for its volumes to detach. A disruption budget or a stuck detach no longer holds a rollout for ever. `kubehenge cluster timeouts`, the interface and the Cluster change them.
+
 ## [0.4.2] - 2026-11-05
 
 - Activity no longer misses a kubectl change made just before the kubelet rotates an API server's log or the API server restarts. The interface follows each log as it is written. After a restart it reads the old container's last lines.

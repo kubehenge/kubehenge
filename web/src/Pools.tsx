@@ -74,9 +74,15 @@ type PoolAction =
 function SizeCells({ size }: { size: MachineSize | undefined }): JSX.Element {
   return (
     <>
-      <td className="num">{size?.cores ?? ""}</td>
-      <td className="num">{size === undefined ? "" : memoryText(size.memoryMiB)}</td>
-      <td className="num">{size === undefined ? "" : `${size.diskGiB} GiB`}</td>
+      <td className="num" data-label="Cores">
+        {size?.cores ?? ""}
+      </td>
+      <td className="num" data-label="Memory">
+        {size === undefined ? "" : memoryText(size.memoryMiB)}
+      </td>
+      <td className="num" data-label="Disk">
+        {size === undefined ? "" : `${size.diskGiB} GiB`}
+      </td>
     </>
   );
 }
@@ -106,7 +112,7 @@ export function Pools({
           Add pool…
         </button>
       </div>
-      <table className="grid">
+      <table className="grid stack pools">
         <thead>
           <tr>
             <th>Pool</th>
@@ -121,8 +127,8 @@ export function Pools({
         </thead>
         <tbody>
           <tr>
-            <td>Control plane</td>
-            <td>{c.controlPlane.desired}</td>
+            <td className="pool-name">Control plane</td>
+            <td data-label="Nodes">{c.controlPlane.desired}</td>
             <SizeCells size={sizeOf(c.variables["controlPlaneMachine"])} />
             <td className="row-action">
               <RowMenu label="Control-plane actions">
@@ -139,7 +145,7 @@ export function Pools({
                   type="button"
                   disabled={!can}
                   title={why}
-                  aria-label="Control-plane timeouts"
+                  aria-label="Control plane timeouts"
                   onClick={() => setAction({ kind: "timeouts" })}
                 >
                   Timeouts…
@@ -149,8 +155,8 @@ export function Pools({
           </tr>
           {c.workerPools.map((p) => (
             <tr key={p.name}>
-              <td className="id">{p.name}</td>
-              <td>{poolText(p)}</td>
+              <td className="id pool-name">{p.name}</td>
+              <td data-label="Nodes">{poolText(p)}</td>
               <SizeCells size={poolSize(c, p)} />
               <td className="row-action">
                 <RowMenu label={`Actions for pool ${p.name}`}>
@@ -167,7 +173,7 @@ export function Pools({
                     type="button"
                     disabled={!can}
                     title={why}
-                    aria-label={`Timeouts of pool ${p.name}`}
+                    aria-label={`Pool ${p.name} timeouts`}
                     onClick={() => setAction({ kind: "timeouts", pool: p })}
                   >
                     Timeouts…

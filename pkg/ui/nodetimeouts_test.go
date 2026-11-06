@@ -129,7 +129,7 @@ func TestClassesShowTheirTimeouts(t *testing.T) {
 		t.Fatal("no classes")
 	}
 	c := classes[0]
-	if d := c.ControlPlaneTimeouts.Drain; d == nil || *d != 900 {
+	if d := c.ControlPlaneTimeouts.Drain; d == nil || *d != 3600 {
 		t.Errorf("control plane timeouts = %+v", c.ControlPlaneTimeouts)
 	}
 	if d := c.WorkerTimeouts.VolumeDetach; d == nil || *d != 600 || c.WorkerTimeouts.Drain != nil {

@@ -35,7 +35,7 @@ const classes = [
   {
     name: "kubehenge-k3s",
     distribution: "k3s",
-    controlPlaneTimeouts: { nodeDrainTimeoutSeconds: 900 },
+    controlPlaneTimeouts: { nodeDrainTimeoutSeconds: 3600 },
     variables: [
       {
         name: "workerMachine",
@@ -78,10 +78,10 @@ describe("the pools", () => {
 
   it("set the control plane's timeouts, in minutes sent as seconds", async () => {
     const { calls, user } = await machinesView();
-    await user.click(screen.getByRole("button", { name: "Control-plane timeouts" }));
-    const dialog = screen.getByRole("dialog", { name: "web control-plane timeouts" });
+    await user.click(screen.getByRole("button", { name: "Control plane timeouts" }));
+    const dialog = screen.getByRole("dialog", { name: "Control plane timeouts" });
     expect(within(dialog).getByLabelText("Drain, minutes")).toHaveAccessibleDescription(
-      "Empty takes 15, and 0 sets no limit",
+      "Empty takes 60, and 0 sets no limit",
     );
     expect(within(dialog).getByRole("button", { name: "Set" })).toBeDisabled();
     await user.type(within(dialog).getByLabelText("Drain, minutes"), "30");
@@ -97,8 +97,8 @@ describe("the pools", () => {
 
   it("set a pool's timeouts and refuse one out of range", async () => {
     const { calls, user } = await machinesView();
-    await user.click(screen.getByRole("button", { name: "Timeouts of pool md-0" }));
-    const dialog = screen.getByRole("dialog", { name: "Timeouts of pool md-0" });
+    await user.click(screen.getByRole("button", { name: "Pool md-0 timeouts" }));
+    const dialog = screen.getByRole("dialog", { name: "Pool md-0 timeouts" });
     const detach = within(dialog).getByLabelText("Volume detach, minutes");
     await user.type(detach, "5000");
     expect(detach).toHaveAccessibleDescription(/0 to 1440 minutes/u);

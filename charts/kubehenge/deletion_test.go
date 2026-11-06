@@ -45,7 +45,7 @@ func TestEveryClassBoundsTheWaitForARemovedMachinesNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("helm template: %v: %s", err, stderr.String())
 	}
-	want := map[string]int{"nodeDrainTimeoutSeconds": 900, "nodeVolumeDetachTimeoutSeconds": 600, "nodeDeletionTimeoutSeconds": 60}
+	want := map[string]int{"nodeDrainTimeoutSeconds": 3600, "nodeVolumeDetachTimeoutSeconds": 600, "nodeDeletionTimeoutSeconds": 60}
 	same := func(got map[string]int) bool {
 		if len(got) != len(want) {
 			return false
