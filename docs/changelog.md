@@ -46,6 +46,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - After a restore to another ID or a clone, the backup check and the commands the interface shows find the appliance by its MAC address. A guest ID that is gone no longer counts as backed up.
 - The interface warns administrators when the appliance's address is no longer the one its certificate is for, as after a DHCP change. The warning names the command that renews it.
 - `install.sh --certificate` points this node's Kubernetes entry at the appliance's new address and prints the command for the other nodes.
+- An apply or removal on a state older than the management cluster's, as after a snapshot rollback, is refused. Administrators can take the cluster over from the Administration page or with `kubehenge appliance take-over`.
 
 ## [0.4.2] - 2026-11-05
 

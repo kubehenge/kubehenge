@@ -19,6 +19,7 @@ import {
   toInt,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
+import { TakeOver } from "./TakeOver";
 import type {
   BackupTarget,
   Bridge,
@@ -693,7 +694,7 @@ export function ManagementCluster({
   );
 }
 
-function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
+function LastRun({ status, manage, onTakenOver }: { status: SetupStatus; manage: boolean; onTakenOver: () => void }) {
   const { job } = status;
   if (!job) {
     return null;
@@ -712,7 +713,13 @@ function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
           Management cluster removed {when} by {job.user}
         </p>
       )}
-      {job.state === "failed" && (
+      {job.state === "failed" && job.stale && (
+        <div className="error" role="alert">
+          A newer state changed the management cluster. This appliance's state is from apply {job.stale.local}.
+          <TakeOver stale={job.stale} onDone={onTakenOver} />
+        </div>
+      )}
+      {job.state === "failed" && !job.stale && (
         <div className="error" role="alert">
           {job.automatic === true
             ? `Automatic upgrade of ${when} failed. It retries at the next upgrade hour.`
@@ -818,7 +825,7 @@ function ManagedSummary({
     <section className="panel">
       <div className="box">
         <h3>Management cluster</h3>
-        <LastRun status={status} manage />
+        <LastRun status={status} manage onTakenOver={onStarted} />
         <dl className="summary">
           {rows.map(([k, v]) => (
             <Fragment key={k}>
@@ -1773,7 +1780,7 @@ function SetupWizard({
         }}
       >
         {manage && <h3 id={headingId}>Management cluster</h3>}
-        <LastRun status={status} manage={manage} />
+        <LastRun status={status} manage={manage} onTakenOver={onStarted} />
         {stepped ? (
           <>
             <nav className="wizard-steps" aria-label="Steps">

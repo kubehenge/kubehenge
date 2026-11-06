@@ -73,7 +73,7 @@ checks apply as on its pages.`,
 	f.StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "certificate the interface must present")
 	f.StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
-		o.activityCommand())
+		o.activityCommand(), o.takeOverCommand())
 	return cmd
 }
 
@@ -421,6 +421,39 @@ then. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.
 		},
 	}
 	cmd.Flags().BoolVar(&wait, "wait", true, "wait until the restore ends, printing its log")
+	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
+	o.signInFlags(cmd)
+	return cmd
+}
+
+func (o *applianceOptions) takeOverCommand() *cobra.Command {
+	var passphraseFile string
+	var overwrite bool
+	cmd := &cobra.Command{
+		Use:   "take-over",
+		Short: "Apply this appliance's state after a newer one changed the management cluster",
+		Long: `Make this appliance's state the one the management cluster follows. An apply is refused when
+an apply this state does not know changed the cluster since, as after a snapshot rollback, an older
+backup or a second appliance. Once taken over, the next apply undoes those changes. It needs
+--overwrite, and the state passphrase from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !overwrite {
+				return errors.New("take-over undoes the newer changes at the next apply; give --overwrite to go ahead")
+			}
+			passphrase, err := secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE")
+			if err != nil {
+				return err
+			}
+			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
+				if _, err := s.call(ctx, http.MethodPost, "/api/setup/take-over", map[string]string{"passphrase": passphrase}, nil); err != nil {
+					return err
+				}
+				return say(cmd, "Taken over. The next apply brings the management cluster to this state")
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "undo the newer changes at the next apply")
 	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
 	o.signInFlags(cmd)
 	return cmd

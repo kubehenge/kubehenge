@@ -248,6 +248,46 @@ func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	_, _ = w.Write(data)
 }
 
+// takeOver makes this appliance's state the one the management cluster follows, after an apply
+// was refused because a newer state changed the cluster. It needs the state passphrase on top of
+// the privileges, as the next apply undoes what that newer state made.
+func (s *Server) takeOver(w http.ResponseWriter, r *http.Request, u user) {
+	a := s.Appliance
+	if a == nil {
+		writeError(w, http.StatusNotFound, "this interface does not manage its management cluster")
+		return
+	}
+	var req struct {
+		Passphrase string `json:"passphrase"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if !s.require(w, r, u, "/", setupPrivileges...) {
+		return
+	}
+	done, ok := s.limiter.reserve(passphraseCount(u))
+	if !ok {
+		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases. Try again later")
+		return
+	}
+	err := a.TakeOver(r.Context(), req.Passphrase)
+	done(errors.Is(err, appliance.ErrPassphrase))
+	switch {
+	case errors.Is(err, appliance.ErrPassphrase):
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	case errors.Is(err, appliance.ErrBusy), errors.Is(err, appliance.ErrUpgrading):
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	case err != nil:
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	s.Log.WarnContext(r.Context(), "took the management cluster over", "user", u.ticket.Username)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // templatePool is where the management-cluster module keeps the clusters' templates. The
 // appliance leaves its template_pool at the default.
 const templatePool = "kubehenge-templates"

@@ -977,10 +977,18 @@ export interface Job {
   finished?: string;
   state: "running" | "succeeded" | "failed";
   error?: string;
+  /** Set when the run was refused for a state older than the management cluster's. */
+  stale?: StaleState;
   // Null until the job writes its first line.
   log?: string[] | null;
   /** How many lines the whole log has, when log holds only the last of them. */
   lines?: number;
+}
+
+/** The apply this appliance's state is from, and the one the management cluster is at. */
+export interface StaleState {
+  local: number;
+  cluster: number;
 }
 
 export interface SetupStatus {
