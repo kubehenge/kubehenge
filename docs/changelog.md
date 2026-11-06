@@ -34,6 +34,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The setup warns of VMs sharing nodes and of an API address that is one node's. It also warns of pod or service ranges that overlap a node's networks, and shows the ranges chosen.
 - The management cluster's health shows when the controller cannot reach the Proxmox VE API from inside the cluster.
 - An answer from Proxmox VE larger than 1 MiB fails with an error naming the path.
+- A Talos node drained before its upgrade reboot records the event `TalosDrained` on its Cluster.
+- Kyverno's two admission controllers run on different nodes, so draining a node no longer waits on them. With one worker, the second runs on a control-plane node.
 
 ## [0.4.2] - 2026-11-05
 

@@ -403,8 +403,12 @@ func (u *TalosUpgrader) upgrade(ctx context.Context, c *clusterv1.Cluster, s *ta
 		return u.retryOrFail(ctx, c, s, err)
 	}
 	u.eventf(c, corev1.EventTypeNormal, "TalosUpgrading", "node %s installed Talos %s and reboots into it", s.node, s.release)
+	// A drained node is cordoned only for the seconds before its reboot, so the event is the lasting
+	// record that its pods were moved.
 	if err := u.Nodes.Drain(ctx, c, s.node); err != nil {
 		u.eventf(c, corev1.EventTypeWarning, "TalosDrain", "node %s reboots without all its pods moved: %v", s.node, err)
+	} else {
+		u.eventf(c, corev1.EventTypeNormal, "TalosDrained", "node %s drained before its reboot", s.node)
 	}
 	s.rebooted = u.Now()
 	if err := u.annotate(ctx, c, map[string]any{TalosUpgradingAnnotation: s.String()}); err != nil {
