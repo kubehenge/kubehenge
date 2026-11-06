@@ -3187,6 +3187,11 @@ spec:
             - {name: ssh, containerPort: 2222}
           readinessProbe:
             httpGet: {path: /api/healthz, port: http}
+          # A pod without requests is best-effort, and Talos's OOM controller kills those first when the
+          # 2 GiB worker fills up as the add-ons install (Gitea peaks near 150 MiB).
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 512Mi}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
