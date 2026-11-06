@@ -442,6 +442,8 @@ func TestAQuietAuditStreamOpensAgain(t *testing.T) {
 	}
 	r.clock.Add(int64(auditQuiet))
 	r.tick(t)
+	// The quiet stream may still take a line written before the new one opens.
+	r.wait(t, "the stream to open again", func(*auditFollower) bool { return len(r.api.openedFrom()) == 2 })
 	r.api.add(apiServerA, 1, "after")
 	waitAuditKept(t, r.s, "created configmaps after")
 	if opens := r.api.openedFrom(); len(opens) != 2 || r.warnings("no line") != 1 {

@@ -189,7 +189,11 @@ export function start(root) {
   // The interface rises when it comes into view.
   $$("[data-rise]").forEach((el) => {
     if (still) return;
+    // Sunk at once: a fade out at load would show the interface going before it rises.
+    el.style.transition = "none";
     el.classList.add("sunk");
+    el.getBoundingClientRect();
+    el.style.transition = "";
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {

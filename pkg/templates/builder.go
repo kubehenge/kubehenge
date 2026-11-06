@@ -766,6 +766,9 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 		{Name: "serial0", Value: "socket"},
 		{Name: "vga", Value: "serial0"},
 		{Name: "agent", Value: "enabled=1"},
+		// Every clone takes this over, so a node comes back with its Proxmox VE host. Cluster API
+		// starts a VM only once, and the health check would replace one left stopped.
+		{Name: "onboot", Value: 1},
 	}
 	options = append(options, disks...)
 	if b.Pool != "" {
