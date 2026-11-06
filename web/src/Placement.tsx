@@ -118,7 +118,7 @@ export function PlacementFields({
   value: Place;
   onChange: (p: Place) => void;
   problem: string | undefined;
-  hint?: string;
+  hint?: string | undefined;
   nodes: PveNode[];
   /** The nodes the cluster already has, offered even where the user cannot see them. */
   kept?: string[] | undefined;
