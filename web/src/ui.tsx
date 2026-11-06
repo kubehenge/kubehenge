@@ -266,8 +266,13 @@ export function usePoll<T>(
     interval.current = intervalMs;
     const t = window.setInterval(() => {
       ticked.current = Date.now();
+      // A hidden tab reads nothing until it is shown, and is read at once then. Marking it late
+      // meanwhile would only flash "Stale" at whoever comes back to it.
+      if (document.hidden) {
+        return;
+      }
       setLate(ticked.current - answered.current > 2 * intervalMs);
-      if (!document.hidden && pending.current === 0) {
+      if (pending.current === 0) {
         void reload();
       }
     }, intervalMs);

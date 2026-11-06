@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import type { JSX } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { api } from "./api";
 import { fakeServer } from "./fake-server";
@@ -15,6 +15,37 @@ function Shown({ load, kept }: { load: () => Promise<string>; kept: Kept<string>
   const { data } = usePoll(load, pollIdle, kept);
   return <p>{data ?? "Nothing"}</p>;
 }
+
+function Freshness({ load }: { load: () => Promise<string> }): JSX.Element {
+  const { data, stale } = usePoll(load, pollIdle);
+  return <p>{`${data ?? "Nothing"}${stale ? ", stale" : ""}`}</p>;
+}
+
+describe("a poll's freshness", () => {
+  it("is not marked stale while the tab is hidden, and is late once shown and unanswered", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const firstOnly = (): Promise<string> => (++calls === 1 ? Promise.resolve("Read") : Promise.race<string>([]));
+      const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+      render(<Freshness load={firstOnly} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5 * pollIdle);
+      });
+      expect(screen.getByText("Read")).toBeInTheDocument();
+      expect(calls).toBe(1);
+
+      hidden.mockReturnValue(false);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(pollIdle);
+      });
+      expect(screen.getByText("Read, stale")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+});
 
 describe("a view's last answer", () => {
   it("shows at once when the view opens again, while it is read again", async () => {

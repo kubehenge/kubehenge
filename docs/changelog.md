@@ -5,6 +5,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 ## [Unreleased]
 
 - The demo's health pages read each sample cluster's control plane and log no "no matches for kind" errors. A health page also stays whole when the management cluster serves none of its control plane's API.
+- A tab left in the background no longer shows "Stale" when it is opened again.
 - The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
 - New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
 - The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
