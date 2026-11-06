@@ -544,7 +544,7 @@ export function AddOnsStep(props: AddOnsProps): JSX.Element {
           </p>
         </>
       )}
-      {(variable(cls, "podSecurity") || variable(cls, "namespaceLabels")) && (
+      {(variable(cls, "podSecurity") !== undefined || variable(cls, "namespaceLabels") !== undefined) && (
         <fieldset className="group">
           <legend>Pod security</legend>
           {variable(cls, "podSecurity") && (
