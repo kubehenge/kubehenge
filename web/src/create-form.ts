@@ -671,7 +671,7 @@ export const newForm = (): Form => ({
   storeBackupKey: true,
   backupKey: {},
   etcdSnapshots: true,
-  etcdFields: etcdFieldsOf({ enabled: true }),
+  etcdFields: etcdFieldsOf({ enabled: false }),
 });
 
 /** namespaceOf is the namespace the cluster goes to: the one chosen, else the interface's first. */
@@ -1371,7 +1371,9 @@ function etcdSnapshotsProblems(form: Form, c: ClusterClass | undefined): Problem
   if (!etcdChosen(form, c)) {
     return p;
   }
-  const e = etcdProblems(form.etcdFields, classTargets(c));
+  const e = etcdProblems(form.etcdFields, classTargets(c), {
+    ...(backupsChosen(form, c) && { backups: form.backupFields.target }),
+  });
   for (const [key, found] of [
     ["etcdTarget", e.target],
     ["etcdSchedule", e.schedule],

@@ -21,6 +21,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
 - The create wizard offers etcd snapshots on its add-ons step, on by default wherever the class offers a backup target. They share the backups' access key, entered once, and a new cluster started from another takes its settings.
+- Etcd snapshots and backups on one cluster must use the same target, as one access key reaches one store. The webhook refuses two, and snapshots start in the browser's time zone like backups.
 
 ## [0.4.2] - 2026-11-05
 

@@ -1679,6 +1679,14 @@ fieldset.choices .check {
   border: none;
 }
 
+/* Without a box there is no border or padding to give up: the label column starts where the
+   card's other fields do. */
+@media (width > 600px) {
+  .addon-card > fieldset.group > .field {
+    grid-template-columns: 190px 1fr;
+  }
+}
+
 /* A switch reads as one: the track carries the state, the words beside it what that state is. */
 .switch {
   cursor: pointer;
@@ -2328,6 +2336,11 @@ fieldset.choices {
 
 fieldset.choices legend {
   margin-block-end: 2px;
+  padding: 0;
+}
+
+/* A box's legend sits inside its border. Without a box it starts where the card's fields do. */
+.addon-card > fieldset.group > legend {
   padding: 0;
 }
 

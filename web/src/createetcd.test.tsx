@@ -19,6 +19,9 @@ import {
 import { fromCluster } from "./start-from";
 import type { Cluster, ClusterClass } from "./types";
 
+// The zone backups start in, which snapshots start in too.
+const browserZone = (): string => newBackupFields().timeZone;
+
 const targets = JSON.stringify([
   { name: "store", endpoint: "https://s3.example.org:8333", bucket: "backups" },
   { name: "aws", bucket: "aws-backups" },
@@ -98,6 +101,26 @@ describe("a new cluster's etcd snapshots", () => {
     expect(fieldProblems("Add-ons", off, rke2)).toStrictEqual({});
   });
 
+  it("start in the browser's time zone, as backups do", () => {
+    const form = filledForm(kubeadm);
+    expect(form.etcdFields.timeZone).toBe(browserZone());
+    expect(form.backupFields.timeZone).toBe(browserZone());
+  });
+
+  it("go to the backups' target when both are on", () => {
+    const both = filledForm(rke2, {
+      backups: true,
+      backupKey: key,
+      backupFields: { ...newBackupFields(), target: "aws" },
+    });
+    expect(both.etcdFields.target).toBe("aws");
+    expect(fieldProblems("Add-ons", both, rke2)).toStrictEqual({});
+    const apart = { ...both, etcdFields: { ...both.etcdFields, target: "store" } };
+    expect(fieldProblems("Add-ons", apart, rke2)).toStrictEqual({ etcdTarget: "Use the backups' target" });
+    expect(fieldProblems("Add-ons", { ...apart, backups: false }, rke2)).toStrictEqual({});
+    expect(fieldProblems("Add-ons", { ...apart, etcdSnapshots: false }, rke2)).toStrictEqual({});
+  });
+
   it("go into the request, and nothing goes in when they are off", () => {
     const form = filledForm(rke2, {
       backupKey: key,
@@ -108,7 +131,7 @@ describe("a new cluster's etcd snapshots", () => {
       enabled: true,
       target: "aws",
       schedule: "0 */12 * * *",
-      timeZone: "UTC",
+      timeZone: browserZone(),
       keep: 30,
     });
     expect(JSON.stringify(request(form, rke2))).not.toContain("secret");
@@ -149,7 +172,7 @@ describe("a new cluster's etcd snapshots", () => {
     expect(fieldProblems("Add-ons", form, kubeadm)).toStrictEqual({});
     expect(pendingCredentials(form, kubeadm)).toStrictEqual([]);
     expect(Object.fromEntries(summary(form, kubeadm))["etcd snapshots"]).toBe(
-      "Every 12 hours from 00:00 (UTC), keeps 14, to store, access key to store later",
+      `Every 12 hours from 00:00 (${browserZone()}), keeps 14, to store, access key to store later`,
     );
   });
 
@@ -157,7 +180,7 @@ describe("a new cluster's etcd snapshots", () => {
     const form = filledForm(kubeadm, { backupKey: key });
     expect(summary(form, kubeadm).map(([label]) => label)).toContain("etcd snapshots");
     expect(Object.fromEntries(summary(form, kubeadm))["etcd snapshots"]).toBe(
-      "Every 12 hours from 00:00 (UTC), keeps 14, to store, own access key",
+      `Every 12 hours from 00:00 (${browserZone()}), keeps 14, to store, own access key`,
     );
     expect(Object.fromEntries(summary({ ...form, etcdSnapshots: false }, kubeadm))["etcd snapshots"]).toBe("Off");
   });

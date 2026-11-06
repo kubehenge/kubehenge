@@ -25,6 +25,7 @@ import {
   Info,
   Status,
   age,
+  browserZone,
   bytes,
   distributionName,
   errorMessage,
@@ -103,7 +104,8 @@ export function etcdFieldsOf(v: EtcdSnapshotsValue): EtcdSnapshotFields {
   return {
     target: v.target ?? "",
     schedule: v.schedule ?? defaultEtcdSchedule,
-    timeZone: v.timeZone ?? "UTC",
+    // What is in effect: UTC when snapshots name none. Snapshots switched on start in the browser's zone.
+    timeZone: v.timeZone ?? (v.enabled ? "UTC" : browserZone()),
     keep: String(v.keep ?? defaultEtcdKeep),
     upload: v.distributionUpload === true,
   };
@@ -111,16 +113,24 @@ export function etcdFieldsOf(v: EtcdSnapshotsValue): EtcdSnapshotFields {
 
 export type EtcdSnapshotField = "target" | "schedule" | "keep";
 
-/** etcdProblems says, by field, what Kubehenge would refuse. */
+/** sameTargetProblem is what snapshots and backups on different targets get: one access key reaches one store. */
+export const sameTargetProblem = "Use the backups' target";
+
+/**
+ * etcdProblems says, by field, what Kubehenge would refuse. kept is the target set already.
+ * backups is the target of the backups that are on, which the snapshots share their access key with.
+ */
 export function etcdProblems(
   f: EtcdSnapshotFields,
   targets: OfferedTarget[],
-  kept?: string,
+  held: { kept?: string | undefined; backups?: string | undefined } = {},
 ): Partial<Record<EtcdSnapshotField, string>> {
   const p: Partial<Record<EtcdSnapshotField, string>> = {};
-  const target = targetProblem(f.target, targets, kept);
+  const target = targetProblem(f.target, targets, held.kept);
   if (target !== undefined) {
     p.target = target;
+  } else if (filled(held.backups) && f.target !== held.backups) {
+    p.target = sameTargetProblem;
   }
   const schedule = scheduleProblem(f.schedule);
   if (schedule !== undefined) {
@@ -289,7 +299,9 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
   const backups = backupsOf(c.variables["backups"]);
   const fields = withEtcdTarget(typed, targets, backups.enabled ? backups.target : undefined);
   const kept = current.enabled ? current.target : undefined;
-  const problems = enabled ? etcdProblems(fields, targets, kept) : {};
+  // A cluster already on two targets is refused only once it changes one of them.
+  const shared = backups.enabled && fields.target !== kept ? backups.target : undefined;
+  const problems = enabled ? etcdProblems(fields, targets, { kept, backups: shared }) : {};
   // The distribution's upload shares the snapshots' settings, so it goes off with them.
   const { distributionUpload: _, ...rest } = current;
   const next: EtcdSnapshotsValue = enabled ? etcdSnapshotsVariable(fields) : { ...rest, enabled: false };
