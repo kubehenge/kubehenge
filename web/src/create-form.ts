@@ -1509,39 +1509,24 @@ export function bridgeNodeProblems(
 }
 
 /**
- * memoryNodeProblems holds the machines step to nodes with the free memory for its largest
- * machine, as the Placer judges them. A node whose memory is not reported counts as having it.
+ * memoryNodeWarning warns when no node the cluster may use has the free memory for its largest
+ * machine, as the Placer judges them. The server accepts such a cluster, so this never blocks. A
+ * node whose memory is not reported counts as having it.
  */
-export function memoryNodeProblems(step: Step, form: Form, nodes: PveNode[]): Problems {
-  if (step !== "Machines") {
-    return {};
-  }
+export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefined {
   const chosen = allowedNodes(form.place);
   const candidates = nodes.filter((n) => n.online && (chosen === undefined || chosen.includes(n.node)));
   const need = Math.max(form.controlPlaneMachine.memoryMiB, form.workerReplicas > 0 ? form.workerMachine.memoryMiB : 0);
   const [best] = candidates.toSorted((a, b) => freeMiB(b) - freeMiB(a));
   if (best === undefined || freeMiB(best) >= need) {
-    return {};
+    return undefined;
   }
-  return { placement: `No node has ${need} MiB free. The best, ${best.node}, has ${Math.floor(freeMiB(best))} MiB.` };
+  return `No node has ${need} MiB free (best: ${best.node}, ${Math.floor(freeMiB(best))} MiB). The cluster waits until one has.`;
 }
 
 // freeMiB is a node's free memory, unlimited while it reports none.
 function freeMiB(n: PveNode): number {
   return n.maxMemory === undefined || n.memory === undefined ? Infinity : (n.maxMemory - n.memory) / bytesPerMiB;
-}
-
-/** nodeProblems are the problems of the nodes a new cluster may use: its bridge and its memory. */
-export function nodeProblems(
-  step: Step,
-  form: Form,
-  seen: { bridgesByNode: Record<string, Bridge[]>; nodes: PveNode[]; placed: boolean },
-): Problems {
-  const online = seen.nodes.filter((n) => n.online).map((n) => n.node);
-  return {
-    ...bridgeNodeProblems(step, form, { bridgesByNode: seen.bridgesByNode, online }),
-    ...(seen.placed ? memoryNodeProblems(step, form, seen.nodes) : {}),
-  };
 }
 
 // offeredStorages are the storages, once each, that take disks, the user may use and the class

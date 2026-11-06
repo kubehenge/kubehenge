@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { memoryNodeProblems, newForm } from "./create-form";
+import { fieldProblems, memoryNodeWarning, newForm } from "./create-form";
 import type { PveNode } from "./types";
 
 const gib = 1_073_741_824;
@@ -19,21 +19,20 @@ const form = {
 };
 
 describe("the machines step and the nodes' free memory", () => {
-  it("accepts a node with room for the largest machine", () => {
-    expect(memoryNodeProblems("Machines", form, [node("pve1", 2), node("pve2", 8)])).toStrictEqual({});
+  it("says nothing when a node has room for the largest machine", () => {
+    expect(memoryNodeWarning(form, [node("pve1", 2), node("pve2", 8)])).toBeUndefined();
   });
 
-  it("refuses when no node the cluster may use has room", () => {
+  it("warns, without blocking the step, when no node the cluster may use has room", () => {
     const chosen = { ...form, place: { placement: "nodes" as const, haRule: "", nodes: ["pve1"] } };
-    expect(memoryNodeProblems("Machines", chosen, [node("pve1", 2), node("pve2", 30)])).toStrictEqual({
-      placement: "No node has 8192 MiB free. The best, pve1, has 2048 MiB.",
-    });
-    expect(memoryNodeProblems("Network", chosen, [node("pve1", 2)])).toStrictEqual({});
+    expect(memoryNodeWarning(chosen, [node("pve1", 2), node("pve2", 30)])).toBe(
+      "No node has 8192 MiB free (best: pve1, 2048 MiB). The cluster waits until one has.",
+    );
+    expect(fieldProblems("Machines", chosen, undefined)).not.toHaveProperty("placement");
   });
 
   it("leaves a node that reports no memory alone, and ignores workers that are not asked for", () => {
-    expect(memoryNodeProblems("Machines", form, [{ node: "pve1", online: true }])).toStrictEqual({});
-    const alone = { ...form, workerReplicas: 0 };
-    expect(memoryNodeProblems("Machines", alone, [node("pve1", 5)])).toStrictEqual({});
+    expect(memoryNodeWarning(form, [{ node: "pve1", online: true }])).toBeUndefined();
+    expect(memoryNodeWarning({ ...form, workerReplicas: 0 }, [node("pve1", 5)])).toBeUndefined();
   });
 });

@@ -6,6 +6,7 @@ import {
   chosenNodeOS,
   controlPlaneSizes,
   machineLeast,
+  memoryNodeWarning,
   templateMissing,
   variable,
   versionExamples,
@@ -824,6 +825,7 @@ export function MachinesStep({
           value={form.place}
           onChange={(p) => set("place", p)}
           problem={shown("placement")}
+          hint={memoryNodeWarning(form, nodes)}
           nodes={nodes}
           rules={rules}
         />
