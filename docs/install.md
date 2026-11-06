@@ -132,6 +132,8 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
    - It installs Kubehenge, OpenTofu, the management-cluster module, the service units and the shared Headlamp, a single Kubernetes web interface for every cluster.
    - It adds the API's CA to the container's trust store and switches off the template's SSH and mail servers.
    - It starts the interface on ports 443 and 8443 (the shared Headlamp) as an unprivileged user.
+   - It installs Debian's `unattended-upgrades` for daily security updates through the installer's proxy, and only warns where Debian's mirrors are out of reach. `--upgrade` adds it where it is missing.
+   - It sets the container's protection, so Proxmox VE refuses to destroy it until that is taken off.
 7. If you said yes, adds the Kubernetes entry to this node's Proxmox VE interface.
 8. Prints the address and the certificate's fingerprint:
 

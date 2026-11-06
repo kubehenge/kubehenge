@@ -331,6 +331,159 @@ func TestUpdateRollsBack(t *testing.T) {
 	installedIs(t, u, "0.3.0", "")
 }
 
+// A disk without room for three times what is installed refuses the upgrade before it downloads
+// or replaces anything.
+func TestUpdateNeedsRoom(t *testing.T) {
+	t.Parallel()
+	rs := newReleaseServer(t)
+	u, restarts := newUpdater(t, rs)
+	var asked string
+	// What newUpdater installs: the binary, the module and a unit in the share directory.
+	installed := uint64(len("binary 0.1.0") + len("module 0.1.0") + len("unit 0.1.0"))
+	room := 3*installed + spareSpace - 1
+	u.FreeSpace = func(path string) (uint64, error) { asked = path; return room, nil }
+	if err := u.Spool.Request(UpdateRequest{Version: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	err := u.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "the upgrade needs 64 MiB") || !strings.Contains(err.Error(), "pct resize") {
+		t.Fatalf("update on a full disk: %v", err)
+	}
+	if asked != filepath.Join(u.Root, "usr", "local", "share") {
+		t.Errorf("asked for the free space at %s", asked)
+	}
+	installedIs(t, u, "0.1.0", "")
+	if *restarts != 0 {
+		t.Errorf("restarted %d times", *restarts)
+	}
+	if st := u.Spool.Status(); st == nil || st.State != StateFailed || st.RolledBack {
+		t.Errorf("status = %+v", st)
+	}
+
+	room++
+	if err := u.Spool.Request(UpdateRequest{Version: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Run(context.Background()); err != nil {
+		t.Fatalf("update with just enough room: %v", err)
+	}
+	installedIs(t, u, "0.2.0", "tofu 1.14.0")
+}
+
+// halfUpgraded leaves the software as a reboot leaves it halfway through an upgrade to 0.2.0: the
+// old release set aside, the new binary and share directory in place, the units still the old ones.
+func halfUpgraded(t *testing.T, u *Updater) {
+	t.Helper()
+	if _, err := u.setAside("0.2.0", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(u.share(), filepath.Join(u.aside(), "share")); err != nil {
+		t.Fatal(err)
+	}
+	module := filepath.Join(u.share(), "management-cluster", "main.tf")
+	if err := os.MkdirAll(filepath.Dir(module), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for path, body := range map[string]string{module: "module 0.2.0", u.binary("kubehenge"): "binary 0.2.0"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	u.write(&UpdateStatus{State: StateUpdating, From: "0.1.0", To: "0.2.0", Step: StepInstall})
+}
+
+// At the interface's next start, an upgrade cut off in the middle is undone: the old release is
+// put back, the units reloaded, and the start fails once so that systemd runs the old units.
+func TestRecoverUndoesAnUpgradeCutOff(t *testing.T) {
+	t.Parallel()
+	rs := newReleaseServer(t)
+	u, restarts := newUpdater(t, rs)
+	reloads := 0
+	u.Reload = func(context.Context) error { reloads++; return nil }
+	halfUpgraded(t, u)
+
+	unlock, err := LockJobs(u.ApplianceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Recover(context.Background(), false); err != nil {
+		t.Fatalf("Recover while an upgrade holds the lock: %v", err)
+	}
+	if got := read(t, u.binary("kubehenge")); got != "binary 0.2.0" {
+		t.Fatalf("Recover undid an upgrade under way: binary %q", got)
+	}
+	unlock()
+
+	err = u.Recover(context.Background(), false)
+	if !errors.Is(err, ErrRecovered) || !strings.Contains(err.Error(), "starts again on 0.1.0") {
+		t.Fatalf("Recover = %v", err)
+	}
+	installedIs(t, u, "0.1.0", "")
+	if reloads != 1 || *restarts != 0 {
+		t.Errorf("%d reloads and %d restarts, want 1 and 0", reloads, *restarts)
+	}
+	st := u.Spool.Status()
+	if st == nil || st.State != StateFailed || !st.RolledBack || st.To != "0.2.0" ||
+		st.Error != "the appliance stopped during the upgrade to 0.2.0, so it rolled back to 0.1.0" {
+		t.Errorf("status = %+v", st)
+	}
+	if err := u.Recover(context.Background(), false); err != nil {
+		t.Errorf("Recover with nothing to undo: %v", err)
+	}
+}
+
+// An upgrade cut off before it replaced anything is only recorded as failed.
+func TestRecoverRecordsAnUpgradeCutOffBeforeTheSwap(t *testing.T) {
+	t.Parallel()
+	rs := newReleaseServer(t)
+	u, _ := newUpdater(t, rs)
+	u.Reload = func(context.Context) error { t.Error("reloaded with nothing put back"); return nil }
+	u.write(&UpdateStatus{State: StateUpdating, From: "0.1.0", Step: StepDownload})
+	if err := u.Recover(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if st := u.Spool.Status(); st == nil || st.State != StateFailed || st.RolledBack || !strings.Contains(st.Error, "before it replaced the software") {
+		t.Errorf("status = %+v", st)
+	}
+	installedIs(t, u, "0.1.0", "")
+}
+
+// The next request first puts back what an upgrade cut off in the middle set aside, instead of
+// setting the half-new software aside over it.
+func TestUpdateUndoesAnUpgradeCutOffFirst(t *testing.T) {
+	t.Parallel()
+	rs := newReleaseServer(t)
+	u, restarts := newUpdater(t, rs)
+	halfUpgraded(t, u)
+	if err := u.Spool.Request(UpdateRequest{Version: "0.3.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	installedIs(t, u, "0.3.0", "")
+	if *restarts != 2 {
+		t.Errorf("%d restarts, want one on the release put back and one on the new", *restarts)
+	}
+
+	// install.sh's own marker is left to install.sh, which knows its layout.
+	if err := os.MkdirAll(u.aside(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(u.aside(), "shell-pending"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Spool.Request(UpdateRequest{Version: "0.3.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "install.sh --upgrade again") {
+		t.Errorf("an upgrade over one install.sh left: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(u.aside(), "shell-pending")); err != nil {
+		t.Errorf("install.sh's software set aside is gone: %v", err)
+	}
+}
+
 func TestUpdateRollsBackAFailedRestart(t *testing.T) {
 	t.Parallel()
 	rs := newReleaseServer(t)

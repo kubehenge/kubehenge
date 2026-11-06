@@ -17,6 +17,9 @@ SupplementaryGroups=systemd-journal
 EnvironmentFile=/etc/kubehenge/appliance.env
 # A restored backup brings the key volume back empty and owned by root, as backups leave it out.
 ExecStartPre=+/usr/bin/install -d -o kubehenge -g kubehenge -m 0700 /var/lib/kubehenge-keys
+# Puts the old release back where a reboot or a kill cut an upgrade off in the middle. Having done
+# so, it fails this start, and the restart below runs on the old release's units.
+ExecStartPre=+/usr/local/bin/kubehenge update --recover --spool /var/lib/kubehenge-update --appliance-dir /var/lib/kubehenge
 ExecStart=/usr/local/bin/kubehenge serve \
     --appliance-dir /var/lib/kubehenge \
     --key-dir /var/lib/kubehenge-keys \

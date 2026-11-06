@@ -117,8 +117,9 @@ type Updater struct {
 	// Root is the file system root, "/" but for tests.
 	Root string
 	HTTP *http.Client
-	// Restart restarts the interface on the new software.
+	// Restart restarts the interface on the new software, and Reload reloads systemd's units.
 	Restart func(ctx context.Context) error
+	Reload  func(ctx context.Context) error
 	// ApplianceDir is the interface's state directory. Its job lock keeps a restart from cutting
 	// off a run of the management-cluster module.
 	ApplianceDir string
@@ -128,6 +129,9 @@ type Updater struct {
 	Keys    []ed25519.PublicKey
 	// Healthy tells whether the restarted interface serves. An upgrade it refuses is rolled back.
 	Healthy func(ctx context.Context) error
+	// FreeSpace tells how many bytes may still be written where the software lives. It is the
+	// file system's own answer when nil.
+	FreeSpace func(path string) (uint64, error)
 
 	// status is the upgrade under way, which each step records as it begins.
 	status *UpdateStatus
@@ -138,6 +142,16 @@ func (u *Updater) Run(ctx context.Context) error {
 	req, ok, err := u.take()
 	if err != nil || !ok {
 		return err
+	}
+	// Setting the software aside again would delete the only copy of the old release.
+	if err := u.Recover(ctx, true); err != nil {
+		return fmt.Errorf("undoing an earlier upgrade cut off in the middle: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(u.aside(), pendingFile)); err == nil {
+		return errors.New("an earlier upgrade cut off in the middle is still to be undone, once the management cluster run under way ends. Ask again then")
+	}
+	if _, err := os.Stat(filepath.Join(u.aside(), "shell-pending")); err == nil {
+		return errors.New("an upgrade by install.sh was cut off in the middle. Run install.sh --upgrade again, which undoes it first")
 	}
 	st := UpdateStatus{State: StateUpdating, From: u.Current, Time: time.Now()}
 	u.status = &st
@@ -247,6 +261,9 @@ func (u *Updater) update(ctx context.Context, req UpdateRequest) (string, error)
 	if r == nil {
 		return "", nil
 	}
+	if err := u.checkSpace(); err != nil {
+		return "", err
+	}
 	// Downloads go to disk, not memory: the appliance is small, the archive and OpenTofu large, and
 	// /tmp may be memory too.
 	downloads := filepath.Join(u.Root, "usr", "local", "share", ".kubehenge-download")
@@ -280,6 +297,43 @@ func (u *Updater) update(ctx context.Context, req UpdateRequest) (string, error)
 	return r.Version, u.replace(ctx, r.Version, archive, tofu)
 }
 
+// spareSpace is what an upgrade leaves free on top of its own files.
+const spareSpace = 64 << 20
+
+// checkSpace refuses an upgrade the disk has no room for. It downloads and unpacks the new release
+// beside the installed one and keeps that aside until the new one serves, about three times what
+// is installed. A disk filling up halfway would leave the old software half replaced.
+func (u *Updater) checkSpace() error {
+	var installed uint64
+	for _, p := range []string{u.share(), u.binary("kubehenge"), u.binary("tofu")} {
+		err := filepath.WalkDir(p, func(_ string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if info, err := d.Info(); err == nil && info.Mode().IsRegular() {
+				installed += uint64(info.Size()) //nolint:gosec // a file's size is never negative
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("measuring the installed software: %w", err)
+		}
+	}
+	free := u.FreeSpace
+	if free == nil {
+		free = freeSpace
+	}
+	have, err := free(filepath.Dir(u.share()))
+	if err != nil {
+		// Where the free space is not known, a full disk still stops the upgrade, only later.
+		return nil //nolint:nilerr // the check is a forewarning, not the only guard
+	}
+	if need := 3*installed + spareSpace; have < need {
+		return fmt.Errorf("the appliance has %d MiB free and the upgrade needs %d MiB. Free space in it, or grow its disk with: pct resize <ctid> rootfs +4G", have>>20, need>>20)
+	}
+	return nil
+}
+
 func (u *Updater) binary(name string) string {
 	return filepath.Join(u.Root, "usr", "local", "bin", name)
 }
@@ -289,7 +343,7 @@ func (u *Updater) share() string { return filepath.Join(u.Root, "usr", "local", 
 // replace installs the archive and OpenTofu's binary at tofu, when not empty, restarts the
 // interface on them and checks that it serves. Failing anywhere, it puts the old software back.
 func (u *Updater) replace(ctx context.Context, version, archive, tofu string) error {
-	sw, err := u.setAside(tofu)
+	sw, err := u.setAside(version, tofu)
 	if err != nil {
 		return err
 	}
@@ -327,10 +381,24 @@ type swap struct {
 	tofu, restarted bool
 }
 
-// setAside makes the swap of the software for one whose OpenTofu is at tofu, or keeps it when tofu
-// is empty.
-func (u *Updater) setAside(tofu string) (*swap, error) {
-	sw := &swap{u: u, aside: filepath.Join(u.Root, "usr", "local", "share", ".kubehenge-rollback"), tofu: tofu != ""}
+func (u *Updater) aside() string { return filepath.Join(u.Root, "usr", "local", "share", ".kubehenge-rollback") }
+
+// pendingFile, in the directory the old software is set aside in, marks a swap under way. Found
+// while no upgrade holds the job lock, it is an upgrade cut off in the middle, by a reboot or a
+// kill, and the old software is all there to put back.
+const pendingFile = "pending.json"
+
+// pendingSwap is what pendingFile records.
+type pendingSwap struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Tofu bool   `json:"tofu,omitempty"`
+}
+
+// setAside makes the swap of the software for release version, whose OpenTofu is at tofu, or
+// keeps OpenTofu when tofu is empty.
+func (u *Updater) setAside(version, tofu string) (*swap, error) {
+	sw := &swap{u: u, aside: u.aside(), tofu: tofu != ""}
 	err := os.RemoveAll(sw.aside)
 	if err == nil {
 		err = os.MkdirAll(sw.aside, privateDir)
@@ -348,7 +416,75 @@ func (u *Updater) setAside(tofu string) (*swap, error) {
 			return nil, fmt.Errorf("setting the installed software aside: %w", err)
 		}
 	}
+	raw, err := json.Marshal(pendingSwap{From: u.Current, To: version, Tofu: sw.tofu})
+	if err == nil {
+		err = writeFileAtomic(filepath.Join(sw.aside, pendingFile), raw)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("setting the installed software aside: %w", err)
+	}
 	return sw, nil
+}
+
+// ErrRecovered is an upgrade cut off in the middle and undone by Recover, which reloaded systemd's
+// units. The interface's start fails once with it, so that systemd starts it again on the units of
+// the release put back.
+var ErrRecovered = errors.New("undone")
+
+// Recover undoes an upgrade cut off in the middle, as by a reboot or a kill, and records it as
+// failed. An upgrade that stopped before it replaced anything is only recorded. It does nothing
+// while an upgrade holds the job lock. With restart it restarts the interface on the software put
+// back and checks it. Without, it reloads the units and returns ErrRecovered. kubehenge.service
+// runs it that way before it starts, and Run with restart before it takes a request.
+func (u *Updater) Recover(ctx context.Context, restart bool) error {
+	unlock, err := LockJobs(u.ApplianceDir)
+	if errors.Is(err, ErrBusy) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	raw, err := os.ReadFile(filepath.Join(u.aside(), pendingFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		if st := u.Spool.Status(); st != nil && st.State == StateUpdating {
+			st.State, st.Time = StateFailed, time.Now()
+			st.Error = "the appliance stopped during the upgrade, before it replaced the software"
+			u.write(st)
+		}
+		return nil
+	}
+	var p pendingSwap
+	if err == nil {
+		err = json.Unmarshal(raw, &p)
+	}
+	if err != nil {
+		return fmt.Errorf("reading the upgrade cut off in the middle: %w", err)
+	}
+	sw := &swap{u: u, aside: u.aside(), tofu: p.Tofu}
+	if err := sw.restore(); err != nil {
+		return fmt.Errorf("undoing the upgrade to %s, cut off in the middle: %w", p.To, err)
+	}
+	if err := os.RemoveAll(sw.aside); err != nil {
+		return fmt.Errorf("undoing the upgrade to %s: %w", p.To, err)
+	}
+	u.write(&UpdateStatus{
+		State: StateFailed, From: p.From, To: p.To, Time: time.Now(), RolledBack: true, Step: StepInstall,
+		Error: fmt.Sprintf("the appliance stopped during the upgrade to %s, so it rolled back to %s", p.To, p.From),
+	})
+	if !restart {
+		if err := u.Reload(ctx); err != nil {
+			return err
+		}
+		return fmt.Errorf("the upgrade to %s was cut off in the middle and is %w, so the interface starts again on %s", p.To, ErrRecovered, p.From)
+	}
+	if err := u.Restart(ctx); err != nil {
+		return err
+	}
+	if u.Healthy != nil {
+		return u.Healthy(ctx)
+	}
+	return nil
 }
 
 // rollBack puts the software set aside in place again after an upgrade failed with cause, and
@@ -492,6 +628,16 @@ func downloadTofu(ctx context.Context, client *http.Client, t *release.Artefact,
 // download fetches url into a new file in dir, checking it against the signed index's checksum
 // as it arrives, and returns the file's path.
 func download(ctx context.Context, client *http.Client, url, want, dir string) (string, error) {
+	var name string
+	err := retrying(ctx, func() error {
+		var err error
+		name, err = downloadOnce(ctx, client, url, want, dir)
+		return err
+	})
+	return name, err
+}
+
+func downloadOnce(ctx context.Context, client *http.Client, url, want, dir string) (string, error) {
 	resp, err := fetch(ctx, client, url)
 	if err != nil {
 		return "", err
@@ -502,11 +648,11 @@ func download(ctx context.Context, client *http.Client, url, want, dir string) (
 		return "", fmt.Errorf("GET %s: %w", url, err)
 	}
 	sum := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, sum), io.LimitReader(resp.Body, maxArchive+1))
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
+	n, copyErr := io.Copy(io.MultiWriter(f, sum), io.LimitReader(resp.Body, maxArchive+1))
+	err = f.Close()
 	switch {
+	case copyErr != nil:
+		err = transientError{fmt.Errorf("GET %s: %w", url, copyErr)}
 	case err != nil:
 		err = fmt.Errorf("GET %s: %w", url, err)
 	case n > maxArchive:
@@ -641,14 +787,21 @@ func openTarball(archive string) (*tar.Reader, func(), error) {
 }
 
 func get(ctx context.Context, client *http.Client, url string, limit int64) ([]byte, error) {
-	resp, err := fetch(ctx, client, url)
+	var body []byte
+	err := retrying(ctx, func() error {
+		resp, err := fetch(ctx, client, url)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err = io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		if err != nil {
+			return transientError{fmt.Errorf("GET %s: %w", url, err)}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", url, err)
 	}
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("GET %s: larger than %d bytes", url, limit)
@@ -656,25 +809,111 @@ func get(ctx context.Context, client *http.Client, url string, limit int64) ([]b
 	return body, nil
 }
 
+const (
+	// downloadAttempts is how often a download is tried in all. Proxies and mirrors drop
+	// connections and answer 502 or 504 now and then.
+	downloadAttempts = 5
+	// retryDelay is the wait before the second try, doubled before each further one.
+	retryDelay = time.Second
+)
+
+// transientError is a failed download that may succeed when tried again.
+type transientError struct{ err error }
+
+func (e transientError) Error() string { return e.err.Error() }
+func (e transientError) Unwrap() error { return e.err }
+
+// retrying calls try until it succeeds, fails for good, or has been tried downloadAttempts times.
+func retrying(ctx context.Context, try func() error) error {
+	delay := retryDelay
+	for attempt := 1; ; attempt++ {
+		err := try()
+		var transient transientError
+		if err == nil || !errors.As(err, &transient) || attempt == downloadAttempts || ctx.Err() != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
+}
+
+// stallTimeout ends a download that receives nothing for that long. A slow link may take as long
+// as it needs, as long as data keeps arriving.
+var stallTimeout = 2 * time.Minute //nolint:gochecknoglobals // a test shortens it
+
+var errStalled = errors.New("nothing arrived for two minutes")
+
+// watchedBody cancels its request once no data has arrived for stallTimeout.
+type watchedBody struct {
+	io.ReadCloser
+	ctx   context.Context
+	timer *time.Timer
+	stop  context.CancelCauseFunc
+}
+
+func (b *watchedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if n > 0 {
+		b.timer.Reset(stallTimeout)
+	}
+	if err != nil && errors.Is(context.Cause(b.ctx), errStalled) {
+		err = errStalled
+	}
+	return n, err //nolint:wrapcheck // the body's own error, or errStalled, which callers wrap
+}
+
+func (b *watchedBody) Close() error {
+	b.timer.Stop()
+	b.stop(nil)
+	return b.ReadCloser.Close() //nolint:wrapcheck // the body's own error
+}
+
 // fetch starts a GET of url, which has to be https, and returns the response once its status is
-// OK. The caller closes its body.
+// OK. The caller closes its body. A failed connection, a stalled one and an answer a busy or
+// failing server gives are transientError.
 func fetch(ctx context.Context, client *http.Client, url string) (*http.Response, error) {
 	if !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("%s is not https", url)
 	}
+	ctx, stop := context.WithCancelCause(ctx)
+	timer := time.AfterFunc(stallTimeout, func() { stop(errStalled) })
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
+		timer.Stop()
+		stop(nil)
 		return nil, fmt.Errorf("GET %s: %w", url, err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("downloading: %w", err)
+		timer.Stop()
+		if errors.Is(context.Cause(ctx), errStalled) {
+			err = errStalled
+		}
+		stop(nil)
+		return nil, transientError{fmt.Errorf("downloading %s: %w", url, err)}
 	}
+	resp.Body = &watchedBody{ReadCloser: resp.Body, ctx: ctx, timer: timer, stop: stop}
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
+		err = fmt.Errorf("GET %s: %s", url, resp.Status)
+		if resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusRequestTimeout {
+			return nil, transientError{err}
+		}
+		return nil, err
 	}
 	return resp, nil
+}
+
+// ReloadUnits has systemd read the units again.
+func ReloadUnits(ctx context.Context) error {
+	if out, err := exec.CommandContext(ctx, "systemctl", "daemon-reload").CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl daemon-reload: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // RestartService restarts the interface's systemd unit after reloading the units.

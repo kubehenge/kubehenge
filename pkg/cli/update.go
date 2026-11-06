@@ -25,8 +25,6 @@ import (
 const DefaultIndex = "https://kubehenge.dev/releases/index.json"
 
 const (
-	// updateTimeout bounds the download of a release, the largest file the updater fetches.
-	updateTimeout = 10 * time.Minute
 	// healthWait is how long the restarted interface has to answer, and healthSettle how long it
 	// then has to keep running, with systemd's restarts 5 seconds apart, before an upgrade counts.
 	healthWait   = 2 * time.Minute
@@ -51,23 +49,39 @@ func newUpdateCommand() *cobra.Command {
 		CertFile: "/etc/kubehenge/tls.crt", Address: "127.0.0.1:443", Wait: healthWait, Settle: healthSettle,
 	}
 	u := appliance.Updater{
-		Root: "/", Restart: appliance.RestartService, Healthy: check.Healthy, Current: release.Version, Keys: release.PublicKeys(),
+		Root: "/", Restart: appliance.RestartService, Reload: appliance.ReloadUnits, Healthy: check.Healthy,
+		Current: release.Version, Keys: release.PublicKeys(),
 	}
 	var spool string
+	var recovering bool
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Carry out an upgrade the appliance's interface asked for",
 		Long: `Carry out an upgrade the appliance's interface asked for.
 
 Run as root by kubehenge-update.service when a request appears in the spool. It installs only a
-release named in the index signed by Kubehenge's release key, and only one newer than itself.`,
+release named in the index signed by Kubehenge's release key, and only one newer than itself.
+
+With --recover it undoes an upgrade a reboot or a kill cut off in the middle, and takes no
+request. kubehenge.service runs it so before the interface starts.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			u.Spool = appliance.Spool(spool)
-			u.HTTP = &http.Client{Timeout: updateTimeout}
+			if recovering {
+				err := u.Recover(cmd.Context(), false)
+				if err != nil && !errors.Is(err, appliance.ErrRecovered) {
+					// The interface starts all the same: it served on whatever is in place before.
+					fmt.Fprintln(cmd.ErrOrStderr(), "kubehenge update --recover:", err)
+					return nil
+				}
+				return err
+			}
+			// No overall timeout: each download ends once nothing arrives for a while.
+			u.HTTP = &http.Client{}
 			return u.Run(cmd.Context())
 		},
 	}
+	cmd.Flags().BoolVar(&recovering, "recover", false, "undo an upgrade cut off in the middle, and take no request")
 	cmd.Flags().StringVar(&spool, "spool", "/var/lib/kubehenge-update", "the updater's spool directory")
 	cmd.Flags().StringVar(&u.ApplianceDir, "appliance-dir", "/var/lib/kubehenge", "the interface's state directory. No upgrade starts while a management cluster run holds its lock")
 	cmd.Flags().StringVar(&u.Index, "index", releaseIndexDefault(), "URL of the signed release index (env KUBEHENGE_RELEASE_INDEX)")

@@ -39,6 +39,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - Switching automatic upgrades on names the cause when it fails.
 - `install.sh --upgrade --proxmox-url <URL>` moves the appliance to another address of the Proxmox VE API, checked as an install checks it. It was accepted and ignored.
 - The installer protects the appliance's container, so Proxmox VE refuses to destroy it or restore over it. The docs say how to test a backup without a second appliance on the network.
+- The appliance's updater tries a download up to five times when a proxy or mirror drops the connection or answers 502, 503, 504 or 429. A slow link no longer fails at 10 minutes, as only two minutes without data end a try.
+- An upgrade checks for room first, about three times what is installed, in the updater and in `install.sh --upgrade`. A full disk had left the old software half replaced.
+- An upgrade cut off by a reboot or a kill is undone at the interface's next start, and its status says so instead of "under way" for ever. `install.sh --upgrade` undoes its own the same way when run again.
+- The installer sets up Debian's daily security updates in the container, through its proxy, and `--upgrade` adds them to appliances that lack them.
 
 ## [0.4.2] - 2026-11-05
 

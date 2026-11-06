@@ -123,6 +123,35 @@ rm "${root}/etc/systemd/system/kubehenge-headlamp-proxy.service"
 upgrade "${root}"
 check "a unit the old release lacks is removed again" [ ! -e "${root}/etc/systemd/system/kubehenge-headlamp-proxy.service" ]
 
+# An upgrade of its own cut off in the middle, with the old release all in the aside directory and
+# half of the new one in place: it is put back before anything is set aside again. The new release
+# then fails, so the rollback shows what was set aside the second time.
+release "${root}" 0.1.0 1
+aside=${root}/usr/local/share/.kubehenge-rollback
+mkdir -p "${aside}/units"
+cp -p "${root}/usr/local/bin/kubehenge" "${root}/etc/kubehenge/appliance.env" "${aside}/"
+cp -p "${root}/etc/systemd/system/kubehenge.service" "${aside}/units/"
+mv "${root}/usr/local/share/kubehenge" "${aside}/share"
+mkdir -p "${root}/usr/local/share/kubehenge"
+echo half > "${root}/usr/local/share/kubehenge/VERSION"
+printf '#!/bin/sh\necho half\n' > "${root}/usr/local/bin/kubehenge"
+: > "${aside}/shell-pending"
+upgrade "${root}"
+check "the release that fails afterwards is rolled back (status ${status})" [ "${status}" -eq 76 ]
+check "to the old binary, not the half-upgraded one" grep -qx 'echo old' "${root}/usr/local/bin/kubehenge"
+check "and the old share directory" grep -qx 0.1.0 "${root}/usr/local/share/kubehenge/VERSION"
+
+# One the appliance's own updater left is refused, changing nothing.
+release "${root}" 0.1.0 0
+mkdir -p "${aside}"
+echo '{"from":"0.1.0","to":"0.2.0"}' > "${aside}/pending.json"
+upgrade "${root}"
+check "an upgrade the updater left is refused (status ${status})" [ "${status}" -eq 78 ]
+check "saying why (${said})" [ "${said}" = "an upgrade by the updater in the appliance was cut off in the middle" ]
+check "what it set aside is kept" [ -e "${aside}/pending.json" ]
+check "and the installed binary too" grep -qx 'echo old' "${root}/usr/local/bin/kubehenge"
+rm -rf "${aside}"
+
 # Putting the old release back fails: told apart.
 release "${root}" 0.1.0 1
 cat > "${bin}/systemctl" << EOF
