@@ -118,31 +118,6 @@ the wizard's request is.`,
 	scale.Flags().StringArrayVar(&workers, "workers", nil, "a pool's workers as POOL=N, such as md-0=3, repeated for more pools")
 	o.namespaceFlag(scale.Flags())
 
-	var controlPlaneTimeouts string
-	var poolTimeouts []string
-	timeouts := &cobra.Command{
-		Use:   "timeouts NAME",
-		Short: "Set how long a removed machine waits for its node's drain, volumes and deletion",
-		Long: `Set how long a removed machine waits for its node before its deletion goes on without it.
-
-A value is drain, detach or deletion, set to a duration such as 30m, or to 0 for never. The
-drain is the eviction of the node's pods, and a pod it cannot evict is deleted with the machine. The
-detach is the wait for the node's volumes. The deletion is the removal of the node's Node object.
-A value left out is the cluster class's.`,
-		Example: `  kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h`,
-		Args:    argsSay(cobra.ExactArgs(1), clusterNameArg),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			req, err := timeoutsRequest(controlPlaneTimeouts, poolTimeouts)
-			if err != nil {
-				return err
-			}
-			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], req)
-		},
-	}
-	timeouts.Flags().StringVar(&controlPlaneTimeouts, "control-planes", "", "the control planes' timeouts as drain=30m,detach=10m,deletion=1m")
-	timeouts.Flags().StringArrayVar(&poolTimeouts, "pool", nil, "a pool's timeouts as POOL=drain=30m,detach=10m, repeated for more pools")
-	o.namespaceFlag(timeouts.Flags())
-
 	var yes bool
 	deleteCmd := &cobra.Command{
 		Use:   "delete NAME --yes",
@@ -158,7 +133,35 @@ A value left out is the cluster class's.`,
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
 	o.namespaceFlag(deleteCmd.Flags())
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, timeouts, deleteCmd, o.machineCommand())
+	cmd.AddCommand(list, get, kubeconfig, create, scale, o.timeoutsCommand(), deleteCmd, o.machineCommand())
+	return cmd
+}
+
+func (o *clusterOptions) timeoutsCommand() *cobra.Command {
+	var controlPlanes string
+	var pools []string
+	cmd := &cobra.Command{
+		Use:   "timeouts NAME",
+		Short: "Set how long a removed machine waits for its node's drain, volumes and deletion",
+		Long: `Set how long a removed machine waits for its node before its deletion goes on without it.
+
+A value is drain, detach or deletion, set to a duration such as 30m, or to 0 for never. The
+drain is the eviction of the node's pods, and a pod it cannot evict is deleted with the machine. The
+detach is the wait for the node's volumes. The deletion is the removal of the node's Node object.
+A value left out is the cluster class's.`,
+		Example: `  kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h`,
+		Args:    argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req, err := timeoutsRequest(controlPlanes, pools)
+			if err != nil {
+				return err
+			}
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], req)
+		},
+	}
+	cmd.Flags().StringVar(&controlPlanes, "control-planes", "", "the control planes' timeouts as drain=30m,detach=10m,deletion=1m")
+	cmd.Flags().StringArrayVar(&pools, "pool", nil, "a pool's timeouts as POOL=drain=30m,detach=10m, repeated for more pools")
+	o.namespaceFlag(cmd.Flags())
 	return cmd
 }
 
@@ -358,7 +361,7 @@ var timeoutKeys = map[string]string{
 // timeoutValues reads "drain=30m,detach=10m" as the interface's timeouts in seconds.
 func timeoutValues(spec string) (map[string]int64, error) {
 	out := map[string]int64{}
-	for _, part := range strings.Split(spec, ",") {
+	for part := range strings.SplitSeq(spec, ",") {
 		key, value, ok := strings.Cut(part, "=")
 		field := timeoutKeys[key]
 		if !ok || field == "" {

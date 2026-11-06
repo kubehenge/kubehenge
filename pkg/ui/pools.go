@@ -45,25 +45,32 @@ func applyPools(c *clusterv1.Cluster, pools map[string]*poolChange) string {
 			workers.MachineDeployments = append(workers.MachineDeployments, clusterv1.MachineDeploymentTopology{Class: workerClass, Name: name})
 			i = len(workers.MachineDeployments) - 1
 		}
-		md := &workers.MachineDeployments[i]
-		if n := change.Replicas; n != nil {
-			if !provisioner.ValidWorkers(*n) {
-				return provisioner.WorkersRule + " in each pool"
-			}
-			if autoscalingOf(md.Metadata.Annotations) != nil {
-				return "pool " + name + " is autoscaled. Switch autoscaling off to set its workers"
-			}
-			md.Replicas = n
+		if problem := changePool(&workers.MachineDeployments[i], change); problem != "" {
+			return problem
 		}
-		if change.Machine != nil {
-			setPoolOverride(md, workerMachineVariable, change.Machine)
+	}
+	return ""
+}
+
+// changePool sets what a change gives the pool md, or says what is wrong with it.
+func changePool(md *clusterv1.MachineDeploymentTopology, change *poolChange) string {
+	if n := change.Replicas; n != nil {
+		if !provisioner.ValidWorkers(*n) {
+			return provisioner.WorkersRule + " in each pool"
 		}
-		if t := change.Timeouts; t != nil {
-			if problem := t.Problem(); problem != "" {
-				return problem
-			}
-			t.SetOnPool(&md.Deletion)
+		if autoscalingOf(md.Metadata.Annotations) != nil {
+			return "pool " + md.Name + " is autoscaled. Switch autoscaling off to set its workers"
 		}
+		md.Replicas = n
+	}
+	if change.Machine != nil {
+		setPoolOverride(md, workerMachineVariable, change.Machine)
+	}
+	if t := change.Timeouts; t != nil {
+		if problem := t.Problem(); problem != "" {
+			return problem
+		}
+		t.SetOnPool(&md.Deletion)
 	}
 	return ""
 }

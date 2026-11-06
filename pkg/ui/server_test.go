@@ -427,7 +427,8 @@ func rke2Class() *clusterv1.ClusterClass {
 				{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
 					Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
 				}})},
-			}},
+			},
+		},
 	}
 }
 
