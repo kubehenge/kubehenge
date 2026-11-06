@@ -601,22 +601,18 @@ export function GeneralStep({
       <WorkerFields form={form} set={set} shown={shown} cls={cls} />
       <details className="advanced" open={shown("timeouts") === undefined ? undefined : true}>
         <summary>Node timeouts</summary>
-        <fieldset className="group">
-          <legend>Control planes</legend>
-          <NodeTimeoutFields
-            value={form.controlPlaneTimeouts}
-            onChange={(v) => set("controlPlaneTimeouts", v)}
-            fallback={cls?.controlPlaneTimeouts}
-          />
-        </fieldset>
-        <fieldset className="group">
-          <legend>Workers</legend>
-          <NodeTimeoutFields
-            value={form.workerTimeouts}
-            onChange={(v) => set("workerTimeouts", v)}
-            fallback={cls?.workerTimeouts}
-          />
-        </fieldset>
+        <h4 className="subsection">Control planes</h4>
+        <NodeTimeoutFields
+          value={form.controlPlaneTimeouts}
+          onChange={(v) => set("controlPlaneTimeouts", v)}
+          fallback={cls?.controlPlaneTimeouts}
+        />
+        <h4 className="subsection">Workers</h4>
+        <NodeTimeoutFields
+          value={form.workerTimeouts}
+          onChange={(v) => set("workerTimeouts", v)}
+          fallback={cls?.workerTimeouts}
+        />
       </details>
     </>
   );

@@ -25,7 +25,7 @@
       "controlPlane": {
         "deletion": {
           "nodeDeletionTimeoutSeconds": 60,
-          "nodeDrainTimeoutSeconds": 900,
+          "nodeDrainTimeoutSeconds": 3600,
           "nodeVolumeDetachTimeoutSeconds": 600
         }
       },
@@ -1328,7 +1328,7 @@
             "class": "worker",
             "deletion": {
               "nodeDeletionTimeoutSeconds": 60,
-              "nodeDrainTimeoutSeconds": 900,
+              "nodeDrainTimeoutSeconds": 3600,
               "nodeVolumeDetachTimeoutSeconds": 600
             }
           }
@@ -1361,7 +1361,7 @@
       "controlPlane": {
         "deletion": {
           "nodeDeletionTimeoutSeconds": 60,
-          "nodeDrainTimeoutSeconds": 900,
+          "nodeDrainTimeoutSeconds": 3600,
           "nodeVolumeDetachTimeoutSeconds": 600
         }
       },
@@ -2662,7 +2662,7 @@
             "class": "worker",
             "deletion": {
               "nodeDeletionTimeoutSeconds": 60,
-              "nodeDrainTimeoutSeconds": 900,
+              "nodeDrainTimeoutSeconds": 3600,
               "nodeVolumeDetachTimeoutSeconds": 600
             }
           }
@@ -2694,7 +2694,7 @@
       "controlPlane": {
         "deletion": {
           "nodeDeletionTimeoutSeconds": 60,
-          "nodeDrainTimeoutSeconds": 900,
+          "nodeDrainTimeoutSeconds": 3600,
           "nodeVolumeDetachTimeoutSeconds": 600
         }
       },
@@ -3997,7 +3997,7 @@
             "class": "worker",
             "deletion": {
               "nodeDeletionTimeoutSeconds": 60,
-              "nodeDrainTimeoutSeconds": 900,
+              "nodeDrainTimeoutSeconds": 3600,
               "nodeVolumeDetachTimeoutSeconds": 600
             }
           }
@@ -4030,7 +4030,7 @@
       "controlPlane": {
         "deletion": {
           "nodeDeletionTimeoutSeconds": 60,
-          "nodeDrainTimeoutSeconds": 900,
+          "nodeDrainTimeoutSeconds": 3600,
           "nodeVolumeDetachTimeoutSeconds": 600
         }
       },
@@ -5307,7 +5307,7 @@
             "class": "worker",
             "deletion": {
               "nodeDeletionTimeoutSeconds": 60,
-              "nodeDrainTimeoutSeconds": 900,
+              "nodeDrainTimeoutSeconds": 3600,
               "nodeVolumeDetachTimeoutSeconds": 600
             }
           }

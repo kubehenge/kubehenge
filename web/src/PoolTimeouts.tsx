@@ -25,7 +25,7 @@ export function TimeoutsDialog({
   const same = JSON.stringify(timeouts) === JSON.stringify(was);
   return (
     <Dialog
-      title={pool === undefined ? `${c.name} control-plane timeouts` : `Timeouts of pool ${pool.name}`}
+      title={pool === undefined ? "Control plane timeouts" : `Pool ${pool.name} timeouts`}
       onClose={onClose}
       onSubmit={() => {
         void send(pool === undefined ? { controlPlaneTimeouts: timeouts } : { pools: { [pool.name]: { timeouts } } });

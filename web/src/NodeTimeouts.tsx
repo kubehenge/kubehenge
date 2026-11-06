@@ -70,15 +70,40 @@ export const timeoutsSet = (t: NodeTimeouts): boolean =>
   t.nodeVolumeDetachTimeoutSeconds !== undefined ||
   t.nodeDeletionTimeoutSeconds !== undefined;
 
-/** timeoutsText is timeouts in words, or "Class" for none. */
-export function timeoutsText(t: NodeTimeouts): string {
-  const e = entryOf(t);
-  const parts = [
-    e.drain !== "" && `drain ${e.drain} min`,
-    e.detach !== "" && `volumes ${e.detach} min`,
-    e.deletion !== "" && `node ${e.deletion} s`,
-  ].filter(Boolean);
-  return parts.length === 0 ? "Class" : parts.join(", ");
+const classDefault = "class default";
+
+interface Part {
+  label: string;
+  key: keyof NodeTimeouts;
+  minutes: boolean;
+}
+
+const parts: Part[] = [
+  { label: "Drain", key: "nodeDrainTimeoutSeconds", minutes: true },
+  { label: "volume detach", key: "nodeVolumeDetachTimeoutSeconds", minutes: true },
+  { label: "node removal", key: "nodeDeletionTimeoutSeconds", minutes: false },
+];
+
+function partText({ label, key, minutes }: Part, own: NodeTimeouts, fallback: NodeTimeouts): string {
+  const v = own[key] ?? fallback[key];
+  if (v === undefined) {
+    return `${label} ${classDefault}`;
+  }
+  let value = `${v} s`;
+  if (v === 0) {
+    value = "no limit";
+  } else if (minutes) {
+    value = `${v / secondsPerMinute} min`;
+  }
+  return own[key] === undefined ? `${label} ${value} (${classDefault})` : `${label} ${value}`;
+}
+
+/**
+ * timeoutsText is the timeouts a machine's node gets, as they apply: the cluster's own, and for
+ * those it leaves out the class's, marked as such.
+ */
+export function timeoutsText(own: NodeTimeouts, fallback: NodeTimeouts = {}): string {
+  return parts.map((p) => partText(p, own, fallback)).join(", ");
 }
 
 const classHint = (classes: number | undefined, unit: number): string =>
