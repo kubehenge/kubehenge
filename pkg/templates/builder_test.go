@@ -424,6 +424,10 @@ func TestCreateFreshTakesAnotherVMIDWhenTheOfferedOneIsTaken(t *testing.T) {
 	if f.configs[100]["name"] != "kubehenge-k3s-build" {
 		t.Errorf("the other build's VM 100 is now %v", f.configs[100])
 	}
+	// Clones take onboot over from the template, so the nodes start again with their host.
+	if f.created[0]["onboot"] != float64(1) {
+		t.Errorf("the template's onboot is %v, want 1", f.created[0]["onboot"])
+	}
 }
 
 // A create whose task Proxmox VE killed before it ran leaves its VM ID locked. The build goes on

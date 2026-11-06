@@ -19,6 +19,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - Once the container has an address, the installer checks its network from inside it. It tests the gateway, the name server and the API's port in turn, and a failure names the option to check (`--vlan`, `--gateway`, `--dns` or the node's firewall).
 - A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
+- Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
 
 ## [0.4.2] - 2026-11-05
 

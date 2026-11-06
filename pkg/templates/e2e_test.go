@@ -167,6 +167,9 @@ func assertTemplateShape(t *testing.T, b *Builder, vmid int, tmpl *Template) {
 	if !strings.HasPrefix(c.Agent, "enabled=1") && c.Agent != "1" {
 		t.Errorf("guest agent %q, want enabled", c.Agent)
 	}
+	if !bool(c.OnBoot) {
+		t.Error("onboot off: the clones would stay stopped after their host reboots")
+	}
 }
 
 // bootClone does what Cluster API's Proxmox VE provider does with a template and checks the clone
