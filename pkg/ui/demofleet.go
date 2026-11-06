@@ -666,6 +666,14 @@ func (*demoAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error)
 	return []string{"10.20.0.53"}, nil
 }
 
+func (*demoAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, error) {
+	return pve.Names{}, nil
+}
+
+func (*demoAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 func (*demoAccounts) NodeAffinityRules(context.Context, *pve.Ticket) ([]pve.HARule, error) {
 	return nil, nil
 }

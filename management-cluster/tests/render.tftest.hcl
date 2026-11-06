@@ -105,14 +105,6 @@ run "nodes" {
   }
 
   assert {
-    condition = (
-      length(toset([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].mac_address])) == 3 &&
-      alltrue([for vm in proxmox_virtual_environment_vm.node : can(regex("^BC:24:11(:[0-9A-F]{2}){3}$", vm.network_device[0].mac_address))])
-    )
-    error_message = "nodes need distinct MAC addresses in Proxmox VE's range"
-  }
-
-  assert {
     condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.memory[0].dedicated == 4096 && vm.memory[0].floating == 4096])
     error_message = "without a minimum, each node keeps all its memory and still has a balloon device"
   }
@@ -1447,4 +1439,76 @@ run "rejects_a_node_twice" {
   }
 
   expect_failures = [var.proxmox_nodes]
+}
+
+run "time_servers_become_time_sync_config" {
+  command = apply
+
+  variables {
+    time_servers = ["ntp1.example.org", "192.0.2.5"]
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if yamldecode(d).kind == "TimeSyncConfig"
+      ] == [{
+        apiVersion = "v1alpha1"
+        kind       = "TimeSyncConfig"
+        ntp        = { servers = ["ntp1.example.org", "192.0.2.5"] }
+    }]
+    error_message = "time servers must become one TimeSyncConfig document, servers in order"
+  }
+}
+
+run "no_time_servers_keep_talos_defaults" {
+  command = apply
+
+  assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "TimeSyncConfig")
+    error_message = "without time servers the nodes keep Talos's default ones"
+  }
+}
+
+run "time_servers_refuse_urls" {
+  command = plan
+
+  variables {
+    time_servers = ["http://ntp.example.org"]
+  }
+
+  expect_failures = [var.time_servers]
+}
+
+run "every_helm_release_that_waits_has_a_long_timeout" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for r in [helm_release.cert_manager, helm_release.cluster_api_operator, helm_release.cluster_api_providers, helm_release.kubehenge] :
+      r.wait && r.timeout == 900
+    ])
+    error_message = "a release that waits needs Helm's timeout raised from 300 to 900 seconds for slow image pulls"
+  }
+}
+
+# The virtual IP sits on the link this alias selects. The guest agent's MAC list starts with the
+# loopback, and an alias on it left the API address unreachable.
+run "the_link_alias_selects_the_one_virtio_nic" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for i in [0, 1, 2] : anytrue([
+        for d in split("---\n", data.talos_machine_configuration.node[i].config_patches[1]) :
+        try(yamldecode(d).kind == "LinkAliasConfig" && yamldecode(d).selector.match == "link.driver == \"virtio_net\"", false)
+      ])
+    ])
+    error_message = "each node's link alias must select its NIC by the virtio driver"
+  }
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : length(vm.network_device) == 1 && vm.network_device[0].model == "virtio"])
+    error_message = "the alias matches exactly one link only while each node has one virtio NIC"
+  }
 }

@@ -82,8 +82,8 @@ func clusterResources(t *testing.T) *Accounts {
 		switch r.URL.Query().Get("type") {
 		case "storage":
 			all = []map[string]any{
-				{"id": "storage/one/local-lvm", "storage": "local-lvm", "node": "one", "shared": 0, "content": "rootdir,images", "disk": 300, "maxdisk": 1000, "status": "available"},
-				{"id": "storage/two/ceph", "storage": "ceph", "node": "two", "shared": 1, "content": "images", "disk": 10, "maxdisk": 50, "status": "unknown"},
+				{"id": "storage/one/local-lvm", "storage": "local-lvm", "node": "one", "shared": 0, "content": "rootdir,images", "plugintype": "zfspool", "disk": 300, "maxdisk": 1000, "status": "available"},
+				{"id": "storage/two/ceph", "storage": "ceph", "node": "two", "shared": 1, "content": "images", "plugintype": "rbd", "disk": 10, "maxdisk": 50, "status": "unknown"},
 			}
 		case "node":
 			all = []map[string]any{
@@ -101,7 +101,41 @@ func clusterResources(t *testing.T) *Accounts {
 		}
 		replyData(t, w, visible)
 	})
+	mux.HandleFunc("GET /api2/json/storage", func(w http.ResponseWriter, _ *http.Request) {
+		replyData(t, w, []map[string]any{
+			{"storage": "local-lvm", "type": "zfspool", "sparse": 1},
+			{"storage": "ceph", "type": "rbd"},
+		})
+	})
 	return serveAPI(t, mux)
+}
+
+func TestAllocatesOnWriteFollowsTheStorageType(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	for _, c := range []struct {
+		s           Storage
+		thin, known bool
+	}{
+		{Storage{Type: "lvm"}, false, true},
+		{Storage{Type: "lvmthin"}, true, true},
+		{Storage{Type: "rbd"}, true, true},
+		{Storage{Type: "zfspool", Sparse: &yes}, true, true},
+		{Storage{Type: "zfspool", Sparse: &no}, false, true},
+		{Storage{Type: "zfspool"}, false, false},
+		{Storage{Type: "zfs", Sparse: &no}, false, true},
+		{Storage{Type: "dir"}, true, true},
+		{Storage{Type: "nfs"}, true, true},
+		{Storage{Type: "cifs", Preallocation: "off"}, true, true},
+		{Storage{Type: "dir", Preallocation: "metadata"}, true, true},
+		{Storage{Type: "dir", Preallocation: "falloc"}, false, true},
+		{Storage{Type: "nfs", Preallocation: "full"}, false, true},
+		{Storage{}, false, false},
+	} {
+		if thin, known := c.s.AllocatesOnWrite(); thin != c.thin || known != c.known {
+			t.Errorf("%s %s: thin, known = %v, %v, want %v, %v", c.s.Type, c.s.Preallocation, thin, known, c.thin, c.known)
+		}
+	}
 }
 
 func TestStoragesShowSpaceOnlyWhereAvailable(t *testing.T) {
@@ -111,12 +145,26 @@ func TestStoragesShowSpaceOnlyWhereAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	yes := true
 	want := []Storage{
-		{Storage: "local-lvm", Node: "one", Content: []string{"rootdir", "images"}, Avail: 700, Total: 1000},
-		{Storage: "ceph", Node: "two", Shared: true, Content: []string{"images"}},
+		{Storage: "local-lvm", Node: "one", Type: "zfspool", Sparse: &yes, Content: []string{"rootdir", "images"}, Active: true, Avail: 700, Total: 1000},
+		{Storage: "ceph", Node: "two", Type: "rbd", Shared: true, Content: []string{"images"}},
 	}
 	if !reflect.DeepEqual(storages, want) {
 		t.Errorf("storages %+v, want %+v", storages, want)
+	}
+}
+
+func TestAnswerCutAtTheLimitIsAnExplicitError(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api2/json/cluster/resources", func(w http.ResponseWriter, _ *http.Request) {
+		replyData(t, w, strings.Repeat("x", maxResponseBytes))
+	})
+	a := serveAPI(t, mux)
+	_, err := a.Nodes(context.Background(), alice)
+	if err == nil || !strings.Contains(err.Error(), "/api2/json/cluster/resources: the answer is larger than 1 MiB") {
+		t.Fatalf("error = %v, want one naming the path and the 1 MiB limit", err)
 	}
 }
 

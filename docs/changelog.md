@@ -22,6 +22,18 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
 - SDN VNets work wherever a bridge is chosen, listed with their zone and alias, and `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone. A VLAN tag on a VNet of a VLAN zone is refused.
 - AlmaLinux and Rocky Linux templates get the kernel's extra modules with the kernel itself. In the hours after a kernel release, a bake could reach a mirror without that kernel's modules and fail.
+- New management VMs get their MAC addresses from Proxmox VE, so two installs on one network never share them. An existing management cluster keeps its addresses and is not changed by an upgrade.
+- A "Time servers" setting writes Talos's `TimeSyncConfig` for the management nodes. Empty keeps Talos's default servers.
+- A cut-off apply sends OpenTofu an interrupt and waits up to five minutes for it to write its state before killing it.
+- A failed run's error carries OpenTofu's error diagnostics, not only the exit status.
+- Every Helm release of the management module that waits has a timeout of 900 seconds.
+- The setup checks the settings against Proxmox VE before it runs. It covers storages, bridges, memory, disk space, answering addresses and leftover pools, roles, users and groups.
+- A failed check names the node or storage and the fix. The setup page shows it before Apply and disables Apply while an error stands.
+- Too little free space is an error on thick LVM and on ZFS without sparse. On other storage, such as LVM-thin, Ceph RBD or files on a directory, it is a warning.
+- Changing the management cluster's Proxmox VE nodes once it is Ready is refused, as its VMs would migrate.
+- The setup warns of VMs sharing nodes and of an API address that is one node's. It also warns of pod or service ranges that overlap a node's networks, and shows the ranges chosen.
+- The management cluster's health shows when the controller cannot reach the Proxmox VE API from inside the cluster.
+- An answer from Proxmox VE larger than 1 MiB fails with an error naming the path.
 
 ## [0.4.2] - 2026-11-05
 
