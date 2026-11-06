@@ -1521,7 +1521,7 @@ export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefi
   if (best === undefined || freeMiB(best) >= need) {
     return undefined;
   }
-  return `No node has ${need} MiB free (best: ${best.node}, ${Math.floor(freeMiB(best))} MiB). The cluster waits until one has.`;
+  return `No node has ${need} MiB free, and ${best.node} has most with ${Math.floor(freeMiB(best))} MiB. The cluster waits until one has room.`;
 }
 
 // freeMiB is a node's free memory, unlimited while it reports none.

@@ -26,7 +26,7 @@ describe("the machines step and the nodes' free memory", () => {
   it("warns, without blocking the step, when no node the cluster may use has room", () => {
     const chosen = { ...form, place: { placement: "nodes" as const, haRule: "", nodes: ["pve1"] } };
     expect(memoryNodeWarning(chosen, [node("pve1", 2), node("pve2", 30)])).toBe(
-      "No node has 8192 MiB free (best: pve1, 2048 MiB). The cluster waits until one has.",
+      "No node has 8192 MiB free, and pve1 has most with 2048 MiB. The cluster waits until one has room.",
     );
     expect(fieldProblems("Machines", chosen, undefined)).not.toHaveProperty("placement");
   });
