@@ -660,6 +660,17 @@ func TestASnapshotIsOneObjectAndItsRecordNeverACopy(t *testing.T) {
 	}
 }
 
+// Snapshots written before the record beside each one carry their facts as the object's metadata.
+func TestStatReadsAnObjectsMetadataByLowerCaseNames(t *testing.T) {
+	t.Parallel()
+	f, srv := newFakeS3(t, defaultBackupRegion)
+	f.put("old", []byte("sealed"), map[string]string{"Kubernetes-Version": "v1.34.1"})
+	o, err := openFake(t, srv, "").Stat(context.Background(), "old")
+	if err != nil || o.Metadata["kubernetes-version"] != "v1.34.1" {
+		t.Errorf("stat %+v, %v", o, err)
+	}
+}
+
 func TestListPagesThroughMoreThanAThousandObjects(t *testing.T) {
 	t.Parallel()
 	f, srv := newFakeS3(t, defaultBackupRegion)

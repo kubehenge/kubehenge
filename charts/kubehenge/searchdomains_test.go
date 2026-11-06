@@ -15,20 +15,30 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-type searchDomainsPatch struct {
-	Name        string `json:"name"`
-	EnabledIf   string `json:"enabledIf"`
-	Definitions []struct {
-		Selector    struct{ Kind string }
-		JSONPatches []jsonPatch `json:"jsonPatches"`
-	} `json:"definitions"`
+// classVariable is a variable of a ClusterClass as Helm renders it.
+type classVariable struct {
+	Name   string         `json:"name"`
+	Schema variableSchema `json:"schema"`
+}
+
+type variableSchema struct {
+	OpenAPIV3Schema apiextensionsv1.JSONSchemaProps `json:"openAPIV3Schema"`
+}
+
+type variablesDocument struct {
+	Kind string        `json:"kind"`
+	Spec variablesSpec `json:"spec"`
+}
+
+type variablesSpec struct {
+	Variables []classVariable `json:"variables"`
 }
 
 // distributionSearchDomains is the patch that gives a kubeadm, RKE2 or k3s class's nodes the
 // network variable's search domains, as the class renders.
-func distributionSearchDomains(t *testing.T, file, name string) searchDomainsPatch {
+func distributionSearchDomains(t *testing.T, file, name string) classPatch {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system",
+	cmd := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system", //nolint:gosec // the chart's own file
 		"--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--show-only", "templates/"+file)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -37,12 +47,7 @@ func distributionSearchDomains(t *testing.T, file, name string) searchDomainsPat
 		t.Fatalf("helm template: %v: %s", err, stderr.String())
 	}
 	for doc := range strings.SplitSeq(string(out), "\n---\n") {
-		var class struct {
-			Kind string `json:"kind"`
-			Spec struct {
-				Patches []searchDomainsPatch `json:"patches"`
-			} `json:"spec"`
-		}
+		var class renderedDocument
 		if err := yaml.Unmarshal([]byte(doc), &class); err != nil {
 			t.Fatal(err)
 		}
@@ -53,7 +58,7 @@ func distributionSearchDomains(t *testing.T, file, name string) searchDomainsPat
 		}
 	}
 	t.Fatalf("%s has no patch %s", file, name)
-	return searchDomainsPatch{}
+	return classPatch{}
 }
 
 func TestSearchDomainsReachEveryNode(t *testing.T) {
@@ -91,7 +96,11 @@ func TestSearchDomainsReachEveryNode(t *testing.T) {
 					case want + "/files/-":
 						file = capiTemplate(t, jp.ValueFrom.Template, map[string]any{"network": network})
 					case want + "/" + c.commands + "/-":
-						command, _ = jp.Value.(string)
+						text, ok := jp.Value.(string)
+						if !ok {
+							t.Fatalf("command %v", jp.Value)
+						}
+						command = text
 					}
 				}
 				var written struct {
@@ -115,7 +124,7 @@ func TestSearchDomainsReachEveryNode(t *testing.T) {
 }
 
 // networkValidator validates a value against the class's network variable as the API server does.
-func networkValidator(t *testing.T) validation.SchemaValidator {
+func networkValidator(t *testing.T) validation.SchemaValidator { //nolint:ireturn // the API server's own validator type
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system",
 		"--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--show-only", "templates/kubeadm.yaml")
@@ -124,21 +133,12 @@ func networkValidator(t *testing.T) validation.SchemaValidator {
 		t.Fatalf("helm template: %v", err)
 	}
 	for doc := range strings.SplitSeq(string(out), "\n---\n") {
-		var class struct {
-			Kind string `json:"kind"`
-			Spec struct {
-				Variables []struct {
-					Name   string `json:"name"`
-					Schema struct {
-						OpenAPIV3Schema apiextensionsv1.JSONSchemaProps `json:"openAPIV3Schema"`
-					} `json:"schema"`
-				} `json:"variables"`
-			} `json:"spec"`
-		}
+		var class variablesDocument
 		if err := yaml.Unmarshal([]byte(doc), &class); err != nil {
 			t.Fatal(err)
 		}
-		for _, v := range class.Spec.Variables {
+		for i := range class.Spec.Variables {
+			v := &class.Spec.Variables[i]
 			if class.Kind != "ClusterClass" || v.Name != "network" {
 				continue
 			}
