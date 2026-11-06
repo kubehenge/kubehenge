@@ -94,21 +94,39 @@ type proxmoxReader interface {
 	Get(ctx context.Context, path string, v any) error
 }
 
+// proxmoxEditor reads Proxmox VE's API and changes a VM's configuration; *proxmox.Client is one.
+type proxmoxEditor interface {
+	proxmoxReader
+	Put(ctx context.Context, path string, params, out any) error
+}
+
 // VMWatch looks at the VMs of every cluster's machines and the storage each cluster's disks are
 // on, with the controller's own token, and says on the Cluster what does not run and what is
 // nearly full: VMsCondition and StorageCondition, with an event when each starts and ends.
+// It also keeps a VM's name and its node's zone label true to where the VM is (identity.go).
 type VMWatch struct {
 	Client client.Client
 	// Reader reads a cluster past the cache, after a write to it conflicted.
 	Reader         client.Reader
 	ClassNamespace string
-	Proxmox        proxmoxReader
-	Events         events.EventRecorder
-	Interval       time.Duration
-	Now            func() time.Time
+	// WorkloadPool is the pool the clusters' own pools nest under.
+	WorkloadPool string
+	Proxmox      proxmoxEditor
+	// Workloads reaches the workload clusters, to follow a moved VM with its node's zone label.
+	Workloads workloadClients
+	Events    events.EventRecorder
+	Interval  time.Duration
+	Now       func() time.Time
 
 	// seen is when each VM was first found in the state it is in, while that is not running.
 	seen map[int64]vmSeen
+	// zoned is the Proxmox VE node each VM's Kubernetes node was last found labelled with.
+	zoned map[int64]string
+	// restartDue holds the VMs whose zone label changed and whose CSI node plugin has not restarted.
+	restartDue map[int64]bool
+	// reported is the last warning told on a Cluster for each VM and reason, so that a retry that
+	// fails the same way says nothing again.
+	reported map[reportKey]string
 }
 
 type vmSeen struct {
@@ -119,6 +137,8 @@ type vmSeen struct {
 // pveGuest is a VM as Proxmox VE's resource list shows it.
 type pveGuest struct {
 	VMID   int64  `json:"vmid"`
+	Name   string `json:"name"`
+	Pool   string `json:"pool"`
 	Node   string `json:"node"`
 	Type   string `json:"type"`
 	Status string `json:"status"`
@@ -177,6 +197,7 @@ func (w *VMWatch) read(ctx context.Context) (*vmLook, error) {
 		}
 	}
 	w.settle(look)
+	w.forgetGone(look)
 	return look, nil
 }
 
@@ -192,7 +213,7 @@ func (w *VMWatch) settle(look *vmLook) {
 		}
 	}
 	for vmid, g := range look.guests {
-		reason := vmStateOf(g)
+		reason := vmStateOf(&g)
 		if reason == "" {
 			delete(w.seen, vmid)
 			continue
@@ -212,7 +233,7 @@ func (w *VMWatch) settle(look *vmLook) {
 // through a state on purpose. The resource list gives a started VM's state as QEMU reports it,
 // "paused" or "io-error" rather than "running"; "unknown" is a VM whose node is offline, which
 // Cluster API sees from the node.
-func vmStateOf(g pveGuest) string {
+func vmStateOf(g *pveGuest) string {
 	if slices.Contains(transientLocks, g.Lock) {
 		return ""
 	}
@@ -238,7 +259,10 @@ func (w *VMWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *vmLook)
 	if err != nil {
 		return err
 	}
-	vmsErr := w.mark(ctx, c, VMsCondition, vmsCondition(vms, look), "VMsRunning", "every VM of the cluster runs")
+	vmsErr := errors.Join(
+		w.keepIdentity(ctx, c, vms, look),
+		w.mark(ctx, c, VMsCondition, vmsCondition(vms, look), "VMsRunning", "every VM of the cluster runs"),
+	)
 	storage, set, err := optionalVariable[string](c, "storage")
 	if err != nil || !set {
 		return errors.Join(vmsErr, err)
@@ -251,6 +275,10 @@ func (w *VMWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *vmLook)
 type clusterVM struct {
 	machine string
 	vmid    int64
+	// vmName is the name capmox gave the VM, its ProxmoxMachine's.
+	vmName string
+	// node is the machine's Kubernetes node.
+	node string
 }
 
 // clusterVMs lists the VMs of the cluster's machines that joined and are not being deleted.
@@ -276,7 +304,7 @@ func (w *VMWatch) clusterVMs(ctx context.Context, c *clusterv1.Cluster) ([]clust
 		if !ok || m.Status.NodeRef.Name == "" {
 			continue
 		}
-		vms = append(vms, clusterVM{machine: m.Name, vmid: vmid})
+		vms = append(vms, clusterVM{machine: m.Name, vmid: vmid, vmName: m.Spec.InfrastructureRef.Name, node: m.Status.NodeRef.Name})
 	}
 	slices.SortFunc(vms, func(a, b clusterVM) int { return int(a.vmid - b.vmid) })
 	return vms, nil

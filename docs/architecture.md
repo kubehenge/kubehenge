@@ -153,7 +153,12 @@ Cluster API sees a node's VM only through the node. A VM paused by hand, or by Q
 
 Kubehenge's controller therefore reads Proxmox VE's resource list every 15 seconds. Its token holds `VM.Audit` on the workload pool and `Datastore.Audit` on the clusters' storages. For a started VM, that list gives the state QEMU reports, such as paused or a disk error.
 
-The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). It changes nothing. Resuming, starting or replacing a VM is the administrator's call.
+The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
+
+For the VMs in a cluster's own pool, the same look sets back two things the cloud controller manager and the CSI plugin go by:
+
+- **The VM's name.** The controller renames it back to its machine's, with `VM.Config.Options`. A VM whose name does not start with its node's name makes the cloud controller manager report the instance gone, and Kubernetes deletes the Node once it is not ready.
+- **The node's zone label.** `topology.kubernetes.io/zone` follows the Proxmox VE node a moved VM runs on. The controller sets it through the cluster's kubeconfig and restarts the CSI plugin's node pod on that node ([clusters.md](clusters.md#a-worker-moved-to-another-proxmox-ve-node)).
 
 ## Each cluster's own corner of Proxmox VE
 

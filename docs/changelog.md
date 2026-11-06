@@ -4,6 +4,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+- A VM renamed in Proxmox VE is renamed back to its machine's name within 15 seconds, with a `VMRenamedBack` event. Otherwise the cloud controller manager reports its node gone, and Kubernetes deletes the node when it is next not ready.
+- A worker moved to another Proxmox VE node gets its `topology.kubernetes.io/zone` label updated, and the CSI plugin's pod on it restarts. New node-local volumes are created on the right host.
 - The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
 - New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
 - The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
