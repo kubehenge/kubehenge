@@ -776,6 +776,7 @@ It is where Kubehenge starts and what looks after it:
   - A token session ends at its next renewal once Proxmox VE stops taking the token. Its privileges are the token's, which privilege separation cuts down to its user's.
   - An OpenID realm sends the browser to its identity provider, which returns it to the interface. The return goes to `/api/openid/callback` under `--public-url`, to be registered with the provider.
   - Without a public URL OpenID sign-in is refused, since the address the browser sends is the client's to choose.
+  - The state cookie is host-only, so a sign-in started under another name first redirects to the same path under `--public-url`, where the provider returns.
   - Proxmox VE checks the code, and the interface accepts the return only in the browser that started it.
 - **Sessions.** The Proxmox VE ticket stays on the server, in memory only.
   - The browser holds a random session ID in a `__Host-` cookie (Secure, HttpOnly, SameSite=Strict). Every change also carries a per-session CSRF token.

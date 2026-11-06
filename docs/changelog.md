@@ -21,6 +21,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - A user whose only second factor is a security key signs in with a Proxmox VE API token (`Use API token` on the sign-in page). The session has the token's privileges, a CSRF token and the usual limits.
 - A tab whose session another tab replaced picks up the new CSRF token after a refused change and asks for a retry. It returns to sign-in when the other tab signed in as someone else.
+- OpenID sign-in works from any name the interface answers to. A start under another name moves to `--public-url` first, so the provider's return finds the state cookie.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
 - SDN VNets work wherever a bridge is chosen, listed with their zone and alias, and `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone. A VLAN tag on a VNet of a VLAN zone is refused.
 
