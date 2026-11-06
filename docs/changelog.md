@@ -26,6 +26,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A sign-in name over 64 characters, realm included, is refused at once with the limit. Proxmox VE answered it with an error that read like an outage.
 - A refused second factor says the factor may be locked, or for a recovery key that the cluster may lack quorum. Proxmox VE answers these like a wrong code, so each still counts against the sign-in limit.
 - The docs' example roles for cluster users hold `Pool.Audit`. A user without it is told so on the cluster page and on reboot, instead of "The machine has no VM in the cluster's pool".
+- The create form asks Proxmox VE for the user's privileges once and shares the answer between lists. With 20 nodes and 30 VNets it made 600 calls and now makes at most 31.
+- A VM that Proxmox VE lists without a name, because its node dropped out of the statistics, is matched to its machine by guest ID. A machine with no VM to match shows "Not reporting" as its node.
 
 ## [0.4.2] - 2026-11-05
 

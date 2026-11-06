@@ -345,8 +345,9 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 	}
 	// The kinds the interface reads only as unstructured objects: the add-on releases, and the
 	// control plane of whichever provider, which it finds through the RESTMapper.
-	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{rke2ControlPlane.GroupVersion()})
-	for _, gvk := range []schema.GroupVersionKind{helmReleaseProxyList.GroupVersion().WithKind("HelmReleaseProxy"), rke2ControlPlane} {
+	proxmoxMachine := schema.GroupVersionKind{Group: "infrastructure.cluster.x-k8s.io", Version: "v1alpha2", Kind: "ProxmoxMachine"}
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{rke2ControlPlane.GroupVersion(), proxmoxMachine.GroupVersion()})
+	for _, gvk := range []schema.GroupVersionKind{helmReleaseProxyList.GroupVersion().WithKind("HelmReleaseProxy"), rke2ControlPlane, proxmoxMachine} {
 		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
 		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
 		mapper.Add(gvk, meta.RESTScopeNamespace)
