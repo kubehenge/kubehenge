@@ -1679,12 +1679,6 @@ fieldset.choices .check {
   border: none;
 }
 
-/* A field straight in a card starts its control where the fields in the card's boxes do, which give
-   up their box's border and padding. */
-.addon-card > .field {
-  grid-template-columns: calc(190px - 12px - 1px) 1fr;
-}
-
 /* A switch reads as one: the track carries the state, the words beside it what that state is. */
 .switch {
   cursor: pointer;
@@ -2586,13 +2580,15 @@ form.box > *,
 }
 
 /* A box's fields start their controls where the fields around the box do: its label column gives
-   up the box's border and left padding. */
-.group > .field {
+   up the box's border and left padding. An add-on card is such a box. */
+.group > .field,
+.addon-card > .field {
   grid-template-columns: calc(190px - 12px - 1px) 1fr;
 }
 
 @media (width <= 600px) {
-  .group > .field {
+  .group > .field,
+  .addon-card > .field {
     grid-template-columns: 1fr;
   }
 }
