@@ -243,6 +243,10 @@ Each add-on the class offers is a card with the memory its pods take by the clas
   - Choose the target, the schedule, its time zone, how long each backup is kept and the access key Velero signs in to the store with.
   - Storing that key needs `Sys.Modify` on the workload pool. Without it, backups wait until someone holding that stores one.
   - The key an administrator stored for every cluster never goes into a cluster. Without any target, the choice is off and says so.
+- **etcd snapshots** ([below](#etcd-snapshots)), on by default wherever an administrator set a backup target and absent without one.
+  - Choose the target, the schedule, its time zone and how many snapshots are kept. On RKE2 and k3s, also the distribution's own upload ([below](#the-distributions-own-upload)).
+  - They are written with the same access key as the backups, which is entered once for both. Storing it needs `Sys.Modify` on the workload pool, and without it the snapshots wait as backups do.
+  - A cluster started from another takes that cluster's snapshot settings, or the default where it never set any.
 - **Certificates** from cert-manager for the cluster's Ingresses and routes, from Let's Encrypt or another ACME server, or from a CA of the cluster's own ([below](#certificates)).
 - **Pod security**: the [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/) pods are held to, `baseline` or `restricted`. Kubernetes' Pod Security Admission, Kyverno or both enforce it, each at a level of its own.
   - Pod Security Admission sets the level of every namespace that labels none of its own, `baseline` unless another is chosen. It warns about and audits pods short of `restricted` at every level.
@@ -882,7 +886,7 @@ The controller reaches one etcd member through the cluster's API server, or a co
 
 Each snapshot is encrypted with [age](https://age-encryption.org) to a key of the cluster's own, `etcd-snapshot-identity` in the Secret `<name>-backup-keys` beside the Cluster. The key is made with the cluster's other backup keys and outlives the cluster as they do. The snapshot is written with the same access key as Velero's backups. RKE2 and k3s also keep the snapshots they take themselves on their nodes, as they always do.
 
-The **Backups** view's etcd snapshots section says when the last snapshot was taken and what went wrong with the last try. It lists the snapshots in the target. Snapshots are switched on under Options or from **Set up snapshots…**. The target, schedule, time zone and number kept are chosen there too.
+The **Backups** view's etcd snapshots section says when the last snapshot was taken and what went wrong with the last try. It lists the snapshots in the target. Snapshots are switched on when the cluster is created, under Options or from **Set up snapshots…**. The target, schedule, time zone and number kept are chosen there too.
 
 - **Take snapshot** has the controller take one at once. It needs `VM.Allocate` on the cluster's pool.
 - **Download** hands the snapshot out decrypted, as etcd wrote it. It holds every Secret of the cluster, so it needs `Sys.Modify` on the cluster's pool, as the admin kubeconfig does.

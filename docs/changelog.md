@@ -20,6 +20,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
+- The create wizard offers etcd snapshots on its add-ons step, on by default wherever the class offers a backup target. They share the backups' access key, entered once, and a new cluster started from another takes its settings.
 
 ## [0.4.2] - 2026-11-05
 

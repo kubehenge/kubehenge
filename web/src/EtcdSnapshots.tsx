@@ -49,7 +49,7 @@ export const defaultEtcdSchedule = "0 */12 * * *";
 export const defaultEtcdKeep = 14;
 const maxEtcdKeep = 1000;
 
-const etcdSnapshotsInfo = "Encrypted copies of every API object, without volume data.";
+export const etcdSnapshotsInfo = "Encrypted copies of every API object, without volume data.";
 
 const etcdRestoreUse = "For lost quorum or corrupted state. Restore a backup to bring back applications.";
 
@@ -170,14 +170,111 @@ export function etcdSnapshotsRows(c: Cluster, offered: boolean): OptionRow<"etcd
   ];
 }
 
-// withTarget starts from the target the cluster's backups use, or the one there is.
-function withTarget(f: EtcdSnapshotFields, targets: OfferedTarget[], backups: string | undefined): EtcdSnapshotFields {
+/** withEtcdTarget starts from the target the cluster's backups use, or the one there is. */
+export function withEtcdTarget(
+  f: EtcdSnapshotFields,
+  targets: OfferedTarget[],
+  backups: string | undefined,
+): EtcdSnapshotFields {
   if (filled(f.target)) {
     return f;
   }
   const chosen =
     backups !== undefined && targets.some((t) => t.name === backups) ? backups : sole(targets.map((t) => t.name));
   return { ...f, target: chosen ?? "" };
+}
+
+/** EtcdSnapshotFieldset edits a cluster's etcd snapshot settings. problems are those to show. */
+export function EtcdSnapshotFieldset({
+  value,
+  onChange,
+  targets,
+  problems,
+  distribution,
+}: {
+  value: EtcdSnapshotFields;
+  onChange: (f: EtcdSnapshotFields) => void;
+  targets: OfferedTarget[];
+  problems: Partial<Record<EtcdSnapshotField, string | undefined>>;
+  distribution: string;
+}): JSX.Element {
+  const uploadHintId = useId();
+  const update = (patch: Partial<EtcdSnapshotFields>): void => onChange({ ...value, ...patch });
+  const listed = targets.some((t) => t.name === value.target);
+  return (
+    <>
+      <Field label="Target" error={problems.target}>
+        {(id) => (
+          <select id={id} value={value.target} onChange={(e) => update({ target: e.target.value })}>
+            <option value="" disabled>
+              Choose…
+            </option>
+            {targets.map((t) => (
+              <option key={t.name} value={t.name}>
+                {t.name}: {targetText(t)}
+              </option>
+            ))}
+            {filled(value.target) && !listed && (
+              <option value={value.target}>{value.target} (no longer offered)</option>
+            )}
+          </select>
+        )}
+      </Field>
+      <Field label="Schedule" hint={scheduleHint(value.schedule)} error={problems.schedule}>
+        {(id) => (
+          <input
+            id={id}
+            value={value.schedule}
+            spellCheck={false}
+            onChange={(e) => update({ schedule: e.target.value })}
+          />
+        )}
+      </Field>
+      <Field label="Time zone">
+        {(id) => (
+          <select id={id} value={value.timeZone} onChange={(e) => update({ timeZone: e.target.value })}>
+            {timeZones(value.timeZone).map((z) => (
+              <option key={z} value={z}>
+                {z}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+      <Field label="Snapshots to keep" error={problems.keep}>
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={1}
+            max={maxEtcdKeep}
+            value={value.keep}
+            onChange={(e) => update({ keep: e.target.value })}
+          />
+        )}
+      </Field>
+      {uploadsItself(distribution) && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={value.upload}
+              aria-describedby={uploadHintId}
+              onChange={(e) => update({ upload: e.target.checked })}
+            />{" "}
+            Also take {distributionName(distribution)} snapshots
+          </label>
+          <Info about={`${distributionName(distribution)} snapshots`}>
+            A shared key also reaches other clusters&apos; backups. {distributionName(distribution)} snapshots are
+            unencrypted, restored by hand, and changing this replaces control-plane nodes.
+          </Info>
+          <p className="hint" id={uploadHintId}>
+            {uploadHint}
+          </p>
+        </>
+      )}
+    </>
+  );
 }
 
 /** EtcdSnapshotsDialog switches a cluster's etcd snapshots on or off and changes how they run. */
@@ -190,18 +287,15 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
   const { busy, error, send } = useChange(c, onClose);
   const hint = useId();
   const backups = backupsOf(c.variables["backups"]);
-  const fields = withTarget(typed, targets, backups.enabled ? backups.target : undefined);
+  const fields = withEtcdTarget(typed, targets, backups.enabled ? backups.target : undefined);
   const kept = current.enabled ? current.target : undefined;
   const problems = enabled ? etcdProblems(fields, targets, kept) : {};
   // The distribution's upload shares the snapshots' settings, so it goes off with them.
   const { distributionUpload: _, ...rest } = current;
   const next: EtcdSnapshotsValue = enabled ? etcdSnapshotsVariable(fields) : { ...rest, enabled: false };
-  const uploadHintId = useId();
   const before: EtcdSnapshotsValue = current.enabled ? etcdSnapshotsVariable(etcdFieldsOf(current)) : current;
   const changed = JSON.stringify(next) !== JSON.stringify(before);
   const none = offered !== undefined && targets.length === 0 && !current.enabled;
-  const update = (patch: Partial<EtcdSnapshotFields>): void => setTyped({ ...fields, ...patch });
-  const listed = targets.some((t) => t.name === fields.target);
   return (
     <Dialog
       title="Edit etcd snapshots"
@@ -238,76 +332,13 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
       )}
       {enabled && (
         <>
-          <Field label="Target" error={problems.target}>
-            {(id) => (
-              <select id={id} value={fields.target} onChange={(e) => update({ target: e.target.value })}>
-                <option value="" disabled>
-                  Choose…
-                </option>
-                {targets.map((t) => (
-                  <option key={t.name} value={t.name}>
-                    {t.name}: {targetText(t)}
-                  </option>
-                ))}
-                {filled(fields.target) && !listed && (
-                  <option value={fields.target}>{fields.target} (no longer offered)</option>
-                )}
-              </select>
-            )}
-          </Field>
-          <Field label="Schedule" hint={scheduleHint(fields.schedule)} error={problems.schedule}>
-            {(id) => (
-              <input
-                id={id}
-                value={fields.schedule}
-                spellCheck={false}
-                onChange={(e) => update({ schedule: e.target.value })}
-              />
-            )}
-          </Field>
-          <Field label="Time zone">
-            {(id) => (
-              <select id={id} value={fields.timeZone} onChange={(e) => update({ timeZone: e.target.value })}>
-                {timeZones(fields.timeZone).map((z) => (
-                  <option key={z} value={z}>
-                    {z}
-                  </option>
-                ))}
-              </select>
-            )}
-          </Field>
-          <Field label="Snapshots to keep" error={problems.keep}>
-            {(id) => (
-              <input
-                id={id}
-                type="number"
-                min={1}
-                max={maxEtcdKeep}
-                value={fields.keep}
-                onChange={(e) => update({ keep: e.target.value })}
-              />
-            )}
-          </Field>
-          {uploadsItself(c.distribution) && (
-            <>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={fields.upload}
-                  aria-describedby={uploadHintId}
-                  onChange={(e) => update({ upload: e.target.checked })}
-                />{" "}
-                Also take {distributionName(c.distribution)} snapshots
-              </label>
-              <Info about={`${distributionName(c.distribution)} snapshots`}>
-                A shared key also reaches other clusters&apos; backups. {distributionName(c.distribution)} snapshots are
-                unencrypted, restored by hand, and changing this replaces control-plane nodes.
-              </Info>
-              <p className="hint" id={uploadHintId}>
-                {uploadHint}
-              </p>
-            </>
-          )}
+          <EtcdSnapshotFieldset
+            value={fields}
+            onChange={setTyped}
+            targets={targets}
+            problems={problems}
+            distribution={c.distribution}
+          />
           <CredentialField
             label="Access key"
             purpose="backup"
