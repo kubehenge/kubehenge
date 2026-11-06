@@ -2771,6 +2771,10 @@ EOF
         bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
         # renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
         pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
+        # Pebble refuses an account without an external account binding, as ZeroSSL or Sectigo do. Its key
+        # and cert-manager's are base64url without padding.
+        eab_key_id=e2e-eab
+        eab_hmac=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
         # The HTTP-01 names live in the cluster's own DNS, as Services in e2e-certs whose endpoint is the API
         # address, where Traefik answers on port 80; cert-manager's self-check finds them there, and Pebble
         # in BIND's copy of the same records, so that nothing outside the cluster need resolve them.
@@ -2869,7 +2873,8 @@ data:
   pebble.json: |
     {"pebble": {"listenAddress": "0.0.0.0:14000", "managementListenAddress": "0.0.0.0:15000",
       "certificate": "/tls/tls.crt", "privateKey": "/tls/tls.key", "httpPort": 80, "tlsPort": 443,
-      "ocspResponderURL": "", "externalAccountBindingRequired": false}}
+      "ocspResponderURL": "", "externalAccountBindingRequired": true,
+      "externalAccountMACKeys": {"${eab_key_id}": "${eab_hmac}"}}}
 ---
 apiVersion: v1
 kind: Pod
@@ -3019,10 +3024,29 @@ metadata:
 type: kubehenge.dev/user-credential
 stringData:
   token: "${tsig}"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${name}.acme-eab
+  labels:
+    kubehenge.dev/user-credential: acme-eab
+    kubehenge.dev/credential-cluster: ${name}
+  annotations:
+    kubehenge.dev/credential-set-by: e2e@pve
+    kubehenge.dev/credential-set-at: "${stored_at}"
+  ownerReferences:
+    - apiVersion: cluster.x-k8s.io/v1beta2
+      kind: Cluster
+      name: ${name}
+      uid: ${cluster_uid}
+type: kubehenge.dev/user-credential
+stringData:
+  hmacKey: "${eab_hmac}"
 EOF
         kubectl -n "${ns}" annotate cluster "${name}" --overwrite "kubehenge.dev/credentials-stored-at=${stored_at}"
-        dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
-    acme: {server: $s, caBundle: $ca}, dns01: {provider: "rfc2136", nameservers: [$d], rfc2136: {nameserver: $d, tsigKeyName: "e2e", tsigAlgorithm: "HMACSHA256"}}}')
+        dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" --arg k "${eab_key_id}" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
+    acme: {server: $s, caBundle: $ca, externalAccountBinding: {keyID: $k}}, dns01: {provider: "rfc2136", nameservers: [$d], rfc2136: {nameserver: $d, tsigKeyName: "e2e", tsigAlgorithm: "HMACSHA256"}}}')
         set_variable certificates "${dns01}"
         # One name one level too deep for the default certificate, and one it covers.
         set_variable headlamp '{"enabled":true,"hostname":"headlamp.apps.e2e.test"}'
@@ -3033,6 +3057,18 @@ EOF
                 dns01_token=$(printf '%s' "${dns01_token}" | base64 -d) && [ "${dns01_token}" = "${tsig}" ]
         }
         until_true 300 "the cluster's DNS credential in the workload cluster" dns01_copied
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        eab_copied() {
+            eab_copy=$(wl -n cert-manager get secret kubehenge-acme-eab -o jsonpath='{.data.hmacKey}' 2> /dev/null) &&
+                eab_copy=$(printf '%s' "${eab_copy}" | base64 -d) && [ "${eab_copy}" = "${eab_hmac}" ]
+        }
+        until_true 300 "the cluster's binding key in the workload cluster" eab_copied
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        issuer_binds() {
+            wl get clusterissuer.cert-manager.io/kubehenge-ingress -o json 2> /dev/null |
+                jq -e --arg k "${eab_key_id}" '.spec.acme.externalAccountBinding == {keyID: $k, keySecretRef: {name: "kubehenge-acme-eab", key: "hmacKey"}}' > /dev/null
+        }
+        until_true 300 "the issuer binds its ACME account with the key ID and the copied key" issuer_binds
         # cert-manager looks for its records only at BIND, which alone knows e2e.test.
         recursive() {
             wl -n cert-manager get deployment cert-manager -o json 2> /dev/null |
@@ -3103,7 +3139,7 @@ EOF
                 [ "${http01_status}" != 000 ]
         }
         until_true 60 "Traefik reached from a pod at ${http01_host} on port 80" http01_reached
-        http01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" '{enabled: true, issuer: "acme-http01", acme: {server: $s, caBundle: $ca}}')
+        http01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg k "${eab_key_id}" '{enabled: true, issuer: "acme-http01", acme: {server: $s, caBundle: $ca, externalAccountBinding: {keyID: $k}}}')
         set_variable certificates "${http01}"
         set_variable headlamp "{\"enabled\":true,\"hostname\":\"${http01_headlamp}\"}"
         set_variable monitoring '{"enabled":true}'
