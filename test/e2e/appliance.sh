@@ -514,22 +514,33 @@ audit_create() {
         "${management_api}/api/v1/namespaces/default/configmaps")
     [ "${created}" = 201 ] || fail "creating a ConfigMap with the admin kubeconfig: ${created} instead of 201"
 }
-audit_create kubehenge-e2e-audit
 management_get() {
     curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" "${management_api}$1"
 }
-# How far the reader got and how long the API server's log is: a ConfigMap missing from Activity is
-# either past the reader or never read.
+# How far the reader got, how long each API server's log is, and whether its container restarted:
+# a ConfigMap missing from Activity is either past the reader, in a container's log it never read,
+# or never read.
 audit_report() {
-    echo "-- the Activity check: the API server's log" >&2
+    echo "-- the Activity check: the API servers" >&2
     management_get '/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app%3Dkube-apiserver' > "${work}/apiservers.json"
+    jq -r '.items[] | "\(.metadata.name): \(.status.containerStatuses | map("restarts \(.restartCount), started \(.state.running.startedAt // "not running"), last state \(.lastState | tostring)") | join("; "))"' \
+        "${work}/apiservers.json" >&2
     jq -r '.items[].metadata.name' "${work}/apiservers.json" > "${work}/apiservers.txt"
     while read -r pod; do
-        management_get "/api/v1/namespaces/kube-system/pods/${pod}/log?timestamps=true" > "${work}/apiserver.log"
-        size=$(wc -c < "${work}/apiserver.log")
-        first=$(head -n 1 "${work}/apiserver.log")
-        last=$(tail -n 1 "${work}/apiserver.log")
-        echo "${pod}: ${size} bytes, from ${first%% *} to ${last%% *}" >&2
+        management_get "/api/v1/namespaces/kube-system/pods/${pod}/log?timestamps=true" > "${work}/${pod}.log"
+        management_get "/api/v1/namespaces/kube-system/pods/${pod}/log?timestamps=true&previous=true" > "${work}/${pod}-previous.log"
+        # A refusal is a JSON status with the code. A log is not JSON.
+        code=$(jq -r '.code // empty' "${work}/${pod}-previous.log" 2> /dev/null || true)
+        for log in "${pod}.log" "${pod}-previous.log"; do
+            if [ "${log}" = "${pod}-previous.log" ] && [ -n "${code}" ]; then
+                echo "${pod}: no previous container log (${code})" >&2
+                continue
+            fi
+            size=$(wc -c < "${work}/${log}")
+            first=$(head -n 1 "${work}/${log}")
+            last=$(tail -n 1 "${work}/${log}")
+            echo "${log%.log}: ${size} bytes, from ${first%% *} to ${last%% *}" >&2
+        done
     done < "${work}/apiservers.txt"
 }
 audited() {
@@ -537,28 +548,21 @@ audited() {
     seen=$(jq -r '[.entries[] | select(.details.via == "kubectl or the API")] |
         if length == 0 then "the reader holds no kubectl entry"
         else "the reader holds \(length) kubectl entries, the newest at \(map(.at) | max)" end' "${work}/body") || seen=
-    jq -e --arg w "created configmaps $1" '.entries | any(.what == $w and .details.via == "kubectl or the API"
+    jq -e '.entries | any(.what == "created configmaps kubehenge-e2e-audit" and .details.via == "kubectl or the API"
         and .details.namespace == "default" and .user != "")' "${work}/body" > /dev/null
 }
-# The interface looks for the API server's log every minute. The kubelet serves only the current
-# file of a log, so a change made before the interface first opened it can be rotated or restarted
-# away unread. Once a minute has passed, the interface follows the log, and a second change
-# is read without fail.
-audited_within() {
-    limit=$(($(date +%s) + $1))
-    # shellcheck disable=SC2310 # a ConfigMap not yet on Activity is a retry.
-    until audited "$2"; do
-        now=$(date +%s)
-        [ "${now}" -lt "${limit}" ] || return 1
-        sleep 5
-    done
+# The kubelet serves only the current file of a log, so a change made before the interface has
+# its stream open on every API server's log can be rotated away unread. The interface says when
+# it follows them.
+following() {
+    setup_status
+    seen="the interface does not follow the API servers' logs yet"
+    jq -e '.activityFollows' "${work}/body" > /dev/null
 }
 audit_waiting=1
-# shellcheck disable=SC2310 # a ConfigMap missing after the wait is the case this handles.
-if ! audited_within 90 kubehenge-e2e-audit; then
-    audit_create kubehenge-e2e-audit-late
-    until_true 240 "the ConfigMap's creation on Activity" audited kubehenge-e2e-audit-late
-fi
+until_true 300 "the interface to follow the API servers' logs" following
+audit_create kubehenge-e2e-audit
+until_true 300 "the ConfigMap's creation on Activity" audited
 audit_waiting=
 handed="handed out the management cluster's credential"
 # shellcheck disable=SC2016 # jq's variables, not the shell's.

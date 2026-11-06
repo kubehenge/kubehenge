@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -451,6 +453,81 @@ func TestAnAPIServerMetAfterARestartKeepsItsOldContainersLines(t *testing.T) {
 				t.Errorf("%d warnings of lines lost, want none: %s", n, r.out)
 			}
 		})
+	}
+}
+
+// runFollower runs the follower's loop with the given tick until the test ends.
+func (r *auditRig) runFollower(t *testing.T, every time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.s.followAuditLog(ctx, every)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+}
+
+// waitRounds waits until the follower's loop has gone over the API servers n times.
+func (r *auditRig) waitRounds(t *testing.T, n int64) {
+	t.Helper()
+	for range 300 {
+		if f := r.s.auditFollower.Load(); f != nil && f.rounds.Load() >= n {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("waited in vain for %d rounds of the follower", n)
+}
+
+// The first management cluster has the API servers' logs followed at once, not at the next tick,
+// and the interface says so once every stream is open.
+func TestTheAuditLogIsFollowedAtOnceWhenTheClusterAppears(t *testing.T) {
+	t.Parallel()
+	r := newAuditRig(t, apiServerA)
+	kube := r.s.currentKube()
+	r.s.activeKube.Store(nil)
+	r.runFollower(t, time.Hour)
+	r.waitRounds(t, 1)
+	if r.s.followsAuditLog() {
+		t.Fatal("the audit log is followed without a management cluster")
+	}
+	r.api.add(apiServerA, 1, "early")
+	r.s.setKube(kube)
+	waitAuditKept(t, r.s, "created configmaps early")
+	for range 300 {
+		if r.s.followsAuditLog() {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !r.s.followsAuditLog() {
+		t.Fatal("the interface does not say it follows the log")
+	}
+	r.api.add(apiServerA, 2, "after")
+	waitAuditKept(t, r.s, "created configmaps after", "created configmaps early")
+}
+
+// A pass that cannot reach the API servers leaves it to the tick to try again.
+func TestAFailedAuditAttachIsRetriedByTheTick(t *testing.T) {
+	t.Parallel()
+	r := newAuditRig(t, apiServerA)
+	reach := r.s.NewClientset
+	var tries atomic.Int64
+	r.s.NewClientset = func() (kubernetes.Interface, error) {
+		if tries.Add(1) == 1 {
+			return nil, errConnectionLost
+		}
+		return reach()
+	}
+	r.api.add(apiServerA, 1, "retried")
+	r.runFollower(t, 50*time.Millisecond)
+	waitAuditKept(t, r.s, "created configmaps retried")
+	if tries.Load() < 2 {
+		t.Errorf("the API servers were reached %d times, want the tick to try again", tries.Load())
 	}
 }
 

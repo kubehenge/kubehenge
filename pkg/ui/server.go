@@ -165,6 +165,10 @@ type Server struct {
 	workloads  workloadConns
 	changes    changes
 	notifier   notifier
+
+	// auditWake wakes the audit follower between its ticks. auditFollower is the one it runs.
+	auditWake     chan struct{}
+	auditFollower atomic.Pointer[auditFollower]
 	// clock is the health page's time. Unset, the system's.
 	clock func() time.Time
 	// demo is set by SetUpDemo: the answers say so and changes are refused.
@@ -332,6 +336,7 @@ func (s *Server) init() {
 	s.prepared.Do(func() {
 		s.sessions = newSessions(s.Accounts, s.SessionMaxAge)
 		s.limiter = newLimiter(failureWindow)
+		s.auditWake = make(chan struct{}, 1)
 		if s.Kube != nil {
 			s.setKube(s.Kube)
 		}
@@ -347,9 +352,15 @@ func (s *Server) init() {
 	})
 }
 
-// setKube switches the interface to a management cluster.
+// setKube switches the interface to a management cluster. The first one wakes the audit follower,
+// so the API servers' logs are followed from the moment there is a cluster to read them from.
 func (s *Server) setKube(c client.Client) {
-	s.activeKube.Store(&c)
+	if s.activeKube.Swap(&c) == nil {
+		select {
+		case s.auditWake <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (s *Server) currentKube() client.Client {

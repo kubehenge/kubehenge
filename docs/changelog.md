@@ -13,6 +13,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The installer stops early, in plain words, without quorum, with a resolver that names only loopback servers, or with too little room for the downloads.
 - A failed download gives curl's exit code and the HTTP status.
 - Activity keeps a kubectl change made before an API server restarted, also when the interface first meets the API server after the restart.
+- Activity follows the management cluster's API servers as soon as the cluster is set up. A change made right after the setup is no longer missed.
 - An option without its value reports `<option> needs a value`. A storage name is matched as written.
 - New `--tofu <file>` option installs OpenTofu from a local archive, checked against the script's checksum.
 - A container that cannot resolve the API's name makes the installer take the next name or address the certificate covers. It names every one it tried when none works.
