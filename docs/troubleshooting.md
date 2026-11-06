@@ -442,6 +442,13 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 - **`BackupCredentialMissing`:** `"no credential of the cluster's own for the backup target, for which the one for every cluster never stands in: type one in for it in the interface, or name a Secret of the cluster's velero namespace in existingSecret"`. Store the cluster's own key, or name such a Secret. Backups wait until then.
   - "Secret … holds no accessKeyID and secretAccessKey": the credential named lacks one or both of its keys. Store it again.
 
+### etcd database full
+
+- **"etcd member … refuses writes, its database is full"**, or `mvcc: database space exceeded`: a member reached the `etcd` variable's limit. Reads still work, so the API server's readiness stays green.
+  - The controller defragments the members at once and clears the alarm.
+  - Data in use above the limit is not given back. Raise the limit with `kubehenge cluster etcd set NAME --quota-gib 8`, then delete what fills the database.
+- **"etcd member … is at …% of its quota"**: the database is over 60 percent of the limit. Free space is defragmented inside the upgrade window. Data needs a higher limit or fewer objects.
+
 ### etcd snapshots and restores
 
 - **`EtcdSnapshotFailed`**, "etcd snapshot failed: …": no snapshot was taken, for the reason that follows. The **Backups** view shows it as the last try's error too. The controller tries again 15 minutes later.
@@ -470,6 +477,7 @@ Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its o
   - "the node is not Ready … after it rebooted" means it did not come back within 15 minutes.
   - The controller upgrades no other node until **Try again** on the cluster's Summary, or until the annotation `kubehenge.dev/talos-upgrade-failed` is removed ([clusters.md](clusters.md#talos-upgrades)). Correct what the reason names first.
 - **`TalosInstallRetry`**, "node … to Talos …, try … of 4 at …: …": the installer's pull or install stalled, or the node did not answer. The controller tries again at the time named, and after the fourth try fails as above. Check that the node reaches factory.talos.dev.
+- **`TalosUpgradeWaiting`**, "the upgrade of node … waits for etcd: …": another etcd member is unhealthy, a learner or not answering, and rebooting the node would cost etcd its quorum. The upgrade goes on by itself once every other member is healthy. Check the member the event names with `talosctl etcd status`.
 - **`TalosUpgradeAbandoned`**, "node … to Talos …: its machine is being deleted": the cluster scaled down or replaced the node while it was upgraded. Nothing to do. Its successor is upgraded as any other node.
 - **`TalosDrain`**, "node … reboots without all its pods moved: …": the node's pods did not all leave within five minutes, and the node rebooted anyway. A PodDisruptionBudget often holds them, so check the budgets of the workloads named.
 

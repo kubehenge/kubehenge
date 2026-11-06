@@ -317,6 +317,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/certificates/ca", s.managed(s.ingressCA))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.etcdSnapshots))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.takeEtcdSnapshot))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-defrag", s.managed(s.defragEtcd))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}", s.managed(s.downloadEtcdSnapshot))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}/restore-plan", s.managed(s.etcdRestorePlan))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-restores", s.managed(s.restoreEtcd))

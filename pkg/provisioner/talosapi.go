@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -46,7 +47,22 @@ type TalosNode interface {
 	// BootstrapRecovered starts etcd on the node as a cluster of one from the uploaded snapshot, a
 	// database without etcd's checksum.
 	BootstrapRecovered(ctx context.Context) error
+	// EtcdMember is the state of the etcd member on the node, and its alarms. Name is left empty.
+	EtcdMember(ctx context.Context) (EtcdMember, error)
+	// EtcdMembers is the cluster's member list as the node's etcd has it.
+	EtcdMembers(ctx context.Context) ([]EtcdListed, error)
+	// EtcdDefragment defragments the etcd member on the node.
+	EtcdDefragment(ctx context.Context) error
+	// EtcdDisarm clears the etcd alarms.
+	EtcdDisarm(ctx context.Context) error
 	Close() error
+}
+
+// EtcdListed is a member of etcd's member list.
+type EtcdListed struct {
+	ID      uint64
+	Name    string
+	Learner bool
 }
 
 // errTalosNotReady is a node's refusal of a call it takes later in its boot.
@@ -229,6 +245,65 @@ func (n *talosNode) BootstrapRecovered(ctx context.Context) error {
 	// changed. The controller checked the snapshot against it and against the store's.
 	if err := n.c.Bootstrap(ctx, &machine.BootstrapRequest{RecoverEtcd: true, RecoverSkipHashCheck: true}); err != nil {
 		return fmt.Errorf("%s: restoring etcd from the snapshot: %w", n.address, notReady(err))
+	}
+	return nil
+}
+
+func (n *talosNode) EtcdMember(ctx context.Context) (EtcdMember, error) {
+	resp, err := n.c.EtcdStatus(ctx)
+	if err != nil {
+		return EtcdMember{}, fmt.Errorf("%s: etcd status: %w", n.address, notReady(err))
+	}
+	var m EtcdMember
+	for _, msg := range resp.GetMessages() {
+		st := msg.GetMemberStatus()
+		m = EtcdMember{
+			ID: st.GetMemberId(), Leader: st.GetLeader() == st.GetMemberId(), Learner: st.GetIsLearner(),
+			DBSize: st.GetDbSize(), DBSizeInUse: st.GetDbSizeInUse(), Errors: slices.Clone(st.GetErrors()),
+		}
+		if st.GetLeader() == 0 {
+			m.Errors = append(m.Errors, "no leader")
+		}
+	}
+	alarms, err := n.c.EtcdAlarmList(ctx)
+	if err != nil {
+		return EtcdMember{}, fmt.Errorf("%s: etcd alarms: %w", n.address, notReady(err))
+	}
+	for _, msg := range alarms.GetMessages() {
+		for _, a := range msg.GetMemberAlarms() {
+			if a.GetMemberId() == m.ID && a.GetAlarm() != machine.EtcdMemberAlarm_NONE {
+				m.Alarms = append(m.Alarms, a.GetAlarm().String())
+			}
+		}
+	}
+	return m, nil
+}
+
+func (n *talosNode) EtcdMembers(ctx context.Context) ([]EtcdListed, error) {
+	resp, err := n.c.EtcdMemberList(ctx, &machine.EtcdMemberListRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("%s: etcd member list: %w", n.address, notReady(err))
+	}
+	var listed []EtcdListed
+	for _, msg := range resp.GetMessages() {
+		for _, m := range msg.GetMembers() {
+			listed = append(listed, EtcdListed{ID: m.GetId(), Name: m.GetHostname(), Learner: m.GetIsLearner()})
+		}
+		break
+	}
+	return listed, nil
+}
+
+func (n *talosNode) EtcdDefragment(ctx context.Context) error {
+	if _, err := n.c.EtcdDefragment(ctx); err != nil {
+		return fmt.Errorf("%s: defragmenting etcd: %w", n.address, notReady(err))
+	}
+	return nil
+}
+
+func (n *talosNode) EtcdDisarm(ctx context.Context) error {
+	if _, err := n.c.EtcdAlarmDisarm(ctx); err != nil {
+		return fmt.Errorf("%s: clearing etcd's alarms: %w", n.address, notReady(err))
 	}
 	return nil
 }

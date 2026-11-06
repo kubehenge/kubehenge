@@ -60,7 +60,7 @@ const (
 // Variables a cluster may change after creation. The others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
-	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
+	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true, etcdVariable: true,
 	// A new node OS rolls every node onto its template, as a node image refresh does. A new size
 	// rolls the machines it sizes.
 	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true,
@@ -221,6 +221,8 @@ type clusterView struct {
 	GitOps *gitOpsView `json:"gitops,omitempty"`
 	// Talos is how a Talos cluster's nodes stand with its Talos release.
 	Talos *talosView `json:"talos,omitempty"`
+	// Etcd is what the controller last read of the cluster's etcd members.
+	Etcd *etcdView `json:"etcd,omitempty"`
 	// Generation counts the changes to the cluster's spec. A change made against it carries it back
 	// (generationHeader).
 	Generation int64 `json:"generation"`
@@ -242,6 +244,8 @@ type talosView struct {
 	Upgrading string `json:"upgrading,omitempty"`
 	Upgraded  string `json:"upgraded,omitempty"`
 	Failed    string `json:"failed,omitempty"`
+	// Waiting says why the next control-plane node waits: its reboot would cost etcd its quorum.
+	Waiting string `json:"waiting,omitempty"`
 }
 
 func talosViewOf(c *clusterv1.Cluster) *talosView {
@@ -252,6 +256,7 @@ func talosViewOf(c *clusterv1.Cluster) *talosView {
 		Upgrading: c.Annotations[provisioner.TalosUpgradingAnnotation],
 		Upgraded:  c.Annotations[provisioner.TalosUpgradedAnnotation],
 		Failed:    c.Annotations[provisioner.TalosUpgradeFailedAnnotation],
+		Waiting:   c.Annotations[provisioner.TalosUpgradeWaitingAnnotation],
 	}
 }
 
@@ -364,6 +369,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	if dist == string(templates.Talos) {
 		v.Talos = talosViewOf(c)
 	}
+	v.Etcd = etcdStatusView(c)
 	if e := c.Spec.ControlPlaneEndpoint; e.Host != "" {
 		v.Endpoint = e.Host
 		if e.Port != 0 {

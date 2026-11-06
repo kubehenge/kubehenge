@@ -295,6 +295,9 @@ func (u *TalosUpgrader) look(ctx context.Context, c *clusterv1.Cluster) (*talosS
 			return nil, u.fail(ctx, c, &p, err)
 		}
 		p.release = release
+		if wait, err := u.holdForQuorum(ctx, c, machines, m); wait || err != nil {
+			return nil, err
+		}
 		return &talosStep{talosProgress: p, address: machineAddress(m), machine: m.Name}, nil
 	}
 	return nil, nil //nolint:nilnil // every node runs the release
@@ -343,6 +346,9 @@ func (u *TalosUpgrader) follow(ctx context.Context, c *clusterv1.Cluster, machin
 	if p.rebooted.IsZero() {
 		if u.Now().Before(p.retryAt()) {
 			return nil, nil //nolint:nilnil // the next try waits
+		}
+		if wait, err := u.holdForQuorum(ctx, c, machines, m); wait || err != nil {
+			return nil, err
 		}
 		return &talosStep{talosProgress: *p, address: machineAddress(m), machine: m.Name}, nil
 	}
@@ -401,6 +407,10 @@ func (u *TalosUpgrader) upgrade(ctx context.Context, c *clusterv1.Cluster, s *ta
 		return u.abandon(ctx, c, &s.talosProgress)
 	case err != nil:
 		return u.retryOrFail(ctx, c, s, err)
+	}
+	// The install can take a quarter of an hour, in which another member may have fallen ill.
+	if wait, err := u.stillHoldsQuorum(ctx, c, s); wait || err != nil {
+		return err
 	}
 	u.eventf(c, corev1.EventTypeNormal, "TalosUpgrading", "node %s installed Talos %s and reboots into it", s.node, s.release)
 	if err := u.Nodes.Drain(ctx, c, s.node); err != nil {
