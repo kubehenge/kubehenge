@@ -7,13 +7,12 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // proxmoxMachineWithVM is a ProxmoxMachine of cluster "one" with the guest ID capmox recorded.
-func proxmoxMachineWithVM(name string, vmid int64) client.Object {
+func proxmoxMachineWithVM(name string, vmid int64) *unstructured.Unstructured {
 	pm := &unstructured.Unstructured{}
 	pm.SetAPIVersion("infrastructure.cluster.x-k8s.io/v1alpha2")
 	pm.SetKind("ProxmoxMachine")
@@ -24,13 +23,16 @@ func proxmoxMachineWithVM(name string, vmid int64) client.Object {
 	return pm
 }
 
-func joinedMachine(name, infra, node string, controlPlane bool) *clusterv1.Machine {
+func controlPlaneMachine(name, infra, node string) *clusterv1.Machine {
+	m := joinedMachine(name, infra, node)
+	m.Labels[clusterv1.MachineControlPlaneLabel] = ""
+	return m
+}
+
+func joinedMachine(name, infra, node string) *clusterv1.Machine {
 	m := &clusterv1.Machine{}
 	m.Namespace, m.Name = "default", name
 	m.Labels = map[string]string{clusterv1.ClusterNameLabel: "one"}
-	if controlPlane {
-		m.Labels[clusterv1.MachineControlPlaneLabel] = ""
-	}
 	m.Spec.ClusterName = "one"
 	m.Spec.InfrastructureRef = clusterv1.ContractVersionedObjectReference{Kind: "ProxmoxMachine", APIGroup: "infrastructure.cluster.x-k8s.io", Name: infra}
 	m.Status.NodeRef.Name = node
@@ -42,10 +44,10 @@ func joinedMachine(name, infra, node string, controlPlane bool) *clusterv1.Machi
 func TestNamelessVMsAreFoundByTheirGuestID(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, cluster("default", "one"),
-		joinedMachine("one-cp-a", "one-cp-a-x1", "kube-cp-a", true),
-		joinedMachine("one-md-a", "one-md-a-y2", "kube-md-a", false),
-		joinedMachine("one-md-b", "one-md-b-z3", "kube-md-b", false),
-		joinedMachine("one-md-c", "one-md-c-w4", "", false),
+		controlPlaneMachine("one-cp-a", "one-cp-a-x1", "kube-cp-a"),
+		joinedMachine("one-md-a", "one-md-a-y2", "kube-md-a"),
+		joinedMachine("one-md-b", "one-md-b-z3", "kube-md-b"),
+		joinedMachine("one-md-c", "one-md-c-w4", ""),
 		proxmoxMachineWithVM("one-cp-a-x1", 201), proxmoxMachineWithVM("one-md-a-y2", 202), proxmoxMachineWithVM("one-md-b-z3", 203),
 	)
 	h.accounts.members = []pve.Member{
@@ -91,8 +93,8 @@ func TestNamelessVMsAreFoundByTheirGuestID(t *testing.T) {
 func TestMachineWithNothingToMatchIsNotReporting(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, cluster("default", "one"),
-		joinedMachine("one-cp-a", "one-cp-a-x1", "kube-cp-a", true),
-		joinedMachine("one-md-a", "one-md-a-y2", "kube-md-a", false),
+		controlPlaneMachine("one-cp-a", "one-cp-a-x1", "kube-cp-a"),
+		joinedMachine("one-md-a", "one-md-a-y2", "kube-md-a"),
 		proxmoxMachineWithVM("one-cp-a-x1", 201),
 	)
 	h.accounts.members = []pve.Member{
