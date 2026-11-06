@@ -240,6 +240,22 @@ func (s *Settings) checkBridge(inv *Inventory, f *Findings) {
 	}
 	for _, node := range s.Nodes {
 		checkBridgeOn(inv, f, s.Bridge, node, "choose another bridge")
+		s.checkMTUOn(inv, f, node)
+	}
+}
+
+// checkMTUOn refuses an interface MTU above the management bridge's on the node: its larger frames
+// never pass. A bridge whose MTU Proxmox VE did not say, such as a VNet in a zone without one, passes.
+func (s *Settings) checkMTUOn(inv *Inventory, f *Findings, node string) {
+	if s.MTU == 0 {
+		return
+	}
+	i := slices.IndexFunc(inv.Bridges[node], func(b pve.Bridge) bool { return b.Ref() == s.Bridge })
+	if i < 0 {
+		return
+	}
+	if mtu := inv.Bridges[node][i].MTU; mtu > 0 && s.MTU > mtu {
+		f.Errors = append(f.Errors, fmt.Sprintf("Bridge %s has MTU %d on node %s. Use %d or less, or raise the bridge's MTU.", s.Bridge, mtu, node, mtu))
 	}
 }
 

@@ -657,6 +657,8 @@ export interface ManagementSettings {
   vmDatastore: string;
   bridge: string;
   vlan?: number;
+  /** The management VMs' interface MTU. Absent: the bridge's. */
+  mtu?: number;
   nodeAddresses: string[];
   apiAddress: string;
   gateway: string;

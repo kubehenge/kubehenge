@@ -95,6 +95,9 @@ func TestNetworkValidated(t *testing.T) {
 		"API elsewhere":     {func(s *Settings) { s.APIAddress = "10.9.0.10" }, "API address: inside the nodes' network, 10.0.0.0/24"},
 		"DNS":               {func(s *Settings) { s.DNSServers = []string{"dns.example"} }, "DNS servers: dns.example is no IP address"},
 		"VLAN":              {func(s *Settings) { v := 4095; s.VLAN = &v }, "VLAN tag: 1 to 4094"},
+		"MTU 1279":          {func(s *Settings) { s.MTU = 1279 }, "MTU: 1280 to 65520"},
+		"MTU 65521":         {func(s *Settings) { s.MTU = 65521 }, "MTU: 1280 to 65520"},
+		"MTU negative":      {func(s *Settings) { s.MTU = -1 }, "MTU: 1280 to 65520"},
 		"pod host bits":     {func(s *Settings) { s.PodSubnets = []string{"10.244.0.1/16"} }, "Pod ranges: 10.244.0.1/16 is no network"},
 		"mirror scheme":     {func(s *Settings) { s.RegistryMirrors = map[string][]string{"docker.io": {"mirror:5000"}} }, "Registry mirrors: mirror:5000"},
 		"mirror registry":   {func(s *Settings) { s.RegistryMirrors = map[string][]string{"a/b": {"https://m"}} }, `Registry mirrors: "a/b"`},
@@ -1017,6 +1020,44 @@ func TestTimeServersReachTheModule(t *testing.T) {
 	}
 	if raw, _ = os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); !strings.Contains(string(raw), `"timeServers": []`) {
 		t.Errorf("no servers must reach the module as an empty list, not null: %s", raw)
+	}
+}
+
+func TestMTUBoundsAreValid(t *testing.T) {
+	t.Parallel()
+	for _, mtu := range []int{0, 1280, 1450, 9000, 65520} {
+		s := settings("pve1")
+		s.MTU = mtu
+		if err := s.Validate(); err != nil {
+			t.Errorf("MTU %d: %v", mtu, err)
+		}
+	}
+}
+
+func TestMTUReachesTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	s := settings("pve1")
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	vars := filepath.Join(a.workdir(), "terraform.tfvars.json")
+	if err := a.writeConfig(s); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(vars); err != nil || !strings.Contains(string(raw), `"mtu": null`) {
+		t.Errorf("an unset MTU must reach the module as null: %s, %v", raw, err)
+	}
+	s.MTU = 1450
+	if err := a.writeConfig(s); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(vars); err != nil || !strings.Contains(string(raw), `"mtu": 1450`) {
+		t.Errorf("the MTU must reach the module: %s, %v", raw, err)
+	}
+	main, err := os.ReadFile(filepath.Join(a.workdir(), "main.tf"))
+	if err != nil || !strings.Contains(string(main), "mtu                    = try(var.settings.mtu, null)") {
+		t.Errorf("root module: %s, %v", main, err)
 	}
 }
 

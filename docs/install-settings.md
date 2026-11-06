@@ -98,6 +98,10 @@ It can touch no VM outside the template pool, no cluster's VM and none of the ma
 
 Switching the refresh off removes the user, its token and the CronJob. The templates stay.
 
+## Management network MTU
+
+Set `mtu` (1280 to 65520) where the network carries other frames than 1500 bytes, such as 1450 on a VXLAN underlay or 9000 with jumbo frames. It goes on the management VMs' Proxmox VE interface and on the node's own link. Empty keeps the bridge's, and the setup refuses a value above it.
+
 ## Where the template builds run
 
 Three settings of `template_refresh` place the VM that builds a node image:

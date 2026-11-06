@@ -24,6 +24,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - SDN VNets work wherever a bridge is chosen, listed with their zone and alias, and `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone. A VLAN tag on a VNet of a VLAN zone is refused.
 - AlmaLinux and Rocky Linux templates get the kernel's extra modules with the kernel itself. In the hours after a kernel release, a bake could reach a mirror without that kernel's modules and fail.
 - New management VMs get their MAC addresses from Proxmox VE, so two installs on one network never share them. An existing management cluster keeps its addresses and is not changed by an upgrade.
+- An "MTU" setting (1280 to 65520) for the management VMs' interface reaches Proxmox VE and the node's own link. The setup refuses an MTU above the bridge's, where Proxmox VE lists it.
 - A "Time servers" setting writes Talos's `TimeSyncConfig` for the management nodes. Empty keeps Talos's default servers.
 - A cut-off apply sends OpenTofu an interrupt and waits up to five minutes for it to write its state before killing it.
 - A failed run's error carries OpenTofu's error diagnostics, not only the exit status.

@@ -226,7 +226,7 @@ func TestBridgesOfANodeNeedSysAuditOnIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Bridge{{Bridge: "vmbr0", Node: "one", VLANAware: true, Comment: "uplink"}, {Bridge: "vmbr1", Node: "one"}}
+	want := []Bridge{{Bridge: "vmbr0", Node: "one", VLANAware: true, Comment: "uplink", MTU: 1500}, {Bridge: "vmbr1", Node: "one", MTU: 1500}}
 	if !reflect.DeepEqual(bridges, want) {
 		t.Errorf("bridges %+v, want %+v", bridges, want)
 	}
@@ -275,7 +275,7 @@ func TestBridgesListVNetsWithTheirZones(t *testing.T) {
 	})
 	mux.HandleFunc("GET /api2/json/cluster/sdn/zones", func(w http.ResponseWriter, _ *http.Request) {
 		replyData(t, w, []map[string]any{
-			{"zone": "evpn1", "type": "evpn"},
+			{"zone": "evpn1", "type": "evpn", "mtu": 1450},
 			{"zone": "vlanz", "type": "vlan"},
 			{"zone": "simplez", "type": "simple"},
 			{"zone": "pinned", "type": "vxlan", "nodes": "two,three"},
@@ -287,10 +287,10 @@ func TestBridgesListVNetsWithTheirZones(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Bridge{
-		{Bridge: "vmbr0", Node: "one"},
+		{Bridge: "vmbr0", Node: "one", MTU: 1500},
 		{Bridge: "corp", Node: "one", Zone: "vlanz", ZoneType: "vlan", VLANAware: true},
 		{Bridge: "dmz", Node: "one", Zone: "simplez", ZoneType: "simple"},
-		{Bridge: "web", Node: "one", Zone: "evpn1", ZoneType: "evpn", Alias: "Web tier"},
+		{Bridge: "web", Node: "one", Zone: "evpn1", ZoneType: "evpn", Alias: "Web tier", MTU: 1450},
 	}
 	if !reflect.DeepEqual(bridges, want) {
 		t.Errorf("bridges %+v, want %+v", bridges, want)
@@ -313,7 +313,7 @@ func TestBridgesWithoutSDNAreTheNodesOwn(t *testing.T) {
 			http.Error(w, "no SDN", status)
 		})
 		bridges, err := serveAPI(t, mux).Bridges(context.Background(), alice, "one")
-		if want := []Bridge{{Bridge: "vmbr0", Node: "one"}}; err != nil || !reflect.DeepEqual(bridges, want) {
+		if want := []Bridge{{Bridge: "vmbr0", Node: "one", MTU: 1500}}; err != nil || !reflect.DeepEqual(bridges, want) {
 			t.Errorf("%s: bridges %+v, %v, want %+v", name, bridges, err, want)
 		}
 	}

@@ -29,6 +29,13 @@ export const maxVLAN = 4094;
 /** isVLAN tells whether text is a VLAN tag. */
 export const isVLAN = (v: string): boolean => whole(Number(v), 1, maxVLAN);
 
+// Proxmox VE takes an MTU from 576, but the nodes' IPv6 does not work below 1280.
+export const minMTU = 1280;
+export const maxMTU = 65_520;
+
+/** isMTU tells whether text is an interface MTU the nodes take. */
+export const isMTU = (v: string): boolean => whole(Number(v), minMTU, maxMTU);
+
 /** bridgeRef is how the settings name a bridge: a VNet as zone/vnet, a node's bridge by its name. */
 export const bridgeRef = (b: Pick<Bridge, "bridge" | "zone">): string =>
   b.zone === undefined || b.zone === "" ? b.bridge : `${b.zone}/${b.bridge}`;

@@ -29,10 +29,13 @@ type Settings struct {
 	VMDatastore    string   `json:"vmDatastore"`
 	Bridge         string   `json:"bridge"`
 	VLAN           *int     `json:"vlan,omitempty"`
-	NodeAddresses  []string `json:"nodeAddresses"`
-	APIAddress     string   `json:"apiAddress"`
-	Gateway        string   `json:"gateway"`
-	DNSServers     []string `json:"dnsServers"`
+	// MTU is the management VMs' network interface MTU, for a network that carries less than 1500
+	// or more. 0 or empty keeps the bridge's.
+	MTU           int      `json:"mtu,omitempty"`
+	NodeAddresses []string `json:"nodeAddresses"`
+	APIAddress    string   `json:"apiAddress"`
+	Gateway       string   `json:"gateway"`
+	DNSServers    []string `json:"dnsServers"`
 	// TimeServers are the NTP servers the nodes keep their clocks with. Empty keeps Talos's default
 	// public ones.
 	TimeServers        []string `json:"timeServers,omitempty"`
@@ -239,6 +242,12 @@ const (
 	maxVLAN = 4094
 )
 
+// The MTUs of a node's interface. Proxmox VE takes one from 576, but IPv6 does not work below 1280.
+const (
+	minMTU = 1280
+	maxMTU = 65520
+)
+
 // bridgeRef is a node's bridge by name, or a VNet as zone/vnet.
 var bridgeRef = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
@@ -424,6 +433,9 @@ func (s *Settings) checkPlacement(p *problems) {
 	}
 	if s.VLAN != nil && (*s.VLAN < minVLAN || *s.VLAN > maxVLAN) {
 		p.addf("VLAN tag: %d to %d", minVLAN, maxVLAN)
+	}
+	if s.MTU != 0 && (s.MTU < minMTU || s.MTU > maxMTU) {
+		p.addf("MTU: %d to %d", minMTU, maxMTU)
 	}
 }
 
