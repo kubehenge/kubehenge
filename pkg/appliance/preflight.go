@@ -263,23 +263,26 @@ func checkBridgeOn(inv *Inventory, f *Findings, ref, node, fix string) {
 
 // buildPlace is where the weekly template build runs: the node, the storage for the template
 // disks and the bridge, each defaulting as the module has it.
-func (s *Settings) buildPlace() (node, storage, bridge string) {
+func (s *Settings) buildPlace() buildSite {
 	r := s.TemplateRefresh
 	if r == nil {
 		r = &TemplateRefresh{}
 	}
-	node, storage, bridge = r.Node, r.Storage, r.Bridge
-	if node == "" && len(s.Nodes) > 0 {
-		node = s.Nodes[0]
+	site := buildSite{node: r.Node, storage: r.Storage, bridge: r.Bridge}
+	if site.node == "" && len(s.Nodes) > 0 {
+		site.node = s.Nodes[0]
 	}
-	if storage == "" && len(s.WorkloadDatastores) > 0 {
-		storage = s.WorkloadDatastores[0]
+	if site.storage == "" && len(s.WorkloadDatastores) > 0 {
+		site.storage = s.WorkloadDatastores[0]
 	}
-	if bridge == "" && len(s.WorkloadBridges) > 0 {
-		bridge = s.WorkloadBridges[0]
+	if site.bridge == "" && len(s.WorkloadBridges) > 0 {
+		site.bridge = s.WorkloadBridges[0]
 	}
-	return node, storage, bridge
+	return site
 }
+
+// buildSite is a node with the storage and bridge the template build uses on it.
+type buildSite struct{ node, storage, bridge string }
 
 // checkBuildPlace checks that the build node exists and is online, and that it carries the build
 // storage and bridge. The VM that builds a node image gets no disk or network otherwise.
@@ -287,18 +290,18 @@ func (s *Settings) checkBuildPlace(inv *Inventory, f *Findings) {
 	if !s.RefreshesTemplates() {
 		return
 	}
-	node, storage, bridge := s.buildPlace()
-	if node == "" {
+	site := s.buildPlace()
+	if site.node == "" {
 		return
 	}
-	if !checkNodeExists(inv, f, node, "Set the template build node to one that is, or leave it empty.", "Start it, or set another template build node.") {
+	if !checkNodeExists(inv, f, site.node, "Set the template build node to one that is, or leave it empty.", "Start it, or set another template build node.") {
 		return
 	}
-	if inv.Storages != nil && storage != "" {
-		checkStorageOn(inv, f, storage, "images", node, "set another template build storage or node")
+	if inv.Storages != nil && site.storage != "" {
+		checkStorageOn(inv, f, site.storage, "images", site.node, "set another template build storage or node")
 	}
-	if bridge != "" {
-		checkBridgeOn(inv, f, bridge, node, "set another template build bridge or node")
+	if site.bridge != "" {
+		checkBridgeOn(inv, f, site.bridge, site.node, "set another template build bridge or node")
 	}
 }
 
