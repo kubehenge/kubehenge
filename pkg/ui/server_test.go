@@ -59,6 +59,12 @@ type fakeAccounts struct {
 	users        map[string]string
 	usersDeleted int
 	rebooted     []int
+	// storageList and bridgeList, when set, replace the default storages and bridges.
+	storageList []pve.Storage
+	bridgeList  []pve.Bridge
+	// viaPool are privileges a user holds on a path only through a pool's members, which Proxmox VE
+	// lists for the path but which reach nothing below it.
+	viaPool map[string]map[string][]string
 }
 
 func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
@@ -145,6 +151,9 @@ func (f *fakeAccounts) AllPrivileges(_ context.Context, t *pve.Ticket) (map[stri
 	for _, p := range f.acls {
 		paths[p] = true
 	}
+	for p := range f.viaPool[strings.SplitN(t.Username, "!", 2)[0]] {
+		paths[p] = true
+	}
 	all := map[string]pve.Privileges{}
 	for p := range paths {
 		if privs := f.effective(t.Username, p); len(privs) > 0 {
@@ -171,7 +180,10 @@ func (f *fakeAccounts) OpenIDLogin(_ context.Context, code, state, _ string) (*p
 	return &pve.Ticket{Username: "sso-user@sso", Ticket: "ticket:sso", Issued: f.now()}, nil
 }
 
-func (*fakeAccounts) Storages(context.Context, *pve.Ticket) ([]pve.Storage, error) {
+func (f *fakeAccounts) Storages(context.Context, *pve.Ticket) ([]pve.Storage, error) {
+	if f.storageList != nil {
+		return f.storageList, nil
+	}
 	return []pve.Storage{
 		{Storage: "local-lvm", Node: "pve1", Content: []string{"images", "rootdir"}},
 		{Storage: "tank", Node: "pve1", Content: []string{"images"}},
@@ -208,7 +220,10 @@ func (f *fakeAccounts) ReleaseHA(_ context.Context, t *pve.Ticket, prefix string
 	return nil
 }
 
-func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
+func (f *fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
+	if f.bridgeList != nil {
+		return slices.Clone(f.bridgeList), nil
+	}
 	return []pve.Bridge{
 		{Bridge: "vmbr0", Node: node, CIDR: "10.0.0.5/24", Gateway: "10.0.0.1"},
 		{Bridge: "vmbr1", Node: node},
@@ -298,6 +313,9 @@ func (*fakeAccounts) Network(_ context.Context, _ *pve.Ticket, bridge string) (p
 func (f *fakeAccounts) effective(username, aclPath string) pve.Privileges {
 	username, _, _ = strings.Cut(username, "!")
 	privs := pve.Privileges{}
+	for _, granted := range f.viaPool[username][aclPath] {
+		privs[granted] = true
+	}
 	for p, granted := range f.grants[username] {
 		if aclPath == p || strings.HasPrefix(aclPath, p+"/") || p == "/" {
 			for _, g := range granted {
