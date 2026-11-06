@@ -244,22 +244,25 @@ func (c *Certificates) bindsAccount() bool {
 // none of its own beside.
 func (c *Certificates) external() bool { return c.on() && c.issuer() == IssuerExternal }
 
+// issuerReference names an issuer the way cert-manager's issuerRef does.
+type issuerReference struct{ name, kind, group string }
+
 // issuerRef names the issuer every certificate of the add-on comes from.
-func (c *Certificates) issuerRef() (name, kind, group string) {
+func (c *Certificates) issuerRef() issuerReference {
 	if !c.external() {
-		return ingressIssuer, clusterIssuerKind, certManagerGroup
+		return issuerReference{ingressIssuer, clusterIssuerKind, certManagerGroup}
 	}
-	return c.IssuerName, cmp.Or(c.IssuerKind, clusterIssuerKind), cmp.Or(c.IssuerGroup, certManagerGroup)
+	return issuerReference{c.IssuerName, cmp.Or(c.IssuerKind, clusterIssuerKind), cmp.Or(c.IssuerGroup, certManagerGroup)}
 }
 
 // issuerAnnotations ask cert-manager's ingress-shim for an Ingress's certificate from the issuer.
 func (c *Certificates) issuerAnnotations() map[string]any {
-	name, kind, group := c.issuerRef()
-	if kind == clusterIssuerKind && group == certManagerGroup {
-		return map[string]any{issuerAnnotation: name}
+	ref := c.issuerRef()
+	if ref.kind == clusterIssuerKind && ref.group == certManagerGroup {
+		return map[string]any{issuerAnnotation: ref.name}
 	}
 	return map[string]any{
-		certManagerGroup + "/issuer": name, certManagerGroup + "/issuer-kind": kind, certManagerGroup + "/issuer-group": group,
+		certManagerGroup + "/issuer": ref.name, certManagerGroup + "/issuer-kind": ref.kind, certManagerGroup + "/issuer-group": ref.group,
 	}
 }
 
@@ -288,8 +291,8 @@ func certManagerValues(c *Certificates) map[string]any {
 	if !c.on() {
 		return values
 	}
-	name, kind, group := c.issuerRef()
-	values["ingressShim"] = map[string]any{"defaultIssuerName": name, "defaultIssuerKind": kind, "defaultIssuerGroup": group}
+	ref := c.issuerRef()
+	values["ingressShim"] = map[string]any{"defaultIssuerName": ref.name, "defaultIssuerKind": ref.kind, "defaultIssuerGroup": ref.group}
 	if c.issuer() == IssuerACMEDNS01 && len(c.DNS01.Nameservers) > 0 {
 		values["dns01RecursiveNameservers"] = strings.Join(c.DNS01.Nameservers, ",")
 		values["dns01RecursiveNameserversOnly"] = true
@@ -351,7 +354,8 @@ func (c *Certificates) validateIssuer(path *field.Path) field.ErrorList {
 	for _, problem := range validation.IsDNS1123Subdomain(c.IssuerName) {
 		errs = append(errs, field.Invalid(path.Child("issuerName"), c.IssuerName, problem))
 	}
-	name, kind, group := c.issuerRef()
+	ref := c.issuerRef()
+	name, kind, group := ref.name, ref.kind, ref.group
 	if !issuerKindPattern.MatchString(kind) {
 		errs = append(errs, field.Invalid(path.Child("issuerKind"), kind, "a kind is a word such as ClusterIssuer"))
 	}
@@ -420,29 +424,11 @@ func (r *Reconciler) reconcileCertificates(ctx context.Context, cluster *cluster
 			return false, err
 		}
 	}
-	var ca *corev1.Secret
-	if c.on() && c.issuer() == IssuerCA {
-		var err error
-		if ca, err = r.ingressCA(ctx, cluster, c.Domain); err != nil {
-			return false, err
-		}
+	in, ready, err := r.certificateInputs(ctx, cluster, c)
+	if err != nil || !ready {
+		return false, err
 	}
-	var credential map[string][]byte
-	if c.copiesDNS01Credential() {
-		var err error
-		if credential, _, err = r.dns01Credential(ctx, cluster, c); err != nil {
-			return false, err
-		}
-	}
-	var binding map[string][]byte
-	if c.bindsAccount() {
-		var stored bool
-		var err error
-		if binding, stored, err = r.eabCredential(ctx, cluster); err != nil || !stored {
-			// An ACME server that requires the binding refuses an account made without it.
-			return false, err
-		}
-	}
+	ca, credential, binding := in.ca, in.credential, in.binding
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
 		// Without a kubeconfig, nothing was ever applied to take out.
@@ -464,6 +450,36 @@ func (r *Reconciler) reconcileCertificates(ctx context.Context, cluster *cluster
 		r.Remotes.forget(cluster)
 	}
 	return waiting, err
+}
+
+// certificateInputs are what the add-on takes from the management cluster: the cluster's CA, the DNS
+// provider's credential and the ACME account's binding key, each only where the settings use it.
+type certificateInputs struct {
+	ca                  *corev1.Secret
+	credential, binding map[string][]byte
+}
+
+// certificateInputs reads them. It reports false when the issuer is to be left out until the binding
+// key is stored, since an ACME server that requires the binding refuses an account made without it.
+func (r *Reconciler) certificateInputs(ctx context.Context, cluster *clusterv1.Cluster, c *Certificates) (certificateInputs, bool, error) {
+	var in certificateInputs
+	var err error
+	if c.on() && c.issuer() == IssuerCA {
+		if in.ca, err = r.ingressCA(ctx, cluster, c.Domain); err != nil {
+			return in, false, err
+		}
+	}
+	if c.copiesDNS01Credential() {
+		if in.credential, _, err = r.dns01Credential(ctx, cluster, c); err != nil {
+			return in, false, err
+		}
+	}
+	if !c.bindsAccount() {
+		return in, true, nil
+	}
+	var stored bool
+	in.binding, stored, err = r.eabCredential(ctx, cluster)
+	return in, stored && err == nil, err
 }
 
 // applyIssued applies the add-on's objects. When the issuer is another than before, every
@@ -737,30 +753,11 @@ func secretObject(name string, t corev1.SecretType, data map[string][]byte) *uns
 
 // clusterIssuer is the ClusterIssuer the cluster's certificates come from.
 func clusterIssuer(c *Certificates) (*unstructured.Unstructured, error) {
-	var spec map[string]any
-	if c.issuer() == IssuerCA {
-		spec = map[string]any{"ca": map[string]any{"secretName": ingressCASecret}}
-	} else {
-		solver, err := acmeSolver(c)
+	spec := map[string]any{"ca": map[string]any{"secretName": ingressCASecret}}
+	if c.issuer() != IssuerCA {
+		acme, err := acmeIssuerSpec(c)
 		if err != nil {
 			return nil, err
-		}
-		acme := map[string]any{
-			"server":              acmeServer(c.ACME),
-			"privateKeySecretRef": map[string]any{"name": ingressACMEKey},
-			"solvers":             []any{solver},
-		}
-		if c.ACME.Email != "" {
-			acme["email"] = c.ACME.Email
-		}
-		if c.ACME.CABundle != "" {
-			acme["caBundle"] = base64.StdEncoding.EncodeToString([]byte(c.ACME.CABundle))
-		}
-		if id := c.ACME.ExternalAccountBinding.KeyID; id != "" {
-			// keyAlgorithm is deprecated in cert-manager: the algorithm is always HS256.
-			acme["externalAccountBinding"] = map[string]any{
-				"keyID": id, "keySecretRef": map[string]any{"name": eabSecret, "key": eabKey},
-			}
 		}
 		spec = map[string]any{"acme": acme}
 	}
@@ -769,6 +766,32 @@ func clusterIssuer(c *Certificates) (*unstructured.Unstructured, error) {
 		"metadata": map[string]any{"name": ingressIssuer},
 		"spec":     spec,
 	}}, nil
+}
+
+// acmeIssuerSpec is the ACME account's and the solver's settings.
+func acmeIssuerSpec(c *Certificates) (map[string]any, error) {
+	solver, err := acmeSolver(c)
+	if err != nil {
+		return nil, err
+	}
+	acme := map[string]any{
+		"server":              acmeServer(c.ACME),
+		"privateKeySecretRef": map[string]any{"name": ingressACMEKey},
+		"solvers":             []any{solver},
+	}
+	if c.ACME.Email != "" {
+		acme["email"] = c.ACME.Email
+	}
+	if c.ACME.CABundle != "" {
+		acme["caBundle"] = base64.StdEncoding.EncodeToString([]byte(c.ACME.CABundle))
+	}
+	if id := c.ACME.ExternalAccountBinding.KeyID; id != "" {
+		// keyAlgorithm is deprecated in cert-manager: the algorithm is always HS256.
+		acme["externalAccountBinding"] = map[string]any{
+			"keyID": id, "keySecretRef": map[string]any{"name": eabSecret, "key": eabKey},
+		}
+	}
+	return acme, nil
 }
 
 // acmeServer is the ACME directory the cluster's certificates are asked of.
@@ -854,7 +877,8 @@ func acmeSolver(c *Certificates) (map[string]any, error) {
 // namespace, where its default TLS store and its Gateway read it.
 func defaultCertificate(c *Certificates) *unstructured.Unstructured {
 	domain := c.Domain
-	name, kind, group := c.issuerRef()
+	ref := c.issuerRef()
+	name, kind, group := ref.name, ref.kind, ref.group
 	return &unstructured.Unstructured{Object: map[string]any{
 		apiVersionKey: certManagerAPI, "kind": certificateKind,
 		"metadata": map[string]any{"name": ingressIssuer, "namespace": metav1.NamespaceSystem},

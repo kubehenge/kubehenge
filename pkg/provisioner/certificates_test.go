@@ -729,19 +729,19 @@ func TestExternalIssuerMakesNoIssuerAndEveryCertificateAsksIt(t *testing.T) {
 func TestValidatorHoldsTheExternalIssuerToItsRules(t *testing.T) {
 	t.Parallel()
 	for raw, want := range map[string]string{
-		`{"enabled": true, "issuer": "external", "issuerName": "vault"}`:                                                              "",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault"}`:                                                            "",
 		`{"enabled": true, "issuer": "external", "issuerName": "vault", "issuerKind": "VaultIssuer", "issuerGroup": "example.org"}`: "",
-		`{"enabled": true, "issuer": "external"}`:                                                                                     "issuerName",
-		`{"enabled": true, "issuer": "external", "issuerName": "Vault_1"}`:                                                            "issuerName",
-		`{"enabled": true, "issuer": "external", "issuerName": "vault", "issuerKind": "cluster-issuer"}`:                             "issuerKind",
-		`{"enabled": true, "issuer": "external", "issuerName": "vault", "issuerKind": "Issuer"}`:                                     "ClusterIssuer",
-		`{"enabled": true, "issuer": "external", "issuerName": "kubehenge-ingress"}`:                                                 "issuerName",
-		`{"enabled": true, "issuer": "external", "issuerName": "vault", "acme": {"email": "a@example.org"}}`:                         "ACME",
-		`{"enabled": true, "issuer": "external", "issuerName": "vault", "dns01": {"provider": "cloudflare"}}`:                        "ACME",
-		`{"enabled": true, "domain": "lab.example.org", "issuerName": "vault", "dns01": {"provider": "cloudflare"}}`:                 "issuer external",
-		`{"enabled": true, "issuer": "ca", "domain": "lab.example.org", "acme": {"externalAccountBinding": {"keyID": "k"}}}`:         "ACME issuer",
-		`{"enabled": true, "issuer": "acme-http01", "acme": {"externalAccountBinding": {"keyID": "k"}}}`:                             "",
-		`{"enabled": false, "issuer": "external"}`:                                                                                   "",
+		`{"enabled": true, "issuer": "external"}`:                                                                                   "issuerName",
+		`{"enabled": true, "issuer": "external", "issuerName": "Vault_1"}`:                                                          "issuerName",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault", "issuerKind": "cluster-issuer"}`:                            "issuerKind",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault", "issuerKind": "Issuer"}`:                                    "ClusterIssuer",
+		`{"enabled": true, "issuer": "external", "issuerName": "kubehenge-ingress"}`:                                                "issuerName",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault", "acme": {"email": "a@example.org"}}`:                        "ACME",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault", "dns01": {"provider": "cloudflare"}}`:                       "ACME",
+		`{"enabled": true, "domain": "lab.example.org", "issuerName": "vault", "dns01": {"provider": "cloudflare"}}`:                "issuer external",
+		`{"enabled": true, "issuer": "ca", "domain": "lab.example.org", "acme": {"externalAccountBinding": {"keyID": "k"}}}`:        "ACME issuer",
+		`{"enabled": true, "issuer": "acme-http01", "acme": {"externalAccountBinding": {"keyID": "k"}}}`:                            "",
+		`{"enabled": false, "issuer": "external"}`:                                                                                  "",
 	} {
 		errs := validateCertificates(certificatesCluster(raw))
 		switch {
