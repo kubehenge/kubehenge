@@ -538,6 +538,7 @@ A warning event of the condition's name records each start and change. `VMsRunni
 #### A VM renamed or moved
 
 - **`VMRenamedBack`:** someone renamed a cluster's VM. Kubehenge set the name back, because the cloud controller manager deletes the node of a VM whose name does not start with the node's name.
+  - The event repeating means a naming or inventory script renames the VMs. Leave the Kubehenge pools out of that script.
 - **`VMRenameFailed`:** Proxmox VE refused the rename, and the event gives its answer. The controller retries every 15 seconds. Rename the VM back by hand meanwhile.
 - **`NodeZoneUpdated`, `NodeZoneNotUpdated`:** a VM moved to another Proxmox VE node ([a worker moved to another Proxmox VE node](clusters.md#a-worker-moved-to-another-proxmox-ve-node)).
 
