@@ -84,8 +84,8 @@ func (s *Server) readBridges(ctx context.Context, u user, inv *appliance.Invento
 			return fmt.Errorf("reading the bridges of %s: %w", n.Node, err)
 		}
 		inv.Bridges[n.Node] = bridges
-		for _, b := range bridges {
-			if own, ok := ownAddress(b.CIDR); ok {
+		for i := range bridges {
+			if own, ok := ownAddress(bridges[i].CIDR); ok {
 				inv.NodeAddresses[n.Node] = append(inv.NodeAddresses[n.Node], own.Addr())
 			}
 		}

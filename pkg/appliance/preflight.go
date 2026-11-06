@@ -208,9 +208,9 @@ func (s *Settings) checkBridge(inv *Inventory, f *Findings) {
 		if !known {
 			continue
 		}
-		switch {
-		case network.Zone == z:
-		case network.Zone == pve.LocalZone:
+		switch network.Zone {
+		case z:
+		case pve.LocalZone:
 			f.Errors = append(f.Errors, fmt.Sprintf("Bridge %s is a node's own bridge, in no zone. Write it as %s.", ref, n))
 		default:
 			f.Errors = append(f.Errors, fmt.Sprintf("Bridge %s is in zone %s. Write it as %s/%s.", ref, network.Zone, network.Zone, n))
@@ -342,7 +342,8 @@ type place struct {
 func networkPlaces(inv *Inventory) []place {
 	var places []place
 	for _, node := range slices.Sorted(maps.Keys(inv.Bridges)) {
-		for _, b := range inv.Bridges[node] {
+		for i := range inv.Bridges[node] {
+			b := &inv.Bridges[node][i]
 			if p, err := netip.ParsePrefix(b.CIDR); err == nil {
 				places = append(places, place{p.Masked(), fmt.Sprintf("the network %s on bridge %s of node %s", p.Masked(), b.Bridge, node)})
 			}
