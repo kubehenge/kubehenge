@@ -2581,14 +2581,12 @@ form.box > *,
 
 /* A box's fields start their controls where the fields around the box do: its label column gives
    up the box's border and left padding. */
-.group > .field,
-.group > details.advanced > .field {
+.group > .field {
   grid-template-columns: calc(190px - 12px - 1px) 1fr;
 }
 
 @media (width <= 600px) {
-  .group > .field,
-  .group > details.advanced > .field {
+  .group > .field {
     grid-template-columns: 1fr;
   }
 }
@@ -2605,7 +2603,6 @@ form.box > *,
 
   .field,
   .group > .field,
-  .group > details.advanced > .field,
   .summary {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2647,6 +2644,17 @@ form.box > *,
 
 .signin .field {
   grid-template-columns: 100px 1fr;
+}
+
+/* A box's fields inside a disclosure line up with the box's other fields. */
+.group > details.advanced > .field {
+  grid-template-columns: calc(190px - 12px - 1px) 1fr;
+}
+
+@media (width <= 600px) {
+  .group > details.advanced > .field {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .signin .sso {
