@@ -679,8 +679,8 @@ html:has(.kh) {
     color: var(--faint);
   }
 
-  /* A wipe rather than a fade, so the labels keep their full contrast in every frame. */
-  /* The open clip leaves room for the flash's glow around the text. */
+  /* A wipe rather than a fade, so the labels keep their full contrast in every frame. The open
+     clip leaves room for the flash's glow around the text. */
   .lab > * {
     clip-path: inset(-2em);
     transition: clip-path 0.3s ease;
@@ -1260,6 +1260,7 @@ html:has(.kh) {
       --art: min(20px, (100vi - 2 * var(--gutter)) / 26.7);
 
       flex-wrap: wrap;
+
       /* Room for the second row's flags, which stand above its stones. */
       row-gap: calc(1.5 * var(--art) + 6px);
       justify-content: flex-start;
