@@ -16,6 +16,9 @@ import (
 type poolChange struct {
 	Replicas *int32          `json:"replicas"`
 	Machine  json.RawMessage `json:"machine"`
+	// Timeouts sets the pool's waits for a removed machine's node. It replaces all three, and a
+	// timeout it leaves out is the class's.
+	Timeouts *provisioner.NodeTimeouts `json:"timeouts"`
 }
 
 // applyPools adds, changes and removes worker pools as a change asks, by name, a null removing one.
@@ -55,6 +58,12 @@ func applyPools(c *clusterv1.Cluster, pools map[string]*poolChange) string {
 		if change.Machine != nil {
 			setPoolOverride(md, workerMachineVariable, change.Machine)
 		}
+		if t := change.Timeouts; t != nil {
+			if problem := t.Problem(); problem != "" {
+				return problem
+			}
+			t.SetOnPool(&md.Deletion)
+		}
 	}
 	return ""
 }
@@ -82,6 +91,9 @@ func setPoolOverride(md *clusterv1.MachineDeploymentTopology, name string, value
 // poolsEffect is what a change of pools does to the machines: a new size replaces the pool's
 // workers. Adding or removing a pool, or setting its workers, only adds or removes some.
 func poolsEffect(before *clusterv1.Cluster, pools map[string]*poolChange) string {
+	if timeoutsOnly(pools) {
+		return effectNone
+	}
 	for name, change := range pools {
 		if change == nil || change.Machine == nil {
 			continue

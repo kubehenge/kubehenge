@@ -103,6 +103,10 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	if _, err = runCluster(t, srv.URL, token, "scale", "web", "--control-planes", "5", "--workers", "md-0=4"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = runCluster(t, srv.URL, token, "timeouts", "web", "--control-planes", "drain=30m,detach=10m,deletion=0",
+		"--pool", "md-0=drain=1h", "--pool", "gpu=detach=90s"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = runCluster(t, srv.URL, token, "delete", "web"); err == nil {
 		t.Error("delete went ahead without --yes")
 	}
@@ -125,7 +129,7 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		}
 	}
 	file := filepath.Join(t.TempDir(), "new.yaml")
-	if err = os.WriteFile(file, []byte("name: new\nclass: talos\ncontrolPlaneReplicas: 1\n"), 0o600); err != nil {
+	if err = os.WriteFile(file, []byte("name: new\nclass: talos\ncontrolPlaneReplicas: 1\ncontrolPlaneTimeouts:\n  nodeDrainTimeoutSeconds: 600\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if out, err = runCluster(t, srv.URL, token, "create", "-f", file); err != nil || out != "cluster clusters/new created\n" {
@@ -137,6 +141,7 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	fake.mu.Unlock()
 	want := []string{
 		`PATCH /api/clusters/clusters/web {"controlPlaneReplicas":5,"workerPools":{"md-0":4}}`,
+		`PATCH /api/clusters/clusters/web {"controlPlaneTimeouts":{"nodeDeletionTimeoutSeconds":0,"nodeDrainTimeoutSeconds":1800,"nodeVolumeDetachTimeoutSeconds":600},"pools":{"gpu":{"timeouts":{"nodeVolumeDetachTimeoutSeconds":90}},"md-0":{"timeouts":{"nodeDrainTimeoutSeconds":3600}}}}`,
 		`DELETE /api/clusters/clusters/web {"confirm":"web"}`,
 		"PUT /api/clusters/clusters/web/machines/web-cp-1/replacement",
 		"DELETE /api/clusters/clusters/web/machines/web-cp-1/replacement",
@@ -144,7 +149,7 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		"PUT /api/clusters/clusters/web/machines/web-md-0-b/cordon",
 		"DELETE /api/clusters/clusters/web/machines/web-md-0-b/cordon",
 		"POST /api/clusters/clusters/web/machines/web-md-0-b/reboot",
-		`POST /api/clusters {"class":"talos","controlPlaneReplicas":1,"name":"new"}`,
+		`POST /api/clusters {"class":"talos","controlPlaneReplicas":1,"controlPlaneTimeouts":{"nodeDrainTimeoutSeconds":600},"name":"new"}`,
 	}
 	if strings.Join(sent, "\n") != strings.Join(want, "\n") {
 		t.Errorf("sent\n%s\nwant\n%s", strings.Join(sent, "\n"), strings.Join(want, "\n"))
@@ -168,6 +173,11 @@ func TestClusterCommandsSayWhatWentWrong(t *testing.T) {
 		{"dev@pve!ci=secret", []string{"scale", "twin", "-n", "b", "--workers", "md-0=1"}, "you need VM.Allocate on pool b (403)"},
 		{"dev@pve!ci=secret", []string{"scale", "web", "--workers", "md-0"}, `--workers "md-0": give POOL=N`},
 		{"dev@pve!ci=secret", []string{"scale", "web"}, "give --control-planes, --workers or both"},
+		{"dev@pve!ci=secret", []string{"timeouts", "web"}, "give --control-planes, --pool or both"},
+		{"dev@pve!ci=secret", []string{"timeouts", "web", "--pool", "md-0"}, `--pool "md-0": give POOL=drain=30m`},
+		{"dev@pve!ci=secret", []string{"timeouts", "web", "--control-planes", "drain=soon"}, `"soon" is not a duration such as 30m`},
+		{"dev@pve!ci=secret", []string{"timeouts", "web", "--control-planes", "wait=5m"}, "give drain, detach or deletion"},
+		{"dev@pve!ci=secret", []string{"timeouts", "web", "--control-planes", "drain=-5m"}, "is not a duration"},
 		{"dev@pve!ci=secret", []string{"list", "-o", "yaml"}, `--output is json or nothing, not "yaml"`},
 	} {
 		_, err := runCluster(t, srv.URL, c.token, c.args...)
