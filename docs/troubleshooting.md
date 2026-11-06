@@ -551,7 +551,12 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.metadata.annotations.ku
 - **Hook BeforeClusterDelete:** a cluster registered with Rancher leaves it first, while its VMs still run. The reason is Rancher's.
 - **Machine … Drain not completed:** a node's pods are being evicted, and a PodDisruptionBudget, or a pod that does not stop, holds that up. Delete the pod in the cluster, or abandon the deletion.
 - **ProxmoxMachine … (a VM on an offline node):** capmox cannot delete the VM. Bring the node back.
-- **Cluster … removing the Proxmox VE objects:** Kubehenge's controller waits while an offline Proxmox VE node may hold some of the cluster's volumes on local storage. It also waits while Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
+- **Cluster … removing the Proxmox VE objects:** an offline node that carries a storage the cluster used. The reason names the node and the storage. Its volumes are deleted once the node is online. Nodes and storages the cluster never used do not block.
+- **Cluster … removing the Proxmox VE objects, other reasons:** Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
+
+The `DeletionStalled` message ends with what abandoning leaves behind. For an offline node that is the volume owner VM with its volumes, the pool and the user.
+
+Someone who deleted the volume owner VM by hand raises the warning event `VolumeOwnerMissing` with its old VMID. The volumes named `vm-<VMID>-…` stay on the storage without an owner. Restore a VM with that VMID from a backup to own them again.
 
 The Cluster gets the condition `DeletionStalled` and a warning event of the same name once the deletion has waited 20 minutes (the module's `watch.stall_minutes`). The fleet and the cluster's **Health** view list it.
 

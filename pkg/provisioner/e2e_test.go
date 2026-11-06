@@ -58,7 +58,7 @@ func allocate(t *testing.T, own *proxmox.Client, node, storage, kind string, own
 // removeLeftovers removes what a failed run left of its cluster.
 func removeLeftovers(t *testing.T, p *Proxmox, n Names, held Credentials) {
 	t.Helper()
-	if err := p.Remove(context.Background(), n, held); err != nil {
+	if err := p.Remove(context.Background(), n, held, ""); err != nil {
 		t.Errorf("removing %s: %v", n.Pool, err)
 	}
 }
@@ -187,7 +187,7 @@ func TestVolumesEndToEnd(t *testing.T) { //nolint:paralleltest // owns the Proxm
 	volumes[last] = allocate(t, own, last, storage, kind.Type, creds.VolumeOwner)
 	// Straight after creation, as a cluster that fails early is: Proxmox VE may not list the
 	// owner VM in its pool yet.
-	if err := p.Remove(ctx, n, again); err != nil {
+	if err := p.Remove(ctx, n, again, storage); err != nil {
 		t.Fatal(err)
 	}
 	for node, v := range volumes {

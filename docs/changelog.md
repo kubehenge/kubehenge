@@ -4,6 +4,9 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+- The default StorageClass sets `discard` and `ssd`, so thin storage takes back the space of deleted data. The controller recreates a cluster's existing class once, as Kubernetes does not allow changing its parameters.
+- The volume owner VM is protected in Proxmox VE and says in its description not to delete it. A cluster whose owner VM disappeared gets a `VolumeOwnerMissing` event with the old VMID.
+- Deleting a cluster looks only at the storages it used, on the nodes where they are active. Offline nodes and storages the cluster never used no longer block it, and the stall message says what abandoning leaves behind.
 - The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
 - New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
 - The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
