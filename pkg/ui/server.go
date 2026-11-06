@@ -132,6 +132,10 @@ type Server struct {
 	// PublicURL is the address users reach the interface at, such as https://kubehenge.example;
 	// OpenID identity providers send users back to it. Empty means the address the browser used.
 	PublicURL string
+	// TrustedProxies are the reverse proxies and load balancers in front of the interface. From
+	// one of them, the sign-in limits count the client in X-Forwarded-For instead of the proxy.
+	// Empty means every request counts under the address it came from.
+	TrustedProxies []netip.Prefix
 	// SessionMaxAge ends every session this long after sign-in.
 	SessionMaxAge time.Duration
 	// ConnectWorkload reaches a workload cluster's API server with the token of one of Kubehenge's
@@ -244,9 +248,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("/", s.assets)
 	if s.demo != nil {
-		return withRequestID(securityHeaders(s.demoGuard(mux)))
+		return withRequestID(s.withClientAddress(securityHeaders(s.demoGuard(mux))))
 	}
-	return withRequestID(securityHeaders(mux))
+	return withRequestID(s.withClientAddress(securityHeaders(mux)))
 }
 
 // healthz tells a monitor that the interface answers, unauthenticated. It says nothing more, so it

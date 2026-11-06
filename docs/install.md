@@ -111,6 +111,7 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 | `--proxmox-url <URL>` | chosen from the API's certificate ([below](#the-proxmox-ve-api)) | The Proxmox VE API as the appliance and the clusters' VMs reach it, such as `https://pve.example.org:8006`. The API's certificate must be valid for it. The installer stops unless the appliance gets an answer there. |
 | `--proxmox-ca <file>` | found by the installer ([below](#the-ca)) | The CA that signed the API's certificate, such as your organisation's where it replaced Proxmox VE's own. The file may be a whole trust store, and the appliance gets only the certificates the API's rests on. The installer stops before it creates anything unless this CA signed the API's certificate for the URL. |
 | `--proxmox-insecure` | off | Nothing checks the Proxmox VE API's certificate. That covers OpenTofu, Cluster API, Kubehenge's controller, the template builds and every cluster's cloud controller manager and CSI plugin. The Administration page shows that it is on. Not with `--proxmox-ca`. |
+| `--trusted-proxy <address or CIDR>` | none | A reverse proxy in front of the interface, repeatable and also comma-separated ([below](#behind-a-reverse-proxy)). It writes `KUBEHENGE_TRUSTED_PROXIES` into `/etc/kubehenge/appliance.env`. With `--upgrade` it replaces the list. |
 | `--release <file> --sha256 <hex>` | the published release the script names | Installs a release archive from a file instead, checked against the given checksum. OpenTofu is still downloaded unless `--tofu` names it. |
 | `--tofu <file>` | the published OpenTofu release | Installs OpenTofu from a release archive (`tofu_<version>_linux_amd64.tar.gz`) instead of downloading it. It is checked against the checksum in `install.sh`, so the version must be the one the script names. Together with `--release` and a template on a storage, the node needs no internet access. |
 | `--pve-entry` or `--no-pve-entry` | asked | Whether to add a Kubernetes entry to this node's Proxmox VE interface ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
@@ -260,6 +261,16 @@ Sign in with a Proxmox VE account of any realm: Proxmox VE, PAM, LDAP, Active Di
 - **Twenty failed sign-ins** from one address in that time refuse the address, whatever users they name.
 
 Every user sees and changes only what their Proxmox VE privileges allow ([clusters.md](clusters.md#who-may-do-what)).
+
+### Behind a reverse proxy
+
+The interface needs a host name of its own, never a path such as `https://tools.example.org/kubehenge/`, because its pages and API use absolute paths.
+
+- **Ports.** Forward 443 to the appliance's 443. Headlamp is served on port 8443 of the same name, which the interface's Headlamp links use, so forward that port too.
+- **Host.** Pass the `Host` header on unchanged, and set `--public-url` (the installer's `--name`) to the name users type.
+- **Sign-in limits.** The limits count the connection's address, which behind a proxy is the proxy's, so five wrong passwords lock a user out for everyone. List the proxy with `--trusted-proxy`.
+  - From a listed proxy, the client is the right-most `X-Forwarded-For` entry that is not itself listed. The proxy must append to that header, as most do.
+  - Requests from any other address count under their own address, whatever headers they carry.
 
 ## Set up the management cluster
 

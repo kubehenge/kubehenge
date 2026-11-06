@@ -206,6 +206,7 @@ The task log shows what each Kubehenge account did. In an appliance's management
 - **No bridges to choose from:** Proxmox VE lists a node's bridges only with `Sys.Audit` on the node. Type the bridge's name instead. A bridge marked "no SDN.Use" needs that privilege on `/sdn/zones/localnetwork/<bridge>`, or on `/sdn/zones/<zone>/<vnet>` for a VNet.
 - **`"Session ended. Sign in again."`:** Proxmox VE no longer accepts the session. A session lasts eight hours at most.
 - **Sign-in refused after several tries:** five failures within 15 minutes lock a user out from that address until the 15 minutes are up. Twenty failures from one address, whichever users they name, lock the address out.
+- **Everyone is locked out after one person's typos:** behind a reverse proxy, every sign-in counts under the proxy's address. List the proxy with `--trusted-proxy` ([install.md](install.md#behind-a-reverse-proxy)).
 - **"Security keys work only in Proxmox VE":** a WebAuthn key answers only on Proxmox VE's own page. Choose **Use API token** and give one of that user's Proxmox VE API tokens.
 - **An OpenID sign-in does not come back:** register `https://<appliance>/api/openid/callback` with the identity provider, and `https://<appliance>:8443/oidc-callback` for the shared Headlamp. A Headlamp sign-in can only be finished in the browser that started it.
 

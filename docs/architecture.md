@@ -782,6 +782,7 @@ It is where Kubehenge starts and what looks after it:
   - The browser holds a random session ID in a `__Host-` cookie (Secure, HttpOnly, SameSite=Strict). Every change also carries a per-session CSRF token.
   - Proxmox VE renews a ticket without asking the realm or the second factor again. A session therefore ends after a fixed time (eight hours by default) however active it is.
   - Failed sign-ins are limited per user at an address and per address, never per user alone. Nobody can lock an administrator out from elsewhere.
+  - The address is the connection's peer. From a peer listed in `--trusted-proxy` it is the right-most `X-Forwarded-For` entry that is not listed, since only the entries a trusted proxy appended can be believed.
   - The frontend loads no inline script or style, and the Content-Security-Policy allows none.
 - **Permissions follow Proxmox VE's, by pool.** Each cluster has its own pool under the workload pool.
   - Seeing a cluster needs `VM.Audit` on its pool. Creating one needs `VM.Allocate` on the workload pool.
