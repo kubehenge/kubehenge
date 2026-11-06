@@ -202,8 +202,8 @@ function Shell({
       )}
       {setup?.diskFull && (
         <p className="warning" role="alert">
-          Appliance disk {setup.diskFull.usedPercent} % full, {(setup.diskFull.freeMiB / 1024).toFixed(1)} GiB free. Grow
-          it on the Proxmox VE node: <code>pct resize {setup.applianceVMID ?? "<appliance ID>"} rootfs +4G</code>
+          Appliance disk {setup.diskFull.usedPercent} % full, {(setup.diskFull.freeMiB / 1024).toFixed(1)} GiB free.
+          Grow it on the Proxmox VE node: <code>pct resize {setup.applianceVMID ?? "<appliance ID>"} rootfs +4G</code>
         </p>
       )}
       {certificate && (

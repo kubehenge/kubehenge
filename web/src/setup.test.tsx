@@ -715,7 +715,13 @@ describe("setup", () => {
     fakeServer({
       ...administrator,
       "GET /api/setup": {
-        body: { appliance: true, ready: true, allowed: true, applianceVMID: 105, diskFull: { usedPercent: 86, freeMiB: 1192 } },
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          applianceVMID: 105,
+          diskFull: { usedPercent: 86, freeMiB: 1192 },
+        },
       },
       "GET /api/clusters": { body: [] },
     });

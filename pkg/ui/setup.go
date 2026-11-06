@@ -161,7 +161,10 @@ func (s *Server) addressMoved(host string) *addressMove {
 // diskWarning is the share of the appliance's disk in use, in per cent, from which administrators
 // are told to grow it. An upgrade needs room for three copies of the software, and OpenTofu
 // rewrites the state in place.
-const diskWarning = 80
+const (
+	diskWarning = 80
+	mebibyte    = 1 << 20
+)
 
 // diskFull is the share of the appliance's disk in use, in per cent, and the mebibytes left.
 type diskFull struct {
@@ -189,7 +192,7 @@ func (s *Server) diskFull(ctx context.Context) *diskFull {
 	if percent < diskWarning {
 		return nil
 	}
-	return &diskFull{UsedPercent: percent, FreeMiB: free >> 20}
+	return &diskFull{UsedPercent: percent, FreeMiB: free / mebibyte}
 }
 
 // applianceID is the appliance's guest ID as the user sees it, found by its MAC addresses where
