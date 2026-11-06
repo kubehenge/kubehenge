@@ -4,11 +4,11 @@
     "lastmod": "2026-11-01"
   },
   "/docs/architecture": {
-    "fingerprint": "e34f8deff70bebe1124aebc28b8bb392373b6b809d07724268cdb26c8adde81d",
-    "lastmod": "2026-11-05"
+    "fingerprint": "e89e0439b45ed3ca469773c60cd25ea4d5444fcf19c0d2d8e21f50c338111dd0",
+    "lastmod": "2026-11-06"
   },
   "/docs/changelog": {
-    "fingerprint": "cb6bf0b04d9afcb0d29fcabf0b9dd25732a39389818b0e7693fed4012b888b4d",
+    "fingerprint": "12c1ba4d64b6fe3238670bef1b0de8b02712e74a8951a2045d290476a44cc52e",
     "lastmod": "2026-11-06"
   },
   "/docs/clusters": {
@@ -28,8 +28,8 @@
     "lastmod": "2026-11-05"
   },
   "/docs/roadmap": {
-    "fingerprint": "7d56aa82c6120ad17e33184839debf31dd009c031b25f62c258e46bc65b28500",
-    "lastmod": "2026-11-05"
+    "fingerprint": "5f5ec5e1b09b8f1b6b7f93fdd211783ba7f02f9c9908dd2598861ac599db807c",
+    "lastmod": "2026-11-06"
   },
   "/docs/templates": {
     "fingerprint": "30be1d476b989e3d5cf867e49d2120dc8dc12887b1058963d72c00fc692bc0e0",
@@ -40,8 +40,8 @@
     "lastmod": "2026-11-05"
   },
   "/docs/troubleshooting": {
-    "fingerprint": "61780fcb48d1f1e83f64f4f889d6ec5762341936b0716e5dab23e595c7a9f5d7",
-    "lastmod": "2026-11-05"
+    "fingerprint": "ac949c5e8659a4f2e5013d23a5c251cbe54cfbf83807b117c9b05f640e38674c",
+    "lastmod": "2026-11-06"
   },
   "/docs/uninstalling": {
     "fingerprint": "230dcb624eb7eb30afaab3eaa6ffa49764a0e7f54d5a7b2888f3312816903a1b",
