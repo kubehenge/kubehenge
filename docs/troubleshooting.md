@@ -463,6 +463,12 @@ Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its o
 - **"starting Job …: … only a Job made exactly from PodTemplate …":** the Job did not match its template, as happens while an upgrade of the chart replaces it. The controller tries HA writes again with the new one. Ask for a restore again.
 - **"not one of Kubehenge's HA objects":** a write was refused. The HA resource or rule it was for, or a resource a rule names, no longer carries the comment `Kubehenge cluster …`. Someone changed it in Proxmox VE. Put the comment back, or remove the object and let the controller make it again.
 
+### Maintenance mode that never finishes
+
+With Proxmox VE HA on, a cluster's negative resource affinity keeps its control-plane VMs on separate nodes. When every other node already runs one, the VM on a node in maintenance has nowhere to go. `ha-manager status` then shows it still started on that node.
+
+Shut that VM down in Proxmox VE before the node goes down. Start it again once the node is back. The other control planes keep etcd and the API running meanwhile.
+
 ### Talos upgrades
 
 - **`TalosUpgradeFailed`**, "node … to Talos …: …": the node did not take the release, for the reason that follows.
