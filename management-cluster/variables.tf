@@ -448,3 +448,24 @@ variable "controller_image" {
     error_message = "controller_image is the image by digest, repository@sha256:<digest>."
   }
 }
+
+variable "proxy" {
+  description = "The HTTP(S) proxy every download from the management side goes through: url (with credentials if it needs them), no_proxy (comma-separated hosts, domains and networks that bypass it, which has to name the Proxmox VE API host, the nodes' networks and the pod and service ranges) and ca_bundle (PEM, for a proxy that re-signs TLS). Empty strings go direct."
+  type = object({
+    url       = optional(string, "")
+    no_proxy  = optional(string, "")
+    ca_bundle = optional(string, "")
+  })
+  default   = {}
+  nullable  = false
+  sensitive = true
+
+  validation {
+    condition     = nonsensitive(var.proxy.url == "" || can(regex("^https?://[^/?#]+/?$", var.proxy.url)))
+    error_message = "proxy.url is an http:// or https:// address with a host and no path."
+  }
+  validation {
+    condition     = nonsensitive(var.proxy.url != "" || (var.proxy.no_proxy == "" && var.proxy.ca_bundle == ""))
+    error_message = "proxy.no_proxy and proxy.ca_bundle need proxy.url."
+  }
+}

@@ -1399,3 +1399,140 @@ run "rejects_a_node_twice" {
 
   expect_failures = [var.proxmox_nodes]
 }
+
+run "no_proxy_leaves_everything_direct" {
+  command = plan
+
+  assert {
+    condition     = length(helm_release.proxy_operator) == 0 && !strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "HTTPS_PROXY") && !strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "TrustedRootsConfig")
+    error_message = "without a proxy the nodes get no proxy environment or trusted root, and there is no proxy release"
+  }
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "proxy") && !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0])), "proxy") && !can(yamldecode(helm_release.cluster_api_operator.values[0]).env)
+    error_message = "without a proxy the controller chart, the providers chart and the operator are told nothing about one"
+  }
+
+  assert {
+    condition     = alltrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : !can(p.spec.deployment.containers[0].env)])
+    error_message = "without a proxy no provider container gets an environment"
+  }
+}
+
+run "proxy_reaches_every_downloader" {
+  command = plan
+
+  variables {
+    proxy = {
+      url       = "http://user:hunter2@proxy.example.com:3128"
+      no_proxy  = "pve.example.org,192.0.2.0/24,10.244.0.0/16"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    }
+  }
+
+  assert {
+    condition = (
+      strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "\"HTTPS_PROXY\": \"http://user:hunter2@proxy.example.com:3128\"") &&
+      strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "\"NO_PROXY\": \"pve.example.org,192.0.2.0/24,10.244.0.0/16\"") &&
+      strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "\"kind\": \"TrustedRootsConfig\"")
+    )
+    error_message = "the Talos nodes get the proxy in their environment and its authority as a trusted root"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).proxy == { secret = "kubehenge-proxy", ca = true }
+    error_message = "the controller chart is told which Secret holds the proxy, and that it has an authority"
+  }
+
+  assert {
+    condition = (
+      [for e in yamldecode(helm_release.cluster_api_operator.values[0]).env.manager : e.name] == ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE"] &&
+      yamldecode(helm_release.cluster_api_operator.values[0]).env.manager[0].valueFrom.secretKeyRef.name == "kubehenge-proxy" &&
+      length(yamldecode(helm_release.cluster_api_operator.values[0]).volumes) == 2 &&
+      length(yamldecode(helm_release.cluster_api_operator.values[0]).volumeMounts.manager) == 2
+    )
+    error_message = "the operator, which fetches every provider's files, takes the proxy from the Secret and mounts the authority beside its webhook certificate"
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.cluster_api_providers.values[0]).proxy == { secret = "kubehenge-proxy", ca = true } &&
+      alltrue([for n in ["kubehenge-proxy", "kubehenge-proxy-addon"] : contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets), n)]) &&
+      anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : p.name == "helm" && p.spec.deployment.containers[0].env[1].valueFrom.secretKeyRef.name == "kubehenge-proxy-addon"])
+    )
+    error_message = "the providers' hook downloads, the controller's namespace and the Add-on Provider for Helm each get the proxy"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      p.spec.deployment.containers[0].env[3].name == "SSL_CERT_FILE" &&
+      p.spec.deployment.containers[0].env[3].value == "/etc/kubehenge/proxy/ca.crt" &&
+      length(p.spec.patches) == 2 &&
+      strcontains(p.spec.patches[1].patch, "\"secretName\": \"kubehenge-proxy-addon\"") &&
+      strcontains(p.spec.patches[1].patch, "\"mountPath\": \"/etc/kubehenge/proxy\"") &&
+      strcontains(p.spec.patches[1].patch, "\"name\": \"proxy-ca\"")
+    )])
+    error_message = "the Add-on Provider for Helm mounts the authority from its Secret and points SSL_CERT_FILE at it"
+  }
+
+  assert {
+    condition = alltrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
+    p.name == "helm" || !anytrue([for patch in try(p.spec.patches, []) : strcontains(patch.patch, "proxy-ca")])])
+    error_message = "only the Add-on Provider for Helm downloads on its own, so no other provider mounts the authority"
+  }
+
+  assert {
+    condition = alltrue([
+      for v in [helm_release.cluster_api_providers.values[0], helm_release.cluster_api_operator.values[0], helm_release.kubehenge.values[0], helm_release.proxy_operator[0].values[0]] :
+      !strcontains(v, "hunter2")
+    ])
+    error_message = "the password reaches no Helm values, which the release records and a plan prints"
+  }
+}
+
+run "proxy_without_authority" {
+  command = plan
+
+  variables {
+    proxy = {
+      url = "https://proxy.example.com"
+    }
+  }
+
+  assert {
+    condition     = !strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "TrustedRootsConfig") && yamldecode(helm_release.kubehenge.values[0]).proxy.ca == false && length(yamldecode(helm_release.cluster_api_operator.values[0]).volumes) == 1
+    error_message = "without an authority nothing is trusted or mounted"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" && length(p.spec.patches) == 1 && length(p.spec.deployment.containers[0].env) == 3
+    )])
+    error_message = "without an authority the Add-on Provider for Helm gets no volume and no SSL_CERT_FILE"
+  }
+}
+
+run "rejects_a_proxy_that_is_no_address" {
+  command = plan
+
+  variables {
+    proxy = {
+      url = "proxy.example.com:3128"
+    }
+  }
+
+  expect_failures = [var.proxy]
+}
+
+run "rejects_proxy_exceptions_without_a_proxy" {
+  command = plan
+
+  variables {
+    proxy = {
+      no_proxy = "pve.example.org"
+    }
+  }
+
+  expect_failures = [var.proxy]
+}

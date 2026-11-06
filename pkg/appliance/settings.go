@@ -82,6 +82,28 @@ type Settings struct {
 	// APIAuditLog has the management cluster's API server log the changes people make to its
 	// output, where the interface reads them for its activity page.
 	APIAuditLog bool `json:"apiAuditLog,omitempty"`
+	// Proxy is the HTTP(S) proxy that every download from the management side goes through. Unset,
+	// they go direct.
+	Proxy *Proxy `json:"proxy,omitempty"`
+}
+
+// KeepsProxySecret restores the saved proxy's password where these settings came back with the
+// address the interface showed, password hidden.
+func (s *Settings) KeepsProxySecret(saved *Settings) {
+	if saved != nil {
+		s.Proxy.KeepsSecret(saved.Proxy)
+	}
+}
+
+// Redacted is a copy of the settings that is safe to send to the interface: the proxy's password
+// is hidden.
+func (s *Settings) Redacted() *Settings {
+	if s == nil {
+		return nil
+	}
+	out := *s
+	out.Proxy = s.Proxy.Redacted()
+	return &out
 }
 
 // TemplateRefresh is when and where the node OS VM templates are built again. Empty fields take the
@@ -219,7 +241,7 @@ const (
 // plainHTTPS tells whether s is an https:// URL with a host and without query, fragment or user.
 func plainHTTPS(s string) bool {
 	u, err := url.Parse(s)
-	return err == nil && u.Scheme == "https" && u.Host != "" && u.RawQuery == "" && u.Fragment == "" && u.User == nil
+	return err == nil && u.Scheme == schemeHTTPS && u.Host != "" && u.RawQuery == "" && u.Fragment == "" && u.User == nil
 }
 
 // Validate checks a provider as the API server would on start, where a mistake keeps the control
@@ -325,6 +347,7 @@ func (s *Settings) Validate() error {
 		s.TemplateRefresh.check(&p, s.WorkloadDatastores)
 	}
 	s.checkNamespaces(&p)
+	checkProxySetting(s.Proxy, &p)
 	err = p.err()
 	if err != nil {
 		return err
@@ -472,7 +495,7 @@ func (s *Settings) checkMirrors(p *problems) {
 			p.addf("Registry mirrors: %q is no registry host name", registry)
 		}
 		for _, e := range s.RegistryMirrors[registry] {
-			if u, err := url.Parse(e); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			if u, err := url.Parse(e); err != nil || (u.Scheme != schemeHTTPS && u.Scheme != schemeHTTP) || u.Host == "" {
 				p.addf("Registry mirrors: %s is no http:// or https:// URL", e)
 			}
 		}

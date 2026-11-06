@@ -65,6 +65,7 @@ module "management" {
 
   extra_cluster_namespaces = var.settings.extraClusterNamespaces
   api_audit_log            = var.settings.apiAuditLog
+  proxy                    = var.settings.proxy
 }
 
 output "kubeconfig" {
@@ -196,6 +197,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"clusterSysAudit":          s.GivesClusterSysAudit(),
 		"nodeBootLogs":             s.ReadsNodeBootLogs(),
 		"apiAuditLog":              s.APIAuditLog,
+		"proxy":                    moduleProxy(s, a.ProxmoxURL),
 		// The module takes no null for a list.
 		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
 	}}
@@ -256,6 +258,19 @@ func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
 		"TF_ENCRYPTION=" + encryption(passphrase),
 	}
 	env = append(env, auth...)
+	// The setting wins over the service's own environment, which only the installer sets.
+	if saved := a.SavedSettings(); saved != nil && saved.Proxy.Enabled() {
+		env = append(env, saved.Proxy.Env(saved.NoProxyList(a.ProxmoxURL))...)
+		if saved.Proxy.CABundle != "" {
+			path := filepath.Join(a.workdir(), "proxy-ca.pem")
+			if err := writeFileAtomic(path, []byte(saved.Proxy.CABundle)); err != nil {
+				return nil, err
+			}
+			// Go reads this file beside the system's certificate directories, so public hosts stay trusted.
+			env = append(env, "SSL_CERT_FILE="+path)
+		}
+		return env, nil
+	}
 	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
@@ -264,9 +279,26 @@ func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
 	return env, nil
 }
 
+// moduleProxy is the module's proxy variable: empty strings for none, which the module reads as no
+// proxy.
+func moduleProxy(s *Settings, proxmoxURL string) map[string]any {
+	out := map[string]any{"url": "", "no_proxy": "", "ca_bundle": ""}
+	if !s.Proxy.Enabled() {
+		return out
+	}
+	out["url"] = s.Proxy.FullURL()
+	out["no_proxy"] = strings.Join(s.NoProxyList(proxmoxURL), ",")
+	out["ca_bundle"] = s.Proxy.CABundle
+	return out
+}
+
 // tofu runs one OpenTofu command in the working directory, logging into the job what message makes
 // of each line of its output.
 func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func(line string) string, args ...string) error {
+	// OpenTofu echoes a failed request's proxy now and then, and the log goes to the interface.
+	if saved := a.SavedSettings(); saved != nil {
+		j.Hide(saved.Proxy.Secrets()...)
+	}
 	cmd := exec.CommandContext(ctx, a.Tofu, append([]string{"-chdir=" + a.workdir()}, args...)...) //nolint:gosec // the binary and arguments are the appliance's own
 	cmd.Env = env
 	out, err := cmd.StdoutPipe()
@@ -304,7 +336,15 @@ func (a *Appliance) output(ctx context.Context, env []string, name string) (stri
 	cmd.Env = env
 	out, err := cmd.Output()
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
-		return "", fmt.Errorf("tofu output %s: %s", name, strings.TrimSpace(string(exit.Stderr)))
+		stderr := strings.TrimSpace(string(exit.Stderr))
+		if saved := a.SavedSettings(); saved != nil {
+			j := &Job{}
+			j.Hide(saved.Proxy.Secrets()...)
+			if j.hidden != nil {
+				stderr = j.hidden.Replace(stderr)
+			}
+		}
+		return "", fmt.Errorf("tofu output %s: %s", name, stderr)
 	}
 	if err != nil {
 		return "", fmt.Errorf("tofu output %s: %w", name, err)

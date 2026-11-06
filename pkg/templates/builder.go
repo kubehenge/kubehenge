@@ -42,6 +42,9 @@ type Builder struct {
 	// build of the template's line, so that a new build does not change what its clones run on, and
 	// DefaultCPUType for a line without one.
 	CPUType string
+	// Proxy is what the bake's guests download through. Nil goes direct, and the bake's
+	// cloud-config is then the same as it is without this field.
+	Proxy *GuestProxy
 
 	// selectableSettle and selectablePoll pace waitSelectable. Zero means selectableSettle and
 	// pve.PollLongest.
@@ -642,7 +645,9 @@ func (b *Builder) recipe(ctx context.Context, bake *Bake) (*Recipe, error) {
 		}
 		keys[k.Name] = armoured
 	}
-	recipe, err := f.Recipe(r, *bake, keys)
+	withProxy := *bake
+	withProxy.Proxy = b.Proxy
+	recipe, err := f.Recipe(r, withProxy, keys)
 	if err != nil {
 		return nil, fmt.Errorf("the bake of %s %s: %w", f.Title(), r.Name, err)
 	}

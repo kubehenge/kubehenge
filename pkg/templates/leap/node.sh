@@ -20,6 +20,13 @@ done
 for repo in "${files}"/repos/*.repo; do
     install -m 0644 "${repo}" "/etc/zypp/repos.d/kubehenge-$(basename "${repo}")"
 done
+# The snapshot began with the running root's /etc, so zypper has the proxy's address from
+# /etc/sysconfig/proxy and the authority as an anchor, but /var and the trust store built from it
+# are the running root's. The authority is trusted here again.
+if [ -f "${files}/proxy/ca.crt" ]; then
+    install -D -m 0644 "${files}/proxy/ca.crt" /etc/pki/trust/anchors/kubehenge-proxy.crt
+    update-ca-certificates
+fi
 
 packages="container-selinux curl gawk tar"
 case "${distribution}" in
@@ -72,5 +79,10 @@ printf '[Journal]\nStorage=persistent\n' > /usr/lib/systemd/journald.conf.d/50-k
 if [ "${distribution}" = kubeadm ]; then
     sh "${files}/node/kubeadm.sh"
 fi
-# The bake's files came into the snapshot with its /etc.
+# The bake's files came into the snapshot with its /etc, and so did the proxy's address, password
+# and authority, which down.sh takes out of the snapshot that becomes the node's root. The running
+# root's own are taken away by run.sh once the build is over.
+if [ -f "${files}/proxy/down.sh" ]; then
+    sh "${files}/proxy/down.sh"
+fi
 rm -rf "${files}"

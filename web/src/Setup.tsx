@@ -64,6 +64,18 @@ export interface SetupForm {
   bootstrapDatastore: string;
   // registry=endpoint, one per line.
   mirrors: string;
+  // The address alone, with no user name or password.
+  proxyURL: string;
+  proxyUser: string;
+  // Typed anew. A saved password never reaches the page.
+  proxyPassword: string;
+  // Whether the server holds a password, and what the form does with it.
+  proxyPasswordSaved: boolean;
+  proxyPasswordAction: "keep" | "replace" | "remove";
+  // Comma or line separated.
+  proxyExceptions: string;
+  // PEM certificates.
+  proxyCA: string;
   podSubnets: string;
   serviceSubnets: string;
   // Kept from the last run. Not edited here.
@@ -167,6 +179,29 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .join("\n");
 }
 
+// proxySettings is the proxy the form names, if it names an address.
+function proxySettings(f: SetupForm): ManagementSettings["proxy"] {
+  if (!filled(f.proxyURL)) {
+    return undefined;
+  }
+  const proxy: NonNullable<ManagementSettings["proxy"]> = { url: f.proxyURL.trim() };
+  if (filled(f.proxyUser)) {
+    proxy.user = f.proxyUser.trim();
+    if (f.proxyPasswordAction === "remove") {
+      proxy.clearPassword = true;
+    } else if ((f.proxyPasswordAction === "replace" || !f.proxyPasswordSaved) && f.proxyPassword !== "") {
+      proxy.password = f.proxyPassword;
+    }
+  }
+  if (list(f.proxyExceptions).length > 0) {
+    proxy.noProxy = list(f.proxyExceptions);
+  }
+  if (filled(f.proxyCA)) {
+    proxy.caBundle = `${f.proxyCA.trim()}\n`;
+  }
+  return proxy;
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -187,6 +222,10 @@ export function settings(f: SetupForm): ManagementSettings {
   const mirrors = parseMirrors(f.mirrors);
   if (Object.keys(mirrors).length > 0) {
     s.registryMirrors = mirrors;
+  }
+  const proxy = proxySettings(f);
+  if (proxy) {
+    s.proxy = proxy;
   }
   if (list(f.podSubnets).length > 0) {
     s.podSubnets = list(f.podSubnets);
@@ -298,6 +337,13 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     workloadBridges: saved.workloadBridges,
     bootstrapDatastore: saved.bootstrapDatastore,
     mirrors: formatMirrors(saved.registryMirrors),
+    proxyURL: saved.proxy?.url ?? "",
+    proxyUser: saved.proxy?.user ?? "",
+    proxyPassword: "",
+    proxyPasswordSaved: saved.proxy?.passwordSet === true,
+    proxyPasswordAction: "keep",
+    proxyExceptions: (saved.proxy?.noProxy ?? []).join(", "),
+    proxyCA: saved.proxy?.caBundle ?? "",
     podSubnets: (saved.podSubnets ?? []).join(", "),
     serviceSubnets: (saved.serviceSubnets ?? []).join(", "),
     controllerImage: saved.controllerImage,
@@ -335,6 +381,11 @@ export type SetupField =
   | "clusterOIDC"
   | "backupTargets"
   | "mirrors"
+  | "proxyURL"
+  | "proxyUser"
+  | "proxyPassword"
+  | "proxyExceptions"
+  | "proxyCA"
   | "podSubnets"
   | "serviceSubnets"
   | "refreshAddress"
@@ -358,6 +409,11 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "gateway",
     "dnsServers",
     "mirrors",
+    "proxyURL",
+    "proxyUser",
+    "proxyPassword",
+    "proxyExceptions",
+    "proxyCA",
     "podSubnets",
     "serviceSubnets",
   ],
@@ -368,7 +424,16 @@ const stepFields: Record<SetupStep, SetupField[]> = {
 
 const stepOf = (k: SetupField): SetupStep => setupSteps.find((s) => stepFields[s].includes(k)) ?? "Placement";
 
-const advancedFields: SetupField[] = ["mirrors", "podSubnets", "serviceSubnets"];
+const advancedFields: SetupField[] = [
+  "mirrors",
+  "proxyURL",
+  "proxyUser",
+  "proxyPassword",
+  "proxyExceptions",
+  "proxyCA",
+  "podSubnets",
+  "serviceSubnets",
+];
 
 // preferredDisk is the storage for the management cluster's disks a first run starts from: a shared
 // one, which lets its VMs move between nodes, else the one with the most room.
@@ -507,6 +572,49 @@ function networkProblems(f: SetupForm, was: ManagementSettings | undefined): Set
   return p;
 }
 
+/** proxySummary is the proxy as the review shows it: the address and user, never a password. */
+export function proxySummary(proxy: ManagementSettings["proxy"]): string {
+  if (!proxy) {
+    return "None";
+  }
+  if (!filled(proxy.user)) {
+    return proxy.url;
+  }
+  return `${proxy.url}, user ${proxy.user}${proxy.passwordSet === true || filled(proxy.password) ? ", password set" : ""}`;
+}
+
+// proxyProblems are those of the proxy's address, user, exceptions and certificate authority. The
+// errors never repeat what was typed, which may be a password.
+function proxyProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  if (!filled(f.proxyURL)) {
+    if (list(f.proxyExceptions).length > 0 || filled(f.proxyCA) || filled(f.proxyUser)) {
+      p.proxyURL = "Enter the proxy address.";
+    }
+    return p;
+  }
+  if (f.proxyURL.includes("@")) {
+    p.proxyURL = "Leave the user name and password out. They have fields of their own.";
+  } else if (!/^https?:\/\/[^\s/?#]+\/?$/u.test(f.proxyURL.trim())) {
+    p.proxyURL = "Use an http:// or https:// address without a path.";
+  }
+  if (!filled(f.proxyUser) && f.proxyPassword !== "") {
+    p.proxyUser = "Enter the user name for the password.";
+  }
+  const wrong = list(f.proxyExceptions).find((e) => !/^[\w*.:/[\]-]+$/u.test(e));
+  if (wrong !== undefined) {
+    p.proxyExceptions = `${wrong} is no host, domain, address or network.`;
+  }
+  if (filled(f.proxyCA)) {
+    if (f.proxyCA.includes("PRIVATE KEY")) {
+      p.proxyCA = "Paste certificates only, no private key.";
+    } else if (!f.proxyCA.includes("-----BEGIN CERTIFICATE-----")) {
+      p.proxyCA = "Paste PEM certificates.";
+    }
+  }
+  return p;
+}
+
 // badMirror is the first line of the registry mirrors that is no registry=endpoint.
 function badMirror(mirrors: string): string | undefined {
   return mirrorLines(mirrors).find((line) => {
@@ -540,6 +648,7 @@ function offerProblems(f: SetupForm): SetupProblems {
   if (bad !== undefined) {
     p.mirrors = `${bad} is not in the form ghcr.io=https://mirror.example:5000.`;
   }
+  Object.assign(p, proxyProblems(f));
   for (const key of ["podSubnets", "serviceSubnets"] as const) {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
@@ -785,6 +894,7 @@ function ManagedSummary({
     ],
     ["etcd restores", s.etcdRestore === true ? "Guest agent" : "By hand"],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
+    ["Proxy", proxySummary(s.proxy)],
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Automatic"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Automatic"],
   ];
@@ -1458,6 +1568,72 @@ function EtcdRestoreConfirm({
   );
 }
 
+/**
+ * ProxyPassword takes the proxy's password. A saved one is only shown as set, with a way to replace
+ * or remove it, as the interface's other stored secrets are: it never comes back to the page.
+ */
+function ProxyPassword({ form, set }: FieldsProps): JSX.Element {
+  const action = form.proxyPasswordAction;
+  if (form.proxyPasswordSaved && action !== "replace") {
+    const removing = action === "remove";
+    return (
+      <Field label="Proxy password">
+        {(id) => (
+          <div className="secret-state">
+            <span className="muted">{removing ? "Removed when you apply" : "Set"}</span>
+            {/* The label's own name would hide what the button does, so each button names itself. */}
+            <button
+              id={id}
+              type="button"
+              aria-label={removing ? "Keep proxy password" : "Replace proxy password"}
+              onClick={() => set("proxyPasswordAction", removing ? "keep" : "replace")}
+            >
+              {removing ? "Keep" : "Replace"}
+            </button>
+            {!removing && (
+              <button
+                type="button"
+                aria-label="Remove proxy password"
+                onClick={() => set("proxyPasswordAction", "remove")}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        )}
+      </Field>
+    );
+  }
+  return (
+    <Field label="Proxy password">
+      {(id) => (
+        <div className="secret-state">
+          <input
+            id={id}
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            value={form.proxyPassword}
+            onChange={(e) => set("proxyPassword", e.target.value)}
+          />
+          {form.proxyPasswordSaved && (
+            <button
+              type="button"
+              aria-label="Cancel replacing proxy password"
+              onClick={() => {
+                set("proxyPassword", "");
+                set("proxyPasswordAction", "keep");
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
+    </Field>
+  );
+}
+
 function AdvancedFields({
   form,
   set,
@@ -1476,6 +1652,27 @@ function AdvancedFields({
         error={shown("mirrors")}
       >
         {(id) => <textarea id={id} rows={2} value={form.mirrors} onChange={(e) => set("mirrors", e.target.value)} />}
+      </Field>
+      <Field label="Proxy address" hint="Like http://proxy.example:3128" error={shown("proxyURL")}>
+        {(id) => <input id={id} value={form.proxyURL} onChange={(e) => set("proxyURL", e.target.value)} />}
+      </Field>
+      <Field label="Proxy user" hint="Only for a proxy that asks" error={shown("proxyUser")}>
+        {(id) => (
+          <input id={id} autoComplete="off" value={form.proxyUser} onChange={(e) => set("proxyUser", e.target.value)} />
+        )}
+      </Field>
+      <ProxyPassword form={form} set={set} shown={shown} />
+      <Field
+        label="Proxy exceptions"
+        hint="Kubehenge adds Proxmox VE, node networks and cluster ranges."
+        error={shown("proxyExceptions")}
+      >
+        {(id) => (
+          <input id={id} value={form.proxyExceptions} onChange={(e) => set("proxyExceptions", e.target.value)} />
+        )}
+      </Field>
+      <Field label="Proxy certificate" hint="PEM, for a proxy that re-signs TLS" error={shown("proxyCA")}>
+        {(id) => <textarea id={id} rows={3} value={form.proxyCA} onChange={(e) => set("proxyCA", e.target.value)} />}
       </Field>
       <Field label="Pod ranges" hint={rangeHint} error={shown("podSubnets")}>
         {(id) => (
