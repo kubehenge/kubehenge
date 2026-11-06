@@ -882,7 +882,7 @@ etcd gives file space back only when a member is defragmented, and the member se
 
 - The controller defragments one member at a time, followers first and the leader last.
 - It does so when a database holds over 100 MiB and over half of it is free.
-- It waits for the cluster's upgrade window ([upgrades](#upgrades)) and for every member to answer.
+- It waits for the cluster's upgrade window ([upgrade](#upgrade)) and for every member to answer.
 - A full database is defragmented at once, whatever the hour. The controller then clears the `NOSPACE` alarm.
 - Each member gets an `EtcdDefragmented` event.
 
