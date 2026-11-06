@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,7 @@ func validateAlloy(t *testing.T, binary, name string, values map[string]any) {
 	if err := os.WriteFile(file, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	//nolint:gosec // the binary is the pinned alloy found on PATH, and the file is this test's own
 	out, err := exec.CommandContext(t.Context(), binary, "validate", "--stability.level="+level, file).CombinedOutput()
 	if err != nil {
 		t.Errorf("%s does not validate at %s: %v\n%s\n%s", name, level, err, out, config)
@@ -64,7 +66,7 @@ func TestAlloyToolIsTheChartsRelease(t *testing.T) {
 	if pinned == nil || image == nil {
 		t.Fatalf("no Alloy pin in scripts/tools.sh (%q) or the chart's values (%q)", pinned, image)
 	}
-	if string(pinned[1]) != string(image[1]) {
+	if !bytes.Equal(pinned[1], image[1]) {
 		t.Errorf("scripts/tools.sh validates with Alloy %s, the chart runs %s", pinned[1], image[1])
 	}
 }

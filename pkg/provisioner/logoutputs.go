@@ -74,7 +74,7 @@ const (
 
 	// logOutputsAnnotation records on the Cluster what was last written into its workload cluster
 	// as logOutputsSecret, so that the controller reaches it only when that changes.
-	logOutputsAnnotation = "kubehenge.dev/log-outputs-secret" //nolint:gosec // an annotation's name, not a credential
+	logOutputsAnnotation = "kubehenge.dev/log-outputs-secret"
 
 	schemeTCP      = "tcp"
 	schemeTLS      = "tls"
