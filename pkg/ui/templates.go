@@ -44,9 +44,20 @@ type templateView struct {
 	NodeOS string `json:"nodeOS,omitempty"`
 }
 
+// downTemplateView is a template of the pool on a node that is down, which Proxmox VE cannot read
+// anything of but its tags.
+type downTemplateView struct {
+	VMID int    `json:"vmid"`
+	Node string `json:"node"`
+	// Name is empty where Proxmox VE's resource view has none for a VM on a down node.
+	Name string `json:"name,omitempty"`
+}
+
 type templatesView struct {
-	Templates []templateView     `json:"templates"`
-	Job       *appliance.JobView `json:"job,omitempty"`
+	Templates []templateView `json:"templates"`
+	// Down are the templates left out of Templates because their node is down.
+	Down []downTemplateView `json:"down"`
+	Job  *appliance.JobView `json:"job,omitempty"`
 	// Refresh is the weekly build, when it is on.
 	Refresh *refreshView `json:"refresh,omitempty"`
 	// NodeOSes are those templates can be built of, and those not released yet.
@@ -74,7 +85,7 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request, u user) {
 	// Read before the list, so that a build shown as finished is in it: the page polls slowly once
 	// no build runs.
 	job := s.Appliance.TemplateJob()
-	list, err := s.templates(r.Context(), u.ticket)
+	list, down, err := s.templates(r.Context(), u.ticket)
 	if err != nil {
 		s.proxmoxError(w, r, err)
 		return
@@ -92,20 +103,25 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request, u user) {
 	for i := range list {
 		list[i].InUse = needs.of(list[i].Tags)
 	}
-	writeJSON(w, http.StatusOK, templatesView{Templates: list, Job: job, Refresh: state.view(s.now()), NodeOSes: templates.NodeOSes()})
+	writeJSON(w, http.StatusOK, templatesView{Templates: list, Down: down, Job: job, Refresh: state.view(s.now()), NodeOSes: templates.NodeOSes()})
 }
 
 // templates lists the VM templates in the template pool, each build beside its line's others,
-// newest first.
-func (s *Server) templates(ctx context.Context, t *pve.Ticket) ([]templateView, error) {
+// newest first. Those on a node that is down are returned apart, and fail nothing.
+func (s *Server) templates(ctx context.Context, t *pve.Ticket) ([]templateView, []downTemplateView, error) {
 	members, err := s.Accounts.Templates(ctx, t, templatePool)
 	if err != nil {
-		return nil, fmt.Errorf("the templates in pool %s: %w", templatePool, err)
+		return nil, nil, fmt.Errorf("the templates in pool %s: %w", templatePool, err)
 	}
 	list := []templateView{}
+	down := []downTemplateView{}
 	newest := map[string]time.Time{}
 	for i := range members {
 		m := &members[i]
+		if m.Down {
+			down = append(down, downTemplateView{VMID: m.VMID, Node: m.Node, Name: m.Name})
+			continue
+		}
 		v := templateView{VMID: m.VMID, Node: m.Node, Name: m.Name, Tags: templates.ParseTags(m.Tags), Line: m.Name}
 		if o, ok := templates.NodeOSOf(v.Tags); ok {
 			v.NodeOS = nodeOSTitle(o)
@@ -128,7 +144,8 @@ func (s *Server) templates(ctx context.Context, t *pve.Ticket) ([]templateView, 
 		}
 		return b.Built.Compare(*a.Built)
 	})
-	return list, nil
+	slices.SortFunc(down, func(a, b downTemplateView) int { return a.VMID - b.VMID })
+	return list, down, nil
 }
 
 // templateUsers tells, by a template's tags, which cluster clones from it: the build of each line
@@ -387,7 +404,7 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request, u user) 
 	if !s.templatesReady(w, r, u) {
 		return
 	}
-	list, err := s.templates(r.Context(), u.ticket)
+	list, _, err := s.templates(r.Context(), u.ticket)
 	if err != nil {
 		s.proxmoxError(w, r, err)
 		return

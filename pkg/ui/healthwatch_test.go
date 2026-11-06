@@ -36,8 +36,9 @@ func TestHealthSaysCertificatesExpire(t *testing.T) {
 func TestHealthSaysVMsStorageAndHeldUpgrades(t *testing.T) {
 	t.Parallel()
 	const (
-		storage = "Storage local-lvm is 96% full on pve1 (96 of 100 GiB). Free space or add capacity."
-		rancher = "for Rancher, choose Kubernetes 1.34 to 1.36, not v1.37.1+k3s1"
+		storage      = "Storage local-lvm is 96% full on pve1 (96 of 100 GiB). Free space or add capacity."
+		rancher      = "for Rancher, choose Kubernetes 1.34 to 1.36, not v1.37.1+k3s1"
+		templateDown = "Template kubehenge-rke2-build-1 is on node pve2, which is down. Start the node, or move the template to a node that is up"
 	)
 	for _, tc := range []struct {
 		condType, reason, message string
@@ -70,6 +71,10 @@ func TestHealthSaysVMsStorageAndHeldUpgrades(t *testing.T) {
 		{
 			provisioner.UpgradeHeldCondition, provisioner.UpgradeHeldTalosUpgrade, "waiting for the Talos upgrade of web-cp-0",
 			attentionView{Severity: severityProgress, Section: sectionClusterAPI, What: "Upgrade waits for Talos", Message: "waiting for the Talos upgrade of web-cp-0"},
+		},
+		{
+			provisioner.TemplateNodeDownCondition, provisioner.TemplateNodeDownReason, templateDown,
+			attentionView{Severity: severityWarning, Section: sectionNodes, What: "Template node down", Message: templateDown},
 		},
 	} {
 		c := &clusterv1.Cluster{Name: "web", Status: clusterv1.ClusterStatus{Conditions: []metav1.Condition{{

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -67,6 +68,11 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			// Behind the configurations: 164's VM ID was reused by a VM being built, 165 was removed.
 			{"vmid": 164, "node": "one", "type": "qemu", "name": "kubehenge-old", "template": 1, "tags": "kubehenge;os-rocky-10;rke2", "pool": "kubehenge-templates"},
 			{"vmid": 165, "node": "one", "type": "qemu", "name": "kubehenge-gone", "template": 1, "tags": "k3s;kubehenge;os-rocky-10", "pool": "kubehenge-templates"},
+			// 166's node is down and the view says so. 167's node went down after the view was made,
+			// which only a 595 on its configuration shows. 168 is none of Kubehenge's.
+			{"vmid": 166, "node": "two", "type": "qemu", "status": "unknown", "tags": "kubehenge;talos;talos-v1.14.4", "pool": "kubehenge-templates"},
+			{"vmid": 167, "node": "one", "type": "qemu", "name": "kubehenge-k3s", "template": 1, "tags": "k3s;kubehenge", "pool": "kubehenge-templates"},
+			{"vmid": 168, "node": "two", "type": "qemu", "status": "unknown", "tags": "web", "pool": "kubehenge-templates"},
 		})
 	})
 	mux.HandleFunc("GET /api2/json/nodes/one/qemu/{vmid}/config", func(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +80,10 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			"160": {"name": "kubehenge-rke2-almalinux-10", "template": 1},
 			"162": {"name": "being-built"},
 			"164": {"name": "being-built-too"},
+		}
+		if r.PathValue("vmid") == "167" {
+			w.WriteHeader(595)
+			return
 		}
 		config, ok := configs[r.PathValue("vmid")]
 		if !ok {
@@ -251,9 +261,25 @@ func TestTemplatesOfAPoolWithTheirTags(t *testing.T) {
 	t.Parallel()
 	a := fakeTicketAPI(t)
 	got, err := a.Templates(context.Background(), &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}, "kubehenge-templates")
-	want := []Member{{VMID: 160, Node: "one", Type: "qemu", Name: "kubehenge-rke2-almalinux-10", Template: 1, Tags: "kubehenge;os-almalinux-10;rke2"}}
+	want := []Member{
+		{VMID: 160, Node: "one", Type: "qemu", Name: "kubehenge-rke2-almalinux-10", Template: 1, Tags: "kubehenge;os-almalinux-10;rke2"},
+		{VMID: 166, Node: "two", Type: "qemu", Status: StatusUnknown, Tags: "kubehenge;talos;talos-v1.14.4", Down: true},
+		{VMID: 167, Node: "one", Type: "qemu", Name: "kubehenge-k3s", Template: 1, Tags: "k3s;kubehenge", Down: true},
+	}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Templates = %+v, %v; want %+v", got, err, want)
+	}
+}
+
+func TestNodeUnreachableIsPveproxysAnswerForANodeItCannotReach(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[string]bool{"595 Connection refused": true, "596 Connection timed out": true, "500 boom": false, "503 busy": false} {
+		if got := NodeUnreachable(fmt.Errorf("reading: %w", &APIError{Status: status})); got != want {
+			t.Errorf("NodeUnreachable(%q) = %v, want %v", status, got, want)
+		}
+	}
+	if NodeUnreachable(nil) || NodeUnreachable(errors.New("595 in prose")) {
+		t.Error("NodeUnreachable took a non-API error for a down node")
 	}
 }
 

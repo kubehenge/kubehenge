@@ -50,6 +50,11 @@ export function Templates(): JSX.Element {
     <div className="box">
       <h3>VM templates</h3>
       <ErrorBox message={error} />
+      {data?.down?.map((d) => (
+        <p className="warning" key={d.vmid}>
+          Template {d.name ?? `VM ${d.vmid}`} is on node {d.node}, which is down.
+        </p>
+      ))}
       {data && data.templates.length === 0 && <p>No templates yet</p>}
       {data && data.templates.length > 0 && (
         <table className="grid">

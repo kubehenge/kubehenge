@@ -276,6 +276,34 @@ describe("vM templates", () => {
     );
   });
 
+  it("says which templates are on a node that is down and lists the others", async () => {
+    fakeServer({
+      "GET /api/templates": {
+        body: {
+          templates: [
+            {
+              vmid: 9002,
+              node: "pve1",
+              name: "kubehenge-talos-v1.14.4",
+              line: "kubehenge-talos-v1.14.4",
+              tags: ["kubehenge", "talos", "talos-v1.14.4"],
+            },
+          ],
+          down: [
+            { vmid: 9005, node: "pve2", name: "kubehenge-rke2-almalinux-10-build-202610150000" },
+            { vmid: 9006, node: "pve3" },
+          ],
+        },
+      },
+    });
+    render(<Templates />);
+    const first = "Template kubehenge-rke2-almalinux-10-build-202610150000 is on node pve2, which is down.";
+    await waitFor(() => expect(screen.getByText(first)).toBeInTheDocument());
+    expect(screen.getByText("Template VM 9006 is on node pve3, which is down.")).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /kubehenge-talos-v1\.14\.4/u })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("shows the weekly build and runs it now", async () => {
     const refresh = {
       weekday: "Sun",

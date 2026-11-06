@@ -239,7 +239,7 @@ func (f *fakeAccounts) Templates(context.Context, *pve.Ticket, string) ([]pve.Me
 	f.mu.Lock()
 	var list []pve.Member
 	for i := range f.members {
-		if m := &f.members[i]; m.Template == 1 {
+		if m := &f.members[i]; m.Template == 1 || m.Down {
 			list = append(list, *m)
 		}
 	}

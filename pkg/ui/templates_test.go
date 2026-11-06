@@ -63,6 +63,32 @@ func TestTemplatesListedWithTheClustersThatNeedThem(t *testing.T) {
 	expect(t, d.do("GET", "/api/templates", ""), http.StatusForbidden)
 }
 
+// A template on a node that is down is reported beside the list, which still holds the others.
+func TestTemplatesOnADownNodeAreReportedAndFailNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, cluster("default", "one"))
+	withTemplates(t, h)
+	h.accounts.members = append(h.accounts.members,
+		pve.Member{VMID: 9010, Node: "pve2", Type: "qemu", Name: "kubehenge-talos-v1.14.4", Tags: "kubehenge;talos;talos-v1.14.4", Down: true},
+		pve.Member{VMID: 9009, Node: "pve3", Type: "qemu", Tags: "kubehenge", Down: true})
+	h.server.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) { return 0, nil }
+	a := h.browser()
+	a.signIn("admin@pve")
+	rec := a.do("GET", "/api/templates", "")
+	expect(t, rec, http.StatusOK)
+	var got templatesView
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []downTemplateView{{VMID: 9009, Node: "pve3"}, {VMID: 9010, Node: "pve2", Name: "kubehenge-talos-v1.14.4"}}
+	if !slices.Equal(got.Down, want) || len(got.Templates) != 3 {
+		t.Fatalf("down = %+v with %d templates, want %+v with 3", got.Down, len(got.Templates), want)
+	}
+	if rec = a.do("DELETE", "/api/templates/9010", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("deleting a template on a down node gave %d, want 404", rec.Code)
+	}
+}
+
 func TestTemplatesOnlyInAnApplianceWithItsManagementCluster(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

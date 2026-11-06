@@ -370,6 +370,8 @@ type poolTemplates struct {
 	builds NodeImageBuilds
 	// talos are the Talos releases of the Talos templates, newest first.
 	talos []string
+	// down are the VMs of the pool on a node that is down.
+	down []DownTemplate
 }
 
 // talosVersionOf is the Talos release a Talos template's tags name: exactly a release's tags, as
@@ -415,6 +417,9 @@ func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, e
 	for _, r := range inv.Templates {
 		seen.add(templates.ParseTags(r.Tags))
 	}
+	for _, r := range inv.Down {
+		seen.addDown(r)
+	}
 	seen.sort()
 	return seen, nil
 }
@@ -440,6 +445,31 @@ func (p *poolTemplates) add(tags []string) {
 	if v, ok := kubeadmVersionOf(tags); ok && !slices.Contains(p.kubeadm[os], v) {
 		p.kubeadm[os] = append(p.kubeadm[os], v)
 	}
+}
+
+// addDown records a VM on a down node. Its build stays among the builds, so that the build a
+// cluster's node image time picks does not move to another while the node is down. What the
+// template offers a new cluster is left out, since it cannot be cloned from.
+func (p *poolTemplates) addDown(r *proxmox.ClusterResource) {
+	tags := templates.NormaliseTags(templates.ParseTags(r.Tags))
+	vmid, _ := templateVMID(r)
+	p.down = append(p.down, DownTemplate{Name: r.Name, VMID: vmid, Node: r.Node, Tags: tags})
+	at, built := templates.BuildOf(tags)
+	os, known := templates.NodeOSOf(tags)
+	if _, _, err := templates.ReleaseOf(os); !built || !known || err != nil {
+		return
+	}
+	line := templates.LineKey(tags)
+	p.builds[line] = append(p.builds[line], at)
+}
+
+// templateVMID reads a VM ID from the cluster's resource list, where it is unsigned.
+func templateVMID(r *proxmox.ClusterResource) (int, error) {
+	const largest = 999999999 // Proxmox VE's own upper bound
+	if r.VMID > largest {
+		return 0, fmt.Errorf("VM ID %d is outside Proxmox VE's range", r.VMID)
+	}
+	return int(r.VMID), nil
 }
 
 // sort puts the versions and releases newest first, the node OSes by name and the builds oldest
@@ -812,9 +842,14 @@ func ClassBuilds(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (No
 	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, class); err != nil {
 		return nil, fmt.Errorf("reading ClusterClass %s/%s: %w", ns, ref.Name, err)
 	}
+	return recordedBuilds(class)
+}
+
+// recordedBuilds reads the builds recorded on a ClusterClass.
+func recordedBuilds(class *clusterv1.ClusterClass) (NodeImageBuilds, error) {
 	recorded, ok := class.Annotations[NodeImageBuildsAnnotation]
 	if !ok {
-		return nil, fmt.Errorf("ClusterClass %s/%s: %w", ns, ref.Name, errNoBuildsRecorded)
+		return nil, fmt.Errorf("ClusterClass %s/%s: %w", class.Namespace, class.Name, errNoBuildsRecorded)
 	}
 	return ParseNodeImageBuilds(recorded)
 }

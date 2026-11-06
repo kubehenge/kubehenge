@@ -18,6 +18,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The usage text and the docs describe how `--template-storage` is chosen.
 - Once the container has an address, the installer checks its network from inside it. It tests the gateway, the name server and the API's port in turn, and a failure names the option to check (`--vlan`, `--gateway`, `--dns` or the node's firewall).
 - A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
+- A template on a down Proxmox VE node no longer fails the Templates page, the template refresh or the versions the create wizard offers. The page names each such template, and the controller logs it.
+- A cluster whose machines would clone from a template on a down node is refused at creation. An existing one has the condition `TemplateNodeDown`, shown as **Template node down**, until the node is back.
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
 

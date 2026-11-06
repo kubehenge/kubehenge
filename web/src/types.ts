@@ -1089,8 +1089,17 @@ export interface TemplateRefresh {
   };
 }
 
+/** A template of the pool on a Proxmox VE node that is down, which leaves it out of the list. */
+export interface DownTemplate {
+  vmid: number;
+  node: string;
+  /** Absent where Proxmox VE has no name for a VM on a down node. */
+  name?: string;
+}
+
 export interface Templates {
   templates: VMTemplate[];
+  down?: DownTemplate[];
   /** The last template build. */
   job?: Job;
   /** The weekly build, when it is on. */
