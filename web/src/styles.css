@@ -1350,9 +1350,11 @@ h4.subsection {
 
   .grid.stack :is(td, th) {
     display: block;
+
     min-inline-size: 0;
     padding: 0;
     border: none;
+
     text-align: start;
     white-space: normal;
   }
@@ -1376,8 +1378,8 @@ h4.subsection {
   .grid.stack .row-action {
     grid-column: 2;
     grid-row: 1;
-    inline-size: auto;
     align-self: center;
+    inline-size: auto;
   }
 
   .grid.stack .pool-name {
