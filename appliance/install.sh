@@ -54,10 +54,14 @@ TOFU_TAG=v1.13.2
 TOFU_SHA256=ac05d9952662c7db28dd57e93f0a68018837bfdf9342384ec0987977c16a9645
 TOFU_VERSION=${TOFU_TAG#v}
 # The container template and its SHA-512 from Proxmox's template index (aplinfo-pve-9.dat). Proxmox
-# serves templates over plain HTTP, so the checksum is what vouches for it.
+# serves templates over plain HTTP, so the checksum is what vouches for it. Once the mirror drops
+# this point release, the index's signature vouches for the one it lists instead.
 TEMPLATE=debian-13-standard_13.6-1_amd64.tar.zst
 TEMPLATE_SHA512=4c0c27ca6ceab5ef0b84db57825a00f26157ef1854bafe97297813e1cbe8ecb8cc9c453cab6b3b0efe1ba193a50c47ece1e41d950e411b8730b835b71e9e754b
-TEMPLATE_URL=http://download.proxmox.com/images/system/${TEMPLATE}
+TEMPLATE_MIRROR=http://download.proxmox.com/images
+TEMPLATE_URL=${TEMPLATE_MIRROR}/system/${TEMPLATE}
+# The keys Proxmox signs its template index with, as pveam checks it.
+template_keyring=/usr/share/doc/pve-manager/trustedkeys.gpg
 # This Proxmox VE cluster's CA, this node's trust store, and the terminal questions are asked on,
 # which stays the administrator's when the script is piped into sh.
 cluster_ca=/etc/pve/pve-root-ca.pem
@@ -775,6 +779,46 @@ fetch() {
     ok "$4: checksum verified"
 }
 
+# template_gone: whether Proxmox's mirror answers 404 for the pinned template. Any other answer,
+# no answer included, leaves the pin to fetch and its own error.
+template_gone() {
+    # shellcheck disable=SC2086 # the unquoted expansion is two words on purpose, the URL one of them.
+    [ "$(curl -sI ${download_proxy:+--proxy "${download_proxy}"} --proto '=http,https' --retry 3 -o /dev/null -w '%{http_code}' "${TEMPLATE_URL}" || true)" = 404 ]
+}
+
+# template_from_index <directory>: the newest amd64 Debian 13 standard template in Proxmox's template
+# index, as "<file> <SHA-512> <location>". The index is checked as pveam checks it, against this
+# node's keyring of Proxmox's signing keys.
+template_from_index() {
+    index=$1/aplinfo-pve-9.dat
+    for suffix in .gz .asc; do
+        # shellcheck disable=SC2086 # the unquoted expansion is two words on purpose, the URL one of them.
+        curl -fsSL ${download_proxy:+--proxy "${download_proxy}"} --proto '=http,https' --retry 8 --retry-all-errors -o "${index}${suffix}" "${TEMPLATE_MIRROR}/aplinfo-pve-9.dat${suffix}" ||
+            fail "could not download Proxmox's template index ${TEMPLATE_MIRROR}/aplinfo-pve-9.dat${suffix}"
+    done
+    gunzip -f "${index}.gz" || fail "Proxmox's template index ${TEMPLATE_MIRROR}/aplinfo-pve-9.dat.gz does not unpack"
+    sqv --keyring "${template_keyring}" "${index}.asc" "${index}" > /dev/null 2>&1 ||
+        fail "Proxmox's template index ${TEMPLATE_MIRROR}/aplinfo-pve-9.dat fails its signature check against ${template_keyring}"
+    found=$(awk '
+        function entry() {
+            if (pkg == "debian-13-standard" && arch == "amd64" && loc ~ /^system\/[A-Za-z0-9._+-]+$/ && sum ~ /^[0-9a-f]{128}$/) print ver, loc, sum
+            pkg = arch = ver = loc = sum = ""
+        }
+        /^$/ { entry(); next }
+        $1 == "Package:" { pkg = $2 }
+        $1 == "Architecture:" { arch = $2 }
+        $1 == "Version:" { ver = $2 }
+        $1 == "Location:" { loc = $2 }
+        $1 == "sha512sum:" { sum = $2 }
+        END { entry() }
+    ' "${index}" | sort -V | tail -n 1)
+    [ -n "${found}" ] || fail "Proxmox's template index lists no amd64 Debian 13 standard template"
+    read -r _ location sha << EOF
+${found}
+EOF
+    echo "${location##*/} ${sha} ${location}"
+}
+
 # local_archive <file> <SHA-256> <destination> <what it is>: copies a file the administrator gave
 # and checks it.
 local_archive() {
@@ -1454,7 +1498,21 @@ fi
 
 step "container template ${TEMPLATE} on ${template_storage}"
 template_file=$(pvesm path "${template_storage}:vztmpl/${TEMPLATE}") || fail "storage ${template_storage} gives no path for the container template. Name another with --template-storage"
-if [ -f "${template_file}" ] && echo "${TEMPLATE_SHA512}  ${template_file}" | sha512sum -c --quiet - 2> /dev/null; then
+template_there() {
+    [ -f "${template_file}" ] && echo "${TEMPLATE_SHA512}  ${template_file}" | sha512sum -c --quiet - 2> /dev/null
+}
+# shellcheck disable=SC2310 # template_there and template_gone are predicates; their status is the answer.
+if ! template_there && template_gone; then
+    listed=$(template_from_index "${work}") || exit 1
+    read -r TEMPLATE TEMPLATE_SHA512 location << EOF
+${listed}
+EOF
+    TEMPLATE_URL=${TEMPLATE_MIRROR}/${location}
+    ok "Proxmox's mirror no longer has the pinned template. Its signed index lists ${TEMPLATE}"
+    template_file=$(pvesm path "${template_storage}:vztmpl/${TEMPLATE}") || fail "storage ${template_storage} gives no path for the container template. Name another with --template-storage"
+fi
+# shellcheck disable=SC2310 # template_there is a predicate; its status is the answer.
+if template_there; then
     ok "already there, checksum verified"
 else
     mkdir -p "$(dirname "${template_file}")"

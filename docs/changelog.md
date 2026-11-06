@@ -11,6 +11,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The installer asks about the Proxmox VE interface entry on the same terminal as its other questions, also when piped into `sh`.
 - A dropped session or an interrupt now removes the half-made container and the temporary files. That includes a container cut off while `pct create` runs, and the disks it had allocated.
 - A `--ctid` another guest has is refused at once.
+- Once Proxmox's mirror drops the pinned container template, the installer takes the Debian 13 template that Proxmox's signed template index lists. It checks the index's signature as `pveam` does.
 - The installer stops early, in plain words, without quorum, with a resolver that names only loopback servers, or with too little room for the downloads.
 - A failed download gives curl's exit code and the HTTP status.
 - An option without its value reports `<option> needs a value`. A storage name is matched as written.
