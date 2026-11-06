@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { noAnswer } from "./api";
+import { api, noAnswer } from "./api";
 import { App } from "./App";
 import { ClusterList } from "./ClusterList";
 import {
@@ -315,6 +315,62 @@ describe("sign-in", () => {
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     expect(calls.find((c) => c.key === "DELETE /api/session")?.headers.get("X-Kubehenge-CSRF")).toBe("t1");
     await expect(screen.findByRole("button", { name: "Use API token" })).resolves.toBeInTheDocument();
+  });
+
+  describe("when a second tab replaced the session", () => {
+    const refused = { status: 403, body: { error: "missing or wrong CSRF token" } };
+
+    it("takes up the same user's new CSRF token, so the next try goes through", async () => {
+      const routes: Record<string, Route> = {
+        "GET /api/session": { body: { user: "alice@pve", csrf: "old" } },
+        "GET /api/clusters": { body: [web] },
+        "DELETE /api/session": refused,
+      };
+      const calls = fakeServer(routes);
+      render(<App />);
+      await screen.findByRole("link", { name: "web" });
+
+      routes["GET /api/session"] = { body: { user: "alice@pve", csrf: "new" } };
+      await expect(api.signOut()).rejects.toThrow("The session changed in another tab. Try again.");
+      expect(screen.getByRole("link", { name: "web" })).toBeInTheDocument();
+
+      routes["DELETE /api/session"] = { status: 204 };
+      await api.signOut();
+      const deletes = calls.filter((c) => c.key === "DELETE /api/session");
+      expect(deletes.map((c) => c.headers.get("X-Kubehenge-CSRF"))).toStrictEqual(["old", "new"]);
+    });
+
+    it("returns to sign-in when the other tab signed in as someone else", async () => {
+      const routes: Record<string, Route> = {
+        "GET /api/session": { body: { user: "alice@pve", csrf: "old" } },
+        "GET /api/realms": { body: [{ realm: "pve", type: "pve" }] },
+        "GET /api/clusters": { body: [web] },
+        "DELETE /api/session": refused,
+      };
+      fakeServer(routes);
+      render(<App />);
+      await screen.findByRole("link", { name: "web" });
+
+      routes["GET /api/session"] = { body: { user: "bob@pve", csrf: "bobs" } };
+      await expect(api.signOut()).rejects.toThrow("The session changed in another tab");
+      await expect(screen.findByText("Session ended. Sign in again.")).resolves.toBeInTheDocument();
+    });
+
+    it("returns to sign-in when the session is gone", async () => {
+      const routes: Record<string, Route> = {
+        "GET /api/session": { body: { user: "alice@pve", csrf: "old" } },
+        "GET /api/realms": { body: [{ realm: "pve", type: "pve" }] },
+        "GET /api/clusters": { body: [web] },
+        "DELETE /api/session": refused,
+      };
+      fakeServer(routes);
+      render(<App />);
+      await screen.findByRole("link", { name: "web" });
+
+      routes["GET /api/session"] = { status: 401, body: { error: "not signed in" } };
+      await expect(api.signOut()).rejects.toThrow("The session changed in another tab");
+      await expect(screen.findByText("Session ended. Sign in again.")).resolves.toBeInTheDocument();
+    });
   });
 
   it("offers the realm last signed in with, while Proxmox VE still has it", async () => {
