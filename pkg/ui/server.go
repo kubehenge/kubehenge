@@ -112,6 +112,9 @@ type Server struct {
 	CertificateIPs   []netip.Addr
 	CertificateNames []string
 	OwnAddresses     func() []netip.Addr
+	// DiskUse gives the bytes taken and free on the appliance's disk, for telling administrators
+	// to grow it before an upgrade or an apply runs out of room. Nil tells nothing.
+	DiskUse func() (used, free uint64, err error)
 	// ProxmoxInsecure tells administrators that the appliance and the clusters do not verify the
 	// Proxmox VE API's certificate, as it was installed.
 	ProxmoxInsecure bool

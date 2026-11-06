@@ -46,6 +46,8 @@ type setupView struct {
 	ApplianceVMID      int        `json:"applianceVMID,omitempty"`
 	// AddressMoved tells that the appliance no longer has the address its certificate is for.
 	AddressMoved *addressMove `json:"addressMoved,omitempty"`
+	// DiskFull tells that the appliance's disk is nearly full.
+	DiskFull *diskFull `json:"diskFull,omitempty"`
 	// CredentialsExpire is when the management cluster's admin credentials in the state run out,
 	// which an apply in their last month renews.
 	CredentialsExpire *time.Time `json:"credentialsExpire,omitempty"`
@@ -94,7 +96,7 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 	if !s.CertificateExpires.IsZero() {
 		v.CertificateExpires = &s.CertificateExpires
 	}
-	v.AddressMoved = s.addressMoved(r.Host)
+	v.AddressMoved, v.DiskFull = s.addressMoved(r.Host), s.diskFull(r.Context())
 	if !v.Ready || v.ApplianceVMID == 0 || !privs.Has("Sys.Audit") {
 		return true
 	}
@@ -154,6 +156,40 @@ func (s *Server) addressMoved(host string) *addressMove {
 		m.To = append(m.To, ip.String())
 	}
 	return m
+}
+
+// diskWarning is the share of the appliance's disk in use, in per cent, from which administrators
+// are told to grow it. An upgrade needs room for three copies of the software, and OpenTofu
+// rewrites the state in place.
+const diskWarning = 80
+
+// diskFull is the share of the appliance's disk in use, in per cent, and the mebibytes left.
+type diskFull struct {
+	UsedPercent uint64 `json:"usedPercent"`
+	FreeMiB     uint64 `json:"freeMiB"`
+}
+
+// diskFull tells how full the appliance's disk is, once it is past diskWarning. Nil below that, or
+// when the use is not known.
+func (s *Server) diskFull(ctx context.Context) *diskFull {
+	if s.DiskUse == nil {
+		return nil
+	}
+	used, free, err := s.DiskUse()
+	if err != nil {
+		s.Log.WarnContext(ctx, "reading the appliance's disk use", "error", err)
+		return nil
+	}
+	total := used + free
+	if total == 0 {
+		return nil
+	}
+	// Rounded up, as df rounds it.
+	percent := (used*100 + total - 1) / total
+	if percent < diskWarning {
+		return nil
+	}
+	return &diskFull{UsedPercent: percent, FreeMiB: free >> 20}
 }
 
 // applianceID is the appliance's guest ID as the user sees it, found by its MAC addresses where

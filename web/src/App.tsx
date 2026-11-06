@@ -200,6 +200,12 @@ function Shell({
           <code>sh install.sh --certificate --ctid {setup.applianceVMID ?? "<appliance ID>"}</code>
         </p>
       )}
+      {setup?.diskFull && (
+        <p className="warning" role="alert">
+          Appliance disk {setup.diskFull.usedPercent} % full, {(setup.diskFull.freeMiB / 1024).toFixed(1)} GiB free. Grow
+          it on the Proxmox VE node: <code>pct resize {setup.applianceVMID ?? "<appliance ID>"} rootfs +4G</code>
+        </p>
+      )}
       {certificate && (
         <p className="warning" role="alert">
           {certificate.expired ? "Appliance certificate expired on " : "Appliance certificate expires on "}
