@@ -428,6 +428,13 @@ func TestCreateFreshTakesAnotherVMIDWhenTheOfferedOneIsTaken(t *testing.T) {
 	if f.created[0]["onboot"] != float64(1) {
 		t.Errorf("the template's onboot is %v, want 1", f.created[0]["onboot"])
 	}
+	// A datacenter backup job that includes every VM leaves the nodes alone.
+	if disk, _ := f.created[0]["scsi0"].(string); !strings.Contains(disk, ",backup=0,") {
+		t.Errorf("the template's disk is %q, want backup=0", disk)
+	}
+	if f.created[0]["agent"] != "enabled=1,freeze-fs=0" {
+		t.Errorf("the template's agent is %v, want no freeze", f.created[0]["agent"])
+	}
 }
 
 // A create whose task Proxmox VE killed before it ran leaves its VM ID locked. The build goes on

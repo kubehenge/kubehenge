@@ -774,7 +774,7 @@ func TestCreateMakesATemplateAndRemovesItsDownload(t *testing.T) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c := h.vms[101]
-	if c["template"] != 1 || c["cpu"] != DefaultCPUType || c["pool"] != testPool || c["scsi0"] != "local-lvm:0,import-from="+volume+",discard=on,ssd=1" {
+	if c["template"] != 1 || c["cpu"] != DefaultCPUType || c["pool"] != testPool || c["scsi0"] != "local-lvm:0,import-from="+volume+",backup=0,discard=on,ssd=1" {
 		t.Errorf("the template is %v", c)
 	}
 	if c["net0"] != nil {

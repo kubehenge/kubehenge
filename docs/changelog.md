@@ -20,6 +20,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
+- A Proxmox VE backup job that includes every VM leaves cluster nodes out (`backup=0` on their disks) and never freezes them. Kubehenge's etcd snapshots and Velero back up the clusters.
+- A user name with an `@` of its own, such as an Active Directory principal name, signs in with the chosen realm.
 
 ## [0.4.2] - 2026-11-05
 
