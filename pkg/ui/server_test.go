@@ -45,6 +45,11 @@ type fakeAccounts struct {
 	backupChecks   int
 	renewals       int
 	tokenChecks    int
+	// tokenGrants are the privileges of tokens with privilege separation, by token ID and path.
+	// Such a token holds only what its user holds as well. revoked are the token IDs Proxmox VE no
+	// longer takes.
+	tokenGrants map[string]map[string][]string
+	revoked     map[string]bool
 	now            func() time.Time
 	// members are every pool's guests. deleted records the VMs deleted.
 	members []pve.Member
@@ -90,7 +95,7 @@ func (f *fakeAccounts) TokenUser(_ context.Context, token string) (*pve.Ticket, 
 	f.tokenChecks++
 	id, secret, _ := strings.Cut(token, "=")
 	username, _, _ := strings.Cut(id, "!")
-	if secret != "secret" || f.passwords[username] == "" {
+	if !strings.Contains(id, "!") || secret != "secret" || f.passwords[username] == "" || f.revoked[id] {
 		return nil, pve.ErrAuthentication
 	}
 	return &pve.Ticket{Username: id, Token: token, Issued: f.now()}, nil
@@ -113,7 +118,10 @@ func (f *fakeAccounts) Answer(_ context.Context, c *pve.Challenge, kind, code st
 	return &pve.Ticket{Username: c.Username, Ticket: "ticket:" + c.Username, Issued: f.now()}, nil
 }
 
-func (f *fakeAccounts) Renew(_ context.Context, t *pve.Ticket) (*pve.Ticket, error) {
+func (f *fakeAccounts) Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket, error) {
+	if t.Token != "" {
+		return f.TokenUser(ctx, t.Token)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.passwords[t.Username] == "" {
@@ -295,10 +303,23 @@ func (*fakeAccounts) Network(_ context.Context, _ *pve.Ticket, bridge string) (p
 	return pve.Network{Zone: pve.LocalZone}, nil
 }
 
-func (f *fakeAccounts) effective(username, aclPath string) pve.Privileges {
-	username, _, _ = strings.Cut(username, "!")
+func (f *fakeAccounts) effective(tokenID, aclPath string) pve.Privileges {
+	username, _, _ := strings.Cut(tokenID, "!")
+	privs := grantedOn(f.grants[username], aclPath)
+	if separated, ok := f.tokenGrants[tokenID]; ok {
+		own := grantedOn(separated, aclPath)
+		for p := range privs {
+			if !own[p] {
+				delete(privs, p)
+			}
+		}
+	}
+	return privs
+}
+
+func grantedOn(grants map[string][]string, aclPath string) pve.Privileges {
 	privs := pve.Privileges{}
-	for p, granted := range f.grants[username] {
+	for p, granted := range grants {
 		if aclPath == p || strings.HasPrefix(aclPath, p+"/") || p == "/" {
 			for _, g := range granted {
 				privs[g] = true

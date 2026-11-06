@@ -39,6 +39,9 @@ export function SignIn({
   const [realm, setRealm] = useState("");
   const [password, setPassword] = useState("");
   const [factor, setFactor] = useState<SecondFactor>();
+  // A Proxmox VE API token is the way in for a user whose second factor is a security key, which
+  // answers only on Proxmox VE's own page.
+  const [byToken, setByToken] = useState(false);
   const [busy, setBusy] = useState(false);
   // An OpenID sign-in that failed comes back with its reason.
   const [error, setError] = useState<string | undefined>(
@@ -109,9 +112,9 @@ export function SignIn({
           {isDemo() && <span className="demo-mark">Demo</span>}
         </h1>
         {filled(notice) && <output className="warning notice">{notice}</output>}
-        {factor ? (
-          <SecondFactorForm factor={factor} onSignedIn={onSignedIn} onCancel={() => setFactor(undefined)} />
-        ) : (
+        {factor && <SecondFactorForm factor={factor} onSignedIn={onSignedIn} onCancel={() => setFactor(undefined)} />}
+        {!factor && byToken && <TokenForm onSignedIn={onSignedIn} onCancel={() => setByToken(false)} />}
+        {!factor && !byToken && (
           <form
             onSubmit={(ev: SubmitEvent<HTMLFormElement>) => {
               ev.preventDefault();
@@ -184,17 +187,90 @@ export function SignIn({
               </>
             )}
             <ErrorBox message={error} />
-            {passwordForm && (
-              <div className="actions">
+            <div className="actions">
+              <button type="button" onClick={() => setByToken(true)}>
+                Use API token
+              </button>
+              {passwordForm && (
                 <button type="submit" className={lastWasSSO ? undefined : "primary"} disabled={busy}>
                   {busy ? "Signing in…" : "Sign in"}
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </form>
         )}
       </div>
     </div>
+  );
+}
+
+function TokenForm({ onSignedIn, onCancel }: { onSignedIn: (s: Session) => void; onCancel: () => void }): JSX.Element {
+  const [tokenId, setTokenId] = useState("");
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const input = useRef<HTMLInputElement>(null);
+
+  useLayoutEffect(() => {
+    input.current?.focus();
+  }, []);
+
+  const submit = async (): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      onSignedIn(await api.signInWithToken(tokenId.trim(), secret.trim()));
+    } catch (err) {
+      setError(errorMessage(err));
+      setSecret("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={(ev: SubmitEvent<HTMLFormElement>) => {
+        ev.preventDefault();
+        void submit();
+      }}
+    >
+      <p className="muted">Sign in with an API token</p>
+      <Field label="Token ID" hint="user@realm!name">
+        {(id) => (
+          <input
+            id={id}
+            ref={input}
+            autoComplete="off"
+            spellCheck={false}
+            value={tokenId}
+            onChange={(e) => setTokenId(e.target.value)}
+            required
+          />
+        )}
+      </Field>
+      <Field label="Secret">
+        {(id) => (
+          <input
+            id={id}
+            type="password"
+            autoComplete="off"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            required
+          />
+        )}
+      </Field>
+      <ErrorBox message={error} />
+      <div className="actions">
+        <button type="button" onClick={onCancel}>
+          Use password
+        </button>
+        <button type="submit" className="primary" disabled={busy}>
+          {busy ? "Signing in…" : "Sign in"}
+        </button>
+      </div>
+    </form>
   );
 }
 

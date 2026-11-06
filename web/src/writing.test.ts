@@ -12,6 +12,12 @@ const exceptions: readonly { file: string; rule: string; text: string; reason: s
     text: "use letters, digits and !_.*'()-",
     reason: "the ! is one of the characters a bucket folder may hold, not punctuation",
   },
+  {
+    file: "SignIn.tsx",
+    rule: "exclamation",
+    text: "user@realm!name",
+    reason: "the ! separates a Proxmox VE API token's user from its name, not punctuation",
+  },
 ];
 
 type Exception = (typeof exceptions)[number];

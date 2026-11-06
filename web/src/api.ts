@@ -303,6 +303,7 @@ export interface Api {
   realms: () => Promise<Realm[]>;
   session: () => Promise<Session>;
   signIn: (username: string, realm: string, password: string) => Promise<Session>;
+  signInWithToken: (id: string, secret: string) => Promise<Session>;
   secondFactor: (kind: string, code: string) => Promise<Session>;
   signOut: () => Promise<void>;
 
@@ -432,6 +433,10 @@ export const api: Api = {
   signIn: async (username, realm, password) => {
     clearPollCaches();
     return remember(await request("POST", "/api/session", { username, realm, password }));
+  },
+  signInWithToken: async (id, secret) => {
+    clearPollCaches();
+    return remember(await request("POST", "/api/session/token", { id, secret }));
   },
   secondFactor: async (kind, code) => remember(await request("POST", "/api/session/second-factor", { kind, code })),
   signOut: async () => {

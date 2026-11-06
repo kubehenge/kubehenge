@@ -109,7 +109,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !challenge.TOTP && !challenge.Yubico && len(challenge.Recovery) == 0 {
-		writeError(w, http.StatusUnauthorized, "security keys work only in Proxmox VE. Use a TOTP code, recovery key or OpenID realm")
+		writeError(w, http.StatusUnauthorized, "security keys work only in Proxmox VE. Sign in with an API token instead")
 		return
 	}
 	sess := s.sessions.start(w, nil, challenge)
@@ -120,6 +120,34 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 			TOTP: challenge.TOTP, Yubico: challenge.Yubico, Recovery: challenge.Recovery,
 		},
 	})
+}
+
+// signInWithToken opens a browser session for a Proxmox VE API token, the way in for a user whose
+// only second factor is a security key, which answers on Proxmox VE's own page alone. The token
+// counts against the same limits as a wrong password, and the session has the same lifetime and
+// CSRF token. Its privileges are the token's own, which Proxmox VE already cuts down to its user's
+// where the token has privilege separation.
+func (s *Server) signInWithToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID     string `json:"id"`
+		Secret string `json:"secret"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	id, secret := strings.TrimSpace(req.ID), strings.TrimSpace(req.Secret)
+	if id == "" || secret == "" {
+		writeError(w, http.StatusBadRequest, "enter the token ID and secret")
+		return
+	}
+	ticket := s.tokenUser(w, r, id+"="+secret)
+	if ticket == nil {
+		return
+	}
+	s.sessions.end(w, r)
+	sess := s.sessions.start(w, ticket, nil)
+	s.Log.InfoContext(r.Context(), "signed in", "user", ticket.Username, "address", clientAddress(r), "via", "token")
+	writeJSON(w, http.StatusOK, s.signedInView(r.Context(), ticket.Username, sess))
 }
 
 func (s *Server) secondFactor(w http.ResponseWriter, r *http.Request) {

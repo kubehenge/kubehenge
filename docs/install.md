@@ -253,7 +253,7 @@ Sign in with a Proxmox VE account of any realm: Proxmox VE, PAM, LDAP, Active Di
 
 - **Realm and password.** Choose the realm, or type `user@realm` as the user name.
 - **Second factor.** An account with TOTP, Yubico OTP or recovery keys is asked for one.
-  - WebAuthn keys are bound to Proxmox VE's own address and do not work here. Their users sign in with another factor or an OpenID realm.
+  - WebAuthn keys are bound to Proxmox VE's own address and do not work here. Their users choose **Use API token** and give a Proxmox VE API token (`user@realm!name` and its secret).
 - **OpenID realms** return from the identity provider to `https://<appliance>/api/openid/callback`. Register it as a redirect URL with the provider of the realm's client.
 - **Sessions** end eight hours after sign-in, however active, or when the interface restarts on an upgrade or a certificate renewal.
 - **Five failed sign-ins** for one user from one address within 15 minutes block that user from that address for the rest of the 15 minutes.

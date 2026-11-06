@@ -272,6 +272,51 @@ describe("sign-in", () => {
     );
   });
 
+  it("signs in with an API token for a user whose second factor is a security key", async () => {
+    const routes: Record<string, Route> = {
+      "GET /api/session": { status: 401, body: { error: "not signed in" } },
+      "GET /api/realms": { body: [{ realm: "pve", type: "pve", default: true }] },
+      "POST /api/session": {
+        status: 401,
+        body: { error: "security keys work only in Proxmox VE. Sign in with an API token instead" },
+      },
+      "POST /api/session/token": { status: 401, body: { error: "Proxmox VE refused the API token" } },
+      "GET /api/clusters": { body: [web] },
+      "DELETE /api/session": { status: 204 },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User name"), "alice@pve");
+    await user.type(screen.getByLabelText("Password"), "secret");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent("Sign in with an API token instead");
+
+    await user.click(screen.getByRole("button", { name: "Use API token" }));
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Token ID")).toHaveFocus();
+    await user.type(screen.getByLabelText("Token ID"), " alice@pve!ui ");
+    await user.type(screen.getByLabelText("Secret"), "wrong");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent("Proxmox VE refused the API token");
+    expect(screen.getByLabelText("Secret")).toHaveValue("");
+
+    routes["POST /api/session/token"] = { body: { user: "alice@pve!ui", csrf: "t1" } };
+    await user.type(screen.getByLabelText("Secret"), "0b6f3c1e");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await expect(screen.findByRole("link", { name: "web" })).resolves.toBeInTheDocument();
+    expect(calls.findLast((c) => c.key === "POST /api/session/token")?.body).toStrictEqual({
+      id: "alice@pve!ui",
+      secret: "0b6f3c1e",
+    });
+    expect(screen.getByText("alice@pve!ui", { selector: ".user" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(calls.find((c) => c.key === "DELETE /api/session")?.headers.get("X-Kubehenge-CSRF")).toBe("t1");
+    await expect(screen.findByRole("button", { name: "Use API token" })).resolves.toBeInTheDocument();
+  });
+
   it("offers the realm last signed in with, while Proxmox VE still has it", async () => {
     const realms = [
       { realm: "pam", type: "pam" },

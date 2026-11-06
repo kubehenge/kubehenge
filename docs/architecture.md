@@ -772,7 +772,8 @@ It is where Kubehenge starts and what looks after it:
 
 - **Sign-in through the Proxmox VE API**, with no second user directory. Every Proxmox VE realm works, PAM, Proxmox VE users, LDAP, Active Directory and OpenID Connect included.
   - A second factor (TOTP, Yubico OTP or recovery keys) is passed on to Proxmox VE as its own sign-in page would.
-  - A WebAuthn key is bound to Proxmox VE's own address, so its users sign in through an OpenID realm or another factor.
+  - A WebAuthn key is bound to Proxmox VE's own address, so its users sign in with an API token (`POST /api/session/token`). That makes a normal session with the same limits.
+  - A token session ends at its next renewal once Proxmox VE stops taking the token. Its privileges are the token's, which privilege separation cuts down to its user's.
   - An OpenID realm sends the browser to its identity provider, which returns it to the interface. The return goes to `/api/openid/callback` under `--public-url`, to be registered with the provider.
   - Without a public URL OpenID sign-in is refused, since the address the browser sends is the client's to choose.
   - Proxmox VE checks the code, and the interface accepts the return only in the browser that started it.

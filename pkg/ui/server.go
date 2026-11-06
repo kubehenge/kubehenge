@@ -207,6 +207,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/realms", s.realms)
 	mux.HandleFunc("POST /api/session", s.signIn)
 	mux.HandleFunc("POST /api/session/second-factor", s.secondFactor)
+	mux.HandleFunc("POST /api/session/token", s.signInWithToken)
 	mux.HandleFunc("GET /api/openid/start", s.openIDStart)
 	mux.HandleFunc("GET /api/openid/callback", s.openIDCallback)
 	mux.HandleFunc("GET /api/session", s.signedIn(s.whoAmI))
