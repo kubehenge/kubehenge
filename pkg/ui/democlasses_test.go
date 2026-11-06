@@ -32,9 +32,11 @@ type chartMetadata struct {
 type chartSpec struct {
 	Variables    []any             `json:"variables"`
 	ControlPlane chartMachineClass `json:"controlPlane"`
-	Workers      struct {
-		MachineDeployments []chartMachineClass `json:"machineDeployments"`
-	} `json:"workers"`
+	Workers      chartWorkerClass  `json:"workers"`
+}
+
+type chartWorkerClass struct {
+	MachineDeployments []chartMachineClass `json:"machineDeployments"`
 }
 
 // chartMachineClass is the part of a control plane or a worker class that the wizard shows: the

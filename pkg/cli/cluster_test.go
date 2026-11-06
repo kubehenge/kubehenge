@@ -103,8 +103,9 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	if _, err = runCluster(t, srv.URL, token, "scale", "web", "--control-planes", "5", "--workers", "md-0=4"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = runCluster(t, srv.URL, token, "timeouts", "web", "--control-planes", "drain=30m,detach=10m,deletion=0",
-		"--pool", "md-0=drain=1h", "--pool", "gpu=detach=90s"); err != nil {
+	_, err = runCluster(t, srv.URL, token, "timeouts", "web", "--control-planes", "drain=30m,detach=10m,deletion=0",
+		"--pool", "md-0=drain=1h", "--pool", "gpu=detach=90s")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = runCluster(t, srv.URL, token, "delete", "web"); err == nil {

@@ -10,21 +10,27 @@ import (
 )
 
 type deletionDocument struct {
-	Kind     string `json:"kind"`
-	Metadata struct {
-		Name string `json:"name"`
-	} `json:"metadata"`
-	Spec struct {
-		ControlPlane struct {
-			Deletion map[string]int `json:"deletion"`
-		} `json:"controlPlane"`
-		Workers struct {
-			MachineDeployments []struct {
-				Class    string         `json:"class"`
-				Deletion map[string]int `json:"deletion"`
-			} `json:"machineDeployments"`
-		} `json:"workers"`
-	} `json:"spec"`
+	Kind     string            `json:"kind"`
+	Metadata deletionName      `json:"metadata"`
+	Spec     deletionClassSpec `json:"spec"`
+}
+
+type deletionName struct {
+	Name string `json:"name"`
+}
+
+type deletionClassSpec struct {
+	ControlPlane deletionMachines `json:"controlPlane"`
+	Workers      deletionWorkers  `json:"workers"`
+}
+
+type deletionMachines struct {
+	Class    string         `json:"class"`
+	Deletion map[string]int `json:"deletion"`
+}
+
+type deletionWorkers struct {
+	MachineDeployments []deletionMachines `json:"machineDeployments"`
 }
 
 // Cluster API waits for ever on a disruption budget or a volume that will not detach unless the
