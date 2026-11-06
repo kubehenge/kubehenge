@@ -3,18 +3,62 @@
 # changes: each of the nightly run's four extra tests comes with its own script and the code only it
 # exercises, and a path no rule names brings every other test.
 #
+# The lanes scope.sh prints are matched in the shell, as each process started costs most of this
+# test's time on Windows. Its output is a JSON list of strings, `["a", "b,c"]`, and one jq call
+# below reads that it is one.
+#
 #   test/unit/scope.sh
 set -eu
 
 here=$(dirname "$0")
 ci=${here}/../e2e/ci
+work=$(mktemp -d)
+repo=$(mktemp -d)
+trap 'rm -rf "${work}" "${repo}"' EXIT
+# A line end, for the paths of a change.
+nl='
+'
 
 failures=0
+# lanes_for <paths, one per line>: sets list to the lanes for a change to them.
+lanes_for() {
+    printf '%s\n' "$1" > "${work}/paths"
+    sh "${ci}/scope.sh" < "${work}/paths" > "${work}/lanes"
+    read -r list < "${work}/lanes"
+}
+# has <lanes> <test>: whether a lane of the list holds the test, alone or in a pair.
+has() {
+    case $1 in
+        *[\",]"$2"[\",]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+# compact: cuts the blank after each comma between the lanes of list.
+compact() {
+    while :; do
+        case ${list} in
+            *', '*) list="${list%%, *},${list#*, }" ;;
+            *) break ;;
+        esac
+    done
+}
+# contains <file> <text>: whether a line of the file holds the text.
+contains() {
+    while IFS= read -r contains_line || [ -n "${contains_line}" ]; do
+        case ${contains_line} in
+            *"$2"*) return 0 ;;
+            *) ;;
+        esac
+    done < "$1"
+    return 1
+}
+
 # expect <path> <test> <yes|no>: whether the lanes for a change to the path run the test. A lane
 # is a test or a pair, as in k3s-etcd,cluster-mesh.
 expect() {
-    list=$(printf '%s\n' "$1" | sh "${ci}/scope.sh")
-    if printf '%s' "${list}" | jq -e --arg t "$2" 'any(.[]; split(",") | index($t) != null)' > /dev/null; then got=yes; else got=no; fi
+    lanes_for "$1"
+    # shellcheck disable=SC2310 # its status is the answer.
+    if has "${list}" "$2"; then got=yes; else got=no; fi
     if [ "${got}" != "$3" ]; then
         printf 'FAIL: %s: %s in %s, want %s\n' "$1" "$2" "${list}" "$3"
         failures=$((failures + 1))
@@ -79,28 +123,36 @@ done
 
 # expect_lanes <paths, one per line> <lanes>: the lanes, in order, as compact JSON.
 expect_lanes() {
-    list=$(printf '%s\n' "$1" | sh "${ci}/scope.sh" | jq -c . | tr -d '\r')
+    lanes_for "$1"
+    compact
     if [ "${list}" != "$2" ]; then
         printf 'FAIL: %s: %s, want %s\n' "$1" "${list}" "$2"
         failures=$((failures + 1))
     fi
 }
+sh "${ci}/scope.sh" --all > "${work}/all"
+read -r all < "${work}/all"
+list=${all}
+compact
+want_all=${list}
 # expect_all <paths>: every lane of the merge queue.
 expect_all() {
-    want=$(sh "${ci}/scope.sh" --all | jq -c . | tr -d '\r')
-    expect_lanes "$1" "${want}"
+    expect_lanes "$1" "${want_all}"
 }
 # expect_each <path> <yes|no> <test>...: whether the lanes for a change to the path run each test.
 expect_each() {
     each_path=$1
     each_want=$2
     shift 2
-    each_list=$(printf '%s\n' "${each_path}" | sh "${ci}/scope.sh")
-    each_wrong=$(printf '%s' "${each_list}" | jq -r --arg want "${each_want}" \
-        '[.[] | split(",")[]] as $s | $ARGS.positional[] as $t | select((if $s | index($t) then "yes" else "no" end) != $want) | $t' \
-        --args "$@" | tr -d '\r' | tr '\n' ' ')
+    lanes_for "${each_path}"
+    each_wrong=''
+    for each_test in "$@"; do
+        # shellcheck disable=SC2310 # its status is the answer.
+        if has "${list}" "${each_test}"; then got=yes; else got=no; fi
+        [ "${got}" = "${each_want}" ] || each_wrong="${each_wrong}${each_test} "
+    done
     if [ -n "${each_wrong}" ]; then
-        printf 'FAIL: %s: %s in %s, want %s\n' "${each_path}" "${each_wrong}" "${each_list}" "${each_want}"
+        printf 'FAIL: %s: %s in %s, want %s\n' "${each_path}" "${each_wrong}" "${list}" "${each_want}"
         failures=$((failures + 1))
     fi
 }
@@ -169,23 +221,23 @@ expect_all charts/kubehenge/templates/_helpers.tpl
 expect_all charts/kubehenge/templates/controller.yaml
 expect_all charts/kubehenge/templates/autoscaler.yaml
 expect_all charts/kubehenge/Chart.yaml
-expect_all "$(printf 'charts/kubehenge/Chart.yaml\ndocs/changelog.md')"
+expect_all "charts/kubehenge/Chart.yaml${nl}docs/changelog.md"
 expect_all go.mod
 expect_all Makefile
 expect_all .github/workflows/e2e.yml
 expect_all test/e2e/ci/run.sh
 expect_all brand-new/file.txt
 # A mix gives the union of its paths' lanes.
-expect_lanes "$(printf 'web/src/app.tsx\npkg/cli/cluster.go')" "[${appliance_lane},\"k3s-machines\"]"
-expect_lanes "$(printf 'web/src/app.tsx\ndocs/testing.md')" "[${appliance_lane}]"
-expect_lanes "$(printf 'docs/testing.md\npkg/ui/clusters.go\nREADME.md')" "[${appliance_lane},\"k3s-machines\"]"
-expect_lanes "$(printf 'test/e2e/autoscaler.sh\ntest/e2e/node-image-refresh.sh')" '["node-image-refresh","k3s-addons-b,autoscaler"]'
-expect_lanes "$(printf 'test/e2e/rancher.sh\npkg/ui/clusters.go')" "[${appliance_lane},\"k3s-machines\",\"rancher\"]"
-expect_each "$(printf 'charts/kubehenge/templates/kubeadm.yaml\ncharts/kubehenge/templates/rke2.yaml')" yes kubeadm rke2-etcd appliance
-expect_each "$(printf 'charts/kubehenge/templates/kubeadm.yaml\ncharts/kubehenge/templates/rke2.yaml')" no talos k3s-etcd
+expect_lanes "web/src/app.tsx${nl}pkg/cli/cluster.go" "[${appliance_lane},\"k3s-machines\"]"
+expect_lanes "web/src/app.tsx${nl}docs/testing.md" "[${appliance_lane}]"
+expect_lanes "docs/testing.md${nl}pkg/ui/clusters.go${nl}README.md" "[${appliance_lane},\"k3s-machines\"]"
+expect_lanes "test/e2e/autoscaler.sh${nl}test/e2e/node-image-refresh.sh" '["node-image-refresh","k3s-addons-b,autoscaler"]'
+expect_lanes "test/e2e/rancher.sh${nl}pkg/ui/clusters.go" "[${appliance_lane},\"k3s-machines\",\"rancher\"]"
+expect_each "charts/kubehenge/templates/kubeadm.yaml${nl}charts/kubehenge/templates/rke2.yaml" yes kubeadm rke2-etcd appliance
+expect_each "charts/kubehenge/templates/kubeadm.yaml${nl}charts/kubehenge/templates/rke2.yaml" no talos k3s-etcd
 # One path no rule names brings every lane, whatever else changes.
-expect_all "$(printf 'web/src/app.tsx\npkg/provisioner/cluster.go\ndocs/testing.md')"
-expect_all "$(printf 'docs/testing.md\nbrand-new/file.txt')"
+expect_all "web/src/app.tsx${nl}pkg/provisioner/cluster.go${nl}docs/testing.md"
+expect_all "docs/testing.md${nl}brand-new/file.txt"
 # Paths with spaces are one path each, and a quoted path, which git prints for odd bytes, is unknown.
 expect_lanes 'docs/my file.md' '[]'
 expect_lanes 'web/src/my page.tsx' "[${appliance_lane}]"
@@ -194,8 +246,9 @@ expect_all 'weird dir/file.txt'
 expect_all '"docs/caf\303\251.md"'
 # No change, or only blank lines, runs nothing.
 expect_lanes '' '[]'
-expect_lanes "$(printf '\n\n')" '[]'
-empty=$(printf '' | sh "${ci}/scope.sh")
+expect_lanes "${nl}${nl}" '[]'
+sh "${ci}/scope.sh" < /dev/null > "${work}/lanes"
+read -r empty < "${work}/lanes"
 if [ "${empty}" != '[]' ]; then
     echo 'FAIL: an empty diff runs a lane'
     failures=$((failures + 1))
@@ -203,15 +256,16 @@ fi
 # A deleted file is listed by its path, as a change is. A rename, listed with --no-renames, names
 # both paths, so a ClusterClass moved away still brings its tests.
 expect_each test/e2e/autoscaler.sh yes autoscaler
-expect_lanes "$(printf 'docs/old.md\ndocs/new.md')" '[]'
-expect_each "$(printf 'charts/kubehenge/templates/talos.yaml\ndocs/talos.yaml')" yes talos talos-addons-c
-expect_each "$(printf 'test/e2e/rancher.sh\ntest/e2e/rancher-new.sh')" yes kubeadm
-grep -q 'diff --name-only --no-renames' "${here}/../../.github/workflows/e2e.yml" || {
+expect_lanes "docs/old.md${nl}docs/new.md" '[]'
+expect_each "charts/kubehenge/templates/talos.yaml${nl}docs/talos.yaml" yes talos talos-addons-c
+expect_each "test/e2e/rancher.sh${nl}test/e2e/rancher-new.sh" yes kubeadm
+# shellcheck disable=SC2310 # its status is the answer.
+if contains "${here}/../../.github/workflows/e2e.yml" 'diff --name-only --no-renames'; then :; else
     echo 'FAIL: the workflow lists the diff with renames, which names only the new path'
     failures=$((failures + 1))
-}
+fi
 # The diff the workflow lists, of a repository where a ClusterClass moves into docs/.
-moved=$(mktemp -d)
+moved=${work}/moved
 mkdir -p "${moved}/charts/kubehenge/templates" "${moved}/docs"
 echo a > "${moved}/charts/kubehenge/templates/talos.yaml"
 git -C "${moved}" init -q
@@ -220,106 +274,140 @@ before=$(git -C "${moved}" write-tree)
 git -C "${moved}" mv charts/kubehenge/templates/talos.yaml docs/talos.yaml
 after=$(git -C "${moved}" write-tree)
 diffed=$(git -C "${moved}" -c core.quotepath=off diff --name-only --no-renames "${before}" "${after}" | tr -d '\r')
-rm -rf "${moved}"
 expect_each "${diffed}" yes talos talos-addons-a
 
 # Every test a rule names is one the nightly run has: scope.sh refuses an unknown name, and the
-# nightly run holds all of them.
-nightly_tests=$(sh "${ci}/nightly.sh" 20000 | jq -r '.[] | split(",")[] | split("+")[0]' | tr -d '\r' | sort -u)
-for t in $(sh "${ci}/scope.sh" --all | jq -r '.[] | split(",")[]' | tr -d '\r') management-cluster-upgrade rancher control-plane-ha two-nodes; do
-    case "
-${nightly_tests}
-" in
-        *"
-${t}
-"*) ;;
+# nightly run holds all of them. The same list holds the checks of --all, which stays the merge
+# queue's set without the nightly run's four. It holds 20 lanes at most, as many as a run's jobs at
+# once, with every pair, and each test in one lane only.
+nightly_tests=$(sh "${ci}/nightly.sh" 20000 | jq -j '.[] | split(",")[] | split("+")[0] | . + " "')
+checks=$(
+    printf '%s' "${all}" | jq -j '
+      (if type == "array" then "" else "not-a-list " end),
+      (if index("rancher") == null then "" else "rancher " end),
+      (if length <= 20 then "" else "over-20 " end),
+      (["appliance,management-cluster", "k3s-etcd,cluster-mesh", "k3s-addons-b,autoscaler"][] as $p
+        | if index($p) == null then "no-lane:\($p) " else "" end),
+      (if [.[] | split(",")[]] | length == (unique | length) then "" else "twice " end),
+      "|", (.[] | split(",")[] | . + " "),
+      "|", (.[] | select(contains(",")) | . + " ")'
+)
+problems=${checks%%|*}
+rest=${checks#*|}
+tests_of_all=${rest%%|*}
+pairs=${rest#*|}
+for t in ${tests_of_all} management-cluster-upgrade rancher control-plane-ha two-nodes; do
+    case " ${nightly_tests}" in
+        *" ${t} "*) ;;
         *)
             printf 'FAIL: nightly.sh has no test %s\n' "${t}"
             failures=$((failures + 1))
             ;;
     esac
 done
-typo=$(mktemp -d)
+typo=${work}/typo
+mkdir "${typo}"
 # shellcheck disable=SC2016 # the pattern is the script's text
 sed 's|need="${need} autoscaler"|need="${need} autoscalar"|' "${ci}/scope.sh" > "${typo}/scope.sh"
-if grep -q autoscalar "${typo}/scope.sh" && ! printf 'test/e2e/autoscaler.sh\n' | sh "${typo}/scope.sh" > /dev/null 2>&1; then :; else
+# shellcheck disable=SC2310 # its status is the answer.
+if contains "${typo}/scope.sh" autoscalar && ! printf 'test/e2e/autoscaler.sh\n' | sh "${typo}/scope.sh" > /dev/null 2>&1; then :; else
     echo 'FAIL: scope.sh accepts a rule that names a test the nightly run lacks'
     failures=$((failures + 1))
 fi
-rm -rf "${typo}"
 
 # With a base, the values bring Rancher's test only for a change to addons.rancher. The base is a
 # tree of a repository made for the test, the change the checkout's copy of the values.
-repo=$(mktemp -d)
-trap 'rm -rf "${repo}"' EXIT
 mkdir -p "${repo}/charts/kubehenge"
 cp "${here}/../../charts/kubehenge/values.yaml" "${repo}/charts/kubehenge/values.yaml"
 git -C "${repo}" init -q
 git -C "${repo}" add charts/kubehenge/values.yaml
 tree=$(git -C "${repo}" write-tree)
 values=${repo}/charts/kubehenge/values.yaml
+cp "${values}" "${work}/original.yaml"
 scope_dir=$(cd "${ci}" && pwd)
+printf 'charts/kubehenge/values.yaml\n' > "${work}/values-path"
+start=${PWD}
 # expect_values <case> <want>: whether the checkout's values, against the tree, bring Rancher's test.
 expect_values() {
-    list=$(cd "${repo}" && printf 'charts/kubehenge/values.yaml\n' | sh "${scope_dir}/scope.sh" --base "${tree}")
-    if printf '%s' "${list}" | jq -e 'index("rancher") != null' > /dev/null; then got=yes; else got=no; fi
+    cd "${repo}"
+    sh "${scope_dir}/scope.sh" --base "${tree}" < "${work}/values-path" > "${work}/lanes"
+    cd "${start}"
+    read -r list < "${work}/lanes"
+    case ${list} in
+        *'"rancher"'*) got=yes ;;
+        *) got=no ;;
+    esac
     if [ "${got}" != "$2" ]; then
         printf 'FAIL: values.yaml %s: rancher in %s, want %s\n' "$1" "${list}" "$2"
         failures=$((failures + 1))
     fi
-    if printf '%s' "${list}" | jq -e 'index("k3s-etcd,cluster-mesh") != null' > /dev/null; then :; else
-        printf 'FAIL: values.yaml %s: no k3s-etcd in %s\n' "$1" "${list}"
-        failures=$((failures + 1))
-    fi
+    case ${list} in
+        *'"k3s-etcd,cluster-mesh"'*) ;;
+        *)
+            printf 'FAIL: values.yaml %s: no k3s-etcd in %s\n' "$1" "${list}"
+            failures=$((failures + 1))
+            ;;
+    esac
 }
-original=$(cat "${values}")
 expect_values unchanged no
 # Rancher's chart pin, as Renovate raises it.
-printf '%s\n' "${original}" | sed 's|^\(    version: \)2\.[0-9.]*@|\19.9.9@|' > "${values}"
+sed 's|^\(    version: \)2\.[0-9.]*@|\19.9.9@|' "${work}/original.yaml" > "${values}"
 expect_values 'with addons.rancher changed' yes
 # A pin in the Turtles block nested inside it.
-printf '%s\n' "${original}" | sed 's|turtles:v[0-9.]*@|turtles:v9.9.9@|' > "${values}"
+sed 's|turtles:v[0-9.]*@|turtles:v9.9.9@|' "${work}/original.yaml" > "${values}"
 expect_values "with Rancher's Turtles changed" yes
 # Headlamp's pin, the block before Rancher's, and Prometheus's comment, the line after it.
-printf '%s\n' "${original}" | sed 's|depName=ghcr.io/headlamp-k8s/headlamp|depName=ghcr.io/headlamp-k8s/headlamp2|; s|^  # Prometheus, Alertmanager|  # Prometheus and Alertmanager|' > "${values}"
+sed 's|depName=ghcr.io/headlamp-k8s/headlamp|depName=ghcr.io/headlamp-k8s/headlamp2|; s|^  # Prometheus, Alertmanager|  # Prometheus and Alertmanager|' "${work}/original.yaml" > "${values}"
 expect_values 'changed outside addons.rancher' no
 
 # --all stays the merge queue's set, without the nightly run's four.
-all=$(sh "${ci}/scope.sh" --all)
-if printf '%s' "${all}" | jq -e 'index("rancher") == null' > /dev/null; then :; else
-    echo 'FAIL: --all lists rancher'
+for problem in ${problems}; do
+    case ${problem} in
+        rancher) echo 'FAIL: --all lists rancher' ;;
+        over-20) printf 'FAIL: --all has over 20 lanes: %s\n' "${all}" ;;
+        no-lane:*) printf 'FAIL: --all has no lane %s: %s\n' "${problem#no-lane:}" "${all}" ;;
+        twice) printf 'FAIL: --all runs a test in two lanes: %s\n' "${all}" ;;
+        *) printf 'FAIL: --all is not a list of lanes: %s\n' "${all}" ;;
+    esac
     failures=$((failures + 1))
-fi
-# It holds 20 lanes at most, as many as a run's jobs at once, with every pair, and each test in one
-# lane only.
-if printf '%s' "${all}" | jq -e 'length <= 20' > /dev/null; then :; else
-    printf 'FAIL: --all has over 20 lanes: %s\n' "${all}"
-    failures=$((failures + 1))
-fi
-for pair in appliance,management-cluster k3s-etcd,cluster-mesh k3s-addons-b,autoscaler; do
-    if printf '%s' "${all}" | jq -e --arg p "${pair}" 'index($p) != null' > /dev/null; then :; else
-        printf 'FAIL: --all has no lane %s: %s\n' "${pair}" "${all}"
-        failures=$((failures + 1))
-    fi
 done
-if printf '%s' "${all}" | jq -e '[.[] | split(",")[]] | length == (unique | length)' > /dev/null; then :; else
-    printf 'FAIL: --all runs a test in two lanes: %s\n' "${all}"
-    failures=$((failures + 1))
-fi
-# A pair's tests share their templates: the lane's later test needs none its first does not.
-# templates_of <test>: the templates.sh function of that name, each line's trailing blanks cut.
-templates_of() {
-    # shellcheck disable=SC2016 # expanded by the inner shell
-    sh -c '. "$1/templates.sh"; node_os= from=v0 to=v0; templates_of "$2"' sh "${ci}" "$1" | sed 's/ *$//'
+# A pair's tests share their templates: the lane's later test needs none its first does not. The
+# templates.sh function of each test is read in one shell, each line's trailing blanks cut.
+# shellcheck disable=SC2016 # expanded by the inner shell
+templates_script='
+. "$1/templates.sh"
+node_os= from=v0 to=v0
+file=$2
+shift 2
+# trimmed <test>: sets trimmed to the lines of the templates the test needs, with no trailing blanks.
+trimmed() {
+    templates_of "$1" > "${file}"
+    trimmed=
+    sep=
+    while IFS= read -r line; do
+        line=${line%"${line##*[! ]}"}
+        trimmed=${trimmed}${sep}${line}
+        sep="
+"
+    done < "${file}"
 }
-for pair in $(printf '%s' "${all}" | jq -r '.[] | select(contains(","))' | tr -d '\r'); do
-    first=$(templates_of "${pair%%,*}")
-    second=$(templates_of "${pair#*,}")
+bad=0
+for pair in "$@"; do
+    trimmed "${pair%%,*}"
+    first=${trimmed}
+    trimmed "${pair#*,}"
+    second=${trimmed}
     if [ -z "${second}" ] || [ "${second}" = "${first}" ]; then :; else
-        printf 'FAIL: %s: %s needs templates (%s) that %s does not make\n' "${pair}" "${pair#*,}" "${second}" "${pair%%,*}"
-        failures=$((failures + 1))
+        printf "FAIL: %s: %s needs templates (%s) that %s does not make\n" "${pair}" "${pair#*,}" "${second}" "${pair%%,*}"
+        bad=1
     fi
 done
+exit "${bad}"
+'
+# shellcheck disable=SC2086 # one pair per word
+if ! sh -c "${templates_script}" sh "${ci}" "${work}/templates" ${pairs}; then
+    failures=$((failures + 1))
+fi
 
 if [ "${failures}" -gt 0 ]; then
     printf '%s failed\n' "${failures}"

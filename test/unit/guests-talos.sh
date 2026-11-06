@@ -15,20 +15,40 @@ mkdir "${bin}" "${root}/work" "${root}/work/mgmt" "${root}/tmp"
 trap 'rm -rf "${root}"' EXIT
 
 passes=0 failures=0
+# holds <file> <text>: whether a line of the file holds the text. The files are read in the shell,
+# as each process started costs most of this test's time on Windows.
+holds() {
+    [ -f "$1" ] || return 1
+    while IFS= read -r holds_line || [ -n "${holds_line}" ]; do
+        case ${holds_line} in
+            *"$2"*) return 0 ;;
+            *) ;;
+        esac
+    done < "$1"
+    return 1
+}
 # has <what> <file> <text>: whether the file holds the text.
 has() {
-    if [ -f "$2" ] && grep -qF -- "$3" "$2"; then
+    # shellcheck disable=SC2310 # its status is the answer.
+    if holds "$2" "$3"; then
         passes=$((passes + 1))
     else
         said='(no file)'
-        [ ! -f "$2" ] || said=$(cat "$2")
+        if [ -f "$2" ]; then
+            said=
+            while IFS= read -r line || [ -n "${line}" ]; do
+                said=${said:+${said}
+}${line}
+            done < "$2"
+        fi
         printf 'FAIL: %s\n  wanted %s to say: %s\n  it said: %s\n' "$1" "$2" "$3" "${said}"
         failures=$((failures + 1))
     fi
 }
 # lacks <what> <file> <text>: whether the file, if there is one, leaves the text out.
 lacks() {
-    if [ -f "$2" ] && grep -qF -- "$3" "$2"; then
+    # shellcheck disable=SC2310 # its status is the answer.
+    if holds "$2" "$3"; then
         printf 'FAIL: %s\n  wanted %s not to say: %s\n' "$1" "$2" "$3"
         failures=$((failures + 1))
     else
@@ -49,10 +69,13 @@ truth() {
 
 # jq's Windows builds end their lines with CR LF, which the script's reads would keep.
 real_jq=$(command -v jq)
+cr=$(printf '\r')
 cat > "${bin}/jq" << EOF
 #!/bin/sh
 "${real_jq}" "\$@" > "${root}/jq.out" || code=\$?
-tr -d '\r' < "${root}/jq.out"
+while IFS= read -r line || [ -n "\${line}" ]; do
+    printf '%s\n' "\${line%${cr}}"
+done < "${root}/jq.out"
 exit "\${code:-0}"
 EOF
 
@@ -130,7 +153,13 @@ cat > "${root}/proxmoxmachines.json" << 'EOF'
 EOF
 cat > "${bin}/kubectl" << EOF
 #!/bin/sh
-[ "\$1" = --kubeconfig ] && grep -q 'management kubeconfig' "\$2" && [ "\$3" = --request-timeout=20s ] || {
+management=no
+if [ "\$1" = --kubeconfig ]; then
+    while IFS= read -r line; do
+        case \${line} in *'management kubeconfig'*) management=yes ;; *) ;; esac
+    done < "\$2"
+fi
+[ "\${management}" = yes ] && [ "\$3" = --request-timeout=20s ] || {
     echo "error: not the management cluster's kubeconfig" >&2
     exit 1
 }
@@ -157,7 +186,11 @@ config=$2 node=$4
 shift 6
 cluster=talos-1
 [ "${node}" != 172.20.99.11 ] || cluster=mgmt
-grep -q "context: ${cluster}" "${config}" || {
+known=no
+while IFS= read -r line; do
+    case ${line} in *"context: ${cluster}"*) known=yes ;; *) ;; esac
+done < "${config}"
+[ "${known}" = yes ] || {
     echo "rpc error: code = Unauthenticated desc = not the talosconfig of ${node}"
     exit 1
 }
@@ -195,20 +228,22 @@ esac
 EOF
 chmod +x "${bin}"/*
 
-# collect_into <out> <work directory>: guests.sh collect with the stand-ins, whose exit code it prints.
+# collect_into <out> <work directory>: guests.sh collect with the stand-ins, whose exit code it sets code to.
 # The cut-off ends the node that never answers, which is asked once. It is well above what a
 # stand-in's answer takes on a loaded machine, where a few processes can take seconds to start.
 collect_into() {
     code=0
     env PATH="${bin}:${PATH}" TMPDIR="${root}/tmp" KUBEHENGE_E2E_TALOSCTL_TIMEOUT=10 \
         sh "${guests}" collect "$1" "$2" > "${root}/collect.log" 2>&1 || code=$?
-    echo "${code}"
 }
 
 out=${root}/out
-code=$(collect_into "${out}" "${root}/work")
+collect_into "${out}" "${root}/work"
 truth "collect succeeds although nodes fail" [ "${code}" = 0 ]
-left=$(ls -A "${root}/tmp")
+left=
+for f in "${root}/tmp"/* "${root}/tmp"/.[!.]* "${root}/tmp"/..?*; do
+    [ ! -e "${f}" ] || left="${left} ${f}"
+done
 truth "the talosconfigs and kubeconfig are removed" [ -z "${left}" ]
 truth "a stopped VM is left alone" [ ! -e "${out}/106-stopped-vm" ]
 for f in "${out}"/*/*.txt; do
@@ -263,7 +298,7 @@ has "a VM of a cluster without a talosconfig is read through its guest agent" "$
 # Without the run's work directory, a VM known to run Talos says why it is not read, and the others
 # are read through their guest agents.
 out=${root}/out-alone
-code=$(collect_into "${out}" "${root}/nowhere")
+collect_into "${out}" "${root}/nowhere"
 truth "collect succeeds without a work directory" [ "${code}" = 0 ]
 has "the management cluster's node says why" "${out}/100-mgmt-0/state.txt" "no talosconfig: no Terraform/OpenTofu state in '${root}/nowhere/mgmt'"
 has "a VM tagged talos says why" "${out}/101-talos-cp/state.txt" "cannot be read through its API"

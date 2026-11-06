@@ -43,7 +43,9 @@ esac
 EOF
 chmod +x "${root}/bin/kubectl"
 PATH="${root}/bin:${PATH}"
-export KUBEHENGE_E2E_MEASURE_EVERY=0
+# A retry every half second: with none waited, the reading would be tried in a tight loop, each try
+# starting a stand-in and a clock.
+export KUBEHENGE_E2E_MEASURE_EVERY=0.5
 
 KUBEHENGE_E2E_MEASURE_TIMEOUT=1
 got=$(measured "memory with the CNI alone" pod_memory "${root}/kubeconfig")

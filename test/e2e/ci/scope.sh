@@ -57,18 +57,19 @@ nightly='management-cluster-upgrade rancher control-plane-ha two-nodes'
 # as many as a run's jobs at once. Each pair ends within the longest lane, and the first test leaves
 # no guest behind (docs/testing.md).
 pairs='appliance,management-cluster k3s-etcd,cluster-mesh k3s-addons-b,autoscaler'
-# lane_of <test>: the lane the test runs in, its pair or itself.
+# lane_of <test>: sets lane to the lane the test runs in, its pair or itself. It sets a variable
+# because a command substitution starts a process for each test.
 lane_of() {
-    for lane in ${pairs}; do
-        case ",${lane}," in
+    lane=$1
+    for lane_pair in ${pairs}; do
+        case ",${lane_pair}," in
             *",$1,"*)
-                echo "${lane}"
+                lane=${lane_pair}
                 return
                 ;;
             *) ;;
         esac
     done
-    echo "$1"
 }
 need=
 [ "${1:-}" != --all ] || need=${all}
@@ -162,7 +163,7 @@ for t in ${all} ${nightly}; do
         *" ${t} "*) ;;
         *) continue ;;
     esac
-    lane=$(lane_of "${t}")
+    lane_of "${t}"
     case "${printed}" in
         *" ${lane} "*) ;;
         *)
