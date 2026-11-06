@@ -202,6 +202,11 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .join("\n");
 }
 
+/** linkSettings holds the optional numbers of the management VMs' interface: set ones only. */
+function linkSettings(f: SetupForm): Pick<ManagementSettings, "vlan" | "mtu"> {
+  return { ...(f.vlan ? { vlan: Number(f.vlan) } : {}), ...(f.mtu ? { mtu: Number(f.mtu) } : {}) };
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -216,13 +221,8 @@ export function settings(f: SetupForm): ManagementSettings {
     workloadDatastores: f.workloadDatastores,
     workloadBridges: f.workloadBridges,
     bootstrapDatastore: f.bootstrapDatastore,
+    ...linkSettings(f),
   };
-  if (f.vlan) {
-    s.vlan = Number(f.vlan);
-  }
-  if (f.mtu) {
-    s.mtu = Number(f.mtu);
-  }
   const mirrors = parseMirrors(f.mirrors);
   if (Object.keys(mirrors).length > 0) {
     s.registryMirrors = mirrors;

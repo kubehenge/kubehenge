@@ -1041,18 +1041,17 @@ func TestMTUReachesTheModule(t *testing.T) {
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		t.Fatal(err)
 	}
-	vars := filepath.Join(a.workdir(), "terraform.tfvars.json")
 	if err := a.writeConfig(s); err != nil {
 		t.Fatal(err)
 	}
-	if raw, err := os.ReadFile(vars); err != nil || !strings.Contains(string(raw), `"mtu": null`) {
+	if raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); err != nil || !strings.Contains(string(raw), `"mtu": null`) {
 		t.Errorf("an unset MTU must reach the module as null: %s, %v", raw, err)
 	}
 	s.MTU = 1450
 	if err := a.writeConfig(s); err != nil {
 		t.Fatal(err)
 	}
-	if raw, err := os.ReadFile(vars); err != nil || !strings.Contains(string(raw), `"mtu": 1450`) {
+	if raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); err != nil || !strings.Contains(string(raw), `"mtu": 1450`) {
 		t.Errorf("the MTU must reach the module: %s, %v", raw, err)
 	}
 	main, err := os.ReadFile(filepath.Join(a.workdir(), "main.tf"))
