@@ -51,6 +51,19 @@ func run(dir string, args []string) int {
 	case "init":
 		fmt.Println("OpenTofu has been initialised")
 	case "apply":
+		// A "slow" apply runs until it is interrupted, then writes <dir>/../state-written as
+		// OpenTofu writes its state, and fails.
+		if strings.Contains(string(vars), `"slow"`) {
+			interrupt := make(chan os.Signal, 1)
+			signal.Notify(interrupt, os.Interrupt)
+			select {
+			case <-interrupt:
+				fmt.Println(`{"@level":"info","@message":"Interrupt received.","type":"log"}`)
+				_ = os.WriteFile(filepath.Join(dir, "..", "state-written"), nil, 0o600)
+			case <-time.After(30 * time.Second):
+			}
+			return 1
+		}
 		// A "held" apply runs until the test creates <dir>/../release.
 		if strings.Contains(string(vars), `"held"`) {
 			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(5 * time.Millisecond) {

@@ -24,7 +24,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - AlmaLinux and Rocky Linux templates get the kernel's extra modules with the kernel itself. In the hours after a kernel release, a bake could reach a mirror without that kernel's modules and fail.
 - New management VMs get their MAC addresses from Proxmox VE, so two installs on one network never share them. An existing management cluster keeps its addresses and is not changed by an upgrade.
 - A "Time servers" setting writes Talos's `TimeSyncConfig` for the management nodes. Empty keeps Talos's default servers.
-- A cut-off apply sends OpenTofu an interrupt and waits up to five minutes for it to write its state before killing it.
+- A management cluster run cut off at the end of its sign-in keeps its state, as OpenTofu is interrupted five minutes before instead of killed. The next run no longer fails on pools it had made.
 - A failed run's error carries OpenTofu's error diagnostics, not only the exit status.
 - Every Helm release of the management module that waits has a timeout of 900 seconds.
 - The setup checks the settings against Proxmox VE before it runs. It covers storages, bridges, memory, disk space, answering addresses and leftover pools, roles, users and groups.

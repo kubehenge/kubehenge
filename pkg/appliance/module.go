@@ -20,8 +20,6 @@ import (
 const (
 	lineBuffer = 64 << 10
 	maxLine    = 4 << 20
-	// interruptGrace is how long an interrupted tofu gets to flush its state before it is killed.
-	interruptGrace = 5 * time.Minute
 )
 
 // rootConfig calls the module with the wizard's settings. State encryption comes from
@@ -269,15 +267,25 @@ func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
 	return env, nil
 }
 
+// tofuGrace is how long OpenTofu has between an interrupt and a kill, to finish the operations in
+// flight and write its state. A killed apply loses the objects it made since its last write, and
+// the next run then fails on them as already there.
+const tofuGrace = 5 * time.Minute
+
 // tofu runs one OpenTofu command in the working directory, logging into the job what message makes
-// of each line of its output.
+// of each line of its output. A job with a deadline interrupts it tofuGrace before, so that it
+// stops while the sign-in it runs on still holds, and kills it only at the deadline.
 func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func(line string) string, args ...string) error {
-	cmd := exec.CommandContext(ctx, a.Tofu, append([]string{"-chdir=" + a.workdir()}, args...)...) //nolint:gosec // the binary and arguments are the appliance's own
-	cmd.Env = env
-	// A kill leaves resources made in the last seconds out of the state, so a retry meets them as
-	// "already exists". Interrupted, tofu finishes what it is creating and writes its state first.
+	run := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		run, cancel = context.WithDeadline(ctx, deadline.Add(-tofuGrace))
+		defer cancel()
+	}
+	cmd := exec.CommandContext(run, a.Tofu, append([]string{"-chdir=" + a.workdir()}, args...)...) //nolint:gosec // the binary and arguments are the appliance's own
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
-	cmd.WaitDelay = interruptGrace
+	cmd.WaitDelay = tofuGrace
+	cmd.Env = env
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("tofu %s: %w", args[0], err)
@@ -305,10 +313,12 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 	}
 	_, _ = io.Copy(io.Discard, out)
 	err = cmd.Wait()
-	if err != nil {
-		if len(failures) > 0 {
-			return fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; "))
-		}
+	switch {
+	case err != nil && run.Err() != nil && ctx.Err() == nil:
+		return fmt.Errorf("tofu %s: interrupted before the Proxmox VE sign-in it runs on expires, so run it again: %w", args[0], err)
+	case err != nil && len(failures) > 0:
+		return fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; "))
+	case err != nil:
 		return fmt.Errorf("tofu %s: %w", args[0], err)
 	}
 	return nil
