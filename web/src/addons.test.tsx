@@ -192,7 +192,8 @@ describe("the add-on conditions", () => {
   it("leaves a cluster as it is while changes wait for the window", () => {
     const held = { ...waiting, conditions: withCondition(addonChangesPendingCondition).conditions };
     expect(standing(held)).toMatchObject({ group: "healthy", state: "ok", verdict: "Available" });
-    expect(standing(held).reason).toMatch(/^Add-on changes \d\d\/\d\d,? \d\d:\d\d$/u);
+    // The date and time follow the browser's locale, so only their shape is fixed: no year, no seconds.
+    expect(standing(held).reason).toMatch(/^Add-on changes \d{1,2}\D\d{1,2}\D+\d{1,2}\D\d{2}$/u);
   });
 
   it("stands for neither once they are false", () => {
