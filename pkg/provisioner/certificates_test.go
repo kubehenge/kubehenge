@@ -615,7 +615,7 @@ func TestCertificatesCopyTheBindingKeyAndLeaveTheIssuerOutWithoutIt(t *testing.T
 	stored := &corev1.Secret{
 		Namespace: "team-a", Name: "web.acme-eab", Type: CredentialType,
 		Labels: map[string]string{CredentialLabel: eabPurpose},
-		Data:   map[string][]byte{eabKey: []byte("c2VjcmV0LWhtYWM")},
+		Data:   map[string][]byte{eabKey: []byte("hmac-value-1")},
 	}
 	certs := Certificates{
 		Enabled: true, Domain: "lab.example.org", DNS01: DNS01{Provider: "cloudflare", ExistingSecret: "mine"},
@@ -664,14 +664,14 @@ func TestCertificatesCopyTheBindingKeyAndLeaveTheIssuerOutWithoutIt(t *testing.T
 		t.Fatalf("no binding Secret: %v", workload.applied)
 	}
 	raw, err := base64.StdEncoding.DecodeString(lookup[string](t, secret, "data", eabKey))
-	if err != nil || string(raw) != "c2VjcmV0LWhtYWM" {
+	if err != nil || string(raw) != "hmac-value-1" {
 		t.Errorf("copied key %q, %v", raw, err)
 	}
 	issuer := workload.applied["ClusterIssuer//"+ingressIssuer]
 	if issuer == nil {
 		t.Fatalf("no issuer: %v", workload.applied)
 	}
-	if text := fmt.Sprint(issuer); strings.Contains(text, "c2VjcmV0LWhtYWM") || !strings.Contains(text, "kid-1") {
+	if text := fmt.Sprint(issuer); strings.Contains(text, "hmac-value-1") || !strings.Contains(text, "kid-1") {
 		t.Errorf("issuer %v", issuer)
 	}
 
