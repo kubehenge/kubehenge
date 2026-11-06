@@ -103,6 +103,10 @@ upgrade "${root}" 10.0.0.0/8,2001:db8::/32
 check "--trusted-proxy replaces the list" grep -qx KUBEHENGE_TRUSTED_PROXIES=10.0.0.0/8,2001:db8::/32 "${root}/etc/kubehenge/appliance.env"
 lists=$(grep -c '^KUBEHENGE_TRUSTED_PROXIES=' "${root}/etc/kubehenge/appliance.env")
 check "and leaves one line" [ "${lists}" -eq 1 ]
+release "${root}" 0.1.0 0
+upgrade "${root}" none
+lists=$(grep -c '^KUBEHENGE_TRUSTED_PROXIES=' "${root}/etc/kubehenge/appliance.env" || true)
+check "--no-trusted-proxy removes the list" [ "${lists}" -eq 0 ]
 check "the other settings stay" grep -qx KUBEHENGE_PROXMOX_URL=https://pve.example:8006 "${root}/etc/kubehenge/appliance.env"
 
 # The new release does not serve: the old one is put back, the reason told.

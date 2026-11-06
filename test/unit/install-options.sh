@@ -98,6 +98,8 @@ says "a flag option needs none" "unknown option --nope" --nope
     says "a bad one in a list" "--trusted-proxy 300.0.0.1: use an IPv4" --trusted-proxy 192.0.2.7,300.0.0.1 ${release}
     says "--trusted-proxy without its value" "--trusted-proxy needs a value" --trusted-proxy
     says "--trusted-proxy with --certificate" "--trusted-proxy goes with an install or --upgrade" --certificate --ctid 105 --trusted-proxy 192.0.2.7
+    says "--no-trusted-proxy on an install" "--no-trusted-proxy goes with --upgrade" --no-trusted-proxy ${release}
+    says "both trusted proxy options" "--trusted-proxy and --no-trusted-proxy exclude each other" --upgrade --ctid 105 --trusted-proxy 192.0.2.7 --no-trusted-proxy
     does_not_say "good trusted proxies" "--trusted-proxy " --trusted-proxy 192.0.2.7 --trusted-proxy 10.0.0.0/8,2001:db8::/32 ${release}
 }
 

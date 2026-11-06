@@ -9,7 +9,7 @@
 #                 [--hostname <name>] [--name <DNS name>] [--cert <file> --key <file>] [--release <file> --sha256 <hex>]
 #                 [--pve-entry | --no-pve-entry] [--trusted-proxy <address or CIDR>]...
 #   sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-ca <file> | --proxmox-insecure]
-#                 [--trusted-proxy <address or CIDR>]...
+#                 [--trusted-proxy <address or CIDR>... | --no-trusted-proxy]
 #   sh install.sh --certificate --ctid <id> [--name <DNS name> | --no-name] [--cert <file> --key <file>]
 #
 # A new install asks whether to add a Kubernetes entry to this node's Proxmox VE interface, leading
@@ -36,7 +36,7 @@
 # Behind a reverse proxy or load balancer, --trusted-proxy (repeatable, an address or CIDR range)
 # lets the interface count sign-in failures per client from the proxy's X-Forwarded-For header
 # instead of all under the proxy's address. On --upgrade it replaces the list an installed
-# appliance has.
+# appliance has, and --no-trusted-proxy removes it.
 #
 # The appliance's disks and the container template go to a storage that takes them, asked on the
 # terminal when several do; --storage and --template-storage name them in advance. A template
@@ -676,7 +676,7 @@ if [ -n "$insecure" ]; then
     chmod 0644 "$env.new" && mv "$env.new" "$env"
 fi
 if [ -n "$proxies" ]; then
-    { grep -v "^KUBEHENGE_TRUSTED_PROXIES=" "$env" || true; echo "KUBEHENGE_TRUSTED_PROXIES=$proxies"; } > "$env.new"
+    { grep -v "^KUBEHENGE_TRUSTED_PROXIES=" "$env" || true; [ "$proxies" = none ] || echo "KUBEHENGE_TRUSTED_PROXIES=$proxies"; } > "$env.new"
     chmod 0644 "$env.new" && mv "$env.new" "$env"
 fi
 [ -f "$R/etc/kubehenge/headlamp.env" ] ||
@@ -1051,7 +1051,7 @@ usage() {
 Installs Kubehenge's appliance on this Proxmox VE node, as root.
 
   sh install.sh [options]
-  sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-ca <file> | --proxmox-insecure] [--trusted-proxy <address or CIDR>]...
+  sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-ca <file> | --proxmox-insecure] [--trusted-proxy <address or CIDR>... | --no-trusted-proxy]
   sh install.sh --certificate --ctid <id> [--name <DNS name> | --no-name] [--cert <file> --key <file>]
 
 Options:
@@ -1072,6 +1072,7 @@ Options:
   --proxmox-ca <file>         the CA that signed the API's certificate, alone or in a bundle
   --proxmox-insecure          reach the Proxmox VE API without verifying its certificate
   --trusted-proxy <address or CIDR> a reverse proxy in front of the interface, repeatable; sign-in limits then count the client in its X-Forwarded-For
+  --no-trusted-proxy          with --upgrade, remove the list of trusted proxies
   --release <file>            install this release archive instead of downloading it
   --sha256 <hex>              the archive's SHA-256, with --release
   --tofu <file>               install OpenTofu from this release archive instead of downloading it, checked against the checksum this script carries
@@ -1085,7 +1086,7 @@ EOF
 }
 
 ctid='' storage='' template_storage='' bridge='' vlan='' mtu='' tofu_archive='' ip=dhcp gateway='' dns='' proxmox_url='' proxmox_ca='' proxmox_insecure='' hostname=kubehenge
-release='' release_sha='' upgrade='' pve_entry='' certificate='' name='' no_name='' cert_file='' key_file='' trusted_proxy=''
+release='' release_sha='' upgrade='' pve_entry='' certificate='' name='' no_name='' cert_file='' key_file='' trusted_proxy='' no_trusted_proxy=''
 while [ $# -gt 0 ]; do
     case "$1" in
         -h | --help)
@@ -1119,6 +1120,11 @@ while [ $# -gt 0 ]; do
             ;;
         --proxmox-insecure)
             proxmox_insecure=1
+            shift
+            continue
+            ;;
+        --no-trusted-proxy)
+            no_trusted_proxy=1
             shift
             continue
             ;;
@@ -1184,6 +1190,12 @@ for entry in $(printf '%s' "${trusted_proxy}" | tr , ' '); do
     # shellcheck disable=SC2310 # is_proxy_range is a predicate; its status is the answer.
     is_proxy_range "${entry}" || fail "--trusted-proxy ${entry}: use an IPv4 or IPv6 address or CIDR range, such as 192.0.2.10 or 10.0.0.0/8"
 done
+if [ -n "${no_trusted_proxy}" ]; then
+    [ -z "${trusted_proxy}" ] || fail "--trusted-proxy and --no-trusted-proxy exclude each other"
+    [ -n "${upgrade}" ] || fail "--no-trusted-proxy goes with --upgrade"
+    # The container's upgrade step reads "none" as the list removed.
+    trusted_proxy=none
+fi
 # shellcheck disable=SC2310 # is_ipv4_cidr is a predicate; its status is the answer.
 if [ "${ip}" != dhcp ] && ! is_ipv4_cidr "${ip}"; then
     fail "--ip is dhcp or an IPv4 address with its prefix length, such as 192.0.2.5/24"
