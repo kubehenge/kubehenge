@@ -4,6 +4,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+- A cluster's VM that an administrator renamed is destroyed with its machine. Once the machine has booted, its SMBIOS UUID alone identifies the VM.
+- A VM of another name under the machine's VM ID, with no UUID to check, is no longer released silently. The machine stays, with a warning event and a condition naming the VM ID and the VM found.
+- Deleting a machine's VM removes it from HA resources, backup jobs and replication jobs in one call, and drops disks left under its ID.
+- A VM with Proxmox VE's protection flag is not destroyed, and the stalled deletion names the flag and `qm set <vmid> --protection 0`.
 - The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
 - New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
 - The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
