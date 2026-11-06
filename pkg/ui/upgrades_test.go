@@ -174,7 +174,8 @@ func TestSetupHoldsBridgesToTheirZones(t *testing.T) {
 	for name, c := range map[string]struct{ settings, want string }{
 		"management VNet as a plain bridge": {bridges("tenants", `"vmbr0"`), "Bridge tenants is in zone evpn. Write it as evpn/tenants."},
 		"workload VNet in another zone":     {bridges("vmbr0", `"vmbr0","localnetwork/tenants"`), "Write it as evpn/tenants."},
-		"node bridge in a zone":             {bridges("evpn/vmbr0", `"vmbr0"`), "Write it as vmbr0."},
+		"node bridge in a zone":             {bridges("evpn/vmbr0", `"vmbr0"`), "Proxmox VE shows you no VNet vmbr0. A node's own bridge is written as vmbr0."},
+		"VNet that is not there":            {bridges("evpn/nosuch", `"vmbr0"`), "Proxmox VE shows you no VNet nosuch."},
 		"VLAN on a VLAN zone": {
 			strings.Replace(bridges("vlanz/corp", `"vmbr0"`), `"bridge":`, `"vlan":20,"bridge":`, 1),
 			"VNet corp is in a VLAN zone and tags already",

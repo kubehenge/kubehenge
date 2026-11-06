@@ -211,7 +211,8 @@ func (s *Settings) checkBridge(inv *Inventory, f *Findings) {
 		switch network.Zone {
 		case z:
 		case pve.LocalZone:
-			f.Errors = append(f.Errors, fmt.Sprintf("Bridge %s is a node's own bridge, in no zone. Write it as %s.", ref, n))
+			// Proxmox VE answers alike for a VNet that does not exist and one the user may not see.
+			f.Errors = append(f.Errors, fmt.Sprintf("Bridge %s: Proxmox VE shows you no VNet %s. A node's own bridge is written as %s.", ref, n, n))
 		default:
 			f.Errors = append(f.Errors, fmt.Sprintf("Bridge %s is in zone %s. Write it as %s/%s.", ref, network.Zone, network.Zone, n))
 		}
