@@ -105,7 +105,9 @@ export function EgressFields({
   return (
     <>
       <fieldset className="choices">
-        <legend>Egress proxy</legend>
+        <legend>
+          Egress proxy <Info about="the egress proxy">{egressInfo}</Info>
+        </legend>
         {modes.map((m) => (
           <label key={m.value} className="check">
             <input
@@ -119,7 +121,6 @@ export function EgressFields({
           </label>
         ))}
       </fieldset>
-      <Info about="the egress proxy">{egressInfo}</Info>
       {e.mode === "own" && (
         <>
           <Field label="Proxy address" hint="Like http://proxy.example:3128" error={problems.url}>
