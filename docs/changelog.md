@@ -34,6 +34,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The setup warns of VMs sharing nodes and of an API address that is one node's. It also warns of pod or service ranges that overlap a node's networks, and shows the ranges chosen.
 - The management cluster's health shows when the controller cannot reach the Proxmox VE API from inside the cluster.
 - An answer from Proxmox VE larger than 1 MiB fails with an error naming the path.
+- Prometheus now reads every ServiceMonitor, PodMonitor, Probe, ScrapeConfig and PrometheusRule of the cluster, not only those labelled for the release.
+- The monitoring add-on takes alert receivers (email, webhook, Slack, Teams), a remote write target and external Alertmanagers, with their secrets stored as credentials, in the interface, with kubectl and from the command line.
+- The monitoring chart's own job applies the Prometheus Operator's CRDs on every install and upgrade, with images pinned by digest.
+- The docs list what stays after monitoring, logs or Headlamp is switched off, and the monitoring dialog says that the volumes stay.
 
 ## [0.4.2] - 2026-11-05
 

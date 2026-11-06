@@ -249,9 +249,13 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 	if err != nil {
 		return false, err
 	}
+	monitoringWaiting, err := r.reconcileMonitoringSecrets(ctx, cluster, addons)
+	if err != nil {
+		return false, err
+	}
 	uploadWaiting, err := r.reconcileEtcdUpload(ctx, cluster)
 	return certificatesWaiting || rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting || gitOpsWaiting ||
-		uploadWaiting, err
+		monitoringWaiting || uploadWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
@@ -464,6 +468,9 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 		addons.Rancher.Install = false
 	}
 	if addons.gitOpsFound, err = r.gitOpsState(ctx, cluster, &addons.GitOps); err != nil {
+		return addons, "", err
+	}
+	if addons.monitoringFound, err = r.monitoringCredentials(ctx, cluster, &addons.Monitoring); err != nil {
 		return addons, "", err
 	}
 	return addons, refused, nil

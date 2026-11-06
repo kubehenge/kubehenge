@@ -329,6 +329,17 @@ addons:
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.1@sha256:f723251bdd90a806b5331b6e9f9287cc2832d3dd9f9479378cdbbddb9856724f
     values:
+      # The job that applies the chart's CRDs on every install and upgrade. The tag carries the
+      # digest, since the chart's own digest keys are not read.
+      crds:
+        upgradeJob:
+          image:
+            busybox:
+              # renovate: datasource=docker depName=docker.io/library/busybox
+              tag: 1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
+            kubectl:
+              # renovate: datasource=docker depName=registry.k8s.io/kubectl
+              tag: v1.37.2@sha256:fe049faa65ae483ac200009a949a68fa4c9985daea12c9cb1195c9c7965301fc
       prometheusOperator:
         image:
           # renovate: datasource=docker depName=quay.io/prometheus-operator/prometheus-operator

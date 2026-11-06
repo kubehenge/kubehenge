@@ -1,5 +1,6 @@
 import type { JSX, ReactNode } from "react";
 
+import { AlertingFields } from "./Alerting";
 import {
   BackupFieldset,
   BackupSourcesField,
@@ -25,6 +26,7 @@ import {
   variable,
 } from "./create-form";
 import type { StepProps } from "./CreateSteps";
+import type { CredentialKey } from "./CredentialField";
 import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { PodSecurityFields, cisHint, cisInfo } from "./PodSecurity";
@@ -352,7 +354,54 @@ function AddonRoom({ form, cls }: { form: StepProps["form"]; cls: ClusterClass |
   );
 }
 
-function MonitoringAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
+// PendingSecret takes the values of a credential for the new cluster, stored once it exists.
+function PendingSecret({
+  form,
+  set,
+  purpose,
+  label,
+  keys,
+  canTrust,
+}: Pick<StepProps, "form" | "set"> & {
+  purpose: string;
+  label: string;
+  keys: CredentialKey[];
+  canTrust: boolean | undefined;
+}): JSX.Element {
+  const values = form.alertingSecrets[purpose] ?? {};
+  return (
+    <fieldset className="group">
+      <legend>{label}</legend>
+      {canTrust === false && <p className="hint">{tokenRefusal}</p>}
+      {keys.map((k) => (
+        <Field key={k.key} label={k.label} hint={k.optional === true ? "Optional" : undefined}>
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              disabled={canTrust === false}
+              value={values[k.key] ?? ""}
+              onChange={(e) =>
+                set("alertingSecrets", {
+                  ...form.alertingSecrets,
+                  [purpose]: { ...values, [k.key]: e.target.value },
+                })
+              }
+            />
+          )}
+        </Field>
+      ))}
+    </fieldset>
+  );
+}
+
+function MonitoringAddOn({
+  form,
+  set,
+  canTrust,
+}: Pick<StepProps, "form" | "set"> & { canTrust: boolean | undefined }): JSX.Element {
   return (
     <>
       <label className="check">
@@ -364,15 +413,24 @@ function MonitoringAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.El
         monitoring/kube-prometheus-stack-grafana.
       </Info>
       {form.monitoring && (
-        <Field label="Grafana host name" hint="Optional">
-          {(id) => (
-            <input
-              id={id}
-              value={form.grafanaHostname}
-              onChange={(e) => set("grafanaHostname", e.target.value.trim())}
-            />
-          )}
-        </Field>
+        <>
+          <Field label="Grafana host name" hint="Optional">
+            {(id) => (
+              <input
+                id={id}
+                value={form.grafanaHostname}
+                onChange={(e) => set("grafanaHostname", e.target.value.trim())}
+              />
+            )}
+          </Field>
+          <AlertingFields
+            value={form.alerting}
+            onChange={(a) => set("alerting", a)}
+            renderCredential={(purpose, label, keys) => (
+              <PendingSecret form={form} set={set} purpose={purpose} label={label} keys={keys} canTrust={canTrust} />
+            )}
+          />
+        </>
       )}
     </>
   );
@@ -448,7 +506,7 @@ function AddonCards({
         <HeadlampAddOn form={form} set={set} />
       </AddonCard>
       <AddonCard mib={cost("monitoring")} on={form.monitoring}>
-        <MonitoringAddOn form={form} set={set} />
+        <MonitoringAddOn form={form} set={set} canTrust={canTrust} />
       </AddonCard>
       {variable(cls, "logs") && (
         <AddonCard mib={cost("logs")} on={logsChosen(form)}>

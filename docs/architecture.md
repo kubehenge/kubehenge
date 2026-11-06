@@ -811,6 +811,7 @@ It is where Kubehenge starts and what looks after it:
   - a DNS provider's API token for DNS-01 certificates
   - a private Git repository's token
   - an identity provider's client secret
+  - the monitoring add-on's alert receivers, remote write target and external Alertmanagers (purposes `alerts-email`, `alerts-webhook`, `alerts-slack`, `alerts-teams`, `remote-write`, `external-alertmanager`). The controller copies them into the Secrets `kubehenge-alertmanager` and `kubehenge-prometheus` of the `monitoring` namespace, which the pods read as files, never into the chart's values.
   - The interface stores each in a Secret `<cluster>.<purpose>` of the type `kubehenge.dev/user-credential`, owned by the Cluster.
   - The Secret is labelled with its purpose (`kubehenge.dev/user-credential`) and its cluster (`kubehenge.dev/credential-cluster`).
   - **Who may set one:** storing, replacing or removing a cluster's credential needs `Sys.Modify` on its pool. A credential reaches as far into what the cluster runs as the admin kubeconfig does.

@@ -1,4 +1,12 @@
 import {
+  alertingText,
+  alertingVariable,
+  newAlerting,
+  pendingAlerting,
+  type AlertingForm,
+  type AlertingSecrets,
+} from "./Alerting";
+import {
   backupKeys,
   backupProblems,
   backupsText,
@@ -147,6 +155,9 @@ export interface Form {
   headlampView: boolean;
   monitoring: boolean;
   grafanaHostname: string;
+  alerting: AlertingForm;
+  // The secrets of the alerting settings, stored for the cluster once it is created. Never in the request.
+  alertingSecrets: AlertingSecrets;
   logs: Logs;
   podSecurity: PodSecurity;
   cis: boolean;
@@ -614,6 +625,8 @@ export const newForm = (): Form => ({
   headlampView: false,
   monitoring: false,
   grafanaHostname: "",
+  alerting: newAlerting(),
+  alertingSecrets: {},
   logs: newLogs(),
   podSecurity: podSecurityOf(undefined),
   cis: false,
@@ -711,9 +724,11 @@ function addOnVariables(form: Form, defined: Set<string>): Record<string, unknow
     variables["headlamp"] = headlamp;
   }
   if (form.monitoring) {
-    variables["monitoring"] = form.grafanaHostname
-      ? { enabled: true, hostname: form.grafanaHostname }
-      : { enabled: true };
+    variables["monitoring"] = {
+      enabled: true,
+      ...(form.grafanaHostname && { hostname: form.grafanaHostname }),
+      ...alertingVariable(form.alerting),
+    };
   }
   if (logsChosen(form)) {
     variables["logs"] = logsVariable(form.logs);
@@ -778,6 +793,15 @@ export function pendingCredentials(form: Form, c: ClusterClass): PendingCredenti
       section: "Certificates",
       forget: { dns01Token: "" },
     });
+  }
+  if (form.monitoring && variable(c, "monitoring")) {
+    for (const p of pendingAlerting(form.alerting, form.alertingSecrets)) {
+      pending.push({
+        ...p,
+        section: "Monitoring",
+        forget: { alertingSecrets: { ...form.alertingSecrets, [p.purpose]: {} } },
+      });
+    }
   }
   return pending;
 }
@@ -972,6 +996,14 @@ export function summary(
   return rows;
 }
 
+function monitoringText(form: Form): string {
+  if (!form.monitoring) {
+    return "Off";
+  }
+  const sends = alertingText(form.alerting);
+  return `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}${sends ? `, sends to ${sends}` : ""}`;
+}
+
 // addOnRows sums up the add-ons and the hardening the class offers.
 function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   const rows: [string, string][] = [];
@@ -979,10 +1011,7 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
     rows.push(["Headlamp", headlampText(form.headlamp, form.headlampHostname, form.headlampView)]);
   }
   if (defined.has("monitoring")) {
-    rows.push([
-      "Monitoring",
-      form.monitoring ? `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}` : "Off",
-    ]);
+    rows.push(["Monitoring", monitoringText(form)]);
   }
   if (defined.has("logs")) {
     rows.push(["Logs", logsText({ ...form.logs, enabled: logsChosen(form) })]);
