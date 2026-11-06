@@ -337,6 +337,7 @@ func (o LogOutput) writeLoki(b *strings.Builder, bundle string) {
 	case logAuthBasic:
 		fmt.Fprintf(b, "    basic_auth {\n      username = %s\n      password = %s\n    }\n", o.file(credentialUsername), o.file(credentialPassword))
 	case logAuthBearer:
+		// spellchecker:disable-next-line
 		fmt.Fprintf(b, "    authorization {\n      type        = \"Bearer\"\n      credentials = %s\n    }\n", o.file(credentialToken))
 	}
 	if bundle != "" {
