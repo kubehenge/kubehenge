@@ -302,6 +302,8 @@ describe("vM templates", () => {
     expect(screen.getByText("Template VM 9006 is on node pve3, which is down.")).toBeInTheDocument();
     expect(screen.getByRole("row", { name: /kubehenge-talos-v1\.14\.4/u })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // On a phone the table scrolls inside its card. Outside a scroller it widens the whole page.
+    expect(screen.getByRole("table").closest(".scroll")).not.toBeNull();
   });
 
   it("shows the weekly build and runs it now", async () => {
