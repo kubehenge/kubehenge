@@ -661,6 +661,8 @@ export interface ManagementSettings {
   apiAddress: string;
   gateway: string;
   dnsServers: string[];
+  /** Domains appended to a name without dots, on the nodes and in the clusters' network. */
+  searchDomains?: string[];
   /** NTP servers for the nodes. Unset keeps Talos's default ones. */
   timeServers?: string[];
   workloadDatastores: string[];

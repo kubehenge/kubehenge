@@ -31,6 +31,7 @@ import (
 	"testing/iotest"
 	"time"
 
+	"filippo.io/age"
 	"github.com/minio/minio-go/v7/pkg/s3utils"
 )
 
@@ -124,14 +125,12 @@ type fakeS3 struct {
 	t      *testing.T
 	region string
 
-	mu       sync.Mutex
-	objects  map[string]fakeObject
-	uploads  map[string]*fakeUpload
-	uploadID int
-	// vanished keys are listed but gone by the time they are read, as when a snapshot is pruned
-	// between the two.
-	vanished    map[string]bool
+	mu          sync.Mutex
+	objects     map[string]fakeObject
+	uploads     map[string]*fakeUpload
+	uploadID    int
 	lists       int
+	copies      int
 	parts       int
 	aborts      int
 	abortRefuse int
@@ -140,7 +139,7 @@ type fakeS3 struct {
 
 func newFakeS3(t *testing.T, region string) (*fakeS3, *httptest.Server) {
 	t.Helper()
-	f := &fakeS3{t: t, region: region, objects: map[string]fakeObject{}, uploads: map[string]*fakeUpload{}, vanished: map[string]bool{}}
+	f := &fakeS3{t: t, region: region, objects: map[string]fakeObject{}, uploads: map[string]*fakeUpload{}}
 	srv := httptest.NewTLSServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -253,6 +252,7 @@ func (f *fakeS3) serveUpload(w http.ResponseWriter, r *http.Request, key string,
 func (f *fakeS3) serveObject(w http.ResponseWriter, r *http.Request, key string) {
 	switch {
 	case r.Method == http.MethodPut && r.Header.Get("X-Amz-Copy-Source") != "":
+		f.copies++
 		f.copy(w, r, key)
 	case r.Method == http.MethodHead || r.Method == http.MethodGet:
 		o, ok := f.objects[key]
@@ -298,9 +298,6 @@ func (f *fakeS3) list(w http.ResponseWriter, q url.Values) {
 	}
 	var keys []string
 	for k := range f.objects {
-		keys = append(keys, k)
-	}
-	for k := range f.vanished {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
@@ -539,7 +536,7 @@ func TestStoreKeepsAnObjectWithItsMetadataUnderLowerCaseNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(objects) != 1 || objects[0].Key != key || !maps.Equal(objects[0].Metadata, want) {
+	if len(objects) != 1 || objects[0].Key != key || objects[0].Size != int64(len(data)) {
 		t.Errorf("listed %+v", objects)
 	}
 	// Snapshots are sealed before they leave. The store is never asked to encrypt, which a
@@ -616,24 +613,50 @@ func TestFailedPutLeavesNoUploadBehind(t *testing.T) {
 	}
 }
 
-func TestSetMetadataReplacesTheMetadataAndKeepsTheData(t *testing.T) {
+// A bucket with versioning and object lock keeps every version of an object until its retention
+// ends, so a snapshot copied onto itself to record its checksum would be stored twice. The store
+// holds one object per snapshot and one record beside it, and a prune removes both.
+func TestASnapshotIsOneObjectAndItsRecordNeverACopy(t *testing.T) {
 	t.Parallel()
 	f, srv := newFakeS3(t, defaultBackupRegion)
-	f.put("snap", []byte("sealed"), map[string]string{"kubernetes-version": "v1.34.1", "partial": "yes"})
 	store := openFake(t, srv, "")
 	ctx := context.Background()
-	if err := store.SetMetadata(ctx, "snap", map[string]string{"kubernetes-version": "v1.34.1", "sha256": "abc123"}); err != nil {
-		t.Fatal(err)
-	}
-	o, err := store.Stat(ctx, "snap")
+	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := map[string]string{"kubernetes-version": "v1.34.1", "sha256": "abc123"}; !maps.Equal(o.Metadata, want) || o.Size != int64(len("sealed")) {
-		t.Errorf("after setting metadata %+v, want %v and the data kept", o, want)
+	const folder = "web/etcd"
+	taken := EtcdSnapshot{
+		Name: EtcdSnapshotName(time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC), "v1.34.1"), KubernetesVersion: "v1.34.1",
+		Distribution: "rke2", Revision: 7, EtcdVersion: "3.6.5",
 	}
-	if err := store.SetMetadata(ctx, "missing", nil); err == nil {
-		t.Error("set the metadata of an object that is not there")
+	if err = StoreEtcdSnapshot(ctx, store, folder, &taken, bytes.NewReader(etcdData(10<<10)), id.Recipient()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	keys, copies := slices.Sorted(maps.Keys(f.objects)), f.copies
+	f.mu.Unlock()
+	if want := []string{folder + "/" + taken.Name, folder + "/" + taken.Name + EtcdSnapshotInfoSuffix}; !slices.Equal(keys, want) || copies != 0 {
+		t.Fatalf("objects %v and %d copies, want %v and none", keys, copies, want)
+	}
+	listed, err := ListEtcdSnapshots(ctx, store, folder)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("listed %v, %v", listed, err)
+	}
+	if got := listed[0]; got.SHA256 != taken.SHA256 || got.SHA256 == "" || got.Revision != 7 || got.EtcdVersion != "3.6.5" || got.Size != taken.Size || got.Distribution != "rke2" {
+		t.Errorf("listed %+v, stored %+v", got, taken)
+	}
+	read, err := ReadEtcdSnapshot(ctx, store, folder, taken.Name)
+	if err != nil || read.SHA256 != taken.SHA256 {
+		t.Errorf("read %+v, %v", read, err)
+	}
+	if removed, err := PruneEtcdSnapshots(ctx, store, folder, 0); err != nil || removed != 1 {
+		t.Fatalf("pruned %d, %v", removed, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.objects) != 0 {
+		t.Errorf("a prune left %v", slices.Sorted(maps.Keys(f.objects)))
 	}
 }
 
@@ -644,12 +667,11 @@ func TestListPagesThroughMoreThanAThousandObjects(t *testing.T) {
 	want := make([]string, 0, n)
 	for i := range n {
 		key := fmt.Sprintf("web/etcd/%05d", i)
-		f.put(key, []byte(key), map[string]string{"etcd-revision": strconv.Itoa(i)})
+		f.put(key, []byte(key), nil)
 		want = append(want, key)
 	}
 	f.put("web/etcd", []byte("not under the folder"), nil)
 	f.put("other/etcd/00000", []byte("another cluster's"), nil)
-	f.vanished["web/etcd/00002-pruned"] = true
 	objects, err := openFake(t, srv, "").List(context.Background(), "web/etcd/")
 	if err != nil {
 		t.Fatal(err)
@@ -657,7 +679,7 @@ func TestListPagesThroughMoreThanAThousandObjects(t *testing.T) {
 	got := make([]string, 0, len(objects))
 	for i, o := range objects {
 		got = append(got, o.Key)
-		if o.Metadata["etcd-revision"] == "" || o.Size != int64(len(o.Key)) {
+		if o.Size != int64(len(o.Key)) || o.Modified.IsZero() {
 			t.Errorf("object %d: %+v", i, o)
 		}
 	}

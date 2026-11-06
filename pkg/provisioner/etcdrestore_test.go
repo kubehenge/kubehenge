@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -209,9 +210,29 @@ func (f *restoreFixture) putSnapshot(name, identity, version string) {
 		SnapshotMetaSHA256: sum, SnapshotMetaSize: strconv.FormatInt(size, 10),
 		SnapshotMetaDistribution: string(distributionOf(f.cluster())), SnapshotMetaKubernetes: version,
 	}
-	if err = f.store.SetMetadata(context.Background(), snapshotFolder+"/"+name, metadata); err != nil {
+	f.putInfo(snapshotFolder+"/"+name, metadata)
+}
+
+// putInfo writes the record beside a snapshot, as the snapshotter does.
+func (f *restoreFixture) putInfo(key string, metadata map[string]string) {
+	f.t.Helper()
+	record, err := json.Marshal(metadata)
+	if err != nil {
 		f.t.Fatal(err)
 	}
+	if _, err = f.store.Put(context.Background(), key+EtcdSnapshotInfoSuffix, bytes.NewReader(record), nil); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// info reads the record beside a snapshot.
+func (f *restoreFixture) info(key string) map[string]string {
+	f.t.Helper()
+	var metadata map[string]string
+	if err := json.Unmarshal(f.store.objects[key+EtcdSnapshotInfoSuffix].data, &metadata); err != nil {
+		f.t.Fatal(err)
+	}
+	return metadata
 }
 
 func (f *restoreFixture) reconcile() {

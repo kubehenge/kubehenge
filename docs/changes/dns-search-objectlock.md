@@ -1,0 +1,2 @@
+- Clusters take search domains with their name servers, so a pod resolves `git` as `git.corp.example`. The create wizard, the cluster's `network.searchDomains` variable and the management cluster's settings all carry them.
+- An etcd snapshot is one object with a small JSON record beside it, where it was the object copied onto itself. A bucket with object lock no longer keeps two locked copies of every snapshot, and a prune deletes both objects.

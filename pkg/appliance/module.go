@@ -46,6 +46,7 @@ module "management" {
   api_address            = var.settings.apiAddress
   gateway                = var.settings.gateway
   dns_servers            = var.settings.dnsServers
+  search_domains         = var.settings.searchDomains
   time_servers           = var.settings.timeServers
   workload_datastores    = var.settings.workloadDatastores
   workload_bridges       = var.settings.workloadBridges
@@ -180,6 +181,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"apiAddress":             s.APIAddress,
 		"gateway":                s.Gateway,
 		"dnsServers":             s.DNSServers,
+		"searchDomains":          append([]string{}, s.SearchDomains...),
 		"timeServers":            append([]string{}, s.TimeServers...),
 		"workloadDatastores":     s.WorkloadDatastores,
 		"workloadBridges":        s.WorkloadBridges,

@@ -580,11 +580,11 @@ func (a *Appliance) fetchEtcdSnapshot(ctx context.Context, b *backupSetup, folde
 	if err != nil {
 		return "", err
 	}
-	info, err := b.store.Stat(ctx, folder+"/"+name)
+	info, err := provisioner.ReadEtcdSnapshot(ctx, b.store, folder, name)
 	if err != nil {
-		return "", fmt.Errorf("snapshot %s: %w", name, err)
+		return "", err
 	}
-	want := info.Metadata[provisioner.SnapshotMetaSHA256]
+	want := info.SHA256
 	sealed, err := b.store.Get(ctx, folder+"/"+name)
 	if err != nil {
 		return "", fmt.Errorf("reading snapshot %s: %w", name, err)

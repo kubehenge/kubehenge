@@ -16,6 +16,7 @@ import {
   pointToPoint,
   rangeProblem,
   sameNetwork,
+  searchDomainsProblem,
   toInt,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
@@ -73,6 +74,7 @@ export interface SetupForm {
   apiAddress: string;
   gateway: string;
   dnsServers: string;
+  searchDomains: string;
   timeServers: string;
   workloadDatastores: string[];
   workloadBridges: string[];
@@ -182,6 +184,16 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .join("\n");
 }
 
+// The lists the settings leave out when empty, where the module has a default for them.
+function optionalLists(f: SetupForm): Pick<ManagementSettings, "searchDomains" | "timeServers"> {
+  const domains = list(f.searchDomains);
+  const servers = list(f.timeServers);
+  return {
+    ...(domains.length > 0 ? { searchDomains: domains } : {}),
+    ...(servers.length > 0 ? { timeServers: servers } : {}),
+  };
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -192,7 +204,7 @@ export function settings(f: SetupForm): ManagementSettings {
     apiAddress: f.apiAddress,
     gateway: f.gateway,
     dnsServers: list(f.dnsServers),
-    ...(list(f.timeServers).length > 0 ? { timeServers: list(f.timeServers) } : {}),
+    ...optionalLists(f),
     workloadDatastores: f.workloadDatastores,
     workloadBridges: f.workloadBridges,
     bootstrapDatastore: f.bootstrapDatastore,
@@ -310,6 +322,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     apiAddress: saved.apiAddress,
     gateway: saved.gateway,
     dnsServers: saved.dnsServers.join(", "),
+    searchDomains: (saved.searchDomains ?? []).join(", "),
     timeServers: (saved.timeServers ?? []).join(", "),
     workloadDatastores: saved.workloadDatastores,
     workloadBridges: saved.workloadBridges,
@@ -347,6 +360,7 @@ export type SetupField =
   | "apiAddress"
   | "gateway"
   | "dnsServers"
+  | "searchDomains"
   | "timeServers"
   | "workload"
   | "bootstrapDatastore"
@@ -375,6 +389,7 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "apiAddress",
     "gateway",
     "dnsServers",
+    "searchDomains",
     "timeServers",
     "mirrors",
     "podSubnets",
@@ -522,6 +537,10 @@ function networkProblems(f: SetupForm, was: ManagementSettings | undefined): Set
     p.dnsServers = "Enter at least one DNS server.";
   } else if (dns.some((d) => !isIP(d))) {
     p.dnsServers = "Enter IP addresses only.";
+  }
+  const domains = searchDomainsProblem(list(f.searchDomains));
+  if (domains !== undefined) {
+    p.searchDomains = domains;
   }
   if (list(f.timeServers).some((t) => /[\s/:]/u.test(t) && !isIP(t))) {
     p.timeServers = "Enter host names or IP addresses only.";
@@ -791,6 +810,7 @@ function ManagedSummary({
     ["API address", s.apiAddress],
     ["Gateway", s.gateway],
     ["DNS servers", s.dnsServers.join(", ")],
+    ["Search domains", searchDomainsOf(s)],
     ["Time servers", timeServersOf(s)],
     ["Cluster storages", s.workloadDatastores.join(", ")],
     ["Cluster bridges", s.workloadBridges.join(", ")],
@@ -1843,6 +1863,7 @@ function SetupWizard({
   );
 }
 
+const searchDomainsOf = (s: ManagementSettings): string => s.searchDomains?.join(", ") ?? "None";
 const timeServersOf = (s: ManagementSettings): string => s.timeServers?.join(", ") ?? "Talos defaults";
 
 // checkDelay waits for typing to stop before Proxmox VE is asked, as the answer probes addresses.
@@ -2221,6 +2242,16 @@ function setupFields({
         </Field>
         <Field label="DNS servers" hint="Separated by commas" error={shown("dnsServers")}>
           {(id) => <input id={id} value={effective.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
+        </Field>
+        <Field label="Search domains" hint="Separated by commas" error={shown("searchDomains")}>
+          {(id) => (
+            <input
+              id={id}
+              value={effective.searchDomains}
+              placeholder="corp.example"
+              onChange={(e) => set("searchDomains", e.target.value)}
+            />
+          )}
         </Field>
         <Field
           label="Time servers"

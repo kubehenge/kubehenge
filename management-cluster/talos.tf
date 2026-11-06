@@ -153,6 +153,12 @@ data "talos_machine_configuration" "node" {
         kind       = "TimeSyncConfig"
         ntp        = { servers = var.time_servers }
       })],
+      # The nameservers stay the platform's: only search domains are set.
+      length(var.search_domains) == 0 ? [] : [yamlencode({
+        apiVersion    = "v1alpha1"
+        kind          = "ResolverConfig"
+        searchDomains = { domains = var.search_domains }
+      })],
     )),
   ]
 }

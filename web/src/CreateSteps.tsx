@@ -710,6 +710,16 @@ export function NetworkStep({
       <Field label="DNS servers" error={shown("dnsServers")}>
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
+      <Field label="Search domains" error={shown("searchDomains")}>
+        {(id) => (
+          <input
+            id={id}
+            value={form.searchDomains}
+            placeholder="corp.example"
+            onChange={(e) => set("searchDomains", e.target.value)}
+          />
+        )}
+      </Field>
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}

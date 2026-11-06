@@ -74,6 +74,16 @@
                   "minimum": 1,
                   "type": "integer"
                 },
+                "searchDomains": {
+                  "description": "Domains the nodes and the pods append to a name without dots, so that \"git\" finds git.example.com.",
+                  "items": {
+                    "maxLength": 253,
+                    "pattern": "^([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?$",
+                    "type": "string"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
+                },
                 "vlan": {
                   "maximum": 4094,
                   "minimum": 1,
@@ -1391,6 +1401,16 @@
                   "minimum": 1,
                   "type": "integer"
                 },
+                "searchDomains": {
+                  "description": "Domains the nodes and the pods append to a name without dots, so that \"git\" finds git.example.com.",
+                  "items": {
+                    "maxLength": 253,
+                    "pattern": "^([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?$",
+                    "type": "string"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
+                },
                 "vlan": {
                   "maximum": 4094,
                   "minimum": 1,
@@ -2704,6 +2724,16 @@
                   "maximum": 32,
                   "minimum": 1,
                   "type": "integer"
+                },
+                "searchDomains": {
+                  "description": "Domains the nodes and the pods append to a name without dots, so that \"git\" finds git.example.com.",
+                  "items": {
+                    "maxLength": 253,
+                    "pattern": "^([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?$",
+                    "type": "string"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
                 },
                 "vlan": {
                   "maximum": 4094,
@@ -4021,6 +4051,16 @@
                   "maximum": 32,
                   "minimum": 1,
                   "type": "integer"
+                },
+                "searchDomains": {
+                  "description": "Domains the nodes and the pods append to a name without dots, so that \"git\" finds git.example.com.",
+                  "items": {
+                    "maxLength": 253,
+                    "pattern": "^([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?$",
+                    "type": "string"
+                  },
+                  "maxItems": 6,
+                  "type": "array"
                 },
                 "vlan": {
                   "maximum": 4094,

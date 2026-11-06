@@ -17,6 +17,7 @@ const form: SetupForm = {
   apiAddress: "192.0.2.10",
   gateway: "192.0.2.1",
   dnsServers: "192.0.2.1, 1.1.1.1",
+  searchDomains: "",
   timeServers: "",
   workloadDatastores: ["local-lvm"],
   workloadBridges: ["vmbr0"],
@@ -620,6 +621,14 @@ describe("setup", () => {
     expect(problemsOf({ apiAddress: "198.51.100.10" }).apiAddress).toBe("Use an address in the nodes' network.");
     expect(problemsOf({ dnsServers: "dns.example" }).dnsServers).toBe("Enter IP addresses only.");
     expect(problemsOf({ dnsServers: "2001:db8::53" }).dnsServers).toBeUndefined();
+    expect(problemsOf({ searchDomains: "corp.example, example.org" }).searchDomains).toBeUndefined();
+    expect(problemsOf({ searchDomains: "corp example." }).searchDomains).toBe("Enter domain names like corp.example");
+    expect(problemsOf({ searchDomains: "a b c d e f g" }).searchDomains).toBe("At most 6 domains");
+    expect(settings({ ...form, searchDomains: "corp.example example.org" }).searchDomains).toStrictEqual([
+      "corp.example",
+      "example.org",
+    ]);
+    expect(settings(form)).not.toHaveProperty("searchDomains");
     expect(problemsOf({ vlan: "4095" }).vlan).toBe("A whole number from 1 to 4094.");
     expect(problemsOf({ podSubnets: "10.244.0.0/16, 10.245.0.1/16" }).podSubnets).toMatch(
       /^10.245.0.1\/16 is not a network address/u,

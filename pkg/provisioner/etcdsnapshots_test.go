@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -71,17 +72,6 @@ func lower(metadata map[string]string) map[string]string {
 		out[strings.ToLower(k)] = v
 	}
 	return out
-}
-
-func (m *memStore) SetMetadata(_ context.Context, key string, metadata map[string]string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	o, ok := m.objects[key]
-	if !ok {
-		return ErrNoObject
-	}
-	o.metadata = lower(metadata)
-	return nil
 }
 
 func (m *memStore) List(_ context.Context, prefix string) ([]StoredObject, error) {
@@ -257,6 +247,39 @@ func withRequest(c *clusterv1.Cluster) *clusterv1.Cluster {
 	return c
 }
 
+// Snapshots from before the record beside each one kept their facts on the object, or have none, and
+// a record that does not read is none: all are listed, and none stops the listing.
+func TestListingSnapshotsWithoutARecord(t *testing.T) {
+	t.Parallel()
+	store := newMemStore()
+	const old, bare, torn, whole = "20261020T000000Z-v1.37.1-rke2r1.db.age", "20261021T000000Z-v1.37.1-rke2r1.db.age",
+		"20261022T000000Z-v1.37.1-rke2r1.db.age", "20261023T000000Z-v1.37.1-rke2r1.db.age"
+	store.objects[snapshotFolder+"/"+old] = &memObject{data: []byte("x"), metadata: map[string]string{SnapshotMetaSHA256: "abc", SnapshotMetaEtcd: "3.5.0"}}
+	store.objects[snapshotFolder+"/"+bare] = &memObject{data: []byte("x")}
+	store.objects[snapshotFolder+"/"+torn] = &memObject{data: []byte("x")}
+	store.objects[snapshotFolder+"/"+torn+EtcdSnapshotInfoSuffix] = &memObject{data: []byte(`{"sha256":`)}
+	store.objects[snapshotFolder+"/"+whole] = &memObject{data: []byte("x")}
+	store.objects[snapshotFolder+"/"+whole+EtcdSnapshotInfoSuffix] = &memObject{data: []byte(`{"sha256":"def","etcd-revision":"9"}`)}
+	listed, err := ListEtcdSnapshots(context.Background(), store, snapshotFolder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]EtcdSnapshot{}
+	for _, s := range listed {
+		got[s.Name] = s
+	}
+	if len(listed) != 4 || got[old].SHA256 != "abc" || got[old].EtcdVersion != "3.5.0" || got[bare].SHA256 != "" || got[torn].SHA256 != "" ||
+		got[whole].SHA256 != "def" || got[whole].Revision != 9 {
+		t.Errorf("listed %+v", listed)
+	}
+	if _, err = ReadEtcdSnapshot(context.Background(), store, snapshotFolder, "20261030T000000Z-v1.37.1-rke2r1.db.age"); !errors.Is(err, ErrNoObject) {
+		t.Errorf("a snapshot that is not there: %v", err)
+	}
+	if _, err = ReadEtcdSnapshot(context.Background(), store, snapshotFolder, whole+EtcdSnapshotInfoSuffix); !errors.Is(err, ErrNoObject) {
+		t.Errorf("a record read as a snapshot: %v", err)
+	}
+}
+
 // A snapshot asked for is encrypted to the cluster's own key, stored with what a restore checks,
 // recorded on the cluster, and the oldest beyond keep are deleted, and nothing else in the folder.
 func TestEtcdSnapshotterTakesEncryptsAndPrunes(t *testing.T) {
@@ -275,6 +298,7 @@ func TestEtcdSnapshotterTakesEncryptsAndPrunes(t *testing.T) {
 	want := []string{
 		snapshotFolder + "/20261021T000000Z-v1.37.1-rke2r1.db.age",
 		snapshotFolder + "/" + name,
+		snapshotFolder + "/" + name + EtcdSnapshotInfoSuffix,
 		snapshotFolder + "/notes.txt",
 		snapshotFolder + "/restore/abc.enc",
 	}
@@ -294,12 +318,20 @@ func TestEtcdSnapshotterTakesEncryptsAndPrunes(t *testing.T) {
 	if bytes.Contains(o.data, data[:1024]) {
 		t.Error("the snapshot is stored in the clear")
 	}
+	record := f.store.objects[snapshotFolder+"/"+name+EtcdSnapshotInfoSuffix]
+	if record == nil {
+		t.Fatalf("no record beside the snapshot: %v", f.store.keys())
+	}
+	var recorded map[string]string
+	if err := json.Unmarshal(record.data, &recorded); err != nil {
+		t.Fatal(err)
+	}
 	for k, v := range map[string]string{
 		SnapshotMetaSHA256: sum, SnapshotMetaSize: strconv.Itoa(len(data)), SnapshotMetaRevision: "4711",
 		SnapshotMetaEtcd: "3.6.5", SnapshotMetaDistribution: "rke2", SnapshotMetaKubernetes: "v1.37.1+rke2r1",
 	} {
-		if o.metadata[k] != v {
-			t.Errorf("metadata %s = %q, want %q", k, o.metadata[k], v)
+		if recorded[k] != v {
+			t.Errorf("record %s = %q, want %q", k, recorded[k], v)
 		}
 	}
 

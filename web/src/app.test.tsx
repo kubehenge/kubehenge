@@ -735,6 +735,7 @@ describe("create", () => {
     prefix: 24,
     gateway: "10.0.0.1",
     dnsServers: "10.0.0.1, 1.1.1.1",
+    searchDomains: "",
     loadBalancer: "",
     loadBalancerAddresses: "",
     pods: "",
@@ -838,6 +839,27 @@ describe("create", () => {
     });
     const unhardened = { ...rke2, variables: rke2.variables.filter((v) => v.name !== "cis") };
     expect(request({ ...defaults, cis: true }, unhardened).variables).not.toHaveProperty("podSecurity");
+  });
+
+  it("sends the search domains only when entered, and refuses what the schema would", () => {
+    expect(request(form, rke2).variables["network"]).not.toHaveProperty("searchDomains");
+    expect(Object.fromEntries(summary(form, rke2))["Search domains"]).toBe("None");
+    const domains = { ...form, searchDomains: "corp.example, Site-1.example\nexample.org" };
+    expect(request(domains, rke2).variables["network"]).toMatchObject({
+      searchDomains: ["corp.example", "Site-1.example", "example.org"],
+    });
+    expect(Object.fromEntries(summary(domains, rke2))["Search domains"]).toBe(
+      "corp.example, Site-1.example, example.org",
+    );
+    expect(problems("Network", domains, rke2)).toStrictEqual([]);
+    for (const bad of ["corp..example", "-corp.example", "corp.example.", "$(reboot).example", "a_b.example"]) {
+      expect(problems("Network", { ...form, searchDomains: bad }, rke2)).toStrictEqual([
+        "Enter domain names like corp.example",
+      ]);
+    }
+    const seven = "a b c d e f g".split(" ").map((x) => `${x}.example`);
+    expect(problems("Network", { ...form, searchDomains: seven.join(" ") }, rke2)).toStrictEqual(["At most 6 domains"]);
+    expect(problems("Network", { ...form, searchDomains: `${"a".repeat(64)}.example` }, rke2)).toHaveLength(1);
   });
 
   it("asks for Headlamp's view access only when chosen", () => {

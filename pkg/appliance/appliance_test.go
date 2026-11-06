@@ -1004,6 +1004,59 @@ func TestTimeServersReachTheModule(t *testing.T) {
 	}
 }
 
+func TestSearchDomainsValidated(t *testing.T) {
+	t.Parallel()
+	for domain, bad := range map[string]bool{
+		"corp.example": false, "corp": false, "Site-1.Corp.example": false,
+		"corp.example.": true, "corp example": true, "-corp.example": true, "corp..example": true,
+		"$(reboot).example": true, "": true, "corp.example/x": true,
+	} {
+		s := settings("pve1")
+		s.SearchDomains = []string{domain}
+		err := s.Validate()
+		if bad != (err != nil && strings.Contains(err.Error(), "Search domains:")) {
+			t.Errorf("search domain %q: error %v, want refused %v", domain, err, bad)
+		}
+	}
+	s := settings("pve1")
+	s.SearchDomains = []string{"a.example", "a.example"}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "Search domains: a.example is listed twice") {
+		t.Errorf("a domain twice: %v", err)
+	}
+	s.SearchDomains = []string{"a.example", "b.example", "c.example", "d.example", "e.example", "f.example", "g.example"}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "Search domains: at most 6") {
+		t.Errorf("seven domains: %v", err)
+	}
+}
+
+func TestSearchDomainsReachTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	s := settings("pve1")
+	s.SearchDomains = []string{"corp.example"}
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.writeConfig(s); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json"))
+	if err != nil || !strings.Contains(string(raw), `"searchDomains": [`+"\n      \"corp.example\"") {
+		t.Fatalf("variables: %s, %v", raw, err)
+	}
+	main, err := os.ReadFile(filepath.Join(a.workdir(), "main.tf"))
+	if err != nil || !strings.Contains(string(main), "search_domains         = var.settings.searchDomains") {
+		t.Fatalf("root module: %s, %v", main, err)
+	}
+	s.SearchDomains = nil
+	if err = a.writeConfig(s); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ = os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); !strings.Contains(string(raw), `"searchDomains": []`) {
+		t.Errorf("no domains must reach the module as an empty list, not null: %s", raw)
+	}
+}
+
 func TestFixedOnceCreated(t *testing.T) {
 	t.Parallel()
 	was := settings("pve1")

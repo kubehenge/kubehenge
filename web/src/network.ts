@@ -6,6 +6,23 @@ import type { Bridge } from "./types";
 export const ipv4 = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/u;
 export const cidr = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\/(?:3[0-2]|[12]?\d)$/u;
 
+// The class's network.searchDomains: a DNS name of labels up to 63 characters, six at most because
+// glibc's resolver reads no more.
+const dnsName = /^(?:[A-Za-z\d](?:[-A-Za-z\d]{0,61}[A-Za-z\d])?\.)*[A-Za-z\d](?:[-A-Za-z\d]{0,61}[A-Za-z\d])?$/u;
+export const maxSearchDomains = 6;
+const maxDNSNameLength = 253;
+
+/** isDNSName tells whether text is a domain name without a trailing dot. */
+export const isDNSName = (s: string): boolean => s.length <= maxDNSNameLength && dnsName.test(s);
+
+/** searchDomainsProblem is what the server's schema would refuse in the search domains entered, if anything. */
+export function searchDomainsProblem(domains: string[]): string | undefined {
+  if (domains.length > maxSearchDomains) {
+    return `At most ${maxSearchDomains} domains`;
+  }
+  return domains.every((d) => isDNSName(d)) ? undefined : "Enter domain names like corp.example";
+}
+
 export const addressBits = 32;
 const octetValues = 256;
 const octets = 4;
