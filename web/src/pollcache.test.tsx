@@ -25,15 +25,14 @@ describe("a poll's freshness", () => {
   it("is not marked stale while the tab is hidden, and is late once shown and unanswered", async () => {
     vi.useFakeTimers();
     try {
-      let calls = 0;
-      const firstOnly = (): Promise<string> => (++calls === 1 ? Promise.resolve("Read") : Promise.race<string>([]));
+      const firstOnly = vi.fn<() => Promise<string>>().mockResolvedValueOnce("Read").mockImplementation(unanswered);
       const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
       render(<Freshness load={firstOnly} />);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5 * pollIdle);
       });
       expect(screen.getByText("Read")).toBeInTheDocument();
-      expect(calls).toBe(1);
+      expect(firstOnly).toHaveBeenCalledTimes(1);
 
       hidden.mockReturnValue(false);
       await act(async () => {
