@@ -406,7 +406,7 @@ func TestRecoverUndoesAnUpgradeCutOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := u.Recover(context.Background(), false); err != nil {
+	if err = u.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover while an upgrade holds the lock: %v", err)
 	}
 	if got := read(t, u.binary("kubehenge")); got != "binary 0.2.0" {
@@ -414,7 +414,7 @@ func TestRecoverUndoesAnUpgradeCutOff(t *testing.T) {
 	}
 	unlock()
 
-	err = u.Recover(context.Background(), false)
+	err = u.Recover(context.Background())
 	if !errors.Is(err, ErrRecovered) || !strings.Contains(err.Error(), "starts again on 0.1.0") {
 		t.Fatalf("Recover = %v", err)
 	}
@@ -427,7 +427,7 @@ func TestRecoverUndoesAnUpgradeCutOff(t *testing.T) {
 		st.Error != "the appliance stopped during the upgrade to 0.2.0, so it rolled back to 0.1.0" {
 		t.Errorf("status = %+v", st)
 	}
-	if err := u.Recover(context.Background(), false); err != nil {
+	if err := u.Recover(context.Background()); err != nil {
 		t.Errorf("Recover with nothing to undo: %v", err)
 	}
 }
@@ -439,7 +439,7 @@ func TestRecoverRecordsAnUpgradeCutOffBeforeTheSwap(t *testing.T) {
 	u, _ := newUpdater(t, rs)
 	u.Reload = func(context.Context) error { t.Error("reloaded with nothing put back"); return nil }
 	u.write(&UpdateStatus{State: StateUpdating, From: "0.1.0", Step: StepDownload})
-	if err := u.Recover(context.Background(), false); err != nil {
+	if err := u.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if st := u.Spool.Status(); st == nil || st.State != StateFailed || st.RolledBack || !strings.Contains(st.Error, "before it replaced the software") {

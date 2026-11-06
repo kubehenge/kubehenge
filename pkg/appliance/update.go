@@ -144,13 +144,13 @@ func (u *Updater) Run(ctx context.Context) error {
 		return err
 	}
 	// Setting the software aside again would delete the only copy of the old release.
-	if err := u.Recover(ctx, true); err != nil {
+	if err = u.recoverRestarting(ctx); err != nil {
 		return fmt.Errorf("undoing an earlier upgrade cut off in the middle: %w", err)
 	}
-	if _, err := os.Stat(filepath.Join(u.aside(), pendingFile)); err == nil {
+	if exists(filepath.Join(u.aside(), pendingFile)) {
 		return errors.New("an earlier upgrade cut off in the middle is still to be undone, once the management cluster run under way ends. Ask again then")
 	}
-	if _, err := os.Stat(filepath.Join(u.aside(), "shell-pending")); err == nil {
+	if exists(filepath.Join(u.aside(), "shell-pending")) {
 		return errors.New("an upgrade by install.sh was cut off in the middle. Run install.sh --upgrade again, which undoes it first")
 	}
 	st := UpdateStatus{State: StateUpdating, From: u.Current, Time: time.Now()}
@@ -169,6 +169,26 @@ func (u *Updater) Run(ctx context.Context) error {
 	}
 	u.write(&st)
 	return err
+}
+
+// ErrRecovered is an upgrade cut off in the middle and undone by Recover, which reloaded systemd's
+// units. The interface's start fails once with it, so that systemd starts it again on the units of
+// the release put back.
+var ErrRecovered = errors.New("undone")
+
+// Recover undoes an upgrade cut off in the middle, as by a reboot or a kill, and records it as
+// failed. An upgrade that stopped before it replaced anything is only recorded. It does nothing
+// while an upgrade holds the job lock. Having undone one, it reloads systemd's units and returns
+// ErrRecovered. kubehenge.service runs it before it starts.
+func (u *Updater) Recover(ctx context.Context) error {
+	p, undone, err := u.undoCutOff()
+	if err != nil || !undone {
+		return err
+	}
+	if err = u.Reload(ctx); err != nil {
+		return err
+	}
+	return fmt.Errorf("the upgrade to %s was cut off in the middle and is %w, so the interface starts again on %s", p.To, ErrRecovered, p.From)
 }
 
 // take reads and removes the request. A symbolic link or anything but a small regular file is
@@ -261,7 +281,7 @@ func (u *Updater) update(ctx context.Context, req UpdateRequest) (string, error)
 	if r == nil {
 		return "", nil
 	}
-	if err := u.checkSpace(); err != nil {
+	if err = u.checkSpace(); err != nil {
 		return "", err
 	}
 	// Downloads go to disk, not memory: the appliance is small, the archive and OpenTofu large, and
@@ -297,12 +317,17 @@ func (u *Updater) update(ctx context.Context, req UpdateRequest) (string, error)
 	return r.Version, u.replace(ctx, r.Version, archive, tofu)
 }
 
-// spareSpace is what an upgrade leaves free on top of its own files.
-const spareSpace = 64 << 20
+const (
+	mebibyte = 1 << 20
+	// spareSpace is what an upgrade leaves free on top of its own files.
+	spareSpace = 64 * mebibyte
+	// upgradeCopies is how many copies of the software an upgrade holds at once: the installed one,
+	// the download unpacked beside it and the old one kept aside until the new one serves.
+	upgradeCopies = 3
+)
 
-// checkSpace refuses an upgrade the disk has no room for. It downloads and unpacks the new release
-// beside the installed one and keeps that aside until the new one serves, about three times what
-// is installed. A disk filling up halfway would leave the old software half replaced.
+// checkSpace refuses an upgrade the disk has no room for. A disk filling up halfway would leave the
+// old software half replaced.
 func (u *Updater) checkSpace() error {
 	var installed uint64
 	for _, p := range []string{u.share(), u.binary("kubehenge"), u.binary("tofu")} {
@@ -328,8 +353,8 @@ func (u *Updater) checkSpace() error {
 		// Where the free space is not known, a full disk still stops the upgrade, only later.
 		return nil //nolint:nilerr // the check is a forewarning, not the only guard
 	}
-	if need := 3*installed + spareSpace; have < need {
-		return fmt.Errorf("the appliance has %d MiB free and the upgrade needs %d MiB. Free space in it, or grow its disk with: pct resize <ctid> rootfs +4G", have>>20, need>>20)
+	if need := upgradeCopies*installed + spareSpace; have < need {
+		return fmt.Errorf("the appliance has %d MiB free and the upgrade needs %d MiB. Free space in it, or grow its disk with: pct resize <ctid> rootfs +4G", have/mebibyte, need/mebibyte)
 	}
 	return nil
 }
@@ -381,7 +406,9 @@ type swap struct {
 	tofu, restarted bool
 }
 
-func (u *Updater) aside() string { return filepath.Join(u.Root, "usr", "local", "share", ".kubehenge-rollback") }
+func (u *Updater) aside() string {
+	return filepath.Join(u.Root, "usr", "local", "share", ".kubehenge-rollback")
+}
 
 // pendingFile, in the directory the old software is set aside in, marks a swap under way. Found
 // while no upgrade holds the job lock, it is an upgrade cut off in the middle, by a reboot or a
@@ -411,7 +438,7 @@ func (u *Updater) setAside(version, tofu string) (*swap, error) {
 		names = append(names, "tofu")
 	}
 	for _, name := range names {
-		err := copyAtomic(u.binary(name), filepath.Join(sw.aside, name), publicExecutable)
+		err = copyAtomic(u.binary(name), filepath.Join(sw.aside, name), publicExecutable)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("setting the installed software aside: %w", err)
 		}
@@ -426,23 +453,31 @@ func (u *Updater) setAside(version, tofu string) (*swap, error) {
 	return sw, nil
 }
 
-// ErrRecovered is an upgrade cut off in the middle and undone by Recover, which reloaded systemd's
-// units. The interface's start fails once with it, so that systemd starts it again on the units of
-// the release put back.
-var ErrRecovered = errors.New("undone")
+// recoverRestarting undoes an upgrade cut off in the middle as Recover does, then restarts the
+// interface on the software put back and checks it.
+func (u *Updater) recoverRestarting(ctx context.Context) error {
+	_, undone, err := u.undoCutOff()
+	if err != nil || !undone {
+		return err
+	}
+	if err = u.Restart(ctx); err != nil {
+		return err
+	}
+	if u.Healthy != nil {
+		return u.Healthy(ctx)
+	}
+	return nil
+}
 
-// Recover undoes an upgrade cut off in the middle, as by a reboot or a kill, and records it as
-// failed. An upgrade that stopped before it replaced anything is only recorded. It does nothing
-// while an upgrade holds the job lock. With restart it restarts the interface on the software put
-// back and checks it. Without, it reloads the units and returns ErrRecovered. kubehenge.service
-// runs it that way before it starts, and Run with restart before it takes a request.
-func (u *Updater) Recover(ctx context.Context, restart bool) error {
+// undoCutOff puts back the software of an upgrade cut off in the middle and returns that upgrade,
+// and whether there was one to undo.
+func (u *Updater) undoCutOff() (pendingSwap, bool, error) {
 	unlock, err := LockJobs(u.ApplianceDir)
 	if errors.Is(err, ErrBusy) {
-		return nil
+		return pendingSwap{}, false, nil
 	}
 	if err != nil {
-		return err
+		return pendingSwap{}, false, err
 	}
 	defer unlock()
 	raw, err := os.ReadFile(filepath.Join(u.aside(), pendingFile))
@@ -452,39 +487,32 @@ func (u *Updater) Recover(ctx context.Context, restart bool) error {
 			st.Error = "the appliance stopped during the upgrade, before it replaced the software"
 			u.write(st)
 		}
-		return nil
+		return pendingSwap{}, false, nil
 	}
 	var p pendingSwap
 	if err == nil {
 		err = json.Unmarshal(raw, &p)
 	}
 	if err != nil {
-		return fmt.Errorf("reading the upgrade cut off in the middle: %w", err)
+		return p, false, fmt.Errorf("reading the upgrade cut off in the middle: %w", err)
 	}
 	sw := &swap{u: u, aside: u.aside(), tofu: p.Tofu}
-	if err := sw.restore(); err != nil {
-		return fmt.Errorf("undoing the upgrade to %s, cut off in the middle: %w", p.To, err)
+	if err = sw.restore(); err != nil {
+		return p, false, fmt.Errorf("undoing the upgrade to %s, cut off in the middle: %w", p.To, err)
 	}
-	if err := os.RemoveAll(sw.aside); err != nil {
-		return fmt.Errorf("undoing the upgrade to %s: %w", p.To, err)
+	if err = os.RemoveAll(sw.aside); err != nil {
+		return p, false, fmt.Errorf("undoing the upgrade to %s: %w", p.To, err)
 	}
 	u.write(&UpdateStatus{
 		State: StateFailed, From: p.From, To: p.To, Time: time.Now(), RolledBack: true, Step: StepInstall,
 		Error: fmt.Sprintf("the appliance stopped during the upgrade to %s, so it rolled back to %s", p.To, p.From),
 	})
-	if !restart {
-		if err := u.Reload(ctx); err != nil {
-			return err
-		}
-		return fmt.Errorf("the upgrade to %s was cut off in the middle and is %w, so the interface starts again on %s", p.To, ErrRecovered, p.From)
-	}
-	if err := u.Restart(ctx); err != nil {
-		return err
-	}
-	if u.Healthy != nil {
-		return u.Healthy(ctx)
-	}
-	return nil
+	return p, true, nil
+}
+
+func exists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // rollBack puts the software set aside in place again after an upgrade failed with cause, and
@@ -850,7 +878,9 @@ var errStalled = errors.New("nothing arrived for two minutes")
 // watchedBody cancels its request once no data has arrived for stallTimeout.
 type watchedBody struct {
 	io.ReadCloser
-	ctx   context.Context
+
+	// cause is the request context's cause, errStalled once the timer fired.
+	cause func() error
 	timer *time.Timer
 	stop  context.CancelCauseFunc
 }
@@ -860,10 +890,10 @@ func (b *watchedBody) Read(p []byte) (int, error) {
 	if n > 0 {
 		b.timer.Reset(stallTimeout)
 	}
-	if err != nil && errors.Is(context.Cause(b.ctx), errStalled) {
+	if err != nil && errors.Is(b.cause(), errStalled) {
 		err = errStalled
 	}
-	return n, err //nolint:wrapcheck // the body's own error, or errStalled, which callers wrap
+	return n, err
 }
 
 func (b *watchedBody) Close() error {
@@ -896,7 +926,7 @@ func fetch(ctx context.Context, client *http.Client, url string) (*http.Response
 		stop(nil)
 		return nil, transientError{fmt.Errorf("downloading %s: %w", url, err)}
 	}
-	resp.Body = &watchedBody{ReadCloser: resp.Body, ctx: ctx, timer: timer, stop: stop}
+	resp.Body = &watchedBody{ReadCloser: resp.Body, cause: func() error { return context.Cause(ctx) }, timer: timer, stop: stop}
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
 		err = fmt.Errorf("GET %s: %s", url, resp.Status)

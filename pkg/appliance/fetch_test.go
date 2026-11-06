@@ -1,6 +1,7 @@
 package appliance
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -60,7 +61,7 @@ func TestDownloadsAreTriedAgain(t *testing.T) {
 			body := []byte("the signed index")
 			srv, requests := flakyServer(t, 1, tc.fail, body)
 			got, err := get(t.Context(), srv.Client(), srv.URL+"/index.json", 1<<20)
-			if err != nil || string(got) != string(body) {
+			if err != nil || !bytes.Equal(got, body) {
 				t.Fatalf("get = %q, %v", got, err)
 			}
 			if n := requests.Load(); n != 2 {
@@ -73,7 +74,7 @@ func TestDownloadsAreTriedAgain(t *testing.T) {
 			if err != nil {
 				t.Fatalf("download = %v", err)
 			}
-			if raw, err := os.ReadFile(file); err != nil || string(raw) != string(body) {
+			if raw, err := os.ReadFile(file); err != nil || !bytes.Equal(raw, body) { //nolint:gosec // the download's own temporary file
 				t.Errorf("downloaded %q, %v", raw, err)
 			}
 			if n := requests.Load(); n != 2 {
@@ -124,10 +125,9 @@ func TestStalledDownloadsAreTriedAgain(t *testing.T) { //nolint:paralleltest // 
 	var requests atomic.Int32
 	release := make(chan struct{})
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		flusher, _ := w.(http.Flusher)
 		if requests.Add(1) == 1 {
 			_, _ = w.Write([]byte("half"))
-			flusher.Flush()
+			_ = http.NewResponseController(w).Flush()
 			select {
 			case <-r.Context().Done():
 			case <-release:
@@ -137,7 +137,7 @@ func TestStalledDownloadsAreTriedAgain(t *testing.T) { //nolint:paralleltest // 
 		// Slower in all than stallTimeout, but never silent that long.
 		for range 5 {
 			_, _ = w.Write([]byte("tick"))
-			flusher.Flush()
+			_ = http.NewResponseController(w).Flush()
 			time.Sleep(stallTimeout / 2)
 		}
 	}))

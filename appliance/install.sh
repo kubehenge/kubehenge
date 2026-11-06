@@ -774,6 +774,7 @@ read_download_proxy() {
 # packages of the template's build. A container that cannot reach Debian's mirrors is warned
 # about, as the appliance works without them.
 security_updates() {
+    # shellcheck disable=SC2016 # dpkg-query's own format, not the shell's
     if pct exec "${ctid}" -- dpkg-query -W -f '${Status}' unattended-upgrades 2> /dev/null | grep -q 'ok installed'; then
         return 0
     fi

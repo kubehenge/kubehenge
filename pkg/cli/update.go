@@ -68,13 +68,15 @@ request. kubehenge.service runs it so before the interface starts.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			u.Spool = appliance.Spool(spool)
 			if recovering {
-				err := u.Recover(cmd.Context(), false)
-				if err != nil && !errors.Is(err, appliance.ErrRecovered) {
-					// The interface starts all the same: it served on whatever is in place before.
-					fmt.Fprintln(cmd.ErrOrStderr(), "kubehenge update --recover:", err)
-					return nil
+				err := u.Recover(cmd.Context())
+				if errors.Is(err, appliance.ErrRecovered) {
+					return err //nolint:wrapcheck // the updater's own words, which the journal shows as they are
 				}
-				return err
+				if err != nil {
+					// The interface starts all the same: it served on whatever is in place before.
+					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "kubehenge update --recover:", err)
+				}
+				return nil
 			}
 			// No overall timeout: each download ends once nothing arrives for a while.
 			u.HTTP = &http.Client{}
