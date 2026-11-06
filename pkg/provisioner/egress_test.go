@@ -99,8 +99,11 @@ func TestEgressReachesEveryAddonThatLeavesTheCluster(t *testing.T) {
 			if !ok {
 				t.Fatalf("env entry is %T", item)
 			}
-			name, _ := e["name"].(string)
-			value, _ := e["value"].(string)
+			name, nameOK := e["name"].(string)
+			value, valueOK := e["value"].(string)
+			if !nameOK || !valueOK {
+				t.Fatalf("env entry %v lacks a string name or value", e)
+			}
 			out[name] = value
 		}
 		return out
