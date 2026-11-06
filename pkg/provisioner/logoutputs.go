@@ -71,6 +71,11 @@ const (
 	credentialToken    = "token"
 
 	syslogDefaultPort = 514
+
+	schemeTCP      = "tcp"
+	schemeTLS      = "tls"
+	schemeUDP      = "udp"
+	pemCertificate = "CERTIFICATE"
 )
 
 var (
@@ -79,7 +84,12 @@ var (
 	logAuths       = []string{logAuthNone, logAuthBasic, logAuthBearer}
 )
 
-func (o LogOutput) auth() string {
+// CredentialPurpose is the purpose of the output's stored credential.
+func (o *LogOutput) CredentialPurpose() string {
+	return LogOutputPurposePrefix + o.Name
+}
+
+func (o *LogOutput) auth() string {
 	if o.Auth == "" {
 		return logAuthNone
 	}
@@ -87,18 +97,13 @@ func (o LogOutput) auth() string {
 }
 
 // takes tells whether the output gets a stream.
-func (o LogOutput) takes(stream string) bool {
+func (o *LogOutput) takes(stream string) bool {
 	return len(o.Streams) == 0 || slices.Contains(o.Streams, stream)
 }
 
 // id names the output's Alloy components, whose labels allow no hyphen.
-func (o LogOutput) id() string {
+func (o *LogOutput) id() string {
 	return "out_" + strings.ReplaceAll(o.Name, "-", "_")
-}
-
-// CredentialPurpose is the purpose of the output's stored credential.
-func (o LogOutput) CredentialPurpose() string {
-	return LogOutputPurposePrefix + o.Name
 }
 
 // logOutputPurpose finds the credential purpose of a log output by its name, which no static list
@@ -155,7 +160,7 @@ func (o *LogOutput) validate() error {
 	if err != nil {
 		return err
 	}
-	encrypted := u.Scheme == "https" || u.Scheme == "tls"
+	encrypted := u.Scheme == schemeHTTPS || u.Scheme == schemeTLS
 	if o.CABundle != "" {
 		if !encrypted {
 			return errors.New("a CA bundle needs an https or tls endpoint")
@@ -181,14 +186,14 @@ func (o *LogOutput) endpointURL() (*url.URL, error) {
 	}
 	switch o.Kind {
 	case logOutputSyslog:
-		if !slices.Contains([]string{"tcp", "tls", "udp"}, u.Scheme) {
+		if !slices.Contains([]string{schemeTCP, schemeTLS, schemeUDP}, u.Scheme) {
 			return nil, errors.New("a syslog endpoint starts with tcp://, tls:// or udp://")
 		}
 		if u.Port() == "" || (u.Path != "" && u.Path != "/") {
 			return nil, errors.New("a syslog endpoint is scheme://host:port")
 		}
 	case logOutputOTLP, logOutputLoki:
-		if u.Scheme != "https" && u.Scheme != "http" {
+		if u.Scheme != schemeHTTPS && u.Scheme != "http" {
 			return nil, errors.New("endpoint starts with https:// or http://")
 		}
 	}
@@ -209,7 +214,7 @@ func normalisedBundle(bundle string) (string, error) {
 		if block == nil {
 			break
 		}
-		if block.Type != "CERTIFICATE" {
+		if block.Type != pemCertificate {
 			return "", errors.New("the CA bundle holds certificates alone")
 		}
 		if _, err := x509.ParseCertificate(block.Bytes); err != nil {
@@ -280,11 +285,11 @@ func routed(config string, outputs []LogOutput) string {
 }
 
 // reached tells whether the (already routed) configuration forwards to the output.
-func (o LogOutput) reached(config string) bool {
+func (o *LogOutput) reached(config string) bool {
 	return strings.Contains(config, o.receiver())
 }
 
-func (o LogOutput) receiver() string {
+func (o *LogOutput) receiver() string {
 	if o.Kind == logOutputLoki {
 		return "loki.write." + o.id() + ".receiver"
 	}
@@ -293,7 +298,7 @@ func (o LogOutput) receiver() string {
 
 // alloy is the output's components. The endpoint and bundle passed validation, and strconv.Quote
 // leaves nothing in a string that ends it.
-func (o LogOutput) alloy() string {
+func (o *LogOutput) alloy() string {
 	var b strings.Builder
 	b.WriteString("\n")
 	u, _ := o.endpointURL()
@@ -310,13 +315,13 @@ func (o LogOutput) alloy() string {
 	return b.String()
 }
 
-func (o LogOutput) file(key string) string {
+func (o *LogOutput) file(key string) string {
 	return "local.file." + o.id() + "_" + key + ".content"
 }
 
 // secretFiles reads the output's credential from the mounted Secret, so that a changed credential
 // reaches Alloy without a restart and nothing secret is in the configuration.
-func (o LogOutput) secretFiles() string {
+func (o *LogOutput) secretFiles() string {
 	var keys []string
 	switch o.auth() {
 	case logAuthBasic:
@@ -331,7 +336,7 @@ func (o LogOutput) secretFiles() string {
 	return b.String()
 }
 
-func (o LogOutput) writeLoki(b *strings.Builder, bundle string) {
+func (o *LogOutput) writeLoki(b *strings.Builder, bundle string) {
 	fmt.Fprintf(b, "loki.write %q {\n  endpoint {\n    url = %s\n", o.id(), strconv.Quote(o.Endpoint))
 	switch o.auth() {
 	case logAuthBasic:
@@ -346,7 +351,7 @@ func (o LogOutput) writeLoki(b *strings.Builder, bundle string) {
 	b.WriteString("  }\n}\n")
 }
 
-func (o LogOutput) writeOTLP(b *strings.Builder, bundle string) {
+func (o *LogOutput) writeOTLP(b *strings.Builder, bundle string) {
 	fmt.Fprintf(b, "otelcol.receiver.loki %q {\n  output {\n    logs = [otelcol.exporter.otlphttp.%s.input]\n  }\n}\n\n", o.id(), o.id())
 	fmt.Fprintf(b, "otelcol.exporter.otlphttp %q {\n  client {\n    endpoint = %s\n", o.id(), strconv.Quote(o.Endpoint))
 	switch o.auth() {
@@ -370,7 +375,7 @@ func (o LogOutput) writeOTLP(b *strings.Builder, bundle string) {
 // writeSyslog sends each line as an RFC 5424 message. The exporter reads a message's fields from
 // the log record's attributes, so the line becomes the message and the node and job labels the
 // host and application.
-func (o LogOutput) writeSyslog(b *strings.Builder, u *url.URL, bundle string) {
+func (o *LogOutput) writeSyslog(b *strings.Builder, u *url.URL, bundle string) {
 	fmt.Fprintf(b, "otelcol.receiver.loki %q {\n  output {\n    logs = [otelcol.processor.transform.%s.input]\n  }\n}\n\n", o.id(), o.id())
 	fmt.Fprintf(b, "otelcol.processor.transform %q {\n  error_mode = \"ignore\"\n  log_statements {\n    context    = \"log\"\n    statements = [\n", o.id())
 	b.WriteString("      `set(attributes[\"message\"], body)`,\n")
@@ -381,13 +386,13 @@ func (o LogOutput) writeSyslog(b *strings.Builder, u *url.URL, bundle string) {
 	if p, err := strconv.Atoi(u.Port()); err == nil {
 		port = p
 	}
-	network := "tcp"
-	if u.Scheme == "udp" {
-		network = "udp"
+	network := schemeTCP
+	if u.Scheme == schemeUDP {
+		network = schemeUDP
 	}
 	fmt.Fprintf(b, "otelcol.exporter.syslog %q {\n  endpoint = %s\n  port     = %d\n  network  = %q\n", o.id(), strconv.Quote(u.Hostname()), port, network)
 	switch {
-	case u.Scheme == "tcp":
+	case u.Scheme == schemeTCP:
 		b.WriteString("  tls {\n    insecure = true\n  }\n")
 	case bundle != "":
 		fmt.Fprintf(b, "  tls {\n    ca_pem = `%s`\n  }\n", bundle)
@@ -403,12 +408,12 @@ func usesSyslog(outputs []LogOutput) bool {
 
 // outputVolume mounts the outputs' credentials. The Secret is optional so that Alloy starts before
 // the controller has put it there.
-func outputVolume(outputs []LogOutput) (volumes, mounts []any) {
+func outputVolume(outputs []LogOutput) ([]any, []any) {
 	if len(needsCredentials(outputs)) == 0 {
 		return nil, nil
 	}
 	optional := true
-	return []any{corev1.Volume{Name: logOutputsVolume, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: logOutputsSecret, Optional: &optional}}}},
+	return []any{corev1.Volume{Name: logOutputsVolume, Secret: &corev1.SecretVolumeSource{SecretName: logOutputsSecret, Optional: &optional}}},
 		[]any{corev1.VolumeMount{Name: logOutputsVolume, MountPath: logOutputsPath, ReadOnly: true}}
 }
 
