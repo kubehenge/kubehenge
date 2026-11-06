@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -296,6 +297,57 @@ func TestSetupTellsAdministratorsAboutBackups(t *testing.T) {
 		d.signIn("dev@pve")
 		if rec := d.do("GET", "/api/setup", ""); strings.Contains(rec.Body.String(), "backup") {
 			t.Errorf("guest %d: told someone who may not set up: %s", vmid, rec.Body)
+		}
+	}
+}
+
+// A restore to another ID or a clone leaves the installed ID behind. The appliance's MAC finds
+// its guest again, or tells that the user sees none.
+func TestSetupFindsTheApplianceByItsMAC(t *testing.T) {
+	t.Parallel()
+	for mac, want := range map[string]string{"bc:24:11:00:01:50": `"backup":true`, "bc:24:11:00:01:99": ""} {
+		h := newHarness(t)
+		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+		h.server.ApplianceVMID, h.server.ApplianceMACs = 105, []string{mac}
+		a := h.browser()
+		a.signIn("admin@pve")
+		for range 2 {
+			got := a.do("GET", "/api/setup", "").Body.String()
+			if want == "" && (strings.Contains(got, "applianceVMID") || strings.Contains(got, "backup")) ||
+				want != "" && (!strings.Contains(got, `"applianceVMID":150`) || !strings.Contains(got, want)) {
+				t.Errorf("MAC %s: setup = %s", mac, got)
+			}
+		}
+		if h.accounts.applianceLookups != 1 {
+			t.Errorf("MAC %s: looked for the appliance %d times, want once", mac, h.accounts.applianceLookups)
+		}
+	}
+}
+
+// A DHCP lease that changed leaves the certificate for the old address. Reached by a name the
+// certificate is for, the appliance still serves without a warning, so nothing is said.
+func TestSetupTellsAdministratorsWhenTheAddressMoved(t *testing.T) {
+	t.Parallel()
+	old, moved := netip.MustParseAddr("192.0.2.40"), netip.MustParseAddr("192.0.2.41")
+	for _, tc := range []struct {
+		name, host string
+		own        []netip.Addr
+		want       string
+	}{
+		{"moved, reached by its new address", "192.0.2.41", []netip.Addr{moved}, `"addressMoved":{"from":["192.0.2.40"],"to":["192.0.2.41"]}`},
+		{"moved, reached by its name", "kubehenge.example.org:443", []netip.Addr{moved}, ""},
+		{"still there", "192.0.2.40", []netip.Addr{old, moved}, ""},
+	} {
+		h := newHarness(t)
+		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+		h.server.CertificateIPs, h.server.CertificateNames = []netip.Addr{old}, []string{"kubehenge", "kubehenge.example.org"}
+		h.server.OwnAddresses = func() []netip.Addr { return tc.own }
+		a := h.browser()
+		a.signIn("admin@pve")
+		a.host = tc.host
+		got := a.do("GET", "/api/setup", "").Body.String()
+		if tc.want == "" && strings.Contains(got, "addressMoved") || !strings.Contains(got, tc.want) {
+			t.Errorf("%s: setup = %s", tc.name, got)
 		}
 	}
 }

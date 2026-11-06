@@ -604,7 +604,8 @@ The appliance, the management cluster and every cluster check the Proxmox VE API
 ### The interface is unreachable
 
 - Check the container runs (`pct status <ctid>`) and the service is active (`pct exec <ctid> -- systemctl status kubehenge`).
-- The appliance's certificate and its sign-in redirects name the address (or `--name`) it was given. If it took another address from DHCP, give it back that one, or make a certificate for the new one ([install.md](install.md#the-appliances-certificate)).
+- The appliance's certificate and its sign-in redirects name the address (or `--name`) it was given. After a DHCP change, give it back that address or make a certificate for the new one ([install.md](install.md#the-appliances-certificate)).
+- **"The appliance stopped during the upgrade":** a reboot or a migration cut the upgrade off. The old release is back. Ask for the upgrade again, or run `install.sh --upgrade` again.
 - **The browser says the certificate expired:** renew it with `install.sh --certificate --ctid <ctid>` ([install.md](install.md#the-appliances-certificate)). The interface warns administrators 30 days ahead.
 - The interface keeps working while the management cluster is unwell. Pages that need it say the management cluster did not answer. Use **Repair access**, or apply the management cluster again from the Administration page.
 

@@ -47,9 +47,11 @@ type fakeAccounts struct {
 	names          pve.Names
 	privilegeCalls int
 	backupChecks   int
-	renewals       int
-	tokenChecks    int
-	now            func() time.Time
+	// applianceLookups counts the searches for the appliance's guest ID.
+	applianceLookups int
+	renewals         int
+	tokenChecks      int
+	now              func() time.Time
 	// members are every pool's guests. deleted records the VMs deleted.
 	members []pve.Member
 	deleted []int
@@ -302,6 +304,17 @@ func (f *fakeAccounts) BackupCovers(_ context.Context, _ *pve.Ticket, vmid int) 
 	return vmid == 150, nil
 }
 
+// ApplianceID knows the appliance as guest 150, with the MAC address bc:24:11:00:01:50.
+func (f *fakeAccounts) ApplianceID(_ context.Context, _ *pve.Ticket, _ int, macs []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applianceLookups++
+	if slices.Contains(macs, "bc:24:11:00:01:50") {
+		return 150, nil
+	}
+	return 0, pve.ErrNoAppliance
+}
+
 // Network knows two SDN VNets: tenants in the evpn zone and corp in the VLAN zone vlanz.
 // Everything else is a plain bridge.
 func (*fakeAccounts) Network(_ context.Context, _ *pve.Ticket, bridge string) (pve.Network, error) {
@@ -448,8 +461,10 @@ type browser struct {
 	h      *harness
 	cookie string
 	csrf   string
-	// address is where the browser connects from. Unset, 192.0.2.10.
+	// address is where the browser connects from. Unset, 192.0.2.10. host, when set, is the host
+	// it reached the interface by.
 	address string
+	host    string
 	// generation, when set, is sent with each request as the cluster's generation a change was
 	// made against.
 	generation string
@@ -468,6 +483,9 @@ func (b *browser) do(method, path, body string) *httptest.ResponseRecorder {
 	}
 	if b.generation != "" {
 		req.Header.Set(generationHeader, b.generation)
+	}
+	if b.host != "" {
+		req.Host = b.host
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")

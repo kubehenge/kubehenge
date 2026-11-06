@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -42,6 +44,8 @@ type setupView struct {
 	// renew it on the node with the installer. They name the appliance by its guest ID.
 	CertificateExpires *time.Time `json:"certificateExpires,omitempty"`
 	ApplianceVMID      int        `json:"applianceVMID,omitempty"`
+	// AddressMoved tells that the appliance no longer has the address its certificate is for.
+	AddressMoved *addressMove `json:"addressMoved,omitempty"`
 	// CredentialsExpire is when the management cluster's admin credentials in the state run out,
 	// which an apply in their last month renews.
 	CredentialsExpire *time.Time `json:"credentialsExpire,omitempty"`
@@ -86,14 +90,15 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 			v.CredentialsExpire = &last.CredentialsExpire
 		}
 	}
-	v.ApplianceVMID, v.ProxmoxInsecure = s.ApplianceVMID, s.ProxmoxInsecure
+	v.ApplianceVMID, v.ProxmoxInsecure = s.applianceID(r.Context(), u), s.ProxmoxInsecure
 	if !s.CertificateExpires.IsZero() {
 		v.CertificateExpires = &s.CertificateExpires
 	}
-	if !v.Ready || s.ApplianceVMID == 0 || !privs.Has("Sys.Audit") {
+	v.AddressMoved = s.addressMoved(r.Host)
+	if !v.Ready || v.ApplianceVMID == 0 || !privs.Has("Sys.Audit") {
 		return true
 	}
-	covered, err := s.backupCovers(r.Context(), u)
+	covered, err := s.backupCovers(r.Context(), u, v.ApplianceVMID)
 	if err != nil {
 		s.Log.WarnContext(r.Context(), "checking the appliance's backup", "error", err)
 		return true
@@ -111,23 +116,81 @@ type backupCache struct {
 }
 
 type backupSeen struct {
+	vmid    int
 	covered bool
 	until   time.Time
 }
 
 const backupTTL = 5 * time.Minute
 
-func (s *Server) backupCovers(ctx context.Context, u user) (bool, error) {
+// addressMove is the addresses the certificate is for, From, and those the appliance has, To.
+type addressMove struct {
+	From []string `json:"from"`
+	To   []string `json:"to"`
+}
+
+// addressMoved tells that none of the addresses the certificate is for is the appliance's any
+// more, as after its DHCP lease changed or a move to another network. Nil while one still is, or
+// while the user reaches the appliance by a DNS name the certificate is for.
+func (s *Server) addressMoved(host string) *addressMove {
+	if len(s.CertificateIPs) == 0 || s.OwnAddresses == nil {
+		return nil
+	}
+	own := s.OwnAddresses()
+	if slices.ContainsFunc(s.CertificateIPs, func(ip netip.Addr) bool { return slices.Contains(own, ip) }) {
+		return nil
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if slices.ContainsFunc(s.CertificateNames, func(n string) bool { return strings.EqualFold(n, host) }) {
+		return nil
+	}
+	m := &addressMove{From: []string{}, To: []string{}}
+	for _, ip := range s.CertificateIPs {
+		m.From = append(m.From, ip.String())
+	}
+	for _, ip := range own {
+		m.To = append(m.To, ip.String())
+	}
+	return m
+}
+
+// applianceID is the appliance's guest ID as the user sees it, found by its MAC addresses where
+// they are known, or the installed one. 0 when no guest the user sees has its MAC: a restore or a
+// clone took it out of their sight, and the installed ID would name another guest or none.
+func (s *Server) applianceID(ctx context.Context, u user) int {
+	if len(s.ApplianceMACs) == 0 {
+		return s.ApplianceVMID
+	}
+	id, err := s.applianceIDs.get(ctx, u.ticket.Username, backupTTL, time.Now, func(ctx context.Context) int {
+		id, err := s.Accounts.ApplianceID(ctx, u.ticket, s.ApplianceVMID, s.ApplianceMACs)
+		switch {
+		case errors.Is(err, pve.ErrNoAppliance):
+			return 0
+		case err != nil:
+			s.Log.WarnContext(ctx, "finding the appliance's guest ID", "error", err)
+			return s.ApplianceVMID
+		}
+		return id
+	})
+	if err != nil {
+		return s.ApplianceVMID
+	}
+	return id
+}
+
+func (s *Server) backupCovers(ctx context.Context, u user, vmid int) (bool, error) {
 	c, now := &s.backups, time.Now()
 	c.mu.Lock()
 	e, ok := c.seen[u.ticket.Username]
 	c.mu.Unlock()
-	if ok && now.Before(e.until) {
+	if ok && e.vmid == vmid && now.Before(e.until) {
 		return e.covered, nil
 	}
-	covered, err := s.Accounts.BackupCovers(ctx, u.ticket, s.ApplianceVMID)
+	covered, err := s.Accounts.BackupCovers(ctx, u.ticket, vmid)
 	if err != nil {
-		return false, fmt.Errorf("the backup jobs covering VM %d: %w", s.ApplianceVMID, err)
+		return false, fmt.Errorf("the backup jobs covering VM %d: %w", vmid, err)
 	}
 	c.mu.Lock()
 	if c.seen == nil {
@@ -138,7 +201,7 @@ func (s *Server) backupCovers(ctx context.Context, u user) (bool, error) {
 			delete(c.seen, name)
 		}
 	}
-	c.seen[u.ticket.Username] = backupSeen{covered: covered, until: now.Add(backupTTL)}
+	c.seen[u.ticket.Username] = backupSeen{vmid: vmid, covered: covered, until: now.Add(backupTTL)}
 	c.mu.Unlock()
 	return covered, nil
 }

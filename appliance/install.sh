@@ -73,6 +73,9 @@ template_kib=204800
 # The volume holding the key that seals what automatic upgrades keep, which Proxmox VE's backups
 # leave out, so that no backup holds both the sealed passphrase and token and what opens them.
 key_dir=/var/lib/kubehenge-keys
+# The Kubernetes entry in this node's Proxmox VE interface, as pve-entry/install.sh installs it.
+pve_entry_conf=/etc/kubehenge-pve-entry.conf
+pve_entry_self=/usr/local/sbin/kubehenge-pve-entry
 
 fail() {
     echo "kubehenge: $*" >&2
@@ -197,6 +200,21 @@ install_certificate() {
         chmod 0644 "$env.new" && mv "$env.new" "$env"
         echo "HEADLAMP_CONFIG_OIDC_CALLBACK_URL=https://$1:8443/oidc-callback" > /etc/kubehenge/headlamp.env
     ' sh "$1"
+}
+
+# update_pve_entry <URL>: points this node's Kubernetes entry at the appliance's address when it
+# leads elsewhere, and says which command does the same on the other nodes. Without the entry
+# here, it does nothing.
+update_pve_entry() {
+    [ -f "${pve_entry_conf}" ] && [ -x "${pve_entry_self}" ] || return 0
+    entry_url=$(sed -n 's/^url=//p' "${pve_entry_conf}")
+    [ "${entry_url}" != "$1" ] || return 0
+    step "Kubernetes entry in this node's Proxmox VE interface"
+    if ! "${pve_entry_self}" --url "$1"; then
+        echo "kubehenge: the entry still leads to ${entry_url}; see above" >&2
+        return 0
+    fi
+    echo "On every other node with the entry, run: kubehenge-pve-entry --url $1"
 }
 
 # certificate_report: what users check the certificate against.
@@ -1260,6 +1278,7 @@ if [ -n "${certificate}" ]; then
     pct exec "${ctid}" -- flock -n -E 75 /var/lib/kubehenge sh -c 'systemctl restart kubehenge.service && systemctl stop kubehenge-headlamp.service' || rc=$?
     [ "${rc}" -ne 75 ] || fail "the certificate is in place but the interface is busy applying or removing the management cluster; run this again once that has finished"
     [ "${rc}" -eq 0 ] || fail "restarting the interface failed; see: pct exec ${ctid} -- journalctl -u kubehenge"
+    update_pve_entry "https://${public}"
     printf '\nKubehenge in container %s: https://%s/\n' "${ctid}" "${public}"
     certificate_report
     exit 0

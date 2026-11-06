@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -136,6 +137,15 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 		return fmt.Errorf("--tls-cert and --tls-key: %w", err)
 	}
 	s.CertificateExpires = pair.Leaf.NotAfter
+	if o.a.Dir != "" {
+		s.ApplianceMACs, s.OwnAddresses = ownMACs(), ownAddresses
+		s.CertificateNames = pair.Leaf.DNSNames
+		for _, ip := range pair.Leaf.IPAddresses {
+			if addr, ok := netip.AddrFromSlice(ip); ok {
+				s.CertificateIPs = append(s.CertificateIPs, addr.Unmap())
+			}
+		}
+	}
 	accounts, err := pve.NewAccounts(*conn)
 	if err != nil {
 		return fmt.Errorf("the Proxmox VE API: %w", err)
@@ -415,4 +425,36 @@ func listenPort(addr string) (int, error) {
 func applianceVMIDDefault() int {
 	id, _ := strconv.Atoi(os.Getenv("KUBEHENGE_APPLIANCE_VMID"))
 	return id
+}
+
+// ownAddresses are the addresses of this machine others may reach it at: neither loopback nor
+// link-local.
+func ownAddresses() []netip.Addr {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var own []netip.Addr
+	for _, a := range addrs {
+		if p, err := netip.ParsePrefix(a.String()); err == nil && p.Addr().IsGlobalUnicast() {
+			own = append(own, p.Addr().Unmap())
+		}
+	}
+	return own
+}
+
+// ownMACs are the MAC addresses of this machine's network interfaces, by which the appliance finds
+// its own guest in Proxmox VE.
+func ownMACs() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var macs []string
+	for _, i := range ifaces {
+		if i.Flags&net.FlagLoopback == 0 && len(i.HardwareAddr) > 0 {
+			macs = append(macs, i.HardwareAddr.String())
+		}
+	}
+	return macs
 }

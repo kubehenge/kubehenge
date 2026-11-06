@@ -192,7 +192,7 @@ It keeps a name given before unless `--name` gives another, or `--no-name` drops
 
 A renewal keeps a name from a certificate this cluster's CA signed. It keeps any other name only where this node's DNS resolves it to the appliance's address, and otherwise drops it and says so. `--name` keeps it. The address is the one the container's configuration gives it, or with DHCP the one the container reports.
 
-After a new name or address, update the redirect URLs registered for OpenID realms (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).
+After a new name or address, it points this node's Kubernetes entry ([below](#the-proxmox-ve-interface-entry)) at it and prints the command for the other nodes. Update the redirect URLs registered for OpenID realms (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).
 
 ### The Proxmox VE interface entry
 

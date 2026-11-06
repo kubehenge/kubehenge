@@ -43,6 +43,9 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - An upgrade checks for room first, about three times what is installed, in the updater and in `install.sh --upgrade`. A full disk had left the old software half replaced.
 - An upgrade cut off by a reboot or a kill is undone at the interface's next start, and its status says so instead of "under way" for ever. `install.sh --upgrade` undoes its own the same way when run again.
 - The installer sets up Debian's daily security updates in the container, through its proxy, and `--upgrade` adds them to appliances that lack them.
+- After a restore to another ID or a clone, the backup check and the commands the interface shows find the appliance by its MAC address. A guest ID that is gone no longer counts as backed up.
+- The interface warns administrators when the appliance's address is no longer the one its certificate is for, as after a DHCP change. The warning names the command that renews it.
+- `install.sh --certificate` points this node's Kubernetes entry at the appliance's new address and prints the command for the other nodes.
 
 ## [0.4.2] - 2026-11-05
 
