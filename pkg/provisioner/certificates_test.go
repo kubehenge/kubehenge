@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -574,5 +575,178 @@ func TestCertificatesVariableIsParsed(t *testing.T) {
 	}
 	if _, err := addonsOf(withAddons(storageCluster(), map[string]string{certificatesVariable: `"on"`})); err == nil {
 		t.Error("a certificates variable that is no object")
+	}
+}
+
+func TestClusterIssuerBindsTheACMEAccountWithoutTheKey(t *testing.T) {
+	t.Parallel()
+	c := Certificates{
+		Enabled: true, Domain: "lab.example.org", DNS01: DNS01{Provider: "cloudflare"},
+		ACME: ACME{Server: "https://ca.test/acme/directory", ExternalAccountBinding: ExternalAccountBinding{KeyID: "kid-1"}},
+	}
+	issuer, err := clusterIssuer(&c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lookup[string](t, issuer.Object, "spec", "acme", "externalAccountBinding", "keyID"); got != "kid-1" {
+		t.Errorf("key ID %q", got)
+	}
+	ref := lookup[map[string]any](t, issuer.Object, "spec", "acme", "externalAccountBinding", "keySecretRef")
+	if ref["name"] != eabSecret || ref["key"] != eabKey {
+		t.Errorf("secret reference %v", ref)
+	}
+	binding := lookup[map[string]any](t, issuer.Object, "spec", "acme", "externalAccountBinding")
+	if _, set := binding["keyAlgorithm"]; set || len(binding) != 2 {
+		t.Errorf("binding %v", binding)
+	}
+	plain, err := clusterIssuer(&Certificates{DNS01: DNS01{Provider: "cloudflare"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, set := lookup[map[string]any](t, plain.Object, "spec", "acme")["externalAccountBinding"]; set {
+		t.Error("a binding without a key ID")
+	}
+}
+
+func TestCertificatesCopyTheBindingKeyAndLeaveTheIssuerOutWithoutIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := certificatesCluster(`{"enabled": true}`)
+	stored := &corev1.Secret{
+		Namespace: "team-a", Name: "web.acme-eab", Type: CredentialType,
+		Labels: map[string]string{CredentialLabel: eabPurpose},
+		Data:   map[string][]byte{eabKey: []byte("c2VjcmV0LWhtYWM")},
+	}
+	certs := Certificates{
+		Enabled: true, Domain: "lab.example.org", DNS01: DNS01{Provider: "cloudflare", ExistingSecret: "mine"},
+		ACME: ACME{ExternalAccountBinding: ExternalAccountBinding{KeyID: "kid-1"}},
+	}
+
+	// Without the credential the issuer is not made, and the cluster hears why.
+	r, _ := newReconciler(t, &fakeCloud{}, c)
+	recorder := events.NewFakeRecorder(10)
+	r.Events = recorder
+	workload := newCertWorkload(t)
+	workload.installed = true
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
+	if _, err := r.reconcileCertificates(ctx, c, &certs); err != nil {
+		t.Fatal(err)
+	}
+	if len(workload.applied) != 0 {
+		t.Errorf("objects applied without the binding key: %v", workload.applied)
+	}
+	select {
+	case e := <-recorder.Events:
+		if !strings.Contains(e, "NoACMEEABCredential") {
+			t.Errorf("event %q", e)
+		}
+	default:
+		t.Error("the missing binding key is not reported")
+	}
+
+	// A credential of the wrong purpose is no credential.
+	wrong := stored.DeepCopy()
+	wrong.Labels[CredentialLabel] = dns01Purpose
+	r, _ = newReconciler(t, &fakeCloud{}, c, wrong)
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
+	if _, err := r.reconcileCertificates(ctx, c, &certs); err != nil || workload.has("ClusterIssuer//"+ingressIssuer) {
+		t.Errorf("a credential of another purpose: %v, %v", workload.applied, err)
+	}
+
+	// With it, the key is copied and the issuer points at the copy, never at the value.
+	r, _ = newReconciler(t, &fakeCloud{}, c, stored)
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
+	if _, err := r.reconcileCertificates(ctx, c, &certs); err != nil {
+		t.Fatal(err)
+	}
+	secret := workload.applied["Secret/cert-manager/"+eabSecret]
+	if secret == nil {
+		t.Fatalf("no binding Secret: %v", workload.applied)
+	}
+	raw, err := base64.StdEncoding.DecodeString(lookup[string](t, secret, "data", eabKey))
+	if err != nil || string(raw) != "c2VjcmV0LWhtYWM" {
+		t.Errorf("copied key %q, %v", raw, err)
+	}
+	issuer := workload.applied["ClusterIssuer//"+ingressIssuer]
+	if issuer == nil {
+		t.Fatalf("no issuer: %v", workload.applied)
+	}
+	if text := fmt.Sprint(issuer); strings.Contains(text, "c2VjcmV0LWhtYWM") || !strings.Contains(text, "kid-1") {
+		t.Errorf("issuer %v", issuer)
+	}
+
+	// Switching the binding off takes the copy out.
+	certs.ACME.ExternalAccountBinding = ExternalAccountBinding{}
+	if _, err := r.reconcileCertificates(ctx, c, &certs); err != nil || !slices.Contains(workload.deleted, "Secret/cert-manager/"+eabSecret) {
+		t.Errorf("the copy stays: deleted %v, %v", workload.deleted, err)
+	}
+}
+
+func TestExternalIssuerMakesNoIssuerAndEveryCertificateAsksIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	c := certificatesCluster(`{"enabled": true}`)
+	r, _ := newReconciler(t, &fakeCloud{}, c)
+	workload := newCertWorkload(t)
+	workload.installed = true
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
+	// The cluster ran its own issuer before.
+	if _, err := r.reconcileCertificates(ctx, c, &Certificates{Enabled: true, Issuer: IssuerCA, Domain: "lab.example.org"}); err != nil {
+		t.Fatal(err)
+	}
+	external := Certificates{Enabled: true, Issuer: IssuerExternal, Domain: "lab.example.org", IssuerName: "vault"}
+	if _, err := r.reconcileCertificates(ctx, c, &external); err != nil {
+		t.Fatal(err)
+	}
+	if workload.has("ClusterIssuer//"+ingressIssuer) || !slices.Contains(workload.deleted, "ClusterIssuer//"+ingressIssuer) {
+		t.Errorf("Kubehenge's issuer beside the owner's: %v, deleted %v", workload.applied, workload.deleted)
+	}
+	ref := lookup[map[string]any](t, workload.applied["Certificate/kube-system/"+ingressIssuer], "spec", "issuerRef")
+	if ref["name"] != "vault" || ref["kind"] != clusterIssuerKind || ref["group"] != certManagerGroup {
+		t.Errorf("default certificate asks %v", ref)
+	}
+
+	// The ingress certificates of the add-ons and the shim's default ask it too.
+	_, annotations := addonIngress(&external, "grafana", "grafana.example.org", "")
+	if annotations[issuerAnnotation] != "vault" {
+		t.Errorf("annotations %v", annotations)
+	}
+	shim := lookup[map[string]any](t, certManagerValues(&external), "ingressShim")
+	if shim["defaultIssuerName"] != "vault" || shim["defaultIssuerKind"] != clusterIssuerKind {
+		t.Errorf("ingress shim %v", shim)
+	}
+	own := Certificates{Enabled: true, Issuer: IssuerExternal, IssuerName: "adcs", IssuerKind: "AdcsIssuer", IssuerGroup: "adcs.certmanager.csf.nhs.uk"}
+	_, annotations = addonIngress(&own, "grafana", "grafana.example.org", "")
+	if annotations["cert-manager.io/issuer"] != "adcs" || annotations["cert-manager.io/issuer-kind"] != "AdcsIssuer" ||
+		annotations["cert-manager.io/issuer-group"] != "adcs.certmanager.csf.nhs.uk" || annotations[issuerAnnotation] != nil {
+		t.Errorf("annotations of an issuer from another group %v", annotations)
+	}
+	if own.defaultCertificate() {
+		t.Error("a default certificate without a domain")
+	}
+}
+
+func TestValidatorHoldsTheExternalIssuerToItsRules(t *testing.T) {
+	t.Parallel()
+	for raw, want := range map[string]string{
+		`{"enabled": true, "issuer": "external", "issuerName": "vault"}`:                                                              "",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault", "issuerKind": "VaultIssuer", "issuerGroup": "example.org"}`: "",
+		`{"enabled": true, "issuer": "external"}`:                                                                                     "issuerName",
+		`{"enabled": true, "issuer": "external", "issuerName": "Vault_1"}`:                                                            "issuerName",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault", "issuerKind": "cluster-issuer"}`:                             "issuerKind",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault", "issuerKind": "Issuer"}`:                                     "ClusterIssuer",
+		`{"enabled": true, "issuer": "external", "issuerName": "kubehenge-ingress"}`:                                                 "issuerName",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault", "acme": {"email": "a@example.org"}}`:                         "ACME",
+		`{"enabled": true, "issuer": "external", "issuerName": "vault", "dns01": {"provider": "cloudflare"}}`:                        "ACME",
+		`{"enabled": true, "domain": "lab.example.org", "issuerName": "vault", "dns01": {"provider": "cloudflare"}}`:                 "issuer external",
+		`{"enabled": true, "issuer": "ca", "domain": "lab.example.org", "acme": {"externalAccountBinding": {"keyID": "k"}}}`:         "ACME issuer",
+		`{"enabled": true, "issuer": "acme-http01", "acme": {"externalAccountBinding": {"keyID": "k"}}}`:                             "",
+		`{"enabled": false, "issuer": "external"}`:                                                                                   "",
+	} {
+		errs := validateCertificates(certificatesCluster(raw))
+		switch {
+		case want == "" && len(errs) > 0, want != "" && (len(errs) == 0 || !strings.Contains(errs.ToAggregate().Error(), want)):
+			t.Errorf("%s: %v, want %q", raw, errs, want)
+		}
 	}
 }

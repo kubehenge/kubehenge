@@ -9,6 +9,7 @@ import {
   certificatesProblems,
   certificatesText,
   certificatesVariable,
+  needsBindingKey,
   newCertificates,
 } from "./Certificates";
 import { fakeServer, type Route } from "./fake-server";
@@ -248,9 +249,146 @@ const wizard = (store: Route): ReturnType<typeof fakeServer> => {
     "POST /api/clusters?dryRun=All": () => ({ body: { manifest: "kind: Cluster\n" } }),
     "POST /api/clusters": () => ({ status: 201, body: web }),
     [`PUT ${credentialPath}`]: store,
+    "PUT /api/clusters/default/web/credentials/acme-eab": store,
     "GET /api/clusters/default/web": () => ({ body: web }),
   });
 };
+
+describe("certificates of an ACME server with a binding, and of an issuer you run", () => {
+  const bindingPath = "/api/clusters/default/web/credentials/acme-eab";
+
+  it("writes the key ID, never the HMAC key, and reads it back", () => {
+    const f = {
+      ...newCertificates(),
+      enabled: true,
+      domain: "apps.example.com",
+      server: "https://ca.example/acme/directory",
+      eabKeyID: " kid-1 ",
+    };
+    const v = certificatesVariable(f);
+    expect(v).toMatchObject({
+      acme: { server: "https://ca.example/acme/directory", externalAccountBinding: { keyID: "kid-1" } },
+    });
+    expect(certificatesOf(v).eabKeyID).toBe("kid-1");
+    expect(certificatesVariable({ ...f, eabKeyID: "" })).not.toHaveProperty("acme.externalAccountBinding");
+    expect([f, { ...f, issuer: "ca" as const }, { ...f, eabKeyID: " " }].map((x) => needsBindingKey(x))).toStrictEqual([
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it("leaves out everything but the issuer you run, and checks its name", () => {
+    const f = {
+      ...newCertificates(),
+      enabled: true,
+      issuer: "external" as const,
+      issuerName: "vault",
+      email: "ops@example.com",
+      eabKeyID: "kid-1",
+    };
+    expect(certificatesVariable(f)).toStrictEqual({ enabled: true, issuer: "external", issuerName: "vault" });
+    expect(
+      certificatesVariable({ ...f, domain: "apps.example.com", issuerKind: "AdcsIssuer", issuerGroup: "adcs.example" }),
+    ).toStrictEqual({
+      enabled: true,
+      issuer: "external",
+      domain: "apps.example.com",
+      issuerName: "vault",
+      issuerKind: "AdcsIssuer",
+      issuerGroup: "adcs.example",
+    });
+    expect(certificatesText(f)).toBe("ClusterIssuer vault");
+    expect(certificatesProblems(f)).toStrictEqual({});
+    expect(certificatesProblems({ ...f, issuerName: "" })).toHaveProperty("issuerName");
+    expect(certificatesProblems({ ...f, issuerName: "kubehenge-ingress" })).toHaveProperty("issuerName");
+    expect(certificatesProblems({ ...f, issuerKind: "Issuer" })).toHaveProperty("issuerKind");
+    expect(certificatesProblems({ ...f, issuerKind: "Issuer", issuerGroup: "other.example" })).toStrictEqual({});
+    expect(certificatesProblems({ ...f, issuerKind: "cluster-issuer" })).toHaveProperty("issuerKind");
+    expect(certificatesProblems({ ...f, issuerGroup: "Not A Group" })).toHaveProperty("issuerGroup");
+    expect(certificatesProblems({ ...f, domain: "Not A Domain" })).toHaveProperty("domain");
+  });
+
+  it("asks for the HMAC key beside the key ID, and saves the ID only", async () => {
+    const calls = fakeServer({
+      [`GET ${credentialPath}`]: unset,
+      [`GET ${bindingPath}`]: { body: { purpose: "acme-eab", set: false, canChange: true } },
+      "PATCH /api/clusters/default/web": { body: web },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<CertificatesDialog cluster={web} onClose={vi.fn<() => void>()} />);
+    const dialog = within(screen.getByRole("dialog", { name: "Edit certificates" }));
+    await user.click(dialog.getByRole("checkbox", { name: "Issue certificates" }));
+    await user.type(dialog.getByLabelText("Domain"), "apps.example.com");
+    expect(dialog.queryByRole("group", { name: "HMAC key" })).not.toBeInTheDocument();
+    await user.click(dialog.getByText("Another ACME server"));
+    await user.type(dialog.getByLabelText("ACME server"), "https://ca.example/acme/directory");
+    await user.type(dialog.getByLabelText("Key ID"), "kid-1");
+    await expect(
+      within(await dialog.findByRole("group", { name: "HMAC key" })).findByText("Not set"),
+    ).resolves.toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(calls.at(-1)?.key).toBe("PATCH /api/clusters/default/web"));
+    expect(calls.at(-1)?.body).toMatchObject({
+      variables: { certificates: { acme: { externalAccountBinding: { keyID: "kid-1" } } } },
+    });
+  });
+
+  it("shows the issuer's fields only for an issuer you run, and its errors only once touched or saved", async () => {
+    fakeServer({ [`GET ${credentialPath}`]: unset });
+    const user = userEvent.setup({ delay: null });
+    render(<CertificatesDialog cluster={web} onClose={vi.fn<() => void>()} />);
+    const dialog = within(screen.getByRole("dialog", { name: "Edit certificates" }));
+    await user.click(dialog.getByRole("checkbox", { name: "Issue certificates" }));
+    expect(dialog.queryByLabelText("Issuer name")).not.toBeInTheDocument();
+    await user.selectOptions(dialog.getByLabelText("Issuer"), "external");
+    expect(dialog.queryByLabelText("DNS provider")).not.toBeInTheDocument();
+    expect(dialog.queryByLabelText("Contact email")).not.toBeInTheDocument();
+    expect(dialog.getByLabelText("Issuer name")).not.toHaveAccessibleDescription(/Use lowercase/u);
+    await user.click(dialog.getByRole("button", { name: "Save" }));
+    expect(dialog.getByLabelText("Issuer name")).toHaveAccessibleDescription(/^Use lowercase letters/u);
+    await user.type(dialog.getByLabelText("Issuer name"), "vault");
+    expect(dialog.getByLabelText("Issuer name")).not.toHaveAccessibleDescription(/Use lowercase/u);
+    expect(dialog.getByLabelText("Domain")).not.toHaveAccessibleDescription(/Enter a domain/u);
+  });
+
+  it("stores the HMAC key for the new cluster once it is created", async () => {
+    const calls = wizard({ body: { purpose: "dns01", set: true, canChange: true } });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.type(await screen.findByLabelText("Name"), "web");
+    await waitFor(() => expect(screen.getByRole("option", { name: "RKE2" })).toBeInTheDocument());
+    await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-rke2");
+    await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+rke2r1");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0"));
+    await user.type(screen.getByLabelText("API address"), "10.0.0.20");
+    await user.type(screen.getByLabelText("Node addresses"), "10.0.0.21-10.0.0.29");
+    await user.type(screen.getByLabelText("Gateway"), "10.0.0.1");
+    await user.type(screen.getByLabelText("DNS servers"), "10.0.0.1");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    const certificates = within(screen.getByRole("group", { name: "Certificates" }));
+    await user.click(certificates.getByRole("checkbox", { name: "Issue certificates" }));
+    await user.selectOptions(certificates.getByLabelText("Issuer"), "acme-http01");
+    await user.click(certificates.getByText("Another ACME server"));
+    await user.type(certificates.getByLabelText("ACME server"), "https://ca.example/acme/directory");
+    await user.type(certificates.getByLabelText("Key ID"), "kid-1");
+    await user.type(certificates.getByLabelText("HMAC key"), "hmac-secret");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("ACME HMAC key")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/web"));
+    expect(calls.find((c) => c.key === `PUT ${bindingPath}`)?.body).toStrictEqual({
+      values: { hmacKey: "hmac-secret" },
+    });
+    for (const key of ["POST /api/clusters?dryRun=All", "POST /api/clusters"]) {
+      expect(JSON.stringify(calls.find((c) => c.key === key)?.body)).not.toContain("hmac-secret");
+    }
+  });
+});
 
 const createWithToken = async (): Promise<void> => {
   const user = userEvent.setup({ delay: null });

@@ -241,6 +241,25 @@ function CertificatesAddOn({
             )}
           </Field>
         )}
+        renderBinding={(label, hint) => (
+          <Field
+            label={label}
+            hint={canTrust === false ? tokenRefusal : hint}
+            info={canTrust === false ? undefined : "Add it later in Options. The cluster waits for it."}
+          >
+            {(id) => (
+              <input
+                id={id}
+                type="password"
+                autoComplete="new-password"
+                spellCheck={false}
+                disabled={canTrust === false}
+                value={form.eabKey}
+                onChange={(e) => set("eabKey", e.target.value)}
+              />
+            )}
+          </Field>
+        )}
       />
     </fieldset>
   );

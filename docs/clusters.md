@@ -701,7 +701,7 @@ The annotation `kubehenge.dev/gateway-api` on the Cluster names the oldest relea
 
 ## Certificates
 
-The certificates add-on (`certificates: {enabled: true, …}`) installs cert-manager and a ClusterIssuer `kubehenge-ingress`, which signs or orders every certificate the cluster asks for. There are three issuers:
+The certificates add-on (`certificates: {enabled: true, …}`) installs cert-manager and a ClusterIssuer `kubehenge-ingress`, which signs or orders every certificate the cluster asks for. There are four issuers:
 
 - **`acme-dns01`** (the default): an ACME server proves the names through a TXT record that cert-manager sets with the DNS provider's API.
   - Works for clusters no one reaches from the internet, and for wildcards. Needs a `domain` and a DNS provider.
@@ -711,8 +711,9 @@ The certificates add-on (`certificates: {enabled: true, …}`) installs cert-man
   - It signs names in the domain and nothing else, no other name and no address. So trusting it trusts nothing beyond the cluster.
   - Clients trust it once: **Download CA certificate** under the cluster's **Options**, **CA certificate** on its page, or the `<cluster>-ingress-ca` Secret beside the Cluster (`tls.crt`).
   - A new domain makes a new CA. Add-on host names have to lie in the domain, or name a `tlsSecret`.
+- **`external`**: an issuer you run in the cluster, such as Vault's, ADCS's or a ClusterIssuer that exists already ([below](#an-issuer-you-run)).
 
-With `acme-dns01` and `ca`, the certificate `kubehenge-ingress` in `kube-system` covers `domain` and `*.domain`. Traefik serves it for every Ingress and route that names no certificate of its own, and on the Gateway's `websecure` listener. A name further down, or any name with `acme-http01`, gets its own certificate. The add-ons' Ingresses (Headlamp's, Grafana's, Argo CD's and Flux's web interface) ask for one themselves. An Ingress of yours asks with either annotation:
+With `acme-dns01`, `ca` and `external` (when it has a `domain`), the certificate `kubehenge-ingress` in `kube-system` covers `domain` and `*.domain`. Traefik serves it for every Ingress and route that names no certificate of its own, and on the Gateway's `websecure` listener. A name further down, or any name with `acme-http01`, gets its own certificate. The add-ons' Ingresses (Headlamp's, Grafana's, Argo CD's and Flux's web interface) ask for one themselves. An Ingress of yours asks with either annotation:
 
 ```yaml
 metadata:
@@ -727,6 +728,29 @@ spec:
 A Gateway of your own asks for its listeners' certificates with `cert-manager.io/cluster-issuer: kubehenge-ingress` on the Gateway.
 
 The ACME server is Let's Encrypt's. With `acme.staging` it is its staging directory (certificates no browser trusts, for trying things out). With `acme.server` it is any other. `acme.caBundle` is the CA of a server whose own certificate the usual CAs do not sign. `acme.email` receives the server's notices.
+
+### External account binding
+
+Some ACME servers accept only accounts tied to one their operator made: a step-ca with an EAB provisioner, Sectigo, DigiCert, ZeroSSL and Google Trust Services. Without the binding, registration fails with `externalAccountRequired`. Let's Encrypt needs none.
+
+- **`acme.externalAccountBinding.keyID`**: the key ID the server gave you.
+- **The HMAC key** is the cluster's own credential, typed in when creating the cluster or under **Options**. The interface keeps it in the Secret `<cluster>.acme-eab` beside the Cluster and never shows it again.
+- Kubehenge's controller copies it into the `cert-manager` namespace of the workload cluster (`kubehenge-acme-eab`), and the ClusterIssuer's `externalAccountBinding.keySecretRef` points there.
+- Cert-manager signs with HS256, the only algorithm ACME defines for it, so there is nothing to set.
+- A cluster without the key gets a `NoACMEEABCredential` event and no issuer, since a registration without it would fail.
+
+### An issuer you run
+
+With `issuer: external`, Kubehenge makes no issuer. It points every certificate it asks for at yours: the default certificate, the add-ons' Ingresses and cert-manager's default for Ingresses that name none. It also leaves out the ACME account, the DNS-01 credential and the cluster's CA.
+
+| Variable | Meaning |
+| --- | --- |
+| `issuerName` | Required. The issuer, a DNS name such as `vault`. It cannot be `kubehenge-ingress`. |
+| `issuerKind` | Optional, `ClusterIssuer` by default. Another kind (such as `AdcsIssuer`) needs its `issuerGroup`. An `Issuer` serves one namespace, so it is refused. |
+| `issuerGroup` | Optional, `cert-manager.io` by default. |
+| `domain` | Optional. With it, a default certificate for `domain` and `*.domain` is asked of your issuer, which has to be able to sign a wildcard. |
+
+`acme` and `dns01` cannot go with it. The issuer has to exist in the workload cluster, made by you or by your own GitOps. Certificates wait until it is `Ready`.
 
 ### DNS providers
 
@@ -1156,7 +1180,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `podSecurity` | no | `admission`, the level Pod Security Admission enforces in every namespace that labels none of its own: `privileged`, `baseline` (default) or `restricted`. Changing it replaces the control-plane machines. `kyverno`, the level Kyverno enforces in every namespace: `off` (default), `baseline` or `restricted` ([above](#add-ons)). |
 | `istio` | no | `enabled` (default false): Istio in ambient mode ([above](#add-ons)). |
 | `clusterMesh` | no | For a cluster that runs Cilium ([above](#add-ons)). `enabled` (default false). `peers`, the clusters of this namespace to link with, by name. |
-| `certificates` | no | `enabled` (default false). `issuer`, `acme-dns01` (default), `acme-http01` or `ca`. `domain`, needed with `acme-dns01` and `ca`. `acme` holds `email`, `server`, `staging`, `caBundle`. `dns01` holds `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
+| `certificates` | no | `enabled` (default false). `issuer`, `acme-dns01` (default), `acme-http01`, `ca` or `external`. `domain`, needed with `acme-dns01` and `ca`. `issuerName`, `issuerKind`, `issuerGroup`, with `external` ([above](#an-issuer-you-run)). `acme` holds `email`, `server`, `staging`, `caBundle`, `externalAccountBinding.keyID` ([above](#external-account-binding)). `dns01` holds `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node. `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false uninstalls it ([above](#change-settings)). |
 | `gitops` | no | `enabled` (default false). `engine`, `argocd` (default) or `flux`. `repository`, with `url` (`https://` or `ssh://`), `revision` (a branch or full ref, default `main`) and `path` (default `.`). `auth`, `none` (default), `deployKey`, `token` or `existingSecret`. `deployKey` works over `ssh://`. The key is in the Secret `<name>-gitops` beside the Cluster, its public half under `identity.pub`. `token` is the cluster's `gitops` credential, `username` and `password`. With `existingSecret`, the field `existingSecret` names the Secret. `knownHosts`, the server's host keys as known_hosts lines, at least one for the URL's host and port. It is required over `ssh://` except for Flux with `existingSecret`. `hostname` and `tlsSecret`, to serve the web interface through the ingress controller. `admins`, the first provider's groups that administer Argo CD. `signIn`, with `clientID` (the provider's own when unset) and `clientSecret`, `none` (default, PKCE), `stored` or `existingSecret`. `stored` is the cluster's `oidc-client` credential, key `clientSecret`. With `existingSecret`, the field `signIn.existingSecret` names the Secret. `ui` (default false), Flux's web interface, which needs `hostname` and a client secret. `ui` and `admins` need an identity provider in `oidc`. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
