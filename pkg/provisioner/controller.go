@@ -613,6 +613,10 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 			wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
 				return r.backupsWait(ctx, c, &addons.Backups, addons.backupSources)
 			}
+		case alloyProxy(cluster):
+			wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
+				return r.logOutputsWait(ctx, c, addons.Logs)
+			}
 		case snapshotClassProxy(cluster):
 			wait = r.snapshotClassWaits
 		}

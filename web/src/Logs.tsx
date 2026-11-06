@@ -1,6 +1,8 @@
 import { useId, useState, type JSX } from "react";
 
-import type { Cluster } from "./types";
+import { LogOutputsFields } from "./LogOutputs";
+import { outputProblems, outputVariable, outputsOf, type LogOutput } from "./output-model";
+import type { Cluster, ClusterRef } from "./types";
 import { Dialog, ErrorBox, Field, Info, useChange } from "./ui";
 import { flag, quantity, record, text } from "./values";
 
@@ -13,6 +15,8 @@ export interface Logs {
   collector: Collector;
   retentionDays: number;
   sizeGiB: number;
+  /** Destinations every log also goes to, beside Loki. */
+  outputs: LogOutput[];
 }
 
 const defaultRetentionDays = 7;
@@ -26,6 +30,7 @@ export const newLogs = (): Logs => ({
   collector: "node",
   retentionDays: defaultRetentionDays,
   sizeGiB: defaultSizeGiB,
+  outputs: [],
 });
 
 export function logsOf(v: unknown): Logs {
@@ -35,6 +40,7 @@ export function logsOf(v: unknown): Logs {
     collector: text(r["collector"]) === "api" ? "api" : "node",
     retentionDays: quantity(r["retentionDays"]) ?? defaultRetentionDays,
     sizeGiB: quantity(r["sizeGiB"]) ?? defaultSizeGiB,
+    outputs: outputsOf(r["outputs"]),
   };
 }
 
@@ -44,7 +50,9 @@ export function logsText(l: Logs): string {
     return "Off";
   }
   const days = l.retentionDays === 1 ? "1 day" : `${l.retentionDays} days`;
-  return `On, ${l.collector === "node" ? "every node" : "Kubernetes API"}, ${days}, ${l.sizeGiB} GiB`;
+  const outputs =
+    l.outputs.length === 0 ? "" : `, ${l.outputs.length === 1 ? "1 output" : `${l.outputs.length} outputs`}`;
+  return `On, ${l.collector === "node" ? "every node" : "Kubernetes API"}, ${days}, ${l.sizeGiB} GiB${outputs}`;
 }
 
 /** What keeping logs gives, short enough for a hint. */
@@ -82,17 +90,23 @@ function daysProblem(days: number): string | undefined {
 
 /** logsProblem says what is wrong with a logs choice, if anything. least is the volume it had. */
 export const logsProblem = (l: Logs, least = 1): string | undefined =>
-  l.enabled ? (daysProblem(l.retentionDays) ?? sizeProblem(l.sizeGiB, least)) : undefined;
+  l.enabled
+    ? (daysProblem(l.retentionDays) ?? sizeProblem(l.sizeGiB, least) ?? Object.values(outputProblems(l.outputs))[0])
+    : undefined;
 
 /** LogsFields chooses how logs are collected and how long and in how much they are kept. */
 export function LogsFields({
   value,
   least = 1,
   onChange,
+  showAll = false,
+  cluster,
 }: {
   value: Logs;
   least?: number;
   onChange: (l: Logs) => void;
+  showAll?: boolean | undefined;
+  cluster?: ClusterRef | undefined;
 }): JSX.Element {
   const name = useId();
   return (
@@ -143,15 +157,32 @@ export function LogsFields({
           />
         )}
       </Field>
+      <LogOutputsFields
+        value={value.outputs}
+        onChange={(outputs) => onChange({ ...value, outputs })}
+        showAll={showAll}
+        cluster={cluster}
+      />
     </>
   );
 }
 
 /** logsVariable is what a logs choice sets, with whatever else the variable holds kept. */
-export const logsVariable = (l: Logs, held: Record<string, unknown> = {}): Record<string, unknown> =>
-  l.enabled
-    ? { ...held, enabled: true, collector: l.collector, retentionDays: l.retentionDays, sizeGiB: l.sizeGiB }
-    : { ...held, enabled: false };
+export function logsVariable(l: Logs, held: Record<string, unknown> = {}): Record<string, unknown> {
+  if (!l.enabled) {
+    return { ...held, enabled: false };
+  }
+  // Outputs are set or absent, so that removing the last one clears the held list.
+  const { outputs: _held, ...rest } = held;
+  return {
+    ...rest,
+    enabled: true,
+    collector: l.collector,
+    retentionDays: l.retentionDays,
+    sizeGiB: l.sizeGiB,
+    ...(l.outputs.length === 0 ? {} : { outputs: l.outputs.map(outputVariable) }),
+  };
+}
 
 export function LogsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
   const held = record(c.variables["logs"]);
@@ -198,7 +229,9 @@ export function LogsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
           {logsNeedMonitoring}
         </p>
       )}
-      {next.enabled && <LogsFields value={next} least={least} onChange={setNext} />}
+      {next.enabled && (
+        <LogsFields value={next} least={least} onChange={setNext} cluster={{ namespace: c.namespace, name: c.name }} />
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );

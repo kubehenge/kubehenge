@@ -442,6 +442,22 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 - **`BackupCredentialMissing`:** `"no credential of the cluster's own for the backup target, for which the one for every cluster never stands in: type one in for it in the interface, or name a Secret of the cluster's velero namespace in existingSecret"`. Store the cluster's own key, or name such a Secret. Backups wait until then.
   - "Secret … holds no accessKeyID and secretAccessKey": the credential named lacks one or both of its keys. Store it again.
 
+### Log outputs
+
+Alloy reports a refused or unreachable output in its own log. Read it in the Alloy that carries the stream, `alloy-node` in `logging-node` for containers, nodes and audit, and `alloy` in `logging` for events:
+
+```bash
+kubectl -n logging-node logs ds/alloy-node | grep out_<name>
+```
+
+Component names are `out_<name>` with hyphens as underscores. Alloy retries and drops what the endpoint keeps refusing, so Loki still has the logs.
+
+- **A `LogOutputCredentialMissing` event on the Cluster:** the stored credential `<cluster>.log-<name>` lacks `username` and `password`, or `token`. Store it again under **Options**. Alloy runs meanwhile, and the output reports an unreadable file.
+- **`401` or `403` in Alloy's log:** the endpoint refused the credential. Store a new one.
+- **`x509: certificate signed by unknown authority`:** paste the endpoint's CA into **CA certificate**.
+- **Nothing arrives from a syslog output:** `tcp://` and `udp://` send in clear text, and a collector that expects TLS drops them. Use `tls://`. Check that a firewall passes the port from the nodes.
+- **The cluster is refused with "log output …":** the message names the rule, such as a scheme the kind does not take or credentials to a non-`https://` endpoint.
+
 ### etcd snapshots and restores
 
 - **`EtcdSnapshotFailed`**, "etcd snapshot failed: …": no snapshot was taken, for the reason that follows. The **Backups** view shows it as the last try's error too. The controller tries again 15 minutes later.

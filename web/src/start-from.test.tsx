@@ -86,7 +86,7 @@ const chosen: Form = {
   headlampView: true,
   monitoring: true,
   grafanaHostname: "grafana.example",
-  logs: { enabled: true, collector: "api", retentionDays: 14, sizeGiB: 20 },
+  logs: { enabled: true, collector: "api", retentionDays: 14, sizeGiB: 20, outputs: [] },
   podSecurity: { admission: "restricted", kyverno: "restricted" },
   cis: true,
   istio: true,
