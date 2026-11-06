@@ -31,9 +31,7 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionClusterAPI, what, cond.Message, cond.LastTransitionTime.Time)
 	}
-	if cond := trueCondition(c, provisioner.TemplateNodeDownCondition); cond != nil {
-		a.add(severityWarning, sectionNodes, "Template node down", cond.Message, cond.LastTransitionTime.Time)
-	}
+	templateAttention(c, a)
 	if cond := trueCondition(c, provisioner.CertificatesCondition); cond != nil {
 		if cond.Reason == provisioner.CertificatesRenewing {
 			a.add(severityProgress, sectionNodes, "Renewing certificates", provisioner.CertificatesHead(cond.Message), cond.LastTransitionTime.Time)
@@ -54,6 +52,16 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 			severity, what = severityError, "Storage full"
 		}
 		a.add(severity, sectionVolumes, what, provisioner.StorageSummary(cond.Message), cond.LastTransitionTime.Time)
+	}
+}
+
+// templateAttention adds what a template on a down node means for the cluster.
+func templateAttention(c *clusterv1.Cluster, a *attention) {
+	if cond := trueCondition(c, provisioner.TemplateNodeDownCondition); cond != nil {
+		a.add(severityWarning, sectionNodes, "Template node down", cond.Message, cond.LastTransitionTime.Time)
+	}
+	if cond := trueCondition(c, provisioner.NodeImageHeldCondition); cond != nil {
+		a.add(severityWarning, sectionNodes, "Node image refresh held", cond.Message, cond.LastTransitionTime.Time)
 	}
 }
 

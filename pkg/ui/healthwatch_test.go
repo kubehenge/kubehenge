@@ -73,6 +73,10 @@ func TestHealthSaysVMsStorageAndHeldUpgrades(t *testing.T) {
 			attentionView{Severity: severityProgress, Section: sectionClusterAPI, What: "Upgrade waits for Talos", Message: "waiting for the Talos upgrade of web-cp-0"},
 		},
 		{
+			provisioner.NodeImageHeldCondition, provisioner.NodeImageHeldTemplateNodeDown, "Build build-202610150000 is on node pve2, which is down",
+			attentionView{Severity: severityWarning, Section: sectionNodes, What: "Node image refresh held", Message: "Build build-202610150000 is on node pve2, which is down"},
+		},
+		{
 			provisioner.TemplateNodeDownCondition, provisioner.TemplateNodeDownReason, templateDown,
 			attentionView{Severity: severityWarning, Section: sectionNodes, What: "Template node down", Message: templateDown},
 		},

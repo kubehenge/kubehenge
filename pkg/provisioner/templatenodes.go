@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,6 +30,92 @@ const TemplateNodeDownCondition = "TemplateNodeDown"
 // TemplateNodeDownReason is the reason of TemplateNodeDownCondition.
 const TemplateNodeDownReason = "NodeDown"
 
+// NodeImageHeldCondition is true on a Cluster while the node image refresh waits because the newest
+// build on offer is on a node that is down: clones of it would fail, so the cluster stays on its
+// build. The refresh goes on by itself once the node is back.
+const NodeImageHeldCondition = "NodeImageHeld"
+
+// NodeImageHeldTemplateNodeDown is the reason of NodeImageHeldCondition.
+const NodeImageHeldTemplateNodeDown = "TemplateNodeDown"
+
+// without is the builds minus those whose template is on a down node.
+func (b NodeImageBuilds) without(down []DownTemplate) NodeImageBuilds {
+	out := NodeImageBuilds{}
+	for key, list := range b {
+		out[key] = slices.DeleteFunc(slices.Clone(list), func(at time.Time) bool {
+			_, isDown := downBuild(down, key, at)
+			return isDown
+		})
+	}
+	return out
+}
+
+// downBuild is the template of the line's build made at, when it is on a down node.
+func downBuild(down []DownTemplate, lineKey string, at time.Time) (DownTemplate, bool) {
+	for _, d := range down {
+		if built, has := templates.BuildOf(d.Tags); has && built.Equal(at) && templates.LineKey(d.Tags) == lineKey {
+			return d, true
+		}
+	}
+	return DownTemplate{}, false
+}
+
+// nextBuild is the build a refresh at now moves a cluster's machines of the line from (from) to
+// (to). A newest build on a down node is passed over for the newest on a node that is up. When none
+// is newer than the build they run, blocked is the down template that would have been the move. A
+// cluster whose own build is on a down node is moved as before, since it is stuck either way.
+func nextBuild(builds NodeImageBuilds, down []DownTemplate, line []string, t, now time.Time, soak time.Duration) (waiting, bool) {
+	from, ok := builds.Pick(line, t, soak)
+	next, nextOK := builds.Pick(line, now, soak)
+	if !ok || !nextOK || next.Equal(from) {
+		return waiting{}, false
+	}
+	key := templates.LineKey(line)
+	if _, runsDown := downBuild(down, key, from); runsDown {
+		return waiting{from: from, to: next}, true
+	}
+	if up, upOK := builds.without(down).Pick(line, now, soak); upOK && !up.Equal(from) {
+		return waiting{from: from, to: up}, true
+	}
+	blocked, _ := downBuild(down, key, next)
+	return waiting{from: from, to: next, blocked: blocked}, false
+}
+
+// refreshTime is the node image time that has the line's machines clone from the build to: now,
+// unless a newer build is on offer, which only a build on a down node can be. Then it is the
+// moment to was first offered.
+func refreshTime(builds NodeImageBuilds, line []string, to, now time.Time, soak time.Duration) time.Time {
+	if newest, ok := builds.Pick(line, now, soak); ok && newest.Equal(to) {
+		return now
+	}
+	return to.Add(soak)
+}
+
+// markNodeImageHeld sets NodeImageHeldCondition for a blocked refresh, or takes it away. It writes
+// only a change, since the upgrader looks again and again.
+func (u *Upgrader) markNodeImageHeld(ctx context.Context, c *clusterv1.Cluster, blocked DownTemplate) error {
+	found := meta.FindStatusCondition(c.Status.Conditions, NodeImageHeldCondition)
+	var cond *metav1.Condition
+	if blocked.Node != "" {
+		cond = &metav1.Condition{Type: NodeImageHeldCondition, Status: metav1.ConditionTrue, Reason: NodeImageHeldTemplateNodeDown, Message: blocked.BuildMessage()}
+	}
+	switch {
+	case cond == nil && found == nil:
+		return nil
+	case cond != nil && found != nil && found.Status == cond.Status && found.Reason == cond.Reason && found.Message == cond.Message:
+		return nil
+	}
+	key := client.ObjectKeyFromObject(c)
+	if _, err := markCluster(ctx, u.Client, nil, key, NodeImageHeldCondition, cond); err != nil {
+		return err
+	}
+	// The write moved the resource version that the refresh's own patch is made against.
+	if err := u.Client.Get(ctx, key, c); err != nil {
+		return fmt.Errorf("reading the cluster again: %w", err)
+	}
+	return nil
+}
+
 // DownTemplate is a VM of the template pool on a node that is down.
 type DownTemplate struct {
 	// Name is empty where Proxmox VE's resource view gives none for a VM on a down node.
@@ -36,6 +123,12 @@ type DownTemplate struct {
 	VMID int      `json:"vmid"`
 	Node string   `json:"node"`
 	Tags []string `json:"tags"`
+}
+
+// BuildMessage says which build is on a down node.
+func (d DownTemplate) BuildMessage() string {
+	at, _ := templates.BuildOf(d.Tags)
+	return fmt.Sprintf("Build %s is on node %s, which is down", templates.BuildTag(at), d.Node)
 }
 
 // What names the template: its name, or its VM ID where the name is unknown.

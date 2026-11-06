@@ -254,6 +254,7 @@ Kubehenge says so first. The Templates list on the Administration page names eac
 
 - A new cluster whose machines would clone from such a template is refused with the same sentence.
 - An existing cluster has the condition `TemplateNodeDown`, shown under **Nodes** as **Template node down**. It goes when the node is back.
+- A node image refresh does not move a cluster onto a build on a down node. The cluster has the condition `NodeImageHeld` (**Node image refresh held**) until the node is back.
 - Start the node, or on shared storage move the VM to a node that is up with `mv /etc/pve/nodes/<node>/qemu-server/<vmid>.conf /etc/pve/nodes/<other node>/qemu-server/`.
 - Never copy the template to a second node. Two templates with the same tags make Cluster API fail with `found 2 VM templates`.
 

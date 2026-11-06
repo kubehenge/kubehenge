@@ -292,7 +292,7 @@ func (h *Hooks) newestNodeImages(ctx context.Context, c *clusterv1.Cluster, vers
 	if h.Client == nil || !RefreshesNodes(c) {
 		return false, nil
 	}
-	builds, err := ClassBuilds(ctx, h.Reader, c)
+	builds, down, err := classBuildsAndDown(ctx, h.Reader, c)
 	if err != nil {
 		return false, err
 	}
@@ -309,10 +309,12 @@ func (h *Hooks) newestNodeImages(ctx context.Context, c *clusterv1.Cluster, vers
 		return false, err
 	}
 	now := h.now()
-	if _, waiting := builds.Waiting(line, t, now, h.Soak); !waiting {
+	// A newer build on a down node is not moved to, since clones of it fail.
+	move, moves := nextBuild(builds, down, line, t, now, h.Soak)
+	if !moves {
 		return false, nil
 	}
-	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, NodeImageAnnotation, now.Format(time.RFC3339))
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, NodeImageAnnotation, refreshTime(builds, line, move.to, now, h.Soak).Format(time.RFC3339))
 	target := &clusterv1.Cluster{}
 	target.Namespace, target.Name = c.Namespace, c.Name
 	if err := h.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil {
