@@ -8,7 +8,7 @@
     "lastmod": "2026-11-06"
   },
   "/docs/changelog": {
-    "fingerprint": "c47217b912e6bc95203a6268d89975cf6b2a793bfe035317ff7493f940c886f7",
+    "fingerprint": "5fcdde738563740bc75783e3d6e1106db016f4679a13d76e022c56fb19a8a61a",
     "lastmod": "2026-11-06"
   },
   "/docs/clusters": {
@@ -16,7 +16,7 @@
     "lastmod": "2026-11-06"
   },
   "/docs/install": {
-    "fingerprint": "b865a1d2c0ac926eaf720093ba33a0e5bb7a480eb22a2888ac6e1fa60de3588a",
+    "fingerprint": "0e963b0c63329fa9790bce54ea680382ea74c109d490afffbce8f1ffaf2b8244",
     "lastmod": "2026-11-06"
   },
   "/docs/install-settings": {
@@ -40,15 +40,15 @@
     "lastmod": "2026-11-05"
   },
   "/docs/troubleshooting": {
-    "fingerprint": "4392b5d855e8a1c7f831a353c3d25b8b681e6419d592b1439425e1a780415762",
+    "fingerprint": "44ba2784017387772ac3c429de30d3918e434d2f20cde550172e97ad40bfa28b",
     "lastmod": "2026-11-06"
   },
   "/docs/uninstalling": {
-    "fingerprint": "230dcb624eb7eb30afaab3eaa6ffa49764a0e7f54d5a7b2888f3312816903a1b",
-    "lastmod": "2026-11-05"
+    "fingerprint": "57fc536d50f9f2625b92011bbb78061a61105556106d87420504792814eb71fc",
+    "lastmod": "2026-11-06"
   },
   "/docs/upgrading": {
-    "fingerprint": "a1de5c1ce9aaa6aad2064528f7c97e56ba8a0af4e06ba6841b6dc12e62cf62e7",
-    "lastmod": "2026-11-05"
+    "fingerprint": "e686e4d2a5298badf589db6d517e75e20c516a9eb17bb8cc48711ea597dc0909",
+    "lastmod": "2026-11-06"
   }
 }
