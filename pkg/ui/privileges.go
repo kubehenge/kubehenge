@@ -40,6 +40,8 @@ func (s *Server) userPrivileges(ctx context.Context, u user) (*userPrivileges, e
 		return nil, err
 	}
 	if up.err != nil {
+		// The next list asks again rather than taking the failure as fresh.
+		s.privileges.forget(u.ticket.Username, func(kept *userPrivileges) bool { return kept == up })
 		return nil, fmt.Errorf("reading the user's privileges: %w", up.err)
 	}
 	return up, nil
