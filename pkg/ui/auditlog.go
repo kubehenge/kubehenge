@@ -321,7 +321,9 @@ func (s *Server) keepStreaming(ctx context.Context, f *auditFollower, open audit
 	p := f.pods[name]
 	switch {
 	case p == nil:
-		p = &auditPod{uid: uid, restarts: restarts, from: f.start}
+		// A pod met after its container restarted (the interface started late, or restarted itself) has
+		// the changes made since f.start in the previous container's log too.
+		p = &auditPod{uid: uid, restarts: restarts, from: f.start, previous: restarts > 0}
 		f.pods[name] = p
 	case p.uid != uid:
 		if !p.finished {
@@ -385,7 +387,10 @@ func (s *Server) streamPod(ctx context.Context, f *auditFollower, open auditOpen
 		err := s.readPodLog(ctx, f, open, name, p, from, true)
 		switch {
 		case apierrors.IsBadRequest(err) || apierrors.IsNotFound(err):
-			s.warnLost(ctx, name, last, "the previous container's log is gone")
+			// A pod first met after a restart has read nothing yet, so nothing is known to be lost.
+			if !last.IsZero() {
+				s.warnLost(ctx, name, last, "the previous container's log is gone")
+			}
 		case err != nil:
 			// Read again at the next tick, as the previous log may still be there.
 			s.warnStream(ctx, name, err)

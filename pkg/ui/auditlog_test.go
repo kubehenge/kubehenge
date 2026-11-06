@@ -400,6 +400,60 @@ func TestARestartedAPIServerKeepsItsOldContainersLastLines(t *testing.T) {
 	}
 }
 
+// An API server whose container restarted before the interface first met it still has the changes
+// made before the restart, in the previous container's log.
+func TestAnAPIServerMetAfterARestartKeepsItsOldContainersLines(t *testing.T) {
+	t.Parallel()
+	const lost = "could not read all"
+	for name, tc := range map[string]struct {
+		change   func(r *auditRig)
+		kept     []string
+		previous int
+	}{
+		"a previous log with the change": {
+			change: func(r *auditRig) { r.api.restart() },
+			kept:   []string{"fresh", "old"}, previous: 1,
+		},
+		"no previous log": {
+			change: func(r *auditRig) {
+				r.api.restart()
+				r.api.forgetPrevious()
+			},
+			kept: []string{"fresh"}, previous: 1,
+		},
+		"the new log rotated right after the restart": {
+			change: func(r *auditRig) {
+				r.api.restart()
+				r.api.addThenRotate(apiServerA, 2, "rotated")
+			},
+			kept: []string{"fresh", "old"}, previous: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newAuditRig(t, apiServerA)
+			for n := range 9 {
+				r.api.add(apiServerA, n, "")
+			}
+			r.api.add(apiServerA, 9, "old")
+			tc.change(r)
+			r.api.add(apiServerA, 10, "fresh")
+			r.tick(t)
+			want := make([]string, 0, len(tc.kept))
+			for _, id := range tc.kept {
+				want = append(want, "created configmaps "+id)
+			}
+			waitAuditKept(t, r.s, want...)
+			if got := r.api.previousFrom(); len(got) != tc.previous || (len(got) > 0 && got[0].IsZero()) {
+				t.Errorf("the previous log was read from %v, want %d read from the follower's start", got, tc.previous)
+			}
+			if n := r.warnings(lost) + r.warnings("rotated"); n != 0 {
+				t.Errorf("%d warnings of lines lost, want none: %s", n, r.out)
+			}
+		})
+	}
+}
+
 // A line is kept once however often it is read: on the boundary second a stream opens again at,
 // and on the streams that follow.
 func TestAnAuditLineIsNeverKeptTwice(t *testing.T) {

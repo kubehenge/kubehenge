@@ -507,11 +507,14 @@ kubeconfig_field certificate-authority-data | base64 -d > "${work}/management-ca
 kubeconfig_field client-certificate-data | base64 -d > "${work}/management.crt"
 kubeconfig_field client-key-data | base64 -d > "${work}/management.key"
 management_api=$(kubeconfig_field server)
-created=$(curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
-    -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-    -d '{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "kubehenge-e2e-audit"}}' \
-    "${management_api}/api/v1/namespaces/default/configmaps")
-[ "${created}" = 201 ] || fail "creating a ConfigMap with the admin kubeconfig: ${created} instead of 201"
+audit_create() {
+    created=$(curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
+        -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+        -d "{\"apiVersion\": \"v1\", \"kind\": \"ConfigMap\", \"metadata\": {\"name\": \"$1\"}}" \
+        "${management_api}/api/v1/namespaces/default/configmaps")
+    [ "${created}" = 201 ] || fail "creating a ConfigMap with the admin kubeconfig: ${created} instead of 201"
+}
+audit_create kubehenge-e2e-audit
 management_get() {
     curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" "${management_api}$1"
 }
@@ -534,12 +537,25 @@ audited() {
     seen=$(jq -r '[.entries[] | select(.details.via == "kubectl or the API")] |
         if length == 0 then "the reader holds no kubectl entry"
         else "the reader holds \(length) kubectl entries, the newest at \(map(.at) | max)" end' "${work}/body") || seen=
-    jq -e '.entries | any(.what == "created configmaps kubehenge-e2e-audit" and .details.via == "kubectl or the API"
+    jq -e --arg w "created configmaps $1" '.entries | any(.what == $w and .details.via == "kubectl or the API"
         and .details.namespace == "default" and .user != "")' "${work}/body" > /dev/null
 }
-# The interface reads the API server's log every minute.
+# The interface looks for the API server's log every minute. The kubelet serves only the current
+# file of a log, so a change made before the interface first opened it can be rotated or restarted
+# away unread. Once a minute has passed, the interface follows the log, and a second change
+# is read without fail.
+audited_within() {
+    limit=$(($(date +%s) + $1))
+    until audited "$2"; do
+        [ "$(date +%s)" -lt "${limit}" ] || return 1
+        sleep 5
+    done
+}
 audit_waiting=1
-until_true 300 "the ConfigMap's creation on Activity" audited
+if ! audited_within 90 kubehenge-e2e-audit; then
+    audit_create kubehenge-e2e-audit-late
+    until_true 240 "the ConfigMap's creation on Activity" audited kubehenge-e2e-audit-late
+fi
 audit_waiting=
 handed="handed out the management cluster's credential"
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
