@@ -56,7 +56,7 @@ func TestAnAPITokenActsAsItsUser(t *testing.T) {
 	}
 }
 
-const tokenSignIn = `{"id":"dev@pve!ci","secret":"secret"}`
+const tokenSignIn = `{"id":"dev@pve!ci","secret":"secret"}` //nolint:gosec // the fake accounts' own
 
 // A token signs in to the browser as a password does, for users whose second factor is a security
 // key that answers only on Proxmox VE's own page.
@@ -130,7 +130,7 @@ func TestAWrongAPITokenIsRefusedAndLimited(t *testing.T) {
 	}
 	// The count is the token's, whether it is given in the form or the header.
 	expect(t, b.do("POST", "/api/session/token", tokenSignIn), http.StatusTooManyRequests)
-	expect(t, (&browser{h: h, token: "dev@pve!ci=secret"}).do("GET", "/api/clusters", ""), http.StatusTooManyRequests)
+	expect(t, (&browser{h: h, token: "dev@pve!ci=secret"}).do("GET", "/api/clusters", ""), http.StatusTooManyRequests) //nolint:gosec // the fake accounts' own
 	h.clock = h.clock.Add(16 * time.Minute)
 	expect(t, b.do("POST", "/api/session/token", tokenSignIn), http.StatusOK)
 }

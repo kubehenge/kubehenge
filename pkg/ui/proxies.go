@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -69,8 +70,8 @@ func forwardedClient(r *http.Request, trusted []netip.Prefix) (string, bool) {
 		}
 	}
 	client := peer
-	for i := len(entries) - 1; i >= 0; i-- {
-		addr, valid := forwardedAddress(entries[i])
+	for _, entry := range slices.Backward(entries) {
+		addr, valid := forwardedAddress(entry)
 		if !valid {
 			// A proxy only writes addresses, so the entry came from before one this chain trusts.
 			// Nothing to its left can be believed either.
