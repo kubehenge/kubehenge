@@ -52,6 +52,7 @@ module "management" {
   bootstrap_datastore    = var.settings.bootstrapDatastore
   registry_mirrors       = var.settings.registryMirrors
   controller_image       = var.settings.controllerImage
+  vm_id_range            = var.settings.vmIdRange
   pod_subnets            = var.settings.podSubnets
   service_subnets        = var.settings.serviceSubnets
   cluster_oidc           = var.settings.clusterOIDC
@@ -86,14 +87,22 @@ output "api_endpoint" {
 }
 `
 
-// run applies the module with the settings, signing in to Proxmox VE as auth says (ticketAuth or
-// tokenAuth), and returns the interface's kubeconfig.
-func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase string, auth []string) ([]byte, error) {
+// run applies the module with the settings, signing in to Proxmox VE as the ticket's user (a
+// session, or an API token), and returns the interface's kubeconfig.
+func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase string, ticket *pve.Ticket) ([]byte, error) {
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		return nil, fmt.Errorf("preparing the module's working directory: %w", err)
 	}
-	if err := a.writeConfig(s); err != nil {
+	ids, err := a.vmIDRange(ctx, ticket, len(s.NodeAddresses))
+	if err != nil {
 		return nil, err
+	}
+	if err = a.writeConfig(s, ids); err != nil {
+		return nil, err
+	}
+	auth := ticketAuth(ticket)
+	if ticket.Token != "" {
+		auth = tokenAuth(ticket.Token)
 	}
 	env, err := a.env(passphrase, auth)
 	if err != nil {
@@ -154,7 +163,7 @@ func (a *Appliance) init(ctx context.Context, j *Job, env []string) error {
 	return a.tofu(ctx, j, env, plainLine, "init", "-input=false", "-lockfile=readonly", "-no-color") //nolint:misspell // OpenTofu's flag
 }
 
-func (a *Appliance) writeConfig(s *Settings) error {
+func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 	ranges, err := s.ranges()
 	if err != nil {
 		return err
@@ -186,6 +195,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"bootstrapDatastore":     s.BootstrapDatastore,
 		"registryMirrors":        nonNilMirrors(s.RegistryMirrors),
 		"controllerImage":        nilIfEmpty(s.ControllerImage),
+		"vmIdRange":              ids,
 		"podSubnets":             ranges.pods,
 		"serviceSubnets":         ranges.services,
 		"clusterOIDC":            moduleOIDC(s.ClusterOIDC),

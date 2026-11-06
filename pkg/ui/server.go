@@ -37,8 +37,15 @@ type Accounts interface {
 	SignIns
 	Resources
 	Guests
+	VMIDPool
 	Removals
 	Upgraders
+}
+
+// VMIDPool is the range Proxmox VE offers new VMs IDs from, and the IDs in use.
+type VMIDPool interface {
+	NextID(ctx context.Context, t *pve.Ticket) (pve.NextID, error)
+	VMIDs(ctx context.Context, t *pve.Ticket) ([]int, error)
 }
 
 // SignIns are the Proxmox VE sign-ins the interface's sessions rest on.

@@ -265,6 +265,9 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxInsecure, a.Log, a.Release = conn.URL, string(ca), conn.Insecure, s.Log, release.Version
 	s.ProxmoxInsecure = conn.Insecure
 	a.InterfaceKubeconfig = appliance.InterfaceKubeconfig
+	if s.Accounts != nil {
+		a.NextID = s.Accounts.NextID
+	}
 	a.Talos = &provisioner.ManagementTalos{}
 	a.LoadLast()
 	if a.Ready() {

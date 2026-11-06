@@ -2,6 +2,7 @@ package pve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -470,6 +471,74 @@ func (a *Accounts) NodeAddresses(ctx context.Context, t *Ticket) (map[string]str
 		}
 	}
 	return addresses, nil
+}
+
+// NextID is the datacenter's range for the free VM ID auto-selection pool (datacenter.cfg, next-id).
+// A bound the datacenter does not set is zero. Lower is inclusive and Upper exclusive, as Proxmox
+// VE's schema has them ("Lower, inclusive boundary" and "Upper, exclusive boundary").
+type NextID struct {
+	Lower int `json:"lower"`
+	Upper int `json:"upper"`
+}
+
+// Proxmox VE's own bounds of the pool when next-id leaves one out.
+const (
+	DefaultNextIDLower = 100
+	DefaultNextIDUpper = 1000000
+)
+
+// NextID reads the datacenter's next-id option. Reading /cluster/options needs Sys.Audit on /, and
+// a user without it gets ErrForbidden.
+func (a *Accounts) NextID(ctx context.Context, t *Ticket) (NextID, error) {
+	var res struct {
+		// Proxmox VE answers a property string as an object, and the raw text where it cannot
+		// parse it.
+		NextID json.RawMessage `json:"next-id"`
+	}
+	if err := a.get(ctx, t, "/cluster/options", &res); err != nil {
+		return NextID{}, err
+	}
+	if len(res.NextID) == 0 {
+		return NextID{}, nil
+	}
+	var object NextID
+	if json.Unmarshal(res.NextID, &object) == nil {
+		return object, nil
+	}
+	var text string
+	if err := json.Unmarshal(res.NextID, &text); err != nil {
+		return NextID{}, fmt.Errorf("proxmox VE GET /cluster/options: next-id: %w", err)
+	}
+	var out NextID
+	for part := range strings.SplitSeq(text, ",") {
+		key, value, _ := strings.Cut(part, "=")
+		n, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "lower":
+			out.Lower = n
+		case "upper":
+			out.Upper = n
+		}
+	}
+	return out, nil
+}
+
+// VMIDs lists the IDs of the VMs and containers the user may see, templates included.
+func (a *Accounts) VMIDs(ctx context.Context, t *Ticket) ([]int, error) {
+	var res []struct {
+		VMID int `json:"vmid"`
+	}
+	if err := a.get(ctx, t, "/cluster/resources?type=vm", &res); err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(res))
+	for _, r := range res {
+		ids = append(ids, r.VMID)
+	}
+	return ids, nil
 }
 
 // Allowed are those of the nodes given that the rule keeps its resources to: its own, or for a
