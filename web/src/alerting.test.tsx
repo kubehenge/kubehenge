@@ -1,8 +1,17 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import type { JSX } from "react";
+import { describe, expect, it, vi } from "vitest";
 
-import { alertingOf, alertingPurposes, alertingVariable, newAlerting, pendingAlerting } from "./Alerting";
+import {
+  type AlertingForm,
+  AlertingFields,
+  alertingOf,
+  alertingPurposes,
+  alertingVariable,
+  newAlerting,
+  pendingAlerting,
+} from "./Alerting";
 import { App } from "./App";
 import { applyStaged, fakeServer } from "./fake-server";
 
@@ -45,6 +54,28 @@ const variable = {
   remoteWrite: { url: "https://mimir.example.org/push", auth: "basic", username: "tenant" },
   externalAlertmanagers: { urls: ["https://am.example.org", "https://am2.example.org:9093"], auth: "bearer" },
 };
+
+const credential = (purpose: string, label: string): JSX.Element => <p data-testid={purpose}>{label}</p>;
+
+describe("the alerting fields", () => {
+  it("stay behind a closed disclosure until a setting is on", () => {
+    const onChange = vi.fn<(a: AlertingForm) => void>();
+    const { rerender } = render(
+      <AlertingFields value={newAlerting()} onChange={onChange} renderCredential={credential} />,
+    );
+    expect(screen.getByText("Alerts and remote write").closest("details")).not.toHaveAttribute("open");
+    rerender(<AlertingFields value={everything} onChange={onChange} renderCredential={credential} />);
+    expect(screen.getByText("Alerts and remote write").closest("details")).toHaveAttribute("open");
+  });
+
+  it("ask for the mail password right after the user name", () => {
+    const onChange = vi.fn<(a: AlertingForm) => void>();
+    render(<AlertingFields value={everything} onChange={onChange} renderCredential={credential} />);
+    const password = screen.getByTestId("alerts-email");
+    expect(password.previousElementSibling).toHaveTextContent("User name");
+    expect(password.nextElementSibling).toHaveTextContent("Require TLS");
+  });
+});
 
 describe("monitoring's alerting settings", () => {
   it("make the monitoring variable and are read back from it", () => {

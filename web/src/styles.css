@@ -1679,6 +1679,12 @@ fieldset.choices .check {
   border: none;
 }
 
+/* A field straight in a card starts its control where the fields in the card's boxes do, which give
+   up their box's border and padding. */
+.addon-card > .field {
+  grid-template-columns: calc(190px - 12px - 1px) 1fr;
+}
+
 /* A switch reads as one: the track carries the state, the words beside it what that state is. */
 .switch {
   cursor: pointer;
@@ -2603,6 +2609,7 @@ form.box > *,
 
   .field,
   .group > .field,
+  .addon-card > .field,
   .summary {
     grid-template-columns: minmax(0, 1fr);
   }

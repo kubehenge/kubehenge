@@ -2,7 +2,7 @@ import type { JSX, ReactNode } from "react";
 
 import type { CredentialKey } from "./CredentialField";
 import { list } from "./network";
-import { Field, Info } from "./ui";
+import { Field } from "./ui";
 import { flag, record, records, text, texts } from "./values";
 
 /** How a remote write target or an external Alertmanager is signed in to. */
@@ -260,8 +260,11 @@ export function AlertingFields({
   const credential = (purpose: AlertingPurpose): ReactNode =>
     renderCredential(purpose, credentials[purpose].label, [...credentials[purpose].keys]);
   const { email } = value;
+  const anySet =
+    email.on || value.webhook || value.slack.on || value.teams || value.remoteWrite.on || value.external.on;
   return (
-    <>
+    <details className="advanced" open={anySet ? true : undefined}>
+      <summary>Alerts and remote write</summary>
       <fieldset className="group">
         <legend>Alert receivers</legend>
         <label className="check">
@@ -301,7 +304,7 @@ export function AlertingFields({
                 />
               )}
             </Field>
-            <Field label="User name" hint="Optional">
+            <Field label="User name" hint="Optional, asks for a password">
               {(id) => (
                 <input
                   id={id}
@@ -311,6 +314,7 @@ export function AlertingFields({
                 />
               )}
             </Field>
+            {email.username !== "" && credential("alerts-email")}
             <label className="check">
               <input
                 type="checkbox"
@@ -319,7 +323,6 @@ export function AlertingFields({
               />{" "}
               Require TLS
             </label>
-            {email.username !== "" && credential("alerts-email")}
           </>
         )}
         <label className="check">
@@ -339,7 +342,6 @@ export function AlertingFields({
           />{" "}
           Slack
         </label>
-        <Info about="Slack">Also Mattermost and other services that take Slack&apos;s webhook format.</Info>
         {value.slack.on && (
           <>
             <Field label="Channel" hint="Optional">
@@ -425,6 +427,6 @@ export function AlertingFields({
           </>
         )}
       </fieldset>
-    </>
+    </details>
   );
 }
