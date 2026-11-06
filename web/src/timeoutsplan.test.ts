@@ -75,13 +75,13 @@ describe("the plan's timeouts", () => {
     expect(rows).toStrictEqual([
       {
         label: "Control plane timeouts",
-        now: "Drain 60 min (class default), volume detach 10 min (class default), node removal 60 s (class default)",
+        now: "Drain 60 min, volume detach 10 min, node removal 60 s (class defaults)",
         after: "Drain 30 min, volume detach 10 min (class default), node removal 60 s (class default)",
         effect: "none",
       },
       {
         label: "Pool md-0 timeouts",
-        now: "Drain 60 min (class default), volume detach 10 min (class default), node removal 60 s (class default)",
+        now: "Drain 60 min, volume detach 10 min, node removal 60 s (class defaults)",
         after: "Drain 60 min (class default), volume detach no limit, node removal 60 s (class default)",
         effect: "none",
       },

@@ -84,7 +84,7 @@ const parts: Part[] = [
   { label: "node removal", key: "nodeDeletionTimeoutSeconds", minutes: false },
 ];
 
-function partText({ label, key, minutes }: Part, own: NodeTimeouts, fallback: NodeTimeouts): string {
+function partText({ label, key, minutes }: Part, own: NodeTimeouts, fallback: NodeTimeouts, mark: boolean): string {
   const v = own[key] ?? fallback[key];
   if (v === undefined) {
     return `${label} ${classDefault}`;
@@ -95,15 +95,17 @@ function partText({ label, key, minutes }: Part, own: NodeTimeouts, fallback: No
   } else if (minutes) {
     value = `${v / secondsPerMinute} min`;
   }
-  return own[key] === undefined ? `${label} ${value} (${classDefault})` : `${label} ${value}`;
+  return mark && own[key] === undefined ? `${label} ${value} (${classDefault})` : `${label} ${value}`;
 }
 
 /**
  * timeoutsText is the timeouts a machine's node gets, as they apply: the cluster's own, and for
- * those it leaves out the class's, marked as such.
+ * those it leaves out the class's, marked as such. All three from the class are marked once.
  */
 export function timeoutsText(own: NodeTimeouts, fallback: NodeTimeouts = {}): string {
-  return parts.map((p) => partText(p, own, fallback)).join(", ");
+  const all = !timeoutsSet(own) && timeoutsSet(fallback);
+  const text = parts.map((p) => partText(p, own, fallback, !all)).join(", ");
+  return all ? `${text} (${classDefault}s)` : text;
 }
 
 const classHint = (classes: number | undefined, unit: number): string =>
