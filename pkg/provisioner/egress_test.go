@@ -369,7 +369,7 @@ func TestChartsInValuesListsEveryPinnedChart(t *testing.T) {
 	}
 }
 
-func TestArgoCDTrustsTheRepositorysAuthorityForItsHost(t *testing.T) {
+func TestArgoCDTrustsTheAuthorityOfTheRepositoryForItsHost(t *testing.T) {
 	t.Parallel()
 	ca := testAuthority(t)
 	g := &GitOps{Enabled: true, Repository: GitRepository{URL: "https://git.example.org:8443/a/b.git", CABundle: ca}}
@@ -385,7 +385,7 @@ func TestArgoCDTrustsTheRepositorysAuthorityForItsHost(t *testing.T) {
 	}
 }
 
-func TestFluxReadsTheRepositorysAuthorityFromItsPullSecret(t *testing.T) {
+func TestFluxReadsTheAuthorityOfTheRepositoryFromItsPullSecret(t *testing.T) {
 	t.Parallel()
 	ca := testAuthority(t)
 	r := &Reconciler{}
