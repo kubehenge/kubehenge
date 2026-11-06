@@ -47,6 +47,7 @@ module "management" {
   workload_bridges       = var.settings.workloadBridges
   bootstrap_datastore    = var.settings.bootstrapDatastore
   registry_mirrors       = var.settings.registryMirrors
+  chart_repositories     = var.settings.chartRepositories
   controller_image       = var.settings.controllerImage
   pod_subnets            = var.settings.podSubnets
   service_subnets        = var.settings.serviceSubnets
@@ -181,6 +182,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"workloadBridges":        s.WorkloadBridges,
 		"bootstrapDatastore":     s.BootstrapDatastore,
 		"registryMirrors":        nonNilMirrors(s.RegistryMirrors),
+		"chartRepositories":      moduleChartRepositories(s.ChartRepositories),
 		"controllerImage":        nilIfEmpty(s.ControllerImage),
 		"podSubnets":             ranges.pods,
 		"serviceSubnets":         ranges.services,
@@ -282,13 +284,13 @@ func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
 // moduleProxy is the module's proxy variable: empty strings for none, which the module reads as no
 // proxy.
 func moduleProxy(s *Settings, proxmoxURL string) map[string]any {
-	out := map[string]any{"url": "", "no_proxy": "", "ca_bundle": ""}
+	out := map[string]any{"url": "", "no_proxy": "", moduleCABundle: ""}
 	if !s.Proxy.Enabled() {
 		return out
 	}
 	out["url"] = s.Proxy.FullURL()
 	out["no_proxy"] = strings.Join(s.NoProxyList(proxmoxURL), ",")
-	out["ca_bundle"] = s.Proxy.CABundle
+	out[moduleCABundle] = s.Proxy.CABundle
 	return out
 }
 

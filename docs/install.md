@@ -60,7 +60,25 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 | Clusters' nodes | Container registries. On RKE2 and k3s, GitHub (`github.com` and `raw.githubusercontent.com`), for the release and its images, which a node installs when it boots. |
 | The VM that prepares a template | Its node OS's package mirrors and `quay.io` (for the image builder's tool image, by digest). For RKE2 and k3s, `rpm.rancher.io` (their SELinux policies). For kubeadm, `pkgs.k8s.io`, the node OS's EPEL mirror (containerd), `registry.k8s.io`, GitHub (for cosign) and Sigstore's `tuf-repo-cdn.sigstore.dev`, to check the images' signatures. |
 
-The management cluster's nodes can pull through registry mirrors instead ([setup](#network), Advanced).
+The management cluster's nodes can pull images through registry mirrors instead ([setup](#network), Advanced). Registry mirrors cover images only. The Add-on Provider for Helm fetches every chart from its own repository, the cloud controller manager and CSI plugin included. A site without access to those hosts also needs [chart mirrors](#mirroring-the-charts).
+
+### Mirroring the charts
+
+A chart mirror serves the charts of one repository host from an address you choose. Set one per host under Advanced in the setup (Chart mirrors), or `chart_repositories` in the module ([variables](#variables)).
+
+- A host that serves OCI charts (`ghcr.io`) needs an `oci://` mirror, such as `ghcr.io=oci://registry.example.org/ghcr`. The charts of `oci://ghcr.io/istio/release/charts` are then fetched from `oci://registry.example.org/ghcr/istio/release/charts`.
+- A host that serves a chart repository (`charts.jetstack.io`) needs an `https://` or `http://` one, such as `charts.jetstack.io=https://charts.example.org/jetstack`.
+- The mirror holds the same charts under the same digests, since a re-packed chart is refused. Copy OCI charts with a tool that keeps the digest (`crane copy`, `oras cp` or `skopeo copy`) and chart archives byte for byte.
+- A mirror whose certificate the usual authorities do not sign needs its authority under Chart mirror certificate. The Add-on Provider for Helm trusts it beside the proxy's.
+- The proxy setting reaches the Add-on Provider for Helm too, so a mirror outside the proxy's exceptions is fetched through the proxy.
+
+`kubehenge charts` lists what to copy, each chart as `<repository>/<name>:<version>@sha256:<digest>`. Give it the values file of Kubehenge's chart (`charts/kubehenge/values.yaml` of the release), and `--mirror` to see where each chart then comes from:
+
+```sh
+kubehenge charts charts/kubehenge/values.yaml --mirror ghcr.io=oci://registry.example.org/ghcr
+```
+
+A mirror that no chart uses, or of another kind than its host, is refused. Charts without a mirror are fetched from their repository.
 
 ### Behind a proxy
 
@@ -333,7 +351,8 @@ The one exception is automatic upgrades of the management cluster, off by defaul
 | API address | The virtual IP of the management cluster's Kubernetes API. An unused IPv4 address in the nodes' network, neither a node address nor the gateway. It moves to a healthy node when one fails. |
 | Gateway | The nodes' default gateway, an IPv4 address. |
 | DNS servers | IP addresses, one per line or separated by commas. |
-| Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. |
+| Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. They cover images, not charts. |
+| Advanced: Chart mirrors, Chart mirror certificate | `host=address`, one per line, such as `ghcr.io=oci://registry.example.org/ghcr`. Clusters fetch that host's charts from the address, and trust the certificate authority (PEM) for it. See [Mirroring the charts](#mirroring-the-charts). |
 | Advanced: Proxy address, Proxy user, Proxy password, Proxy exceptions, Proxy certificate | The proxy every download goes through. The address has no credentials, so write `http://proxy.example:3128` and put the user and password in their fields. A saved password shows as set, and the page can replace or remove it but never shows it. See [Behind a proxy](#behind-a-proxy). |
 | Advanced: Pod ranges, Service ranges | The management cluster's own. When empty, `10.244.0.0/16` and `10.96.0.0/12`. Where those overlap the nodes' network, the API address or the gateway, the first clear one of a few other private ranges. |
 
@@ -617,6 +636,7 @@ tofu output -raw talosconfig > talosconfig
 | `workload_bridges` | `["vmbr0"]` | Bridges clusters may attach to, with any VLAN on them. |
 | `bootstrap_datastore` | `local` | Storage for cloud-init ISOs. Cluster API gets full control of it. |
 | `proxy` | `{}` | The HTTP(S) proxy for downloads: `url`, `no_proxy` (comma-separated, with the Proxmox VE host, the nodes' network and the pod and service ranges) and `ca_bundle` (PEM). Sensitive. |
+| `chart_repositories` | `{}` | Mirrors of the Helm chart repositories. `mirrors` maps a repository host to an `oci://` or `http(s)://` address, of the same kind as the host, serving the same charts under the same digests. `ca_bundle` (PEM) is the authority of mirrors the usual ones do not sign ([details](#mirroring-the-charts)). |
 | `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name. Each takes endpoint URLs tried in order before the registry itself. A mirror of `factory.talos.dev`, `ghcr.io` or `registry.k8s.io` must serve the images' cosign signatures too. The nodes require them on Sidero's and Kubernetes' images and on the Talos providers'. |
 | `backup_targets` | `[]` | S3 stores clusters back up to with Velero ([details](install-settings.md#backup-targets)). Up to sixteen, each with `name` and `bucket`. Optional fields are `endpoint` (https, AWS S3 when unset), `region`, `prefix`, `ca_certificate` and `checksums` (default true). Access keys are stored through the interface, or named per cluster with `existingSecret` ([clusters.md](clusters.md#variables)). |
 | `cluster_oidc` | `[]` | OpenID Connect providers every new cluster trusts unless it names its own. Up to eight, each with `issuer_url` (https) and `client_id`. Optional fields are `username_claim`, `username_prefix`, `groups_claim`, `groups_prefix`, `scopes` and `certificate_authority`. |

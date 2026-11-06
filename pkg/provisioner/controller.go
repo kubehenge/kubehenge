@@ -69,6 +69,9 @@ type Reconciler struct {
 	ClassNamespace string
 	Endpoint       Endpoint
 	Charts         Charts
+	// Egress is the management side's proxy, which the add-ons of clusters that set none of their
+	// own go through.
+	Egress Egress
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio
@@ -466,6 +469,11 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	if addons.gitOpsFound, err = r.gitOpsState(ctx, cluster, &addons.GitOps); err != nil {
 		return addons, "", err
 	}
+	var skipped string
+	if addons.viaProxy, skipped = r.Egress.resolve(cluster, &addons.Egress); skipped != "" {
+		ctrl.LoggerFrom(ctx).Info("add-ons go direct: " + skipped)
+	}
+	addons.gitOpsFound.egress = addons.viaProxy
 	return addons, refused, nil
 }
 

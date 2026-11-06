@@ -21,6 +21,8 @@ const form: SetupForm = {
   workloadBridges: ["vmbr0"],
   bootstrapDatastore: "local",
   mirrors: "",
+  chartMirrors: "",
+  chartMirrorCA: "",
   proxyURL: "",
   proxyUser: "",
   proxyPassword: "",
@@ -202,6 +204,73 @@ describe("setup", () => {
     });
     expect(s.serviceSubnets).toStrictEqual(["172.20.0.0/16"]);
     expect(s.podSubnets).toBeUndefined();
+  });
+
+  it("sends chart mirrors and their authority only when set", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(settings(form)).not.toHaveProperty("chartRepositories");
+    expect(settings({ ...form, chartMirrors: " \n" })).not.toHaveProperty("chartRepositories");
+    expect(
+      settings({
+        ...form,
+        chartMirrors:
+          "ghcr.io = oci://registry.example.org/ghcr\ncharts.jetstack.io=https://charts.example.org/jetstack\n",
+      }).chartRepositories,
+    ).toStrictEqual({
+      mirrors: {
+        "ghcr.io": "oci://registry.example.org/ghcr",
+        "charts.jetstack.io": "https://charts.example.org/jetstack",
+      },
+    });
+    expect(
+      settings({ ...form, chartMirrors: "ghcr.io=oci://m.example", chartMirrorCA: ` ${pem}\n\n` }).chartRepositories,
+    ).toStrictEqual({ mirrors: { "ghcr.io": "oci://m.example" }, caBundle: `${pem}\n` });
+  });
+
+  it("reads saved chart mirrors back into the form", () => {
+    const saved = {
+      ...settings(form),
+      chartRepositories: {
+        mirrors: { "ghcr.io": "oci://m.example/ghcr", "charts.jetstack.io": "https://m.example/jetstack" },
+        caBundle: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+      },
+    };
+    const again = formOf(saved);
+    expect(again.chartMirrors).toBe("ghcr.io=oci://m.example/ghcr\ncharts.jetstack.io=https://m.example/jetstack");
+    expect(again.chartMirrorCA).toBe(saved.chartRepositories.caBundle);
+    expect(settings({ ...again, passphrase: "", confirm: "" }).chartRepositories).toStrictEqual(
+      saved.chartRepositories,
+    );
+    expect(formOf(settings(form)).chartMirrors).toBe("");
+  });
+
+  it("checks the chart mirrors and their authority", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    const ok = "ghcr.io=oci://registry.example.org/ghcr";
+    expect(problems({ chartMirrors: `${ok}\ncharts.example=http://10.0.0.1:8080` })).toStrictEqual({});
+    expect(problems({ chartMirrors: "ghcr.io oci://m.example" }).chartMirrors).toMatch(
+      /^ghcr.io oci:\/\/m.example is not in the form host=/u,
+    );
+    const wrong = [
+      "ghcr.io=",
+      "=oci://m.example",
+      "ghcr.io=registry.example.org",
+      "ghcr.io=ftp://m.example",
+      "ghcr.io=oci://m.example/",
+      "ghcr.io=https://m.example/jetstack/",
+      "ghcr.io=https://user:pw@m.example",
+      "ghcr.io=oci://m.example/a b",
+      "a/b=oci://m.example",
+    ];
+    const accepted = wrong.filter((line) => problems({ chartMirrors: line }).chartMirrors === undefined);
+    expect(accepted).toStrictEqual([]);
+    expect(problems({ chartMirrors: `${ok}\nbroken` }).chartMirrors).toMatch(/^broken is not/u);
+    expect(problems({ chartMirrors: ok, chartMirrorCA: pem })).toStrictEqual({});
+    expect(problems({ chartMirrors: ok, chartMirrorCA: "junk" }).chartMirrorCA).toBe("Paste PEM certificates.");
+    expect(problems({ chartMirrors: ok, chartMirrorCA: "-----BEGIN PRIVATE KEY-----\nx" }).chartMirrorCA).toBe(
+      "Paste certificates only, no private key.",
+    );
+    expect(problems({ chartMirrorCA: pem }).chartMirrorCA).toBe("Add a chart mirror first.");
   });
 
   it("sends a proxy only when it has an address", () => {
@@ -836,6 +905,64 @@ describe("setup", () => {
     await waitFor(() => expect(calls.find((c) => c.key === "POST /api/setup")).toBeDefined());
     expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
       settings: { proxy: { url: "http://proxy.example:3128", user: "alice", clearPassword: true } },
+    });
+  });
+
+  it("loads saved chart mirrors into the form and sends them back", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+    const saved = {
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+      chartRepositories: { mirrors: { "ghcr.io": "oci://registry.example.org/ghcr" }, caBundle: pem },
+    };
+    const calls = fakeServer({
+      ...administrator,
+      ...administration,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: saved } },
+      "POST /api/setup": {
+        status: 202,
+        body: { user: "root@pam", kind: "apply", started: new Date().toISOString(), state: "running", log: [] },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Management cluster" });
+    expect(screen.getByText("ghcr.io=oci://registry.example.org/ghcr")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Edit settings" }));
+    const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    await user.click(wizard.getByText("Advanced"));
+    const mirrors = wizard.getByLabelText("Chart mirrors");
+    expect(mirrors).toHaveValue("ghcr.io=oci://registry.example.org/ghcr");
+    expect(wizard.getByLabelText("Chart mirror certificate")).toHaveValue(pem);
+    await user.type(mirrors, "{Enter}charts.example");
+    await expect(wizard.findByText(/charts.example is not in the form host=/u)).resolves.toBeInTheDocument();
+    await user.type(mirrors, "=https://charts.example.org/jetstack");
+    expect(wizard.queryByText(/is not in the form host=/u)).not.toBeInTheDocument();
+    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.click(wizard.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(calls.find((c) => c.key === "POST /api/setup")).toBeDefined());
+    expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
+      settings: {
+        chartRepositories: {
+          mirrors: {
+            "ghcr.io": "oci://registry.example.org/ghcr",
+            "charts.example": "https://charts.example.org/jetstack",
+          },
+          caBundle: pem,
+        },
+      },
     });
   });
 

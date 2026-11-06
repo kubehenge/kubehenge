@@ -889,7 +889,18 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
               description: >-
                 The directory synced, with plain manifests or a kustomization; the repository's
                 root by default.
+            caBundle:
+              type: string
+              maxLength: 65536
+              description: >-
+                The certificate authority, in PEM, of a repository server whose certificate the
+                usual authorities do not sign. Argo CD takes it for the server's host, Flux in its
+                pull Secret as ca.crt.
           x-kubernetes-validations:
+            - rule: "!has(self.caBundle) || self.url.startsWith('https://')"
+              message: A certificate authority is for a repository read over https://.
+            - rule: "!has(self.caBundle) || self.caBundle.contains('-----BEGIN CERTIFICATE-----')"
+              message: The authority is one or more PEM certificates.
             - rule: "!self.url.matches('^https://[^/]*@')"
               message: A token goes into the cluster's gitops credential, not into the URL.
             - rule: "!has(self.path) || !self.path.matches('(^|/)[.][.](/|$)')"
@@ -990,6 +1001,41 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           message: The web interface is Flux's, and needs a hostname.
         - rule: "!has(self.ui) || !self.ui || (has(self.signIn) && has(self.signIn.clientSecret) && self.signIn.clientSecret != 'none')"
           message: Flux's web interface signs in with a client secret.
+        - rule: "!has(self.repository) || !has(self.repository.caBundle) || !(has(self.auth) && self.auth == 'existingSecret' && has(self.engine) && self.engine == 'flux')"
+          message: Flux reads the authority from ca.crt in your own Secret.
+- name: egressProxy
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero,
+        Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has
+        one without credentials in its address. The cluster's pod and service ranges, .svc and
+        .cluster.local always bypass it.
+      properties:
+        url:
+          type: string
+          maxLength: 2048
+          pattern: "^https?://[^\\s/@?#]+/?$"
+          description: >-
+            The proxy's address, as http://host:port, without credentials, since add-on settings
+            are plain text.
+        noProxy:
+          type: array
+          maxItems: 64
+          description: Hosts, domains and networks that bypass the proxy.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+            pattern: "^[^,\\s]+$"
+        disabled:
+          type: boolean
+          description: Go direct, whatever the management side uses.
+      x-kubernetes-validations:
+        - rule: "!has(self.disabled) || !self.disabled || !has(self.url)"
+          message: A cluster that goes direct names no proxy.
 {{- end -}}
 
 {{/*

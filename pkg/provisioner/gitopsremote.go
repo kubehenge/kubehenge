@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -200,7 +201,13 @@ func (r *Reconciler) bootstrapGitOps(ctx context.Context, cluster *clusterv1.Clu
 			return waits, err
 		}
 	}
-	return applyInWorkload(ctx, c, bootstrapObject(g, r.Charts.FluxVersion))
+	bootstrap := bootstrapObject(g, r.Charts.FluxVersion)
+	if g.engine() == flux {
+		if err := state.egress.patchFlux(bootstrap); err != nil {
+			return false, err
+		}
+	}
+	return applyInWorkload(ctx, c, bootstrap)
 }
 
 // gitOpsSecrets are the Secrets the controller keeps in the engine's namespace, by name: the
@@ -267,8 +274,23 @@ func applyInWorkload(ctx context.Context, c client.Client, o *unstructured.Unstr
 }
 
 // repositoryCredentials are what the engine reads the repository with, nil when the controller
-// writes none, or what is missing of them.
+// writes none, or what is missing of them. Flux reads the repository server's authority from the
+// same Secret, as ca.crt, so the Secret exists for a repository that needs only that.
 func (r *Reconciler) repositoryCredentials(ctx context.Context, cluster *clusterv1.Cluster, g *GitOps, state *gitOpsState) (map[string][]byte, string, error) {
+	creds, missing, err := r.repositoryAuth(ctx, cluster, g, state)
+	if err != nil || missing != "" || g.engine() != flux || g.pullSecret() != fluxPullSecret || g.Repository.CABundle == "" {
+		return creds, missing, err
+	}
+	with := maps.Clone(creds)
+	if with == nil {
+		with = map[string][]byte{}
+	}
+	with[gitCAKey] = []byte(g.Repository.CABundle)
+	return with, "", nil
+}
+
+// repositoryAuth is the part of the repository's credentials that its authentication makes.
+func (r *Reconciler) repositoryAuth(ctx context.Context, cluster *clusterv1.Cluster, g *GitOps, state *gitOpsState) (map[string][]byte, string, error) {
 	switch g.auth() {
 	case gitAuthKey:
 		if len(state.keys[identityKey]) == 0 {

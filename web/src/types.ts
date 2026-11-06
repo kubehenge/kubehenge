@@ -660,6 +660,11 @@ export interface ManagementSettings {
   bootstrapDatastore: string;
   registryMirrors?: Record<string, string[]>;
   /**
+   * Mirrors of the Helm charts by repository host. A mirror serves the same charts under the same
+   * digests. The authority is PEM, for mirrors the usual authorities do not sign.
+   */
+  chartRepositories?: { mirrors?: Record<string, string>; caBundle?: string };
+  /**
    * The proxy downloads go through. The address has no credentials. The server never sends the
    * password, only passwordSet. Sent back, an empty password keeps the saved one and clearPassword
    * removes it.

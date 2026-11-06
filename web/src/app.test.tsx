@@ -765,6 +765,7 @@ describe("create", () => {
     certificates: newForm().certificates,
     dns01Token: "",
     gitops: newForm().gitops,
+    egress: newForm().egress,
     oidc: [],
     upgradeMode: "off",
     backups: false,

@@ -21,6 +21,9 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
 - A proxy setting sends every management-side download through an HTTP(S) proxy ([install.md](install.md#behind-a-proxy)). The user and password have fields of their own, and the saved password is never shown again.
+- Chart mirrors serve the Helm charts clusters install, by repository host, with their own certificate authority ([install.md](install.md#mirroring-the-charts)). The Add-on Provider for Helm fetches from them, and `kubehenge charts` lists every chart and digest to copy.
+- Cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher go through a proxy, the management side's by default or one set per cluster (`egressProxy`). The cluster's ranges, `.svc` and `.cluster.local` bypass it.
+- Argo CD and Flux trust a certificate authority for the Git server (`gitops.repository.caBundle`).
 
 ## [0.4.2] - 2026-11-05
 

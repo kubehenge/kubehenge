@@ -38,6 +38,9 @@ type Settings struct {
 	// RegistryMirrors are endpoints tried before each registry, by registry name, for a site with
 	// a pull-through cache or none of the internet.
 	RegistryMirrors map[string][]string `json:"registryMirrors,omitempty"`
+	// ChartRepositories are mirrors of the Helm chart repositories, which registry mirrors do not
+	// reach.
+	ChartRepositories *ChartRepositories `json:"chartRepositories,omitempty"`
 	// ControllerImage replaces the controller image the chart was released with.
 	ControllerImage string `json:"controllerImage,omitempty"`
 	// PodSubnets and ServiceSubnets are the management cluster's own ranges. When unset, the first
@@ -337,6 +340,7 @@ func (s *Settings) Validate() error {
 	s.checkServers(&p)
 	s.checkSubnets(&p)
 	s.checkMirrors(&p)
+	s.ChartRepositories.check(&p)
 	if err = ValidOIDC(s.ClusterOIDC); err != nil {
 		p.addf("Identity providers: %s", err)
 	}
