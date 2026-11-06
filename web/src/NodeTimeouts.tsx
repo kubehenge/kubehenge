@@ -84,18 +84,15 @@ const parts: Part[] = [
   { label: "node removal", key: "nodeDeletionTimeoutSeconds", minutes: false },
 ];
 
-function partText({ label, key, minutes }: Part, own: NodeTimeouts, fallback: NodeTimeouts, mark: boolean): string {
-  const v = own[key] ?? fallback[key];
+/** partValue is one timeout as it reads, or undefined when neither the cluster nor the class sets it. */
+function partValue({ minutes }: Part, v: number | undefined): string | undefined {
   if (v === undefined) {
-    return `${label} ${classDefault}`;
+    return undefined;
   }
-  let value = `${v} s`;
   if (v === 0) {
-    value = "no limit";
-  } else if (minutes) {
-    value = `${v / secondsPerMinute} min`;
+    return "no limit";
   }
-  return mark && own[key] === undefined ? `${label} ${value} (${classDefault})` : `${label} ${value}`;
+  return minutes ? `${v / secondsPerMinute} min` : `${v} s`;
 }
 
 /**
@@ -104,7 +101,15 @@ function partText({ label, key, minutes }: Part, own: NodeTimeouts, fallback: No
  */
 export function timeoutsText(own: NodeTimeouts, fallback: NodeTimeouts = {}): string {
   const all = !timeoutsSet(own) && timeoutsSet(fallback);
-  const text = parts.map((p) => partText(p, own, fallback, !all)).join(", ");
+  const text = parts
+    .map((p) => {
+      const value = partValue(p, own[p.key] ?? fallback[p.key]);
+      if (value === undefined) {
+        return `${p.label} ${classDefault}`;
+      }
+      return !all && own[p.key] === undefined ? `${p.label} ${value} (${classDefault})` : `${p.label} ${value}`;
+    })
+    .join(", ");
   return all ? `${text} (${classDefault}s)` : text;
 }
 
