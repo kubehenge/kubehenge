@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { applyStaged, fakeServer, reads } from "./fake-server";
-import { addonChangesPendingCondition, addonConflictCondition, standing } from "./fleet";
+import { addonChangesPendingCondition, addonConflictCondition, standing, windowTime } from "./fleet";
 import { labelsLines, labelsText, maxLabelValue, maxNamespaceLabels, parseLabels } from "./namespace-labels";
 import type { Cluster, ClusterClass } from "./types";
 import { abnormal } from "./ui";
@@ -56,6 +56,8 @@ const rke2: ClusterClass = {
     { name: "controlPlaneEndpoint", required: true, schema: { type: "string" } },
     { name: "network", required: true, schema: { type: "object" } },
     { name: "storage", required: true, schema: { type: "string" } },
+    { name: "certificates", required: false, schema: { type: "object" } },
+    { name: "podSecurity", required: false, schema: { type: "object" } },
     { name: "namespaceLabels", required: false, schema: { type: "object" } },
     { name: "useExisting", required: false, schema: { type: "object" } },
   ],
@@ -74,8 +76,10 @@ describe("waiting add-on changes", () => {
     const block = await screen.findByRole("group", { name: "Add-on changes" });
     expect(within(block).getByText("monitoring: kube-prometheus-stack 70.0.0 to 71.0.0")).toBeInTheDocument();
     expect(within(block).getByText("headlamp: new values")).toBeInTheDocument();
-    expect(within(block).getByText(new Date(opens).toLocaleString(), { exact: false })).toBeInTheDocument();
-    expect(within(block).getByText(/apply when the maintenance window opens/u)).toBeInTheDocument();
+    expect(
+      within(block).getByText(`Applies at ${windowTime(opens)}, when the upgrade window opens.`),
+    ).toBeInTheDocument();
+    expect(within(block).queryByText(/Otherwise/u)).not.toBeInTheDocument();
     const before = reads(calls, "GET /api/clusters/default/web");
     await user.click(within(block).getByRole("button", { name: "Apply now" }));
     await waitFor(() => expect(calls.map((c) => c.key)).toContain(`POST ${applyPath}`));
@@ -185,10 +189,13 @@ describe("the add-on conditions", () => {
     });
   });
 
-  it("stands for changes that wait", () => {
-    expect(standing(withCondition(addonChangesPendingCondition))).toMatchObject({
-      group: "running",
-      reason: "Add-on changes wait",
+  it("leaves a cluster as it is while changes wait for the window", () => {
+    const held = { ...waiting, conditions: withCondition(addonChangesPendingCondition).conditions };
+    expect(standing(held)).toMatchObject({
+      group: "healthy",
+      state: "ok",
+      verdict: "Available",
+      reason: `Add-on changes at ${windowTime(opens)}`,
     });
   });
 
@@ -197,10 +204,12 @@ describe("the add-on conditions", () => {
     expect(standing(withCondition(addonChangesPendingCondition, "False")).verdict).toBe("Available");
   });
 
-  it("marks them on the Health page only while true", () => {
-    for (const type of [addonConflictCondition, addonChangesPendingCondition]) {
-      expect([abnormal(type, "True"), abnormal(type, "False")]).toStrictEqual([true, false]);
-    }
+  it("marks a conflict on the Health page only while true, and held changes never", () => {
+    expect([
+      abnormal(addonConflictCondition, "True"),
+      abnormal(addonConflictCondition, "False"),
+      abnormal(addonChangesPendingCondition, "True"),
+    ]).toStrictEqual([true, false, false]);
   });
 });
 
@@ -272,9 +281,10 @@ describe("add-on installs of a new cluster", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await toAddOns(user);
-    const group = within(screen.getByRole("group", { name: "Add-on installs" }));
-    await user.click(group.getByRole("checkbox", { name: "Use existing cert-manager" }));
-    await user.type(group.getByLabelText("Namespace labels"), "team=payments{Enter}env = prod");
+    const certificates = within(screen.getByRole("group", { name: "Certificates" }));
+    await user.click(certificates.getByRole("checkbox", { name: "Use existing cert-manager" }));
+    const podSecurity = within(screen.getByRole("group", { name: "Pod security" }));
+    await user.type(podSecurity.getByLabelText("Namespace labels"), "team=payments{Enter}env = prod");
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByText("Existing cert-manager")).toBeInTheDocument();
@@ -318,7 +328,7 @@ describe("add-on installs of a new cluster", () => {
     await user.type(labels, `a=${"x".repeat(maxLabelValue + 1)}`);
     expect(labels).toHaveAccessibleDescription(new RegExp(`^Line 1: value over ${maxLabelValue} characters`, "u"));
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(screen.getByRole("group", { name: "Add-on installs" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Pod security" })).toBeInTheDocument();
   });
 
   it("limits the labels to the most a cluster takes", async () => {
@@ -347,7 +357,8 @@ describe("add-on installs of a new cluster", () => {
     await user.type(await screen.findByLabelText("Name"), "web");
     await waitFor(() => expect(screen.getByRole("option", { name: "RKE2" })).toBeInTheDocument());
     await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-rke2");
-    expect(screen.queryByRole("group", { name: "Add-on installs" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Use existing cert-manager" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Namespace labels")).not.toBeInTheDocument();
   });
 });
 

@@ -155,6 +155,7 @@ const kubeadmClass = {
     { name: "headlamp", required: false, schema: object },
     { name: "monitoring", required: false, schema: object },
     { name: "podSecurity", required: false, schema: object },
+    { name: "certificates", required: false, schema: object },
     { name: "cis", required: false, schema: { type: "boolean", default: false } },
     { name: "rancher", required: false, schema: object },
     { name: "oidc", required: false, schema: { type: "array" } },

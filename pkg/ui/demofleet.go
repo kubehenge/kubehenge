@@ -94,7 +94,7 @@ type demoCluster struct {
 	Crashing string `json:"crashing"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
-	// AddonChanges wait for the cluster's maintenance window.
+	// AddonChanges wait for the cluster's upgrade window.
 	AddonChanges []provisioner.AddonChange `json:"addonChanges"`
 }
 
@@ -316,7 +316,7 @@ func (f *demoFleet) waitForWindow(c *clusterv1.Cluster, changes []provisioner.Ad
 	c.Annotations[provisioner.AddonChangesAnnotation] = string(raw)
 	c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
 		Type: provisioner.AddonChangesPendingCondition, Status: metav1.ConditionTrue, Reason: provisioner.AddonChangesWaiting,
-		Message: "Add-on changes wait for the maintenance window, which opens " + opens.Format(time.RFC3339), LastTransitionTime: metav1.NewTime(f.now.Add(-2 * time.Hour)),
+		Message: "Add-on changes wait for the upgrade window, which opens " + opens.Format(time.RFC3339), LastTransitionTime: metav1.NewTime(f.now.Add(-2 * time.Hour)),
 	})
 }
 

@@ -10,12 +10,12 @@ import (
 )
 
 // addonCommands are the commands for a cluster's add-ons: applying the changes that wait for its
-// maintenance window, and labelling the namespaces the add-ons install into.
+// upgrade window, and labelling the namespaces the add-ons install into.
 func (o *clusterOptions) addonCommands() []*cobra.Command {
 	apply := &cobra.Command{
 		Use:   "apply-addon-changes NAME",
-		Short: "Apply the add-on changes that wait for the cluster's maintenance window now",
-		Long: `Apply the add-on changes that wait for the cluster's maintenance window now.
+		Short: "Apply the add-on changes that wait for the cluster's upgrade window now",
+		Long: `Apply the add-on changes that wait for the cluster's upgrade window now.
 
 A new Kubehenge release moves the charts of a cluster's add-ons only when the cluster's window
 opens. This applies them at once, as a security fix needs. "kubehenge cluster get" lists them as

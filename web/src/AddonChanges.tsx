@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { addonConflictCondition } from "./fleet";
+import { addonConflictCondition, windowTime } from "./fleet";
 import type { AddonChange, Cluster } from "./types";
 import { Detail, ErrorBox, errorMessage, filled } from "./ui";
 
@@ -10,7 +10,7 @@ export const changeText = (c: AddonChange): string =>
   c.from === c.to ? `${c.addon}: new values` : `${c.addon}: ${c.chart} ${c.from} to ${c.to}`;
 
 /**
- * AddonChangesWaiting lists the add-on chart changes that wait for the maintenance window, with a
+ * AddonChangesWaiting lists the add-on chart changes that wait for the upgrade window, with a
  * button that applies them now. It shows nothing while none wait.
  */
 export function AddonChangesWaiting({
@@ -50,8 +50,7 @@ export function AddonChangesWaiting({
           <li key={`${x.addon}/${x.chart}`}>{changeText(x)}</li>
         ))}
       </ul>
-      <p>Window opens {new Date(waiting.opens).toLocaleString()}</p>
-      <p className="muted">Otherwise the changes apply when the maintenance window opens.</p>
+      <p className="muted">Applies at {windowTime(waiting.opens)}, when the upgrade window opens.</p>
       <ErrorBox message={error} />
       <div className="actions">
         {c.allowed.change && (

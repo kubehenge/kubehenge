@@ -501,7 +501,7 @@ The newest version the cluster may move to is chosen already. Under it the dialo
 
 Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
 
-A new Kubehenge release also moves the charts of the cluster's add-ons. In a cluster with a maintenance window, those changes wait for it. The dialog and the cluster's page list each one with its chart and the version it moves from and to. **Apply now** applies them at once, as `kubehenge cluster apply-addon-changes NAME` does ([upgrading.md](upgrading.md#add-on-changes)).
+A new Kubehenge release also moves the charts of the cluster's add-ons. In a cluster with an upgrade window, those changes wait for it. The dialog and the cluster's page list each one with its chart and the version it moves from and to. **Apply now** applies them at once, as `kubehenge cluster apply-addon-changes NAME` does ([upgrading.md](upgrading.md#add-on-changes)).
 
 A cluster with one control plane runs on two etcd members while its control plane is replaced. Its API stops if either does. The plan of such a change warns of it, as kubectl does.
 
@@ -559,9 +559,9 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 | Storage | CSI plugin | where the management cluster lets clusters choose its newest release, or while the cluster runs it | [Persistent volumes](#persistent-volumes). |
 | Storage | Volume snapshots | where the management cluster lets clusters take them, or while they are on | [Volume snapshots](#volume-snapshots). |
 | Add-ons | Headlamp, Monitoring, Logs, Certificates, Istio, Rancher, GitOps | always | See the list below. |
-| Add-ons | Namespace labels | always | Put on the namespaces the add-ons install into ([Add-ons and your policies](#add-ons-and-your-policies)). |
 | Security | CIS hardening | always | Fixed for the cluster's life ([Add-ons](#add-ons)). |
 | Security | Pod security, Identity providers | always | See the list below. |
+| Security | Namespace labels | always | Put on the namespaces the add-ons install into ([Add-ons and your policies](#add-ons-and-your-policies)). |
 | Maintenance | Backups | where an administrator set a backup target, or while they are on | See the list below. |
 | Maintenance | etcd snapshots | where an administrator set a backup target, or while they are on | [etcd snapshots](#etcd-snapshots). |
 | Maintenance | Automatic upgrades | always | The Kubernetes upgrades, their window and the move to new node images ([upgrading.md](upgrading.md#automatically-inside-a-window), [Node image refresh](#node-image-refresh)). |
@@ -1031,7 +1031,7 @@ Helm refuses to install over objects that another release or tool owns, so an ad
 
 <!-- addon-owned:end -->
 
-To use a cert-manager the cluster runs already, choose **Use existing cert-manager** when you create the cluster, or set `useExisting.certManager`. Kubehenge then installs no cert-manager and still makes its issuers and certificates in yours, for the certificates add-on, monitoring and Rancher. It is fixed once the cluster exists, since switching would delete the definitions with every certificate. The existing cert-manager must run with its custom resource definitions installed.
+To use a cert-manager the cluster runs already, choose **Use existing cert-manager** under Certificates when you create the cluster, or set `useExisting.certManager`. Kubehenge then installs no cert-manager and still makes its issuers and certificates in yours, for the certificates add-on, monitoring and Rancher. It is fixed once the cluster exists, since switching would delete the definitions with every certificate. The existing cert-manager must run with its custom resource definitions installed.
 
 Kyverno and the Prometheus Operator have no such choice. Remove the cluster's own install, or switch the add-on off.
 

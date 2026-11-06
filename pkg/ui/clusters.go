@@ -221,7 +221,7 @@ type clusterView struct {
 	GitOps *gitOpsView `json:"gitops,omitempty"`
 	// Talos is how a Talos cluster's nodes stand with its Talos release.
 	Talos *talosView `json:"talos,omitempty"`
-	// AddonChanges are the add-on changes that wait for the cluster's maintenance window.
+	// AddonChanges are the add-on changes that wait for the cluster's upgrade window.
 	AddonChanges *provisioner.AddonChangesStatus `json:"addonChanges,omitempty"`
 	// Generation counts the changes to the cluster's spec. A change made against it carries it back
 	// (generationHeader).

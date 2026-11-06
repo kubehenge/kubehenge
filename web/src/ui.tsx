@@ -325,7 +325,6 @@ const negativePolarity = new Set([
   "ScalingUp",
   "ScalingDown",
   "UpgradeHeld",
-  "AddonChangesPending",
   "AddonConflict",
   "ControlPlaneRollStalled",
   "DeletionStalled",

@@ -357,13 +357,11 @@ export function optionRows<A extends string = never>(
       action: "certificates",
       name: "certificates",
     },
-    {
-      label: "Namespace labels",
-      value: labelsText(labelsOf(c.variables["namespaceLabels"])),
-      group: "Add-ons",
-      action: "namespaceLabels",
-      name: "namespace labels",
-    },
+  );
+  if (flag(record(c.variables["useExisting"])["certManager"]) === true) {
+    rows.push({ label: "Existing cert-manager", value: "Yes", group: "Add-ons" });
+  }
+  rows.push(
     {
       label: "Pod security",
       value: podSecurityText(podSecurity),
@@ -371,11 +369,15 @@ export function optionRows<A extends string = never>(
       action: "podSecurity",
       name: "pod security",
     },
+    {
+      label: "Namespace labels",
+      value: labelsText(labelsOf(c.variables["namespaceLabels"])),
+      group: "Security",
+      action: "namespaceLabels",
+      name: "namespace labels",
+    },
     { label: "Istio", value: istioText(istioOn(c)), group: "Add-ons", toggle: istioToggle },
   );
-  if (flag(record(c.variables["useExisting"])["certManager"]) === true) {
-    rows.push({ label: "Existing cert-manager", value: "Yes", group: "Add-ons" });
-  }
   if (runsCilium(c)) {
     rows.push({
       label: "Cluster Mesh",

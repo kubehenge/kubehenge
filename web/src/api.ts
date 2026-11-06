@@ -361,7 +361,7 @@ export interface Api {
   talosconfig: (ns: string, name: string) => Promise<Blob>;
   /** retryTalosUpgrade takes back the failed node upgrade that holds a Talos cluster's others. */
   retryTalosUpgrade: (ns: string, name: string) => Promise<void>;
-  /** applyAddonChanges applies the add-on chart changes that wait for the maintenance window now. */
+  /** applyAddonChanges applies the add-on chart changes that wait for the upgrade window now. */
   applyAddonChanges: (ns: string, name: string) => Promise<void>;
   /** replaceMachine marks a machine for its cluster's health check to replace. */
   replaceMachine: (ns: string, name: string, machine: string) => Promise<void>;

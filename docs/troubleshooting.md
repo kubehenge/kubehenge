@@ -491,7 +491,7 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.t
 
 ### Add-on changes wait
 
-A cluster with a maintenance window gets the changes a new Kubehenge release makes to its add-ons when the window opens. Until then it has the condition `AddonChangesPending`, and the annotation `kubehenge.dev/addon-changes` lists each add-on, its chart, and the versions it moves from and to ([upgrading.md](upgrading.md#add-on-changes)).
+A cluster with an upgrade window gets the changes a new Kubehenge release makes to its add-ons when the window opens. Until then it has the condition `AddonChangesPending`, and the annotation `kubehenge.dev/addon-changes` lists each add-on, its chart, and the versions it moves from and to ([upgrading.md](upgrading.md#add-on-changes)).
 
 To apply them now, use **Apply now** on the cluster's page. With the command line, run `kubehenge cluster apply-addon-changes <name>`. With kubectl, annotate the Cluster with `kubehenge.dev/apply-addon-changes` set to any value.
 

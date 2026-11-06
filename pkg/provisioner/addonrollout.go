@@ -22,7 +22,7 @@ import (
 
 const (
 	// ApplyAddonChangesAnnotation on a Cluster asks the controller to apply the add-on changes that
-	// wait for the maintenance window, now. The controller takes it off again.
+	// wait for the upgrade window, now. The controller takes it off again.
 	ApplyAddonChangesAnnotation = "kubehenge.dev/apply-addon-changes"
 	// AddonChangesAnnotation on a Cluster holds, as JSON, the AddonChangesStatus of the changes that
 	// wait for the window.
@@ -61,7 +61,7 @@ type AddonChangesStatus struct {
 }
 
 // rolloutGate decides which changes of an add-on's proxy wait. A new release of the controller
-// changes the charts it pins, and the new pins reach a cluster whose maintenance window is closed
+// changes the charts it pins, and the new pins reach a cluster whose upgrade window is closed
 // only once it opens. A change the cluster's owner makes in its settings, a new cluster and an
 // add-on just switched on apply at once.
 type rolloutGate struct {
@@ -254,7 +254,7 @@ func (r *Reconciler) markAddonChanges(ctx context.Context, cluster *clusterv1.Cl
 	}
 	cond := metav1.Condition{
 		Type: AddonChangesPendingCondition, Status: metav1.ConditionTrue, Reason: AddonChangesWaiting,
-		Message: changesText(changes) + " wait for the maintenance window, which opens " + opens.UTC().Format(time.RFC3339),
+		Message: changesText(changes) + " wait for the upgrade window, which opens " + opens.UTC().Format(time.RFC3339),
 	}
 	if found != nil && found.Status == cond.Status && found.Reason == cond.Reason && found.Message == shorten(cond.Message, watchMessageMax) {
 		return nil

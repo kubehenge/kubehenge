@@ -111,7 +111,7 @@ export interface NodeOSChoice extends NodeOS {
   noTemplate?: string;
 }
 
-/** An add-on chart change that waits for the maintenance window. Equal from and to mean new values only. */
+/** An add-on chart change that waits for the upgrade window. Equal from and to mean new values only. */
 export interface AddonChange {
   addon: string;
   chart: string;
@@ -119,7 +119,7 @@ export interface AddonChange {
   to: string;
 }
 
-/** The add-on changes waiting, and when the maintenance window opens (RFC 3339). */
+/** The add-on changes waiting, and when the upgrade window opens (RFC 3339). */
 export interface AddonChanges {
   opens: string;
   changes: AddonChange[];
@@ -508,7 +508,7 @@ export interface Cluster {
   gitops?: GitOpsKeys;
   /** How a Talos cluster's nodes stand with its Talos release. */
   talos?: TalosStatus;
-  /** The add-on chart changes that wait for the maintenance window, while any do. */
+  /** The add-on chart changes that wait for the upgrade window, while any do. */
   addonChanges?: AddonChanges;
   /** The last recovery of the control plane from a stalled roll: etcd reset to one machine's own. */
   recovery?: EtcdRestoreStatus;

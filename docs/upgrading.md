@@ -236,7 +236,7 @@ To hold a cluster on its build, switch `nodeImages` off. Deleting a broken build
 
 ### Add-on changes
 
-A new Kubehenge release changes the charts it installs. It also changes the values it gives them. A cluster with a maintenance window gets those changes inside the window and not before. That covers the CNI, the cloud controller manager, the CSI plugin, Traefik, Kyverno and every other add-on.
+A new Kubehenge release changes the charts it installs. It also changes the values it gives them. A cluster with an upgrade window gets those changes inside the window and not before. That covers the CNI, the cloud controller manager, the CSI plugin, Traefik, Kyverno and every other add-on.
 
 A cluster has a window once its `upgrades` variable has automatic upgrades or node image refreshes on. A cluster without one gets the changes at once.
 
@@ -248,7 +248,7 @@ Three things apply at once, window or not:
 
 While changes wait, the cluster has the condition `AddonChangesPending`, and the annotation `kubehenge.dev/addon-changes` lists each add-on with its chart, the version it runs and the version it moves to. The cluster's page and the Upgrade dialog show the same list.
 
-A security fix may not wait for the window. **Apply now** in the dialog or on the cluster's page applies the waiting changes at once. So do these:
+A security fix to an add-on waits for the window like a Kubernetes patch does. **Apply now** in the dialog or on the cluster's page, and `kubehenge cluster apply-addon-changes`, apply the waiting changes at once. So does the annotation:
 
 ```sh
 kubehenge cluster apply-addon-changes <name>

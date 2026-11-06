@@ -206,6 +206,9 @@ function BackupsChoice({
 // which Sys.Modify on its pool grants.
 const tokenRefusal = "Needs Sys.Modify on the workload pool";
 
+const existingCertManagerInfo =
+  "Kubehenge installs none and still makes its issuers and certificates in it. Fixed once the cluster exists.";
+
 // CertificatesAddOn sets the certificates up, with the DNS provider's credential typed in here for
 // the new cluster.
 function CertificatesAddOn({
@@ -213,10 +216,28 @@ function CertificatesAddOn({
   set,
   canTrust,
   showAll = false,
-}: Pick<StepProps, "form" | "set"> & { canTrust: boolean | undefined; showAll: boolean | undefined }): JSX.Element {
+  mayUseExisting,
+}: Pick<StepProps, "form" | "set"> & {
+  canTrust: boolean | undefined;
+  showAll: boolean | undefined;
+  mayUseExisting: boolean;
+}): JSX.Element {
   return (
     <fieldset className="group">
       <legend>Certificates</legend>
+      {mayUseExisting && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.existingCertManager}
+              onChange={(e) => set("existingCertManager", e.target.checked)}
+            />{" "}
+            Use existing cert-manager
+          </label>
+          <Info about="Existing cert-manager">{existingCertManagerInfo}</Info>
+        </>
+      )}
       <CertificatesFields
         value={form.certificates}
         onChange={(f) => set("certificates", f)}
@@ -483,7 +504,13 @@ function AddonCards({
       )}
       {variable(cls, "certificates") && (
         <AddonCard mib={cost("certManager")} on={form.certificates.enabled}>
-          <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
+          <CertificatesAddOn
+            form={form}
+            set={set}
+            canTrust={canTrust}
+            showAll={showAll}
+            mayUseExisting={variable(cls, "useExisting") !== undefined}
+          />
         </AddonCard>
       )}
       {variable(cls, "gitops") && (
@@ -495,46 +522,8 @@ function AddonCards({
   );
 }
 
-const existingCertManagerInfo =
-  "Kubehenge installs none and still makes its issuers and certificates in it. Fixed once the cluster exists.";
-
-// AddonInstalls are the choices about where the add-ons go and what they find: an existing
-// cert-manager, and the labels of the namespaces they are installed in.
-function AddonInstalls({ step: { form, set, cls, shown } }: { step: AddOnsProps }): JSX.Element | null {
-  const certManager = variable(cls, "useExisting") !== undefined;
-  const labels = variable(cls, "namespaceLabels") !== undefined;
-  if (!certManager && !labels) {
-    return null;
-  }
-  return (
-    <fieldset className="group">
-      <legend>Add-on installs</legend>
-      {certManager && (
-        <>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={form.existingCertManager}
-              onChange={(e) => set("existingCertManager", e.target.checked)}
-            />{" "}
-            Use existing cert-manager
-          </label>
-          <Info about="Existing cert-manager">{existingCertManagerInfo}</Info>
-        </>
-      )}
-      {labels && (
-        <NamespaceLabelsField
-          value={form.namespaceLabels}
-          onChange={(v) => set("namespaceLabels", v)}
-          error={shown("namespaceLabels")}
-        />
-      )}
-    </fieldset>
-  );
-}
-
 export function AddOnsStep(props: AddOnsProps): JSX.Element {
-  const { form, set, cls } = props;
+  const { form, set, cls, shown } = props;
   return (
     <>
       <AddonCards step={props} />
@@ -555,17 +544,25 @@ export function AddOnsStep(props: AddOnsProps): JSX.Element {
           </p>
         </>
       )}
-      {variable(cls, "podSecurity") && (
+      {(variable(cls, "podSecurity") || variable(cls, "namespaceLabels")) && (
         <fieldset className="group">
           <legend>Pod security</legend>
-          <PodSecurityFields
-            value={form.podSecurity}
-            onChange={(p) => set("podSecurity", p)}
-            cis={form.cis && variable(cls, "cis") !== undefined}
-          />
+          {variable(cls, "podSecurity") && (
+            <PodSecurityFields
+              value={form.podSecurity}
+              onChange={(p) => set("podSecurity", p)}
+              cis={form.cis && variable(cls, "cis") !== undefined}
+            />
+          )}
+          {variable(cls, "namespaceLabels") && (
+            <NamespaceLabelsField
+              value={form.namespaceLabels}
+              onChange={(v) => set("namespaceLabels", v)}
+              error={shown("namespaceLabels")}
+            />
+          )}
         </fieldset>
       )}
-      <AddonInstalls step={props} />
       <AddonRoom form={form} cls={cls} />
 
       {variable(cls, "upgrades") && (
