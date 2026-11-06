@@ -15,7 +15,7 @@ KO_FLAGS ?=
 # Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
 
-.PHONY: build web gateway-api capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web gateway-api capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
 .PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -367,6 +367,11 @@ e2e-interface:
 # of a key made for the test; settings in test/e2e/appliance.sh.
 e2e-appliance:
 	test/e2e/appliance.sh $(RELEASE) $(NEWER) $(NEWEST) $(SETTINGS)
+
+# As root on a Proxmox VE node, with the latest published release's install.sh and archive, and a
+# `make dist` archive of a higher VERSION; settings in test/e2e/appliance-upgrade.sh.
+e2e-appliance-upgrade:
+	test/e2e/appliance-upgrade.sh $(PUBLISHED_INSTALL) $(PUBLISHED) $(RELEASE) $(SETTINGS)
 
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/provisioner/e2e_test.go.
 e2e-volumes:

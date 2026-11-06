@@ -21,6 +21,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
 
+### Contributing
+
+- The nightly run adds `appliance-upgrade`, which upgrades the latest published release to the tree under test. It fails when an upgrade replaces a management cluster VM ([testing.md](testing.md#the-appliance-upgrade-test)).
+
 ## [0.4.2] - 2026-11-05
 
 - Activity no longer misses a kubectl change made just before the kubelet rotates an API server's log or the API server restarts. The interface follows each log as it is written. After a restart it reads the old container's last lines.

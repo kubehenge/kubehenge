@@ -21,6 +21,9 @@ expect() {
     fi
 }
 
+expect test/e2e/appliance-upgrade.sh appliance-upgrade yes
+expect test/e2e/appliance-upgrade.sh appliance no
+expect test/e2e/appliance.sh appliance-upgrade no
 expect test/e2e/rancher.sh rancher yes
 expect test/e2e/rancher.sh two-nodes no
 expect test/e2e/two-nodes.sh two-nodes yes
@@ -68,7 +71,7 @@ expect test/e2e/workload-cluster.sh cluster-mesh yes
 expect test/e2e/workload-cluster.sh appliance no
 # Without a base to compare with, any change to the values may touch Rancher's.
 expect charts/kubehenge/values.yaml rancher yes
-for t in rancher two-nodes control-plane-ha management-cluster-upgrade; do
+for t in rancher two-nodes control-plane-ha management-cluster-upgrade appliance-upgrade; do
     expect pkg/provisioner/cluster.go "${t}" no
     [ "${t}" = rancher ] || expect charts/kubehenge/values.yaml "${t}" no
     expect test/e2e/common.sh "${t}" no
@@ -226,7 +229,7 @@ expect_each "${diffed}" yes talos talos-addons-a
 # Every test a rule names is one the nightly run has: scope.sh refuses an unknown name, and the
 # nightly run holds all of them.
 nightly_tests=$(sh "${ci}/nightly.sh" 20000 | jq -r '.[] | split(",")[] | split("+")[0]' | tr -d '\r' | sort -u)
-for t in $(sh "${ci}/scope.sh" --all | jq -r '.[] | split(",")[]' | tr -d '\r') management-cluster-upgrade rancher control-plane-ha two-nodes; do
+for t in $(sh "${ci}/scope.sh" --all | jq -r '.[] | split(",")[]' | tr -d '\r') management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade; do
     case "
 ${nightly_tests}
 " in
@@ -288,6 +291,10 @@ expect_values 'changed outside addons.rancher' no
 all=$(sh "${ci}/scope.sh" --all)
 if printf '%s' "${all}" | jq -e 'index("rancher") == null' > /dev/null; then :; else
     echo 'FAIL: --all lists rancher'
+    failures=$((failures + 1))
+fi
+if printf '%s' "${all}" | jq -e 'index("appliance-upgrade") == null' > /dev/null; then :; else
+    echo 'FAIL: --all lists appliance-upgrade'
     failures=$((failures + 1))
 fi
 # It holds 20 lanes at most, as many as a run's jobs at once, with every pair, and each test in one

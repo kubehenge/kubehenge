@@ -36,7 +36,7 @@ strip_options() {
 # this test's time on Windows. Each holds its words between spaces.
 # jq on Windows ends its lines with CR LF.
 lanes=$(sh "${ci}/scope.sh" --all | jq -r '.[]' | tr -d '\r')
-queue=" $(printf '%s' "${lanes}" | tr '\n' ' ') management-cluster-upgrade rancher control-plane-ha two-nodes "
+queue=" $(printf '%s' "${lanes}" | tr '\n' ' ') management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade "
 all_lanes=" $(printf '%s' "${lanes}" | tr '\n,' '  ') "
 node_oses=" $(jq -r '.available[]' "${chart}/files/node-oses.json" | tr -d '\r' | tr '\n' ' ') "
 # cnis <distribution>: the CNIs its class offers.
@@ -60,7 +60,7 @@ while [ "${night}" -lt "${nights}" ]; do
         esac
     done
     # Every lane is one the merge queue runs, its tests without their options, or one of the
-    # nightly run's own four: none runs only at night by accident.
+    # nightly run's own: none runs only at night by accident.
     for lane in ${tests}; do
         strip_options "${lane}"
         case ${queue} in
@@ -195,6 +195,8 @@ refused 'k3s+$(true)'
 refused 'k3s++cilium'
 refused 'k3s+Cilium'
 refused appliance+management-3584
+refused appliance-upgrade+management-3584
+refused appliance-upgrade+calico
 refused management-cluster+management-
 refused management-cluster+management-0
 refused management-cluster+management-035
@@ -213,7 +215,7 @@ reads rke2+calico 'export KUBEHENGE_E2E_CNI=calico'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
 if out=$(variant control-plane-ha 2>&1) && [ -z "${out}" ]; then ok; else bad "control-plane-ha carries settings: ${out}"; fi
-for t in control-plane-ha two-nodes; do
+for t in control-plane-ha two-nodes appliance-upgrade; do
     if grep -q "^    ${t})" "${ci}/run.sh"; then ok; else bad "run.sh does not run ${t}"; fi
 done
 

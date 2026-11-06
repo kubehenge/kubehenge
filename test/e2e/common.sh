@@ -1,6 +1,9 @@
 #!/bin/sh
 # Helpers every end-to-end test uses. Sourced after `set -eu`.
 
+# The appliance tests' helpers below read variables each test sets, and set $csrf for it.
+# shellcheck disable=SC2154,SC2034
+
 # The images the tests run their own pods from.
 # renovate: datasource=docker depName=registry.k8s.io/e2e-test-images/agnhost
 agnhost=registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4
@@ -269,4 +272,193 @@ boot_log_shows() {
 boot_log_summary() {
     printf '%s' "$1" | jq -r --arg m "$2" '.[$m] // {error: "not read"} | "boot log of \($m): \(.error // "read")",
         (.sections[]? | "--- \(.name): \(.error // "read"), \(.lines // [] | length) lines", (.lines // [] | .[-5:][] | "    " + .))' >&2
+}
+
+# The appliance tests' helpers (appliance.sh, appliance-upgrade.sh). They read variables the test
+# sets before it calls them: $work (the scratch directory), $ca (the cluster's CA), $ui (the
+# interface's URL), $ctid and $address (the appliance's container and its address with prefix),
+# $install (the installer under test), $password and $passphrase, $admin and $admin_csrf, and the
+# KUBEHENGE_E2E_* settings install_appliance names. Answers go to $work/status and $work/body, and
+# to $csrf, $got and $upgraded.
+
+# request <cookie jar> <curl arguments...>: a request to the appliance; its status goes to
+# $work/status and its body to $work/body.
+request() {
+    jar=$1
+    shift
+    curl -sS --cacert "${ca}" -b "${jar}" -c "${jar}" -o "${work}/body" -w '%{http_code}' "$@" > "${work}/status"
+}
+
+# post <cookie jar> <CSRF token> <URL> <JSON>, and put and delete the same
+post() {
+    request "$1" -H 'Content-Type: application/json' -H "X-Kubehenge-CSRF: $2" -d "$4" "$3"
+}
+put() {
+    request "$1" -X PUT -H 'Content-Type: application/json' -H "X-Kubehenge-CSRF: $2" -d "$4" "$3"
+}
+delete() {
+    request "$1" -X DELETE -H "X-Kubehenge-CSRF: $2" "$3"
+}
+
+# expect <status> <what> <command...>: runs a request and checks the status it got.
+expect() {
+    want=$1 what=$2
+    shift 2
+    "$@"
+    got=$(cat "${work}/status")
+    [ "${got}" = "${want}" ] || fail_with_body "${what}: ${got} instead of ${want}"
+}
+
+# fail_with_body <message>: fails with the start of the last answer's body.
+fail_with_body() {
+    body=$(head -c 500 "${work}/body")
+    fail "$1: ${body}"
+}
+
+# body_is <jq filter> <message>: checks the last answer's body.
+body_is() {
+    jq -e "$1" "${work}/body" > /dev/null || fail_with_body "$2"
+}
+
+# body_has <message> <jq arguments...>: body_is with a filter that takes arguments.
+body_has() {
+    message=$1
+    shift
+    jq -e "$@" "${work}/body" > /dev/null || fail_with_body "${message}"
+}
+
+# answers: whether the interface is up again, on its certificate.
+answers() {
+    curl -sS -o /dev/null --cacert "${ca}" "${ui}/api/realms" 2> /dev/null
+}
+
+# sign_in <cookie jar> <user>: signs in with the test's password, the session in the jar and its
+# CSRF token in $csrf.
+sign_in() {
+    body=$(jq -n --arg u "$2" --arg p "${password}" '{username: $u, password: $p}')
+    expect 200 "signing in as $2" request "$1" -H 'Content-Type: application/json' -d "${body}" "${ui}/api/session"
+    csrf=$(jq -r .csrf "${work}/body")
+}
+
+# setup_status: the setup's status as the administrator sees it, in $work/body.
+setup_status() {
+    expect 200 "the setup's status" request "${work}/admin.jar" "${ui}/api/setup"
+}
+
+# job_ended: whether the appliance's last job has ended.
+job_ended() {
+    setup_status
+    jq -e '.job.state != "running"' "${work}/body" > /dev/null
+}
+
+# job_was <kind> <state> <ready>: checks how the last job ended and whether the management cluster
+# is ready after it, with the job's log when not as expected.
+job_was() {
+    if ! jq -e --arg k "$1" --arg s "$2" --argjson r "$3" '.job.kind == $k and .job.state == $s and .ready == $r' "${work}/body" > /dev/null; then
+        jq -r '"kind \(.job.kind), state \(.job.state), ready \(.ready): \(.job.error // "")", (.job.log // [] | .[])' "${work}/body" >&2
+        fail "the $1 job did not end $2 with the management cluster ready: $3"
+    fi
+}
+
+# ready_again: whether the interface, after a restart, found the management cluster again.
+ready_again() {
+    setup_status
+    jq -e .ready "${work}/body" > /dev/null
+}
+
+# install_appliance <installer> <release>: installs the appliance from the release archive with the
+# installer, which is the one the release itself was published with when the test installs a
+# published release as a user does. The container is KUBEHENGE_E2E_APPLIANCE_ID at
+# KUBEHENGE_E2E_APPLIANCE_ADDRESS on KUBEHENGE_E2E_BRIDGE (default vmbr0), and its disk goes on
+# KUBEHENGE_E2E_STORAGE when that is set.
+install_appliance() {
+    installer=$1 archive=$2
+    sum=$(sha256sum "${archive}" | cut -d ' ' -f 1)
+    set -- --ctid "${ctid}" --ip "${address}" --gateway "${KUBEHENGE_E2E_GATEWAY}" --dns "${KUBEHENGE_E2E_DNS}" \
+        --bridge "${KUBEHENGE_E2E_BRIDGE:-vmbr0}" --hostname kubehenge-e2e --release "${archive}" --sha256 "${sum}" --no-pve-entry
+    [ -z "${KUBEHENGE_E2E_STORAGE:-}" ] || set -- "$@" --storage "${KUBEHENGE_E2E_STORAGE}"
+    if ! sh "${installer}" "$@" < /dev/null > "${work}/install.log" 2>&1; then
+        cat "${work}/install.log" >&2
+        fail "install.sh failed"
+    fi
+    grep -qF "Kubehenge is running in container ${ctid}: ${ui}/" "${work}/install.log" ||
+        fail "install.sh did not name the appliance's address"
+}
+
+# upgrade <release>: install.sh --upgrade of the appliance, its exit status in $upgraded and its
+# output in $work/upgrade.log.
+upgrade() {
+    sum=$(sha256sum "$1" | cut -d ' ' -f 1)
+    upgraded=0
+    sh "${install}" --upgrade --ctid "${ctid}" --release "$1" --sha256 "${sum}" < /dev/null > "${work}/upgrade.log" 2>&1 || upgraded=$?
+}
+
+# upgrade_refused <release> <reason>: checks that install.sh --upgrade stops, giving the reason.
+upgrade_refused() {
+    upgrade "$1"
+    if [ "${upgraded}" -eq 0 ] || ! grep -q "$2" "${work}/upgrade.log"; then
+        cat "${work}/upgrade.log" >&2
+        fail "install.sh --upgrade to $1 did not stop with: $2"
+    fi
+}
+
+# version_of <release>: the version of a release archive.
+version_of() { tar -xzOf "$1" ./share/kubehenge/VERSION; }
+
+# runs <version>: checks that the appliance runs that release, its interface answering.
+runs() {
+    installed=$(pct exec "${ctid}" -- cat /usr/local/share/kubehenge/VERSION)
+    [ "${installed}" = "$1" ] || fail "the appliance runs ${installed} instead of $1"
+    until_true 120 "the interface to answer" answers
+}
+
+# list <jq filter> <pvesh get arguments...>: an answer of Proxmox VE's API as lines. Through a file
+# rather than a pipe, so that a query that fails stops the test instead of leaving lines out.
+list() {
+    filter=$1
+    shift
+    pvesh get "$@" --output-format json < /dev/null > "${work}/answer"
+    jq -r "${filter}" "${work}/answer"
+}
+
+# inventory: what Proxmox VE holds that the appliance or the management cluster could leave behind,
+# a line each. Container templates stay: install.sh keeps the one it downloaded for the next install.
+inventory() {
+    node=$(hostname)
+    list '.[] | select(.active == 1) | .storage' "/nodes/${node}/storage" --enabled 1 > "${work}/storages"
+    {
+        list '.[] | "guest \(.vmid) \(.name // "")"' /cluster/resources --type vm
+        list '.[] | "pool \(.poolid)"' /pools
+        list '.[] | "user \(.userid) \(.tokens // [] | map(.tokenid) | sort | join(","))"' /access/users --full 1
+        list '.[] | "group \(.groupid)"' /access/groups
+        list '.[] | "role \(.roleid)"' /access/roles
+        list '.[] | "acl \(.path) \(.type) \(.ugid) \(.roleid)"' /access/acl
+        list '.[] | "ha resource \(.sid)"' /cluster/ha/resources
+        list '.[] | "ha rule \(.rule)"' /cluster/ha/rules
+        while read -r storage; do
+            list '.[] | select(.content != "vztmpl") | "volume \(.volid)"' "/nodes/${node}/storage/${storage}/content"
+        done < "${work}/storages"
+    } > "${work}/inventory"
+    sort "${work}/inventory"
+}
+
+# management_credentials: fetches the management cluster's admin kubeconfig through the interface
+# and keeps its certificates in $work for management_get; $management_api is the cluster's API
+# address.
+management_credentials() {
+    asked=$(jq -nc --arg p "${passphrase}" '{name: "kubeconfig", passphrase: $p}')
+    expect 200 "the management cluster's admin kubeconfig" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/credential" "${asked}"
+    cp "${work}/body" "${work}/management.kubeconfig"
+    kubeconfig_field certificate-authority-data | base64 -d > "${work}/management-ca.crt"
+    kubeconfig_field client-certificate-data | base64 -d > "${work}/management.crt"
+    kubeconfig_field client-key-data | base64 -d > "${work}/management.key"
+    management_api=$(kubeconfig_field server)
+}
+kubeconfig_field() {
+    sed -n "s/^ *$1: *//p" "${work}/management.kubeconfig" | head -n 1
+}
+
+# management_get <path>: a read of the management cluster's API with the admin kubeconfig.
+management_get() {
+    curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" "${management_api}$1"
 }
