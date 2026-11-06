@@ -38,6 +38,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The setup warns of VMs sharing nodes and of an API address that is one node's. It also warns of pod or service ranges that overlap a node's networks, and shows the ranges chosen.
 - The management cluster's health shows when the controller cannot reach the Proxmox VE API from inside the cluster.
 - An answer from Proxmox VE larger than 1 MiB fails with an error naming the path.
+- Stopping the appliance during a management cluster run, as a migration, a backup in stop mode or a reboot does, interrupts OpenTofu so that it writes its state. The run fails saying so, and the appliance waits up to 150 seconds for it.
 
 ## [0.4.2] - 2026-11-05
 

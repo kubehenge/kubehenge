@@ -56,6 +56,8 @@ func run(dir string, args []string) int {
 		if strings.Contains(string(vars), `"slow"`) {
 			interrupt := make(chan os.Signal, 1)
 			signal.Notify(interrupt, os.Interrupt)
+			// Said once it listens, so that a test interrupts it only from then on.
+			fmt.Println(`{"@level":"info","@message":"Applying.","type":"log"}`)
 			select {
 			case <-interrupt:
 				fmt.Println(`{"@level":"info","@message":"Interrupt received.","type":"log"}`)

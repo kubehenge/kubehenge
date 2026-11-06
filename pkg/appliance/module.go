@@ -315,6 +315,8 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 	_, _ = io.Copy(io.Discard, out)
 	err = cmd.Wait()
 	switch {
+	case err != nil && errors.Is(context.Cause(ctx), ErrServiceStopped):
+		return fmt.Errorf("tofu %s: interrupted as %w, so run it again: %w", args[0], ErrServiceStopped, err)
 	case err != nil && run.Err() != nil && ctx.Err() == nil:
 		return fmt.Errorf("tofu %s: interrupted before the Proxmox VE sign-in it runs on expires, so run it again: %w", args[0], err)
 	case err != nil && len(failures) > 0:
