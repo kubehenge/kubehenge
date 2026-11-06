@@ -546,12 +546,15 @@ audited() {
 # is read without fail.
 audited_within() {
     limit=$(($(date +%s) + $1))
+    # shellcheck disable=SC2310 # a ConfigMap not yet on Activity is a retry.
     until audited "$2"; do
-        [ "$(date +%s)" -lt "${limit}" ] || return 1
+        now=$(date +%s)
+        [ "${now}" -lt "${limit}" ] || return 1
         sleep 5
     done
 }
 audit_waiting=1
+# shellcheck disable=SC2310 # a ConfigMap missing after the wait is the case this handles.
 if ! audited_within 90 kubehenge-e2e-audit; then
     audit_create kubehenge-e2e-audit-late
     until_true 240 "the ConfigMap's creation on Activity" audited kubehenge-e2e-audit-late
