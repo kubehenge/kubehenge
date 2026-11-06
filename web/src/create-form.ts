@@ -292,6 +292,8 @@ const bytesPerGiB = 1_073_741_824;
 export interface Room {
   memory: number;
   freeMemory?: number | undefined;
+  /** Set where no node the cluster may use has room for its largest machine. */
+  nodeWarning?: string | undefined;
   disk: number;
   freeDisk?: number | undefined;
 }
@@ -313,6 +315,7 @@ export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): R
     freeMemory: known
       ? usable.reduce((sum, n) => sum + Math.max(0, (n.maxMemory ?? 0) - (n.memory ?? 0)), 0)
       : undefined,
+    nodeWarning: memoryNodeWarning(form, nodes),
     disk: (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB,
     freeDisk: disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined,
   };
@@ -1503,9 +1506,10 @@ export function bridgeNodeProblems(
   if (holders.length === 0 || allowed.length === 0 || allowed.some((node) => on(node) !== false)) {
     return {};
   }
-  return {
-    bridge: `${form.bridge} is only on ${holders.join(", ")}. Allow one of those nodes or choose another bridge.`,
-  };
+  const [only, ...rest] = holders.toReversed();
+  const named = rest.length === 0 ? holders.join("") : `${rest.toReversed().join(", ")} and ${only}`;
+  const allow = rest.length === 0 ? `Allow ${named}` : "Allow one of them";
+  return { bridge: `${form.bridge} is only on ${named}. ${allow} or choose another bridge.` };
 }
 
 /**
@@ -1521,7 +1525,8 @@ export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefi
   if (best === undefined || freeMiB(best) >= need) {
     return undefined;
   }
-  return `No node has ${need} MiB free, and ${best.node} has most with ${Math.floor(freeMiB(best))} MiB. The cluster waits until one has room.`;
+  const needGiB = Math.ceil(need / mibPerGiB);
+  return `No node has ${needGiB} GiB free, the most is ${Math.floor(freeMiB(best) / mibPerGiB)} GiB on ${best.node}. The cluster waits for room.`;
 }
 
 // freeMiB is a node's free memory, unlimited while it reports none.

@@ -37,6 +37,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The create wizard says that volumes on node-local storage stay on one node. The docs explain how replacements interact with them and how to move a volume, and troubleshooting covers "volume node affinity conflict".
 - The interface marks the `NodesSkipped` and `NodesLackMemory` conditions as problems while they are true.
 - A new cluster's first machines go only to nodes with room for its largest machine. The create wizard says so before submit when no node it may use has the free memory.
+- The create wizard shows that memory warning in amber at the Placement field and in the Confirm step's checks. A bridge missing on the allowed nodes names the nodes that have it.
 
 ## [0.4.2] - 2026-11-05
 

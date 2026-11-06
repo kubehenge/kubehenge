@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
-import { Detail, Dialog, ErrorBox, Field, Info, errorMessage, filled, useChange } from "./ui";
+import { Detail, Dialog, ErrorBox, Field, Info, Status, errorMessage, filled, useChange } from "./ui";
 import { flag, record, texts } from "./values";
 
 /** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
@@ -110,6 +110,7 @@ export function PlacementFields({
   onChange,
   problem,
   hint,
+  warning,
   nodes,
   kept = noNodes,
   rules: read,
@@ -119,6 +120,8 @@ export function PlacementFields({
   onChange: (p: Place) => void;
   problem: string | undefined;
   hint?: string | undefined;
+  /** A warning that does not stop the form, drawn as the Confirm step's checks are. */
+  warning?: string | undefined;
   nodes: PveNode[];
   /** The nodes the cluster already has, offered even where the user cannot see them. */
   kept?: string[] | undefined;
@@ -140,6 +143,11 @@ export function PlacementFields({
       aria-describedby={hint === undefined ? undefined : "placement-hint"}
     >
       {framed && <legend>Placement</legend>}
+      {warning !== undefined && (
+        <p className="hint">
+          <Status state="warning" text={warning} />
+        </p>
+      )}
       {hint !== undefined && (
         <p className="hint" id="placement-hint">
           {hint}

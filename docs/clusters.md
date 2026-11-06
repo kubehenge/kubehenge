@@ -134,6 +134,7 @@ The rules Kubehenge keeps for its own clusters' Proxmox VE HA are not offered.
 A node is left out while it lacks the cluster's storage, template, bridge or VNet. It is also left out while it has less free memory than the cluster's largest machine.
 
 - **Free memory** is what Proxmox VE reports as unused. Memory that stopped guests are configured with does not count, so an overcommitted node still takes VMs.
+- **Headroom:** placement counts the memory free now, as Proxmox VE does when it starts a VM. Memory configured for stopped VMs is not held back, so a node can run short once they start. Allowed nodes keep clusters on hosts with real headroom.
 - **Rejoining** takes a tenth more free memory than the machine needs. That keeps the placement steady as memory moves.
 - **New clusters** are judged the same way before the first look. The create wizard warns, without blocking, when no node it may use has the free memory.
 - **No room anywhere:** the placement stays as it was. The cluster's `NodesLackMemory` condition names the memory needed and the best node's free memory.

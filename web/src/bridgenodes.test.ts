@@ -27,7 +27,15 @@ describe("the network step and the nodes that have the bridge", () => {
       place: { placement: "nodes" as const, haRule: "", nodes: ["pve1", "pve2"] },
     };
     expect(bridgeNodeProblems("Network", form, nodes)).toStrictEqual({
-      bridge: "vmbr1 is only on pve3. Allow one of those nodes or choose another bridge.",
+      bridge: "vmbr1 is only on pve3. Allow pve3 or choose another bridge.",
+    });
+    const two = {
+      ...nodes,
+      bridgesByNode: { ...nodes.bridgesByNode, pve1: [bridge("vmbr2", "pve1")], pve2: [bridge("vmbr2", "pve2")] },
+    };
+    const away = { ...form, bridge: "vmbr2", place: { placement: "nodes" as const, haRule: "", nodes: ["pve3"] } };
+    expect(bridgeNodeProblems("Network", away, two)).toStrictEqual({
+      bridge: "vmbr2 is only on pve1 and pve2. Allow one of them or choose another bridge.",
     });
     expect(bridgeNodeProblems("Machines", form, nodes)).toStrictEqual({});
   });

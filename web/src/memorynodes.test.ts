@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fieldProblems, memoryNodeWarning, newForm } from "./create-form";
+import { createRoom, fieldProblems, memoryNodeWarning, newForm } from "./create-form";
 import type { PveNode } from "./types";
 
 const gib = 1_073_741_824;
@@ -26,8 +26,12 @@ describe("the machines step and the nodes' free memory", () => {
   it("warns, without blocking the step, when no node the cluster may use has room", () => {
     const chosen = { ...form, place: { placement: "nodes" as const, haRule: "", nodes: ["pve1"] } };
     expect(memoryNodeWarning(chosen, [node("pve1", 2), node("pve2", 30)])).toBe(
-      "No node has 8192 MiB free, and pve1 has most with 2048 MiB. The cluster waits until one has room.",
+      "No node has 8 GiB free, the most is 2 GiB on pve1. The cluster waits for room.",
     );
+    expect(createRoom(chosen, [node("pve1", 2), node("pve2", 30)], []).nodeWarning).toBe(
+      memoryNodeWarning(chosen, [node("pve1", 2), node("pve2", 30)]),
+    );
+    expect(createRoom(form, [node("pve1", 20)], []).nodeWarning).toBeUndefined();
     expect(fieldProblems("Machines", chosen, undefined)).not.toHaveProperty("placement");
   });
 
