@@ -21,6 +21,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
 - SDN VNets work wherever a bridge is chosen, listed with their zone and alias, and `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone. A VLAN tag on a VNet of a VLAN zone is refused.
+- AlmaLinux and Rocky Linux templates get the kernel's extra modules with the kernel itself. In the hours after a kernel release, a bake could reach a mirror without that kernel's modules and fail.
 
 ## [0.4.2] - 2026-11-05
 

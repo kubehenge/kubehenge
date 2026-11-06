@@ -58,14 +58,17 @@ func (f *elFamily) repositories(b Bake) []*repository {
 }
 
 // manifest is what bootc-base-imagectl composes the minimal root file system from: upstream's
-// minimal manifest, with what grows the root file system to a clone's disk.
+// minimal manifest, with what grows the root file system to a clone's disk. The kernel's extra
+// modules hold br_netfilter, which every distribution's pod network needs. Composed with the
+// kernel, they come from the same mirror's metadata: a later install can reach a mirror one sync
+// behind, which the metalink still accepts and which lacks a kernel published hours before.
 func (f *elFamily) manifest(d Distribution) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "releasever: %s\nrepos:\n", f.releasever)
 	for _, r := range f.repos {
 		fmt.Fprintf(&sb, "  - %s\n", r)
 	}
-	fmt.Fprintf(&sb, "variables:\n  distro: %q\npackages:\n  - %s\n  - cloud-utils-growpart\n", f.distro, f.reposPackage)
+	fmt.Fprintf(&sb, "variables:\n  distro: %q\npackages:\n  - %s\n  - cloud-utils-growpart\n  - kernel-modules-extra\n", f.distro, f.reposPackage)
 	if d == RKE2 || d == K3s {
 		// They install themselves into /usr/local when a node boots, which the minimal manifest
 		// keeps in the read-only /usr. In /var the policy labels it as it would /usr/local. kubeadm's
