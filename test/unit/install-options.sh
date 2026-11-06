@@ -77,7 +77,8 @@ PATH=${bin}:${PATH}
 printf 'Quorate:          Yes\n' > "${root}/quorum"
 printf '[]\n' > "${root}/resources"
 printf '[{"iface":"vmbr0","type":"bridge"},{"iface":"eno1","type":"eth"},{"iface":"vmbr1","type":"OVSBridge"}]\n' > "${root}/network"
-release='--release /dev/null --sha256 00'
+# --dns keeps the runs past the name server check whatever this machine's resolver names.
+release='--release /dev/null --sha256 00 --dns 192.0.2.53'
 
 # A missing value.
 says "an option without its value" "--name needs a value" --name
