@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,8 +42,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
 
 // Each page's fingerprint and the day it last changed. Search engines trust a sitemap date only
-// if it moves when the page does, and IndexNow is sent only the pages whose fingerprint moved.
-const pagesFile = join(here, "..", "pages.json");
+// if it moves when the page does, and IndexNow is sent only the pages whose fingerprint moved. The
+// state lives on the published site (/pages.json), never in git, as a committed copy made every
+// pull request that touches a page conflict with the others. A deployment build starts from the
+// published file, which the workflow fetches and PAGES_PREVIOUS names. Without it, as on a local
+// or pull request build, every page starts at its source's last commit.
+const previousFile = process.env.PAGES_PREVIOUS ?? "";
+const pagesName = "pages.json";
 
 interface Page {
   fingerprint: string;
@@ -74,7 +79,7 @@ function fingerprint(html: string): string {
     .digest("hex");
 }
 
-// A page new to pages.json starts at its source's last commit, or today while that is uncommitted.
+// A page with no earlier date starts at its source's last commit, or today while that is uncommitted.
 function firstSeen(url: string, today: string): string {
   const source = url === "" ? "website/index.md" : `${url}.md`;
   const day = execFileSync("git", ["log", "-1", "--format=%cs", "--", source], { cwd: root, encoding: "utf8" });
@@ -176,9 +181,9 @@ export default defineConfig({
     lastmodDateOnly: true,
     // Runs once every page is written, so each date comes from the page as built.
     transformItems(items) {
-      const known: Record<string, Page | undefined> = existsSync(pagesFile)
-        ? JSON.parse(readFileSync(pagesFile, "utf8"))
-        : {};
+      // A named file that cannot be read fails the build, so a fault never resets every date.
+      const known: Record<string, Page | undefined> =
+        previousFile === "" ? {} : JSON.parse(readFileSync(previousFile, "utf8"));
       const today = new Date().toISOString().slice(0, 10);
       const pages: Record<string, Page> = {};
       for (const item of items) {
@@ -186,18 +191,13 @@ export default defineConfig({
         const html = readFileSync(join(here, "dist", `${item.url === "" ? "index" : item.url}.html`), "utf8");
         const print = fingerprint(html);
         const was = known[path];
-        const page =
-          was?.fingerprint === print
-            ? was
-            : { fingerprint: print, lastmod: was === undefined ? firstSeen(item.url, today) : today };
+        const lastmod = was === undefined ? firstSeen(item.url, today) : today;
+        const page = was?.fingerprint === print ? was : { fingerprint: print, lastmod };
         pages[path] = page;
         item.lastmod = page.lastmod;
       }
       const sorted = Object.fromEntries(Object.entries(pages).sort(([a], [b]) => a.localeCompare(b)));
-      const text = `${JSON.stringify(sorted, null, 2)}\n`;
-      if (!existsSync(pagesFile) || readFileSync(pagesFile, "utf8") !== text) {
-        writeFileSync(pagesFile, text);
-      }
+      writeFileSync(join(here, "dist", pagesName), `${JSON.stringify(sorted, null, 2)}\n`);
       return items;
     },
   },
