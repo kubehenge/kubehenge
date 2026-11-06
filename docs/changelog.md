@@ -9,7 +9,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
 - The installer stops when the cluster has an appliance already. `--upgrade` and `--certificate` on the wrong node name the node that runs the container.
 - The installer asks about the Proxmox VE interface entry on the same terminal as its other questions, also when piped into `sh`.
-- A dropped session or an interrupt now removes the half-made container and the temporary files.
+- A dropped session or an interrupt now removes the half-made container and the temporary files. That includes a container cut off while `pct create` runs, and the disks it had allocated.
+- A `--ctid` another guest has is refused at once.
 - The installer stops early, in plain words, without quorum, with a resolver that names only loopback servers, or with too little room for the downloads.
 - A failed download gives curl's exit code and the HTTP status.
 - An option without its value reports `<option> needs a value`. A storage name is matched as written.

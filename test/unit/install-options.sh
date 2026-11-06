@@ -50,14 +50,20 @@ cat > "${bin}/pvecm" << EOF
 #!/bin/sh
 cat "${root}/quorum" 2> /dev/null || exit 1
 EOF
-# pvesh answers from files: resources, network, vnets.
+# pvesh answers from files: resources, network, vnets, and taken, the ids guests have.
 cat > "${bin}/pvesh" << EOF
 #!/bin/sh
 case "\$2" in
     /cluster/resources) cat "${root}/resources" ;;
     /nodes/*/network) cat "${root}/network" ;;
     /cluster/sdn/vnets) cat "${root}/vnets" 2> /dev/null || exit 1 ;;
-    /cluster/nextid) echo 100 ;;
+    /cluster/nextid)
+        if [ "\${3:-}" = --vmid ] && grep -qx "\$4" "${root}/taken" 2> /dev/null; then
+            echo "VM \$4 already exists" >&2
+            exit 1
+        fi
+        echo 100
+        ;;
     *) exit 1 ;;
 esac
 EOF
@@ -114,6 +120,15 @@ printf 'Quorate:          Yes\n' > "${root}/quorum"
     says "no bridge to default to" "no bridge carries this node's default route and there is no vmbr0. Name one of none with --bridge" ${release}
     printf '[{"iface":"vmbr0","type":"bridge"}]\n' > "${root}/network"
 }
+
+# An id another guest has, which the cleanup after a failure would otherwise remove.
+printf '107\n' > "${root}/taken"
+# shellcheck disable=SC2086 # $release is several words.
+{
+    says "a --ctid another guest has" "--ctid 107 is taken by another guest. Name a free id, or leave --ctid out" --ctid 107 ${release}
+    does_not_say "a free --ctid" "is taken" --ctid 108 ${release}
+}
+rm "${root}/taken"
 
 # An appliance that exists already, anywhere in the cluster.
 printf '[{"type":"lxc","vmid":105,"node":"pve2","tags":"kubehenge","name":"kubehenge"}]\n' > "${root}/resources"

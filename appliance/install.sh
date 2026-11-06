@@ -1010,6 +1010,31 @@ check_container_api_port() {
     fi
 }
 
+# id_free <id>: whether no guest in the cluster has the id.
+id_free() {
+    pvesh get /cluster/nextid --vmid "$1" > /dev/null 2>&1
+}
+
+# cleanup removes what a failed install made, so running it again starts clean. created is set
+# before pct create, so a container whose creation was cut off goes too, locked as pct left it,
+# with any disk it had allocated and not yet named in its config.
+cleanup() {
+    status=$?
+    if [ "${status}" -ne 0 ] && [ -n "${created}" ]; then
+        # The service's log goes with the container, so it is shown before the container is removed.
+        if [ -n "${started}" ]; then
+            echo "kubehenge: the service's log:" >&2
+            pct exec "${ctid}" -- journalctl -u kubehenge --no-pager -n 60 >&2 2> /dev/null || true
+        fi
+        echo "kubehenge: removing container ${ctid} after the failure" >&2
+        pct unlock "${ctid}" > /dev/null 2>&1 || true
+        pct stop "${ctid}" > /dev/null 2>&1 || true
+        pct destroy "${ctid}" --purge --destroy-unreferenced-disks 1 > /dev/null 2>&1 || true
+    fi
+    [ -z "${partial}" ] || rm -f "${partial}"
+    rm -rf "${work}"
+}
+
 # The tests source this file for its functions alone.
 [ -z "${KUBEHENGE_INSTALL_FUNCTIONS:-}" ] || return 0
 
@@ -1229,7 +1254,12 @@ else
     if [ -z "${dns}" ] && loopback_resolver_only; then
         fail "${resolv_conf} names only name servers on this node's loopback, which the container cannot reach. Give the name servers it asks with --dns, such as 192.0.2.53,192.0.2.54"
     fi
-    [ -n "${ctid}" ] || ctid=$(pvesh get /cluster/nextid)
+    if [ -z "${ctid}" ]; then
+        ctid=$(pvesh get /cluster/nextid)
+    else
+        # shellcheck disable=SC2310 # id_free is a predicate; its status is the answer.
+        id_free "${ctid}" || fail "--ctid ${ctid} is taken by another guest. Name a free id, or leave --ctid out"
+    fi
     # Asked before the long steps rather than during them.
     if [ -z "${storage}" ]; then
         storage=$(choose_storage rootdir "the appliance's disks" --storage "${disks_kib}")
@@ -1260,22 +1290,6 @@ work=$(mktemp -d)
 created=''
 started=''
 partial=''
-# A failed install leaves no half-made container behind, so running it again starts clean.
-cleanup() {
-    status=$?
-    if [ "${status}" -ne 0 ] && [ -n "${created}" ]; then
-        # The service's log goes with the container, so it is shown before the container is removed.
-        if [ -n "${started}" ]; then
-            echo "kubehenge: the service's log:" >&2
-            pct exec "${ctid}" -- journalctl -u kubehenge --no-pager -n 60 >&2 2> /dev/null || true
-        fi
-        echo "kubehenge: removing container ${ctid} after the failure" >&2
-        pct stop "${ctid}" > /dev/null 2>&1 || true
-        pct destroy "${ctid}" --purge > /dev/null 2>&1 || true
-    fi
-    [ -z "${partial}" ] || rm -f "${partial}"
-    rm -rf "${work}"
-}
 install_traps cleanup
 need_space "${work}" "${work_kib}" "the downloaded archives and what they unpack to" "Free space there, or set TMPDIR to a directory on a larger file system."
 
@@ -1456,13 +1470,15 @@ fi
 step "creating container ${ctid} on ${node}"
 # Without --nameserver the container is given this node's name servers.
 nameservers=$(printf '%s' "${dns}" | tr , ' ')
+# shellcheck disable=SC2310 # id_free is a predicate; its status is the answer.
+id_free "${ctid}" || fail "id ${ctid} was taken by another guest while the installer ran. Run it again, or name a free id with --ctid"
+created=1
 pct create "${ctid}" "${template_storage}:vztmpl/${TEMPLATE}" \
     --hostname "${hostname}" --cores 2 --memory 1024 --swap 512 \
     --rootfs "${storage}:8" --mp0 "${storage}:1,mp=${key_dir},backup=0" \
     --net0 "${net}" ${dns:+--nameserver "${nameservers}"} \
     --unprivileged 1 --features nesting=1 --onboot 1 \
     --tags kubehenge --description "Kubehenge's appliance: its web interface and the management cluster's state. Include it in backups."
-created=1
 pct start "${ctid}"
 for _ in $(seq 1 60); do
     # shellcheck disable=SC2310 # the container may not answer yet; an empty address is tried again.
