@@ -10,12 +10,6 @@ mock_provider "proxmox" {
       id = "local:import/talos-v1.14.4-ce4c980550dd-nocloud-amd64.qcow2"
     }
   }
-  # What Proxmox VE assigns a VM whose configuration sets no MAC address.
-  mock_resource "proxmox_virtual_environment_vm" {
-    defaults = {
-      mac_addresses = ["BC:24:11:AA:BB:CC"]
-    }
-  }
 }
 
 mock_provider "talos" {
@@ -1498,16 +1492,23 @@ run "every_helm_release_that_waits_has_a_long_timeout" {
   }
 }
 
-run "the_link_alias_selects_the_mac_proxmox_ve_assigned" {
+# The virtual IP sits on the link this alias selects. The guest agent's MAC list starts with the
+# loopback, and an alias on it left the API address unreachable.
+run "the_link_alias_selects_the_one_virtio_nic" {
   command = apply
 
   assert {
     condition = alltrue([
       for i in [0, 1, 2] : anytrue([
         for d in split("---\n", data.talos_machine_configuration.node[i].config_patches[1]) :
-        try(yamldecode(d).kind == "LinkAliasConfig" && yamldecode(d).selector.match == "mac(link.permanent_addr) == \"bc:24:11:aa:bb:cc\"", false)
+        try(yamldecode(d).kind == "LinkAliasConfig" && yamldecode(d).selector.match == "link.driver == \"virtio_net\"", false)
       ])
     ])
-    error_message = "each node's link alias must select the MAC its VM has, lower case, since the module sets none"
+    error_message = "each node's link alias must select its NIC by the virtio driver"
+  }
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : length(vm.network_device) == 1 && vm.network_device[0].model == "virtio"])
+    error_message = "the alias matches exactly one link only while each node has one virtio NIC"
   }
 }

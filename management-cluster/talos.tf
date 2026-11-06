@@ -127,7 +127,10 @@ data "talos_machine_configuration" "node" {
         apiVersion = "v1alpha1"
         kind       = "LinkAliasConfig"
         name       = "lan"
-        selector   = { match = "mac(link.permanent_addr) == \"${lower(proxmox_virtual_environment_vm.node[count.index].mac_addresses[0])}\"" }
+        # The node's one NIC, by its driver, as Talos's own QEMU provisioner selects it. A fixed
+        # alias must match exactly one link. The VM's mac_addresses come from the guest agent and
+        # start with the loopback's, so they cannot name it.
+        selector = { match = "link.driver == \"virtio_net\"" }
       }),
       yamlencode({
         apiVersion = "v1alpha1"
