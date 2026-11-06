@@ -3,12 +3,12 @@ import { useEffect, useState, type JSX } from "react";
 import { api } from "./api";
 import { poolText } from "./Autoscaling";
 import { machineMinimums, memoryStepMiB } from "./create-form";
-import { MachineFields } from "./MachineFields";
+import { MachineFields, sizeOf } from "./MachineFields";
 import { whole } from "./network";
+import { TimeoutsDialog } from "./PoolTimeouts";
 import { useStaging } from "./staging-context";
 import type { Cluster, ClusterClass, MachineSize, WorkerPool } from "./types";
 import { Dialog, ErrorBox, Field, RowMenu, maxWorkers, shownNumber, typedNumber, useChange } from "./ui";
-import { quantity, record } from "./values";
 
 // As the API server holds them: a DNS label, and host names of <cluster>-<pool>-<three random
 // parts> within one.
@@ -18,17 +18,6 @@ const maxPoolNames = 44;
 const mibPerGiB = 1024;
 
 const memoryText = (mib: number): string => (mib % mibPerGiB === 0 ? `${mib / mibPerGiB} GiB` : `${mib} MiB`);
-
-/** sizeOf reads a machine variable's value, or undefined where it holds none. */
-function sizeOf(v: unknown): MachineSize | undefined {
-  const r = record(v);
-  const cores = quantity(r["cores"]);
-  const memoryMiB = quantity(r["memoryMiB"]);
-  const diskGiB = quantity(r["diskGiB"]);
-  return cores === undefined || memoryMiB === undefined || diskGiB === undefined
-    ? undefined
-    : { cores, memoryMiB, diskGiB };
-}
 
 /** poolSize is a pool's machine size: its own, or the cluster's for its workers. */
 export const poolSize = (c: Cluster, p: WorkerPool): MachineSize | undefined =>
@@ -76,7 +65,11 @@ function useClass(name: string): ClusterClass | undefined {
   return cls;
 }
 
-type PoolAction = { kind: "add" } | { kind: "resize"; pool?: WorkerPool } | { kind: "delete"; pool: WorkerPool };
+type PoolAction =
+  | { kind: "add" }
+  | { kind: "resize"; pool?: WorkerPool }
+  | { kind: "timeouts"; pool?: WorkerPool }
+  | { kind: "delete"; pool: WorkerPool };
 
 function SizeCells({ size }: { size: MachineSize | undefined }): JSX.Element {
   return (
@@ -142,6 +135,15 @@ export function Pools({
                 >
                   Resize…
                 </button>
+                <button
+                  type="button"
+                  disabled={!can}
+                  title={why}
+                  aria-label="Control-plane timeouts"
+                  onClick={() => setAction({ kind: "timeouts" })}
+                >
+                  Timeouts…
+                </button>
               </RowMenu>
             </td>
           </tr>
@@ -163,6 +165,15 @@ export function Pools({
                   </button>
                   <button
                     type="button"
+                    disabled={!can}
+                    title={why}
+                    aria-label={`Timeouts of pool ${p.name}`}
+                    onClick={() => setAction({ kind: "timeouts", pool: p })}
+                  >
+                    Timeouts…
+                  </button>
+                  <button
+                    type="button"
                     className="danger"
                     disabled={!can}
                     title={why}
@@ -179,9 +190,22 @@ export function Pools({
       </table>
       {action?.kind === "add" && <AddPoolDialog cluster={c} onClose={close} />}
       {action?.kind === "resize" && <ResizeDialog cluster={c} pool={action.pool} onClose={close} />}
+      {action?.kind === "timeouts" && <TimeoutsAction cluster={c} pool={action.pool} onClose={close} />}
       {action?.kind === "delete" && <DeletePoolDialog cluster={c} pool={action.pool} onClose={close} />}
     </section>
   );
+}
+
+function TimeoutsAction({
+  cluster: c,
+  pool,
+  onClose,
+}: {
+  cluster: Cluster;
+  pool: WorkerPool | undefined;
+  onClose: () => void;
+}): JSX.Element {
+  return <TimeoutsDialog cluster={c} pool={pool} cls={useClass(c.class)} onClose={onClose} />;
 }
 
 const fallbackSize: MachineSize = { cores: 2, memoryMiB: 4096, diskGiB: 30 };

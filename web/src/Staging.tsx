@@ -5,6 +5,7 @@ import { autoscalerText } from "./Autoscaling";
 import { backupsRows } from "./Backups";
 import { everything, optionRows, type OptionRow } from "./ClusterOptions";
 import { etcdSnapshotsRows } from "./EtcdSnapshots";
+import { timeoutsSet, timeoutsText } from "./NodeTimeouts";
 import { StagingContext, useStaging, type Staging } from "./staging-context";
 import type { ChangeRequest, Cluster, Effect, PlannedChange } from "./types";
 import { Dialog, ErrorBox, errorMessage } from "./ui";
@@ -42,6 +43,10 @@ export function merged(a: ChangeRequest, b: ChangeRequest): ChangeRequest {
   }
   if (a.pools !== undefined || b.pools !== undefined) {
     out.pools = mergedPools(a.pools ?? {}, b.pools ?? {});
+  }
+  const timeouts = b.controlPlaneTimeouts ?? a.controlPlaneTimeouts;
+  if (timeouts !== undefined) {
+    out.controlPlaneTimeouts = timeouts;
   }
   if (a.variables !== undefined || b.variables !== undefined) {
     out.variables = { ...a.variables, ...b.variables };
@@ -118,7 +123,8 @@ const settingLabels: Record<string, string[]> = {
   version: ["Kubernetes version"],
   controlPlaneReplicas: ["Control plane"],
   workerPools: ["Workers"],
-  pools: ["Worker pools"],
+  pools: ["Worker pools", "Node timeouts"],
+  controlPlaneTimeouts: ["Node timeouts"],
   controlPlaneMachine: ["Control-plane size"],
   workerMachine: ["Worker size"],
   autoscaling: ["Autoscaling"],
@@ -182,6 +188,14 @@ function autoscalingText(c: Cluster): string {
   return scaled.length === 0 ? "Off" : scaled.join(", ");
 }
 
+function nodeTimeoutsText(c: Cluster): string {
+  const own = [
+    { name: "control plane", timeouts: c.controlPlaneTimeouts ?? {} },
+    ...c.workerPools.map((p) => ({ name: p.name, timeouts: p.timeouts ?? {} })),
+  ].filter((x) => timeoutsSet(x.timeouts));
+  return own.length === 0 ? "Class" : own.map((x) => `${x.name} ${timeoutsText(x.timeouts)}`).join("; ");
+}
+
 // settingRows are every setting of a cluster a change can set, as the page shows them.
 function settingRows(c: Cluster): Setting[] {
   return [
@@ -189,6 +203,7 @@ function settingRows(c: Cluster): Setting[] {
     { label: "Control plane", value: String(c.controlPlane.desired) },
     { label: "Workers", value: workersText(c) },
     { label: "Autoscaling", value: autoscalingText(c) },
+    { label: "Node timeouts", value: nodeTimeoutsText(c) },
     ...optionRows<string>(c, everything, [
       ...backupsRows(c, true),
       ...etcdSnapshotsRows(c, true),

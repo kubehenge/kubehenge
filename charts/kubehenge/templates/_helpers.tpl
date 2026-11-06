@@ -1544,6 +1544,23 @@ remediation:
 {{- end -}}
 
 {{/*
+How long a removed machine waits for its node before the deletion goes on without it. Unset, Cluster
+API waits for ever on a disruption budget or a volume that will not detach, and a rollout, a node
+image refresh or a replacement stops there. A cluster overrides each in its topology.
+- Drain: 15 minutes lets pods finish their termination grace period behind a budget. The pods left
+  are deleted with the machine.
+- Volume detach: 10 minutes outlasts the backup or snapshot lock a VM can hold. The CSI detach
+  fails while it lasts. Cluster API's k3s sample uses 5 minutes.
+- Node deletion: 1 minute for a slow API server. Cluster API's own default is 10 seconds and the
+  k3s sample's 30.
+*/}}
+{{- define "kubehenge.machineDeletion" -}}
+nodeDrainTimeoutSeconds: 900
+nodeVolumeDetachTimeoutSeconds: 600
+nodeDeletionTimeoutSeconds: 60
+{{- end -}}
+
+{{/*
 k3s and RKE2 servers register with kubeadm's control-plane taint, so a new server takes no
 workloads before the controller has looked at it; the controller takes the taint off while a
 cluster has no workers.

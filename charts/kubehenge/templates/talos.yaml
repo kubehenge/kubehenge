@@ -84,6 +84,8 @@ spec:
       template: {{ "{{ .cluster.name }}-control-plane-{{ .random }}" | quote }}
     healthCheck:
       {{- include "kubehenge.healthCheck" "controlPlane" | nindent 6 }}
+    deletion:
+      {{- include "kubehenge.machineDeletion" . | nindent 6 }}
   workers:
     machineDeployments:
       - class: worker
@@ -101,6 +103,8 @@ spec:
             name: {{ $machineName }}
         healthCheck:
           {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
+        deletion:
+          {{- include "kubehenge.machineDeletion" . | nindent 10 }}
   variables:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 1024 "clusters" .Values.clusters "sysAudit" (not (empty .Values.proxmox.sysAuditGroup))) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}

@@ -34,6 +34,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The setup warns of VMs sharing nodes and of an API address that is one node's. It also warns of pod or service ranges that overlap a node's networks, and shows the ranges chosen.
 - The management cluster's health shows when the controller cannot reach the Proxmox VE API from inside the cluster.
 - An answer from Proxmox VE larger than 1 MiB fails with an error naming the path.
+- A removed machine waits at most 15 minutes for its node to drain and 10 for its volumes to detach. A disruption budget or a stuck detach no longer holds a rollout for ever. `kubehenge cluster timeouts`, the interface and the Cluster change them.
 
 ## [0.4.2] - 2026-11-05
 

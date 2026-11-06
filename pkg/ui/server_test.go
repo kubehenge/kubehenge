@@ -407,23 +407,27 @@ func rke2Class() *clusterv1.ClusterClass {
 		Namespace: "kubehenge-system", Name: "kubehenge-rke2", Annotations: map[string]string{
 			"kubehenge.dev/default-pods": "10.42.0.0/16", "kubehenge.dev/default-services": "10.43.0.0/16",
 		},
-		Spec: clusterv1.ClusterClassSpec{Variables: []clusterv1.ClusterClassVariable{
-			{Name: "controlPlaneEndpoint", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string", Format: "ipv4"})},
-			{Name: "network", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "storage", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string"})},
-			{Name: "headlamp", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "rancher", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "csi", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "ccm", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "certificates", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "gitops", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "nodeOS", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object", Default: &apiextensionsv1.JSON{
-				Raw: []byte(`{"family":"almalinux","release":"10"}`),
-			}})},
-			{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
-				Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
-			}})},
-		}},
+		Spec: clusterv1.ClusterClassSpec{
+			ControlPlane: clusterv1.ControlPlaneClass{Deletion: clusterv1.ControlPlaneClassMachineDeletionSpec{NodeDrainTimeoutSeconds: new(int32(900))}},
+			Workers: clusterv1.WorkersClass{MachineDeployments: []clusterv1.MachineDeploymentClass{{
+				Class: "worker", Deletion: clusterv1.MachineDeploymentClassMachineDeletionSpec{NodeVolumeDetachTimeoutSeconds: new(int32(600))},
+			}}}, Variables: []clusterv1.ClusterClassVariable{
+				{Name: "controlPlaneEndpoint", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string", Format: "ipv4"})},
+				{Name: "network", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "storage", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string"})},
+				{Name: "headlamp", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "rancher", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "csi", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "ccm", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "certificates", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "gitops", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "nodeOS", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object", Default: &apiextensionsv1.JSON{
+					Raw: []byte(`{"family":"almalinux","release":"10"}`),
+				}})},
+				{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
+					Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
+				}})},
+			}},
 	}
 }
 

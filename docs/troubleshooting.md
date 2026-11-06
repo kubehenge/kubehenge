@@ -549,7 +549,8 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.metadata.annotations.ku
 ```
 
 - **Hook BeforeClusterDelete:** a cluster registered with Rancher leaves it first, while its VMs still run. The reason is Rancher's.
-- **Machine … Drain not completed:** a node's pods are being evicted, and a PodDisruptionBudget, or a pod that does not stop, holds that up. Delete the pod in the cluster, or abandon the deletion.
+- **Machine … Drain not completed:** a PodDisruptionBudget, or a pod that does not stop, holds up the eviction. The drain timeout ends the wait after 15 minutes by default ([upgrading.md](upgrading.md#what-holds-an-upgrade-back)). With 0 it never ends: delete the pod, set a timeout, or abandon the deletion.
+- **Machine … Waiting for Node volumes to be detached:** the volume detach timeout bounds this the same way, 10 minutes by default.
 - **ProxmoxMachine … (a VM on an offline node):** capmox cannot delete the VM. Bring the node back.
 - **Cluster … removing the Proxmox VE objects:** Kubehenge's controller waits while an offline Proxmox VE node may hold some of the cluster's volumes on local storage. It also waits while Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
 

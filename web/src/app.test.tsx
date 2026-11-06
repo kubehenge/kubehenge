@@ -728,6 +728,8 @@ describe("create", () => {
     workerReplicas: 2,
     workerAutoscale: false,
     workerMax: 3,
+    controlPlaneTimeouts: { drain: "", detach: "", deletion: "" },
+    workerTimeouts: { drain: "", detach: "", deletion: "" },
     endpoint: "10.0.0.20",
     bridge: "vmbr0",
     vlan: "",
@@ -1044,6 +1046,25 @@ describe("create", () => {
     expect(Object.fromEntries(summary(form, talos))["Automatic upgrades"]).toBe(
       `Talos patch releases, daily 02:00 for 4 h ${zone}`,
     );
+  });
+
+  it("sends the node timeouts it is given and refuses one out of range", () => {
+    expect(request(form, rke2)).not.toHaveProperty("controlPlaneTimeouts");
+    expect(request(form, rke2)).not.toHaveProperty("workerTimeouts");
+    const timed = {
+      ...form,
+      controlPlaneTimeouts: { drain: "30", detach: "", deletion: "" },
+      workerTimeouts: { drain: "", detach: "7.5", deletion: "0" },
+    };
+    expect(request(timed, rke2)).toMatchObject({
+      controlPlaneTimeouts: { nodeDrainTimeoutSeconds: 1800 },
+      workerTimeouts: { nodeVolumeDetachTimeoutSeconds: 450, nodeDeletionTimeoutSeconds: 0 },
+    });
+    expect(problems("General", timed, rke2)).toStrictEqual([]);
+    const bad = { ...form, workerTimeouts: { drain: "-1", detach: "", deletion: "" } };
+    expect(fieldProblems("General", bad, rke2)).toStrictEqual({ timeouts: "Check the node timeouts" });
+    const late = { ...form, controlPlaneTimeouts: { drain: "", detach: "1441", deletion: "" } };
+    expect(fieldProblems("General", late, rke2)).toStrictEqual({ timeouts: "Check the node timeouts" });
   });
 
   it("autoscales the workers between the fewest and the most", () => {
