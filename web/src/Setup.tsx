@@ -4,7 +4,20 @@ import { api, bridgesOf, dnsOf } from "./api";
 import { backupKeys } from "./Backups";
 import { BackupTargets, cleanTargets, targetProblems, targetSummary } from "./BackupTargets";
 import { CredentialField } from "./CredentialField";
-import { cidr, isIP, isVLAN, list, maskOf, networkOf, pointToPoint, rangeProblem, sameNetwork, toInt } from "./network";
+import {
+  bridgeLabel,
+  bridgeRef,
+  cidr,
+  isIP,
+  isVLAN,
+  list,
+  maskOf,
+  networkOf,
+  pointToPoint,
+  rangeProblem,
+  sameNetwork,
+  toInt,
+} from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
 import type {
   BackupTarget,
@@ -1001,6 +1014,8 @@ function FieldError({ message }: { message: string | undefined }): JSX.Element |
 
 interface Offered {
   name: string;
+  /** What the choice reads as, where that is not its name. */
+  label?: string;
   note: string;
 }
 
@@ -1042,7 +1057,7 @@ function WorkloadChoices({
       </fieldset>
       <fieldset className="choices">
         <legend>Bridges</legend>
-        {bridges.map(({ name, note }, i) => (
+        {bridges.map(({ name, label, note }, i) => (
           <label key={name} className="check">
             <input
               type="checkbox"
@@ -1050,7 +1065,7 @@ function WorkloadChoices({
               checked={form.workloadBridges.includes(name)}
               onChange={(e) => onToggle("workloadBridges", name, e.target.checked)}
             />{" "}
-            {name}
+            {label ?? name}
             {note && (
               <span className="muted" id={`${ids}-bridge-${i}`} aria-hidden="true">
                 ({note})
@@ -1828,8 +1843,8 @@ function withDefaults(
     unique(all.filter((s) => s.content.includes(c)).map((s) => s.storage)).filter((name) =>
       form.nodes.every((n) => all.some((s) => s.node === n && s.storage === name && s.content.includes(c))),
     );
-  const bridges = unique(Object.values(found.bridgesByNode).flatMap((b) => b.map((x) => x.bridge))).filter((name) =>
-    form.nodes.every((n) => (found.bridgesByNode[n] ?? []).some((b) => b.bridge === name)),
+  const bridges = unique(Object.values(found.bridgesByNode).flatMap((b) => b.map((x) => bridgeRef(x)))).filter((ref) =>
+    form.nodes.every((n) => (found.bridgesByNode[n] ?? []).some((b) => bridgeRef(b) === ref)),
   );
   const bridgesKnown = form.nodes.every((n) => found.bridgesByNode[n] !== undefined);
   const fit = (value: string, choices: string[]): string =>
@@ -1837,12 +1852,13 @@ function withDefaults(
   const offers = { vmDisks: onEveryNode("images"), images: onEveryNode("import"), isos: onEveryNode("iso"), bridges };
 
   const [first = ""] = form.nodes;
-  const home = (found.bridgesByNode[first] ?? []).filter((b) => bridges.includes(b.bridge));
+  const home = (found.bridgesByNode[first] ?? []).filter((b) => bridges.includes(bridgeRef(b)));
   const vmDatastore = fixed
     ? fixed.vmDatastore
     : keepOffered(orElse(form.vmDatastore, preferredDisk(all, offers.vmDisks)), offers.vmDisks, known);
-  const bridge = keepOffered(orElse(form.bridge, uplink(home)?.bridge ?? ""), bridges, bridgesKnown);
-  const onBridge = home.find((b) => b.bridge === bridge);
+  const uplinkBridge = uplink(home);
+  const bridge = keepOffered(orElse(form.bridge, uplinkBridge ? bridgeRef(uplinkBridge) : ""), bridges, bridgesKnown);
+  const onBridge = home.find((b) => bridgeRef(b) === bridge);
   const detect = (k: "gateway" | "dnsServers", value: string): string =>
     form[k] === "" && !touched.has(k) ? value : form[k];
   const untouchedNone = (k: "workloadDatastores" | "workloadBridges", value: string): string[] =>
@@ -1890,14 +1906,17 @@ function clusterChoices(
   });
   const bridgesLoaded = Object.keys(found.bridgesByNode).length >= onlineNodes && onlineNodes > 0;
   const clusterBridges = unique([
-    ...Object.values(found.bridgesByNode).flatMap((b) => b.map((x) => x.bridge)),
+    ...Object.values(found.bridgesByNode).flatMap((b) => b.map((x) => bridgeRef(x))),
     ...(bridgesLoaded ? form.workloadBridges : []),
   ]).map((name) => {
     const on = Object.entries(found.bridgesByNode)
-      .filter(([, b]) => b.some((x) => x.bridge === name))
+      .filter(([, b]) => b.some((x) => bridgeRef(x) === name))
       .map(([n]) => n)
       .toSorted();
-    return { name, note: choiceNote(on, false, onlineNodes) };
+    const listed = Object.values(found.bridgesByNode)
+      .flat()
+      .find((x) => bridgeRef(x) === name);
+    return { name, label: listed ? bridgeLabel(listed) : name, note: choiceNote(on, false, onlineNodes) };
   });
   return { clusterStorages, clusterBridges };
 }
@@ -1998,7 +2017,7 @@ function setupFields({
               </option>
               {more.offers.bridges.map((b) => (
                 <option key={b} value={b}>
-                  {b}
+                  {more.clusterBridges.find((c) => c.name === b)?.label ?? b}
                 </option>
               ))}
             </select>

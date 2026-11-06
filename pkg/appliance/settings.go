@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -216,6 +217,9 @@ const (
 	maxVLAN = 4094
 )
 
+// bridgeRef is a node's bridge by name, or a VNet as zone/vnet.
+var bridgeRef = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
 // plainHTTPS tells whether s is an https:// URL with a host and without query, fragment or user.
 func plainHTTPS(s string) bool {
 	u, err := url.Parse(s)
@@ -388,7 +392,7 @@ func (s *Settings) checkPlacement(p *problems) {
 			p.addf("%s: choose a storage", f.label)
 		}
 	}
-	if strings.TrimSpace(s.Bridge) == "" {
+	if !bridgeRef.MatchString(s.Bridge) {
 		p.addf("Bridge: choose one")
 	}
 	if s.VLAN != nil && (*s.VLAN < minVLAN || *s.VLAN > maxVLAN) {
@@ -450,6 +454,11 @@ func (s *Settings) checkServers(p *problems) {
 	}
 	if len(s.WorkloadDatastores) == 0 || len(s.WorkloadBridges) == 0 {
 		p.addf("What clusters may use: at least one storage and one bridge")
+	}
+	for _, b := range s.WorkloadBridges {
+		if !bridgeRef.MatchString(b) {
+			p.addf("What clusters may use: %q is no bridge, write a VNet as zone/vnet", b)
+		}
 	}
 }
 

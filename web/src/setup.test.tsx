@@ -427,6 +427,55 @@ describe("setup", () => {
     });
   });
 
+  it("lists VNets with their alias and zone and sends the one chosen as zone/vnet", async () => {
+    const job = { user: "root@pam", started: new Date().toISOString(), state: "running", log: ["Applying"] };
+    const routes: Record<string, Route> = {
+      ...administrator,
+      ...oneNode,
+      "GET /api/proxmox/nodes/pve1/bridges": {
+        body: [
+          { bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true, cidr: "192.0.2.5/24", gateway: "192.0.2.1" },
+          { bridge: "web", node: "pve1", vlanAware: false, usable: true, zone: "evpn1", alias: "Web tier" },
+        ],
+      },
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "POST /api/setup": () => {
+        routes["GET /api/setup"] = { body: { appliance: true, ready: false, allowed: true, job } };
+        return { status: 202, body: job };
+      },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    const bridge = screen.getByLabelText("Bridge");
+    await waitFor(() =>
+      expect(within(bridge).getByRole("option", { name: "web (Web tier), zone evpn1" })).toBeInTheDocument(),
+    );
+    await user.selectOptions(bridge, "evpn1/web");
+    await user.clear(screen.getByLabelText("Gateway"));
+    await user.type(screen.getByLabelText("Gateway"), "192.0.2.1");
+    await user.type(screen.getByLabelText("Node addresses"), "192.0.2.11/24");
+    await user.type(screen.getByLabelText("API address"), "192.0.2.10");
+    await next(user);
+
+    // The management cluster's own bridge is the one clusters are offered to start with.
+    expect(forClusters("Bridges").getByRole("checkbox", { name: "web (Web tier), zone evpn1" })).toBeChecked();
+    expect(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" })).not.toBeChecked();
+    await next(user);
+    await next(user);
+    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
+    await user.click(screen.getByRole("button", { name: "Create management cluster" }));
+
+    await screen.findByText("Now: Applying");
+    expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
+      settings: { bridge: "evpn1/web", workloadBridges: ["evpn1/web"] },
+    });
+  });
+
   it("offers the management cluster only what every chosen node has, and clusters what any node has", async () => {
     fakeServer({
       ...administrator,

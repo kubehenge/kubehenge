@@ -20,6 +20,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
 - A container that gets no DHCP address now names `--vlan` and the DHCP server.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
+- SDN VNets work wherever a bridge is chosen, listed with their zone and alias, and `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone. A VLAN tag on a VNet of a VLAN zone is refused.
 
 ## [0.4.2] - 2026-11-05
 

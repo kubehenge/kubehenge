@@ -288,7 +288,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err != nil {
 		return err
 	}
-	ctrl.SetLogger(logger)
+	setControllerLogger(logger)
 	scheme, err := controllerScheme()
 	if err != nil {
 		return err

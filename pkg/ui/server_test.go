@@ -209,7 +209,12 @@ func (f *fakeAccounts) ReleaseHA(_ context.Context, t *pve.Ticket, prefix string
 }
 
 func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
-	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.0.0.5/24", Gateway: "10.0.0.1"}, {Bridge: "vmbr1", Node: node}}, nil
+	return []pve.Bridge{
+		{Bridge: "vmbr0", Node: node, CIDR: "10.0.0.5/24", Gateway: "10.0.0.1"},
+		{Bridge: "vmbr1", Node: node},
+		{Bridge: "corp", Node: node, Zone: "vlanz", ZoneType: "vlan", Alias: "Corporate"},
+		{Bridge: "tenants", Node: node, Zone: "evpn", ZoneType: "evpn"},
+	}, nil
 }
 
 func (*fakeAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
@@ -278,12 +283,16 @@ func (f *fakeAccounts) BackupCovers(_ context.Context, _ *pve.Ticket, vmid int) 
 	return vmid == 150, nil
 }
 
-// Zone knows one SDN VNet, tenants, in zone evpn. Everything else is a plain bridge.
-func (*fakeAccounts) Zone(_ context.Context, _ *pve.Ticket, bridge string) (string, error) {
-	if bridge == "tenants" {
-		return "evpn", nil
+// Network knows two SDN VNets: tenants in the evpn zone and corp in the VLAN zone vlanz.
+// Everything else is a plain bridge.
+func (*fakeAccounts) Network(_ context.Context, _ *pve.Ticket, bridge string) (pve.Network, error) {
+	switch bridge {
+	case "tenants":
+		return pve.Network{Zone: "evpn", ZoneType: "evpn"}, nil
+	case "corp":
+		return pve.Network{Zone: "vlanz", ZoneType: "vlan"}, nil
 	}
-	return "localnetwork", nil
+	return pve.Network{Zone: pve.LocalZone}, nil
 }
 
 func (f *fakeAccounts) effective(username, aclPath string) pve.Privileges {
@@ -340,6 +349,7 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 				"/sdn/zones/localnetwork/vmbr0":    {"SDN.Use"},
 				"/sdn/zones/localnetwork/vmbr1/10": {"SDN.Use"},
 				"/sdn/zones/localnetwork/tenants":  {"SDN.Use"},
+				"/sdn/zones/vlanz/corp":            {"SDN.Use"},
 				"/pool/kubehenge/default.one":      {"Sys.Modify"},
 				"/pool/kubehenge-management":       {"VM.Audit"},
 			},
@@ -931,6 +941,22 @@ func TestCreateChecksProxmoxPrivileges(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A VLAN zone's VNet tags its traffic, so a tag on the cluster's devices would be a second one.
+func TestCreateRefusesAVLANOnAVLANZone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	b := h.browser()
+	b.signIn("dev@pve")
+	rec := b.do("POST", "/api/clusters", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"corp","vlan":30`, 1))
+	expect(t, rec, http.StatusUnprocessableEntity)
+	if !strings.Contains(rec.Body.String(), "VNet corp is in a VLAN zone and tags already") {
+		t.Errorf("answer = %s", rec.Body)
+	}
+	// Untagged, the same VNet is created, on the grant in its own zone.
+	untagged := strings.Replace(strings.Replace(createBody, `"web"`, `"corp-web"`, 1), `"bridge":"vmbr0"`, `"bridge":"corp"`, 1)
+	expect(t, b.do("POST", "/api/clusters", untagged), http.StatusCreated)
 }
 
 // The interface passes the ranges asked for as they are and leaves the others to the controller's
@@ -1554,8 +1580,12 @@ func TestProxmoxResources(t *testing.T) {
 	}
 	rec = b.do("GET", "/api/proxmox/nodes/pve1/bridges", "")
 	var bridges []bridgeView
-	if err := json.Unmarshal(rec.Body.Bytes(), &bridges); err != nil || len(bridges) != 2 || !bridges[0].Usable || bridges[1].Usable {
+	if err := json.Unmarshal(rec.Body.Bytes(), &bridges); err != nil || len(bridges) != 4 || !bridges[0].Usable || bridges[1].Usable {
 		t.Fatalf("bridges = %s", rec.Body)
+	}
+	// A VNet is usable by the grant on its own zone, never by one on localnetwork under its name.
+	if corp, tenants := bridges[2], bridges[3]; corp.Ref() != "vlanz/corp" || !corp.Usable || tenants.Ref() != "evpn/tenants" || tenants.Usable {
+		t.Fatalf("VNets = %s", rec.Body)
 	}
 	rec = b.do("GET", "/api/proxmox/nodes/pve1/dns", "")
 	expect(t, rec, http.StatusOK)

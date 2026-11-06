@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 
 import { upgradeTargets } from "./ClusterDetail";
 import { offeredBridges, offeredStorages, versionLabel } from "./create-form";
+import { bridgeLabel, bridgeRef } from "./network";
+
+describe("bridges and VNets", () => {
+  it("names a VNet by its zone and a node's bridge by itself", () => {
+    expect(bridgeRef({ bridge: "vmbr0" })).toBe("vmbr0");
+    expect(bridgeRef({ bridge: "web", zone: "evpn1" })).toBe("evpn1/web");
+  });
+
+  it("shows a VNet with its alias and zone, a node's bridge with its comment", () => {
+    expect(bridgeLabel({ bridge: "vmbr0", comment: "uplink" })).toBe("vmbr0 (uplink)");
+    expect(bridgeLabel({ bridge: "vmbr1" })).toBe("vmbr1");
+    expect(bridgeLabel({ bridge: "web", zone: "evpn1", alias: "Web tier" })).toBe("web (Web tier), zone evpn1");
+    expect(bridgeLabel({ bridge: "dmz", zone: "simplez" })).toBe("dmz, zone simplez");
+  });
+});
 
 const storage = (name: string, node: string, usable = true) => ({
   storage: name,

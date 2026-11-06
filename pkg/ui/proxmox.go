@@ -211,14 +211,14 @@ func (s *Server) bridges(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	views := make([]bridgeView, 0, len(bridges))
-	for _, b := range bridges {
-		// A node's own bridges are all in the local network zone.
-		privs, err := s.Accounts.Privileges(r.Context(), u.ticket, bridgePath("localnetwork", b.Bridge, ""))
+	for i := range bridges {
+		b := &bridges[i]
+		privs, err := s.Accounts.Privileges(r.Context(), u.ticket, bridgePath(b.InZone(), b.Bridge, ""))
 		if err != nil {
 			s.proxmoxError(w, r, err)
 			return
 		}
-		views = append(views, bridgeView{Bridge: b, Usable: privs.Has(privBridge)})
+		views = append(views, bridgeView{Bridge: *b, Usable: privs.Has(privBridge)})
 	}
 	writeJSON(w, http.StatusOK, views)
 }
