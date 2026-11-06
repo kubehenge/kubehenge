@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -138,13 +139,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	s.CertificateExpires = pair.Leaf.NotAfter
 	if o.a.Dir != "" {
-		s.ApplianceMACs, s.OwnAddresses = ownMACs(), ownAddresses
-		s.CertificateNames = pair.Leaf.DNSNames
-		for _, ip := range pair.Leaf.IPAddresses {
-			if addr, ok := netip.AddrFromSlice(ip); ok {
-				s.CertificateIPs = append(s.CertificateIPs, addr.Unmap())
-			}
-		}
+		knowOwnAddresses(s, pair.Leaf)
 	}
 	accounts, err := pve.NewAccounts(*conn)
 	if err != nil {
@@ -425,6 +420,18 @@ func listenPort(addr string) (int, error) {
 func applianceVMIDDefault() int {
 	id, _ := strconv.Atoi(os.Getenv("KUBEHENGE_APPLIANCE_VMID"))
 	return id
+}
+
+// knowOwnAddresses tells the interface the appliance's MAC and IP addresses and those its
+// certificate is for, by which it finds its guest in Proxmox VE and notices an address it lost.
+func knowOwnAddresses(s *ui.Server, cert *x509.Certificate) {
+	s.ApplianceMACs, s.OwnAddresses = ownMACs(), ownAddresses
+	s.CertificateNames = cert.DNSNames
+	for _, ip := range cert.IPAddresses {
+		if addr, ok := netip.AddrFromSlice(ip); ok {
+			s.CertificateIPs = append(s.CertificateIPs, addr.Unmap())
+		}
+	}
 }
 
 // ownAddresses are the addresses of this machine others may reach it at: neither loopback nor
