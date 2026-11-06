@@ -122,7 +122,8 @@ export function EgressFields({
         ))}
       </fieldset>
       {e.mode === "own" && (
-        <>
+        <fieldset className="group">
+          <legend>Own proxy</legend>
           <Field label="Proxy address" hint="Like http://proxy.example:3128" error={problems.url}>
             {(id) => (
               <input
@@ -144,7 +145,7 @@ export function EgressFields({
               />
             )}
           </Field>
-        </>
+        </fieldset>
       )}
     </>
   );
@@ -153,15 +154,38 @@ export function EgressFields({
 export function EgressDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
   const current = egressOf(c.variables["egressProxy"]);
   const [value, setValue] = useState(current);
+  // A problem shows once its field was edited or Save was pressed, as the wizard's fields do.
+  const [touched, setTouched] = useState<ReadonlySet<EgressField>>(new Set());
+  const [attempted, setAttempted] = useState(false);
   const { busy, error, send } = useChange(c, onClose);
-  const problems = egressProblems(value);
+  const found = egressProblems(value);
+  const problems = Object.fromEntries(
+    egressFields.filter((f) => attempted || touched.has(f)).map((f) => [f, found[f]]),
+  );
   const next = egressVariable(value);
   const changed = JSON.stringify(next) !== JSON.stringify(egressVariable(current));
+  const edit = (to: EgressChoice): void => {
+    setTouched((t) => {
+      const more = new Set(t);
+      if (to.url !== value.url) {
+        more.add("url");
+      }
+      if (to.noProxy !== value.noProxy) {
+        more.add("noProxy");
+      }
+      return more;
+    });
+    setValue(to);
+  };
   return (
     <Dialog
       title="Edit egress proxy"
       onClose={onClose}
       onSubmit={() => {
+        if (Object.keys(found).length > 0) {
+          setAttempted(true);
+          return;
+        }
         void send({ variables: { egressProxy: next ?? null } });
       }}
       actions={
@@ -169,13 +193,13 @@ export function EgressDialog({ cluster: c, onClose }: { cluster: Cluster; onClos
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={busy || !changed || Object.keys(problems).length > 0}>
+          <button type="submit" className="primary" disabled={busy || !changed}>
             Save
           </button>
         </>
       }
     >
-      <EgressFields value={value} onChange={setValue} problems={problems} />
+      <EgressFields value={value} onChange={edit} problems={problems} />
       <ErrorBox message={error} />
     </Dialog>
   );

@@ -185,10 +185,13 @@ describe("a cluster's egress proxy option", () => {
     const save = within(dialog).getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByRole("radio", { name: "Own proxy" }));
-    expect(save).toBeDisabled();
+    expect(within(dialog).queryByText(/without credentials or path/u)).not.toBeInTheDocument();
+    await user.click(save);
+    expect(within(dialog).getByText(/without credentials or path/u)).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText("Proxy address"), "http://alice:pw@proxy.example:3128");
     expect(within(dialog).getByText(/without credentials or path/u)).toBeInTheDocument();
-    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(calls.filter((c) => c.key === "PATCH /api/clusters/clusters/web")).toHaveLength(0);
     await user.clear(within(dialog).getByLabelText("Proxy address"));
     await user.type(within(dialog).getByLabelText("Proxy address"), "http://proxy.example:3128");
     await user.type(within(dialog).getByLabelText("Exceptions"), ".corp, 10.0.0.0/8");
