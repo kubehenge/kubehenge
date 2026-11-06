@@ -22,6 +22,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
 - SDN VNets work wherever a bridge is chosen, listed with their zone and alias, and `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone. A VLAN tag on a VNet of a VLAN zone is refused.
 - Privileges granted through a pool, or by an ACL without propagate, count as held. The interface had shown such storages, VNets and guests as out of reach.
+- A refusal from Proxmox VE reads "Proxmox VE refused:" with its own reason, such as "VM is locked (backup)". Only a lost connection, a timeout or a gateway error reads "did not answer".
+- A sign-in name over 64 characters, realm included, is refused at once with the limit. Proxmox VE answered it with an error that read like an outage.
+- A refused second factor says the factor may be locked, or for a recovery key that the cluster may lack quorum. Proxmox VE answers these like a wrong code, so each still counts against the sign-in limit.
+- The docs' example roles for cluster users hold `Pool.Audit`. A user without it is told so on the cluster page and on reboot, instead of "The machine has no VM in the cluster's pool".
 
 ## [0.4.2] - 2026-11-05
 
