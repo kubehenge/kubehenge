@@ -293,6 +293,30 @@ func (a *Appliance) LoadLast() {
 	}
 }
 
+// Stop refuses new jobs and interrupts the running ones with ErrServiceStopped, which lets
+// OpenTofu write its state. It waits until they have recorded their outcome, or ctx ends.
+func (a *Appliance) Stop(ctx context.Context) error {
+	a.mu.Lock()
+	a.stopping = true
+	var running []*Job
+	for _, j := range []*Job{a.job, a.templateJob} {
+		if j.running() && j.stop != nil {
+			j.stop(ErrServiceStopped)
+			running = append(running, j)
+		}
+	}
+	a.mu.Unlock()
+	for _, j := range running {
+		a.Log.Info("waiting for the run under way to end", "kind", j.Kind)
+		select {
+		case <-j.done:
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for the %s run to end: %w", j.Kind, ctx.Err())
+		}
+	}
+	return nil
+}
+
 // stateOutput reads one output of the encrypted state with the passphrase, outside any run.
 func (a *Appliance) stateOutput(ctx context.Context, passphrase, name string) (string, error) {
 	if err := ValidPassphrase(passphrase); err != nil {
@@ -329,30 +353,6 @@ func (a *Appliance) running() error {
 		return ErrBusy
 	case a.templateJob.running():
 		return ErrTemplateBusy
-	}
-	return nil
-}
-
-// Stop refuses new jobs and interrupts the running ones with ErrServiceStopped, which lets
-// OpenTofu write its state. It waits until they have recorded their outcome, or ctx ends.
-func (a *Appliance) Stop(ctx context.Context) error {
-	a.mu.Lock()
-	a.stopping = true
-	var running []*Job
-	for _, j := range []*Job{a.job, a.templateJob} {
-		if j.running() && j.stop != nil {
-			j.stop(ErrServiceStopped)
-			running = append(running, j)
-		}
-	}
-	a.mu.Unlock()
-	for _, j := range running {
-		a.Log.Info("waiting for the run under way to end", "kind", j.Kind)
-		select {
-		case <-j.done:
-		case <-ctx.Done():
-			return fmt.Errorf("waiting for the %s run to end: %w", j.Kind, ctx.Err())
-		}
 	}
 	return nil
 }

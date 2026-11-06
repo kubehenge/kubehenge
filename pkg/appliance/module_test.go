@@ -47,7 +47,7 @@ func TestStopInterruptsTheRunUnderWay(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("tofu never started applying")
 	}
-	if err := a.Stop(ctx); err != nil {
+	if err = a.Stop(ctx); err != nil {
 		t.Fatalf("Stop = %v", err)
 	}
 	got := a.Current()
