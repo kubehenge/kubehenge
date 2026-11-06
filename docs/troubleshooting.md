@@ -217,7 +217,8 @@ The Administration page (or the setup page) shows the error and the run's log. F
 - **Addresses:** the node addresses and the API address must be free, in one subnet, and reachable from the appliance on ports 50000 and 6443.
 - **Internet access** from the appliance, the Proxmox VE node and the new nodes ([install.md](install.md#internet-access)), or registry mirrors for the nodes.
 - **Pod and service ranges** that overlap the nodes' network are refused. Set others under Advanced.
-- **Time:** a run has to finish within two hours, the life of the Proxmox VE ticket it acts on.
+- **Time:** a run has to finish within two hours, the life of the Proxmox VE ticket it acts on. A run cut off there keeps what it made, so apply again.
+- **"context deadline exceeded"** for a `helm_release`: the release's pods did not get ready in time. Under "What the management cluster's pods wait for", the log names each pod and why, such as too little memory on the nodes.
 - **"The management cluster is being applied or removed"** or **"the appliance is being upgraded":** wait for that to finish.
 - **A wrong passphrase:** an apply cannot read the state. Repair access and removal answer "the passphrase does not open the management cluster's state".
   - It has to be the one given when the management cluster was created.

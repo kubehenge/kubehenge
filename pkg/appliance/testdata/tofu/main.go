@@ -102,6 +102,12 @@ func run(dir string, args []string) int {
 		}
 		switch args[len(args)-1] {
 		case "kubeconfig":
+			// A test that serves the cluster's API leaves the kubeconfig for it in
+			// <dir>/../admin.kubeconfig.
+			if admin, err := os.ReadFile(filepath.Join(dir, "..", "admin.kubeconfig")); err == nil {
+				fmt.Print(string(admin))
+				break
+			}
 			fmt.Print("admin-kubeconfig")
 		case "api_endpoint":
 			fmt.Print("https://10.0.0.20:6443")
