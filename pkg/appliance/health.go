@@ -101,12 +101,14 @@ func (c *ServiceCheck) Client() (*http.Client, string, error) {
 	default:
 		return nil, "", errors.New("the interface's certificate names no host")
 	}
-	// The served certificate is compared byte for byte rather than verified. Verifying it fails
-	// once it has expired, which would roll back every upgrade from then on, and the interface
-	// warns about the expiry itself. The handshake still proves the server holds its key.
+	// The certificate on disk is the only root, and it is verified as of its first valid moment.
+	// Verifying it against the clock fails once it has expired, which would roll back every upgrade
+	// from then on, and the interface warns about the expiry itself.
+	roots := x509.NewCertPool()
+	roots.AddCert(leaf)
 	pinned := &tls.Config{
-		ServerName: name, MinVersion: tls.VersionTLS12,
-		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection pins the certificate instead
+		ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: roots,
+		Time: func() time.Time { return leaf.NotBefore },
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 || !bytes.Equal(cs.PeerCertificates[0].Raw, leaf.Raw) {
 				return fmt.Errorf("%s serves a certificate other than %s", c.Address, c.CertFile)
@@ -132,6 +134,9 @@ func (c *ServiceCheck) untilAnswers(ctx context.Context, client *http.Client, ur
 		err := answers(ctx, client, url)
 		if err == nil {
 			return nil
+		}
+		if verr := (*tls.CertificateVerificationError)(nil); errors.As(err, &verr) {
+			err = fmt.Errorf("%s serves a certificate other than %s", c.Address, c.CertFile)
 		}
 		// A request the deadline cut off says less than the answer before it.
 		if last == nil || ctx.Err() == nil {
