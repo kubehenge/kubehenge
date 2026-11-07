@@ -1697,6 +1697,32 @@
           }
         },
         {
+          "name": "etcd",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "How much the control plane's etcd database may grow before etcd refuses writes. Kubehenge's controller shows the database size, and defragments the members one at a time inside the upgrade window, to give the space back.",
+              "properties": {
+                "quotaGiB": {
+                  "default": 8,
+                  "description": "The most one member's database may reach, in GiB. It can be raised, not lowered.",
+                  "maximum": 8,
+                  "minimum": 2,
+                  "type": "integer"
+                }
+              },
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
+                  "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": false,
           "schema": {
@@ -3424,6 +3450,32 @@
                 {
                   "message": "CIS hardening is chosen when the cluster is created and cannot be changed",
                   "rule": "self == oldSelf"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "etcd",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "How much the control plane's etcd database may grow before etcd refuses writes. Kubehenge's controller shows the database size, and defragments the members one at a time inside the upgrade window, to give the space back.",
+              "properties": {
+                "quotaGiB": {
+                  "default": 8,
+                  "description": "The most one member's database may reach, in GiB. It can be raised, not lowered.",
+                  "maximum": 8,
+                  "minimum": 2,
+                  "type": "integer"
+                }
+              },
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
+                  "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
                 }
               ]
             }
@@ -5160,6 +5212,32 @@
           }
         },
         {
+          "name": "etcd",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "How much the control plane's etcd database may grow before etcd refuses writes. Kubehenge's controller shows the database size, and defragments the members one at a time inside the upgrade window, to give the space back.",
+              "properties": {
+                "quotaGiB": {
+                  "default": 8,
+                  "description": "The most one member's database may reach, in GiB. It can be raised, not lowered.",
+                  "maximum": 8,
+                  "minimum": 2,
+                  "type": "integer"
+                }
+              },
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
+                  "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": false,
           "schema": {
@@ -6850,6 +6928,32 @@
                 {
                   "message": "CIS hardening is chosen when the cluster is created and cannot be changed",
                   "rule": "self == oldSelf"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "etcd",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "How much the control plane's etcd database may grow before etcd refuses writes. Kubehenge's controller shows the database size, and defragments the members one at a time inside the upgrade window, to give the space back.",
+              "properties": {
+                "quotaGiB": {
+                  "default": 8,
+                  "description": "The most one member's database may reach, in GiB. It can be raised, not lowered.",
+                  "maximum": 8,
+                  "minimum": 2,
+                  "type": "integer"
+                }
+              },
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
+                  "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
                 }
               ]
             }

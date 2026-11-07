@@ -43,6 +43,10 @@ type fakeTalos struct {
 	// down are the nodes whose API does not answer. fail decides which calls fail.
 	down map[string]bool
 	fail func(address, call string) error
+	// etcd are the members the nodes report by address, where a node reports a healthy voter of its
+	// own otherwise. listed is the member list every node answers with.
+	etcd   map[string]EtcdMember
+	listed []EtcdListed
 }
 
 // call records a restore's call, and fails it as the fake is told to.
@@ -177,6 +181,44 @@ func (n *fakeTalosNode) BootstrapRecovered(context.Context) error {
 	}
 	n.f.wiped[n.address] = false
 	return nil
+}
+
+func (n *fakeTalosNode) EtcdMember(context.Context) (EtcdMember, error) {
+	if err := n.f.call(n.address, "member"); err != nil {
+		return EtcdMember{}, err
+	}
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	if m, ok := n.f.etcd[n.address]; ok {
+		return m, nil
+	}
+	return EtcdMember{ID: fakeMemberID(n.address)}, nil
+}
+
+func (n *fakeTalosNode) EtcdMembers(context.Context) ([]EtcdListed, error) {
+	if err := n.f.call(n.address, "members"); err != nil {
+		return nil, err
+	}
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	return slices.Clone(n.f.listed), nil
+}
+
+func (n *fakeTalosNode) EtcdDefragment(context.Context) error {
+	return n.f.call(n.address, "defrag")
+}
+
+func (n *fakeTalosNode) EtcdDisarm(context.Context) error {
+	return n.f.call(n.address, "disarm")
+}
+
+// fakeMemberID is the etcd ID the fake gives the member on a node that was told nothing of its own.
+func fakeMemberID(address string) uint64 {
+	var id uint64 = 1
+	for _, b := range []byte(address) {
+		id = id*31 + uint64(b)
+	}
+	return id
 }
 
 func (*fakeTalosNode) Close() error { return nil }

@@ -1003,6 +1003,7 @@ describe("create", () => {
     logs: { enabled: false, collector: "node", retentionDays: 7, sizeGiB: 10, outputs: [] },
     podSecurity: { admission: "restricted", kyverno: "off" },
     cis: false,
+    etcdQuotaGiB: 8,
     istio: false,
     clusterMesh: false,
     meshPeers: [],

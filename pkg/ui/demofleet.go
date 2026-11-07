@@ -255,6 +255,7 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 			`{"bridge":"vmbr0","addresses":["10.20.%[1]d.11-10.20.%[1]d.60"],"prefix":24,"gateway":"10.20.%[1]d.1","dnsServers":["10.20.0.53"]}`, d.Subnet)),
 	}
 	maps.Copy(vars, f.data.Settings)
+	vars[etcdVariable] = json.RawMessage(fmt.Sprintf(`{"quotaGiB":%d}`, provisioner.DefaultEtcdQuotaGiB))
 	if d.Distribution == templates.Talos {
 		vars[provisioner.TalosVersionVariable] = json.RawMessage(`"` + templates.DefaultTalosVersion + `"`)
 	} else {
@@ -283,6 +284,7 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 	for _, name := range slices.Sorted(maps.Keys(vars)) {
 		c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: name, Value: apiextensionsv1.JSON{Raw: vars[name]}})
 	}
+	c.Annotations[provisioner.EtcdStatusAnnotation] = f.etcdStatus(d)
 	since := metav1.NewTime(created.Add(9 * time.Minute))
 	upToDateCP, upToDateWorkers := cp, workers
 	reconciled := metav1.Condition{
@@ -394,6 +396,21 @@ func (f *demoFleet) workerPool(d *demoCluster, created time.Time) *clusterv1.Mac
 // machine is a cluster's control-plane node or worker, by role: controlPlaneRole or the worker
 // pool's name. In an upgrade under way the control plane and the first worker are new, the others
 // still on the old version.
+// etcdStatus is what the controller would have read of the cluster's etcd members a few minutes ago:
+// small databases, the first member leading.
+func (f *demoFleet) etcdStatus(d *demoCluster) string {
+	status := provisioner.EtcdStatus{At: f.now.Add(-4 * time.Minute), QuotaBytes: provisioner.DefaultEtcdQuotaGiB * demoGiB}
+	for i := range d.ControlPlanes {
+		size := int64(90+30*i) << 20
+		status.Members = append(status.Members, provisioner.EtcdMember{
+			Name:   fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, int(i))),
+			Leader: i == 0, DBSize: size, DBSizeInUse: size * 3 / 4,
+		})
+	}
+	raw, _ := json.Marshal(status) //nolint:errchkjson // numbers, strings and a time
+	return string(raw)
+}
+
 func (f *demoFleet) machine(d *demoCluster, role string, i int, created time.Time) *clusterv1.Machine {
 	labels := map[string]string{clusterv1.ClusterNameLabel: d.Name}
 	host := 21 + i

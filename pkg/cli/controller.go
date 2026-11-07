@@ -803,16 +803,27 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 // token. Without it every restore of kubeadm, RKE2 and k3s is done by hand.
 func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remotes *provisioner.Remotes) error {
 	targets := &provisioner.ClusterTargets{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget}
+	dialer := &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos}
 	snapshotter := &provisioner.EtcdSnapshotter{
 		Client:         mgr.GetClient(),
 		Reader:         mgr.GetAPIReader(),
 		ClassNamespace: o.r.ClassNamespace,
-		Etcd:           &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos},
+		Etcd:           dialer,
 		Targets:        targets,
 		Events:         mgr.GetEventRecorder("kubehenge"),
 	}
 	if err := snapshotter.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the etcd snapshotter: %w", err)
+	}
+	maintainer := &provisioner.EtcdMaintainer{
+		Client:         mgr.GetClient(),
+		Reader:         mgr.GetAPIReader(),
+		ClassNamespace: o.r.ClassNamespace,
+		Etcd:           dialer,
+		Events:         mgr.GetEventRecorder("kubehenge"),
+	}
+	if err := maintainer.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the etcd maintainer: %w", err)
 	}
 	restorer := &provisioner.EtcdRestorer{
 		Client:         mgr.GetClient(),

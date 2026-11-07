@@ -112,6 +112,7 @@ spec:
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
+    {{- include "kubehenge.etcdVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -163,6 +164,19 @@ spec:
               path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
               valueFrom:
                 template: {{ printf "apiVersion: v1alpha1\nkind: KubeAPIServerConfig\nenv:\n  GOMEMLIMIT: %s" (include "kubehenge.apiServerMemoryLimit" (dict "share" 40)) | toJson | quote }}
+    # Talos sets no quota or compaction, so etcd runs its own 2 GiB limit.
+    - name: talos-etcd
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+            kind: TalosControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              valueFrom:
+                template: {{ `{{ dict "cluster" (dict "etcd" (dict "extraArgs" (dict "quota-backend-bytes" (printf "%d" (mul (dig "etcd" "quotaGiB" 8 .) 1073741824)) "auto-compaction-mode" "periodic" "auto-compaction-retention" "1h"))) | toJson | toJson }}` | quote }}
     # Another CNI than flannel takes the place of Talos's.
     - name: talos-cni
       enabledIf: {{ "{{ if ne .cni \"flannel\" }}true{{ end }}" | quote }}

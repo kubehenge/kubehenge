@@ -135,7 +135,7 @@ the wizard's request is.`,
 	o.namespaceFlag(deleteCmd.Flags())
 
 	cmd.AddCommand(slices.Concat([]*cobra.Command{
-		list, get, kubeconfig, create, scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd, o.machineCommand(),
+		list, get, kubeconfig, create, scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd, o.machineCommand(), o.etcdCommand(),
 	}, o.addonCommands())...)
 	return cmd
 }
@@ -165,6 +165,52 @@ A value left out is the cluster class's.`,
 	cmd.Flags().StringVar(&controlPlanes, "control-planes", "", "the control planes' timeouts as drain=30m,detach=10m,deletion=1m")
 	cmd.Flags().StringArrayVar(&pools, "pool", nil, "a pool's timeouts as POOL=drain=30m,detach=10m, repeated for more pools")
 	o.namespaceFlag(cmd.Flags())
+	return cmd
+}
+
+// etcdQuotaBounds are the etcd variable's quotaGiB limits, as the chart's schema has them.
+const (
+	minEtcdQuotaGiB = 2
+	maxEtcdQuotaGiB = 8
+)
+
+func (o *clusterOptions) etcdCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "etcd", Short: "Set how large a cluster's etcd database may grow, or defragment it"}
+	o.namespaceFlag(cmd.PersistentFlags())
+	defrag := &cobra.Command{
+		Use:   "defrag NAME",
+		Short: "Defragment every etcd member of the cluster now, followers first, one at a time",
+		Long: `Ask Kubehenge's controller to defragment every etcd member of the cluster at once, whatever the hour
+and the fragmentation. Each member's reads and writes stop while it is defragmented. Without the
+request the controller defragments large, fragmented members inside the cluster's upgrade window.`,
+		Args: argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := o.clusterPath(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if _, err := o.call(cmd.Context(), http.MethodPost, path+"/etcd-defrag", nil); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "cluster %s: etcd defragmentation asked for\n", args[0])
+			return nil
+		},
+	}
+	var quota int
+	set := &cobra.Command{
+		Use:   "set NAME --quota-gib N",
+		Short: "Raise the size one etcd member's database may reach before etcd refuses writes",
+		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if quota < minEtcdQuotaGiB || quota > maxEtcdQuotaGiB {
+				return fmt.Errorf("--quota-gib is %d to %d, not %d", minEtcdQuotaGiB, maxEtcdQuotaGiB, quota)
+			}
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{"variables": map[string]any{"etcd": map[string]any{"quotaGiB": quota}}})
+		},
+	}
+	set.Flags().IntVar(&quota, "quota-gib", 0, "the most one member's database may reach, in GiB: 2 to 8, never lower than now")
+	_ = set.MarkFlagRequired("quota-gib")
+	cmd.AddCommand(defrag, set)
 	return cmd
 }
 

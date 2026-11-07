@@ -15,6 +15,7 @@ import {
   type Form,
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
+import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
 import { LoadBalancerFields } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
@@ -911,6 +912,28 @@ export function MachinesStep({
         error={shown("workerMachine")}
         onChange={(m) => set("workerMachine", m)}
       />
+      {variable(cls, "etcd") !== undefined && (
+        <details className="advanced" open={shown("etcdQuotaGiB") === undefined ? undefined : true}>
+          <summary>etcd</summary>
+          <Field
+            label="Database limit (GiB)"
+            hint="It can be raised later, never lowered."
+            error={shown("etcdQuotaGiB")}
+          >
+            {(id) => (
+              <input
+                id={id}
+                type="number"
+                min={minEtcdQuotaGiB}
+                max={maxEtcdQuotaGiB}
+                step={1}
+                value={shownNumber(form.etcdQuotaGiB)}
+                onChange={(e) => set("etcdQuotaGiB", typedNumber(e.target.value))}
+              />
+            )}
+          </Field>
+        </details>
+      )}
     </>
   );
 }

@@ -1616,6 +1616,55 @@ streaming sessions that end when idle. Each class adds its distribution's own on
           message: CIS hardening is chosen when the cluster is created and cannot be changed
 {{- end -}}
 
+{{/*
+etcd's database size limit, and the compaction etcd runs itself beside the API server's. None of
+the distributions sets either, so each runs etcd's own 2 GiB limit, after which etcd refuses every
+write. 8 GiB is the most etcd's documentation suggests.
+*/}}
+{{- define "kubehenge.etcdVariable" -}}
+- name: etcd
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      default: {}
+      description: >-
+        How much the control plane's etcd database may grow before etcd refuses writes. Kubehenge's
+        controller shows the database size, and defragments the members one at a time inside the
+        upgrade window, to give the space back.
+      properties:
+        quotaGiB:
+          type: integer
+          minimum: 2
+          maximum: 8
+          default: 8
+          description: The most one member's database may reach, in GiB. It can be raised, not lowered.
+      x-kubernetes-validations:
+        - rule: "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB >= oldSelf.quotaGiB"
+          message: The etcd limit can be raised, not lowered, since a database above it stops accepting writes
+{{- end -}}
+
+{{/*
+The quota in bytes, as Cluster API renders it from the cluster's variables.
+*/}}
+{{- define "kubehenge.etcdQuotaBytes" -}}
+{{ `{{ printf "%d" (mul (dig "etcd" "quotaGiB" 8 .) 1073741824) }}` }}
+{{- end -}}
+
+{{/*
+The drop-in that gives RKE2's or k3s's etcd the quota and the periodic compaction.
+*/}}
+{{- define "kubehenge.etcdFile" -}}
+path: {{ .path }}
+owner: root:root
+permissions: "0600"
+content: |
+  etcd-arg+:
+    - quota-backend-bytes={{ include "kubehenge.etcdQuotaBytes" . }}
+    - auto-compaction-mode=periodic
+    - auto-compaction-retention=1h
+{{- end -}}
+
 {{- define "kubehenge.cisEnabled" -}}
 {{ "{{ if .cis }}true{{ end }}" | quote }}
 {{- end -}}
