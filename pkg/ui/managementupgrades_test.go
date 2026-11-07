@@ -15,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
@@ -97,6 +100,8 @@ func withManagementCluster(t *testing.T, h *harness) *appliance.Appliance {
 	if err := os.WriteFile(filepath.Join(a.Dir, "management", "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	management := k8sfake.NewClientset()
+	a.ManagementClient = func([]byte) (kubernetes.Interface, error) { return management, nil }
 	h.server.Appliance = a
 	h.server.NewKube = func([]byte) (client.Client, error) { return h.kube, nil }
 	return a
@@ -383,6 +388,46 @@ func TestFailedAutomaticManagementUpgradeWaitsADay(t *testing.T) {
 	h.server.applyDueManagement()
 	if got := jobEnded(t, a); got.Started.Equal(failed.Started) || !got.Automatic {
 		t.Fatalf("not tried the next day: %+v", got)
+	}
+}
+
+// An apply on a state older than the management cluster's is refused. An administrator with the
+// passphrase takes the cluster over, and the next apply goes ahead.
+func TestTakingTheManagementClusterOver(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	a := withManagementCluster(t, h)
+	management := k8sfake.NewClientset(&corev1.ConfigMap{
+		Name: "kubehenge-appliance-lease", Namespace: "kubehenge-system",
+		Data: map[string]string{"generation": "5"},
+	})
+	a.ManagementClient = func([]byte) (kubernetes.Interface, error) { return management, nil }
+	ticket := &pve.Ticket{Username: "admin@pve", Ticket: "PVE:admin@pve:1", CSRF: "csrf", Issued: time.Now()}
+	apply := func() *appliance.JobView {
+		t.Helper()
+		if err := a.Apply(a.SavedSettings(), statePassphrase, ticket, func(context.Context, []byte) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return jobEnded(t, a)
+	}
+	if j := apply(); j.State != "failed" || j.Stale == nil {
+		t.Fatalf("apply on an older state = %+v", j)
+	}
+	b := h.browser()
+	b.signIn("admin@pve")
+	if got := b.do("GET", "/api/setup", "").Body.String(); !strings.Contains(got, `"stale":{"local":0,"cluster":5}`) {
+		t.Errorf("setup = %s", got)
+	}
+	d := h.browser()
+	d.signIn("dev@pve")
+	expect(t, d.do("POST", "/api/setup/take-over", `{"passphrase":"`+statePassphrase+`"}`), http.StatusForbidden)
+	expect(t, b.do("POST", "/api/setup/take-over", `{"passphrase":"not the passphrase of this state"}`), http.StatusForbidden)
+	expect(t, b.do("POST", "/api/setup/take-over", `{"passphrase":"`+statePassphrase+`"}`), http.StatusNoContent)
+	if got := b.do("GET", "/api/setup", "").Body.String(); strings.Contains(got, "stale") {
+		t.Errorf("still stale once taken over: %s", got)
+	}
+	if j := apply(); j.State != "succeeded" {
+		t.Fatalf("apply once taken over = %+v", j)
 	}
 }
 

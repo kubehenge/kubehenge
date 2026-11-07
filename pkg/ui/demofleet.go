@@ -704,6 +704,10 @@ func (*demoAccounts) Templates(context.Context, *pve.Ticket, string) ([]pve.Memb
 
 func (*demoAccounts) BackupCovers(context.Context, *pve.Ticket, int) (bool, error) { return true, nil }
 
+func (*demoAccounts) ApplianceID(_ context.Context, _ *pve.Ticket, hint int, _ []string) (int, error) {
+	return hint, nil
+}
+
 func (*demoAccounts) DeleteVM(context.Context, *pve.Ticket, string, int) error { return errDemo }
 
 func (*demoAccounts) RebootVM(context.Context, *pve.Ticket, string, int) error { return errDemo }

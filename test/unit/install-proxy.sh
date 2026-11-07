@@ -111,6 +111,43 @@ appliance_realms kubehenge.example.org 192.0.2.40 "${root}/tls.crt" > /dev/null
 expect_in "the realms check bypasses every proxy" "--noproxy * " args
 expect_in "and reaches the container's address" "--resolve kubehenge.example.org:443:192.0.2.40" args
 
+# Security updates in the container: pct copies what it pushes into $root/ct and fails apt as
+# $root/apt-fails says.
+mkdir -p "${root}/ct"
+cat > "${bin}/pct" << EOF
+#!/bin/sh
+case "\$1" in
+    push) cp "\$3" "${root}/ct/\$(basename "\$4")" ;;
+    exec)
+        case "\$4" in
+            dpkg-query) [ -e "${root}/installed" ] && printf 'install ok installed' ;;
+            sh) [ ! -e "${root}/apt-fails" ] || { echo "E: Unable to locate package unattended-upgrades"; exit 100; } ;;
+            *) exit 2 ;;
+        esac
+        ;;
+    *) exit 2 ;;
+esac
+EOF
+chmod +x "${bin}/pct"
+ctid=900 work=${root}
+updates() { security_updates 2>&1; }
+download_proxy=http://user:secret@proxy.example.org:3128
+expect_in "unattended-upgrades is installed" "unattended-upgrades installed" updates
+expect_in "apt goes through the installer's proxy" 'Acquire::https::Proxy "http://user:secret@proxy.example.org:3128";' cat "${root}/ct/80kubehenge-proxy"
+expect_in "and runs each day" 'APT::Periodic::Unattended-Upgrade "1";' cat "${root}/ct/20auto-upgrades"
+rm -f "${root}/ct/"*
+download_proxy=''
+updates > /dev/null
+expect "without a proxy, apt is given none" "" sh -c "ls '${root}/ct' | grep proxy || true"
+touch "${root}/apt-fails"
+rm -f "${root}/ct/"*
+expect_in "a container without Debian's mirrors is warned about" "container 900 could not install unattended-upgrades" updates
+expect_in "with apt's own words" "Unable to locate package" updates
+expect "and is not set to run it" "" sh -c "ls '${root}/ct' | grep auto-upgrades || true"
+rm "${root}/apt-fails"
+touch "${root}/installed"
+expect "installed already: left as it is" "" updates
+
 if [ "${failures}" -ne 0 ]; then
     echo "install-proxy: ${failures} of $((passes + failures)) checks failed"
     exit 1

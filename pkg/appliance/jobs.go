@@ -26,6 +26,8 @@ type Job struct {
 	// State is running, succeeded or failed.
 	State string `json:"state"`
 	Error string `json:"error,omitempty"`
+	// Stale is set when the run was refused for a state older than the management cluster's.
+	Stale *StaleStateError `json:"stale,omitempty"`
 	// Request is what the run was started with, with nothing secret in it, for starting it again.
 	Request json.RawMessage `json:"request,omitempty"`
 
@@ -67,7 +69,7 @@ func (j *Job) view() *JobView {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	shown := j.log[max(0, len(j.log)-shownLines):]
-	v := &JobView{User: j.User, Automatic: j.Automatic, Kind: j.Kind, Started: j.Started, Finished: j.Finished, State: j.State, Error: j.Error, Request: j.Request, Log: append([]string{}, shown...)}
+	v := &JobView{User: j.User, Automatic: j.Automatic, Kind: j.Kind, Started: j.Started, Finished: j.Finished, State: j.State, Error: j.Error, Stale: j.Stale, Request: j.Request, Log: append([]string{}, shown...)}
 	if len(shown) < len(j.log) {
 		v.Lines = len(j.log)
 	}
@@ -83,6 +85,9 @@ type JobView struct {
 	Finished  time.Time `json:"finished,omitzero"`
 	State     string    `json:"state"`
 	Error     string    `json:"error,omitempty"`
+	// Stale holds the generations of a run refused for a state older than the management
+	// cluster's, which an administrator may take over.
+	Stale *StaleStateError `json:"stale,omitempty"`
 	// Request is what the run was started with, with nothing secret in it, for starting it again.
 	Request json.RawMessage `json:"request,omitempty"`
 	Log     []string        `json:"log"`

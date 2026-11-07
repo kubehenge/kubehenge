@@ -19,6 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
+
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -232,6 +235,8 @@ func newAppliance(t *testing.T) (*Appliance, chan []byte) {
 			return []byte("interface for " + string(admin) + " at " + endpoint), nil
 		},
 	}
+	management := fake.NewClientset()
+	a.ManagementClient = func([]byte) (kubernetes.Interface, error) { return management, nil }
 	return a, ready
 }
 
