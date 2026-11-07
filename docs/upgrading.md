@@ -61,16 +61,17 @@ curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/inst
 - It stops, changing nothing, while the management cluster is applied or removed, a VM template is built, or the appliance is upgraded.
 - Like the updater, it keeps the installed release aside until the new one serves. Otherwise it rolls back with the same error.
 
-#### CA and certificate options
+#### API address, CA and certificate options
 
+- `--proxmox-url <URL>` moves the appliance to another address of the Proxmox VE API, such as once the node it names is removed. It checks the URL as an install does and stops, changing nothing, unless the container reaches it with a certificate it trusts.
 - `--proxmox-ca <file>` replaces the CA the appliance checks the Proxmox VE API against. Use it after the API's certificate was replaced with one from another CA ([install.md](install.md#options)).
   - It stops, changing nothing, unless the API's certificate is one that CA signed.
   - A file holding several certificates is reduced to those the API's certificate rests on.
   - It also turns certificate verification back on where `--proxmox-insecure` turned it off.
 - `--proxmox-insecure` has the appliance stop verifying the Proxmox VE API's certificate.
-- Without either option the appliance keeps what it had.
+- Without these options the appliance keeps what it had.
 
-After either option, apply the management cluster again to carry the change to it and the clusters.
+After any of them, apply the management cluster again to carry the change to it and the clusters.
 
 ### From the appliance's shell
 

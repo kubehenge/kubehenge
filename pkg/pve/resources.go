@@ -594,23 +594,76 @@ func (a *Accounts) Network(ctx context.Context, t *Ticket, bridge string) (Netwo
 	return n, nil
 }
 
-// BackupCovers tells whether an enabled backup job of the Proxmox VE cluster includes the guest,
-// by its ID, by all guests, or by its pool. Listing the jobs needs Sys.Audit on /.
-func (a *Accounts) BackupCovers(ctx context.Context, t *Ticket, vmid int) (bool, error) {
-	var guests []struct {
-		VMID int    `json:"vmid"`
-		Node string `json:"node"`
-		Pool string `json:"pool"`
+// ErrNoAppliance is no container the user sees being the appliance.
+var ErrNoAppliance = errors.New("no container visible to this user is the appliance")
+
+// listedGuest is a guest as the cluster's resource list gives it.
+type listedGuest struct {
+	VMID int    `json:"vmid"`
+	Node string `json:"node"`
+	Type string `json:"type"`
+	Tags string `json:"tags"`
+	Pool string `json:"pool"`
+}
+
+// ApplianceID finds the appliance's own guest ID: the container tagged kubehenge, or guest hint,
+// whose network interface has one of the MAC addresses macs. A restore to another ID or a clone
+// leaves the ID the installer recorded behind. A copy restored beside it has the same MAC, so
+// hint is tried first.
+func (a *Accounts) ApplianceID(ctx context.Context, t *Ticket, hint int, macs []string) (int, error) {
+	var guests []listedGuest
+	if err := a.get(ctx, t, "/cluster/resources?type=vm", &guests); err != nil {
+		return 0, err
 	}
+	if i := slices.IndexFunc(guests, func(g listedGuest) bool { return g.VMID == hint }); i > 0 {
+		guests[0], guests[i] = guests[i], guests[0]
+	}
+	var unread error
+	for _, g := range guests {
+		if g.Type != "lxc" || g.VMID != hint && !slices.Contains(strings.Split(g.Tags, ";"), "kubehenge") {
+			continue
+		}
+		var config map[string]any
+		if err := a.get(ctx, t, "/nodes/"+url.PathEscape(g.Node)+"/lxc/"+strconv.Itoa(g.VMID)+"/config", &config); err != nil {
+			unread = err
+			continue
+		}
+		for key, v := range config {
+			if s, ok := v.(string); ok && strings.HasPrefix(key, "net") && hasMAC(s, macs) {
+				return g.VMID, nil
+			}
+		}
+	}
+	if unread != nil {
+		return 0, unread
+	}
+	return 0, ErrNoAppliance
+}
+
+// hasMAC tells whether a container's network interface, as its configuration gives it
+// ("name=eth0,bridge=vmbr0,hwaddr=BC:24:11:2E:5D:6A,ip=dhcp"), has one of the MAC addresses.
+func hasMAC(netConfig string, macs []string) bool {
+	for part := range strings.SplitSeq(netConfig, ",") {
+		if mac, ok := strings.CutPrefix(part, "hwaddr="); ok {
+			return slices.ContainsFunc(macs, func(m string) bool { return strings.EqualFold(m, mac) })
+		}
+	}
+	return false
+}
+
+// BackupCovers tells whether an enabled backup job of the Proxmox VE cluster includes the guest,
+// by its ID, by all guests, or by its pool. Listing the jobs needs Sys.Audit on /. A guest the user
+// does not see is an error: a job of all guests would seem to cover an ID long gone.
+func (a *Accounts) BackupCovers(ctx context.Context, t *Ticket, vmid int) (bool, error) {
+	var guests []listedGuest
 	if err := a.get(ctx, t, "/cluster/resources?type=vm", &guests); err != nil {
 		return false, err
 	}
-	node, pool := "", ""
-	for _, g := range guests {
-		if g.VMID == vmid {
-			node, pool = g.Node, g.Pool
-		}
+	i := slices.IndexFunc(guests, func(g listedGuest) bool { return g.VMID == vmid })
+	if i < 0 {
+		return false, fmt.Errorf("guest %d is not among those %s sees", vmid, t.Username)
 	}
+	node, pool := guests[i].Node, guests[i].Pool
 	var jobs []struct {
 		Enabled *int   `json:"enabled"`
 		Node    string `json:"node"`

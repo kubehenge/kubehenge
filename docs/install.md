@@ -149,6 +149,8 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
    - It installs Kubehenge, OpenTofu, the management-cluster module, the service units and the shared Headlamp, a single Kubernetes web interface for every cluster.
    - It adds the API's CA to the container's trust store and switches off the template's SSH and mail servers.
    - It starts the interface on ports 443 and 8443 (the shared Headlamp) as an unprivileged user.
+   - It installs Debian's `unattended-upgrades` for daily security updates through the installer's proxy, and only warns where Debian's mirrors are out of reach. `--upgrade` adds it where it is missing.
+   - It sets the container's protection, so Proxmox VE refuses to destroy it until that is taken off.
 7. If you said yes, adds the Kubernetes entry to this node's Proxmox VE interface.
 8. Prints the address and the certificate's fingerprint:
 
@@ -207,7 +209,7 @@ It keeps a name given before unless `--name` gives another, or `--no-name` drops
 
 A renewal keeps a name from a certificate this cluster's CA signed. It keeps any other name only where this node's DNS resolves it to the appliance's address, and otherwise drops it and says so. `--name` keeps it. The address is the one the container's configuration gives it, or with DHCP the one the container reports.
 
-After a new name or address, update the redirect URLs registered for OpenID realms (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).
+After a new name or address, it points this node's Kubernetes entry ([below](#the-proxmox-ve-interface-entry)) at it and prints the command for the other nodes. Update the redirect URLs registered for OpenID realms (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).
 
 ### The Proxmox VE interface entry
 
@@ -458,6 +460,22 @@ The appliance keeps the record in its own folder for 90 days. Changes made with 
 ### Back up the appliance
 
 The appliance holds the only copy of the management cluster's state. Add it to a Proxmox VE backup job (Datacenter, Backup) by its ID, its pool or all guests on its node. Once the management cluster exists, and until a backup job includes the appliance, administrators with `Sys.Audit` on `/` see a warning.
+
+The installer sets the container's protection, so Proxmox VE refuses to destroy it or restore a backup over it. Take it off with `pct set <ctid> --protection 0` first.
+
+Backups leave out the key of automatic upgrades. After a restore, switch automatic upgrades off and on again on the Administration page.
+
+#### Test a backup
+
+Restore it so that it cannot meet the running appliance. Two appliances on one management cluster each apply their own state to it.
+
+```sh
+pct restore <new ctid> <backup> --unique 1
+pct config <new ctid> | grep ^net0
+pct set <new ctid> --onboot 0 --net0 <that net0>,link_down=1
+```
+
+`--unique 1` gives the copy a MAC address of its own, and `link_down=1` keeps it off the network. A `pct clone` keeps the original's address too, and copies the key of automatic upgrades.
 
 ### Back up the management cluster's etcd
 

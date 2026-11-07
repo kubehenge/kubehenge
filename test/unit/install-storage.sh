@@ -193,6 +193,26 @@ expect "enough room: silent" "" space 1
 expect_in "too little room: says what needs how much and what to do" "needs" space 99999999999999
 expect_in "and the fix" "Free some." space 99999999999999
 
+# Free space in the container for an upgrade: three times what is installed, and 64 MiB.
+cat > "${bin}/pct" << EOF
+#!/bin/sh
+case "\$4" in
+    df) printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/loop0 8000000 1000000 %s 13%% /\n' "\$(cat "${root}/room")" ;;
+    du) printf '100000\t/usr/local/share/kubehenge\n200000\t/usr/local/bin/kubehenge\n' ;;
+    *) exit 2 ;;
+esac
+EOF
+chmod +x "${bin}/pct"
+ctid=900
+upgrade_space() { (need_upgrade_space) 2>&1; }
+echo 965536 > "${root}/room"
+expect "room for three times what is installed and 64 MiB: silent" "" upgrade_space
+echo 965535 > "${root}/room"
+expect_in "a KiB less: stops" "the upgrade needs 942 MiB" upgrade_space
+echo 500000 > "${root}/room"
+expect_in "it says how much is free and needed" "container 900 has 488 MiB free and the upgrade needs 942 MiB" upgrade_space
+expect_in "and how to grow the disk" "pct resize 900 rootfs +4G" upgrade_space
+
 if [ "${failures}" -ne 0 ]; then
     echo "install-storage: ${failures} of $((passes + failures)) checks failed"
     exit 1

@@ -75,7 +75,20 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			{"vmid": 166, "node": "two", "type": "qemu", "status": "unknown", "tags": "kubehenge;talos;talos-v1.14.4", "pool": "kubehenge-templates"},
 			{"vmid": 167, "node": "one", "type": "qemu", "name": "kubehenge-k3s", "template": 1, "tags": "k3s;kubehenge", "pool": "kubehenge-templates"},
 			{"vmid": 168, "node": "two", "type": "qemu", "status": "unknown", "tags": "web", "pool": "kubehenge-templates"},
+			// The appliance restored to 180, a clone of it at 181, and an untagged copy at 182.
+			{"vmid": 180, "node": "one", "type": "lxc", "name": "kubehenge", "tags": "kubehenge"},
+			{"vmid": 181, "node": "two", "type": "lxc", "name": "kubehenge", "tags": "kubehenge;test"},
+			{"vmid": 182, "node": "one", "type": "lxc", "name": "kubehenge"},
 		})
+	})
+	mux.HandleFunc("GET /api2/json/nodes/{node}/lxc/{vmid}/config", func(w http.ResponseWriter, r *http.Request) {
+		macs := map[string]string{"one/180": "BC:24:11:00:00:01", "two/181": "BC:24:11:00:00:02", "one/182": "BC:24:11:00:00:01"}
+		mac, ok := macs[r.PathValue("node")+"/"+r.PathValue("vmid")]
+		if !ok {
+			http.Error(w, "no such container", http.StatusInternalServerError)
+			return
+		}
+		reply(w, map[string]any{"hostname": "kubehenge", "nameserver": "192.0.2.53", "net0": "name=eth0,bridge=vmbr0,hwaddr=" + mac + ",ip=dhcp,type=veth"})
 	})
 	mux.HandleFunc("GET /api2/json/nodes/one/qemu/{vmid}/config", func(w http.ResponseWriter, r *http.Request) {
 		configs := map[string]map[string]any{
@@ -257,6 +270,35 @@ func TestBackupCovers(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("BackupCovers(%d) = %v, %v; want %v", vmid, got, err, want)
 		}
+	}
+	// Covered by "all", if it still existed.
+	if got, err := a.BackupCovers(context.Background(), tk, 999); err == nil {
+		t.Errorf("BackupCovers of a guest that is gone = %v, want an error", got)
+	}
+}
+
+func TestApplianceIDByItsMAC(t *testing.T) {
+	t.Parallel()
+	a := fakeTicketAPI(t)
+	tk := &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}
+	for _, tc := range []struct {
+		name string
+		hint int
+		macs []string
+		want int
+	}{
+		{"restored to another ID", 105, []string{"bc:24:11:00:00:01"}, 180},
+		{"the clone, by its own MAC", 105, []string{"02:00:00:00:00:09", "bc:24:11:00:00:02"}, 181},
+		{"the recorded ID among copies with the same MAC", 182, []string{"bc:24:11:00:00:01"}, 182},
+		{"a recorded ID that is another guest", 150, []string{"bc:24:11:00:00:02"}, 181},
+	} {
+		got, err := a.ApplianceID(context.Background(), tk, tc.hint, tc.macs)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: ApplianceID = %d, %v; want %d", tc.name, got, err, tc.want)
+		}
+	}
+	if got, err := a.ApplianceID(context.Background(), tk, 180, []string{"bc:24:11:00:00:99"}); !errors.Is(err, ErrNoAppliance) {
+		t.Errorf("ApplianceID with no MAC of the appliance's = %d, %v; want ErrNoAppliance", got, err)
 	}
 }
 

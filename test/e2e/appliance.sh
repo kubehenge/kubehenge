@@ -594,7 +594,12 @@ expect 200 "the etcd backups after the removal" request "${work}/admin.jar" "${b
 body_is '.settings == null and (.keysStored | not)' "the removed management cluster's etcd backups are still set up"
 
 step "remove the appliance"
+pct config "${ctid}" | grep -qx 'protection: 1' || fail "the installer left the appliance unprotected"
 pct stop "${ctid}"
+if pct destroy "${ctid}" --purge > /dev/null 2>&1; then
+    fail "Proxmox VE destroyed the protected appliance"
+fi
+pct set "${ctid}" --protection 0
 pct destroy "${ctid}" --purge
 
 step "Proxmox VE as it was"

@@ -76,6 +76,7 @@ type Guests interface {
 	VMLoad(ctx context.Context, t *pve.Ticket, node string, vmid int) ([]pve.LoadPoint, error)
 	Templates(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
 	BackupCovers(ctx context.Context, t *pve.Ticket, vmid int) (bool, error)
+	ApplianceID(ctx context.Context, t *pve.Ticket, hint int, macs []string) (int, error)
 }
 
 // Removals are what an administrator's runs remove from Proxmox VE that the management-cluster
@@ -99,12 +100,22 @@ type Server struct {
 	// Appliance is set when the interface runs in Kubehenge's appliance, which creates and looks
 	// after the management cluster.
 	Appliance *appliance.Appliance
-	// ApplianceVMID is the appliance's own guest ID in Proxmox VE, for telling administrators
-	// whether it is backed up. 0 when not known.
+	// ApplianceVMID is the appliance's own guest ID in Proxmox VE as installed, for telling
+	// administrators whether it is backed up. 0 when not known. With ApplianceMACs, the MAC
+	// addresses of its network interfaces, the interface finds the ID again after a restore to
+	// another ID or a clone.
 	ApplianceVMID int
+	ApplianceMACs []string
 	// CertificateExpires is when the certificate the interface serves runs out. Zero when not
 	// known. It is read at start, as the certificate is.
 	CertificateExpires time.Time
+	// CertificateIPs and CertificateNames are the addresses and DNS names the certificate is for.
+	// OwnAddresses gives the addresses the machine has now. Together they tell administrators
+	// when the appliance's address moved away from its certificate's. Nil OwnAddresses tells
+	// nothing.
+	CertificateIPs   []netip.Addr
+	CertificateNames []string
+	OwnAddresses     func() []netip.Addr
 	// ProxmoxInsecure tells administrators that the appliance and the clusters do not verify the
 	// Proxmox VE API's certificate, as it was installed.
 	ProxmoxInsecure bool
@@ -156,19 +167,20 @@ type Server struct {
 
 	// prepared guards the set-up Run and the handlers each do on first use, in whichever order the
 	// caller starts them.
-	prepared   sync.Once
-	sessions   *sessions
-	limiter    *limiter
-	tokens     tokenUsers
-	activeKube atomic.Pointer[client.Client]
-	backups    backupCache
-	etags      etagCache
-	health     readCache[healthView]
-	veleroRuns readCache[[]runView]
-	vmLoads    vmLoadCache
-	workloads  workloadConns
-	changes    changes
-	notifier   notifier
+	prepared     sync.Once
+	sessions     *sessions
+	limiter      *limiter
+	tokens       tokenUsers
+	activeKube   atomic.Pointer[client.Client]
+	backups      backupCache
+	applianceIDs readCache[int]
+	etags        etagCache
+	health       readCache[healthView]
+	veleroRuns   readCache[[]runView]
+	vmLoads      vmLoadCache
+	workloads    workloadConns
+	changes      changes
+	notifier     notifier
 	// clock is the health page's time. Unset, the system's.
 	clock func() time.Time
 	// demo is set by SetUpDemo: the answers say so and changes are refused.
