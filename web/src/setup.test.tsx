@@ -661,6 +661,24 @@ describe("setup", () => {
     expect(alert).toHaveTextContent("wrong passphrase");
   });
 
+  it("offers to take over when a newer state changed the management cluster", async () => {
+    withJob({
+      user: "root@pam",
+      automatic: true,
+      kind: "apply",
+      started: new Date().toISOString(),
+      state: "failed",
+      error: "this appliance's state is from apply 2, and the management cluster is at apply 3",
+      stale: { local: 2, cluster: 3 },
+      log: [],
+    });
+    render(<App />);
+    const alert = await screen.findByText(/A newer state changed the management cluster\./u);
+    expect(alert).toHaveTextContent("This appliance's state is from apply 2.");
+    expect(within(alert).getByRole("button", { name: "Take over…" })).toBeInTheDocument();
+    expect(screen.queryByText(/retries at the next upgrade hour/u)).not.toBeInTheDocument();
+  });
+
   it("warns administrators of a certificate about to run out, and no one long before", async () => {
     certificateIn(10);
     const { unmount } = render(<App />);
@@ -672,6 +690,44 @@ describe("setup", () => {
     render(<App />);
     await expect(screen.findByRole("link", { name: "Administration" })).resolves.toBeInTheDocument();
     expect(screen.queryByText(/certificate expires on/u)).not.toBeInTheDocument();
+  });
+
+  it("warns administrators that the appliance's address moved away from its certificate's", async () => {
+    fakeServer({
+      ...administrator,
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          applianceVMID: 105,
+          addressMoved: { from: ["192.0.2.40"], to: ["192.0.2.41"] },
+        },
+      },
+      "GET /api/clusters": { body: [] },
+    });
+    render(<App />);
+    const alert = await screen.findByText(/Appliance address moved from 192\.0\.2\.40 to 192\.0\.2\.41\./u);
+    expect(within(alert).getByText("sh install.sh --certificate --ctid 105")).toBeInTheDocument();
+  });
+
+  it("warns administrators that the appliance's disk fills up", async () => {
+    fakeServer({
+      ...administrator,
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          applianceVMID: 105,
+          diskFull: { usedPercent: 86, freeMiB: 1192 },
+        },
+      },
+      "GET /api/clusters": { body: [] },
+    });
+    render(<App />);
+    const alert = await screen.findByText(/Appliance disk 86 % full, 1\.2 GiB free\./u);
+    expect(within(alert).getByText("pct resize 105 rootfs +4G")).toBeInTheDocument();
   });
 
   it("warns administrators that the management cluster's credentials run out", async () => {

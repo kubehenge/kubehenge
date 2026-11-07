@@ -102,6 +102,9 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err = a.init(ctx, j, env); err != nil {
 		return nil, err
 	}
+	if err = a.claimLease(ctx, j, env); err != nil {
+		return nil, err
+	}
 	j.Add("Applying the management cluster")
 	err = a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json")
 	if err != nil {

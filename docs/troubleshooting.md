@@ -224,6 +224,10 @@ The Administration page (or the setup page) shows the error and the run's log. F
   - After five wrong ones within 15 minutes, repair access refuses further tries until those 15 minutes are up.
   - A passphrase that is lost cannot be recovered: [what still works, and how to start over](install.md#the-state-passphrase).
 - **"The appliance stopped during the run":** the appliance restarted while a run was going on. Apply again.
+- **"this appliance's state is from apply N, and the management cluster is at apply M":** a newer state changed the cluster since this one was saved. A snapshot rollback, an older backup or a second appliance does that.
+  - Restore the newest backup instead, or use the appliance that applied last.
+  - To go ahead with this state, [take the cluster over](install.md#a-state-older-than-the-management-cluster). The next apply undoes the newer changes.
+- **"another appliance started applying the management cluster at the same time":** two appliances act on one cluster. Stop one of them, then apply again from the other.
 - **"job wait-for-providers failed"** after ten minutes: a provider was not installed or did not roll out. `kubectl -n capi-operator-system logs job/wait-for-providers` names each one with the Cluster API Operator's reason.
   - A version lowered through `version_overrides` is refused ("Downgrade is not supported"). Setting it back does not repair the provider object by itself. To repair it:
     1. Set its `spec.version` back with `kubectl patch`.
@@ -578,6 +582,7 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 - **The last upgrade failed:** the reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. The release installed before runs again in every case but one, below.
 - **`"release … did not start: …; rolled back to …"`:** the new release was installed, but its interface did not answer within 2 minutes, or stopped and was restarted soon after. The updater, or `install.sh --upgrade`, put the old release back. `journalctl -u kubehenge` shows why the new one did not start. Report it with that log ([below](#reporting-a-problem)).
 - **`"…; rolling back to … failed too"`**, or **the interface does not come back** after an upgrade: neither release serves. See `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).
+- **"Appliance disk N % full"** or **"the upgrade needs M MiB":** grow the container's disk on the Proxmox VE node with `pct resize <id> rootfs +4G`, while it runs.
 - **"Distribution: not installed on the management cluster"** or **"Cluster class … has no setting …"** when creating a cluster: the upgraded appliance offers a distribution or setting whose ClusterClass the management cluster does not have yet. Apply the management cluster again (**Upgrade…** at the top of the Administration page) to install the new release's ClusterClasses ([upgrading.md](upgrading.md#in-the-appliance)).
 
 ### Management cluster etcd backups
@@ -604,7 +609,8 @@ The appliance, the management cluster and every cluster check the Proxmox VE API
 ### The interface is unreachable
 
 - Check the container runs (`pct status <ctid>`) and the service is active (`pct exec <ctid> -- systemctl status kubehenge`).
-- The appliance's certificate and its sign-in redirects name the address (or `--name`) it was given. If it took another address from DHCP, give it back that one, or make a certificate for the new one ([install.md](install.md#the-appliances-certificate)).
+- The appliance's certificate and its sign-in redirects name the address (or `--name`) it was given. After a DHCP change, give it back that address or make a certificate for the new one ([install.md](install.md#the-appliances-certificate)).
+- **"The appliance stopped during the upgrade":** a reboot or a migration cut the upgrade off. The old release is back. Ask for the upgrade again, or run `install.sh --upgrade` again.
 - **The browser says the certificate expired:** renew it with `install.sh --certificate --ctid <ctid>` ([install.md](install.md#the-appliances-certificate)). The interface warns administrators 30 days ahead.
 - The interface keeps working while the management cluster is unwell. Pages that need it say the management cluster did not answer. Use **Repair access**, or apply the management cluster again from the Administration page.
 

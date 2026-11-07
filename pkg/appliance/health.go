@@ -1,6 +1,7 @@
 package appliance
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -71,7 +72,7 @@ func (c *ServiceCheck) Healthy(ctx context.Context) error {
 	return answers(ctx, client, url)
 }
 
-// Client trusts the served certificate itself, so the check holds for one Proxmox VE's CA signed,
+// Client accepts only the served certificate itself, so the check holds for one Proxmox VE's CA signed,
 // a self-signed one and an administrator's own alike, and asks for it by a name it is valid for.
 // It returns the client and the interface's URL.
 func (c *ServiceCheck) Client() (*http.Client, string, error) {
@@ -100,11 +101,24 @@ func (c *ServiceCheck) Client() (*http.Client, string, error) {
 	default:
 		return nil, "", errors.New("the interface's certificate names no host")
 	}
+	// The certificate on disk is the only root, and it is verified as of its first valid moment.
+	// Verifying it against the clock fails once it has expired, which would roll back every upgrade
+	// from then on, and the interface warns about the expiry itself.
 	roots := x509.NewCertPool()
 	roots.AddCert(leaf)
+	pinned := &tls.Config{
+		ServerName: name, MinVersion: tls.VersionTLS12, RootCAs: roots,
+		Time: func() time.Time { return leaf.NotBefore },
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 || !bytes.Equal(cs.PeerCertificates[0].Raw, leaf.Raw) {
+				return fmt.Errorf("%s serves a certificate other than %s", c.Address, c.CertFile)
+			}
+			return nil
+		},
+	}
 	dialer := &net.Dialer{Timeout: healthRequest}
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: name, MinVersion: tls.VersionTLS12},
+		TLSClientConfig: pinned,
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return dialer.DialContext(ctx, network, c.Address)
 		},
@@ -120,6 +134,9 @@ func (c *ServiceCheck) untilAnswers(ctx context.Context, client *http.Client, ur
 		err := answers(ctx, client, url)
 		if err == nil {
 			return nil
+		}
+		if verr := (*tls.CertificateVerificationError)(nil); errors.As(err, &verr) {
+			err = fmt.Errorf("%s serves a certificate other than %s", c.Address, c.CertFile)
 		}
 		// A request the deadline cut off says less than the answer before it.
 		if last == nil || ctx.Err() == nil {

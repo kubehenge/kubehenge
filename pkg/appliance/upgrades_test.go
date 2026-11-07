@@ -203,8 +203,11 @@ func TestUnattendedWithoutItsKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	restored := &Appliance{Dir: a.Dir, KeyDir: t.TempDir(), Module: a.Module, Tofu: a.Tofu, Log: a.Log}
-	if restored.UnattendedOn() == nil {
-		t.Fatal("off once the key is gone")
+	if got := restored.UnattendedOn(); got == nil || !got.KeyLost {
+		t.Fatalf("restored without the key, UnattendedOn = %+v", got)
+	}
+	if got := a.UnattendedOn(); got == nil || got.KeyLost {
+		t.Fatalf("with its key, UnattendedOn = %+v", got)
 	}
 	if err := restored.ApplyUnattended(func(context.Context, []byte) error { return nil }); !errors.Is(err, ErrUnattendedKey) {
 		t.Fatalf("an automatic apply without the key: %v", err)
@@ -214,6 +217,9 @@ func TestUnattendedWithoutItsKey(t *testing.T) {
 	}
 	if _, err := restored.unattended(); !errors.Is(err, ErrUnattendedKey) {
 		t.Fatalf("opened with another key: %v", err)
+	}
+	if got := restored.UnattendedOn(); got == nil || !got.KeyLost {
+		t.Fatalf("with another key, UnattendedOn = %+v", got)
 	}
 	restored.KeyDir = ""
 	if err := restored.KeepUnattended(Unattended{Passphrase: "correct horse battery staple", Token: upgraderAPI}); err == nil {
