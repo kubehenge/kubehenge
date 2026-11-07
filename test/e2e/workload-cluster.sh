@@ -453,14 +453,22 @@ class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
 # load balancer and Rancher's agent, which registers a cluster by default.
 # shellcheck disable=SC2086 # one add-on per word.
 sized_for=$(jq -cn '$ARGS.positional + ["loadBalancer", "rancherAgent"]' --args ${addons})
+# fixture_memory: what the test's own pods request on the worker at once, which the scheduler keeps
+# for them beside the add-ons' requests. With GitOps that is Gitea's 128 MiB and five agnhost pods at
+# 16 MiB each. The other steps' few agnhost pods fit in the room the add-ons' figures leave.
+fixture_memory=0
+# shellcheck disable=SC2310 # on only answers whether the run switches the add-on on.
+if on argocd; then
+    fixture_memory=208
+fi
 # Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they
-# are seen to fit in it: its distribution's least, or what a worker uses itself and each add-on's
-# figure, whichever is more.
-worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
+# are seen to fit in it: its distribution's least, or what a worker uses itself, each add-on's
+# figure and the test's own pods, whichever is more.
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --argjson fixtures "${fixture_memory}" '
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + ([$on[] | $addon[.]] | add)]
+        $node.worker + ([$on[] | $addon[.]] | add) + $fixtures]
     | max')}
 # Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
 # request, the GitOps engine that asks for more of the two.
@@ -3206,9 +3214,10 @@ spec:
           readinessProbe:
             httpGet: {path: /api/healthz, port: http}
           # A pod without requests is best-effort, and Talos's OOM controller kills those first when the
-          # 2 GiB worker fills up as the add-ons install (Gitea peaks near 150 MiB).
+          # 2 GiB worker fills up as the add-ons install. Gitea holds about 100 MiB and peaks near
+          # 135 MiB, and the worker is sized for this request (fixture_memory).
           resources:
-            requests: {cpu: 100m, memory: 256Mi}
+            requests: {cpu: 100m, memory: 128Mi}
             limits: {memory: 512Mi}
           securityContext:
             allowPrivilegeEscalation: false
