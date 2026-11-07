@@ -1311,7 +1311,7 @@
               "type": "object",
               "x-kubernetes-validations": [
                 {
-                  "message": "The etcd quota can be raised, not lowered, since a database above it stops accepting writes",
+                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
                   "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
                 }
               ]
@@ -2654,7 +2654,7 @@
               "type": "object",
               "x-kubernetes-validations": [
                 {
-                  "message": "The etcd quota can be raised, not lowered, since a database above it stops accepting writes",
+                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
                   "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
                 }
               ]
@@ -3994,7 +3994,7 @@
               "type": "object",
               "x-kubernetes-validations": [
                 {
-                  "message": "The etcd quota can be raised, not lowered, since a database above it stops accepting writes",
+                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
                   "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
                 }
               ]
@@ -5300,7 +5300,7 @@
               "type": "object",
               "x-kubernetes-validations": [
                 {
-                  "message": "The etcd quota can be raised, not lowered, since a database above it stops accepting writes",
+                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
                   "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
                 }
               ]

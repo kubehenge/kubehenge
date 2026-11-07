@@ -157,7 +157,7 @@ func (s *EtcdStatus) Warning() string {
 		case m.Alarmed():
 			parts = append(parts, fmt.Sprintf("etcd member %s refuses writes, its database is full", m.Name))
 		case s.QuotaBytes > 0 && m.DBSize*100 > s.QuotaBytes*EtcdWarnPercent:
-			parts = append(parts, fmt.Sprintf("etcd member %s is at %d%% of its quota", m.Name, s.Percent(m)))
+			parts = append(parts, fmt.Sprintf("etcd member %s is at %d%% of its limit", m.Name, s.Percent(m)))
 		}
 	}
 	return strings.Join(parts, ", ")

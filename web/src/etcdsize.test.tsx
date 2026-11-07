@@ -29,7 +29,7 @@ const read = new Date(Date.now() - 5 * 60_000).toISOString();
 const sizes: EtcdSizes = {
   read,
   quotaBytes: 8 * gib,
-  warning: "etcd member web-cp-b is at 88% of its quota",
+  warning: "etcd member web-cp-b is at 88% of its limit",
   members: [
     { name: "web-cp-a", leader: true, dbSize: 5 * gib, dbSizeInUse: gib, quotaPercent: 63 },
     { name: "web-cp-b", dbSize: 7 * gib, dbSizeInUse: 6 * gib, quotaPercent: 88 },
@@ -118,7 +118,7 @@ describe("etcd limit", () => {
 
     await expect(screen.findByRole("heading", { name: "etcd size" })).resolves.toBeInTheDocument();
     // The warning and the table give the one share the server computed.
-    expect(screen.getByText("etcd member web-cp-b is at 88% of its quota")).toBeInTheDocument();
+    expect(screen.getByText("etcd member web-cp-b is at 88% of its limit")).toBeInTheDocument();
     const leader = screen.getByRole("row", { name: /web-cp-a/u });
     expect(leader).toHaveTextContent("web-cp-a (leader)");
     expect(leader).toHaveTextContent("5.0 GiB");

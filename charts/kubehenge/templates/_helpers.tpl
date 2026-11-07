@@ -1273,7 +1273,7 @@ write. 8 GiB is the most etcd's documentation suggests.
           description: The most one member's database may reach, in GiB. It can be raised, not lowered.
       x-kubernetes-validations:
         - rule: "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB >= oldSelf.quotaGiB"
-          message: The etcd quota can be raised, not lowered, since a database above it stops accepting writes
+          message: The etcd limit can be raised, not lowered, since a database above it stops accepting writes
 {{- end -}}
 
 {{/*

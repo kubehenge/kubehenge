@@ -447,7 +447,7 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 - **"etcd member … refuses writes, its database is full"**, or `mvcc: database space exceeded`: a member reached the `etcd` variable's limit. Reads still work, so the API server's readiness stays green.
   - The controller defragments the members at once and clears the alarm.
   - Data in use above the limit is not given back. Raise the limit with `kubehenge cluster etcd set NAME --quota-gib 8`, then delete what fills the database.
-- **"etcd member … is at …% of its quota"**: the database is over 60 percent of the limit. Free space is defragmented inside the upgrade window. Data needs a higher limit or fewer objects.
+- **"etcd member … is at …% of its limit"**: the database is over 60 percent of the limit. Free space is defragmented inside the upgrade window. Data needs a higher limit or fewer objects.
 
 ### etcd snapshots and restores
 
