@@ -63,7 +63,7 @@ func (f *fakeCloud) Ensure(_ context.Context, n Names, access Access, held Crede
 	return c, nil
 }
 
-func (f *fakeCloud) Remove(_ context.Context, n Names, held Credentials) error {
+func (f *fakeCloud) Remove(_ context.Context, n Names, held Credentials, _ string) error {
 	f.removed = append(f.removed, n)
 	f.removedHeld = append(f.removedHeld, held)
 	return nil

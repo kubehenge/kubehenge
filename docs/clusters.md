@@ -5,7 +5,7 @@ Every cluster Kubehenge creates is a Cluster API Cluster built from one of Kubeh
 ## What every cluster gets
 
 - **The Proxmox VE cloud controller manager** initialises new nodes and labels them with a region and a zone. The region is the Proxmox VE cluster's name (the node's, on a single node outside any cluster) and the zone is the node.
-- **The Proxmox CSI plugin**, with a default StorageClass `proxmox`: ext4 volumes on the cluster's storage, deleted when released.
+- **The Proxmox CSI plugin**, with a default StorageClass `proxmox`: ext4 volumes on the cluster's storage, deleted when released. Volumes use `discard` and `ssd`, so thin storage takes back deleted data.
 - **A control-plane virtual IP**, held by one control-plane node and moved to another when it fails. kube-vip holds it, and on Talos Talos itself does.
 - **A CNI**: the distribution's own, or the one chosen at creation.
 - **An ingress controller**, Traefik, on ports 80 and 443 of every node, the control planes included. A host name pointing at the cluster's API address or at any node reaches it.
@@ -784,7 +784,9 @@ Where the domain's DNS answers differently inside the network than outside (spli
 
 ## Persistent volumes
 
-The default StorageClass `proxmox` puts volumes on the cluster's storage. They belong to a VM named `<name>-<hash>-volumes`, tagged `kubehenge` and `volumes`, in the cluster's pool. The VM is never started and exists so that only this cluster's token may attach them. A released volume is deleted through that VM. On storage local to each node, a volume lives on one node.
+The default StorageClass `proxmox` puts volumes on the cluster's storage. They belong to a VM named `<name>-<hash>-volumes`, tagged `kubehenge` and `volumes`, in the cluster's pool. The VM is never started and exists so that only this cluster's token may attach them. Kubehenge protects it, so Proxmox VE refuses to delete it by hand. A released volume is deleted through that VM. On storage local to each node, a volume lives on one node.
+
+Kubernetes does not let a StorageClass change its parameters. Where the default class `proxmox` has other parameters than the cluster's storage asks for, the controller deletes it and the CSI plugin's release creates it again. Volumes keep working. Only volumes created after that get `discard` and `ssd`.
 
 By default a cluster runs the last release of the Proxmox VE CSI plugin that needs no more than `Datastore.AllocateSpace` on the cluster's storage. Its newer releases read the storage's configuration and need `Datastore.Allocate` there. That lets the cluster's token delete any volume on that storage and change the storage's definition.
 

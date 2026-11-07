@@ -623,7 +623,12 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.metadata.annotations.ku
 - **ProxmoxMachine … (a VM on an offline node):** capmox cannot delete the VM. Bring the node back.
 - **ProxmoxMachine … "protection flag set":** the VM has Proxmox VE's protection flag, which stops anyone destroying it. Kubehenge never clears an administrator's lock. Run `qm set <vmid> --protection 0` on the node. The deletion carries on within seconds.
 - **ProxmoxMachine … "named …, not …":** a VM of another name holds the machine's VM ID and nothing proves it is not the machine's own. Rename it to the name given, or remove the ProxmoxMachine's finalizer if the machine's VM is gone.
-- **Cluster … removing the Proxmox VE objects:** Kubehenge's controller waits while an offline Proxmox VE node may hold some of the cluster's volumes on local storage. It also waits while Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
+- **Cluster … removing the Proxmox VE objects:** an offline node that carries a storage the cluster used. The reason names the node and the storage. Its volumes are deleted once the node is online. Nodes and storages the cluster never used do not block.
+- **Cluster … removing the Proxmox VE objects, other reasons:** Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
+
+The `DeletionStalled` message ends with what abandoning leaves behind. For an offline node that is the volume owner VM with its volumes, the pool and the user.
+
+Someone who deleted the volume owner VM by hand raises the warning event `VolumeOwnerMissing` with its old VMID. The volumes named `vm-<VMID>-…` stay on the storage without an owner. Restore a VM with that VMID from a backup to own them again.
 
 The Cluster gets the condition `DeletionStalled` and a warning event of the same name once the deletion has waited 20 minutes (the module's `watch.stall_minutes`). The fleet and the cluster's **Health** view list it.
 

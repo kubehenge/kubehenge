@@ -39,19 +39,19 @@ type flakyCloud struct {
 	failures int
 }
 
-func (f *flakyCloud) Remove(ctx context.Context, names Names, held Credentials) error {
+func (f *flakyCloud) Remove(ctx context.Context, names Names, held Credentials, storage string) error {
 	if f.failures > 0 {
 		f.failures--
 		return errors.New("node pve2 is offline")
 	}
-	return f.fakeCloud.Remove(ctx, names, held)
+	return f.fakeCloud.Remove(ctx, names, held, storage)
 }
 
 // failingCloud cannot remove a cluster's Proxmox VE objects, as when a node holding its volumes is
 // down.
 type failingCloud struct{ fakeCloud }
 
-func (*failingCloud) Remove(context.Context, Names, Credentials) error {
+func (*failingCloud) Remove(context.Context, Names, Credentials, string) error {
 	return errors.New("node pve2 is offline")
 }
 
@@ -265,13 +265,22 @@ func TestDeletionSaysKubehengesOwnWait(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	f.r.StallAfter = time.Minute
 	_, err := f.r.Reconcile(context.Background(), ctrl.Request{NamespacedName: webKey})
 	if err == nil {
 		t.Fatal("no error from a failed removal")
 	}
-	st := DeletionStatusOf(f.cluster())
+	c := f.cluster()
+	st := DeletionStatusOf(c)
 	if len(st.Waiting) != 1 || st.Waiting[0].Kind != "Cluster" || !strings.Contains(st.Waiting[0].Reason, "node pve2 is offline") {
 		t.Errorf("waiting %+v", st.Waiting)
+	}
+	if !slices.Contains(st.MayLeave, "the volume owner VM with the cluster's volumes") {
+		t.Errorf("may leave %v; want the volume owner VM named", st.MayLeave)
+	}
+	stalled := meta.FindStatusCondition(c.Status.Conditions, DeletionStalledCondition)
+	if stalled == nil || !strings.Contains(stalled.Message, "Abandoning leaves behind: the volume owner VM with the cluster's volumes") {
+		t.Errorf("stalled condition %+v; want it to say what abandoning leaves behind", stalled)
 	}
 }
 
