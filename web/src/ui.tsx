@@ -246,13 +246,23 @@ export function usePoll<T>(
     }
   }, [take]);
 
+  // When the tab was hidden. A hidden tab reads nothing, so the time it spends hidden does not make
+  // an answer late.
+  const hiddenAt = useRef<number | undefined>(undefined);
   useEffect(() => {
     answered.current = Date.now();
+    hiddenAt.current = document.hidden ? Date.now() : undefined;
     void reload();
     const shownAgain = () => {
-      if (!document.hidden) {
-        void reload();
+      if (document.hidden) {
+        hiddenAt.current ??= Date.now();
+        return;
       }
+      if (hiddenAt.current !== undefined) {
+        answered.current += Date.now() - hiddenAt.current;
+        hiddenAt.current = undefined;
+      }
+      void reload();
     };
     document.addEventListener("visibilitychange", shownAgain);
     return () => document.removeEventListener("visibilitychange", shownAgain);
@@ -368,6 +378,18 @@ export function RetryIn({ next, onRetry }: { next: () => number; onRetry: () => 
         Try now
       </button>
     </span>
+  );
+}
+
+const isoDate = /\d{4}-\d{2}-\d{2}/gu;
+
+/**
+ * localDates writes the dates in text from the server, which keeps them as 2026-10-13 (UTC days),
+ * as the rest of the interface writes a date.
+ */
+export function localDates(text: string): string {
+  return text.replaceAll(isoDate, (day) =>
+    new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC" }),
   );
 }
 
