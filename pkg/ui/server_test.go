@@ -40,7 +40,11 @@ type fakeAccounts struct {
 	grants    map[string]map[string][]string // user -> path -> privileges
 	// acls are paths with ACL entries besides the grants, such as a cluster's pool with its own
 	// user's. privilegeCalls counts the questions about privileges.
-	acls           []string
+	acls []string
+	// storages, when set, replace the storages listed. names are the pools, roles, users and groups
+	// that exist.
+	storages       []pve.Storage
+	names          pve.Names
 	privilegeCalls int
 	backupChecks   int
 	renewals       int
@@ -171,16 +175,31 @@ func (f *fakeAccounts) OpenIDLogin(_ context.Context, code, state, _ string) (*p
 	return &pve.Ticket{Username: "sso-user@sso", Ticket: "ticket:sso", Issued: f.now()}, nil
 }
 
-func (*fakeAccounts) Storages(context.Context, *pve.Ticket) ([]pve.Storage, error) {
+func (f *fakeAccounts) Storages(context.Context, *pve.Ticket) ([]pve.Storage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.storages != nil {
+		return f.storages, nil
+	}
 	return []pve.Storage{
-		{Storage: "local-lvm", Node: "pve1", Content: []string{"images", "rootdir"}},
-		{Storage: "tank", Node: "pve1", Content: []string{"images"}},
-		{Storage: "local", Node: "pve1", Content: []string{"iso", "import", "vztmpl"}},
+		{Storage: "local-lvm", Node: "pve1", Content: []string{"images", "rootdir"}, Active: true, Avail: 100 << 30},
+		{Storage: "tank", Node: "pve1", Content: []string{"images"}, Active: true, Avail: 100 << 30},
+		{Storage: "local", Node: "pve1", Content: []string{"iso", "import", "vztmpl"}, Active: true, Avail: 100 << 30},
 	}, nil
 }
 
 func (*fakeAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
-	return []pve.Node{{Node: "pve1", Online: true}, {Node: "pve2", Online: true}}, nil
+	return []pve.Node{{Node: "pve1", Online: true, MaxMemory: 64 << 30}, {Node: "pve2", Online: true, MaxMemory: 64 << 30}}, nil
+}
+
+func (f *fakeAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.names, nil
+}
+
+func (*fakeAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]string, error) {
+	return map[string]string{"pve1": "10.0.0.5"}, nil
 }
 
 // NodeAffinityRules answers those with Sys.Audit on / with a rule keeping to pve2, one keeping off
@@ -209,7 +228,12 @@ func (f *fakeAccounts) ReleaseHA(_ context.Context, t *pve.Ticket, prefix string
 }
 
 func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
-	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.0.0.5/24", Gateway: "10.0.0.1"}, {Bridge: "vmbr1", Node: node}}, nil
+	return []pve.Bridge{
+		{Bridge: "vmbr0", Node: node, CIDR: "10.0.0.5/24", Gateway: "10.0.0.1"},
+		{Bridge: "vmbr1", Node: node},
+		{Bridge: "corp", Node: node, Zone: "vlanz", ZoneType: "vlan", Alias: "Corporate"},
+		{Bridge: "tenants", Node: node, Zone: "evpn", ZoneType: "evpn"},
+	}, nil
 }
 
 func (*fakeAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
@@ -278,12 +302,16 @@ func (f *fakeAccounts) BackupCovers(_ context.Context, _ *pve.Ticket, vmid int) 
 	return vmid == 150, nil
 }
 
-// Zone knows one SDN VNet, tenants, in zone evpn. Everything else is a plain bridge.
-func (*fakeAccounts) Zone(_ context.Context, _ *pve.Ticket, bridge string) (string, error) {
-	if bridge == "tenants" {
-		return "evpn", nil
+// Network knows two SDN VNets: tenants in the evpn zone and corp in the VLAN zone vlanz.
+// Everything else is a plain bridge.
+func (*fakeAccounts) Network(_ context.Context, _ *pve.Ticket, bridge string) (pve.Network, error) {
+	switch bridge {
+	case "tenants":
+		return pve.Network{Zone: "evpn", ZoneType: "evpn"}, nil
+	case "corp":
+		return pve.Network{Zone: "vlanz", ZoneType: "vlan"}, nil
 	}
-	return "localnetwork", nil
+	return pve.Network{Zone: pve.LocalZone}, nil
 }
 
 func (f *fakeAccounts) effective(username, aclPath string) pve.Privileges {
@@ -340,6 +368,7 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 				"/sdn/zones/localnetwork/vmbr0":    {"SDN.Use"},
 				"/sdn/zones/localnetwork/vmbr1/10": {"SDN.Use"},
 				"/sdn/zones/localnetwork/tenants":  {"SDN.Use"},
+				"/sdn/zones/vlanz/corp":            {"SDN.Use"},
 				"/pool/kubehenge/default.one":      {"Sys.Modify"},
 				"/pool/kubehenge-management":       {"VM.Audit"},
 			},
@@ -931,6 +960,22 @@ func TestCreateChecksProxmoxPrivileges(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A VLAN zone's VNet tags its traffic, so a tag on the cluster's devices would be a second one.
+func TestCreateRefusesAVLANOnAVLANZone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	b := h.browser()
+	b.signIn("dev@pve")
+	rec := b.do("POST", "/api/clusters", strings.Replace(createBody, `"bridge":"vmbr0"`, `"bridge":"corp","vlan":30`, 1))
+	expect(t, rec, http.StatusUnprocessableEntity)
+	if !strings.Contains(rec.Body.String(), "VNet corp is in a VLAN zone and tags already") {
+		t.Errorf("answer = %s", rec.Body)
+	}
+	// Untagged, the same VNet is created, on the grant in its own zone.
+	untagged := strings.Replace(strings.Replace(createBody, `"web"`, `"corp-web"`, 1), `"bridge":"vmbr0"`, `"bridge":"corp"`, 1)
+	expect(t, b.do("POST", "/api/clusters", untagged), http.StatusCreated)
 }
 
 // The interface passes the ranges asked for as they are and leaves the others to the controller's
@@ -1554,8 +1599,12 @@ func TestProxmoxResources(t *testing.T) {
 	}
 	rec = b.do("GET", "/api/proxmox/nodes/pve1/bridges", "")
 	var bridges []bridgeView
-	if err := json.Unmarshal(rec.Body.Bytes(), &bridges); err != nil || len(bridges) != 2 || !bridges[0].Usable || bridges[1].Usable {
+	if err := json.Unmarshal(rec.Body.Bytes(), &bridges); err != nil || len(bridges) != 4 || !bridges[0].Usable || bridges[1].Usable {
 		t.Fatalf("bridges = %s", rec.Body)
+	}
+	// A VNet is usable by the grant on its own zone, never by one on localnetwork under its name.
+	if corp, tenants := bridges[2], bridges[3]; corp.Ref() != "vlanz/corp" || !corp.Usable || tenants.Ref() != "evpn/tenants" || tenants.Usable {
+		t.Fatalf("VNets = %s", rec.Body)
 	}
 	rec = b.do("GET", "/api/proxmox/nodes/pve1/dns", "")
 	expect(t, rec, http.StatusOK)

@@ -263,6 +263,8 @@ resource "helm_release" "cert_manager" {
   chart      = "cert-manager@sha256:${split("@sha256:", local.cert_manager.chart)[1]}"
   version    = split("@sha256:", local.cert_manager.chart)[0]
   wait       = true
+  # Helm's 300 seconds are short for images pulled through a mirror or a slow uplink and verified.
+  timeout = 900
 
   # The chart sets no requests, which leaves cert-manager BestEffort; see memory_requests. Each image
   # is named by its tag and digest, which the chart puts after the repository.
@@ -287,6 +289,7 @@ resource "helm_release" "cluster_api_operator" {
   create_namespace = true
   chart            = local.capi_operator_chart
   wait             = true
+  timeout          = 900
 
   values = [yamlencode({
     image             = { manager = { tag = local.capi_operator.image } }
@@ -391,6 +394,7 @@ resource "helm_release" "kubehenge" {
   namespace = local.kubehenge_namespace
   chart     = "${path.module}/../charts/kubehenge"
   wait      = true
+  timeout   = 900
 
   values = [yamlencode(merge(
     {
@@ -409,7 +413,7 @@ resource "helm_release" "kubehenge" {
       }
       clusters = {
         storages = var.workload_datastores
-        bridges  = var.workload_bridges
+        bridges  = [for b in var.workload_bridges : local.bridges[b].name]
       }
       proxmox = {
         url          = var.proxmox_endpoint
@@ -438,7 +442,7 @@ resource "helm_release" "kubehenge" {
         importStorage = local.template_builder.import
         isoStorage    = local.template_builder.iso
         pool          = proxmox_virtual_environment_pool.templates.pool_id
-        bridge        = local.template_builder.bridge
+        bridge        = local.bridges[local.template_builder.bridge].name
         vlan          = var.template_refresh.vlan
         address       = var.template_refresh.address == null ? "" : var.template_refresh.address
         gateway       = var.template_refresh.gateway == null ? "" : var.template_refresh.gateway
