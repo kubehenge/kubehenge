@@ -196,12 +196,18 @@ func (b *Builder) chooseISO(ctx context.Context, list []nodeStorage) (string, er
 // TagOptions are the datacenter options that decide which tags a user may set, in the shapes
 // /cluster/options gives them.
 type TagOptions struct {
-	Access struct {
-		// Allow is free, existing, list or none. Proxmox VE leaves it out for free.
-		Allow string   `json:"user-allow"`
-		List  []string `json:"user-allow-list"`
-	} `json:"user-tag-access"`
-	Registered []string `json:"registered-tags"`
+	Access     TagAccess `json:"user-tag-access"`
+	Registered []string  `json:"registered-tags"`
+}
+
+// tagAccessExisting is the user-tag-access setting that also allows the tags already on guests.
+const tagAccessExisting = "existing"
+
+// TagAccess is the datacenter option user-tag-access.
+type TagAccess struct {
+	// Allow is free, existing, list or none. Proxmox VE leaves it out for free.
+	Allow string   `json:"user-allow"`
+	List  []string `json:"user-allow-list"`
 }
 
 // Refusal says why the options would refuse tags to a user without Sys.Modify on /, or returns "".
@@ -222,9 +228,9 @@ func (o *TagOptions) Refusal(tags, visible []string) string {
 	case "none":
 		return "the datacenter option user-tag-access is none, so users cannot set tags. " +
 			"Choose list in Datacenter, Options, User Tag Access and add " + strings.Join(tags, ", ")
-	case "list", "existing":
+	case "list", tagAccessExisting:
 		allowed := slices.Clone(o.Access.List)
-		if o.Access.Allow == "existing" {
+		if o.Access.Allow == tagAccessExisting {
 			allowed = append(allowed, visible...)
 		}
 		var missing []string
@@ -268,7 +274,7 @@ func CheckTags(ctx context.Context, c *proxmox.Client, tags []string) error {
 		return nil //nolint:nilerr // options that cannot be read cannot judge the tags
 	}
 	var visible []string
-	if options.Access.Allow == "existing" {
+	if options.Access.Allow == tagAccessExisting {
 		visible = visibleTags(ctx, c)
 	}
 	why := options.Refusal(tags, visible)
