@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -23,15 +24,18 @@ const MinPassphrase = 16
 // variables keep their defaults.
 type Settings struct {
 	// Nodes are the Proxmox VE nodes the management cluster's VMs run on, taken in turn.
-	Nodes              []string `json:"nodes"`
-	ImageDatastore     string   `json:"imageDatastore"`
-	VMDatastore        string   `json:"vmDatastore"`
-	Bridge             string   `json:"bridge"`
-	VLAN               *int     `json:"vlan,omitempty"`
-	NodeAddresses      []string `json:"nodeAddresses"`
-	APIAddress         string   `json:"apiAddress"`
-	Gateway            string   `json:"gateway"`
-	DNSServers         []string `json:"dnsServers"`
+	Nodes          []string `json:"nodes"`
+	ImageDatastore string   `json:"imageDatastore"`
+	VMDatastore    string   `json:"vmDatastore"`
+	Bridge         string   `json:"bridge"`
+	VLAN           *int     `json:"vlan,omitempty"`
+	NodeAddresses  []string `json:"nodeAddresses"`
+	APIAddress     string   `json:"apiAddress"`
+	Gateway        string   `json:"gateway"`
+	DNSServers     []string `json:"dnsServers"`
+	// TimeServers are the NTP servers the nodes keep their clocks with. Empty keeps Talos's default
+	// public ones.
+	TimeServers        []string `json:"timeServers,omitempty"`
 	WorkloadDatastores []string `json:"workloadDatastores"`
 	WorkloadBridges    []string `json:"workloadBridges"`
 	BootstrapDatastore string   `json:"bootstrapDatastore"`
@@ -241,6 +245,9 @@ const (
 	maxVLAN = 4094
 )
 
+// bridgeRef is a node's bridge by name, or a VNet as zone/vnet.
+var bridgeRef = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
 // plainHTTPS tells whether s is an https:// URL with a host and without query, fragment or user.
 func plainHTTPS(s string) bool {
 	u, err := url.Parse(s)
@@ -370,6 +377,11 @@ func (s *Settings) KeepsFixed(was *Settings) error {
 	if len(s.NodeAddresses) < len(was.NodeAddresses) || !slices.Equal(s.NodeAddresses[:len(was.NodeAddresses)], was.NodeAddresses) {
 		p.addf("Node addresses: the nodes there are keep theirs (%s), and more can only be added after them", strings.Join(was.NodeAddresses, ", "))
 	}
+	// The VMs take the nodes in turn, so adding, removing or reordering one moves running etcd VMs
+	// to other nodes.
+	if !slices.Equal(s.Nodes, was.Nodes) {
+		p.addf("Proxmox VE nodes: stay %s once the management cluster exists, or its VMs would migrate to other nodes", strings.Join(was.Nodes, ", "))
+	}
 	for _, f := range [...]struct{ label, now, then string }{
 		{"API address", s.APIAddress, was.APIAddress},
 		{"Gateway", s.Gateway, was.Gateway},
@@ -415,7 +427,7 @@ func (s *Settings) checkPlacement(p *problems) {
 			p.addf("%s: choose a storage", f.label)
 		}
 	}
-	if strings.TrimSpace(s.Bridge) == "" {
+	if !bridgeRef.MatchString(s.Bridge) {
 		p.addf("Bridge: choose one")
 	}
 	if s.VLAN != nil && (*s.VLAN < minVLAN || *s.VLAN > maxVLAN) {
@@ -478,6 +490,50 @@ func (s *Settings) checkServers(p *problems) {
 	if len(s.WorkloadDatastores) == 0 || len(s.WorkloadBridges) == 0 {
 		p.addf("What clusters may use: at least one storage and one bridge")
 	}
+	for _, b := range s.WorkloadBridges {
+		if !bridgeRef.MatchString(b) {
+			p.addf("What clusters may use: %q is no bridge, write a VNet as zone/vnet", b)
+		}
+	}
+	s.checkTimeServers(p)
+}
+
+// checkTimeServers checks that each time server is a host name or an address Talos can resolve and
+// reach, not a URL and not an address that leads back to the node itself.
+func (s *Settings) checkTimeServers(p *problems) {
+	seen := map[string]bool{}
+	for _, t := range s.TimeServers {
+		switch ip, err := netip.ParseAddr(t); {
+		case seen[t]:
+			p.addf("Time servers: %s is listed twice", t)
+		case err == nil && (ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast()):
+			p.addf("Time servers: %s is no address the nodes can reach", t)
+		case err != nil && !validHostName(t):
+			p.addf("Time servers: %s is no host name or IP address", t)
+		}
+		seen[t] = true
+	}
+}
+
+// validHostName tells whether s is a DNS name: dot-separated labels of letters, digits and hyphens,
+// none starting or ending with a hyphen, at most 253 characters.
+func validHostName(s string) bool {
+	const longestName, longestLabel = 253, 63
+	s = strings.TrimSuffix(s, ".")
+	if s == "" || len(s) > longestName {
+		return false
+	}
+	for label := range strings.SplitSeq(s, ".") {
+		if label == "" || len(label) > longestLabel || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, r := range label {
+			if r > unicode.MaxASCII || (!unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *Settings) checkSubnets(p *problems) {

@@ -1773,6 +1773,42 @@ fieldset.choices .check {
   color: var(--error);
 }
 
+/* Under the control of the field it is about, in the column the controls start in. */
+.field-warning {
+  display: block;
+
+  margin-block: -4px 12px;
+  margin-inline-start: calc(190px + 10px);
+
+  font-size: 12.5px;
+  color: var(--warning);
+}
+
+@media (width <= 600px) {
+  .field-warning {
+    margin-inline-start: 0;
+  }
+}
+
+.findings {
+  margin-block: 16px 0;
+  padding-inline-start: 10px;
+  border-inline-start: 3px solid var(--warning);
+}
+
+.findings-errors {
+  border-inline-start-color: var(--error);
+  color: var(--error);
+}
+
+.findings + .findings {
+  margin-block-start: 12px;
+}
+
+.summary.findings-ranges {
+  margin-block-start: 16px;
+}
+
 .switch ~ .hint,
 .switch ~ .field-error {
   display: block;

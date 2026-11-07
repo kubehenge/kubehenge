@@ -184,7 +184,7 @@ rules:
     verbs: [create]
   - apiGroups: [""]
     resources: [configmaps]
-    resourceNames: [kubehenge-ha-rules]
+    resourceNames: [kubehenge-ha-rules, kubehenge-proxmox-reach]
     verbs: [update, delete]
   - apiGroups: [controlplane.cluster.x-k8s.io]
     resources: [kubeadmcontrolplanetemplates, rke2controlplanetemplates, kthreescontrolplanetemplates, taloscontrolplanetemplates]

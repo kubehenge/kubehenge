@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -19,6 +20,8 @@ import (
 const (
 	lineBuffer = 64 << 10
 	maxLine    = 4 << 20
+	// interruptGrace is how long an interrupted tofu gets to flush its state before it is killed.
+	interruptGrace = 5 * time.Minute
 )
 
 // rootConfig calls the module with the wizard's settings. State encryption comes from
@@ -43,6 +46,7 @@ module "management" {
   api_address            = var.settings.apiAddress
   gateway                = var.settings.gateway
   dns_servers            = var.settings.dnsServers
+  time_servers           = var.settings.timeServers
   workload_datastores    = var.settings.workloadDatastores
   workload_bridges       = var.settings.workloadBridges
   bootstrap_datastore    = var.settings.bootstrapDatastore
@@ -178,6 +182,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"apiAddress":             s.APIAddress,
 		"gateway":                s.Gateway,
 		"dnsServers":             s.DNSServers,
+		"timeServers":            append([]string{}, s.TimeServers...),
 		"workloadDatastores":     s.WorkloadDatastores,
 		"workloadBridges":        s.WorkloadBridges,
 		"bootstrapDatastore":     s.BootstrapDatastore,
@@ -303,6 +308,10 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 	}
 	cmd := exec.CommandContext(ctx, a.Tofu, append([]string{"-chdir=" + a.workdir()}, args...)...) //nolint:gosec // the binary and arguments are the appliance's own
 	cmd.Env = env
+	// A kill leaves resources made in the last seconds out of the state, so a retry meets them as
+	// "already exists". Interrupted, tofu finishes what it is creating and writes its state first.
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = interruptGrace
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("tofu %s: %w", args[0], err)
@@ -314,7 +323,11 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 	}
 	sc := bufio.NewScanner(out)
 	sc.Buffer(make([]byte, lineBuffer), maxLine)
+	var failures []string
 	for sc.Scan() {
+		if d := errorDiagnostic(sc.Text()); d != "" {
+			failures = append(failures, d)
+		}
 		if line := message(sc.Text()); line != "" {
 			j.Add(line)
 		}
@@ -327,9 +340,30 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 	_, _ = io.Copy(io.Discard, out)
 	err = cmd.Wait()
 	if err != nil {
+		if len(failures) > 0 {
+			return fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; "))
+		}
 		return fmt.Errorf("tofu %s: %w", args[0], err)
 	}
 	return nil
+}
+
+// errorDiagnostic is the summary and detail of a line of OpenTofu's -json output that reports an
+// error, or "" for any other line. The job's error carries them, as the log scrolls out of view.
+func errorDiagnostic(line string) string {
+	var m tofuMessage
+	if json.Unmarshal([]byte(line), &m) != nil || m.Type != "diagnostic" || m.Level != "error" {
+		return ""
+	}
+	d := m.Diagnostic
+	text := strings.TrimSpace(d.Summary)
+	if detail := strings.TrimSpace(d.Detail); detail != "" {
+		text += ": " + detail
+	}
+	if d.Address != "" {
+		text = d.Address + ": " + text
+	}
+	return text
 }
 
 // output reads one output of the last apply.

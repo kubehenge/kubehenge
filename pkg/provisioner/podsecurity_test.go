@@ -39,6 +39,13 @@ func TestKyvernoEnforcesTheChosenLevel(t *testing.T) {
 		if lookup[float64](t, own, "admissionController", "replicas") != kyvernoAdmissionReplicas {
 			t.Errorf("%s: one lost lease leaves no admission controller answering: %v", level, own)
 		}
+		spread := lookup[[]any](t, own, "admissionController", "topologySpreadConstraints")
+		tolerated := lookup[[]any](t, own, "admissionController", "tolerations")
+		if len(spread) != 1 || lookup[string](t, spread, 0, "whenUnsatisfiable") != "DoNotSchedule" ||
+			lookup[string](t, spread, 0, "topologyKey") != "kubernetes.io/hostname" ||
+			len(tolerated) != 1 || lookup[string](t, tolerated, 0, "key") != controlPlaneRole {
+			t.Errorf("%s: both admission controllers may share a node, whose drain then waits on their budget: %v", level, own["admissionController"])
+		}
 		values := map[string]any{}
 		if err := yaml.Unmarshal([]byte(lookup[string](t, policies, "valuesTemplate")), &values); err != nil {
 			t.Fatal(err)

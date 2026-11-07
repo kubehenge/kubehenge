@@ -4,8 +4,6 @@ locals {
     proxmox_node = var.proxmox_nodes[i % length(var.proxmox_nodes)]
     address      = address
     ip           = split("/", address)[0]
-    # Proxmox VE's own prefix and 24 bits from the name, so Talos can name the link before the VM exists.
-    mac = upper(join(":", concat(["bc", "24", "11"], regexall("..", substr(md5("${var.cluster_name}-${i}"), 0, 6)))))
   }]
   node_ips     = [for n in local.nodes : n.ip]
   api_endpoint = "https://${var.api_address}:6443"
