@@ -940,12 +940,7 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 		return err
 	}
 	for _, check := range checks {
-		var err error
-		if log != "" {
-			err = b.execWatched(ctx, vm, check, log)
-		} else {
-			err = b.exec(ctx, vm, check, bakeTimeout)
-		}
+		err := b.runCheck(ctx, vm, check, log)
 		if err == nil {
 			continue
 		}
@@ -1013,6 +1008,14 @@ func (b *Builder) activity(ctx context.Context, vm *proxmox.VirtualMachine, log 
 	return bakeActivity{log: size, received: status.NetIn, written: status.DiskWrite, cpu: status.CPU}, nil
 }
 
+// runCheck runs a check of a bake, watched for a stall when the bake keeps a log.
+func (b *Builder) runCheck(ctx context.Context, vm *proxmox.VirtualMachine, check []string, log string) error {
+	if log == "" {
+		return b.exec(ctx, vm, check, bakeTimeout)
+	}
+	return b.execWatched(ctx, vm, check, log)
+}
+
 // execWatched runs a bake's check as exec does, and ends it once the bake has shown no work for
 // bakeStall.
 func (b *Builder) execWatched(ctx context.Context, vm *proxmox.VirtualMachine, command []string, log string) error {
@@ -1039,8 +1042,8 @@ func (b *Builder) execWatched(ctx context.Context, vm *proxmox.VirtualMachine, c
 		case !read || now.busySince(last):
 			last, read, since = now, true, time.Now()
 		case time.Since(since) >= bakeStall:
+			// The check, cancelled, ends on its own, into done's room.
 			cancel()
-			<-done
 			return fmt.Errorf("running %q: no work for %s: no new line in %s, under 1 MiB received and 16 MiB written, CPUs idle",
 				strings.Join(command, " "), bakeStall, log)
 		}

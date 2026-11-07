@@ -553,6 +553,59 @@ func (u *Upgrader) Start(ctx context.Context) error {
 	}
 }
 
+// RunOnce looks at every cluster once.
+func (u *Upgrader) RunOnce(ctx context.Context) {
+	log := ctrl.LoggerFrom(ctx).WithName("upgrader")
+	var list clusterv1.ClusterList
+	if err := u.Client.List(ctx, &list); err != nil {
+		log.Error(err, "listing clusters")
+		return
+	}
+	channels := map[string]Channels{}
+	compare := u.supportDue()
+	for i := range list.Items {
+		c := &list.Items[i]
+		if compare {
+			u.markSupport(ctx, c, channels)
+		}
+		to, err := u.next(ctx, c, channels)
+		if err != nil {
+			log.Error(err, "automatic upgrade", "cluster", client.ObjectKeyFromObject(c))
+			continue
+		}
+		if to == "" {
+			// An upgrade takes the newest node images itself, so a refresh is only looked for
+			// when none starts.
+			if err := u.refresh(ctx, c); err != nil {
+				log.Error(err, "node image refresh", "cluster", client.ObjectKeyFromObject(c))
+			}
+			continue
+		}
+		from := c.Spec.Topology.Version
+		// The target was chosen from what was read. A version the user set since, or a cluster that
+		// stopped being settled, makes the patch fail on the resource version and is looked at anew.
+		base := client.MergeFromWithOptions(c.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		if c.Annotations == nil {
+			c.Annotations = map[string]string{}
+		}
+		c.Annotations[autoUpgraded] = fmt.Sprintf("%s to %s at %s", from, to, u.Now().UTC().Format(time.RFC3339))
+		c.Spec.Topology.Version = to
+		if err := u.Client.Patch(ctx, c, base); err != nil {
+			log.Error(err, "starting an automatic upgrade", "cluster", client.ObjectKeyFromObject(c))
+			continue
+		}
+		log.Info("automatic upgrade started", "cluster", client.ObjectKeyFromObject(c), "from", from, "to", to)
+		u.clearSkipped(ctx, c)
+	}
+	if compare {
+		// After the loop, since a condition written first would make the upgrade's patch conflict.
+		for i := range list.Items {
+			u.recordChecks(ctx, &list.Items[i], channels)
+		}
+		u.supportAt = u.Now()
+	}
+}
+
 // watch sends on wake when a round could find something to do. A full channel already holds a
 // round to come, so changes in a burst start one.
 func (u *Upgrader) watch(ctx context.Context, wake chan<- struct{}) error {
@@ -610,59 +663,6 @@ func variableValue(c *clusterv1.Cluster, name string) []byte {
 		}
 	}
 	return nil
-}
-
-// RunOnce looks at every cluster once.
-func (u *Upgrader) RunOnce(ctx context.Context) {
-	log := ctrl.LoggerFrom(ctx).WithName("upgrader")
-	var list clusterv1.ClusterList
-	if err := u.Client.List(ctx, &list); err != nil {
-		log.Error(err, "listing clusters")
-		return
-	}
-	channels := map[string]Channels{}
-	compare := u.supportDue()
-	for i := range list.Items {
-		c := &list.Items[i]
-		if compare {
-			u.markSupport(ctx, c, channels)
-		}
-		to, err := u.next(ctx, c, channels)
-		if err != nil {
-			log.Error(err, "automatic upgrade", "cluster", client.ObjectKeyFromObject(c))
-			continue
-		}
-		if to == "" {
-			// An upgrade takes the newest node images itself, so a refresh is only looked for
-			// when none starts.
-			if err := u.refresh(ctx, c); err != nil {
-				log.Error(err, "node image refresh", "cluster", client.ObjectKeyFromObject(c))
-			}
-			continue
-		}
-		from := c.Spec.Topology.Version
-		// The target was chosen from what was read. A version the user set since, or a cluster that
-		// stopped being settled, makes the patch fail on the resource version and is looked at anew.
-		base := client.MergeFromWithOptions(c.DeepCopy(), client.MergeFromWithOptimisticLock{})
-		if c.Annotations == nil {
-			c.Annotations = map[string]string{}
-		}
-		c.Annotations[autoUpgraded] = fmt.Sprintf("%s to %s at %s", from, to, u.Now().UTC().Format(time.RFC3339))
-		c.Spec.Topology.Version = to
-		if err := u.Client.Patch(ctx, c, base); err != nil {
-			log.Error(err, "starting an automatic upgrade", "cluster", client.ObjectKeyFromObject(c))
-			continue
-		}
-		log.Info("automatic upgrade started", "cluster", client.ObjectKeyFromObject(c), "from", from, "to", to)
-		u.clearSkipped(ctx, c)
-	}
-	if compare {
-		// After the loop, since a condition written first would make the upgrade's patch conflict.
-		for i := range list.Items {
-			u.recordChecks(ctx, &list.Items[i], channels)
-		}
-		u.supportAt = u.Now()
-	}
 }
 
 // next returns the version a cluster should move to now, or "".
