@@ -217,6 +217,26 @@ function proxySettings(f: SetupForm): ManagementSettings["proxy"] {
   return proxy;
 }
 
+/** outboundSettings are the settings for how the management cluster reaches registries and the internet, and its subnets. */
+function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
+  const s: Partial<ManagementSettings> = {};
+  const mirrors = parseMirrors(f.mirrors);
+  if (Object.keys(mirrors).length > 0) {
+    s.registryMirrors = mirrors;
+  }
+  const proxy = proxySettings(f);
+  if (proxy) {
+    s.proxy = proxy;
+  }
+  if (list(f.podSubnets).length > 0) {
+    s.podSubnets = list(f.podSubnets);
+  }
+  if (list(f.serviceSubnets).length > 0) {
+    s.serviceSubnets = list(f.serviceSubnets);
+  }
+  return s;
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -235,20 +255,7 @@ export function settings(f: SetupForm): ManagementSettings {
   if (f.vlan) {
     s.vlan = Number(f.vlan);
   }
-  const mirrors = parseMirrors(f.mirrors);
-  if (Object.keys(mirrors).length > 0) {
-    s.registryMirrors = mirrors;
-  }
-  const proxy = proxySettings(f);
-  if (proxy) {
-    s.proxy = proxy;
-  }
-  if (list(f.podSubnets).length > 0) {
-    s.podSubnets = list(f.podSubnets);
-  }
-  if (list(f.serviceSubnets).length > 0) {
-    s.serviceSubnets = list(f.serviceSubnets);
-  }
+  Object.assign(s, outboundSettings(f));
   if (filled(f.controllerImage)) {
     s.controllerImage = f.controllerImage;
   }
