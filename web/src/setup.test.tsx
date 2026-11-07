@@ -855,6 +855,25 @@ describe("setup", () => {
     expect(within(alert).getByText("sh install.sh --certificate --ctid 105")).toBeInTheDocument();
   });
 
+  it("warns administrators that the appliance's disk fills up", async () => {
+    fakeServer({
+      ...administrator,
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          applianceVMID: 105,
+          diskFull: { usedPercent: 86, freeMiB: 1192 },
+        },
+      },
+      "GET /api/clusters": { body: [] },
+    });
+    render(<App />);
+    const alert = await screen.findByText(/Appliance disk 86 % full, 1\.2 GiB free\./u);
+    expect(within(alert).getByText("pct resize 105 rootfs +4G")).toBeInTheDocument();
+  });
+
   it("warns administrators that the management cluster's credentials run out", async () => {
     fakeServer({
       ...administrator,

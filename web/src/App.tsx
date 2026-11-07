@@ -10,6 +10,7 @@ import type { Session, SetupStatus } from "./types";
 import { ErrorBoundary, Skeleton } from "./ui";
 
 const msPerDay = 86_400_000;
+const mibPerGiB = 1024;
 
 // Administrators are warned this many days before the certificate runs out. It is renewed on the node.
 const certificateWarningDays = 30;
@@ -95,8 +96,8 @@ function Shell({
 }): JSX.Element {
   const path = usePath();
   const [setup, setSetup] = useState<SetupStatus>();
-  const [certificate, setCertificate] = useState<{ expires: Date; expired: boolean }>();
-  const [credentials, setCredentials] = useState<{ expires: Date; expired: boolean }>();
+  const [certificate, setCertificate] = useState<Expiry>();
+  const [credentials, setCredentials] = useState<Expiry>();
   const [upgradedTo, setUpgradedTo] = useState<string>();
   const retry = useRef<number>(undefined);
   // Counts the reads, so only the newest one's answer shows, and none after sign-out.
@@ -187,32 +188,8 @@ function Shell({
           </button>
         </output>
       )}
-      {setup?.backup === false && !settingUp && (
-        <p className="warning" role="alert">
-          No backup job covers this appliance, and it holds the management cluster's only state. Add it under Datacenter
-          → Backup.
-        </p>
-      )}
-      {setup?.addressMoved && (
-        <p className="warning" role="alert">
-          Appliance address moved from {setup.addressMoved.from.join(", ")} to{" "}
-          {setup.addressMoved.to.join(", ") || "none"}. Renew the certificate on the Proxmox VE node:{" "}
-          <code>sh install.sh --certificate --ctid {setup.applianceVMID ?? "<appliance ID>"}</code>
-        </p>
-      )}
-      {certificate && (
-        <p className="warning" role="alert">
-          {certificate.expired ? "Appliance certificate expired on " : "Appliance certificate expires on "}
-          {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Renew it on the Proxmox VE node:{" "}
-          <code>sh install.sh --certificate --ctid {setup?.applianceVMID ?? "<appliance ID>"}</code>
-        </p>
-      )}
-      {credentials && (
-        <p className="warning" role="alert">
-          Management cluster credentials {credentials.expired ? "expired" : "expire"} on{" "}
-          {credentials.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Apply the settings in{" "}
-          <a href="/administration">Administration</a> to renew them.
-        </p>
+      {setup && (
+        <ApplianceWarnings setup={setup} settingUp={settingUp} certificate={certificate} credentials={credentials} />
       )}
       {/* Keyed by path: a page that failed recovers by navigating away, the top bar stays. */}
       <ErrorBoundary key={pageKey}>
@@ -250,6 +227,64 @@ function Shell({
   );
   // The fleet is read once the appliance is set up, for every page alike.
   return <FleetProvider reads={needsSetup === false}>{frame}</FleetProvider>;
+}
+
+interface Expiry {
+  expires: Date;
+  expired: boolean;
+}
+
+// ApplianceWarnings are what administrators of the appliance have to act on: its backup, its
+// address, its disk and the credentials running out. The server sends each only to them.
+function ApplianceWarnings({
+  setup,
+  settingUp,
+  certificate,
+  credentials,
+}: {
+  setup: SetupStatus;
+  settingUp: boolean;
+  certificate: Expiry | undefined;
+  credentials: Expiry | undefined;
+}): JSX.Element {
+  const ctid = setup.applianceVMID ?? "<appliance ID>";
+  return (
+    <>
+      {setup.backup === false && !settingUp && (
+        <p className="warning" role="alert">
+          No backup job covers this appliance, and it holds the management cluster's only state. Add it under Datacenter
+          → Backup.
+        </p>
+      )}
+      {setup.addressMoved && (
+        <p className="warning" role="alert">
+          Appliance address moved from {setup.addressMoved.from.join(", ")} to{" "}
+          {setup.addressMoved.to.join(", ") || "none"}. Renew the certificate on the Proxmox VE node:{" "}
+          <code>sh install.sh --certificate --ctid {ctid}</code>
+        </p>
+      )}
+      {setup.diskFull && (
+        <p className="warning" role="alert">
+          Appliance disk {setup.diskFull.usedPercent} % full, {(setup.diskFull.freeMiB / mibPerGiB).toFixed(1)} GiB
+          free. Grow it on the Proxmox VE node: <code>pct resize {ctid} rootfs +4G</code>
+        </p>
+      )}
+      {certificate && (
+        <p className="warning" role="alert">
+          {certificate.expired ? "Appliance certificate expired on " : "Appliance certificate expires on "}
+          {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Renew it on the Proxmox VE node:{" "}
+          <code>sh install.sh --certificate --ctid {ctid}</code>
+        </p>
+      )}
+      {credentials && (
+        <p className="warning" role="alert">
+          Management cluster credentials {credentials.expired ? "expired" : "expire"} on{" "}
+          {credentials.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Apply the settings in{" "}
+          <a href="/administration">Administration</a> to renew them.
+        </p>
+      )}
+    </>
+  );
 }
 
 // certificateWarning is the warning about the appliance's certificate when it runs out within

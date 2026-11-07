@@ -143,7 +143,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	s.CertificateExpires = pair.Leaf.NotAfter
 	if o.a.Dir != "" {
-		knowOwnAddresses(s, pair.Leaf)
+		knowTheAppliance(s, pair.Leaf, o.a.Dir)
 	}
 	accounts, err := pve.NewAccounts(*conn)
 	if err != nil {
@@ -437,9 +437,11 @@ func applianceVMIDDefault() int {
 	return id
 }
 
-// knowOwnAddresses tells the interface the appliance's MAC and IP addresses and those its
-// certificate is for, by which it finds its guest in Proxmox VE and notices an address it lost.
-func knowOwnAddresses(s *ui.Server, cert *x509.Certificate) {
+// knowTheAppliance tells the interface the appliance's MAC and IP addresses and those its
+// certificate is for, by which it finds its guest in Proxmox VE and notices an address it lost. It
+// also reads the use of the disk holding the appliance's state in dir.
+func knowTheAppliance(s *ui.Server, cert *x509.Certificate, dir string) {
+	s.DiskUse = func() (uint64, uint64, error) { return appliance.DiskUse(dir) }
 	s.ApplianceMACs, s.OwnAddresses = ownMACs(), ownAddresses
 	s.CertificateNames = cert.DNSNames
 	for _, ip := range cert.IPAddresses {

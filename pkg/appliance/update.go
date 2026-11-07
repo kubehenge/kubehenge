@@ -346,7 +346,10 @@ func (u *Updater) checkSpace() error {
 	}
 	free := u.FreeSpace
 	if free == nil {
-		free = freeSpace
+		free = func(p string) (uint64, error) {
+			_, f, err := DiskUse(p)
+			return f, err
+		}
 	}
 	have, err := free(filepath.Dir(u.share()))
 	if err != nil {

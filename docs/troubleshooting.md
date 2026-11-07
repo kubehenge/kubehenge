@@ -640,6 +640,7 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 - **The last upgrade failed:** the reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. The release installed before runs again in every case but one, below.
 - **`"release … did not start: …; rolled back to …"`:** the new release was installed, but its interface did not answer within 2 minutes, or stopped and was restarted soon after. The updater, or `install.sh --upgrade`, put the old release back. `journalctl -u kubehenge` shows why the new one did not start. Report it with that log ([below](#reporting-a-problem)).
 - **`"…; rolling back to … failed too"`**, or **the interface does not come back** after an upgrade: neither release serves. See `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)).
+- **"Appliance disk N % full"** or **"the upgrade needs M MiB":** grow the container's disk on the Proxmox VE node with `pct resize <id> rootfs +4G`, while it runs.
 - **"Distribution: not installed on the management cluster"** or **"Cluster class … has no setting …"** when creating a cluster: the upgraded appliance offers a distribution or setting whose ClusterClass the management cluster does not have yet. Apply the management cluster again (**Upgrade…** at the top of the Administration page) to install the new release's ClusterClasses ([upgrading.md](upgrading.md#in-the-appliance)).
 
 ### Management cluster etcd backups

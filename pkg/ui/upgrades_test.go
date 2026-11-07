@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -348,6 +349,41 @@ func TestSetupTellsAdministratorsWhenTheAddressMoved(t *testing.T) {
 		got := a.do("GET", "/api/setup", "").Body.String()
 		if tc.want == "" && strings.Contains(got, "addressMoved") || !strings.Contains(got, tc.want) {
 			t.Errorf("%s: setup = %s", tc.name, got)
+		}
+	}
+}
+
+// A root disk fills over the years with OpenTofu's plugins and logs, and an upgrade needs room for
+// three copies of the software. From 80 % in use, administrators are told to grow it.
+func TestSetupTellsAdministratorsWhenTheDiskFillsUp(t *testing.T) {
+	t.Parallel()
+	const mib = 1 << 20
+	for _, tc := range []struct {
+		name       string
+		used, free uint64
+		err        error
+		want       string
+	}{
+		{"nearly full", 7000 * mib, 1192 * mib, nil, `"diskFull":{"usedPercent":86,"freeMiB":1192}`},
+		{"at the mark", 80 * mib, 20 * mib, nil, `"diskFull":{"usedPercent":80,"freeMiB":20}`},
+		{"79.01 %, rounded up as df does", 7901 * mib, 2099 * mib, nil, `"diskFull":{"usedPercent":80,"freeMiB":2099}`},
+		{"78.99 %", 7899 * mib, 2101 * mib, nil, ""},
+		{"room enough", 2000 * mib, 6000 * mib, nil, ""},
+		{"not known", 0, 0, errors.New("statfs: not supported"), ""},
+		{"an empty file system", 0, 0, nil, ""},
+	} {
+		h := newHarness(t)
+		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+		h.server.DiskUse = func() (uint64, uint64, error) { return tc.used, tc.free, tc.err }
+		a := h.browser()
+		a.signIn("admin@pve")
+		got := a.do("GET", "/api/setup", "").Body.String()
+		if tc.want == "" && strings.Contains(got, "diskFull") || !strings.Contains(got, tc.want) {
+			t.Errorf("%s: setup = %s", tc.name, got)
+		}
+		a.signIn("dev@pve")
+		if got := a.do("GET", "/api/setup", "").Body.String(); strings.Contains(got, "diskFull") {
+			t.Errorf("%s: a user who may not set up sees the disk: %s", tc.name, got)
 		}
 	}
 }
