@@ -350,7 +350,7 @@ func (run *restoreRun) prepare(ctx context.Context) error {
 	}
 	if len(run.nodes) == 0 {
 		if len(run.status.Missing) > 0 {
-			return fmt.Errorf("no control-plane VM of the cluster exists in Proxmox VE (missing: %s), so there is no node to restore etcd on. Create the cluster again",
+			return fmt.Errorf("no control-plane VM of the cluster exists in Proxmox VE (missing: %s), so there is no node to restore etcd on. Rebuild it from its saved file with `kubehenge cluster create --from <file>`",
 				strings.Join(run.status.Missing, ", "))
 		}
 		return errors.New("no control-plane VM of the cluster runs")

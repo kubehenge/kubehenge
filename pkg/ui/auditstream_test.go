@@ -315,11 +315,11 @@ func (*apiServerFake) follow(w http.ResponseWriter, r *http.Request, f *fakeFoll
 }
 
 // waitAuditKept waits until the activity log holds exactly the changes want, sorted, and fails
-// after a few seconds.
+// after auditWaitLimit.
 func waitAuditKept(t *testing.T, s *Server, want ...string) {
 	t.Helper()
 	var got []string
-	for range 300 {
+	for deadline := time.Now().Add(auditWaitLimit); time.Now().Before(deadline); {
 		kept, err := s.activityLog.since(auditBase.Add(-time.Hour), 1000, func(*activityEntry) bool { return true })
 		if err != nil {
 			t.Fatal(err)

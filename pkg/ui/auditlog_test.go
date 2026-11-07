@@ -189,10 +189,14 @@ func (r *auditRig) tick(t *testing.T) {
 	}
 }
 
-// wait waits until done holds of the follower, and fails after a few seconds.
+// auditWaitLimit bounds every wait on the follower. A loaded machine can leave its goroutine
+// unscheduled for seconds, so only a hung follower should reach it.
+const auditWaitLimit = 60 * time.Second
+
+// wait waits until done holds of the follower, and fails after auditWaitLimit.
 func (r *auditRig) wait(t *testing.T, what string, done func(f *auditFollower) bool) {
 	t.Helper()
-	for range 300 {
+	for deadline := time.Now().Add(auditWaitLimit); time.Now().Before(deadline); {
 		r.f.mu.Lock()
 		ok := done(r.f)
 		r.f.mu.Unlock()
