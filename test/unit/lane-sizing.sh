@@ -75,5 +75,12 @@ expect "requests set the size" 1504 "${synthetic}"
 synthetic=$(worker_memory_for "${class}" '["a"]' true)
 expect "the fixtures add to the requests" 1712 "${synthetic}"
 
+# The pods the sizing counts are the pods the script creates: a new fixture pod has to be listed in
+# common.sh as running during the GitOps steps or not, or this fails.
+created=$(sed -n 's/^[[:space:]]*agnhost_\(pod\|deployment\) \([a-z0-9-]*\) \([a-z0-9-]*\) .*/\2\/\3/p' "${here}/../e2e/workload-cluster.sh" | sort -u)
+# shellcheck disable=SC2086 # one pod per word.
+listed=$(printf '%s\n' ${gitops_fixture_pods} ${earlier_fixture_pods} | sort -u)
+expect "every agnhost pod is listed in common.sh" "${created}" "${listed}"
+
 printf 'lane-sizing: %d passed, %d failed\n' "${passes}" "${failures}"
 [ "${failures}" -eq 0 ]

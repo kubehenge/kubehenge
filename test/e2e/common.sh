@@ -11,10 +11,20 @@ pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde33
 gitea=docker.io/gitea/gitea:28.3.0-rootless@sha256:40c5a68a0463c0940e1ae32626c8300dd0572f3558e390073ad8379ca67c0e1d
 export agnhost pause_image gitea
 # What the test's own pods request, in MiB. The manifests and the worker's sizing both read these.
-# gitops_agnhost_pods is how many agnhost pods the GitOps steps have running beside Gitea.
+# Every agnhost pod workload-cluster.sh creates is listed as <namespace>/<name> in one of two lists,
+# which test/unit/lane-sizing.sh enforces. The first runs while the GitOps steps do, so a worker is
+# sized for it. The second is deleted before them.
+gitops_fixture_pods='e2e-lb/web e2e-mesh/server e2e-mesh/client e2e-plain/client e2e-git/client'
+# shellcheck disable=SC2034 # read by test/unit/lane-sizing.sh.
+earlier_fixture_pods='e2e-policy/server e2e-policy/client e2e-health/crasher e2e-ingress/web e2e-certs/web e2e-acme/client'
 agnhost_request_mib=16
 gitea_request_mib=128
-gitops_agnhost_pods=5
+# word_count <words...>
+word_count() {
+    echo "$#"
+}
+# shellcheck disable=SC2086 # one pod per word.
+gitops_agnhost_pods=$(word_count ${gitops_fixture_pods})
 
 # worker_memory_for <class JSON> <add-ons JSON array> <gitops: true|false>: the least memory in MiB
 # a worker may have for a class with those add-ons on. It is the largest of the class's own minimum,
