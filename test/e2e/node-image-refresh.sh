@@ -56,6 +56,13 @@ builds() {
         jq -r --arg p "${pool}" --arg os "${1:-${default_os}}" '[.data[] | select(.type == "qemu" and .template == 1 and .pool == $p)
             | .name | capture("^kubehenge-k3s-" + $os + "-(?<b>build-[0-9]{12})$").b] | sort[]'
 }
+# Proxmox VE's resource list takes a guest's name and template flag from the status the nodes
+# broadcast every few seconds, so a template restored into a just-freed VM ID shows the old guest
+# there for a moment.
+has_builds() {
+    got=$(builds "$1")
+    [ -n "${got}" ]
+}
 builds_are() {
     got=$(builds)
     got=$(printf '%s\n' "${got}" | tr '\n' ' ')
@@ -232,8 +239,7 @@ runs "${second}" || fail 'the node left its build'
 step "the node OS changed to Rocky Linux 10 replaces the node, which enforces SELinux"
 # Made only now, the refresh's runs build no Rocky Linux template of their own.
 [ -z "${KUBEHENGE_E2E_ROCKY_TEMPLATE:-}" ] || sh -c "${KUBEHENGE_E2E_ROCKY_TEMPLATE}"
-rocky_builds=$(builds rocky-10)
-[ -n "${rocky_builds}" ] || fail 'the template pool holds no build of k3s on Rocky Linux 10'
+until_true 60 "the template pool holds a build of k3s on Rocky Linux 10" has_builds rocky-10
 machine=$(machine_name)
 vars=$(kubectl -n "${ns}" get cluster/node-image -o json |
     jq -c '[.spec.topology.variables[] | select(.name != "nodeOS")] + [{name: "nodeOS", value: {family: "rocky", release: "10"}}]')
