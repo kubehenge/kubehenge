@@ -157,7 +157,8 @@ resource "proxmox_acl" "clusters_audit" {
 # nothing outside the workload pool and the clusters' group. VM.Migrate and VM.Config.Disk move a
 # volume owner VM to the node of a volume on node-local storage and delete the volume through it;
 # VM.Allocate there already lets it destroy the VMs outright. VM.GuestAgent.FileRead reads nodes'
-# boot logs, files only, through the guest agent.
+# boot logs, files only, through the guest agent. VM.Config.Options renames a VM back to its
+# machine's name when someone renames it.
 resource "proxmox_virtual_environment_role" "provisioner_pools" {
   role_id = "${var.cluster_name}-provisioner-pools"
   privileges = concat(

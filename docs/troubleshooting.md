@@ -597,6 +597,13 @@ Kubehenge's controller looks every 15 seconds at the VMs of every cluster's mach
 
 A warning event of the condition's name records each start and change. `VMsRunning` and `StorageFreed` record the end.
 
+#### A VM renamed or moved
+
+- **`VMRenamedBack`:** someone renamed a cluster's VM. Kubehenge set the name back, because the cloud controller manager deletes the node of a VM whose name does not start with the node's name.
+  - The event repeating means a naming or inventory script renames the VMs. Leave the Kubehenge pools out of that script.
+- **`VMRenameFailed`:** Proxmox VE refused the rename, and the event gives its answer. The controller retries every 15 seconds. Rename the VM back by hand meanwhile.
+- **`NodeZoneUpdated`, `NodeZoneNotUpdated`:** a VM moved to another Proxmox VE node ([a worker moved to another Proxmox VE node](clusters.md#a-worker-moved-to-another-proxmox-ve-node)).
+
 ### Autoscaling
 
 - **`AutoscalerNoRoom`**, "Proxmox VE has no node with the memory for a new worker of pool …: …": the new worker waits for room. After 30 minutes the autoscaler gives the machine up and tries again. Free memory on the Proxmox VE nodes the cluster may use, or let it use more nodes ([clusters.md](clusters.md#autoscaling)).

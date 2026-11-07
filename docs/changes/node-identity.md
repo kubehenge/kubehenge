@@ -1,0 +1,2 @@
+- A VM renamed in Proxmox VE is renamed back to its machine's name within 15 seconds, with a `VMRenamedBack` event. Otherwise the cloud controller manager reports its node gone, and Kubernetes deletes the node when it is next not ready.
+- A worker moved to another Proxmox VE node gets its `topology.kubernetes.io/zone` label updated, and the CSI plugin's pod on it restarts. New node-local volumes are created on the right host.
