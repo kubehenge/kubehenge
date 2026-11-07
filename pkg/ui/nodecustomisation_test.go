@@ -100,7 +100,8 @@ func TestNodeCustomisationReplacesEveryNode(t *testing.T) {
 func TestDemoClientCanBeCompared(t *testing.T) {
 	t.Parallel()
 	s, _ := newDemo(t)
-	if s.currentKube() != s.currentKube() {
+	watched := s.currentKube()
+	if s.currentKube() != watched {
 		t.Error("the demo's client differs from itself")
 	}
 }
