@@ -188,7 +188,7 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 		case talosContractPaths[kindOf(item)] != "":
 			patch, err = images.contract(ctx, item)
 		case h.Releases != nil:
-			patch, err = h.Releases.patch(item, cluster)
+			patch, err = h.Releases.patch(ctx, item, cluster)
 		}
 		if err != nil {
 			resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()

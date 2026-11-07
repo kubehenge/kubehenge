@@ -2,9 +2,9 @@ package templates
 
 import "sync"
 
-// SiteCache keeps where each template's disks are, by VMID. A template's configuration is
-// read-only, and a VMID that leaves the listing is dropped, so a new VM with the same ID is read
-// afresh.
+// SiteCache keeps where each template's disks are and what its build recorded, by VMID. A
+// template's configuration is read-only, and a VMID that leaves the listing is dropped, so a new VM
+// with the same ID is read afresh.
 type SiteCache struct {
 	mu      sync.Mutex
 	entries map[int]cachedSite
@@ -13,6 +13,8 @@ type SiteCache struct {
 type cachedSite struct {
 	name string
 	site Site
+	// facts is nil for a template whose build recorded none.
+	facts *BuildFacts
 }
 
 // Len is the number of templates held.
@@ -26,17 +28,17 @@ func (c *SiteCache) Len() int {
 }
 
 // get is safe on a nil cache, which holds nothing.
-func (c *SiteCache) get(id int) (string, Site, bool) {
+func (c *SiteCache) get(id int) (cachedSite, bool) {
 	if c == nil {
-		return "", Site{}, false
+		return cachedSite{}, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[id]
-	return e.name, e.site, ok
+	return e, ok
 }
 
-func (c *SiteCache) put(id int, name string, site Site) {
+func (c *SiteCache) put(id int, e cachedSite) {
 	if c == nil {
 		return
 	}
@@ -45,7 +47,7 @@ func (c *SiteCache) put(id int, name string, site Site) {
 	if c.entries == nil {
 		c.entries = map[int]cachedSite{}
 	}
-	c.entries[id] = cachedSite{name, site}
+	c.entries[id] = e
 }
 
 // keepOnly drops the entries of VMIDs that are no longer listed.

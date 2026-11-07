@@ -216,6 +216,9 @@ templateRefresh:
   # Kubernetes version no kubeadm template exists for yet. The builds run here, with the builder's
   # token, one at a time; the interface asks for them and never starts one itself.
   creatorBuilds: false
+  # Whether the weekly build also makes the kubeadm template of the newest patch release of each
+  # Kubernetes minor version a kubeadm cluster runs, and of the next minor version.
+  kubeadmPatches: true
 
 # kube-vip, which holds each cluster's API address on its control planes and, where it is the
 # cluster's load balancer, its Services' addresses.

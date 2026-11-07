@@ -225,6 +225,31 @@ Cluster API then rolls the nodes as for any upgrade. A rollout that has started 
 | kubeadm | the newest version a kubeadm template on Proxmox VE exists for. Building a template of a newer version offers it. |
 | Talos | Kubernetes' own newest release of each minor version (`dl.k8s.io`). The stable one is what the Talos release Kubehenge carries installs by default. Never one the cluster's Talos release does not run, and never while its nodes are being upgraded. |
 
+#### Releases Kubehenge does not pin
+
+RKE2 and k3s nodes install only releases whose checksum file and install script Kubehenge pins, and the API server refuses any other. The newest releases are in the build. For a release that is not, an administrator adds a pin from **Administration**, **Release pins**, or with `kubehenge release pin <version>`.
+
+Both fetch the release's checksum file from the distribution's release page and show its SHA-256 digests before saving. A version that does not exist or has no checksum file is refused. Each pin records who added it. A pin is removed with **Unpin** or `kubehenge release unpin <version>`, and only while no cluster runs that release. The pins built into Kubehenge stay.
+
+Talos has no pin. Any release of Talos's Image Factory can be built into a template, so a Talos cluster needs no pin to run it.
+
+#### Pinning with kubectl
+
+The pins are one key of the ConfigMap `kubehenge-release-pins` in the namespace of the ClusterClasses. The admission check and the release channels read it beside the built-in list. Only administrators may write it.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubehenge-release-pins
+  namespace: kubehenge-system
+data:
+  pins: |
+    v1.37.1+rke2r1 <SHA-256 of the checksum file> <SHA-256 of the install script> # added by alice at 2026-11-07T09:00:00Z
+```
+
+Each line is a version, the checksum file's digest and the install script's digest. The comment is optional.
+
 ### The nodes' operating system
 
 The management cluster builds the node OS VM templates again every week, with the updates each node OS published since ([templates.md](templates.md#the-weekly-build)). The controller moves the nodes of each cluster with `nodeImages` on to the newest build that is at least a day old. It does so inside the cluster's window, under the same conditions as an upgrade.

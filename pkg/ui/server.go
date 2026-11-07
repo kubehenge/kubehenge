@@ -142,6 +142,9 @@ type Server struct {
 	// controller's automatic upgrades read. Nil leaves their version to be typed in.
 	Releases     provisioner.Releases
 	releaseCache releaseCache
+	// PinChecks reads the checksum file and install script of an RKE2 or k3s release to pin. Nil
+	// leaves pinning to kubehenge release pin and kubectl.
+	PinChecks *provisioner.ReleaseChecksums
 	// TalosReleases lists the Talos releases the Image Factory builds. Nil offers only those the
 	// template pool has.
 	TalosReleases func(ctx context.Context) ([]string, error)
@@ -318,6 +321,10 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
 	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
 	mux.HandleFunc("POST /api/templates/refresh", s.signedIn(s.refreshNow))
+	mux.HandleFunc("GET /api/release-pins", s.signedIn(s.listPins))
+	mux.HandleFunc("POST /api/release-pins/check", s.signedIn(s.checkPin))
+	mux.HandleFunc("POST /api/release-pins", s.signedIn(s.addPin))
+	mux.HandleFunc("DELETE /api/release-pins/{version}", s.signedIn(s.removePin))
 	mux.HandleFunc("GET /api/template-builds", s.managed(s.templateBuilds))
 	mux.HandleFunc("POST /api/template-builds", s.managed(s.requestTemplateBuild))
 }

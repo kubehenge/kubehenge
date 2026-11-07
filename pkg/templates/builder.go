@@ -150,6 +150,12 @@ func (b *Builder) List(ctx context.Context) ([]*proxmox.ClusterResource, error) 
 	return inv.Templates, err
 }
 
+// Facts returns what the builds in the builder's pool recorded of themselves, by VM ID.
+func (b *Builder) Facts(ctx context.Context) (map[uint64]BuildFacts, error) {
+	inv, err := b.Inventory(ctx)
+	return inv.Facts, err
+}
+
 // Inventory is what the builder's pool holds of Kubehenge's templates.
 type Inventory struct {
 	// Templates are sorted by name.
@@ -162,6 +168,9 @@ type Inventory struct {
 	// Sites say, for each of Templates in the same order, where its disks are and which CPU type it
 	// carries: a clone runs on a node only if the disks are reachable from it.
 	Sites []Site
+	// Facts are what the builds recorded of themselves, by VM ID. A template without any, such as
+	// one made before builds recorded them, has no entry.
+	Facts map[uint64]BuildFacts
 }
 
 // Site is where one template's disks are.
@@ -202,6 +211,7 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	type placed struct {
 		resource *proxmox.ClusterResource
 		site     Site
+		facts    *BuildFacts
 	}
 	var found []placed
 	var down []*proxmox.ClusterResource
@@ -218,8 +228,8 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 		seen[id] = true
 		// A cached site skips the configuration read, which is where a down node shows, so the
 		// resource view's word that the node is down goes first.
-		if name, site, ok := b.SiteCache.get(id); ok && r.Status != pve.StatusUnknown {
-			cached = append(cached, cachedTemplate{r, name, site})
+		if e, ok := b.SiteCache.get(id); ok && r.Status != pve.StatusUnknown {
+			cached = append(cached, cachedTemplate{r, e})
 			continue
 		}
 		c, err := b.config(ctx, r)
@@ -231,9 +241,12 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 			return Inventory{}, err
 		}
 		if bool(c.Template) {
-			site := siteOf(c)
-			b.SiteCache.put(id, c.Name, site)
-			found = append(found, placed{confirmed(r, c), site})
+			e := cachedSite{name: c.Name, site: siteOf(c)}
+			if facts, ok := ParseBuildFacts(c.Description); ok {
+				e.facts = &facts
+			}
+			b.SiteCache.put(id, e)
+			found = append(found, placed{confirmed(r, c), e.site, e.facts})
 		}
 	}
 	b.SiteCache.keepOnly(seen)
@@ -245,13 +258,16 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 		}
 		out := *t.resource
 		out.Name, out.Template = t.name, 1
-		found = append(found, placed{&out, t.site})
+		found = append(found, placed{&out, t.site, t.facts})
 	}
 	slices.SortFunc(found, func(x, y placed) int { return strings.Compare(x.resource.Name, y.resource.Name) })
-	inv := Inventory{Down: down}
+	inv := Inventory{Down: down, Facts: map[uint64]BuildFacts{}}
 	for _, p := range found {
 		inv.Templates = append(inv.Templates, p.resource)
 		inv.Sites = append(inv.Sites, p.site)
+		if p.facts != nil {
+			inv.Facts[p.resource.VMID] = *p.facts
+		}
 		for _, s := range p.site.Storages {
 			if !slices.Contains(inv.Storages, s) {
 				inv.Storages = append(inv.Storages, s)
@@ -262,11 +278,10 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	return inv, nil
 }
 
-// cachedTemplate is a template of the listing whose name and site the SiteCache holds.
+// cachedTemplate is a template of the listing whose name, site and build facts the SiteCache holds.
 type cachedTemplate struct {
 	resource *proxmox.ClusterResource
-	name     string
-	site     Site
+	cachedSite
 }
 
 // unreachableNodes are the nodes of the cached templates that pveproxy cannot reach. The resource
@@ -593,17 +608,21 @@ func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.Vi
 	if err := markBuilding(ctx, vm); err != nil {
 		return err
 	}
+	options := []proxmox.VirtualMachineOption{
+		{Name: "tags", Value: strings.Join(t.Tags, ";")},
+		{Name: "cores", Value: templateCores},
+		{Name: "memory", Value: templateMemoryMB},
+		bootFrom(templateDisk),
+	}
 	if recipe != nil {
-		if err := b.bake(ctx, node, vm, recipe); err != nil {
+		facts, err := b.bake(ctx, node, vm, recipe)
+		if err != nil {
 			return fmt.Errorf("baking %s: %w", t.Name, err)
 		}
+		b.logf("%s installed kernel %s and packages %s", t.Name, facts.Kernel, facts.Packages)
+		options = append(options, proxmox.VirtualMachineOption{Name: "description", Value: facts.Description(templateDescription)})
 	}
-	task, err := vm.Config(ctx,
-		proxmox.VirtualMachineOption{Name: "tags", Value: strings.Join(t.Tags, ";")},
-		proxmox.VirtualMachineOption{Name: "cores", Value: templateCores},
-		proxmox.VirtualMachineOption{Name: "memory", Value: templateMemoryMB},
-		bootFrom(templateDisk),
-	)
+	task, err := vm.Config(ctx, options...)
 	err = waitTask(ctx, task, err, configTimeout)
 	if err != nil {
 		return err
@@ -921,7 +940,7 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 	}
 	options := []proxmox.VirtualMachineOption{
 		{Name: "name", Value: t.Name},
-		{Name: "description", Value: "Kubehenge template, made by `kubehenge template`; Cluster API selects it by its tags."},
+		{Name: "description", Value: templateDescription},
 		{Name: "ostype", Value: "l26"},
 		{Name: "machine", Value: "q35"},
 		{Name: "cpu", Value: cpuType},
@@ -977,54 +996,76 @@ func bootFrom(disk string) proxmox.VirtualMachineOption {
 	return proxmox.VirtualMachineOption{Name: "boot", Value: "order=" + disk}
 }
 
+// templateDescription is the fixed text of every template's description.
+const templateDescription = "Kubehenge template, made by `kubehenge template`; Cluster API selects it by its tags."
+
 // bake carries out the recipe: the first boot, a reboot into what it installed if the recipe asks,
 // in image mode a boot of the node image on its own disk, then the clean-up that leaves a first
-// boot for every clone.
-func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, recipe *Recipe) error {
+// boot for every clone. It returns what the node installed, read before the clean-up.
+func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, recipe *Recipe) (BuildFacts, error) {
 	isoStorage, err := b.isoStorage(ctx, node)
 	if err != nil {
-		return err
+		return BuildFacts{}, err
 	}
 	defer b.removeSeed(context.WithoutCancel(ctx), node, vm, isoStorage)
-	if err = growDisk(ctx, vm, recipe); err != nil {
+	if err = b.install(ctx, node, vm, isoStorage, recipe); err != nil {
+		return BuildFacts{}, err
+	}
+	facts, err := b.readFacts(ctx, vm)
+	if err != nil {
+		return BuildFacts{}, err
+	}
+	for _, step := range recipe.Cleanup {
+		if err := b.exec(ctx, vm, step, longTaskTimeout); err != nil {
+			return BuildFacts{}, err
+		}
+	}
+	return facts, detach(ctx, vm)
+}
+
+// install runs the recipe's boots and checks, up to a node that is ready for its clean-up.
+func (b *Builder) install(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, isoStorage string, recipe *Recipe) error {
+	if err := growDisk(ctx, vm, recipe); err != nil {
 		return err
 	}
-	if err = b.boot(ctx, node, vm, isoStorage, "bake", recipe.UserData); err != nil {
+	if err := b.boot(ctx, node, vm, isoStorage, "bake", recipe.UserData); err != nil {
 		return err
 	}
 	b.logf("VM %d is building the node; waiting for its guest agent", vm.VMID)
-	if err = b.waitAndCheck(ctx, vm, recipe.Checks, recipe.Log); err != nil {
+	if err := b.waitAndCheck(ctx, vm, recipe.Checks, recipe.Log); err != nil {
 		return err
 	}
 	if recipe.Reboot {
 		b.logf("VM %d boots what it installed", vm.VMID)
-		if err = restart(ctx, vm); err != nil {
+		if err := restart(ctx, vm); err != nil {
 			return err
 		}
-		if err = b.waitAndCheck(ctx, vm, recipe.RebootChecks, recipe.Log); err != nil {
+		if err := b.waitAndCheck(ctx, vm, recipe.RebootChecks, recipe.Log); err != nil {
 			return err
 		}
 	}
 	if recipe.Image != nil {
 		b.logf("VM %d boots the node image it installed", vm.VMID)
-		if err = b.bootNodeImage(ctx, node, vm, isoStorage, recipe.Image); err != nil {
+		if err := b.bootNodeImage(ctx, node, vm, isoStorage, recipe.Image); err != nil {
 			return err
 		}
-		if err = b.waitAndCheck(ctx, vm, recipe.Image.Checks, ""); err != nil {
+		if err := b.waitAndCheck(ctx, vm, recipe.Image.Checks, ""); err != nil {
 			return err
 		}
 	}
 	if recipe.BootLog {
-		if err = b.checkBootLog(ctx, vm); err != nil {
-			return err
-		}
+		return b.checkBootLog(ctx, vm)
 	}
-	for _, step := range recipe.Cleanup {
-		if err := b.exec(ctx, vm, step, longTaskTimeout); err != nil {
-			return err
-		}
+	return nil
+}
+
+// readFacts reads the kernel the node booted and a hash of its packages.
+func (b *Builder) readFacts(ctx context.Context, vm *proxmox.VirtualMachine) (BuildFacts, error) {
+	out, err := b.output(ctx, vm, []string{"sh", "-c", factsCommand})
+	if err != nil {
+		return BuildFacts{}, err
 	}
-	return detach(ctx, vm)
+	return parseFactsOutput(out)
 }
 
 // growDisk gives the disk the bake runs on the room it needs: in image mode the builder's, whose

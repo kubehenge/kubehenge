@@ -97,6 +97,12 @@ A cluster's machines clone the newest build of their line made by the cluster's 
 
 Talos templates have no builds. Talos nodes take their updates by upgrading Talos.
 
+### Kernel check
+
+A build records its kernel and a hash of its packages in the template's description when it ends. The refresh compares each build with the previous one of its line. An older kernel means the mirror was one sync behind.
+
+Such a build is kept out of the builds clusters move to, and the Administration page marks it "Older than the previous build". The controller asks for another build an hour later, up to 3 times. After the third, the build stays out until a newer one arrives. A build from before this check is never older.
+
 ### CPU type of clones
 
 Clones keep the template's CPU type. A new build takes that of the newest build of its line. A line's first build takes the least its node OS runs on, unless `--cpu-type` names another.
@@ -114,6 +120,12 @@ While the management cluster's template refresh is on (the default), a CronJob i
 Then it deletes the builds nothing needs. Of each line it keeps the two newest and any older one that a cluster's machines run or a new machine will clone from. A kubeadm line no cluster runs or can upgrade to keeps only its newest build.
 
 A build that fails does not stop the others. The next run starts over. The Administration page shows the last run with its log and has Build now.
+
+### Kubeadm patch releases
+
+The run also builds the kubeadm template of the newest patch release of each minor version a kubeadm cluster runs. It does the same for the next minor version. Without one, a kubeadm cluster is offered no patch release. The release is read from `dl.k8s.io/release/stable-1.<minor>.txt`. Such a template is built only while it has no build.
+
+`kubeadm_patches: false` in the `template_refresh` settings, or `--kubeadm-patches=false`, switches this off.
 
 ### The command
 

@@ -138,7 +138,11 @@ before it. The last build of a template is never deleted while a cluster runs it
 			}
 			b.Pool = pool
 			users := func(list []*proxmox.ClusterResource) (map[string][]string, error) {
-				return buildUsers(cmd.Context(), classNamespace, list)
+				facts, ferr := b.Facts(cmd.Context())
+				if ferr != nil {
+					return nil, fmt.Errorf("reading what the builds installed: %w", ferr)
+				}
+				return buildUsers(cmd.Context(), classNamespace, list, facts)
 			}
 			deleted, err := deleteTemplate(cmd, b, &t, build, deleteChecks{users: users, roll: roll})
 			if err != nil {
@@ -174,7 +178,7 @@ type deleteChecks struct {
 
 // buildUsers reads who clones from the builds from the management cluster, with the soak its
 // refresh is set to.
-func buildUsers(ctx context.Context, classNamespace string, list []*proxmox.ClusterResource) (map[string][]string, error) {
+func buildUsers(ctx context.Context, classNamespace string, list []*proxmox.ClusterResource, facts map[uint64]templates.BuildFacts) (map[string][]string, error) {
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
 		return nil, fmt.Errorf("finding which clusters run the builds needs the management cluster's API (KUBECONFIG): %w", err)
@@ -202,7 +206,7 @@ func buildUsers(ctx context.Context, classNamespace string, list []*proxmox.Clus
 	case !apierrors.IsNotFound(err):
 		return nil, fmt.Errorf("reading the template refresh's soak: %w", err)
 	}
-	users, err := provisioner.BuildUsers(ctx, kube, classNamespace, list, soak)
+	users, err := provisioner.BuildUsers(ctx, kube, classNamespace, list, facts, soak)
 	if err != nil {
 		return nil, fmt.Errorf("finding which clusters run the builds: %w", err)
 	}

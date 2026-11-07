@@ -1431,6 +1431,11 @@ h4.subsection {
   margin-block-end: 10px;
 }
 
+/* A form under a table sits clear of its last row. */
+.box > .grid + form {
+  margin-block-start: 16px;
+}
+
 .management-health h3 {
   display: flex;
   gap: 10px;
@@ -1918,6 +1923,62 @@ fieldset.choices .check {
    cell of several lines starts. */
 .grid tr:has(> .row-action) > :is(td, th) {
   vertical-align: middle;
+}
+
+/* On a phone a row of a stacked grid is a card: each cell is a line with its column's name before
+   it, and the first cell, which has none, heads the card. */
+@media (width <= 600px) {
+  .grid.stack :is(table, tbody, tr, td) {
+    display: block;
+  }
+
+  .grid.stack thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .grid.stack tr {
+    padding-block: 10px;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .grid.stack td {
+    position: relative;
+
+    min-inline-size: 0;
+    padding: 2px 0 2px 7em;
+    border: none;
+
+    overflow-wrap: anywhere;
+  }
+
+  .grid.stack td:not([data-label]) {
+    padding-inline-start: 0;
+    font-weight: 600;
+  }
+
+  .grid.stack td:not([data-label]) .muted {
+    font-weight: 400;
+  }
+
+  .grid.stack td[data-label]::before {
+    content: attr(data-label);
+    position: absolute;
+    inset-inline-start: 0;
+    color: var(--dim);
+  }
+
+  .grid.stack td.row-action {
+    inline-size: auto;
+    padding: 8px 0 0;
+    text-align: start;
+  }
 }
 
 .row-menu-toggle svg {

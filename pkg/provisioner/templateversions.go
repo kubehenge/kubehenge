@@ -49,6 +49,11 @@ type TemplateVersions struct {
 	// Soak is how long a template build waits before clusters are offered it, which decides the
 	// build each cluster clones from.
 	Soak time.Duration
+	// Reader reads past any cache. Set, a line whose newest build has an older kernel than the build
+	// before is asked to be built again (retryOlder). Nil leaves that to nobody, as when the refresh
+	// is off.
+	Reader client.Reader
+	Now    func() time.Time
 
 	// loggedDown is the templates on down nodes the last look logged.
 	loggedDown string
@@ -120,7 +125,12 @@ func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 		}
 		p.loggedDown = now
 	}
+	older, err := seen.older.Encode()
+	if err != nil {
+		return err
+	}
 	err = errors.Join(
+		p.retryOlder(ctx, &seen),
 		p.annotate(ctx, "kubeadm", TemplatesDownAnnotation, down),
 		p.annotate(ctx, "rke2", TemplatesDownAnnotation, down),
 		p.annotate(ctx, "k3s", TemplatesDownAnnotation, down),
@@ -136,6 +146,9 @@ func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 		p.annotate(ctx, "kubeadm", NodeImageBuildsAnnotation, builds),
 		p.annotate(ctx, "rke2", NodeImageBuildsAnnotation, builds),
 		p.annotate(ctx, "k3s", NodeImageBuildsAnnotation, builds),
+		p.annotate(ctx, "kubeadm", NodeImageOlderAnnotation, older),
+		p.annotate(ctx, "rke2", NodeImageOlderAnnotation, older),
+		p.annotate(ctx, "k3s", NodeImageOlderAnnotation, older),
 	)
 	p.markTemplateNodes(ctx, seen.down, seen.builds)
 	return err

@@ -157,6 +157,7 @@ spec:
                 - --build-dns={{ join "," . }}
                 {{- end }}
                 - --soak={{ .soakHours }}h
+                - --kubeadm-patches={{ .kubeadmPatches }}
                 - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
                 - --proxmox-insecure={{ $.Values.proxmox.insecure }}
                 - --trigger=schedule

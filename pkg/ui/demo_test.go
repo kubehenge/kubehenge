@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -38,9 +39,11 @@ type demoBrowser struct {
 func newDemo(t *testing.T) (*Server, *demoBrowser) {
 	t.Helper()
 	s := &Server{Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}}}
-	if err := SetUpDemo(s, func() time.Time { return demoAt }); err != nil {
+	cleanup, err := SetUpDemo(s, func() time.Time { return demoAt })
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(cleanup)
 	return s, &demoBrowser{t: t, handler: s.Handler()}
 }
 
@@ -106,7 +109,7 @@ func TestDemoUsesNoRealClient(t *testing.T) {
 	if s.ConnectWorkload == nil || s.OpenStore == nil || s.Probe == nil || s.NewKube == nil || s.TalosReleases == nil {
 		t.Error("a client of the demo is left to its real default")
 	}
-	if s.NewClientset != nil || s.MakeTemplate != nil || s.Appliance != nil || s.Upgrades != nil || s.Headlamp != nil || s.ProxmoxURL != "" {
+	if s.NewClientset != nil || s.Upgrades != nil || s.Headlamp != nil || s.ProxmoxURL != "" {
 		t.Error("the demo reaches past its own fakes")
 	}
 	channels, ok := s.Releases.(*provisioner.ChannelServer)
@@ -135,10 +138,7 @@ var demoAnswers = map[string]int{
 	"/api/health":                                       http.StatusNoContent,
 	"/api/openid/start":                                 http.StatusSeeOther,
 	"/api/openid/callback":                              http.StatusSeeOther,
-	"/api/templates":                                    http.StatusNotFound,
 	"/api/appliance/upgrades":                           http.StatusNotFound,
-	"/api/appliance/etcd-backups":                       http.StatusNotFound,
-	"/api/appliance/etcd-backups/snapshots":             http.StatusNotFound,
 	"/api/credentials/dns":                              http.StatusNotFound,
 	"/api/clusters/clusters/web/credentials/dns":        http.StatusNotFound,
 	"/api/clusters/clusters/web/kubeconfig":             http.StatusConflict,
@@ -273,9 +273,11 @@ func TestDemoReadsEveryClustersHealth(t *testing.T) {
 		Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}},
 		Log:    slog.New(slog.NewTextHandler(logged, nil)),
 	}
-	if err := SetUpDemo(s, func() time.Time { return demoAt }); err != nil {
+	cleanup, err := SetUpDemo(s, func() time.Time { return demoAt })
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(cleanup)
 	b := &demoBrowser{t: t, handler: s.Handler()}
 	b.signIn()
 	fleet, err := newDemoFleet(demoAt)
@@ -327,6 +329,59 @@ func TestDemoShowsPoolLabelsTaintsAndPodChecks(t *testing.T) {
 	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/staging/pod-security-check", ""), &check)
 	if check.Checked == 0 || len(check.Refused) == 0 {
 		t.Errorf("pod check %+v, want pods checked and some refused", check)
+	}
+}
+
+func TestDemoShowsTemplatesAndPins(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+
+	var setup setupView
+	decodeDemo(t, b.do("GET", "/api/setup", ""), &setup)
+	if !setup.Appliance || !setup.Ready || !setup.Allowed || setup.Settings == nil ||
+		setup.Settings.TemplateRefresh == nil || setup.Settings.TemplateRefresh.KubeadmPatches == nil || !*setup.Settings.TemplateRefresh.KubeadmPatches {
+		t.Errorf("the demo's setup is %+v, want an appliance with the kubeadm patch builds on", setup)
+	}
+
+	var list templatesView
+	decodeDemo(t, b.do("GET", "/api/templates", ""), &list)
+	var older []string
+	for _, tpl := range list.Templates {
+		if tpl.Older {
+			older = append(older, tpl.Name)
+		}
+		if tpl.Older && !tpl.Newest {
+			t.Errorf("%s is older but not the line's newest build", tpl.Name)
+		}
+	}
+	if len(older) != 1 || !strings.HasPrefix(older[0], "kubehenge-rke2-") {
+		t.Errorf("builds marked older: %v, want the newest RKE2 build alone", older)
+	}
+	if list.Refresh == nil || list.Refresh.Last == nil || list.Refresh.Last.State != "succeeded" {
+		t.Errorf("the refresh is %+v, want one that ran", list.Refresh)
+	}
+
+	var pins releasePinsView
+	decodeDemo(t, b.do("GET", "/api/release-pins", ""), &pins)
+	inUse := map[string]string{}
+	for _, p := range pins.Pins {
+		inUse[p.Version] = p.InUse
+		if p.By == "" || p.At == nil || p.File == "" || p.Script == "" {
+			t.Errorf("pin %+v lacks who added it, when or a digest", p)
+		}
+	}
+	if len(pins.Pins) != 2 || !pins.Checks || inUse["v1.36.5+rke2r1"] == "" || inUse["v1.37.2+rke2r1"] != "" {
+		t.Errorf("pins %+v, want two with one in use by a cluster", pins)
+	}
+
+	var checked releasePinView
+	decodeDemo(t, b.do("POST", "/api/release-pins/check", `{"version":"v1.37.3+rke2r1"}`), &checked)
+	if len(checked.File) != sha256.Size*2 || len(checked.Script) != sha256.Size*2 {
+		t.Errorf("the check of a release shows %+v, want two digests", checked)
+	}
+	if rec := b.do("POST", "/api/release-pins", `{"version":"v1.37.3+rke2r1"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("pinning in the demo: %d %s", rec.Code, rec.Body)
 	}
 }
 

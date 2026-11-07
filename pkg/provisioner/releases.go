@@ -34,6 +34,8 @@ const releaseScriptPath = "/usr/local/sbin/kubehenge-release"
 type ReleaseChecksums struct {
 	// Pins are the releases a node may install. DefaultReleasePins in the controller.
 	Pins ReleasePins
+	// Store, when set, adds the pins administrators added.
+	Store *PinStore
 	// HTTP, GitHub and Raw read a release's checksum file and install script when it is pinned:
 	// https://github.com and https://raw.githubusercontent.com, unless a test serves its own.
 	HTTP        *http.Client
@@ -86,7 +88,7 @@ const (
 
 // patch has an RKE2 or k3s node install its release from checked files, through its bootstrap
 // provider's air-gapped install. It is nil for any other template.
-func (r *ReleaseChecksums) patch(item *runtimehooksv1.GeneratePatchesRequestItem, cluster *clusterv1.Cluster) ([]byte, error) {
+func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.GeneratePatchesRequestItem, cluster *clusterv1.Cluster) ([]byte, error) {
 	var object metav1.TypeMeta
 	if len(item.Object.Raw) > 0 {
 		if err := json.Unmarshal(item.Object.Raw, &object); err != nil {
@@ -119,7 +121,11 @@ func (r *ReleaseChecksums) patch(item *runtimehooksv1.GeneratePatchesRequestItem
 		}
 		files = append(slices.Clone(files), rke2CNIImages(cni))
 	}
-	sums, ok := r.Pins[version]
+	pins, err := r.pins(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sums, ok := pins[version]
 	if !ok {
 		return nil, unpinnedRelease(release, version)
 	}

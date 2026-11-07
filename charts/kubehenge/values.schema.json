@@ -278,7 +278,8 @@
         "address": { "type": "string", "pattern": "^([0-9.]+/[0-9]+)?$" },
         "gateway": { "type": "string" },
         "dns": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "creatorBuilds": { "type": "boolean" }
+        "creatorBuilds": { "type": "boolean" },
+        "kubeadmPatches": { "type": "boolean" }
       },
       "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] },
       "then": {

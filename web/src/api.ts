@@ -44,6 +44,8 @@ import type {
   SetupStatus,
   Storage,
   StoredCredential,
+  ReleasePin,
+  ReleasePins,
   TalosReleases,
   TemplateBuildRequest,
   TemplateBuilds,
@@ -447,6 +449,12 @@ export interface Api {
   deleteTemplate: (vmid: number) => Promise<void>;
   /** Has the weekly template build run now. */
   refreshTemplates: () => Promise<TemplateRefresh>;
+  releasePins: () => Promise<ReleasePins>;
+  /** Reads a release's checksum file and install script, to show their digests. */
+  checkReleasePin: (version: string) => Promise<ReleasePin>;
+  /** Pins a release once it still has the digests shown. */
+  addReleasePin: (pin: ReleasePin) => Promise<ReleasePin>;
+  removeReleasePin: (version: string) => Promise<void>;
   templateBuilds: () => Promise<TemplateBuilds>;
   /** Asks for a missing template, for one who may create clusters. */
   requestTemplateBuild: (req: TemplateBuildRequest) => Promise<void>;
@@ -592,6 +600,11 @@ export const api: Api = {
   createTemplate: (req) => request("POST", "/api/templates", req),
   deleteTemplate: (vmid) => act("DELETE", `/api/templates/${vmid}`),
   refreshTemplates: () => request("POST", "/api/templates/refresh"),
+  releasePins: () => request("GET", "/api/release-pins"),
+  checkReleasePin: (version) => request("POST", "/api/release-pins/check", { version }),
+  addReleasePin: (pin) =>
+    request("POST", "/api/release-pins", { version: pin.version, file: pin.file, script: pin.script }),
+  removeReleasePin: (version) => act("DELETE", `/api/release-pins/${encodeURIComponent(version)}`),
   templateBuilds: () => request("GET", "/api/template-builds"),
   requestTemplateBuild: (req) => act("POST", "/api/template-builds", req),
 

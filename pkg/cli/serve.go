@@ -187,6 +187,10 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	s.Accounts, s.Assets, s.ProxmoxURL = accounts, ui.Frontend(), conn.URL
 	s.Releases = &provisioner.ChannelServer{
 		HTTP: savedProxyClient(o.a.Dir, conn.URL, releaseChannelTimeout), URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
+		Store: &provisioner.PinStore{Reader: s.ManagementReader(), Namespace: s.ClassNamespace},
+	}
+	s.PinChecks = &provisioner.ReleaseChecksums{
+		HTTP: savedProxyClient(o.a.Dir, conn.URL, pinFetchTimeout), GitHub: pinsSources.github, Raw: pinsSources.raw,
 	}
 	sources := templates.DefaultSources()
 	sources.HTTP = savedProxyClient(o.a.Dir, conn.URL, sources.HTTP.Timeout)
@@ -249,9 +253,11 @@ func (o *serveOptions) runDemo(ctx context.Context) error {
 		clock = func() time.Time { return at }
 	}
 	o.s.Assets = ui.Frontend()
-	if err = ui.SetUpDemo(&o.s, clock); err != nil {
+	cleanup, err := ui.SetUpDemo(&o.s, clock)
+	if err != nil {
 		return fmt.Errorf("--demo: %w", err)
 	}
+	defer cleanup()
 	return o.serve(ctx)
 }
 

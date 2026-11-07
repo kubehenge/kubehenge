@@ -278,6 +278,7 @@ describe("vM templates", () => {
 
   it("says which templates are on a node that is down and lists the others", async () => {
     fakeServer({
+      "GET /api/release-pins": { body: { pins: [], checks: false } },
       "GET /api/templates": {
         body: {
           templates: [
@@ -347,6 +348,7 @@ describe("vM templates", () => {
   it("says when the template disk is on storage that is not shared", async () => {
     fakeServer({
       "GET /api/templates": { body: { templates: [] } },
+      "GET /api/release-pins": { body: { pins: [], checks: false } },
       "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] },
       "GET /api/proxmox/storages": {
         body: [
@@ -360,5 +362,81 @@ describe("vM templates", () => {
     await user.click(await screen.findByRole("button", { name: "Build template" }));
     const dialog = within(screen.getByRole("dialog", { name: "Build template" }));
     await waitFor(() => expect(dialog.getByText("Clones start only on pve1")).toBeInTheDocument());
+  });
+
+  it("marks a build whose kernel is older than the previous build's", async () => {
+    fakeServer({
+      "GET /api/templates": {
+        body: {
+          templates: [
+            {
+              vmid: 9004,
+              node: "pve1",
+              name: "kubehenge-rke2-almalinux-10-build-202610150000",
+              line: "kubehenge-rke2-almalinux-10",
+              tags: ["kubehenge", "rke2"],
+              built: "2026-10-15T00:00:00Z",
+              newest: true,
+              older: true,
+            },
+            {
+              vmid: 9001,
+              node: "pve1",
+              name: "kubehenge-rke2-almalinux-10-build-202610010000",
+              line: "kubehenge-rke2-almalinux-10",
+              tags: ["kubehenge", "rke2"],
+              built: "2026-10-01T00:00:00Z",
+            },
+          ],
+        },
+      },
+      "GET /api/release-pins": { body: { pins: [], checks: false } },
+    });
+    render(<Templates />);
+    await expect(screen.findByText("Older than the previous build")).resolves.toBeInTheDocument();
+    expect(screen.getAllByText("Older than the previous build")).toHaveLength(1);
+  });
+
+  it("shows a release's digests before pinning it, and unpins one no cluster runs", async () => {
+    const digests = { version: "v1.36.6+k3s1", file: "a".repeat(64), script: "b".repeat(64) };
+    const calls = fakeServer({
+      "GET /api/templates": { body: { templates: [] } },
+      "GET /api/release-pins": {
+        body: {
+          pins: [
+            {
+              version: "v1.36.5+rke2r1",
+              file: "c".repeat(64),
+              script: "d".repeat(64),
+              by: "admin@pve",
+              inUse: "clusters/web",
+            },
+            { version: "v1.36.4+rke2r1", file: "e".repeat(64), script: "f".repeat(64), by: "admin@pve" },
+          ],
+          checks: true,
+        },
+      },
+      "POST /api/release-pins/check": { body: digests },
+      "POST /api/release-pins": { status: 201, body: digests },
+      "DELETE /api/release-pins/v1.36.4%2Brke2r1": { status: 204 },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<Templates />);
+    await expect(screen.findByRole("button", { name: "Unpin v1.36.5+rke2r1" })).resolves.toBeDisabled();
+    await user.type(screen.getByLabelText("Release"), "v1.36.6+k3s1");
+    await user.click(screen.getByRole("button", { name: "Check release" }));
+    await expect(screen.findByText("a".repeat(64))).resolves.toBeInTheDocument();
+    expect(screen.getByText("b".repeat(64))).toBeInTheDocument();
+    expect(calls.map((c) => c.key)).not.toContain("POST /api/release-pins");
+    await user.click(screen.getByRole("button", { name: "Pin v1.36.6+k3s1" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "POST /api/release-pins")?.body).toStrictEqual({
+        version: "v1.36.6+k3s1",
+        file: "a".repeat(64),
+        script: "b".repeat(64),
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Unpin v1.36.4+rke2r1" }));
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("DELETE /api/release-pins/v1.36.4%2Brke2r1"));
   });
 });

@@ -710,6 +710,7 @@ tofu output -raw talosconfig > talosconfig
 | `bridge`, `vlan` | the first of `workload_bridges`, `0` (none) | Where the VM that prepares an image attaches. The bridge takes `zone/vnet` too. |
 | `address`, `gateway`, `dns` | DHCP | A static address with prefix, gateway and DNS servers for that VM. |
 | `creator_builds` | `false` | Lets those who may create clusters have a missing template built. |
+| `kubeadm_patches` | `true` | Also builds the kubeadm template of the newest patch release of each Kubernetes minor version a kubeadm cluster runs, and of the next minor version. |
 
 Outputs: `kubeconfig` and `talosconfig` (sensitive), `api_endpoint`, and `proxmox_objects`, which lists everything the module made on Proxmox VE.
 

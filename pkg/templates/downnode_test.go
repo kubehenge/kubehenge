@@ -117,6 +117,29 @@ func TestInventoryNoticesACachedTemplatesNodeTheViewStillShowsOnline(t *testing.
 	}
 }
 
+// A template served from the site cache keeps the facts its build recorded in its description,
+// which only the first listing reads.
+func TestInventoryKeepsTheBuildFactsOfACachedTemplate(t *testing.T) {
+	t.Parallel()
+	tmpl, tags := rke2(t)
+	built := template(101, tmpl.Name, tags, testPool)
+	old := template(102, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool)
+	configs := configsOf(built, old)
+	facts := BuildFacts{Kernel: "6.12.0-124.8.1.el10_1.x86_64", Packages: strings.Repeat("c", 64)}
+	configs[101]["description"] = facts.Description(templateDescription)
+	f := &fakeCluster{t: t, views: [][]map[string]any{{built, old}}, configs: configs}
+	b := &Builder{Client: f.client(), Pool: testPool, SiteCache: &SiteCache{}}
+	for round := range 2 {
+		inv, err := b.Inventory(t.Context())
+		if err != nil || len(inv.Facts) != 1 || inv.Facts[101] != facts {
+			t.Errorf("listing %d: facts %+v, %v; want 101's alone", round+1, inv.Facts, err)
+		}
+	}
+	if f.configReads() != 2 {
+		t.Errorf("%d configuration reads, want the 2 of the first listing alone", f.configReads())
+	}
+}
+
 // The view still showed the node online when the node went down: only the 595 on the VM's
 // configuration tells.
 func TestInventoryTakesA595OnAConfigurationForADownNode(t *testing.T) {

@@ -3,6 +3,7 @@ import { useEffect, useState, type JSX } from "react";
 import { api, bridgesOf } from "./api";
 import { bridgeLabel, isVLAN, list } from "./network";
 import { choosable, cpuNote, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSLabel } from "./node-os";
+import { ReleasePins } from "./ReleasePins";
 import { loadingReleases, offeredReleases, releaseToMake, talosExample, talosRelease, useTalosReleases } from "./Talos";
 import type {
   Bridge,
@@ -21,6 +22,7 @@ import {
   Dialog,
   ErrorBox,
   Field,
+  Status,
   errorMessage,
   filled,
   logLines,
@@ -38,6 +40,15 @@ const kubernetesVersion = /^v1\.\d+\.\d+$/u;
 // Templates lists the VM templates clusters are cloned from and builds them with the signed-in
 // administrator's Proxmox VE session.
 export function Templates(): JSX.Element {
+  return (
+    <>
+      <TemplatesBox />
+      <ReleasePins />
+    </>
+  );
+}
+
+function TemplatesBox(): JSX.Element {
   const { data, error, reload } = usePoll(api.templates, (d) =>
     d?.job?.state === "running" || refreshBusy(d?.refresh) ? pollRunning : pollIdle,
   );
@@ -58,7 +69,7 @@ export function Templates(): JSX.Element {
       {data && data.templates.length === 0 && <p>No templates yet</p>}
       {data && data.templates.length > 0 && (
         <div className="scroll">
-          <table className="grid">
+          <table className="grid stack">
             <thead>
               <tr>
                 <th>Template</th>
@@ -77,19 +88,24 @@ export function Templates(): JSX.Element {
                   <td>
                     {t.line} <span className="muted">({t.vmid})</span>
                   </td>
-                  <td>{t.nodeOS ?? "Talos Linux"}</td>
-                  <td>
+                  <td data-label="Node OS">{t.nodeOS ?? "Talos Linux"}</td>
+                  <td data-label="Build">
                     {t.built === undefined ? (
                       <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
                     ) : (
                       <>
                         {new Date(t.built).toLocaleString()}
                         {t.newest === true && <span className="muted"> (newest)</span>}
+                        {t.older === true && (
+                          <div>
+                            <Status state="warning" text="Older than the previous build" />
+                          </div>
+                        )}
                       </>
                     )}
                   </td>
-                  <td>{t.node}</td>
-                  <td>{t.inUse ?? "None"}</td>
+                  <td data-label="Node">{t.node}</td>
+                  <td data-label="Used by">{t.inUse ?? "None"}</td>
                   <td className="row-action">
                     <button
                       type="button"
