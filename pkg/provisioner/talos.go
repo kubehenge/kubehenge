@@ -29,6 +29,10 @@ const (
 	// TalosUpgradedAnnotation records the last node upgrade that finished: "<node> to <release> at
 	// <time>".
 	TalosUpgradedAnnotation = "kubehenge.dev/talos-upgraded"
+	// TalosWaitingAnnotation says what holds the node being upgraded before its reboot: the pods a
+	// disruption budget keeps on it, or StatefulSets short of ready replicas. It is gone once nothing
+	// holds the node.
+	TalosWaitingAnnotation = "kubehenge.dev/talos-waiting"
 )
 
 // isTalos tells whether a cluster is built from the Talos ClusterClass.

@@ -542,6 +542,8 @@ export interface TalosStatus {
   upgraded?: string;
   /** The node that failed, as "<node> to <release> at <time>: <why>", which holds the rest. */
   failed?: string;
+  /** What holds the node under way before its reboot: pods a disruption budget keeps, or StatefulSets short of replicas. */
+  waiting?: string;
 }
 
 /** The Talos releases a cluster can start on, be upgraded to, and have a template made of. */

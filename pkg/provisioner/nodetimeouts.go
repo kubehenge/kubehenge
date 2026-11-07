@@ -11,6 +11,10 @@ import (
 // its volumes' detach or the Node's removal. A day is longer than any rollout should be held.
 const MaxNodeTimeoutSeconds = 24 * 60 * 60
 
+// DefaultNodeDrainTimeoutSeconds is the drain timeout the shipped ClusterClasses give their machines.
+// A Talos upgrade falls back to it where neither the Cluster nor its class sets one.
+const DefaultNodeDrainTimeoutSeconds int32 = 60 * 60
+
 // NodeTimeoutRule is the message for a timeout out of range.
 var NodeTimeoutRule = fmt.Sprintf("timeouts: 0 for never, or up to %d seconds", MaxNodeTimeoutSeconds)
 

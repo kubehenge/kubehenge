@@ -181,16 +181,38 @@ func (n *fakeTalosNode) BootstrapRecovered(context.Context) error {
 
 func (*fakeTalosNode) Close() error { return nil }
 
+// fakeDrainer records the drains and uncordons it is asked for. A test sets drainFn to act as the
+// drain does, and shortFn to answer which StatefulSets are short on its n-th look.
 type fakeDrainer struct {
 	mu                  sync.Mutex
 	drained, uncordoned []string
+	timeouts            []time.Duration
+	drainFn             func(o DrainOptions) error
+	shortFn             func(look int) []string
+	looks               int
 }
 
-func (d *fakeDrainer) Drain(_ context.Context, _ *clusterv1.Cluster, node string) error {
+func (d *fakeDrainer) Drain(_ context.Context, _ *clusterv1.Cluster, node string, o DrainOptions) error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	d.drained = append(d.drained, node)
+	d.timeouts = append(d.timeouts, o.Timeout)
+	fn := d.drainFn
+	d.mu.Unlock()
+	if fn != nil {
+		return fn(o)
+	}
 	return nil
+}
+
+func (d *fakeDrainer) ShortStatefulSets(context.Context, *clusterv1.Cluster) ([]string, error) {
+	d.mu.Lock()
+	d.looks++
+	look, fn := d.looks, d.shortFn
+	d.mu.Unlock()
+	if fn == nil {
+		return nil, nil
+	}
+	return fn(look), nil
 }
 
 func (d *fakeDrainer) Uncordon(_ context.Context, _ *clusterv1.Cluster, node string) error {
@@ -274,7 +296,7 @@ func newTalosRig(t *testing.T, objects ...client.Object) *talosRig {
 	r.u = &TalosUpgrader{
 		Client: kube, Reader: kube, ClassNamespace: "kubehenge-system",
 		Images: fakeTalosImages{"v1.13.9", "v1.13.12", "v1.14.4"}, Dial: r.talos.dial, Nodes: r.drainer,
-		Now: func() time.Time { return r.now }, MachineCheck: 10 * time.Millisecond, Events: r.events,
+		Now: func() time.Time { return r.now }, MachineCheck: 10 * time.Millisecond, WaitInterval: time.Millisecond, Events: r.events,
 	}
 	return r
 }

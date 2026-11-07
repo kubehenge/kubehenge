@@ -246,4 +246,4 @@ To hold a cluster on its build, switch `nodeImages` off. Deleting a broken build
   - **Node removal** (1 minute) is how long the controller retries deleting the node's Node object.
   - A timeout of 0 keeps waiting for ever, for single-replica workloads that must not go down. The rollout then stays on that machine until the pod or the volume lets go.
   - Set them per cluster and per pool with **Timeouts…** under **Machines**, with `kubehenge cluster timeouts`, or as `deletion` in the Cluster ([clusters.md](clusters.md#pools)).
-  - Talos nodes upgraded in place give their pods 5 minutes to leave before the reboot, whatever these are set to.
+  - Talos nodes upgraded in place use the drain timeout too, before their reboot. At the timeout the node reboots with the pods left, as a removed machine is deleted ([clusters.md](clusters.md#talos-upgrades)).

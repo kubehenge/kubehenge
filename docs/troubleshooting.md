@@ -471,7 +471,11 @@ Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its o
   - The controller upgrades no other node until **Try again** on the cluster's Summary, or until the annotation `kubehenge.dev/talos-upgrade-failed` is removed ([clusters.md](clusters.md#talos-upgrades)). Correct what the reason names first.
 - **`TalosInstallRetry`**, "node … to Talos …, try … of 4 at …: …": the installer's pull or install stalled, or the node did not answer. The controller tries again at the time named, and after the fourth try fails as above. Check that the node reaches factory.talos.dev.
 - **`TalosUpgradeAbandoned`**, "node … to Talos …: its machine is being deleted": the cluster scaled down or replaced the node while it was upgraded. Nothing to do. Its successor is upgraded as any other node.
-- **`TalosDrain`**, "node … reboots without all its pods moved: …": the node's pods did not all leave within five minutes, and the node rebooted anyway. A PodDisruptionBudget often holds them, so check the budgets of the workloads named.
+- **`TalosDrainBlocked`**, "node … is held while it drains: Pod … cannot evict pod …": a PodDisruptionBudget keeps a pod on the node and the upgrade waits. The text names the pod and the budget, and **Upgrade held by** on the cluster shows it too.
+  - `kubectl get pdb -A` shows why the budget allows no disruption, and a workload short of ready replicas explains most. Once it is healthy the pod leaves and the upgrade goes on.
+  - A budget that can never be met, such as `minAvailable` equal to a single replica, holds until the drain timeout. Lower the budget, or shorten the drain timeout of the control plane or the pool under **Machines**, **Timeouts…**.
+- **`TalosStatefulSetsWaiting`**, "node … waits to drain: StatefulSet … replicas ready": a StatefulSet is short of replicas, so the node is not drained yet. Bring it back, or wait for the drain timeout (`TalosStatefulSetsNotReady`).
+- **`TalosDrain`**, "node … reboots without all its pods moved: the drain timeout of … ran out": the pods named were still on the node at the timeout. It rebooted anyway.
 
 ### Upgrades held back
 

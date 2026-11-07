@@ -37,6 +37,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A Talos node drained before its upgrade reboot records the event `TalosDrained` on its Cluster.
 - Kyverno's two admission controllers run on different nodes, so draining a node no longer waits on them. With one worker, the second runs on a control-plane node.
 - A removed machine waits at most 60 minutes for its node to drain and 10 for its volumes to detach. A disruption budget or a stuck detach no longer holds a rollout for ever. `kubehenge cluster timeouts`, the interface and the Cluster change them.
+- A Talos upgrade drains a node for its drain timeout (60 minutes by default), not a fixed five. It first waits for every StatefulSet to be ready. The cluster page names the budget and pod that hold a drain.
 
 ## [0.4.2] - 2026-11-05
 
