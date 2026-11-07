@@ -147,6 +147,8 @@ var workloadIdentities = []workloadIdentity{
 		id: IdentityHealth, namespace: metav1.NamespaceSystem, wanted: always,
 		clusterRules: []rbacv1.PolicyRule{
 			{APIGroups: []string{""}, Resources: []string{"nodes", "pods", "events", "persistentvolumeclaims"}, Verbs: []string{"get", "list"}},
+			// The nodes' leases carry their kubelets' clocks, which the health page compares with its own.
+			{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{"get", "list"}},
 			{APIGroups: []string{"events.k8s.io"}, Resources: []string{"events"}, Verbs: []string{"get", "list"}},
 			{NonResourceURLs: []string{"/readyz", "/readyz/*"}, Verbs: []string{"get"}},
 		},

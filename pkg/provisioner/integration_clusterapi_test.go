@@ -486,7 +486,7 @@ func checkRulesOnChanges(ctx context.Context, t *testing.T, c client.Client) {
 	}
 	for _, tc := range []struct{ name, value, message string }{
 		{"cni", `"cilium"`, "the CNI is chosen when the cluster is created and cannot be changed"},
-		{"cis", `true`, "CIS hardening is chosen when the cluster is created and cannot be changed"},
+		{"cis", `false`, "CIS hardening cannot be switched off once it is on"},
 		{logsAddon, `{"enabled":true,"sizeGiB":10}`, "Loki's volume only grows."},
 	} {
 		if err := change(tc.name, tc.value); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), tc.message) {

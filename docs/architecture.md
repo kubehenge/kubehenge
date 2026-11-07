@@ -677,7 +677,7 @@ The security baseline of every cluster is the part of the [CIS Kubernetes Benchm
 
 ### CIS hardening
 
-CIS hardening (`cis: true`), chosen when a cluster is created and fixed after, adds what costs workloads something:
+CIS hardening (`cis: true`), which can be switched on after creation and never off, adds what costs workloads something:
 
 - Pod Security Admission enforces `restricted`, whatever `podSecurity` says. The exempt namespaces stay exempt.
 - Every container that sets no seccomp profile of its own runs under the container runtime's default.

@@ -28,6 +28,7 @@ import type {
   ManagementSnapshots,
   NotificationSent,
   PodLogs,
+  PodSecurityCheck,
   Plan,
   PveNode,
   Realm,
@@ -329,6 +330,8 @@ export interface Api {
   backupLog: (ns: string, name: string, backup: string) => Promise<VeleroLog>;
   restoreLog: (ns: string, name: string, restore: string) => Promise<VeleroLog>;
   etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
+  /** podSecurityCheck lists the running pods the restricted Pod Security level would refuse. */
+  podSecurityCheck: (ns: string, name: string) => Promise<PodSecurityCheck>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
   /**
@@ -463,6 +466,7 @@ export const api: Api = {
   restoreLog: (ns, name, restore) =>
     request("GET", `${clusterPath(ns, name)}/restores/${encodeURIComponent(restore)}/log`),
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
+  podSecurityCheck: (ns, name) => request("GET", `${clusterPath(ns, name)}/pod-security-check`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
   restoreEtcd: (ns, name, req) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, req),

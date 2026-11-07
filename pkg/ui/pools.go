@@ -16,6 +16,9 @@ import (
 type poolChange struct {
 	Replicas *int32          `json:"replicas"`
 	Machine  json.RawMessage `json:"machine"`
+	// Nodes is the pool's own labels and taints, which JSON null sets back to the cluster's
+	// workerNodes.
+	Nodes json.RawMessage `json:"nodes"`
 }
 
 // applyPools adds, changes and removes worker pools as a change asks, by name, a null removing one.
@@ -42,19 +45,29 @@ func applyPools(c *clusterv1.Cluster, pools map[string]*poolChange) string {
 			workers.MachineDeployments = append(workers.MachineDeployments, clusterv1.MachineDeploymentTopology{Class: workerClass, Name: name})
 			i = len(workers.MachineDeployments) - 1
 		}
-		md := &workers.MachineDeployments[i]
-		if n := change.Replicas; n != nil {
-			if !provisioner.ValidWorkers(*n) {
-				return provisioner.WorkersRule + " in each pool"
-			}
-			if autoscalingOf(md.Metadata.Annotations) != nil {
-				return "pool " + name + " is autoscaled. Switch autoscaling off to set its workers"
-			}
-			md.Replicas = n
+		if problem := applyPool(&workers.MachineDeployments[i], change); problem != "" {
+			return problem
 		}
-		if change.Machine != nil {
-			setPoolOverride(md, workerMachineVariable, change.Machine)
+	}
+	return ""
+}
+
+// applyPool sets what a change gives one existing pool, or says what is wrong with it.
+func applyPool(md *clusterv1.MachineDeploymentTopology, change *poolChange) string {
+	if n := change.Replicas; n != nil {
+		if !provisioner.ValidWorkers(*n) {
+			return provisioner.WorkersRule + " in each pool"
 		}
+		if autoscalingOf(md.Metadata.Annotations) != nil {
+			return "pool " + md.Name + " is autoscaled. Switch autoscaling off to set its workers"
+		}
+		md.Replicas = n
+	}
+	if change.Machine != nil {
+		setPoolOverride(md, workerMachineVariable, change.Machine)
+	}
+	if change.Nodes != nil {
+		setPoolOverride(md, workerNodesVariable, change.Nodes)
 	}
 	return ""
 }
@@ -79,11 +92,12 @@ func setPoolOverride(md *clusterv1.MachineDeploymentTopology, name string, value
 	}
 }
 
-// poolsEffect is what a change of pools does to the machines: a new size replaces the pool's
-// workers. Adding or removing a pool, or setting its workers, only adds or removes some.
+// poolsEffect is what a change of pools does to the machines: a new size, or new labels or taints,
+// replace the pool's workers. Adding or removing a pool, or setting its workers, only adds or
+// removes some.
 func poolsEffect(before *clusterv1.Cluster, pools map[string]*poolChange) string {
 	for name, change := range pools {
-		if change == nil || change.Machine == nil {
+		if change == nil {
 			continue
 		}
 		i := slices.IndexFunc(before.Spec.Topology.Workers.MachineDeployments, func(md clusterv1.MachineDeploymentTopology) bool { return md.Name == name })
@@ -91,13 +105,22 @@ func poolsEffect(before *clusterv1.Cluster, pools map[string]*poolChange) string
 			continue
 		}
 		md := &before.Spec.Topology.Workers.MachineDeployments[i]
-		was := json.RawMessage("null")
-		if j := poolOverride(md, workerMachineVariable); j >= 0 {
-			was = md.Variables.Overrides[j].Value.Raw
-		}
-		if !sameJSON(was, change.Machine) {
+		if poolOverrideChanged(md, workerMachineVariable, change.Machine) || poolOverrideChanged(md, workerNodesVariable, change.Nodes) {
 			return effectWorkers
 		}
 	}
 	return effectScales
+}
+
+// poolOverrideChanged tells whether a change sets a pool's own value of a variable to something
+// other than it has. A change that leaves the variable out (nil) keeps it.
+func poolOverrideChanged(md *clusterv1.MachineDeploymentTopology, name string, value json.RawMessage) bool {
+	if value == nil {
+		return false
+	}
+	was := json.RawMessage("null")
+	if j := poolOverride(md, name); j >= 0 {
+		was = md.Variables.Overrides[j].Value.Raw
+	}
+	return !sameJSON(was, value)
 }

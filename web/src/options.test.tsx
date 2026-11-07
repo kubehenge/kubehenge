@@ -26,6 +26,23 @@ const cluster = {
   machines: [],
 };
 
+async function cisDialog(
+  check: unknown,
+  shown: object = cluster,
+): Promise<{ calls: ReturnType<typeof fakeServer>; dialog: HTMLElement; user: ReturnType<typeof userEvent.setup> }> {
+  window.history.replaceState(null, "", "/clusters/clusters/web/options");
+  const calls = fakeServer({
+    "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+    "GET /api/clusters/clusters/web": { body: shown },
+    "GET /api/clusters/clusters/web/pod-security-check": { body: check },
+    "PATCH /api/clusters/clusters/web": { body: shown },
+  });
+  const user = userEvent.setup({ delay: null });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Edit CIS hardening" }));
+  return { calls, dialog: screen.getByRole("dialog", { name: "Edit CIS hardening" }), user };
+}
+
 describe("a cluster's options", () => {
   it("save only a change", async () => {
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
@@ -117,7 +134,6 @@ describe("a cluster's options", () => {
 
     const row = await screen.findByRole("row", { name: /CIS hardening/u });
     expect(row).toHaveTextContent("On");
-    expect(within(row).queryByRole("button")).not.toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Pod security/u })).toHaveTextContent("Restricted, Kyverno baseline");
     await user.click(screen.getByRole("button", { name: "Edit pod security" }));
     const dialog = screen.getByRole("dialog", { name: "Edit pod security" });
@@ -131,6 +147,64 @@ describe("a cluster's options", () => {
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { podSecurity: { admission: "restricted", kyverno: "restricted" } },
     });
+  });
+
+  it("switch CIS hardening on after listing the pods it would refuse", async () => {
+    const refused = Array.from({ length: 12 }, (_, i) => ({
+      namespace: "apps",
+      name: `pod-${i}`,
+      reasons: "privileged containers; host namespaces",
+    }));
+    const { calls, dialog, user } = await cisDialog({ checked: 40, truncated: false, refused });
+    const box = within(dialog).getByLabelText("CIS hardening");
+    expect(box).not.toBeChecked();
+    expect(box).toBeEnabled();
+    expect(
+      within(dialog).getByText(
+        /Switching this on replaces every node, one at a time, and enforces the restricted level/u,
+      ),
+    ).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Switch on" })).toBeDisabled();
+    await expect(within(dialog).findByText("40 pods checked")).resolves.toBeVisible();
+    const items = within(dialog).getAllByRole("listitem");
+    expect(items).toHaveLength(10);
+    expect(items[0]).toHaveTextContent("apps/pod-0privileged containers; host namespaces");
+    expect(within(dialog).getByText("and 2 more")).toBeVisible();
+    await user.click(box);
+    await user.click(within(dialog).getByRole("button", { name: "Switch on" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { cis: true },
+    });
+  });
+
+  it("say when no running pod would be refused", async () => {
+    const { dialog } = await cisDialog({ checked: 12, truncated: true, refused: [] });
+    await expect(within(dialog).findByText("No running pod would be refused.")).resolves.toBeVisible();
+    expect(within(dialog).getByText("12 pods checked, more exist")).toBeVisible();
+    expect(within(dialog).queryByRole("listitem")).not.toBeInTheDocument();
+  });
+
+  it("say why no pod was checked", async () => {
+    const { dialog } = await cisDialog({
+      checked: 0,
+      truncated: false,
+      refused: [],
+      skipped: "The cluster is not reachable",
+    });
+    await expect(within(dialog).findByText("The cluster is not reachable")).resolves.toBeVisible();
+    expect(within(dialog).queryByText("No running pod would be refused.")).not.toBeInTheDocument();
+  });
+
+  it("hold CIS hardening on, explaining that it stays", async () => {
+    const { dialog } = await cisDialog({}, { ...cluster, variables: { ...cluster.variables, cis: true } });
+    const box = within(dialog).getByLabelText("CIS hardening");
+    expect(box).toBeChecked();
+    expect(box).toBeDisabled();
+    expect(box).toHaveAccessibleDescription(/Cannot be switched off/u);
+    expect(within(dialog).getByRole("button", { name: "Switch on" })).toBeDisabled();
+    expect(within(dialog).queryByText(/Checking pods/u)).not.toBeInTheDocument();
   });
 
   it("switch the load balancer, keeping its addresses while it is off", async () => {

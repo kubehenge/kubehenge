@@ -361,7 +361,7 @@ func assemble(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now tim
 	v := healthView{
 		Read:         now,
 		Workload:     wl.why(),
-		Nodes:        nodesSection(m, wl, now, &a),
+		Nodes:        nodesSection(c, m, wl, now, &a),
 		Pods:         podsSection(wl, now, &a),
 		Volumes:      volumesSection(wl, now, &a),
 		Addons:       addonsSection(c, m, &a),

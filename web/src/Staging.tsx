@@ -121,6 +121,8 @@ const settingLabels: Record<string, string[]> = {
   pools: ["Worker pools"],
   controlPlaneMachine: ["Control-plane size"],
   workerMachine: ["Worker size"],
+  workerNodes: ["Worker node settings"],
+  cis: ["CIS hardening"],
   autoscaling: ["Autoscaling"],
   allowedNodes: ["Placement"],
   autoscaler: ["Autoscaler"],

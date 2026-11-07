@@ -47,6 +47,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   namespaces: {{ toJson $namespaces | quote }}
+  {{- /* Every namespace any cluster exempts from Pod Security Admission, for the check before CIS hardening is switched on. */}}
+  {{- $exempt := list }}
+  {{- range $by, $listed := .Values.podSecurityExempt }}{{ $exempt = concat $exempt $listed }}{{ end }}
+  podSecurityExempt: {{ toJson (uniq $exempt) | quote }}
   {{- if .Values.interface.headlampActions }}
   headlampActions: "true"
   {{- end }}

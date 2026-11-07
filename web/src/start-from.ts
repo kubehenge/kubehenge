@@ -2,6 +2,7 @@ import { newForm, type Form, type Machine } from "./create-form";
 import { loadBalancerOf } from "./LoadBalancer";
 import { logsOf } from "./Logs";
 import { nodeOSKey } from "./node-os";
+import { nodesOf } from "./node-settings";
 import { oidcProviders } from "./OIDCProviders";
 import { placeOf } from "./Placement";
 import { podSecurityOf } from "./PodSecurity";
@@ -39,6 +40,7 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "haGroups",
   "controlPlaneMachine",
   "workerMachine",
+  "workerNodes",
   "cni",
   "headlamp",
   "headlampView",
@@ -101,6 +103,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     haGroups: flag(record(v["ccm"])["haGroups"]) !== false,
     controlPlaneMachine: machineOf(v["controlPlaneMachine"], base.controlPlaneMachine),
     workerMachine: machineOf(v["workerMachine"], base.workerMachine),
+    workerNodes: nodesOf(v["workerNodes"]),
     cni: text(v["cni"]) ?? "",
     headlamp: flag(headlamp["enabled"]) === true,
     headlampView: text(headlamp["access"]) === "view",
