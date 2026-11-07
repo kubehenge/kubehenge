@@ -349,14 +349,21 @@ func (r *TemplateRefresh) patchRequests(ctx context.Context, clusters []refreshe
 					r.logf("%v", err)
 					errs = append(errs, err)
 				}
-				req := templates.Request{Distribution: templates.Kubeadm, NodeOS: nodeOS, KubernetesVersion: v}
-				if v != "" && !slices.Contains(reqs, req) {
-					reqs = append(reqs, req)
-				}
+				reqs = addPatchRequest(reqs, nodeOS, v)
 			}
 		}
 	}
 	return reqs, errs
+}
+
+// addPatchRequest adds the kubeadm template of release v on nodeOS to reqs, unless v is empty or the
+// template is there.
+func addPatchRequest(reqs []templates.Request, nodeOS templates.NodeOS, v string) []templates.Request {
+	req := templates.Request{Distribution: templates.Kubeadm, NodeOS: nodeOS, KubernetesVersion: v}
+	if v == "" || slices.Contains(reqs, req) {
+		return reqs
+	}
+	return append(reqs, req)
 }
 
 // patchMarkers reads each minor version's newest release once, and a marker that failed not again.

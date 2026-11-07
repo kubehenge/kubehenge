@@ -36,7 +36,6 @@ export function ReleasePins(): JSX.Element {
             <tr>
               <th>Release</th>
               <th>Pinned by</th>
-              <th>Used by</th>
               <th>
                 <span className="visually-hidden">Actions</span>
               </th>
@@ -45,12 +44,14 @@ export function ReleasePins(): JSX.Element {
           <tbody>
             {data.pins.map((p) => (
               <tr key={p.version}>
-                <td>{p.version}</td>
+                <td>
+                  {p.version}
+                  {filled(p.inUse) && <div className="muted">In use by {p.inUse}</div>}
+                </td>
                 <td>
                   {p.by ?? "Unknown"}
-                  {filled(p.at) && <span className="muted"> {new Date(p.at).toLocaleDateString()}</span>}
+                  {filled(p.at) && <div className="muted">{new Date(p.at).toLocaleDateString()}</div>}
                 </td>
-                <td>{p.inUse ?? "None"}</td>
                 <td className="row-action">
                   <button
                     type="button"
@@ -103,11 +104,15 @@ export function ReleasePins(): JSX.Element {
       )}
       {shown && (
         <>
-          <dl className="details" aria-label="Digests">
+          <dl className="summary" aria-label="Digests">
             <dt>Checksum file</dt>
-            <dd className="mono">{shown.file}</dd>
+            <dd>
+              <code>{shown.file}</code>
+            </dd>
             <dt>Install script</dt>
-            <dd className="mono">{shown.script}</dd>
+            <dd>
+              <code>{shown.script}</code>
+            </dd>
           </dl>
           <div className="actions">
             <button

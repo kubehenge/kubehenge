@@ -280,7 +280,7 @@ func (s *ChannelServer) Channels(ctx context.Context, distribution string, os te
 // NewestPatch is the newest release of Kubernetes minor version 1.<minor> that Kubernetes names in
 // base/stable-1.<minor>.txt, or false for a minor it has not released yet.
 func (s *ChannelServer) NewestPatch(ctx context.Context, base string, minor int) (string, bool, error) {
-	v, found, err := s.newestPatch(ctx, base, minor)
+	v, found, err := s.markedRelease(ctx, base, minor)
 	if err != nil {
 		return "", false, fmt.Errorf("the newest Kubernetes 1.%d release: %w", minor, err)
 	}
@@ -352,7 +352,7 @@ func (s *ChannelServer) kubernetesChannels(ctx context.Context, base string) (Ch
 	}
 	ch := Channels{Latest: map[int]kubeVersion{}, StableMinor: stable.Minor}
 	for _, m := range minors {
-		v, found, err := s.newestPatch(ctx, base, m)
+		v, found, err := s.markedRelease(ctx, base, m)
 		if err != nil {
 			return Channels{}, err
 		}
@@ -367,7 +367,8 @@ func (s *ChannelServer) kubernetesChannels(ctx context.Context, base string) (Ch
 	return ch, nil
 }
 
-func (s *ChannelServer) newestPatch(ctx context.Context, base string, minor int) (kubeVersion, bool, error) {
+// markedRelease is the release base/stable-1.<minor>.txt names.
+func (s *ChannelServer) markedRelease(ctx context.Context, base string, minor int) (kubeVersion, bool, error) {
 	url := fmt.Sprintf("%s/stable-1.%d.txt", base, minor)
 	raw, found, err := s.get(ctx, url)
 	if err != nil || !found {

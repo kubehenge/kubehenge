@@ -125,5 +125,5 @@ func retryDue(accepted, older []time.Time, now time.Time) bool {
 		}
 	}
 	// The first older build is not a retry.
-	return chain-1 < OlderRetries
+	return chain <= OlderRetries
 }

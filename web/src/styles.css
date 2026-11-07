@@ -1355,6 +1355,11 @@ button.go {
   margin-block-end: 10px;
 }
 
+/* A form under a table sits clear of its last row. */
+.box > .grid + form {
+  margin-block-start: 16px;
+}
+
 .management-health h3 {
   display: flex;
   gap: 10px;
