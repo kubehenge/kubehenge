@@ -357,7 +357,7 @@ func (f *demoFleet) etcdStatus(d *demoCluster) string {
 	for i := range d.ControlPlanes {
 		size := int64(90+30*i) << 20
 		status.Members = append(status.Members, provisioner.EtcdMember{
-			Name: fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, int(i))),
+			Name:   fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, int(i))),
 			Leader: i == 0, DBSize: size, DBSizeInUse: size * 3 / 4,
 		})
 	}
