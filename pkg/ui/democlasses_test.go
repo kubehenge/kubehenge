@@ -30,7 +30,20 @@ type chartMetadata struct {
 }
 
 type chartSpec struct {
-	Variables []any `json:"variables"`
+	Variables    []any             `json:"variables"`
+	ControlPlane chartMachineClass `json:"controlPlane"`
+	Workers      chartWorkerClass  `json:"workers"`
+}
+
+type chartWorkerClass struct {
+	MachineDeployments []chartMachineClass `json:"machineDeployments"`
+}
+
+// chartMachineClass is the part of a control plane or a worker class that the wizard shows: the
+// waits a removed machine's node is given.
+type chartMachineClass struct {
+	Class    string         `json:"class,omitempty"`
+	Deletion map[string]int `json:"deletion"`
 }
 
 // The demo's ClusterClasses are the chart's, cut to what the interface reads, so the wizard it
@@ -58,7 +71,11 @@ func TestDemoClassesMatchTheChart(t *testing.T) {
 			"apiVersion": obj.APIVersion,
 			"kind":       obj.Kind,
 			"metadata":   map[string]any{"name": obj.Metadata.Name, "namespace": "kubehenge-system", "annotations": obj.Metadata.Annotations},
-			"spec":       map[string]any{"variables": obj.Spec.Variables},
+			"spec": map[string]any{
+				"variables":    obj.Spec.Variables,
+				"controlPlane": map[string]any{"deletion": obj.Spec.ControlPlane.Deletion},
+				"workers":      map[string]any{"machineDeployments": obj.Spec.Workers.MachineDeployments},
+			},
 		})
 	}
 	if len(classes) != len(provisioner.VersionFormats) {

@@ -122,6 +122,7 @@ func validateTopology(old, c *clusterv1.Cluster) field.ErrorList {
 	if n := c.Spec.Topology.ControlPlane.Replicas; n != nil && !ValidControlPlane(*n) {
 		errs = append(errs, field.Invalid(topology.Child("controlPlane", "replicas"), *n, ControlPlaneRule))
 	}
+	errs = append(errs, NodeTimeoutsOf(&c.Spec.Topology.ControlPlane.Deletion).errors(topology.Child("controlPlane", "deletion"))...)
 	return append(errs, validatePools(old, c, topology.Child("workers", "machineDeployments"))...)
 }
 
@@ -140,6 +141,7 @@ func validatePools(old, c *clusterv1.Cluster, pools *field.Path) field.ErrorList
 		if n := md.Replicas; n != nil && !ValidWorkers(*n) {
 			errs = append(errs, field.Invalid(pools.Index(i).Child("replicas"), *n, WorkersRule+" in each pool"))
 		}
+		errs = append(errs, NodeTimeoutsOfPool(&md.Deletion).errors(pools.Index(i).Child("deletion"))...)
 		problem := ""
 		if !had[md.Name] {
 			problem = PoolNameProblem(c.Name, md.Name)

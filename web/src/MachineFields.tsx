@@ -1,7 +1,20 @@
 import type { JSX } from "react";
 
 import { memoryStepMiB, type Machine } from "./create-form";
+import type { MachineSize } from "./types";
 import { Field, shownNumber, typedNumber } from "./ui";
+import { quantity, record } from "./values";
+
+/** sizeOf reads a machine variable's value, or undefined where it holds none. */
+export function sizeOf(v: unknown): MachineSize | undefined {
+  const r = record(v);
+  const cores = quantity(r["cores"]);
+  const memoryMiB = quantity(r["memoryMiB"]);
+  const diskGiB = quantity(r["diskGiB"]);
+  return cores === undefined || memoryMiB === undefined || diskGiB === undefined
+    ? undefined
+    : { cores, memoryMiB, diskGiB };
+}
 
 /** MachineFields edit a machine's cores, memory and disk, with a problem shown at the part it names. */
 export function MachineFields({

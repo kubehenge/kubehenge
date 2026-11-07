@@ -63,6 +63,7 @@ import {
   whole,
 } from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
+import { noTimeouts, timeoutProblems, timeoutsOf, timeoutsSet, type TimeoutEntry } from "./NodeTimeouts";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
 import {
@@ -146,6 +147,9 @@ export interface Form {
   workerAutoscale: boolean;
   /** The most workers the cluster autoscaler adds, with workerAutoscale. */
   workerMax: number;
+  /** How long a removed machine waits for its node, for the control planes and for the workers. Empty takes the class's. */
+  controlPlaneTimeouts: TimeoutEntry;
+  workerTimeouts: TimeoutEntry;
   endpoint: string;
   bridge: string;
   vlan: string;
@@ -646,6 +650,8 @@ export const newForm = (): Form => ({
   workerReplicas: 1,
   workerAutoscale: false,
   workerMax: 3,
+  controlPlaneTimeouts: noTimeouts,
+  workerTimeouts: noTimeouts,
   endpoint: "",
   bridge: "",
   vlan: "",
@@ -876,6 +882,16 @@ function interfaceOptions(form: Form): Record<string, number> {
   return options;
 }
 
+// timeoutRequests are the timeouts the form sets, left out where all of a group's are empty.
+function timeoutRequests(form: Form): Pick<CreateRequest, "controlPlaneTimeouts" | "workerTimeouts"> {
+  const controlPlane = timeoutsOf(form.controlPlaneTimeouts);
+  const workers = timeoutsOf(form.workerTimeouts);
+  return {
+    ...(timeoutsSet(controlPlane) && { controlPlaneTimeouts: controlPlane }),
+    ...(timeoutsSet(workers) && { workerTimeouts: workers }),
+  };
+}
+
 // request turns the form into the API's request, with only the variables the class defines.
 export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
@@ -934,6 +950,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     controlPlaneReplicas: form.controlPlaneReplicas,
     workerReplicas: form.workerReplicas,
     variables: Object.fromEntries(Object.entries(variables).filter(([k]) => defined.has(k))),
+    ...timeoutRequests(form),
   };
   if (autoscales(form, c)) {
     req.workerAutoscaling = { min: form.workerReplicas, max: form.workerMax };
@@ -1138,6 +1155,7 @@ export type FieldKey =
   | "controlPlaneReplicas"
   | "workerReplicas"
   | "workerMax"
+  | "timeouts"
   | "addons"
   | "bridge"
   | "vlan"
@@ -1223,6 +1241,12 @@ function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
     if (!whole(form.workerMax, least, maxWorkers)) {
       p.workerMax = `A whole number from ${least} to ${maxWorkers}`;
     }
+  }
+  if (
+    Object.keys(timeoutProblems(form.controlPlaneTimeouts)).length > 0 ||
+    Object.keys(timeoutProblems(form.workerTimeouts)).length > 0
+  ) {
+    p.timeouts = "Check the node timeouts";
   }
   return p;
 }

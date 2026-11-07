@@ -93,6 +93,10 @@ type classView struct {
 	NoTemplate string `json:"noTemplate,omitempty"`
 	// NodeOSes are the operating systems the class's nodes may run, but for Talos's.
 	NodeOSes []nodeOSChoice `json:"nodeOSes,omitempty"`
+	// ControlPlaneTimeouts and WorkerTimeouts are the waits the class gives a node's drain, volume
+	// detach and Node deletion when a machine is removed, where a cluster sets none of its own.
+	ControlPlaneTimeouts provisioner.NodeTimeouts `json:"controlPlaneTimeouts"`
+	WorkerTimeouts       provisioner.NodeTimeouts `json:"workerTimeouts"`
 }
 
 // nodeOSChoice is a node OS a cluster may run, and why none can be built on it yet.
@@ -150,6 +154,7 @@ func (s *Server) classView(ctx context.Context, c *clusterv1.ClusterClass, dist 
 	v := classView{
 		Name: c.Name, Distribution: dist, Variables: []classVariable{}, Versions: &regexpDescription{Pattern: provisioner.VersionFormats[templates.Distribution(dist)].String()},
 		NoTemplate: missingTemplate(c, dist, "", templates.DefaultNodeOS), NodeOSes: nodeOSChoices(c, dist),
+		ControlPlaneTimeouts: classControlPlaneTimeouts(c), WorkerTimeouts: classWorkerTimeouts(c),
 	}
 	for i := range c.Spec.Variables {
 		cv := &c.Spec.Variables[i]
@@ -207,6 +212,9 @@ type clusterView struct {
 	Pool         string                     `json:"pool"`
 	Allowed      allowedView                `json:"allowed"`
 	Machines     []machineView              `json:"machines,omitempty"`
+	// ControlPlaneTimeouts are the control planes' own waits for a removed machine's node, where
+	// they do not take the class's.
+	ControlPlaneTimeouts provisioner.NodeTimeouts `json:"controlPlaneTimeouts"`
 	// ControllerError is the error Kubehenge's controller last met reconciling the cluster, until
 	// a reconcile succeeds, from the Cluster's own condition, which kubectl shows the same.
 	ControllerError string `json:"controllerError,omitempty"`
@@ -299,6 +307,9 @@ type workerPoolView struct {
 	Autoscaling *poolAutoscaling `json:"autoscaling,omitempty"`
 	// Machine is the pool's own size, where it does not take the cluster's workerMachine.
 	Machine json.RawMessage `json:"machine,omitempty"`
+	// Timeouts are the pool's own waits for a removed machine's node, where it does not take the
+	// class's.
+	Timeouts provisioner.NodeTimeouts `json:"timeouts"`
 }
 
 type allowedView struct {
@@ -392,6 +403,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		v.Workers = replicas(ws.DesiredReplicas, ws.ReadyReplicas, ws.AvailableReplicas, ws.UpToDateReplicas)
 	}
 	v.WorkerPools = workerPoolsOf(c)
+	v.ControlPlaneTimeouts = provisioner.NodeTimeoutsOf(&c.Spec.Topology.ControlPlane.Deletion)
 	for _, cv := range c.Spec.Topology.Variables {
 		v.Variables[cv.Name] = json.RawMessage(cv.Value.Raw)
 	}
@@ -413,7 +425,7 @@ func workerPoolsOf(c *clusterv1.Cluster) []workerPoolView {
 	pools := make([]workerPoolView, 0, len(c.Spec.Topology.Workers.MachineDeployments))
 	for i := range c.Spec.Topology.Workers.MachineDeployments {
 		md := &c.Spec.Topology.Workers.MachineDeployments[i]
-		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations)}
+		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations), Timeouts: provisioner.NodeTimeoutsOfPool(&md.Deletion)}
 		if md.Replicas != nil {
 			wp.Replicas = *md.Replicas
 		}
@@ -728,6 +740,10 @@ type createRequest struct {
 	// WorkerAutoscaling has the cluster autoscaler size the worker pool in place of WorkerReplicas.
 	WorkerAutoscaling *poolAutoscaling           `json:"workerAutoscaling,omitempty"`
 	Variables         map[string]json.RawMessage `json:"variables"`
+	// ControlPlaneTimeouts and WorkerTimeouts set the waits for a removed machine's node of the
+	// control planes and of the first worker pool, in place of the class's.
+	ControlPlaneTimeouts *provisioner.NodeTimeouts `json:"controlPlaneTimeouts,omitempty"`
+	WorkerTimeouts       *provisioner.NodeTimeouts `json:"workerTimeouts,omitempty"`
 	// Pods and Services are the cluster's own ranges. Unset, the controller's admission chooses ones
 	// clear of the nodes' network (provisioner.ClusterDefaulter).
 	Pods     []string `json:"pods,omitempty"`
@@ -802,6 +818,11 @@ func (req *createRequest) invalid() string {
 	}
 	if a := req.WorkerAutoscaling; a != nil && !a.valid() {
 		return autoscalingCounts
+	}
+	for _, t := range []*provisioner.NodeTimeouts{req.ControlPlaneTimeouts, req.WorkerTimeouts} {
+		if t != nil && t.Problem() != "" {
+			return t.Problem()
+		}
 	}
 	return ""
 }
@@ -998,6 +1019,12 @@ func (s *Server) newCluster(u user, req *createRequest) *clusterv1.Cluster {
 	if req.WorkerAutoscaling != nil {
 		setAutoscaling(&c.Spec.Topology.Workers.MachineDeployments[0], req.WorkerAutoscaling, 0)
 	}
+	if t := req.ControlPlaneTimeouts; t != nil {
+		t.SetOn(&c.Spec.Topology.ControlPlane.Deletion)
+	}
+	if t := req.WorkerTimeouts; t != nil {
+		t.SetOnPool(&c.Spec.Topology.Workers.MachineDeployments[0].Deletion)
+	}
 	for _, name := range slices.Sorted(maps.Keys(req.Variables)) {
 		c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{
 			Name: name, Value: apiextensionsv1.JSON{Raw: req.Variables[name]},
@@ -1105,6 +1132,9 @@ type changeRequest struct {
 	// Pools adds, changes and removes worker pools by name.
 	Pools     map[string]*poolChange     `json:"pools"`
 	Variables map[string]json.RawMessage `json:"variables"`
+	// ControlPlaneTimeouts sets the control planes' waits for a removed machine's node. It replaces
+	// all three, and a timeout it leaves out is the class's.
+	ControlPlaneTimeouts *provisioner.NodeTimeouts `json:"controlPlaneTimeouts"`
 }
 
 // changed is a change read and checked, applied to the cluster in memory, with the cluster as it was.
@@ -1171,6 +1201,9 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, r
 	}
 	if msg == "" {
 		msg = applyPools(c, req.Pools)
+	}
+	if msg == "" {
+		msg = applyControlPlaneTimeouts(c, req.ControlPlaneTimeouts)
 	}
 	if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)

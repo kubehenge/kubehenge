@@ -86,10 +86,10 @@ func workerOf(cluster, pool, name string) *clusterv1.Machine {
 	return m
 }
 
-func storedCluster(t *testing.T, h *harness) *clusterv1.Cluster {
+func storedCluster(t *testing.T, h *harness, namespace, name string) *clusterv1.Cluster {
 	t.Helper()
 	c := &clusterv1.Cluster{}
-	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "one"}, c); err != nil {
+	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: namespace, Name: name}, c); err != nil {
 		t.Fatal(err)
 	}
 	return c
@@ -113,7 +113,7 @@ func TestDeletingAWorkerSurvivesControllersUpdatingTheCluster(t *testing.T) {
 	b := h.browser()
 	b.signIn("dev@pve")
 	expect(t, b.do("DELETE", "/api/clusters/default/one/machines/one-md-0-a", ""), http.StatusNoContent)
-	if n := *storedCluster(t, h).Spec.Topology.Workers.MachineDeployments[0].Replicas; n != 1 {
+	if n := *storedCluster(t, h, "default", "one").Spec.Topology.Workers.MachineDeployments[0].Replicas; n != 1 {
 		t.Errorf("md-0 has %d workers, want 1: one lower, however often the write was made", n)
 	}
 	if !isMarkedToGo(t, h, worker) {
@@ -142,7 +142,7 @@ func TestDeletingAWorkerThatConflictsEveryTimeUnmarksIt(t *testing.T) {
 	if isMarkedToGo(t, h, worker) {
 		t.Error("the worker stays marked though its pool did not shrink")
 	}
-	if n := *storedCluster(t, h).Spec.Topology.Workers.MachineDeployments[0].Replicas; n != 2 {
+	if n := *storedCluster(t, h, "default", "one").Spec.Topology.Workers.MachineDeployments[0].Replicas; n != 2 {
 		t.Errorf("md-0 has %d workers, want the 2 it had", n)
 	}
 }
@@ -166,7 +166,7 @@ func TestDeletingAWorkerChecksThePoolAgainOnEachAttempt(t *testing.T) {
 	if isMarkedToGo(t, h, worker) {
 		t.Error("the worker stays marked though its pool became autoscaled")
 	}
-	if n := *storedCluster(t, h).Spec.Topology.Workers.MachineDeployments[0].Replicas; n != 2 {
+	if n := *storedCluster(t, h, "default", "one").Spec.Topology.Workers.MachineDeployments[0].Replicas; n != 2 {
 		t.Errorf("md-0 has %d workers, want the 2 it had", n)
 	}
 }
@@ -178,7 +178,7 @@ func TestChangeSurvivesControllersUpdatingTheCluster(t *testing.T) {
 	b := h.browser()
 	b.signIn("dev@pve")
 	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"workerPools":{"md-0":4},"variables":{"headlamp":{"enabled":true}}}`), http.StatusOK)
-	c := storedCluster(t, h)
+	c := storedCluster(t, h, "default", "one")
 	if n := *c.Spec.Topology.Workers.MachineDeployments[0].Replicas; n != 4 {
 		t.Errorf("md-0 has %d workers, want 4", n)
 	}
@@ -208,7 +208,7 @@ func TestChangeThatConflictsEveryTimeSaysTheClusterChanged(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "the cluster changed meanwhile") {
 		t.Errorf("body %s", rec.Body)
 	}
-	if n := *storedCluster(t, h).Spec.Topology.Workers.MachineDeployments[0].Replicas; n != 2 {
+	if n := *storedCluster(t, h, "default", "one").Spec.Topology.Workers.MachineDeployments[0].Replicas; n != 2 {
 		t.Errorf("md-0 has %d workers, want the 2 it had", n)
 	}
 }
@@ -261,7 +261,7 @@ func TestChangeRefusesAnEditThatLandsDuringARetry(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "the cluster changed meanwhile") {
 		t.Errorf("body %s", rec.Body)
 	}
-	if got := variableValue(storedCluster(t, h), "headlamp"); string(got) != `{"enabled":true}` {
+	if got := variableValue(storedCluster(t, h, "default", "one"), "headlamp"); string(got) != `{"enabled":true}` {
 		t.Errorf("the other user's edit was overwritten: headlamp = %s", got)
 	}
 }

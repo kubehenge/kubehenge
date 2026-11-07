@@ -3,6 +3,7 @@ import { etcdFieldsOf, etcdSnapshotsOf } from "./EtcdSnapshots";
 import { loadBalancerOf } from "./LoadBalancer";
 import { logsOf } from "./Logs";
 import { nodeOSKey } from "./node-os";
+import { entryOf } from "./NodeTimeouts";
 import { oidcProviders } from "./OIDCProviders";
 import { placeOf } from "./Placement";
 import { podSecurityOf } from "./PodSecurity";
@@ -28,6 +29,8 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "workerReplicas",
   "workerAutoscale",
   "workerMax",
+  "controlPlaneTimeouts",
+  "workerTimeouts",
   "bridge",
   "vlan",
   "mtu",
@@ -96,6 +99,8 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     workerReplicas: autoscaling?.min ?? c.workers.desired,
     workerAutoscale: autoscaling !== undefined,
     workerMax: autoscaling?.max ?? base.workerMax,
+    controlPlaneTimeouts: entryOf(c.controlPlaneTimeouts ?? {}),
+    workerTimeouts: entryOf(c.workerPools[0]?.timeouts ?? {}),
     bridge: text(network["bridge"]) ?? "",
     vlan: vlan === undefined ? "" : String(vlan),
     mtu: quantity(network["mtu"])?.toString() ?? "",

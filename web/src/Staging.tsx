@@ -1,12 +1,13 @@
-import { useState, type JSX, type ReactNode } from "react";
+import { useEffect, useState, type JSX, type ReactNode } from "react";
 
 import { api, ApiError, httpPreconditionFailed } from "./api";
 import { autoscalerText } from "./Autoscaling";
 import { backupsRows } from "./Backups";
 import { everything, optionRows, type OptionRow } from "./ClusterOptions";
 import { etcdSnapshotsRows } from "./EtcdSnapshots";
+import { timeoutsText } from "./NodeTimeouts";
 import { StagingContext, useStaging, type Staging } from "./staging-context";
-import type { ChangeRequest, Cluster, Effect, PlannedChange } from "./types";
+import type { ChangeRequest, Cluster, ClusterClass, Effect, PlannedChange } from "./types";
 import { Dialog, ErrorBox, errorMessage } from "./ui";
 
 // mergedPools is two changes of pools as one: a pool's later change adds to its earlier one, and a
@@ -42,6 +43,10 @@ export function merged(a: ChangeRequest, b: ChangeRequest): ChangeRequest {
   }
   if (a.pools !== undefined || b.pools !== undefined) {
     out.pools = mergedPools(a.pools ?? {}, b.pools ?? {});
+  }
+  const timeouts = b.controlPlaneTimeouts ?? a.controlPlaneTimeouts;
+  if (timeouts !== undefined) {
+    out.controlPlaneTimeouts = timeouts;
   }
   if (a.variables !== undefined || b.variables !== undefined) {
     out.variables = { ...a.variables, ...b.variables };
@@ -113,12 +118,16 @@ export function StagingProvider({
   return <StagingContext value={staging}>{children}</StagingContext>;
 }
 
+const controlPlaneTimeoutsLabel = "Control plane timeouts";
+const poolTimeoutsLabel = (pool: string): string => `Pool ${pool} timeouts`;
+
 // The rows of the page a setting shows in. Most show in one.
 const settingLabels: Record<string, string[]> = {
   version: ["Kubernetes version"],
   controlPlaneReplicas: ["Control plane"],
   workerPools: ["Workers"],
   pools: ["Worker pools"],
+  controlPlaneTimeouts: [controlPlaneTimeoutsLabel],
   controlPlaneMachine: ["Control-plane size"],
   workerMachine: ["Worker size"],
   autoscaling: ["Autoscaling"],
@@ -182,13 +191,28 @@ function autoscalingText(c: Cluster): string {
   return scaled.length === 0 ? "Off" : scaled.join(", ");
 }
 
+// The timeouts of the control plane and of each pool, as they apply with the class's behind them.
+function timeoutRows(c: Cluster, cls: ClusterClass | undefined): Setting[] {
+  return [
+    {
+      label: controlPlaneTimeoutsLabel,
+      value: timeoutsText(c.controlPlaneTimeouts ?? {}, cls?.controlPlaneTimeouts),
+    },
+    ...c.workerPools.map((p) => ({
+      label: poolTimeoutsLabel(p.name),
+      value: timeoutsText(p.timeouts ?? {}, cls?.workerTimeouts),
+    })),
+  ];
+}
+
 // settingRows are every setting of a cluster a change can set, as the page shows them.
-function settingRows(c: Cluster): Setting[] {
+function settingRows(c: Cluster, cls: ClusterClass | undefined): Setting[] {
   return [
     { label: "Kubernetes version", value: c.version },
     { label: "Control plane", value: String(c.controlPlane.desired) },
     { label: "Workers", value: workersText(c) },
     { label: "Autoscaling", value: autoscalingText(c) },
+    ...timeoutRows(c, cls),
     ...optionRows<string>(c, everything, [
       ...backupsRows(c, true),
       ...etcdSnapshotsRows(c, true),
@@ -210,11 +234,18 @@ interface PlanRow {
 const valueOf = (rows: Setting[], label: string): string => rows.find((r) => r.label === label)?.value ?? "";
 
 /** planRows are the rows of a plan: one per row of the page whose value a change sets anew. */
-export function planRows(before: Cluster, after: Cluster, changes: PlannedChange[]): PlanRow[] {
-  const now = settingRows(before);
-  const then = settingRows(after);
+export function planRows(
+  { before, after }: { before: Cluster; after: Cluster },
+  changes: PlannedChange[],
+  cls?: ClusterClass,
+): PlanRow[] {
+  const now = settingRows(before, cls);
+  const then = settingRows(after, cls);
+  const pools = [...new Set([...before.workerPools, ...after.workerPools].map((p) => p.name))].map((name) =>
+    poolTimeoutsLabel(name),
+  );
   return changes.flatMap(({ setting, effect }) => {
-    const rows = labelsOf(setting).map((label) => ({
+    const rows = (setting === "pools" ? [...labelsOf(setting), ...pools] : labelsOf(setting)).map((label) => ({
       label,
       now: valueOf(now, label),
       after: valueOf(then, label),
@@ -262,6 +293,19 @@ function PlanDialog({
 }): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [cls, setCls] = useState<ClusterClass>();
+  const className = c.class;
+  useEffect(() => {
+    async function load(): Promise<void> {
+      try {
+        const classes = await api.classes();
+        setCls(classes.find((x) => x.name === className));
+      } catch {
+        // Without the class the plan shows the timeouts a cluster sets, and "class default" for the rest.
+      }
+    }
+    void load();
+  }, [className]);
   const { staged } = staging;
   if (staged === undefined) {
     return null;
@@ -304,7 +348,7 @@ function PlanDialog({
         </p>
       ))}
       <div className="scroll">
-        <table className="grid plan">
+        <table className="grid plan stack">
           <thead>
             <tr>
               <th>Setting</th>
@@ -314,12 +358,14 @@ function PlanDialog({
             </tr>
           </thead>
           <tbody>
-            {planRows(c, plan.cluster, plan.changes).map((r) => (
+            {planRows({ before: c, after: plan.cluster }, plan.changes, cls).map((r) => (
               <tr key={r.label}>
                 <th scope="row">{r.label}</th>
-                <td>{r.now}</td>
-                <td>{r.after}</td>
-                <td className={r.effect === "none" ? "muted" : "plan-replaces"}>{effects[r.effect]}</td>
+                <td data-label="Now">{r.now}</td>
+                <td data-label="After">{r.after}</td>
+                <td data-label="Machines" className={r.effect === "none" ? "muted" : "plan-replaces"}>
+                  {effects[r.effect]}
+                </td>
               </tr>
             ))}
           </tbody>
