@@ -543,6 +543,21 @@ func TestSignInWithRealm(t *testing.T) {
 	expect(t, b.do("POST", "/api/session", `{"username":"admin","realm":"pve","password":"secret"}`), http.StatusOK)
 }
 
+// Active Directory users often type their principal name, whose domain is no realm.
+func TestSignInWithAPrincipalNameTakesTheChosenRealm(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.accounts.passwords["anna@corp.example@pve"] = "secret"
+	b := h.browser()
+	rec := b.do("POST", "/api/session", `{"username":"anna@corp.example","realm":"pve","password":"secret"}`)
+	expect(t, rec, http.StatusOK)
+	if !strings.Contains(rec.Body.String(), `"user":"anna@corp.example@pve"`) {
+		t.Errorf("signed in as %s", rec.Body)
+	}
+	// A name that ends in a realm keeps it, whichever realm is chosen.
+	expect(t, h.browser().do("POST", "/api/session", `{"username":"admin@pve","realm":"sso","password":"secret"}`), http.StatusOK)
+}
+
 func TestFailedSignInsAreLimited(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

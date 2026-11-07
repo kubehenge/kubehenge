@@ -124,8 +124,8 @@ func workerMachine(name, node string) clusterv1.Machine {
 
 func attentionWhat(a attention) []string {
 	out := make([]string, 0, len(a))
-	for _, item := range a {
-		out = append(out, item.What)
+	for i := range a {
+		out = append(out, a[i].What)
 	}
 	return out
 }
