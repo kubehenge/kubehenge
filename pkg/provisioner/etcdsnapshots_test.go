@@ -516,6 +516,44 @@ func TestCheckEtcdSnapshots(t *testing.T) {
 	}
 }
 
+// Snapshots and backups are written with the cluster's one access key, so both go to one target.
+func TestCheckEtcdSnapshotsShareBackupsTarget(t *testing.T) {
+	t.Parallel()
+	both := func(snapshots, backups string) *clusterv1.Cluster {
+		return withAddons(etcdCluster(snapshots), map[string]string{backupsVariable: backups})
+	}
+	const (
+		onStore = `{"enabled":true,"target":"store"}`
+		onAWS   = `{"enabled":true,"target":"aws"}`
+	)
+	for _, tc := range []struct {
+		name     string
+		old, new *clusterv1.Cluster
+		want     string
+	}{
+		{"same target", nil, both(onStore, onStore), ""},
+		{"different targets", nil, both(onStore, onAWS), `use the backups' target "aws", not "store"`},
+		{"backups off", nil, both(onStore, `{"enabled":false,"target":"aws"}`), ""},
+		{"no backups", nil, etcdCluster(onStore), ""},
+		{"a change to the snapshots' target", both(onAWS, onAWS), both(onStore, onAWS), `use the backups' target "aws"`},
+		{"a change to the backups' target", both(onStore, onStore), both(onStore, onAWS), `use the backups' target "aws"`},
+		{"a cluster already on two targets, edited", both(onStore, onAWS), both(`{"enabled":true,"target":"store","keep":3}`, onAWS), ""},
+	} {
+		err := checkEtcdSnapshots(tc.old, tc.new, targetClass())
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: refused: %v", tc.name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: %v, want a refusal naming %q", tc.name, err, tc.want)
+		}
+	}
+	h, _ := hooksFor(t)
+	v := &ClusterValidator{Hooks: h}
+	if _, err := v.ValidateCreate(context.Background(), both(onStore, onAWS)); err == nil || !strings.Contains(err.Error(), "variables[etcdSnapshots]") || !strings.Contains(err.Error(), "backups' target") {
+		t.Errorf("the webhook on a create with two targets: %v", err)
+	}
+}
+
 // The webhook refuses what checkEtcdSnapshots does and names the variable.
 func TestValidatorHoldsEtcdSnapshots(t *testing.T) {
 	t.Parallel()

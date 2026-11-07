@@ -39,6 +39,9 @@ const (
 	privKubeconfig = "Sys.Modify"
 	privConsole    = "VM.Console"
 	privPower      = "VM.PowerMgmt"
+	// privPoolAudit lets Proxmox VE list a pool's guests. Without it a cluster's VMs, nodes and
+	// console links do not show.
+	privPoolAudit = "Pool.Audit"
 )
 
 // createdBy records which Proxmox VE user created a cluster through the interface.
@@ -640,7 +643,10 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, r, err)
 		return
 	}
-	vms := s.clusterVMs(r, u, c, access.path)
+	vms, err := s.clusterVMs(r, u, access.path)
+	if err != nil && !errors.Is(err, pve.ErrForbidden) {
+		s.Log.ErrorContext(r.Context(), "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
+	}
 	console := access.held.Has(privConsole)
 	reboot := access.held.Has(privPower) && u.namespaces.has(c.Namespace)
 	v.Machines = []machineView{}
@@ -673,19 +679,16 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 // clusterVMs maps the names of the cluster's VMs, which the Proxmox VE provider names after their
 // machines' infrastructure, to the VMs, on the nodes they run on now. The machines show without
 // their nodes when Proxmox VE does not tell: they are the page's subject, the nodes an addition.
-func (s *Server) clusterVMs(r *http.Request, u user, c *clusterv1.Cluster, poolPath string) map[string]pve.Member {
+func (s *Server) clusterVMs(r *http.Request, u user, poolPath string) (map[string]pve.Member, error) {
 	members, err := s.Accounts.PoolMembers(r.Context(), u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
 	if err != nil {
-		if !errors.Is(err, pve.ErrForbidden) {
-			s.Log.ErrorContext(r.Context(), "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
-		}
-		return nil
+		return nil, fmt.Errorf("listing a cluster's VMs: %w", err)
 	}
 	vms := make(map[string]pve.Member, len(members))
 	for i := range members {
 		vms[members[i].Name] = members[i]
 	}
-	return vms
+	return vms, nil
 }
 
 // consoleURL is where Proxmox VE's web interface at base opens the VM's console, as its own

@@ -7,6 +7,7 @@ import { scheduleText } from "./Backups";
 import { etcdFieldsOf, etcdProblems, etcdSnapshotsText, restoreProblem } from "./EtcdSnapshots";
 import { applyStaged, fakeServer } from "./fake-server";
 import type { Cluster, ClusterClass, ClusterEtcdSnapshots, EtcdRestorePlan } from "./types";
+import { browserZone } from "./ui";
 
 const targets = JSON.stringify([
   { name: "store", endpoint: "https://s3.example.org:8333", bucket: "backups" },
@@ -171,9 +172,27 @@ describe("etcd snapshot settings", () => {
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: {
-        etcdSnapshots: { enabled: true, target: "store", schedule: "0 */12 * * *", timeZone: "UTC", keep: 14 },
+        etcdSnapshots: { enabled: true, target: "store", schedule: "0 */12 * * *", timeZone: browserZone(), keep: 14 },
       },
     });
+  });
+
+  it("start in the browser's time zone once, and keep the zone a cluster saved", () => {
+    expect(etcdFieldsOf({ enabled: false }).timeZone).toBe(browserZone());
+    expect(etcdFieldsOf({ enabled: false, timeZone: "Asia/Tokyo" }).timeZone).toBe("Asia/Tokyo");
+    expect(etcdFieldsOf({ enabled: true }).timeZone).toBe("UTC");
+    expect(etcdFieldsOf({ enabled: true, timeZone: "Europe/Zurich" }).timeZone).toBe("Europe/Zurich");
+  });
+
+  it("share the target of the backups that are on", () => {
+    const offered = [
+      { name: "store", bucket: "backups" },
+      { name: "aws", bucket: "aws-backups" },
+    ];
+    const fields = { ...etcdFieldsOf({ enabled: true }), target: "store" };
+    expect(etcdProblems(fields, offered, { backups: "aws" })).toStrictEqual({ target: "Use the backups' target" });
+    expect(etcdProblems(fields, offered, { backups: "store" })).toStrictEqual({});
+    expect(etcdProblems(fields, offered, {})).toStrictEqual({});
   });
 
   it("offer RKE2's and k3s's own upload, saying what it grants, and drop it with the snapshots", async () => {

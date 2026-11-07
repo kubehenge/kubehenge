@@ -274,12 +274,14 @@ export type BackupField = "target" | "schedule" | "retention";
 export function backupProblems(
   f: BackupFields,
   targets: OfferedTarget[],
-  kept?: string,
+  held: { kept?: string | undefined; snapshots?: string | undefined } = {},
 ): Partial<Record<BackupField, string>> {
   const p: Partial<Record<BackupField, string>> = {};
-  const target = targetProblem(f.target, targets, kept);
+  const target = targetProblem(f.target, targets, held.kept);
   if (target !== undefined) {
     p.target = target;
+  } else if (filled(held.snapshots) && f.target !== held.snapshots) {
+    p.target = "Use the snapshots' target";
   }
   const schedule = scheduleProblem(f.schedule);
   if (schedule !== undefined) {
@@ -526,7 +528,11 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
   const hint = useId();
   const fields = withTarget(typed, targets);
   const kept = current.enabled ? current.target : undefined;
-  const problems = enabled ? backupProblems(fields, targets, kept) : {};
+  // The etcd snapshots share the access key, so they share the store. A cluster already on two
+  // targets is refused only once it changes one of them.
+  const etcd = record(c.variables["etcdSnapshots"]);
+  const snapshots = etcd["enabled"] === true && fields.target !== kept ? text(etcd["target"]) : undefined;
+  const problems = enabled ? backupProblems(fields, targets, { kept, snapshots }) : {};
   const next: BackupsValue = enabled ? backupsVariable(fields, current.existingSecret) : { ...current, enabled: false };
   const before: BackupsValue = current.enabled
     ? backupsVariable(backupFieldsOf(current), current.existingSecret)

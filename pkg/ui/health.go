@@ -410,7 +410,7 @@ type vmLoad struct {
 func (s *Server) addVMs(ctx context.Context, u user, c *clusterv1.Cluster, poolPath string, nodes []nodeView) string {
 	members, err := s.Accounts.PoolMembers(ctx, u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
 	if errors.Is(err, pve.ErrForbidden) {
-		return "Proxmox VE does not show you this cluster's VMs."
+		return missingPrivilege(u, privPoolAudit, poolPath) + " to see this cluster's VMs."
 	}
 	if err != nil {
 		s.Log.ErrorContext(ctx, "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)

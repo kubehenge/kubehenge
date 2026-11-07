@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // machineOf describes one of a cluster's machines, on the Proxmox VE node its VM runs on.
@@ -129,7 +131,16 @@ func (s *Server) rebootMachine(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusNotFound, "no such cluster")
 		return
 	}
-	vm, found := s.clusterVMs(r, u, c, pool)[m.Spec.InfrastructureRef.Name]
+	vms, err := s.clusterVMs(r, u, pool)
+	if errors.Is(err, pve.ErrForbidden) {
+		writeError(w, http.StatusForbidden, missingPrivilege(u, privPoolAudit, pool))
+		return
+	}
+	if err != nil {
+		s.proxmoxError(w, r, err)
+		return
+	}
+	vm, found := vms[m.Spec.InfrastructureRef.Name]
 	if !found || vm.VMID == 0 || vm.Node == "" {
 		writeError(w, http.StatusConflict, "The machine has no VM in the cluster's pool.")
 		return

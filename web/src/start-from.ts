@@ -1,5 +1,6 @@
 import { newForm, type Form, type Machine } from "./create-form";
 import { etcdQuotaOf } from "./EtcdSize";
+import { etcdFieldsOf, etcdSnapshotsOf } from "./EtcdSnapshots";
 import { loadBalancerOf } from "./LoadBalancer";
 import { logsOf } from "./Logs";
 import { nodeOSKey } from "./node-os";
@@ -51,6 +52,8 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "istio",
   "rancherRegister",
   "oidc",
+  "etcdSnapshots",
+  "etcdFields",
 ]);
 
 function machineOf(v: unknown, fallback: Machine): Machine {
@@ -79,6 +82,8 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
   const vlan = quantity(network["vlan"]);
   const headlamp = record(v["headlamp"]);
   const autoscaling = c.workerPools.find((p) => p.autoscaling !== undefined)?.autoscaling;
+  // A cluster that never had etcd snapshots set leaves a new one at the default.
+  const etcd = v["etcdSnapshots"] === undefined ? undefined : etcdSnapshotsOf(v["etcdSnapshots"]);
   return {
     ...base,
     from: clusterKey(c),
@@ -114,5 +119,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     istio: flag(record(v["istio"])["enabled"]) === true,
     rancherRegister: flag(record(v["rancher"])["register"]) !== false,
     oidc: oidcProviders(v["oidc"]),
+    etcdSnapshots: etcd?.enabled ?? base.etcdSnapshots,
+    etcdFields: etcd === undefined ? base.etcdFields : etcdFieldsOf(etcd),
   };
 }

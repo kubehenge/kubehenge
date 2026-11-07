@@ -256,7 +256,9 @@ describe("sign-in", () => {
       "GET /api/realms": () => ({ body: [{ realm: "pve", type: "pve" }] }),
       "POST /api/session": () => ({
         status: 401,
-        body: { error: "sign-in failed: check the user name, password and realm" },
+        body: {
+          error: "Sign-in failed. Check the user name, password and realm, or set up the required second factor.",
+        },
       }),
     });
     const user = userEvent.setup({ delay: null });
@@ -268,7 +270,7 @@ describe("sign-in", () => {
     await user.type(screen.getByLabelText("Password"), "wrong");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
-      "Sign-in failed: check the user name, password and realm.",
+      "Sign-in failed. Check the user name, password and realm, or set up the required second factor.",
     );
   });
 
@@ -852,6 +854,8 @@ describe("create", () => {
     },
     storeBackupKey: true,
     backupKey: {},
+    etcdSnapshots: true,
+    etcdFields: newForm().etcdFields,
   };
 
   it("keeps the VMs to the nodes of the placement chosen", () => {

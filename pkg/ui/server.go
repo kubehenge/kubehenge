@@ -13,15 +13,19 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"mime"
 	"net/http"
 	"net/netip"
 	"path"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -591,14 +595,32 @@ func (s *Server) require(w http.ResponseWriter, r *http.Request, u user, aclPath
 	}
 	for _, p := range privs {
 		if !held[p] {
-			writeError(w, http.StatusForbidden, fmt.Sprintf("%s needs %s on %s", u.ticket.Username, p, aclPath))
+			writeError(w, http.StatusForbidden, missingPrivilege(u, p, aclPath))
 			return false
 		}
 	}
 	return true
 }
 
+// missingPrivilege is what a refusal says when the user lacks priv on aclPath.
+func missingPrivilege(u user, priv, aclPath string) string {
+	return fmt.Sprintf("%s needs %s on %s", u.ticket.Username, priv, aclPath)
+}
+
+// proxmoxError answers a request whose call to Proxmox VE as the signed-in user failed. A refusal
+// carries Proxmox VE's own reason, which the user's own ticket earned.
 func (s *Server) proxmoxError(w http.ResponseWriter, r *http.Request, err error) {
+	if apiErr, ok := errors.AsType[*pve.APIError](err); ok && pveAnswered(apiErr) {
+		s.Log.ErrorContext(r.Context(), "proxmox VE refused a request", "error", err)
+		writeError(w, http.StatusBadGateway, "Proxmox VE refused: "+refusalReason(apiErr))
+		return
+	}
+	s.anonymousProxmoxError(w, r, err)
+}
+
+// anonymousProxmoxError answers a request whose call to Proxmox VE was made for someone not yet
+// signed in. It tells a stranger nothing of Proxmox VE's reasons.
+func (s *Server) anonymousProxmoxError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, pve.ErrAuthentication):
 		writeError(w, http.StatusUnauthorized, "session expired. Sign in again")
@@ -608,6 +630,50 @@ func (s *Server) proxmoxError(w http.ResponseWriter, r *http.Request, err error)
 		s.Log.ErrorContext(r.Context(), "proxmox VE request failed", "error", err)
 		writeError(w, http.StatusBadGateway, "Proxmox VE did not answer")
 	}
+}
+
+// pveAnswered tells whether Proxmox VE itself gave the refusal. A gateway in front of it answering
+// 502 to 504 means it did not.
+func pveAnswered(e *pve.APIError) bool {
+	code, _, _ := strings.Cut(e.Status, " ")
+	switch code {
+	case "502", "503", "504":
+		return false
+	}
+	return true
+}
+
+// maxReasonLength keeps Proxmox VE's reason to one line of the interface.
+const maxReasonLength = 120
+
+var (
+	// pathPattern matches a file or API path in a reason, which says nothing to the user.
+	pathPattern = regexp.MustCompile(`\s*['"(]?/[\w.\-/]+['")]?`)
+	spaces      = regexp.MustCompile(`\s+`)
+)
+
+// refusalReason is the reason Proxmox VE gave in its status line, without the status code and any
+// path, and with the first parameter it refused. It is cut to maxReasonLength.
+func refusalReason(e *pve.APIError) string {
+	code, reason, _ := strings.Cut(e.Status, " ")
+	if len(e.Errors) > 0 {
+		keys := slices.Sorted(maps.Keys(e.Errors))
+		reason = strings.TrimSuffix(strings.TrimSpace(reason), ".") + ": " + keys[0] + " " + e.Errors[keys[0]]
+	}
+	reason = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, reason)
+	reason = strings.TrimSpace(spaces.ReplaceAllString(pathPattern.ReplaceAllString(reason, ""), " "))
+	if reason == "" {
+		return "status " + code
+	}
+	if runes := []rune(reason); len(runes) > maxReasonLength {
+		reason = string(runes[:maxReasonLength-1]) + "…"
+	}
+	return reason
 }
 
 const maxBody = 64 << 10
