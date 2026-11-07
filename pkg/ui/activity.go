@@ -53,19 +53,25 @@ type changeMutex struct {
 	changed chan struct{}
 }
 
+// Unlock unlocks and wakes the waiters.
+func (m *changeMutex) Unlock() {
+	m.signal()
+	m.Mutex.Unlock()
+}
+
 // wake tells the waiters that something changed that the lock does not guard.
 func (m *changeMutex) wake() {
 	m.Lock()
-	defer m.Unlock()
+	m.signal()
+	m.release()
 }
 
-// Unlock unlocks and wakes the waiters.
-func (m *changeMutex) Unlock() {
+// signal closes the channel the waiters hold. The caller holds the lock.
+func (m *changeMutex) signal() {
 	if m.changed != nil {
 		close(m.changed)
 		m.changed = nil
 	}
-	m.Mutex.Unlock()
 }
 
 func (m *changeMutex) release() { m.Mutex.Unlock() }
