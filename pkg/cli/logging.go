@@ -7,10 +7,12 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"sync"
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
 	"go.uber.org/zap/zapcore"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
@@ -54,6 +56,17 @@ func (l *logOptions) zapLogger() (logr.Logger, error) {
 		return logr.Logger{}, fmt.Errorf("--log-level: %w", err)
 	}
 	return zap.New(zap.Level(level), zap.JSONEncoder(), func(o *zap.Options) { o.Development = l.development }), nil
+}
+
+// controllerLogMu serialises setControllerLogger. controller-runtime's logger is one per process,
+// and two commands run in the same process, as tests run them in parallel, race inside SetLogger.
+var controllerLogMu sync.Mutex
+
+// setControllerLogger makes logger the one controller-runtime logs to.
+func setControllerLogger(logger logr.Logger) {
+	controllerLogMu.Lock()
+	defer controllerLogMu.Unlock()
+	ctrl.SetLogger(logger)
 }
 
 // slogLogger is the interface's logger, in JSON. Development adds where in the code each line was
