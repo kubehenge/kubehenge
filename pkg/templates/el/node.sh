@@ -29,9 +29,9 @@ for key in "${files}"/keys/*.asc; do
 done
 
 # curl, awk and tar for the installs of RKE2, k3s and kubeadm's images; NetworkManager, the only
-# network renderer cloud-init has on EL. The kernel's extra modules come with the kernel, in the
-# compose (manifest.yaml).
-packages="cloud-init qemu-guest-agent NetworkManager container-selinux curl gawk tar"
+# network renderer cloud-init has on EL; chrony, since the minimal manifest does not promise a time
+# daemon. The kernel's extra modules come with the kernel, in the compose (manifest.yaml).
+packages="cloud-init qemu-guest-agent NetworkManager chrony container-selinux curl gawk tar"
 case "${distribution}" in
     kubeadm)
         version=${kubernetes#v}
@@ -79,8 +79,8 @@ printf 'kargs = ["console=tty0", "console=ttyS0,115200n8", "psi=1"]\n' > /usr/li
 # A clone's first boot, with its new machine ID, applies the presets again, and the family's end in
 # disabling every service they do not name.
 mkdir -p /usr/lib/systemd/system-preset
-printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
-systemctl preset qemu-guest-agent kubehenge-boot-log.timer
+printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\nenable chronyd.service\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
+systemctl preset qemu-guest-agent kubehenge-boot-log.timer chronyd
 # A node takes its updates as a new build of its template, which its cluster rolls out; fwupd
 # cannot go, since shim needs it.
 systemctl mask bootc-fetch-apply-updates.timer fwupd-refresh.timer

@@ -55,6 +55,11 @@ const (
 const (
 	controlPlaneMachineVariable = "controlPlaneMachine"
 	workerMachineVariable       = "workerMachine"
+	// workerNodesVariable holds the labels and taints of the workers, as the cluster's default and
+	// as a pool's own.
+	workerNodesVariable = "workerNodes"
+	// cisVariable hardens the cluster to the CIS benchmark.
+	cisVariable = "cis"
 )
 
 // Variables a cluster may change after creation. The others describe where its VMs live.
@@ -62,8 +67,10 @@ var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
 	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
 	// A new node OS rolls every node onto its template, as a node image refresh does. A new size
-	// rolls the machines it sizes.
-	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true,
+	// rolls the machines it sizes. New labels or taints roll the workers, and CIS hardening switched
+	// on rolls every node (the class refuses it switched off).
+	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true, workerNodesVariable: true,
+	cisVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -295,6 +302,8 @@ type workerPoolView struct {
 	Autoscaling *poolAutoscaling `json:"autoscaling,omitempty"`
 	// Machine is the pool's own size, where it does not take the cluster's workerMachine.
 	Machine json.RawMessage `json:"machine,omitempty"`
+	// Nodes is the pool's own labels and taints, where it does not take the cluster's workerNodes.
+	Nodes json.RawMessage `json:"nodes,omitempty"`
 }
 
 type allowedView struct {
@@ -412,6 +421,9 @@ func workerPoolsOf(c *clusterv1.Cluster) []workerPoolView {
 		}
 		if i := poolOverride(md, workerMachineVariable); i >= 0 {
 			wp.Machine = json.RawMessage(md.Variables.Overrides[i].Value.Raw)
+		}
+		if i := poolOverride(md, workerNodesVariable); i >= 0 {
+			wp.Nodes = json.RawMessage(md.Variables.Overrides[i].Value.Raw)
 		}
 		pools = append(pools, wp)
 	}

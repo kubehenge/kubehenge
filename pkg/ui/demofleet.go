@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -94,6 +95,10 @@ type demoCluster struct {
 	Crashing string `json:"crashing"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
+	// WorkerNodes is the cluster's workerNodes variable: the labels and taints its workers carry.
+	WorkerNodes json.RawMessage `json:"workerNodes"`
+	// DriftTaint is a taint key put by hand on the last worker, which the pool does not set.
+	DriftTaint string `json:"driftTaint"`
 }
 
 type demoUpgrade struct {
@@ -246,6 +251,9 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 	}
 	for _, a := range d.AddOns {
 		vars[a] = f.data.AddOns[a].Value
+	}
+	if d.WorkerNodes != nil {
+		vars[workerNodesVariable] = d.WorkerNodes
 	}
 	c := &clusterv1.Cluster{
 		Namespace: demoNamespace, Name: d.Name, UID: types.UID("demo-" + d.Name), Generation: 4,
@@ -435,8 +443,20 @@ func demoAddOn(d *demoCluster, name string, a demoAddOnData, created time.Time) 
 // workload is a cluster's own API, as its identities see it.
 func (f *demoFleet) workload(d *demoCluster, machines []*clusterv1.Machine) *Workload {
 	objects := make([]runtime.Object, 0, 4*len(machines))
+	var pool provisioner.NodeSettings
+	if d.WorkerNodes != nil {
+		_ = json.Unmarshal(d.WorkerNodes, &pool) // checked in demo-fleet.json by the tests
+	}
 	for i, m := range machines {
-		objects = append(objects, demoNode(m))
+		node := demoNode(m)
+		if !isControlPlane(m) {
+			drift := ""
+			if i == len(machines)-1 {
+				drift = d.DriftTaint
+			}
+			setPoolNodes(node, pool, drift)
+		}
+		objects = append(objects, node, demoLease(node.Name, f.now))
 		for j, app := range []string{"api", "frontend", "cache"} {
 			if isControlPlane(m) && j > 0 {
 				break
@@ -508,6 +528,23 @@ func demoNode(m *clusterv1.Machine) *corev1.Node {
 			},
 		},
 	}
+}
+
+// setPoolNodes gives a worker its pool's labels and taints, and a taint set by hand when drifted.
+func setPoolNodes(node *corev1.Node, pool provisioner.NodeSettings, driftTaint string) {
+	for _, l := range pool.Labels {
+		node.Labels[l.Key] = l.Value
+	}
+	node.Spec.Taints = pool.CoreTaints()
+	if driftTaint != "" {
+		node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{Key: driftTaint, Effect: corev1.TaintEffectNoSchedule})
+	}
+}
+
+// demoLease is a node's lease, renewed as the controller's clock has it.
+func demoLease(node string, now time.Time) *coordinationv1.Lease {
+	renewed := metav1.NewMicroTime(now)
+	return &coordinationv1.Lease{Namespace: corev1.NamespaceNodeLease, Name: node, Spec: coordinationv1.LeaseSpec{RenewTime: &renewed}}
 }
 
 func demoPod(namespace, name, node string, started time.Time, cpu, memory string) *corev1.Pod {

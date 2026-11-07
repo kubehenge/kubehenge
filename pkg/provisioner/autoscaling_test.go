@@ -183,7 +183,7 @@ func TestCapacityAnnotations(t *testing.T) {
 		"topology.kubernetes.io/zone":        "a",
 		"example.org/node.cluster.x-k8s.io":  "no",
 		"notnode.cluster.x-k8s.io.example/x": "no",
-	})
+	}, NodeSettings{})
 	want := map[string]string{
 		capacityPrefix + "cpu":            "4",
 		capacityPrefix + "memory":         "7372Mi",
@@ -193,12 +193,30 @@ func TestCapacityAnnotations(t *testing.T) {
 	if !maps.Equal(got, want) {
 		t.Errorf("%v, want %v", got, want)
 	}
-	bare := capacityAnnotations(machineSize{Cores: new(2), MemoryMiB: new(4096)}, nil)
+	bare := capacityAnnotations(machineSize{Cores: new(2), MemoryMiB: new(4096)}, nil, NodeSettings{})
 	if _, ok := bare[capacityPrefix+"ephemeral-disk"]; ok {
 		t.Error("a disk of no known size")
 	}
 	if _, ok := bare[capacityPrefix+"labels"]; ok {
 		t.Error("labels without any")
+	}
+	if _, ok := bare[capacityPrefix+"taints"]; ok {
+		t.Error("taints without any")
+	}
+}
+
+func TestCapacityAnnotationsCarryTheNodesLabelsAndTaints(t *testing.T) {
+	t.Parallel()
+	nodes := NodeSettings{
+		Labels: []NodeLabel{{Key: "team", Value: "a"}, {Key: "tier"}},
+		Taints: []NodeTaint{{Key: "dedicated", Value: "db", Effect: "NoSchedule"}, {Key: "spot", Effect: "PreferNoSchedule"}},
+	}
+	got := capacityAnnotations(machineSize{Cores: new(2), MemoryMiB: new(4096)}, map[string]string{"node.cluster.x-k8s.io/pool": "batch"}, nodes)
+	if want := "node.cluster.x-k8s.io/pool=batch,team=a,tier="; got[capacityPrefix+"labels"] != want {
+		t.Errorf("labels %q, want %q", got[capacityPrefix+"labels"], want)
+	}
+	if want := "dedicated=db:NoSchedule,spot=:PreferNoSchedule"; got[capacityPrefix+"taints"] != want {
+		t.Errorf("taints %q, want %q", got[capacityPrefix+"taints"], want)
 	}
 }
 

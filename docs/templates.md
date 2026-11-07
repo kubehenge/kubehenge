@@ -25,6 +25,7 @@ A node OS whose CPU type is above `x86-64-v2-AES` stops at boot on an older CPU.
 Every node OS holds only what a node needs:
 
 - Its family's minimal system, cloud-init and the QEMU guest agent.
+- chrony, enabled, as its time daemon, since a VM's host corrects its clock only on resume and migration. The bake checks that `chronyd` is enabled and that `chronyc tracking` answers. Talos keeps its own.
 - The SELinux policy packages and the kernel modules a pod network bridges through.
 - For kubeadm, containerd and the kubelet's tools.
 - For RKE2 and k3s, their prerequisites and SELinux policy.
