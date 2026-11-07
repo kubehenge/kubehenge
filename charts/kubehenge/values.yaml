@@ -727,11 +727,15 @@ addons:
         image:
           # renovate: datasource=docker depName=quay.io/metallb/speaker
           tag: v0.16.1@sha256:16561e96531e1852d5c229ad7fae6e994dcfa983ff7f4de6b6208b34a4e2ddbc
-        # The FRR this MetalLB release's chart names, so it moves with MetalLB; layer 2 mode leaves
-        # it off.
-        frr:
+      # The frr-k8s and FRR images of this MetalLB release's frr-k8s subchart, so they move with
+      # MetalLB. BGP mode runs them, layer 2 mode leaves frr-k8s off.
+      frr-k8s:
+        frrk8s:
           image:
-            tag: 10.5.3@sha256:37b42d2b340c322edc5f20dc4598373adb6e813e95cc9d4a18f64f9a37c98a4c
+            tag: v0.0.25@sha256:1cb06fb2d5538c9f9b20d3adf00da8d1e6cb0166bc15df8add0d9efe578641a4
+          frr:
+            image:
+              tag: 10.4.3@sha256:8745af1f9bbbc26ab11d99ccdf35e07aa3427a199749bef0cd6bb5132bb130df
   kubeVip:
     repository: https://kube-vip.github.io/helm-charts
     chart: kube-vip

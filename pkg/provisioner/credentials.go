@@ -48,6 +48,8 @@ type CredentialPurpose struct {
 var credentialPurposes = []CredentialPurpose{
 	{Name: "backup", Keys: []string{"accessKeyID", "secretAccessKey"}, Appliance: true},
 	{Name: "dns01", Keys: []string{"token"}, Appliance: true},
+	// The password of a cluster's BGP sessions, the same for every router.
+	{Name: bgpPurpose, Keys: []string{passwordKey}},
 	{Name: "gitops", Keys: []string{"username", "password"}},
 	{Name: "oidc-client", Keys: []string{"clientSecret"}},
 	// Where the appliance sends what needs a look (pkg/notify).

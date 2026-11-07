@@ -203,6 +203,108 @@ describe("a cluster's options", () => {
     });
   });
 
+  it("switch the load balancer to BGP and back", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const balanced = {
+      ...cluster,
+      variables: {
+        ...cluster.variables,
+        loadBalancer: { enabled: true, implementation: "metallb", addresses: ["10.0.0.100-10.0.0.120"] },
+      },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: balanced },
+      "PATCH /api/clusters/clusters/web": { body: balanced },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await screen.findByRole("row", { name: /Load balancer/u });
+    await user.click(screen.getByRole("button", { name: "Edit the load balancer" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit load balancer" });
+    const save = within(dialog).getByRole("button", { name: "Save" });
+    expect(within(dialog).queryByLabelText("Routers")).not.toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText("Announce with"), "bgp");
+    // A problem shows only once its field has been touched, and Save waits for it to go.
+    expect(within(dialog).getByLabelText("Routers")).not.toHaveAccessibleDescription(/Enter at least one router/u);
+    expect(save).toBeDisabled();
+    const asn = within(dialog).getByLabelText("Cluster AS number");
+    await user.type(asn, "0");
+    expect(asn).toHaveAccessibleDescription(/Enter a number from 1 to 4294967295/u);
+    await user.clear(asn);
+    await user.type(asn, "65001");
+    const routers = within(dialog).getByLabelText("Routers");
+    await user.type(routers, "10.0.0.1");
+    expect(routers).toHaveAccessibleDescription(/Each line needs an IPv4 address and an AS number/u);
+    await user.type(routers, " 64512");
+    const addresses = within(dialog).getByLabelText("Load-balancer addresses");
+    await user.clear(addresses);
+    await user.type(addresses, "198.51.100.0/28");
+    expect(addresses).not.toHaveAccessibleDescription(/network/u);
+    await user.click(save);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: {
+        loadBalancer: {
+          enabled: true,
+          implementation: "metallb",
+          addresses: ["198.51.100.0/28"],
+          mode: "bgp",
+          bgp: { asn: 65_001, peers: [{ address: "10.0.0.1", asn: 64_512 }] },
+        },
+      },
+    });
+  });
+
+  it("sign the BGP sessions with a password stored as the cluster's credential", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const routed = {
+      ...cluster,
+      variables: {
+        ...cluster.variables,
+        loadBalancer: {
+          enabled: true,
+          implementation: "metallb",
+          addresses: ["198.51.100.0/28"],
+          mode: "bgp",
+          bgp: { asn: 65_001, peers: [{ address: "10.0.0.1", asn: 64_512 }] },
+        },
+      },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: routed },
+      "GET /api/clusters/clusters/web/credentials/bgp": { body: { purpose: "bgp", set: false, canChange: true } },
+      "PUT /api/clusters/clusters/web/credentials/bgp": { body: { purpose: "bgp", set: true, canChange: true } },
+      "PATCH /api/clusters/clusters/web": { body: routed },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await screen.findByRole("row", { name: /Load balancer/u });
+    await user.click(screen.getByRole("button", { name: "Edit the load balancer" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit load balancer" });
+    expect(within(dialog).queryByRole("group", { name: "BGP password" })).not.toBeInTheDocument();
+    await user.click(within(dialog).getByLabelText("Use a BGP password"));
+    await expect(within(dialog).findByRole("group", { name: "BGP password" })).resolves.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: {
+        loadBalancer: {
+          enabled: true,
+          implementation: "metallb",
+          addresses: ["198.51.100.0/28"],
+          mode: "bgp",
+          bgp: { asn: 65_001, peers: [{ address: "10.0.0.1", asn: 64_512 }], authenticated: true },
+        },
+      },
+    });
+  });
+
   it("keep logs only beside monitoring", async () => {
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
     const calls = fakeServer({

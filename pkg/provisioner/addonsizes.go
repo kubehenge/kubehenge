@@ -12,7 +12,7 @@ import (
 
 // AddonMemoryAnnotation on a ClusterClass is the memory, in MiB, each add-on's pods use in one of its
 // clusters, by add-on: headlamp, monitoring, logs, backups, kyverno, istio, clusterMesh,
-// loadBalancer, certManager, rancher, rancherAgent, argocd and flux.
+// loadBalancer, loadBalancerBGP, certManager, rancher, rancherAgent, argocd and flux.
 // The end-to-end tests measure the figures with every add-on on.
 const AddonMemoryAnnotation = "kubehenge.dev/addon-memory"
 
@@ -52,12 +52,14 @@ const NodeCPUAnnotation = "kubehenge.dev/node-cpu"
 const (
 	certManagerFigure  = "certManager"
 	rancherAgentFigure = "rancherAgent"
+	// bgpFigure is frr-k8s, which MetalLB runs for its BGP sessions on top of the load balancer's own.
+	bgpFigure = "loadBalancerBGP"
 )
 
 // addonNames are the add-ons as people know them, by their keys in AddonMemoryAnnotation.
 var addonNames = map[string]string{
 	headlampAddon: "Headlamp", monitoringAddon: "monitoring", logsAddon: "logs", backupsVariable: "backups", kyvernoAddon: "Kyverno", istioAddon: "Istio",
-	clusterMeshVariable: "Cluster Mesh", loadBalancerVariable: "the load balancer", certManagerFigure: "cert-manager", rancherAddon: "Rancher", rancherAgentFigure: "Rancher's agent",
+	clusterMeshVariable: "Cluster Mesh", loadBalancerVariable: "the load balancer", bgpFigure: "frr-k8s for BGP", certManagerFigure: "cert-manager", rancherAddon: "Rancher", rancherAgentFigure: "Rancher's agent",
 	argoCD: "Argo CD", flux: "Flux",
 }
 
@@ -84,6 +86,7 @@ func addonsOn(cluster *clusterv1.Cluster) ([]string, error) {
 		{istioAddon, a.Istio.Enabled},
 		{clusterMeshVariable, a.ClusterMesh.Enabled},
 		{loadBalancerVariable, a.LoadBalancer.Enabled},
+		{bgpFigure, a.LoadBalancer.Enabled && a.LoadBalancer.bgp()},
 		{certManagerFigure, a.certManager()},
 		{rancherAddon, a.Rancher.Install},
 		{rancherAgentFigure, !a.Rancher.Install && a.Rancher.registers()},

@@ -1049,17 +1049,25 @@ An upgrade starts only inside the window (days of the week or of the month, a st
 ## Networking
 
 - **Node addresses** come from IP pools managed in the management cluster. No DHCP is needed on the Proxmox VE bridge.
-- **The control plane** of each cluster gets a virtual IP that moves between control-plane nodes.
+- **The control plane** of each cluster gets a virtual IP that moves between control-plane nodes. It is held by ARP, or over BGP where the cluster's load balancer is in BGP mode.
 - **Services of type `LoadBalancer`** get addresses from the cluster's `loadBalancer` range, if it has one:
-  - MetalLB in layer 2 mode, without its BGP backend.
+  - MetalLB in layer 2 mode without its BGP backend, or in BGP mode with frr-k8s, the backend its chart recommends. The FRR mode inside the speaker is deprecated and not used.
     - Kubehenge's controller applies the address pool the chart has no place for, again whenever MetalLB returns. The CRDs take the pool with them when MetalLB goes.
+    - It applies an `L2Advertisement` in layer 2. In BGP mode it applies a `BGPAdvertisement` and a `BGPPeer` for each router, and deletes the objects of the other mode and peers no longer listed.
+    - Two BGP speakers on one node would open two sessions from one address to the same router, which most routers refuse. kube-vip holds the API address on the control planes, so the `BGPPeer` objects select nodes without the control-plane label. MetalLB peers from workers only.
+    - A cluster without workers therefore has no node for MetalLB's sessions, and the webhook refuses BGP with the load balancer on.
+    - The API address is announced by kube-vip's static pod on the control planes, with `vip_arp` off and BGP on. The webhook refuses BGP on Talos, whose virtual IP is its own election with no BGP option.
+    - kube-vip could run there as a `KubeStaticPodConfig`, announcing from every control plane with its health check of the local API server. It needs a kubeconfig, and Talos has no `admin.conf`. Whether the controller manager's kubeconfig under `/system/secrets/kubernetes/` carries the rights kube-vip needs, and whether the API server's `/livez` answers it, is unproven. Until a Talos node shows both, the refusal stays.
+    - In BGP mode MetalLB's frr-k8s asks for 45m CPU and 176 MiB, which the class's `loadBalancerBGP` figures count. The pinned chart sets no requests for it, so Kubehenge sets them.
+    - With `bgp.authenticated`, the controller writes kube-vip's manifest, password included, into the Secret `<cluster>-kube-vip`. The ClusterClasses write the file from it with `contentFrom.secret`, which all three bootstrap providers support.
+    - MetalLB's peers name `passwordSecret`, a Secret in `metallb-system` kept from the same credential.
   - kube-vip as a DaemonSet that answers only for Services, one lease per Service so that their addresses spread over the nodes. kube-vip's cloud provider hands them out.
   - MetalLB's speakers answer from the control planes too, which kubeadm labels as excluded from load balancers. A cluster without workers therefore still has nodes to answer from.
   - On k3s the class switches servicelb off. The controller deletes the DaemonSets servicelb left, which k3s cleans up only while its own cloud controller runs.
   - Every k3s node allows the two forwarding settings servicelb's pods need, which k3s allows only where servicelb is on.
   - Switching the load balancer off turns servicelb back on, and the control planes roll for it. Its pods then run on the old servers too.
-  - Cilium's own L2 announcements are not used, since they need Cilium in place of kube-proxy.
-  - Kubehenge's admission webhook and BeforeClusterCreate hook refuse addresses outside the nodes' network.
+  - Cilium's own L2 announcements and BGP control plane are not used. The L2 announcements need Cilium in place of kube-proxy.
+  - Kubehenge's admission webhook and BeforeClusterCreate hook refuse addresses outside the nodes' network in layer 2. In BGP mode they let routed addresses and API address through, and refuse an invalid AS number or router, a router that is also an announced address, kube-vip as the load balancer and Talos.
     - They also refuse the gateway, the network's own or broadcast address, and the API and node addresses. Other clusters' addresses on the same bridge and VLAN are refused too.
   - kube-vip's cloud provider never takes back an address it has recorded on a Service, and MetalLB keeps one as requested.
     - The controller therefore frees a Service of an address outside the range, which no longer holds it against other clusters. The load balancer gives the Service a new one.

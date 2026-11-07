@@ -12,6 +12,7 @@ import {
   addonNeedMiB,
   fieldProblems,
   newForm,
+  pendingCredentials,
   problems,
   request,
   summary,
@@ -737,6 +738,11 @@ describe("create", () => {
     dnsServers: "10.0.0.1, 1.1.1.1",
     loadBalancer: "",
     loadBalancerAddresses: "",
+    loadBalancerMode: "l2",
+    loadBalancerAsn: "",
+    loadBalancerPeers: "",
+    loadBalancerAuthenticated: false,
+    loadBalancerPassword: "",
     pods: "",
     services: "",
     storage: "local-lvm",
@@ -1013,6 +1019,87 @@ describe("create", () => {
       expect(fieldProblems("Network", { ...metallb, loadBalancerAddresses: addresses }, withLB)).toStrictEqual({
         loadBalancerAddresses: problem,
       });
+    }
+  });
+
+  it("announces over BGP to the routers typed, with a routed pool and API address", () => {
+    const withLB: ClusterClass = {
+      ...rke2,
+      variables: [...rke2.variables, { name: "loadBalancer", required: false, schema: { type: "object" } }],
+    };
+    const bgp = {
+      ...form,
+      endpoint: "198.51.100.200",
+      loadBalancer: "metallb" as const,
+      loadBalancerAddresses: "198.51.100.0/28",
+      loadBalancerMode: "bgp" as const,
+      loadBalancerAsn: "65001",
+      loadBalancerPeers: "10.0.0.1 64512\n10.0.1.1 4294967295",
+    };
+    expect(request(bgp, withLB).variables["loadBalancer"]).toStrictEqual({
+      enabled: true,
+      implementation: "metallb",
+      addresses: ["198.51.100.0/28"],
+      mode: "bgp",
+      bgp: {
+        asn: 65_001,
+        peers: [
+          { address: "10.0.0.1", asn: 64_512 },
+          { address: "10.0.1.1", asn: 4_294_967_295 },
+        ],
+      },
+    });
+    expect(Object.fromEntries(summary(bgp, withLB))).toMatchObject({
+      "Load balancer": "MetalLB, on 198.51.100.0/28, over BGP as AS 65001",
+    });
+    expect(fieldProblems("Network", bgp, withLB)).toStrictEqual({});
+    // The password is stored as the cluster's credential, never sent as a variable.
+    const signed = { ...bgp, loadBalancerAuthenticated: true, loadBalancerPassword: "s3cret" };
+    expect(request(signed, withLB).variables["loadBalancer"]).toMatchObject({ bgp: { authenticated: true } });
+    expect(JSON.stringify(request(signed, withLB))).not.toContain("s3cret");
+    expect(pendingCredentials(signed, withLB)).toMatchObject([{ purpose: "bgp", values: { password: "s3cret" } }]);
+    expect(pendingCredentials({ ...signed, loadBalancerPassword: "" }, withLB)).toStrictEqual([]);
+    expect(pendingCredentials({ ...signed, loadBalancerAuthenticated: false }, withLB)).toStrictEqual([]);
+    expect(pendingCredentials({ ...signed, loadBalancerMode: "l2" }, withLB)).toStrictEqual([]);
+    expect(Object.fromEntries(summary(signed, withLB))).toMatchObject({
+      "Load balancer": "MetalLB, on 198.51.100.0/28, over BGP as AS 65001, with a password",
+      "BGP password": "Stored once created",
+    });
+    expect(Object.fromEntries(summary({ ...signed, loadBalancerPassword: "" }, withLB))).toMatchObject({
+      "BGP password": "None yet: the cluster waits",
+    });
+    expect(fieldProblems("Network", { ...signed, loadBalancerPassword: "a:b" }, withLB)).toStrictEqual({
+      loadBalancerPassword: "No spaces, colons or commas",
+    });
+    // Layer 2 holds the pool and the API address to the nodes' network.
+    expect(fieldProblems("Network", { ...bgp, loadBalancerMode: "l2" }, withLB)).toMatchObject({
+      endpoint: "Use an address on the gateway's network",
+      loadBalancerAddresses: "198.51.100.0/28 is not an address, range or network on the gateway's network",
+    });
+    // kube-vip and Talos only answer by ARP, so the mode stays layer 2.
+    expect(request({ ...bgp, loadBalancer: "kube-vip" }, withLB).variables["loadBalancer"]).not.toHaveProperty("mode");
+    expect(request(bgp, { ...withLB, distribution: "talos" }).variables["loadBalancer"]).not.toHaveProperty("bgp");
+
+    for (const [patch, expected] of [
+      [{ loadBalancerAsn: "" }, { loadBalancerAsn: "Enter a number from 1 to 4294967295" }],
+      [{ loadBalancerAsn: "0" }, { loadBalancerAsn: "Enter a number from 1 to 4294967295" }],
+      [{ loadBalancerAsn: "4294967296" }, { loadBalancerAsn: "Enter a number from 1 to 4294967295" }],
+      [{ loadBalancerPeers: "" }, { loadBalancerPeers: "Enter at least one router" }],
+      [
+        { loadBalancerPeers: "10.0.0.1" },
+        { loadBalancerPeers: "Each line needs an IPv4 address and an AS number from 1 to 4294967295" },
+      ],
+      [
+        { loadBalancerPeers: "10.0.0.1 0" },
+        { loadBalancerPeers: "Each line needs an IPv4 address and an AS number from 1 to 4294967295" },
+      ],
+      [
+        { loadBalancerPeers: "router 64512" },
+        { loadBalancerPeers: "Each line needs an IPv4 address and an AS number from 1 to 4294967295" },
+      ],
+      [{ loadBalancerPeers: "10.0.0.1 64512\n10.0.0.1 64513" }, { loadBalancerPeers: "A router is listed twice" }],
+    ] as const) {
+      expect(fieldProblems("Network", { ...bgp, ...patch }, withLB)).toStrictEqual(expected);
     }
   });
 

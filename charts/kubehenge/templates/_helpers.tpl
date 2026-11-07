@@ -242,14 +242,15 @@ grows while it fills its first two-hour block; Rancher's own pod peaks at about 
 first starts, and with a cluster registered Rancher, Fleet and their controllers hold about 1.2 GiB.
 Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, which the node they
 share has to have; the clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
-controller and a node's speaker, or kube-vip and its cloud provider. Logs are Loki, which asks for
+controller and a node's speaker, or kube-vip and its cloud provider; in BGP mode frr-k8s adds the
+requests of its controller, frr and exporters, and of the status cleaner (176 MiB). Logs are Loki, which asks for
 256 MiB, the Alloy that reads the events and a node's Alloy. Backups are Velero's server and a
 node's agent, which grow while a backup reads a volume. Argo CD is its application, ApplicationSet
 and repository controllers, its server and Redis; Flux is the operator and Flux's four controllers.
 Kyverno's four controllers, the admission controller twice, hold about 520 MiB.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":640,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":640,"istio":384,"clusterMesh":128,"loadBalancer":128,"loadBalancerBGP":176,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
 {{- end -}}
 
 {{/*
@@ -278,7 +279,10 @@ node's agent's 20m. Monitoring is Prometheus's 100m and its operator's 50m, Graf
 two sidecars, Prometheus's and Alertmanager's reloaders, Alertmanager, kube-state-metrics, and a
 node's node-exporter and its proxy at 10m each, and its metrics proxies at 5m each, a node's and a
 control plane's three. The load balancer is kube-vip's cloud provider at 50m and a node's kube-vip
-at 10m, more than MetalLB's controller and a node's speaker at 10m each. Flux is its operator and
+at 10m, more than MetalLB's controller and a node's speaker at 10m each. In BGP mode, MetalLB's
+frr-k8s adds 45m: a node's controller, frr and reloader at 10m, 10m and 5m, its two exporters at 5m
+each, and the status cleaner at 10m (pkg/provisioner's frrK8sRequests, which the pinned chart leaves
+without any). Flux is its operator and
 four controllers at 10m each, Headlamp 10m. cert-manager is its controller, webhook and CA injector
 at 10m each; Argo CD its application controller's 50m and its server, repository server,
 ApplicationSet controller and Redis at 10m each; the clustermesh-apiserver its three containers at
@@ -287,7 +291,7 @@ containers at 10m each; Rancher's agent a node's cluster agent, Fleet's agent an
 10m each. The Cluster API controller Turtles runs and the system upgrade controller ask for none.
 */}}
 {{- define "kubehenge.addonCPU" -}}
-kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":300,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":30,"loadBalancer":60,"certManager":30,"rancher":120,"rancherAgent":30,"argocd":90,"flux":50}'
+kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":300,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":30,"loadBalancer":60,"loadBalancerBGP":45,"certManager":30,"rancher":120,"rancherAgent":30,"argocd":90,"flux":50}'
 {{- end -}}
 
 {{/*
@@ -605,7 +609,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       type: object
       description: >-
         Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes'
-        network. One node at a time answers for each address, and another takes over when it fails.
+        network or, in mode bgp, a routed one. One node at a time answers for each address in
+        mode l2, and another takes over when it fails.
         Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for
         them on every node's own address.
       properties:
@@ -620,21 +625,71 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             MetalLB, or kube-vip, which also holds the cluster's API address. Switching replaces the
             one with the other; Services keep their addresses where the new one can, and take new
             ones from the range otherwise.
+        mode:
+          type: string
+          enum: [l2, bgp]
+          default: l2
+          description: >-
+            l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the
+            nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and
+            switches that drop such ARP, and also announces the control-plane endpoint through
+            kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and
+            the routers have to accept a session from every node.
+        bgp:
+          type: object
+          description: The cluster's autonomous system and the routers every node peers with, for mode bgp.
+          properties:
+            asn:
+              type: integer
+              format: int64
+              minimum: 1
+              maximum: 4294967295
+              description: The cluster's own autonomous system number.
+            peers:
+              type: array
+              minItems: 1
+              maxItems: 16
+              description: >-
+                Routers that accept a session from every node: the control planes for the
+                control-plane endpoint, the workers for the Services.
+              items:
+                type: object
+                properties:
+                  address:
+                    type: string
+                    format: ipv4
+                    description: The router's IPv4 address.
+                  asn:
+                    type: integer
+                    format: int64
+                    minimum: 1
+                    maximum: 4294967295
+                    description: The router's autonomous system number.
+                required: [address, asn]
+            authenticated:
+              type: boolean
+              default: false
+              description: >-
+                Sign every session with the password in the cluster's bgp credential, which the
+                routers have to be set to expect. The password is kept in a Secret, never here.
+          required: [asn, peers]
         addresses:
           type: array
           minItems: 1
           description: >-
             Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in
-            CIDR notation or single addresses: unused addresses on the nodes' network, apart from
-            network.addresses, the control-plane endpoint, the gateway, the network's own and
-            broadcast addresses and other clusters' addresses there. Services outside a changed
-            range take new addresses from it.
+            CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in
+            bgp any routed ones, apart from network.addresses, the control-plane endpoint, the
+            gateway, the network's own and broadcast addresses and other clusters' addresses
+            there. Services outside a changed range take new addresses from it.
           items:
             type: string
             minLength: 1
       x-kubernetes-validations:
         - rule: "!self.enabled || has(self.addresses)"
           message: A load balancer needs addresses.
+        - rule: "self.mode != 'bgp' || has(self.bgp)"
+          message: Mode bgp needs the bgp settings.
 - name: rancher
   required: false
   schema:
@@ -1604,9 +1659,18 @@ whichever node leads. Returned as the template of a JSON patch value that adds t
 Call with (dict "root" . "path" <static pod manifest file> "kubeconfig" <admin kubeconfig on the node>).
 */}}
 {{- define "kubehenge.kubeVipFile" -}}
+{{- `{{ $signed := false }}{{ with .loadBalancer }}{{ if eq .mode "bgp" }}{{ $signed = .bgp.authenticated }}{{ end }}{{ end }}` }}
 path: {{ .path }}
 owner: root:root
 permissions: "0600"
+{{- `{{ if $signed }}` }}
+# The routers' password cannot go into a ClusterClass: Kubehenge's controller writes the whole
+# manifest into this Secret, from the cluster's bgp credential.
+contentFrom:
+  secret:
+    name: {{ "{{ .builtin.cluster.name }}" }}-kube-vip
+    key: kube-vip.yaml
+{{- `{{ else }}` }}
 content: |
   apiVersion: v1
   kind: Pod
@@ -1636,7 +1700,20 @@ content: |
           - name: port
             value: "6443"
           - name: vip_arp
+            value: "{{ `{{ with .loadBalancer }}{{ if eq .mode "bgp" }}false{{ else }}true{{ end }}{{ else }}true{{ end }}` }}"
+          {{- `{{ with .loadBalancer }}{{ if eq .mode "bgp" }}` }}
+          # Announced to the routers as a route from the node that leads, from its own address.
+          - name: bgp_enable
             value: "true"
+          - name: bgp_routerid
+            valueFrom:
+              fieldRef:
+                fieldPath: status.hostIP
+          - name: bgp_as
+            value: "{{ `{{ int64 .bgp.asn }}` }}"
+          - name: bgp_peers
+            value: "{{ `{{ range $i, $p := .bgp.peers }}{{ if $i }},{{ end }}{{ $p.address }}:{{ int64 $p.asn }}::false{{ end }}` }}"
+          {{- `{{ end }}{{ end }}` }}
           - name: cp_enable
             value: "true"
           - name: cp_namespace
@@ -1680,4 +1757,5 @@ content: |
         hostPath:
           path: {{ .kubeconfig }}
           type: File
+{{- `{{ end }}` }}
 {{- end -}}
