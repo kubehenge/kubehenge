@@ -117,14 +117,15 @@ printf '[req]\ndistinguished_name = dn\n[dn]\n' > "${root}/openssl.cnf"
 OPENSSL_CONF=${root}/openssl.cnf
 export OPENSSL_CONF
 make_certificate kubehenge 192.0.2.40
-seconds() {
-    stamp=$(openssl x509 -in "${work}/tls.crt" -noout "$1")
-    date -d "${stamp#*=}" +%s
-}
+startdate=$(openssl x509 -in "${work}/tls.crt" -noout -startdate)
+enddate=$(openssl x509 -in "${work}/tls.crt" -noout -enddate)
+started=$(date -d "${startdate#*=}" +%s)
+ended=$(date -d "${enddate#*=}" +%s)
+now=$(date +%s)
 expect "a new certificate starts between 59 and 61 minutes back" yes sh -c \
-    "age=\$(( \$(date +%s) - $(seconds -startdate) )); [ \"\${age}\" -ge 3540 ] && [ \"\${age}\" -le 3660 ] && echo yes"
+    "age=$((now - started)); [ \"\${age}\" -ge 3540 ] && [ \"\${age}\" -le 3660 ] && echo yes"
 expect "and ends within 825 days of its start" yes sh -c \
-    "span=\$(( $(seconds -enddate) - $(seconds -startdate) )); [ \"\${span}\" -le $((825 * 86400)) ] && echo yes"
+    "span=$((ended - started)); [ \"\${span}\" -le $((825 * 86400)) ] && echo yes"
 
 if [ "${failures}" -ne 0 ]; then
     echo "install-certificate: ${failures} of $((passes + failures)) checks failed"
