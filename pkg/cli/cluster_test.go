@@ -60,7 +60,7 @@ func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, `{"namespace":"clusters","name":"new"}`)
 	case "GET /api/clusters/clusters/web/spec":
-		_, _ = io.WriteString(w, "kind: Cluster\nname: web\n")
+		_, _ = io.WriteString(w, "# Secrets: sealed, 2\nkind: Cluster\nname: web\n")
 	case "POST /api/cluster-specs":
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, `{"namespace":"clusters","name":"web"}`)
@@ -164,22 +164,27 @@ func TestClusterExportSavesTheSpecAndCreateFromRecreatesIt(t *testing.T) {
 	const token = "dev@pve!ci=secret" //nolint:gosec // the fake interface's own
 
 	out, err := runCluster(t, srv.URL, token, "export", "web", "-n", "clusters")
-	if err != nil || out != "kind: Cluster\nname: web\n" {
+	if err != nil || out != "# Secrets: sealed, 2\nkind: Cluster\nname: web\n" {
 		t.Fatalf("export = %q, %v", out, err)
 	}
 	file := filepath.Join(t.TempDir(), "web.yaml")
-	if out, err = runCluster(t, srv.URL, token, "export", "web", "-n", "clusters", "-o", file); err != nil || !strings.Contains(out, file) {
+	if out, err = runCluster(t, srv.URL, token, "export", "web", "-n", "clusters", "-o", file); err != nil ||
+		!strings.Contains(out, file) || !strings.Contains(out, "2 Secrets are included, sealed") {
 		t.Fatalf("export -o = %q, %v", out, err)
 	}
 	if out, err = runCluster(t, srv.URL, token, "create", "--from", file); err != nil || out != "cluster clusters/web created\n" {
 		t.Fatalf("create --from = %q, %v", out, err)
+	}
+	if _, err = runCluster(t, srv.URL, token, "create", "--from", file, "--without-secrets"); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = runCluster(t, srv.URL, token, "create", "--from", file, "-f", file); err == nil {
 		t.Error("create took both -f and --from")
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	if len(fake.sent) != 1 || !strings.HasPrefix(fake.sent[0], "POST /api/cluster-specs ") || !strings.Contains(fake.sent[0], "kind: Cluster") {
+	if len(fake.sent) != 2 || !strings.HasPrefix(fake.sent[0], "POST /api/cluster-specs ") || !strings.Contains(fake.sent[0], "kind: Cluster") ||
+		!strings.Contains(fake.sent[0], `"withoutSecrets":false`) || !strings.Contains(fake.sent[1], `"withoutSecrets":true`) {
 		t.Errorf("sent %v", fake.sent)
 	}
 }

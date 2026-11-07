@@ -24,17 +24,21 @@ import { Dialog, ErrorBox, Field, Status, errorMessage, filled, saveFile, senten
 /** SpecExport downloads a cluster's spec, which is also kept in the management backups' target. */
 export function SpecExport({ cluster: c }: { cluster: Cluster }): JSX.Element {
   const [error, setError] = useState<string>();
+  const [included, setIncluded] = useState<string>();
   return (
     <div className="box">
       <h3>Spec</h3>
-      <p className="muted">Kept in the management backup target after every change. Secrets hold no values.</p>
+      <p className="muted">Kept in the management backup target after every change. Secrets are sealed.</p>
       <div className="actions">
         <button
           type="button"
           onClick={() => {
             void (async () => {
               try {
-                saveFile(await api.clusterSpec(c.namespace, c.name), `${c.name}.cluster.yaml`);
+                const spec = await api.clusterSpec(c.namespace, c.name);
+                saveFile(spec, `${c.name}.cluster.yaml`);
+                setIncluded(secretsIncluded(await spec.text()));
+                setError(undefined);
               } catch (err) {
                 setError(errorMessage(err));
               }
@@ -44,9 +48,21 @@ export function SpecExport({ cluster: c }: { cluster: Cluster }): JSX.Element {
           Download spec
         </button>
       </div>
+      {included !== undefined && <p className="muted">{included}</p>}
       <ErrorBox message={error} />
     </div>
   );
+}
+
+/** secretsIncluded reads a downloaded spec's first line, which says whether its Secrets hold values. */
+function secretsIncluded(spec: string): string {
+  const found = /^# Secrets: (?<state>\w+), (?<count>\d+)/u.exec(spec)?.groups;
+  const state = found?.["state"];
+  const count = found?.["count"];
+  if (state === "sealed") {
+    return `${count} Secrets included, sealed.`;
+  }
+  return state === "none" ? "No Secrets." : `${count ?? "Its"} Secrets not included.`;
 }
 
 /** RestoredNotice says where a restore into another cluster can be followed. */

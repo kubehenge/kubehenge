@@ -127,6 +127,7 @@ const clusterNameArg = "give the cluster's name"
 
 func (o *clusterOptions) createCommand() *cobra.Command {
 	var file, from string
+	var withoutSecrets bool
 	create := &cobra.Command{
 		Use:   "create (-f FILE | --from FILE)",
 		Short: "Create a cluster from the interface's create request, or from an exported spec",
@@ -137,20 +138,23 @@ workerReplicas, variables, and namespace where the interface has more than one. 
 the wizard's request is.
 
 --from takes a spec saved by "kubehenge cluster export", or found in the backup target under
-clusters/<namespace>.<name>/cluster.yaml, and creates the cluster it describes. The same checks apply.`,
+clusters/<namespace>.<name>/cluster.yaml, and creates the cluster it describes. The same checks apply.
+The spec's Secrets are opened with the appliance's recovery key and made too. Where one cannot be
+opened the command stops and names it. --without-secrets creates the cluster without them.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if (file == "") == (from == "") {
 				return errors.New("give the request with -f, or an exported spec with --from")
 			}
 			if from != "" {
-				return o.createFromSpec(cmd.Context(), cmd.OutOrStdout(), from)
+				return o.createFromSpec(cmd.Context(), cmd.OutOrStdout(), from, withoutSecrets)
 			}
 			return o.create(cmd.Context(), cmd.OutOrStdout(), file)
 		},
 	}
 	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
 	create.Flags().StringVar(&from, "from", "", "an exported cluster spec, or - for standard input")
+	create.Flags().BoolVar(&withoutSecrets, "without-secrets", false, "with --from, go on where the spec's Secrets cannot be restored")
 	return create
 }
 
@@ -313,15 +317,28 @@ func (o *clusterOptions) export(ctx context.Context, out io.Writer, name, file s
 	if err != nil {
 		return err
 	}
+	state, count := provisioner.SpecSecretsState(body)
 	if file == "" {
-		_, err = out.Write(body)
-		return err //nolint:wrapcheck // the writer's own error
+		_, err = out.Write(body) // Its first line says whether the Secrets are in it.
+		return err               //nolint:wrapcheck // the writer's own error
 	}
 	if err := os.WriteFile(file, body, privateFileMode); err != nil {
 		return fmt.Errorf("saving the spec: %w", err)
 	}
-	_, _ = fmt.Fprintln(out, "spec saved to "+file)
+	_, _ = fmt.Fprintln(out, "spec saved to "+file+". "+secretsNote(state, count))
 	return nil
+}
+
+// secretsNote says whether a saved spec holds its Secrets' values.
+func secretsNote(state string, count int) string {
+	switch state {
+	case provisioner.SpecSecretsSealed:
+		return fmt.Sprintf("Its %d Secrets are included, sealed with the appliance's recovery key.", count)
+	case provisioner.SpecSecretsNone:
+		return "It has no Secrets."
+	default:
+		return fmt.Sprintf("Its %d Secrets are not included. A cluster created from it lacks them.", count)
+	}
 }
 
 // readInput reads the file the user names, or standard input for "-".
@@ -355,12 +372,12 @@ func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string)
 
 // createFromSpec makes a cluster from a spec saved by export. The interface checks it as it checks
 // the wizard's request.
-func (o *clusterOptions) createFromSpec(ctx context.Context, out io.Writer, file string) error {
+func (o *clusterOptions) createFromSpec(ctx context.Context, out io.Writer, file string, withoutSecrets bool) error {
 	raw, err := readInput(file)
 	if err != nil {
 		return err
 	}
-	return o.created(ctx, out, "/api/cluster-specs", map[string]string{"spec": string(raw)})
+	return o.created(ctx, out, "/api/cluster-specs", map[string]any{"spec": string(raw), "withoutSecrets": withoutSecrets})
 }
 
 func (o *clusterOptions) created(ctx context.Context, out io.Writer, path string, request any) error {

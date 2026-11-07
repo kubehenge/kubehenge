@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"filippo.io/age"
@@ -104,6 +105,8 @@ type exportBackups struct {
 	Settings EtcdBackupSettings `json:"settings"`
 	Keys     etcdBackupKeys     `json:"keys"`
 	Target   BackupTarget       `json:"target"`
+	// SpecKey is the recovery key that opens the Secrets in the stored cluster specs.
+	SpecKey string `json:"specKey,omitempty"`
 }
 
 // exportRecord is what was last exported, to tell a later change of the settings.
@@ -123,7 +126,8 @@ func exportFingerprint(b *exportBackups) string {
 		SecretAccessKey string       `json:"secretAccessKey"`
 		Recipient       string       `json:"recipient"`
 		Target          BackupTarget `json:"target"`
-	}{b.Settings.Target, b.Keys.AccessKeyID, b.Keys.SecretAccessKey, b.Keys.Recipient, b.Target})
+		SpecKey         string       `json:"specKey"`
+	}{b.Settings.Target, b.Keys.AccessKeyID, b.Keys.SecretAccessKey, b.Keys.Recipient, b.Target, b.SpecKey})
 	if err != nil {
 		// Strings and plain structs always marshal. Distinct input still gives a distinct value.
 		raw = fmt.Appendf(nil, "%+v", b)
@@ -147,7 +151,11 @@ func (a *Appliance) currentBackups() (*exportBackups, error) {
 	if saved == nil {
 		return nil, errors.New("there are no saved settings")
 	}
-	return &exportBackups{Settings: *s, Keys: *keys, Target: targetOf(saved.BackupTargets, s.Target)}, nil
+	b := &exportBackups{Settings: *s, Keys: *keys, Target: targetOf(saved.BackupTargets, s.Target)}
+	if raw, err := os.ReadFile(a.specKeyFile()); err == nil {
+		b.SpecKey = strings.TrimSpace(string(raw))
+	}
+	return b, nil
 }
 
 // exportDue tells whether the backups work and an export of the settings now was not taken yet.
@@ -173,6 +181,10 @@ func (a *Appliance) exportDue(st *EtcdBackupStatus) (bool, *time.Time) {
 func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPassphrase string) ([]byte, error) {
 	if err := ValidPassphrase(exportPassphrase); err != nil {
 		return nil, fmt.Errorf("export %w", err)
+	}
+	// The export carries the recovery key, so that a new appliance opens the stored specs.
+	if _, err := a.ensureSpecIdentity(); err != nil {
+		return nil, err
 	}
 	backups, err := a.currentBackups()
 	if errors.Is(err, fs.ErrNotExist) {
@@ -295,6 +307,9 @@ func (a *Appliance) ImportState(ctx context.Context, sealed []byte, exportPassph
 	if err := writeJSONFile(a.etcdBackupFile("settings.json"), b.Backups.Settings); err != nil {
 		return err
 	}
+	if err := a.importSpecKey(b.Backups.SpecKey); err != nil {
+		return err
+	}
 	if err := writeJSONFile(a.exportFile(), exportRecord{At: b.Created, Fingerprint: exportFingerprint(&b.Backups)}); err != nil {
 		return err
 	}
@@ -309,6 +324,15 @@ func (a *Appliance) ImportState(ctx context.Context, sealed []byte, exportPassph
 		}
 	}
 	return nil
+}
+
+// importSpecKey keeps the recovery key an export carried. An export made before there was one
+// carries none.
+func (a *Appliance) importSpecKey(key string) error {
+	if key == "" {
+		return nil
+	}
+	return writeFileAtomic(a.specKeyFile(), []byte(key))
 }
 
 // recreateTargets are the module's addresses an apply creates the VMs and configures the nodes

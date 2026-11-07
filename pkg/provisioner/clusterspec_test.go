@@ -2,11 +2,14 @@ package provisioner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -30,9 +33,12 @@ func TestClusterSpecRoundTripsAndKeepsNoSecretValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := ClusterSpecYAML(c, objects)
+	raw, err := ClusterSpecYAML(c, objects, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if state, n := SpecSecretsState(raw); state != SpecSecretsOmitted || n != 1 {
+		t.Errorf("a spec made without a sealer says %q, %d", state, n)
 	}
 	text := string(raw)
 	for _, bad := range []string{"hunter2", "aHVudGVyMg", "uid-1", "last-applied", "Provisioned", "other"} {
@@ -52,14 +58,61 @@ func TestClusterSpecRoundTripsAndKeepsNoSecretValue(t *testing.T) {
 	if back.Name != "web" || back.Namespace != "team-a" || back.Spec.Topology.Version != c.Spec.Topology.Version || len(back.Spec.Topology.Variables) != 1 {
 		t.Fatalf("read back %+v", back)
 	}
-	again, _ := ClusterSpecYAML(c, objects)
-	if ClusterSpecSum(raw) != ClusterSpecSum(again) {
-		t.Fatal("the same cluster gave different bytes")
+	sum, _ := ClusterSpecSum(c, objects)
+	if again, _ := ClusterSpecSum(c, objects); sum != again {
+		t.Fatal("the same cluster gave different sums")
 	}
 	c.Spec.Topology.Version = "v1.37.2+rke2r1"
-	changed, _ := ClusterSpecYAML(c, objects)
-	if ClusterSpecSum(raw) == ClusterSpecSum(changed) {
+	if changed, _ := ClusterSpecSum(c, objects); sum == changed {
 		t.Fatal("a changed cluster gave the same sum")
+	}
+	c.Spec.Topology.Version = cluster(variableOf("storage", `"local-lvm"`)).Spec.Topology.Version
+	rotated, ok := objects[len(objects)-1].(*corev1.Secret)
+	if !ok {
+		t.Fatalf("the last object is %T", objects[len(objects)-1])
+	}
+	rotated.Data["token"] = []byte("rotated")
+	if changed, _ := ClusterSpecSum(c, objects); sum == changed {
+		t.Fatal("a rotated Secret value gave the same sum")
+	}
+}
+
+func TestClusterSpecSealsSecretValuesAndLeavesNoneInPlainText(t *testing.T) {
+	t.Parallel()
+	c := cluster()
+	labels := map[string]string{ClusterSpecClusterLabel: "web"}
+	secret := &corev1.Secret{
+		Name: "web-deploy-key", Namespace: "team-a", Labels: labels, Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{"ssh-privatekey": []byte("hunter2")},
+	}
+	var plains [][]byte
+	seal := func(plain []byte) (string, error) {
+		plains = append(plains, plain)
+		sum := sha256.Sum256(plain)
+		return "sealed-" + hex.EncodeToString(sum[:]), nil
+	}
+	raw, err := ClusterSpecYAML(c, []client.Object{secret}, seal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"hunter2", "aHVudGVyMg"} {
+		if strings.Contains(string(raw), bad) {
+			t.Errorf("the stored spec holds %q in plain text:\n%s", bad, raw)
+		}
+	}
+	if string(secret.Data["ssh-privatekey"]) != "hunter2" {
+		t.Error("sealing emptied the caller's Secret")
+	}
+	if state, n := SpecSecretsState(raw); state != SpecSecretsSealed || n != 1 {
+		t.Errorf("state %q, %d", state, n)
+	}
+	if len(plains) != 1 || !strings.Contains(string(plains[0]), "ssh-privatekey") {
+		t.Fatalf("the sealer was given %q", plains)
+	}
+	found, err := ParseSpecSecrets(raw)
+	if err != nil || len(found) != 1 || found[0].Name != "web-deploy-key" || found[0].Namespace != "team-a" ||
+		!strings.HasPrefix(found[0].Sealed, "sealed-") || found[0].Labels[ClusterSpecClusterLabel] != "web" {
+		t.Fatalf("read back %+v, %v", found, err)
 	}
 }
 

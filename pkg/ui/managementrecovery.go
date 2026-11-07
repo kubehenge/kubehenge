@@ -161,15 +161,21 @@ func (s *Server) recreateManagement(w http.ResponseWriter, r *http.Request, u us
 }
 
 // clusterSpec hands out a cluster's spec as the backup target keeps it, to those who may see the
-// cluster. It holds no Secret's value.
+// cluster. A Secret's values are in it sealed with the appliance's recovery key, and the spec's
+// first line says so.
 func (s *Server) clusterSpec(w http.ResponseWriter, r *http.Request, u user) {
 	c, _, ok := s.cluster(w, r, u)
 	if !ok {
 		return
 	}
-	raw, err := specOf(r.Context(), u.kube, c)
+	objects, err := provisioner.ClusterSpecObjects(r.Context(), u.kube, c)
 	if err != nil {
 		s.kubeError(w, r, err)
+		return
+	}
+	raw, err := provisioner.ClusterSpecYAML(c, objects, s.specSealer())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/yaml")
@@ -177,40 +183,13 @@ func (s *Server) clusterSpec(w http.ResponseWriter, r *http.Request, u user) {
 	_, _ = io.Copy(w, bytes.NewReader(raw))
 }
 
-func specOf(ctx context.Context, kube client.Reader, c *clusterv1.Cluster) ([]byte, error) {
-	objects, err := provisioner.ClusterSpecObjects(ctx, kube, c)
-	if err != nil {
-		return nil, fmt.Errorf("reading the cluster's objects: %w", err)
+// specSealer seals Secrets' values with the appliance's recovery key. Without an appliance a spec
+// holds no value.
+func (s *Server) specSealer() provisioner.SecretSealer {
+	if s.Appliance == nil {
+		return nil
 	}
-	raw, err := provisioner.ClusterSpecYAML(c, objects)
-	if err != nil {
-		return nil, fmt.Errorf("encoding the cluster's spec: %w", err)
-	}
-	return raw, nil
-}
-
-// createFromSpec creates a cluster from an exported spec, sent as {"spec": "<YAML>"}. It makes the
-// wizard's request out of it, so that every check of a created cluster applies.
-func (s *Server) createFromSpec(w http.ResponseWriter, r *http.Request, u user) {
-	var in struct {
-		Spec string `json:"spec"`
-	}
-	if !readJSON(w, r, &in) {
-		return
-	}
-	spec, err := provisioner.ParseClusterSpec([]byte(in.Spec))
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
-	body, err := json.Marshal(createRequestOf(spec))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	s.createCluster(w, r, u)
+	return s.Appliance.SealSpecSecret
 }
 
 // createRequestOf is the wizard's request for the cluster an exported spec describes.
@@ -274,13 +253,23 @@ func (s *Server) storeSpecsOnce(ctx context.Context, stored map[string]string) {
 		if !provisioner.Owns(c, s.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
 			continue
 		}
-		raw, err := specOf(ctx, kube, c)
+		key := c.Namespace + "/" + c.Name
+		objects, err := provisioner.ClusterSpecObjects(ctx, kube, c)
 		if err != nil {
-			s.Log.Warn("reading a cluster's spec", "cluster", c.Namespace+"/"+c.Name, "error", err)
+			s.Log.Warn("reading a cluster's spec", "cluster", key, "error", err)
 			continue
 		}
-		key, sum := c.Namespace+"/"+c.Name, provisioner.ClusterSpecSum(raw)
+		sum, err := provisioner.ClusterSpecSum(c, objects)
+		if err != nil {
+			s.Log.Warn("reading a cluster's spec", "cluster", key, "error", err)
+			continue
+		}
 		if stored[key] == sum {
+			continue
+		}
+		raw, err := provisioner.ClusterSpecYAML(c, objects, s.specSealer())
+		if err != nil {
+			s.Log.Warn("sealing a cluster's spec", "cluster", key, "error", err)
 			continue
 		}
 		if err := s.Appliance.StoreClusterSpec(ctx, c.Namespace, c.Name, raw); err != nil {

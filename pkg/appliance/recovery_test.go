@@ -143,11 +143,18 @@ func TestImportRestoresWhatTheExportCarried(t *testing.T) {
 	if _, err := a.TakeEtcdSnapshot(ctx); err != nil {
 		t.Fatal(err)
 	}
+	sealedSecret, err := a.SealSpecSecret([]byte(`{"token":"aHVudGVy"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	bundle, err := a.ExportState(ctx, passphrase, exportPassphrase)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fresh, talos := freshAppliance(t, store)
+	if _, err = fresh.OpenSpecSecret(sealedSecret); !errors.Is(err, ErrNoSpecKey) {
+		t.Fatalf("a new appliance without the key opened a Secret: %v", err)
+	}
 	if err = fresh.ImportState(ctx, bundle, "not the export passphrase"); !errors.Is(err, ErrExportPassphrase) {
 		t.Fatalf("wrong export passphrase: %v", err)
 	}
@@ -159,6 +166,9 @@ func TestImportRestoresWhatTheExportCarried(t *testing.T) {
 	}
 	if !fresh.HasState() || fresh.SavedSettings() == nil || fresh.EtcdBackups().Settings == nil || fresh.EtcdBackups().ExportDue {
 		t.Fatalf("imported state %+v", fresh.EtcdBackups())
+	}
+	if opened, openErr := fresh.OpenSpecSecret(sealedSecret); openErr != nil || string(opened) != `{"token":"aHVudGVy"}` {
+		t.Fatalf("the imported appliance opens the Secret as %q, %v", opened, openErr)
 	}
 	list, err := fresh.ListEtcdSnapshots(ctx)
 	if err != nil || len(list) != 1 {

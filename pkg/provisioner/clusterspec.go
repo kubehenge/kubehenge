@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -34,10 +35,28 @@ func ClusterSpecKey(prefix, namespace, name string) string {
 	return path.Join(prefix, "clusters", namespace+"."+name, ClusterSpecFile)
 }
 
+// SealedSecretAnnotation holds a Secret's values in a spec, sealed.
+const SealedSecretAnnotation = "kubehenge.dev/sealed-data" //nolint:gosec // an annotation's name
+
+// SecretSealer seals a Secret's data, as JSON, for a spec, so that only the holder of a recovery key
+// reads it again. A spec made without one holds no Secret value at all.
+type SecretSealer func(plain []byte) (string, error)
+
+// specSecretsPrefix opens a spec's first line, which says whether its Secrets hold their values.
+const specSecretsPrefix = "# Secrets: "
+
+// Secret states a spec's first line gives.
+const (
+	SpecSecretsNone    = "none"
+	SpecSecretsSealed  = "sealed"
+	SpecSecretsOmitted = "omitted"
+)
+
 // ClusterSpecYAML is a cluster's spec as a YAML stream: the Cluster as it is created, without its
 // status and the fields the API server fills in, then the Kubehenge objects that belong to it.
-// Secrets keep their keys and lose their values. The same cluster gives the same bytes.
-func ClusterSpecYAML(c *clusterv1.Cluster, referenced []client.Object) ([]byte, error) {
+// A Secret keeps its keys. Its values are sealed by seal into an annotation, or left out where seal
+// is nil. The first line says which. The same cluster gives the same bytes where seal does.
+func ClusterSpecYAML(c *clusterv1.Cluster, referenced []client.Object, seal SecretSealer) ([]byte, error) {
 	keep := &clusterv1.Cluster{
 		Name: c.Name, Namespace: c.Namespace, Labels: c.Labels, Annotations: withoutKubectl(c.Annotations), Spec: c.Spec,
 	}
@@ -48,14 +67,99 @@ func ClusterSpecYAML(c *clusterv1.Cluster, referenced []client.Object) ([]byte, 
 		return nil, err
 	}
 	docs = append(docs, doc)
+	secrets := 0
 	for _, o := range referenced {
+		if s, ok := o.(*corev1.Secret); ok {
+			secrets++
+			if o, err = sealedCopy(s, seal); err != nil {
+				return nil, err
+			}
+		}
 		doc, err := cleanYAML(o)
 		if err != nil {
 			return nil, err
 		}
 		docs = append(docs, doc)
 	}
-	return bytes.Join(docs, []byte("---\n")), nil
+	state := SpecSecretsNone
+	switch {
+	case secrets > 0 && seal != nil:
+		state = SpecSecretsSealed
+	case secrets > 0:
+		state = SpecSecretsOmitted
+	}
+	head := fmt.Sprintf("%s%s, %d\n", specSecretsPrefix, state, secrets)
+	return append([]byte(head), bytes.Join(docs, []byte("---\n"))...), nil
+}
+
+// SpecSecretsState reads the state of a spec's Secrets from its first line.
+func SpecSecretsState(raw []byte) (string, int) {
+	line, _, _ := bytes.Cut(raw, []byte("\n"))
+	rest, ok := strings.CutPrefix(string(line), specSecretsPrefix)
+	if !ok {
+		return SpecSecretsOmitted, 0
+	}
+	state, n, _ := strings.Cut(rest, ", ")
+	count, _ := strconv.Atoi(n)
+	return state, count
+}
+
+// sealedCopy is the Secret as a spec keeps it: the keys with no value, and the values sealed.
+func sealedCopy(s *corev1.Secret, seal SecretSealer) (*corev1.Secret, error) {
+	out := s.DeepCopy()
+	out.APIVersion, out.Kind = "v1", "Secret"
+	plain := map[string][]byte{}
+	for k, v := range s.Data {
+		plain[k] = v
+		out.Data[k] = []byte{}
+	}
+	out.StringData = nil
+	if seal == nil {
+		return out, nil
+	}
+	raw, err := json.Marshal(plain)
+	if err != nil {
+		return nil, fmt.Errorf("encoding Secret %s: %w", s.Name, err)
+	}
+	sealed, err := seal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("sealing Secret %s: %w", s.Name, err)
+	}
+	if out.Annotations == nil {
+		out.Annotations = map[string]string{}
+	}
+	out.Annotations[SealedSecretAnnotation] = sealed
+	return out, nil
+}
+
+// SpecSecret is a Secret as a spec holds it.
+type SpecSecret struct {
+	Name, Namespace string
+	Labels          map[string]string
+	Type            corev1.SecretType
+	// Sealed is the values, sealed. It is empty where the spec was made without them.
+	Sealed string
+}
+
+// ParseSpecSecrets reads the Secrets out of an exported spec.
+func ParseSpecSecrets(raw []byte) ([]SpecSecret, error) {
+	var out []SpecSecret
+	for doc := range bytes.SplitSeq(raw, []byte("\n---")) {
+		var head struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal(doc, &head); err != nil || head.Kind != secretKind {
+			continue
+		}
+		var s corev1.Secret
+		if err := yaml.Unmarshal(doc, &s); err != nil {
+			return nil, fmt.Errorf("a Secret in the exported spec: %w", err)
+		}
+		sealed := s.Annotations[SealedSecretAnnotation]
+		delete(s.Annotations, SealedSecretAnnotation)
+		out = append(out, SpecSecret{Name: s.Name, Namespace: s.Namespace, Labels: s.Labels, Type: s.Type, Sealed: sealed})
+	}
+	return out, nil
 }
 
 func withoutKubectl(in map[string]string) map[string]string {
@@ -95,8 +199,8 @@ func cleanYAML(o any) ([]byte, error) {
 	return out, nil
 }
 
-// ClusterSpecObjects lists the ConfigMaps and Secrets that belong to the cluster, Secrets without
-// their values, in a fixed order.
+// ClusterSpecObjects lists the ConfigMaps and Secrets that belong to the cluster, in a fixed order.
+// The Secrets keep their values, which ClusterSpecYAML seals or leaves out.
 func ClusterSpecObjects(ctx context.Context, kube client.Reader, c *clusterv1.Cluster) ([]client.Object, error) {
 	in := client.InNamespace(c.Namespace)
 	label := client.MatchingLabels{ClusterSpecClusterLabel: c.Name}
@@ -117,10 +221,6 @@ func ClusterSpecObjects(ctx context.Context, kube client.Reader, c *clusterv1.Cl
 	for i := range secrets.Items {
 		s := &secrets.Items[i]
 		s.APIVersion, s.Kind = "v1", "Secret"
-		for k := range s.Data {
-			s.Data[k] = []byte{}
-		}
-		s.StringData = nil
 		out = append(out, s)
 	}
 	slices.SortFunc(out, func(a, b client.Object) int {
@@ -129,10 +229,18 @@ func ClusterSpecObjects(ctx context.Context, kube client.Reader, c *clusterv1.Cl
 	return out, nil
 }
 
-// ClusterSpecSum identifies a cluster's exported spec, so that a write happens on a change only.
-func ClusterSpecSum(raw []byte) string {
+// ClusterSpecSum identifies a cluster's spec with its Secrets' values, so that a write happens on a
+// change only. Sealing is random, so the sum is over the values themselves, never stored.
+func ClusterSpecSum(c *clusterv1.Cluster, referenced []client.Object) (string, error) {
+	raw, err := ClusterSpecYAML(c, referenced, func(plain []byte) (string, error) {
+		sum := sha256.Sum256(plain)
+		return hex.EncodeToString(sum[:]), nil
+	})
+	if err != nil {
+		return "", err
+	}
 	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // ParseClusterSpec reads the Cluster out of an exported spec.

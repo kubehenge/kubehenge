@@ -614,6 +614,8 @@ After a restore of the management cluster, and then daily, the controller compar
 - **Unowned VMs** on the management cluster's Health: VMs in Kubehenge's pools that no cluster owns, as for a cluster created since the snapshot. Delete them in Proxmox VE when you are sure.
 - The token that lists the VMs must see them. A list with no VM at all is taken as a token that sees nothing, and marks no cluster.
 
+`kubehenge cluster create --from` restores the spec's Secrets with the appliance's recovery key, which an export carries. It names any Secret it cannot open. `--without-secrets` goes on without them.
+
 ### The Proxmox VE certificate or CA changed
 
 The appliance, the management cluster and every cluster check the Proxmox VE API's certificate against the CA chosen when the appliance was installed ([install.md](install.md#the-proxmox-ve-api)). A new certificate from the same CA, such as one Proxmox VE renewed, needs nothing. One from another CA, such as your organisation's replacing Proxmox VE's own, fails those checks. Sign-in fails, and the appliance's log (`journalctl -u kubehenge`) and the clusters' cloud controller managers report a certificate error.

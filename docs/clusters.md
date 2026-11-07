@@ -821,9 +821,11 @@ Each links to the Backups view. Kubehenge reads this from Velero's own schedule 
 
 ### The cluster's spec
 
-After every change, the appliance writes the cluster to `<prefix>/clusters/<namespace>.<name>/cluster.yaml` in the management etcd's backup target. The file holds the Cluster and the ConfigMaps and Secrets labelled `kubehenge.dev/cluster-name: <name>`. Secrets keep their keys and lose their values.
+After every change, the appliance writes the cluster to `<prefix>/clusters/<namespace>.<name>/cluster.yaml` in the management etcd's backup target. The file holds the Cluster and the ConfigMaps and Secrets labelled `kubehenge.dev/cluster-name: <name>`. The Secrets' values are in it, sealed with age to a recovery key that only the appliance holds. The backup target never sees a value in plain text. The file's first line says whether the Secrets are included.
 
-The **Backups** tab downloads it, as does `kubehenge cluster export <name>`. `kubehenge cluster create --from <file>` creates the cluster again, with the wizard's checks. Without a target the download still works.
+The **Backups** tab downloads it, as does `kubehenge cluster export <name>`, and both say whether the Secrets are included. `kubehenge cluster create --from <file>` creates the cluster again with the wizard's checks. It opens the sealed Secrets with the appliance's key and makes them too.
+
+A Secret it cannot open stops the command, which names it. `--without-secrets` creates the cluster without those Secrets. The appliance export carries the key, so a new appliance reads every stored spec. Without a target the download still works.
 
 ### Restore into another cluster
 
