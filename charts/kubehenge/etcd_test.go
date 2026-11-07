@@ -111,6 +111,11 @@ func (d *classDocument) patch(t *testing.T, name string) classPatch {
 
 type kubeadmArg struct{ Name, Value string }
 
+// kubeadmLocalEtcd is the local member of kubeadm's etcd configuration.
+type kubeadmLocalEtcd struct {
+	ExtraArgs []kubeadmArg `json:"extraArgs"`
+}
+
 // etcdArguments are the etcd arguments a distribution's patch renders for a cluster's variables, as
 // name=value, in order.
 func etcdArguments(t *testing.T, file, patch, variables string) []string {
@@ -132,9 +137,7 @@ func etcdArguments(t *testing.T, file, patch, variables string) []string {
 			t.Fatalf("path %s", jp.Path)
 		}
 		var etcd struct {
-			Local struct {
-				ExtraArgs []kubeadmArg `json:"extraArgs"`
-			} `json:"local"`
+			Local kubeadmLocalEtcd `json:"local"`
 		}
 		if err := yaml.Unmarshal([]byte(rendered), &etcd); err != nil {
 			t.Fatalf("%v:\n%s", err, rendered)
