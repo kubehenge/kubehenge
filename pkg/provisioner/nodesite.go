@@ -40,7 +40,7 @@ type RegistryMirror struct {
 }
 
 // registryName holds a registry to a lower-case host name, as the chart's schema does.
-var registryName = regexp.MustCompile(`^(\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?)$`)
+var registryName = regexp.MustCompile(`^(\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:\d{1,5})?)$`)
 
 // validateNodeSite holds the site settings a cluster's nodes take, the mirrors and the trusted
 // authorities, to the rules the schema cannot state: certificates that parse and have not

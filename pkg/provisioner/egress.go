@@ -211,7 +211,7 @@ func (e egressEnv) patchFlux(instance *unstructured.Unstructured) error {
 // checkEgress holds the egressProxy variable to a proxy address without credentials, and
 // exceptions that name something.
 func checkEgress(v *EgressProxy) error {
-	for _, a := range []struct{ name, address string }{{"url", v.URL}, {"httpsUrl", v.HTTPSURL}} {
+	for _, a := range []struct{ name, address string }{{urlKey, v.URL}, {"httpsUrl", v.HTTPSURL}} {
 		name, address := a.name, a.address
 		if address == "" {
 			continue

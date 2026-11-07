@@ -167,8 +167,11 @@ func TestAddOnsGoThroughTheHTTPSProxyForHTTPSAddresses(t *testing.T) {
 		if !ok {
 			t.Fatalf("%v", v)
 		}
-		name, _ := m["name"].(string)
-		value, _ := m[valueKey].(string)
+		name, nameOK := m["name"].(string)
+		value, valueOK := m[valueKey].(string)
+		if !nameOK || !valueOK {
+			t.Fatalf("variable %v has no text name and value", m)
+		}
 		vars[name] = value
 	}
 	if vars["HTTP_PROXY"] != "http://p.example.org:3128" || vars["https_proxy"] != "http://q.example.org:3129" {

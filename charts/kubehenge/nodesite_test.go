@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"maps"
 	"math/big"
 	"os/exec"
 	"slices"
@@ -60,9 +61,7 @@ func siteVariables(t *testing.T, builtin string, extra map[string]any) map[strin
 		"trustedCAs": [`+jsonString(siteCA(t, "corp"))+`],
 		"egressProxy": {"url": "http://proxy.example.org:3128", "httpsUrl": "http://secure.example.org:3129", "noProxy": [".corp.example.org", "10.10.0.0/16", "localhost"]}
 	}`)
-	for k, e := range extra {
-		v[k] = e
-	}
+	maps.Copy(v, extra)
 	return v
 }
 
@@ -73,6 +72,9 @@ func jsonString(s string) string {
 	}
 	return string(b)
 }
+
+// artifactURL is the tail of the installers' own variable names for a release mirror.
+const artifactURL = "ARTIFACT_URL" //nolint:misspell // the installers' spelling
 
 const ownRanges = `{"pods": ["172.16.0.0/16"], "services": ["172.17.0.0/16"]}`
 
@@ -92,7 +94,7 @@ var siteCases = []siteCase{
 }
 
 // siteScript is the node's boot script and its commands after the patches for these variables.
-func siteScript(t *testing.T, c siteCase, vars map[string]any) (string, []string) {
+func siteScript(t *testing.T, c *siteCase, vars map[string]any) (string, []string) {
 	t.Helper()
 	spec := asMap(t, field(t, renderClass(t, c.file).patched(t, c.kind, vars), c.files...))
 	file, n := fileOf(t, spec["files"], "/etc/kubehenge/node-site.sh")
@@ -115,7 +117,7 @@ func TestEveryNodeTakesTheSiteSettings(t *testing.T) {
 		t.Run(c.file+"/"+c.kind, func(t *testing.T) {
 			t.Parallel()
 			vars := siteVariables(t, ownRanges, nil)
-			script, commands := siteScript(t, c, vars)
+			script, commands := siteScript(t, &c, vars)
 			at := slices.Index(commands, "/etc/kubehenge/node-site.sh || exit 1")
 			if at < 1 || commands[0] != waitClockCommand {
 				t.Fatalf("%v: the site script must run after the clock wait", commands)
@@ -126,7 +128,7 @@ func TestEveryNodeTakesTheSiteSettings(t *testing.T) {
 			if c.distribution != "kubeadm" {
 				// Mirrors of the release go before the distribution's installer, which comes after
 				// every one of these commands.
-				if got := commands[at+2]; !strings.Contains(got, "ARTIFACT_URL") {
+				if got := commands[at+2]; !strings.Contains(got, artifactURL) {
 					t.Errorf("%v: no export of the release mirror after the proxy", commands)
 				}
 			}
@@ -205,7 +207,7 @@ func syntax(t *testing.T, script string) {
 		t.Log("no sh to parse the script with")
 		return
 	}
-	cmd := exec.CommandContext(t.Context(), sh, "-n")
+	cmd := exec.CommandContext(t.Context(), sh, "-n") //nolint:gosec // sh is the PATH's own shell, parsing without running
 	cmd.Stdin = strings.NewReader(script)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Errorf("sh -n: %v: %s\n%s", err, out, script)
@@ -216,8 +218,8 @@ func TestOnlyTheReleaseMirrorOfAgentDistributionsExists(t *testing.T) {
 	t.Parallel()
 	vars := siteVariables(t, ownRanges, map[string]any{"distributionMirror": "https://mirror.example.org/rancher"})
 	for file, want := range map[string]string{
-		"rke2.yaml": "export INSTALL_RKE2_METHOD=tar INSTALL_RKE2_ARTIFACT_URL='https://mirror.example.org/rancher'",
-		"k3s.yaml":  "export INSTALL_K3S_ARTIFACT_URL='https://mirror.example.org/rancher'",
+		"rke2.yaml": "export INSTALL_RKE2_METHOD=tar INSTALL_RKE2_" + artifactURL + "='https://mirror.example.org/rancher'",
+		"k3s.yaml":  "export INSTALL_K3S_" + artifactURL + "='https://mirror.example.org/rancher'",
 	} {
 		kind, commands, files := "RKE2ControlPlaneTemplate", "preRKE2Commands", []string{"spec", "template", "spec"}
 		if file == "k3s.yaml" {
@@ -249,7 +251,7 @@ func TestNodesChangeNothingWithoutSiteSettings(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, banned := range []string{"node-site", "kubehenge/site", "registries.yaml", "proxy.env", "ARTIFACT_URL"} {
+		for _, banned := range []string{"node-site", "kubehenge/site", "registries.yaml", "proxy.env", artifactURL} {
 			if strings.Contains(string(raw), banned) {
 				t.Errorf("%s %s: %q without any site setting", c.file, c.kind, banned)
 			}
@@ -269,12 +271,12 @@ func TestNoProxyHoldsTheClustersOwnRangesOrTheDistributionsDefaults(t *testing.T
 	for _, c := range []siteCase{siteCases[0], siteCases[2], siteCases[4]} {
 		defaults := map[string]string{"kubeadm": "10.244.0.0/16,10.96.0.0/12", "rke2": "10.42.0.0/16,10.43.0.0/16", "k3s": "10.42.0.0/16,10.43.0.0/16"}[c.distribution]
 		for builtin, want := range map[string]string{
-			`{}`:                                  defaults,
-			`{"pods": [], "services": []}`:        defaults,
-			ownRanges:                             "172.16.0.0/16,172.17.0.0/16",
+			`{}`:                           defaults,
+			`{"pods": [], "services": []}`: defaults,
+			ownRanges:                      "172.16.0.0/16,172.17.0.0/16",
 			`{"pods": ["172.16.0.0/16", "172.16.0.0/16"], "services": ["172.17.0.0/16"]}`: "172.16.0.0/16,172.17.0.0/16",
 		} {
-			script, _ := siteScript(t, c, siteVariables(t, builtin, nil))
+			script, _ := siteScript(t, &c, siteVariables(t, builtin, nil))
 			line := "NO_PROXY='localhost,127.0.0.1,.svc,.cluster.local,192.0.2.10,192.0.2.1/24," + want + ",.corp.example.org,10.10.0.0/16'\n"
 			if !strings.Contains(script, line) {
 				t.Errorf("%s with %s: script lacks %q:\n%s", c.distribution, builtin, line, script)
@@ -354,8 +356,8 @@ func TestEveryClassValidatesTheSiteSettings(t *testing.T) {
 				t.Errorf("%s %s %s: %v lacks %q", file, name, value, errs, contains)
 			}
 		}
-		pem := jsonString(good)
-		check("registryMirrors", `[{"registry":"docker.io","endpoints":["https://m.example.org:5000"],"caBundle":`+pem+`}]`, true, "")
+		goodJSON := jsonString(good)
+		check("registryMirrors", `[{"registry":"docker.io","endpoints":["https://m.example.org:5000"],"caBundle":`+goodJSON+`}]`, true, "")
 		check("registryMirrors", `[{"registry":"*","endpoints":["http://m.example.org","https://h.example.org/v2"]}]`, true, "")
 		check("registryMirrors", `[{"registry":"registry.example.org:5000","endpoints":["https://m.example.org/prefix/v2"]}]`, true, "")
 		for _, bad := range []string{"m.example.org", "ftp://m.example.org", "https://m.example.org/path", "https://m.example.org/", "https://user@m.example.org", "https://m.example.org?a=b", "https://m'$(x).example.org", "https:// m.example.org"} {
@@ -366,7 +368,7 @@ func TestEveryClassValidatesTheSiteSettings(t *testing.T) {
 		check("registryMirrors", `[{"registry":"docker.io","endpoints":["https://m.example.org"],"caBundle":"not a certificate"}]`, false, "caBundle")
 		check("registryMirrors", `[{"registry":"docker.io","endpoints":["https://m.example.org"],"caBundle":`+jsonString("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")+`}]`, false, "caBundle")
 		check("registryMirrors", `[{"registry":"docker.io","endpoints":["https://m.example.org"],"caBundle":`+jsonString(strings.ReplaceAll(good, "\n", "\r\n"))+`}]`, false, "caBundle")
-		check("trustedCAs", `[`+pem+`]`, true, "")
+		check("trustedCAs", `[`+goodJSON+`]`, true, "")
 		check("trustedCAs", `[`+jsonString(good+good)+`]`, true, "")
 		check("trustedCAs", `["not a certificate"]`, false, "in body")
 		check("trustedCAs", `[`+jsonString(good+"\nEOF\n")+`]`, false, "in body")
