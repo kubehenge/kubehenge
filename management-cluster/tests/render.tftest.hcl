@@ -666,6 +666,7 @@ run "template_refresh_on_dedicated_storages" {
       storage          = "ceph"
       import_datastore = "images"
       iso_datastore    = "seeds"
+      vlan             = 120
       address          = "192.0.2.50/24"
       gateway          = "192.0.2.1"
       creator_builds   = true
@@ -689,9 +690,11 @@ run "template_refresh_on_dedicated_storages" {
   assert {
     condition = (
       yamldecode(helm_release.kubehenge.values[0]).templateRefresh.address == "192.0.2.50/24" &&
+      yamldecode(helm_release.kubehenge.values[0]).templateRefresh.vlan == 120 &&
+      yamldecode(helm_release.kubehenge.values[0]).templateRefresh.node == "pve2" &&
       yamldecode(helm_release.kubehenge.values[0]).templateRefresh.creatorBuilds
     )
-    error_message = "the chart builds with the network and creator builds asked for"
+    error_message = "the chart builds with the node, VLAN, network and creator builds asked for"
   }
 
   assert {

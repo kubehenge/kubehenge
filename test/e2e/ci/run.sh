@@ -269,10 +269,10 @@ if [ "${built}" != true ]; then
 fi
 
 # The management node's memory is the module's default, but where the test's name gives another.
-# kubeadm-addons-a with Calico and rke2-addons-b with Cilium take 3584 MiB, as with 4096 their
-# guests outgrow 12 GiB (docs/testing.md).
+# kubeadm-addons-a and k3s-addons-b with Calico and rke2-addons-b with Cilium take 3584 MiB, as
+# with 4096 their guests outgrow 12 GiB (docs/testing.md).
 case "${test}+${KUBEHENGE_E2E_CNI:-}" in
-    kubeadm-addons-a+calico | rke2-addons-b+cilium) : "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:=3584}" ;;
+    kubeadm-addons-a+calico | k3s-addons-b+calico | rke2-addons-b+cilium) : "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:=3584}" ;;
     *) ;;
 esac
 if [ -n "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:-}" ]; then
