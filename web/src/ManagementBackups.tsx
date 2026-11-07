@@ -2,6 +2,7 @@ import { useState, type JSX } from "react";
 
 import { adminPath } from "./admin-views";
 import { api } from "./api";
+import { BackupWarning, ExportBox, RecreateDialog } from "./ManagementRecovery";
 import { Link } from "./router";
 import type { EtcdSnapshot, ManagementBackups as Backups, ManagementBackupSettings } from "./types";
 import {
@@ -57,6 +58,12 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
     <>
       <div className="box">
         <h3>Management cluster etcd</h3>
+        <BackupWarning
+          backups={b}
+          onChanged={() => {
+            void reload();
+          }}
+        />
         {b.settings === undefined ? (
           <NotSetUp backups={b} onSetUp={() => setEditing(true)} />
         ) : (
@@ -90,6 +97,7 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
         )}
         <ErrorBox message={actionError} />
       </div>
+      {b.settings !== undefined && <ExportBox backups={b} />}
       {b.settings !== undefined && <Snapshots running={running} />}
       {editing && (
         <SetUpDialog
@@ -167,6 +175,7 @@ function Summary({ backups: b, settings: s }: { backups: Backups; settings: Mana
 function Snapshots({ running }: { running: boolean }): JSX.Element {
   const { data: v, error } = usePoll(api.managementSnapshots, pollIdle);
   const [restoring, setRestoring] = useState<EtcdSnapshot>();
+  const [recreating, setRecreating] = useState<EtcdSnapshot>();
   const list = v?.snapshots ?? [];
   return (
     <div className="box scroll">
@@ -208,6 +217,15 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
                 >
                   Restore…
                 </button>
+                <button
+                  type="button"
+                  disabled={running}
+                  title={running ? "Run under way" : undefined}
+                  aria-label={`Recreate from ${s.name}`}
+                  onClick={() => setRecreating(s)}
+                >
+                  Recreate…
+                </button>
               </td>
             </tr>
           ))}
@@ -216,6 +234,7 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
       {restoring !== undefined && (
         <ManagementRestoreDialog snapshot={restoring} onClose={() => setRestoring(undefined)} />
       )}
+      {recreating !== undefined && <RecreateDialog snapshot={recreating} onClose={() => setRecreating(undefined)} />}
     </div>
   );
 }

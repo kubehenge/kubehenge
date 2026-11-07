@@ -869,6 +869,11 @@ export interface ManagementBackups {
   taking?: boolean;
   targets: string[];
   keysStored: boolean;
+  /** Stands while the management cluster's etcd is not backed up. */
+  warning?: { dismissal?: { by: string; at: string; until: string } };
+  /** Set when no export of the appliance's state was taken since its backup settings changed. */
+  exportDue?: boolean;
+  exportedAt?: string;
 }
 
 export interface ManagementSnapshots {
@@ -1015,6 +1020,8 @@ export interface ManagementHealth {
   controllers?: { namespace: string; name: string; ready: number; wanted: number }[];
   /** Whether the controller reaches the Proxmox VE API from inside the cluster. Unset until it has asked. */
   proxmox?: { ok: boolean; error?: string; checked: string };
+  /** VMs in Kubehenge's pools that no cluster owns. Nothing deletes them. */
+  unowned?: { checked: string; vms: { vmid: number; name?: string; node?: string; pool: string }[] };
 }
 
 /** What the setup would run into: errors stop it, warnings do not. */

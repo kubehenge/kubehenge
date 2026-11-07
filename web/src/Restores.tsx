@@ -19,7 +19,35 @@ import {
 import { clusterPath } from "./cluster-paths";
 import { Link } from "./router";
 import type { BackupRun, Cluster, ClusterBackups, RestoreMessages, RestoreResults, RestoreRun } from "./types";
-import { Dialog, ErrorBox, Field, Status, errorMessage, filled, sentence } from "./ui";
+import { Dialog, ErrorBox, Field, Status, errorMessage, filled, saveFile, sentence } from "./ui";
+
+/** SpecExport downloads a cluster's spec, which is also kept in the management backups' target. */
+export function SpecExport({ cluster: c }: { cluster: Cluster }): JSX.Element {
+  const [error, setError] = useState<string>();
+  return (
+    <div className="box">
+      <h3>Spec</h3>
+      <p className="muted">Kept in the management backup target after every change. Secrets hold no values.</p>
+      <div className="actions">
+        <button
+          type="button"
+          onClick={() => {
+            void (async () => {
+              try {
+                saveFile(await api.clusterSpec(c.namespace, c.name), `${c.name}.cluster.yaml`);
+              } catch (err) {
+                setError(errorMessage(err));
+              }
+            })();
+          }}
+        >
+          Download spec
+        </button>
+      </div>
+      <ErrorBox message={error} />
+    </div>
+  );
+}
 
 /** RestoredNotice says where a restore into another cluster can be followed. */
 export function RestoredNotice({ namespace, into }: { namespace: string; into: string }): JSX.Element {

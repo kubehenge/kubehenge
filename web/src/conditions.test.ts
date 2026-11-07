@@ -7,9 +7,9 @@ const marked = (types: string[], status: string): boolean[] => types.map((type) 
 
 describe("the Health page's condition list", () => {
   it("marks Kubehenge's conditions when they are true", () => {
-    const kubehenge = [upgradeHeldCondition, "DeletionStalled", "VMsNotRunning", "CertificatesExpiring"];
-    expect(marked(kubehenge, "True")).toStrictEqual([true, true, true, true]);
-    expect(marked(kubehenge, "False")).toStrictEqual([false, false, false, false]);
+    const kubehenge = [upgradeHeldCondition, "DeletionStalled", "VMsNotRunning", "VMsMissing", "CertificatesExpiring"];
+    expect(marked(kubehenge, "True")).toStrictEqual([true, true, true, true, true]);
+    expect(marked(kubehenge, "False")).toStrictEqual([false, false, false, false, false]);
   });
 
   it("marks Cluster API's conditions by their own polarity", () => {

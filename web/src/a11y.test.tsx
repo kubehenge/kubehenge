@@ -115,6 +115,7 @@ const signedIn: Record<string, Route> = {
   "GET /api/clusters": { body: [cluster("web")] },
   "GET /api/fleet/health": { body: [] },
   "GET /api/runs": { body: [] },
+  "GET /api/appliance/etcd-backups": { body: { targets: ["main"], keysStored: true } },
   "DELETE /api/session": { status: 204 },
 };
 

@@ -20,6 +20,20 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
 
+function UnownedVMs({ vms }: { vms: { vmid: number }[] }): JSX.Element | null {
+  if (vms.length === 0) {
+    return null;
+  }
+  return (
+    <div className="unowned-vms">
+      <p className="warning">
+        Unowned VMs: <span className="mono">{vms.map((v) => v.vmid).join(", ")}</span>
+      </p>
+      <p className="muted">In Kubehenge&apos;s pools, owned by no cluster. Nothing deletes them.</p>
+    </div>
+  );
+}
+
 // ManagementHealthCard is the management cluster's own health, read on its own so that it answers
 // while the cluster does not, when the Administration page is what repairs it.
 export function ManagementHealthCard(): JSX.Element {
@@ -67,6 +81,7 @@ export function ManagementHealthCard(): JSX.Element {
               </>
             )}
           </dl>
+          <UnownedVMs vms={h.unowned?.vms ?? []} />
           {h.proxmox?.ok === false && h.proxmox.error !== undefined && (
             <Detail>
               <p className="mono">{h.proxmox.error}</p>
