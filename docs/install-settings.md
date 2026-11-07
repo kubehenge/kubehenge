@@ -98,6 +98,16 @@ It can touch no VM outside the template pool, no cluster's VM and none of the ma
 
 Switching the refresh off removes the user, its token and the CronJob. The templates stay.
 
+## Where the template builds run
+
+Three settings of `template_refresh` place the VM that builds a node image:
+
+- **`node`** is the Proxmox VE node it runs on. Empty takes the first management node.
+- **`bridge`** is its bridge, a VNet written `zone/vnet`. Empty takes the first cluster bridge.
+- **`vlan`** is its VLAN tag. 0 or empty sends it untagged.
+
+The setup checks that the node is online and carries the template disks' storage and the bridge.
+
 ## HA group labels
 
 The cloud controller manager labels each node with the Proxmox VE HA groups, or node-affinity HA rules, its Proxmox VE node is in. Proxmox VE lists them only with `Sys.Audit` on `/`. On by default, the setting gives each cluster the labels unless it switches them off ([clusters.md](clusters.md#machines)). Its token then holds `Sys.Audit` on `/`.

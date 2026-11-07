@@ -17,8 +17,11 @@ const binary = ["accessibility", "best-practices", "seo"].flatMap((category) =>
 );
 
 // Limits per page and form factor. A docs page goes by its file, as this server has no clean URLs.
-// The performance score is a floor below the lowest of 20 runs. Layout shift, bytes and requests
-// do not vary between runs: bytes get 3 to 5 per cent of room for a docs edit, requests none.
+// The performance score is a floor below the lowest of 20 runs. Bytes and requests do not vary
+// between runs: bytes get 3 to 5 per cent of room for a docs edit, requests none. Layout shift
+// stays near 0 only while no late file reflows the page, as a web font that arrives after the first
+// paint does unless a stand-in with its metrics holds the place. A shift here is a defect, even
+// when most runs miss it.
 const limits = {
   mobile: {
     "/": { performance: 0.93, cls: 0.01, bytes: 215_000, fontBytes: 95_000, requests: 16 },

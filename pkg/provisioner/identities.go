@@ -149,6 +149,11 @@ var workloadIdentities = []workloadIdentity{
 			{APIGroups: []string{""}, Resources: []string{"nodes", "pods", "events", "persistentvolumeclaims"}, Verbs: []string{"get", "list"}},
 			{APIGroups: []string{"events.k8s.io"}, Resources: []string{"events"}, Verbs: []string{"get", "list"}},
 			{NonResourceURLs: []string{"/readyz", "/readyz/*"}, Verbs: []string{"get"}},
+			// What an upgrade is checked against: the deprecated APIs in use (the API server's
+			// metrics) and the webhooks that fail closed, with the endpoints behind them.
+			{NonResourceURLs: []string{"/metrics"}, Verbs: []string{"get"}},
+			{APIGroups: []string{admissionregistrationv1.GroupName}, Resources: []string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"}, Verbs: []string{"get", "list"}},
+			{APIGroups: []string{"discovery.k8s.io"}, Resources: []string{"endpointslices"}, Verbs: []string{"get", "list"}},
 		},
 	},
 	{

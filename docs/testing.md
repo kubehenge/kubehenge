@@ -306,24 +306,24 @@ Swap does not count as room for the guests. Cold pages of the runner's own proce
 
 #### Each test's guests
 
-Every node is at the least Kubehenge allows for what its test switches on. The management node has the module's default 4 GiB. A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). The guests of each add-on part together, per CNI, in MiB:
+Every node is at the least Kubehenge allows for what its test switches on. With GitOps the worker also holds the 208 MiB its Git server and test pods request. The management node has the module's default 4 GiB. A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). The guests of each add-on part together, per CNI, in MiB:
 
 | Test | Worker | Default CNI | Cilium | Calico |
 | --- | --- | --- | --- | --- |
 | `kubeadm-addons-a` | 3648 | 11840 | (default) | 12688 |
 | `kubeadm-addons-b` | 2368 | 10576 | (default) | 12000 |
-| `kubeadm-addons-c` | 2240 | 10432 | (default) | 11856 |
+| `kubeadm-addons-c` | 2448 | 10640 | (default) | 12064 |
 | `rke2-addons-a` | 4096 | 12288 | 12288 | 12288 |
 | `rke2-addons-b` | 4096 | 12288 | 12368 | 12288 |
 | `rke2-addons-c` | 4096 | 12288 | 12288 | 12288 |
 | `rke2-addons-d` | 4096 | 12288 | 12288 | 12288 |
 | `k3s-addons-a` | 3392 | 11584 | 11584 | 11760 |
-| `k3s-addons-b` | 3008 | 11200 | 11520 | 12168 |
+| `k3s-addons-b` | 3216 | 11408 | 11728 | 12376 |
 | `talos-addons-a` | 3648 | 11840 | 11840 | 11840 |
 | `talos-addons-b` | 2368 | 10560 | 10560 | 10560 |
-| `talos-addons-c` | 2240 | 10432 | 10432 | 10432 |
+| `talos-addons-c` | 2448 | 10640 | 10640 | 10640 |
 
-`kubeadm-addons-a` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176 and 11856 MiB. The guard's samples show what the management node uses in every run (below).
+`kubeadm-addons-a` and `k3s-addons-b` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176, 11864 and 11856 MiB. The guard's samples show what the management node uses in every run (below).
 
 These tests outgrow 12 GiB as well. Only the RKE2 ones read back from swap past the guard's line, 570 to 1220 MiB in a minute:
 

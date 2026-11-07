@@ -67,6 +67,12 @@ type deletionFixture struct {
 // its node's drain, beside its ProxmoxMachine with VM 101 and a control plane not yet deleted.
 func newDeletionFixture(t *testing.T, cloud Cloud, edit func(*clusterv1.Cluster)) *deletionFixture {
 	t.Helper()
+	return newDeletionFixtureWith(t, cloud, edit, nil)
+}
+
+// newDeletionFixtureWith is newDeletionFixture with editMachine applied to the ProxmoxMachine.
+func newDeletionFixtureWith(t *testing.T, cloud Cloud, edit func(*clusterv1.Cluster), editMachine func(*unstructured.Unstructured)) *deletionFixture {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, clusterv1.AddToScheme} {
 		if err := add(scheme); err != nil {
@@ -106,6 +112,9 @@ func newDeletionFixture(t *testing.T, cloud Cloud, edit func(*clusterv1.Cluster)
 	pm.SetFinalizers([]string{"proxmoxmachine.infrastructure.cluster.x-k8s.io"})
 	_ = unstructured.SetNestedField(pm.Object, int64(101), "spec", "virtualMachineID")
 	_ = unstructured.SetNestedField(pm.Object, "pve1", "status", "proxmoxNode")
+	if editMachine != nil {
+		editMachine(pm)
+	}
 	control := &unstructured.Unstructured{}
 	control.SetGroupVersionKind(controlGVK)
 	control.SetNamespace("team-a")
@@ -205,6 +214,38 @@ func TestDeletionSaysWhatItWaitsOn(t *testing.T) {
 	f.reconcile()
 	if got := f.drained(); len(got) != 0 {
 		t.Errorf("events %q on a second look", got)
+	}
+}
+
+// A VM that capmox cannot destroy shows what it says on the ProxmoxMachine, whole: the flag set on
+// the VM, or a VM of another name under its ID, and what to do about it.
+func TestDeletionQuotesWhyAVMIsNotDestroyed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, message string }{
+		{"protected", "VM 101 has its protection flag set, which stops Proxmox VE destroying it. Clear the flag with: qm set 101 --protection 0"},
+		{"another name", `VM 101 is named "db-old", not "web-md-0-a", and the machine has no provider ID, so it is not destroyed. If it is the machine's VM, rename it to "web-md-0-a".`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newDeletionFixtureWith(t, &fakeCloud{}, nil, func(pm *unstructured.Unstructured) {
+				pm.SetDeletionTimestamp(&metav1.Time{Time: deletedAt.Add(time.Minute)})
+				// Cluster API's summary of the provisioned condition, as capmox's Ready condition carries it.
+				_ = unstructured.SetNestedSlice(pm.Object, []any{map[string]any{
+					"type": clusterv1.ReadyCondition, "status": "False", "reason": "NotReady",
+					"message": "* VirtualMachineProvisioned: " + tc.message,
+				}}, "status", "conditions")
+			})
+			f.reconcile()
+			var got string
+			for _, w := range DeletionStatusOf(f.cluster()).Waiting {
+				if w.Kind == "ProxmoxMachine" {
+					got = w.Reason
+				}
+			}
+			if want := "* VirtualMachineProvisioned: " + tc.message; got != want {
+				t.Errorf("reason %q, want %q", got, want)
+			}
+		})
 	}
 }
 
