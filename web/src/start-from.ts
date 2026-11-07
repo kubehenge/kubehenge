@@ -80,6 +80,26 @@ function machineOf(v: unknown, fallback: Machine): Machine {
   };
 }
 
+type NetworkFields = Pick<
+  Form,
+  "bridge" | "vlan" | "mtu" | "queues" | "prefix" | "gateway" | "dnsServers" | "searchDomains" | "ntpServers"
+>;
+
+function networkFrom(v: unknown, base: Form): NetworkFields {
+  const network = record(v);
+  return {
+    bridge: text(network["bridge"]) ?? "",
+    vlan: quantity(network["vlan"])?.toString() ?? "",
+    mtu: quantity(network["mtu"])?.toString() ?? "",
+    queues: quantity(network["queues"])?.toString() ?? "",
+    prefix: quantity(network["prefix"]) ?? base.prefix,
+    gateway: text(network["gateway"]) ?? "",
+    dnsServers: (texts(network["dnsServers"]) ?? []).join(", "),
+    searchDomains: (texts(network["searchDomains"]) ?? []).join(", "),
+    ntpServers: (texts(network["ntp"]) ?? []).join(", "),
+  };
+}
+
 /** startDefault is the cluster a new one starts from unless another is chosen: the newest that works, else the newest. */
 export function startDefault(clusters: Cluster[]): Cluster | undefined {
   const starts = startable(clusters);
@@ -93,8 +113,6 @@ export function startDefault(clusters: Cluster[]): Cluster | undefined {
 export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace" | "className" | "version">): Form {
   const v = c.variables;
   const base = newForm();
-  const network = record(v["network"]);
-  const vlan = quantity(network["vlan"]);
   const lb = loadBalancerOf(v["loadBalancer"]);
   const autoscaling = c.workerPools.find((p) => p.autoscaling !== undefined)?.autoscaling;
   return {
@@ -111,15 +129,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     workerMax: autoscaling?.max ?? base.workerMax,
     controlPlaneTimeouts: entryOf(c.controlPlaneTimeouts ?? {}),
     workerTimeouts: entryOf(c.workerPools[0]?.timeouts ?? {}),
-    bridge: text(network["bridge"]) ?? "",
-    vlan: vlan === undefined ? "" : String(vlan),
-    mtu: quantity(network["mtu"])?.toString() ?? "",
-    queues: quantity(network["queues"])?.toString() ?? "",
-    prefix: quantity(network["prefix"]) ?? base.prefix,
-    gateway: text(network["gateway"]) ?? "",
-    dnsServers: (texts(network["dnsServers"]) ?? []).join(", "),
-    searchDomains: (texts(network["searchDomains"]) ?? []).join(", "),
-    ntpServers: (texts(network["ntp"]) ?? []).join(", "),
+    ...networkFrom(v["network"], base),
     loadBalancer: lb.implementation,
     loadBalancerMode: lb.mode,
     loadBalancerAsn: lb.asn,
