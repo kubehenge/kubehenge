@@ -6,20 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
-
-func storedCluster(t *testing.T, h *harness, namespace, name string) *clusterv1.Cluster {
-	t.Helper()
-	c := &clusterv1.Cluster{}
-	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: namespace, Name: name}, c); err != nil {
-		t.Fatal(err)
-	}
-	return c
-}
 
 func TestCreateCarriesTheTimeoutsItIsGiven(t *testing.T) {
 	t.Parallel()

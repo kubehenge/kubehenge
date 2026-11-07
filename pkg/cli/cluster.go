@@ -38,8 +38,8 @@ func newClusterCommand(conn *pve.Config) *cobra.Command {
 	o := &clusterOptions{token: conn.Token}
 	cmd := &cobra.Command{
 		Use:   "cluster",
-		Short: "List, create, scale and delete clusters through Kubehenge's interface",
-		Long: `List, create, scale and delete clusters through Kubehenge's interface.
+		Short: "List, create, scale, upgrade and delete clusters through Kubehenge's interface",
+		Long: `List, create, scale, upgrade and delete clusters through Kubehenge's interface.
 
 Every command calls the interface at --url as the user of the Proxmox VE API token in
 KUBEHENGE_PROXMOX_TOKEN (user@realm!name=secret). The token's privileges on each cluster's pool
@@ -133,7 +133,7 @@ the wizard's request is.`,
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
 	o.namespaceFlag(deleteCmd.Flags())
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, o.timeoutsCommand(), deleteCmd, o.machineCommand())
+	cmd.AddCommand(list, get, kubeconfig, create, scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd, o.machineCommand())
 	return cmd
 }
 

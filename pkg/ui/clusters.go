@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -38,6 +39,9 @@ const (
 	privKubeconfig = "Sys.Modify"
 	privConsole    = "VM.Console"
 	privPower      = "VM.PowerMgmt"
+	// privPoolAudit lets Proxmox VE list a pool's guests. Without it a cluster's VMs, nodes and
+	// console links do not show.
+	privPoolAudit = "Pool.Audit"
 )
 
 // createdBy records which Proxmox VE user created a cluster through the interface.
@@ -645,7 +649,10 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, r, err)
 		return
 	}
-	vms := s.clusterVMs(r, u, c, access.path)
+	vms, err := s.clusterVMs(r, u, access.path)
+	if err != nil && !errors.Is(err, pve.ErrForbidden) {
+		s.Log.ErrorContext(r.Context(), "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
+	}
 	console := access.held.Has(privConsole)
 	reboot := access.held.Has(privPower) && u.namespaces.has(c.Namespace)
 	v.Machines = []machineView{}
@@ -678,19 +685,16 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 // clusterVMs maps the names of the cluster's VMs, which the Proxmox VE provider names after their
 // machines' infrastructure, to the VMs, on the nodes they run on now. The machines show without
 // their nodes when Proxmox VE does not tell: they are the page's subject, the nodes an addition.
-func (s *Server) clusterVMs(r *http.Request, u user, c *clusterv1.Cluster, poolPath string) map[string]pve.Member {
+func (s *Server) clusterVMs(r *http.Request, u user, poolPath string) (map[string]pve.Member, error) {
 	members, err := s.Accounts.PoolMembers(r.Context(), u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
 	if err != nil {
-		if !errors.Is(err, pve.ErrForbidden) {
-			s.Log.ErrorContext(r.Context(), "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
-		}
-		return nil
+		return nil, fmt.Errorf("listing a cluster's VMs: %w", err)
 	}
 	vms := make(map[string]pve.Member, len(members))
 	for i := range members {
 		vms[members[i].Name] = members[i]
 	}
-	return vms
+	return vms, nil
 }
 
 // consoleURL is where Proxmox VE's web interface at base opens the VM's console, as its own
@@ -1122,13 +1126,39 @@ type changed struct {
 	access poolAccess
 }
 
-// prepareChange reads a change and applies it to the cluster in memory, or answers the request with
-// what is wrong with it.
-func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (*changed, bool) {
+// writeChange reads the request's change once. It then applies it to a fresh read of the cluster
+// and hands the result to write. A conflict of that write means a controller updated the cluster's
+// status, metadata or annotations meanwhile, so the whole preparation runs again from a new read,
+// every check included. Another user's change to the spec fails the generation check then, and the
+// request is answered as such. It tells whether write succeeded. Otherwise the request is answered.
+func (s *Server) writeChange(ctx context.Context, w http.ResponseWriter, r *http.Request, u user, write func(context.Context, *changed) error) (*changed, bool) {
 	var req changeRequest
 	if !readJSON(w, r, &req) {
 		return nil, false
 	}
+	var ch *changed
+	answered := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var ok bool
+		if ch, ok = s.prepareChange(w, r, u, &req); !ok {
+			answered = true
+			return nil
+		}
+		return write(ctx, ch)
+	})
+	switch {
+	case answered:
+		return nil, false
+	case err != nil:
+		s.kubeError(w, r, err)
+		return nil, false
+	}
+	return ch, true
+}
+
+// prepareChange applies a change to a fresh read of the cluster in memory, or answers the request
+// with what is wrong with it.
+func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, req *changeRequest) (*changed, bool) {
 	c, access, ok := s.cluster(w, r, u, privChange)
 	if !ok {
 		return nil, false
@@ -1148,7 +1178,7 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 		return nil, false
 	}
 	if msg == "" {
-		msg = applyTopology(c, &req)
+		msg = applyTopology(c, req)
 	}
 	if msg == "" {
 		msg = applyPools(c, req.Pools)
@@ -1163,7 +1193,7 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 	if !s.applyVariables(w, r, u, c, access, req.Variables) {
 		return nil, false
 	}
-	return &changed{req: req, before: before, c: c, access: access}, true
+	return &changed{req: *req, before: before, c: c, access: access}, true
 }
 
 // generationHeader carries the generation of the cluster a change was made against, in the
@@ -1197,23 +1227,20 @@ func unchangedSince(w http.ResponseWriter, r *http.Request, c *clusterv1.Cluster
 }
 
 func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
-	ch, ok := s.prepareChange(w, r, u)
+	ch, ok := s.writeChange(r.Context(), w, r, u, func(ctx context.Context, ch *changed) error {
+		changes, err := plannedOf(ctx, u, ch)
+		if err != nil {
+			return err
+		}
+		if len(changes) > 0 {
+			recordChange(ch.c, u.ticket.Username, s.now(), changes)
+		}
+		return u.kube.Update(ctx, ch.c)
+	})
 	if !ok {
 		return
 	}
 	c, access := ch.c, ch.access
-	changes, err := plannedOf(r.Context(), u, ch)
-	if err != nil {
-		s.kubeError(w, r, err)
-		return
-	}
-	if len(changes) > 0 {
-		recordChange(c, u.ticket.Username, s.now(), changes)
-	}
-	if err := u.kube.Update(r.Context(), c); err != nil {
-		s.kubeError(w, r, err)
-		return
-	}
 	s.Log.InfoContext(r.Context(), "changed cluster", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	writeJSON(w, http.StatusOK, s.view(c, access.path, access.held, u.namespaces))
 }

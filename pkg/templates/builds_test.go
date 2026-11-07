@@ -162,7 +162,7 @@ func TestANewVMIsTaggedOnceInThePool(t *testing.T) {
 		t.Fatalf("created %v; want one VM named %s in %s", created, build.Name, testPool)
 	}
 	// In image mode the template's own disk starts empty, and the family's image boots beside it.
-	if created[0]["scsi0"] != "local-lvm:12,discard=on,ssd=1" || created[0]["scsi1"] != "local-lvm:0,import-from=local:import/almalinux.qcow2,discard=on,ssd=1" ||
+	if created[0]["scsi0"] != "local-lvm:12,backup=0,discard=on,ssd=1" || created[0]["scsi1"] != "local-lvm:0,import-from=local:import/almalinux.qcow2,backup=0,discard=on,ssd=1" ||
 		created[0]["boot"] != "order=scsi1" || fmt.Sprint(created[0]["memory"]) != "4096" {
 		t.Errorf("created %v", created[0])
 	}

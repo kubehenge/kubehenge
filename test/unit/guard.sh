@@ -117,7 +117,15 @@ watcher=$!
 # would otherwise take its first sample after the swap-in below.
 sampled() {
     for _ in $(seq 100); do
-        if grep -q -F -- "$1" "${record}" 2> /dev/null; then return 0; fi
+        # Read in the shell: each poll would otherwise start a process.
+        if [ -r "${record}" ]; then
+            while IFS= read -r sampled_line || [ -n "${sampled_line}" ]; do
+                case ${sampled_line} in
+                    *"$1"*) return 0 ;;
+                    *) ;;
+                esac
+            done < "${record}"
+        fi
         sleep 0.2
     done
     printf 'FAIL: no sample holds %s\n' "$1"

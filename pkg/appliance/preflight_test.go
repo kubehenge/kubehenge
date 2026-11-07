@@ -183,6 +183,65 @@ func TestPreflightVNetMustReachEveryNodeWhereItCanBeRead(t *testing.T) {
 	}
 }
 
+func TestPreflightTemplateBuildPlace(t *testing.T) {
+	t.Parallel()
+	build := func(r TemplateRefresh) *Settings {
+		s := settings("pve1")
+		r.Enabled = true
+		s.TemplateRefresh = &r
+		return s
+	}
+	// pve2 is online but carries no storage and no bridge.
+	inv := healthy()
+	inv.Bridges["pve2"] = []pve.Bridge{{Bridge: "vmbr1", Node: "pve2"}}
+	f := build(TemplateRefresh{Node: "pve2"}).Preflight(inv, false)
+	mentions(t, f.Errors, "Storage local-lvm is not enabled on node pve2", "template build storage")
+	mentions(t, f.Errors, "Node pve2 has no bridge vmbr0", "template build bridge")
+
+	inv.Storages = append(inv.Storages, pve.Storage{Storage: "fast", Node: "pve2", Content: []string{"images"}, Active: true, Avail: 200 * gib})
+	f = build(TemplateRefresh{Node: "pve2", Storage: "fast", Bridge: "vmbr9"}).Preflight(inv, false)
+	mentions(t, f.Errors, "Node pve2 has no bridge vmbr9")
+	if len(f.Errors) != 1 {
+		t.Errorf("storage fast is on pve2: %v", f.Errors)
+	}
+
+	inv = healthy()
+	inv.Storages[0].Content = []string{"rootdir"}
+	inv.Bridges["pve1"] = []pve.Bridge{{Bridge: "vmbr1", Node: "pve1"}}
+	s := build(TemplateRefresh{Storage: "local-lvm", Bridge: "vmbr1"})
+	f = s.Preflight(inv, false)
+	mentions(t, f.Errors, "Storage local-lvm on node pve1 lacks the images content type")
+
+	inv = healthy()
+	inv.Nodes[1].Online = false
+	mentions(t, build(TemplateRefresh{Node: "pve2"}).Preflight(inv, false).Errors, "Node pve2 is offline", "template build node")
+	mentions(t, build(TemplateRefresh{Node: "pve9"}).Preflight(healthy(), false).Errors, "Node pve9 is not in the Proxmox VE cluster", "template build node")
+}
+
+func TestPreflightTemplateBuildDefaultsAndOff(t *testing.T) {
+	t.Parallel()
+	// Unset, the build takes the first management node, workload storage and workload bridge.
+	s := settings("pve1")
+	s.WorkloadDatastores, s.WorkloadBridges = []string{"fast", "local-lvm"}, []string{"vmbr7", "vmbr0"}
+	s.TemplateRefresh = &TemplateRefresh{Enabled: true}
+	f := s.Preflight(healthy(), false)
+	mentions(t, f.Errors, "Storage fast is not enabled on node pve1")
+	mentions(t, f.Errors, "Node pve1 has no bridge vmbr7")
+
+	s.TemplateRefresh = &TemplateRefresh{Enabled: false}
+	if f = s.Preflight(healthy(), false); len(f.Errors) != 0 {
+		t.Errorf("refresh off must not check the build place: %v", f.Errors)
+	}
+
+	// An inventory without storages, bridges or nodes leaves the checks out.
+	s.TemplateRefresh = &TemplateRefresh{Enabled: true, Node: "pve2"}
+	inv := healthy()
+	inv.Storages, inv.Bridges, inv.Nodes = nil, nil, nil
+	if f = s.Preflight(inv, false); len(f.Errors) != 0 {
+		t.Errorf("unreadable inventory: %v", f.Errors)
+	}
+}
+
 func TestPreflightNodeMemory(t *testing.T) {
 	t.Parallel()
 	s := settings("pve1")
