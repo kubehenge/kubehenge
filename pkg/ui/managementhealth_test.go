@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -70,6 +71,22 @@ func TestManagementHealthListsNodesAndControllers(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("health %+v, want %+v", got, want)
+	}
+}
+
+func TestManagementHealthShowsWhetherTheControllerReachesProxmoxVE(t *testing.T) {
+	t.Parallel()
+	failing := `{"ok":false,"error":"Get \"https://pve.internal:8006/api2/json/version\": dial tcp: lookup pve.internal: no such host","checked":"2026-01-02T12:00:00Z"}`
+	h := newHarness(t, &corev1.ConfigMap{
+		Namespace: "kubehenge-system", Name: "kubehenge-proxmox-reach",
+		Data: map[string]string{"reach": failing},
+	})
+	got := readHealth(t, h, "admin@pve", http.StatusOK)
+	if got.Proxmox == nil || got.Proxmox.OK || !strings.Contains(got.Proxmox.Error, "lookup pve.internal: no such host") {
+		t.Fatalf("health %+v, want the failed reach with its error", got.Proxmox)
+	}
+	if none := readHealth(t, newHarness(t), "admin@pve", http.StatusOK); none.Proxmox != nil {
+		t.Fatalf("no record yet, but health says %+v", none.Proxmox)
 	}
 }
 

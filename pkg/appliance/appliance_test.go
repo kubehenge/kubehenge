@@ -99,6 +99,8 @@ func TestNetworkValidated(t *testing.T) {
 		"mirror scheme":     {func(s *Settings) { s.RegistryMirrors = map[string][]string{"docker.io": {"mirror:5000"}} }, "Registry mirrors: mirror:5000"},
 		"mirror registry":   {func(s *Settings) { s.RegistryMirrors = map[string][]string{"a/b": {"https://m"}} }, `Registry mirrors: "a/b"`},
 		"nothing for usage": {func(s *Settings) { s.WorkloadBridges = nil }, "What clusters may use"},
+		"VNet no zone":      {func(s *Settings) { s.WorkloadBridges = []string{"/web"} }, `"/web" is no bridge, write a VNet as zone/vnet`},
+		"VNet two slashes":  {func(s *Settings) { s.Bridge = "evpn/web/x" }, "Bridge: choose one"},
 	} {
 		s := settings("pve1")
 		c.change(s)
@@ -574,6 +576,9 @@ func TestApplyFails(t *testing.T) {
 	if j.State != "failed" || !strings.Contains(j.Error, "tofu apply") || !strings.Contains(strings.Join(j.Log, "\n"), "node fail does not exist") {
 		t.Fatalf("job = %+v", j)
 	}
+	if !strings.HasSuffix(j.Error, ": Error: node fail does not exist") {
+		t.Errorf("the job's error = %q, want it to end on the diagnostic's summary and detail", j.Error)
+	}
 	if a.Ready() {
 		t.Fatal("ready after a failed apply")
 	}
@@ -604,7 +609,8 @@ func TestSwitchingHAOffLastsUntilARunGetsThrough(t *testing.T) {
 			t.Fatalf("job = %+v", j)
 		}
 	}
-	on, off, failing := settings("pve1"), settings("pve1"), settings("fail")
+	on, off, failing := settings("pve1"), settings("pve1"), settings("pve1")
+	failing.ControllerImage = "fail"
 	on.ProxmoxHA = true
 	if a.ReleasesHA(off) {
 		t.Fatal("releases HA that was never on")
@@ -881,6 +887,123 @@ func TestJSONMessageNamesTheResourceADiagnosticIsAbout(t *testing.T) {
 	}
 }
 
+func TestErrorDiagnosticKeepsOnlyErrors(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ line, want string }{{
+		line: `{"@level":"error","type":"diagnostic","diagnostic":{"summary":"Unable to create pool","detail":"pool already exists","address":"module.management.proxmox_virtual_environment_pool.workload"}}`,
+		want: "module.management.proxmox_virtual_environment_pool.workload: Unable to create pool: pool already exists",
+	}, {
+		line: `{"@level":"error","type":"diagnostic","diagnostic":{"summary":"Invalid value"}}`,
+		want: "Invalid value",
+	}, {
+		line: `{"@level":"warning","type":"diagnostic","diagnostic":{"summary":"Deprecated","detail":"use another"}}`,
+	}, {
+		line: `{"@level":"info","@message":"Creating...","type":"apply_start"}`,
+	}, {
+		line: "not json",
+	}} {
+		if got := errorDiagnostic(c.line); got != c.want {
+			t.Errorf("errorDiagnostic(%s) = %q, want %q", c.line, got, c.want)
+		}
+	}
+}
+
+func TestFailedRunCarriesEveryErrorDiagnostic(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	if err := a.Apply(settings("twofail"), "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	j := waitFor(t, a)
+	for _, want := range []string{"pool kubehenge exists", "storage ceph lacks import"} {
+		if !strings.Contains(j.Error, want) {
+			t.Errorf("the job's error %q lacks %q", j.Error, want)
+		}
+	}
+}
+
+func TestInterruptedApplyIsGivenTimeToWriteItsState(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no SIGINT for another process")
+	}
+	a, _ := newAppliance(t)
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.workdir(), "terraform.tfvars.json"), []byte(`{"settings":{"nodes":["interrupt"]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- a.tofu(ctx, &Job{}, nil, jsonMessage, "apply", "-auto-approve") }()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(a.Dir, "applying")); err == nil {
+			break
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		t.Logf("tofu ended: %v", err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("tofu did not end after its context did")
+	}
+	if _, err := os.Stat(filepath.Join(a.Dir, "state-flushed")); err != nil {
+		t.Errorf("tofu was killed before it wrote its state: %v", err)
+	}
+}
+
+func TestTimeServersValidated(t *testing.T) {
+	t.Parallel()
+	for server, bad := range map[string]bool{
+		"pool.ntp.org": false, "ntp1.example.org.": false, "192.0.2.5": false, "2001:db8::1": false,
+		"http://ntp.example.org": true, "ntp example": true, "127.0.0.1": true, "169.254.1.1": true,
+		"-bad.example.org": true, "ntp..example.org": true, "ntp.example.org/x": true, "": true,
+	} {
+		s := settings("pve1")
+		s.TimeServers = []string{server}
+		err := s.Validate()
+		if bad != (err != nil && strings.Contains(err.Error(), "Time servers:")) {
+			t.Errorf("time server %q: error %v, want refused %v", server, err, bad)
+		}
+	}
+	s := settings("pve1")
+	s.TimeServers = []string{"pool.ntp.org", "pool.ntp.org"}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "Time servers: pool.ntp.org is listed twice") {
+		t.Errorf("a server twice: %v", err)
+	}
+}
+
+func TestTimeServersReachTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	s := settings("pve1")
+	s.TimeServers = []string{"ntp.example.org"}
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.writeConfig(s); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json"))
+	if err != nil || !strings.Contains(string(raw), `"timeServers": [`+"\n      \"ntp.example.org\"") {
+		t.Fatalf("variables: %s, %v", raw, err)
+	}
+	main, err := os.ReadFile(filepath.Join(a.workdir(), "main.tf"))
+	if err != nil || !strings.Contains(string(main), "time_servers           = var.settings.timeServers") {
+		t.Fatalf("root module: %s, %v", main, err)
+	}
+	s.TimeServers = nil
+	if err = a.writeConfig(s); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ = os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); !strings.Contains(string(raw), `"timeServers": []`) {
+		t.Errorf("no servers must reach the module as an empty list, not null: %s", raw)
+	}
+}
+
 func TestFixedOnceCreated(t *testing.T) {
 	t.Parallel()
 	was := settings("pve1")
@@ -894,6 +1017,8 @@ func TestFixedOnceCreated(t *testing.T) {
 		"gateway":         {func(s *Settings) { s.Gateway = "10.0.0.254" }, "Gateway: stays 10.0.0.1"},
 		"VM disks":        {func(s *Settings) { s.VMDatastore = "ceph" }, "VM disks: stays local-lvm"},
 		"pod ranges":      {func(s *Settings) { s.PodSubnets = []string{"10.50.0.0/16"} }, "Pod ranges: stay 10.244.0.0/16"},
+		"nodes moved":     {func(s *Settings) { s.Nodes = []string{"pve2"} }, "Proxmox VE nodes: stay pve1 once the management cluster exists, or its VMs would migrate"},
+		"node added":      {func(s *Settings) { s.Nodes = []string{"pve1", "pve2"} }, "Proxmox VE nodes: stay pve1"},
 	} {
 		s := settings("pve1")
 		c.change(s)
@@ -937,7 +1062,9 @@ func TestOneApplyAtATime(t *testing.T) {
 	t.Parallel()
 	a, ready := newAppliance(t)
 	done := func(_ context.Context, k []byte) error { ready <- k; return nil }
-	if err := a.Apply(settings("held"), "correct horse battery staple", ticket(), done); err != nil {
+	held := settings("pve1")
+	held.ControllerImage = "held"
+	if err := a.Apply(held, "correct horse battery staple", ticket(), done); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Apply(settings("pve1"), "correct horse battery staple", ticket(), done); !errors.Is(err, ErrBusy) {

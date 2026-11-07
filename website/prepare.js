@@ -1,5 +1,6 @@
 // Copies the documentation and the logo into the site, so docs/ stays plain Markdown that reads
 // the same on GitHub, and nothing outside docs/ can end up on the site.
+import { execFileSync } from "node:child_process";
 import { copyFileSync, cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,11 +39,25 @@ function description(markdown) {
   return kept.trim();
 }
 
+// The unreleased lines live in docs/changes/, a file per pull request. The site shows them under
+// [Unreleased], in the order a release folds them in, which the folding script alone decides.
+function withUnreleased(markdown) {
+  const lines = execFileSync("sh", [join(site, "..", "scripts", "changelog.sh"), "--unreleased"], {
+    encoding: "utf8",
+  }).trim();
+  const heading = "## [Unreleased]\n";
+  if (!markdown.includes(heading)) {
+    throw new Error("docs/changelog.md has no '## [Unreleased]' heading");
+  }
+  return lines === "" ? markdown : markdown.replace(heading, () => `${heading}\n${lines}\n`);
+}
+
 rmSync(pages, { recursive: true, force: true });
 mkdirSync(pages);
 for (const name of readdirSync(docs)) {
   if (name.endsWith(".md")) {
-    const markdown = readFileSync(join(docs, name), "utf8");
+    const source = readFileSync(join(docs, name), "utf8");
+    const markdown = name === "changelog.md" ? withUnreleased(source) : source;
     const said = description(markdown);
     // JSON's quoting is valid YAML, whatever the sentence holds.
     const front = said === undefined ? "" : `---\ndescription: ${JSON.stringify(said)}\n---\n\n`;

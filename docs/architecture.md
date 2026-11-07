@@ -827,6 +827,8 @@ It is where Kubehenge starts and what looks after it:
 
 ### Identities and health
 
+- **Reach of the Proxmox VE API.** The management VMs resolve the API's address with the setup's DNS servers, which may know less than the node the installer ran on. Every minute the controller asks the API's `/version` from its own pod and records the outcome in the ConfigMap `kubehenge-proxmox-reach`. The management cluster's health card reads it and shows the error when the API does not answer.
+
 - **Identities inside the clusters.** Whatever the interface or the cluster autoscaler reads or starts inside a workload cluster is done as one of Kubehenge's identities.
   - Each identity is a ServiceAccount `kubehenge-<identity>` with a role for one job and nothing else. What serves one purpose cannot do another's.
   - The workload cluster's audit log tells them apart. None may read a Secret or exec.

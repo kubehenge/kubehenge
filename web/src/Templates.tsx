@@ -1,7 +1,7 @@
 import { useEffect, useState, type JSX } from "react";
 
 import { api, bridgesOf } from "./api";
-import { isVLAN, list } from "./network";
+import { bridgeLabel, isVLAN, list } from "./network";
 import { choosable, cpuNote, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSLabel } from "./node-os";
 import { loadingReleases, offeredReleases, releaseToMake, talosExample, talosRelease, useTalosReleases } from "./Talos";
 import type {
@@ -469,6 +469,7 @@ function BuildDialog({
     .toSorted((a, b) => Number(b.shared) - Number(a.shared))
     .map((s) => s.storage);
   const bridgeNames = bridges.map((b) => b.bridge);
+  const bridgeLabels = Object.fromEntries(bridges.map((b) => [b.bridge, bridgeLabel(b)]));
   const talos = entered.distribution === "talos";
   const releases = useTalosReleases(talos);
   // A lone choice is taken until the user picks. The cloud-init storage is optional, so stays the
@@ -609,7 +610,15 @@ function BuildDialog({
         hint={talos ? undefined : "Needs to reach the package repositories"}
         error={shown("bridge")}
       >
-        {(id) => <Choice id={id} value={form.bridge} options={bridgeNames} onChoose={(v) => set("bridge", v)} />}
+        {(id) => (
+          <Choice
+            id={id}
+            value={form.bridge}
+            options={bridgeNames}
+            labels={bridgeLabels}
+            onChoose={(v) => set("bridge", v)}
+          />
+        )}
       </Field>
       {!talos && (
         <Field label="VLAN tag" error={shown("vlan")}>
