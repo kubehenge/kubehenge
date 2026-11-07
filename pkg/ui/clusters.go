@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -1092,13 +1093,39 @@ type changed struct {
 	access poolAccess
 }
 
-// prepareChange reads a change and applies it to the cluster in memory, or answers the request with
-// what is wrong with it.
-func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (*changed, bool) {
+// writeChange reads the request's change once. It then applies it to a fresh read of the cluster
+// and hands the result to write. A conflict of that write means a controller updated the cluster's
+// status, metadata or annotations meanwhile, so the whole preparation runs again from a new read,
+// every check included. Another user's change to the spec fails the generation check then, and the
+// request is answered as such. It tells whether write succeeded. Otherwise the request is answered.
+func (s *Server) writeChange(ctx context.Context, w http.ResponseWriter, r *http.Request, u user, write func(context.Context, *changed) error) (*changed, bool) {
 	var req changeRequest
 	if !readJSON(w, r, &req) {
 		return nil, false
 	}
+	var ch *changed
+	answered := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var ok bool
+		if ch, ok = s.prepareChange(w, r, u, &req); !ok {
+			answered = true
+			return nil
+		}
+		return write(ctx, ch)
+	})
+	switch {
+	case answered:
+		return nil, false
+	case err != nil:
+		s.kubeError(w, r, err)
+		return nil, false
+	}
+	return ch, true
+}
+
+// prepareChange applies a change to a fresh read of the cluster in memory, or answers the request
+// with what is wrong with it.
+func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, req *changeRequest) (*changed, bool) {
 	c, access, ok := s.cluster(w, r, u, privChange)
 	if !ok {
 		return nil, false
@@ -1118,7 +1145,7 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 		return nil, false
 	}
 	if msg == "" {
-		msg = applyTopology(c, &req)
+		msg = applyTopology(c, req)
 	}
 	if msg == "" {
 		msg = applyPools(c, req.Pools)
@@ -1130,7 +1157,7 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user) (
 	if !s.applyVariables(w, r, u, c, access, req.Variables) {
 		return nil, false
 	}
-	return &changed{req: req, before: before, c: c, access: access}, true
+	return &changed{req: *req, before: before, c: c, access: access}, true
 }
 
 // generationHeader carries the generation of the cluster a change was made against, in the
@@ -1164,23 +1191,20 @@ func unchangedSince(w http.ResponseWriter, r *http.Request, c *clusterv1.Cluster
 }
 
 func (s *Server) changeCluster(w http.ResponseWriter, r *http.Request, u user) {
-	ch, ok := s.prepareChange(w, r, u)
+	ch, ok := s.writeChange(r.Context(), w, r, u, func(ctx context.Context, ch *changed) error {
+		changes, err := plannedOf(ctx, u, ch)
+		if err != nil {
+			return err
+		}
+		if len(changes) > 0 {
+			recordChange(ch.c, u.ticket.Username, s.now(), changes)
+		}
+		return u.kube.Update(ctx, ch.c)
+	})
 	if !ok {
 		return
 	}
 	c, access := ch.c, ch.access
-	changes, err := plannedOf(r.Context(), u, ch)
-	if err != nil {
-		s.kubeError(w, r, err)
-		return
-	}
-	if len(changes) > 0 {
-		recordChange(c, u.ticket.Username, s.now(), changes)
-	}
-	if err := u.kube.Update(r.Context(), c); err != nil {
-		s.kubeError(w, r, err)
-		return
-	}
 	s.Log.InfoContext(r.Context(), "changed cluster", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	writeJSON(w, http.StatusOK, s.view(c, access.path, access.held, u.namespaces))
 }
