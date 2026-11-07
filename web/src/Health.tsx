@@ -45,8 +45,16 @@ const millicoresPerCore = 1000;
 
 type State = "ok" | "progress" | "warning" | "error" | "idle";
 
-const severityState: Record<Severity, State> = { error: "error", warning: "warning", progress: "progress" };
-const severityText: Record<Severity, string> = { error: "Error", warning: "Warning", progress: "In progress" };
+const severityState: Record<Severity, State> = {
+  error: "error",
+  warning: "warning",
+  progress: "progress",
+};
+const severityText: Record<Severity, string> = {
+  error: "Error",
+  warning: "Warning",
+  progress: "In progress",
+};
 const severityRank: Severity[] = ["error", "warning", "progress"];
 
 /** The id of the part of the page a section's details are in, which the tiles and the list link to. */
@@ -162,7 +170,12 @@ function controlPlaneTile(h: ClusterHealth): Tile {
   const etcd = etcdNote(h);
   // Unread, its nodes are only machines whose readiness nobody knows, not nodes known to be down.
   if (nodes.length === 0 || filled(h.workload)) {
-    return { section: "nodes", label: "Control plane", ...notRead, detail: etcd?.detail };
+    return {
+      section: "nodes",
+      label: "Control plane",
+      ...notRead,
+      detail: etcd?.detail,
+    };
   }
   const ready = nodes.filter((n) => n.ready).length;
   const state = etcd?.healthy === false ? "error" : readyState(ready, nodes.length);
@@ -210,7 +223,12 @@ function pressureTile(h: ClusterHealth): Tile {
   }
   const pressed = joined.filter((n) => (n.pressure ?? []).length > 0 || n.unschedulable === true);
   if (pressed.length === 0) {
-    return { section: "nodes", label: "Node pressure", value: "None", state: "ok" };
+    return {
+      section: "nodes",
+      label: "Node pressure",
+      value: "None",
+      state: "ok",
+    };
   }
   return {
     section: "nodes",
@@ -256,7 +274,12 @@ function healthChecksTile(h: ClusterHealth): Tile {
     return { section: "cluster-api", label: "Health checks", ...notRead };
   }
   if (checks.length === 0) {
-    return { section: "cluster-api", label: "Health checks", value: "None", state: "ok" };
+    return {
+      section: "cluster-api",
+      label: "Health checks",
+      value: "None",
+      state: "ok",
+    };
   }
   let expected = 0;
   let healthy = 0;
@@ -270,7 +293,12 @@ function healthChecksTile(h: ClusterHealth): Tile {
   } else if (checks.some((x) => (x.remediating ?? []).length > 0)) {
     state = "progress";
   }
-  return { section: "cluster-api", label: "Health checks", value: `${healthy} of ${expected} healthy`, state };
+  return {
+    section: "cluster-api",
+    label: "Health checks",
+    value: `${healthy} of ${expected} healthy`,
+    state,
+  };
 }
 
 function alertsTile(alerts: HealthSection<FiringAlert>): Tile {
@@ -437,7 +465,7 @@ function CPUCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefined }
       {vm !== undefined && vm.status === "running" && (
         <div className="use">
           <Sparkline load={vm.load ?? []} />
-          <span>
+          <span className="use-figure">
             {share(vm.cpu, 1)} of {vm.cores}
           </span>
         </div>
@@ -457,7 +485,7 @@ function MemoryCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefine
       {vm !== undefined && vm.status === "running" && vm.maxMemory > 0 && (
         <div className="use">
           <meter className="bar" min={0} max={vm.maxMemory} value={vm.memory} aria-label={`${n.name}'s memory use`} />
-          <span>
+          <span className="use-figure">
             {bytes(vm.memory)} of {bytes(vm.maxMemory)}
           </span>
         </div>
@@ -485,7 +513,10 @@ function nodeStatus(n: HealthNode, inside: boolean): { state: State; text: strin
     if (n.down !== true) {
       return { state: "progress", text: "Not ready" };
     }
-    return { state: "error", text: n.silent === true ? "Not reporting" : "Not ready" };
+    return {
+      state: "error",
+      text: n.silent === true ? "Not reporting" : "Not ready",
+    };
   }
   if ((n.pressure ?? []).length > 0 || n.unschedulable === true) {
     return { state: "warning", text: "Ready" };
@@ -501,13 +532,9 @@ const pressureText: Record<string, string> = {
   NetworkUnavailable: "No network",
 };
 
-// nodeNotes lists what keeps work off a node: its pressures, a cordon and its taints.
+// nodeNotes lists what keeps work off a node: its pressures and a cordon.
 function nodeNotes(n: HealthNode): string[] {
-  return [
-    ...(n.pressure ?? []).map((p) => pressureText[p] ?? p),
-    ...(n.unschedulable === true ? ["Cordoned"] : []),
-    ...(n.taints ?? []).map((t) => `Taint ${t}`),
-  ];
+  return [...(n.pressure ?? []).map((p) => pressureText[p] ?? p), ...(n.unschedulable === true ? ["Cordoned"] : [])];
 }
 
 function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JSX.Element {
@@ -520,6 +547,15 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
         <div className="hint">
           {n.role === "control-plane" ? "Control plane" : `Worker${filled(n.pool) ? `, pool ${n.pool}` : ""}`}
         </div>
+        {(n.taints ?? []).length > 0 && (
+          <ul className="node-tags broken" aria-label={`${n.name} taints`}>
+            {(n.taints ?? []).map((t) => (
+              <li key={t} className="taint">
+                {t}
+              </li>
+            ))}
+          </ul>
+        )}
       </td>
       <td>
         <Status state={s.state} text={s.text} />
@@ -532,9 +568,9 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
       </td>
       <CPUCell node={n} vm={vm} />
       <MemoryCell node={n} vm={vm} />
-      <td>{n.joined ? n.pods : ""}</td>
-      <td>{n.kubelet ?? ""}</td>
-      <td>{vm !== undefined && vm.status === "running" ? uptime(vm.uptime) : (vm?.status ?? "")}</td>
+      <td className="nowrap">{n.joined ? n.pods : ""}</td>
+      <td className="nowrap">{n.kubelet ?? ""}</td>
+      <td className="nowrap">{vm !== undefined && vm.status === "running" ? uptime(vm.uptime) : (vm?.status ?? "")}</td>
     </tr>
   );
 }
@@ -672,7 +708,10 @@ function addonStatus(r: AddonRelease): { state: State; text: string } {
   if (r.status === "failed") {
     return { state: "error", text: "Failed" };
   }
-  return { state: "progress", text: filled(r.status) ? sentence(r.status).replace(/\.$/u, "") : "Installing" };
+  return {
+    state: "progress",
+    text: filled(r.status) ? sentence(r.status).replace(/\.$/u, "") : "Installing",
+  };
 }
 
 function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
@@ -831,7 +870,10 @@ function checkStatus(x: HealthCheck): { state: State; text: string } {
   if ((x.remediating ?? []).length > 0) {
     return { state: "progress", text: "Replacing machines" };
   }
-  return { state: x.healthy === x.expected ? "ok" : "warning", text: `${x.healthy} of ${x.expected} healthy` };
+  return {
+    state: x.healthy === x.expected ? "ok" : "warning",
+    text: `${x.healthy} of ${x.expected} healthy`,
+  };
 }
 
 function HealthChecks({ checks }: { checks: HealthSection<HealthCheck> }): JSX.Element {
@@ -1075,7 +1117,10 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
       </div>
     );
   }
-  const actions: PodActions = { logs: h.logs ? setLogsOf : undefined, headlamp };
+  const actions: PodActions = {
+    logs: h.logs ? setLogsOf : undefined,
+    headlamp,
+  };
   return (
     <>
       <div className="box">

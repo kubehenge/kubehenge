@@ -3000,11 +3000,16 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
   white-space: nowrap;
 }
 
-/* A VM's use beside its figure: a line for the last hour's CPU, a bar for memory. */
+/* A VM's use beside its figure: a line for the last hour's CPU, a bar for memory. The figure drops
+   under the line or bar before its column outgrows the table. */
 .use {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 2px 8px;
   align-items: center;
+}
+
+.use-figure {
   white-space: nowrap;
 }
 
@@ -3088,22 +3093,43 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
   color: var(--dim);
 }
 
-@media (width <= 600px) {
+.node-field {
+  min-inline-size: 0;
+}
+
+.node-field-name {
+  display: none;
+}
+
+/* The rows follow the width of their dialog, not the window's. Where the fields no longer fit side
+   by side, each takes the full width under its name and Remove follows, aligned to the row's start. */
+.node-rows {
+  container-type: inline-size;
+}
+
+@container (inline-size < 32rem) {
   .node-row,
   .node-row.taint-row {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  .node-head {
+    display: none;
+  }
+
+  .node-field-name {
+    display: block;
+    margin-block-end: 2px;
+    font-size: 12.5px;
+    color: var(--dim);
   }
 
   .node-row.bare > button {
-    grid-column: 2;
-  }
-
-  .node-head > :nth-child(n + 3) {
-    display: none;
+    justify-self: start;
   }
 }
 
-/* A pool's labels and taints as small tags that stay whole, so a narrow cell widens the table. */
 .node-tags {
   display: flex;
   flex-wrap: wrap;
@@ -3138,4 +3164,11 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
 
 .node-tags .taint {
   border-color: var(--warning);
+}
+
+/* A node's taints in the health table: a long tag breaks inside itself instead of widening its
+   column past the table. */
+.node-tags.broken li {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
