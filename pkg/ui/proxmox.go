@@ -65,7 +65,8 @@ func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	views := make([]storageView, 0, len(storages))
-	for _, st := range storages {
+	for i := range storages {
+		st := storages[i]
 		privs := asked[slices.Index(paths, storagePath(st.Storage))]
 		usable := privs.Has(privStorage) && slices.Contains(st.Content, "images")
 		views = append(views, storageView{Storage: st, Usable: usable, Allocatable: usable && privs.Has(privDatastoreAllocate)})

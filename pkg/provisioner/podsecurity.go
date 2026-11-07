@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -26,7 +27,12 @@ const (
 	// kyvernoOff is the Kyverno level that leaves Kyverno out of the cluster.
 	kyvernoOff = "off"
 
+	// matchLabelsKey is a label selector's key in the objects and values written as maps.
+	matchLabelsKey = "matchLabels"
+
 	kyvernoAdmissionReplicas = 2
+	// kyvernoWorkerPreference is the highest weight a preferred node affinity takes.
+	kyvernoWorkerPreference = 100
 )
 
 // PodSecurityExempt are the namespaces whose pods neither Pod Security Admission nor Kyverno holds
@@ -117,8 +123,14 @@ func kyvernoPoliciesProxy(cluster *clusterv1.Cluster) string {
 // disruption budget. Its leader shuts down when it cannot renew its lease, and with the policies
 // failing closed a lone replica would refuse every pod until it is back. The other goes on
 // answering. A third would not fit the least worker beside every other add-on.
+//
+// The two must stand on different nodes, or a drain of the node holding both waits on the budget
+// for ever: the first one evicted has nowhere to go, and the second may not leave. With one worker
+// the second therefore runs on a control plane, as the other cluster-critical add-ons may. Where
+// workers are enough, they are preferred.
 func kyvernoValues() map[string]any {
 	lease := func() map[string]any { return map[string]any{"leaderElectionRetryPeriod": leaseRetry} }
+	admission := map[string]any{"app.kubernetes.io/component": "admission-controller"}
 	return map[string]any{
 		"features": map[string]any{
 			"policyExceptions": map[string]any{"enabled": true, "namespace": kyvernoAddon},
@@ -126,6 +138,19 @@ func kyvernoValues() map[string]any {
 		"admissionController": map[string]any{
 			"replicas":  kyvernoAdmissionReplicas,
 			"container": map[string]any{extraArgsKey: lease()},
+			"tolerations": []any{map[string]any{
+				"key": controlPlaneTaint.Key, "operator": string(corev1.TolerationOpExists), "effect": string(controlPlaneTaint.Effect),
+			}},
+			"topologySpreadConstraints": []any{map[string]any{
+				"maxSkew": 1, "topologyKey": corev1.LabelHostname,
+				"whenUnsatisfiable": string(corev1.DoNotSchedule), "labelSelector": map[string]any{matchLabelsKey: admission},
+			}},
+			"nodeAffinity": map[string]any{"preferredDuringSchedulingIgnoredDuringExecution": []any{map[string]any{
+				"weight": kyvernoWorkerPreference,
+				"preference": map[string]any{"matchExpressions": []any{map[string]any{
+					"key": controlPlaneRole, "operator": string(corev1.NodeSelectorOpDoesNotExist),
+				}}},
+			}}},
 		},
 		"backgroundController": map[string]any{extraArgsKey: lease()},
 		"cleanupController":    map[string]any{extraArgsKey: lease()},

@@ -15,7 +15,8 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
   if (nodes.length > 0 && nodes.every((n) => !n.ready)) {
     return { state: "error", text: "Down" };
   }
-  const short = nodes.some((n) => !n.ready) || (h.controllers ?? []).some((c) => c.ready < c.wanted);
+  const short =
+    nodes.some((n) => !n.ready) || (h.controllers ?? []).some((c) => c.ready < c.wanted) || h.proxmox?.ok === false;
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
 
@@ -57,7 +58,20 @@ export function ManagementHealthCard(): JSX.Element {
             <dd className="mono">
               {controllers.length - controllersShort.length} of {controllers.length} ready
             </dd>
+            {h.proxmox !== undefined && (
+              <>
+                <dt>Proxmox VE API</dt>
+                <dd>
+                  <Status state={h.proxmox.ok ? "ok" : "error"} text={h.proxmox.ok ? "Reachable" : "Not reachable"} />
+                </dd>
+              </>
+            )}
           </dl>
+          {h.proxmox?.ok === false && h.proxmox.error !== undefined && (
+            <Detail>
+              <p className="mono">{h.proxmox.error}</p>
+            </Detail>
+          )}
           {(nodesDown.length > 0 || controllersShort.length > 0) && (
             <ul className="health-short">
               {nodesDown.map((n) => (

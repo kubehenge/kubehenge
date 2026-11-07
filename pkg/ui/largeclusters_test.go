@@ -25,7 +25,7 @@ func largeCluster(t *testing.T, grants, viaPool map[string][]string) (*harness, 
 		h.accounts.bridgeList = append(h.accounts.bridgeList, pve.Bridge{Bridge: fmt.Sprintf("v%02d", i), Zone: "z", ZoneType: "simple"})
 	}
 	for i := range largeStorages {
-		h.accounts.storageList = append(h.accounts.storageList, pve.Storage{Storage: fmt.Sprintf("s%02d", i), Node: "pve1", Content: []string{"images"}})
+		h.accounts.storages = append(h.accounts.storages, pve.Storage{Storage: fmt.Sprintf("s%02d", i), Node: "pve1", Content: []string{"images"}})
 	}
 	h.accounts.passwords["big@pve"] = "secret"
 	h.accounts.grants["big@pve"] = grants

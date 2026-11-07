@@ -478,6 +478,7 @@ variables:
 packages:
   - almalinux-repos
   - cloud-utils-growpart
+  - kernel-modules-extra
 include:
   - minimal/manifest.yaml
   - standard/generic-growfs.yaml
