@@ -34,6 +34,8 @@ Every node OS holds only what a node needs:
 
 Nothing on a node updates itself. A new build of its template brings the updates ([below](#the-weekly-build)).
 
+Clones take three settings from the template. They start with their Proxmox VE host (`onboot`). Proxmox VE backup jobs skip their disks (`backup=0`), and the guest agent never freezes them for one. A node holds nothing to keep, and a restored node would bring back a stale etcd member. Back a cluster up with [etcd snapshots](clusters.md#etcd-snapshots) and the backups add-on.
+
 ### SELinux
 
 SELinux enforces on every node, with the targeted policy, never permissive. containerd runs with its SELinux support on, so pods run confined as `container_t`. RKE2 and k3s are started with `selinux: true` and their own policy (`rke2-selinux`, `k3s-selinux`).
