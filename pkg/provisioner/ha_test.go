@@ -754,6 +754,23 @@ func TestHAWithoutItsTokenTakesBackTheHooks(t *testing.T) {
 	}
 }
 
+// TestHAKeepsOffNodesBelowTheNodeOSsCPULevel has HA keep a Rocky Linux 10 cluster, which needs
+// x86-64-v3, off the node whose CPU reaches only v2.
+func TestHAKeepsOffNodesBelowTheNodeOSsCPULevel(t *testing.T) {
+	t.Parallel()
+	c := cluster(variableOf("storage", `"ceph"`), nodeOSVariable(t, "rocky", "10"))
+	f := newHAFixture(t, c, "pve1", "pve2", "pve3")
+	f.r.Nodes = &fakeNodes{online: []string{"pve1", "pve2", "pve3"}, levels: map[string]int{"pve1": 2}}
+	f.reconcile()
+	nodes := haRuleID(webPool, nodesRule)
+	f.pve.mu.Lock()
+	kept := slices.Clone(f.pve.rules[nodes].Nodes)
+	f.pve.mu.Unlock()
+	if !slices.Equal(kept, []string{"pve2", "pve3"}) {
+		t.Errorf("kept to %v, want pve2 and pve3", kept)
+	}
+}
+
 func TestHANodes(t *testing.T) {
 	t.Parallel()
 	known := []string{"pve1", "pve2", "pve3"}
@@ -761,15 +778,18 @@ func TestHANodes(t *testing.T) {
 		name    string
 		chosen  []string
 		storage string
+		below   []string
 		want    []string
 	}{
-		{"every node", nil, "", nil},
-		{"the chosen", []string{"pve3", "pve1"}, "", []string{"pve1", "pve3"}},
-		{"those with the storage", nil, "pve2,pve3,pve7", []string{"pve2", "pve3"}},
-		{"both", []string{"pve1", "pve2"}, "pve2,pve3", []string{"pve2"}},
-		{"none known", []string{"pve8"}, "", nil},
+		{"every node", nil, "", nil, nil},
+		{"the chosen", []string{"pve3", "pve1"}, "", nil, []string{"pve1", "pve3"}},
+		{"those with the storage", nil, "pve2,pve3,pve7", nil, []string{"pve2", "pve3"}},
+		{"both", []string{"pve1", "pve2"}, "pve2,pve3", nil, []string{"pve2"}},
+		{"none known", []string{"pve8"}, "", nil, nil},
+		{"a CPU too old", nil, "", []string{"pve2"}, []string{"pve1", "pve3"}},
+		{"a CPU too old among the chosen", []string{"pve1", "pve2"}, "", []string{"pve1"}, []string{"pve2"}},
 	} {
-		if got := haNodes(known, tc.chosen, tc.storage); !slices.Equal(got, tc.want) {
+		if got := haNodes(known, tc.chosen, tc.storage, tc.below); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}

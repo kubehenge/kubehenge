@@ -41,6 +41,10 @@ const (
 	interfaceRequestTimeout = 5 * time.Minute
 	// shutdownTimeout is how long requests under way may take to finish on shutdown.
 	shutdownTimeout = 10 * time.Second
+	// jobStopTimeout is how long an interrupted run has to write its state on shutdown. It stays
+	// under kubehenge.service's TimeoutStopSec, which stays under the 180 seconds Proxmox VE gives
+	// a container to shut down for a migration.
+	jobStopTimeout = 150 * time.Second
 
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 2 * time.Minute
@@ -346,6 +350,14 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	wg.Go(func() { s.Run(ctx) })
 	if o.a.Dir != "" {
 		wg.Go(func() { o.a.RenewInterfaceToken(ctx) })
+		wg.Go(func() {
+			<-ctx.Done()
+			stopping, done := context.WithTimeout(context.WithoutCancel(ctx), jobStopTimeout)
+			defer done()
+			if err := o.a.Stop(stopping); err != nil {
+				s.Log.Error("stopping with a run under way", "error", err)
+			}
+		})
 	}
 	servers := []*http.Server{newServer(o.listen, s.Handler(), interfaceRequestTimeout)}
 	if s.Headlamp != nil {
