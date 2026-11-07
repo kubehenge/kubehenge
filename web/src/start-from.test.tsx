@@ -71,6 +71,7 @@ const chosen: Form = {
   prefix: 16,
   gateway: "10.1.0.1",
   dnsServers: "10.1.0.53, 1.1.1.1",
+  ntpServers: "ntp.example.org, 192.0.2.5",
   loadBalancer: "kube-vip",
   loadBalancerAddresses: "10.1.0.40-10.1.0.49",
   storage: "tank",

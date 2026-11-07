@@ -358,6 +358,39 @@ describe("health page", () => {
     );
   });
 
+  it("shows a Talos node whose clock is not synced and a Proxmox VE node whose clock is off", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "Worker web-md-0-a: clock not synced",
+              message: "The node reaches no time server.",
+              machine: "web-md-0-a",
+            },
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "Proxmox VE node pve2 clock is off by 1m35s",
+              message: "The node's clock is ahead of this machine's.",
+            },
+          ],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    await expect(screen.findByRole("link", { name: "Worker web-md-0-a: clock not synced" })).resolves.toHaveAttribute(
+      "href",
+      "/clusters/default/web/machines?machine=web-md-0-a",
+    );
+    expect(screen.getByText("Proxmox VE node pve2 clock is off by 1m35s")).toBeInTheDocument();
+    expect(screen.getByText("The node's clock is ahead of this machine's.")).toBeInTheDocument();
+  });
+
   it("shows an item of an unknown section without a link", async () => {
     fakeServer({
       [healthPath]: {

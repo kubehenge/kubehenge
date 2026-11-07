@@ -712,6 +712,9 @@ export function NetworkStep({
       <Field label="DNS servers" error={shown("dnsServers")}>
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
+      <Field label="Time servers" hint="Optional, separated by commas" error={shown("ntpServers")}>
+        {(id) => <input id={id} value={form.ntpServers} onChange={(e) => set("ntpServers", e.target.value)} />}
+      </Field>
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}

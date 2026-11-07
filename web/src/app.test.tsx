@@ -735,6 +735,7 @@ describe("create", () => {
     prefix: 24,
     gateway: "10.0.0.1",
     dnsServers: "10.0.0.1, 1.1.1.1",
+    ntpServers: "",
     loadBalancer: "",
     loadBalancerAddresses: "",
     pods: "",
@@ -796,6 +797,14 @@ describe("create", () => {
     const unplaced = { ...rke2, variables: rke2.variables.filter((v) => v.name !== "allowedNodes") };
     expect(request(byRule, unplaced).variables).not.toHaveProperty("allowedNodes");
     expect(problems("Machines", noNodes, unplaced)).toStrictEqual([]);
+  });
+
+  it("sends the time servers of the nodes, and nothing when there are none", () => {
+    const withNtp = { ...form, ntpServers: "ntp1.example.org, 192.0.2.5" };
+    expect(request(withNtp, rke2).variables["network"]).toMatchObject({ ntp: ["ntp1.example.org", "192.0.2.5"] });
+    expect(request(form, rke2).variables["network"]).not.toHaveProperty("ntp");
+    expect(Object.fromEntries(summary(withNtp, rke2))["Time servers"]).toBe("ntp1.example.org, 192.0.2.5");
+    expect(Object.fromEntries(summary(form, rke2))).not.toHaveProperty("Time servers");
   });
 
   it("builds the request from the form", () => {
@@ -1131,6 +1140,20 @@ describe("create", () => {
       "There is no VM template for RKE2 and k3s yet; an administrator builds it on the Administration page.",
     ]);
     expect(problems("Network", { ...form, endpoint: "10.0.0", vlan: "5000" }, rke2)).toHaveLength(2);
+    for (const [ntpServers, want] of [
+      ["ntp.example.org, 192.0.2.5, 2001:db8::1, pool.ntp.org.", []],
+      ["", []],
+      ["http://ntp.example.org", ["http://ntp.example.org is not a host name or IP address"]],
+      ["ntp.example.org/x", ["ntp.example.org/x is not a host name or IP address"]],
+      ["-bad.example.org", ["-bad.example.org is not a host name or IP address"]],
+      ["ntp.example.org, ntp.example.org", ["ntp.example.org is listed twice"]],
+      [
+        "a.example, b.example, c.example, d.example, e.example, f.example, g.example, h.example, i.example",
+        ["Enter at most 8 time servers"],
+      ],
+    ] as const) {
+      expect(problems("Network", { ...form, ntpServers }, rke2)).toStrictEqual(want);
+    }
     expect(problems("Network", { ...form, pods: "10.244.0.0", services: "10.96.0.0/16" }, rke2)).toStrictEqual([
       "Enter a network like 10.244.0.0/16, without host bits",
     ]);
@@ -1618,6 +1641,7 @@ describe("create", () => {
     await user.type(screen.getByLabelText("Node addresses"), "10.0.0.21-10.0.0.29");
     await user.type(screen.getByLabelText("Gateway"), "10.0.0.1");
     await user.type(screen.getByLabelText("DNS servers"), "10.0.0.1");
+    await user.type(screen.getByLabelText("Time servers"), "ntp.example.org");
     await user.selectOptions(screen.getByLabelText("Pod network"), "cilium");
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.clear(workerCores());
@@ -1628,6 +1652,7 @@ describe("create", () => {
     await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+k3s1");
     await user.click(screen.getByRole("button", { name: "Network" }));
     expect(screen.getByLabelText("Pod network")).toHaveValue("cilium");
+    expect(screen.getByLabelText("Time servers")).toHaveValue("ntp.example.org");
     await user.click(screen.getByRole("button", { name: "Machines" }));
     expect(workerCores()).toHaveValue(6);
 

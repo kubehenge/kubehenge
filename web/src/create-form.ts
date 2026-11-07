@@ -36,7 +36,18 @@ import {
 } from "./GitOps";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
-import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
+import {
+  addressBits,
+  addressCount,
+  inList,
+  ipv4,
+  isVLAN,
+  list,
+  networkOf,
+  rangeProblem,
+  timeServersProblem,
+  whole,
+} from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import {
   hasNodeSettings,
@@ -136,6 +147,8 @@ export interface Form {
   prefix: number;
   gateway: string;
   dnsServers: string;
+  /** NTP servers for the nodes. Empty keeps the node image's own. */
+  ntpServers: string;
   loadBalancer: Implementation;
   loadBalancerAddresses: string;
   pods: string;
@@ -606,6 +619,7 @@ export const newForm = (): Form => ({
   prefix: 24,
   gateway: "",
   dnsServers: "",
+  ntpServers: "",
   loadBalancer: "",
   loadBalancerAddresses: "",
   pods: "",
@@ -828,6 +842,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (form.vlan) {
     network["vlan"] = Number(form.vlan);
   }
+  if (list(form.ntpServers).length > 0) {
+    network["ntp"] = list(form.ntpServers);
+  }
   const variables: Record<string, unknown> = {
     controlPlaneEndpoint: form.endpoint,
     network,
@@ -921,6 +938,9 @@ function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string
   return rows;
 }
 
+const timeServersRow = (form: Form): [string, string][] =>
+  list(form.ntpServers).length > 0 ? [["Time servers", list(form.ntpServers).join(", ")]] : [];
+
 // summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
@@ -943,6 +963,7 @@ export function summary(
     ["Node addresses", list(form.addresses).join(", ")],
     ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
     ["DNS servers", list(form.dnsServers).join(", ")],
+    ...timeServersRow(form),
   ];
   if (defined.has("loadBalancer")) {
     rows.push([
@@ -1067,6 +1088,7 @@ export type FieldKey =
   | "prefix"
   | "gateway"
   | "dnsServers"
+  | "ntpServers"
   | "loadBalancerAddresses"
   | "pods"
   | "services"
@@ -1205,6 +1227,10 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
     p.dnsServers = "Enter at least one DNS server";
   } else if (list(form.dnsServers).some((d) => !ipv4.test(d))) {
     p.dnsServers = "DNS servers must be IPv4 addresses";
+  }
+  const ntpProblem = timeServersProblem(list(form.ntpServers));
+  if (ntpProblem !== undefined) {
+    p.ntpServers = ntpProblem;
   }
   const lb =
     form.loadBalancer === ""
