@@ -40,6 +40,16 @@ metadata:
     # controller's 50m, and 10m each for the cloud controller manager, kube-vip and the snapshot
     # controller.
     kubehenge.dev/node-cpu: '{"controlPlane":1605,"worker":775}'
+    {{- include "kubehenge.addonMemoryRequests" . | nindent 4 }}
+    # The memory, in MiB, a node keeps from the add-ons' requests, counted as node-cpu counts CPU. On
+    # a worker the kernel's 198 of a 4096 MiB VM, as Talos's measured, the kubelet's 100 eviction
+    # threshold, RKE2's kube-proxy at 128 (RKE2's documented default, LAB), the CNI's agent (canal
+    # asks for none, RKE2's Calico agent for 128), a CoreDNS replica's 128 and its autoscaler's 16,
+    # the metrics server's 200, Traefik's 64 and the CSI plugin's 64. A control plane without workers
+    # adds the API server's 1024, etcd's 512, the controller manager's 256 and the scheduler's 128
+    # (RKE2's documented defaults, LAB), the CSI controller's 80, and 32 each for the cloud
+    # controller manager, kube-vip and the snapshot controller.
+    kubehenge.dev/node-memory-requests: '{"controlPlane":3128,"worker":1032}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

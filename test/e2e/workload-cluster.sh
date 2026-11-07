@@ -195,7 +195,8 @@ cni_state() {
         calico | cilium) ;;
         *) return 0 ;;
     esac
-    kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' 2> /dev/null | base64 -d > "${work}/state" || return 0
+    # shellcheck disable=SC2310 # a cluster whose kubeconfig cannot be read has no state to show.
+    state_kubeconfig || return 0
     printf '\n%s:\n' "${KUBEHENGE_E2E_CNI}"
     if [ "${KUBEHENGE_E2E_CNI}" = calico ]; then
         KUBECONFIG=${work}/state kubectl get tigerastatus -o wide 2>&1 || true
@@ -224,9 +225,18 @@ cni_state() {
     done
     KUBECONFIG=${work}/state kubectl -n headlamp logs deployment/headlamp --tail=30 2>&1 || true
 }
+# state_kubeconfig: the cluster's kubeconfig in ${work}/state for a failed test's state, read from
+# the management cluster, as a test can fail before it wrote its own.
+state_kubeconfig() {
+    kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' 2> /dev/null | base64 -d > "${work}/state"
+}
 cleanup() {
     status=$?
     [ "${status}" -eq 0 ] || cni_state
+    # shellcheck disable=SC2310 # a cluster whose kubeconfig cannot be read has no state to show.
+    if [ "${status}" -ne 0 ] && on argocd && state_kubeconfig; then
+        flux_state "${work}/state"
+    fi
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${interface_pid}" ] || kill "${interface_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
@@ -453,23 +463,17 @@ class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
 # load balancer and Rancher's agent, which registers a cluster by default.
 # shellcheck disable=SC2086 # one add-on per word.
 sized_for=$(jq -cn '$ARGS.positional + ["loadBalancer", "rancherAgent"]' --args ${addons})
-# fixture_memory: what the test's own pods request on the worker at once, which the scheduler keeps
-# for them beside the add-ons' requests. With GitOps that is Gitea's 128 MiB and five agnhost pods at
-# 16 MiB each. The other steps' few agnhost pods fit in the room the add-ons' figures leave.
-fixture_memory=0
+# With GitOps the worker also holds what the test's own pods request, which the scheduler keeps for
+# them beside the add-ons' requests: Gitea and the agnhost pods the steps before it leave running.
+# The other steps' few agnhost pods fit in the room the add-ons' figures leave.
+sized_gitops=false
 # shellcheck disable=SC2310 # on only answers whether the run switches the add-on on.
 if on argocd; then
-    fixture_memory=208
+    sized_gitops=true
 fi
 # Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they
-# are seen to fit in it: its distribution's least, or what a worker uses itself, each add-on's
-# figure and the test's own pods, whichever is more.
-worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --argjson fixtures "${fixture_memory}" '
-    (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
-    | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
-    | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + ([$on[] | $addon[.]] | add) + $fixtures]
-    | max')}
+# are seen to fit in it (worker_memory_for, common.sh).
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(worker_memory_for "${class_json}" "${sized_for}" "${sized_gitops}")}
 # Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
 # request, the GitOps engine that asks for more of the two.
 worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
@@ -904,7 +908,7 @@ esac
 # Every fixture pod here has a memory request: a pod without one is best-effort, and Talos's OOM
 # controller kills those first on a full worker, which restarts it and fails the lane's restart check.
 agnhost_pod() {
-    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
+    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","resources":{"requests":{"cpu":"10m","memory":"%sMi"},"limits":{"memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2" "${agnhost_request_mib}")
     agnhost_namespace=$1 agnhost_name=$2
     shift 2
     wl -n "${agnhost_namespace}" run "${agnhost_name}" --image="${agnhost}" --override-type=strategic --overrides="${agnhost_overrides}" -- "$@"
@@ -915,14 +919,14 @@ agnhost_pod() {
 agnhost_deployment() {
     agnhost_namespace=$1 agnhost_name=$2
     shift 2
-    jq -n --arg name "${agnhost_name}" --arg image "${agnhost}" '$ARGS.positional as $args | {
+    jq -n --arg name "${agnhost_name}" --arg image "${agnhost}" --arg request "${agnhost_request_mib}Mi" '$ARGS.positional as $args | {
         apiVersion: "apps/v1", kind: "Deployment", metadata: {name: $name},
         spec: {replicas: 1, selector: {matchLabels: {app: $name}}, template: {
             metadata: {labels: {app: $name}},
             spec: {hostname: $name,
                 securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: "RuntimeDefault"}},
                 containers: [{name: $name, image: $image, args: $args,
-                    resources: {requests: {cpu: "10m", memory: "16Mi"}, limits: {memory: "128Mi"}},
+                    resources: {requests: {cpu: "10m", memory: $request}, limits: {memory: "128Mi"}},
                     securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}}}' --args -- "$@" |
         wl -n "${agnhost_namespace}" apply -f -
 }
@@ -3217,7 +3221,7 @@ spec:
           # 2 GiB worker fills up as the add-ons install. Gitea holds about 100 MiB and peaks near
           # 135 MiB, and the worker is sized for this request (fixture_memory).
           resources:
-            requests: {cpu: 100m, memory: 128Mi}
+            requests: {cpu: 100m, memory: ${gitea_request_mib}Mi}
             limits: {memory: 512Mi}
           securityContext:
             allowPrivilegeEscalation: false
@@ -3300,7 +3304,7 @@ EOF
         # Read only, as the interface tells its users to add it.
         git_request=$(jq -cn --arg k "${public_key}" '{title: "kubehenge", key: $k, read_only: true}')
         git_api POST repos/e2e/clusters/keys -d "${git_request}" > /dev/null
-        until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=condition=Ready fluxinstance/flux --timeout=10s
+        until_true 600 "Flux installed by its operator" flux_ready "${work}/workload"
         until_true 600 "Flux syncs the repository" synced one
         push two
         until_true 300 "Flux syncs a new commit" synced two
