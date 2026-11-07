@@ -95,6 +95,10 @@ func readManagement(ctx context.Context, kube client.Client, c *clusterv1.Cluste
 func readControlPlane(ctx context.Context, kube client.Client, c *clusterv1.Cluster) (*unstructured.Unstructured, error) {
 	ref := c.Spec.ControlPlaneRef
 	mapping, err := kube.RESTMapper().RESTMapping(schema.GroupKind{Group: ref.APIGroup, Kind: ref.Kind})
+	if meta.IsNoMatchError(err) {
+		// A provider that is not installed (yet) serves no such object, so there is none to read.
+		return nil, nil //nolint:nilnil // no object is an answer, not a failure
+	}
 	if err != nil {
 		return nil, fmt.Errorf("the API of %s: %w", ref.Kind, err)
 	}

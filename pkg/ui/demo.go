@@ -106,7 +106,13 @@ func demoScheme() (*runtime.Scheme, *meta.DefaultRESTMapper, error) {
 	for _, cp := range demoControlPlanes {
 		kinds = append(kinds, cp)
 	}
-	mapper := meta.NewDefaultRESTMapper(nil)
+	// A lookup by group and kind alone, as the control plane's reference makes, tries only the
+	// mapper's default versions.
+	versions := make([]schema.GroupVersion, 0, len(kinds))
+	for _, gvk := range kinds {
+		versions = append(versions, gvk.GroupVersion())
+	}
+	mapper := meta.NewDefaultRESTMapper(versions)
 	for _, gvk := range kinds {
 		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
 		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
