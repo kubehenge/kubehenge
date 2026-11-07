@@ -76,6 +76,9 @@ func withManagementCluster(t *testing.T, h *harness) *appliance.Appliance {
 		Dir: t.TempDir(), KeyDir: t.TempDir(), Module: module, Tofu: fakeTofu, Release: "0.1.0",
 		ProxmoxURL: "https://pve.example:8006", ProxmoxCA: "-----BEGIN CERTIFICATE-----\n", Log: slog.New(slog.DiscardHandler),
 		InterfaceKubeconfig: func(_ context.Context, admin []byte, _, _ string) ([]byte, error) { return admin, nil },
+		// age's default work factor costs about a second of CPU per seal or open, which the race
+		// detector and a busy machine stretch past the wait for a job.
+		KeyWorkFactor: 10,
 	}
 	s := &appliance.Settings{
 		Nodes: []string{"pve1"}, ImageDatastore: "local", VMDatastore: "local-lvm", Bridge: "vmbr0",
