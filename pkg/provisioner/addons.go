@@ -1147,7 +1147,7 @@ func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unst
 		u.SetName(cluster.Name + "-" + p.suffix)
 		u.SetNamespace(cluster.Namespace)
 		u.Object["spec"] = map[string]any{
-			"clusterSelector": map[string]any{"matchLabels": map[string]any{clusterv1.ClusterNameLabel: cluster.Name}},
+			"clusterSelector": map[string]any{matchLabelsKey: map[string]any{clusterv1.ClusterNameLabel: cluster.Name}},
 			"repoURL":         p.chart.Repository,
 			"chartName":       p.chart.Name,
 			"version":         p.chart.pinnedVersion(),
