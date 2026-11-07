@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -150,15 +151,11 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	pool := m.Labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel]
-	i := slices.IndexFunc(c.Spec.Topology.Workers.MachineDeployments, func(md clusterv1.MachineDeploymentTopology) bool { return md.Name == pool })
-	switch {
-	case pool == "" || i < 0:
-		writeError(w, http.StatusConflict, "Only a worker pool's machine can be deleted. Replace a control-plane node instead.")
+	if _, msg := deletablePool(c, pool); msg != "" {
+		writeError(w, http.StatusConflict, msg)
 		return
-	case isAutoscaled(c, pool):
-		writeError(w, http.StatusConflict, "Pool "+pool+" is autoscaled. Switch autoscaling off to delete a worker.")
-		return
-	case m.DeletionTimestamp != nil:
+	}
+	if m.DeletionTimestamp != nil {
 		writeError(w, http.StatusConflict, "The machine is already being deleted.")
 		return
 	}
@@ -171,18 +168,58 @@ func (s *Server) deleteMachine(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, r, err)
 		return
 	}
-	before := c.DeepCopy()
-	md := &c.Spec.Topology.Workers.MachineDeployments[i]
-	md.Replicas = new(max(ptr.Deref(md.Replicas, 1)-1, 0))
-	if err := u.kube.Patch(ctx, c, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+	refused, err := shrinkPool(ctx, u.kube, client.ObjectKeyFromObject(c), pool)
+	if refused != "" || err != nil {
 		if undoErr := mark(ctx, nil); undoErr != nil {
 			s.Log.Error("unmarking a machine whose pool did not shrink", "machine", m.Namespace+"/"+m.Name, "error", undoErr)
 		}
-		s.kubeError(w, r, err)
+		if err != nil {
+			s.kubeError(w, r, err)
+			return
+		}
+		writeError(w, http.StatusConflict, refused)
 		return
 	}
 	s.Log.Info("machine deleted", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "machine", m.Name, "pool", pool)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deletablePool finds the index of the worker pool a machine of it may be deleted from, or says
+// why it may not.
+func deletablePool(c *clusterv1.Cluster, pool string) (int, string) {
+	i := slices.IndexFunc(c.Spec.Topology.Workers.MachineDeployments, func(md clusterv1.MachineDeploymentTopology) bool { return md.Name == pool })
+	switch {
+	case pool == "" || i < 0:
+		return i, "Only a worker pool's machine can be deleted. Replace a control-plane node instead."
+	case isAutoscaled(c, pool):
+		return i, "Pool " + pool + " is autoscaled. Switch autoscaling off to delete a worker."
+	}
+	return i, ""
+}
+
+// shrinkPool lowers the replicas of a cluster's worker pool by one. Controllers update a cluster
+// all the time, so a conflicting write is made again from a fresh read, which lowers the pool by
+// one once however often it is tried. It returns why the pool cannot shrink, or "".
+func shrinkPool(ctx context.Context, kube client.Client, key client.ObjectKey, pool string) (string, error) {
+	refused := ""
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		c := &clusterv1.Cluster{}
+		if err := kube.Get(ctx, key, c); err != nil {
+			return fmt.Errorf("reading the cluster: %w", err)
+		}
+		i, msg := deletablePool(c, pool)
+		if refused = msg; msg != "" {
+			return nil
+		}
+		before := c.DeepCopy()
+		md := &c.Spec.Topology.Workers.MachineDeployments[i]
+		md.Replicas = new(max(ptr.Deref(md.Replicas, 1)-1, 0))
+		if err := kube.Patch(ctx, c, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+			return fmt.Errorf("shrinking pool %s: %w", pool, err)
+		}
+		return nil
+	})
+	return refused, err //nolint:wrapcheck // kubeError answers as the API server did
 }
 
 // clusterMachine reads the cluster the request names, for a user who holds privs on it, and the
