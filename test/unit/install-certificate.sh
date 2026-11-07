@@ -108,6 +108,21 @@ expect "a static address comes from the container's configuration, not from insi
 printf 'hostname: kubehenge\nnet0: name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:01,ip=dhcp,type=veth\n' > "${root}/config"
 expect "an address from DHCP is the one the container has" 203.0.113.7 appliance_ip
 
+# The certificate starts an hour back, so that a browser whose clock is behind this node's by
+# minutes does not refuse it as not yet valid, and lasts no more than the 825 days browsers accept.
+# A leading slash in -subj is a path to Git for Windows' shell.
+export MSYS2_ARG_CONV_EXCL='/CN='
+# OpenSSL for Windows has no default configuration for req to read.
+printf '[req]\ndistinguished_name = dn\n[dn]\n' > "${root}/openssl.cnf"
+OPENSSL_CONF=${root}/openssl.cnf
+export OPENSSL_CONF
+make_certificate kubehenge 192.0.2.40
+seconds() { date -d "$(openssl x509 -in "${work}/tls.crt" -noout "$1" | cut -d= -f2)" +%s; }
+expect "a new certificate starts between 59 and 61 minutes back" yes sh -c \
+    "age=\$(( \$(date +%s) - $(seconds -startdate) )); [ \"\${age}\" -ge 3540 ] && [ \"\${age}\" -le 3660 ] && echo yes"
+expect "and ends within 825 days of its start" yes sh -c \
+    "span=\$(( $(seconds -enddate) - $(seconds -startdate) )); [ \"\${span}\" -le $((825 * 86400)) ] && echo yes"
+
 if [ "${failures}" -ne 0 ]; then
     echo "install-certificate: ${failures} of $((passes + failures)) checks failed"
     exit 1
