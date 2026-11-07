@@ -50,55 +50,62 @@ export function Templates(): JSX.Element {
     <div className="box">
       <h3>VM templates</h3>
       <ErrorBox message={error} />
+      {data?.down?.map((d) => (
+        <p className="warning" key={d.vmid}>
+          Template {d.name ?? `VM ${d.vmid}`} is on node {d.node}, which is down.
+        </p>
+      ))}
       {data && data.templates.length === 0 && <p>No templates yet</p>}
       {data && data.templates.length > 0 && (
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>Template</th>
-              <th>Node OS</th>
-              <th>Build</th>
-              <th>Node</th>
-              <th>Used by</th>
-              <th>
-                <span className="visually-hidden">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.templates.map((t) => (
-              <tr key={t.vmid}>
-                <td>
-                  {t.line} <span className="muted">({t.vmid})</span>
-                </td>
-                <td>{t.nodeOS ?? "Talos Linux"}</td>
-                <td>
-                  {t.built === undefined ? (
-                    <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
-                  ) : (
-                    <>
-                      {new Date(t.built).toLocaleString()}
-                      {t.newest === true && <span className="muted"> (newest)</span>}
-                    </>
-                  )}
-                </td>
-                <td>{t.node}</td>
-                <td>{t.inUse ?? "None"}</td>
-                <td className="row-action">
-                  <button
-                    type="button"
-                    disabled={filled(t.inUse) || building}
-                    aria-label={`Delete ${t.name}`}
-                    title={filled(t.inUse) ? `In use by ${t.inUse}` : undefined}
-                    onClick={() => setDeleting(t)}
-                  >
-                    Delete
-                  </button>
-                </td>
+        <div className="scroll">
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>Template</th>
+                <th>Node OS</th>
+                <th>Build</th>
+                <th>Node</th>
+                <th>Used by</th>
+                <th>
+                  <span className="visually-hidden">Actions</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.templates.map((t) => (
+                <tr key={t.vmid}>
+                  <td>
+                    {t.line} <span className="muted">({t.vmid})</span>
+                  </td>
+                  <td>{t.nodeOS ?? "Talos Linux"}</td>
+                  <td>
+                    {t.built === undefined ? (
+                      <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
+                    ) : (
+                      <>
+                        {new Date(t.built).toLocaleString()}
+                        {t.newest === true && <span className="muted"> (newest)</span>}
+                      </>
+                    )}
+                  </td>
+                  <td>{t.node}</td>
+                  <td>{t.inUse ?? "None"}</td>
+                  <td className="row-action">
+                    <button
+                      type="button"
+                      disabled={filled(t.inUse) || building}
+                      aria-label={`Delete ${t.name}`}
+                      title={filled(t.inUse) ? `In use by ${t.inUse}` : undefined}
+                      onClick={() => setDeleting(t)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {job && <BuildJob job={job} />}
       <div className="actions">

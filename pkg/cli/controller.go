@@ -718,7 +718,7 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 // clusters' nodes in place to their Talos release, and what records the templates there are, which
 // the upgraders and the interface go by.
 func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, rancherMinors provisioner.KubernetesMinors, remotes *provisioner.Remotes) error {
-	versions := &provisioner.TemplateVersions{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Interval: templateVersionsInterval}
+	versions := &provisioner.TemplateVersions{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Interval: templateVersionsInterval, Soak: o.nodeImageSoak}
 	if err := mgr.Add(versions); err != nil {
 		return fmt.Errorf("the template versions: %w", err)
 	}

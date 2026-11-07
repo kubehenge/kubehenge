@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 const testPool = "kubehenge-templates"
@@ -38,6 +40,9 @@ type fakeCluster struct {
 	// unstarted are VM IDs whose create task Proxmox VE kills before it runs, leaving the VM
 	// locked for creation.
 	unstarted map[int]bool
+	// unreachable are VM IDs on a node that pveproxy cannot reach: the answer to their
+	// configuration is a 595, whatever the resource view says.
+	unreachable map[int]bool
 }
 
 var (
@@ -61,7 +66,15 @@ func (f *fakeCluster) client() *proxmox.Client {
 	f.t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	f.t.Cleanup(srv.Close)
-	return proxmox.NewClient(srv.URL + "/api2/json")
+	return proxmox.NewClient(srv.URL+"/api2/json", proxmox.WithHTTPClient(&http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		resp, err := http.DefaultTransport.RoundTrip(r)
+		// pve.Connect's client fails on a 595 with this error, which go-proxmox would not.
+		if err == nil && resp.StatusCode == 595 {
+			_ = resp.Body.Close()
+			return nil, &pve.APIError{Method: r.Method, Path: r.URL.Path, Status: resp.Status}
+		}
+		return resp, err
+	})}))
 }
 
 // memoryClient reaches the fake without a network, for tests run in a synctest bubble, where time
@@ -118,6 +131,10 @@ func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 		vmid, err := strconv.Atoi(m[1])
 		if err != nil {
 			f.t.Error(err)
+		}
+		if f.unreachable[vmid] {
+			w.WriteHeader(595)
+			return
 		}
 		c, ok := f.configs[vmid]
 		if !ok {

@@ -112,6 +112,9 @@ func (b *Builder) Find(ctx context.Context, t *Template) (*proxmox.ClusterResour
 			continue
 		}
 		c, err := b.config(ctx, r)
+		// A candidate on a down node is not skipped: Create would take the template for missing,
+		// build a second one with the same tags, and Cluster API could not choose between the two
+		// once the node is back.
 		if err != nil {
 			return nil, err
 		}
@@ -142,9 +145,33 @@ type Inventory struct {
 	Templates []*proxmox.ClusterResource
 	// Storages are those the templates have disks on, sorted.
 	Storages []string
+	// Down are the Kubehenge VMs of the pool whose node is down. They are left out of Templates
+	// and Storages, since nothing can be read from them. They may be builds not yet templates.
+	Down []*proxmox.ClusterResource
 }
 
-// Inventory lists the templates as List does, with the storages their disks are on.
+// NodeDownError is a VM that cannot be read because its node is down.
+type NodeDownError struct {
+	VMID int
+	// Name is empty where the resource view has none for a VM on a down node.
+	Name string
+	Node string
+}
+
+func (e *NodeDownError) Error() string {
+	return fmt.Sprintf("%s is on node %s, which is down", e.What(), e.Node)
+}
+
+// What names the VM: its name, or its VM ID where the name is unknown.
+func (e *NodeDownError) What() string {
+	if e.Name != "" {
+		return e.Name
+	}
+	return fmt.Sprintf("VM %d", e.VMID)
+}
+
+// Inventory lists the templates as List does, with the storages their disks are on. A VM on a down
+// node is reported in Down and does not fail the listing.
 func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	resources, err := b.vms(ctx)
 	if err != nil {
@@ -156,6 +183,10 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 			continue
 		}
 		c, err := b.config(ctx, r)
+		if _, down := errors.AsType[*NodeDownError](err); down {
+			inv.Down = append(inv.Down, r)
+			continue
+		}
 		if err != nil {
 			return Inventory{}, err
 		}
@@ -279,14 +310,24 @@ type Built struct {
 	At       time.Time
 }
 
-// Builds lists the builds of line in the builder's pool, newest first.
+// Builds lists the builds of line in the builder's pool, newest first. A VM of the line on a down
+// node fails it: its build may be the newest, and a build made meanwhile would take its place.
 func (b *Builder) Builds(ctx context.Context, line *Template) ([]Built, error) {
-	list, err := b.List(ctx)
+	inv, err := b.Inventory(ctx)
 	if err != nil {
 		return nil, err
 	}
+	for _, r := range inv.Down {
+		if slices.Equal(LineOf(ParseTags(r.Tags)), line.Tags) {
+			id, idErr := vmID(r)
+			if idErr != nil {
+				return nil, idErr
+			}
+			return nil, &NodeDownError{VMID: id, Name: r.Name, Node: r.Node}
+		}
+	}
 	var out []Built
-	for _, r := range list {
+	for _, r := range inv.Templates {
 		tags := ParseTags(r.Tags)
 		at, built := BuildOf(tags)
 		if built && slices.Equal(LineOf(tags), line.Tags) {
@@ -332,6 +373,10 @@ func (b *Builder) RemoveLeftovers(ctx context.Context, line *Template, olderThan
 			continue
 		}
 		c, err := b.config(ctx, r)
+		if _, down := errors.AsType[*NodeDownError](err); down {
+			b.logf("VM %d on node %s is down; leaving it alone", r.VMID, r.Node)
+			continue
+		}
 		if err != nil {
 			return removed, err
 		}
@@ -410,13 +455,23 @@ func confirmed(r *proxmox.ClusterResource, c *proxmox.VirtualMachineConfig) *pro
 
 // config reads a listed VM's configuration, which Proxmox VE keeps current. A VM removed or moved
 // since the listing has an empty one: no name, and no template.
+//
+// A VM whose node is down has no configuration to read, and gives a *NodeDownError. The resource
+// view can say so (status unknown), or only pveproxy does, with a 595 on a node that went down
+// after the view was made.
 func (b *Builder) config(ctx context.Context, r *proxmox.ClusterResource) (*proxmox.VirtualMachineConfig, error) {
 	id, err := vmID(r)
 	if err != nil {
 		return nil, err
 	}
+	if r.Status == pve.StatusUnknown {
+		return nil, &NodeDownError{VMID: id, Name: r.Name, Node: r.Node}
+	}
 	var c proxmox.VirtualMachineConfig
 	err = b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", r.Node, id), &c)
+	if pve.NodeUnreachable(err) {
+		return nil, &NodeDownError{VMID: id, Name: r.Name, Node: r.Node}
+	}
 	if err != nil {
 		// Proxmox VE puts this in the status line of its answer for a missing configuration, and
 		// the status line is all go-proxmox keeps of an error response.
@@ -498,6 +553,10 @@ func (b *Builder) checkNotInProgress(ctx context.Context, t *Template) error {
 			continue
 		}
 		c, err := b.config(ctx, r)
+		if _, down := errors.AsType[*NodeDownError](err); down {
+			b.logf("VM %d on node %s is down; it cannot be checked for a build in progress", r.VMID, r.Node)
+			continue
+		}
 		if err != nil {
 			return err
 		}

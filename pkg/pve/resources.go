@@ -150,15 +150,33 @@ type Member struct {
 	// Tags are separated by semicolons, as Proxmox VE stores them. Templates reads them, PoolMembers
 	// cannot.
 	Tags string `json:"tags"`
-	// Status is running or stopped. CPU is the share of its cores in use, from 0 to 1. Memory is in
-	// bytes, uptime in seconds. Proxmox VE lists them with a pool's members, from its nodes' last
-	// broadcast.
+	// Status is running or stopped, or StatusUnknown while its node is not online. CPU is the share
+	// of its cores in use, from 0 to 1. Memory is in bytes, uptime in seconds. Proxmox VE lists them
+	// with a pool's members, from its nodes' last broadcast.
 	Status string  `json:"status"`
 	CPU    float64 `json:"cpu"`
 	Cores  float64 `json:"maxcpu"`
 	Memory int64   `json:"mem"`
 	MaxMem int64   `json:"maxmem"`
 	Uptime int64   `json:"uptime"`
+	// Down is set by Templates on a member whose node is not online. Its configuration cannot be
+	// read then, so its name and whether it is a template may be missing.
+	Down bool `json:"-"`
+}
+
+// StatusUnknown is the status the cluster's resource view gives a VM whose node is not online.
+const StatusUnknown = "unknown"
+
+// NodeUnreachable tells whether err is pveproxy's answer when it cannot reach the node a call is
+// forwarded to: 595 for a refused or lost connection, 596 for a failed handshake. It answers so
+// for a node that went down after the resource view last showed it online.
+func NodeUnreachable(err error) bool {
+	apiErr, ok := errors.AsType[*APIError](err)
+	return ok && (strings.HasPrefix(apiErr.Status, "595") || strings.HasPrefix(apiErr.Status, "596"))
+}
+
+func hasTag(tags, tag string) bool {
+	return slices.Contains(strings.Split(tags, ";"), tag)
 }
 
 // LoadPoint is a VM's average CPU load over one step of Proxmox VE's round-robin data, the share of
@@ -607,6 +625,9 @@ func (a *Accounts) BackupCovers(ctx context.Context, t *Ticket, vmid int) (bool,
 // pools and tags afresh, but a VM's name and whether it is a template from the status its node
 // broadcast last, which can be seconds old and can still show a removed VM's under a reused VM ID.
 // Each VM's configuration says it for certain, before anything is done to the VM by its ID.
+//
+// A Kubehenge VM on a node that is not online is listed with Down set instead of failing the list,
+// since no other node can read its configuration.
 func (a *Accounts) Templates(ctx context.Context, t *Ticket, pool string) ([]Member, error) {
 	var guests []struct {
 		Member
@@ -623,21 +644,42 @@ func (a *Accounts) Templates(ctx context.Context, t *Ticket, pool string) ([]Mem
 		if g.Type != "qemu" || g.Pool != pool {
 			continue
 		}
-		var config struct {
-			Name     string `json:"name"`
-			Template int    `json:"template"`
-		}
-		err := a.get(ctx, t, fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(g.Node), g.VMID), &config)
-		if notFound(err) || err == nil && config.Template != 1 {
-			continue
-		}
+		m, ok, err := a.templateMember(ctx, t, &g.Member)
 		if err != nil {
 			return nil, err
 		}
-		g.Name, g.Template = config.Name, config.Template
-		list = append(list, g.Member)
+		if ok {
+			list = append(list, m)
+		}
 	}
 	return list, nil
+}
+
+// templateMember confirms one VM of the pool from its configuration. It is false for a VM that is
+// no template.
+func (a *Accounts) templateMember(ctx context.Context, t *Ticket, g *Member) (Member, bool, error) {
+	down := func() (Member, bool, error) {
+		g.Down = hasTag(g.Tags, "kubehenge")
+		return *g, g.Down, nil
+	}
+	if g.Status == StatusUnknown {
+		return down()
+	}
+	var config struct {
+		Name     string `json:"name"`
+		Template int    `json:"template"`
+	}
+	err := a.get(ctx, t, fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(g.Node), g.VMID), &config)
+	switch {
+	case notFound(err) || err == nil && config.Template != 1:
+		return Member{}, false, nil
+	case NodeUnreachable(err):
+		return down()
+	case err != nil:
+		return Member{}, false, err
+	}
+	g.Name, g.Template = config.Name, config.Template
+	return *g, true, nil
 }
 
 // PoolMembers lists a pool's VMs, without their tags.

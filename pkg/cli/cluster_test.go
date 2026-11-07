@@ -49,7 +49,10 @@ func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			 "controlPlane":{"desired":3,"ready":3},"workers":{"desired":2,"ready":1}},
 			{"namespace":"a","name":"twin","phase":"Provisioned","conditions":[
 			 {"type":"UpgradeHeld","status":"True","reason":"RancherKubernetes","message":"for Rancher, choose Kubernetes 1.34 to 1.36, not v1.37.1+k3s1"}]},
-			{"namespace":"b","name":"twin","phase":"Provisioned"}]`)
+			{"namespace":"b","name":"twin","phase":"Provisioned","conditions":[
+			 {"type":"NodeImageHeld","status":"True","reason":"TemplateNodeDown","message":"Build build-202610150000 is on node pve2, which is down"}]},
+			{"namespace":"c","name":"stuck","phase":"Provisioned","conditions":[
+			 {"type":"TemplateNodeDown","status":"True","reason":"NodeDown","message":"Template x is on node pve2, which is down"}]}]`)
 	case "GET /api/clusters/clusters/web":
 		_, _ = io.WriteString(w, `{"namespace":"clusters","name":"web"}`)
 	case "GET /api/clusters/clusters/web/upgrade-checks":
@@ -101,7 +104,8 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	}
 	if !strings.Contains(out, "CONTROL PLANES") || !strings.Contains(out, "web") || !strings.Contains(out, "3/3") ||
 		!strings.Contains(out, "1/2") || !strings.Contains(out, "Provisioned, upgrade held (RancherKubernetes)") ||
-		strings.Count(out, "upgrade held") != 1 {
+		strings.Count(out, "upgrade held") != 1 || !strings.Contains(out, "Provisioned, node image refresh held (TemplateNodeDown)") ||
+		!strings.Contains(out, "Provisioned, template node down") {
 		t.Errorf("list =\n%s", out)
 	}
 	if out, err = runCluster(t, srv.URL, token, "get", "web"); err != nil || !strings.Contains(out, `"name": "web"`) {
