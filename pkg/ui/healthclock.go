@@ -74,7 +74,7 @@ func clockSyncAttention(a *attention, v *nodeView, unsynced map[string]bool) {
 		return
 	}
 	a.addMachine(v.Machine, severityWarning, roleWord(v.Role)+" "+v.Name+": clock not synced",
-		"The node reaches no time server, so its clock may be wrong and certificates with it. Check that UDP 123 is open from the nodes, or set the cluster's time servers.", time.Time{})
+		"The node reaches no time server. Open UDP 123 from the nodes or set the cluster's time servers.", time.Time{})
 }
 
 // nodeClockWarn is how far a Proxmox VE node's clock may be from the controller's.
@@ -105,7 +105,7 @@ func (s *Server) addNodeClocks(ctx context.Context, u user, v *healthView) {
 				direction = "behind"
 			}
 			a.add(severityWarning, sectionNodes, "Proxmox VE node "+name+" clock is off by "+found[i].Abs().Round(time.Second).String(),
-				"The node's clock is "+direction+" this machine's. VMs on it start with that clock, and Proxmox VE sign-ins through several nodes fail when two disagree by over "+strconv.Itoa(proxmoxTicketGraceMinutes)+" minutes. Check the node's time service.", time.Time{})
+				"The node's clock is "+direction+" this machine's. Its VMs start with that clock, and sign-ins fail when nodes differ by over "+strconv.Itoa(proxmoxTicketGraceMinutes)+" minutes.", time.Time{})
 		}
 	}
 	if len(a) == 0 {

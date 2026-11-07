@@ -136,8 +136,9 @@ spec:
     # Talos waits for its clock before it signs the cluster's certificates, for ever unless told
     # otherwise: a node that reaches no time server never joins, and its machine health check
     # replaces it on and on. Five minutes later the node boots and the Health page says that its
-    # clock is not synced. TimeSyncConfig takes NTP servers or PTP devices, not both, so the
-    # hypervisor's clock (/dev/ptp_kvm) is not a second source here.
+    # clock is not synced. The TimeSyncConfig document takes NTP servers or PTP devices, not both
+    # (validate in pkg/machinery/config/types/network/time_sync.go). Only machine.time.servers takes
+    # both, so the hypervisor's clock (/dev/ptp0) sits beside the NTP servers there.
     - name: talos-time
       definitions:
         - selector:
@@ -250,12 +251,13 @@ credentials, so its health checks stay open to them.
 {{- end -}}
 
 {{/*
-Talos's TimeSyncConfig as a Cluster API template: the network variable's ntp servers, or Talos's own
-default (time.cloudflare.com over NTS) where none are set, and a boot that goes on after five
-minutes without sync.
+Talos's machine.time as a Cluster API template: the network variable's ntp servers, or Talos's own
+default server (time.cloudflare.com) where none are set, then the hypervisor's PTP clock, and a boot
+that goes on after five minutes without sync. This field is the only one that takes NTP servers and
+a PTP device together, and it syncs without NTS.
 */}}
 {{- define "kubehenge.talosTimeSync" -}}
-{{ `{{ $doc := dict "apiVersion" "v1alpha1" "kind" "TimeSyncConfig" "bootTimeout" "5m0s" }}{{ with .network }}{{ if .ntp }}{{ $_ := set $doc "ntp" (dict "servers" .ntp) }}{{ end }}{{ end }}{{ $doc | toJson | toJson }}` }}
+{{ `{{ $servers := list "time.cloudflare.com" }}{{ with .network }}{{ if .ntp }}{{ $servers = .ntp }}{{ end }}{{ end }}{{ dict "machine" (dict "time" (dict "servers" (append $servers "/dev/ptp0") "bootTimeout" "5m0s")) | toJson | toJson }}` }}
 {{- end -}}
 
 {{- define "kubehenge.talosAuthentication" -}}

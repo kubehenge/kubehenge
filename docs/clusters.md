@@ -641,9 +641,9 @@ In the cluster's audit log, what you do appears as the ServiceAccount `kube-syst
 
 **Log out** in Headlamp signs you out of that cluster. The appliance drops your session's token, and Headlamp asks for a token or a sign-in of your own. That lasts until you open the cluster again with **Headlamp** on its page here, which signs you in again.
 
-Where the administrator switched on the [Headlamp actions](install-settings.md#headlamp-actions), Headlamp also offers the Helm app catalog and the Prometheus charts it ships with. The app catalog lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them. It acts with your own credentials in the cluster, or the sign-in's.
+Where the administrator switched on the [Headlamp actions](install-settings.md#headlamp-actions), Headlamp also offers the Helm app catalogue and the Prometheus charts it ships with. The app catalogue lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them. It acts with your own credentials in the cluster, or the sign-in's.
 
-The app catalog installs charts only from the Helm repositories set for the appliance. Only those who may set up the appliance add or remove them.
+The app catalogue installs charts only from the Helm repositories set for the appliance. Only those who may set up the appliance add or remove them.
 
 The Prometheus plugin charts a cluster's metrics from a Prometheus running in it, such as the monitoring add-on's. It reads them through the cluster's API with your credentials. Node drain is offered either way, with your own credentials.
 
@@ -1015,7 +1015,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Store a cluster's own backup access key | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Download the admin kubeconfig | `Sys.Modify` | the cluster's pool |
 | Open the cluster in the shared Headlamp signed in as cluster-admin, where the [Headlamp sign-in](install-settings.md#headlamp-sign-in) is on | `Sys.Modify` | the cluster's pool |
-| Use the Helm app catalog and the Prometheus charts in the shared Headlamp, where the [Headlamp actions](install-settings.md#headlamp-actions) are on. In the cluster they act with the cluster's own rights | `VM.Audit` | the cluster's pool |
+| Use the Helm app catalogue and the Prometheus charts in the shared Headlamp, where the [Headlamp actions](install-settings.md#headlamp-actions) are on. In the cluster they act with the cluster's own rights | `VM.Audit` | the cluster's pool |
 | Add, update or remove a Helm repository in the shared Headlamp | the [setup privileges](install.md#who-may-set-it-up) | `/` |
 | Read an unwell pod's logs on the health page | `Sys.Modify` | the cluster's pool |
 | Trust identity providers beyond those set for every cluster | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |

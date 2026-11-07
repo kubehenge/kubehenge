@@ -17,19 +17,13 @@ func TestTalosNodesGetTimeSyncWithTheClusterServersAndABoundedWait(t *testing.T)
 	t.Parallel()
 	class := renderTalosClass(t)
 	for kind, role := range map[string]machine.Type{"TalosControlPlaneTemplate": machine.TypeControlPlane, "TalosConfigTemplate": machine.TypeWorker} {
-		set := talosConfig(t, role, class.strategicPatches(t, kind, variablesOf(t, ntpNetwork)))["TimeSyncConfig"]
-		if set == nil {
-			t.Fatalf("%s: no TimeSyncConfig", kind)
+		set := field(t, talosConfig(t, role, class.strategicPatches(t, kind, variablesOf(t, ntpNetwork)))["v1alpha1"], "machine", "time")
+		if got := asJSON(t, set); got != `{"bootTimeout":"5m0s","servers":["ntp1.example.org","192.0.2.5","/dev/ptp0"]}` {
+			t.Errorf("%s: machine.time is %s, want the cluster's servers, the hypervisor's PTP clock and a 5m boot timeout (Talos waits for ever by default)", kind, got)
 		}
-		if got := asJSON(t, set["ntp"]); got != `{"servers":["ntp1.example.org","192.0.2.5"]}` {
-			t.Errorf("%s: ntp %s", kind, got)
-		}
-		if got := set["bootTimeout"]; got != "5m0s" {
-			t.Errorf("%s: bootTimeout %v, want 5m0s: Talos waits for ever by default", kind, got)
-		}
-		bare := talosConfig(t, role, class.strategicPatches(t, kind, variablesOf(t, bareNet)))["TimeSyncConfig"]
-		if bare == nil || bare["bootTimeout"] != "5m0s" || bare["ntp"] != nil {
-			t.Errorf("%s: without servers the document is %v, want only the boot timeout", kind, bare)
+		bare := field(t, talosConfig(t, role, class.strategicPatches(t, kind, variablesOf(t, bareNet)))["v1alpha1"], "machine", "time")
+		if got := asJSON(t, bare); got != `{"bootTimeout":"5m0s","servers":["time.cloudflare.com","/dev/ptp0"]}` {
+			t.Errorf("%s: without servers machine.time is %s, want Talos's default server and the PTP clock", kind, got)
 		}
 	}
 }
