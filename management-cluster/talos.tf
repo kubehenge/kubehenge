@@ -153,6 +153,9 @@ data "talos_machine_configuration" "node" {
         kind       = "TimeSyncConfig"
         ntp        = { servers = var.time_servers }
       })],
+      # The same MTU as the Proxmox VE interface, on the link by its alias, so it holds whatever
+      # the guest driver negotiates.
+      var.mtu == null ? [] : [yamlencode({ apiVersion = "v1alpha1", kind = "LinkConfig", name = "lan", mtu = var.mtu })],
     )),
   ]
 }

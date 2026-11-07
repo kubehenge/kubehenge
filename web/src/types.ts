@@ -657,6 +657,8 @@ export interface ManagementSettings {
   vmDatastore: string;
   bridge: string;
   vlan?: number;
+  /** The management VMs' interface MTU. Absent: the bridge's. */
+  mtu?: number;
   nodeAddresses: string[];
   apiAddress: string;
   gateway: string;
@@ -703,6 +705,12 @@ export interface TemplateRefreshSettings {
   time?: string;
   timeZone?: string;
   storage?: string;
+  /** The Proxmox VE node the build VM runs on. Empty: the first management node. */
+  node?: string;
+  /** The build VM's bridge, a VNet as zone/vnet. Empty: the first cluster bridge. */
+  bridge?: string;
+  /** The build VM's VLAN tag. Absent: untagged. */
+  vlan?: number;
   address?: string;
   gateway?: string;
   dns?: string[];

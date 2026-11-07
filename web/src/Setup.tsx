@@ -9,7 +9,10 @@ import {
   bridgeRef,
   cidr,
   isIP,
+  isMTU,
   isVLAN,
+  maxMTU,
+  minMTU,
   list,
   maskOf,
   networkOf,
@@ -69,6 +72,8 @@ export interface SetupForm {
   vmDatastore: string;
   bridge: string;
   vlan: string;
+  // Empty: the bridge's.
+  mtu: string;
   nodeAddresses: string;
   apiAddress: string;
   gateway: string;
@@ -96,6 +101,12 @@ export interface SetupForm {
   refreshTimeZone: string;
   // Empty: the first storage for clusters.
   refreshStorage: string;
+  // Empty: the first management node.
+  refreshNode: string;
+  // Empty: the first cluster bridge.
+  refreshBridge: string;
+  // Empty: untagged.
+  refreshVLAN: string;
   refreshAddress: string;
   refreshGateway: string;
   refreshDNS: string;
@@ -127,6 +138,15 @@ function refreshSettings(f: SetupForm): NonNullable<ManagementSettings["template
   };
   if (f.refreshStorage) {
     r.storage = f.refreshStorage;
+  }
+  if (f.refreshNode) {
+    r.node = f.refreshNode;
+  }
+  if (f.refreshBridge) {
+    r.bridge = f.refreshBridge;
+  }
+  if (f.refreshVLAN) {
+    r.vlan = Number(f.refreshVLAN);
   }
   if (f.refreshAddress) {
     r.address = f.refreshAddress;
@@ -182,6 +202,11 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .join("\n");
 }
 
+/** linkSettings holds the optional numbers of the management VMs' interface: set ones only. */
+function linkSettings(f: SetupForm): Pick<ManagementSettings, "vlan" | "mtu"> {
+  return { ...(f.vlan ? { vlan: Number(f.vlan) } : {}), ...(f.mtu ? { mtu: Number(f.mtu) } : {}) };
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -196,10 +221,8 @@ export function settings(f: SetupForm): ManagementSettings {
     workloadDatastores: f.workloadDatastores,
     workloadBridges: f.workloadBridges,
     bootstrapDatastore: f.bootstrapDatastore,
+    ...linkSettings(f),
   };
-  if (f.vlan) {
-    s.vlan = Number(f.vlan);
-  }
   const mirrors = parseMirrors(f.mirrors);
   if (Object.keys(mirrors).length > 0) {
     s.registryMirrors = mirrors;
@@ -276,6 +299,9 @@ type RefreshFields = Pick<
   | "refreshTime"
   | "refreshTimeZone"
   | "refreshStorage"
+  | "refreshNode"
+  | "refreshBridge"
+  | "refreshVLAN"
   | "refreshAddress"
   | "refreshGateway"
   | "refreshDNS"
@@ -291,10 +317,21 @@ function refreshFields(r: ManagementSettings["templateRefresh"]): RefreshFields 
     refreshTime: r?.time ?? refreshDefaults.time,
     refreshTimeZone: r?.timeZone ?? refreshDefaults.timeZone,
     refreshStorage: r?.storage ?? "",
+    ...refreshPlacementFields(r),
     refreshAddress: r?.address ?? "",
     refreshGateway: r?.gateway ?? "",
     refreshDNS: (r?.dns ?? []).join(", "),
     creatorBuilds: r?.creatorBuilds === true,
+  };
+}
+
+function refreshPlacementFields(
+  r: ManagementSettings["templateRefresh"],
+): Pick<SetupForm, "refreshNode" | "refreshBridge" | "refreshVLAN"> {
+  return {
+    refreshNode: r?.node ?? "",
+    refreshBridge: r?.bridge ?? "",
+    refreshVLAN: r?.vlan !== undefined && r.vlan > 0 ? String(r.vlan) : "",
   };
 }
 
@@ -306,6 +343,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     vmDatastore: saved.vmDatastore,
     bridge: saved.bridge,
     vlan: saved.vlan !== undefined && saved.vlan > 0 ? String(saved.vlan) : "",
+    mtu: saved.mtu !== undefined && saved.mtu > 0 ? String(saved.mtu) : "",
     nodeAddresses: saved.nodeAddresses.join("\n"),
     apiAddress: saved.apiAddress,
     gateway: saved.gateway,
@@ -343,6 +381,7 @@ export type SetupField =
   | "vmDatastore"
   | "bridge"
   | "vlan"
+  | "mtu"
   | "nodeAddresses"
   | "apiAddress"
   | "gateway"
@@ -355,6 +394,7 @@ export type SetupField =
   | "mirrors"
   | "podSubnets"
   | "serviceSubnets"
+  | "refreshVLAN"
   | "refreshAddress"
   | "refreshGateway"
   | "refreshDNS"
@@ -371,6 +411,7 @@ const stepFields: Record<SetupStep, SetupField[]> = {
   Network: [
     "bridge",
     "vlan",
+    "mtu",
     "nodeAddresses",
     "apiAddress",
     "gateway",
@@ -380,7 +421,7 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "podSubnets",
     "serviceSubnets",
   ],
-  Clusters: ["workload", "refreshAddress", "refreshGateway", "refreshDNS", "extraNamespaces"],
+  Clusters: ["workload", "refreshVLAN", "refreshAddress", "refreshGateway", "refreshDNS", "extraNamespaces"],
   Services: ["clusterOIDC", "backupTargets"],
   Passphrase: ["passphrase", "confirm"],
 };
@@ -491,6 +532,9 @@ function placementProblems(f: SetupForm): SetupProblems {
   if (f.vlan && !isVLAN(f.vlan)) {
     p.vlan = "A whole number from 1 to 4094.";
   }
+  if (f.mtu && !isMTU(f.mtu)) {
+    p.mtu = `A whole number from ${minMTU} to ${maxMTU}.`;
+  }
   return p;
 }
 
@@ -588,6 +632,9 @@ function refreshProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
   if (!f.refresh) {
     return p;
+  }
+  if (f.refreshVLAN && !isVLAN(f.refreshVLAN)) {
+    p.refreshVLAN = "A whole number from 1 to 4094.";
   }
   const dns = list(f.refreshDNS);
   if (!f.refreshAddress) {
@@ -1240,7 +1287,15 @@ function DatastoreAllocateChoice({ form, set }: Omit<FieldsProps, "shown">): JSX
 const offeredRefreshStorage = (f: SetupForm): string =>
   f.workloadDatastores.includes(f.refreshStorage) ? f.refreshStorage : "";
 
-function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
+// refreshBridges are the bridges the build VM may attach to: the clusters' and the management VMs'.
+const refreshBridges = (f: SetupForm): string[] => unique([...f.workloadBridges, ...(f.bridge ? [f.bridge] : [])]);
+
+// offeredRefreshBridge sends a build bridge that is no longer offered back to the first cluster bridge.
+const offeredRefreshBridge = (f: SetupForm): string =>
+  refreshBridges(f).includes(f.refreshBridge) ? f.refreshBridge : "";
+
+function RefreshChoice({ form, set, shown, nodes }: FieldsProps & { nodes: string[] }): JSX.Element {
+  const buildNodes = unique([...form.nodes, ...nodes, ...(form.refreshNode ? [form.refreshNode] : [])]);
   return (
     <fieldset className="group">
       <legend>Template refresh</legend>
@@ -1299,6 +1354,50 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
                   </option>
                 ))}
               </select>
+            )}
+          </Field>
+          <Field label="Build node">
+            {(id) => (
+              <select id={id} value={form.refreshNode} onChange={(e) => set("refreshNode", e.target.value)}>
+                <option value="">
+                  {form.nodes[0] === undefined ? "First management node" : `${form.nodes[0]} (default)`}
+                </option>
+                {buildNodes
+                  .filter((n) => n !== form.nodes[0])
+                  .map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </Field>
+          <Field label="Build bridge">
+            {(id) => (
+              <select id={id} value={form.refreshBridge} onChange={(e) => set("refreshBridge", e.target.value)}>
+                <option value="">
+                  {form.workloadBridges[0] === undefined
+                    ? "First cluster bridge"
+                    : `${form.workloadBridges[0]} (default)`}
+                </option>
+                {refreshBridges(form)
+                  .filter((b) => b !== form.workloadBridges[0])
+                  .map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+              </select>
+            )}
+          </Field>
+          <Field label="Build VLAN" hint="Optional" error={shown("refreshVLAN")}>
+            {(id) => (
+              <input
+                id={id}
+                inputMode="numeric"
+                value={form.refreshVLAN}
+                onChange={(e) => set("refreshVLAN", e.target.value.trim())}
+              />
             )}
           </Field>
           <Field label="Build address" hint="Empty for DHCP, or like 192.0.2.50/24" error={shown("refreshAddress")}>
@@ -2022,6 +2121,7 @@ function withDefaults(
       workloadDatastores: untouchedNone("workloadDatastores", vmDatastore),
       workloadBridges: untouchedNone("workloadBridges", bridge),
       refreshStorage: offeredRefreshStorage(form),
+      refreshBridge: offeredRefreshBridge(form),
     },
     offers,
     nodeNetwork: onBridge?.cidr === undefined ? undefined : networkOf(onBridge.cidr),
@@ -2181,6 +2281,17 @@ function setupFields({
             <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
           )}
         </Field>
+        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.mtu}
+              onChange={(e) => set("mtu", e.target.value.trim())}
+              placeholder="1500"
+            />
+          )}
+        </Field>
         <Field
           label="Node addresses"
           hint={nodeAddressHint(fixed !== undefined, more.nodeNetwork)}
@@ -2252,7 +2363,7 @@ function setupFields({
         <HAChoice form={form} set={set} />
         <HARulesChoice form={form} set={set} />
         <DatastoreAllocateChoice form={form} set={set} />
-        <RefreshChoice form={effective} set={set} shown={shown} />
+        <RefreshChoice form={effective} set={set} shown={shown} nodes={nodes.map((n) => n.node)} />
         <SysAuditChoice form={form} set={set} />
         <BootLogsChoice form={form} set={set} />
         <AuditLogChoice form={form} set={set} />

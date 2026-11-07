@@ -216,6 +216,7 @@ The Administration page (or the setup page) shows the error and the run's log. F
 - **Storage:** the Talos image storage must allow the `import` content type.
 - **Addresses:** the node addresses and the API address must be free, in one subnet, and reachable from the appliance on ports 50000 and 6443.
 - **Internet access** from the appliance, the Proxmox VE node and the new nodes ([install.md](install.md#internet-access)), or registry mirrors for the nodes.
+- **"Bridge … has MTU …":** the MTU is above the bridge's, so its larger frames never pass. Use the bridge's MTU or less, or raise the bridge's under System, Network.
 - **Pod and service ranges** that overlap the nodes' network are refused. Set others under Advanced.
 - **Time:** a run has to finish within two hours, the life of the Proxmox VE ticket it acts on.
 - **"The management cluster is being applied or removed"** or **"the appliance is being upgraded":** wait for that to finish.

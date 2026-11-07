@@ -29,10 +29,13 @@ type Settings struct {
 	VMDatastore    string   `json:"vmDatastore"`
 	Bridge         string   `json:"bridge"`
 	VLAN           *int     `json:"vlan,omitempty"`
-	NodeAddresses  []string `json:"nodeAddresses"`
-	APIAddress     string   `json:"apiAddress"`
-	Gateway        string   `json:"gateway"`
-	DNSServers     []string `json:"dnsServers"`
+	// MTU is the management VMs' network interface MTU, for a network that carries less than 1500
+	// or more. 0 or empty keeps the bridge's.
+	MTU           int      `json:"mtu,omitempty"`
+	NodeAddresses []string `json:"nodeAddresses"`
+	APIAddress    string   `json:"apiAddress"`
+	Gateway       string   `json:"gateway"`
+	DNSServers    []string `json:"dnsServers"`
 	// TimeServers are the NTP servers the nodes keep their clocks with. Empty keeps Talos's default
 	// public ones.
 	TimeServers        []string `json:"timeServers,omitempty"`
@@ -98,6 +101,12 @@ type TemplateRefresh struct {
 	TimeZone string `json:"timeZone,omitempty"`
 	// Storage holds the templates' disks, one of the cluster storages.
 	Storage string `json:"storage,omitempty"`
+	// Node is the Proxmox VE node the build VM runs on. Empty takes the first management node.
+	Node string `json:"node,omitempty"`
+	// Bridge is the build VM's bridge, a VNet written zone/vnet. Empty takes the first cluster bridge.
+	Bridge string `json:"bridge,omitempty"`
+	// VLAN tags the build VM's network. 0 or empty sends it untagged.
+	VLAN int `json:"vlan,omitempty"`
 	// Address, Gateway and DNS are the static network of the VM that prepares an image.
 	Address string   `json:"address,omitempty"`
 	Gateway string   `json:"gateway,omitempty"`
@@ -147,6 +156,15 @@ func (r *TemplateRefresh) check(p *problems, workloadDatastores []string) {
 	if r.Storage != "" && !slices.Contains(workloadDatastores, r.Storage) {
 		p.addf("Template disks: one of the cluster storages")
 	}
+	if r.Node != "" && !validHostName(r.Node) {
+		p.addf("Template build node: a Proxmox VE node name")
+	}
+	if r.Bridge != "" && !bridgeRef.MatchString(r.Bridge) {
+		p.addf("Template build bridge: a bridge, or a VNet written zone/vnet")
+	}
+	if r.VLAN < 0 || r.VLAN > maxVLAN {
+		p.addf("Template build VLAN: 0 to %d", maxVLAN)
+	}
 	r.checkNetwork(p)
 }
 
@@ -187,10 +205,14 @@ func moduleTemplateRefresh(r *TemplateRefresh) map[string]any {
 	for key, value := range map[string]string{
 		"weekday": r.Weekday, "time": r.Time, "time_zone": r.TimeZone, "storage": r.Storage,
 		"address": r.Address, "gateway": r.Gateway,
+		"node": r.Node, "bridge": r.Bridge,
 	} {
 		if value != "" {
 			out[key] = value
 		}
+	}
+	if r.VLAN > 0 {
+		out["vlan"] = r.VLAN
 	}
 	if len(r.DNS) > 0 {
 		out["dns"] = r.DNS
@@ -218,6 +240,12 @@ const MaxOIDCProviders = 8
 const (
 	minVLAN = 1
 	maxVLAN = 4094
+)
+
+// The MTUs of a node's interface. Proxmox VE takes one from 576, but IPv6 does not work below 1280.
+const (
+	minMTU = 1280
+	maxMTU = 65520
 )
 
 // bridgeRef is a node's bridge by name, or a VNet as zone/vnet.
@@ -405,6 +433,9 @@ func (s *Settings) checkPlacement(p *problems) {
 	}
 	if s.VLAN != nil && (*s.VLAN < minVLAN || *s.VLAN > maxVLAN) {
 		p.addf("VLAN tag: %d to %d", minVLAN, maxVLAN)
+	}
+	if s.MTU != 0 && (s.MTU < minMTU || s.MTU > maxMTU) {
+		p.addf("MTU: %d to %d", minMTU, maxMTU)
 	}
 }
 

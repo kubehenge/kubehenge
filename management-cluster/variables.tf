@@ -66,6 +66,17 @@ variable "vlan_id" {
   default     = null
 }
 
+variable "mtu" {
+  description = "MTU of the management cluster's VMs' network interface, 1280 to 65520, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It cannot exceed the bridge's. Null keeps the bridge's."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.mtu == null ? true : var.mtu >= 1280 && var.mtu <= 65520 && var.mtu == floor(var.mtu)
+    error_message = "mtu is a whole number from 1280 to 65520, or null for the bridge's."
+  }
+}
+
 variable "cluster_name" {
   description = "Name of the management cluster, also the prefix of its VM names."
   type        = string

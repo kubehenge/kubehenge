@@ -142,7 +142,8 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 		}
 		reply(w, []map[string]any{
 			{"iface": "vmbr0", "type": "bridge", "cidr": "192.0.2.5/24", "address": "192.0.2.5", "netmask": "24", "gateway": "192.0.2.1", "comments": "uplink\n"},
-			{"iface": "vmbr1", "type": "OVSBridge", "bridge_vlan_aware": 1},
+			{"iface": "vmbr1", "type": "OVSBridge", "bridge_vlan_aware": 1, "mtu": "9000"},
+			{"iface": "vmbr2", "type": "bridge", "mtu": 1450},
 		})
 	})
 	mux.HandleFunc("GET /api2/json/nodes/one/dns", func(w http.ResponseWriter, _ *http.Request) {
@@ -289,8 +290,9 @@ func TestBridgesAndDNSOfANode(t *testing.T) {
 	tk := &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}
 	bridges, err := a.Bridges(context.Background(), tk, "one")
 	want := []Bridge{
-		{Bridge: "vmbr0", Node: "one", Comment: "uplink", CIDR: "192.0.2.5/24", Gateway: "192.0.2.1"},
-		{Bridge: "vmbr1", Node: "one", VLANAware: true},
+		{Bridge: "vmbr0", Node: "one", Comment: "uplink", CIDR: "192.0.2.5/24", Gateway: "192.0.2.1", MTU: 1500},
+		{Bridge: "vmbr1", Node: "one", VLANAware: true, MTU: 9000},
+		{Bridge: "vmbr2", Node: "one", MTU: 1450},
 	}
 	if err != nil || !reflect.DeepEqual(bridges, want) {
 		t.Fatalf("Bridges = %+v, %v; want %+v", bridges, err, want)

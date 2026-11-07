@@ -1,6 +1,7 @@
 package pve
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -69,6 +70,9 @@ type Bridge struct {
 	// CIDR and Gateway are the node's own IPv4 address on the bridge and its gateway, where it has them.
 	CIDR    string `json:"cidr,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
+	// MTU is the bridge's, 1500 where Proxmox VE lists none: a node's interface on it takes no more.
+	// A VNet has its zone's, and 0 where the zone sets none or the user may not read it.
+	MTU int `json:"mtu,omitempty"`
 	// Zone is the SDN zone of a VNet. A node's own bridge has none and sits in LocalZone.
 	Zone string `json:"zone,omitempty"`
 	// ZoneType is the type of the VNet's zone: simple, vlan, qinq, vxlan or evpn. Empty where the
@@ -76,6 +80,21 @@ type Bridge struct {
 	ZoneType string `json:"zoneType,omitempty"`
 	// Alias is the VNet's display name, which Proxmox VE's interface shows beside its ID.
 	Alias string `json:"alias,omitempty"`
+}
+
+// defaultBridgeMTU is what a Linux bridge has where Proxmox VE lists no MTU.
+const defaultBridgeMTU = 1500
+
+// number reads a number Proxmox VE sends as a string or as a number.
+type number int
+
+func (n *number) UnmarshalJSON(raw []byte) error {
+	v, err := strconv.Atoi(strings.Trim(string(raw), `"`))
+	if err != nil {
+		return fmt.Errorf("reading %s as a number: %w", raw, err)
+	}
+	*n = number(v)
+	return nil
 }
 
 // LocalZone is the SDN zone of the bridges in a node's network configuration.
@@ -332,6 +351,7 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 		Comments  string `json:"comments"`
 		CIDR      string `json:"cidr"`
 		Gateway   string `json:"gateway"`
+		MTU       number `json:"mtu"`
 	}
 	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/network?type=any_bridge", &res); err != nil {
 		return nil, err
@@ -340,7 +360,7 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 	for _, r := range res {
 		bridges = append(bridges, Bridge{
 			Bridge: r.Iface, Node: node, VLANAware: r.VLANAware != 0, Comment: strings.TrimSpace(r.Comments),
-			CIDR: r.CIDR, Gateway: r.Gateway,
+			CIDR: r.CIDR, Gateway: r.Gateway, MTU: cmp.Or(int(r.MTU), defaultBridgeMTU),
 		})
 	}
 	return append(bridges, a.vnets(ctx, t, node)...), nil
@@ -362,16 +382,18 @@ func (a *Accounts) vnets(ctx context.Context, t *Ticket, node string) []Bridge {
 		Zone  string `json:"zone"`
 		Type  string `json:"type"`
 		Nodes string `json:"nodes"`
+		MTU   number `json:"mtu"`
 	}
 	// Without the zones every VNet is offered, on the strength of its own zone name.
 	_ = a.get(ctx, t, "/cluster/sdn/zones", &zones)
 	type zoneInfo struct {
 		kind  string
+		mtu   int
 		nodes []string
 	}
 	known := map[string]zoneInfo{}
 	for _, z := range zones {
-		info := zoneInfo{kind: z.Type}
+		info := zoneInfo{kind: z.Type, mtu: int(z.MTU)}
 		for n := range strings.SplitSeq(z.Nodes, ",") {
 			if n = strings.TrimSpace(n); n != "" {
 				info.nodes = append(info.nodes, n)
@@ -386,7 +408,7 @@ func (a *Accounts) vnets(ctx context.Context, t *Ticket, node string) []Bridge {
 			continue
 		}
 		bridges = append(bridges, Bridge{
-			Bridge: v.VNet, Node: node, VLANAware: bool(v.VLANAware), Zone: v.Zone, ZoneType: z.kind,
+			Bridge: v.VNet, Node: node, VLANAware: bool(v.VLANAware), Zone: v.Zone, ZoneType: z.kind, MTU: z.mtu,
 			Alias: strings.TrimSpace(v.Alias),
 		})
 	}

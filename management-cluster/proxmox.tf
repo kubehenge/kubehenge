@@ -441,6 +441,7 @@ resource "proxmox_virtual_environment_vm" "node" {
     bridge  = local.bridges[var.bridge].name
     vlan_id = var.vlan_id
     model   = "virtio"
+    mtu     = var.mtu
     # No mac_address: Proxmox VE assigns a unique one, and the provider keeps what the VM has. The
     # Talos link alias selects the NIC by it.
   }
