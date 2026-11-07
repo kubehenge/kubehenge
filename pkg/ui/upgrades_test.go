@@ -162,6 +162,44 @@ func TestSetupNeedsAnAdministrator(t *testing.T) {
 	expect(t, d.do("POST", "/api/setup", `{"settings":{},"passphrase":"correct horse battery staple"}`), http.StatusForbidden)
 }
 
+// The module grants SDN.Use on the zone the settings name, so a VNet written as a plain bridge or in
+// the wrong zone would get an ACL that Proxmox VE never checks.
+func TestSetupHoldsBridgesToTheirZones(t *testing.T) {
+	t.Parallel()
+	h, a := preflightHarness(t)
+	bridges := func(bridge, workload string) string {
+		s := strings.Replace(preflightSettings, `"bridge":"vmbr0"`, `"bridge":"`+bridge+`"`, 1)
+		return strings.Replace(s, `"workloadBridges":["vmbr0"]`, `"workloadBridges":[`+workload+`]`, 1)
+	}
+	for name, c := range map[string]struct{ settings, want string }{
+		"management VNet as a plain bridge": {bridges("tenants", `"vmbr0"`), "Bridge tenants is in zone evpn. Write it as evpn/tenants."},
+		"workload VNet in another zone":     {bridges("vmbr0", `"vmbr0","localnetwork/tenants"`), "Write it as evpn/tenants."},
+		"node bridge in a zone":             {bridges("evpn/vmbr0", `"vmbr0"`), "Proxmox VE shows you no VNet vmbr0. A node's own bridge is written as vmbr0."},
+		"VNet that is not there":            {bridges("evpn/nosuch", `"vmbr0"`), "Proxmox VE shows you no VNet nosuch."},
+		"VLAN on a VLAN zone": {
+			strings.Replace(bridges("vlanz/corp", `"vmbr0"`), `"bridge":`, `"vlan":20,"bridge":`, 1),
+			"VNet corp is in a VLAN zone and tags already",
+		},
+	} {
+		joined := strings.Join(checkSettings(t, a, c.settings).Errors, "\n")
+		if !strings.Contains(joined, c.want) {
+			t.Errorf("%s: errors %q, want %q", name, joined, c.want)
+		}
+		rec := a.do("POST", "/api/setup", strings.TrimSuffix(c.settings, "}")+`,"passphrase":"correct horse battery staple"}`)
+		expect(t, rec, http.StatusUnprocessableEntity)
+		if !strings.Contains(rec.Body.String(), c.want) {
+			t.Errorf("%s: apply answered %s, want %q", name, rec.Body, c.want)
+		}
+	}
+	if h.server.Appliance.Current() != nil {
+		t.Error("a run started although a bridge was in the wrong zone")
+	}
+	// VNets in their own zones, on a node that carries them, pass.
+	if errs := checkSettings(t, a, bridges("vlanz/corp", `"vmbr0","evpn/tenants"`)).Errors; len(errs) != 0 {
+		t.Errorf("errors = %q", errs)
+	}
+}
+
 // Restores through the guest agent grant Kubehenge a token with VM.GuestAgent.Unrestricted, which
 // only who holds it may hand on.
 func TestSetupWithEtcdRestoresNeedsTheGuestAgent(t *testing.T) {

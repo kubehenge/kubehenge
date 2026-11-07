@@ -130,6 +130,11 @@ rules:
     resources: [serviceaccounts/token]
     resourceNames: [{{ $name }}]
     verbs: [create]
+  # Whether the controller reaches the Proxmox VE API, which the management cluster's health shows.
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kubehenge-proxmox-reach]
+    verbs: [get]
   {{- if .Values.interface.offerHARules }}
   # The HA rules' names and nodes, which it offers to those who may create or change a cluster.
   - apiGroups: [""]

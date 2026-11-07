@@ -5,10 +5,22 @@ name: website
 # published from main, with the release index appliances read signed again every week.
 on:
   pull_request:
-    paths: [docs/**, website/**, web/src/logo.svg, scripts/tools.sh, .github/workflows/website.yml]
+    paths:
+      - docs/**
+      - website/**
+      - web/src/logo.svg
+      - scripts/tools.sh
+      - scripts/changelog.sh
+      - .github/workflows/website.yml
   push:
     branches: [main]
-    paths: [docs/**, website/**, web/src/logo.svg, scripts/tools.sh, .github/workflows/website.yml]
+    paths:
+      - docs/**
+      - website/**
+      - web/src/logo.svg
+      - scripts/tools.sh
+      - scripts/changelog.sh
+      - .github/workflows/website.yml
   # An index runs out two weeks after it is signed (pkg/release); a weekly run leaves a week to
   # spare. release.yml starts a run as well once it publishes a release.
   schedule:
@@ -116,15 +128,37 @@ jobs:
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" node
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - run: make website
-      # The build brings website/pages.json up to date, so a difference is a page change committed
-      # without its new fingerprint and date.
-      - name: Page dates
+      # The page dates are the published site's own pages.json, so no pull request has to carry
+      # them. A missing file means the first deploy. Any other failure stops the build, as an empty
+      # start would give every page today's date.
+      - name: Published page dates
+        if: github.event_name != 'pull_request'
         run: |
-          [ -z "$(git status --porcelain -- website/pages.json)" ] && exit 0
-          git --no-pager diff -- website/pages.json
-          echo "::error file=website/pages.json::Out of date: run make website and commit it."
-          exit 1
+          set -eu
+          dates=$RUNNER_TEMP/page-dates
+          mkdir -p "$dates"
+          code=$(curl --silent --show-error --location --retry 3 --output "$dates/before.json" \
+            --write-out '%{http_code}' https://kubehenge.dev/pages.json)
+          case $code in
+            200) jq -e 'type == "object"' "$dates/before.json" > /dev/null ;;
+            404) echo '{}' > "$dates/before.json" ;;
+            *) echo "::error::https://kubehenge.dev/pages.json answered $code"; exit 1 ;;
+          esac
+      - run: make website
+        env:
+          PAGES_PREVIOUS: >-
+            ${{ github.event_name != 'pull_request'
+            && format('{0}/page-dates/before.json', runner.temp) || '' }}
+      # What IndexNow compares: the dates before this deploy and the ones it publishes.
+      - if: github.event_name != 'pull_request'
+        run: cp website/.vitepress/dist/pages.json "$RUNNER_TEMP/page-dates/after.json"
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: page-dates
+          path: ${{ runner.temp }}/page-dates
+          if-no-files-found: error
+          retention-days: 1
       - if: >-
           github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
           && steps.cache.outputs.cache-hit != 'true'
@@ -195,35 +229,32 @@ jobs:
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
   # The pages this push changed, sent to IndexNow, which passes them on to Bing, Yandex and the
-  # other engines that take part. A page changed when its fingerprint in website/pages.json moved.
+  # other engines that take part. A page changed when its fingerprint in pages.json moved, between
+  # the file the site served before this deploy and the one it serves now (the build's artifact).
   # Google reads the sitemap that robots.txt names. The key is public by design: the engines check
   # that the site serves it.
   indexnow:
     name: IndexNow
-    needs: deploy
+    needs: [build, deploy]
     if: ${{ !cancelled() && needs.deploy.result == 'success' && github.event_name == 'push' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
-    permissions:
-      contents: read # Reads pages.json before and after the push.
+    permissions: {}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          persist-credentials: false
-          fetch-depth: 0
+          name: page-dates
+          path: page-dates
       - name: Send the changed pages
         env:
           SITE: https://kubehenge.dev
           KEY: de4648cfd1ca935797a72233390428d9
-          BEFORE: ${{ github.event.before }}
         run: |
           set -eu
-          git show "$BEFORE:website/pages.json" > before.json 2> /dev/null ||
-            echo '{}' > before.json
-          jq -r --slurpfile before before.json --arg site "$SITE" '
+          jq -r --slurpfile before page-dates/before.json --arg site "$SITE" '
             to_entries[]
             | select(.value.fingerprint != $before[0][.key].fingerprint)
-            | $site + .key' website/pages.json > pages.txt
+            | $site + .key' page-dates/after.json > pages.txt
           if [ ! -s pages.txt ]; then
             echo "No page changed."
             exit 0
