@@ -42,7 +42,11 @@ func connect(conn *pve.Config) (*templates.Builder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connecting to Proxmox VE: %w", err)
 	}
-	return &templates.Builder{Client: api, Sources: templates.DefaultSources()}, nil
+	proxy, err := templates.ProxyFromEnvironment()
+	if err != nil {
+		return nil, fmt.Errorf("reading the proxy: %w", err)
+	}
+	return &templates.Builder{Client: api, Sources: templates.DefaultSources(), Proxy: proxy}, nil
 }
 
 // poolFlag is the pool a template command works in. Clusters clone only from the templates in their

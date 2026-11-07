@@ -117,6 +117,13 @@ controllerLogs:
   level: info
   development: false
 
+# The HTTP(S) proxy the controller and the template builds download through. secret names a Secret
+# in the release namespace with HTTP_PROXY, HTTPS_PROXY and NO_PROXY, and with ca.crt when ca is
+# true, for a proxy that re-signs TLS. Empty, they go direct.
+proxy:
+  secret: ""
+  ca: false
+
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.
   url: ""

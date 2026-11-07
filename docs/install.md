@@ -64,6 +64,23 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 
 The management cluster's nodes can pull through registry mirrors instead ([setup](#network), Advanced).
 
+### Behind a proxy
+
+Set the proxy under Advanced in the setup ([setup](#network)), or `proxy` in the module ([variables](#variables)). It takes an address, a user and password if the proxy asks, exceptions and the authority of a proxy that re-signs TLS. The module's `proxy.url` is the one place the credentials sit inside the address.
+
+It reaches OpenTofu, the appliance's downloads, the Talos nodes, the Cluster API operator and providers, the controller and the VM template builds. A build's VM uses it for packages, `curl` and image pulls, and trusts the authority while it builds.
+
+Kubehenge adds these exceptions:
+
+- the Proxmox VE API host
+- the management nodes' network and the build VM's network
+- the management cluster's pod and service ranges
+- `localhost`, `127.0.0.1`, `.svc` and `.cluster.local`
+
+Add the workload clusters' node networks and any internal registry.
+
+Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too. Clusters' own nodes are not covered.
+
 ### Sizes
 
 | What | vCPUs | Memory | Disk |
@@ -319,6 +336,7 @@ The one exception is automatic upgrades of the management cluster, off by defaul
 | Gateway | The nodes' default gateway, an IPv4 address. |
 | DNS servers | IP addresses, one per line or separated by commas. |
 | Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. |
+| Advanced: Proxy address, Proxy user, Proxy password, Proxy exceptions, Proxy certificate | The proxy every download goes through. The address has no credentials, so write `http://proxy.example:3128` and put the user and password in their fields. A saved password shows as set, and the page can replace or remove it but never shows it. See [Behind a proxy](#behind-a-proxy). |
 | Advanced: Pod ranges, Service ranges | The management cluster's own. When empty, `10.244.0.0/16` and `10.96.0.0/12`. Where those overlap the nodes' network, the API address or the gateway, the first clear one of a few other private ranges. |
 
 #### Clusters
@@ -600,6 +618,7 @@ tofu output -raw talosconfig > talosconfig
 | `workload_datastores` | `["local-lvm"]` | Storages clusters may use. |
 | `workload_bridges` | `["vmbr0"]` | Bridges clusters may attach to, with any VLAN on them. A node's bridge is its name. An SDN VNet is `zone/vnet`, such as `evpn1/web`. |
 | `bootstrap_datastore` | `local` | Storage for cloud-init ISOs. Cluster API gets full control of it. |
+| `proxy` | `{}` | The HTTP(S) proxy for downloads: `url`, `no_proxy` (comma-separated, with the Proxmox VE host, the nodes' network and the pod and service ranges) and `ca_bundle` (PEM). Sensitive. |
 | `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name. Each takes endpoint URLs tried in order before the registry itself. A mirror of `factory.talos.dev`, `ghcr.io` or `registry.k8s.io` must serve the images' cosign signatures too. The nodes require them on Sidero's and Kubernetes' images and on the Talos providers'. |
 | `backup_targets` | `[]` | S3 stores clusters back up to with Velero ([details](install-settings.md#backup-targets)). Up to sixteen, each with `name` and `bucket`. Optional fields are `endpoint` (https, AWS S3 when unset), `region`, `prefix`, `ca_certificate` and `checksums` (default true). Access keys are stored through the interface, or named per cluster with `existingSecret` ([clusters.md](clusters.md#variables)). |
 | `cluster_oidc` | `[]` | OpenID Connect providers every new cluster trusts unless it names its own. Up to eight, each with `issuer_url` (https) and `client_id`. Optional fields are `username_claim`, `username_prefix`, `groups_claim`, `groups_prefix`, `scopes` and `certificate_authority`. |

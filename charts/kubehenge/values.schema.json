@@ -121,6 +121,15 @@
       "type": "string",
       "pattern": "^([^@]+@sha256:[0-9a-f]{64})?$"
     },
+    "proxy": {
+      "description": "The HTTP(S) proxy the controller and the template builds download through.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "secret": { "type": "string" },
+        "ca": { "type": "boolean" }
+      }
+    },
     "controllerLogs": {
       "description": "How the controller logs, in JSON either way.",
       "type": "object",

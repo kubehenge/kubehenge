@@ -1,0 +1,10 @@
+---
+# Digest of the chart's files. The module sets it: the Helm provider upgrades a release only when
+# its chart's version or its values change.
+chartDigest: ""
+
+secret:
+  name: kubehenge-proxy
+# Plain keys, and keys whose values are base64-encoded (so that --set cannot mangle them).
+data: {}
+encodedData: {}
