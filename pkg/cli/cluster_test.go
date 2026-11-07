@@ -59,6 +59,11 @@ func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "POST /api/clusters":
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, `{"namespace":"clusters","name":"new"}`)
+	case "GET /api/clusters/clusters/web/spec":
+		_, _ = io.WriteString(w, "kind: Cluster\nname: web\n")
+	case "POST /api/cluster-specs":
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"namespace":"clusters","name":"web"}`)
 	case "PATCH /api/clusters/b/twin":
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = io.WriteString(w, `{"error":"you need VM.Allocate on pool b"}`)
@@ -148,6 +153,34 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	}
 	if strings.Join(sent, "\n") != strings.Join(want, "\n") {
 		t.Errorf("sent\n%s\nwant\n%s", strings.Join(sent, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestClusterExportSavesTheSpecAndCreateFromRecreatesIt(t *testing.T) {
+	t.Parallel()
+	fake := &fakeClusterAPI{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	const token = "dev@pve!ci=secret" //nolint:gosec // the fake interface's own
+
+	out, err := runCluster(t, srv.URL, token, "export", "web", "-n", "clusters")
+	if err != nil || out != "kind: Cluster\nname: web\n" {
+		t.Fatalf("export = %q, %v", out, err)
+	}
+	file := filepath.Join(t.TempDir(), "web.yaml")
+	if out, err = runCluster(t, srv.URL, token, "export", "web", "-n", "clusters", "-o", file); err != nil || !strings.Contains(out, file) {
+		t.Fatalf("export -o = %q, %v", out, err)
+	}
+	if out, err = runCluster(t, srv.URL, token, "create", "--from", file); err != nil || out != "cluster clusters/web created\n" {
+		t.Fatalf("create --from = %q, %v", out, err)
+	}
+	if _, err = runCluster(t, srv.URL, token, "create", "--from", file, "-f", file); err == nil {
+		t.Error("create took both -f and --from")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.sent) != 1 || !strings.HasPrefix(fake.sent[0], "POST /api/cluster-specs ") || !strings.Contains(fake.sent[0], "kind: Cluster") {
+		t.Errorf("sent %v", fake.sent)
 	}
 }
 

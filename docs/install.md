@@ -451,7 +451,9 @@ The appliance takes each snapshot itself through the nodes' Talos API, with a ta
 
 #### Restoring
 
-**Restore…** on a snapshot wipes etcd on every control-plane node of the management cluster and restores it from the snapshot. Every cluster's objects go back to then. Check clusters created or deleted since then in the cluster list, as they no longer match what is in Proxmox VE.
+**Restore…** on a snapshot wipes etcd on every control-plane node of the management cluster and restores it from the snapshot. Every cluster's objects go back to then. After a restore, and then daily, the controller compares each cluster with its VMs. A cluster whose VMs are all gone shows **VMs missing** on its Health page. VMs in Kubehenge's pools that no cluster owns show as **Unowned VMs** on the management cluster's Health. Nothing deletes them.
+
+While the backups are off, a warning stands on **Administration, Backups** and above the cluster list, because every cluster's CAs, kubeconfigs and backup keys live only in this etcd. An administrator can dismiss it for 30 days, and the page records who did and when. Notifications repeat it weekly.
 
 It asks for the state passphrase and counts as a run of the management cluster. It needs only the nodes' Talos API, so it works while the management cluster's own API does not answer.
 
@@ -465,6 +467,10 @@ The appliance's shell has the same commands, with the page's privileges and refu
 | `kubehenge appliance etcd-backups snapshots` | lists the snapshots in the target, newest first |
 | `kubehenge appliance etcd-backups take` | takes a snapshot and waits until it is stored |
 | `kubehenge appliance etcd-backups restore … --passphrase-file …` | restores a snapshot by name and prints the run's log until it ends |
+| `kubehenge appliance etcd-backups recreate … --passphrase-file …` | makes the management cluster's VMs again, then restores a snapshot into them |
+| `kubehenge appliance etcd-backups dismiss-warning` | silences the warning that the backups are off for 30 days |
+| `kubehenge appliance export` | saves the appliance's state, encrypted with `--export-passphrase-file`, for a new appliance ([details](install-settings.md#export-for-a-new-appliance)) |
+| `kubehenge appliance import <file>` | reads an export into a new appliance |
 
 ### Notifications
 

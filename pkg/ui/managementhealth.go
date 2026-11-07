@@ -13,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
@@ -29,6 +30,11 @@ type managementHealthView struct {
 	Controllers []managementController `json:"controllers,omitempty"`
 	// Proxmox tells whether the controller reaches the Proxmox VE API from inside the cluster.
 	Proxmox *proxmoxReachView `json:"proxmox,omitempty"`
+	// Unowned are the VMs in Kubehenge's pools that no Cluster owns. They are never deleted
+	// automatically.
+	Unowned *provisioner.UnownedVMs `json:"unowned,omitempty"`
+	// BackupWarning stands while the management cluster's etcd is not backed up.
+	BackupWarning *appliance.EtcdBackupWarning `json:"backupWarning,omitempty"`
 }
 
 type managementNode struct {
@@ -65,6 +71,10 @@ func (s *Server) managementHealth(w http.ResponseWriter, r *http.Request, u user
 	}
 	if v.Answers {
 		v.Proxmox = s.proxmoxReach(ctx, kube)
+		v.Unowned = s.unownedVMs(ctx, kube)
+	}
+	if s.Appliance != nil {
+		v.BackupWarning = s.Appliance.EtcdBackups().Warning
 	}
 	writeJSON(w, http.StatusOK, v)
 }

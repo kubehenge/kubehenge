@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -79,22 +80,7 @@ decide what it may do, as they do for a user signed in to the interface.`,
 	}
 	o.namespaceFlag(kubeconfig.Flags())
 
-	var file string
-	create := &cobra.Command{
-		Use:   "create -f FILE",
-		Short: "Create a cluster from the interface's create request, in JSON or YAML",
-		Long: `Create a cluster from the interface's create request, in JSON or YAML.
-
-The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
-workerReplicas, variables, and namespace where the interface has more than one. It is checked as
-the wizard's request is.`,
-		Args: noArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return o.create(cmd.Context(), cmd.OutOrStdout(), file)
-		},
-	}
-	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
-	_ = create.MarkFlagRequired("filename")
+	create := o.createCommand()
 
 	var controlPlanes int32
 	var workers []string
@@ -133,11 +119,40 @@ the wizard's request is.`,
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
 	o.namespaceFlag(deleteCmd.Flags())
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, deleteCmd, o.machineCommand())
+	cmd.AddCommand(list, get, kubeconfig, create, o.exportCommand(), scale, deleteCmd, o.machineCommand())
 	return cmd
 }
 
 const clusterNameArg = "give the cluster's name"
+
+func (o *clusterOptions) createCommand() *cobra.Command {
+	var file, from string
+	create := &cobra.Command{
+		Use:   "create (-f FILE | --from FILE)",
+		Short: "Create a cluster from the interface's create request, or from an exported spec",
+		Long: `Create a cluster from the interface's create request, in JSON or YAML.
+
+The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
+workerReplicas, variables, and namespace where the interface has more than one. It is checked as
+the wizard's request is.
+
+--from takes a spec saved by "kubehenge cluster export", or found in the backup target under
+clusters/<namespace>.<name>/cluster.yaml, and creates the cluster it describes. The same checks apply.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if (file == "") == (from == "") {
+				return errors.New("give the request with -f, or an exported spec with --from")
+			}
+			if from != "" {
+				return o.createFromSpec(cmd.Context(), cmd.OutOrStdout(), from)
+			}
+			return o.create(cmd.Context(), cmd.OutOrStdout(), file)
+		},
+	}
+	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
+	create.Flags().StringVar(&from, "from", "", "an exported cluster spec, or - for standard input")
+	return create
+}
 
 // namespaceFlag adds -n to a command that finds a cluster by its name. The others either list
 // every namespace or, as create, take the namespace in the request.
@@ -273,27 +288,88 @@ func (o *clusterOptions) raw(ctx context.Context, out io.Writer, method, name, t
 	return nil
 }
 
-func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string) error {
-	var raw []byte
-	var err error
-	if file == "-" {
-		raw, err = io.ReadAll(os.Stdin)
-	} else {
-		raw, err = os.ReadFile(file) //nolint:gosec // the file the user names
+func (o *clusterOptions) exportCommand() *cobra.Command {
+	var file string
+	cmd := &cobra.Command{
+		Use:   "export NAME",
+		Short: "Print a cluster's spec as the backup target keeps it, without Secrets' values",
+		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return o.export(cmd.Context(), cmd.OutOrStdout(), args[0], file)
+		},
 	}
+	cmd.Flags().StringVarP(&file, "output", "o", "", "save the spec to this file")
+	o.namespaceFlag(cmd.Flags())
+	return cmd
+}
+
+// export saves a cluster's spec, as the backup target keeps it, to a file or the output.
+func (o *clusterOptions) export(ctx context.Context, out io.Writer, name, file string) error {
+	path, err := o.clusterPath(ctx, name)
 	if err != nil {
-		return fmt.Errorf("reading the create request: %w", err)
+		return err
+	}
+	body, err := o.call(ctx, http.MethodGet, path+"/spec", nil)
+	if err != nil {
+		return err
+	}
+	if file == "" {
+		_, err = out.Write(body)
+		return err //nolint:wrapcheck // the writer's own error
+	}
+	if err := os.WriteFile(file, body, privateFileMode); err != nil {
+		return fmt.Errorf("saving the spec: %w", err)
+	}
+	_, _ = fmt.Fprintln(out, "spec saved to "+file)
+	return nil
+}
+
+// readInput reads the file the user names, or standard input for "-".
+func readInput(file string) ([]byte, error) {
+	if file == "-" {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("reading standard input: %w", err)
+		}
+		return raw, nil
+	}
+	raw, err := os.ReadFile(filepath.Clean(file))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", file, err)
+	}
+	return raw, nil
+}
+
+// create makes a cluster from the wizard's request in file.
+func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string) error {
+	raw, err := readInput(file)
+	if err != nil {
+		return err
 	}
 	req, err := yaml.YAMLToJSON(raw)
 	if err != nil {
 		return fmt.Errorf("the create request is neither JSON nor YAML: %w", err)
 	}
-	body, err := o.call(ctx, http.MethodPost, "/api/clusters", json.RawMessage(req))
+	return o.created(ctx, out, "/api/clusters", json.RawMessage(req))
+}
+
+// createFromSpec makes a cluster from a spec saved by export. The interface checks it as it checks
+// the wizard's request.
+func (o *clusterOptions) createFromSpec(ctx context.Context, out io.Writer, file string) error {
+	raw, err := readInput(file)
+	if err != nil {
+		return err
+	}
+	return o.created(ctx, out, "/api/cluster-specs", map[string]string{"spec": string(raw)})
+}
+
+func (o *clusterOptions) created(ctx context.Context, out io.Writer, path string, request any) error {
+	body, err := o.call(ctx, http.MethodPost, path, request)
 	if err != nil {
 		return err
 	}
 	var made listedCluster
-	if err := json.Unmarshal(body, &made); err != nil || made.Name == "" {
+	if err = json.Unmarshal(body, &made); err != nil || made.Name == "" {
 		_, _ = fmt.Fprintln(out, "cluster created")
 		return nil //nolint:nilerr // the cluster was created; only its description did not read.
 	}

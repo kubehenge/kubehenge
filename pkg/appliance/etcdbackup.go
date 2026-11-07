@@ -83,6 +83,12 @@ type EtcdBackupStatus struct {
 	Failed   *time.Time                `json:"failed,omitempty"`
 	// Taking is set while a snapshot is being taken.
 	Taking bool `json:"taking,omitempty"`
+	// Warning stands while the backups are off.
+	Warning *EtcdBackupWarning `json:"warning,omitempty"`
+	// ExportDue is set when no export of the appliance's state was taken since the settings it
+	// carries last changed, after a snapshot succeeded.
+	ExportDue  bool       `json:"exportDue,omitempty"`
+	ExportedAt *time.Time `json:"exportedAt,omitempty"`
 }
 
 // etcdBackupKeys is what the appliance keeps to take snapshots with nobody signed in: the target's
@@ -139,6 +145,8 @@ func (a *Appliance) EtcdBackups() *EtcdBackupStatus {
 	a.mu.Lock()
 	st.Taking = a.takingEtcd
 	a.mu.Unlock()
+	st.Warning = a.etcdBackupWarning(st)
+	st.ExportDue, st.ExportedAt = a.exportDue(st)
 	return st
 }
 
