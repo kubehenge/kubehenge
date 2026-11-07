@@ -122,6 +122,12 @@ type demoCluster struct {
 	Crashing string `json:"crashing"`
 	// LackingMemory is the message of a NodesLackMemory condition: no node has room for the cluster.
 	LackingMemory string `json:"lackingMemory"`
+	// ProxmoxVersions and NodeMTUs are the annotations the placer sets while the Proxmox VE nodes run
+	// different major versions and the VMs different interface sizes. HARulesPending is the message
+	// of the condition for the HA rules that wait.
+	ProxmoxVersions string `json:"proxmoxVersions"`
+	NodeMTUs        string `json:"nodeMTUs"`
+	HARulesPending  string `json:"haRulesPending"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
 	// AddonChanges wait for the cluster's upgrade window.
@@ -511,6 +517,12 @@ func (f *demoFleet) heldConditions(d *demoCluster) []metav1.Condition {
 			LastTransitionTime: metav1.NewTime(f.now.Add(-time.Duration(n.AgoHours) * time.Hour)),
 		})
 	}
+	if d.HARulesPending != "" {
+		out = append(out, metav1.Condition{
+			Type: provisioner.HARulesPendingCondition, Status: metav1.ConditionTrue, Reason: "MixedVersions",
+			Message: d.HARulesPending, LastTransitionTime: metav1.NewTime(f.now.Add(-40 * time.Minute)),
+		})
+	}
 	if d.LackingMemory != "" {
 		out = append(out, metav1.Condition{
 			Type: provisioner.NodesLackMemoryCondition, Status: metav1.ConditionTrue, Reason: "NoRoom",
@@ -560,6 +572,12 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		raw, _ := json.Marshal(changeRecord{By: demoUser, At: started, Settings: u.Change}) //nolint:errchkjson // strings and a time
 		c.Annotations[changeAnnotation] = string(raw)
 		c.Generation++
+	}
+	if d.ProxmoxVersions != "" {
+		c.Annotations[provisioner.ProxmoxVersionsAnnotation] = d.ProxmoxVersions
+	}
+	if d.NodeMTUs != "" {
+		c.Annotations[provisioner.NodeMTUsAnnotation] = d.NodeMTUs
 	}
 	if h := d.TalosHold; h != nil {
 		node := fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, 0))

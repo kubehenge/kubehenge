@@ -80,7 +80,8 @@ Kubehenge sets it on the VM's Proxmox VE interface and on the node's own, throug
 - **Bounds.** 1280 to 65520. IPv6 does not work below 1280, and the Proxmox VE provider refuses less.
 - **The bridge.** The interface cannot exceed the bridge's MTU, which Kubehenge reads from the Proxmox VE nodes the cluster may use. A bridge that lists none has 1500.
 - **When it is checked.** The wizard and the controller refuse a larger MTU as the cluster is created or its network changes. Where a bridge cannot be read, only the bounds apply.
-- **Unset.** The interface keeps 1500.
+- **Unset.** On Proxmox VE 9 the VM's interface inherits the bridge's MTU, as a node's interface then does. A VM that kept running since Proxmox VE 8 has 1500 until it restarts. Set the MTU to give every VM the same size.
+- **Differing sizes.** The Health page lists a cluster whose VMs have different MTUs on different nodes. Large packets can then be lost between them.
 
 The VM firewall cannot be set per cluster. The Proxmox VE provider has no setting for the interface's firewall flag.
 

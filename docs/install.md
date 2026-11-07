@@ -113,6 +113,15 @@ The appliance, a one-node management cluster and a cluster at the create wizard'
 
 Each node OS template build takes 12 GiB on the template storage. The two newest builds of each stay. While one is made, the VM that prepares it takes 2 vCPUs, up to 4 GiB of memory and 20 GiB of disk more.
 
+### Upgrading Proxmox VE
+
+A Proxmox VE cluster that runs two major versions at once is only a stopover.
+
+- **Finish the upgrade before installing.** The installer checks the node it runs on, and nothing checks the others.
+- **Upgrade the nodes one at a time.** While the major versions differ, new VMs go only to the nodes on the oldest one. An event on each cluster names the nodes left out, and the Health page lists the nodes of each version.
+- **Move VMs from old to new only.** A VM started on a newer node gets a machine version an older node cannot run.
+- **HA rules wait.** Proxmox VE refuses them until every node runs 9. Kubehenge writes none meanwhile and sets the condition `HARulesPending` on the cluster, which the interface and `kubectl describe cluster` show.
+
 ## Install the appliance
 
 In the shell of the Proxmox VE node that should run it, as root:

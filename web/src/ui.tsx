@@ -352,6 +352,7 @@ const negativePolarity = new Set([
   "NodeImageHeld",
   "NodesSkipped",
   "NodesLackMemory",
+  "HARulesPending",
   "StorageUnavailable",
   "RemediationHeld",
 ]);

@@ -1,0 +1,198 @@
+package provisioner
+
+import (
+	"cmp"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"slices"
+	"strconv"
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+// vmMTUs is implemented by a Nodes that can tell the interface size a pool's VMs run with.
+type vmMTUs interface {
+	// NodeMTUs gives the smallest interface MTU of the pool's VMs on each node that runs one.
+	NodeMTUs(ctx context.Context, pool string, online []Node) (map[string]int, error)
+}
+
+// annotate sets an annotation on the cluster, or removes it when value is empty, and does nothing
+// when the cluster holds it already.
+func (p *Placer) annotate(ctx context.Context, c *clusterv1.Cluster, key, value string) bool {
+	if c.Annotations[key] == value {
+		return false
+	}
+	var v *string
+	if value != "" {
+		v = &value
+	}
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{annotationsKey: map[string]any{key: v}}})
+	if err != nil {
+		ctrl.LoggerFrom(ctx).WithName("placer").Error(err, "encoding an annotation", "annotation", key)
+		return false
+	}
+	target := &clusterv1.Cluster{}
+	target.Namespace, target.Name = c.Namespace, c.Name
+	if err := p.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		if ctx.Err() == nil {
+			ctrl.LoggerFrom(ctx).WithName("placer").Error(err, "recording an annotation", "annotation", key, "cluster", client.ObjectKeyFromObject(c))
+		}
+		return false
+	}
+	return true
+}
+
+// markVersions records on the cluster which Proxmox VE nodes run which major version while they
+// differ, and says in an event which nodes are left out of placement for it.
+func (p *Placer) markVersions(ctx context.Context, c *clusterv1.Cluster, online []Node) {
+	note := versionNote(online)
+	if !p.annotate(ctx, c, ProxmoxVersionsAnnotation, note) || note == "" || p.Events == nil {
+		return
+	}
+	_, left := oldestMajor(online)
+	names := make([]string, len(left))
+	for i, n := range left {
+		names[i] = n.Name
+	}
+	p.Events.Eventf(c, nil, corev1.EventTypeWarning, "ProxmoxVersionsMixed", "Place",
+		"Proxmox VE nodes %s are left out of placement while the nodes run different major versions, so every VM can start on every node", strings.Join(names, ", "))
+}
+
+// markMTUs records the interface sizes of the cluster's VMs per node while they differ.
+func (p *Placer) markMTUs(ctx context.Context, c *clusterv1.Cluster, online []Node) {
+	reader, ok := p.Nodes.(vmMTUs)
+	if !ok || p.WorkloadPool == "" {
+		return
+	}
+	names, err := NamesFor(p.WorkloadPool, c.Namespace, c.Name)
+	if err != nil {
+		return
+	}
+	mtus, err := reader.NodeMTUs(ctx, names.Pool, online)
+	if err != nil {
+		ctrl.LoggerFrom(ctx).WithName("placer").Error(err, "reading the cluster's VM interface sizes", "cluster", client.ObjectKeyFromObject(c))
+		return
+	}
+	p.annotate(ctx, c, NodeMTUsAnnotation, mtuNote(mtus))
+}
+
+// mtuNote is NodeMTUsAnnotation's value: empty while every node's VMs have the same MTU.
+func mtuNote(mtus map[string]int) string {
+	distinct := map[int]bool{}
+	for _, m := range mtus {
+		distinct[m] = true
+	}
+	if len(distinct) < 2 {
+		return ""
+	}
+	nodes := make([]string, 0, len(mtus))
+	for n := range mtus {
+		nodes = append(nodes, n)
+	}
+	slices.Sort(nodes)
+	pairs := make([]string, len(nodes))
+	for i, n := range nodes {
+		pairs[i] = n + "=" + strconv.Itoa(mtus[n])
+	}
+	return strings.Join(pairs, ",")
+}
+
+// NodeMTU is one node's smallest VM interface MTU.
+type NodeMTU struct {
+	Node string
+	MTU  int
+}
+
+// ParseNodeMTUs reads NodeMTUsAnnotation.
+func ParseNodeMTUs(note string) []NodeMTU {
+	var out []NodeMTU
+	for pair := range strings.SplitSeq(note, ",") {
+		node, value, ok := strings.Cut(pair, "=")
+		mtu, err := strconv.Atoi(value)
+		if ok && err == nil && node != "" {
+			out = append(out, NodeMTU{Node: node, MTU: mtu})
+		}
+	}
+	return out
+}
+
+// NodeMTUs implements vmMTUs. The guest agent's network-get-interfaces carries no MTU, so the size
+// is what Proxmox VE gives the VM's first interface: its own mtu setting, otherwise the bridge's
+// MTU on Proxmox VE 9 and 1500 before. A VM that was running before an upgrade may hold the old
+// size until it restarts, which this does not see.
+func (p *Proxmox) NodeMTUs(ctx context.Context, pool string, online []Node) (map[string]int, error) {
+	var vms []struct {
+		VMID     int64     `json:"vmid"`
+		Node     string    `json:"node"`
+		Pool     string    `json:"pool"`
+		Type     string    `json:"type"`
+		Template pveNumber `json:"template"`
+	}
+	if err := p.Client.Get(ctx, "/cluster/resources?type=vm", &vms); err != nil {
+		return nil, fmt.Errorf("listing the VMs: %w", err)
+	}
+	major := map[string]int{}
+	for _, n := range online {
+		major[n.Name] = n.Major
+	}
+	bridges := map[string]int{}
+	bridgeMTU := func(node, bridge string) int {
+		key := node + "/" + bridge
+		if m, ok := bridges[key]; ok {
+			return m
+		}
+		var ifaces []struct {
+			Iface string    `json:"iface"`
+			MTU   pveNumber `json:"mtu"`
+		}
+		m := defaultBridgeMTU
+		if err := p.Client.Get(ctx, "/nodes/"+url.PathEscape(node)+"/network?type=any_bridge", &ifaces); err == nil {
+			for _, i := range ifaces {
+				if i.Iface == bridge {
+					m = cmp.Or(int(i.MTU), defaultBridgeMTU)
+				}
+			}
+		}
+		bridges[key] = m
+		return m
+	}
+	out := map[string]int{}
+	for _, vm := range vms {
+		if vm.Pool != pool || vm.Type != "qemu" || vm.Template != 0 {
+			continue
+		}
+		var config map[string]any
+		path := "/nodes/" + url.PathEscape(vm.Node) + "/qemu/" + strconv.FormatInt(vm.VMID, 10) + "/config"
+		if err := p.Client.Get(ctx, path, &config); err != nil {
+			continue
+		}
+		net0, _ := config["net0"].(string)
+		bridge, set := "", 0
+		for part := range strings.SplitSeq(net0, ",") {
+			switch key, value, _ := strings.Cut(part, "="); key {
+			case "bridge":
+				bridge = value
+			case "mtu":
+				set, _ = strconv.Atoi(value)
+			}
+		}
+		mtu := set
+		if mtu <= 1 {
+			mtu = defaultBridgeMTU
+			if set == 1 || major[vm.Node] >= 9 {
+				mtu = bridgeMTU(vm.Node, bridge)
+			}
+		}
+		if have, ok := out[vm.Node]; !ok || mtu < have {
+			out[vm.Node] = mtu
+		}
+	}
+	return out, nil
+}

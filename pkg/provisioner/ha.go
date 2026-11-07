@@ -9,9 +9,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/luthermonson/go-proxmox"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -116,6 +119,68 @@ type HAReconciler struct {
 	// controller. Without it the reconciler only takes back the hooks it set, once capmox knows
 	// where each VM is.
 	HA HAWriter
+
+	versions versionCache
+}
+
+// HARulesPendingCondition is true on a Cluster whose HA rules wait: Proxmox VE refuses them until
+// its HA groups are migrated, which takes every node on the new major version, and Kubehenge writes
+// none while the nodes run different ones.
+const HARulesPendingCondition = "HARulesPending"
+
+// The reasons of HARulesPendingCondition.
+const (
+	haGroupsNotMigrated = "GroupsNotMigrated"
+	haMixedVersions     = "MixedVersions"
+)
+
+// haGroupsError is what Proxmox VE answers a rule written while its HA groups are not migrated.
+const haGroupsError = "ha groups have not been migrated yet"
+
+// haRulesRetry is how soon a waiting rule is tried again.
+const haRulesRetry = 5 * time.Minute
+
+// rules writes the cluster's HA rules, or none while they cannot take effect, and keeps
+// HARulesPendingCondition to match. It tells whether they wait.
+func (r *HAReconciler) rules(ctx context.Context, cluster *clusterv1.Cluster, pool string, s *haState, members, allowed []string, takesPart bool) (bool, error) {
+	var cond *metav1.Condition
+	switch mixed := takesPart && r.mixed(ctx); {
+	case mixed:
+		cond = &metav1.Condition{
+			Status: metav1.ConditionTrue, Reason: haMixedVersions,
+			Message: "The Proxmox VE nodes run different major versions. The cluster's HA rules are written once they run one.",
+		}
+	default:
+		err := r.reconcileRules(ctx, pool, s, members, allowed)
+		switch {
+		case err == nil:
+		case strings.Contains(err.Error(), haGroupsError):
+			cond = &metav1.Condition{
+				Status: metav1.ConditionTrue, Reason: haGroupsNotMigrated,
+				Message: "Proxmox VE has not migrated its HA groups to rules yet. The cluster's HA rule waits for the upgrade to finish.",
+			}
+		default:
+			return false, err
+		}
+	}
+	have := meta.FindStatusCondition(cluster.Status.Conditions, HARulesPendingCondition)
+	if cond == nil && have == nil || cond != nil && have != nil && have.Reason == cond.Reason && have.Message == cond.Message {
+		return cond != nil, nil
+	}
+	if _, err := markCluster(ctx, r.Client, r.Client, client.ObjectKeyFromObject(cluster), HARulesPendingCondition, cond); err != nil && !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("marking the cluster's HA rules: %w", err)
+	}
+	return cond != nil, nil
+}
+
+// mixed tells whether the Proxmox VE nodes run different major versions. A read that fails says no:
+// Proxmox VE's own refusal is the next check.
+func (r *HAReconciler) mixed(ctx context.Context) bool {
+	mixed, err := mixedPVE(ctx, r.Proxmox, &r.versions)
+	if err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "reading the Proxmox VE versions")
+	}
+	return mixed
 }
 
 // SetupWithManager registers the reconciler for Clusters and their control-plane Machines.
@@ -207,8 +272,12 @@ func (r *HAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 		return ctrl.Result{}, err
 	}
 	if r.HA != nil {
-		if err := r.reconcileRules(ctx, names.Pool, s, members, allowed); err != nil {
+		pending, err := r.rules(ctx, cluster, names.Pool, s, members, allowed, takesPart)
+		if err != nil {
 			return ctrl.Result{}, err
+		}
+		if pending && !waiting {
+			return ctrl.Result{RequeueAfter: haRulesRetry}, nil
 		}
 		// Proxmox VE lists the nodes once its HA manager has started, which the first HA resource
 		// does. The rule keeping VMs apart can be sized only then.

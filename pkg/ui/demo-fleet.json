@@ -162,7 +162,10 @@
       "subnet": 70,
       "ageDays": 9,
       "addOns": ["headlamp"],
-      "lackingMemory": "No Proxmox VE node this cluster may use has 16 GiB of free memory for its largest machine. The best, pve2, has 11 GiB"
+      "lackingMemory": "No Proxmox VE node this cluster may use has 16 GiB of free memory for its largest machine. The best, pve2, has 11 GiB",
+      "proxmoxVersions": "8=pve1,pve3;9=pve2",
+      "nodeMTUs": "pve1=1500,pve2=9000",
+      "haRulesPending": "The Proxmox VE nodes run different major versions. The cluster's HA rules are written once they run one."
     },
     {
       "name": "legacy",

@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -56,6 +57,12 @@ type Placer struct {
 	// Interval is how often the nodes are looked at: a node that goes down is left out of the
 	// clusters' placement within about that long.
 	Interval time.Duration
+	// Events records the nodes left out while the Proxmox VE nodes run different major versions.
+	// Unset, none is.
+	Events events.EventRecorder
+	// WorkloadPool names the clusters' VM pools, for reading the interface sizes of their VMs.
+	// Unset, the sizes are not read.
+	WorkloadPool string
 }
 
 // NodesSkippedCondition on a Cluster says that Placer left Proxmox VE nodes out of its placement
@@ -113,6 +120,8 @@ func (p *Placer) placeAll(ctx context.Context) {
 			continue
 		}
 		p.markSkipped(ctx, c, skipped)
+		p.markVersions(ctx, c, online)
+		p.markMTUs(ctx, c, online)
 		level, err := clusterCPULevel(c)
 		if err != nil {
 			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))

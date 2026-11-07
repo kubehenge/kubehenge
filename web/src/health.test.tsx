@@ -407,6 +407,42 @@ describe("health page", () => {
     expect(row.queryByRole("link", { name: "Something odd" })).not.toBeInTheDocument();
   });
 
+  it("lists a Proxmox VE upgrade under way, its interface sizes and the HA rules that wait", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "Proxmox VE 8 and 9 nodes in one cluster",
+              message: "Proxmox VE 8: pve1, pve3. Proxmox VE 9: pve2.",
+            },
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "VMs differ in interface MTU",
+              message: "pve1: 1500, pve2: 9000.",
+            },
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "HA rules wait for the Proxmox VE upgrade",
+              message: "The cluster's HA rules are written once the nodes run one version.",
+            },
+          ],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    const versions = within(await screen.findByRole("row", { name: /Proxmox VE 8 and 9 nodes in one cluster/u }));
+    expect(versions.getByText("Proxmox VE 8: pve1, pve3. Proxmox VE 9: pve2.")).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /VMs differ in interface MTU/u })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /HA rules wait for the Proxmox VE upgrade/u })).toBeInTheDocument();
+  });
+
   it("shows no alerts section for a cluster without monitoring", async () => {
     fakeServer({ [healthPath]: { body: degraded } });
     render(<HealthView cluster={cluster} headlamp={undefined} />);

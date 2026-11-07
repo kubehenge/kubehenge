@@ -28,6 +28,10 @@ type Node struct {
 	Maintenance bool
 	// InactiveStorages are the storages that are defined for the node and not available on it.
 	InactiveStorages []string
+	// Version is the node's pve-manager version and Major its major number, 0 where it could not be
+	// read.
+	Version string
+	Major   int
 }
 
 // Nodes tells which Proxmox VE nodes are online; *Proxmox is the real one.
@@ -62,6 +66,7 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 			continue
 		}
 		node := Node{Name: n.Node, CPULevel: level, Maintenance: maintenance[n.Node]}
+		node.Version, node.Major = p.versions.read(ctx, p.Client, n.Node)
 		if n.MaxMem > 0 {
 			node.FreeMiB, node.MemoryKnown = max(0, n.MaxMem-n.Mem)/bytesPerMiB, true
 		}
@@ -74,6 +79,11 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 	}
 	slices.SortFunc(online, func(a, b Node) int { return strings.Compare(a.Name, b.Name) })
 	slices.Sort(skipped)
+	names := make([]string, len(online))
+	for i, n := range online {
+		names[i] = n.Name
+	}
+	p.versions.keep(names)
 	p.mu.Lock()
 	p.skipped = skipped
 	for name := range p.cpuLevels {
@@ -149,6 +159,7 @@ func nodesFor(online []Node, need int) []string {
 // placeable are the online nodes that can take a new VM now: not in maintenance, and with the
 // cluster's storage active.
 func placeable(online []Node, storage string) []Node {
+	online, _ = oldestMajor(online)
 	return slices.DeleteFunc(slices.Clone(online), func(n Node) bool {
 		return n.Maintenance || storage != "" && slices.Contains(n.InactiveStorages, storage)
 	})
@@ -159,6 +170,9 @@ func placeable(online []Node, storage string) []Node {
 // When nodes the cluster could use are online but every one is left out for those last two, there is
 // nowhere to put a VM, and blocked says why.
 func nodesToPlace(online []Node, level int, chosen []string, storage string) ([]string, string) {
+	// While the nodes run different major versions a VM keeps to the oldest: it carries a machine
+	// version every node can start, so drains and HA moves work in both directions.
+	online, _ = oldestMajor(online)
 	capable := slices.DeleteFunc(slices.Clone(online), func(n Node) bool {
 		return n.CPULevel < level || len(chosen) > 0 && !slices.Contains(chosen, n.Name)
 	})

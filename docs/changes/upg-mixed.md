@@ -1,0 +1,5 @@
+- The controller reads each Proxmox VE node's version every minute. While the nodes run different major versions, new VMs go only to the nodes on the oldest one, so a drain or an HA move to any node works. An event on each cluster names the nodes left out.
+- The Health page lists the nodes of each Proxmox VE version ("Proxmox VE 8 and 9 nodes in one cluster"). The cluster carries them in the annotation `kubehenge.dev/proxmox-versions`.
+- HA rules are refused by Proxmox VE until it has migrated its HA groups. Kubehenge now sets the condition `HARulesPending` on the Cluster, tries again after 5 minutes and no longer fails the reconcile. It writes no rule while the nodes run different major versions, and the HA rule placements it offers list none then.
+- The Health page lists a cluster whose VMs have different interface MTUs on different nodes. On Proxmox VE 9 an unset MTU follows the bridge. The network's `mtu` setting gives every VM the same size ([clusters.md](clusters.md#interface-mtu-and-queues)).
+- `install.md` has an "Upgrading Proxmox VE" section.
