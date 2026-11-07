@@ -226,11 +226,22 @@ fmt: web/node_modules/.package-lock.json
 # govulncheck fails on a known vulnerability only where the code calls into it, for the system it
 # runs on: GOOS would also build govulncheck itself for another one.
 # golangci-lint holds one lock per user, so a gate in a second worktree waits for it rather than fail.
+# A change to a package most others import makes the lint analyse nearly the whole module again.
+# On every core at once that takes 6 GB and the whole machine. Four threads under a soft 2 GiB heap
+# target take about 5 minutes and 4 GB, and an unchanged tree takes seconds from the cache.
+# Even those seconds open every package's cache entries, so inputs that already passed are not
+# linted again: the Go sources, tracked or not, the module, the config and the linter's version.
+LINT_GO := CGO_ENABLED=0 GOMAXPROCS=4 GOMEMLIMIT=2GiB nice -n 10 golangci-lint run --allow-serial-runners
+LINT_GO_INPUTS := '*.go' go.mod go.sum .golangci.yml
 lint-go: web gateway-api
 	go mod tidy -diff
 	golangci-lint config verify
-	CGO_ENABLED=0 GOOS=linux golangci-lint run --allow-serial-runners ./...
-	CGO_ENABLED=0 GOOS=windows golangci-lint run --allow-serial-runners ./...
+	key=$$({ git ls-files -s -- $(LINT_GO_INPUTS); git diff HEAD -- $(LINT_GO_INPUTS); \
+		git ls-files -o --exclude-standard -z -- '*.go' | xargs -0 -r git hash-object; \
+		golangci-lint version; } | sha256sum | cut -c1-16); \
+	if [ -f "dist/lint-go/$$key" ]; then echo "golangci-lint: these inputs passed before"; \
+	else GOOS=linux $(LINT_GO) ./... && GOOS=windows $(LINT_GO) ./... && \
+		mkdir -p dist/lint-go && touch "dist/lint-go/$$key"; fi
 	$(GOVULNCHECK) ./...
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
