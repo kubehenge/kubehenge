@@ -46,8 +46,8 @@ func TestControllerStoresWhatTheNextUpgradesMeet(t *testing.T) {
 	}
 }
 
-func withFindings(version, kind, target string) *clusterv1.Cluster {
-	c := settledCluster("web", version, nil)
+func withFindings(kind, target string) *clusterv1.Cluster {
+	c := settledCluster("web", "v1.35.4+rke2r1", nil)
 	if kind != "" {
 		c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
 			Type: kind, Status: metav1.ConditionTrue, Reason: UpgradeFound,
@@ -67,8 +67,8 @@ func movedTo(c *clusterv1.Cluster, version string) *clusterv1.Cluster {
 // cluster without stored findings, a change of anything else and a target of another minor get none.
 func TestUpgradeWarningsFollowTheVersionChange(t *testing.T) {
 	t.Parallel()
-	minor := withFindings("v1.35.4+rke2r1", UpgradeFindingsMinorCondition, "v1.36.5+rke2r1")
-	patch := withFindings("v1.35.4+rke2r1", UpgradeFindingsPatchCondition, "v1.35.9+rke2r1")
+	minor := withFindings(UpgradeFindingsMinorCondition, "v1.36.5+rke2r1")
+	patch := withFindings(UpgradeFindingsPatchCondition, "v1.35.9+rke2r1")
 	for _, tc := range []struct {
 		name string
 		old  *clusterv1.Cluster
@@ -80,8 +80,8 @@ func TestUpgradeWarningsFollowTheVersionChange(t *testing.T) {
 		{"a patch is not the minor's step", minor, movedTo(minor, "v1.35.6+rke2r1"), 0},
 		{"a minor is not the patch's step", patch, movedTo(patch, "v1.36.1+rke2r1"), 0},
 		{"two minors on", minor, movedTo(minor, "v1.37.1+rke2r1"), 0},
-		{"findings of another minor", withFindings("v1.35.4+rke2r1", UpgradeFindingsMinorCondition, "v1.37.1+rke2r1"), movedTo(minor, "v1.36.1+rke2r1"), 0},
-		{"nothing stored", withFindings("v1.35.4+rke2r1", "", ""), movedTo(minor, "v1.36.1+rke2r1"), 0},
+		{"findings of another minor", withFindings(UpgradeFindingsMinorCondition, "v1.37.1+rke2r1"), movedTo(minor, "v1.36.1+rke2r1"), 0},
+		{"nothing stored", withFindings("", ""), movedTo(minor, "v1.36.1+rke2r1"), 0},
 		{"version unchanged", minor, minor.DeepCopy(), 0},
 		{"a new cluster", nil, minor, 0},
 	} {
