@@ -13,8 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -69,6 +71,8 @@ type serveOptions struct {
 	// listenChanged tells whether --listen was given, which the demo's own default yields to.
 	listenChanged bool
 
+	trustedProxies []string
+
 	headlampListen     string
 	headlampUpstream   string
 	headlampKubeconfig string
@@ -104,6 +108,9 @@ The interface acts in the management cluster with its own kubeconfig.`,
 	f.DurationVar(&s.SessionMaxAge, "session-max-age", defaultSessionMaxAge, "how long a sign-in lasts, however active the user")
 	f.StringVar(&s.PublicURL, "public-url", os.Getenv("KUBEHENGE_PUBLIC_URL"),
 		"address users reach the interface at, such as https://kubehenge.example. OpenID sign-in needs it, for identity providers to send users back (env KUBEHENGE_PUBLIC_URL)")
+	f.StringSliceVar(&o.trustedProxies, "trusted-proxy", trustedProxiesDefault(),
+		"address or CIDR range of a reverse proxy in front of the interface, repeatable. From one, the sign-in limits count the client in X-Forwarded-For, "+
+			"so one person's failures no longer lock out everyone behind the proxy. Without it forwarding headers are ignored (env KUBEHENGE_TRUSTED_PROXIES, comma-separated)")
 	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state in this directory and setting it up from the interface. "+
 		"Without it, the management cluster is the one in KUBECONFIG")
 	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume the appliance's backups leave out. It holds the key that seals what automatic upgrades of the management cluster keep. Empty, those upgrades cannot be switched on")
@@ -126,8 +133,25 @@ The interface acts in the management cluster with its own kubeconfig.`,
 // machine it runs on.
 const demoListen = "127.0.0.1:8443"
 
+// trustedProxiesDefault is the list KUBEHENGE_TRUSTED_PROXIES holds, split at commas and spaces.
+func trustedProxiesDefault() []string {
+	return strings.FieldsFunc(os.Getenv("KUBEHENGE_TRUSTED_PROXIES"), func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+}
+
+func (o *serveOptions) parseTrustedProxies() error {
+	proxies, err := ui.ParseTrustedProxies(o.trustedProxies)
+	if err != nil {
+		return fmt.Errorf("--trusted-proxy: %w", err)
+	}
+	o.s.TrustedProxies = proxies
+	return nil
+}
+
 func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	s := &o.s
+	if err := o.parseTrustedProxies(); err != nil {
+		return err
+	}
 	if o.demo {
 		return o.runDemo(ctx)
 	}

@@ -484,8 +484,12 @@ func TestAnAPITokenActsInPlaceOfATicket(t *testing.T) {
 	if err := a.remove(t.Context(), ticket, "/cluster/ha/rules/x"); err != nil || removed != 1 {
 		t.Fatalf("remove: %v, %d removed", err, removed)
 	}
-	if renewed, err := a.Renew(t.Context(), ticket); err != nil || renewed != ticket {
+	// Renewing asks Proxmox VE whether it still takes the token, and gives it back.
+	if renewed, err := a.Renew(t.Context(), ticket); err != nil || renewed.Token != token || renewed.Username != ticket.Username {
 		t.Errorf("renewing a token = %v, %v", renewed, err)
+	}
+	if _, err := a.Renew(t.Context(), &Ticket{Username: "alice@pve!ci", Token: "alice@pve!ci=revoked"}); !errors.Is(err, ErrAuthentication) { //nolint:gosec // the fake Proxmox VE's own
+		t.Errorf("renewing a token Proxmox VE no longer takes = %v", err)
 	}
 	for _, bad := range []string{"alice@pve!ci=wrong", "alice@pve=0b6f3c1e", "nonsense"} {
 		if _, err := a.TokenUser(t.Context(), bad); !errors.Is(err, ErrAuthentication) {

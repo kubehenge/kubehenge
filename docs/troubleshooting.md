@@ -212,7 +212,8 @@ The task log shows what each Kubehenge account did. In an appliance's management
 - **"Wrong recovery key, or the cluster has no quorum":** a recovery key is written to Proxmox VE's cluster files, which a cluster without quorum cannot change. Sign in on a node's console until quorum returns.
 - **`"Session ended. Sign in again."`:** Proxmox VE no longer accepts the session. A session lasts eight hours at most.
 - **Sign-in refused after several tries:** five failures within 15 minutes lock a user out from that address until the 15 minutes are up. Twenty failures from one address, whichever users they name, lock the address out.
-- **"Security keys work only in Proxmox VE":** a WebAuthn key answers only on Proxmox VE's own page. Sign in with a TOTP code or recovery key, or through an OpenID realm.
+- **Everyone is locked out after one person's typos:** behind a reverse proxy, every sign-in counts under the proxy's address. List the proxy with `--trusted-proxy` ([install.md](install.md#behind-a-reverse-proxy)).
+- **"Security keys work only in Proxmox VE":** a WebAuthn key answers only on Proxmox VE's own page. Choose **Use API token** and give one of that user's Proxmox VE API tokens.
 - **An OpenID sign-in does not come back:** register `https://<appliance>/api/openid/callback` with the identity provider, and `https://<appliance>:8443/oidc-callback` for the shared Headlamp. A Headlamp sign-in can only be finished in the browser that started it.
 
 ### Setting up the management cluster fails

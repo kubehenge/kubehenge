@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { noAnswer } from "./api";
+import { api, noAnswer } from "./api";
 import { App } from "./App";
 import { ClusterList } from "./ClusterList";
 import {
@@ -272,6 +272,107 @@ describe("sign-in", () => {
     await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
       "Sign-in failed. Check the user name, password and realm, or set up the required second factor.",
     );
+  });
+
+  it("signs in with an API token for a user whose second factor is a security key", async () => {
+    const routes: Record<string, Route> = {
+      "GET /api/session": { status: 401, body: { error: "not signed in" } },
+      "GET /api/realms": { body: [{ realm: "pve", type: "pve", default: true }] },
+      "POST /api/session": {
+        status: 401,
+        body: { error: "security keys work only in Proxmox VE. Sign in with an API token instead" },
+      },
+      "POST /api/session/token": { status: 401, body: { error: "Proxmox VE refused the API token" } },
+      "GET /api/clusters": { body: [web] },
+      "DELETE /api/session": { status: 204 },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User name"), "alice@pve");
+    await user.type(screen.getByLabelText("Password"), "secret");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent("Sign in with an API token instead");
+
+    await user.click(screen.getByRole("button", { name: "Use API token" }));
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Token ID")).toHaveFocus();
+    await user.type(screen.getByLabelText("Token ID"), " alice@pve!ui ");
+    await user.type(screen.getByLabelText("Secret"), "wrong");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent("Proxmox VE refused the API token");
+    expect(screen.getByLabelText("Secret")).toHaveValue("");
+
+    routes["POST /api/session/token"] = { body: { user: "alice@pve!ui", csrf: "t1" } };
+    await user.type(screen.getByLabelText("Secret"), "0b6f3c1e");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await expect(screen.findByRole("link", { name: "web" })).resolves.toBeInTheDocument();
+    expect(calls.findLast((c) => c.key === "POST /api/session/token")?.body).toStrictEqual({
+      id: "alice@pve!ui",
+      secret: "0b6f3c1e",
+    });
+    expect(screen.getByText("alice@pve!ui", { selector: ".user" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(calls.find((c) => c.key === "DELETE /api/session")?.headers.get("X-Kubehenge-CSRF")).toBe("t1");
+    await expect(screen.findByRole("button", { name: "Use API token" })).resolves.toBeInTheDocument();
+  });
+
+  describe("when a second tab replaced the session", () => {
+    const refused = { status: 403, body: { error: "missing or wrong CSRF token" } };
+
+    it("takes up the same user's new CSRF token, so the next try goes through", async () => {
+      const routes: Record<string, Route> = {
+        "GET /api/session": { body: { user: "alice@pve", csrf: "old" } },
+        "GET /api/clusters": { body: [web] },
+        "DELETE /api/session": refused,
+      };
+      const calls = fakeServer(routes);
+      render(<App />);
+      await screen.findByRole("link", { name: "web" });
+
+      routes["GET /api/session"] = { body: { user: "alice@pve", csrf: "new" } };
+      await expect(api.signOut()).rejects.toThrow("The session changed in another tab. Try again.");
+      expect(screen.getByRole("link", { name: "web" })).toBeInTheDocument();
+
+      routes["DELETE /api/session"] = { status: 204 };
+      await api.signOut();
+      const deletes = calls.filter((c) => c.key === "DELETE /api/session");
+      expect(deletes.map((c) => c.headers.get("X-Kubehenge-CSRF"))).toStrictEqual(["old", "new"]);
+    });
+
+    it("returns to sign-in when the other tab signed in as someone else", async () => {
+      const routes: Record<string, Route> = {
+        "GET /api/session": { body: { user: "alice@pve", csrf: "old" } },
+        "GET /api/realms": { body: [{ realm: "pve", type: "pve" }] },
+        "GET /api/clusters": { body: [web] },
+        "DELETE /api/session": refused,
+      };
+      fakeServer(routes);
+      render(<App />);
+      await screen.findByRole("link", { name: "web" });
+
+      routes["GET /api/session"] = { body: { user: "bob@pve", csrf: "bobs" } };
+      await expect(api.signOut()).rejects.toThrow("The session changed in another tab");
+      await expect(screen.findByText("Session ended. Sign in again.")).resolves.toBeInTheDocument();
+    });
+
+    it("returns to sign-in when the session is gone", async () => {
+      const routes: Record<string, Route> = {
+        "GET /api/session": { body: { user: "alice@pve", csrf: "old" } },
+        "GET /api/realms": { body: [{ realm: "pve", type: "pve" }] },
+        "GET /api/clusters": { body: [web] },
+        "DELETE /api/session": refused,
+      };
+      fakeServer(routes);
+      render(<App />);
+      await screen.findByRole("link", { name: "web" });
+
+      routes["GET /api/session"] = { status: 401, body: { error: "not signed in" } };
+      await expect(api.signOut()).rejects.toThrow("The session changed in another tab");
+      await expect(screen.findByText("Session ended. Sign in again.")).resolves.toBeInTheDocument();
+    });
   });
 
   it("offers the realm last signed in with, while Proxmox VE still has it", async () => {

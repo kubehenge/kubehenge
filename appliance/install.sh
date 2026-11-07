@@ -7,8 +7,9 @@
 #   sh install.sh [--ctid <id>] [--storage <storage>] [--template-storage <storage>] [--bridge <bridge>] [--ip dhcp|<address/prefix>]
 #                 [--gateway <address>] [--dns <address>,...] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
 #                 [--hostname <name>] [--name <DNS name>] [--cert <file> --key <file>] [--release <file> --sha256 <hex>]
-#                 [--pve-entry | --no-pve-entry]
+#                 [--pve-entry | --no-pve-entry] [--trusted-proxy <address or CIDR>]...
 #   sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
+#                 [--trusted-proxy <address or CIDR>... | --no-trusted-proxy]
 #   sh install.sh --certificate --ctid <id> [--name <DNS name> | --no-name] [--cert <file> --key <file>]
 #
 # A new install asks whether to add a Kubernetes entry to this node's Proxmox VE interface, leading
@@ -31,6 +32,11 @@
 # --upgrade, --proxmox-ca replaces the CA an installed appliance checks it against and
 # --proxmox-insecure stops the checks; the management cluster takes either once it is applied
 # again from the interface.
+#
+# Behind a reverse proxy or load balancer, --trusted-proxy (repeatable, an address or CIDR range)
+# lets the interface count sign-in failures per client from the proxy's X-Forwarded-For header
+# instead of all under the proxy's address. On --upgrade it replaces the list an installed
+# appliance has, and --no-trusted-proxy removes it.
 #
 # The appliance's disks and the container template go to a storage that takes them, asked on the
 # terminal when several do; --storage and --template-storage name them in advance. A template
@@ -645,16 +651,18 @@ units='kubehenge.service kubehenge-update.service kubehenge-update.path kubeheng
 # pushed the new release beside the old: it sets the installed software aside, puts the new in
 # place and restarts the interface on it. Should the interface not serve and keep running, the
 # check the appliance's own updater makes, it puts the old software back and restarts that.
-#   sh -c "${upgrade_script}" sh <root> <container ID> <true|false|""> <units> [<API URL>]
+#   sh -c "${upgrade_script}" sh <root> <container ID> <true|false|""> <units> [<API URL> [<trusted proxies>]]
 # <root> is "" but in the tests; the third argument stops (true) or starts (false) the checks of
 # the API's certificate, or leaves them. An API URL replaces the one the appliance reaches Proxmox
-# VE at. Exits 76 rolled back, with the reason on standard output, and 77 when putting the old
-# software back failed too. An upgrade of its own that was cut off in the middle it undoes first.
-# One the appliance's updater left it refuses with 78, as the interface's next start undoes that.
+# VE at. The trusted proxies, a comma-separated list, replace the reverse proxies the interface
+# trusts. Either leaves its setting when empty. Exits 76 rolled back, with the reason on standard
+# output, and 77 when putting the old software back failed too. An upgrade of its own that was cut
+# off in the middle it undoes first. One the appliance's updater left it refuses with 78, as the
+# interface's next start undoes that.
 # shellcheck disable=SC2016 # expanded by the container's shell
 upgrade_script='
 set -eu
-R=$1 ctid=$2 insecure=$3 units=$4 url=${5:-}
+R=$1 ctid=$2 insecure=$3 units=$4 url=${5:-} proxies=${6:-}
 aside=$R/usr/local/share/.kubehenge-rollback bin=$R/usr/local/bin share=$R/usr/local/share
 env=$R/etc/kubehenge/appliance.env ca=$R/etc/kubehenge/proxmox-ca.pem trusted=$R/usr/local/share/ca-certificates/proxmox-ca.crt
 
@@ -740,6 +748,10 @@ if [ -n "$insecure" ]; then
 fi
 if [ -n "$url" ]; then
     { grep -v "^KUBEHENGE_PROXMOX_URL=" "$env" || true; echo "KUBEHENGE_PROXMOX_URL=$url"; } > "$env.new"
+    chmod 0644 "$env.new" && mv "$env.new" "$env"
+fi
+if [ -n "$proxies" ]; then
+    { grep -v "^KUBEHENGE_TRUSTED_PROXIES=" "$env" || true; [ "$proxies" = none ] || echo "KUBEHENGE_TRUSTED_PROXIES=$proxies"; } > "$env.new"
     chmod 0644 "$env.new" && mv "$env.new" "$env"
 fi
 [ -f "$R/etc/kubehenge/headlamp.env" ] ||
@@ -930,6 +942,28 @@ is_ipv4_cidr() {
     # shellcheck disable=SC2310 # is_ipv4 is a predicate; its status is the answer.
     is_ipv4 "${1%/*}" || return 1
     in_range "${1#*/}" 1 32
+}
+
+# is_proxy_range <address[/prefix]>: whether it is an IPv4 or IPv6 address, with a prefix length
+# that fits it when given.
+is_proxy_range() {
+    range_prefix=''
+    case "$1" in
+        */*) range_prefix=${1#*/} ;;
+        *) ;;
+    esac
+    # shellcheck disable=SC2310 # is_ipv4 is a predicate; its status is the answer.
+    if is_ipv4 "${1%/*}"; then
+        range_bits=32
+    elif printf '%s' "${1%/*}" | grep -Eqx '[0-9A-Fa-f:]*:[0-9A-Fa-f:]*(:[0-9]{1,3}(\.[0-9]{1,3}){3})?'; then
+        range_bits=128
+    else
+        return 1
+    fi
+    case "$1" in
+        */*) in_range "${range_prefix}" 0 "${range_bits}" ;;
+        *) ;;
+    esac
 }
 
 # in_range <value> <least> <most>: whether the value is a whole number between them.
@@ -1165,7 +1199,7 @@ usage() {
 Installs Kubehenge's appliance on this Proxmox VE node, as root.
 
   sh install.sh [options]
-  sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
+  sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure] [--trusted-proxy <address or CIDR>... | --no-trusted-proxy]
   sh install.sh --certificate --ctid <id> [--name <DNS name> | --no-name] [--cert <file> --key <file>]
 
 Options:
@@ -1185,6 +1219,8 @@ Options:
   --proxmox-url <URL>         the Proxmox VE API, such as https://pve.example.org:8006; default the best name or address its certificate is valid for
   --proxmox-ca <file>         the CA that signed the API's certificate, alone or in a bundle
   --proxmox-insecure          reach the Proxmox VE API without verifying its certificate
+  --trusted-proxy <address or CIDR> a reverse proxy in front of the interface, repeatable; sign-in limits then count the client in its X-Forwarded-For
+  --no-trusted-proxy          with --upgrade, remove the list of trusted proxies
   --release <file>            install this release archive instead of downloading it
   --sha256 <hex>              the archive's SHA-256, with --release
   --tofu <file>               install OpenTofu from this release archive instead of downloading it, checked against the checksum this script carries
@@ -1198,7 +1234,7 @@ EOF
 }
 
 ctid='' storage='' template_storage='' bridge='' vlan='' mtu='' tofu_archive='' ip=dhcp gateway='' dns='' proxmox_url='' proxmox_ca='' proxmox_insecure='' hostname=kubehenge
-release='' release_sha='' upgrade='' pve_entry='' certificate='' name='' no_name='' cert_file='' key_file=''
+release='' release_sha='' upgrade='' pve_entry='' certificate='' name='' no_name='' cert_file='' key_file='' trusted_proxy='' no_trusted_proxy=''
 while [ $# -gt 0 ]; do
     case "$1" in
         -h | --help)
@@ -1235,7 +1271,12 @@ while [ $# -gt 0 ]; do
             shift
             continue
             ;;
-        --name | --cert | --key | --ctid | --storage | --template-storage | --bridge | --vlan | --mtu | --ip | --gateway | --dns | --proxmox-url | --proxmox-ca | --hostname | --release | --sha256 | --tofu)
+        --no-trusted-proxy)
+            no_trusted_proxy=1
+            shift
+            continue
+            ;;
+        --name | --cert | --key | --ctid | --storage | --template-storage | --bridge | --vlan | --mtu | --ip | --gateway | --dns | --proxmox-url | --proxmox-ca | --hostname | --release | --sha256 | --tofu | --trusted-proxy)
             [ $# -ge 2 ] || fail "$1 needs a value"
             ;;
         *) ;;
@@ -1257,6 +1298,7 @@ while [ $# -gt 0 ]; do
         --proxmox-url) proxmox_url=$2 ;;
         --proxmox-ca) proxmox_ca=$2 ;;
         --hostname) hostname=$2 ;;
+        --trusted-proxy) trusted_proxy=${trusted_proxy:+${trusted_proxy},}$2 ;;
         --release) release=$2 ;;
         --sha256) release_sha=$2 ;;
         *)
@@ -1288,6 +1330,19 @@ if [ -n "${proxmox_ca}" ] && [ -n "${proxmox_insecure}" ]; then
 fi
 if [ -n "${proxmox_insecure}" ] && [ -n "${certificate}" ]; then
     fail "--proxmox-insecure goes with an install or --upgrade"
+fi
+if [ -n "${trusted_proxy}" ] && [ -n "${certificate}" ]; then
+    fail "--trusted-proxy goes with an install or --upgrade"
+fi
+for entry in $(printf '%s' "${trusted_proxy}" | tr , ' '); do
+    # shellcheck disable=SC2310 # is_proxy_range is a predicate; its status is the answer.
+    is_proxy_range "${entry}" || fail "--trusted-proxy ${entry}: use an IPv4 or IPv6 address or CIDR range, such as 192.0.2.10 or 10.0.0.0/8"
+done
+if [ -n "${no_trusted_proxy}" ]; then
+    [ -z "${trusted_proxy}" ] || fail "--trusted-proxy and --no-trusted-proxy exclude each other"
+    [ -n "${upgrade}" ] || fail "--no-trusted-proxy goes with --upgrade"
+    # The container's upgrade step reads "none" as the list removed.
+    trusted_proxy=none
 fi
 # shellcheck disable=SC2310 # is_ipv4_cidr is a predicate; its status is the answer.
 if [ "${ip}" != dhcp ] && ! is_ipv4_cidr "${ip}"; then
@@ -1545,7 +1600,7 @@ if [ -n "${upgrade}" ]; then
     # during a run of the management-cluster module would cut the run off.
     step "starting Kubehenge ${KUBEHENGE_VERSION}, and checking that it serves"
     rc=0
-    reason=$(pct exec "${ctid}" -- flock -n -E 75 /var/lib/kubehenge sh -c "${upgrade_script}" sh '' "${ctid}" "${insecure}" "${units}" "${new_url}") || rc=$?
+    reason=$(pct exec "${ctid}" -- flock -n -E 75 /var/lib/kubehenge sh -c "${upgrade_script}" sh '' "${ctid}" "${insecure}" "${units}" "${new_url}" "${trusted_proxy}") || rc=$?
     before=${installed:-the release installed before}
     case "${rc}" in
         0) ;;
@@ -1678,6 +1733,7 @@ pct push "${ctid}" "${work}/tls.key" /etc/kubehenge/tls.key --perms 0600
 
 printf 'KUBEHENGE_PROXMOX_URL=%s\nKUBEHENGE_PUBLIC_URL=https://%s\nKUBEHENGE_APPLIANCE_VMID=%s\n' "${proxmox_url}" "${public}" "${ctid}" > "${work}/appliance.env"
 [ -z "${proxmox_insecure}" ] || echo 'KUBEHENGE_PROXMOX_INSECURE=true' >> "${work}/appliance.env"
+[ -z "${trusted_proxy}" ] || echo "KUBEHENGE_TRUSTED_PROXIES=${trusted_proxy}" >> "${work}/appliance.env"
 pct push "${ctid}" "${work}/appliance.env" /etc/kubehenge/appliance.env --perms 0644
 printf 'HEADLAMP_CONFIG_OIDC_CALLBACK_URL=https://%s:8443/oidc-callback\n' "${public}" > "${work}/headlamp.env"
 pct push "${ctid}" "${work}/headlamp.env" /etc/kubehenge/headlamp.env --perms 0644

@@ -119,6 +119,14 @@ says "a flag option needs none" "unknown option --nope" --nope
     says "an MTU under 576" "--mtu is a number of bytes from 576 to 65535" --mtu 100 ${release}
     does_not_say "a good VLAN tag and MTU" "--vlan is" --vlan 4094 --mtu 9000 ${release}
     says "an OpenTofu archive that is not there" "--tofu names a readable OpenTofu release archive" --tofu "${root}/missing.tar.gz" ${release}
+    says "a trusted proxy that is a name" "--trusted-proxy proxy.example: use an IPv4 or IPv6 address or CIDR range" --trusted-proxy proxy.example ${release}
+    says "a bad one among good trusted proxies" "--trusted-proxy 10.0.0.0/33: use an IPv4" --trusted-proxy 192.0.2.7 --trusted-proxy 10.0.0.0/33 ${release}
+    says "a bad one in a list" "--trusted-proxy 300.0.0.1: use an IPv4" --trusted-proxy 192.0.2.7,300.0.0.1 ${release}
+    says "--trusted-proxy without its value" "--trusted-proxy needs a value" --trusted-proxy
+    says "--trusted-proxy with --certificate" "--trusted-proxy goes with an install or --upgrade" --certificate --ctid 105 --trusted-proxy 192.0.2.7
+    says "--no-trusted-proxy on an install" "--no-trusted-proxy goes with --upgrade" --no-trusted-proxy ${release}
+    says "both trusted proxy options" "--trusted-proxy and --no-trusted-proxy exclude each other" --upgrade --ctid 105 --trusted-proxy 192.0.2.7 --no-trusted-proxy
+    does_not_say "good trusted proxies" "--trusted-proxy " --trusted-proxy 192.0.2.7 --trusted-proxy 10.0.0.0/8,2001:db8::/32 ${release}
 }
 
 # Quorum.

@@ -69,9 +69,16 @@ export class ApiError extends Error {
 export const referenceMark = "\nReference: ";
 
 const httpUnauthorised = 401;
+const httpForbidden = 403;
 
-// The session's CSRF token, which every change has to carry in a header.
+// The session's CSRF token, which every change has to carry in a header, and its user.
 let csrf = "";
+let sessionUser = "";
+
+// What the server answers a change that carries another session's CSRF token, as a tab does after
+// a sign-in in a second tab replaced the session.
+const csrfRefused = "missing or wrong CSRF token";
+const sessionChanged = "The session changed in another tab. Try again.";
 
 // Called when the server no longer knows the session, so the interface returns to sign-in and can
 // say why.
@@ -231,6 +238,10 @@ async function send(method: string, path: string, { body, headers: extra = {}, s
     if (res.status === httpUnauthorised && !path.startsWith("/api/session")) {
       onSignedOut?.();
     }
+    if (res.status === httpForbidden && message === csrfRefused) {
+      await followSession();
+      throw new ApiError(res.status, sessionChanged, requestId);
+    }
     throw new ApiError(res.status, message || res.statusText, requestId);
   }
   return res;
@@ -282,7 +293,24 @@ async function download(method: string, path: string, body?: unknown): Promise<B
 
 function remember(s: Session): Session {
   ({ csrf } = s);
+  sessionUser = s.user;
   return s;
+}
+
+// followSession takes up the session a change was refused under. The same user's new session
+// gives its CSRF token, so the next try goes through. Another user's, or none, returns to sign-in,
+// since the page shows the first user's clusters.
+async function followSession(): Promise<void> {
+  const was = sessionUser;
+  try {
+    if (remember(await request<Session>("GET", "/api/session")).user !== was) {
+      onSignedOut?.();
+    }
+  } catch (err) {
+    if (err instanceof ApiError && err.status === httpUnauthorised) {
+      onSignedOut?.();
+    }
+  }
 }
 
 const clusterPath = (ns: string, name: string): string =>
@@ -305,6 +333,7 @@ export interface Api {
   realms: () => Promise<Realm[]>;
   session: () => Promise<Session>;
   signIn: (username: string, realm: string, password: string) => Promise<Session>;
+  signInWithToken: (id: string, secret: string) => Promise<Session>;
   secondFactor: (kind: string, code: string) => Promise<Session>;
   signOut: () => Promise<void>;
 
@@ -441,11 +470,16 @@ export const api: Api = {
     clearPollCaches();
     return remember(await request("POST", "/api/session", { username, realm, password }));
   },
+  signInWithToken: async (id, secret) => {
+    clearPollCaches();
+    return remember(await request("POST", "/api/session/token", { id, secret }));
+  },
   secondFactor: async (kind, code) => remember(await request("POST", "/api/session/second-factor", { kind, code })),
   signOut: async () => {
     clearPollCaches();
     await act("DELETE", "/api/session");
     csrf = "";
+    sessionUser = "";
   },
 
   classes: () => request("GET", "/api/classes"),

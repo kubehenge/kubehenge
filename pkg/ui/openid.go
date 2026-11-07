@@ -28,11 +28,40 @@ func (s *Server) redirectURL() (string, bool) {
 	return base + "/api/openid/callback", base != ""
 }
 
+// movedToPublicURL is the query parameter that marks a start the interface sent on to the public
+// address, so a proxy that rewrites the Host header cannot send the browser round in circles.
+const movedToPublicURL = "moved"
+
+// sameHost tells whether two Host header values name one host: case aside and with the https
+// port left out, since browsers omit it.
+func sameHost(a, b string) bool {
+	trim := func(h string) string { return strings.TrimSuffix(strings.ToLower(h), ":443") }
+	return trim(a) == trim(b)
+}
+
+// atPublicURL moves a start made under any other name to the public address, which is the only
+// place the identity provider returns to. The state cookie is host-only (__Host-), so the return
+// would find none if the sign-in began elsewhere. It reports whether it answered the request.
+func (s *Server) atPublicURL(w http.ResponseWriter, r *http.Request) bool {
+	public, err := url.Parse(s.PublicURL)
+	if err != nil || public.Host == "" || sameHost(r.Host, public.Host) || r.URL.Query().Has(movedToPublicURL) {
+		return false
+	}
+	q := r.URL.Query()
+	q.Set(movedToPublicURL, "1")
+	// The target is the configured public address, never the Host header the client chose.
+	http.Redirect(w, r, strings.TrimSuffix(s.PublicURL, "/")+r.URL.Path+"?"+q.Encode(), http.StatusSeeOther) //nolint:gosec // the configured public address
+	return true
+}
+
 // openIDStart sends the browser to the identity provider of an OpenID realm.
 func (s *Server) openIDStart(w http.ResponseWriter, r *http.Request) {
 	redirect, ok := s.redirectURL()
 	if !ok {
 		openIDFailed(w, r, noPublicURL)
+		return
+	}
+	if s.atPublicURL(w, r) {
 		return
 	}
 	realm := r.URL.Query().Get("realm")

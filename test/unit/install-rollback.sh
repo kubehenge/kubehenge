@@ -72,11 +72,11 @@ release() {
     done
 }
 
-# upgrade <root> [<API URL>]: the upgrade as install.sh runs it in the container; its output in
-# $said and its exit status in $status.
+# upgrade <root> [<API URL> [<trusted proxies>]]: the upgrade as install.sh runs it in the
+# container; its output in $said and its exit status in $status.
 upgrade() {
     status=0
-    said=$(sh -c "${upgrade_script}" sh "$1" 900 '' "${units}" "${2:-}") || status=$?
+    said=$(sh -c "${upgrade_script}" sh "$1" 900 '' "${units}" "${2:-}" "${3:-}") || status=$?
 }
 
 root=${work}/root
@@ -91,6 +91,23 @@ check "its units are in place" grep -qx 'new kubehenge.service' "${root}/etc/sys
 check "nothing is left aside" [ ! -e "${root}/usr/local/share/.kubehenge-rollback" ]
 check "the appliance's settings gained its ID" grep -qx KUBEHENGE_APPLIANCE_VMID=900 "${root}/etc/kubehenge/appliance.env"
 check "the interface was restarted" grep -qx 'restart kubehenge.service' "${work}/systemctl.log"
+
+# --trusted-proxy replaces the list the appliance has, and without it the list stays.
+release "${root}" 0.1.0 0
+echo KUBEHENGE_TRUSTED_PROXIES=203.0.113.1 >> "${root}/etc/kubehenge/appliance.env"
+upgrade "${root}"
+check "no --trusted-proxy keeps the list" grep -qx KUBEHENGE_TRUSTED_PROXIES=203.0.113.1 "${root}/etc/kubehenge/appliance.env"
+release "${root}" 0.1.0 0
+echo KUBEHENGE_TRUSTED_PROXIES=203.0.113.1 >> "${root}/etc/kubehenge/appliance.env"
+upgrade "${root}" '' 10.0.0.0/8,2001:db8::/32
+check "--trusted-proxy replaces the list" grep -qx KUBEHENGE_TRUSTED_PROXIES=10.0.0.0/8,2001:db8::/32 "${root}/etc/kubehenge/appliance.env"
+lists=$(grep -c '^KUBEHENGE_TRUSTED_PROXIES=' "${root}/etc/kubehenge/appliance.env")
+check "and leaves one line" [ "${lists}" -eq 1 ]
+release "${root}" 0.1.0 0
+upgrade "${root}" '' none
+lists=$(grep -c '^KUBEHENGE_TRUSTED_PROXIES=' "${root}/etc/kubehenge/appliance.env" || true)
+check "--no-trusted-proxy removes the list" [ "${lists}" -eq 0 ]
+check "the other settings stay" grep -qx KUBEHENGE_PROXMOX_URL=https://pve.example:8006 "${root}/etc/kubehenge/appliance.env"
 
 # The new release does not serve: the old one is put back, the reason told.
 release "${root}" 0.1.0 1
