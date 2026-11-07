@@ -2035,6 +2035,15 @@ fieldset.choices .check {
     order: 1;
   }
 
+  /* The header that named the count is hidden, so the count names itself, and says nothing for one. */
+  .grid.events td.count::before {
+    content: "×";
+  }
+
+  .grid.events td.count.once {
+    display: none;
+  }
+
   /* The marker moves from the first cell to the row, so it does not touch the text. */
   .grid.events tr.attention {
     padding-inline-start: 10px;

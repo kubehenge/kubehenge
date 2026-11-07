@@ -176,7 +176,7 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
               <td>{e.reason}</td>
               <td>{e.object}</td>
               <td className="message">{e.message}</td>
-              <td>{e.count}</td>
+              <td className={e.count > 1 ? "count" : "count once"}>{e.count}</td>
             </tr>
           ))}
         </tbody>
