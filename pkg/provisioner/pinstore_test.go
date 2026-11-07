@@ -3,6 +3,8 @@ package provisioner
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 const pinnedLater = "v1.99.9+rke2r1"
@@ -94,6 +98,41 @@ func TestReleaseChecksumsDigestsRefuseABadVersionAndAMissingChecksumFile(t *test
 		t.Errorf("a release without a checksum file gave %v", err)
 	}
 	_ = f
+}
+
+func TestChannelsAndTheValidatorAdmitAReleaseAnAdministratorPinned(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"stable","latest":"v1.36.6+rke2r1"},{"id":"v1.36","latest":"v1.36.6+rke2r1"}]}`))
+	}))
+	defer srv.Close()
+	const newer = "v1.36.6+rke2r1"
+	store := pinStore(t)
+	embedded := ReleasePins{"v1.36.5+rke2r1": {}}
+	s := &ChannelServer{HTTP: srv.Client(), URLs: map[string]string{"rke2": srv.URL}, Pins: embedded, Store: store}
+	ch, err := s.Channels(context.Background(), "rke2", templates.DefaultNodeOS)
+	if err != nil || ch.Latest[36].Raw != "v1.36.5+rke2r1" {
+		t.Fatalf("before the pin: %+v, %v", ch, err)
+	}
+	pin := ReleasePin{File: strings.Repeat("a", 64), Script: strings.Repeat("b", 64)}
+	if err = store.Add(context.Background(), newer, pin, "admin", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if ch, err = s.Channels(context.Background(), "rke2", templates.DefaultNodeOS); err != nil || ch.Latest[36].Raw != newer {
+		t.Errorf("after the pin the channel offers %+v, %v", ch, err)
+	}
+	h, _ := hooksFor(t)
+	h.Releases = &ReleaseChecksums{Pins: embedded, Store: store}
+	v := &ClusterValidator{Hooks: h}
+	c := cluster()
+	c.Spec.Topology.Version = newer
+	if errs := v.validatePinned(context.Background(), nil, c); len(errs) != 0 {
+		t.Errorf("the validator refused the pinned release: %v", errs)
+	}
+	c.Spec.Topology.Version = "v1.36.7+rke2r1"
+	if errs := v.validatePinned(context.Background(), nil, c); len(errs) != 1 {
+		t.Errorf("the validator admitted a release nobody pinned: %v", errs)
+	}
 }
 
 // The admission check and the patch hook go by the pins in the ConfigMap as well as this build's.

@@ -154,6 +154,10 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	s.Accounts, s.Assets, s.ProxmoxURL = accounts, ui.Frontend(), conn.URL
 	s.Releases = &provisioner.ChannelServer{
 		HTTP: &http.Client{Timeout: releaseChannelTimeout}, URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
+		Store: &provisioner.PinStore{Reader: s.ManagementReader(), Namespace: s.ClassNamespace},
+	}
+	s.PinChecks = &provisioner.ReleaseChecksums{
+		HTTP: &http.Client{Timeout: pinFetchTimeout}, GitHub: pinsSources.github, Raw: pinsSources.raw,
 	}
 	s.TalosReleases = templates.DefaultSources().TalosReleases
 	if s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {

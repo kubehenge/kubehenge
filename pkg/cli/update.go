@@ -77,10 +77,10 @@ release named in the index signed by Kubehenge's release key, and only one newer
 func newReleaseCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "release",
-		Short: "Make release keys, indexes and pins, for Kubehenge's maintainers",
+		Short: "Pin RKE2 and k3s releases, and make release keys and indexes",
 	}
 	keys := release.PublicKeys()
-	cmd.AddCommand(newKeygenCommand(), newSignCommand(keys), newIndexCommand(keys), newRenewCommand(keys), newPinsCommand())
+	cmd.AddCommand(newReleasePinCommand(), newReleaseUnpinCommand(), newKeygenCommand(), newSignCommand(keys), newIndexCommand(keys), newRenewCommand(keys), newPinsCommand())
 	return cmd
 }
 

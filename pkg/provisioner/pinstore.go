@@ -54,6 +54,38 @@ func (s *PinStore) Added(ctx context.Context) (ReleasePins, error) {
 	return pins, nil
 }
 
+// PinRecord is a pin an administrator added, with who added it and when, as its comment says.
+type PinRecord struct {
+	Version, File, Script, By string
+	At                        time.Time
+}
+
+// Records are the pins administrators added, oldest first.
+func (s *PinStore) Records(ctx context.Context) ([]PinRecord, error) {
+	cm := &corev1.ConfigMap{}
+	if err := s.Reader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: ReleasePinsName}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading ConfigMap %s/%s: %w", s.Namespace, ReleasePinsName, err)
+	}
+	var out []PinRecord
+	for line := range strings.Lines(cm.Data[releasePinsKey]) {
+		entry, comment, _ := strings.Cut(strings.TrimSpace(line), " #")
+		fields := strings.Fields(entry)
+		if len(fields) != 3 || strings.HasPrefix(entry, "#") {
+			continue
+		}
+		rec := PinRecord{Version: fields[0], File: fields[1], Script: fields[2]}
+		if by, at, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(comment), "added by "), " at "); ok {
+			rec.By = by
+			rec.At, _ = time.Parse(time.RFC3339, at)
+		}
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
 // Add records the pin of version with who added it and when. It is refused for a version that is
 // no RKE2 or k3s release and for one this build already pins.
 func (s *PinStore) Add(ctx context.Context, version string, pin ReleasePin, by string, at time.Time) error {
@@ -114,7 +146,7 @@ func (s *PinStore) Remove(ctx context.Context, version string) error {
 	if !found {
 		return fmt.Errorf("%s: %w", version, ErrNoPin)
 	}
-	running, err := s.runningCluster(ctx, version)
+	running, err := s.RunningCluster(ctx, version)
 	if err != nil {
 		return err
 	}
@@ -128,8 +160,8 @@ func (s *PinStore) Remove(ctx context.Context, version string) error {
 	return nil
 }
 
-// runningCluster names a cluster that runs version, as its topology or any of its machines, or "".
-func (s *PinStore) runningCluster(ctx context.Context, version string) (string, error) {
+// RunningCluster names a cluster that runs version, as its topology or any of its machines, or "".
+func (s *PinStore) RunningCluster(ctx context.Context, version string) (string, error) {
 	var clusters clusterv1.ClusterList
 	if err := s.Reader.List(ctx, &clusters); err != nil {
 		return "", fmt.Errorf("listing the clusters: %w", err)
