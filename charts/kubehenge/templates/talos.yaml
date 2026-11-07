@@ -113,6 +113,7 @@ spec:
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
     {{- include "kubehenge.etcdVariable" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -136,6 +137,7 @@ spec:
           pattern: "^v1\\.[0-9]+\\.[0-9]+$"
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesPatches" "talos" | nindent 4 }}
     # The control planes hold the endpoint with Talos's own virtual IP, elected through etcd, on the
     # VM's one network link.
     - name: talos-control-plane

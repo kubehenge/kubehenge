@@ -60,7 +60,14 @@
       "addonChanges": [
         { "addon": "monitoring", "chart": "kube-prometheus-stack", "from": "84.3.0", "to": "85.0.1" },
         { "addon": "headlamp", "chart": "headlamp", "from": "0.40.1", "to": "0.41.0" }
-      ]
+      ],
+      "workerNodes": {
+        "labels": [
+          { "key": "team", "value": "storefront" },
+          { "key": "tier", "value": "web" }
+        ],
+        "taints": [{ "key": "dedicated", "value": "web", "effect": "NoSchedule" }]
+      }
     },
     {
       "name": "payments",
@@ -103,6 +110,11 @@
       "subnet": 50,
       "ageDays": 14,
       "addOns": ["headlamp"],
+      "workerNodes": {
+        "labels": [{ "key": "team", "value": "release" }],
+        "taints": [{ "key": "dedicated", "value": "canary", "effect": "PreferNoSchedule" }]
+      },
+      "driftTaint": "maintenance",
       "conditions": [
         {
           "type": "AutoUpgradeSkipped",

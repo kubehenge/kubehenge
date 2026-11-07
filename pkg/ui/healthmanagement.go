@@ -185,7 +185,7 @@ func machineRole(m *clusterv1.Machine) string {
 }
 
 // nodesSection lists the cluster's machines with their nodes, and the nodes of no machine.
-func nodesSection(m *managementRead, wl *workloadRead, now time.Time, a *attention) section[nodeView] {
+func nodesSection(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now time.Time, a *attention) section[nodeView] {
 	s := section[nodeView]{Items: []nodeView{}}
 	if m.machinesErr != nil {
 		s.Error = problem(m.machinesErr)
@@ -229,6 +229,10 @@ func nodesSection(m *managementRead, wl *workloadRead, now time.Time, a *attenti
 		if s.Items[i].Joined {
 			s.Items[i].leaving = leaving[s.Items[i].Name]
 			nodeAttention(a, &s.Items[i], now)
+			if n := nodes[s.Items[i].Name]; n != nil && !s.Items[i].leaving {
+				taintDriftAttention(a, c, &s.Items[i], n)
+				clockSkewAttention(a, &s.Items[i], wl.leases[n.Name], now)
+			}
 		}
 	}
 	slices.SortFunc(s.Items, func(x, y nodeView) int {

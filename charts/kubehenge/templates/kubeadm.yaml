@@ -110,6 +110,7 @@ spec:
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
     {{- include "kubehenge.etcdVariable" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
     - name: cni
       required: true
       schema:
@@ -120,6 +121,7 @@ spec:
           {{- include "kubehenge.cniFixed" . | nindent 10 }}
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesPatches" "kubeadm" | nindent 4 }}
     - name: kubeadm-control-plane
       definitions:
         - selector:

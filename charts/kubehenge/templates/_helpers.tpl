@@ -1664,11 +1664,11 @@ streaming sessions that end when idle. Each class adds its distribution's own on
         runs under the runtime's default seccomp profile unless it asks for another, and exec,
         attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS
         profile, under which pods in kube-system, kube-public and default take connections only
-        from their own namespace, DNS and a few of RKE2's own services aside. Fixed once the
-        cluster exists.
+        from their own namespace, DNS and a few of RKE2's own services aside. May be switched on
+        after creation, which replaces every node, and never off again.
       x-kubernetes-validations:
-        - rule: self == oldSelf
-          message: CIS hardening is chosen when the cluster is created and cannot be changed
+        - rule: "!oldSelf || self"
+          message: CIS hardening cannot be switched off once it is on. Pod Security Admission, seccomp and RKE2's network policies stay until the cluster is rebuilt.
 {{- end -}}
 
 {{/*
@@ -1752,6 +1752,173 @@ The kubelet settings cis adds, as kubelet flags.
 {{- define "kubehenge.cisKubeletArgs" -}}
 - seccomp-default=true
 - streaming-connection-idle-timeout=5m
+{{- end -}}
+
+{{/*
+The labels and taints the nodes of a worker pool register with, set through the kubelet (Talos:
+its node configuration), so that a replaced node comes back with them. Cluster API syncs only the
+labels of its own domains from a MachineDeployment to its nodes, so a plain label such as team=a
+has to go through the kubelet. A pool may carry its own value, which replaces the cluster's.
+Both lists hold a key once: Talos keeps a taint per key.
+The kubelet refuses to set labels in kubernetes.io and k8s.io but for its own namespaces and a few
+standard keys (k8s.io/kubelet/pkg/apis, IsKubeletLabel); the API server's NodeRestriction
+admission refuses the same.
+*/}}
+{{- define "kubehenge.workerNodesVariable" -}}
+{{- $name := "[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?" }}
+{{- $key := printf "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?%s$" $name }}
+{{- $value := printf "^(%s)?$" $name }}
+- name: workerNodes
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      default: {}
+      description: >-
+        Labels and taints the nodes of the worker pools register with, kept when a node is
+        replaced. A worker pool may set its own, which replaces these. Changing them replaces the
+        pool's nodes, one at a time.
+      properties:
+        labels:
+          type: array
+          maxItems: 50
+          x-kubernetes-validations:
+            - rule: self.all(x, self.exists_one(y, x.key == y.key))
+              message: Each label key once.
+          description: Node labels. Each key once.
+          items:
+            type: object
+            required: [key]
+            properties:
+              key:
+                type: string
+                maxLength: 317
+                pattern: {{ $key | quote }}
+              value:
+                type: string
+                default: ""
+                maxLength: 63
+                pattern: {{ $value | quote }}
+            x-kubernetes-validations:
+              - rule: self.key.split('/')[size(self.key.split('/')) - 1].size() <= 63
+                message: A label key's name is at most 63 characters.
+              - rule: "!self.key.contains('/') || self.key.split('/')[0].size() <= 253"
+                message: A label key's prefix is at most 253 characters.
+              - rule: >-
+                  !self.key.contains('/') ||
+                  !(self.key.split('/')[0] in ['kubernetes.io', 'k8s.io'] ||
+                  self.key.split('/')[0].endsWith('.kubernetes.io') ||
+                  self.key.split('/')[0].endsWith('.k8s.io')) ||
+                  self.key in ['kubernetes.io/hostname', 'kubernetes.io/os', 'kubernetes.io/arch',
+                  'beta.kubernetes.io/os', 'beta.kubernetes.io/arch', 'beta.kubernetes.io/instance-type',
+                  'node.kubernetes.io/instance-type', 'topology.kubernetes.io/zone', 'topology.kubernetes.io/region',
+                  'failure-domain.beta.kubernetes.io/zone', 'failure-domain.beta.kubernetes.io/region'] ||
+                  self.key.split('/')[0] in ['kubelet.kubernetes.io', 'node.kubernetes.io'] ||
+                  self.key.split('/')[0].endsWith('.kubelet.kubernetes.io') ||
+                  self.key.split('/')[0].endsWith('.node.kubernetes.io')
+                message: The kubelet refuses to set labels in kubernetes.io and k8s.io, except in kubelet.kubernetes.io and node.kubernetes.io and for its standard keys such as kubernetes.io/os.
+        taints:
+          type: array
+          maxItems: 20
+          x-kubernetes-validations:
+            - rule: self.all(x, self.exists_one(y, x.key == y.key))
+              message: Each taint key once.
+          description: Node taints. Each key once.
+          items:
+            type: object
+            required: [key, effect]
+            properties:
+              key:
+                type: string
+                maxLength: 317
+                pattern: {{ $key | quote }}
+              value:
+                type: string
+                default: ""
+                maxLength: 63
+                pattern: {{ $value | quote }}
+              effect:
+                type: string
+                enum: [NoSchedule, PreferNoSchedule, NoExecute]
+            x-kubernetes-validations:
+              - rule: self.key.split('/')[size(self.key.split('/')) - 1].size() <= 63
+                message: A taint key's name is at most 63 characters.
+              - rule: "!self.key.contains('/') || self.key.split('/')[0].size() <= 253"
+                message: A taint key's prefix is at most 253 characters.
+{{- end -}}
+
+{{/*
+The patches that give the nodes of a worker pool its workerNodes: the kubelet's node-labels and the
+registration taints of the distribution (call with its name, kubeadm, rke2, k3s or talos). A pool's
+own value is among the variables a patch sees for the pool's templates, so the enabledIf holds
+per pool.
+*/}}
+{{- define "kubehenge.workerNodesPatches" -}}
+{{- $labels := `{{ if .workerNodes }}{{ if .workerNodes.labels }}true{{ end }}{{ end }}` }}
+{{- $taints := `{{ if .workerNodes }}{{ if .workerNodes.taints }}true{{ end }}{{ end }}` }}
+{{- $labelList := `{{ $l := list }}{{ range .workerNodes.labels }}{{ $l = append $l (printf "%s=%s" .key (.value | default "")) }}{{ end }}` }}
+{{- $taintList := `{{ $t := list }}{{ range .workerNodes.taints }}{{ $t = append $t (printf "%s=%s:%s" .key (.value | default "") .effect) }}{{ end }}` }}
+{{- $worker := dict "machineDeploymentClass" (dict "names" (list "worker")) }}
+{{- $kinds := dict "kubeadm" "KubeadmConfigTemplate" "rke2" "RKE2ConfigTemplate" "k3s" "KThreesConfigTemplate" "talos" "TalosConfigTemplate" }}
+{{- $api := ternary "bootstrap.cluster.x-k8s.io/v1beta1" "bootstrap.cluster.x-k8s.io/v1beta2" (eq . "talos") }}
+{{- if eq . "talos" }}
+- name: worker-nodes
+  enabledIf: {{ `{{ if .workerNodes }}{{ if or .workerNodes.labels .workerNodes.taints }}true{{ end }}{{ end }}` | quote }}
+  definitions:
+    - selector:
+        apiVersion: {{ $api }}
+        kind: {{ get $kinds . }}
+        matchResources:
+          {{- toYaml $worker | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: /spec/template/spec/strategicPatches/-
+          valueFrom:
+            template: {{ `{{ $l := dict }}{{ range .workerNodes.labels }}{{ $_ := set $l .key (.value | default "") }}{{ end }}{{ $t := dict }}{{ range .workerNodes.taints }}{{ $_ := set $t .key (printf "%s:%s" (.value | default "") .effect) }}{{ end }}{{ dict "apiVersion" "v1alpha1" "kind" "KubeNodeConfig" "labels" $l "taints" $t | toJson | toJson }}` | quote }}
+{{- else }}
+- name: {{ . }}-worker-node-labels
+  enabledIf: {{ $labels | quote }}
+  definitions:
+    - selector:
+        apiVersion: {{ $api }}
+        kind: {{ get $kinds . }}
+        matchResources:
+          {{- toYaml $worker | nindent 10 }}
+      jsonPatches:
+        {{- if eq . "kubeadm" }}
+        - op: add
+          path: /spec/template/spec/joinConfiguration/nodeRegistration/kubeletExtraArgs/-
+          valueFrom:
+            template: |
+              name: node-labels
+              value: "{{ `{{ $l := list }}{{ range .workerNodes.labels }}{{ $l = append $l (printf "%s=%s" .key (.value | default "")) }}{{ end }}{{ join "," $l }}` }}"
+        {{- else }}
+        - op: add
+          path: /spec/template/spec/agentConfig/nodeLabels
+          valueFrom:
+            template: {{ printf "%s{{ toJson $l }}" $labelList | quote }}
+        {{- end }}
+- name: {{ . }}-worker-node-taints
+  enabledIf: {{ $taints | quote }}
+  definitions:
+    - selector:
+        apiVersion: {{ $api }}
+        kind: {{ get $kinds . }}
+        matchResources:
+          {{- toYaml $worker | nindent 10 }}
+      jsonPatches:
+        {{- if eq . "kubeadm" }}
+        - op: add
+          path: /spec/template/spec/joinConfiguration/nodeRegistration/taints
+          valueFrom:
+            template: {{ `{{ toJson .workerNodes.taints }}` | quote }}
+        {{- else }}
+        - op: add
+          path: /spec/template/spec/agentConfig/nodeTaints
+          valueFrom:
+            template: {{ printf "%s{{ toJson $t }}" $taintList | quote }}
+        {{- end }}
+{{- end }}
 {{- end -}}
 
 {{/*

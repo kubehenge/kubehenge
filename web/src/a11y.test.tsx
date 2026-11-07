@@ -127,6 +127,16 @@ const signedIn: Record<string, Route> = {
   "GET /api/clusters": { body: [cluster("web")] },
   "GET /api/fleet/health": { body: [] },
   "GET /api/runs": { body: [] },
+  "GET /api/clusters/default/web/pod-security-check": {
+    body: {
+      checked: 14,
+      truncated: false,
+      refused: [{ namespace: "apps", name: "api-0", reasons: "privileged containers; host namespaces" }],
+    },
+  },
+  "GET /api/clusters/default/bk/pod-security-check": {
+    body: { checked: 0, truncated: false, refused: [], skipped: "No pod is running" },
+  },
   "DELETE /api/session": { status: 204 },
 };
 
@@ -169,6 +179,7 @@ const kubeadmClass = {
     { name: "podSecurity", required: false, schema: object },
     { name: "certificates", required: false, schema: object },
     { name: "cis", required: false, schema: { type: "boolean", default: false } },
+    { name: "workerNodes", required: false, schema: object },
     { name: "rancher", required: false, schema: object },
     { name: "oidc", required: false, schema: { type: "array" } },
     { name: "namespaceLabels", required: false, schema: object },
@@ -289,7 +300,16 @@ const db = cluster("db", {
   controlPlane: { desired: 3, ready: 2, available: 2, upToDate: 2 },
   workers: { desired: 2, ready: 1, available: 1, upToDate: 1 },
   workerPools: [
-    { name: "a", class: "default-worker", replicas: 1, machine: { cores: 4, memoryMiB: 8192, diskGiB: 50 } },
+    {
+      name: "a",
+      class: "default-worker",
+      replicas: 1,
+      machine: { cores: 4, memoryMiB: 8192, diskGiB: 50 },
+      nodes: {
+        labels: [{ key: "team", value: "a" }],
+        taints: [{ key: "dedicated", value: "db", effect: "NoSchedule" }],
+      },
+    },
     { name: "b", class: "default-worker", replicas: 1, autoscaling: { min: 1, max: 3 } },
   ],
   headlamp: "https://192.0.2.30:4466/",
@@ -1133,6 +1153,14 @@ const cases: Case[] = [
       await check("Network");
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Machines");
+      await user.click(screen.getByRole("button", { name: "Add label" }));
+      await user.click(screen.getByRole("button", { name: "Add taint" }));
+      await user.type(within(screen.getByRole("group", { name: "Label 1" })).getByLabelText("Key"), "k8s.io/x");
+      await check("Machines with labels and taints");
+      await user.click(screen.getByRole("button", { name: "Next" }));
+      await check("Machines with problems");
+      await user.click(screen.getByRole("button", { name: "Remove label 1" }));
+      await user.click(screen.getByRole("button", { name: "Remove taint 1" }));
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Add-ons");
       await user.click(screen.getByRole("checkbox", { name: "Use existing cert-manager" }));
@@ -1215,6 +1243,8 @@ const dialogsExpected = [
   /^Add pool to /u,
   /^Resize .*control plane$/u,
   /^Resize pool /u,
+  /^Edit pool .* nodes$/u,
+  /^Edit CIS hardening$/u,
   /^Delete pool /u,
   /^Boot log of /u,
   /^Reboot /u,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { coresText } from "./create-form";
-import { sizeProblem } from "./Pools";
+import { sizeProblem } from "./pool-machine";
 
 describe("counting cores", () => {
   it("says core for one and cores for the rest", () => {

@@ -135,7 +135,8 @@ the wizard's request is.`,
 	o.namespaceFlag(deleteCmd.Flags())
 
 	cmd.AddCommand(slices.Concat([]*cobra.Command{
-		list, get, kubeconfig, create, scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd, o.machineCommand(), o.etcdCommand(),
+		list, get, kubeconfig, create, scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd,
+		o.poolCommand(), o.updateCommand(), o.machineCommand(), o.etcdCommand(),
 	}, o.addonCommands())...)
 	return cmd
 }

@@ -94,6 +94,14 @@ import {
   whole,
 } from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
+import {
+  hasNodeSettings,
+  noNodeSettings,
+  nodeSettingsProblem,
+  nodeSettingsText,
+  nodesVariable,
+  type NodeSettings,
+} from "./node-settings";
 import { noTimeouts, timeoutProblems, timeoutsOf, timeoutsSet, type TimeoutEntry } from "./NodeTimeouts";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -212,6 +220,8 @@ export interface Form {
   haGroups: boolean;
   controlPlaneMachine: Machine;
   workerMachine: Machine;
+  /** The labels and taints every worker gets, for a class that has the workerNodes variable. */
+  workerNodes: NodeSettings;
   cni: string;
   headlamp: boolean;
   headlampHostname: string;
@@ -736,6 +746,7 @@ export const newForm = (): Form => ({
   haGroups: true,
   controlPlaneMachine: machineDefaults(undefined),
   workerMachine: machineDefaults(undefined),
+  workerNodes: noNodeSettings,
   cni: "",
   headlamp: false,
   headlampHostname: "",
@@ -829,6 +840,7 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
       ? f.controlPlaneMachine
       : machineDefaults(variable(c, "controlPlaneMachine")),
     workerMachine: kept("workerMachine") ? f.workerMachine : machineDefaults(variable(c, "workerMachine")),
+    workerNodes: variable(c, "workerNodes") ? f.workerNodes : noNodeSettings,
     workerAutoscale: f.workerAutoscale && variable(c, "autoscaler") !== undefined,
     oidc: kept("oidc") ? f.oidc : oidcProviders(variable(c, "oidc")?.default),
   };
@@ -1060,6 +1072,14 @@ function timeoutRequests(form: Form): Pick<CreateRequest, "controlPlaneTimeouts"
   };
 }
 
+// workerNodesVariable is the labels and taints the form gives the workers, where the class has them
+// and there are workers.
+function workerNodesVariable(form: Form, defined: ReadonlySet<string>): Record<string, unknown> {
+  return defined.has("workerNodes") && mostWorkers(form) > 0 && hasNodeSettings(form.workerNodes)
+    ? { workerNodes: nodesVariable(form.workerNodes) }
+    : {};
+}
+
 // request turns the form into the API's request, with only the variables the class defines.
 export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
@@ -1098,7 +1118,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (!form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: false };
   }
-  Object.assign(variables, distributionVariables(form));
+  Object.assign(variables, distributionVariables(form), workerNodesVariable(form, defined));
   const lb = loadBalancerVariable(formLoadBalancer(form, c.distribution));
   if (lb) {
     variables["loadBalancer"] = lb;
@@ -1256,6 +1276,9 @@ export function summary(
   rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
   if (mostWorkers(form) > 0) {
     rows.push(["Worker machines", machine(form.workerMachine)]);
+    if (defined.has("workerNodes")) {
+      rows.push(["Worker labels and taints", nodeSettingsText(form.workerNodes)]);
+    }
   }
   if (defined.has("cni")) {
     rows.push(["Pod network", cniName(form.cni) || "Not chosen"]);
@@ -1401,6 +1424,7 @@ export type FieldKey =
   | "placement"
   | "controlPlaneMachine"
   | "workerMachine"
+  | "workerNodes"
   | "cni"
   | "rancherHostname"
   | "headlampHostname"
@@ -1668,6 +1692,10 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     } else if (!whole(m.diskGiB, min.diskGiB)) {
       p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}`;
     }
+  }
+  const nodes = variable(c, "workerNodes") && mostWorkers(form) > 0 ? nodeSettingsProblem(form.workerNodes) : undefined;
+  if (nodes !== undefined) {
+    p.workerNodes = nodes;
   }
   return p;
 }

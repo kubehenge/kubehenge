@@ -42,10 +42,13 @@ func (s *Server) healthWorkload(ctx context.Context, kube client.Client, c *clus
 // workloadRead is what the health identity read inside a cluster.
 type workloadRead struct {
 	// skipped says why nothing was read.
-	skipped       string
-	connectErr    error
-	nodes         []corev1.Node
-	nodesErr      error
+	skipped    string
+	connectErr error
+	nodes      []corev1.Node
+	nodesErr   error
+	// leases are when each node's kubelet last renewed its lease, by node name, by the kubelet's
+	// own clock. A cluster whose leases cannot be read shows no clock skew.
+	leases        map[string]time.Time
 	pods          []corev1.Pod
 	podsTruncated bool
 	podsErr       error
@@ -119,6 +122,14 @@ func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *cluste
 		}
 		return err //nolint:wrapcheck // problem() reads it, and says it as the API server did
 	})
+	var leasesErr error
+	read(&leasesErr, func(ctx context.Context) error {
+		l, err := w.Kube.CoordinationV1().Leases(corev1.NamespaceNodeLease).List(ctx, list)
+		if err == nil {
+			wl.leases = leaseRenewals(l.Items)
+		}
+		return err //nolint:wrapcheck // the lease is an extra: a failure shows no skew and nothing else
+	})
 	read(&wl.podsErr, func(ctx context.Context) error {
 		l, err := core.Pods(metav1.NamespaceAll).List(ctx, list)
 		if err == nil {
@@ -142,6 +153,14 @@ func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *cluste
 		}
 		return err //nolint:wrapcheck // as above
 	})
+	s.readExtras(read, kube, c, w, &wl)
+	wg.Wait()
+	return wl
+}
+
+// readExtras starts the reads that depend on what the cluster has switched on: backups, alerts and
+// the API server's own readiness checks.
+func (s *Server) readExtras(read func(*error, func(context.Context) error), kube client.Client, c *clusterv1.Cluster, w *Workload, wl *workloadRead) {
 	if backupsOf(c).Enabled {
 		var veleroErr error
 		read(&veleroErr, func(ctx context.Context) error {
@@ -170,8 +189,6 @@ func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *cluste
 			return err
 		})
 	}
-	wg.Wait()
-	return wl
 }
 
 // readinessAttention lists the API server's failing readiness checks, such as etcd's.

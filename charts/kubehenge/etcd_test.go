@@ -66,7 +66,7 @@ var renderedClasses = sync.OnceValues(func() (map[string]classDocument, error) {
 	return classes, nil
 })
 
-func renderClass(t *testing.T, file string) *classDocument {
+func classDocumentOf(t *testing.T, file string) *classDocument {
 	t.Helper()
 	classes, err := renderedClasses()
 	if err != nil {
@@ -106,7 +106,7 @@ func etcdArguments(t *testing.T, file, patch, variables string) []string {
 	if err := json.Unmarshal([]byte(variables), &vars); err != nil {
 		t.Fatal(err)
 	}
-	p := renderClass(t, file).patch(t, patch)
+	p := classDocumentOf(t, file).patch(t, patch)
 	if len(p.Definitions) != 1 || len(p.Definitions[0].JSONPatches) != 1 {
 		t.Fatalf("patch %s: %+v", patch, p.Definitions)
 	}
@@ -190,7 +190,7 @@ func TestEtcdVariableBounds(t *testing.T) {
 	t.Parallel()
 	for _, file := range []string{"kubeadm.yaml", "rke2.yaml", "k3s.yaml", "talos.yaml"} {
 		found := false
-		for _, v := range renderClass(t, file).Spec.Variables {
+		for _, v := range classDocumentOf(t, file).Spec.Variables {
 			if v.Name != "etcd" {
 				continue
 			}

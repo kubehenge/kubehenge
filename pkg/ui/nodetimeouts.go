@@ -23,7 +23,7 @@ func applyControlPlaneTimeouts(c *clusterv1.Cluster, t *provisioner.NodeTimeouts
 // and add or remove none.
 func timeoutsOnly(pools map[string]*poolChange) bool {
 	for _, change := range pools {
-		if change == nil || change.Replicas != nil || change.Machine != nil {
+		if change == nil || change.Replicas != nil || change.Machine != nil || change.Nodes != nil {
 			return false
 		}
 	}

@@ -130,6 +130,8 @@ const settingLabels: Record<string, string[]> = {
   controlPlaneTimeouts: [controlPlaneTimeoutsLabel],
   controlPlaneMachine: ["Control-plane size"],
   workerMachine: ["Worker size"],
+  workerNodes: ["Worker node settings"],
+  cis: ["CIS hardening"],
   autoscaling: ["Autoscaling"],
   allowedNodes: ["Placement"],
   namespaceLabels: ["Namespace labels"],

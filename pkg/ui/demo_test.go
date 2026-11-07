@@ -303,6 +303,33 @@ func TestDemoReadsEveryClustersHealth(t *testing.T) {
 	}
 }
 
+// The demo's staging cluster sets labels and a taint on its pool, one node has a taint besides, and the
+// restricted level would refuse its pods.
+func TestDemoShowsPoolLabelsTaintsAndPodChecks(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var h healthView
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/staging/health", ""), &h)
+	var notes []string
+	for _, a := range h.Attention {
+		if strings.Contains(a.What, "taints differ") {
+			notes = append(notes, a.What+" "+a.Message)
+		}
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "pool "+workerPool) || !strings.Contains(notes[0], "maintenance") {
+		t.Errorf("taint notes %q, want one naming the pool and the taint", notes)
+	}
+	var check struct {
+		Checked int               `json:"checked"`
+		Refused []json.RawMessage `json:"refused"`
+	}
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/staging/pod-security-check", ""), &check)
+	if check.Checked == 0 || len(check.Refused) == 0 {
+		t.Errorf("pod check %+v, want pods checked and some refused", check)
+	}
+}
+
 // A page's first reads go out together, before any has brought a cookie. They share one session.
 func TestDemoSignsInTheFirstReads(t *testing.T) {
 	t.Parallel()

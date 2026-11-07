@@ -169,6 +169,8 @@ export interface WorkerPool {
   machine?: MachineSize;
   /** The pool's own timeouts. Those it lacks are the class's. */
   timeouts?: NodeTimeouts;
+  /** The pool's own labels and taints, as the workerNodes variable holds them. Unset, it takes the cluster's. */
+  nodes?: unknown;
 }
 
 /** A machine's size, as the controlPlaneMachine and workerMachine variables give it. */
@@ -184,6 +186,30 @@ export interface PoolChange {
   machine?: MachineSize | null;
   /** Replaces all the pool's timeouts. Those left out are the class's. */
   timeouts?: NodeTimeouts;
+  /** The pool's own labels and taints, or the cluster's with null. */
+  nodes?: NodesVariable | null;
+}
+
+/** The workerNodes variable's value. */
+export interface NodesVariable {
+  labels: { key: string; value: string }[];
+  taints: { key: string; value?: string; effect: string }[];
+}
+
+/** A pod that the restricted Pod Security level would refuse to start. */
+export interface RefusedPod {
+  namespace: string;
+  name: string;
+  reasons: string;
+}
+
+/** The running pods the restricted Pod Security level would refuse. */
+export interface PodSecurityCheck {
+  checked: number;
+  truncated: boolean;
+  refused: RefusedPod[];
+  /** Why nothing was checked. */
+  skipped?: string;
 }
 
 export interface Machine {

@@ -8,6 +8,7 @@ import {
   formLoadBalancerValue,
   machineLeast,
   memoryNodeWarning,
+  mostWorkers,
   setLoadBalancer,
   templateMissing,
   variable,
@@ -22,6 +23,7 @@ import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer"
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
+import { NodeSettingsFields } from "./NodeSettings";
 import { NodeTimeoutFields } from "./NodeTimeouts";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
@@ -855,7 +857,10 @@ export function MachinesStep({
   haGroups,
   nodes,
   rules,
+  attempted = false,
 }: StepProps & {
+  /** Next was pressed on the step: every row's problem shows. */
+  attempted?: boolean;
   cls: ClusterClass | undefined;
   usableStorages: Storage[];
   placed: boolean;
@@ -953,6 +958,14 @@ export function MachinesStep({
             )}
           </Field>
         </details>
+      )}
+      {variable(cls, "workerNodes") !== undefined && mostWorkers(form) > 0 && (
+        <NodeSettingsFields
+          value={form.workerNodes}
+          onChange={(v) => set("workerNodes", v)}
+          showAll={attempted}
+          workers
+        />
       )}
     </>
   );

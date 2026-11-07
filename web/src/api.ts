@@ -29,6 +29,7 @@ import type {
   NodeDNS,
   NotificationSent,
   PodLogs,
+  PodSecurityCheck,
   Plan,
   UpgradeChecks,
   PveNode,
@@ -360,6 +361,8 @@ export interface Api {
   backupLog: (ns: string, name: string, backup: string) => Promise<VeleroLog>;
   restoreLog: (ns: string, name: string, restore: string) => Promise<VeleroLog>;
   etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
+  /** podSecurityCheck lists the running pods the restricted Pod Security level would refuse. */
+  podSecurityCheck: (ns: string, name: string) => Promise<PodSecurityCheck>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
   /** defragmentEtcd asks the controller to defragment every etcd member at once. */
   defragmentEtcd: (ns: string, name: string) => Promise<void>;
@@ -508,6 +511,7 @@ export const api: Api = {
   restoreLog: (ns, name, restore) =>
     request("GET", `${clusterPath(ns, name)}/restores/${encodeURIComponent(restore)}/log`),
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
+  podSecurityCheck: (ns, name) => request("GET", `${clusterPath(ns, name)}/pod-security-check`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
   defragmentEtcd: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-defrag`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),

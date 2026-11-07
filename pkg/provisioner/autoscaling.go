@@ -181,7 +181,7 @@ func addressNumber(a netip.Addr) uint32 {
 // the labels Cluster API gives its Node from the machines' own. The autoscaler's reading of those
 // labels from the MachineDeployment looks for them where a MachineDeployment has none, so a pool at
 // zero would otherwise seem to offer no pod with a node selector a node of its own.
-func capacityAnnotations(size machineSize, machineLabels map[string]string) map[string]string {
+func capacityAnnotations(size machineSize, machineLabels map[string]string, nodes NodeSettings) map[string]string {
 	a := map[string]string{
 		capacityPrefix + "cpu":    strconv.Itoa(*size.Cores),
 		capacityPrefix + "memory": fmt.Sprintf("%dMi", int(float64(*size.MemoryMiB)*capacityShare)),
@@ -195,8 +195,16 @@ func capacityAnnotations(size machineSize, machineLabels map[string]string) map[
 			labels = append(labels, k+"="+machineLabels[k])
 		}
 	}
+	// The labels and taints the pool's nodes register with are the kubelet's, so Cluster API does not
+	// copy them from the machines.
+	if own := nodes.LabelList(); own != "" {
+		labels = append(labels, own)
+	}
 	if len(labels) > 0 {
 		a[capacityPrefix+"labels"] = strings.Join(labels, ",")
+	}
+	if taints := nodes.TaintList(); taints != "" {
+		a[capacityPrefix+"taints"] = taints
 	}
 	return a
 }

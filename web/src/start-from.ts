@@ -1,6 +1,7 @@
 import { newForm, type Form, type Machine } from "./create-form";
 import { loadBalancerOf } from "./LoadBalancer";
 import { nodeOSKey } from "./node-os";
+import { nodesOf } from "./node-settings";
 import { entryOf } from "./NodeTimeouts";
 import { placeOf } from "./Placement";
 import { featuresOf } from "./start-from-features";
@@ -47,6 +48,7 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "haGroups",
   "controlPlaneMachine",
   "workerMachine",
+  "workerNodes",
   "cni",
   "headlamp",
   "headlampView",
@@ -124,6 +126,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     haGroups: flag(record(v["ccm"])["haGroups"]) !== false,
     controlPlaneMachine: machineOf(v["controlPlaneMachine"], base.controlPlaneMachine),
     workerMachine: machineOf(v["workerMachine"], base.workerMachine),
+    workerNodes: nodesOf(v["workerNodes"]),
     ...featuresOf(v, base),
   };
 }
