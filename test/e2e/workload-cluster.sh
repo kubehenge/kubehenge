@@ -120,6 +120,8 @@ ETCD_SHA256=5dfa9cc3b3ce3b4b491fbcc2057d3daa166bcc6676f743fcd20f8e5760cb9775
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
+# shellcheck source=ci/room.sh
+. "$(dirname "$0")/ci/room.sh"
 # shellcheck source=cis-benchmark.sh
 . "$(dirname "$0")/cis-benchmark.sh"
 # shellcheck source=backups.sh
@@ -464,11 +466,12 @@ fi
 # Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they
 # are seen to fit in it: its distribution's least, or what a worker uses itself, each add-on's
 # figure and the test's own pods, whichever is more.
-worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --argjson fixtures "${fixture_memory}" '
+worker_need=$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --argjson fixtures "${fixture_memory}" '
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
-    | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + ([$on[] | $addon[.]] | add) + $fixtures]
+    | $node.worker + ([$on[] | $addon[.]] | add) + $fixtures')
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson need "${worker_need}" '
+    [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum), $need]
     | max')}
 # Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
 # request, the GitOps engine that asks for more of the two.
@@ -480,15 +483,25 @@ worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r
     | max')}
 # The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
 # it uses itself with those add-ons and its CNI, whichever is more.
-control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --arg cni "${KUBEHENGE_E2E_CNI:-}" '
+control_plane_need=$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --arg cni "${KUBEHENGE_E2E_CNI:-}" '
     (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
     | (.metadata.annotations["kubehenge.dev/cni-control-plane-memory"] // "{}" | fromjson) as $cnis
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
-    | [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
+    | $node.controlPlane + ([$on[] | $grows[.] // 0] | add) + ($cnis[$cni] // 0)')
+control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson need "${control_plane_need}" '
+    [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
         (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.controlPlane + ([$on[] | $grows[.] // 0] | add) + ($cnis[$cni] // 0)]
+        $need]
     | max')}
 echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the control plane with ${control_plane_memory} MiB"
+# KUBEHENGE_E2E_BALLOON_FILE: where the recorder (ci/guests.sh) finds the least memory each node's
+# balloon may take it down to. The nodes keep the sizes above, the class's own least, and give
+# memory back only while the runner is short of it: down to what Kubehenge's figures say they need.
+# A node's name starts with the cluster's, and a worker's goes on with -md-.
+if [ -n "${KUBEHENGE_E2E_BALLOON_FILE:-}" ]; then
+    printf '%s-md-* %s\n%s-* %s\n' "${name}" "$(balloon_floor "${worker_need}" "${worker_memory}")" \
+        "${name}" "$(balloon_floor "${control_plane_need}" "${control_plane_memory}")" > "${KUBEHENGE_E2E_BALLOON_FILE}"
+fi
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster

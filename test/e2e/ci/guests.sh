@@ -5,7 +5,9 @@
 #   test/e2e/ci/guests.sh record <file>    every 15 s until stopped: each VM's CPU time, memory, swap,
 #                                          bytes received, bytes read from disk and time stalled
 #                                          and, while memory is short, has the guests drop their page
-#                                          cache, noting each in <file>.trims
+#                                          cache, noting each in <file>.trims. Where the test names
+#                                          floors, it sets each guest's balloon minimum, noting each
+#                                          in <file>.balloons
 #   test/e2e/ci/guests.sh now              the same sample once, to standard output
 #   test/e2e/ci/guests.sh trim <file>      the page cache step once
 #   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs, memory, download and
@@ -116,10 +118,46 @@ trim() {
     done
 }
 
+# balloon <notes file>: gives each running guest the least memory its balloon may take it down to,
+# once, and notes each in the file with the VM ID and MiB. KUBEHENGE_E2E_BALLOON_FILE (by default
+# balloon.txt in RUNNER_TEMP) holds one "<name pattern> <MiB>" per line, the first pattern a
+# guest's name matches counting, which the workload test writes once it has sized the nodes. Proxmox VE takes memory back from a guest only
+# while the machine is over 80 % memory use, and the guest gives up its page cache first. A guest
+# that no pattern names, such as the management node, keeps its balloon as it is. A guest that
+# does not take the setting yet is tried again in 15 seconds.
+balloon() {
+    floors=${KUBEHENGE_E2E_BALLOON_FILE:-${RUNNER_TEMP:-/tmp}/balloon.txt}
+    [ -s "${floors}" ] || return 0
+    for pid in $(pgrep -x kvm || true); do
+        vmid=$(qemu_arg "${pid}" -id 2> /dev/null)
+        name=$(qemu_arg "${pid}" -name 2> /dev/null)
+        case ${vmid} in
+            '' | *[!0-9]*) continue ;;
+            *) ;;
+        esac
+        eval "done_vm=\${ballooned_${vmid}:-}"
+        [ -z "${done_vm}" ] || continue
+        least=''
+        while read -r pattern mib; do
+            # shellcheck disable=SC2254 # the pattern is a glob on purpose.
+            case ${name} in
+                ${pattern}) least=${mib} && break ;;
+                *) ;;
+            esac
+        done < "${floors}"
+        [ -n "${least}" ] || continue
+        if timeout -k 5 30 docker exec kubehenge-e2e-pve qm set "${vmid}" --balloon "${least}" < /dev/null > /dev/null 2>&1; then
+            eval "ballooned_${vmid}=1"
+            printf '%s %s %s\n' "$(date -u +%T)" "${vmid}" "${least}" >> "$1"
+        fi
+    done
+}
+
 record() {
     while :; do
         sample
         trim "$1"
+        balloon "${1%.trims}.balloons"
         sleep 15
     done
 }
@@ -129,6 +167,10 @@ summary() {
         load "$1"
     else
         echo "no VM was sampled"
+    fi
+    if [ -s "$1.balloons" ]; then
+        echo "guests whose balloon may take them down, with the MiB:"
+        awk '{ printf "  %s: %s MiB, set at %s\n", $2, $3, $1 }' "$1.balloons"
     fi
     [ -s "$1.trims" ] || return 0
     echo "guests that dropped their page cache, with the MiB the machine had available then:"
