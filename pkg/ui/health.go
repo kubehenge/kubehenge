@@ -340,6 +340,8 @@ func (s *Server) clusterHealth(w http.ResponseWriter, r *http.Request, u user) {
 	v := shared
 	v.Nodes.Items = slices.Clone(shared.Nodes.Items)
 	v.VMs = s.addVMs(r.Context(), u, c, access.path, v.Nodes.Items)
+	v.Attention = slices.Clone(shared.Attention)
+	s.addNodeClocks(r.Context(), u, &v)
 	v.Logs = u.namespaces.has(c.Namespace) && access.held.Has(privKubeconfig) && v.Workload == ""
 	writeJSON(w, http.StatusOK, v)
 }

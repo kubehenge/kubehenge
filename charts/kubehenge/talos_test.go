@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -217,7 +218,10 @@ func talosConfig(t *testing.T, role machine.Type, patches []string) map[string]m
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = cfg.ValidateAsClient(metalMode{}); err != nil {
+	// Talos checks a PTP device path with filepath.Clean, which turns /dev/ptp0 into \dev\ptp0 on
+	// Windows, so the one finding about it there is no finding about the configuration.
+	if _, err = cfg.ValidateAsClient(metalMode{}); err != nil &&
+		(runtime.GOOS != "windows" || !strings.Contains(err.Error(), "1 error occurred") || strings.Count(err.Error(), "PTP device path") != 1) {
 		t.Fatal(err)
 	}
 	encoded, err := cfg.EncodeString(encoder.WithComments(encoder.CommentsDisabled))

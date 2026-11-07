@@ -138,6 +138,7 @@ spec:
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
     {{- include "kubehenge.workerNodesPatches" "k3s" | nindent 4 }}
+    {{- include "kubehenge.clockPatches" "k3s" | nindent 4 }}
     - name: k3s-control-plane
       definitions:
         - selector:
@@ -399,6 +400,7 @@ spec:
 
 {{- define "kubehenge.k3sAgentConfig" -}}
 preK3sCommands:
+  - {{ include "kubehenge.clockCommand" . }}
   - sysctl --system
 agentConfig:
   kubeletArgs:
@@ -423,6 +425,7 @@ template:
       {{- include "kubehenge.k3sAgentConfig" (dict "controlPlane" true) | nindent 6 }}
       files:
         {{- include "kubehenge.sysctlFile" . | nindent 8 }}
+        {{- include "kubehenge.clockFile" . | nindent 8 }}
         {{- include "kubehenge.removedServerFile" (dict "distribution" "k3s") | nindent 8 }}
         {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/k3s/audit-policy.yaml") | nindent 8 }}
         # The k3s provider has no setting for secrets encryption; k3s keeps the key in its
@@ -467,4 +470,5 @@ template:
     {{- include "kubehenge.k3sAgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.clockFile" . | nindent 6 }}
 {{- end -}}

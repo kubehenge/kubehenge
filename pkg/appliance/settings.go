@@ -188,7 +188,7 @@ func (r *TemplateRefresh) check(p *problems, workloadDatastores []string) {
 	if r.Storage != "" && !slices.Contains(workloadDatastores, r.Storage) {
 		p.addf("Template disks: one of the cluster storages")
 	}
-	if r.Node != "" && !validHostName(r.Node) {
+	if r.Node != "" && !provisioner.ValidHostName(r.Node) {
 		p.addf("Template build node: a Proxmox VE node name")
 	}
 	if r.Bridge != "" && !bridgeRef.MatchString(r.Bridge) {
@@ -554,7 +554,7 @@ func (s *Settings) checkSearchDomains(p *problems) {
 		switch {
 		case seen[d]:
 			p.addf("Search domains: %s is listed twice", d)
-		case !validHostName(d) || strings.HasSuffix(d, "."):
+		case !provisioner.ValidHostName(d) || strings.HasSuffix(d, "."):
 			p.addf("Search domains: %q is no domain name", d)
 		}
 		seen[d] = true
@@ -566,37 +566,14 @@ func (s *Settings) checkSearchDomains(p *problems) {
 func (s *Settings) checkTimeServers(p *problems) {
 	seen := map[string]bool{}
 	for _, t := range s.TimeServers {
-		switch ip, err := netip.ParseAddr(t); {
+		switch problem := provisioner.TimeServerProblem(t); {
 		case seen[t]:
 			p.addf("Time servers: %s is listed twice", t)
-		case err == nil && (ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast()):
-			p.addf("Time servers: %s is no address the nodes can reach", t)
-		case err != nil && !validHostName(t):
-			p.addf("Time servers: %s is no host name or IP address", t)
+		case problem != "":
+			p.addf("Time servers: %s", problem)
 		}
 		seen[t] = true
 	}
-}
-
-// validHostName tells whether s is a DNS name: dot-separated labels of letters, digits and hyphens,
-// none starting or ending with a hyphen, at most 253 characters.
-func validHostName(s string) bool {
-	const longestName, longestLabel = 253, 63
-	s = strings.TrimSuffix(s, ".")
-	if s == "" || len(s) > longestName {
-		return false
-	}
-	for label := range strings.SplitSeq(s, ".") {
-		if label == "" || len(label) > longestLabel || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-			return false
-		}
-		for _, r := range label {
-			if r > unicode.MaxASCII || (!unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-') {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func (s *Settings) checkSubnets(p *problems) {

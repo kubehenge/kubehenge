@@ -62,6 +62,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | Prefix length | Of the nodes' network. |
 | Gateway | The nodes' default gateway. |
 | DNS servers | IPv4 addresses, one per line or separated by commas. |
+| Time servers | Up to 8 NTP host names or IP addresses, separated by commas. Empty keeps the node image's public servers. The nodes reach them on UDP 123, and a node that cannot sync is reported on the health page ([troubleshooting](troubleshooting.md#a-nodes-clock-is-off)). |
 | Load balancer | What gives Services of type `LoadBalancer` their addresses, [below](#load-balancer). |
 | Load-balancer addresses | With a load balancer: the addresses it hands out, as ranges, networks or single addresses. |
 | Announce with | With MetalLB: layer 2 (ARP) or BGP, [below](#bgp). |
@@ -818,9 +819,9 @@ In the cluster's audit log, what you do appears as the ServiceAccount `kube-syst
 
 **Log out** in Headlamp signs you out of that cluster. The appliance drops your session's token, and Headlamp asks for a token or a sign-in of your own. That lasts until you open the cluster again with **Headlamp** on its page here, which signs you in again.
 
-Where the administrator switched on the [Headlamp actions](install-settings.md#headlamp-actions), Headlamp also offers the Helm app catalog and the Prometheus charts it ships with. The app catalog lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them. It acts with your own credentials in the cluster, or the sign-in's.
+Where the administrator switched on the [Headlamp actions](install-settings.md#headlamp-actions), Headlamp also offers the Helm app catalogue and the Prometheus charts it ships with. The app catalogue lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them. It acts with your own credentials in the cluster, or the sign-in's.
 
-The app catalog installs charts only from the Helm repositories set for the appliance. Only those who may set up the appliance add or remove them.
+The app catalogue installs charts only from the Helm repositories set for the appliance. Only those who may set up the appliance add or remove them.
 
 The Prometheus plugin charts a cluster's metrics from a Prometheus running in it, such as the monitoring add-on's. It reads them through the cluster's API with your credentials. Node drain is offered either way, with your own credentials.
 
@@ -1345,6 +1346,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Create a cluster | `VM.Allocate` | the workload pool |
 | | `Datastore.AllocateSpace` | `/storage/<storage>` |
 | | `SDN.Use` | `/sdn/zones/<zone>/<bridge>`, or `…/<bridge>/<vlan>` with a VLAN tag |
+| See a Proxmox VE node's clock on the health page | `Sys.Audit` | `/nodes/<node>` |
 | Place a cluster by an HA rule's nodes | `Sys.Audit`, or `VM.Allocate` where the rules are offered to cluster creators | `/` for `Sys.Audit`, the workload pool or the cluster's pool for `VM.Allocate` |
 | Install Rancher | `Sys.Modify` | the workload pool |
 | Run the CSI plugin's newest release | `Datastore.Allocate` | `/storage/<storage>` |
@@ -1366,7 +1368,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Store a cluster's own backup access key | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Download the admin kubeconfig | `Sys.Modify` | the cluster's pool |
 | Open the cluster in the shared Headlamp signed in as cluster-admin, where the [Headlamp sign-in](install-settings.md#headlamp-sign-in) is on | `Sys.Modify` | the cluster's pool |
-| Use the Helm app catalog and the Prometheus charts in the shared Headlamp, where the [Headlamp actions](install-settings.md#headlamp-actions) are on. In the cluster they act with the cluster's own rights | `VM.Audit` | the cluster's pool |
+| Use the Helm app catalogue and the Prometheus charts in the shared Headlamp, where the [Headlamp actions](install-settings.md#headlamp-actions) are on. In the cluster they act with the cluster's own rights | `VM.Audit` | the cluster's pool |
 | Add, update or remove a Helm repository in the shared Headlamp | the [setup privileges](install.md#who-may-set-it-up) | `/` |
 | Read an unwell pod's logs on the health page | `Sys.Modify` | the cluster's pool |
 | Trust identity providers beyond those set for every cluster | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
@@ -1517,7 +1519,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | Variable | Required | What it is |
 | --- | --- | --- |
 | `controlPlaneEndpoint` | yes | The control plane's virtual IP: an IPv4 address, unused, outside `network.addresses`. |
-| `network` | yes | `bridge`, one of the bridges clusters may use. It has to exist on a node the cluster may use ([above](#nodes-left-out-of-the-placement)). `vlan` (optional, 1 to 4094). `mtu` (optional, 1280 to 65520). `queues` (optional, 1 to 64). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. `searchDomains` (optional, at most 6 DNS names), which the nodes and the pods append to a name without dots, so that `git` finds `git.corp.example`. |
+| `network` | yes | `bridge`, one of the bridges clusters may use. It has to exist on a node the cluster may use ([above](#nodes-left-out-of-the-placement)). `vlan` (optional, 1 to 4094). `mtu` (optional, 1280 to 65520). `queues` (optional, 1 to 64). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. `searchDomains` (optional, at most 6 DNS names), which the nodes and the pods append to a name without dots, so that `git` finds `git.corp.example`. `ntp` (optional, at most 8 host names or IP addresses, each once). Create a cluster from a file with `kubehenge cluster create -f`, which takes the same variable. |
 | `storage` | yes | The storage for the nodes' disks and the persistent volumes, one of the management cluster's `workload_datastores`. It has to be available on an online node the cluster may use. |
 | `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one. Every node when unset. New VMs go to those of them that are online, where the storage is available and where the template can be cloned ([above](#machines)). A template on storage that is not shared can be cloned only on its own node. The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)). Default true, where the management cluster has Proxmox VE HA and the storage is shared. |

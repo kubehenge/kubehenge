@@ -355,7 +355,20 @@ The Health page warns `clock is off by` when a ready node's lease, stamped by it
 
 - On a kubeadm, RKE2 or k3s node, look at `chronyc tracking` and `chronyc sources` (a debug shell, or the guest agent). A network that blocks UDP port 123 to the public pools leaves chrony without a source. Allow it, or point the node at an internal time server.
 - Older templates did not guarantee a time daemon. Build the node image again and let the cluster replace its nodes ([templates.md](templates.md#the-weekly-build)).
-- Check the Proxmox VE hosts' own time. A VM starts from its host's clock.
+- Check the Proxmox VE hosts' own time. A VM starts from its host's clock. The health page lists a host over 30 seconds from the controller's to users with `Sys.Audit` on it.
+
+### A node's clock is not synced
+
+- **A kubeadm, RKE2 or k3s node** waited 3 minutes for chrony and stopped before it made any certificate, with `clock not synced` in its boot log. The host's clock (`/dev/ptp0`) is the fallback, so the time servers and `/dev/ptp0` both failed: open UDP 123, set **Time servers**, or check that `chronyc sources` lists `KVM`.
+- **A Talos node** booted after 5 minutes without a time source, and the health page says `clock not synced`. `talosctl get timestatus` shows whether it has one now.
+- A running cluster's nodes take new **Time servers** at their next replacement.
+
+### Proxmox VE nodes disagree about the time
+
+Proxmox VE refuses a ticket whose age on the checking node is under minus 5 minutes. A name with several records, or a virtual address in front of several nodes, sends the ticket to a node whose clock is behind. Kubehenge then says `Proxmox VE nodes disagree about the time`.
+
+- Compare `timedatectl` on every node, and read `pvecm status`.
+- Point Kubehenge at one node's address until the clocks agree.
 
 ### Labels and taints vanish from a node
 

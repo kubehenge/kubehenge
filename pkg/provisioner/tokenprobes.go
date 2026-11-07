@@ -141,7 +141,6 @@ func TemplateBuilderNeeds(p *Places) []Need {
 	return unique(append(needs, needsOn(pathStorage+b.Storage, privAllocateSpace, privDatastoreAudit)...))
 }
 
-
 // HANeeds are what the HA token holds.
 func HANeeds() []Need { return needsOn(pathRoot, privSysAudit, "Sys.Console") }
 

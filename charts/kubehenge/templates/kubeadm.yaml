@@ -134,6 +134,7 @@ spec:
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
     {{- include "kubehenge.workerNodesPatches" "kubeadm" | nindent 4 }}
+    {{- include "kubehenge.clockPatches" "kubeadm" | nindent 4 }}
     - name: kubeadm-control-plane
       definitions:
         - selector:
@@ -430,8 +431,10 @@ template:
         {{- include "kubehenge.kubeletConfigFile" . | nindent 8 }}
         {{- include "kubehenge.kubeadmServingFile" . | nindent 8 }}
         {{- include "kubehenge.sysctlFile" . | nindent 8 }}
+        {{- include "kubehenge.clockFile" . | nindent 8 }}
         {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/kubernetes/audit-policy.yaml") | nindent 8 }}
       preKubeadmCommands:
+        - {{ include "kubehenge.clockCommand" . }}
         - sysctl --system
         - /etc/kubehenge/node-ip.sh
         - /etc/kubehenge/serving-certs.sh
@@ -459,7 +462,9 @@ template:
       {{- include "kubehenge.kubeadmNodeIPFile" . | nindent 6 }}
       {{- include "kubehenge.kubeletConfigFile" . | nindent 6 }}
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.clockFile" . | nindent 6 }}
     preKubeadmCommands:
+      - {{ include "kubehenge.clockCommand" . }}
       - sysctl --system
       - /etc/kubehenge/node-ip.sh
     postKubeadmCommands:

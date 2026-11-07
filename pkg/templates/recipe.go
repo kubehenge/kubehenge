@@ -199,6 +199,19 @@ const (
 	timeDaemonUnit = timeDaemon + ".service"
 )
 
+// chronyDropIns finds chrony reading /etc/chrony.d, where the chart writes a cluster's time servers.
+const chronyDropIns = `grep -Eq '^(include|confdir)[[:space:]]+/etc/chrony\.d' /etc/chrony.conf`
+
+// hostClockLine is the source the chart gives chrony beside a cluster's time servers
+// (kubehenge.clockPatches), the hypervisor's clock. The stratum keeps it behind any server that answers.
+const hostClockLine = "refclock PHC /dev/ptp0 poll 2 stratum 5 refid KVM"
+
+// hostClockCheck proves the hypervisor's clock reaches the node and chrony takes it: ptp_kvm loads, the
+// device exists, and chronyd lists a refclock for the very line the chart writes. The drop-in is the
+// bake's own and goes again, so that the template keeps what the chart writes alone.
+const hostClockCheck = `f=/etc/chrony.d/99-kubehenge-bake.conf; listed() { for _ in 1 2 3 4 5 6 7 8 9 10; do chronyc -n sources 2> /dev/null | grep -q '^#' && return 0; sleep 1; done; return 1; }; ` +
+	`mkdir -p /etc/chrony.d && modprobe ptp_kvm && test -c /dev/ptp0 && echo '` + hostClockLine + `' > "$f" && systemctl restart chronyd && listed; r=$?; rm -f "$f"; systemctl restart chronyd; exit $r`
+
 // iptablesCheck finds iptables for the CNI's portmap plugin, which runs it from the node's PATH, on
 // the nftables the kernel has.
 const iptablesCheck = "iptables --version | grep -q nf_tables"
@@ -224,6 +237,10 @@ func nodeChecks(b Bake) [][]string {
 		preset("enable " + timeDaemonUnit),
 		active(timeDaemon),
 		{"sh", "-c", "chronyc tracking > /dev/null"},
+		// A cluster's time servers reach the node as a drop-in there (kubehenge.clockPatches).
+		{"sh", "-c", chronyDropIns},
+		// A closed network has no time server, and the nodes then sync to the hypervisor's clock.
+		{"sh", "-c", hostClockCheck},
 		// The copy as of now, rather than up to a quarter of a minute old, for the bake to read
 		// through the guest agent (checkBootLog).
 		{systemctl, "start", "kubehenge-boot-log.service"},

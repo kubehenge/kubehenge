@@ -105,7 +105,7 @@ func TestKubeadmNodesTakeTheirCustomisation(t *testing.T) {
 		t.Errorf("webhook file %v", hook)
 	}
 	commands := commandsOf(t, cp["preKubeadmCommands"])
-	if i := slices.Index(commands, "sysctl --system"); i != 0 || !slices.Equal(commands[len(commands)-2:], []string{"augenrules --load", "cp-only"}) {
+	if i := slices.Index(commands, "sysctl --system"); i != 1 || commands[0] != waitClockCommand || !slices.Equal(commands[len(commands)-2:], []string{"augenrules --load", "cp-only"}) {
 		t.Errorf("commands %v: Kubehenge's first, then the company's for the control plane", commands)
 	}
 	api := asMap(t, field(t, cp, "clusterConfiguration", "apiServer"))
@@ -202,7 +202,7 @@ func TestAgentNodesTakeTheirCustomisation(t *testing.T) {
 		if f, _ := fileOf(t, cp["files"], "/etc/co/cp.conf"); f == nil {
 			t.Errorf("%s: control-plane file missing", c.file)
 		}
-		if cmds := commandsOf(t, cp[c.commands]); !slices.Equal(cmds[len(cmds)-2:], []string{"augenrules --load", "cp-only"}) || cmds[0] != "sysctl --system" {
+		if cmds := commandsOf(t, cp[c.commands]); !slices.Equal(cmds[len(cmds)-2:], []string{"augenrules --load", "cp-only"}) || cmds[0] != waitClockCommand || cmds[1] != "sysctl --system" {
 			t.Errorf("%s: commands %v", c.file, cmds)
 		}
 

@@ -57,6 +57,8 @@ type fakeAccounts struct {
 	tokenGrants map[string]map[string][]string
 	revoked     map[string]bool
 	now         func() time.Time
+	// nodeSkew is how far each Proxmox VE node's clock is from now.
+	nodeSkew map[string]time.Duration
 	// members are every pool's guests. deleted records the VMs deleted.
 	members []pve.Member
 	deleted []int
@@ -282,6 +284,17 @@ func (*fakeAccounts) DNS(_ context.Context, _ *pve.Ticket, node string) (pve.Nod
 		return pve.NodeDNS{Servers: []string{"192.0.2.54"}}, nil
 	}
 	return pve.NodeDNS{Servers: []string{"192.0.2.53"}, Search: "corp.example"}, nil
+}
+
+// NodeTime answers the time of the fake's clock-skewed nodes, or Proxmox VE's refusal for a user
+// without Sys.Audit on the node.
+func (f *fakeAccounts) NodeTime(_ context.Context, t *pve.Ticket, node string) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.effective(t.Username, "/nodes/"+node).Has("Sys.Audit") {
+		return time.Time{}, pve.ErrForbidden
+	}
+	return f.now().Add(f.nodeSkew[node]), nil
 }
 
 // PoolMembers answers as Proxmox VE does, without the tags.

@@ -173,6 +173,16 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
             type: string
             maxLength: 253
             pattern: '^([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?$'
+        ntp:
+          type: array
+          maxItems: 8
+          description: >-
+            NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123.
+            Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
 - name: storage
   required: true
   schema:
@@ -1590,6 +1600,69 @@ carry nothing a shell would read.
         - op: add
           path: {{ $spec }}/{{ $target.commands }}/-
           value: /etc/kubehenge/search-domains.sh
+    {{- end }}
+{{- end -}}
+
+{{/*
+The script every kubeadm, RKE2 and k3s node runs first: the bootstrap goes on only once chrony has set
+the clock (files/wait-clock.sh). The command list's first entry is kubehenge.clockCommand.
+*/}}
+{{- define "kubehenge.clockFile" -}}
+- path: /etc/kubehenge/wait-clock.sh
+  owner: root:root
+  permissions: "0700"
+  content: |
+    {{- .Files.Get "files/wait-clock.sh" | nindent 4 }}
+{{- end -}}
+
+{{/* `|| exit 1` ends the whole cloud-init command script, so that nothing after it runs. */}}
+{{- define "kubehenge.clockCommand" -}}
+/etc/kubehenge/wait-clock.sh || exit 1
+{{- end -}}
+
+{{/*
+The chrony drop-in of a kubeadm, RKE2 or k3s cluster, from the network variable's ntp (call with
+"kubeadm", "rke2" or "k3s"). It steps the clock at start-up whatever the image's chrony.conf says,
+and adds the cluster's servers to the image's own.
+
+It also gives chrony the hypervisor's clock (the ptp_kvm module, loaded at boot) as a source, so that a
+closed network, with UDP 123 blocked and no internal time server, still syncs. The source reports
+stratum 5, which a time server of stratum 1 to 4 beats wherever it answers: the host clock is the
+fallback only. Talos nodes get the same clock as /dev/ptp0 (talos.yaml).
+*/}}
+{{- define "kubehenge.clockPatches" -}}
+{{- $targets := dict
+  "kubeadm" (list
+    (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "KubeadmControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/kubeadmConfigSpec/files/-")
+    (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KubeadmConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-"))
+  "rke2" (list
+    (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "RKE2ControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/files/-")
+    (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "RKE2ConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-"))
+  "k3s" (list
+    (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "KThreesControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/kthreesConfigSpec/files/-")
+    (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KThreesConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-")) }}
+{{- $drop := `{{ $c := "makestep 1.0 3\n" }}{{ with .network }}{{ range .ntp }}{{ $c = printf "%sserver %s iburst\n" $c . }}{{ end }}{{ end }}{{ $c = printf "%srefclock PHC /dev/ptp0 poll 2 stratum 5 refid KVM\n" $c }}{{ dict "path" "/etc/chrony.d/50-kubehenge.conf" "owner" "root:root" "permissions" "0644" "content" $c | toJson }}` }}
+- name: {{ . }}-clock
+  definitions:
+    {{- range get $targets . }}
+    - selector:
+        apiVersion: {{ .api }}
+        kind: {{ .kind }}
+        matchResources:
+          {{- toYaml .match | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: {{ .path }}
+          valueFrom:
+            template: {{ $drop | quote }}
+        - op: add
+          path: {{ .path }}
+          value:
+            path: /etc/modules-load.d/50-kubehenge-ptp.conf
+            owner: root:root
+            permissions: "0644"
+            content: |
+              ptp_kvm
     {{- end }}
 {{- end -}}
 

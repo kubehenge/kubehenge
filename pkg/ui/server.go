@@ -84,6 +84,7 @@ type Guests interface {
 	Templates(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
 	BackupCovers(ctx context.Context, t *pve.Ticket, vmid int) (bool, error)
 	ApplianceID(ctx context.Context, t *pve.Ticket, hint int, macs []string) (int, error)
+	NodeTime(ctx context.Context, t *pve.Ticket, node string) (time.Time, error)
 }
 
 // Removals are what an administrator's runs remove from Proxmox VE that the management-cluster
@@ -148,6 +149,9 @@ type Server struct {
 	// TalosReleases lists the Talos releases the Image Factory builds. Nil offers only those the
 	// template pool has.
 	TalosReleases func(ctx context.Context) ([]string, error)
+	// TalosClock asks a Talos node whether its clock is synced, for the Health page. Nil asks the
+	// node's Talos API.
+	TalosClock provisioner.TalosClockProbe
 	// Headlamp is set when a shared Headlamp server runs beside the interface.
 	Headlamp *Headlamp
 	// WorkloadPool is the Proxmox VE pool every cluster's own pool nests under.
@@ -652,6 +656,10 @@ func (s *Server) require(w http.ResponseWriter, r *http.Request, u user, aclPath
 	return true
 }
 
+// nodesDisagree is what a refused, freshly issued ticket says: the nodes behind Proxmox VE's address
+// keep clocks over five minutes apart.
+const nodesDisagree = "Proxmox VE nodes disagree about the time. Compare timedatectl on each node and read pvecm status."
+
 // missingPrivilege is what a refusal says when the user lacks priv on aclPath.
 func missingPrivilege(u user, priv, aclPath string) string {
 	return fmt.Sprintf("%s needs %s on %s", u.ticket.Username, priv, aclPath)
@@ -672,6 +680,8 @@ func (s *Server) proxmoxError(w http.ResponseWriter, r *http.Request, err error)
 // signed in. It tells a stranger nothing of Proxmox VE's reasons.
 func (s *Server) anonymousProxmoxError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, pve.ErrNodesDisagree):
+		writeError(w, http.StatusUnauthorized, nodesDisagree)
 	case errors.Is(err, pve.ErrAuthentication):
 		writeError(w, http.StatusUnauthorized, "session expired. Sign in again")
 	case errors.Is(err, pve.ErrForbidden):

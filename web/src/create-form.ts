@@ -92,6 +92,7 @@ import {
   networkOf,
   rangeProblem,
   searchDomainsProblem,
+  timeServersProblem,
   whole,
 } from "./network";
 import {
@@ -212,6 +213,8 @@ export interface Form {
   gateway: string;
   dnsServers: string;
   searchDomains: string;
+  /** NTP servers for the nodes. Empty keeps the node image's own. */
+  ntpServers: string;
   loadBalancer: Implementation;
   loadBalancerAddresses: string;
   loadBalancerMode: Mode;
@@ -772,6 +775,7 @@ export const newForm = (): Form => ({
   gateway: "",
   dnsServers: "",
   searchDomains: "",
+  ntpServers: "",
   loadBalancer: "",
   loadBalancerAddresses: "",
   loadBalancerMode: "l2",
@@ -1141,6 +1145,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     dnsServers: list(form.dnsServers),
     ...interfaceOptions(form),
     ...(list(form.searchDomains).length > 0 && { searchDomains: list(form.searchDomains) }),
+    ...(list(form.ntpServers).length > 0 && { ntp: list(form.ntpServers) }),
   };
   const variables: Record<string, unknown> = {
     controlPlaneEndpoint: form.endpoint,
@@ -1280,6 +1285,9 @@ function loadBalancerRows(form: Form, c: ClusterClass): [string, string][] {
   return rows;
 }
 
+const timeServersRow = (form: Form): [string, string][] =>
+  list(form.ntpServers).length > 0 ? [["Time servers", list(form.ntpServers).join(", ")]] : [];
+
 // summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
@@ -1304,6 +1312,7 @@ export function summary(
     ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
     ["DNS servers", list(form.dnsServers).join(", ")],
     ["Search domains", list(form.searchDomains).join(", ") || "None"],
+    ...timeServersRow(form),
   ];
   if (defined.has("loadBalancer")) {
     rows.push(...loadBalancerRows(form, c));
@@ -1473,6 +1482,7 @@ export type FieldKey =
   | "gateway"
   | "dnsServers"
   | "searchDomains"
+  | "ntpServers"
   | "loadBalancerAddresses"
   | "loadBalancerAsn"
   | "loadBalancerPeers"
@@ -1696,6 +1706,10 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   const domains = searchDomainsProblem(list(form.searchDomains));
   if (domains !== undefined) {
     p.searchDomains = domains;
+  }
+  const ntpProblem = timeServersProblem(list(form.ntpServers));
+  if (ntpProblem !== undefined) {
+    p.ntpServers = ntpProblem;
   }
   Object.assign(p, balancerProblems(form, c));
   for (const [key, v] of [

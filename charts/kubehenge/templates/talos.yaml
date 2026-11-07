@@ -150,6 +150,35 @@ spec:
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
     {{- include "kubehenge.workerNodesPatches" "talos" | nindent 4 }}
+    # Talos waits for its clock before it signs the cluster's certificates, for ever unless told
+    # otherwise: a node that reaches no time server never joins, and its machine health check
+    # replaces it on and on. Five minutes later the node boots and the Health page says that its
+    # clock is not synced. The TimeSyncConfig document takes NTP servers or PTP devices, not both
+    # (validate in pkg/machinery/config/types/network/time_sync.go). Only machine.time.servers takes
+    # both, so the hypervisor's clock (/dev/ptp0) sits beside the NTP servers there.
+    - name: talos-time
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+            kind: TalosControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              valueFrom:
+                template: {{ include "kubehenge.talosTimeSync" . | quote }}
+        - selector:
+            apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+            kind: TalosConfigTemplate
+            matchResources:
+              machineDeploymentClass:
+                names: [worker]
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/strategicPatches/-
+              valueFrom:
+                template: {{ include "kubehenge.talosTimeSync" . | quote }}
     # The control planes hold the endpoint with Talos's own virtual IP, elected through etcd, on the
     # VM's one network link.
     - name: talos-control-plane
@@ -268,6 +297,16 @@ credentials, so its health checks stay open to them.
 {{ include "kubehenge.exempt" .Values.podSecurityExempt }}
 {{ "{{- $talos := true }}" }}
 {{ .Files.Get "files/admission.tpl" }}
+{{- end -}}
+
+{{/*
+Talos's machine.time as a Cluster API template: the network variable's ntp servers, or Talos's own
+default server (time.cloudflare.com) where none are set, then the hypervisor's PTP clock, and a boot
+that goes on after five minutes without sync. This field is the only one that takes NTP servers and
+a PTP device together, and it syncs without NTS.
+*/}}
+{{- define "kubehenge.talosTimeSync" -}}
+{{ `{{ $servers := list "time.cloudflare.com" }}{{ with .network }}{{ if .ntp }}{{ $servers = .ntp }}{{ end }}{{ end }}{{ dict "machine" (dict "time" (dict "servers" (append $servers "/dev/ptp0") "bootTimeout" "5m0s")) | toJson | toJson }}` }}
 {{- end -}}
 
 {{- define "kubehenge.talosAuthentication" -}}

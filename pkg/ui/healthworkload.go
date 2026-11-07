@@ -48,7 +48,9 @@ type workloadRead struct {
 	nodesErr   error
 	// leases are when each node's kubelet last renewed its lease, by node name, by the kubelet's
 	// own clock. A cluster whose leases cannot be read shows no clock skew.
-	leases        map[string]time.Time
+	leases map[string]time.Time
+	// unsynced are the Talos nodes whose time sync has not succeeded, by node name.
+	unsynced      map[string]bool
 	pods          []corev1.Pod
 	podsTruncated bool
 	podsErr       error
@@ -155,6 +157,7 @@ func (s *Server) readWorkload(ctx context.Context, kube client.Client, c *cluste
 	})
 	s.readExtras(read, kube, c, w, &wl)
 	wg.Wait()
+	s.readTalosClocks(ctx, kube, c, &wl)
 	return wl
 }
 

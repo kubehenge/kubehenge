@@ -99,6 +99,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	}
 	errs = append(errs, validateClusterMesh(old, c)...)
 	errs = append(errs, validateRanges(old, c, class)...)
+	errs = append(errs, validateTimeServers(c)...)
 	if err := checkLogs(c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(logsAddon), err.Error()))
 	}
