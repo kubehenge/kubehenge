@@ -49,7 +49,8 @@ Each build checks in its own boot that `/proc/sys/crypto/fips_enabled` reads 1 a
 
 | | FIPS mode |
 | --- | --- |
-| AlmaLinux 10, Rocky Linux 10 | Built, not yet proven. FIPS mode as the family sets it in image mode. No FIPS 140-3 certificate covers the modules of either release |
+| AlmaLinux 10 | Template proven: the end-to-end template test builds one and boots a clone in FIPS mode. No cluster tested yet. FIPS mode as the family sets it in image mode. No FIPS 140-3 certificate covers the release's modules |
+| Rocky Linux 10 | Built, not yet proven. Built as AlmaLinux 10. No FIPS 140-3 certificate covers the release's modules |
 | openSUSE Leap 16.1 | Not offered |
 | RKE2 | Built, not yet proven. RKE2 builds every release with BoringCrypto, a FIPS 140 validated module, so the [release pins](architecture.md#release-pins-for-rke2-and-k3s) stay the same. Canal is the only CNI it builds so. A cluster in FIPS mode is refused Calico and Cilium |
 | k3s | Refused: k3s is not built for FIPS mode |
