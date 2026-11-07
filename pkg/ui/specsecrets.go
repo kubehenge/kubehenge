@@ -115,9 +115,7 @@ func (s *Server) createWith(r *http.Request, u user, body []byte, query url.Valu
 	req.Header.Set("Content-Type", "application/json")
 	if len(query) > 0 {
 		q := req.URL.Query()
-		for k, v := range query {
-			q[k] = v
-		}
+		maps.Copy(q, query)
 		req.URL.RawQuery = q.Encode()
 	}
 	got := &capturedResponse{header: http.Header{}}
