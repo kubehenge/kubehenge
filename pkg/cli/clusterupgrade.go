@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -47,6 +49,19 @@ past the list without asking.`,
 	return cmd
 }
 
+var isoDate = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
+
+// localDates writes the dates in the interface's text, which keeps them as 2026-10-13, as the
+// interface's pages write a date: 13/10/2026.
+func localDates(text string) string {
+	return isoDate.ReplaceAllStringFunc(text, func(day string) string {
+		if t, err := time.Parse(time.DateOnly, day); err == nil {
+			return t.Format("02/01/2006")
+		}
+		return day
+	})
+}
+
 func (o *clusterOptions) acceptUpgradeCommand() *cobra.Command {
 	var version string
 	cmd := &cobra.Command{
@@ -72,7 +87,7 @@ listed holds the automatic upgrade again.`,
 			}
 			out := cmd.OutOrStdout()
 			for _, line := range found.Lines {
-				_, _ = fmt.Fprintf(out, "  - %s\n", line)
+				_, _ = fmt.Fprintf(out, "  - %s\n", localDates(line))
 			}
 			_, _ = fmt.Fprintf(out, "accepted for the automatic upgrade of %s to %s\n", args[0], version)
 			return nil
@@ -101,7 +116,7 @@ func (o *clusterOptions) upgrade(ctx context.Context, out io.Writer, name, versi
 	if len(found.Lines) > 0 {
 		_, _ = fmt.Fprintf(out, "Upgrading %s to %s would run into:\n", name, version)
 		for _, line := range found.Lines {
-			_, _ = fmt.Fprintf(out, "  - %s\n", line)
+			_, _ = fmt.Fprintf(out, "  - %s\n", localDates(line))
 		}
 		if !goOn() {
 			return errors.New("upgrade cancelled: add --yes to go past the list")

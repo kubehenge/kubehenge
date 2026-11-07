@@ -55,7 +55,7 @@ func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "GET /api/clusters/clusters/web/upgrade-checks":
 		if r.URL.Query().Get("version") == "v1.35.1" {
 			_, _ = io.WriteString(w, `{"removedAPIs":[],"webhooks":[],"unchecked":[],"lines":[
-				"Removed APIs still in use: policy/v1beta1 podsecuritypolicies (removed in 1.35).",
+				"Removed APIs still in use: policy/v1beta1 podsecuritypolicies (removed in 1.35, last requested 2026-10-12).",
 				"The validating webhook guard fails closed and its Service apps/guard has 1 ready endpoint."]}`)
 			return
 		}

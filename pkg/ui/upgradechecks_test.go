@@ -76,7 +76,7 @@ func TestHealthNotesAClusterPausedForAWeek(t *testing.T) {
 		switch {
 		case tc.want == "" && len(a) != 0:
 			t.Errorf("%s: %+v", tc.name, a)
-		case tc.want != "" && (len(a) != 1 || a[0].What != tc.want || a[0].Severity != severityWarning):
+		case tc.want != "" && (len(a) != 1 || a[0].What != "Paused" || !strings.HasPrefix(a[0].Message, tc.want+". ") || a[0].Severity != severityWarning):
 			t.Errorf("%s: %+v, want %q", tc.name, a, tc.want)
 		}
 	}
@@ -138,7 +138,7 @@ func TestClusterProblemsRepeatOutOfSupport(t *testing.T) {
 	h, _ := healthHarness(t)
 	v := &healthView{Attention: []attentionView{
 		{Severity: severityWarning, What: outOfSupportWhat, Message: "Kubernetes 1.33 is older than 1.34."},
-		{Severity: severityWarning, What: "Paused since 2026-10-01", Message: "x"},
+		{Severity: severityWarning, What: "Paused", Message: "x"},
 	}}
 	c := &clusterv1.Cluster{Namespace: "default", Name: "one"}
 	notices, _ := h.server.clusterProblems(c, v)
@@ -146,7 +146,7 @@ func TestClusterProblemsRepeatOutOfSupport(t *testing.T) {
 	for i := range notices {
 		repeats[strings.TrimPrefix(notices[i].Title, "one: ")] = repeatEvery(notices[i].Key) == notifyOutOfSupportEvery
 	}
-	if !repeats[outOfSupportWhat] || repeats["Paused since 2026-10-01"] || len(repeats) != 2 {
+	if !repeats[outOfSupportWhat] || repeats["Paused"] || len(repeats) != 2 {
 		t.Errorf("repeats %v", repeats)
 	}
 }
@@ -315,7 +315,7 @@ func TestDemoHealthShowsVersionAndPauseNotes(t *testing.T) {
 		return out
 	}
 	legacy := whats("legacy")
-	for _, want := range []string{outOfSupportWhat, "Paused since 2026-10-01", "Certificates expire"} {
+	for _, want := range []string{outOfSupportWhat, "Paused", "Certificates expire"} {
 		if !slices.Contains(legacy, want) {
 			t.Errorf("legacy: %q lacks %q", legacy, want)
 		}

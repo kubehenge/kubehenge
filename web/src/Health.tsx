@@ -35,6 +35,7 @@ import {
   bytes,
   errorMessage,
   filled,
+  localDates,
   sentence,
   usePoll,
   Skeleton,
@@ -403,7 +404,7 @@ function NeedsAttention({
                   ) : (
                     <Link to={fix.to}>{a.what}</Link>
                   )}
-                  {filled(a.message) && <div className="hint message">{a.message}</div>}
+                  {filled(a.message) && <div className="hint message">{localDates(a.message)}</div>}
                   {filled(a.accept) && <AcceptUpgrade cluster={cluster} version={a.accept} />}
                 </td>
                 <Since at={a.since} />

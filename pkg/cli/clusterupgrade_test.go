@@ -89,7 +89,7 @@ func TestClusterUpgradeListsWhatItMeetsBeforeAsking(t *testing.T) {
 			fake := &fakeClusterAPI{}
 			out, err := runUpgrade(t, fake, tc.stdin, append([]string{"--version", "v1.35.1"}, tc.args...)...)
 			list := "Upgrading web to v1.35.1 would run into:\n" +
-				"  - Removed APIs still in use: policy/v1beta1 podsecuritypolicies (removed in 1.35).\n" +
+				"  - Removed APIs still in use: policy/v1beta1 podsecuritypolicies (removed in 1.35, last requested 12/10/2026).\n" +
 				"  - The validating webhook guard fails closed and its Service apps/guard has 1 ready endpoint.\n"
 			if !strings.HasPrefix(out, list) {
 				t.Errorf("out %q does not open with the list", out)

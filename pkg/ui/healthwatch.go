@@ -85,8 +85,8 @@ func pausedAttention(c *clusterv1.Cluster, now time.Time, a *attention) {
 		return
 	}
 	since := cond.LastTransitionTime.UTC().Format(time.DateOnly)
-	a.add(severityWarning, sectionClusterAPI, "Paused since "+since,
-		"Nothing upgrades, renews certificates or replaces machines while the cluster is paused.", cond.LastTransitionTime.Time)
+	a.add(severityWarning, sectionClusterAPI, "Paused",
+		"Paused since "+since+". Nothing upgrades, renews certificates or replaces machines while the cluster is paused.", cond.LastTransitionTime.Time)
 }
 
 // vmTitles name the worst state a cluster's VMs are in.

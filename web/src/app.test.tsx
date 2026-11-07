@@ -478,7 +478,7 @@ describe("clusters", () => {
               severity: "warning",
               section: "cluster-api",
               what: "Automatic upgrade skipped",
-              message: "The automatic upgrade to v1.37.1+rke2r1 waits.",
+              message: "The automatic upgrade to v1.37.1+rke2r1 waits, last requested 2026-10-12.",
               accept: "v1.37.1+rke2r1",
             },
           ],
@@ -490,6 +490,10 @@ describe("clusters", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
+    const day = new Date("2026-10-12T00:00:00Z").toLocaleDateString(undefined, { timeZone: "UTC" });
+    await expect(
+      screen.findByText(`The automatic upgrade to v1.37.1+rke2r1 waits, last requested ${day}.`),
+    ).resolves.toBeInTheDocument();
     await user.click(await screen.findByRole("button", { name: "Upgrade anyway" }));
     await expect(screen.findByText(/Accepted/u)).resolves.toBeInTheDocument();
     expect(calls.filter((c) => c.key.startsWith("POST /api/clusters/default/web/upgrade-checks/accept"))).toHaveLength(

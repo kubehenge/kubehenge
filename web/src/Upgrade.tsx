@@ -4,7 +4,7 @@ import { api } from "./api";
 import { addressRoom } from "./Autoscaling";
 import { Link } from "./router";
 import type { Cluster, ClusterHealth, Effect, Plan, UpgradeChecks } from "./types";
-import { Detail, Status, errorMessage } from "./ui";
+import { Detail, Status, errorMessage, localDates } from "./ui";
 
 // What the machines go through, by the most a change does.
 const replaces: Record<Effect, string> = {
@@ -107,7 +107,7 @@ function removedAPIsCheck(checks: UpgradeChecks | string | undefined): Check {
       detail: [
         ...checks.removedAPIs.map(
           (a) =>
-            `${a.api}, removed in ${a.removedIn}${a.seen === undefined ? "" : `, last requested ${a.seen.slice(0, isoDateLength)}`}`,
+            `${a.api}, removed in ${a.removedIn}${a.seen === undefined ? "" : `, last requested ${localDates(a.seen.slice(0, isoDateLength))}`}`,
         ),
         ...(checks.basis === "gauge" ? ["No request counts, so every use since start counts."] : []),
       ],
