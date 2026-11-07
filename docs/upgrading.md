@@ -171,7 +171,7 @@ Cluster API replaces the control-plane nodes one by one, then the workers. Each 
 
 The dialog also warns of two things inside the cluster. A warning does not stop the upgrade. `kubehenge cluster upgrade web --version v1.37.1` prints the same list and asks first, and `--yes` skips the question.
 
-- **Removed APIs.** Deprecated APIs that clients requested and that the target version or an earlier one removes. They come from the API server's `apiserver_requested_deprecated_apis` gauge, which only resets when the API server restarts.
+- **Removed APIs.** Deprecated APIs that the target version or an earlier one removes and that a client requested in the last 7 days. The controller dates each by its request count every hour, and an API met for the first time counts from then. Without request counts the API server's gauge of every use since it started decides, and the dialog says so.
 - **Fail-closed webhooks.** Webhooks with `failurePolicy: Fail` (the default) whose Service has under two ready endpoints, or all of them on one node. Kubehenge's own add-ons and URL webhooks are left out.
 
 Kubehenge reads both as the cluster's health identity, which may read `/metrics`, webhook configurations and endpoint slices. What cannot be read shows as **Not checked**.
@@ -244,7 +244,7 @@ To hold a cluster on its build, switch `nodeImages` off. Deleting a broken build
 
 ### What holds an upgrade back
 
-- **Removed APIs and fail-closed webhooks.** An automatic upgrade makes the [same checks](#by-hand) and waits when they find something. The Cluster gets the condition `AutoUpgradeSkipped` ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)).
+- **Removed APIs and fail-closed webhooks.** An automatic upgrade makes the [same checks](#by-hand) and waits when they find something. The Cluster gets the condition `AutoUpgradeSkipped` ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)). Accepting the findings goes past it ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)).
 - **Rancher.** The cluster that runs Rancher stays within the Kubernetes versions Rancher's release runs on.
   - An upgrade beyond them, by hand or automatic, waits (the cluster's conditions say why) until a Kubehenge release brings a Rancher that runs there.
 - **A missing kubeadm template.** New kubeadm nodes cannot be created without the template of their version ([troubleshooting.md](troubleshooting.md#template-missing)).

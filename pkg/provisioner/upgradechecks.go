@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -24,6 +25,12 @@ type RemovedAPI struct {
 	API string `json:"api"`
 	// RemovedIn is the Kubernetes release that removes it, such as 1.32.
 	RemovedIn string `json:"removedIn"`
+	// Requests is how many requests the API server counted for it since it started, -1 when it
+	// keeps no such count.
+	Requests int64 `json:"requests"`
+	// Seen is when the last request was seen, as far as it is known: zero when the API server's
+	// record is all there is.
+	Seen time.Time `json:"seen,omitzero"`
 }
 
 // RiskyWebhook is an admission webhook that rejects every request when its backend is down, with a
@@ -46,6 +53,12 @@ type UpgradeFindings struct {
 	Webhooks    []RiskyWebhook `json:"webhooks"`
 	// Unchecked says what could not be read, and why.
 	Unchecked []string `json:"unchecked"`
+	// Basis says what the removed APIs rest on: BasisRequests, when the API server's request counts
+	// tell which were used in the last days, or BasisGauge, when only its record of every use since
+	// it started is there.
+	Basis string `json:"basis"`
+	// History is what the counts were when this was read, for the controller to keep.
+	History APIHistory `json:"-"`
 }
 
 // Clean tells whether nothing was found and nothing was left unread.
@@ -63,9 +76,13 @@ func (f *UpgradeFindings) Lines() []string {
 	if len(f.RemovedAPIs) > 0 {
 		apis := make([]string, len(f.RemovedAPIs))
 		for i, a := range f.RemovedAPIs {
-			apis[i] = fmt.Sprintf("%s (removed in %s)", a.API, a.RemovedIn)
+			apis[i] = fmt.Sprintf("%s (removed in %s%s)", a.API, a.RemovedIn, lastRequested(&a))
 		}
-		out = append(out, "Removed APIs still in use: "+strings.Join(apis, ", ")+".")
+		line := "Removed APIs still in use: " + strings.Join(apis, ", ") + "."
+		if f.Basis == BasisGauge {
+			line += " The API server keeps no request counts, so these are every API requested since it started."
+		}
+		out = append(out, line)
 	}
 	for _, w := range f.Webhooks {
 		out = append(out, fmt.Sprintf("The %s webhook %s fails closed and its Service %s %s.", w.Kind, w.Name, w.Service, w.Why))
@@ -86,7 +103,10 @@ const maxMetricsBytes = 256 << 20
 // metricsLineMax is the longest line of the metrics read.
 const metricsLineMax = 1 << 20
 
-const deprecatedAPIsMetric = "apiserver_requested_deprecated_apis{"
+const (
+	deprecatedAPIsMetric = "apiserver_requested_deprecated_apis{"
+	requestsMetric       = "apiserver_request_total{"
+)
 
 var metricLabel = regexp.MustCompile(`(\w+)="((?:[^"\\]|\\.)*)"`)
 
@@ -110,11 +130,15 @@ func CheckUpgrade(ctx context.Context, kube kubernetes.Interface, metrics Metric
 		f.Unchecked = append(f.Unchecked, fmt.Sprintf("%q is no Kubernetes version", target))
 		return f
 	}
-	apis, err := readRemovedAPIs(ctx, metrics, to.Minor)
+	apis, counted, err := readRemovedAPIs(ctx, metrics, to.Minor)
 	if err != nil {
 		f.Unchecked = append(f.Unchecked, "the deprecated APIs in use ("+err.Error()+")")
 	}
 	f.RemovedAPIs = append(f.RemovedAPIs, apis...)
+	f.Basis = BasisGauge
+	if counted {
+		f.Basis = BasisRequests
+	}
 	webhooks, err := readRiskyWebhooks(ctx, kube)
 	if err != nil {
 		f.Unchecked = append(f.Unchecked, "the admission webhooks ("+err.Error()+")")
@@ -123,48 +147,67 @@ func CheckUpgrade(ctx context.Context, kube kubernetes.Interface, metrics Metric
 	return f
 }
 
-func readRemovedAPIs(ctx context.Context, metrics MetricsSource, targetMinor int) ([]RemovedAPI, error) {
+func readRemovedAPIs(ctx context.Context, metrics MetricsSource, targetMinor int) ([]RemovedAPI, bool, error) {
 	if metrics == nil {
-		return nil, errors.New("no way to read the API server's metrics")
+		return nil, false, errors.New("no way to read the API server's metrics")
 	}
 	body, err := metrics(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reading /metrics: %w", err)
+		return nil, false, fmt.Errorf("reading /metrics: %w", err)
 	}
 	defer func() { _ = body.Close() }()
-	return ParseRemovedAPIs(io.LimitReader(body, maxMetricsBytes), targetMinor)
+	return parseDeprecatedUse(io.LimitReader(body, maxMetricsBytes), targetMinor)
 }
 
 // ParseRemovedAPIs reads the API server's apiserver_requested_deprecated_apis gauge from its metrics
 // and returns the APIs in use that a release at or below targetMinor removes, by release.
 func ParseRemovedAPIs(r io.Reader, targetMinor int) ([]RemovedAPI, error) {
+	apis, _, err := parseDeprecatedUse(r, targetMinor)
+	return apis, err
+}
+
+// parseDeprecatedUse is ParseRemovedAPIs, with each API's request count from apiserver_request_total
+// and whether the metrics hold any such counts.
+func parseDeprecatedUse(r io.Reader, targetMinor int) ([]RemovedAPI, bool, error) {
 	var out []RemovedAPI
+	requests := map[string]int64{}
+	counted := false
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), metricsLineMax)
 	for scanner.Scan() {
-		line, ok := strings.CutPrefix(scanner.Text(), deprecatedAPIsMetric)
+		text := scanner.Text()
+		if rest, ok := strings.CutPrefix(text, requestsMetric); ok {
+			counted = true
+			if set, value, ok := metricLine(rest); ok {
+				n, _ := strconv.ParseFloat(strings.TrimSpace(value), 64)
+				requests[apiName(set)] += int64(n)
+			}
+			continue
+		}
+		line, ok := strings.CutPrefix(text, deprecatedAPIsMetric)
 		if !ok {
 			continue
 		}
-		labels, value, ok := strings.Cut(line, "}")
+		set, value, ok := metricLine(line)
 		if !ok || strings.TrimSpace(value) != "1" {
 			continue
-		}
-		set := map[string]string{}
-		for _, m := range metricLabel.FindAllStringSubmatch(labels, -1) {
-			set[m[1]] = m[2]
 		}
 		minor, ok := removedMinor(set["removed_release"])
 		if !ok || minor > targetMinor {
 			continue
 		}
-		api := RemovedAPI{API: apiName(set), RemovedIn: set["removed_release"]}
-		if !slices.Contains(out, api) {
+		api := RemovedAPI{API: apiName(set), RemovedIn: set["removed_release"], Requests: -1}
+		if !slices.ContainsFunc(out, func(o RemovedAPI) bool { return o.API == api.API && o.RemovedIn == api.RemovedIn }) {
 			out = append(out, api)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading the metrics: %w", err)
+		return nil, false, fmt.Errorf("reading the metrics: %w", err)
+	}
+	if counted {
+		for i := range out {
+			out[i].Requests = requests[out[i].API]
+		}
 	}
 	slices.SortFunc(out, func(a, b RemovedAPI) int {
 		ma, _ := removedMinor(a.RemovedIn)
@@ -174,7 +217,20 @@ func ParseRemovedAPIs(r io.Reader, targetMinor int) ([]RemovedAPI, error) {
 		}
 		return strings.Compare(a.API, b.API)
 	})
-	return out, nil
+	return out, counted, nil
+}
+
+// metricLine splits a metrics line, past its name, into its labels and its value.
+func metricLine(rest string) (map[string]string, string, bool) {
+	labels, value, ok := strings.Cut(rest, "}")
+	if !ok {
+		return nil, "", false
+	}
+	set := map[string]string{}
+	for _, m := range metricLabel.FindAllStringSubmatch(labels, -1) {
+		set[m[1]] = m[2]
+	}
+	return set, value, true
 }
 
 // removedMinor is the minor version of a removed_release label such as 1.32, false for none.

@@ -66,6 +66,7 @@ func versionAttention(c *clusterv1.Cluster, a *attention) {
 	}
 	if cond := trueCondition(c, provisioner.AutoUpgradeSkippedCondition); cond != nil {
 		a.add(severityWarning, sectionClusterAPI, "Automatic upgrade skipped", cond.Message, cond.LastTransitionTime.Time)
+		(*a)[len(*a)-1].Accept = provisioner.SkippedTarget(cond.Message)
 	}
 }
 

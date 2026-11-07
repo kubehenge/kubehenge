@@ -464,6 +464,37 @@ describe("clusters", () => {
     );
   });
 
+  it("lets a skipped automatic upgrade go ahead from the Health page", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/health");
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": () => ({ body: web }),
+      "GET /api/clusters/default/web/health": () => ({
+        body: {
+          ...quietHealth,
+          verdict: "degraded",
+          attention: [
+            {
+              severity: "warning",
+              section: "cluster-api",
+              what: "Automatic upgrade skipped",
+              message: "The automatic upgrade to v1.37.1+rke2r1 waits.",
+              accept: "v1.37.1+rke2r1",
+            },
+          ],
+        },
+      }),
+      "POST /api/clusters/default/web/upgrade-checks/accept?version=v1.37.1%2Brke2r1": () => ({
+        body: { removedAPIs: [], webhooks: [], unchecked: [], lines: [], basis: "requests" },
+      }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Upgrade anyway" }));
+    await expect(screen.findByText(/Accepted/u)).resolves.toBeInTheDocument();
+    expect(calls.some((c) => c.key.startsWith("POST /api/clusters/default/web/upgrade-checks/accept"))).toBe(true);
+  });
+
   it("upgrades a cluster on a minor version too old for new clusters to the next one", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const old = { ...web, version: "v1.32.4+rke2r1" };

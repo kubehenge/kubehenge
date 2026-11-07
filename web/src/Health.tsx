@@ -33,6 +33,7 @@ import {
   abnormal,
   age,
   bytes,
+  errorMessage,
   filled,
   sentence,
   usePoll,
@@ -297,10 +298,51 @@ function Tiles({ health: h, stale }: { health: ClusterHealth; stale: boolean }):
 
 const podKey = (p: PodRef): string => `${p.namespace}/${p.name}`;
 
-function PodButtons({ pod, actions }: { pod: UnwellPod | undefined; actions: PodActions }): JSX.Element {
+/** AcceptUpgrade lets the automatic upgrade to a version go past what its checks listed. */
+function AcceptUpgrade({
+  cluster,
+  version,
+}: {
+  cluster: { namespace: string; name: string };
+  version: string;
+}): JSX.Element {
+  const [state, setState] = useState<"idle" | "busy" | "done" | string>("idle");
+  if (state === "done") {
+    return <span className="hint">Accepted. The upgrade starts in the next round.</span>;
+  }
+  return (
+    <>
+      <button
+        type="button"
+        disabled={state === "busy"}
+        onClick={() => {
+          setState("busy");
+          api
+            .acceptUpgrade(cluster.namespace, cluster.name, version)
+            .then(() => setState("done"))
+            .catch((e: unknown) => setState(errorMessage(e)));
+        }}
+      >
+        Upgrade anyway
+      </button>
+      {state !== "idle" && state !== "busy" && <div className="hint">{state}</div>}
+    </>
+  );
+}
+
+function PodButtons({
+  pod,
+  actions,
+  children,
+}: {
+  pod: UnwellPod | undefined;
+  actions: PodActions;
+  children?: JSX.Element | false;
+}): JSX.Element {
   const { logs, headlamp } = actions;
   return (
     <td className="row-action">
+      {children}
       {pod !== undefined && logs !== undefined && pod.containers.length > 0 && (
         <button type="button" onClick={() => logs(pod)}>
           Logs
@@ -364,7 +406,9 @@ function NeedsAttention({
                   {filled(a.message) && <div className="hint message">{a.message}</div>}
                 </td>
                 <Since at={a.since} />
-                <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions} />
+                <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions}>
+                  {filled(a.accept) && <AcceptUpgrade cluster={cluster} version={a.accept} />}
+                </PodButtons>
               </tr>
             );
           })}

@@ -133,7 +133,7 @@ the wizard's request is.`,
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
 	o.namespaceFlag(deleteCmd.Flags())
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, o.upgradeCommand(), deleteCmd, o.machineCommand())
+	cmd.AddCommand(list, get, kubeconfig, create, scale, o.upgradeCommand(), o.acceptUpgradeCommand(), deleteCmd, o.machineCommand())
 	return cmd
 }
 

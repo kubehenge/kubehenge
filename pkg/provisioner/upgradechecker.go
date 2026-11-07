@@ -71,7 +71,9 @@ func (k *IdentityChecker) Check(ctx context.Context, cluster *clusterv1.Cluster,
 	if err != nil {
 		return unread(fmt.Sprintf("reaching the cluster (%v)", err))
 	}
-	return CheckUpgrade(ctx, kube, KubeMetrics(kube), target)
+	found := CheckUpgrade(ctx, kube, KubeMetrics(kube), target)
+	found.ApplyHistory(HistoryOf(cluster), k.now())
+	return found
 }
 
 func (k *IdentityChecker) now() time.Time {

@@ -13,6 +13,7 @@ import (
 // demoMetrics is what a demo cluster's API server reports of the deprecated APIs clients requested.
 const demoMetrics = `# TYPE apiserver_requested_deprecated_apis gauge
 apiserver_requested_deprecated_apis{group="orders.example.com",removed_release="1.37",resource="invoices",subresource="",version="v1beta1"} 1
+apiserver_request_total{code="200",component="apiserver",group="orders.example.com",resource="invoices",scope="cluster",subresource="",verb="LIST",version="v1beta1"} 412
 `
 
 // demoDeprecatedAPIs opens the demo's metrics.

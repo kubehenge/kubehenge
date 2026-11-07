@@ -3,10 +3,12 @@ package ui
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
@@ -53,5 +55,39 @@ func (s *Server) checkUpgrade(ctx context.Context, u user, c *clusterv1.Cluster,
 	case why != "":
 		return unread(why)
 	}
-	return provisioner.CheckUpgrade(tctx, wl.Kube, wl.Metrics, version)
+	found := provisioner.CheckUpgrade(tctx, wl.Kube, wl.Metrics, version)
+	found.ApplyHistory(provisioner.HistoryOf(c), s.now())
+	return found
+}
+
+// acknowledgeUpgrade accepts what an upgrade to ?version= would run into for the automatic upgrade
+// to it: the cluster keeps the findings, by name, in an annotation, and the automatic upgrade goes
+// ahead unless something else turns up. Findings that could not be read cannot be accepted.
+func (s *Server) acknowledgeUpgrade(w http.ResponseWriter, r *http.Request, u user) {
+	c, _, ok := s.cluster(w, r, u, privChange)
+	if !ok {
+		return
+	}
+	version := r.URL.Query().Get("version")
+	found := s.checkUpgrade(r.Context(), u, c, version)
+	if len(found.Unchecked) > 0 {
+		writeError(w, http.StatusConflict, "the upgrade checks could not be made: "+strings.Join(found.Unchecked, ", "))
+		return
+	}
+	value, err := provisioner.Acknowledgement(c, version, &found)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	patch := client.MergeFrom(c.DeepCopy())
+	if c.Annotations == nil {
+		c.Annotations = map[string]string{}
+	}
+	c.Annotations[provisioner.AcknowledgedAnnotation] = value
+	if err := u.kube.Patch(r.Context(), c, patch); err != nil {
+		s.kubeError(w, r, err)
+		return
+	}
+	s.Log.InfoContext(r.Context(), "accepted what an upgrade runs into", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "version", version)
+	writeJSON(w, http.StatusOK, upgradeChecksView{UpgradeFindings: found, Lines: append([]string{}, found.Lines()...)})
 }

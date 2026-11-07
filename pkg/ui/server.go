@@ -305,6 +305,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/reboot", s.managed(s.rebootMachine))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/upgrade-checks", s.managed(s.upgradeChecks))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/upgrade-checks/accept", s.managed(s.acknowledgeUpgrade))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/activity", s.managed(s.clusterActivity))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/events", s.managed(s.runEvents))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pods/{podNamespace}/{pod}/logs", s.managed(s.podLogs))

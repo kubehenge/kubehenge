@@ -200,6 +200,8 @@ export interface Attention {
   pod?: { namespace: string; name: string };
   /** The Cluster API machine the item is about, which the machines view acts on. */
   machine?: string;
+  /** The version whose findings Upgrade anyway accepts, on a skipped automatic upgrade. */
+  accept?: string;
 }
 
 export interface HealthVM {
@@ -1210,7 +1212,9 @@ export interface PlannedChange {
 /** What an upgrade would run into inside the cluster, read before it starts. */
 export interface UpgradeChecks {
   /** APIs in use that the target version removes. */
-  removedAPIs: { api: string; removedIn: string }[];
+  removedAPIs: { api: string; removedIn: string; seen?: string }[];
+  /** What they rest on: "requests" dates the last request of each, "gauge" is every use since the API server started. */
+  basis: "requests" | "gauge";
   /** Webhooks that reject every request when their backend is down, with a backend one drain can take. */
   webhooks: { kind: "validating" | "mutating"; name: string; service: string; why: string }[];
   /** What could not be read, and why. */

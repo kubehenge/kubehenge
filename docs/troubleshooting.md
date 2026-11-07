@@ -499,11 +499,13 @@ An automatic upgrade that is due waits while the Cluster has the condition `Auto
 
 | Reason | What to do |
 | --- | --- |
-| `RemovedAPIs` | A client still calls an API the new version removes. Move the client to the current API. The list stays until the API server restarts, so after the fix replace the control-plane nodes or upgrade by hand. |
-| `FailClosedWebhooks` | A webhook that rejects requests when it is down has fewer than two ready endpoints, or all on one node. Run two replicas on different nodes, or set `failurePolicy: Ignore` on the webhook. |
+| `RemovedAPIs` | A client requested an API the new version removes within the last 7 days. The message names it and the date. Move the client to the current API and the note ends 7 days after the last request. Or accept it, below. |
+| `FailClosedWebhooks` | A webhook that rejects requests when it is down has fewer than two ready endpoints, or all on one node. Run two replicas on different nodes, or set `failurePolicy: Ignore` on the webhook. Or accept it, below. |
 | `ChecksUnavailable` | The cluster could not be read. The message says why. Often the cluster's read access is not set up yet or has expired, and the next controller pass fixes it. |
 
 `kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.type=="AutoUpgradeSkipped")].message}'` prints it. An upgrade by hand goes past the warning.
+
+To let the automatic upgrade go ahead without a fix, accept what is listed. Choose **Upgrade anyway** on the Health page, run `kubehenge cluster accept-upgrade NAME --version V`, or set the annotation `kubehenge.dev/acknowledged-upgrade-findings` to `{"1.37":["<API or webhook name>"]}` with kubectl. It holds for that minor version only. A finding that was not listed, such as a new API in use, skips the upgrade again. `ChecksUnavailable` cannot be accepted.
 
 ### GitOps
 

@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"maps"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -44,6 +45,12 @@ func (u *Upgrader) recordChecks(ctx context.Context, c *clusterv1.Cluster, chann
 		return
 	}
 	log := ctrl.LoggerFrom(ctx).WithName("upgrader")
+	history, read := APIHistory{}, false
+	defer func() {
+		if read {
+			u.keepHistory(ctx, c, history)
+		}
+	}()
 	for _, tc := range []struct {
 		condition string
 		target    kubeVersion
@@ -55,6 +62,10 @@ func (u *Upgrader) recordChecks(ctx context.Context, c *clusterv1.Cluster, chann
 		var cond *metav1.Condition
 		if tc.offered {
 			found := u.Checker.Check(ctx, c, tc.target.Raw)
+			if found.History != nil {
+				maps.Copy(history, found.History)
+				read = true
+			}
 			found.Unchecked = nil
 			if lines := found.Lines(); len(lines) > 0 {
 				cond = &metav1.Condition{Status: metav1.ConditionTrue, Reason: UpgradeFound, Message: findingsMessage(tc.target.Raw, lines)}
@@ -63,6 +74,32 @@ func (u *Upgrader) recordChecks(ctx context.Context, c *clusterv1.Cluster, chann
 		if _, err := markCluster(ctx, u.Client, nil, client.ObjectKeyFromObject(c), tc.condition, cond); err != nil {
 			log.Error(err, "recording what an upgrade would run into", "cluster", client.ObjectKeyFromObject(c))
 		}
+	}
+}
+
+// keepHistory stores the readings of the deprecated APIs' request counts on the cluster, which is
+// how the next look tells an API still in use from one used once. A merge patch of the annotation
+// alone leaves the rest of the Cluster, and the optimistic locks on it, as they are.
+func (u *Upgrader) keepHistory(ctx context.Context, c *clusterv1.Cluster, history APIHistory) {
+	have := c.Annotations[DeprecatedUseAnnotation]
+	want := ""
+	if len(history) > 0 {
+		want = history.Encode()
+	}
+	if have == want {
+		return
+	}
+	changed := c.DeepCopy()
+	if want == "" {
+		delete(changed.Annotations, DeprecatedUseAnnotation)
+	} else {
+		if changed.Annotations == nil {
+			changed.Annotations = map[string]string{}
+		}
+		changed.Annotations[DeprecatedUseAnnotation] = want
+	}
+	if err := u.Client.Patch(ctx, changed, client.MergeFrom(c)); err != nil {
+		ctrl.LoggerFrom(ctx).WithName("upgrader").Error(err, "keeping the deprecated APIs' request counts", "cluster", client.ObjectKeyFromObject(c))
 	}
 }
 

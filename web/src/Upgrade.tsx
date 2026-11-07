@@ -88,6 +88,9 @@ function useUpgradeChecks(c: Cluster, version: string): UpgradeChecks | string |
   return read?.version === version ? read.checks : undefined;
 }
 
+// isoDateLength is the part of a timestamp that names the day.
+const isoDateLength = 10;
+
 function removedAPIsCheck(checks: UpgradeChecks | string | undefined): Check {
   const what = "Removed APIs";
   if (checks === undefined) {
@@ -101,7 +104,15 @@ function removedAPIsCheck(checks: UpgradeChecks | string | undefined): Check {
       what,
       state: "warning",
       text: `${checks.removedAPIs.length} in use`,
-      detail: checks.removedAPIs.map((a) => `${a.api}, removed in ${a.removedIn}`),
+      detail: [
+        ...checks.removedAPIs.map(
+          (a) =>
+            `${a.api}, removed in ${a.removedIn}${a.seen === undefined ? "" : `, last requested ${a.seen.slice(0, isoDateLength)}`}`,
+        ),
+        ...(checks.basis === "gauge"
+          ? ["The API server keeps no request counts, so these are every API requested since it started."]
+          : []),
+      ],
     };
   }
   const unread = checks.unchecked.filter((u) => !u.startsWith("the admission webhooks"));

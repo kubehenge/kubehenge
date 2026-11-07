@@ -47,6 +47,43 @@ past the list without asking.`,
 	return cmd
 }
 
+func (o *clusterOptions) acceptUpgradeCommand() *cobra.Command {
+	var version string
+	cmd := &cobra.Command{
+		Use:   "accept-upgrade NAME --version VERSION",
+		Short: "Let the automatic upgrade go ahead past what it waits for",
+		Long: `Accept the removed APIs and fail-closed webhooks an upgrade to the version meets, for the automatic
+upgrade to that minor version. The cluster keeps what was accepted in the annotation
+kubehenge.dev/acknowledged-upgrade-findings, which kubectl can set too. An API in use that was not
+listed holds the automatic upgrade again.`,
+		Args: argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := o.clusterPath(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			body, err := o.call(cmd.Context(), http.MethodPost, path+"/upgrade-checks/accept?version="+url.QueryEscape(version), nil)
+			if err != nil {
+				return err
+			}
+			var found upgradeChecks
+			if err := json.Unmarshal(body, &found); err != nil {
+				return fmt.Errorf("reading the answer: %w", err)
+			}
+			out := cmd.OutOrStdout()
+			for _, line := range found.Lines {
+				_, _ = fmt.Fprintf(out, "  - %s\n", line)
+			}
+			_, _ = fmt.Fprintf(out, "accepted for the automatic upgrade of %s to %s\n", args[0], version)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&version, versionFlag, "", "the Kubernetes version the automatic upgrade goes to")
+	_ = cmd.MarkFlagRequired(versionFlag)
+	o.namespaceFlag(cmd.Flags())
+	return cmd
+}
+
 // upgrade lists what the upgrade meets and, when it lists something, goes on only if goOn says so.
 func (o *clusterOptions) upgrade(ctx context.Context, out io.Writer, name, version string, goOn func() bool) error {
 	path, err := o.clusterPath(ctx, name)

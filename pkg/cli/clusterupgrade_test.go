@@ -36,6 +36,28 @@ func (f *fakeClusterAPI) patches() []string {
 	return out
 }
 
+// accept-upgrade posts the version, prints what was accepted and upgrades nothing.
+func TestClusterAcceptUpgrade(t *testing.T) {
+	t.Parallel()
+	fake := &fakeClusterAPI{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	cmd := newClusterCommand(&pve.Config{Token: "dev@pve!ci=secret"}) //nolint:gosec // the fake interface's own
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--url", srv.URL, "accept-upgrade", "web", "--version", "v1.35.1"})
+	if err := cmd.ExecuteContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "podsecuritypolicies") || !strings.Contains(out.String(), "accepted for the automatic upgrade of web to v1.35.1") {
+		t.Errorf("out %q", out.String())
+	}
+	if len(fake.patches()) != 0 {
+		t.Errorf("sent %v", fake.patches())
+	}
+}
+
 // With nothing in the way the upgrade goes ahead without a question.
 func TestClusterUpgradeWithNothingInTheWay(t *testing.T) {
 	t.Parallel()

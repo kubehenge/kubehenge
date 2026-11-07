@@ -15,6 +15,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/notify"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
@@ -222,6 +223,29 @@ func TestUpgradeChecksNameRemovedAPIsAndThinWebhooks(t *testing.T) {
 	if v = readUpgradeChecks(t, b, "v1.31.9"); len(v.RemovedAPIs) != 0 {
 		t.Errorf("removed APIs for 1.31: %+v", v.RemovedAPIs)
 	}
+}
+
+// Upgrade anyway stores the findings listed now on the cluster, by name, for the minor version
+// asked about. Findings that could not be read are not accepted.
+func TestAcceptUpgradeStoresTheListedFindings(t *testing.T) {
+	t.Parallel()
+	h, workloads := healthHarness(t)
+	workloads.metrics = deprecatedMetrics
+	b := h.browser()
+	b.signIn("dev@pve")
+	rec := b.do("POST", "/api/clusters/default/one/upgrade-checks/accept?version=v1.33.1", "")
+	expect(t, rec, http.StatusOK)
+	c := &clusterv1.Cluster{}
+	if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "one"}, c); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Annotations[provisioner.AcknowledgedAnnotation]; got != `{"1.33":["flowcontrol.apiserver.k8s.io/v1beta3 flowschemas"]}` {
+		t.Errorf("annotation %q", got)
+	}
+
+	workloads.metricsErr = errors.New("403 Forbidden")
+	rec = b.do("POST", "/api/clusters/default/one/upgrade-checks/accept?version=v1.34.1", "")
+	expect(t, rec, http.StatusConflict)
 }
 
 func TestUpgradeChecksSayWhatCouldNotBeRead(t *testing.T) {

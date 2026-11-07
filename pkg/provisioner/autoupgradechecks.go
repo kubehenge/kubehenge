@@ -92,6 +92,7 @@ func (u *Upgrader) vetUpgrade(ctx context.Context, c *clusterv1.Cluster, to stri
 		return true
 	}
 	found := u.Checker.Check(ctx, c, to)
+	found.Unacknowledged(c, to)
 	if !found.Blocks() {
 		// The note goes once the upgrade is patched: clearing it here would change the Cluster under the
 		// patch's optimistic lock.
@@ -106,7 +107,7 @@ func (u *Upgrader) vetUpgrade(ctx context.Context, c *clusterv1.Cluster, to stri
 	}
 	cond := &metav1.Condition{
 		Status: metav1.ConditionTrue, Reason: reason,
-		Message: fmt.Sprintf("The automatic upgrade to %s waits. %s Upgrade by hand to go past it.", to, strings.Join(found.Lines(), " ")),
+		Message: fmt.Sprintf("%s%s waits. %s Choose Upgrade anyway to accept these, or upgrade by hand.", skippedPrefix, to, strings.Join(found.Lines(), " ")),
 	}
 	log := ctrl.LoggerFrom(ctx).WithName("upgrader")
 	before, err := markCluster(ctx, u.Client, nil, client.ObjectKeyFromObject(c), AutoUpgradeSkippedCondition, cond)

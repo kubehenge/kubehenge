@@ -60,6 +60,8 @@ func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = io.WriteString(w, `{"removedAPIs":[],"webhooks":[],"unchecked":[],"lines":[]}`)
+	case "POST /api/clusters/clusters/web/upgrade-checks/accept":
+		_, _ = io.WriteString(w, `{"removedAPIs":[],"webhooks":[],"unchecked":[],"lines":["Removed APIs still in use: policy/v1beta1 podsecuritypolicies (removed in 1.35)."]}`)
 	case "GET /api/clusters/clusters/web/kubeconfig":
 		_, _ = io.WriteString(w, "apiVersion: v1\nkind: Config\n")
 	case "PATCH /api/clusters/clusters/web", "DELETE /api/clusters/clusters/web":
