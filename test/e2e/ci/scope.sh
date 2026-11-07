@@ -8,7 +8,7 @@
 #
 # A path no rule below names needs them all, as --all does. Only the merge queue runs end-to-end
 # tests, so a rule that leaves a test out lets a change reach main without it until the nightly run,
-# which runs them all: leave a test out only for a path it cannot reach. The nightly run's own four
+# which runs them all: leave a test out only for a path it cannot reach. The nightly run's own tests
 # are long, so a merge group runs one only for its own script and the code only it exercises.
 # With --base, run in the repository's checkout, a change to the chart's values brings Rancher's
 # test only when it changes addons.rancher since <base>, a commit or tree; without it, any change to
@@ -52,7 +52,7 @@ interface_users='appliance k3s-machines'
 # The tests that install the chart and look for its ClusterClasses (lib.sh, appliance.sh).
 chart_users='management-cluster appliance'
 # Tests the nightly run adds to --all.
-nightly='management-cluster-upgrade rancher control-plane-ha two-nodes'
+nightly='management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade'
 # Tests that share a lane, one after the other on its runner, which keeps the merge queue at 20 lanes,
 # as many as a run's jobs at once. Each pair ends within the longest lane, and the first test leaves
 # no guest behind (docs/testing.md).
@@ -116,6 +116,7 @@ need=
         # Only `make unit` runs the unit tests, and only this script and the nightly list choose lanes.
         test/e2e/ci/nightly.sh | test/e2e/ci/scope.sh | test/unit/*) ;;
         test/e2e/management-cluster-upgrade.sh) need="${need} management-cluster-upgrade" ;;
+        test/e2e/appliance-upgrade.sh) need="${need} appliance-upgrade" ;;
         test/e2e/rancher.sh) need="${need} rancher" ;;
         test/e2e/control-plane-ha.sh) need="${need} control-plane-ha" ;;
         test/e2e/two-nodes.sh | test/e2e/ci/second-node.sh) need="${need} two-nodes" ;;
