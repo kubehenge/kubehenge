@@ -183,7 +183,11 @@ func (f *demoFleet) classes() ([]client.Object, error) {
 			c.Annotations[provisioner.KubeadmVersionsAnnotation] = string(kubeadm)
 		case templates.Talos:
 			c.Annotations[provisioner.TalosTemplatesAnnotation] = templates.DefaultTalosVersion
-		case templates.RKE2, templates.K3s:
+		case templates.RKE2:
+			fips := templates.DefaultNodeOS
+			fips.FIPS = true
+			c.Annotations[provisioner.NodeOSTemplatesAnnotation] = nodeOS + "," + fips.String()
+		case templates.K3s:
 			c.Annotations[provisioner.NodeOSTemplatesAnnotation] = nodeOS
 		}
 		c.Annotations[provisioner.SnapshotStoragesAnnotation] = storage

@@ -1284,7 +1284,9 @@ The kubelet settings cis adds, as kubelet flags.
 
 {{/*
 The operating system of an RKE2, k3s or kubeadm cluster's nodes. files/node-oses.json lists the node
-OSes Kubehenge builds templates of; a unit test holds it to the families in pkg/templates.
+OSes Kubehenge builds templates of, and those it builds in FIPS mode; a unit test holds it to the
+families in pkg/templates. Given a distribution as noFIPS, the class refuses FIPS mode, as
+pkg/templates.FIPSDistribution does.
 */}}
 {{- define "kubehenge.nodeOSVariable" -}}
 {{- $oses := .Files.Get "files/node-oses.json" | fromJson }}
@@ -1308,9 +1310,21 @@ OSes Kubehenge builds templates of; a unit test holds it to the families in pkg/
         release:
           type: string
           minLength: 1
+        fips:
+          type: boolean
+          description: >-
+            Boot the nodes in FIPS mode, from VM templates of their own: the kernel with fips=1 and
+            every crypto library on the FIPS policy. RKE2 only, whose components are built with a
+            FIPS 140 validated module, and with Canal, its only CNI built so.
       x-kubernetes-validations:
         - rule: "(self.family + '-' + self.release) in {{ toJson $oses.available | replace "\"" "'" }}"
           message: "a release of the family Kubehenge builds templates of: {{ join ", " $oses.available }}"
+        - rule: "!has(self.fips) || !self.fips || (self.family + '-' + self.release + '-fips') in {{ toJson $oses.fips | replace "\"" "'" }}"
+          message: "FIPS mode is built on {{ join ", " $oses.fips }}"
+        {{- with .noFIPS }}
+        - rule: "!has(self.fips) || !self.fips"
+          message: "{{ . }} has no FIPS mode. Choose RKE2 for FIPS mode"
+        {{- end }}
 {{- end -}}
 
 {{/*

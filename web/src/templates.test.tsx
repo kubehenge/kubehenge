@@ -174,6 +174,14 @@ describe("vM templates", () => {
               mac: "selinux",
               default: true,
             },
+            {
+              family: "almalinux",
+              release: "10",
+              fips: true,
+              title: "AlmaLinux 10 FIPS",
+              cpuType: "x86-64-v2-AES",
+              mac: "selinux",
+            },
             { family: "rocky", release: "10", title: "Rocky Linux 10", cpuType: "x86-64-v3", mac: "selinux" },
             {
               family: "leap",
@@ -242,7 +250,15 @@ describe("vM templates", () => {
     const nodeOS = within(dialog).getByLabelText("Node OS");
     expect(nodeOS).toHaveValue("almalinux-10");
     expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1: not released yet" })).toBeDisabled();
-    await user.selectOptions(nodeOS, "rocky-10");
+    // FIPS mode is offered for RKE2 alone. A distribution without it goes back to the default.
+    await user.selectOptions(nodeOS, "almalinux-10-fips");
+    await user.selectOptions(within(dialog).getByLabelText("Distribution"), "k3s");
+    expect(within(dialog).getByLabelText("Node OS")).toHaveValue("almalinux-10");
+    expect(
+      within(within(dialog).getByLabelText("Node OS")).queryByRole("option", { name: /FIPS/u }),
+    ).not.toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText("Distribution"), "rke2");
+    await user.selectOptions(within(dialog).getByLabelText("Node OS"), "rocky-10");
     expect(nodeOS).toHaveAccessibleDescription("Needs Proxmox VE nodes with x86-64-v3 CPUs");
     // Talos is its own OS, so it offers none. The choice stays for the others.
     await user.selectOptions(within(dialog).getByLabelText("Distribution"), "talos");

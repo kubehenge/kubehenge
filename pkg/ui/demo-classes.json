@@ -1133,6 +1133,10 @@
                   ],
                   "type": "string"
                 },
+                "fips": {
+                  "description": "Boot the nodes in FIPS mode, from VM templates of their own: the kernel with fips=1 and every crypto library on the FIPS policy. RKE2 only, whose components are built with a FIPS 140 validated module, and with Canal, its only CNI built so.",
+                  "type": "boolean"
+                },
                 "release": {
                   "minLength": 1,
                   "type": "string"
@@ -1147,6 +1151,14 @@
                 {
                   "message": "a release of the family Kubehenge builds templates of: almalinux-10, rocky-10",
                   "rule": "(self.family + '-' + self.release) in ['almalinux-10','rocky-10']"
+                },
+                {
+                  "message": "FIPS mode is built on almalinux-10-fips, rocky-10-fips",
+                  "rule": "!has(self.fips) || !self.fips || (self.family + '-' + self.release + '-fips') in ['almalinux-10-fips','rocky-10-fips']"
+                },
+                {
+                  "message": "k3s has no FIPS mode. Choose RKE2 for FIPS mode",
+                  "rule": "!has(self.fips) || !self.fips"
                 }
               ]
             }
@@ -2450,6 +2462,10 @@
                   ],
                   "type": "string"
                 },
+                "fips": {
+                  "description": "Boot the nodes in FIPS mode, from VM templates of their own: the kernel with fips=1 and every crypto library on the FIPS policy. RKE2 only, whose components are built with a FIPS 140 validated module, and with Canal, its only CNI built so.",
+                  "type": "boolean"
+                },
                 "release": {
                   "minLength": 1,
                   "type": "string"
@@ -2464,6 +2480,14 @@
                 {
                   "message": "a release of the family Kubehenge builds templates of: almalinux-10, rocky-10",
                   "rule": "(self.family + '-' + self.release) in ['almalinux-10','rocky-10']"
+                },
+                {
+                  "message": "FIPS mode is built on almalinux-10-fips, rocky-10-fips",
+                  "rule": "!has(self.fips) || !self.fips || (self.family + '-' + self.release + '-fips') in ['almalinux-10-fips','rocky-10-fips']"
+                },
+                {
+                  "message": "kubeadm has no FIPS mode. Choose RKE2 for FIPS mode",
+                  "rule": "!has(self.fips) || !self.fips"
                 }
               ]
             }
@@ -3764,6 +3788,10 @@
                   ],
                   "type": "string"
                 },
+                "fips": {
+                  "description": "Boot the nodes in FIPS mode, from VM templates of their own: the kernel with fips=1 and every crypto library on the FIPS policy. RKE2 only, whose components are built with a FIPS 140 validated module, and with Canal, its only CNI built so.",
+                  "type": "boolean"
+                },
                 "release": {
                   "minLength": 1,
                   "type": "string"
@@ -3778,6 +3806,10 @@
                 {
                   "message": "a release of the family Kubehenge builds templates of: almalinux-10, rocky-10",
                   "rule": "(self.family + '-' + self.release) in ['almalinux-10','rocky-10']"
+                },
+                {
+                  "message": "FIPS mode is built on almalinux-10-fips, rocky-10-fips",
+                  "rule": "!has(self.fips) || !self.fips || (self.family + '-' + self.release + '-fips') in ['almalinux-10-fips','rocky-10-fips']"
                 }
               ]
             }

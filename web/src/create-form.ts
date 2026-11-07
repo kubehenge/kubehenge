@@ -47,7 +47,7 @@ import {
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
-import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
+import { choosable, defaultNodeOS, findNodeOS, fipsCNI, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
 import {
@@ -1225,6 +1225,17 @@ function addressProblems(form: Form): Problems {
   return p;
 }
 
+// cniProblem refuses a pod network the node OS or the cluster's name cannot run with.
+function cniProblem(form: Form, c: ClusterClass | undefined): string | undefined {
+  if (chosenNodeOS(form, c)?.fips === true && form.cni !== "" && form.cni !== fipsCNI) {
+    return "FIPS mode needs Canal";
+  }
+  if (form.cni === "cilium" && form.name.length > maxCiliumName) {
+    return `Cilium needs a cluster name of ${maxCiliumName} characters or fewer`;
+  }
+  return undefined;
+}
+
 function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
   if (!form.bridge) {
@@ -1268,8 +1279,11 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   if (c?.variables.find((v) => v.name === "cni")?.required === true && !form.cni) {
     p.cni = "Choose a pod network";
-  } else if (form.cni === "cilium" && form.name.length > maxCiliumName) {
-    p.cni = `Cilium needs a cluster name of ${maxCiliumName} characters or fewer`;
+  } else {
+    const cni = cniProblem(form, c);
+    if (cni !== undefined) {
+      p.cni = cni;
+    }
   }
   return p;
 }

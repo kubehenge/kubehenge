@@ -417,7 +417,9 @@ func TestTheRefreshChecksItsFlagsFirst(t *testing.T) {
 		{"no class namespace", func(o *templateRefreshOptions) { o.classNamespace = "" }, "--namespace and --class-namespace are required"},
 		{"keeping none", func(o *templateRefreshOptions) { o.keep = 0 }, "--keep must be at least 1"},
 		{"a missing line that is none", func(o *templateRefreshOptions) { o.missing = []string{"windows-11"} }, "--missing:"},
+		{"a FIPS line of k3s", func(o *templateRefreshOptions) { o.missing = []string{"k3s-almalinux-10-fips"} }, "k3s has no FIPS mode"},
 		{"no management cluster", func(*templateRefreshOptions) {}, "the management cluster's API"},
+		{"a FIPS line of RKE2", func(o *templateRefreshOptions) { o.missing = []string{"rke2-rocky-10-fips"} }, "the management cluster's API"},
 	} {
 		o := &templateRefreshOptions{namespace: refreshNamespace, classNamespace: refreshNamespace, keep: 2, missing: []string{"rke2-almalinux-10"}}
 		c.change(o)

@@ -106,6 +106,26 @@ func nodesFor(online []Node, need int) []string {
 	return names
 }
 
+// fipsCNI is the only CNI RKE2 builds for FIPS mode.
+const fipsCNI = "canal"
+
+// checkFIPS refuses FIPS mode to a distribution without it, and to an RKE2 cluster on a CNI that
+// RKE2 does not build for FIPS mode.
+func checkFIPS(c *clusterv1.Cluster) error {
+	dist := templates.Distribution(strings.TrimPrefix(c.Spec.Topology.ClassRef.Name, ClassPrefix))
+	if err := templates.FIPSDistribution(dist); err != nil {
+		return err //nolint:wrapcheck // says all a person needs
+	}
+	cni, set, err := optionalVariable[string](c, "cni")
+	if err != nil {
+		return err
+	}
+	if dist == templates.RKE2 && set && cni != fipsCNI {
+		return fmt.Errorf("FIPS mode needs Canal, RKE2's only FIPS pod network, not %s", cni)
+	}
+	return nil
+}
+
 // checkNodeOS refuses a node OS Kubehenge builds no templates of, and one whose CPU type none of the
 // online Proxmox VE nodes the cluster may use offers. While none of those is online there is nothing
 // to judge by, and the cluster waits for its nodes as any other does. A Talos cluster has no node
@@ -120,6 +140,11 @@ func (h *Hooks) checkNodeOS(ctx context.Context, c *clusterv1.Cluster) error {
 	}
 	if _, _, err = templates.Available(o); err != nil {
 		return err //nolint:wrapcheck // says all a person needs
+	}
+	if o.FIPS {
+		if err = checkFIPS(c); err != nil {
+			return err
+		}
 	}
 	if h.Nodes == nil || templates.CPULevel(o) <= 1 {
 		return nil

@@ -264,7 +264,7 @@ func TestKubeadmTargetsAreTemplatesTheClassSelects(t *testing.T) {
 
 	// The patch that picks a machine's template and the upgrader name the same node OS.
 	for _, o := range []templates.NodeOS{templates.DefaultNodeOS, rocky} {
-		if line, err := MachineLine("kubeadm", "v1.36.5", o); err != nil || !slices.Contains(line, o.Tag()) {
+		if line, err := MachineLine("kubeadm", "v1.36.5", o); err != nil || !slices.Contains(line, o.Tags()[0]) {
 			t.Errorf("kubeadm machines on %s select %v, %v", o, line, err)
 		}
 	}

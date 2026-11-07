@@ -355,6 +355,12 @@ func TestNodeOSFlag(t *testing.T) {
 	if err := f.Value.Set("windows"); err == nil || o.String() != "rocky-10" {
 		t.Errorf("--node-os windows gave %s, %v; want it refused and rocky-10 kept", o, err)
 	}
+	if err := f.Value.Set("almalinux-10-fips"); err != nil || o != (templates.NodeOS{Family: "almalinux", Release: "10", FIPS: true}) {
+		t.Errorf("--node-os almalinux-10-fips gave %+v, %v", o, err)
+	}
+	if !strings.Contains(f.Usage, "rocky-10-fips") {
+		t.Errorf("--node-os does not offer FIPS mode: %s", f.Usage)
+	}
 }
 
 func TestBuildUsersNeedsTheManagementCluster(t *testing.T) {

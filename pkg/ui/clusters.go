@@ -103,13 +103,18 @@ type nodeOSChoice struct {
 }
 
 // nodeOSChoices are the node OSes of every family, those not released yet among them, so that the
-// wizard can say why they cannot be chosen.
+// wizard can say why they cannot be chosen. FIPS mode is among them only for a distribution that
+// has it.
 func nodeOSChoices(c *clusterv1.ClusterClass, dist string) []nodeOSChoice {
 	if dist == string(templates.Talos) {
 		return nil
 	}
+	fips := templates.FIPSDistribution(templates.Distribution(dist)) == nil
 	var out []nodeOSChoice
 	for _, info := range templates.NodeOSes() {
+		if info.FIPS && !fips {
+			continue
+		}
 		choice := nodeOSChoice{NodeOSInfo: info}
 		if info.Unreleased == "" {
 			choice.NoTemplate = missingTemplate(c, dist, "", info.NodeOS)
@@ -822,7 +827,7 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 		}
 	} else {
 		var err error
-		if nodeOS, err = requestNodeOS(req.Variables[provisioner.NodeOSVariable]); err != nil {
+		if nodeOS, err = requestNodeOS(req.Variables[provisioner.NodeOSVariable], dist); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return nil, false
 		}
@@ -835,8 +840,8 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 }
 
 // requestNodeOS is the node OS a request's nodeOS variable names, the default where it names none,
-// once Kubehenge builds templates of it.
-func requestNodeOS(raw json.RawMessage) (templates.NodeOS, error) {
+// once Kubehenge builds templates of it for the distribution.
+func requestNodeOS(raw json.RawMessage, dist string) (templates.NodeOS, error) {
 	o := templates.DefaultNodeOS
 	if raw != nil {
 		if err := json.Unmarshal(raw, &o); err != nil {
@@ -845,6 +850,11 @@ func requestNodeOS(raw json.RawMessage) (templates.NodeOS, error) {
 	}
 	if _, _, err := templates.Available(o); err != nil {
 		return o, fmt.Errorf("node OS: %w", err)
+	}
+	if o.FIPS {
+		if err := templates.FIPSDistribution(templates.Distribution(dist)); err != nil {
+			return o, fmt.Errorf("node OS: %w", err)
+		}
 	}
 	return o, nil
 }
@@ -1312,7 +1322,7 @@ func (s *Server) allowNodeOS(w http.ResponseWriter, r *http.Request, u user, c *
 		writeError(w, http.StatusUnprocessableEntity, "node OS: Talos nodes run Talos")
 		return false
 	}
-	nodeOS, err := requestNodeOS(value)
+	nodeOS, err := requestNodeOS(value, dist)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return false

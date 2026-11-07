@@ -240,23 +240,19 @@ func missingTemplate(class *clusterv1.ClusterClass, distribution, version string
 	return ""
 }
 
-// nodeOSTitle is a node OS as people read it, such as AlmaLinux 10.
+// nodeOSTitle is a node OS as people read it, such as AlmaLinux 10 or AlmaLinux 10 FIPS.
 func nodeOSTitle(o templates.NodeOS) string {
 	if f, r, err := templates.ReleaseOf(o); err == nil {
+		if o.FIPS {
+			return f.Title() + " " + r.Name + " FIPS"
+		}
 		return f.Title() + " " + r.Name
 	}
 	return o.String()
 }
 
 func distributionTitle(d string) string {
-	switch templates.Distribution(d) {
-	case templates.RKE2:
-		return "RKE2"
-	case templates.K3s:
-		return "k3s"
-	case templates.Kubeadm, templates.Talos:
-	}
-	return d
+	return templates.Distribution(d).Title()
 }
 
 var kubeadmVersion = regexp.MustCompile(`^v1\.(\d+)\.(\d+)$`)

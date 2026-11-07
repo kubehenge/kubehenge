@@ -101,7 +101,7 @@ spec:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "controlPlaneMemoryMiB" 4800 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 2048 "clusters" .Values.clusters "sysAudit" (not (empty .Values.proxmox.sysAuditGroup))) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
-    {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeOSVariable" (dict "Files" .Files "noFIPS" "kubeadm") | nindent 4 }}
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}

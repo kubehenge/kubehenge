@@ -288,6 +288,34 @@ func TestCheckNodeOSRefusesWhatNoAllowedNodeRuns(t *testing.T) {
 	}
 }
 
+func TestCheckNodeOSHoldsFIPSModeToRKE2OnCanal(t *testing.T) {
+	t.Parallel()
+	fips := clusterVariable(t, NodeOSVariable, templates.NodeOS{Family: "almalinux", Release: "10", FIPS: true})
+	for _, tc := range []struct {
+		name, class, refused string
+		vars                 []clusterv1.ClusterVariable
+	}{
+		{"RKE2 on its default CNI", "kubehenge-rke2", "", []clusterv1.ClusterVariable{fips}},
+		{"RKE2 on Canal", "kubehenge-rke2", "", []clusterv1.ClusterVariable{fips, clusterVariable(t, "cni", "canal")}},
+		{"RKE2 on Cilium", "kubehenge-rke2", "FIPS mode needs Canal", []clusterv1.ClusterVariable{fips, clusterVariable(t, "cni", "cilium")}},
+		{"RKE2 on Calico", "kubehenge-rke2", "not calico", []clusterv1.ClusterVariable{fips, clusterVariable(t, "cni", "calico")}},
+		{"RKE2 on Cilium without FIPS mode", "kubehenge-rke2", "", []clusterv1.ClusterVariable{nodeOSVariable(t, "almalinux", "10"), clusterVariable(t, "cni", "cilium")}},
+		{"k3s", "kubehenge-k3s", "k3s has no FIPS mode. Choose RKE2", []clusterv1.ClusterVariable{fips}},
+		{"kubeadm", "kubehenge-kubeadm", "kubeadm has no FIPS mode", []clusterv1.ClusterVariable{fips}},
+		{"Leap, which has no FIPS mode", "kubehenge-rke2", "not released", []clusterv1.ClusterVariable{clusterVariable(t, NodeOSVariable, templates.NodeOS{Family: "leap", Release: "16.1", FIPS: true})}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := cluster(tc.vars...)
+			c.Spec.Topology.ClassRef.Name = tc.class
+			err := (&Hooks{}).checkNodeOS(t.Context(), c)
+			if tc.refused == "" && err != nil || tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)) {
+				t.Errorf("checkNodeOS = %v, want a refusal naming %q", err, tc.refused)
+			}
+		})
+	}
+}
+
 func clusterVariable(t *testing.T, name string, value any) clusterv1.ClusterVariable {
 	t.Helper()
 	raw, err := json.Marshal(value)

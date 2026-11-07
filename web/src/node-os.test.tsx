@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
+import { fieldProblems, newForm, request, summary, withClass } from "./create-form";
 import { fakeServer } from "./fake-server";
+import { baseTitle, forDistribution, nodeOSKey, nodeOSRef } from "./node-os";
 import type { Cluster, ClusterClass, NodeOS, NodeOSChoice } from "./types";
 
 const alma: NodeOS = {
@@ -27,6 +29,31 @@ const leap: NodeOS = {
 };
 
 const choices: NodeOSChoice[] = [alma, rocky, leap];
+
+const almaFIPS: NodeOS = { ...alma, fips: true, title: "AlmaLinux 10 FIPS", default: false };
+const rockyFIPS: NodeOS = { ...rocky, fips: true, title: "Rocky Linux 10 FIPS" };
+
+const cniVariable = {
+  name: "cni",
+  required: false,
+  schema: { type: "string", enum: ["canal", "calico", "cilium"], default: "canal" },
+};
+
+const rke2: ClusterClass = {
+  name: "kubehenge-rke2",
+  distribution: "rke2",
+  versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+rke2r\d+$` },
+  variables: [{ name: "nodeOS", required: false, schema: { type: "object" } }, cniVariable],
+  nodeOSes: [alma, almaFIPS, rocky, rockyFIPS, leap],
+};
+
+const k3s: ClusterClass = {
+  name: "kubehenge-k3s",
+  distribution: "k3s",
+  versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+k3s\d+$` },
+  variables: [{ name: "nodeOS", required: false, schema: { type: "object" } }],
+  nodeOSes: choices,
+};
 
 const kubeadm: ClusterClass = {
   name: "kubehenge-kubeadm",
@@ -65,6 +92,27 @@ const plain: Cluster = {
 };
 
 const cluster: Cluster = { ...plain, variables: { nodeOS: { family: "almalinux", release: "10" } }, nodeOS: alma };
+
+const rke2Cluster: Cluster = {
+  ...plain,
+  class: "kubehenge-rke2",
+  distribution: "rke2",
+  version: "v1.37.1+rke2r1",
+  variables: { nodeOS: { family: "almalinux", release: "10" }, cni: "canal" },
+  nodeOS: alma,
+};
+
+describe("node OS keys", () => {
+  it("carry FIPS mode", () => {
+    expect(nodeOSKey(almaFIPS)).toBe("almalinux-10-fips");
+    expect(nodeOSKey(alma)).toBe("almalinux-10");
+    expect(nodeOSRef(almaFIPS)).toStrictEqual({ family: "almalinux", release: "10", fips: true });
+    expect(nodeOSRef({ ...alma, fips: false })).toStrictEqual({ family: "almalinux", release: "10" });
+    expect(baseTitle(almaFIPS, [alma, almaFIPS])).toBe("AlmaLinux 10");
+    expect(forDistribution([alma, almaFIPS], "rke2")).toStrictEqual([alma, almaFIPS]);
+    expect(forDistribution([alma, almaFIPS], "kubeadm")).toStrictEqual([alma]);
+  });
+});
 
 const session = { body: { user: "dev@pve", csrf: "c" } };
 
@@ -168,6 +216,87 @@ describe("the node OS", () => {
     expect(calls.find((c) => c.key === "POST /api/clusters/clusters/web/plan")?.body).toStrictEqual({
       variables: { nodeOS: { family: "rocky", release: "10" } },
     });
+  });
+
+  it("is offered in FIPS mode where the distribution has it, on Canal only", async () => {
+    window.history.replaceState(null, "", "/clusters/new");
+    fakeServer({
+      "GET /api/session": session,
+      "GET /api/classes": { body: [rke2, k3s] },
+      "GET /api/proxmox/storages": { body: [] },
+      "GET /api/proxmox/nodes": { body: [] },
+      "GET /api/versions/rke2": { body: { versions: ["v1.37.1+rke2r1"] } },
+      "GET /api/versions/k3s": { body: { versions: ["v1.37.1+k3s1"] } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("option", { name: "RKE2" })).toBeInTheDocument());
+    await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-rke2");
+    const nodeOS = screen.getByLabelText("Node OS");
+    await user.selectOptions(nodeOS, "almalinux-10-fips");
+    expect(nodeOS).toHaveValue("almalinux-10-fips");
+    await user.click(screen.getByRole("button", { name: "About Node OS" }));
+    expect(
+      screen.getByText(
+        "Minimal, from AlmaLinux 10's signed packages, with SELinux enforcing and FIPS mode on. The OS itself is not CMVP validated.",
+      ),
+    ).toBeVisible();
+
+    // k3s has no FIPS mode, so the choice goes back to the default.
+    await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-k3s");
+    expect(screen.getByLabelText("Node OS")).toHaveValue("almalinux-10");
+    expect(within(screen.getByLabelText("Node OS")).queryByRole("option", { name: /FIPS/u })).not.toBeInTheDocument();
+  });
+
+  it("in FIPS mode, sends fips, shows in the review, and refuses a pod network other than Canal", () => {
+    const form = { ...withClass(newForm(), rke2, () => false), nodeOS: "rocky-10-fips" };
+    expect(request(form, rke2).variables["nodeOS"]).toStrictEqual({ family: "rocky", release: "10", fips: true });
+    expect(summary(form, rke2)).toContainEqual(["Node OS", "Rocky Linux 10 FIPS"]);
+    expect(fieldProblems("Network", form, rke2).cni).toBeUndefined();
+    expect(fieldProblems("Network", { ...form, cni: "cilium" }, rke2).cni).toBe("FIPS mode needs Canal");
+    expect(fieldProblems("Network", { ...form, nodeOS: "rocky-10", cni: "cilium" }, rke2).cni).toBeUndefined();
+    expect(request({ ...form, nodeOS: "rocky-10" }, rke2).variables["nodeOS"]).toStrictEqual({
+      family: "rocky",
+      release: "10",
+    });
+  });
+
+  it("is moved to FIPS mode under Options only on Canal", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const onCilium: Cluster = { ...rke2Cluster, variables: { ...rke2Cluster.variables, cni: "cilium" } };
+    fakeServer({
+      "GET /api/session": session,
+      "GET /api/clusters/clusters/web": { body: onCilium },
+      "GET /api/classes": { body: [rke2] },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit the node OS" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit node OS" });
+    const fips = await within(dialog).findByRole("radio", { name: "AlmaLinux 10 FIPS" });
+    expect(fips).toBeDisabled();
+    expect(fips).toHaveAccessibleDescription("Needs Canal as the pod network");
+  });
+
+  it("moves to FIPS mode under Options on Canal", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const calls = fakeServer({
+      "GET /api/session": session,
+      "GET /api/clusters/clusters/web": { body: rke2Cluster },
+      "GET /api/classes": { body: [rke2] },
+      "POST /api/clusters/clusters/web/plan": { status: 409, body: { error: "planned" } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit the node OS" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit node OS" });
+    await user.click(await within(dialog).findByRole("radio", { name: "AlmaLinux 10 FIPS" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "POST /api/clusters/clusters/web/plan")?.body).toStrictEqual({
+        variables: { nodeOS: { family: "almalinux", release: "10", fips: true } },
+      }),
+    );
   });
 
   it("has no row under Options for Talos", async () => {

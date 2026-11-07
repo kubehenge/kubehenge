@@ -13,8 +13,11 @@ func TestNodeOSRegistry(t *testing.T) {
 	if _, r, err := Available(DefaultNodeOS); err != nil || r.Mode != ImageMode {
 		t.Fatalf("the default node OS: %+v, %v", r, err)
 	}
-	if !slices.Equal(AvailableNodeOSes(), []string{"almalinux-10", "rocky-10"}) {
+	if !slices.Equal(AvailableNodeOSes(), []string{"almalinux-10", "almalinux-10-fips", "rocky-10", "rocky-10-fips"}) {
 		t.Errorf("available %v", AvailableNodeOSes())
+	}
+	if !slices.Equal(FIPSNodeOSes(), []string{"almalinux-10-fips", "rocky-10-fips"}) {
+		t.Errorf("FIPS mode on %v", FIPSNodeOSes())
 	}
 	names := map[string]bool{}
 	for _, f := range Families {
@@ -36,12 +39,45 @@ func TestNodeOSRegistry(t *testing.T) {
 	}
 	for _, o := range NodeOSes() {
 		back, err := ParseNodeOS(o.String())
-		if err != nil || back != o.NodeOS || !strings.HasPrefix(o.Tag(), "os-") {
+		if err != nil || back != o.NodeOS || !strings.HasPrefix(o.Tags()[0], "os-") {
 			t.Errorf("%s reads back as %+v, %v", o, back, err)
 		}
-		if tagged, ok := NodeOSOf([]string{"kubehenge", o.Tag()}); !ok || tagged != o.NodeOS {
-			t.Errorf("%s from its tag: %+v", o, tagged)
+		if tagged, ok := NodeOSOf(append([]string{"kubehenge"}, o.Tags()...)); !ok || tagged != o.NodeOS {
+			t.Errorf("%s from its tags: %+v", o, tagged)
 		}
+		if o.FIPS != strings.HasSuffix(o.Title, " FIPS") || (o.FIPS && o.Default) {
+			t.Errorf("%s is titled %q, default %t", o, o.Title, o.Default)
+		}
+	}
+}
+
+func TestFIPSNodeOS(t *testing.T) {
+	t.Parallel()
+	o, err := ParseNodeOS("rocky-10-fips")
+	if err != nil || o != (NodeOS{Family: rockyName, Release: "10", FIPS: true}) {
+		t.Fatalf("ParseNodeOS = %+v, %v", o, err)
+	}
+	if o.String() != "rocky-10-fips" || !slices.Equal(o.Tags(), []string{"os-rocky-10", FIPSTag}) || o.Base().FIPS {
+		t.Errorf("%s tagged %v, base %+v", o, o.Tags(), o.Base())
+	}
+	if got, ok := NodeOSOf([]string{"kubehenge", "os-rocky-10", "rke2"}); !ok || got.FIPS {
+		t.Errorf("a line without the fips tag reads as %+v", got)
+	}
+	if _, ok := NodeOSOf([]string{"kubehenge", "os-rocky-10-fips"}); ok {
+		t.Error("FIPS mode is a tag of its own, never part of the node OS's")
+	}
+	if _, r, err := Available(o); err != nil || !r.FIPS {
+		t.Errorf("Available = %+v, %v", r, err)
+	}
+	if CPULevel(o) != CPULevel(o.Base()) {
+		t.Errorf("FIPS mode changes the CPU level: %d", CPULevel(o))
+	}
+	leap := NodeOS{Family: leapName, Release: "16.1", FIPS: true}
+	if _, _, err := Available(leap); err == nil {
+		t.Error("Leap in FIPS mode is available")
+	}
+	if _, _, err := Available(NodeOS{Family: leapName, Release: "16.1"}); err == nil {
+		t.Error("an unreleased release is available")
 	}
 }
 
@@ -57,15 +93,20 @@ func TestTheChartListsTheNodeOSes(t *testing.T) {
 		Default   NodeOS   `json:"default"`
 		Families  []string `json:"families"`
 		Available []string `json:"available"`
+		FIPS      []string `json:"fips"`
 	}
 	if err := json.Unmarshal(raw, &chart); err != nil {
 		t.Fatal(err)
 	}
-	if chart.Default != DefaultNodeOS || !slices.Equal(chart.Available, AvailableNodeOSes()) {
-		t.Errorf("the chart offers %s by default of %v, want %s of %v", chart.Default, chart.Available, DefaultNodeOS, AvailableNodeOSes())
+	base := slices.DeleteFunc(AvailableNodeOSes(), func(o string) bool { return slices.Contains(FIPSNodeOSes(), o) })
+	if chart.Default != DefaultNodeOS || !slices.Equal(chart.Available, base) {
+		t.Errorf("the chart offers %s by default of %v, want %s of %v", chart.Default, chart.Available, DefaultNodeOS, base)
+	}
+	if !slices.Equal(chart.FIPS, FIPSNodeOSes()) {
+		t.Errorf("the chart offers FIPS mode on %v, want %v", chart.FIPS, FIPSNodeOSes())
 	}
 	var families []string
-	for _, o := range AvailableNodeOSes() {
+	for _, o := range base {
 		family, _, _ := strings.Cut(o, "-")
 		if !slices.Contains(families, family) {
 			families = append(families, family)

@@ -8,7 +8,7 @@ import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./C
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
-import { choosable, cpuNote, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
+import { choosable, cpuNote, findNodeOS, fipsCNI, nodeOSKey, nodeOSRef } from "./node-os";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import {
   PlacementDialog,
@@ -565,13 +565,23 @@ function StagedValue({ now, after }: { now: string; after: string | undefined })
   return <span className="staged-value">Staged: {after}</span>;
 }
 
-// A node OS the cluster can move to: released, and with a template of it built.
-const movable = (o: NodeOSChoice): boolean => choosable(o) && !filled(o.noTemplate);
+// fipsOutOfReach says a node OS in FIPS mode needs a pod network the cluster, fixed at creation, does not run.
+const fipsOutOfReach = (o: NodeOSChoice, c: Cluster): boolean => {
+  const { cni } = c.variables;
+  return o.fips === true && typeof cni === "string" && cni !== fipsCNI;
+};
+
+// A node OS the cluster can move to: released, with a template of it built, and in FIPS mode only on Canal.
+const movable = (o: NodeOSChoice, c: Cluster): boolean =>
+  choosable(o) && !filled(o.noTemplate) && !fipsOutOfReach(o, c);
 
 // nodeOSNote says why a node OS cannot be moved to, or else what it asks of the nodes' CPUs.
-function nodeOSNote(o: NodeOSChoice, oses: NodeOSChoice[]): string | undefined {
+function nodeOSNote(o: NodeOSChoice, oses: NodeOSChoice[], c: Cluster): string | undefined {
   if (filled(o.unreleased)) {
     return sentence(o.unreleased);
+  }
+  if (fipsOutOfReach(o, c)) {
+    return "Needs Canal as the pod network";
   }
   return filled(o.noTemplate) ? sentence(o.noTemplate) : cpuNote(o, oses);
 }
@@ -620,7 +630,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
           <button
             type="submit"
             className="primary"
-            disabled={busy || chosen === running || os === undefined || !movable(os)}
+            disabled={busy || chosen === running || os === undefined || !movable(os, c)}
           >
             Save
           </button>
@@ -634,7 +644,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
         <div role="radiogroup" aria-label="Node OS">
           {oses.map((o, i) => {
             const key = nodeOSKey(o);
-            const note = key === running ? undefined : nodeOSNote(o, oses);
+            const note = key === running ? undefined : nodeOSNote(o, oses, c);
             const noteId = `${group}-${i}`;
             return (
               <Fragment key={key}>
@@ -643,7 +653,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
                     type="radio"
                     name={group}
                     checked={chosen === key}
-                    disabled={key !== running && !movable(o)}
+                    disabled={key !== running && !movable(o, c)}
                     aria-describedby={note === undefined ? undefined : noteId}
                     onChange={() => setChosen(key)}
                   />{" "}
