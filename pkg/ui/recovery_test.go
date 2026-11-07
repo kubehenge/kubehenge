@@ -35,8 +35,6 @@ func TestRecoverControlPlane(t *testing.T) {
 	b.signIn("dev@pve")
 	body := `{"machine":"one-cp-a","confirm":"one"}`
 
-	// Nothing to recover from while the roll goes on.
-	expect(t, b.do("POST", "/api/clusters/default/one/control-plane-recovery", body), http.StatusConflict)
 	h.stall(provisioner.RollStalledUnreachable)
 
 	expect(t, b.do("POST", "/api/clusters/default/one/control-plane-recovery", `{"machine":"one-cp-a","confirm":"One"}`), http.StatusUnprocessableEntity)

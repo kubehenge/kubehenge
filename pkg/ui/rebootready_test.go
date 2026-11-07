@@ -187,7 +187,6 @@ func TestRecoverControlPlaneAfterQuorumLoss(t *testing.T) {
 	b := h.browser()
 	b.signIn("dev@pve")
 	body := `{"machine":"one-cp-a","confirm":"one"}`
-	expect(t, b.do("POST", "/api/clusters/default/one/control-plane-recovery", body), http.StatusConflict)
 	h.loseQuorum()
 	expect(t, b.do("POST", "/api/clusters/default/one/control-plane-recovery", body), http.StatusAccepted)
 	req, ok, err := provisioner.EtcdRestoreRequestOf(h.cluster())

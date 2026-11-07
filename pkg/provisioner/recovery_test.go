@@ -9,15 +9,68 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
-// askReset asks for web's etcd to be reset to machine's own.
+// askReset asks for web's etcd to be reset to machine's own, as its roll stalled.
 func askReset(machine string) func(*clusterv1.Cluster) {
+	return askResetWhile(machine, RollStalledCondition)
+}
+
+// askResetWhile asks for web's etcd to be reset to machine's own, while the cluster has the
+// condition. An empty condition is a healthy cluster.
+func askResetWhile(machine, condition string) func(*clusterv1.Cluster) {
 	return func(c *clusterv1.Cluster) {
 		metav1.SetMetaDataAnnotation(&c.ObjectMeta, EtcdRestoreAnnotation,
 			fmt.Sprintf(`{"machine":%q,"by":"root@pam","at":%q}`, machine, restoreAsked.Format(time.RFC3339)))
+		hold(c, condition)
+	}
+}
+
+// hold gives the cluster the condition, when there is one.
+func hold(c *clusterv1.Cluster, condition string) {
+	if condition != "" {
+		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{Type: condition, Status: metav1.ConditionTrue, Reason: "Test"})
+	}
+}
+
+// A reset reaches the controller from kubectl as it does from the interface, so the controller
+// refuses one of a cluster whose control plane is whole, before it touches anything.
+func TestControlPlaneResetRefusesAHealthyCluster(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, askResetWhile("web-cp-0", ""))
+	f.apis.down = 1
+	f.reconcile()
+	if runs := f.guests.runs(); len(runs) != 0 {
+		t.Errorf("ran %v", runs)
+	}
+	if st := f.status(); st.Phase != RestoreFailed || !strings.Contains(st.Message, "has not stalled and it has not lost its quorum") {
+		t.Errorf("status %+v", st)
+	}
+	if got := f.deleting(); len(got) != 0 {
+		t.Errorf("deleting %v", got)
+	}
+
+	tf, talos := newTalosRestoreFixture(t, askResetWhile("web-cp-0", ""))
+	tf.apis.down = 1
+	tf.reconcile()
+	if calls := talos.restoreCalls(); len(calls) != 0 {
+		t.Errorf("called %v", calls)
+	}
+	if st := tf.status(); st.Phase != RestoreFailed || !strings.Contains(st.Message, "has not stalled and it has not lost its quorum") {
+		t.Errorf("status %+v", st)
+	}
+}
+
+// A snapshot restore is not a recovery, and goes ahead on a healthy cluster.
+func TestSnapshotRestoreNeedsNoCondition(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	f.reconcile()
+	if st := f.status(); st.Phase != RestoreSucceeded {
+		t.Errorf("status %+v", st)
 	}
 }
 
@@ -109,6 +162,7 @@ func TestControlPlaneResetRefuses(t *testing.T) {
 			t.Parallel()
 			f := newRestoreFixture(t, func(c *clusterv1.Cluster) {
 				metav1.SetMetaDataAnnotation(&c.ObjectMeta, EtcdRestoreAnnotation, tc.annotation)
+				hold(c, RollStalledCondition)
 			})
 			f.apis.down = 1
 			f.reconcile()
@@ -197,7 +251,7 @@ func TestControlPlaneResetAfterQuorumLoss(t *testing.T) {
 				t.Parallel()
 				f := newRestoreFixture(t, func(c *clusterv1.Cluster) {
 					c.Spec.Topology.ClassRef.Name = ClassPrefix + class
-					askReset("web-cp-2")(c)
+					askResetWhile("web-cp-2", QuorumLostCondition)(c)
 				})
 				f.r.poll = time.Millisecond
 				f.apis.down = 1
@@ -223,7 +277,7 @@ func TestControlPlaneResetAfterQuorumLoss(t *testing.T) {
 // The reset cannot keep a machine whose VM is gone.
 func TestControlPlaneResetAfterQuorumLossNeedsASurvivor(t *testing.T) {
 	t.Parallel()
-	f := newRestoreFixture(t, askReset("web-cp-0"))
+	f := newRestoreFixture(t, askResetWhile("web-cp-0", QuorumLostCondition))
 	f.apis.down = 1
 	f.guests.destroyed = map[int64]bool{101: true, 102: true}
 	f.reconcile()
@@ -239,7 +293,7 @@ func TestControlPlaneResetAfterQuorumLossNeedsASurvivor(t *testing.T) {
 // distributions' does.
 func TestTalosControlPlaneResetAfterQuorumLoss(t *testing.T) {
 	t.Parallel()
-	f, talos := newTalosRestoreFixture(t, askReset("web-cp-2"))
+	f, talos := newTalosRestoreFixture(t, askResetWhile("web-cp-2", QuorumLostCondition))
 	f.apis.down = 1
 	talos.down["10.0.0.11"], talos.down["10.0.0.12"] = true, true
 	f.reconcile()
@@ -315,6 +369,7 @@ func TestTalosControlPlaneResetRefuses(t *testing.T) {
 			t.Parallel()
 			f, talos := newTalosRestoreFixture(t, func(c *clusterv1.Cluster) {
 				metav1.SetMetaDataAnnotation(&c.ObjectMeta, EtcdRestoreAnnotation, tc.annotation)
+				hold(c, RollStalledCondition)
 			})
 			f.apis.down = 1
 			f.reconcile()

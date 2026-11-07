@@ -7,5 +7,6 @@
 - A cluster gets the condition `ControlPlaneQuorumLost`, an event of that name and a Health item. That happens when its API is silent for 10 minutes and fewer than a majority of its control-plane machines have a running VM.
 - Recover… accepts that condition besides a stalled roll, through the interface, the CLI and kubectl. It lists the control planes whose VM runs.
 - Recover… says that what only the lost members held is gone.
+- The controller refuses a reset of etcd to one machine unless the roll stalled or the quorum is lost. It refuses for kubectl and GitOps too, and the restore status gives the reason.
 - A Talos cluster's etcd reset is tested after the loss of two of three control planes, as the kubeadm, RKE2 and k3s resets are.
 - The troubleshooting page documents recovering a cluster that lost two of three control planes, with the kubectl annotation.

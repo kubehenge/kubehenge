@@ -382,7 +382,7 @@ kubectl -n <namespace> annotate cluster <name> \
   kubehenge.dev/etcd-restore="{\"machine\":\"<machine to keep>\",\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
 ```
 
-The status follows in `kubehenge.dev/etcd-restore-status`. A Talos cluster is reset through the nodes' Talos API, the others through the guest agent.
+The controller resets only a cluster that has `ControlPlaneRollStalled` or `ControlPlaneQuorumLost`. On any other cluster the annotation fails at once, and the status says so. The status follows in `kubehenge.dev/etcd-restore-status`. A Talos cluster is reset through the nodes' Talos API, the others through the guest agent.
 
 ### Not enough memory for the add-ons
 
