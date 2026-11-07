@@ -121,6 +121,25 @@
           }
         },
         {
+          "name": "hostOutageGraceMinutes",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": 30,
+              "description": "Minutes a machine whose Proxmox VE node is offline or in maintenance, or whose storage is unavailable, is kept from replacement. After that it is replaced. 0 waits for the host for as long as it is away.",
+              "maximum": 10080,
+              "minimum": 0,
+              "type": "integer",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The grace is 0, for no ceiling, or at least 5 minutes.",
+                  "rule": "self == 0 || self \u003e= 5"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "proxmoxHA",
           "required": false,
           "schema": {
@@ -1434,6 +1453,25 @@
                 "type": "string"
               },
               "type": "array"
+            }
+          }
+        },
+        {
+          "name": "hostOutageGraceMinutes",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": 30,
+              "description": "Minutes a machine whose Proxmox VE node is offline or in maintenance, or whose storage is unavailable, is kept from replacement. After that it is replaced. 0 waits for the host for as long as it is away.",
+              "maximum": 10080,
+              "minimum": 0,
+              "type": "integer",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The grace is 0, for no ceiling, or at least 5 minutes.",
+                  "rule": "self == 0 || self \u003e= 5"
+                }
+              ]
             }
           }
         },
@@ -2752,6 +2790,25 @@
           }
         },
         {
+          "name": "hostOutageGraceMinutes",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": 30,
+              "description": "Minutes a machine whose Proxmox VE node is offline or in maintenance, or whose storage is unavailable, is kept from replacement. After that it is replaced. 0 waits for the host for as long as it is away.",
+              "maximum": 10080,
+              "minimum": 0,
+              "type": "integer",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The grace is 0, for no ceiling, or at least 5 minutes.",
+                  "rule": "self == 0 || self \u003e= 5"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "proxmoxHA",
           "required": false,
           "schema": {
@@ -4065,6 +4122,25 @@
                 "type": "string"
               },
               "type": "array"
+            }
+          }
+        },
+        {
+          "name": "hostOutageGraceMinutes",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": 30,
+              "description": "Minutes a machine whose Proxmox VE node is offline or in maintenance, or whose storage is unavailable, is kept from replacement. After that it is replaced. 0 waits for the host for as long as it is away.",
+              "maximum": 10080,
+              "minimum": 0,
+              "type": "integer",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The grace is 0, for no ceiling, or at least 5 minutes.",
+                  "rule": "self == 0 || self \u003e= 5"
+                }
+              ]
             }
           }
         },

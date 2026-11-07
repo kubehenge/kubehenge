@@ -106,6 +106,17 @@ describe("the management cluster's health", () => {
     expect(screen.getByText("Reachable")).toBeInTheDocument();
   });
 
+  it("warns when the token cannot see host maintenance", async () => {
+    show({
+      answers: true,
+      nodes: [ready("mgmt-1")],
+      controllers: [],
+      proxmox: { ok: true, blind: "Sys.Audit on /", checked: "2026-01-02T12:00:00Z" },
+    });
+    await expect(screen.findByText("Degraded")).resolves.toBeInTheDocument();
+    expect(screen.getByText("Host maintenance is not visible: the token lacks Sys.Audit on /")).toBeInTheDocument();
+  });
+
   it("calls a cluster with no ready node down", () => {
     expect(healthVerdict({ answers: true, nodes: [{ name: "mgmt-1", ready: false }] })).toStrictEqual({
       state: "error",

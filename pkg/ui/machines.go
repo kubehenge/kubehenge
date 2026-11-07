@@ -48,8 +48,8 @@ func machineOf(m *clusterv1.Machine, proxmoxNode string) machineView {
 	}
 	if why, held := m.Annotations[provisioner.HoldAnnotation]; held {
 		mv.Held = why
-		if since, err := time.Parse(time.RFC3339, m.Annotations[provisioner.HoldSinceAnnotation]); err == nil {
-			mv.HeldUntil = since.Add(provisioner.HoldCeiling)
+		if until, err := time.Parse(time.RFC3339, m.Annotations[provisioner.HoldUntilAnnotation]); err == nil {
+			mv.HeldUntil = until
 		}
 	}
 	for _, a := range m.Status.Addresses {

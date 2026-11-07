@@ -1018,7 +1018,7 @@ export interface ManagementHealth {
   /** Its deployments: Cluster API's providers, Kubehenge's controller and the cluster's own. */
   controllers?: { namespace: string; name: string; ready: number; wanted: number }[];
   /** Whether the controller reaches the Proxmox VE API from inside the cluster. Unset until it has asked. */
-  proxmox?: { ok: boolean; error?: string; checked: string };
+  proxmox?: { ok: boolean; error?: string; blind?: string; checked: string };
 }
 
 /** What the setup would run into: errors stop it, warnings do not. */

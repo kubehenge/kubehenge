@@ -214,6 +214,7 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 				clusterv1.MachineSkipRemediationAnnotation: "",
 				provisioner.HoldAnnotation:                 "Proxmox VE node " + nodes[i%len(nodes)] + " is in maintenance",
 				provisioner.HoldSinceAnnotation:            f.now.Add(-7 * time.Minute).Format(time.RFC3339),
+				provisioner.HoldUntilAnnotation:            f.now.Add(23 * time.Minute).Format(time.RFC3339),
 			}
 		}
 		f.objects = append(f.objects, m)
@@ -300,7 +301,7 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 			Type: provisioner.RemediationHeldCondition, Status: metav1.ConditionTrue, Reason: provisioner.HeldNodeMaintenance, LastTransitionTime: metav1.NewTime(since),
 			Message: fmt.Sprintf("%s-%s-%s: Proxmox VE node %s is in maintenance, replacement waits until %s",
 				d.Name, workerPool, demoSuffix(d.Name, workerPool, int(d.Workers-1)), f.data.ProxmoxNodes[int(d.ControlPlanes+d.Workers-1)%len(f.data.ProxmoxNodes)],
-				since.Add(provisioner.HoldCeiling).UTC().Format("15:04 MST")),
+				since.Add(30*time.Minute).UTC().Format("15:04 MST")),
 		})
 	}
 	c.Status = clusterv1.ClusterStatus{

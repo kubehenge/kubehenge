@@ -157,7 +157,7 @@ The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has b
 
 The same look reads the nodes and the HA manager's status (`/cluster/ha/status/manager_status`). A machine whose VM sits on a node that is offline or in maintenance gets Cluster API's `cluster.x-k8s.io/skip-remediation` annotation. So does one on a node where the cluster's storage is unavailable. The Cluster gets `RemediationHeld` ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)).
 
-The hold ends when the node is back and the machine's node is Ready, or after 30 minutes. The placer leaves such nodes out of `kubehenge.dev/online-nodes`. Cluster API's patch of the cluster is refused while no node is left.
+The hold ends when the node is back and the machine's node is Ready, or after the cluster's `hostOutageGraceMinutes` (30 by default, 0 for no ceiling), which each machine's `remediation-hold-until` records. The placer leaves such nodes out of `kubehenge.dev/online-nodes`. Cluster API's patch of the cluster is refused while no node is left.
 
 ## Each cluster's own corner of Proxmox VE
 

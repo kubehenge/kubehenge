@@ -72,8 +72,10 @@ func (s *Server) managementHealth(w http.ResponseWriter, r *http.Request, u user
 // proxmoxReachView is whether the controller reaches the Proxmox VE API from inside the management
 // cluster, as of its last ask.
 type proxmoxReachView struct {
-	OK      bool      `json:"ok"`
-	Error   string    `json:"error,omitempty"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+	// Blind is the privilege the controller's token lacks to see hosts in maintenance.
+	Blind   string    `json:"blind,omitempty"`
 	Checked time.Time `json:"checked"`
 }
 
@@ -93,7 +95,7 @@ func (s *Server) proxmoxReach(ctx context.Context, kube client.Client) *proxmoxR
 		s.Log.WarnContext(ctx, "reading whether the controller reaches Proxmox VE", "error", err)
 		return nil
 	}
-	return &proxmoxReachView{OK: r.OK, Error: r.Error, Checked: r.Checked}
+	return &proxmoxReachView{OK: r.OK, Error: r.Error, Blind: r.Blind, Checked: r.Checked}
 }
 
 func readManagementHealth(ctx context.Context, kube client.Client) (managementHealthView, error) {

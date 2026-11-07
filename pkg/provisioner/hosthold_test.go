@@ -17,6 +17,93 @@ const (
 
 var controlPlanes = []string{heldFirst, heldSecond, heldThird}
 
+// defaultCeiling is the ceiling of a cluster that sets none.
+const defaultCeiling = DefaultHostOutageGraceMinutes * time.Minute
+
+// grace sets the cluster's hostOutageGraceMinutes.
+func (f *vmFixture) grace(minutes string) {
+	f.t.Helper()
+	c := &clusterv1.Cluster{}
+	if err := f.kube.Get(f.t.Context(), webKey, c); err != nil {
+		f.t.Fatal(err)
+	}
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, variableOf(HostOutageGraceVariable, minutes))
+	if err := f.kube.Update(f.t.Context(), c); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func TestHoldCeilingIsTheClustersOwn(t *testing.T) {
+	t.Parallel()
+	f := newVMFixture(t)
+	f.grace("45")
+	f.nodes([]string{"pve2"})
+	f.look(0, RemediationHeldCondition)
+	wantHeld(t, f.heldMachines(), heldSecond)
+	if got := f.machine(heldSecond).Annotations[HoldUntilAnnotation]; got != f.now.Add(45*time.Minute).Format(time.RFC3339) {
+		t.Errorf("hold until %q", got)
+	}
+	if cond := f.look(44*time.Minute, RemediationHeldCondition); cond == nil {
+		t.Fatal("released before the cluster's ceiling, though the default has passed")
+	}
+	if cond := f.look(time.Minute, RemediationHeldCondition); cond != nil {
+		t.Fatalf("held past the cluster's ceiling: %+v", cond)
+	}
+}
+
+func TestHoldWithoutACeilingWaitsForTheHost(t *testing.T) {
+	t.Parallel()
+	f := newVMFixture(t)
+	f.grace("0")
+	f.nodes([]string{"pve2"})
+	cond := f.look(0, RemediationHeldCondition)
+	if cond == nil || !strings.HasSuffix(cond.Message, "replacement waits for the host") {
+		t.Fatalf("condition %+v", cond)
+	}
+	if _, ok := f.machine(heldSecond).Annotations[HoldUntilAnnotation]; ok {
+		t.Error("an end is recorded for a hold without one")
+	}
+	if cond := f.look(7*24*time.Hour, RemediationHeldCondition); cond == nil {
+		t.Fatal("released after a week with the host away")
+	}
+	wantHeld(t, f.heldMachines(), heldSecond)
+	f.nodes(nil)
+	f.nodeReady(heldSecond)
+	if cond := f.look(time.Minute, RemediationHeldCondition); cond != nil {
+		t.Fatalf("host back: %+v", cond)
+	}
+}
+
+func TestValidatorHoldsTheHostOutageGrace(t *testing.T) {
+	t.Parallel()
+	h, _ := hooksFor(t)
+	v := &ClusterValidator{Hooks: h}
+	for value, ok := range map[string]bool{"0": true, "5": true, "30": true, "10080": true, "1": false, "4": false, "10081": false, "-5": false, `"soon"`: false} {
+		_, err := v.ValidateCreate(t.Context(), cluster(variableOf(HostOutageGraceVariable, value)))
+		refused := err != nil && strings.Contains(err.Error(), "variables["+HostOutageGraceVariable+"]")
+		if refused == ok {
+			t.Errorf("%s: refused %v: %v", value, refused, err)
+		}
+	}
+}
+
+func TestAMalformedGraceFailsTheWatch(t *testing.T) {
+	t.Parallel()
+	f := newVMFixture(t)
+	f.grace(`"soon"`)
+	look, err := f.watch.read(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &clusterv1.Cluster{}
+	if err := f.kube.Get(t.Context(), webKey, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.watch.watch(t.Context(), c, look); err == nil {
+		t.Error("no error for a ceiling that is not a number")
+	}
+}
+
 // heldMachines are the control planes Kubehenge keeps Cluster API from replacing.
 func (f *vmFixture) heldMachines() []string {
 	f.t.Helper()
@@ -61,7 +148,7 @@ func TestHoldKeepsMachinesOfAnOfflineNodeFromReplacement(t *testing.T) {
 	if why := f.machine(heldSecond).Annotations[HoldAnnotation]; why != "Proxmox VE node pve2 is offline" {
 		t.Errorf("the record says %q", why)
 	}
-	until := f.now.Add(HoldCeiling).Format("15:04 MST")
+	until := f.now.Add(defaultCeiling).Format("15:04 MST")
 	if !strings.Contains(cond.Message, heldSecond+": Proxmox VE node pve2 is offline, replacement waits until "+until) {
 		t.Errorf("message %q", cond.Message)
 	}
@@ -119,7 +206,7 @@ func TestHoldLiftsAtTheCeilingAndDoesNotReturnForTheSameOutage(t *testing.T) {
 	f.nodes([]string{"pve2"})
 	f.look(0, RemediationHeldCondition)
 	wantHeld(t, f.heldMachines(), heldSecond)
-	if cond := f.look(HoldCeiling-time.Second, RemediationHeldCondition); cond == nil {
+	if cond := f.look(defaultCeiling-time.Second, RemediationHeldCondition); cond == nil {
 		t.Fatal("released before the ceiling")
 	}
 	wantHeld(t, f.heldMachines(), heldSecond)

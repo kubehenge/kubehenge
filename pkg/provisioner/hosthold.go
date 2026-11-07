@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/luthermonson/go-proxmox"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,9 +47,9 @@ const (
 	// ends it, so that the same outage does not hold the machine a second time.
 	HoldSinceAnnotation = "kubehenge.dev/remediation-hold-since"
 
-	// HoldCeiling is how long a machine is held. A host that stays gone longer than a reboot or a
-	// maintenance takes needs its machines replaced elsewhere.
-	HoldCeiling = 30 * time.Minute
+	// HoldUntilAnnotation is when the hold ends whatever the host does, in RFC 3339. It is absent
+	// for a cluster that holds for as long as the host is away.
+	HoldUntilAnnotation = "kubehenge.dev/remediation-hold-until"
 
 	nodeStatusOnline = "online"
 	storageAvailable = "available"
@@ -69,28 +71,56 @@ type pveNodeUse struct {
 	Status string `json:"status"`
 }
 
-// pveHAStatus is the part of the HA manager's status that tells which nodes are in maintenance.
-// LAB: node_status as read from /cluster/ha/status/manager_status on a real host.
+// haStatusPath is the HA manager's status. Proxmox VE's API module `src/PVE/API2/HA/Status.pm`
+// (pve-ha-manager, master) registers it as `manager_status`, checks `Sys.Audit` on `/`, and returns
+// `{manager_status => $status, quorum => {node, quorate}, lrm_status => {<node> => ...}}`.
+const haStatusPath = "/cluster/ha/status/manager_status"
+
+// pveHAStatus is the part of that answer that tells which nodes are in maintenance.
 type pveHAStatus struct {
 	ManagerStatus pveHAManager `json:"manager_status"`
 }
 
+// pveHAManager is the CRM's status file. `PVE::HA::Manager::flush_master_status` sets
+// `$ms->{node_status} = $ns->{status}`, a map of node to one of the states of
+// `PVE::HA::NodeStatus`: online, maintenance, unknown, fence and gone.
 type pveHAManager struct {
 	NodeStatus map[string]string `json:"node_status"`
 }
 
+// haMaintenanceState is the one node state that means the node is being emptied on purpose.
+// `unknown` (out of the quorate partition), `fence` and `gone` are failures, and the node then
+// shows offline in the resource list, which holds machines on its own.
+const haMaintenanceState = "maintenance"
+
 // haMaintenance lists the nodes the HA manager has in maintenance mode.
-func haMaintenance(ctx context.Context, r proxmoxReader) map[string]bool {
+func haMaintenance(ctx context.Context, r proxmoxReader) (map[string]bool, error) {
 	var status pveHAStatus
-	if err := r.Get(ctx, "/cluster/ha/status/manager_status", &status); err != nil {
-		ctrl.LoggerFrom(ctx).WithName("ha-status").Error(err, "reading the HA manager's status")
-		return nil
+	if err := r.Get(ctx, haStatusPath, &status); err != nil {
+		return nil, fmt.Errorf("reading the HA manager's status: %w", err)
 	}
 	maintenance := map[string]bool{}
 	for node, state := range status.ManagerStatus.NodeStatus {
-		if state == "maintenance" {
+		if state == haMaintenanceState {
 			maintenance[node] = true
 		}
+	}
+	return maintenance, nil
+}
+
+// maintenanceOf reads the nodes in maintenance. A token without Sys.Audit on / is refused, which
+// ProxmoxReach reports once on the management cluster's health, so the refusal is silent here. Any
+// other failure is logged when its text changes.
+func maintenanceOf(ctx context.Context, r proxmoxReader, lastErr *string) map[string]bool {
+	maintenance, err := haMaintenance(ctx, r)
+	switch {
+	case err == nil:
+		*lastErr = ""
+	case errors.Is(err, proxmox.ErrNotAuthorized):
+		*lastErr = err.Error()
+	case err.Error() != *lastErr:
+		*lastErr = err.Error()
+		ctrl.LoggerFrom(ctx).WithName("ha-status").Error(err, "the HA manager's status is not read")
 	}
 	return maintenance
 }
@@ -130,7 +160,7 @@ func (l *vmLook) storageDown(storage string) map[string]bool {
 
 // storageUnavailableCondition says on which nodes the cluster's VMs run without its storage, nil
 // when it is available on all of them. A node that is offline is the node's problem, said there.
-func storageUnavailableCondition(storage string, vms []clusterVM, look *vmLook) *metav1.Condition {
+func storageUnavailableCondition(storage string, vms []clusterVM, look *vmLook, ceiling time.Duration) *metav1.Condition {
 	down := look.storageDown(storage)
 	var nodes []string
 	for _, vm := range vms {
@@ -147,22 +177,26 @@ func storageUnavailableCondition(storage string, vms []clusterVM, look *vmLook) 
 		return nil
 	}
 	slices.Sort(nodes)
+	waits := "while it is gone"
+	if ceiling > 0 {
+		waits = fmt.Sprintf("for %d minutes", int(ceiling/time.Minute))
+	}
 	return &metav1.Condition{
 		Status: metav1.ConditionTrue, Reason: StorageUnavailableReason,
-		Message: fmt.Sprintf("Storage %s is unavailable on %s. Its machines are not replaced for %d minutes. Bring the storage back in Proxmox VE.",
-			storage, strings.Join(nodes, ", "), int(HoldCeiling/time.Minute)),
+		Message: fmt.Sprintf("Storage %s is unavailable on %s. Its machines are not replaced %s. Bring the storage back in Proxmox VE.",
+			storage, strings.Join(nodes, ", "), waits),
 	}
 }
 
 // holdMachines places, keeps and lifts the hold on each of the cluster's machines, and says which
 // are held. A hold lifts when its cause has gone and the machine's node is Ready, or at HoldCeiling.
-func (w *VMWatch) holdMachines(ctx context.Context, vms []clusterVM, storage string, look *vmLook) (*metav1.Condition, error) {
+func (w *VMWatch) holdMachines(ctx context.Context, vms []clusterVM, storage string, look *vmLook, ceiling time.Duration) (*metav1.Condition, error) {
 	now := w.now()
 	var held []string
 	found := map[string]bool{}
 	var errs []error
 	for _, vm := range vms {
-		kept, reason, err := w.holdMachine(ctx, vm, holdOf(vm, storage, look), now)
+		kept, reason, err := w.holdMachine(ctx, vm, holdOf(vm, storage, look), now, ceiling)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -191,13 +225,13 @@ func (w *VMWatch) holdMachines(ctx context.Context, vms []clusterVM, storage str
 
 // holdMachine moves one machine to the state its cause calls for. It returns what the condition
 // says of a machine that stays held, and its reason, both empty otherwise.
-func (w *VMWatch) holdMachine(ctx context.Context, vm clusterVM, cause *machineHold, now time.Time) (string, string, error) {
+func (w *VMWatch) holdMachine(ctx context.Context, vm clusterVM, cause *machineHold, now time.Time, ceiling time.Duration) (string, string, error) {
 	m := vm.m
 	_, ours := m.Annotations[HoldAnnotation]
 	sinceText, hasSince := m.Annotations[HoldSinceAnnotation]
 	since, _ := time.Parse(time.RFC3339, sinceText)
 	_, skipping := m.Annotations[clusterv1.MachineSkipRemediationAnnotation]
-	expired := hasSince && now.Sub(since) >= HoldCeiling
+	expired := hasSince && ceiling > 0 && now.Sub(since) >= ceiling
 	switch {
 	case cause != nil && skipping && !ours && !hasSince:
 		return "", "", nil // an administrator's own skip stands
@@ -205,35 +239,85 @@ func (w *VMWatch) holdMachine(ctx context.Context, vm clusterVM, cause *machineH
 		if !skipping && !ours {
 			return "", "", nil
 		}
-		return "", "", w.patchHold(ctx, m, map[string]*string{clusterv1.MachineSkipRemediationAnnotation: nil, HoldAnnotation: nil})
+		return "", "", w.patchHold(ctx, m, map[string]*string{
+			clusterv1.MachineSkipRemediationAnnotation: nil, HoldAnnotation: nil, HoldUntilAnnotation: nil,
+		})
 	case cause != nil:
 		if !hasSince {
 			since = now
 		}
-		want := map[string]*string{
-			clusterv1.MachineSkipRemediationAnnotation: new(""),
-			HoldAnnotation:      &cause.text,
-			HoldSinceAnnotation: new(since.UTC().Format(time.RFC3339)),
+		var until *string
+		if ceiling > 0 {
+			until = new(since.Add(ceiling).UTC().Format(time.RFC3339))
 		}
-		if m.Annotations[HoldAnnotation] != cause.text || !skipping || !hasSince {
-			if err := w.patchHold(ctx, m, want); err != nil {
+		current, hasUntil := m.Annotations[HoldUntilAnnotation]
+		if m.Annotations[HoldAnnotation] != cause.text || !skipping || !hasSince || hasUntil != (until != nil) || until != nil && current != *until {
+			err := w.patchHold(ctx, m, map[string]*string{
+				clusterv1.MachineSkipRemediationAnnotation: new(""),
+				HoldAnnotation:      &cause.text,
+				HoldSinceAnnotation: new(since.UTC().Format(time.RFC3339)),
+				HoldUntilAnnotation: until,
+			})
+			if err != nil {
 				return "", "", err
 			}
 		}
-		return holdLine(vm.machine, cause.text, since), cause.reason, nil
+		return holdLine(vm.machine, cause.text, since, ceiling), cause.reason, nil
 	case ours && !expired && !meta.IsStatusConditionTrue(m.Status.Conditions, clusterv1.MachineNodeReadyCondition):
-		return holdLine(vm.machine, "its node is not Ready yet", since), HeldNodeRecovering, nil
+		return holdLine(vm.machine, "its node is not Ready yet", since, ceiling), HeldNodeRecovering, nil
 	case ours || hasSince:
 		return "", "", w.patchHold(ctx, m, map[string]*string{
-			clusterv1.MachineSkipRemediationAnnotation: nil, HoldAnnotation: nil, HoldSinceAnnotation: nil,
+			clusterv1.MachineSkipRemediationAnnotation: nil, HoldAnnotation: nil, HoldSinceAnnotation: nil, HoldUntilAnnotation: nil,
 		})
 	}
 	return "", "", nil
 }
 
 // holdLine is what the condition says of one held machine.
-func holdLine(machine, why string, since time.Time) string {
-	return fmt.Sprintf("%s: %s, replacement waits until %s", machine, why, since.Add(HoldCeiling).UTC().Format(holdClockLayout))
+func holdLine(machine, why string, since time.Time, ceiling time.Duration) string {
+	if ceiling == 0 {
+		return fmt.Sprintf("%s: %s, replacement waits for the host", machine, why)
+	}
+	return fmt.Sprintf("%s: %s, replacement waits until %s", machine, why, since.Add(ceiling).UTC().Format(holdClockLayout))
+}
+
+// HostOutageGraceVariable is the ClusterClass variable giving the minutes a machine whose host is
+// away is kept from replacement. Zero keeps it for as long as the host is away.
+const HostOutageGraceVariable = "hostOutageGraceMinutes"
+
+// DefaultHostOutageGraceMinutes is the variable's default, which the schema gives too.
+const DefaultHostOutageGraceMinutes = 30
+
+// MinHostOutageGraceMinutes is the least a set ceiling may be, a reboot's firmware alone taking minutes.
+const MinHostOutageGraceMinutes = 5
+
+// MaxHostOutageGraceMinutes is a week, the most a hold may last.
+const MaxHostOutageGraceMinutes = 7 * 24 * 60
+
+// validateHostOutageGrace holds the variable to the schema's rule at admission too, so that a
+// cluster the schema's defaulting never reached is refused as well: zero, or 5 minutes to a week.
+func validateHostOutageGrace(c *clusterv1.Cluster) field.ErrorList {
+	minutes, set, err := optionalVariable[int](c, HostOutageGraceVariable)
+	path := field.NewPath("spec", "topology", "variables").Key(HostOutageGraceVariable)
+	switch {
+	case err != nil:
+		return field.ErrorList{field.Invalid(path, HostOutageGraceVariable, "a whole number of minutes")}
+	case !set, minutes == 0, minutes >= MinHostOutageGraceMinutes && minutes <= MaxHostOutageGraceMinutes:
+		return nil
+	}
+	return field.ErrorList{field.Invalid(path, minutes, fmt.Sprintf("0 for no ceiling, or %d to %d minutes", MinHostOutageGraceMinutes, MaxHostOutageGraceMinutes))}
+}
+
+// hostOutageGrace is the cluster's ceiling on a hold, zero for none.
+func hostOutageGrace(c *clusterv1.Cluster) (time.Duration, error) {
+	minutes, set, err := optionalVariable[int](c, HostOutageGraceVariable)
+	if err != nil {
+		return 0, err
+	}
+	if !set {
+		minutes = DefaultHostOutageGraceMinutes
+	}
+	return time.Duration(minutes) * time.Minute, nil
 }
 
 // patchHold sets the annotations given, and takes away those given as nil.

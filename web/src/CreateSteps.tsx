@@ -14,6 +14,7 @@ import {
   type Form,
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
+import { HostOutageField, graceVariable } from "./HostOutage";
 import { LoadBalancerFields } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
@@ -817,6 +818,13 @@ export function MachinesStep({
           problem={shown("placement")}
           nodes={nodes}
           rules={rules}
+        />
+      )}
+      {variable(cls, graceVariable) !== undefined && (
+        <HostOutageField
+          value={form.hostOutageGrace}
+          onChange={(minutes) => set("hostOutageGrace", minutes)}
+          problem={shown("hostOutageGrace")}
         />
       )}
       {haOffered && <HAField checked={form.proxmoxHA} onChange={(on) => set("proxmoxHA", on)} />}

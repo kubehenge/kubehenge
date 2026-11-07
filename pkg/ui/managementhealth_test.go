@@ -90,6 +90,18 @@ func TestManagementHealthShowsWhetherTheControllerReachesProxmoxVE(t *testing.T)
 	}
 }
 
+func TestManagementHealthSaysWhenHostMaintenanceIsNotVisible(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, &corev1.ConfigMap{
+		Namespace: "kubehenge-system", Name: "kubehenge-proxmox-reach",
+		Data: map[string]string{"reach": `{"ok":true,"blind":"Sys.Audit on /","checked":"2026-01-02T12:00:00Z"}`},
+	})
+	got := readHealth(t, h, "admin@pve", http.StatusOK)
+	if got.Proxmox == nil || !got.Proxmox.OK || got.Proxmox.Blind != "Sys.Audit on /" {
+		t.Fatalf("health %+v, want the missing privilege", got.Proxmox)
+	}
+}
+
 func TestManagementHealthIsForThoseWhoMaySetUp(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

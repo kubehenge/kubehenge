@@ -38,7 +38,7 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 	if err := p.Client.Get(ctx, "/cluster/resources?type=storage", &storages); err != nil {
 		return nil, fmt.Errorf("listing storages: %w", err)
 	}
-	maintenance := haMaintenance(ctx, p.Client)
+	maintenance, _ := haMaintenance(ctx, p.Client) // a refusal is ProxmoxReach's to report, once
 	var online []Node
 	for _, n := range nodes {
 		if n.Status != nodeOnline {

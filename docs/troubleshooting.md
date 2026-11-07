@@ -543,8 +543,16 @@ A node that reboots or sits in HA maintenance is down longer than the five minut
 - The Cluster has the condition `RemediationHeld`, with the reason `NodeOffline`, `NodeMaintenance`, `StorageUnavailable` or `NodeRecovering`.
 - The Machine carries `cluster.x-k8s.io/skip-remediation`, which keeps the health check off it. `kubehenge.dev/remediation-hold` says why. `kubehenge.dev/remediation-hold-since` is when it began.
 - `kubehenge cluster get <name>` prints `held` and `heldUntil` for each machine.
-- The hold ends when the node is back and the machine's Kubernetes node is Ready. After 30 minutes it ends anyway, and the same outage never holds the machine twice.
+- The hold ends when the node is back and the machine's Kubernetes node is Ready.
+- It ends anyway after the cluster's `hostOutageGraceMinutes`, 30 by default. `kubehenge.dev/remediation-hold-until` is when. The same outage never holds the machine twice.
+- A server that needs longer than 30 minutes to start needs a higher value, and 0 waits for the host for ever ([clusters.md](clusters.md#variables)).
 - A skip annotation without Kubehenge's two is yours, and Kubehenge leaves it alone.
+
+#### Host maintenance is not visible
+
+**Host maintenance is not visible: the token lacks Sys.Audit on /** on the management cluster's **Health** means Proxmox VE refused the controller's read of the HA manager's status. Without it Kubehenge sees offline hosts but not HA maintenance, so it does not hold replacements for a host in maintenance. Give the controller's token `Sys.Audit` on `/`, which the read-privileges setting grants unless you switched it off.
+
+Only `maintenance` in the HA manager's `node_status` counts. `online`, `unknown`, `fence` and `gone` do not: a fenced or gone node is failed, not serviced.
 
 #### Storage unavailable
 

@@ -151,6 +151,52 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	}
 }
 
+func TestClusterCommandsSetTheHostOutageGrace(t *testing.T) {
+	t.Parallel()
+	fake := &fakeClusterAPI{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	const token = "dev@pve!ci=secret" //nolint:gosec // the fake interface's own
+	file := filepath.Join(t.TempDir(), "new.yaml")
+	if err := os.WriteFile(file, []byte("name: new\nclass: talos\nvariables:\n  hostOutageGraceMinutes: 10\n  other: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"create", "-f", file, "--host-outage-grace-minutes", "0"},
+		{"update", "web", "--host-outage-grace-minutes", "45"},
+		{"update", "web", "--host-outage-grace-minutes", "0"},
+	} {
+		if _, err := runCluster(t, srv.URL, token, args...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	fake.mu.Lock()
+	sent := strings.Join(fake.sent, "\n")
+	fake.mu.Unlock()
+	want := strings.Join([]string{
+		`POST /api/clusters {"class":"talos","name":"new","variables":{"hostOutageGraceMinutes":0,"other":1}}`,
+		`PATCH /api/clusters/clusters/web {"variables":{"hostOutageGraceMinutes":45}}`,
+		`PATCH /api/clusters/clusters/web {"variables":{"hostOutageGraceMinutes":0}}`,
+	}, "\n")
+	if sent != want {
+		t.Errorf("sent\n%s\nwant\n%s", sent, want)
+	}
+
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"update", "web", "--host-outage-grace-minutes", "3"}, "give 0, or 5 to 10080"},
+		{[]string{"update", "web", "--host-outage-grace-minutes", "10081"}, "give 0, or 5 to 10080"},
+		{[]string{"update", "web"}, "give --host-outage-grace-minutes"},
+		{[]string{"create", "-f", file, "--host-outage-grace-minutes", "4"}, "give 0, or 5 to 10080"},
+	} {
+		if _, err := runCluster(t, srv.URL, token, c.args...); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: error %v, want %q", c.args, err, c.want)
+		}
+	}
+}
+
 func TestClusterCommandsSayWhatWentWrong(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(&fakeClusterAPI{})
@@ -202,7 +248,7 @@ func TestClusterListChecksItsFormatBeforeAsking(t *testing.T) {
 func TestOnlyTheCommandsFindingAClusterTakeANamespace(t *testing.T) {
 	t.Parallel()
 	cmd := newClusterCommand(&pve.Config{})
-	for _, path := range [][]string{{"get"}, {"kubeconfig"}, {"scale"}, {"delete"}, {"machine", "reboot"}} {
+	for _, path := range [][]string{{"get"}, {"kubeconfig"}, {"update"}, {"scale"}, {"delete"}, {"machine", "reboot"}} {
 		if sub, _, err := cmd.Find(path); err != nil || sub.Flag("namespace") == nil {
 			t.Errorf("%q has no --namespace: %v", path, err)
 		}

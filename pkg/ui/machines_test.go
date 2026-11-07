@@ -130,6 +130,7 @@ func TestAMachineKubehengeHoldsSaysWhyAndUntilWhen(t *testing.T) {
 		clusterv1.MachineSkipRemediationAnnotation: "",
 		provisioner.HoldAnnotation:                 "Proxmox VE node pve2 is offline",
 		provisioner.HoldSinceAnnotation:            since.Format(time.RFC3339),
+		provisioner.HoldUntilAnnotation:            since.Add(45 * time.Minute).Format(time.RFC3339),
 	}
 	h := newHarness(t, cluster("default", "one"), m, clusterMachine("one", "one-cp-2"))
 	b := h.browser()
@@ -148,7 +149,7 @@ func TestAMachineKubehengeHoldsSaysWhyAndUntilWhen(t *testing.T) {
 	for _, mv := range v.Machines {
 		switch mv.Name {
 		case "one-cp-1":
-			if mv.Held != "Proxmox VE node pve2 is offline" || !mv.HeldUntil.Equal(since.Add(provisioner.HoldCeiling)) {
+			if mv.Held != "Proxmox VE node pve2 is offline" || !mv.HeldUntil.Equal(since.Add(45*time.Minute)) {
 				t.Errorf("held machine %+v", mv)
 			}
 		default:

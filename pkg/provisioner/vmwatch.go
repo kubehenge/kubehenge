@@ -109,6 +109,9 @@ type VMWatch struct {
 
 	// seen is when each VM was first found in the state it is in, while that is not running.
 	seen map[int64]vmSeen
+	// haErr is the last failure of reading the HA manager's status, so that a failure that goes on
+	// is logged once.
+	haErr string
 }
 
 type vmSeen struct {
@@ -182,7 +185,7 @@ func (w *VMWatch) read(ctx context.Context) (*vmLook, error) {
 	for _, n := range nodes {
 		look.nodes[n.Node] = n.Status
 	}
-	look.maintenance = haMaintenance(ctx, w.Proxmox)
+	look.maintenance = maintenanceOf(ctx, w.Proxmox, &w.haErr)
 	for _, g := range guests {
 		if g.Type == qemuType {
 			look.guests[g.VMID] = g
@@ -252,7 +255,11 @@ func (w *VMWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *vmLook)
 	}
 	vmsErr := w.mark(ctx, c, VMsCondition, vmsCondition(vms, look), "VMsRunning", "every VM of the cluster runs")
 	storage, _, err := optionalVariable[string](c, "storage")
-	held, holdErr := w.holdMachines(ctx, vms, storage, look)
+	ceiling, graceErr := hostOutageGrace(c)
+	if graceErr != nil {
+		return errors.Join(vmsErr, graceErr)
+	}
+	held, holdErr := w.holdMachines(ctx, vms, storage, look, ceiling)
 	errs := errors.Join(vmsErr, err, holdErr,
 		w.mark(ctx, c, RemediationHeldCondition, held, "RemediationReleased", "replacement of the cluster's machines is no longer held"))
 	if err != nil || storage == "" {
@@ -261,7 +268,7 @@ func (w *VMWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *vmLook)
 	return errors.Join(errs,
 		w.mark(ctx, c, StorageCondition, storageCondition(storage, vms, look), "StorageFreed",
 			fmt.Sprintf("storage %s is below %d%% full", storage, storageWarnPercent)),
-		w.mark(ctx, c, StorageUnavailableCondition, storageUnavailableCondition(storage, vms, look), "StorageAvailable",
+		w.mark(ctx, c, StorageUnavailableCondition, storageUnavailableCondition(storage, vms, look, ceiling), "StorageAvailable",
 			fmt.Sprintf("storage %s is available again", storage)))
 }
 
