@@ -12,7 +12,7 @@ import {
 } from "./node-settings";
 import { NodeSettingsFields } from "./NodeSettings";
 import type { Cluster, WorkerPool } from "./types";
-import { Dialog, ErrorBox, useChange } from "./ui";
+import { BreakableText, Dialog, ErrorBox, useChange } from "./ui";
 
 /** poolNodes are the labels and taints a pool's workers get: its own, or the cluster's for its workers. */
 export const poolNodes = (c: Cluster, p: WorkerPool): NodeSettings => nodesOf(p.nodes ?? c.variables["workerNodes"]);
@@ -25,11 +25,13 @@ export function NodeTags({ nodes }: { nodes: NodeSettings }): JSX.Element | null
   return (
     <ul className="node-tags">
       {nodes.labels.map((l) => (
-        <li key={`label ${l.key}`}>{labelText(l)}</li>
+        <li key={`label ${l.key}`}>
+          <BreakableText text={labelText(l)} />
+        </li>
       ))}
       {nodes.taints.map((t) => (
         <li key={`taint ${t.key}`} className="taint">
-          {taintText(t)}
+          <BreakableText text={taintText(t)} />
         </li>
       ))}
     </ul>

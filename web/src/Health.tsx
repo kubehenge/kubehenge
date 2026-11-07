@@ -25,6 +25,7 @@ import type {
   UnwellPod,
 } from "./types";
 import {
+  BreakableText,
   Detail,
   Dialog,
   ErrorBox,
@@ -548,10 +549,10 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
           {n.role === "control-plane" ? "Control plane" : `Worker${filled(n.pool) ? `, pool ${n.pool}` : ""}`}
         </div>
         {(n.taints ?? []).length > 0 && (
-          <ul className="node-tags broken" aria-label={`${n.name} taints`}>
+          <ul className="node-tags" aria-label={`${n.name} taints`}>
             {(n.taints ?? []).map((t) => (
               <li key={t} className="taint">
-                {t}
+                <BreakableText text={t} />
               </li>
             ))}
           </ul>

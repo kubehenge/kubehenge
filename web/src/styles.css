@@ -3150,7 +3150,11 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
   font-size: 12px;
   font-weight: 400;
   line-height: 18px;
-  white-space: nowrap;
+
+  /* Wraps only at the separators BreakableText marks. A tag longer than its whole cell still breaks
+     inside a word as a last resort. */
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 
 .pod-check ul {
@@ -3164,11 +3168,4 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
 
 .node-tags .taint {
   border-color: var(--warning);
-}
-
-/* A node's taints in the health table: a long tag breaks inside itself instead of widening its
-   column past the table. */
-.node-tags.broken li {
-  overflow-wrap: anywhere;
-  white-space: normal;
 }
