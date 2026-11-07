@@ -45,6 +45,7 @@ type nodeNetwork struct {
 	Gateway string   `json:"gateway"`
 	Prefix  int      `json:"prefix"`
 	Addrs   []string `json:"addresses"`
+	NTP     []string `json:"ntp"`
 }
 
 // nodesPrefix is the nodes' network, from the network variable's gateway and prefix length.

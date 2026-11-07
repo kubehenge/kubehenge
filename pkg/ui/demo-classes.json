@@ -69,6 +69,16 @@
                   "format": "ipv4",
                   "type": "string"
                 },
+                "ntp": {
+                  "description": "NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123. Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).",
+                  "items": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
+                },
                 "prefix": {
                   "maximum": 32,
                   "minimum": 1,
@@ -1492,6 +1502,16 @@
                   "format": "ipv4",
                   "type": "string"
                 },
+                "ntp": {
+                  "description": "NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123. Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).",
+                  "items": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
+                },
                 "prefix": {
                   "maximum": 32,
                   "minimum": 1,
@@ -2911,6 +2931,16 @@
                 "gateway": {
                   "format": "ipv4",
                   "type": "string"
+                },
+                "ntp": {
+                  "description": "NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123. Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).",
+                  "items": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
                 },
                 "prefix": {
                   "maximum": 32,
@@ -4334,6 +4364,16 @@
                 "gateway": {
                   "format": "ipv4",
                   "type": "string"
+                },
+                "ntp": {
+                  "description": "NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123. Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).",
+                  "items": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
                 },
                 "prefix": {
                   "maximum": 32,

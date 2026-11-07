@@ -144,6 +144,16 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
           items:
             type: string
             minLength: 1
+        ntp:
+          type: array
+          maxItems: 8
+          description: >-
+            NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123.
+            Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
 - name: storage
   required: true
   schema:
@@ -1127,6 +1137,56 @@ Proxmox VE HA take it from there. Applied before the distribution starts with sy
     kernel.panic_on_oops=1
     kernel.keys.root_maxkeys=1000000
     kernel.keys.root_maxbytes=25000000
+{{- end -}}
+
+{{/*
+The script every kubeadm, RKE2 and k3s node runs first: the bootstrap goes on only once chrony has set
+the clock (files/wait-clock.sh). The command list's first entry is kubehenge.clockCommand.
+*/}}
+{{- define "kubehenge.clockFile" -}}
+- path: /etc/kubehenge/wait-clock.sh
+  owner: root:root
+  permissions: "0700"
+  content: |
+    {{- .Files.Get "files/wait-clock.sh" | nindent 4 }}
+{{- end -}}
+
+{{/* `|| exit 1` ends the whole cloud-init command script, so that nothing after it runs. */}}
+{{- define "kubehenge.clockCommand" -}}
+/etc/kubehenge/wait-clock.sh || exit 1
+{{- end -}}
+
+{{/*
+The chrony drop-in of a kubeadm, RKE2 or k3s cluster, from the network variable's ntp (call with
+"kubeadm", "rke2" or "k3s"). It steps the clock at start-up whatever the image's chrony.conf says,
+and adds the cluster's servers to the image's own.
+*/}}
+{{- define "kubehenge.clockPatches" -}}
+{{- $targets := dict
+  "kubeadm" (list
+    (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "KubeadmControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/kubeadmConfigSpec/files/-")
+    (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KubeadmConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-"))
+  "rke2" (list
+    (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "RKE2ControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/files/-")
+    (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "RKE2ConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-"))
+  "k3s" (list
+    (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "KThreesControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/kthreesConfigSpec/files/-")
+    (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KThreesConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-")) }}
+{{- $drop := `{{ $c := "makestep 1.0 3\n" }}{{ with .network }}{{ range .ntp }}{{ $c = printf "%sserver %s iburst\n" $c . }}{{ end }}{{ end }}{{ dict "path" "/etc/chrony.d/50-kubehenge.conf" "owner" "root:root" "permissions" "0644" "content" $c | toJson }}` }}
+- name: {{ . }}-clock
+  definitions:
+    {{- range get $targets . }}
+    - selector:
+        apiVersion: {{ .api }}
+        kind: {{ .kind }}
+        matchResources:
+          {{- toYaml .match | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: {{ .path }}
+          valueFrom:
+            template: {{ $drop | quote }}
+    {{- end }}
 {{- end -}}
 
 {{/*

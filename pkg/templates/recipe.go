@@ -192,6 +192,9 @@ const (
 	timeDaemonUnit = timeDaemon + ".service"
 )
 
+// chronyDropIns finds chrony reading /etc/chrony.d, where the chart writes a cluster's time servers.
+const chronyDropIns = `grep -Eq '^(include|confdir)[[:space:]]+/etc/chrony\.d' /etc/chrony.conf`
+
 // iptablesCheck finds iptables for the CNI's portmap plugin, which runs it from the node's PATH, on
 // the nftables the kernel has.
 const iptablesCheck = "iptables --version | grep -q nf_tables"
@@ -217,6 +220,8 @@ func nodeChecks(b Bake) [][]string {
 		preset("enable " + timeDaemonUnit),
 		active(timeDaemon),
 		{"sh", "-c", "chronyc tracking > /dev/null"},
+		// A cluster's time servers reach the node as a drop-in there (kubehenge.clockPatches).
+		{"sh", "-c", chronyDropIns},
 		// The copy as of now, rather than up to a quarter of a minute old, for the bake to read
 		// through the guest agent (checkBootLog).
 		{systemctl, "start", "kubehenge-boot-log.service"},

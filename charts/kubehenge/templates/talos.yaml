@@ -133,6 +133,34 @@ spec:
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
     {{- include "kubehenge.workerNodesPatches" "talos" | nindent 4 }}
+    # Talos waits for its clock before it signs the cluster's certificates, for ever unless told
+    # otherwise: a node that reaches no time server never joins, and its machine health check
+    # replaces it on and on. Five minutes later the node boots and the Health page says that its
+    # clock is not synced. TimeSyncConfig takes NTP servers or PTP devices, not both, so the
+    # hypervisor's clock (/dev/ptp_kvm) is not a second source here.
+    - name: talos-time
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+            kind: TalosControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
+              valueFrom:
+                template: {{ include "kubehenge.talosTimeSync" . | quote }}
+        - selector:
+            apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+            kind: TalosConfigTemplate
+            matchResources:
+              machineDeploymentClass:
+                names: [worker]
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/strategicPatches/-
+              valueFrom:
+                template: {{ include "kubehenge.talosTimeSync" . | quote }}
     # The control planes hold the endpoint with Talos's own virtual IP, elected through etcd, on the
     # VM's one network link.
     - name: talos-control-plane
@@ -219,6 +247,15 @@ credentials, so its health checks stay open to them.
 {{ include "kubehenge.exempt" .Values.podSecurityExempt }}
 {{ "{{- $talos := true }}" }}
 {{ .Files.Get "files/admission.tpl" }}
+{{- end -}}
+
+{{/*
+Talos's TimeSyncConfig as a Cluster API template: the network variable's ntp servers, or Talos's own
+default (time.cloudflare.com over NTS) where none are set, and a boot that goes on after five
+minutes without sync.
+*/}}
+{{- define "kubehenge.talosTimeSync" -}}
+{{ `{{ $doc := dict "apiVersion" "v1alpha1" "kind" "TimeSyncConfig" "bootTimeout" "5m0s" }}{{ with .network }}{{ if .ntp }}{{ $_ := set $doc "ntp" (dict "servers" .ntp) }}{{ end }}{{ end }}{{ $doc | toJson | toJson }}` }}
 {{- end -}}
 
 {{- define "kubehenge.talosAuthentication" -}}
