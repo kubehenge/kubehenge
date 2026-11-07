@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -15,8 +16,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllertest"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -171,6 +174,140 @@ func TestUpgraderRefreshesNodeImagesInTheWindow(t *testing.T) {
 		want := map[string]string{"closed": "build-202610150000 at 2026-10-25T02:00:00Z"}[name]
 		if held, ok := c.Annotations[NodeImageHeldAnnotation]; held != want || ok != (want != "") {
 			t.Errorf("%s: held %q", name, held)
+		}
+	}
+}
+
+func TestUpgraderLooksAtOnceWhenAClusterOrItsClassChanges(t *testing.T) {
+	t.Parallel()
+	open := `{"mode":"off","window":{"start":"02:00","durationMinutes":240}}`
+	for name, change := range map[string]func(t *testing.T, kube client.Client, c *clusterv1.Cluster, class *clusterv1.ClusterClass) client.Object{
+		// Held while the window was closed, then the window opens.
+		"its upgrades": func(t *testing.T, kube client.Client, c *clusterv1.Cluster, _ *clusterv1.ClusterClass) client.Object {
+			t.Helper()
+			c.Spec.Topology.Variables = []clusterv1.ClusterVariable{{Name: "upgrades", Value: apiextensionsv1.JSON{Raw: []byte(open)}}}
+			if err := kube.Update(t.Context(), c); err != nil {
+				t.Fatal(err)
+			}
+			return c
+		},
+		// Inside its window with nothing newer, then the class is offered the 15th's build.
+		"its class's builds": func(t *testing.T, kube client.Client, _ *clusterv1.Cluster, class *clusterv1.ClusterClass) client.Object {
+			t.Helper()
+			builds, err := NodeImageBuilds{templates.LineKey(cloudLine(t)): {day(1), day(8), day(15)}}.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			class.Annotations[NodeImageBuildsAnnotation] = builds
+			if err := kube.Update(t.Context(), class); err != nil {
+				t.Fatal(err)
+			}
+			return class
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				scheme := runtime.NewScheme()
+				if err := clusterv1.AddToScheme(scheme); err != nil {
+					t.Fatal(err)
+				}
+				upgrades := `{"mode":"off","window":{"weekdays":["Sun"]}}`
+				if name != "its upgrades" {
+					upgrades = open
+				}
+				c, class := refreshCluster(t, "c", map[string]string{"upgrades": upgrades})
+				if name != "its upgrades" {
+					older, err := NodeImageBuilds{templates.LineKey(cloudLine(t)): {day(1), day(8)}}.Encode()
+					if err != nil {
+						t.Fatal(err)
+					}
+					class.Annotations[NodeImageBuildsAnnotation] = older
+				}
+				kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(class, c).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+				if err := kube.Status().Update(t.Context(), c.DeepCopy()); err != nil {
+					t.Fatal(err)
+				}
+				informers := &informertest.FakeInformers{Scheme: scheme}
+				fakes := map[string]*controllertest.FakeInformer{}
+				for kind, obj := range map[string]client.Object{"Cluster": &clusterv1.Cluster{}, "ClusterClass": &clusterv1.ClusterClass{}} {
+					i, err := informers.FakeInformerFor(t.Context(), obj)
+					if err != nil {
+						t.Fatal(err)
+					}
+					fakes[kind] = i
+				}
+				now := time.Date(2026, 10, 20, 3, 0, 0, 0, time.UTC)
+				u := &Upgrader{
+					Client: kube, ClassNamespace: "kubehenge-system", Releases: fixedReleases{}, Soak: DefaultNodeImageSoak,
+					Interval: time.Hour, Now: func() time.Time { return now }, Informers: informers,
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				done := make(chan error, 1)
+				go func() { done <- u.Start(ctx) }()
+				synctest.Wait()
+
+				readCluster := func() *clusterv1.Cluster {
+					t.Helper()
+					got := &clusterv1.Cluster{}
+					if err := kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
+						t.Fatal(err)
+					}
+					return got
+				}
+				readClass := func() *clusterv1.ClusterClass {
+					t.Helper()
+					got := &clusterv1.ClusterClass{}
+					if err := kube.Get(t.Context(), client.ObjectKeyFromObject(class), got); err != nil {
+						t.Fatal(err)
+					}
+					return got
+				}
+				if readCluster().Annotations[NodeImageAnnotation] == now.Format(time.RFC3339) {
+					t.Fatal("the cluster moved before the change")
+				}
+				var before client.Object = readCluster()
+				informer := fakes["Cluster"]
+				if name != "its upgrades" {
+					before, informer = readClass(), fakes["ClusterClass"]
+				}
+				after := change(t, kube, readCluster(), readClass())
+				informer.Update(before, after)
+				synctest.Wait()
+
+				got := readCluster().Annotations
+				if got[NodeImageAnnotation] != now.Format(time.RFC3339) || got[NodeImageRefreshedAnnotation] != "build-202610080000 to build-202610150000 at 2026-10-20T03:00:00Z" {
+					t.Errorf("an hour before the next round, the cluster's annotations are %v", got)
+				}
+				cancel()
+				if err := <-done; err != nil {
+					t.Error(err)
+				}
+			})
+		})
+	}
+}
+
+func TestUpgradeInputChanged(t *testing.T) {
+	t.Parallel()
+	c := settledCluster("c", "v1.36.5+rke2r1", map[string]string{"upgrades": `{"mode":"off"}`})
+	unsettled := c.DeepCopy()
+	unsettled.Generation++
+	otherWindow := c.DeepCopy()
+	otherWindow.Spec.Topology.Variables[0].Value.Raw = []byte(`{"mode":"off","window":{"start":"03:00"}}`)
+	annotated := c.DeepCopy()
+	annotated.Annotations = map[string]string{NodeImageHeldAnnotation: "build-202610150000 at 2026-10-25T02:00:00Z"}
+	for name, c := range map[string]struct {
+		before, after *clusterv1.Cluster
+		want          bool
+	}{
+		"it settles":                {unsettled, c, true},
+		"its upgrades change":       {c, otherWindow, true},
+		"it stops being settled":    {c, unsettled, false},
+		"the upgrader annotates it": {c, annotated, false},
+	} {
+		if got := upgradeInputChanged(c.before, c.after); got != c.want {
+			t.Errorf("%s: changed %v, want %v", name, got, c.want)
 		}
 	}
 }

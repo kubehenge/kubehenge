@@ -940,7 +940,12 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 		return err
 	}
 	for _, check := range checks {
-		err := b.exec(ctx, vm, check, bakeTimeout)
+		var err error
+		if log != "" {
+			err = b.execWatched(ctx, vm, check, log)
+		} else {
+			err = b.exec(ctx, vm, check, bakeTimeout)
+		}
 		if err == nil {
 			continue
 		}
@@ -960,6 +965,86 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 		return err
 	}
 	return nil
+}
+
+// A bake that shows no work for bakeStall has hung, as a package manager waiting on nothing does,
+// and would otherwise hold its build until bakeTimeout. Work is a new line in its log, a MiB
+// received, 16 MiB written, or a quarter of its CPUs busy at a reading. A mirror at dnf's least
+// rate (build.sh) still sends 60 MB in that time.
+const (
+	bakeStall         = 10 * time.Minute
+	bakeStallReceived = 1 << 20
+	bakeStallWritten  = 16 << 20
+	bakeStallCPU      = 0.25
+)
+
+// bakeWatch is how often a running bake's work is read.
+const bakeWatch = time.Minute
+
+// bakeActivity is what shows a bake at work: its log's size, and the bytes its VM received and
+// wrote and the share of its CPUs it used, as Proxmox VE counts them.
+type bakeActivity struct {
+	log      string
+	received uint64
+	written  uint64
+	cpu      float64
+}
+
+// busySince tells whether a shows work since earlier. A counter that went back, as after a
+// restart, counts as work.
+func (a bakeActivity) busySince(earlier bakeActivity) bool {
+	return a.log != earlier.log || a.received-earlier.received >= bakeStallReceived ||
+		a.written-earlier.written >= bakeStallWritten || a.cpu >= bakeStallCPU
+}
+
+func (b *Builder) activity(ctx context.Context, vm *proxmox.VirtualMachine, log string) (bakeActivity, error) {
+	size, err := b.output(ctx, vm, []string{"stat", "-c", "%s", log})
+	if err != nil {
+		return bakeActivity{}, err
+	}
+	var status struct {
+		NetIn     uint64  `json:"netin"`
+		DiskWrite uint64  `json:"diskwrite"`
+		CPU       float64 `json:"cpu"`
+	}
+	if err := b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/status/current", vm.Node, vm.VMID), &status); err != nil {
+		return bakeActivity{}, fmt.Errorf("reading the status of VM %d: %w", vm.VMID, err)
+	}
+	return bakeActivity{log: size, received: status.NetIn, written: status.DiskWrite, cpu: status.CPU}, nil
+}
+
+// execWatched runs a bake's check as exec does, and ends it once the bake has shown no work for
+// bakeStall.
+func (b *Builder) execWatched(ctx context.Context, vm *proxmox.VirtualMachine, command []string, log string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.exec(ctx, vm, command, bakeTimeout) }()
+	tick := time.NewTicker(bakeWatch)
+	defer tick.Stop()
+	var last bakeActivity
+	read := false
+	since := time.Now()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-tick.C:
+		}
+		now, err := b.activity(ctx, vm, log)
+		switch {
+		case err != nil:
+			// A reading that failed shows nothing either way, and bakeTimeout still holds.
+			continue
+		case !read || now.busySince(last):
+			last, read, since = now, true, time.Now()
+		case time.Since(since) >= bakeStall:
+			cancel()
+			<-done
+			return fmt.Errorf("running %q: no work for %s: no new line in %s, under 1 MiB received and 16 MiB written, CPUs idle",
+				strings.Join(command, " "), bakeStall, log)
+		}
+	}
 }
 
 // waitForExec waits until the guest agent runs commands. A family's own cloud image answers pings
