@@ -102,6 +102,7 @@ spec:
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
+    {{- include "kubehenge.etcdVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -193,6 +194,19 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.etcdUploadFile" (dict "path" "/etc/rancher/rke2/config.yaml.d/60-kubehenge-etcd-s3.yaml") | nindent 18 }}
+    - name: rke2-etcd
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: RKE2ControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.etcdFile" (dict "path" "/etc/rancher/rke2/config.yaml.d/50-kubehenge-etcd.yaml") | nindent 18 }}
     - name: rke2-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:

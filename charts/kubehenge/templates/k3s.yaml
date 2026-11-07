@@ -109,6 +109,7 @@ spec:
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
+    {{- include "kubehenge.etcdVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -302,6 +303,19 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.etcdUploadFile" (dict "path" "/etc/rancher/k3s/config.yaml.d/60-kubehenge-etcd-s3.yaml") | nindent 18 }}
+    - name: k3s-etcd
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.etcdFile" (dict "path" "/etc/rancher/k3s/config.yaml.d/50-kubehenge-etcd.yaml") | nindent 18 }}
     - name: k3s-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:

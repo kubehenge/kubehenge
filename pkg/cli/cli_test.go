@@ -387,7 +387,7 @@ func TestGroupsRefuseUnknownCommands(t *testing.T) {
 		want string
 	}{
 		{[]string{"cluster", "lsit"}, `unknown command "lsit" for "kubehenge cluster": did you mean list?`}, // spellchecker:disable-line
-		{[]string{"cluster", "everything"}, `unknown command "everything" for "kubehenge cluster": its commands are accept-upgrade, create, delete, get, kubeconfig, list, machine, scale and upgrade`},
+		{[]string{"cluster", "everything"}, `unknown command "everything" for "kubehenge cluster": its commands are accept-upgrade, create, delete, etcd, get, kubeconfig, list, machine, scale and upgrade`},
 		{[]string{"appliance", "etcd-backups", "snapshot"}, `unknown command "snapshot" for "kubehenge appliance etcd-backups": did you mean snapshots?`},
 		{[]string{"completion", "fissh"}, `unknown command "fissh" for "kubehenge completion": did you mean fish?`},
 		{[]string{"completion", "sh"}, `unknown command "sh" for "kubehenge completion": did you mean bash, fish or zsh?`},

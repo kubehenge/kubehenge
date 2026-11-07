@@ -1,4 +1,5 @@
 import { newForm, type Form, type Machine } from "./create-form";
+import { etcdQuotaOf } from "./EtcdSize";
 import { loadBalancerOf } from "./LoadBalancer";
 import { logsOf } from "./Logs";
 import { nodeOSKey } from "./node-os";
@@ -46,6 +47,7 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "logs",
   "podSecurity",
   "cis",
+  "etcdQuotaGiB",
   "istio",
   "rancherRegister",
   "oidc",
@@ -108,6 +110,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     logs: logsOf(v["logs"]),
     podSecurity: podSecurityOf(v["podSecurity"]),
     cis: flag(v["cis"]) === true,
+    etcdQuotaGiB: etcdQuotaOf(v["etcd"]),
     istio: flag(record(v["istio"])["enabled"]) === true,
     rancherRegister: flag(record(v["rancher"])["register"]) !== false,
     oidc: oidcProviders(v["oidc"]),

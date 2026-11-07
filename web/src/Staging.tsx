@@ -129,6 +129,7 @@ const settingLabels: Record<string, string[]> = {
   certificates: ["Certificates"],
   clusterMesh: ["Cluster Mesh"],
   csi: ["CSI plugin", "Volume snapshots"],
+  etcd: ["etcd"],
   etcdSnapshots: ["etcd snapshots"],
   gitops: ["GitOps"],
   headlamp: ["Headlamp"],

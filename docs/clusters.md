@@ -873,6 +873,26 @@ Proxmox VE's own volume copy is for `root@pam` alone. So a small proxy beside th
 
 Kubehenge may be unable to take volume snapshots for the cluster, such as on a storage that is not local to each node. The plugin then goes without them. `kubectl describe cluster` shows a `VolumeSnapshotsRefused` event saying why. A copy the proxy refuses or that fails shows as a `VolumeCopyFailed` event on the CSI plugin's controller pod in `kube-system`. It also shows as the CSI plugin's error on the VolumeSnapshotContent or PersistentVolumeClaim.
 
+## etcd size
+
+Every cluster gives etcd a database limit and periodic compaction. Before, kubeadm, RKE2, k3s and Talos set neither, so each ran etcd's own limit of 2 GiB. etcd then refuses every write while the API server still answers reads.
+
+The `etcd` variable sets the limit as `quotaGiB`, from 2 to 8 GiB, default 8. It can be raised and not lowered. A change replaces the control-plane nodes one at a time. The wizard sets it under **etcd** on the Machines step, and Options under Maintenance changes it. With the CLI, `kubehenge cluster etcd set NAME --quota-gib 6`.
+
+Every ten minutes the controller reads each member's database size and the part in use. The **etcd size** section of the Backups view shows them with the limit. The Health view warns above 60 percent of the limit and when a member has a `NOSPACE` alarm. An `EtcdDatabaseLarge` event says the same.
+
+### Defragmenting etcd
+
+etcd gives file space back only when a member is defragmented, and the member serves nothing while it runs.
+
+- The controller defragments one member at a time, followers first and the leader last.
+- It does so when a database holds over 100 MiB and over half of it is free.
+- It waits for the cluster's upgrade window ([upgrade](#upgrade)) and for every member to answer.
+- A full database is defragmented at once, whatever the hour. The controller then clears the `NOSPACE` alarm.
+- Each member gets an `EtcdDefragmented` event.
+
+`kubehenge cluster etcd defrag NAME`, or **Defragment now** on the cluster page, defragments every member at once. With kubectl, set the annotation `kubehenge.dev/etcd-defrag-requested` to `{"at":"<time>"}`. The last run is in `kubehenge.dev/etcd-defragmented`.
+
 ## etcd snapshots
 
 A cluster with etcd snapshots on has Kubehenge's controller copy its etcd database to one of the backup targets an administrator set. The database holds every object the cluster's API holds. The copy happens on the cluster's schedule and whenever asked.

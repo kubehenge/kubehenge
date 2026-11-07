@@ -382,6 +382,7 @@ func assemble(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now tim
 		a = append(a, backupsAttention(wl.veleroSchedule, wl.veleroBackups, now)...)
 	}
 	watchAttention(c, &a)
+	etcdAttention(c, &a)
 	pausedAttention(c, now, &a)
 	v.Attention = a.sorted()
 	v.Verdict = verdict(c, wl.unreachable(), v.Attention)

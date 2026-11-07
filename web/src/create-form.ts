@@ -25,6 +25,7 @@ import {
   type UpgradeMode,
   type UpgradePolicy,
 } from "./ClusterUpgrades";
+import { defaultEtcdQuotaGiB, etcdText, maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
 import {
   gitOpsFields,
   gitOpsProblems,
@@ -150,6 +151,8 @@ export interface Form {
   logs: Logs;
   podSecurity: PodSecurity;
   cis: boolean;
+  /** The most an etcd database may grow to, in GiB. NaN while the field is empty. */
+  etcdQuotaGiB: number;
   istio: boolean;
   clusterMesh: boolean;
   meshPeers: string[];
@@ -617,6 +620,7 @@ export const newForm = (): Form => ({
   logs: newLogs(),
   podSecurity: podSecurityOf(undefined),
   cis: false,
+  etcdQuotaGiB: defaultEtcdQuotaGiB,
   istio: false,
   clusterMesh: false,
   meshPeers: [],
@@ -697,6 +701,39 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
   };
 }
 
+// hardeningVariables are the variables of the cluster's pod security, CIS profile and etcd limit.
+function hardeningVariables(form: Form, defined: Set<string>): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
+  const cis = form.cis && defined.has("cis");
+  const podSecurity = podSecurityVariable(enforced(form.podSecurity, cis));
+  if (podSecurity) {
+    variables["podSecurity"] = podSecurity;
+  }
+  if (cis) {
+    variables["cis"] = true;
+  }
+  if (defined.has("etcd") && form.etcdQuotaGiB !== defaultEtcdQuotaGiB) {
+    variables["etcd"] = { quotaGiB: form.etcdQuotaGiB };
+  }
+  return variables;
+}
+
+// hardeningRows sum up the cluster's CIS profile, pod security and etcd limit, as the class offers them.
+function hardeningRows(form: Form, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [];
+  const cis = form.cis && defined.has("cis");
+  if (defined.has("cis")) {
+    rows.push(["CIS hardening", cisText(cis)]);
+  }
+  if (defined.has("podSecurity")) {
+    rows.push(["Pod security", podSecurityText(enforced(form.podSecurity, cis))]);
+  }
+  if (defined.has("etcd")) {
+    rows.push(["etcd", etcdText(form.etcdQuotaGiB)]);
+  }
+  return rows;
+}
+
 // addOnVariables are the variables of the add-ons and the hardening a form chooses.
 function addOnVariables(form: Form, defined: Set<string>): Record<string, unknown> {
   const variables: Record<string, unknown> = {};
@@ -718,14 +755,7 @@ function addOnVariables(form: Form, defined: Set<string>): Record<string, unknow
   if (logsChosen(form)) {
     variables["logs"] = logsVariable(form.logs);
   }
-  const cis = form.cis && defined.has("cis");
-  const podSecurity = podSecurityVariable(enforced(form.podSecurity, cis));
-  if (podSecurity) {
-    variables["podSecurity"] = podSecurity;
-  }
-  if (cis) {
-    variables["cis"] = true;
-  }
+  Object.assign(variables, hardeningVariables(form, defined));
   if (form.istio && defined.has("istio")) {
     variables["istio"] = { enabled: true };
   }
@@ -987,13 +1017,7 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   if (defined.has("logs")) {
     rows.push(["Logs", logsText({ ...form.logs, enabled: logsChosen(form) })]);
   }
-  const cis = form.cis && defined.has("cis");
-  if (defined.has("cis")) {
-    rows.push(["CIS hardening", cisText(cis)]);
-  }
-  if (defined.has("podSecurity")) {
-    rows.push(["Pod security", podSecurityText(enforced(form.podSecurity, cis))]);
-  }
+  rows.push(...hardeningRows(form, defined));
   if (defined.has("istio")) {
     rows.push(["Istio", istioText(form.istio)]);
   }
@@ -1036,6 +1060,7 @@ export type FieldKey =
   | "controlPlaneReplicas"
   | "workerReplicas"
   | "workerMax"
+  | "etcdQuotaGiB"
   | "addons"
   | "bridge"
   | "vlan"
@@ -1219,6 +1244,9 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   const placement = variable(c, "allowedNodes") ? placeProblem(form.place) : undefined;
   if (placement !== undefined) {
     p.placement = placement;
+  }
+  if (variable(c, "etcd") !== undefined && !whole(form.etcdQuotaGiB, minEtcdQuotaGiB, maxEtcdQuotaGiB)) {
+    p.etcdQuotaGiB = `A whole number from ${minEtcdQuotaGiB} to ${maxEtcdQuotaGiB}`;
   }
   for (const [key, m] of [
     ["controlPlaneMachine", form.controlPlaneMachine],

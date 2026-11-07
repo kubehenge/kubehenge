@@ -331,6 +331,8 @@ export interface Api {
   restoreLog: (ns: string, name: string, restore: string) => Promise<VeleroLog>;
   etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
+  /** defragmentEtcd asks the controller to defragment every etcd member at once. */
+  defragmentEtcd: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
   /**
    * restoreEtcd asks the controller to take the cluster's etcd back to a snapshot. confirm is the
@@ -469,6 +471,7 @@ export const api: Api = {
     request("GET", `${clusterPath(ns, name)}/restores/${encodeURIComponent(restore)}/log`),
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
+  defragmentEtcd: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-defrag`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
   restoreEtcd: (ns, name, req) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, req),
   controlPlaneRecovery: (ns, name, machine) =>

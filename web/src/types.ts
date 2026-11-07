@@ -496,6 +496,8 @@ export interface Cluster {
   gitops?: GitOpsKeys;
   /** How a Talos cluster's nodes stand with its Talos release. */
   talos?: TalosStatus;
+  /** The sizes of the etcd databases, once the controller has read them. */
+  etcd?: EtcdSizes;
   /** The last recovery of the control plane from a stalled roll: etcd reset to one machine's own. */
   recovery?: EtcdRestoreStatus;
   /** What the cluster's deletion waits on, while it is being deleted, since deletedAt. */
@@ -525,6 +527,34 @@ export interface TalosStatus {
   upgraded?: string;
   /** The node that failed, as "<node> to <release> at <time>: <why>", which holds the rest. */
   failed?: string;
+  /** Why the next control-plane node waits: its reboot would cost etcd its quorum. */
+  waiting?: string;
+}
+
+/** One etcd member as the controller last read it. */
+export interface EtcdMember {
+  name: string;
+  leader?: boolean;
+  learner?: boolean;
+  /** The database file's size, and the part of it that holds data, in bytes. */
+  dbSize: number;
+  dbSizeInUse: number;
+  /** The database as a whole percent of the limit, rounded as the warning rounds it. */
+  quotaPercent?: number;
+  alarms?: string[];
+  errors?: string[];
+}
+
+/** What the controller last read of a cluster's etcd members, and its last defragmentation. */
+export interface EtcdSizes {
+  read: string;
+  quotaBytes: number;
+  members: EtcdMember[];
+  error?: string;
+  warning?: string;
+  defrag?: { at: string; members: string[]; error?: string };
+  /** A defragmentation asked for that the controller has not yet run. */
+  requested?: boolean;
 }
 
 /** The Talos releases a cluster can start on, be upgraded to, and have a template made of. */

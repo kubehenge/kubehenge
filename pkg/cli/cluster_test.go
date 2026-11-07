@@ -66,6 +66,9 @@ func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "apiVersion: v1\nkind: Config\n")
 	case "PATCH /api/clusters/clusters/web", "DELETE /api/clusters/clusters/web":
 		_, _ = io.WriteString(w, `{}`)
+	case "POST /api/clusters/clusters/web/etcd-defrag":
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{}`)
 	case "POST /api/clusters":
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, `{"namespace":"clusters","name":"new"}`)
@@ -158,6 +161,40 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	}
 	if strings.Join(sent, "\n") != strings.Join(want, "\n") {
 		t.Errorf("sent\n%s\nwant\n%s", strings.Join(sent, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestClusterEtcdCommands(t *testing.T) {
+	t.Parallel()
+	fake := &fakeClusterAPI{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	const token = "dev@pve!ci=secret" //nolint:gosec // the fake interface's own
+
+	if out, err := runCluster(t, srv.URL, token, "etcd", "defrag", "web"); err != nil || out != "cluster web: etcd defragmentation asked for\n" {
+		t.Errorf("defrag = %q, %v", out, err)
+	}
+	if out, err := runCluster(t, srv.URL, token, "etcd", "set", "web", "--quota-gib", "4"); err != nil || out != "cluster web changed\n" {
+		t.Errorf("set = %q, %v", out, err)
+	}
+	fake.mu.Lock()
+	sent := strings.Join(fake.sent, "\n")
+	fake.mu.Unlock()
+	if want := `PATCH /api/clusters/clusters/web {"variables":{"etcd":{"quotaGiB":4}}}`; sent != want {
+		t.Errorf("sent %q, want %q", sent, want)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"etcd", "set", "web", "--quota-gib", "1"}, "--quota-gib is 2 to 8, not 1"},
+		{[]string{"etcd", "set", "web", "--quota-gib", "9"}, "--quota-gib is 2 to 8, not 9"},
+		{[]string{"etcd", "set", "web"}, "quota-gib"},
+		{[]string{"etcd", "defrag"}, "give the cluster's name"},
+	} {
+		if _, err := runCluster(t, srv.URL, token, c.args...); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: error %v, want %q", c.args, err, c.want)
+		}
 	}
 }
 

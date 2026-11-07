@@ -335,6 +335,9 @@ func TestTalosControlPlaneConfiguration(t *testing.T) {
 					t.Errorf("%s paths open on loopback = %v", component, got)
 				}
 			}
+			if got := field(t, docs["v1alpha1"], "cluster", "etcd", "extraArgs", "quota-backend-bytes"); got != "8589934592" {
+				t.Errorf("etcd quota %v", got)
+			}
 			if got := field(t, docs["v1alpha1"], "cluster", "etcd", "extraArgs", "listen-metrics-urls"); got != "http://127.0.0.1:2381" {
 				t.Errorf("etcd metrics on %v", got)
 			}
