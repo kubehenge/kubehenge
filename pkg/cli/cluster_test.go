@@ -119,6 +119,7 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		{"cordon", "web", "web-md-0-b"},
 		{"uncordon", "web", "web-md-0-b"},
 		{"reboot", "web", "web-md-0-b"},
+		{"forget", "web", "web-md-0-c", "--yes"},
 	} {
 		if out, err = runCluster(t, srv.URL, token, append([]string{"machine"}, args...)...); err != nil || !strings.HasPrefix(out, "machine "+args[2]+" ") {
 			t.Errorf("machine %v = %q, %v", args, out, err)
@@ -144,6 +145,8 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		"PUT /api/clusters/clusters/web/machines/web-md-0-b/cordon",
 		"DELETE /api/clusters/clusters/web/machines/web-md-0-b/cordon",
 		"POST /api/clusters/clusters/web/machines/web-md-0-b/reboot",
+		`PUT /api/clusters/clusters/web/machines/web-md-0-c/forgotten {"confirm":"web-md-0-c"}`,
+		"PUT /api/clusters/clusters/web/machines/web-md-0-c/forgotten",
 		`POST /api/clusters {"class":"talos","controlPlaneReplicas":1,"name":"new"}`,
 	}
 	if strings.Join(sent, "\n") != strings.Join(want, "\n") {

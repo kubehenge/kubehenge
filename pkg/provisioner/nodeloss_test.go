@@ -7,6 +7,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -81,6 +82,169 @@ func TestAMachineOnAGoneNodeFinishesDeleting(t *testing.T) {
 				t.Errorf("event %q names neither the node nor the VM", event)
 			}
 		})
+	}
+}
+
+func proxmoxClusterObject() *unstructured.Unstructured {
+	pc := &unstructured.Unstructured{}
+	pc.SetGroupVersionKind(proxmoxMachineGVK.GroupVersion().WithKind("ProxmoxCluster"))
+	return pc
+}
+
+// addLocations gives web a ProxmoxCluster that records where web-cp-1 (the deleting machine) and web-cp-0 run.
+func (f *vmFixture) addLocations() {
+	f.t.Helper()
+	pc := proxmoxClusterObject()
+	pc.SetNamespace("team-a")
+	pc.SetName("web")
+	pc.SetLabels(map[string]string{clusterv1.ClusterNameLabel: "web"})
+	loc := func(name, node string) any {
+		return map[string]any{"machine": map[string]any{"name": name}, "node": node}
+	}
+	pc.Object["status"] = map[string]any{"nodeLocations": map[string]any{
+		"controlPlane": []any{loc("web-cp-0", "pve1"), loc(heldSecond, "pve2")},
+		"workers":      []any{loc("web-md-0", "pve1")},
+	}}
+	if err := f.kube.Create(f.t.Context(), pc); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.kube.Status().Update(f.t.Context(), pc); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// located lists the machines the ProxmoxCluster records.
+func (f *vmFixture) located() []string {
+	f.t.Helper()
+	pc := proxmoxClusterObject()
+	if err := f.kube.Get(f.t.Context(), client.ObjectKey{Namespace: "team-a", Name: "web"}, pc); err != nil {
+		f.t.Fatal(err)
+	}
+	var names []string
+	for _, role := range []string{"controlPlane", "workers"} {
+		locations, _, _ := unstructured.NestedSlice(pc.Object, "status", "nodeLocations", role)
+		for _, l := range locations {
+			entry, _ := l.(map[string]any)
+			name, _, _ := unstructured.NestedString(entry, "machine", "name")
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// stallAge moves the clock to age after the machine began deleting.
+func (f *vmFixture) stallAge(age time.Duration) {
+	f.t.Helper()
+	f.now = f.machine(heldSecond).DeletionTimestamp.Add(age)
+}
+
+func (f *vmFixture) ask(value string) {
+	f.t.Helper()
+	m := f.machine(heldSecond)
+	m.Annotations = map[string]string{ForgetAnnotation: value}
+	if err := f.kube.Update(f.t.Context(), m); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *vmFixture) forgetRefusal() string {
+	return f.machine(heldSecond).Annotations[ForgetRefusedAnnotation]
+}
+
+func TestAMachineStuckDeletingSaysWhy(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		setup func(*vmFixture)
+		want  string
+	}{
+		"node offline":    {func(f *vmFixture) { f.nodes([]string{"pve2"}); f.members("pve1", "pve2", "pve3", "pve4") }, "pve2 is offline"},
+		"node maintained": {func(f *vmFixture) { f.nodes(nil, "pve2") }, "in maintenance"},
+		"VM not listed":   {func(f *vmFixture) { f.vms(map[int64]string{101: "running", 103: "running", 104: "running"}) }, "VM 102 is not listed"},
+		"node answers":    {func(f *vmFixture) { f.nodes(nil) }, "though node pve2 answers"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newVMFixture(t)
+			f.deleting()
+			tc.setup(f)
+			f.stallAge(DeletionStallAfter - time.Minute)
+			f.look(0, RemediationHeldCondition)
+			if cond := meta.FindStatusCondition(f.machine(heldSecond).Status.Conditions, MachineDeletionStalledCondition); cond != nil {
+				t.Fatalf("stalled after only %s: %+v", DeletionStallAfter-time.Minute, cond)
+			}
+			f.stallAge(DeletionStallAfter)
+			f.look(0, RemediationHeldCondition)
+			cond := meta.FindStatusCondition(f.machine(heldSecond).Status.Conditions, MachineDeletionStalledCondition)
+			if cond == nil || cond.Status != metav1.ConditionTrue || !strings.Contains(cond.Message, tc.want) {
+				t.Fatalf("condition %+v, want a message with %q", cond, tc.want)
+			}
+		})
+	}
+}
+
+func TestForgettingAMachineOfAnOfflineNodeReleasesItAndItsLocation(t *testing.T) {
+	t.Parallel()
+	f := newVMFixture(t)
+	f.nodes([]string{"pve2"})
+	f.members("pve1", "pve2", "pve3", "pve4")
+	f.addLocations()
+	f.deleting()
+	f.ask(heldSecond)
+	f.stallAge(DeletionStallAfter)
+	f.look(0, RemediationHeldCondition)
+	if f.waitingOnCapmox() {
+		t.Fatal("the forgotten machine still waits for capmox")
+	}
+	if got := f.located(); slices.Contains(got, heldSecond) || len(got) != 2 {
+		t.Fatalf("node locations %v still hold the forgotten machine, or lost another", got)
+	}
+}
+
+func TestForgettingIsRefusedWhereReleasingCouldHarm(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		setup func(*vmFixture)
+		age   time.Duration
+		value string
+		want  string
+	}{
+		"too soon":       {func(f *vmFixture) { f.nodes([]string{"pve2"}) }, time.Minute, heldSecond, "only"},
+		"wrong name":     {func(f *vmFixture) { f.nodes([]string{"pve2"}) }, DeletionStallAfter, "web-cp-0", "not the machine"},
+		"VM still runs":  {func(f *vmFixture) { f.nodes(nil) }, DeletionStallAfter, heldSecond, "Stop it first"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newVMFixture(t)
+			f.deleting()
+			tc.setup(f)
+			f.ask(tc.value)
+			f.stallAge(tc.age)
+			f.look(0, RemediationHeldCondition)
+			if !f.waitingOnCapmox() {
+				t.Fatal("a refused request released the machine")
+			}
+			if got := f.forgetRefusal(); !strings.Contains(got, tc.want) {
+				t.Fatalf("refusal %q, want it to say %q", got, tc.want)
+			}
+			if _, still := f.machine(heldSecond).Annotations[ForgetAnnotation]; still {
+				t.Error("a refused request stays on the machine, so it would be answered again")
+			}
+		})
+	}
+}
+
+func TestForgettingAMachineWhoseVMIsStoppedOnAnOnlineNodeIsAllowed(t *testing.T) {
+	t.Parallel()
+	f := newVMFixture(t)
+	f.vms(map[int64]string{101: "running", 102: "stopped", 103: "running", 104: "running"})
+	f.deleting()
+	f.ask(heldSecond)
+	f.stallAge(DeletionStallAfter)
+	f.look(0, RemediationHeldCondition)
+	if f.waitingOnCapmox() {
+		t.Fatal("a stopped VM on an online node blocked the request")
 	}
 }
 

@@ -706,6 +706,31 @@ describe("clusters", () => {
     await waitFor(() => expect(reads(calls, "POST /api/clusters/default/web/machines/cp-a/reboot")).toBe(1));
   });
 
+  it("offers to forget a machine that cannot finish deleting, only to those who may", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const stuck = {
+      ...runningOn("cp-a", "pve2"),
+      node: "cp-a",
+      phase: "Deleting",
+      stalled: "Proxmox VE node pve2 is offline, so capmox waits for it to return",
+    };
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: { ...web, allowed: { change: true, kubeconfig: true }, machines: [stuck, runningOn("md-a", "pve1", "worker")] },
+      },
+      "PUT /api/clusters/default/web/machines/cp-a/forgotten": { status: 202 },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    expect(await screen.findByText(stuck.stalled)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Forget md-a" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Forget cp-a" }));
+    const dialog = screen.getByRole("dialog", { name: "Forget cp-a" });
+    await user.click(within(dialog).getByRole("button", { name: "Forget" }));
+    await waitFor(() => expect(reads(calls, "PUT /api/clusters/default/web/machines/cp-a/forgotten")).toBe(1));
+  });
+
   it("reads the setup status no more once signed out, even when the last read fails after", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const setup = held();

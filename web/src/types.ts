@@ -174,6 +174,10 @@ export interface Machine {
   held?: string;
   /** When the hold ends whatever the node does. */
   heldUntil?: string;
+  /** Why a machine that has been deleting for long cannot finish. */
+  stalled?: string;
+  /** Why the last request to forget the machine was refused. */
+  forgetRefused?: string;
   addresses?: string[];
   created: string;
   /** The Talos release its node runs, on a Talos cluster. */

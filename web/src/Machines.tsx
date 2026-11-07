@@ -110,6 +110,7 @@ export function Machines({
   const [replacing, setReplacing] = useState<Machine>();
   const [deleting, setDeleting] = useState<Machine>();
   const [rebooting, setRebooting] = useState<Machine>();
+  const [forgetting, setForgetting] = useState<Machine>();
   const [rowError, setRowError] = useState<string>();
   const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));
   const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
@@ -197,6 +198,8 @@ export function Machines({
                     onReplace={() => setReplacing(m)}
                     onDelete={() => setDeleting(m)}
                     onReboot={() => setRebooting(m)}
+                    // Forgetting a machine leaves its VM unmanaged, so it goes to those the admin kubeconfig goes to.
+                    onForget={c.allowed.kubeconfig && filled(m.stalled) ? () => setForgetting(m) : undefined}
                     // Boot logs carry secrets often enough, so they go to those the admin kubeconfig goes to.
                     onBootLog={c.allowed.kubeconfig ? () => setBootLog(m) : undefined}
                   />
@@ -253,6 +256,21 @@ export function Machines({
           Shuts the VM down and starts it again. Its pods stop until the node is back.
         </MachineDialog>
       )}
+      {forgetting !== undefined && (
+        <MachineDialog
+          cluster={c}
+          machine={forgetting}
+          verb="Forget"
+          act={api.forgetMachine}
+          onClose={() => setForgetting(undefined)}
+          onDone={() => {
+            setForgetting(undefined);
+            onChanged();
+          }}
+        >
+          Lets go of the machine without destroying its VM. Remove the VM in Proxmox VE yourself if it is still there.
+        </MachineDialog>
+      )}
     </div>
   );
 }
@@ -275,6 +293,8 @@ function MachineStatusCell({
       {node?.down === true && filled(node.message) && <Detail>{node.message}</Detail>}
       {m.replacing === true && filled(m.waiting) && <Detail>{m.waiting}</Detail>}
       {filled(m.held) && <Detail>{heldText(m)}</Detail>}
+      {filled(m.stalled) && <Detail>{m.stalled}</Detail>}
+      {filled(m.forgetRefused) && <Detail>{`Not forgotten: ${m.forgetRefused}`}</Detail>}
     </td>
   );
 }
@@ -289,6 +309,7 @@ function MachineActions({
   onReplace,
   onDelete,
   onReboot,
+  onForget,
   onBootLog,
 }: {
   machine: Machine;
@@ -300,6 +321,7 @@ function MachineActions({
   onReplace: () => void;
   onDelete: () => void;
   onReboot: () => void;
+  onForget: (() => void) | undefined;
   onBootLog: (() => void) | undefined;
 }): JSX.Element {
   const name = m.node ?? m.name;
@@ -325,6 +347,11 @@ function MachineActions({
       {onBootLog !== undefined && (
         <button type="button" aria-label={`Boot log of ${name}`} onClick={onBootLog}>
           Boot log
+        </button>
+      )}
+      {onForget !== undefined && (
+        <button type="button" className="danger" aria-label={`Forget ${name}`} onClick={onForget}>
+          Forget…
         </button>
       )}
       {m.reboot === true && (

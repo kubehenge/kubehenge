@@ -31,9 +31,20 @@ rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [machines]
     verbs: [get, list, watch, patch, delete]
+  # MachineDeletionStalled says why a machine cannot finish deleting.
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machines/status]
+    verbs: [patch]
   - apiGroups: [infrastructure.cluster.x-k8s.io]
     resources: [proxmoxmachines]
     verbs: [get, list, watch, patch]
+  # A machine let go of leaves the ProxmoxCluster's record of where machines run.
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [proxmoxclusters]
+    verbs: [list]
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [proxmoxclusters/status]
+    verbs: [patch]
   # What a node of each autoscaled pool holds goes onto its MachineDeployment, for the autoscaler.
   - apiGroups: [cluster.x-k8s.io]
     resources: [machinedeployments]

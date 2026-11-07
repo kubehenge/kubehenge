@@ -249,7 +249,7 @@ func vmStateOf(g pveGuest) string {
 
 func (w *VMWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *vmLook) error {
 	// A cluster being deleted is released too, or its deletion would wait on a node that is gone.
-	lostErr := w.releaseLostMachines(ctx, c, look)
+	lostErr := w.settleDeletingMachines(ctx, c, look)
 	if !c.DeletionTimestamp.IsZero() || RestoreInProgress(c) {
 		return lostErr
 	}
