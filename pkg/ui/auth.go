@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,23 @@ type secondFactorView struct {
 	Recovery []int `json:"recovery,omitempty"`
 }
 
+// withRealm adds the chosen realm to a user name. A name with an @ of its own, such as an Active
+// Directory principal name, gets it too, unless what follows its last @ is a realm already.
+func (s *Server) withRealm(ctx context.Context, username, realm string) string {
+	at := strings.LastIndex(username, "@")
+	switch {
+	case realm == "" || username == "":
+		return username
+	case at < 0:
+		return username + "@" + realm
+	}
+	realms, err := s.Accounts.Realms(ctx)
+	if err != nil || slices.ContainsFunc(realms, func(r pve.Realm) bool { return r.Realm == username[at+1:] }) {
+		return username
+	}
+	return username + "@" + realm
+}
+
 func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`
@@ -79,11 +97,8 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	username := req.Username
-	if req.Realm != "" && !strings.Contains(username, "@") {
-		username += "@" + req.Realm
-	}
-	if username == "" || req.Password == "" {
+	username := s.withRealm(r.Context(), req.Username, req.Realm)
+	if req.Username == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "enter a user name and password")
 		return
 	}

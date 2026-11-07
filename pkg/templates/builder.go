@@ -742,13 +742,13 @@ func (b *Builder) createFresh(
 // the family's image boots from a second disk beside it to build the node image onto it.
 func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t *Template, volume, cpuType string, recipe *Recipe) error {
 	cores, memory := templateCores, templateMemoryMB
-	imported := fmt.Sprintf("%s:0,import-from=%s,discard=on,ssd=1", b.Storage, volume)
+	imported := fmt.Sprintf("%s:0,import-from=%s,%s", b.Storage, volume, nodeDiskOptions)
 	disks := []proxmox.VirtualMachineOption{{Name: templateDisk, Value: imported}, bootFrom(templateDisk)}
 	if recipe != nil {
 		cores, memory = bakeCores, cmp.Or(recipe.MemoryMiB, bakeMemoryMB)
 		if recipe.Image != nil {
 			disks = []proxmox.VirtualMachineOption{
-				{Name: templateDisk, Value: fmt.Sprintf("%s:%d,discard=on,ssd=1", b.Storage, recipe.DiskGiB)},
+				{Name: templateDisk, Value: fmt.Sprintf("%s:%d,%s", b.Storage, recipe.DiskGiB, nodeDiskOptions)},
 				{Name: builderDisk, Value: imported},
 				bootFrom(builderDisk),
 			}
@@ -765,7 +765,8 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 		{Name: "scsihw", Value: "virtio-scsi-pci"},
 		{Name: "serial0", Value: "socket"},
 		{Name: "vga", Value: "serial0"},
-		{Name: "agent", Value: "enabled=1"},
+		// Backups skip the disks, so a freeze would only stall etcd, on every node at the same time.
+		{Name: "agent", Value: "enabled=1,freeze-fs=0"},
 		// Every clone takes this over, so a node comes back with its Proxmox VE host. Cluster API
 		// starts a VM only once, and the health check would replace one left stopped.
 		{Name: "onboot", Value: 1},
@@ -800,6 +801,11 @@ const (
 	templateDisk = "scsi0"
 	builderDisk  = "scsi1"
 )
+
+// nodeDiskOptions leave a node's disk out of Proxmox VE backups, which clones take over. A node
+// holds nothing to keep: etcd snapshots and Velero back up the clusters, and a node restored from a
+// backup would bring back a stale etcd member.
+const nodeDiskOptions = "backup=0,discard=on,ssd=1"
 
 // bootFrom has the VM boot from the disk alone. capmox appends its cloud-init ISO to it.
 func bootFrom(disk string) proxmox.VirtualMachineOption {
