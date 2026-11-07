@@ -146,6 +146,8 @@ type vmLook struct {
 	// nodes is each Proxmox VE node's status, and maintenance the nodes the HA manager has emptied.
 	nodes       map[string]string
 	maintenance map[string]bool
+	// gone is the nodes that have left the cluster for good, which no wait can bring back.
+	gone map[string]bool
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -185,12 +187,12 @@ func (w *VMWatch) read(ctx context.Context) (*vmLook, error) {
 	for _, n := range nodes {
 		look.nodes[n.Node] = n.Status
 	}
-	look.maintenance = maintenanceOf(ctx, w.Proxmox, &w.haErr)
 	for _, g := range guests {
 		if g.Type == qemuType {
 			look.guests[g.VMID] = g
 		}
 	}
+	look.maintenance, look.gone = hostFactsOf(ctx, w.Proxmox, look.guests, &w.haErr)
 	w.settle(look)
 	return look, nil
 }

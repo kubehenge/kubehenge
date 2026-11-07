@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -88,31 +89,82 @@ type pveHAManager struct {
 	NodeStatus map[string]string `json:"node_status"`
 }
 
-// haMaintenanceState is the one node state that means the node is being emptied on purpose.
-// `unknown` (out of the quorate partition), `fence` and `gone` are failures, and the node then
+// The node states of `PVE::HA::NodeStatus` that decide a hold. `maintenance` means the node is
+// being emptied on purpose. `gone` means, in `$valid_node_states`, "node vanished from cluster
+// members list, possibly deleted": `update()` sets it only for a node that was `unknown` and is no
+// longer in the member list, so the host was removed from the cluster. `unknown` (out of the
+// quorate partition) and `fence` are failures a rebooting host recovers from, and the node then
 // shows offline in the resource list, which holds machines on its own.
-const haMaintenanceState = "maintenance"
+const (
+	haMaintenanceState = "maintenance"
+	haGoneState        = "gone"
+)
+
+// haNodeSets lists the nodes the HA manager has in maintenance mode and those it has as gone.
+func haNodeSets(ctx context.Context, r proxmoxReader) (map[string]bool, map[string]bool, error) {
+	var status pveHAStatus
+	if err := r.Get(ctx, haStatusPath, &status); err != nil {
+		return nil, nil, fmt.Errorf("reading the HA manager's status: %w", err)
+	}
+	maintenance, gone := map[string]bool{}, map[string]bool{}
+	for node, state := range status.ManagerStatus.NodeStatus {
+		switch state {
+		case haMaintenanceState:
+			maintenance[node] = true
+		case haGoneState:
+			gone[node] = true
+		}
+	}
+	return maintenance, gone, nil
+}
 
 // haMaintenance lists the nodes the HA manager has in maintenance mode.
 func haMaintenance(ctx context.Context, r proxmoxReader) (map[string]bool, error) {
-	var status pveHAStatus
-	if err := r.Get(ctx, haStatusPath, &status); err != nil {
-		return nil, fmt.Errorf("reading the HA manager's status: %w", err)
-	}
-	maintenance := map[string]bool{}
-	for node, state := range status.ManagerStatus.NodeStatus {
-		if state == haMaintenanceState {
-			maintenance[node] = true
-		}
-	}
-	return maintenance, nil
+	maintenance, _, err := haNodeSets(ctx, r)
+	return maintenance, err
 }
 
-// maintenanceOf reads the nodes in maintenance. A token without Sys.Audit on / is refused, which
-// ProxmoxReach reports once on the management cluster's health, so the refusal is silent here. Any
-// other failure is logged when its text changes.
-func maintenanceOf(ctx context.Context, r proxmoxReader, lastErr *string) map[string]bool {
-	maintenance, err := haMaintenance(ctx, r)
+// clusterNodesPath is the cluster's own list of members. Proxmox VE's `src/PVE/API2/ClusterConfig.pm`
+// registers it as `nodes`, checks `Sys.Audit` on `/`, and builds it from the nodelist of
+// `corosync.conf`. `pvecm delnode` takes a node out of that list, while its VMs stay in the
+// resource list until their configuration files are removed.
+const clusterNodesPath = "/cluster/config/nodes"
+
+// removedNodes lists the nodes that run guests of the resource list and are not in the cluster's
+// membership. An empty membership proves nothing, as on a node outside a cluster, so then no node
+// is called removed. A refused or failed read is the caller's to handle.
+func removedNodes(ctx context.Context, r proxmoxReader, guests map[int64]pveGuest) (map[string]bool, error) {
+	var members []pveNodeUse
+	if err := r.Get(ctx, clusterNodesPath, &members); err != nil {
+		return nil, fmt.Errorf("reading the cluster's nodes: %w", err)
+	}
+	if len(members) == 0 {
+		return map[string]bool{}, nil
+	}
+	listed := make(map[string]bool, len(members))
+	for _, m := range members {
+		listed[m.Node] = true
+	}
+	removed := map[string]bool{}
+	for _, g := range guests {
+		if !listed[g.Node] {
+			removed[g.Node] = true
+		}
+	}
+	return removed, nil
+}
+
+// hostFactsOf reads the nodes in maintenance and the nodes that will not come back: those the HA
+// manager has as gone and those the cluster no longer lists. A token without Sys.Audit on / is
+// refused, which ProxmoxReach reports once on the management cluster's health, so the refusal is
+// silent here. Any other failure is logged when its text changes.
+func hostFactsOf(ctx context.Context, r proxmoxReader, guests map[int64]pveGuest, lastErr *string) (map[string]bool, map[string]bool) {
+	maintenance, gone, err := haNodeSets(ctx, r)
+	if err == nil {
+		var removed map[string]bool
+		removed, err = removedNodes(ctx, r, guests)
+		maps.Copy(gone, removed)
+	}
 	switch {
 	case err == nil:
 		*lastErr = ""
@@ -120,9 +172,9 @@ func maintenanceOf(ctx context.Context, r proxmoxReader, lastErr *string) map[st
 		*lastErr = err.Error()
 	case err.Error() != *lastErr:
 		*lastErr = err.Error()
-		ctrl.LoggerFrom(ctx).WithName("ha-status").Error(err, "the HA manager's status is not read")
+		ctrl.LoggerFrom(ctx).WithName("ha-status").Error(err, "the HA manager's status or the cluster's nodes are not read")
 	}
-	return maintenance
+	return maintenance, gone
 }
 
 // downNodes lists the nodes, by name, where the storage is listed and not available.
@@ -168,7 +220,7 @@ func storageUnavailableCondition(storage string, vms []clusterVM, look *vmLook, 
 		if !ok || !down[g.Node] || slices.Contains(nodes, g.Node) {
 			continue
 		}
-		if status, listed := look.nodes[g.Node]; listed && status != nodeStatusOnline {
+		if status, listed := look.nodes[g.Node]; listed && status != nodeStatusOnline || look.gone[g.Node] {
 			continue
 		}
 		nodes = append(nodes, g.Node)
@@ -196,6 +248,10 @@ func (w *VMWatch) holdMachines(ctx context.Context, vms []clusterVM, storage str
 	found := map[string]bool{}
 	var errs []error
 	for _, vm := range vms {
+		if look.goneGuest(vm.vmid) {
+			errs = append(errs, w.releaseMachine(ctx, vm.m))
+			continue
+		}
 		kept, reason, err := w.holdMachine(ctx, vm, holdOf(vm, storage, look), now, ceiling)
 		if err != nil {
 			errs = append(errs, err)
@@ -221,6 +277,25 @@ func (w *VMWatch) holdMachines(ctx context.Context, vms []clusterVM, storage str
 		Status: metav1.ConditionTrue, Reason: worst,
 		Message: strings.Join(held, "; "),
 	}, errors.Join(errs...)
+}
+
+// goneGuest is true when the guest's node has left the cluster for good, so that waiting for it
+// would only delay the replacement.
+func (l *vmLook) goneGuest(vmid int64) bool {
+	g, ok := l.guests[vmid]
+	return ok && l.gone[g.Node]
+}
+
+// releaseMachine ends Kubehenge's hold on a machine at once, and clears the record of the outage.
+// An administrator's own skip annotation stays.
+func (w *VMWatch) releaseMachine(ctx context.Context, m *clusterv1.Machine) error {
+	_, ours := m.Annotations[HoldAnnotation]
+	if _, hasSince := m.Annotations[HoldSinceAnnotation]; !ours && !hasSince {
+		return nil
+	}
+	return w.patchHold(ctx, m, map[string]*string{
+		clusterv1.MachineSkipRemediationAnnotation: nil, HoldAnnotation: nil, HoldSinceAnnotation: nil, HoldUntilAnnotation: nil,
+	})
 }
 
 // holdMachine moves one machine to the state its cause calls for. It returns what the condition

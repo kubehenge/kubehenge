@@ -177,7 +177,7 @@ func TestHoldKeepsMachinesOfANodeInMaintenanceFromReplacement(t *testing.T) {
 func TestHoldLiftsWhenTheNodeIsBackAndTheMachinesNodeReady(t *testing.T) {
 	t.Parallel()
 	f := newVMFixture(t)
-	f.nodeNotReady(heldSecond)
+	f.nodeNotReady()
 	f.nodes([]string{"pve2"})
 	f.look(0, RemediationHeldCondition)
 	wantHeld(t, f.heldMachines(), heldSecond)

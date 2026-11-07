@@ -546,13 +546,14 @@ A node that reboots or sits in HA maintenance is down longer than the five minut
 - The hold ends when the node is back and the machine's Kubernetes node is Ready.
 - It ends anyway after the cluster's `hostOutageGraceMinutes`, 30 by default. `kubehenge.dev/remediation-hold-until` is when. The same outage never holds the machine twice.
 - A server that needs longer than 30 minutes to start needs a higher value, and 0 waits for the host for ever ([clusters.md](clusters.md#variables)).
+- A host removed from the Proxmox VE cluster ends the wait at once, since it will not come back.
 - A skip annotation without Kubehenge's two is yours, and Kubehenge leaves it alone.
 
 #### Host maintenance is not visible
 
-**Host maintenance is not visible: the token lacks Sys.Audit on /** on the management cluster's **Health** means Proxmox VE refused the controller's read of the HA manager's status. Without it Kubehenge sees offline hosts but not HA maintenance, so it does not hold replacements for a host in maintenance. Give the controller's token `Sys.Audit` on `/`, which the read-privileges setting grants unless you switched it off.
+**Host maintenance is not visible: the token lacks Sys.Audit on /** on the management cluster's **Health** means Proxmox VE refused the controller's read of the HA manager's status. Without it Kubehenge sees offline hosts but not HA maintenance, so it does not hold replacements for a host in maintenance. It cannot tell a removed host either. Give the controller's token `Sys.Audit` on `/`, which the read-privileges setting grants unless you switched it off.
 
-Only `maintenance` in the HA manager's `node_status` counts. `online`, `unknown`, `fence` and `gone` do not: a fenced or gone node is failed, not serviced.
+Only `maintenance` in the HA manager's `node_status` holds a machine for maintenance. `gone` means the host left the cluster's member list, and it ends the wait. So does a host missing from the cluster's own node list (`/cluster/config/nodes`). `fence` and `unknown` do not, since a fenced or unreachable host reboots and returns.
 
 #### Storage unavailable
 

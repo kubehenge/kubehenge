@@ -104,9 +104,9 @@ func (f *vmFixture) machine(name string) *clusterv1.Machine {
 // nodeReady has the Kubernetes node of one of web's machines Ready, and nodeNotReady not.
 func (f *vmFixture) nodeReady(name string) { f.t.Helper(); f.setNodeReady(name, metav1.ConditionTrue) }
 
-func (f *vmFixture) nodeNotReady(name string) {
+func (f *vmFixture) nodeNotReady() {
 	f.t.Helper()
-	f.setNodeReady(name, metav1.ConditionFalse)
+	f.setNodeReady(heldSecond, metav1.ConditionFalse)
 }
 
 func (f *vmFixture) setNodeReady(name string, status metav1.ConditionStatus) {

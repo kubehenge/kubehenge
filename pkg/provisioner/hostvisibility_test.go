@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/luthermonson/go-proxmox"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -52,6 +55,123 @@ func TestHAMaintenanceIsOnlyTheMaintenanceState(t *testing.T) {
 	}
 }
 
+// Only `gone` proves a host will not return. `PVE::HA::NodeStatus::update` sets it for a node that
+// was `unknown` and is missing from the cluster's member list. `unknown` and `fence` are failures a
+// rebooting or fenced host recovers from: `fence_node` moves a fenced node back to `unknown`.
+func TestHAGoneIsTheOnlyPermanentState(t *testing.T) {
+	t.Parallel()
+	maintenance, gone, err := haNodeSets(t.Context(), fakeProxmox{haStatusPath: haManagerStatusFixture})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gone) != 1 || !gone["pve5"] {
+		t.Errorf("gone = %v, want only pve5: online, maintenance, unknown and fence are not removals", gone)
+	}
+	if len(maintenance) != 1 || !maintenance["pve2"] {
+		t.Errorf("maintenance = %v", maintenance)
+	}
+}
+
+// haStates is the HA manager's status with each node in the state given.
+func (f *vmFixture) haStates(states map[string]string) {
+	parts := make([]string, 0, len(states))
+	for node, state := range states {
+		parts = append(parts, fmt.Sprintf("%q:%q", node, state))
+	}
+	f.pve[haStatusPath] = `{"manager_status":{"node_status":{` + strings.Join(parts, ",") + `}}}`
+}
+
+// members is the cluster's own node list, as /cluster/config/nodes returns it.
+func (f *vmFixture) members(names ...string) {
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		parts = append(parts, fmt.Sprintf(`{"node":%q}`, n))
+	}
+	f.pve[clusterNodesPath] = "[" + strings.Join(parts, ",") + "]"
+}
+
+func TestAHostTheHAManagerHasGoneEndsTheWaitAtOnce(t *testing.T) {
+	t.Parallel()
+	f := newVMFixture(t)
+	f.nodeNotReady()
+	f.nodes([]string{"pve2"})
+	f.look(0, RemediationHeldCondition)
+	wantHeld(t, f.heldMachines(), heldSecond)
+	// pve2 left the cluster: it is still in the resource list as offline, and the HA manager has it as gone.
+	f.haStates(map[string]string{"pve1": "online", "pve2": "gone", "pve3": "online", "pve4": "online"})
+	if cond := f.look(time.Minute, RemediationHeldCondition); cond != nil {
+		t.Fatalf("a gone host still holds: %+v", cond)
+	}
+	wantHeld(t, f.heldMachines())
+	if _, since := f.machine(heldSecond).Annotations[HoldSinceAnnotation]; since {
+		t.Error("the record of the outage stays")
+	}
+}
+
+func TestAFencedOrUnknownHostIsStillWaitedFor(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{"fence", "unknown"} {
+		f := newVMFixture(t)
+		f.nodeNotReady()
+		f.nodes([]string{"pve2"})
+		f.haStates(map[string]string{"pve1": "online", "pve2": state, "pve3": "online", "pve4": "online"})
+		f.members("pve1", "pve2", "pve3", "pve4")
+		if cond := f.look(0, RemediationHeldCondition); cond == nil || cond.Reason != HeldNodeOffline {
+			t.Fatalf("%s: condition %+v", state, cond)
+		}
+		wantHeld(t, f.heldMachines(), heldSecond)
+	}
+}
+
+func TestAHostMissingFromTheClustersMembersEndsTheWait(t *testing.T) {
+	t.Parallel()
+	f := newVMFixture(t)
+	f.nodeNotReady()
+	f.nodes([]string{"pve2"})
+	f.members("pve1", "pve2", "pve3", "pve4")
+	f.look(0, RemediationHeldCondition)
+	wantHeld(t, f.heldMachines(), heldSecond)
+	// The HA manager has not yet moved pve2 to gone, but `pvecm delnode` took it out of the nodelist.
+	f.members("pve1", "pve3", "pve4")
+	if cond := f.look(time.Minute, RemediationHeldCondition); cond != nil {
+		t.Fatalf("a removed host still holds: %+v", cond)
+	}
+	wantHeld(t, f.heldMachines())
+}
+
+func TestWithoutAMembersListNoHostCountsAsRemoved(t *testing.T) {
+	t.Parallel()
+	for name, members := range map[string]func(*vmFixture){
+		"empty":      func(f *vmFixture) { f.members() },
+		"unreadable": func(f *vmFixture) { delete(f.pve, clusterNodesPath) },
+	} {
+		f := newVMFixture(t)
+		f.nodeNotReady()
+		f.nodes([]string{"pve2"})
+		members(f)
+		if cond := f.look(0, RemediationHeldCondition); cond == nil {
+			t.Fatalf("%s membership: the offline host is not held", name)
+		}
+		wantHeld(t, f.heldMachines(), heldSecond)
+	}
+}
+
+func TestAnAdministratorsSkipSurvivesAGoneHost(t *testing.T) {
+	t.Parallel()
+	f := newVMFixture(t)
+	m := f.machine(heldSecond)
+	m.Annotations = map[string]string{clusterv1.MachineSkipRemediationAnnotation: ""}
+	if err := f.kube.Update(t.Context(), m); err != nil {
+		t.Fatal(err)
+	}
+	f.nodes([]string{"pve2"})
+	f.haStates(map[string]string{"pve1": "online", "pve2": "gone", "pve3": "online", "pve4": "online"})
+	f.look(0, RemediationHeldCondition)
+	if _, skip := f.machine(heldSecond).Annotations[clusterv1.MachineSkipRemediationAnnotation]; !skip {
+		t.Error("Kubehenge removed an administrator's own skip")
+	}
+}
+
 func TestVMWatchReadsMaintenanceFromTheHAManagersStatus(t *testing.T) {
 	t.Parallel()
 	f := newVMFixture(t)
@@ -78,8 +198,8 @@ func TestHAStatusFailuresAreLoggedOnceAndRefusalsNever(t *testing.T) {
 	var last string
 	refused := refusingProxmox{err: proxmox.ErrNotAuthorized}
 	for range 3 {
-		if got := maintenanceOf(ctx, refused, &last); got != nil {
-			t.Fatalf("maintenance %v", got)
+		if maintenance, gone := hostFactsOf(ctx, refused, nil, &last); maintenance != nil || gone != nil {
+			t.Fatalf("maintenance %v, gone %v", maintenance, gone)
 		}
 	}
 	if len(lines) != 0 {
@@ -87,12 +207,12 @@ func TestHAStatusFailuresAreLoggedOnceAndRefusalsNever(t *testing.T) {
 	}
 	broken := refusingProxmox{err: errors.New("connection reset")}
 	for range 3 {
-		maintenanceOf(ctx, broken, &last)
+		hostFactsOf(ctx, broken, nil, &last)
 	}
 	if len(lines) != 1 {
 		t.Fatalf("a failure that goes on logged %d times: %v", len(lines), lines)
 	}
-	maintenanceOf(ctx, refusingProxmox{err: errors.New("timeout")}, &last)
+	hostFactsOf(ctx, refusingProxmox{err: errors.New("timeout")}, nil, &last)
 	if len(lines) != 2 {
 		t.Errorf("a different failure logged %d lines in all", len(lines))
 	}
