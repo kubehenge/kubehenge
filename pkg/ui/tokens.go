@@ -60,7 +60,7 @@ func (s *Server) tokenUser(w http.ResponseWriter, r *http.Request, token string)
 			writeError(w, http.StatusUnauthorized, "Proxmox VE refused the API token")
 			return nil
 		}
-		s.proxmoxError(w, r, err)
+		s.anonymousProxmoxError(w, r, err)
 		return nil
 	}
 	s.tokens.mu.Lock()

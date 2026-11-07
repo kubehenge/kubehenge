@@ -284,6 +284,31 @@ describe("the console", () => {
     vi.useRealTimers();
   });
 
+  it("does not grey the fleet out for the time its tab was hidden", async () => {
+    window.history.replaceState(null, "", "/");
+    const routes = serve();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<App />);
+    const rail = await screen.findByRole("navigation", { name: "Fleet" });
+    await waitFor(() => expect(within(rail).getAllByRole("link")).toHaveLength(4));
+
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await act(() => vi.advanceTimersByTimeAsync(300_000));
+    expect(rail).not.toHaveClass("rail-stale");
+
+    // Shown again, the read it asks for hangs. Only the time since then counts.
+    routes["GET /api/clusters"] = held().route;
+    hidden.mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(rail).not.toHaveClass("rail-stale");
+    await act(() => vi.advanceTimersByTimeAsync(90_000));
+    expect(rail).toHaveClass("rail-stale");
+    hidden.mockRestore();
+    vi.useRealTimers();
+  });
+
   it("says when it reads the clusters again while the management cluster does not answer", async () => {
     window.history.replaceState(null, "", "/clusters");
     const routes = serve();

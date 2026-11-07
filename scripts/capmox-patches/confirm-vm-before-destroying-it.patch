@@ -1,13 +1,48 @@
 diff --git a/internal/service/vmservice/delete.go b/internal/service/vmservice/delete.go
-index 96bafd9..6b2ec53 100644
+index 96bafd9..4307d5f 100644
 --- a/internal/service/vmservice/delete.go
 +++ b/internal/service/vmservice/delete.go
-@@ -31,18 +31,29 @@ import (
+@@ -18,12 +18,15 @@ package vmservice
+ 
+ import (
+ 	"context"
++	"fmt"
++	"strconv"
+ 	"strings"
+ 
+ 	"github.com/pkg/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"sigs.k8s.io/cluster-api/util"
+ 	"sigs.k8s.io/cluster-api/util/conditions"
++	"sigs.k8s.io/cluster-api/util/record"
+ 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+ 
+ 	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
+@@ -31,23 +34,59 @@ import (
  	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/scope"
  )
-
-+// errNotMachineVM means the machine's VM ID is free, or held by a guest that is not the machine's VM.
+ 
++// errNotMachineVM means the machine's VM is gone: its VM ID is free, or held by a guest that is
++// provably not the machine's VM.
 +var errNotMachineVM = errors.New("the vmid does not hold this machine's vm")
++
++// destroyRequestedAnnotation holds the VM ID this provider asked Proxmox VE to destroy. A VM of
++// another name under that ID later is the freed ID handed to someone else.
++const destroyRequestedAnnotation = "kubehenge.dev/vm-destroy-requested"
++
++// unidentifiedVMError means a VM of another name holds the machine's VM ID and nothing proves it is
++// not the machine's VM renamed: no provider ID is recorded and no destroy was requested.
++type unidentifiedVMError struct {
++	vmID int64
++	name string
++	want string
++}
++
++func (e *unidentifiedVMError) Error() string {
++	return fmt.Sprintf("VM %d is named %q, not %q, and the machine has no provider ID, so it is not destroyed. "+
++		"If it is the machine's VM, rename it to %q. If that VM is gone, remove the machine's finalizer.",
++		e.vmID, e.name, e.want, e.want)
++}
 +
  // DeleteVM implements the logic of destroying a VM.
  func DeleteVM(ctx context.Context, machineScope *scope.MachineScope) error {
@@ -20,13 +55,18 @@ index 96bafd9..6b2ec53 100644
 +	// Proxmox VE hands a freed VM ID to the next VM created, so the ID recorded for this machine
 +	// can hold another machine's VM by the time this runs again after the destroy.
 +	node, err := locateMachineVM(ctx, machineScope, vmID)
++	var unidentified *unidentifiedVMError
 +	switch {
 +	case errors.Is(err, errNotMachineVM):
 +		return releaseMachine(machineScope)
++	case errors.As(err, &unidentified):
++		return stallDeletion(machineScope, "VMIDHeldByAnotherVM", unidentified.Error())
 +	case err != nil:
 +		return err
 +	}
-
++
++	machineScope.SetAnnotation(destroyRequestedAnnotation, strconv.FormatInt(vmID, 10))
+ 
  	if _, err := machineScope.InfraCluster.ProxmoxClient.DeleteVM(ctx, node, vmID); err != nil {
  		if VMNotFound(err) || errors.Is(err, goproxmox.ErrVMIDFree) {
 -			// remove machine from cluster status
@@ -37,15 +77,38 @@ index 96bafd9..6b2ec53 100644
 +			return releaseMachine(machineScope)
  		}
  		conditions.Set(machineScope.ProxmoxMachine, metav1.Condition{
- 			Type:   infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
-@@ -55,6 +66,65 @@ func DeleteVM(ctx context.Context, machineScope *scope.MachineScope) error {
+-			Type:   infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
+-			Status: metav1.ConditionFalse,
+-			Reason: infrav1.ProxmoxMachineVirtualMachineProvisionedDeletionFailedReason,
++			Type:    infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
++			Status:  metav1.ConditionFalse,
++			Reason:  infrav1.ProxmoxMachineVirtualMachineProvisionedDeletionFailedReason,
++			Message: err.Error(),
+ 		})
+ 		return err
+ 	}
+@@ -55,6 +94,86 @@ func DeleteVM(ctx context.Context, machineScope *scope.MachineScope) error {
  	return nil
  }
-
+ 
++// stallDeletion keeps the machine and its VM, and says on the machine why. It returns no error, so
++// that the reconcile runs again after the usual wait, when the cause may be gone.
++func stallDeletion(machineScope *scope.MachineScope, reason, message string) error {
++	record.Warn(machineScope.ProxmoxMachine, reason, message)
++	conditions.Set(machineScope.ProxmoxMachine, metav1.Condition{
++		Type:    infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
++		Status:  metav1.ConditionFalse,
++		Reason:  infrav1.ProxmoxMachineVirtualMachineProvisionedDeletionFailedReason,
++		Message: message,
++	})
++	return nil
++}
++
 +// locateMachineVM returns the node holding the machine's VM under vmID. It returns errNotMachineVM
-+// when the ID is free or holds a container or another VM, and ErrVMNotInitialized while a clone
-+// has not named the VM yet. Any other error means the VM could not be confirmed as the machine's,
-+// and nothing may be destroyed.
++// when the ID is free or holds a container or a VM that is provably another, and an
++// unidentifiedVMError when a VM of another name might still be the machine's. It returns
++// ErrVMNotInitialized while a clone has not named the VM yet. Any other error means the VM could not
++// be confirmed as the machine's, and nothing may be destroyed.
 +func locateMachineVM(ctx context.Context, machineScope *scope.MachineScope, vmID int64) (string, error) {
 +	proxmoxClient := machineScope.InfraCluster.ProxmoxClient
 +
@@ -73,24 +136,31 @@ index 96bafd9..6b2ec53 100644
 +		return "", err
 +	}
 +
++	// The SMBIOS UUID is new with every clone and recorded as the provider ID once the clone was
++	// found. Names are not: admins rename VMs, and they repeat across namespaces and recreated
++	// machines. So the UUID alone identifies the VM once it is recorded.
++	providerID := machineScope.ProxmoxMachine.Spec.ProviderID
++	if biosUUID := extractUUID(vm.VirtualMachineConfig.SMBios1); providerID != "" {
++		if providerID != "proxmox://"+biosUUID {
++			machineScope.Info("vmid holds another vm, not destroying it", "vmID", vmID, "providerID", providerID, "biosUUID", biosUUID)
++			return "", errNotMachineVM
++		}
++		return resource.Node, nil
++	}
++
 +	name := vm.VirtualMachineConfig.Name
 +	if name == "" || name == placeholderVMName(vmID) {
 +		return "", ErrVMNotInitialized
 +	}
-+	if name != machineScope.ProxmoxMachine.GetName() {
-+		machineScope.Info("vmid holds another vm, not destroying it", "vmID", vmID, "vmName", name)
++	machineName := machineScope.ProxmoxMachine.GetName()
++	if name == machineName {
++		return resource.Node, nil
++	}
++	if machineScope.ProxmoxMachine.Annotations[destroyRequestedAnnotation] == strconv.FormatInt(vmID, 10) {
++		machineScope.Info("vmid was freed by the destroy and holds another vm now", "vmID", vmID, "vmName", name)
 +		return "", errNotMachineVM
 +	}
-+
-+	// Names repeat across namespaces and recreated machines; the SMBIOS UUID, new with every clone
-+	// and recorded as the provider ID once the clone was found, does not.
-+	providerID := machineScope.ProxmoxMachine.Spec.ProviderID
-+	if biosUUID := extractUUID(vm.VirtualMachineConfig.SMBios1); providerID != "" && providerID != "proxmox://"+biosUUID {
-+		machineScope.Info("vmid holds another vm of the same name, not destroying it", "vmID", vmID, "providerID", providerID, "biosUUID", biosUUID)
-+		return "", errNotMachineVM
-+	}
-+
-+	return resource.Node, nil
++	return "", &unidentifiedVMError{vmID: vmID, name: name, want: machineName}
 +}
 +
 +// releaseMachine drops the machine from the cluster's status and removes its finalizer, for a VM
@@ -105,22 +175,23 @@ index 96bafd9..6b2ec53 100644
  func VMNotFound(err error) bool {
  	return strings.Contains(err.Error(), "does not exist")
 diff --git a/internal/service/vmservice/delete_test.go b/internal/service/vmservice/delete_test.go
-index 62fb19b..2236cba 100644
+index 62fb19b..476383e 100644
 --- a/internal/service/vmservice/delete_test.go
 +++ b/internal/service/vmservice/delete_test.go
-@@ -21,24 +21,145 @@ import (
+@@ -21,24 +21,197 @@ import (
  	"errors"
  	"testing"
-
+ 
 +	"github.com/luthermonson/go-proxmox"
  	"github.com/stretchr/testify/require"
  	corev1 "k8s.io/api/core/v1"
-
++	"sigs.k8s.io/cluster-api/util/conditions"
+ 
  	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
 +	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/proxmox/proxmoxtest"
 +	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/scope"
  )
-
+ 
 -func TestDeleteVM_SuccessNotFound(t *testing.T) {
 +const testBIOSUUID = "6c2e7e5a-1d3b-4f0c-9a51-2f6a8d1e4b7c"
 +
@@ -137,7 +208,7 @@ index 62fb19b..2236cba 100644
  	}, false)
 +	return machineScope, proxmoxClient
 +}
-
+ 
 -	proxmoxClient.EXPECT().DeleteVM(context.TODO(), "node1", int64(123)).Return(nil, errors.New("vm does not exist: some reason")).Once()
 +// expectVM has VMID 123 resolve to a VM of the given name and SMBIOS UUID on node.
 +func expectVM(proxmoxClient *proxmoxtest.MockClient, node, name, biosUUID string) {
@@ -149,7 +220,7 @@ index 62fb19b..2236cba 100644
 +		VMID:                 123,
 +	}, nil).Once()
 +}
-
+ 
 -	require.NoError(t, DeleteVM(context.TODO(), machineScope))
 +func requireReleased(t *testing.T, machineScope *scope.MachineScope) {
 +	t.Helper()
@@ -210,13 +281,64 @@ index 62fb19b..2236cba 100644
 +	requireReleased(t, machineScope)
 +}
 +
-+// The freed ID went to another machine's VM before this pass: it must survive.
-+func TestDeleteVM_ReusedVMIDOfAnotherVM(t *testing.T) {
++// A VM of another name under the ID, with no provider ID and no destroy requested, may be the
++// machine's own renamed: nothing is destroyed or released, and the machine says why.
++func TestDeleteVM_UnidentifiedVMStallsTheDeletion(t *testing.T) {
 +	machineScope, proxmoxClient := setupDeleteTest(t)
 +	expectVM(proxmoxClient, "node1", "other-machine", testBIOSUUID)
 +
 +	require.NoError(t, DeleteVM(context.TODO(), machineScope))
++	requireKept(t, machineScope)
++	cond := conditions.Get(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
++	require.NotNil(t, cond)
++	require.Equal(t, infrav1.ProxmoxMachineVirtualMachineProvisionedDeletionFailedReason, cond.Reason)
++	require.Contains(t, cond.Message, "VM 123")
++	require.Contains(t, cond.Message, `"other-machine"`)
++	require.Contains(t, cond.Message, "rename it to")
++}
++
++// The destroy this provider requested freed the ID, and another VM took it before this pass.
++func TestDeleteVM_ReusedVMIDAfterOurDestroy(t *testing.T) {
++	machineScope, proxmoxClient := setupDeleteTest(t)
++	machineScope.SetAnnotation(destroyRequestedAnnotation, "123")
++	expectVM(proxmoxClient, "node1", "other-machine", testBIOSUUID)
++
++	require.NoError(t, DeleteVM(context.TODO(), machineScope))
 +	requireReleased(t, machineScope)
++}
++
++// The destroy requested was for another ID, so it proves nothing about this one.
++func TestDeleteVM_DestroyRequestForAnotherIDProvesNothing(t *testing.T) {
++	machineScope, proxmoxClient := setupDeleteTest(t)
++	machineScope.SetAnnotation(destroyRequestedAnnotation, "124")
++	expectVM(proxmoxClient, "node1", "other-machine", testBIOSUUID)
++
++	require.NoError(t, DeleteVM(context.TODO(), machineScope))
++	requireKept(t, machineScope)
++}
++
++// An admin renamed the VM: the provider ID alone identifies it.
++func TestDeleteVM_DestroysRenamedVMWithProviderID(t *testing.T) {
++	machineScope, proxmoxClient := setupDeleteTest(t)
++	machineScope.ProxmoxMachine.Spec.ProviderID = "proxmox://" + testBIOSUUID
++	expectVM(proxmoxClient, "node1", "site-convention-name", testBIOSUUID)
++	proxmoxClient.EXPECT().DeleteVM(context.TODO(), "node1", int64(123)).Return(&proxmox.Task{}, nil).Once()
++
++	require.NoError(t, DeleteVM(context.TODO(), machineScope))
++	requireKept(t, machineScope)
++	require.Equal(t, "123", machineScope.ProxmoxMachine.Annotations[destroyRequestedAnnotation])
++}
++
++// A failed destroy shows Proxmox VE's reason on the machine.
++func TestDeleteVM_FailedDestroyKeepsTheReason(t *testing.T) {
++	machineScope, proxmoxClient := setupDeleteTest(t)
++	expectVM(proxmoxClient, "node1", "test", testBIOSUUID)
++	proxmoxClient.EXPECT().DeleteVM(context.TODO(), "node1", int64(123)).Return(nil, errors.New("500 vm is locked")).Once()
++
++	require.Error(t, DeleteVM(context.TODO(), machineScope))
++	cond := conditions.Get(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
++	require.NotNil(t, cond)
++	require.Contains(t, cond.Message, "vm is locked")
 +}
 +
 +// A machine of the same name, recreated or in another namespace, cloned under the reused ID.
