@@ -246,13 +246,23 @@ export function usePoll<T>(
     }
   }, [take]);
 
+  // When the tab was hidden. A hidden tab reads nothing, so the time it spends hidden does not make
+  // an answer late.
+  const hiddenAt = useRef<number | undefined>(undefined);
   useEffect(() => {
     answered.current = Date.now();
+    hiddenAt.current = document.hidden ? Date.now() : undefined;
     void reload();
     const shownAgain = () => {
-      if (!document.hidden) {
-        void reload();
+      if (document.hidden) {
+        hiddenAt.current ??= Date.now();
+        return;
       }
+      if (hiddenAt.current !== undefined) {
+        answered.current += Date.now() - hiddenAt.current;
+        hiddenAt.current = undefined;
+      }
+      void reload();
     };
     document.addEventListener("visibilitychange", shownAgain);
     return () => document.removeEventListener("visibilitychange", shownAgain);
@@ -266,8 +276,11 @@ export function usePoll<T>(
     interval.current = intervalMs;
     const t = window.setInterval(() => {
       ticked.current = Date.now();
+      if (document.hidden) {
+        return;
+      }
       setLate(ticked.current - answered.current > 2 * intervalMs);
-      if (!document.hidden && pending.current === 0) {
+      if (pending.current === 0) {
         void reload();
       }
     }, intervalMs);
