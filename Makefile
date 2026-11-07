@@ -225,12 +225,14 @@ fmt: web/node_modules/.package-lock.json
 # Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
 # govulncheck fails on a known vulnerability only where the code calls into it, for the system it
 # runs on: GOOS would also build govulncheck itself for another one.
-# golangci-lint holds one lock per user, so a gate in a second worktree waits for it rather than fail.
+# golangci-lint gives up on its per-user lock at the first error from the lock file, even with
+# --allow-serial-runners, and gates in several worktrees at once meet that error. Its cache is safe
+# to share, so they lint side by side instead.
 lint-go: web gateway-api
 	go mod tidy -diff
 	golangci-lint config verify
-	CGO_ENABLED=0 GOOS=linux golangci-lint run --allow-serial-runners ./...
-	CGO_ENABLED=0 GOOS=windows golangci-lint run --allow-serial-runners ./...
+	CGO_ENABLED=0 GOOS=linux golangci-lint run --allow-parallel-runners ./...
+	CGO_ENABLED=0 GOOS=windows golangci-lint run --allow-parallel-runners ./...
 	$(GOVULNCHECK) ./...
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
