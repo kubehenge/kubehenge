@@ -17,7 +17,6 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"gopkg.in/yaml.v2"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // bundleSecret is the Secret the Talos bootstrap provider writes: a real secrets bundle, marshalled
@@ -33,8 +32,8 @@ func bundleSecret(t *testing.T, namespace string) *corev1.Secret {
 		t.Fatal(err)
 	}
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: talosBundleSecret("web")},
-		Data:       map[string][]byte{"bundle": raw},
+		Namespace: namespace, Name: talosBundleSecret("web"),
+		Data: map[string][]byte{"bundle": raw},
 	}
 }
 

@@ -84,7 +84,7 @@ func machineTemplateValidators(t *testing.T) map[string]validation.SchemaValidat
 func TestMachineTemplatesFollowTheProviderSchema(t *testing.T) {
 	t.Parallel()
 	validators := machineTemplateValidators(t)
-	helm := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system", "-f", "../../pkg/provisioner/testdata/integration-values.yaml") //nolint:gosec // the test's own chart and values
+	helm := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system", "-f", "../../pkg/provisioner/testdata/integration-values.yaml")
 	var stderr bytes.Buffer
 	helm.Stderr = &stderr
 	out, err := helm.Output()
