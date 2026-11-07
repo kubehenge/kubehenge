@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
@@ -59,6 +61,96 @@ func specRequest(t *testing.T, spec string, withoutSecrets bool) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+func TestSpecSecretsOpenOfflineWithAnExtraRecipientsKey(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	a, _, store := managementWithTarget(t, h)
+	admin := h.browser()
+	admin.signIn("admin@pve")
+	dev := h.browser()
+	dev.signIn("dev@pve")
+	expect(t, dev.do("POST", "/api/clusters", createBody), http.StatusCreated)
+	ctx := t.Context()
+	offline, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(recipients ...string) *httptest.ResponseRecorder {
+		raw, mErr := json.Marshal(map[string]any{
+			"target": "minio", "everyHours": 6, "keep": 3, "accessKeyID": "AKID", "secretAccessKey": "secret",
+			"passphrase": statePassphrase, "specRecipients": recipients,
+		})
+		if mErr != nil {
+			t.Fatal(mErr)
+		}
+		return admin.do("PUT", "/api/appliance/etcd-backups", string(raw))
+	}
+	for _, bad := range []string{"age1nonsense", offline.String(), ""} {
+		expect(t, put(bad), http.StatusUnprocessableEntity)
+	}
+	expect(t, put(offline.Recipient().String(), offline.Recipient().String()), http.StatusUnprocessableEntity)
+	expect(t, put(offline.Recipient().String()), http.StatusOK)
+	if got := a.SpecRecipients(); len(got) != 1 || got[0] != offline.Recipient().String() {
+		t.Fatalf("recipients %v", got)
+	}
+	expect(t, admin.do("PUT", "/api/clusters/default/web/credentials/gitops", typedSecrets["/api/clusters/default/web/credentials/gitops"]), http.StatusOK)
+
+	stored := map[string]string{}
+	h.server.storeSpecsOnce(ctx, stored)
+	spec := string(store.data["clusters/default.web/cluster.yaml"])
+	secrets, err := provisioner.ParseSpecSecrets([]byte(spec))
+	if err != nil || len(secrets) == 0 {
+		t.Fatalf("the stored spec holds no Secrets: %v\n%s", err, spec)
+	}
+	var opened []map[string]any
+	for i := range secrets {
+		plain, openErr := appliance.OpenSealedSecret(secrets[i].Sealed, offline)
+		if openErr != nil {
+			t.Fatalf("the offline key does not open %s: %v", secrets[i].Name, openErr)
+		}
+		var data map[string][]byte
+		if err = json.Unmarshal(plain, &data); err != nil {
+			t.Fatal(err)
+		}
+		opened = append(opened, map[string]any{"namespace": secrets[i].Namespace, "name": secrets[i].Name, "data": data})
+	}
+
+	// Another recipient rewrites the spec, though no value changed.
+	second, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, put(offline.Recipient().String(), second.Recipient().String()), http.StatusOK)
+	h.server.storeSpecsOnce(ctx, stored)
+	again, err := provisioner.ParseSpecSecrets(store.data["clusters/default.web/cluster.yaml"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range again {
+		if _, err = appliance.OpenSealedSecret(again[i].Sealed, second); err != nil {
+			t.Errorf("the added recipient does not open %s: %v", again[i].Name, err)
+		}
+	}
+
+	// The appliance lost its key, and the client opens the Secrets with the key it keeps.
+	if err = os.Remove(filepath.Join(a.Dir, "etcd-backup", "spec-recovery.key")); err != nil {
+		t.Fatal(err)
+	}
+	cleanWeb(t, h, []string{"web.gitops"})
+	body, err := json.Marshal(map[string]any{"spec": spec, "opened": opened})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, dev.do("POST", "/api/cluster-specs", string(body)), http.StatusCreated)
+	got := &corev1.Secret{}
+	if err = h.kube.Get(ctx, client.ObjectKey{Namespace: "default", Name: "web.gitops"}, got); err != nil {
+		t.Fatalf("the Secret was not restored: %v", err)
+	}
+	if string(got.Data["password"]) != "gitops-token-value" {
+		t.Errorf("restored %v", got.Data)
+	}
 }
 
 func TestSpecSecretsAreSealedStoredAndRestoredWithTheCluster(t *testing.T) {

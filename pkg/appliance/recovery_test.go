@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"filippo.io/age"
 )
 
 const exportPassphrase = "an export passphrase of its own"
@@ -132,6 +134,90 @@ func TestExportIsDueUntilTakenAndAfterEachChange(t *testing.T) {
 	}
 	if !a.EtcdBackups().ExportDue {
 		t.Fatal("a changed access key leaves the export current")
+	}
+}
+
+func TestExportIsDueAtOnceWhenTheRecoveryKeyIsMade(t *testing.T) {
+	t.Parallel()
+	a, _, now := backedUp(t)
+	configure(t, a, *now)
+	if st := a.EtcdBackups(); st.ExportDue || st.SpecKey {
+		t.Fatalf("before any Secret was sealed: %+v", st)
+	}
+	if _, err := a.SealSpecSecret([]byte(`{"k":"dg=="}`)); err != nil {
+		t.Fatal(err)
+	}
+	if st := a.EtcdBackups(); !st.ExportDue || !st.SpecKey {
+		t.Fatalf("the key exists, no snapshot was taken and no export was: %+v", st)
+	}
+	if _, err := a.ExportState(context.Background(), passphrase, exportPassphrase); err != nil {
+		t.Fatal(err)
+	}
+	if a.EtcdBackups().ExportDue {
+		t.Fatal("an export was taken and is still due")
+	}
+}
+
+func TestSpecsAreSealedToTheExtraRecipientsAndOpenOffline(t *testing.T) {
+	t.Parallel()
+	a, _, now := backedUp(t)
+	offline, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranger, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := EtcdBackupSettings{
+		Target: "minio", EveryHours: 6, Keep: 3, By: "root@pam", Since: *now,
+		SpecRecipients: []string{offline.Recipient().String()},
+	}
+	if err = a.ConfigureEtcdBackups(context.Background(), s, "AKID", "secret", passphrase); err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := a.SealSpecSecret([]byte(`{"k":"dg=="}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, openErr := OpenSealedSecret(sealed, offline); openErr != nil || string(plain) != `{"k":"dg=="}` {
+		t.Fatalf("the offline key opens %q, %v", plain, openErr)
+	}
+	if plain, openErr := a.OpenSpecSecret(sealed); openErr != nil || string(plain) != `{"k":"dg=="}` {
+		t.Fatalf("the appliance key opens %q, %v", plain, openErr)
+	}
+	if _, openErr := OpenSealedSecret(sealed, stranger); !errors.Is(openErr, ErrWrongSpecKey) {
+		t.Fatalf("a stranger's key: %v", openErr)
+	}
+	if st := a.EtcdBackups(); st.Settings == nil || !slices.Equal(st.Settings.SpecRecipients, s.SpecRecipients) {
+		t.Fatalf("settings %+v", st.Settings)
+	}
+}
+
+func TestSpecRecipientsAreValidated(t *testing.T) {
+	t.Parallel()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := id.Recipient().String()
+	for name, keys := range map[string][]string{
+		"a secret key":    {id.String()},
+		"not a key":       {"age1nonsense"},
+		"empty":           {""},
+		"a duplicate":     {good, good},
+		"too many":        slices.Repeat([]string{good}, maxSpecRecipients+1),
+		"an ssh key":      {"ssh-ed25519 AAAA"},
+		"surrounding gap": {" " + good},
+	} {
+		s := EtcdBackupSettings{Target: "minio", EveryHours: 6, Keep: 3, SpecRecipients: keys}
+		if err := s.Validate([]BackupTarget{{Name: "minio"}}); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	s := EtcdBackupSettings{Target: "minio", EveryHours: 6, Keep: 3, SpecRecipients: []string{good}}
+	if err := s.Validate([]BackupTarget{{Name: "minio"}}); err != nil {
+		t.Errorf("a valid key was refused: %v", err)
 	}
 }
 

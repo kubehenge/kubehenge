@@ -217,9 +217,12 @@ func printBackups(cmd *cobra.Command, v *appliance.EtcdBackupStatus) error {
 		return flush(t)
 	}
 	if v.ExportDue {
-		row(t, "Warning", "No export of the appliance's state since the backup settings changed: kubehenge appliance export")
+		row(t, "Warning", "No export of the appliance's state since the backup settings or the recovery key changed. Stored Secrets open only with this appliance's key: kubehenge appliance export")
 	}
 	row(t, "Target", v.Settings.Target)
+	if len(v.Settings.SpecRecipients) > 0 {
+		row(t, "Extra recipients", strings.Join(v.Settings.SpecRecipients, ", "))
+	}
 	row(t, "Schedule", fmt.Sprintf("every %d h, newest %d kept", v.Settings.EveryHours, v.Settings.Keep))
 	if v.Last != nil {
 		row(t, "Last snapshot", v.Last.Name)
@@ -244,6 +247,8 @@ func (o *applianceOptions) setUpBackupsCommand() *cobra.Command {
 		AccessKeyID     string `json:"accessKeyID,omitempty"`
 		SecretAccessKey string `json:"secretAccessKey,omitempty"`
 		Passphrase      string `json:"passphrase"`
+		// SpecRecipients replace the stored ones, so that a run without any removes them.
+		SpecRecipients []string `json:"specRecipients,omitempty"`
 	}
 	var secretFile, passphraseFile string
 	cmd := &cobra.Command{
@@ -277,6 +282,7 @@ comes from --passphrase-file or KUBEHENGE_PASSPHRASE. The target's secret access
 	f.StringVar(&req.AccessKeyID, "access-key-id", "", "the target's access key ID, or empty to keep the stored one")
 	f.StringVar(&secretFile, "secret-access-key-file", "", "file holding the secret access key, else KUBEHENGE_SECRET_ACCESS_KEY holds it")
 	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
+	f.StringArrayVar(&req.SpecRecipients, "spec-recipient", nil, "an age public key (age1...) that every cluster spec's Secrets are also sealed to, repeatable")
 	_ = cmd.MarkFlagRequired("target")
 	o.signInFlags(cmd)
 	o.jsonFlag(cmd)

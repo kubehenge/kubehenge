@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/pflag"
 	"sigs.k8s.io/yaml"
 
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -126,7 +127,7 @@ decide what it may do, as they do for a user signed in to the interface.`,
 const clusterNameArg = "give the cluster's name"
 
 func (o *clusterOptions) createCommand() *cobra.Command {
-	var file, from string
+	var file, from, identity string
 	var withoutSecrets bool
 	create := &cobra.Command{
 		Use:   "create (-f FILE | --from FILE)",
@@ -140,20 +141,27 @@ the wizard's request is.
 --from takes a spec saved by "kubehenge cluster export", or found in the backup target under
 clusters/<namespace>.<name>/cluster.yaml, and creates the cluster it describes. The same checks apply.
 The spec's Secrets are opened with the appliance's recovery key and made too. Where one cannot be
-opened the command stops and names it. --without-secrets creates the cluster without them.`,
+opened the command stops and names it. --without-secrets creates the cluster without them.
+
+--identity takes an age identity file that opens the Secrets sealed to one of the extra recipients
+set in the backup settings. It opens them on this machine, so a new appliance needs no recovery key.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if (file == "") == (from == "") {
 				return errors.New("give the request with -f, or an exported spec with --from")
 			}
 			if from != "" {
-				return o.createFromSpec(cmd.Context(), cmd.OutOrStdout(), from, withoutSecrets)
+				return o.createFromSpec(cmd.Context(), cmd.OutOrStdout(), from, identity, withoutSecrets)
+			}
+			if identity != "" {
+				return errors.New("--identity belongs to --from")
 			}
 			return o.create(cmd.Context(), cmd.OutOrStdout(), file)
 		},
 	}
 	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
 	create.Flags().StringVar(&from, "from", "", "an exported cluster spec, or - for standard input")
+	create.Flags().StringVar(&identity, "identity", "", "with --from, an age identity file that opens the spec's Secrets offline")
 	create.Flags().BoolVar(&withoutSecrets, "without-secrets", false, "with --from, go on where the spec's Secrets cannot be restored")
 	return create
 }
@@ -372,12 +380,59 @@ func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string)
 
 // createFromSpec makes a cluster from a spec saved by export. The interface checks it as it checks
 // the wizard's request.
-func (o *clusterOptions) createFromSpec(ctx context.Context, out io.Writer, file string, withoutSecrets bool) error {
+func (o *clusterOptions) createFromSpec(ctx context.Context, out io.Writer, file, identityFile string, withoutSecrets bool) error {
 	raw, err := readInput(file)
 	if err != nil {
 		return err
 	}
-	return o.created(ctx, out, "/api/cluster-specs", map[string]any{"spec": string(raw), "withoutSecrets": withoutSecrets})
+	request := map[string]any{"spec": string(raw), "withoutSecrets": withoutSecrets}
+	if identityFile != "" {
+		opened, err := openWithIdentity(raw, identityFile)
+		if err != nil {
+			return err
+		}
+		request["opened"] = opened
+	}
+	return o.created(ctx, out, "/api/cluster-specs", request)
+}
+
+// openWithIdentity opens the spec's Secrets on this machine with an identity file, so that the
+// private key never leaves it. A Secret the file's keys cannot open is left for the appliance's own
+// key.
+func openWithIdentity(spec []byte, identityFile string) ([]map[string]any, error) {
+	f, err := os.Open(identityFile) //nolint:gosec // the file the administrator named
+	if err != nil {
+		return nil, fmt.Errorf("reading the identity file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	ids, err := appliance.ParseSpecIdentities(f)
+	if err != nil {
+		return nil, err
+	}
+	secrets, err := provisioner.ParseSpecSecrets(spec)
+	if err != nil {
+		return nil, fmt.Errorf("reading the spec: %w", err)
+	}
+	opened := make([]map[string]any, 0, len(secrets))
+	for i := range secrets {
+		sp := &secrets[i]
+		if sp.Sealed == "" {
+			continue
+		}
+		plain, err := appliance.OpenSealedSecret(sp.Sealed, ids...)
+		if errors.Is(err, appliance.ErrWrongSpecKey) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("secret %s/%s: %w", sp.Namespace, sp.Name, err)
+		}
+		var data map[string][]byte
+		if err = json.Unmarshal(plain, &data); err != nil {
+			return nil, fmt.Errorf("secret %s/%s: the sealed values are damaged", sp.Namespace, sp.Name)
+		}
+		opened = append(opened, map[string]any{"namespace": sp.Namespace, "name": sp.Name, "data": data})
+	}
+	return opened, nil
 }
 
 func (o *clusterOptions) created(ctx context.Context, out io.Writer, path string, request any) error {

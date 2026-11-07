@@ -75,15 +75,33 @@ func (a *Appliance) ensureSpecIdentity() (*age.X25519Identity, error) {
 	return id, nil
 }
 
+// SpecRecipients are the extra public keys the administrator set, which every spec is sealed to
+// besides the appliance's own.
+func (a *Appliance) SpecRecipients() []string {
+	s, _ := readJSONFile[EtcdBackupSettings](a.etcdBackupFile("settings.json"))
+	if s == nil {
+		return nil
+	}
+	return s.SpecRecipients
+}
+
 // SealSpecSecret seals a Secret's data for a spec with the recovery key's public half, making the
-// key on first use. Only a holder of the key opens it.
+// key on first use, and with each extra recipient. Only a holder of one of those keys opens it.
 func (a *Appliance) SealSpecSecret(plain []byte) (string, error) {
 	id, err := a.ensureSpecIdentity()
 	if err != nil {
 		return "", err
 	}
+	recipients := []age.Recipient{id.Recipient()}
+	for _, key := range a.SpecRecipients() {
+		r, perr := age.ParseX25519Recipient(key)
+		if perr != nil {
+			return "", fmt.Errorf("the recipient %q: %w", key, perr)
+		}
+		recipients = append(recipients, r)
+	}
 	var out bytes.Buffer
-	w, err := age.Encrypt(&out, id.Recipient())
+	w, err := age.Encrypt(&out, recipients...)
 	if err != nil {
 		return "", fmt.Errorf("sealing a Secret: %w", err)
 	}
@@ -103,11 +121,27 @@ func (a *Appliance) OpenSpecSecret(sealed string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return OpenSealedSecret(sealed, id)
+}
+
+// ParseSpecIdentities reads the age identities (secret keys, one per line, comments allowed) of an
+// identity file an administrator keeps offline.
+func ParseSpecIdentities(r io.Reader) ([]age.Identity, error) {
+	ids, err := age.ParseIdentities(r)
+	if err != nil {
+		return nil, fmt.Errorf("reading the identity file: %w", err)
+	}
+	return ids, nil
+}
+
+// OpenSealedSecret opens a sealed value with identities that need no appliance. It answers
+// ErrWrongSpecKey where none of them is a recipient the value was sealed to.
+func OpenSealedSecret(sealed string, ids ...age.Identity) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(sealed)
 	if err != nil {
 		return nil, fmt.Errorf("the sealed Secret is damaged: %w", err)
 	}
-	r, err := age.Decrypt(bytes.NewReader(raw), id)
+	r, err := age.Decrypt(bytes.NewReader(raw), ids...)
 	if _, wrong := errors.AsType[*age.NoIdentityMatchError](err); wrong {
 		return nil, ErrWrongSpecKey
 	}

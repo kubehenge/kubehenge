@@ -827,7 +827,11 @@ The **Backups** tab downloads it, as does `kubehenge cluster export <name>`. Bot
 
 `kubehenge cluster create --from <file>` creates the cluster again with the wizard's checks. It opens the sealed Secrets with the appliance's key and makes them first, so the controller finds the old keys. A Secret that already exists is left as it is.
 
-A Secret it cannot open stops the command, which names it. `--without-secrets` goes on without it. The appliance export carries the key, so a new appliance reads every stored spec.
+A Secret it cannot open stops the command, which names it. `--without-secrets` goes on without it. The appliance export carries the key, so a new appliance reads every stored spec. The export opens every stored Secret, so keep it like a password vault.
+
+The fleet shows an export-due warning once the key exists, because a lost appliance without an export locks every stored Secret for good.
+
+Extra age public keys (`age1...`) go in the backup settings or `etcd-backups set-up --spec-recipient`. Each spec is sealed to the appliance key and to each of them. An offline recipient removes the dependence on the appliance. `create --from <file> --identity <identity file>` opens the Secrets on your machine.
 
 #### Which Secrets are kept
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -53,6 +54,9 @@ func (s *Server) createFromSpec(w http.ResponseWriter, r *http.Request, u user) 
 	var in struct {
 		Spec           string `json:"spec"`
 		WithoutSecrets bool   `json:"withoutSecrets"`
+		// Opened holds Secrets the client opened with an identity it keeps offline, so that the
+		// private key never reaches the appliance.
+		Opened []openedSecret `json:"opened"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -73,7 +77,7 @@ func (s *Server) createFromSpec(w http.ResponseWriter, r *http.Request, u user) 
 			return
 		}
 	}
-	restore, lost := s.openSpecSecrets(secrets)
+	restore, lost := s.openSpecSecrets(secrets, in.Opened)
 	if len(lost) > 0 && !in.WithoutSecrets {
 		writeError(w, http.StatusUnprocessableEntity, "cannot restore "+strings.Join(lost, ", ")+". Send withoutSecrets to create the cluster without them")
 		return
@@ -118,13 +122,27 @@ func (s *Server) createWith(r *http.Request, u user, body []byte, dryRun bool) *
 	return got
 }
 
-// openSpecSecrets opens the Secrets of a spec, and names each one it cannot, with the reason.
-func (s *Server) openSpecSecrets(in []provisioner.SpecSecret) ([]*corev1.Secret, []string) {
+// openedSecret is a spec's Secret that the client opened itself.
+type openedSecret struct {
+	Namespace string            `json:"namespace"`
+	Name      string            `json:"name"`
+	Data      map[string][]byte `json:"data"`
+}
+
+// openSpecSecrets opens the Secrets of a spec, and names each one it cannot, with the reason. A
+// Secret the client opened is taken as it is, and the appliance's key is tried for the rest.
+func (s *Server) openSpecSecrets(in []provisioner.SpecSecret, opened []openedSecret) ([]*corev1.Secret, []string) {
 	var restore []*corev1.Secret
 	var lost []string
 	for i := range in {
 		sp := &in[i]
 		name := fmt.Sprintf("Secret %s/%s", sp.Namespace, sp.Name)
+		if j := slices.IndexFunc(opened, func(o openedSecret) bool { return o.Namespace == sp.Namespace && o.Name == sp.Name }); j >= 0 {
+			restore = append(restore, &corev1.Secret{
+				Name: sp.Name, Namespace: sp.Namespace, Labels: sp.Labels, Annotations: sp.Annotations, Type: sp.Type, Data: opened[j].Data,
+			})
+			continue
+		}
 		if sp.Sealed == "" {
 			lost = append(lost, name+" (the file holds no values for it)")
 			continue

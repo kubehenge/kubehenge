@@ -127,7 +127,8 @@ func exportFingerprint(b *exportBackups) string {
 		Recipient       string       `json:"recipient"`
 		Target          BackupTarget `json:"target"`
 		SpecKey         string       `json:"specKey"`
-	}{b.Settings.Target, b.Keys.AccessKeyID, b.Keys.SecretAccessKey, b.Keys.Recipient, b.Target, b.SpecKey})
+		SpecRecipients  []string     `json:"specRecipients"`
+	}{b.Settings.Target, b.Keys.AccessKeyID, b.Keys.SecretAccessKey, b.Keys.Recipient, b.Target, b.SpecKey, b.Settings.SpecRecipients})
 	if err != nil {
 		// Strings and plain structs always marshal. Distinct input still gives a distinct value.
 		raw = fmt.Appendf(nil, "%+v", b)
@@ -159,21 +160,27 @@ func (a *Appliance) currentBackups() (*exportBackups, error) {
 }
 
 // exportDue tells whether the backups work and an export of the settings now was not taken yet.
-// It is judged after a backup succeeded, since an export without a snapshot restores nothing.
+// It is judged after a backup succeeded, since an export without a snapshot restores nothing. Once
+// the recovery key exists it is due at once, since the stored Secrets open only with that key and
+// an appliance lost before an export locks them for good.
 func (a *Appliance) exportDue(st *EtcdBackupStatus) (bool, *time.Time) {
 	var at *time.Time
 	rec, _ := readJSONFile[exportRecord](a.exportFile())
 	if rec != nil {
 		at = &rec.At
 	}
-	if st.Settings == nil || st.Last == nil {
+	if st.Settings == nil {
 		return false, at
 	}
 	now, err := a.currentBackups()
 	if err != nil {
 		return false, at
 	}
-	return rec == nil || rec.Fingerprint != exportFingerprint(now), at
+	stale := rec == nil || rec.Fingerprint != exportFingerprint(now)
+	if now.SpecKey != "" {
+		return stale, at
+	}
+	return st.Last != nil && stale, at
 }
 
 // ExportState makes the export bundle, encrypted with exportPassphrase. The state passphrase proves
@@ -181,6 +188,9 @@ func (a *Appliance) exportDue(st *EtcdBackupStatus) (bool, *time.Time) {
 func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPassphrase string) ([]byte, error) {
 	if err := ValidPassphrase(exportPassphrase); err != nil {
 		return nil, fmt.Errorf("export %w", err)
+	}
+	if s, _ := readJSONFile[EtcdBackupSettings](a.etcdBackupFile("settings.json")); s == nil {
+		return nil, ErrNoEtcdBackups
 	}
 	// The export carries the recovery key, so that a new appliance opens the stored specs.
 	if _, err := a.ensureSpecIdentity(); err != nil {

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -264,6 +265,7 @@ func (s *Server) storeSpecsOnce(ctx context.Context, stored map[string]string) {
 			s.Log.Warn("reading a cluster's spec", "cluster", key, "error", err)
 			continue
 		}
+		sum += "|" + strings.Join(s.Appliance.SpecRecipients(), ",")
 		if stored[key] == sum {
 			continue
 		}

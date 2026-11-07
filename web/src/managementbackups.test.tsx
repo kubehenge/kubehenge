@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { fakeServer, type Route } from "./fake-server";
 import { ManagementBackups } from "./ManagementBackups";
+import { FleetBackupWarning } from "./ManagementRecovery";
 import type { ManagementBackups as Backups } from "./types";
 
 const passphrase = "correct horse battery staple";
@@ -76,6 +77,7 @@ describe("management cluster backups", () => {
       accessKeyID: "AKID",
       secretAccessKey: "secret",
       passphrase,
+      specRecipients: [],
     });
     await expect(screen.findByText("Every 6 h, newest 28 kept")).resolves.toBeInTheDocument();
     await expect(screen.findAllByRole("button", { name: /^Restore from /u })).resolves.toHaveLength(2);
@@ -102,6 +104,42 @@ describe("management cluster backups", () => {
       accessKeyID: "",
       secretAccessKey: "",
     });
+  });
+
+  it("sends the extra recipients one per line and shows the stored ones", async () => {
+    const key = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p";
+    const calls = fakeServer({
+      "GET /api/appliance/etcd-backups": {
+        body: { ...on, settings: { target: "minio", everyHours: 6, keep: 28, specRecipients: [key] } },
+      },
+      "PUT /api/appliance/etcd-backups": { body: on },
+      "GET /api/appliance/etcd-backups/snapshots": { body: snapshots },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<ManagementBackups running={false} />);
+
+    await user.click(await screen.findByRole("button", { name: "Change…" }));
+    const recipients = within(screen.getByRole("dialog")).getByLabelText(/^Extra recipients/u);
+    expect(recipients).toHaveValue(key);
+    await user.type(recipients, "{Enter}  {Enter}age1second");
+    await user.type(within(screen.getByRole("dialog")).getByLabelText("State passphrase"), `${passphrase}{Enter}`);
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("PUT /api/appliance/etcd-backups"));
+    expect(calls.find((c) => c.key === "PUT /api/appliance/etcd-backups")?.body).toMatchObject({
+      specRecipients: [key, "age1second"],
+    });
+  });
+
+  it("warns in the fleet header once the key exists and no export was taken", async () => {
+    fakeServer({ "GET /api/appliance/etcd-backups": { body: { ...on, exportDue: true, specKey: true } } });
+    render(<FleetBackupWarning />);
+    await expect(screen.findByText(/stored Secrets open only with this appliance/u)).resolves.toBeInTheDocument();
+  });
+
+  it("keeps the fleet header quiet while the export is due but no key exists", async () => {
+    const calls = fakeServer({ "GET /api/appliance/etcd-backups": { body: { ...on, exportDue: true } } });
+    const { container } = render(<FleetBackupWarning />);
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("GET /api/appliance/etcd-backups"));
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("says why a snapshot failed, and points to a target when there is none", async () => {

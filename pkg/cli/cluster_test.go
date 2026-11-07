@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"filippo.io/age"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -186,6 +190,68 @@ func TestClusterExportSavesTheSpecAndCreateFromRecreatesIt(t *testing.T) {
 	if len(fake.sent) != 2 || !strings.HasPrefix(fake.sent[0], "POST /api/cluster-specs ") || !strings.Contains(fake.sent[0], "kind: Cluster") ||
 		!strings.Contains(fake.sent[0], `"withoutSecrets":false`) || !strings.Contains(fake.sent[1], `"withoutSecrets":true`) {
 		t.Errorf("sent %v", fake.sent)
+	}
+}
+
+func TestCreateFromOpensSecretsOfflineWithAnIdentityFile(t *testing.T) {
+	t.Parallel()
+	fake := &fakeClusterAPI{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	const token = "dev@pve!ci=secret" //nolint:gosec // the fake interface's own
+	offline, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stranger, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seal := func(to age.Recipient, plain string) string {
+		var out bytes.Buffer
+		w, sErr := age.Encrypt(&out, to)
+		if sErr != nil {
+			t.Fatal(sErr)
+		}
+		_, _ = w.Write([]byte(plain))
+		_ = w.Close()
+		return base64.StdEncoding.EncodeToString(out.Bytes())
+	}
+	secret := func(name, sealed string) string {
+		return "---\nkind: Secret\nmetadata:\n  name: " + name + "\n  namespace: clusters\n  annotations:\n    " +
+			provisioner.SealedSecretAnnotation + ": " + sealed + "\n"
+	}
+	spec := "# Secrets: sealed, 2\nkind: Cluster\nname: web\n" +
+		secret("web-gitops", seal(offline.Recipient(), `{"key":"dmFsdWU="}`)) +
+		secret("web-encryption", seal(stranger.Recipient(), `{"key":"b3RoZXI="}`))
+	dir := t.TempDir()
+	specFile, identityFile := filepath.Join(dir, "web.yaml"), filepath.Join(dir, "offline.key")
+	if err = os.WriteFile(specFile, []byte(spec), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(identityFile, []byte("# created by the administrator\n"+offline.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, runErr := runCluster(t, srv.URL, token, "create", "--from", specFile, "--identity", identityFile); runErr != nil || out != "cluster clusters/web created\n" {
+		t.Fatalf("create --from --identity = %q, %v", out, runErr)
+	}
+	if _, err = runCluster(t, srv.URL, token, "create", "--from", specFile, "--identity", filepath.Join(dir, "missing")); err == nil {
+		t.Error("a missing identity file was accepted")
+	}
+	if _, err = runCluster(t, srv.URL, token, "create", "-f", specFile, "--identity", identityFile); err == nil {
+		t.Error("--identity was accepted without --from")
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.sent) != 1 {
+		t.Fatalf("sent %v", fake.sent)
+	}
+	sent := fake.sent[0]
+	if !strings.Contains(sent, `"opened":[{"data":{"key":"dmFsdWU="},"name":"web-gitops","namespace":"clusters"}]`) {
+		t.Errorf("only the Secret the identity opens is sent opened: %s", sent)
+	}
+	if strings.Contains(sent, offline.String()) || strings.Contains(sent, "b3RoZXI=") {
+		t.Errorf("the private key or a foreign value left the machine: %s", sent)
 	}
 }
 

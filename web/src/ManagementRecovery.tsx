@@ -63,6 +63,14 @@ export function BackupWarning({
 /** FleetBackupWarning shows the warning above the cluster list, to those who may set backups up. */
 export function FleetBackupWarning(): JSX.Element | null {
   const { data: b, reload } = usePoll(api.managementBackups, pollIdle);
+  if (b?.exportDue === true && b.specKey === true) {
+    return (
+      <div className="pad">
+        <p className="warning">Export due: stored Secrets open only with this appliance&apos;s key.</p>
+        <Link to={adminPath("backups")}>Export the appliance</Link>
+      </div>
+    );
+  }
   if (b?.warning === undefined || b.warning.dismissal !== undefined) {
     return null;
   }
@@ -85,7 +93,13 @@ export function ExportBox({ backups: b }: { backups: ManagementBackups }): JSX.E
   return (
     <div className="box">
       <h3>Export</h3>
-      {b.exportDue === true && <p className="warning">No export since the backup settings changed.</p>}
+      {b.exportDue === true && (
+        <p className="warning">
+          No export since the settings or the recovery key changed. Stored Secrets open only with this appliance&apos;s
+          key.
+        </p>
+      )}
+      <p className="muted">The export opens every stored Secret. Keep it like a password vault.</p>
       <p className="muted">{b.exportedAt === undefined ? "Never exported." : `Last exported ${day(b.exportedAt)}.`}</p>
       <div className="actions">
         <button type="button" onClick={() => setOpen(true)}>

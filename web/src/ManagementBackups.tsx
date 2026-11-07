@@ -27,6 +27,15 @@ const when = (iso: string | undefined): string => (iso === undefined ? "" : new 
 
 const defaults = { everyHours: 6, keep: 28 };
 
+const recipientText = (s: ManagementBackupSettings | undefined): string => (s?.specRecipients ?? []).join("\n");
+
+/** The keys typed one per line, without blank lines. The server validates them. */
+const recipientLines = (text: string): string[] =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+
 // ManagementBackups snapshots the management cluster's etcd into a backup target on a schedule,
 // lists the snapshots there and restores one. The appliance does all of it through the nodes'
 // Talos API, so a restore works while the management cluster's API is down.
@@ -255,6 +264,7 @@ function SetUpDialog({
   const [accessKeyID, setAccessKeyID] = useState("");
   const [secretAccessKey, setSecretAccessKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const [recipients, setRecipients] = useState(recipientText(s));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const keepKeys = b.keysStored && accessKeyID === "" && secretAccessKey === "";
@@ -278,6 +288,7 @@ function SetUpDialog({
         accessKeyID,
         secretAccessKey,
         passphrase,
+        specRecipients: recipientLines(recipients),
       });
       await onDone();
     } catch (err) {
@@ -362,6 +373,19 @@ function SetUpDialog({
           />
         )}
       </Field>
+      <Field label="Extra recipients (age1…, one per line)">
+        {(id) => (
+          <textarea
+            id={id}
+            rows={2}
+            spellCheck={false}
+            autoComplete="off"
+            value={recipients}
+            onChange={(e) => setRecipients(e.target.value)}
+          />
+        )}
+      </Field>
+      <p className="muted">An offline recipient opens the specs&apos; Secrets without this appliance.</p>
       <p className="warning">
         The appliance keeps the access key and a talosconfig that can only take etcd snapshots. Restoring needs this
         passphrase.

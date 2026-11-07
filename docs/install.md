@@ -468,7 +468,7 @@ The appliance's shell has the same commands, with the page's privileges and refu
 | Command | Does |
 | --- | --- |
 | `kubehenge appliance etcd-backups` | shows the target, the schedule, the last snapshot and the next |
-| `kubehenge appliance etcd-backups set-up --target … --access-key-id … --secret-access-key-file … --passphrase-file …` | sets the backups up or changes them. `--every-hours` and `--keep` set the schedule |
+| `kubehenge appliance etcd-backups set-up --target … --access-key-id … --secret-access-key-file … --passphrase-file …` | sets the backups up or changes them. `--every-hours` and `--keep` set the schedule. `--spec-recipient age1...` (repeatable) adds an offline key for the specs' Secrets |
 | `kubehenge appliance etcd-backups off` | switches them off. The snapshots stay in the target |
 | `kubehenge appliance etcd-backups snapshots` | lists the snapshots in the target, newest first |
 | `kubehenge appliance etcd-backups take` | takes a snapshot and waits until it is stored |

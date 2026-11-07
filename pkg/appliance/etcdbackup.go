@@ -57,7 +57,13 @@ type EtcdBackupSettings struct {
 	Keep       int       `json:"keep"`
 	By         string    `json:"by,omitempty"`
 	Since      time.Time `json:"since"`
+	// SpecRecipients are age public keys, besides the appliance's own, that each cluster spec's
+	// Secrets are sealed to. A holder of the matching private key opens a spec without the appliance.
+	SpecRecipients []string `json:"specRecipients,omitempty"`
 }
+
+// maxSpecRecipients bounds the extra recipients of a spec's Secrets.
+const maxSpecRecipients = 8
 
 // Validate checks the settings against the targets there are.
 func (s *EtcdBackupSettings) Validate(targets []BackupTarget) error {
@@ -70,6 +76,16 @@ func (s *EtcdBackupSettings) Validate(targets []BackupTarget) error {
 	}
 	if s.Keep < 1 || s.Keep > maxEtcdBackupKeep {
 		errs = append(errs, fmt.Errorf("keep: 1 to %d snapshots", maxEtcdBackupKeep))
+	}
+	if len(s.SpecRecipients) > maxSpecRecipients {
+		errs = append(errs, fmt.Errorf("specRecipients: at most %d keys", maxSpecRecipients))
+	}
+	for i, key := range s.SpecRecipients {
+		if _, err := age.ParseX25519Recipient(key); err != nil {
+			errs = append(errs, fmt.Errorf("specRecipients: %q is not an age public key (age1...)", key))
+		} else if slices.Contains(s.SpecRecipients[:i], key) {
+			errs = append(errs, fmt.Errorf("specRecipients: %s is given twice", key))
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -89,6 +105,9 @@ type EtcdBackupStatus struct {
 	// carries last changed, after a snapshot succeeded.
 	ExportDue  bool       `json:"exportDue,omitempty"`
 	ExportedAt *time.Time `json:"exportedAt,omitempty"`
+	// SpecKey is set once the appliance holds the recovery key that opens the stored specs' Secrets.
+	// Only an export carries it.
+	SpecKey bool `json:"specKey,omitempty"`
 }
 
 // etcdBackupKeys is what the appliance keeps to take snapshots with nobody signed in: the target's
@@ -147,6 +166,8 @@ func (a *Appliance) EtcdBackups() *EtcdBackupStatus {
 	a.mu.Unlock()
 	st.Warning = a.etcdBackupWarning(st)
 	st.ExportDue, st.ExportedAt = a.exportDue(st)
+	_, keyErr := os.Stat(a.specKeyFile())
+	st.SpecKey = keyErr == nil
 	return st
 }
 
