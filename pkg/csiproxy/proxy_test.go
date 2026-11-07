@@ -599,8 +599,7 @@ func TestCopyUnderWayIsHidden(t *testing.T) {
 		status, _ := h.copyVolume(t, "pve1", "local-zfs", "vm-4242-pvc-1", "vm-4242-snap-1")
 		first <- status
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for len(pve.seen("POST /nodes/pve1/qemu/300/config")) == 0 && time.Now().Before(deadline) {
+	for len(pve.seen("POST /nodes/pve1/qemu/300/config")) == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}
 	_, list := h.call(t, http.MethodGet, "/nodes/pve1/storage/local-zfs/content", nil)

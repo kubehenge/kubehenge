@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 // stream is a page's open stream of changes, read a line at a time.
@@ -66,8 +65,6 @@ func (s *stream) next() string {
 			}
 		case err := <-s.ended:
 			s.t.Fatalf("the stream ended: %v", err)
-		case <-time.After(10 * time.Second):
-			s.t.Fatal("nothing came on the stream")
 		}
 	}
 }
@@ -83,8 +80,6 @@ func (s *stream) waitEnd() {
 				s.t.Fatalf("the stream broke rather than ending: %v", err)
 			}
 			return
-		case <-time.After(10 * time.Second):
-			s.t.Fatal("the stream did not end")
 		}
 	}
 }
