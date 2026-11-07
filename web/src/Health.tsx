@@ -306,26 +306,29 @@ function AcceptUpgrade({
   cluster: { namespace: string; name: string };
   version: string;
 }): JSX.Element {
-  const [state, setState] = useState<"idle" | "busy" | "done" | string>("idle");
-  if (state === "done") {
-    return <span className="hint">Accepted. The upgrade starts in the next round.</span>;
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string>();
+  if (done) {
+    return <span className="hint">Accepted for the next automatic upgrade.</span>;
   }
+  const accept = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await api.acceptUpgrade(cluster.namespace, cluster.name, version);
+      setDone(true);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <>
-      <button
-        type="button"
-        disabled={state === "busy"}
-        onClick={() => {
-          setState("busy");
-          api
-            .acceptUpgrade(cluster.namespace, cluster.name, version)
-            .then(() => setState("done"))
-            .catch((e: unknown) => setState(errorMessage(e)));
-        }}
-      >
+      <button type="button" disabled={busy} onClick={() => void accept()}>
         Upgrade anyway
       </button>
-      {state !== "idle" && state !== "busy" && <div className="hint">{state}</div>}
+      {filled(error) && <div className="hint">{error}</div>}
     </>
   );
 }

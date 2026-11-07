@@ -109,9 +109,7 @@ function removedAPIsCheck(checks: UpgradeChecks | string | undefined): Check {
           (a) =>
             `${a.api}, removed in ${a.removedIn}${a.seen === undefined ? "" : `, last requested ${a.seen.slice(0, isoDateLength)}`}`,
         ),
-        ...(checks.basis === "gauge"
-          ? ["The API server keeps no request counts, so these are every API requested since it started."]
-          : []),
+        ...(checks.basis === "gauge" ? ["No request counts, so every use since start counts."] : []),
       ],
     };
   }
