@@ -1121,6 +1121,25 @@ export interface Templates {
   nodeOSes?: NodeOS[];
 }
 
+/** A release an administrator pinned, or one being checked before it is. */
+export interface ReleasePin {
+  version: string;
+  /** SHA-256 of the release's checksum file. */
+  file: string;
+  /** SHA-256 of its install script. */
+  script: string;
+  by?: string;
+  at?: string;
+  /** A cluster that runs the release, which keeps its pin from being removed. */
+  inUse?: string;
+}
+
+export interface ReleasePins {
+  pins: ReleasePin[];
+  /** Whether this interface can read a release to pin it. */
+  checks: boolean;
+}
+
 /** Whether a cluster creator may have a missing template built, and which builds are under way. */
 export interface TemplateBuilds {
   allowed: boolean;

@@ -32,6 +32,7 @@ import {
   usePoll,
   weekdayName,
 } from "./ui";
+import { ReleasePins } from "./ReleasePins";
 import { oneOf } from "./values";
 
 const kubernetesVersion = /^v1\.\d+\.\d+$/u;
@@ -39,6 +40,15 @@ const kubernetesVersion = /^v1\.\d+\.\d+$/u;
 // Templates lists the VM templates clusters are cloned from and builds them with the signed-in
 // administrator's Proxmox VE session.
 export function Templates(): JSX.Element {
+  return (
+    <>
+      <TemplatesBox />
+      <ReleasePins />
+    </>
+  );
+}
+
+function TemplatesBox(): JSX.Element {
   const { data, error, reload } = usePoll(api.templates, (d) =>
     d?.job?.state === "running" || refreshBusy(d?.refresh) ? pollRunning : pollIdle,
   );

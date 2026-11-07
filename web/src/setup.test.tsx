@@ -39,6 +39,7 @@ const form: SetupForm = {
   refreshGateway: "",
   refreshDNS: "",
   creatorBuilds: false,
+  kubeadmPatches: true,
   clusterSysAudit: true,
   nodeBootLogs: true,
   apiAuditLog: false,
@@ -166,7 +167,11 @@ describe("setup", () => {
     expect(formOf(saved)).toMatchObject({
       refreshWeekday: "Wed",
       creatorBuilds: true,
+      kubeadmPatches: true,
     });
+    const off = settings({ ...form, kubeadmPatches: false });
+    expect(off.templateRefresh).toMatchObject({ kubeadmPatches: false });
+    expect(formOf(off).kubeadmPatches).toBe(false);
     expect(setupFieldProblems({ ...form, refreshGateway: "192.0.2.1" })).toHaveProperty("refreshAddress");
     expect(setupFieldProblems({ ...form, refreshAddress: "192.0.2.50" })).toHaveProperty("refreshAddress");
     const outside = setupFieldProblems({
