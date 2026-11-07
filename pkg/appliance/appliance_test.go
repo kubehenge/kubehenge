@@ -135,6 +135,10 @@ func TestTemplateRefreshValidated(t *testing.T) {
 		"address":           {TemplateRefresh{Address: "10.0.0.50"}, "Template build address: an IPv4 address with prefix"},
 		"gateway elsewhere": {TemplateRefresh{Address: "10.0.0.50/24", Gateway: "10.0.1.1"}, "Template build gateway: an address in 10.0.0.0/24"},
 		"DNS":               {TemplateRefresh{Address: "10.0.0.50/24", Gateway: "10.0.0.1", DNS: []string{"dns"}}, "Template build DNS servers"},
+		"VLAN negative":     {TemplateRefresh{VLAN: -1}, "Template build VLAN: 0 to 4094"},
+		"VLAN too high":     {TemplateRefresh{VLAN: 4095}, "Template build VLAN: 0 to 4094"},
+		"bridge":            {TemplateRefresh{Bridge: "evpn/web/x"}, "Template build bridge"},
+		"node":              {TemplateRefresh{Node: "pve_1"}, "Template build node"},
 	} {
 		s := settings("pve1")
 		c.refresh.Enabled = true
@@ -155,6 +159,13 @@ func TestTemplateRefreshValidated(t *testing.T) {
 	if !settings("pve1").RefreshesTemplates() {
 		t.Error("settings saved without a refresh have it on")
 	}
+	for _, r := range []TemplateRefresh{{VLAN: 0}, {VLAN: 4094}, {Bridge: "evpn1/web"}, {Bridge: "vmbr1", Node: "pve2"}} {
+		s.TemplateRefresh = &r
+		r.Enabled = true
+		if err := s.Validate(); err != nil {
+			t.Errorf("%+v: %v", r, err)
+		}
+	}
 }
 
 func TestModuleTemplateRefresh(t *testing.T) {
@@ -166,6 +177,11 @@ func TestModuleTemplateRefresh(t *testing.T) {
 	want := map[string]any{"enabled": true, "creator_builds": false, "time_zone": "Europe/Berlin", "dns": []string{"10.0.0.1"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+	got = moduleTemplateRefresh(&TemplateRefresh{Enabled: true, Node: "pve2", Bridge: "evpn1/build", VLAN: 20})
+	want = map[string]any{"enabled": true, "creator_builds": false, "node": "pve2", "bridge": "evpn1/build", "vlan": 20}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("placement set: got %v, want %v", got, want)
 	}
 }
 

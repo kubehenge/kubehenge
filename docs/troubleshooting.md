@@ -204,6 +204,12 @@ The task log shows what each Kubehenge account did. In an appliance's management
   - **Kubeconfig** needs `Sys.Modify` on the cluster's pool and shows once the cluster is available.
   - Clusters outside the interface's namespaces are read-only there.
 - **No bridges to choose from:** Proxmox VE lists a node's bridges only with `Sys.Audit` on the node. Type the bridge's name instead. A bridge marked "no SDN.Use" needs that privilege on `/sdn/zones/localnetwork/<bridge>`, or on `/sdn/zones/<zone>/<vnet>` for a VNet.
+- **"`<user>` needs `Pool.Audit` on `<pool>`":** Proxmox VE lists a pool's VMs only to a user with `Pool.Audit` on it. Without it a cluster shows no nodes, console links or reboot. `PVEPoolUser` and `PVEAuditor` hold it, and a role of your own needs it added.
+- **"Proxmox VE refused: …":** Proxmox VE answered, and the reason after the colon is its own, such as "VM is locked (backup)" or "cluster not ready - no quorum?". Fix that first. "Proxmox VE did not answer" means no connection, a timeout or a certificate error.
+- **"The user name and realm together are at most 64 characters":** Proxmox VE takes no longer sign-in name, `user@realm` counted whole.
+- **"Sign-in failed" with a right password:** Proxmox VE gives a wrong password, an unknown or disabled user and a realm that requires a second factor the user lacks one answer. Ask an administrator to set up the factor.
+- **"Wrong code, or the factor is locked":** eight wrong TOTP codes lock TOTP until a recovery key is used, and Proxmox VE says nothing of it. Sign in with a recovery key. Without one, an administrator resets the user's factors.
+- **"Wrong recovery key, or the cluster has no quorum":** a recovery key is written to Proxmox VE's cluster files, which a cluster without quorum cannot change. Sign in on a node's console until quorum returns.
 - **`"Session ended. Sign in again."`:** Proxmox VE no longer accepts the session. A session lasts eight hours at most.
 - **Sign-in refused after several tries:** five failures within 15 minutes lock a user out from that address until the 15 minutes are up. Twenty failures from one address, whichever users they name, lock the address out.
 - **"Security keys work only in Proxmox VE":** a WebAuthn key answers only on Proxmox VE's own page. Sign in with a TOTP code or recovery key, or through an OpenID realm.
@@ -489,6 +495,24 @@ A Kubernetes upgrade waits while the Cluster has the condition `UpgradeHeld`. It
 kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.type=="UpgradeHeld")].reason}'
 ```
 
+### Kubernetes out of support
+
+A cluster on a Kubernetes minor version older than the oldest one offered for new clusters gets the condition `KubernetesOutOfSupport`. The Health page shows **Kubernetes out of support**, and the appliance's notifications tell it once and again each month while it stays. Upgrade one minor version at a time ([upgrading.md](upgrading.md#workload-clusters)).
+
+### Automatic upgrade skipped
+
+An automatic upgrade that is due waits while the Cluster has the condition `AutoUpgradeSkipped`. The Health page shows it as **Automatic upgrade skipped**, and the cluster has a warning event of the same name. The message names the version and what is in the way.
+
+| Reason | What to do |
+| --- | --- |
+| `RemovedAPIs` | A client requested an API the new version removes within the last 7 days. The message names it and the date. Move the client to the current API and the note ends 7 days after the last request. Or accept it, below. |
+| `FailClosedWebhooks` | A webhook that rejects requests when it is down has fewer than two ready endpoints, or all on one node. Run two replicas on different nodes, or set `failurePolicy: Ignore` on the webhook. Or accept it, below. |
+| `ChecksUnavailable` | The cluster could not be read. The message says why. Often the cluster's read access is not set up yet or has expired, and the next controller pass fixes it. |
+
+`kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.type=="AutoUpgradeSkipped")].message}'` prints it. An upgrade by hand goes past the warning.
+
+To let the automatic upgrade go ahead without a fix, accept what is listed. Choose **Upgrade anyway** on the Health page, run `kubehenge cluster accept-upgrade NAME --version V`, or set the annotation `kubehenge.dev/acknowledged-upgrade-findings` to `{"1.37":["<API or webhook name>"]}` with kubectl. It holds for that minor version only. A finding that was not listed, such as a new API in use, skips the upgrade again. `ChecksUnavailable` cannot be accepted.
+
 ### GitOps
 
 - **`GitOpsWaiting`**, "GitOps waits for …": the engine syncs nothing until it has what follows.
@@ -513,6 +537,7 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.t
   - For RKE2 and k3s the controller rolls the workers' pool, and rolls k3s's control plane through its `rolloutAfter`.
   - An RKE2 control plane of three or more machines is replaced one machine at a time, through its health check.
   - An event `RenewingCertificates` names the machines. `CertificatesRenewed` says when nothing runs out within 60 days any more.
+- Reason `Paused`: the cluster is paused (`spec.paused`), so nothing replaces the machines. Resume it and the controller renews them. A cluster paused for a week or more also shows **Paused since** on its Health page.
 - Reason `RestartNeeded`: an RKE2 control plane of fewer than three machines cannot be replaced one at a time without stopping the cluster. Restart `rke2-server` on the node the message names (`systemctl restart rke2-server`). RKE2 renews certificates on a restart once they are within 120 days of running out.
 - Reason `NotRenewed`: they run out within 30 days and nothing renewed them. The message says how to fix each:
   - Replace a machine whose replacement stalled, once the rest of the cluster is healthy.
@@ -554,6 +579,8 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.metadata.annotations.ku
 - **Hook BeforeClusterDelete:** a cluster registered with Rancher leaves it first, while its VMs still run. The reason is Rancher's.
 - **Machine … Drain not completed:** a node's pods are being evicted, and a PodDisruptionBudget, or a pod that does not stop, holds that up. Delete the pod in the cluster, or abandon the deletion.
 - **ProxmoxMachine … (a VM on an offline node):** capmox cannot delete the VM. Bring the node back.
+- **ProxmoxMachine … "protection flag set":** the VM has Proxmox VE's protection flag, which stops anyone destroying it. Kubehenge never clears an administrator's lock. Run `qm set <vmid> --protection 0` on the node. The deletion carries on within seconds.
+- **ProxmoxMachine … "named …, not …":** a VM of another name holds the machine's VM ID and nothing proves it is not the machine's own. Rename it to the name given, or remove the ProxmoxMachine's finalizer if the machine's VM is gone.
 - **Cluster … removing the Proxmox VE objects:** Kubehenge's controller waits while an offline Proxmox VE node may hold some of the cluster's volumes on local storage. It also waits while Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
 
 The Cluster gets the condition `DeletionStalled` and a warning event of the same name once the deletion has waited 20 minutes (the module's `watch.stall_minutes`). The fleet and the cluster's **Health** view list it.

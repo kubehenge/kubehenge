@@ -453,14 +453,22 @@ class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
 # load balancer and Rancher's agent, which registers a cluster by default.
 # shellcheck disable=SC2086 # one add-on per word.
 sized_for=$(jq -cn '$ARGS.positional + ["loadBalancer", "rancherAgent"]' --args ${addons})
+# fixture_memory: what the test's own pods request on the worker at once, which the scheduler keeps
+# for them beside the add-ons' requests. With GitOps that is Gitea's 128 MiB and five agnhost pods at
+# 16 MiB each. The other steps' few agnhost pods fit in the room the add-ons' figures leave.
+fixture_memory=0
+# shellcheck disable=SC2310 # on only answers whether the run switches the add-on on.
+if on argocd; then
+    fixture_memory=208
+fi
 # Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they
-# are seen to fit in it: its distribution's least, or what a worker uses itself and each add-on's
-# figure, whichever is more.
-worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
+# are seen to fit in it: its distribution's least, or what a worker uses itself, each add-on's
+# figure and the test's own pods, whichever is more.
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --argjson fixtures "${fixture_memory}" '
     (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
     | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + ([$on[] | $addon[.]] | add)]
+        $node.worker + ([$on[] | $addon[.]] | add) + $fixtures]
     | max')}
 # Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
 # request, the GitOps engine that asks for more of the two.
@@ -893,8 +901,10 @@ esac
 # agnhost_pod <namespace> <name> <args...>: an agnhost pod at Pod Security's restricted level,
 # which the cluster enforces; the image runs as root unless told otherwise. The overrides merge into
 # the container by its name. sh has no local variables, so its own carry its prefix.
+# Every fixture pod here has a memory request: a pod without one is best-effort, and Talos's OOM
+# controller kills those first on a full worker, which restarts it and fails the lane's restart check.
 agnhost_pod() {
-    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
+    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
     agnhost_namespace=$1 agnhost_name=$2
     shift 2
     wl -n "${agnhost_namespace}" run "${agnhost_name}" --image="${agnhost}" --override-type=strategic --overrides="${agnhost_overrides}" -- "$@"
@@ -912,6 +922,7 @@ agnhost_deployment() {
             spec: {hostname: $name,
                 securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: "RuntimeDefault"}},
                 containers: [{name: $name, image: $image, args: $args,
+                    resources: {requests: {cpu: "10m", memory: "16Mi"}, limits: {memory: "128Mi"}},
                     securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}}}' --args -- "$@" |
         wl -n "${agnhost_namespace}" apply -f -
 }
@@ -1262,6 +1273,9 @@ spec:
     - name: write
       # renovate: datasource=docker depName=registry.k8s.io/pause
       image: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 64Mi}
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -1507,6 +1521,9 @@ spec:
     - name: data
       image: ${agnhost}
       command: [sh, -ec, "$3"]
+      resources:
+        requests: {cpu: 10m, memory: 32Mi}
+        limits: {memory: 256Mi}
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -2384,6 +2401,9 @@ spec:
       image: ${agnhost}
       command: [sh, -c, "echo $2; $4"]
       ports: $3
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 128Mi}
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -2901,6 +2921,9 @@ spec:
       readinessProbe:
         tcpSocket:
           port: 5353
+      resources:
+        requests: {cpu: 10m, memory: 64Mi}
+        limits: {memory: 256Mi}
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -2956,6 +2979,9 @@ spec:
       readinessProbe:
         tcpSocket:
           port: 14000
+      resources:
+        requests: {cpu: 10m, memory: 32Mi}
+        limits: {memory: 256Mi}
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:
@@ -3223,6 +3249,12 @@ spec:
             - {name: ssh, containerPort: 2222}
           readinessProbe:
             httpGet: {path: /api/healthz, port: http}
+          # A pod without requests is best-effort, and Talos's OOM controller kills those first when the
+          # 2 GiB worker fills up as the add-ons install. Gitea holds about 100 MiB and peaks near
+          # 135 MiB, and the worker is sized for this request (fixture_memory).
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
