@@ -177,6 +177,54 @@ absent() {
     esac
 }
 
+# flux_ready <kubeconfig>: whether the Flux Operator reports its FluxInstance ready. Until then seen
+# holds the Ready condition, whose message names the component or sync object the operator waits for.
+flux_ready() {
+    flux_instance=$(KUBECONFIG="$1" kubectl -n flux-system get fluxinstance flux -o json 2>&1) || {
+        seen=$(printf '%s\n' "${flux_instance}" | tail -n 1 | cut -c1-400)
+        return 1
+    }
+    flux_condition=$(printf '%s' "${flux_instance}" | jq -j '[.status.conditions[]? | select(.type == "Ready")][0] //
+        {status: "Unknown", message: "no Ready condition yet"} | "\(.status) \(.reason // "-"): \(.message // "" | gsub("\\s+"; " "))"' |
+        cut -c1-400) || return 1
+    case ${flux_condition} in
+        "True "*) return 0 ;;
+        *) seen=${flux_condition} ;;
+    esac
+    return 1
+}
+
+# flux_state <kubeconfig>: what holds a FluxInstance up in a failed test, which no collected log
+# keeps: its conditions, the sync's GitRepository and Kustomization, each pod in flux-system with
+# the conditions it does not meet and how its containers last ended, the namespace's events and the
+# operator's last lines. A cluster without Flux prints nothing.
+flux_state() {
+    KUBECONFIG="$1" kubectl get namespace flux-system > /dev/null 2>&1 || return 0
+    printf '\nFlux:\n'
+    if flux_instance=$(KUBECONFIG="$1" kubectl -n flux-system get fluxinstance flux -o json 2>&1); then
+        printf '%s' "${flux_instance}" | jq -r '.status.conditions[]? | "FluxInstance \(.type)=\(.status) \(.reason // "-"): \(.message // "")"' || true
+    else
+        printf 'FluxInstance: %s\n' "${flux_instance}"
+    fi
+    KUBECONFIG="$1" kubectl -n flux-system get gitrepositories,kustomizations 2>&1 || true
+    if flux_pods=$(KUBECONFIG="$1" kubectl -n flux-system get pods -o json 2>&1); then
+        # A pending pod's PodScheduled says what no node had room for; a waiting container says
+        # why, such as an image pull backing off; a container killed for memory ended with 137.
+        printf '%s' "${flux_pods}" | jq -r '.items[] |
+            "\(.metadata.name) on \(.spec.nodeName // "no node"): \(.status.phase)",
+            (.status.conditions[]? | select(.status != "True") | "  \(.type) \(.reason // "-"): \(.message // "")"),
+            ((.status.initContainerStatuses // []) + (.status.containerStatuses // []) | .[] |
+                "  \(.name): \(.state | keys[0])" +
+                (.state[] | (if .reason then " " + .reason else "" end) + (if .message then " (" + .message[:200] + ")" else "" end)) +
+                ", ready \(.ready), \(.restartCount) restarts" +
+                (if .lastState.terminated then ", last ended \(.lastState.terminated.reason // "-") with exit \(.lastState.terminated.exitCode) at \(.lastState.terminated.finishedAt // "-")" else "" end))' || true
+    else
+        printf 'pods: %s\n' "${flux_pods}"
+    fi
+    KUBECONFIG="$1" kubectl -n flux-system get events --sort-by=.metadata.creationTimestamp 2>&1 | tail -n 40 || true
+    KUBECONFIG="$1" kubectl -n flux-system logs deployment/flux-operator --tail=40 2>&1 || true
+}
+
 # seaweedfs <directory>: downloads SeaweedFS's weed into the directory, checked by its SHA-256.
 seaweedfs() {
     curl -sS --fail -L --proto '=https' --retry 8 --retry-all-errors -o "$1/seaweedfs.tar.gz" \

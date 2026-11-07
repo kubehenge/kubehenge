@@ -195,7 +195,8 @@ cni_state() {
         calico | cilium) ;;
         *) return 0 ;;
     esac
-    kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' 2> /dev/null | base64 -d > "${work}/state" || return 0
+    # shellcheck disable=SC2310 # a cluster whose kubeconfig cannot be read has no state to show.
+    state_kubeconfig || return 0
     printf '\n%s:\n' "${KUBEHENGE_E2E_CNI}"
     if [ "${KUBEHENGE_E2E_CNI}" = calico ]; then
         KUBECONFIG=${work}/state kubectl get tigerastatus -o wide 2>&1 || true
@@ -224,9 +225,18 @@ cni_state() {
     done
     KUBECONFIG=${work}/state kubectl -n headlamp logs deployment/headlamp --tail=30 2>&1 || true
 }
+# state_kubeconfig: the cluster's kubeconfig in ${work}/state for a failed test's state, read from
+# the management cluster, as a test can fail before it wrote its own.
+state_kubeconfig() {
+    kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' 2> /dev/null | base64 -d > "${work}/state"
+}
 cleanup() {
     status=$?
     [ "${status}" -eq 0 ] || cni_state
+    # shellcheck disable=SC2310 # a cluster whose kubeconfig cannot be read has no state to show.
+    if [ "${status}" -ne 0 ] && on argocd && state_kubeconfig; then
+        flux_state "${work}/state"
+    fi
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${interface_pid}" ] || kill "${interface_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
@@ -3300,7 +3310,7 @@ EOF
         # Read only, as the interface tells its users to add it.
         git_request=$(jq -cn --arg k "${public_key}" '{title: "kubehenge", key: $k, read_only: true}')
         git_api POST repos/e2e/clusters/keys -d "${git_request}" > /dev/null
-        until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=condition=Ready fluxinstance/flux --timeout=10s
+        until_true 600 "Flux installed by its operator" flux_ready "${work}/workload"
         until_true 600 "Flux syncs the repository" synced one
         push two
         until_true 300 "Flux syncs a new commit" synced two
