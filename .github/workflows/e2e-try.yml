@@ -30,6 +30,9 @@ on:
       failed:
         description: The test of the lane that failed, if one did.
         value: ${{ jobs.test.outputs.failed }}
+      ended:
+        description: Whether the try ran its last step, which a try that lost its runner never does.
+        value: ${{ jobs.test.outputs.ended }}
 
 permissions:
   contents: read
@@ -56,6 +59,7 @@ jobs:
     outputs:
       handed-back: ${{ steps.host.outputs.handed-back || steps.load.outputs.handed-back }}
       failed: ${{ steps.failed.outputs.test }}
+      ended: ${{ steps.ended.outputs.ended }}
     steps:
       - name: Host
         id: host
@@ -548,3 +552,9 @@ jobs:
           name: e2e-${{ inputs.test }}
           path: ${{ runner.temp }}/artifacts
           retention-days: 7
+      # A runner that GitHub stops or loses runs no further step, not even one that always runs, so
+      # this output tells a lost runner from a test that failed (e2e-lane.yml).
+      - name: The try's end
+        id: ended
+        if: always()
+        run: echo ended=true >> "$GITHUB_OUTPUT"
