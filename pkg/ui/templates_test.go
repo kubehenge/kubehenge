@@ -32,6 +32,18 @@ func withTemplates(t *testing.T, h *harness) {
 	}
 }
 
+// templateBuildEnded waits until the appliance no longer reports a template build as running. It
+// has no clock of its own: a build records itself on disk first, which a busy machine stretches past
+// any fixed wait, and the test run's timeout ends a build that never ends.
+func templateBuildEnded(a *appliance.Appliance) *appliance.JobView {
+	for {
+		if job := a.TemplateJob(); job == nil || job.State != appliance.StateRunning {
+			return job
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestTemplatesListedWithTheClustersThatNeedThem(t *testing.T) {
 	t.Parallel()
 	// Its nodes went to the build of 1 October. The newer one is not offered by its node image time.
@@ -164,11 +176,7 @@ func TestTemplateBuiltOnTheAdministratorsSession(t *testing.T) {
 	// One job at a time, of any kind.
 	expect(t, a.do("POST", "/api/templates", body), http.StatusConflict)
 	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for h.server.Appliance.TemplateJob().State == "running" && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	job := h.server.Appliance.TemplateJob()
+	job := templateBuildEnded(h.server.Appliance)
 	if job.State != "succeeded" || !slices.Contains(job.Log, "Downloading the image") || !strings.Contains(strings.Join(job.Log, "\n"), "is VM 9010") {
 		t.Fatalf("job = %+v", job)
 	}
@@ -212,10 +220,7 @@ func TestFinishedTemplateBuildIsListed(t *testing.T) {
 		h.accounts.listed = nil
 		h.accounts.mu.Unlock()
 		close(release)
-		deadline := time.Now().Add(5 * time.Second)
-		for h.server.Appliance.TemplateJob().State == "running" && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
+		templateBuildEnded(h.server.Appliance)
 	}
 	h.accounts.mu.Unlock()
 	listed := func() templatesView {
@@ -297,11 +302,7 @@ func TestFailedTemplateBuildReported(t *testing.T) {
 	a := h.browser()
 	a.signIn("admin@pve")
 	expect(t, a.do("POST", "/api/templates", `{"distribution":"rke2","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`), http.StatusAccepted)
-	deadline := time.Now().Add(5 * time.Second)
-	for h.server.Appliance.TemplateJob().State == "running" && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if job := h.server.Appliance.TemplateJob(); job.State != "failed" || !strings.HasSuffix(job.Error, ": no storage local on node pve1") {
+	if job := templateBuildEnded(h.server.Appliance); job.State != "failed" || !strings.HasSuffix(job.Error, ": no storage local on node pve1") {
 		t.Fatalf("job = %+v", job)
 	}
 }

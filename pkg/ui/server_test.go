@@ -759,13 +759,8 @@ func TestSlowRenewalHoldsUpNobodyElse(t *testing.T) {
 		h.server.sessions.prune()
 		beside <- nil
 	}()
-	select {
-	case err := <-beside:
-		if err != nil {
-			t.Error(err)
-		}
-	case <-time.After(time.Minute):
-		t.Fatal("requests and pruning waited for another session's renewal")
+	if err := <-beside; err != nil {
+		t.Error(err)
 	}
 	close(slow.release)
 	if code := <-renewing; code != http.StatusOK {

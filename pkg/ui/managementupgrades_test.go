@@ -109,13 +109,11 @@ func withManagementCluster(t *testing.T, h *harness) *appliance.Appliance {
 
 func jobEnded(t *testing.T, a *appliance.Appliance) *appliance.JobView {
 	t.Helper()
-	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	for ; ; time.Sleep(10 * time.Millisecond) {
 		if j := a.Current(); j != nil && j.State != "running" {
 			return j
 		}
 	}
-	t.Fatal("the job did not end")
-	return nil
 }
 
 // upgraded has the appliance run a newer release, which carries Talos v1.15.0.

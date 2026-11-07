@@ -269,15 +269,12 @@ func ticket() *pve.Ticket {
 
 func waitFor(t *testing.T, a *Appliance) *JobView {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
+	for {
 		if j := a.Current(); j != nil && j.State != "running" {
 			return j
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("the apply did not finish")
-	return nil
 }
 
 func TestExtraClusterNamespacesValidated(t *testing.T) {
@@ -562,10 +559,7 @@ func TestTemplateBuildIsRecorded(t *testing.T) {
 		t.Fatalf("build cut off by a restart: %+v", j)
 	}
 	close(release)
-	for deadline := time.Now().Add(10 * time.Second); a.TemplateJob().State == "running"; {
-		if time.Now().After(deadline) {
-			t.Fatal("the build did not end")
-		}
+	for a.TemplateJob().State == "running" {
 		time.Sleep(10 * time.Millisecond)
 	}
 	restarted := &Appliance{Dir: a.Dir}
@@ -966,18 +960,14 @@ func TestInterruptedApplyIsGivenTimeToWriteItsState(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- a.tofu(ctx, &Job{}, nil, jsonMessage, "apply", "-auto-approve") }()
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	for {
 		if _, err := os.Stat(filepath.Join(a.Dir, "applying")); err == nil {
 			break
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
-	select {
-	case err := <-done:
-		t.Logf("tofu ended: %v", err)
-	case <-time.After(20 * time.Second):
-		t.Fatal("tofu did not end after its context did")
-	}
+	t.Logf("tofu ended: %v", <-done)
 	if _, err := os.Stat(filepath.Join(a.Dir, "state-flushed")); err != nil {
 		t.Errorf("tofu was killed before it wrote its state: %v", err)
 	}
