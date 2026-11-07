@@ -14,6 +14,7 @@ require (
 	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/go-logr/logr v1.4.4
+	github.com/google/go-cmp v0.7.0
 	github.com/luthermonson/go-proxmox v0.8.2
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/prometheus/client_golang v1.25.0
@@ -104,7 +105,6 @@ require (
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/cel-go v0.31.0 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-containerregistry v0.22.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect

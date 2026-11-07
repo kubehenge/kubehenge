@@ -111,6 +111,20 @@ export interface NodeOSChoice extends NodeOS {
   noTemplate?: string;
 }
 
+/** An add-on chart change that waits for the upgrade window. Equal from and to mean new values only. */
+export interface AddonChange {
+  addon: string;
+  chart: string;
+  from: string;
+  to: string;
+}
+
+/** The add-on changes waiting, and when the upgrade window opens (RFC 3339). */
+export interface AddonChanges {
+  opens: string;
+  changes: AddonChange[];
+}
+
 export interface Condition {
   type: string;
   status: string;
@@ -494,6 +508,8 @@ export interface Cluster {
   gitops?: GitOpsKeys;
   /** How a Talos cluster's nodes stand with its Talos release. */
   talos?: TalosStatus;
+  /** The add-on chart changes that wait for the upgrade window, while any do. */
+  addonChanges?: AddonChanges;
   /** The last recovery of the control plane from a stalled roll: etcd reset to one machine's own. */
   recovery?: EtcdRestoreStatus;
   /** What the cluster's deletion waits on, while it is being deleted, since deletedAt. */
@@ -541,7 +557,7 @@ export interface TalosReleases {
 
 /** The VM template builds a cluster's nodes are cloned from. */
 export interface NodeImage {
-  /** The nodes move to new builds inside the maintenance window. */
+  /** The nodes move to new builds inside the upgrade window. */
   refreshes: boolean;
   /** The nodes run the newest builds offered by then. */
   since: string;

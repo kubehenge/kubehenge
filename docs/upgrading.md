@@ -4,7 +4,7 @@ Kubehenge itself, the management cluster and the workload clusters are upgraded 
 
 1. **Kubehenge itself** is the appliance's software, upgraded from the Administration page or the Proxmox VE shell.
 2. **The management cluster** is Talos, Kubernetes, Cluster API and its providers, and Kubehenge's ClusterClasses and controller. Applying it again moves them to the versions the new release carries.
-3. **Workload clusters** upgrade Kubernetes by hand or automatically inside a maintenance window. Their nodes' operating system moves to each week's build of the VM templates inside the same window.
+3. **Workload clusters** upgrade Kubernetes by hand or automatically inside an upgrade window. Their nodes' operating system moves to each week's build of the VM templates inside the same window.
 
 Before 1.0.0, a minor release may change behaviour. Read its entry in the [changelog](changelog.md) first.
 
@@ -233,6 +233,29 @@ While a newer build waits for the window, the annotation `kubehenge.dev/node-ima
 #### Holding and deleting builds
 
 To hold a cluster on its build, switch `nodeImages` off. Deleting a broken build keeps the clusters that have not moved to it yet from moving. A build that clusters already run is deleted only with `--roll-clusters`, which replaces their nodes at once, outside their windows ([templates.md](templates.md#list-and-delete)).
+
+### Add-on changes
+
+A new Kubehenge release changes the charts it installs. It also changes the values it gives them. A cluster with an upgrade window gets those changes inside the window and not before. That covers the CNI, the cloud controller manager, the CSI plugin, Traefik, Kyverno and every other add-on.
+
+A cluster has a window once its `upgrades` variable has automatic upgrades or node image refreshes on. A cluster without one gets the changes at once.
+
+Three things apply at once, window or not:
+
+- a new cluster
+- an add-on you switch on
+- a change you make to the cluster's own settings. It takes the waiting changes with it.
+
+While changes wait, the cluster has the condition `AddonChangesPending`, and the annotation `kubehenge.dev/addon-changes` lists each add-on with its chart, the version it runs and the version it moves to. The cluster's page and the Upgrade dialog show the same list.
+
+A security fix to an add-on waits for the window like a Kubernetes patch does. **Apply now** in the dialog or on the cluster's page, and `kubehenge cluster apply-addon-changes`, apply the waiting changes at once. So does the annotation:
+
+```sh
+kubehenge cluster apply-addon-changes <name>
+kubectl -n <namespace> annotate cluster <name> kubehenge.dev/apply-addon-changes="$(date -u +%FT%TZ)"
+```
+
+The controller takes the annotation off once it has applied the changes.
 
 ### What holds an upgrade back
 

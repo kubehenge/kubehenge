@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -133,7 +134,7 @@ the wizard's request is.`,
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
 	o.namespaceFlag(deleteCmd.Flags())
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, deleteCmd, o.machineCommand())
+	cmd.AddCommand(slices.Concat([]*cobra.Command{list, get, kubeconfig, create, scale, deleteCmd, o.machineCommand()}, o.addonCommands())...)
 	return cmd
 }
 

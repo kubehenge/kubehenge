@@ -503,6 +503,38 @@
           }
         },
         {
+          "name": "useExisting",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Installs the cluster already runs that the add-ons use instead of their own, so that they do not collide with the company's. Chosen when the cluster is created and fixed after.",
+              "properties": {
+                "certManager": {
+                  "default": false,
+                  "description": "Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its issuers and certificates in it. Rancher, monitoring and certificates need cert-manager 0.15 or newer with its custom resource definitions installed.",
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "namespaceLabels",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "additionalProperties": {
+                "maxLength": 63,
+                "type": "string"
+              },
+              "description": "Labels put on the namespaces the add-ons install into, from before the first pod, so that the cluster's admission policy admits them. A policy that requires labels on namespaces, or sets Pod Security levels by label, reads them. The namespaces are listed in the documentation.",
+              "maxProperties": 20,
+              "type": "object"
+            }
+          }
+        },
+        {
           "name": "istio",
           "required": false,
           "schema": {
@@ -1047,7 +1079,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template, inside a maintenance window. Kubehenge's controller takes the newest release the mode allows, one minor version at a time and never past the distribution's stable channel, and starts only when the cluster is healthy and no rollout is running. A started rollout finishes even if the window ends first.",
+              "description": "Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template, inside an upgrade window. Kubehenge's controller takes the newest release the mode allows, one minor version at a time and never past the distribution's stable channel, and starts only when the cluster is healthy and no rollout is running. A started rollout finishes even if the window ends first.",
               "properties": {
                 "mode": {
                   "default": "off",
@@ -1820,6 +1852,38 @@
           }
         },
         {
+          "name": "useExisting",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Installs the cluster already runs that the add-ons use instead of their own, so that they do not collide with the company's. Chosen when the cluster is created and fixed after.",
+              "properties": {
+                "certManager": {
+                  "default": false,
+                  "description": "Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its issuers and certificates in it. Rancher, monitoring and certificates need cert-manager 0.15 or newer with its custom resource definitions installed.",
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "namespaceLabels",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "additionalProperties": {
+                "maxLength": 63,
+                "type": "string"
+              },
+              "description": "Labels put on the namespaces the add-ons install into, from before the first pod, so that the cluster's admission policy admits them. A policy that requires labels on namespaces, or sets Pod Security levels by label, reads them. The namespaces are listed in the documentation.",
+              "maxProperties": 20,
+              "type": "object"
+            }
+          }
+        },
+        {
           "name": "istio",
           "required": false,
           "schema": {
@@ -2364,7 +2428,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template, inside a maintenance window. Kubehenge's controller takes the newest release the mode allows, one minor version at a time and never past the distribution's stable channel, and starts only when the cluster is healthy and no rollout is running. A started rollout finishes even if the window ends first.",
+              "description": "Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template, inside an upgrade window. Kubehenge's controller takes the newest release the mode allows, one minor version at a time and never past the distribution's stable channel, and starts only when the cluster is healthy and no rollout is running. A started rollout finishes even if the window ends first.",
               "properties": {
                 "mode": {
                   "default": "off",
@@ -3134,6 +3198,38 @@
           }
         },
         {
+          "name": "useExisting",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Installs the cluster already runs that the add-ons use instead of their own, so that they do not collide with the company's. Chosen when the cluster is created and fixed after.",
+              "properties": {
+                "certManager": {
+                  "default": false,
+                  "description": "Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its issuers and certificates in it. Rancher, monitoring and certificates need cert-manager 0.15 or newer with its custom resource definitions installed.",
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "namespaceLabels",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "additionalProperties": {
+                "maxLength": 63,
+                "type": "string"
+              },
+              "description": "Labels put on the namespaces the add-ons install into, from before the first pod, so that the cluster's admission policy admits them. A policy that requires labels on namespaces, or sets Pod Security levels by label, reads them. The namespaces are listed in the documentation.",
+              "maxProperties": 20,
+              "type": "object"
+            }
+          }
+        },
+        {
           "name": "istio",
           "required": false,
           "schema": {
@@ -3678,7 +3774,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template, inside a maintenance window. Kubehenge's controller takes the newest release the mode allows, one minor version at a time and never past the distribution's stable channel, and starts only when the cluster is healthy and no rollout is running. A started rollout finishes even if the window ends first.",
+              "description": "Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template, inside an upgrade window. Kubehenge's controller takes the newest release the mode allows, one minor version at a time and never past the distribution's stable channel, and starts only when the cluster is healthy and no rollout is running. A started rollout finishes even if the window ends first.",
               "properties": {
                 "mode": {
                   "default": "off",
@@ -4451,6 +4547,38 @@
           }
         },
         {
+          "name": "useExisting",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Installs the cluster already runs that the add-ons use instead of their own, so that they do not collide with the company's. Chosen when the cluster is created and fixed after.",
+              "properties": {
+                "certManager": {
+                  "default": false,
+                  "description": "Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its issuers and certificates in it. Rancher, monitoring and certificates need cert-manager 0.15 or newer with its custom resource definitions installed.",
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "namespaceLabels",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "additionalProperties": {
+                "maxLength": 63,
+                "type": "string"
+              },
+              "description": "Labels put on the namespaces the add-ons install into, from before the first pod, so that the cluster's admission policy admits them. A policy that requires labels on namespaces, or sets Pod Security levels by label, reads them. The namespaces are listed in the documentation.",
+              "maxProperties": 20,
+              "type": "object"
+            }
+          }
+        },
+        {
           "name": "istio",
           "required": false,
           "schema": {
@@ -4995,7 +5123,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template, inside a maintenance window. Kubehenge's controller takes the newest release the mode allows, one minor version at a time and never past the distribution's stable channel, and starts only when the cluster is healthy and no rollout is running. A started rollout finishes even if the window ends first.",
+              "description": "Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template, inside an upgrade window. Kubehenge's controller takes the newest release the mode allows, one minor version at a time and never past the distribution's stable channel, and starts only when the cluster is healthy and no rollout is running. A started rollout finishes even if the window ends first.",
               "properties": {
                 "mode": {
                   "default": "off",

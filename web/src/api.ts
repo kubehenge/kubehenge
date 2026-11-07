@@ -361,6 +361,8 @@ export interface Api {
   talosconfig: (ns: string, name: string) => Promise<Blob>;
   /** retryTalosUpgrade takes back the failed node upgrade that holds a Talos cluster's others. */
   retryTalosUpgrade: (ns: string, name: string) => Promise<void>;
+  /** applyAddonChanges applies the add-on chart changes that wait for the upgrade window now. */
+  applyAddonChanges: (ns: string, name: string) => Promise<void>;
   /** replaceMachine marks a machine for its cluster's health check to replace. */
   replaceMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** keepMachine takes that mark back. */
@@ -491,6 +493,7 @@ export const api: Api = {
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
   talosconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/talosconfig`),
   retryTalosUpgrade: (ns, name) => act("DELETE", `${clusterPath(ns, name)}/talos-upgrade-failure`),
+  applyAddonChanges: (ns, name) => act("POST", `${clusterPath(ns, name)}/addon-changes`),
   replaceMachine: (ns, name, machine) =>
     act("PUT", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/replacement`),
   keepMachine: (ns, name, machine) =>

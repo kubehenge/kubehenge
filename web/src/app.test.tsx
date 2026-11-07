@@ -763,6 +763,8 @@ describe("create", () => {
     rancherHostname: "",
     rancherRegister: false,
     certificates: newForm().certificates,
+    namespaceLabels: "",
+    existingCertManager: false,
     dns01Token: "",
     gitops: newForm().gitops,
     oidc: [],
