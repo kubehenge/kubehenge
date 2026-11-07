@@ -547,6 +547,52 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           x-kubernetes-validations:
             - rule: self >= oldSelf
               message: Loki's volume only grows.
+        outputs:
+          type: array
+          maxItems: 4
+          description: >-
+            Destinations every log also goes to, beside Loki, which stays on with logs. Each
+            output is a syslog collector, an OTLP/HTTP receiver or another Loki, and takes all
+            streams or some. Its user name and password or token are a credential stored for the
+            cluster under the purpose log-<name>, never a value here.
+          items:
+            type: object
+            required: [name, kind, endpoint]
+            properties:
+              name:
+                type: string
+                minLength: 1
+                maxLength: 20
+                pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                description: Labels the output and its credential, log-<name>.
+              kind:
+                type: string
+                enum: [syslog, otlp, loki]
+              endpoint:
+                type: string
+                minLength: 1
+                maxLength: 2048
+                description: >-
+                  syslog: tcp://, tls:// or udp:// with host and port. otlp: the receiver's
+                  http(s) base URL. loki: the whole push URL. No user, query or fragment.
+              caBundle:
+                type: string
+                maxLength: 16384
+                description: PEM certificates that sign the endpoint's certificate, for a private CA.
+              streams:
+                type: array
+                maxItems: 4
+                description: Some of the logs to send. None sends all.
+                items:
+                  type: string
+                  enum: [containers, events, nodes, audit]
+              auth:
+                type: string
+                enum: [none, basic, bearer]
+                default: none
+                description: >-
+                  basic reads username and password, bearer a token, from the stored credential.
+                  Not for syslog.
 - name: backups
   required: false
   schema:

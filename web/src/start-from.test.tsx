@@ -105,7 +105,7 @@ const chosen: Form = {
     remoteWrite: { on: true, url: "https://mimir.example/push", auth: "basic", username: "tenant" },
     external: { on: true, urls: "https://am.example\nhttps://am2.example:9093", auth: "bearer", username: "" },
   },
-  logs: { enabled: true, collector: "api", retentionDays: 14, sizeGiB: 20 },
+  logs: { enabled: true, collector: "api", retentionDays: 14, sizeGiB: 20, outputs: [] },
   podSecurity: { admission: "restricted", kyverno: "restricted" },
   cis: true,
   istio: true,

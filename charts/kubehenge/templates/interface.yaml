@@ -302,6 +302,7 @@ spec:
         : variables.purpose in ['backup', 'dns01', 'acme-eab', 'gitops', 'oidc-client',
           'alerts-email', 'alerts-webhook', 'alerts-slack', 'alerts-teams',
           'remote-write', 'external-alertmanager']
+          || variables.purpose.matches('^log-[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$')
       messageExpression: >-
         'the interface writes and deletes only credentials labelled {{ $credential }} with a purpose it knows, not '
         + (variables.purpose == '' ? 'an unlabelled Secret' : 'one for ' + variables.purpose)

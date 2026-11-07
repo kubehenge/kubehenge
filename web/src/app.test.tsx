@@ -955,7 +955,7 @@ describe("create", () => {
     grafanaHostname: "grafana.example",
     alerting: newForm().alerting,
     alertingSecrets: {},
-    logs: { enabled: false, collector: "node", retentionDays: 7, sizeGiB: 10 },
+    logs: { enabled: false, collector: "node", retentionDays: 7, sizeGiB: 10, outputs: [] },
     podSecurity: { admission: "restricted", kyverno: "off" },
     cis: false,
     istio: false,
@@ -1140,7 +1140,10 @@ describe("create", () => {
       annotations: { "kubehenge.dev/addon-memory": '{"monitoring":1536,"logs":512}' },
       variables: [...rke2.variables, { name: "logs", required: false, schema: { type: "object" } }],
     };
-    const logged = { ...form, logs: { enabled: true, collector: "api" as const, retentionDays: 14, sizeGiB: 20 } };
+    const logged = {
+      ...form,
+      logs: { enabled: true, collector: "api" as const, retentionDays: 14, sizeGiB: 20, outputs: [] },
+    };
     expect(request(logged, withLogs).variables["logs"]).toStrictEqual({
       enabled: true,
       collector: "api",

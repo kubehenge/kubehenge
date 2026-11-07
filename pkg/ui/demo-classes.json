@@ -504,6 +504,71 @@
                   "default": false,
                   "type": "boolean"
                 },
+                "outputs": {
+                  "description": "Destinations every log also goes to, beside Loki, which stays on with logs. Each output is a syslog collector, an OTLP/HTTP receiver or another Loki, and takes all streams or some. Its user name and password or token are a credential stored for the cluster under the purpose log-\u003cname\u003e, never a value here.",
+                  "items": {
+                    "properties": {
+                      "auth": {
+                        "default": "none",
+                        "description": "basic reads username and password, bearer a token, from the stored credential. Not for syslog.",
+                        "enum": [
+                          "none",
+                          "basic",
+                          "bearer"
+                        ],
+                        "type": "string"
+                      },
+                      "caBundle": {
+                        "description": "PEM certificates that sign the endpoint's certificate, for a private CA.",
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "endpoint": {
+                        "description": "syslog: tcp://, tls:// or udp:// with host and port. otlp: the receiver's http(s) base URL. loki: the whole push URL. No user, query or fragment.",
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "syslog",
+                          "otlp",
+                          "loki"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "description": "Labels the output and its credential, log-\u003cname\u003e.",
+                        "maxLength": 20,
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                        "type": "string"
+                      },
+                      "streams": {
+                        "description": "Some of the logs to send. None sends all.",
+                        "items": {
+                          "enum": [
+                            "containers",
+                            "events",
+                            "nodes",
+                            "audit"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 4,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "kind",
+                      "endpoint"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
+                },
                 "retentionDays": {
                   "default": 7,
                   "description": "Days Loki keeps each line.",
@@ -2162,6 +2227,71 @@
                   "default": false,
                   "type": "boolean"
                 },
+                "outputs": {
+                  "description": "Destinations every log also goes to, beside Loki, which stays on with logs. Each output is a syslog collector, an OTLP/HTTP receiver or another Loki, and takes all streams or some. Its user name and password or token are a credential stored for the cluster under the purpose log-\u003cname\u003e, never a value here.",
+                  "items": {
+                    "properties": {
+                      "auth": {
+                        "default": "none",
+                        "description": "basic reads username and password, bearer a token, from the stored credential. Not for syslog.",
+                        "enum": [
+                          "none",
+                          "basic",
+                          "bearer"
+                        ],
+                        "type": "string"
+                      },
+                      "caBundle": {
+                        "description": "PEM certificates that sign the endpoint's certificate, for a private CA.",
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "endpoint": {
+                        "description": "syslog: tcp://, tls:// or udp:// with host and port. otlp: the receiver's http(s) base URL. loki: the whole push URL. No user, query or fragment.",
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "syslog",
+                          "otlp",
+                          "loki"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "description": "Labels the output and its credential, log-\u003cname\u003e.",
+                        "maxLength": 20,
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                        "type": "string"
+                      },
+                      "streams": {
+                        "description": "Some of the logs to send. None sends all.",
+                        "items": {
+                          "enum": [
+                            "containers",
+                            "events",
+                            "nodes",
+                            "audit"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 4,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "kind",
+                      "endpoint"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
+                },
                 "retentionDays": {
                   "default": 7,
                   "description": "Days Loki keeps each line.",
@@ -3816,6 +3946,71 @@
                 "enabled": {
                   "default": false,
                   "type": "boolean"
+                },
+                "outputs": {
+                  "description": "Destinations every log also goes to, beside Loki, which stays on with logs. Each output is a syslog collector, an OTLP/HTTP receiver or another Loki, and takes all streams or some. Its user name and password or token are a credential stored for the cluster under the purpose log-\u003cname\u003e, never a value here.",
+                  "items": {
+                    "properties": {
+                      "auth": {
+                        "default": "none",
+                        "description": "basic reads username and password, bearer a token, from the stored credential. Not for syslog.",
+                        "enum": [
+                          "none",
+                          "basic",
+                          "bearer"
+                        ],
+                        "type": "string"
+                      },
+                      "caBundle": {
+                        "description": "PEM certificates that sign the endpoint's certificate, for a private CA.",
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "endpoint": {
+                        "description": "syslog: tcp://, tls:// or udp:// with host and port. otlp: the receiver's http(s) base URL. loki: the whole push URL. No user, query or fragment.",
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "syslog",
+                          "otlp",
+                          "loki"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "description": "Labels the output and its credential, log-\u003cname\u003e.",
+                        "maxLength": 20,
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                        "type": "string"
+                      },
+                      "streams": {
+                        "description": "Some of the logs to send. None sends all.",
+                        "items": {
+                          "enum": [
+                            "containers",
+                            "events",
+                            "nodes",
+                            "audit"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 4,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "kind",
+                      "endpoint"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
                 },
                 "retentionDays": {
                   "default": 7,
@@ -5474,6 +5669,71 @@
                 "enabled": {
                   "default": false,
                   "type": "boolean"
+                },
+                "outputs": {
+                  "description": "Destinations every log also goes to, beside Loki, which stays on with logs. Each output is a syslog collector, an OTLP/HTTP receiver or another Loki, and takes all streams or some. Its user name and password or token are a credential stored for the cluster under the purpose log-\u003cname\u003e, never a value here.",
+                  "items": {
+                    "properties": {
+                      "auth": {
+                        "default": "none",
+                        "description": "basic reads username and password, bearer a token, from the stored credential. Not for syslog.",
+                        "enum": [
+                          "none",
+                          "basic",
+                          "bearer"
+                        ],
+                        "type": "string"
+                      },
+                      "caBundle": {
+                        "description": "PEM certificates that sign the endpoint's certificate, for a private CA.",
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "endpoint": {
+                        "description": "syslog: tcp://, tls:// or udp:// with host and port. otlp: the receiver's http(s) base URL. loki: the whole push URL. No user, query or fragment.",
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "syslog",
+                          "otlp",
+                          "loki"
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "description": "Labels the output and its credential, log-\u003cname\u003e.",
+                        "maxLength": 20,
+                        "minLength": 1,
+                        "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                        "type": "string"
+                      },
+                      "streams": {
+                        "description": "Some of the logs to send. None sends all.",
+                        "items": {
+                          "enum": [
+                            "containers",
+                            "events",
+                            "nodes",
+                            "audit"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 4,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "kind",
+                      "endpoint"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 4,
+                  "type": "array"
                 },
                 "retentionDays": {
                   "default": 7,

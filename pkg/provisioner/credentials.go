@@ -75,7 +75,7 @@ func CredentialPurposes() []CredentialPurpose {
 func CredentialPurposeNamed(name string) (CredentialPurpose, bool) {
 	i := slices.IndexFunc(credentialPurposes, func(p CredentialPurpose) bool { return p.Name == name })
 	if i < 0 {
-		return CredentialPurpose{}, false
+		return logOutputPurpose(name)
 	}
 	return credentialPurposes[i], true
 }

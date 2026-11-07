@@ -94,7 +94,11 @@ function HeadlampAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Elem
 }
 
 // LogsAddOn keeps logs, offered only beside monitoring, whose Grafana reads them.
-function LogsAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
+function LogsAddOn({
+  form,
+  set,
+  showAll,
+}: Pick<StepProps, "form" | "set"> & { showAll: boolean | undefined }): JSX.Element {
   return (
     <>
       <label className="check">
@@ -116,7 +120,7 @@ function LogsAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element 
       {logsChosen(form) && (
         <fieldset className="group">
           <legend>Logs</legend>
-          <LogsFields value={form.logs} onChange={(l) => set("logs", l)} />
+          <LogsFields value={form.logs} onChange={(l) => set("logs", l)} showAll={showAll} />
         </fieldset>
       )}
     </>
@@ -596,7 +600,7 @@ function AddonCards({
       </AddonCard>
       {variable(cls, "logs") && (
         <AddonCard mib={cost("logs")} on={logsChosen(form)}>
-          <LogsAddOn form={form} set={set} />
+          <LogsAddOn form={form} set={set} showAll={showAll} />
         </AddonCard>
       )}
       {variable(cls, "istio") && (

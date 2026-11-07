@@ -533,6 +533,13 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 	if err := r.removeProxies(ctx, cluster, off...); err != nil {
 		return false, err
 	}
+	if !addons.logsOn() {
+		// The Secret of the outputs' credentials goes with the Alloys it was for. A cluster that
+		// cannot be reached yet keeps its annotation, so this runs again.
+		if _, err := r.logOutputsWait(ctx, cluster, Logs{}); err != nil {
+			return false, err
+		}
+	}
 	backupsWaiting := false
 	if !addons.Backups.Enabled {
 		var err error
@@ -716,6 +723,10 @@ func (r *Reconciler) chartWaits(ctx context.Context, cluster *clusterv1.Cluster,
 	case veleroProxy(cluster):
 		wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
 			return r.backupsWait(ctx, c, &addons.Backups, addons.backupSources)
+		}
+	case alloyProxy(cluster):
+		wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
+			return r.logOutputsWait(ctx, c, addons.Logs)
 		}
 	case snapshotClassProxy(cluster):
 		wait = r.snapshotClassWaits
