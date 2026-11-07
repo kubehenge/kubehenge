@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -234,6 +236,61 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/web/backups", ""), &backups)
 	if len(backups.Backups) != 8 {
 		t.Errorf("%d backups of web, want 8", len(backups.Backups))
+	}
+}
+
+// lockedBuffer is a log that handlers write from several goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func TestDemoReadsEveryClustersHealth(t *testing.T) {
+	t.Parallel()
+	logged := &lockedBuffer{}
+	s := &Server{
+		Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}},
+		Log:    slog.New(slog.NewTextHandler(logged, nil)),
+	}
+	if err := SetUpDemo(s, func() time.Time { return demoAt }); err != nil {
+		t.Fatal(err)
+	}
+	b := &demoBrowser{t: t, handler: s.Handler()}
+	b.signIn()
+	fleet, err := newDemoFleet(demoAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range fleet.data.Clusters {
+		name := fleet.data.Clusters[i].Name
+		var h healthView
+		decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/"+name+"/health", ""), &h)
+		if h.ControlPlane.Error != "" || len(h.ControlPlane.Conditions) == 0 {
+			t.Errorf("%s: control plane read %q with %d conditions", name, h.ControlPlane.Error, len(h.ControlPlane.Conditions))
+		}
+		for what, failed := range map[string]string{
+			"nodes": h.Nodes.Error, "pods": h.Pods.Error, "volumes": h.Volumes.Error, "add-ons": h.Addons.Error,
+			"pools": h.Pools.Error, "health checks": h.HealthChecks.Error, "events": h.Events.Error,
+		} {
+			if failed != "" {
+				t.Errorf("%s: %s read failed: %s", name, what, failed)
+			}
+		}
+	}
+	if got := logged.String(); strings.Contains(got, "level=ERROR") {
+		t.Errorf("the demo logged errors reading health:\n%s", got)
 	}
 }
 

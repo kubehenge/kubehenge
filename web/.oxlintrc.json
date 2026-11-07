@@ -113,7 +113,9 @@
         // The tests await what they check, which expect.assertions would only repeat.
         "vitest/prefer-expect-assertions": "off",
         // The tests import from vitest, which globals: false asks for; the opposite rule is on.
-        "vitest/no-importing-vitest-globals": "off"
+        "vitest/no-importing-vitest-globals": "off",
+        // It refuses toHaveBeenCalledOnce(), which the opposite rule, prefer-called-once, asks for.
+        "vitest/prefer-called-times": "off"
       }
     },
     {
