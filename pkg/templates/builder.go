@@ -205,6 +205,7 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	}
 	var found []placed
 	var down []*proxmox.ClusterResource
+	var cached []cachedTemplate
 	seen := map[int]bool{}
 	for _, r := range resources {
 		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
@@ -218,9 +219,7 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 		// A cached site skips the configuration read, which is where a down node shows, so the
 		// resource view's word that the node is down goes first.
 		if name, site, ok := b.SiteCache.get(id); ok && r.Status != pve.StatusUnknown {
-			out := *r
-			out.Name, out.Template = name, 1
-			found = append(found, placed{&out, site})
+			cached = append(cached, cachedTemplate{r, name, site})
 			continue
 		}
 		c, err := b.config(ctx, r)
@@ -238,6 +237,16 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 		}
 	}
 	b.SiteCache.keepOnly(seen)
+	unreachable := b.unreachableNodes(ctx, cached)
+	for _, t := range cached {
+		if unreachable[t.resource.Node] {
+			down = append(down, t.resource)
+			continue
+		}
+		out := *t.resource
+		out.Name, out.Template = t.name, 1
+		found = append(found, placed{&out, t.site})
+	}
 	slices.SortFunc(found, func(x, y placed) int { return strings.Compare(x.resource.Name, y.resource.Name) })
 	inv := Inventory{Down: down}
 	for _, p := range found {
@@ -251,6 +260,35 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	}
 	slices.Sort(inv.Storages)
 	return inv, nil
+}
+
+// cachedTemplate is a template of the listing whose name and site the SiteCache holds.
+type cachedTemplate struct {
+	resource *proxmox.ClusterResource
+	name     string
+	site     Site
+}
+
+// unreachableNodes are the nodes of the cached templates that pveproxy cannot reach. The resource
+// view can still show such a node online, and a cached template's configuration is not read, so
+// one status read of a template per node is what notices it. Any other failure of that read keeps
+// the templates listed, as the configuration read would have been skipped anyway.
+func (b *Builder) unreachableNodes(ctx context.Context, cached []cachedTemplate) map[string]bool {
+	unreachable := map[string]bool{}
+	asked := map[string]bool{}
+	for _, t := range cached {
+		node := t.resource.Node
+		if asked[node] {
+			continue
+		}
+		asked[node] = true
+		var status map[string]any
+		err := b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/status/current", node, t.resource.VMID), &status)
+		if pve.NodeUnreachable(err) {
+			unreachable[node] = true
+		}
+	}
+	return unreachable
 }
 
 // siteOf reads where a template's disks are from its configuration.

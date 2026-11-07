@@ -84,6 +84,39 @@ func TestInventoryReportsACachedTemplateOnADownNode(t *testing.T) {
 	}
 }
 
+// A cached template whose node went down while the view still shows it online is reported down,
+// without a configuration read, and is listed again once its node answers.
+func TestInventoryNoticesACachedTemplatesNodeTheViewStillShowsOnline(t *testing.T) {
+	t.Parallel()
+	tmpl, tags := rke2(t)
+	first := onNode(template(101, tmpl.Name, tags, testPool), "pve2", "")
+	second := onNode(template(102, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool), "pve2", "")
+	other := onNode(template(103, "kubehenge-k3s", "k3s;kubehenge", testPool), "pve1", "")
+	f := &fakeCluster{t: t, views: [][]map[string]any{{first, second, other}}, configs: configsOf(first, second, other)}
+	b := &Builder{Client: f.client(), Pool: testPool, SiteCache: &SiteCache{}}
+	if inv, err := b.Inventory(t.Context()); err != nil || len(inv.Templates) != 3 {
+		t.Fatalf("first Inventory = %+v, %v; want three templates listed and cached", inv, err)
+	}
+
+	f.mu.Lock()
+	f.unreachable = map[int]bool{101: true, 102: true}
+	f.mu.Unlock()
+	inv, err := b.Inventory(t.Context())
+	if err != nil || len(inv.Templates) != 1 || inv.Templates[0].VMID != 103 || len(inv.Down) != 2 {
+		t.Errorf("Inventory = %+v, %v; want 103 listed and 101 and 102 down", inv, err)
+	}
+	if f.configReads() != 3 {
+		t.Errorf("%d configuration reads, want the 3 of the first listing alone", f.configReads())
+	}
+
+	f.mu.Lock()
+	f.unreachable = nil
+	f.mu.Unlock()
+	if inv, err = b.Inventory(t.Context()); err != nil || len(inv.Templates) != 3 || len(inv.Down) != 0 {
+		t.Errorf("Inventory once pve2 answers = %+v, %v; want all three listed", inv, err)
+	}
+}
+
 // The view still showed the node online when the node went down: only the 595 on the VM's
 // configuration tells.
 func TestInventoryTakesA595OnAConfigurationForADownNode(t *testing.T) {
