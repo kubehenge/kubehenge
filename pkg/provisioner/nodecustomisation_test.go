@@ -58,6 +58,7 @@ func TestNodeCustomisationIsRefusedWhereItMeetsWhatKubehengeKeeps(t *testing.T) 
 		"an unknown command role":    {"kubeadm", `{"commands":[{"run":"true","roles":["master"]}]}`, "master"},
 
 		"anonymous auth":          {"kubeadm", `{"apiServerArgs":[{"name":"anonymous-auth","value":"true"}]}`, "anonymous-auth is an argument Kubehenge sets for the API server"},
+		// spellchecker:disable-next-line
 		"authorization mode":      {"rke2", `{"apiServerArgs":[{"name":"authorization-mode","value":"AlwaysAllow"}]}`, "authorization-mode is an argument Kubehenge sets"},
 		"oidc":                    {"k3s", `{"apiServerArgs":[{"name":"oidc-issuer-url","value":"x"}]}`, "oidc-issuer-url is an argument Kubehenge sets"},
 		"the cis profile":         {"kubeadm", `{"kubeletArgs":[{"name":"seccomp-default","value":"false"}]}`, "seccomp-default is an argument Kubehenge sets for the kubelet"},

@@ -100,7 +100,7 @@ func set(names ...string) map[string]bool {
 
 var (
 	servingFlags    = []string{"tls-cert-file", "tls-private-key-file", "tls-cipher-suites", "tls-min-version", "client-ca-file", "secure-port", "bind-address", "profiling"}
-	kubeconfigFlags = []string{"kubeconfig", "authentication-kubeconfig", "authorization-kubeconfig", "authorization-always-allow-paths"}
+	kubeconfigFlags = []string{"kubeconfig", "authentication-kubeconfig", "authorization-kubeconfig", "authorization-always-allow-paths"} // spellchecker:disable-line
 
 	// protectedFlags are the arguments Kubehenge's classes set for a cluster's identity or security,
 	// by component. A test holds them to every argument the rendered classes set.
@@ -108,13 +108,13 @@ var (
 		componentKubelet: set("cloud-provider", "provider-id", "node-ip", "hostname-override", "node-labels", "register-with-taints",
 			"register-node", "kubeconfig", "bootstrap-kubeconfig", "config", "cert-dir", "tls-cert-file", "tls-private-key-file",
 			"tls-cipher-suites", "tls-min-version", "rotate-server-certificates", "client-ca-file", "anonymous-auth",
-			"authorization-mode", "authentication-token-webhook", "read-only-port", "protect-kernel-defaults", "seccomp-default",
+			"authorization-mode", "authentication-token-webhook", "read-only-port", "protect-kernel-defaults", "seccomp-default", // spellchecker:disable-line
 			"streaming-connection-idle-timeout", "allowed-unsafe-sysctls", "pod-manifest-path", "container-runtime-endpoint"),
 		componentAPIServer: set("kubelet-certificate-authority", "admission-control-config-file", "enable-admission-plugins",
 			"disable-admission-plugins", "authentication-config", "encryption-provider-config", "audit-policy-file", "audit-log-path",
 			"audit-webhook-config-file", "service-account-extend-token-expiration", "profiling", "tls-cipher-suites", "tls-min-version",
-			"tls-cert-file", "tls-private-key-file", "client-ca-file", "anonymous-auth", "authorization-mode", "authorization-config",
-			"authorization-webhook-config-file", "etcd-servers", "etcd-cafile", "etcd-certfile", "etcd-keyfile",
+			"tls-cert-file", "tls-private-key-file", "client-ca-file", "anonymous-auth", "authorization-mode", "authorization-config", // spellchecker:disable-line
+			"authorization-webhook-config-file", "etcd-servers", "etcd-cafile", "etcd-certfile", "etcd-keyfile", // spellchecker:disable-line
 			"kubelet-client-certificate", "kubelet-client-key", "kubelet-preferred-address-types", "service-account-issuer",
 			"service-account-key-file", "service-account-signing-key-file", "requestheader-client-ca-file", "requestheader-allowed-names",
 			"requestheader-extra-headers-prefix", "requestheader-group-headers", "requestheader-username-headers",
@@ -131,7 +131,7 @@ var (
 	// controller manager and the scheduler, and the OIDC arguments of the API server, which the
 	// authentication configuration carries.
 	protectedPrefixes = map[string][]string{
-		componentAPIServer:         {"oidc-", "authorization-webhook-"},
+		componentAPIServer:         {"oidc-", "authorization-webhook-"}, // spellchecker:disable-line
 		componentControllerManager: {"leader-elect-"},
 		componentScheduler:         {"leader-elect-"},
 	}
