@@ -121,25 +121,7 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 		integration.WaitReconciled(t, c, classNamespace, class)
 	}
 
-	// The CNI it runs is the default it was made with, which stays. CIS hardening, off by default,
-	// may still be switched on. That change goes last, as Cluster API then stores every default.
-	for _, v := range []struct{ name, value string }{{"cni", `"cilium"`}, {"cis", `true`}} {
-		got := &clusterv1.Cluster{}
-		if err := c.Get(ctx, client.ObjectKeyFromObject(early), got); err != nil {
-			t.Fatal(err)
-		}
-		if storedVariable(got, v.name) != "" {
-			t.Fatalf("%s was stored before Cluster API passed the class", v.name)
-		}
-		withAddons(got, map[string]string{v.name: v.value})
-		err := c.Update(ctx, got)
-		switch {
-		case v.name == "cis" && err != nil:
-			t.Errorf("CIS hardening switched on, on a cluster made with its default: %v", err)
-		case v.name != "cis" && (!apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "cannot be changed")):
-			t.Errorf("%s set to %s on a cluster made with its default: %v", v.name, v.value, err)
-		}
-	}
+	checkUnstoredDefaults(ctx, t, c, early)
 
 	net := 10
 	for class := range classVersions {
@@ -195,6 +177,30 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 	}
 
 	checkRulesOnChanges(ctx, t, c)
+}
+
+// checkUnstoredDefaults holds the rules on a cluster made before Cluster API passed its class, whose
+// defaults were never stored. The CNI it runs stays. CIS hardening, off by default, may still be
+// switched on. That change goes last, as Cluster API then stores every default.
+func checkUnstoredDefaults(ctx context.Context, t *testing.T, c client.Client, early *clusterv1.Cluster) {
+	t.Helper()
+	for _, v := range []struct{ name, value string }{{"cni", `"cilium"`}, {"cis", `true`}} {
+		got := &clusterv1.Cluster{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(early), got); err != nil {
+			t.Fatal(err)
+		}
+		if storedVariable(got, v.name) != "" {
+			t.Fatalf("%s was stored before Cluster API passed the class", v.name)
+		}
+		withAddons(got, map[string]string{v.name: v.value})
+		err := c.Update(ctx, got)
+		switch {
+		case v.name == "cis" && err != nil:
+			t.Errorf("CIS hardening switched on, on a cluster made with its default: %v", err)
+		case v.name != "cis" && (!apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "cannot be changed")):
+			t.Errorf("%s set to %s on a cluster made with its default: %v", v.name, v.value, err)
+		}
+	}
 }
 
 // checkDefaultsWithEachCNI has the API server admit a cluster of the class's defaults with each CNI
