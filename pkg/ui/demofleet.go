@@ -128,6 +128,8 @@ type demoCluster struct {
 	AddonChanges []provisioner.AddonChange `json:"addonChanges"`
 	// WorkerNodes is the cluster's workerNodes variable: the labels and taints its workers carry.
 	WorkerNodes json.RawMessage `json:"workerNodes"`
+	// NodeCustomisation is the cluster's nodeCustomisation variable.
+	NodeCustomisation json.RawMessage `json:"nodeCustomisation"`
 	// DriftTaint is a taint key put by hand on the last worker, which the pool does not set.
 	DriftTaint string `json:"driftTaint"`
 	// Held is set on a cluster whose last machine sits on a Proxmox VE node in maintenance, so that
@@ -349,6 +351,13 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 	for _, a := range d.AddOns {
 		f.objects = append(f.objects, demoAddOn(d, a, f.data.AddOns[a], created))
 	}
+	if d.NodeCustomisation != nil {
+		var n provisioner.NodeCustomisation
+		if err := json.Unmarshal(d.NodeCustomisation, &n); err != nil {
+			return fmt.Errorf("the demo's node customisation of %s: %w", d.Name, err)
+		}
+		f.objects = append(f.objects, demoReferences(&n)...)
+	}
 	nodes := f.data.ProxmoxNodes
 	for i, m := range machines {
 		if d.Held && i == len(machines)-1 {
@@ -403,6 +412,9 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 	}
 	if d.WorkerNodes != nil {
 		vars[workerNodesVariable] = d.WorkerNodes
+	}
+	if d.NodeCustomisation != nil {
+		vars[provisioner.NodeCustomisationVariable] = d.NodeCustomisation
 	}
 	c := &clusterv1.Cluster{
 		Namespace: demoNamespace, Name: d.Name, UID: types.UID("demo-" + d.Name), Generation: 4,
@@ -628,6 +640,33 @@ func (f *demoFleet) identity(cluster string, id provisioner.Identity, server str
 		Annotations: map[string]string{provisioner.IdentityExpiresAnnotation: f.now.Add(24 * time.Hour).Format(time.RFC3339)},
 		Data:        map[string][]byte{provisioner.IdentityServerKey: []byte(server), provisioner.IdentityCAKey: []byte("demo"), provisioner.IdentityTokenKey: []byte("demo")},
 	}
+}
+
+// demoReferences are the Secrets and the ConfigMap a cluster's node customisation names, so that a
+// change to it passes the checks that they exist.
+func demoReferences(n *provisioner.NodeCustomisation) []client.Object {
+	secret := func(name, key string) client.Object {
+		return &corev1.Secret{Namespace: demoNamespace, Name: name, Data: map[string][]byte{key: []byte("demo")}}
+	}
+	var out []client.Object
+	for _, f := range n.Files {
+		if f.Secret != nil {
+			out = append(out, secret(f.Secret.Name, f.Secret.Key))
+		}
+	}
+	if w := n.AuditWebhook; w != nil {
+		key := w.Key
+		if key == "" {
+			key = provisioner.IdentityKubeconfigKey
+		}
+		out = append(out, secret(w.Secret, key))
+	}
+	if p := n.AuditPolicy; p != nil && p.ConfigMap != "" {
+		out = append(out, &corev1.ConfigMap{Namespace: demoNamespace, Name: p.ConfigMap, Data: map[string]string{
+			"policy.yaml": "apiVersion: audit.k8s.io/v1\nkind: Policy\nrules:\n  - level: Metadata\n",
+		}})
+	}
+	return out
 }
 
 // demoAddOn is an add-on's release in the cluster, as the Add-on Provider for Helm keeps it.

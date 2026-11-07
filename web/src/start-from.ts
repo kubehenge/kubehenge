@@ -1,4 +1,4 @@
-import { newForm, type Form, type Machine } from "./create-form";
+import { newForm, nodeCustomisationOf, type Form, type Machine } from "./create-form";
 import { graceOf, graceVariable } from "./HostOutage";
 import { loadBalancerOf } from "./LoadBalancer";
 import { nodeOSKey } from "./node-os";
@@ -51,6 +51,7 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "controlPlaneMachine",
   "workerMachine",
   "workerNodes",
+  "nodeCustomisation",
   "cni",
   "headlamp",
   "headlampView",
@@ -130,6 +131,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     controlPlaneMachine: machineOf(v["controlPlaneMachine"], base.controlPlaneMachine),
     workerMachine: machineOf(v["workerMachine"], base.workerMachine),
     workerNodes: nodesOf(v["workerNodes"]),
+    nodeCustomisation: nodeCustomisationOf(v["nodeCustomisation"]),
     ...featuresOf(v, base),
   };
 }

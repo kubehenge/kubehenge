@@ -14,33 +14,40 @@ export interface CheckRead {
 /**
  * useCreateCheck has the API server check a new cluster when run is called. An answer to an earlier
  * run that arrives late is dropped. A cluster is created only once the API server accepts it.
+ * refusalOf gives the refusal of exactly the request it is given, so that a step can show it
+ * until the form changes.
  */
 export function useCreateCheck(): {
   read: CheckRead | undefined;
   accepted: boolean;
   run: (req: CreateRequest) => void;
+  refusalOf: (req: CreateRequest) => string | undefined;
 } {
-  const [read, setRead] = useState<CheckRead>();
+  const [answer, setAnswer] = useState<{ read: CheckRead; asked: string }>();
   const runs = useRef(0);
   const run = (req: CreateRequest): void => {
     runs.current += 1;
     const mine = runs.current;
-    setRead(undefined);
+    const asked = JSON.stringify(req);
+    setAnswer(undefined);
     async function check(): Promise<void> {
       try {
-        const answer = await api.checkCreate(req);
+        const checked = await api.checkCreate(req);
         if (mine === runs.current) {
-          setRead({ check: answer });
+          setAnswer({ read: { check: checked }, asked });
         }
       } catch (err) {
         if (mine === runs.current) {
-          setRead({ error: errorMessage(err) });
+          setAnswer({ read: { error: errorMessage(err) }, asked });
         }
       }
     }
     void check();
   };
-  return { read, accepted: read?.check !== undefined, run };
+  const read = answer?.read;
+  const refusalOf = (req: CreateRequest): string | undefined =>
+    answer?.asked === JSON.stringify(req) ? answer.read.error : undefined;
+  return { read, accepted: read?.check !== undefined, run, refusalOf };
 }
 
 type CheckState = "ok" | "warning" | "error" | "progress";

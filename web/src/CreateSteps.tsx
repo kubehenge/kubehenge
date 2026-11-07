@@ -24,6 +24,7 @@ import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer"
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
+import { NodeCustomisationFields } from "./NodeCustomisation";
 import { NodeSettingsFields } from "./NodeSettings";
 import { NodeTimeoutFields } from "./NodeTimeouts";
 import { OIDCProviders } from "./OIDCProviders";
@@ -859,9 +860,12 @@ export function MachinesStep({
   nodes,
   rules,
   attempted = false,
+  refusal,
 }: StepProps & {
   /** Next was pressed on the step: every row's problem shows. */
   attempted?: boolean;
+  /** The server's refusal of the node customisation, shown with it. */
+  refusal?: string | undefined;
   cls: ClusterClass | undefined;
   usableStorages: Storage[];
   placed: boolean;
@@ -974,6 +978,21 @@ export function MachinesStep({
           showAll={attempted}
           workers
         />
+      )}
+      {variable(cls, "nodeCustomisation") !== undefined && (
+        <details
+          className="advanced"
+          open={(attempted && shown("nodeCustomisation") !== undefined) || refusal !== undefined ? true : undefined}
+        >
+          <summary>Advanced</summary>
+          <NodeCustomisationFields
+            value={form.nodeCustomisation}
+            onChange={(v) => set("nodeCustomisation", v)}
+            talos={cls?.distribution === "talos"}
+            showAll={attempted}
+            refusal={refusal}
+          />
+        </details>
       )}
     </>
   );

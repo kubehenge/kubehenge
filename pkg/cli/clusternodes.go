@@ -129,6 +129,7 @@ type updateFlags struct {
 	cis            *bool
 	grace          *int
 	labels, taints []string
+	custom         *nodeCustomFlags
 }
 
 // updateRequest is the interface's change for update's flags: each sets its own variable only.
@@ -153,8 +154,15 @@ func updateRequest(f updateFlags) (map[string]any, error) {
 		}
 		vars["workerNodes"] = nodes
 	}
+	if f.custom != nil && f.custom.any() {
+		value, err := f.custom.value()
+		if err != nil {
+			return nil, err
+		}
+		vars[nodeCustomisationVariable] = value
+	}
 	if len(vars) == 0 {
-		return nil, errors.New("give --cis, --" + graceFlag + ", --label, --taint or a mix")
+		return nil, errors.New("give --cis, --" + graceFlag + ", --label, --taint, a node customisation flag such as --node-file or --kubelet-arg, or a mix")
 	}
 	return map[string]any{"variables": vars}, nil
 }
@@ -163,9 +171,10 @@ func (o *clusterOptions) updateCommand() *cobra.Command {
 	var cis bool
 	var grace int
 	var labels, taints []string
+	custom := &nodeCustomFlags{}
 	update := &cobra.Command{
-		Use:   "update NAME [--cis] [--" + graceFlag + " N] [--label KEY=VALUE] [--taint KEY=VALUE:EFFECT]",
-		Short: "Change a cluster's CIS hardening, host outage wait, or its workers' labels and taints",
+		Use:   "update NAME [--cis] [--" + graceFlag + " N] [--label KEY=VALUE] [--taint KEY=VALUE:EFFECT] [--node-file ...]",
+		Short: "Change a cluster's CIS hardening, host outage wait, worker labels and taints, or node customisation",
 		Long: `Change the settings given, and leave the others as the cluster has them.
 
 --cis switches CIS hardening on for a cluster created without it. It enforces the restricted Pod
@@ -177,10 +186,14 @@ waits before it is replaced.
 
 --label and --taint set the labels and taints every worker registers with, unless its pool has its
 own. They replace the cluster's labels and taints, so give them all. The workers are replaced, one
-node at a time.`,
+node at a time.
+
+The --node-*, --kubelet-arg, --apiserver-arg, --controller-manager-arg, --scheduler-arg and --audit-*
+flags set the cluster variable nodeCustomisation. They replace the whole variable, so give every
+file, command and flag the cluster should keep. The nodes it reaches are replaced, one at a time.`,
 		Args: argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			f := updateFlags{labels: labels, taints: taints}
+			f := updateFlags{labels: labels, taints: taints, custom: custom}
 			if cmd.Flags().Changed("cis") {
 				f.cis = &cis
 			}
@@ -198,6 +211,7 @@ node at a time.`,
 	update.Flags().IntVar(&grace, graceFlag, 0, graceHelp())
 	update.Flags().StringArrayVar(&labels, "label", nil, "a worker label as KEY=VALUE, such as team=a, repeated for more")
 	update.Flags().StringArrayVar(&taints, "taint", nil, "a worker taint as KEY=VALUE:EFFECT or KEY:EFFECT, such as dedicated=db:NoSchedule, repeated for more")
+	custom.register(update.Flags())
 	o.namespaceFlag(update.Flags())
 	return update
 }

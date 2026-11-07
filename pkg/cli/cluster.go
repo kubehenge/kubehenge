@@ -345,7 +345,7 @@ func (o *clusterOptions) raw(ctx context.Context, out io.Writer, method, name, t
 	return nil
 }
 
-func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string, grace *int) error {
+func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string, grace *int, custom *nodeCustomFlags) error {
 	var raw []byte
 	var err error
 	if file == "-" {
@@ -362,6 +362,15 @@ func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string,
 	}
 	if grace != nil {
 		if req, err = withGrace(req, *grace); err != nil {
+			return err
+		}
+	}
+	if custom.any() {
+		value, valueErr := custom.value()
+		if valueErr != nil {
+			return valueErr
+		}
+		if req, err = mergeNodeCustomisation(req, value); err != nil {
 			return err
 		}
 	}
@@ -448,6 +457,7 @@ func checkGrace(minutes int) error {
 func (o *clusterOptions) createCommand() *cobra.Command {
 	var file string
 	var grace int
+	custom := &nodeCustomFlags{}
 	create := &cobra.Command{
 		Use:   "create -f FILE",
 		Short: "Create a cluster from the interface's create request, in JSON or YAML",
@@ -455,16 +465,23 @@ func (o *clusterOptions) createCommand() *cobra.Command {
 
 The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
 workerReplicas, variables, and namespace where the interface has more than one. It is checked as
-the wizard's request is.`,
+the wizard's request is.
+
+--` + graceFlag + ` sets hostOutageGraceMinutes over the file's value.
+
+The --node-*, --kubelet-arg, --apiserver-arg, --controller-manager-arg, --scheduler-arg and --audit-*
+flags set the cluster variable nodeCustomisation. They add to the lists in the file, and replace its
+audit policy and audit webhook.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var set *int
 			if cmd.Flags().Changed(graceFlag) {
 				set = &grace
 			}
-			return o.create(cmd.Context(), cmd.OutOrStdout(), file, set)
+			return o.create(cmd.Context(), cmd.OutOrStdout(), file, set, custom)
 		},
 	}
+	custom.register(create.Flags())
 	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
 	create.Flags().IntVar(&grace, graceFlag, 0, graceHelp())
 	_ = create.MarkFlagRequired("filename")

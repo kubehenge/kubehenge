@@ -244,13 +244,33 @@ func TestClusterCommandsSetTheHostOutageGrace(t *testing.T) {
 		t.Errorf("sent\n%s\nwant\n%s", sent, want)
 	}
 
+	// The node customisation flags mix with the others too, on update and on create.
+	for _, args := range [][]string{
+		{"update", "web", "--host-outage-grace-minutes", "30", "--kubelet-arg", "event-qps=50"},
+		{"create", "-f", file, "--host-outage-grace-minutes", "30", "--kubelet-arg", "event-qps=50"},
+	} {
+		fake.mu.Lock()
+		fake.sent = nil
+		fake.mu.Unlock()
+		if _, err := runCluster(t, srv.URL, token, args...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		fake.mu.Lock()
+		got := strings.Join(fake.sent, "\n")
+		fake.mu.Unlock()
+		if !strings.Contains(got, `"hostOutageGraceMinutes":30`) || !strings.Contains(got, `"nodeCustomisation":{`) ||
+			!strings.Contains(got, "event-qps") || strings.Contains(got, `"cis"`) || strings.Contains(got, `"workerNodes"`) {
+			t.Errorf("%v sent %s, want the wait and the node customisation alone", args, got)
+		}
+	}
+
 	for _, c := range []struct {
 		args []string
 		want string
 	}{
 		{[]string{"update", "web", "--host-outage-grace-minutes", "3"}, "give 0, or 5 to 10080"},
 		{[]string{"update", "web", "--host-outage-grace-minutes", "10081"}, "give 0, or 5 to 10080"},
-		{[]string{"update", "web"}, "give --cis, --host-outage-grace-minutes, --label, --taint or a mix"},
+		{[]string{"update", "web"}, "give --cis, --host-outage-grace-minutes, --label, --taint, a node customisation flag"},
 		{[]string{"update", "web", "--cis=false"}, "cannot be switched off"},
 		{[]string{"update", "web", "--taint", "dedicated=db"}, "--taint"},
 		{[]string{"create", "-f", file, "--host-outage-grace-minutes", "4"}, "give 0, or 5 to 10080"},

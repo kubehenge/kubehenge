@@ -114,6 +114,7 @@ spec:
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
     {{- include "kubehenge.etcdVariable" . | nindent 4 }}
     {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -222,6 +223,8 @@ spec:
               valueFrom:
                 template: {{ `{{ dict "apiVersion" "v1alpha1" "kind" "ResolverConfig" "searchDomains" (dict "domains" .network.searchDomains) | toJson | toJson }}` | quote }}
         {{- end }}
+    # Last, so that Kubehenge's own settings come first.
+    {{- include "kubehenge.nodeCustomisationPatches" "talos" | nindent 4 }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate

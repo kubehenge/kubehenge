@@ -50,6 +50,19 @@ import { clusterKey, fromCluster, startable, startDefault, startKeys } from "./s
 import type { Bridge, Cluster, ClusterClass, NodeDNS, PveNode, Storage, Versions } from "./types";
 import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
 
+// customisationRefusal is the server's error where it names the node customisation, which then shows with it.
+const customisationRefusal = (error: string | undefined): string | undefined =>
+  error !== undefined && /node customisation|nodeCustomisation/iu.test(error) ? error : undefined;
+
+// checkRefusal is the node customisation's refusal, from a create that failed or from the last check
+// of the form as it stands now.
+const checkRefusal = (
+  error: string | undefined,
+  checked: ReturnType<typeof useCreateCheck>,
+  of: { form: Parameters<typeof request>[0]; cls: Parameters<typeof request>[1] | undefined },
+): string | undefined =>
+  customisationRefusal(error ?? (of.cls ? checked.refusalOf(request(of.form, of.cls)) : undefined));
+
 // versionsKey is where the versions offered are kept: a distribution's, kubeadm's per node OS.
 const versionsKey = (distribution: string, nodeOS: string | undefined): string =>
   nodeOS === undefined ? distribution : `${distribution} ${nodeOS}`;
@@ -391,6 +404,7 @@ export function CreateCluster({
               nodes={nodes}
               rules={rules}
               attempted={attempted.has(step)}
+              refusal={checkRefusal(error, checked, { form, cls })}
             />
           )}
           {step === "Add-ons" && (

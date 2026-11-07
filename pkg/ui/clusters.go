@@ -76,6 +76,9 @@ var changeableVariables = map[string]bool{
 	// on rolls every node (the class refuses it switched off).
 	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true, workerNodesVariable: true,
 	cisVariable: true,
+	// Files, commands, arguments and audit settings reach the nodes' bootstrap, so a change replaces
+	// every node it reaches.
+	provisioner.NodeCustomisationVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.

@@ -16,9 +16,9 @@ type Kind = "label" | "taint";
 type Part = keyof RowProblem;
 
 // The fields of a row carry their names as labels, and a heading line above the rows shows them.
-function Head({ parts }: { parts: string[] }): JSX.Element {
+export function Head({ parts, shape }: { parts: string[]; shape?: string }): JSX.Element {
   return (
-    <div className={`node-row node-head ${parts.length > 2 ? "taint-row" : ""}`} aria-hidden="true">
+    <div className={`node-row node-head ${shape ?? (parts.length > 2 ? "taint-row" : "")}`} aria-hidden="true">
       {parts.map((p) => (
         <span key={p}>{p}</span>
       ))}
@@ -63,7 +63,7 @@ function TextPart({
 
 // Field holds a control with its name. The name shows only where the rows stack and the heading line
 // above them is gone.
-function Field({ label, children }: { label: string; children: JSX.Element }): JSX.Element {
+export function Field({ label, children }: { label: string; children: JSX.Element }): JSX.Element {
   return (
     <div className="node-field">
       <span className="node-field-name" aria-hidden="true">

@@ -29,6 +29,368 @@
           "nodeVolumeDetachTimeoutSeconds": 600
         }
       },
+      "patches": [
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .cis }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-cis"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .cni }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-cni"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .controlPlaneEndpoint }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-controlPlaneEndpoint"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .controlPlaneMachine }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-controlPlaneMachine"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .etcdSnapshots }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-etcdSnapshots"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .loadBalancer }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-loadBalancer"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .network }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-network"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .nodeCustomisation }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisation"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .nodeCustomisationRevision }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisationRevision"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .oidc }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-oidc"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .podSecurity }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-podSecurity"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .storage }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-storage"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .workerMachine }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-workerMachine"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .workerNodes }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-workerNodes"
+        }
+      ],
       "variables": [
         {
           "name": "controlPlaneEndpoint",
@@ -1910,6 +2272,335 @@
           }
         },
         {
+          "name": "nodeCustomisation",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "What a company adds to the nodes: files, commands before the distribution starts, kubelet and control-plane arguments, an audit policy and an audit webhook. Kubehenge's own files and arguments stay and cannot be set here. Changing anything replaces every node it reaches, one at a time.",
+              "properties": {
+                "apiServerArgs": {
+                  "description": "Extra API server arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "auditPolicy": {
+                  "description": "The API server's audit policy, in place of Kubehenge's. A ConfigMap in the cluster's namespace holds it under the key policy.yaml, or the policy is given here. Talos takes only the policy given here.",
+                  "properties": {
+                    "configMap": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                      "type": "string"
+                    },
+                    "policy": {
+                      "type": "object",
+                      "x-kubernetes-preserve-unknown-fields": true
+                    }
+                  },
+                  "type": "object",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Give a ConfigMap or the policy, not both.",
+                      "rule": "has(self.configMap) != has(self.policy)"
+                    }
+                  ]
+                },
+                "auditWebhook": {
+                  "description": "Sends audit events to a webhook. The Secret in the cluster's namespace holds the webhook's kubeconfig.",
+                  "properties": {
+                    "key": {
+                      "default": "kubeconfig",
+                      "maxLength": 253,
+                      "pattern": "^[-._a-zA-Z0-9]+$",
+                      "type": "string"
+                    },
+                    "secret": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "secret"
+                  ],
+                  "type": "object"
+                },
+                "commands": {
+                  "description": "Commands that run, in this order, before the distribution starts.",
+                  "items": {
+                    "properties": {
+                      "roles": {
+                        "default": [
+                          "controlPlane",
+                          "worker"
+                        ],
+                        "description": "The nodes it goes to, control-plane nodes, workers or both.",
+                        "items": {
+                          "enum": [
+                            "controlPlane",
+                            "worker"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 2,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "run": {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "run"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array"
+                },
+                "controllerManagerArgs": {
+                  "description": "Extra controller manager arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "files": {
+                  "description": "Files written to the nodes before the distribution starts.",
+                  "items": {
+                    "properties": {
+                      "content": {
+                        "description": "The file's text. Not for secrets.",
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "path": {
+                        "maxLength": 255,
+                        "minLength": 2,
+                        "pattern": "^/[A-Za-z0-9._@%+=:,/-]+$",
+                        "type": "string"
+                      },
+                      "permissions": {
+                        "default": "0644",
+                        "enum": [
+                          "0400",
+                          "0440",
+                          "0444",
+                          "0600",
+                          "0640",
+                          "0644",
+                          "0700",
+                          "0750",
+                          "0755"
+                        ],
+                        "type": "string"
+                      },
+                      "roles": {
+                        "default": [
+                          "controlPlane",
+                          "worker"
+                        ],
+                        "description": "The nodes it goes to, control-plane nodes, workers or both.",
+                        "items": {
+                          "enum": [
+                            "controlPlane",
+                            "worker"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 2,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "secret": {
+                        "description": "A Secret in the cluster's namespace whose key is the file's content.",
+                        "properties": {
+                          "key": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[-._a-zA-Z0-9]+$",
+                            "type": "string"
+                          },
+                          "name": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "key"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "Give the content or a secret, not both.",
+                        "rule": "has(self.content) != has(self.secret)"
+                      },
+                      {
+                        "message": "A path names a file, not a directory.",
+                        "rule": "!self.path.contains('//') \u0026\u0026 !self.path.endsWith('/')"
+                      },
+                      {
+                        "message": "A path has no . or .. part.",
+                        "rule": "!self.path.matches('(^|/)[.][.]?(/|$)')"
+                      }
+                    ]
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each path once.",
+                      "rule": "self.all(a, self.exists_one(b, a.path == b.path))"
+                    }
+                  ]
+                },
+                "kubeletArgs": {
+                  "description": "Extra kubelet arguments, on every node.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "schedulerArgs": {
+                  "description": "Extra scheduler arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "nodeCustomisationRevision",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Set by Kubehenge's controller to a digest, per role, of the Secrets and the ConfigMap that nodeCustomisation names for that role. A new digest replaces that role's nodes, so that a rotated secret or a changed audit policy reaches them. Do not set it.",
+              "properties": {
+                "controlPlane": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "worker": {
+                  "maxLength": 64,
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": false,
           "schema": {
@@ -1975,6 +2666,317 @@
           "nodeVolumeDetachTimeoutSeconds": 600
         }
       },
+      "patches": [
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .cis }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-cis"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .controlPlaneEndpoint }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-controlPlaneEndpoint"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .controlPlaneMachine }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-controlPlaneMachine"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .loadBalancer }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-loadBalancer"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .network }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-network"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .nodeCustomisation }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisation"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .nodeCustomisationRevision }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisationRevision"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .oidc }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-oidc"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .podSecurity }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-podSecurity"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .storage }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-storage"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .workerMachine }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-workerMachine"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .workerNodes }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-workerNodes"
+        }
+      ],
       "variables": [
         {
           "name": "controlPlaneEndpoint",
@@ -3856,6 +4858,335 @@
           }
         },
         {
+          "name": "nodeCustomisation",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "What a company adds to the nodes: files, commands before the distribution starts, kubelet and control-plane arguments, an audit policy and an audit webhook. Kubehenge's own files and arguments stay and cannot be set here. Changing anything replaces every node it reaches, one at a time.",
+              "properties": {
+                "apiServerArgs": {
+                  "description": "Extra API server arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "auditPolicy": {
+                  "description": "The API server's audit policy, in place of Kubehenge's. A ConfigMap in the cluster's namespace holds it under the key policy.yaml, or the policy is given here. Talos takes only the policy given here.",
+                  "properties": {
+                    "configMap": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                      "type": "string"
+                    },
+                    "policy": {
+                      "type": "object",
+                      "x-kubernetes-preserve-unknown-fields": true
+                    }
+                  },
+                  "type": "object",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Give a ConfigMap or the policy, not both.",
+                      "rule": "has(self.configMap) != has(self.policy)"
+                    }
+                  ]
+                },
+                "auditWebhook": {
+                  "description": "Sends audit events to a webhook. The Secret in the cluster's namespace holds the webhook's kubeconfig.",
+                  "properties": {
+                    "key": {
+                      "default": "kubeconfig",
+                      "maxLength": 253,
+                      "pattern": "^[-._a-zA-Z0-9]+$",
+                      "type": "string"
+                    },
+                    "secret": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "secret"
+                  ],
+                  "type": "object"
+                },
+                "commands": {
+                  "description": "Commands that run, in this order, before the distribution starts.",
+                  "items": {
+                    "properties": {
+                      "roles": {
+                        "default": [
+                          "controlPlane",
+                          "worker"
+                        ],
+                        "description": "The nodes it goes to, control-plane nodes, workers or both.",
+                        "items": {
+                          "enum": [
+                            "controlPlane",
+                            "worker"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 2,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "run": {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "run"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array"
+                },
+                "controllerManagerArgs": {
+                  "description": "Extra controller manager arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "files": {
+                  "description": "Files written to the nodes before the distribution starts.",
+                  "items": {
+                    "properties": {
+                      "content": {
+                        "description": "The file's text. Not for secrets.",
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "path": {
+                        "maxLength": 255,
+                        "minLength": 2,
+                        "pattern": "^/[A-Za-z0-9._@%+=:,/-]+$",
+                        "type": "string"
+                      },
+                      "permissions": {
+                        "default": "0644",
+                        "enum": [
+                          "0400",
+                          "0440",
+                          "0444",
+                          "0600",
+                          "0640",
+                          "0644",
+                          "0700",
+                          "0750",
+                          "0755"
+                        ],
+                        "type": "string"
+                      },
+                      "roles": {
+                        "default": [
+                          "controlPlane",
+                          "worker"
+                        ],
+                        "description": "The nodes it goes to, control-plane nodes, workers or both.",
+                        "items": {
+                          "enum": [
+                            "controlPlane",
+                            "worker"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 2,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "secret": {
+                        "description": "A Secret in the cluster's namespace whose key is the file's content.",
+                        "properties": {
+                          "key": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[-._a-zA-Z0-9]+$",
+                            "type": "string"
+                          },
+                          "name": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "key"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "Give the content or a secret, not both.",
+                        "rule": "has(self.content) != has(self.secret)"
+                      },
+                      {
+                        "message": "A path names a file, not a directory.",
+                        "rule": "!self.path.contains('//') \u0026\u0026 !self.path.endsWith('/')"
+                      },
+                      {
+                        "message": "A path has no . or .. part.",
+                        "rule": "!self.path.matches('(^|/)[.][.]?(/|$)')"
+                      }
+                    ]
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each path once.",
+                      "rule": "self.all(a, self.exists_one(b, a.path == b.path))"
+                    }
+                  ]
+                },
+                "kubeletArgs": {
+                  "description": "Extra kubelet arguments, on every node.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "schedulerArgs": {
+                  "description": "Extra scheduler arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "nodeCustomisationRevision",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Set by Kubehenge's controller to a digest, per role, of the Secrets and the ConfigMap that nodeCustomisation names for that role. A new digest replaces that role's nodes, so that a rotated secret or a changed audit policy reaches them. Do not set it.",
+              "properties": {
+                "controlPlane": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "worker": {
+                  "maxLength": 64,
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": true,
           "schema": {
@@ -3918,6 +5249,363 @@
           "nodeVolumeDetachTimeoutSeconds": 600
         }
       },
+      "patches": [
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .cis }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-cis"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .cni }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-cni"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .controlPlaneEndpoint }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-controlPlaneEndpoint"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .controlPlaneMachine }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-controlPlaneMachine"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .etcdSnapshots }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-etcdSnapshots"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .loadBalancer }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-loadBalancer"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .network }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-network"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .nodeCustomisation }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisation"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .nodeCustomisationRevision }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisationRevision"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .oidc }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-oidc"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .podSecurity }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-podSecurity"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .storage }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-storage"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .workerMachine }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-workerMachine"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .workerNodes }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-workerNodes"
+        }
+      ],
       "variables": [
         {
           "name": "controlPlaneEndpoint",
@@ -5799,6 +7487,335 @@
           }
         },
         {
+          "name": "nodeCustomisation",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "What a company adds to the nodes: files, commands before the distribution starts, kubelet and control-plane arguments, an audit policy and an audit webhook. Kubehenge's own files and arguments stay and cannot be set here. Changing anything replaces every node it reaches, one at a time.",
+              "properties": {
+                "apiServerArgs": {
+                  "description": "Extra API server arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "auditPolicy": {
+                  "description": "The API server's audit policy, in place of Kubehenge's. A ConfigMap in the cluster's namespace holds it under the key policy.yaml, or the policy is given here. Talos takes only the policy given here.",
+                  "properties": {
+                    "configMap": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                      "type": "string"
+                    },
+                    "policy": {
+                      "type": "object",
+                      "x-kubernetes-preserve-unknown-fields": true
+                    }
+                  },
+                  "type": "object",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Give a ConfigMap or the policy, not both.",
+                      "rule": "has(self.configMap) != has(self.policy)"
+                    }
+                  ]
+                },
+                "auditWebhook": {
+                  "description": "Sends audit events to a webhook. The Secret in the cluster's namespace holds the webhook's kubeconfig.",
+                  "properties": {
+                    "key": {
+                      "default": "kubeconfig",
+                      "maxLength": 253,
+                      "pattern": "^[-._a-zA-Z0-9]+$",
+                      "type": "string"
+                    },
+                    "secret": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "secret"
+                  ],
+                  "type": "object"
+                },
+                "commands": {
+                  "description": "Commands that run, in this order, before the distribution starts.",
+                  "items": {
+                    "properties": {
+                      "roles": {
+                        "default": [
+                          "controlPlane",
+                          "worker"
+                        ],
+                        "description": "The nodes it goes to, control-plane nodes, workers or both.",
+                        "items": {
+                          "enum": [
+                            "controlPlane",
+                            "worker"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 2,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "run": {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "run"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array"
+                },
+                "controllerManagerArgs": {
+                  "description": "Extra controller manager arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "files": {
+                  "description": "Files written to the nodes before the distribution starts.",
+                  "items": {
+                    "properties": {
+                      "content": {
+                        "description": "The file's text. Not for secrets.",
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "path": {
+                        "maxLength": 255,
+                        "minLength": 2,
+                        "pattern": "^/[A-Za-z0-9._@%+=:,/-]+$",
+                        "type": "string"
+                      },
+                      "permissions": {
+                        "default": "0644",
+                        "enum": [
+                          "0400",
+                          "0440",
+                          "0444",
+                          "0600",
+                          "0640",
+                          "0644",
+                          "0700",
+                          "0750",
+                          "0755"
+                        ],
+                        "type": "string"
+                      },
+                      "roles": {
+                        "default": [
+                          "controlPlane",
+                          "worker"
+                        ],
+                        "description": "The nodes it goes to, control-plane nodes, workers or both.",
+                        "items": {
+                          "enum": [
+                            "controlPlane",
+                            "worker"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 2,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "secret": {
+                        "description": "A Secret in the cluster's namespace whose key is the file's content.",
+                        "properties": {
+                          "key": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[-._a-zA-Z0-9]+$",
+                            "type": "string"
+                          },
+                          "name": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "key"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "Give the content or a secret, not both.",
+                        "rule": "has(self.content) != has(self.secret)"
+                      },
+                      {
+                        "message": "A path names a file, not a directory.",
+                        "rule": "!self.path.contains('//') \u0026\u0026 !self.path.endsWith('/')"
+                      },
+                      {
+                        "message": "A path has no . or .. part.",
+                        "rule": "!self.path.matches('(^|/)[.][.]?(/|$)')"
+                      }
+                    ]
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each path once.",
+                      "rule": "self.all(a, self.exists_one(b, a.path == b.path))"
+                    }
+                  ]
+                },
+                "kubeletArgs": {
+                  "description": "Extra kubelet arguments, on every node.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "schedulerArgs": {
+                  "description": "Extra scheduler arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "nodeCustomisationRevision",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Set by Kubehenge's controller to a digest, per role, of the Secrets and the ConfigMap that nodeCustomisation names for that role. A new digest replaces that role's nodes, so that a rotated secret or a changed audit policy reaches them. Do not set it.",
+              "properties": {
+                "controlPlane": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "worker": {
+                  "maxLength": 64,
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": false,
           "schema": {
@@ -5864,6 +7881,284 @@
           "nodeVolumeDetachTimeoutSeconds": 600
         }
       },
+      "patches": [
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .cis }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-cis"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .cni }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-cni"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .controlPlaneEndpoint }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-controlPlaneEndpoint"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .controlPlaneMachine }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-controlPlaneMachine"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .network }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-network"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .nodeCustomisation }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisation"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .oidc }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-oidc"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .podSecurity }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true
+                }
+              }
+            }
+          ],
+          "name": "reach-podSecurity"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .storage }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-storage"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .workerMachine }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-workerMachine"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .workerNodes }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-workerNodes"
+        }
+      ],
       "variables": [
         {
           "name": "controlPlaneEndpoint",
@@ -7701,6 +9996,335 @@
                       "rule": "self.all(x, self.exists_one(y, x.key == y.key))"
                     }
                   ]
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "nodeCustomisation",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "What a company adds to the nodes: files, commands before the distribution starts, kubelet and control-plane arguments, an audit policy and an audit webhook. Kubehenge's own files and arguments stay and cannot be set here. Changing anything replaces every node it reaches, one at a time.",
+              "properties": {
+                "apiServerArgs": {
+                  "description": "Extra API server arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "auditPolicy": {
+                  "description": "The API server's audit policy, in place of Kubehenge's. A ConfigMap in the cluster's namespace holds it under the key policy.yaml, or the policy is given here. Talos takes only the policy given here.",
+                  "properties": {
+                    "configMap": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                      "type": "string"
+                    },
+                    "policy": {
+                      "type": "object",
+                      "x-kubernetes-preserve-unknown-fields": true
+                    }
+                  },
+                  "type": "object",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Give a ConfigMap or the policy, not both.",
+                      "rule": "has(self.configMap) != has(self.policy)"
+                    }
+                  ]
+                },
+                "auditWebhook": {
+                  "description": "Sends audit events to a webhook. The Secret in the cluster's namespace holds the webhook's kubeconfig.",
+                  "properties": {
+                    "key": {
+                      "default": "kubeconfig",
+                      "maxLength": 253,
+                      "pattern": "^[-._a-zA-Z0-9]+$",
+                      "type": "string"
+                    },
+                    "secret": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "secret"
+                  ],
+                  "type": "object"
+                },
+                "commands": {
+                  "description": "Commands that run, in this order, before the distribution starts.",
+                  "items": {
+                    "properties": {
+                      "roles": {
+                        "default": [
+                          "controlPlane",
+                          "worker"
+                        ],
+                        "description": "The nodes it goes to, control-plane nodes, workers or both.",
+                        "items": {
+                          "enum": [
+                            "controlPlane",
+                            "worker"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 2,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "run": {
+                        "maxLength": 1024,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "run"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array"
+                },
+                "controllerManagerArgs": {
+                  "description": "Extra controller manager arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "files": {
+                  "description": "Files written to the nodes before the distribution starts.",
+                  "items": {
+                    "properties": {
+                      "content": {
+                        "description": "The file's text. Not for secrets.",
+                        "maxLength": 16384,
+                        "type": "string"
+                      },
+                      "path": {
+                        "maxLength": 255,
+                        "minLength": 2,
+                        "pattern": "^/[A-Za-z0-9._@%+=:,/-]+$",
+                        "type": "string"
+                      },
+                      "permissions": {
+                        "default": "0644",
+                        "enum": [
+                          "0400",
+                          "0440",
+                          "0444",
+                          "0600",
+                          "0640",
+                          "0644",
+                          "0700",
+                          "0750",
+                          "0755"
+                        ],
+                        "type": "string"
+                      },
+                      "roles": {
+                        "default": [
+                          "controlPlane",
+                          "worker"
+                        ],
+                        "description": "The nodes it goes to, control-plane nodes, workers or both.",
+                        "items": {
+                          "enum": [
+                            "controlPlane",
+                            "worker"
+                          ],
+                          "type": "string"
+                        },
+                        "maxItems": 2,
+                        "minItems": 1,
+                        "type": "array"
+                      },
+                      "secret": {
+                        "description": "A Secret in the cluster's namespace whose key is the file's content.",
+                        "properties": {
+                          "key": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[-._a-zA-Z0-9]+$",
+                            "type": "string"
+                          },
+                          "name": {
+                            "maxLength": 253,
+                            "minLength": 1,
+                            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "key"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "Give the content or a secret, not both.",
+                        "rule": "has(self.content) != has(self.secret)"
+                      },
+                      {
+                        "message": "A path names a file, not a directory.",
+                        "rule": "!self.path.contains('//') \u0026\u0026 !self.path.endsWith('/')"
+                      },
+                      {
+                        "message": "A path has no . or .. part.",
+                        "rule": "!self.path.matches('(^|/)[.][.]?(/|$)')"
+                      }
+                    ]
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each path once.",
+                      "rule": "self.all(a, self.exists_one(b, a.path == b.path))"
+                    }
+                  ]
+                },
+                "kubeletArgs": {
+                  "description": "Extra kubelet arguments, on every node.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                },
+                "schedulerArgs": {
+                  "description": "Extra scheduler arguments.",
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "maxLength": 63,
+                        "minLength": 1,
+                        "pattern": "^[a-z][a-z0-9-]*$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 1024,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 10,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each argument once.",
+                      "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "nodeCustomisationRevision",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Set by Kubehenge's controller to a digest, per role, of the Secrets and the ConfigMap that nodeCustomisation names for that role. A new digest replaces that role's nodes, so that a rotated secret or a changed audit policy reaches them. Do not set it.",
+              "properties": {
+                "controlPlane": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "worker": {
+                  "maxLength": 64,
+                  "type": "string"
                 }
               },
               "type": "object"

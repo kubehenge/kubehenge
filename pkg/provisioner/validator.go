@@ -112,6 +112,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateGitOps(c)...)
 	errs = append(errs, validateEgress(c)...)
 	errs = append(errs, validateAddonSettings(old, c)...)
+	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
 	errs = append(errs, validateAutoscaling(c)...)
 	errs = append(errs, validateHostOutageGrace(c)...)
 	if err := checkEtcdSnapshots(old, c, class); err != nil {

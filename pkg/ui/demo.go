@@ -23,6 +23,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
@@ -95,7 +96,7 @@ func fillDemo(s *Server, clock func() time.Time, dir string) error {
 		return fmt.Errorf("the demo's appliance: %w", err)
 	}
 	s.Appliance = &appliance.Appliance{Dir: dir, Release: demoName, Now: clock}
-	s.Kube = fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(fleet.objects...).Build()
+	s.Kube = withDemoWebhook(fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(fleet.objects...).Build())
 	s.Accounts = &demoAccounts{fleet: fleet}
 	s.ConnectWorkload = fleet.connect
 	s.Probe = func(context.Context, []netip.Addr) map[netip.Addr]bool { return map[netip.Addr]bool{} }
@@ -130,6 +131,40 @@ func fillDemo(s *Server, clock func() time.Time, dir string) error {
 	}
 	return nil
 }
+
+// withDemoWebhook gives the demo's fake API server the refusals of Kubehenge's admission webhook
+// that need no Proxmox VE host, so that the interface shows the reason a real cluster would give.
+func withDemoWebhook(c client.WithWatch) client.WithWatch {
+	check := func(ctx context.Context, obj client.Object, old *clusterv1.Cluster) error {
+		cluster, ok := obj.(*clusterv1.Cluster)
+		if !ok {
+			return nil
+		}
+		return provisioner.ValidateNodeCustomisation(ctx, c, old, cluster)
+	}
+	return &demoKube{WithWatch: interceptor.NewClient(c, interceptor.Funcs{
+		Create: func(ctx context.Context, kube client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if err := check(ctx, obj, nil); err != nil {
+				return err
+			}
+			return kube.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, kube client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			var old clusterv1.Cluster
+			if err := kube.Get(ctx, client.ObjectKeyFromObject(obj), &old); err != nil {
+				return kube.Update(ctx, obj, opts...)
+			}
+			if err := check(ctx, obj, &old); err != nil {
+				return err
+			}
+			return kube.Update(ctx, obj, opts...)
+		},
+	})}
+}
+
+// demoKube is a pointer type so that the server can compare one client with another, which the
+// interceptor's own value type, holding functions, cannot do.
+type demoKube struct{ client.WithWatch }
 
 // demoScheme knows the kinds the interface reads: Cluster API's typed, the add-ons and the
 // control planes of each distribution as unstructured objects, as a management cluster serves them.

@@ -78,7 +78,23 @@
       "subnet": 20,
       "ageDays": 61,
       "addOns": ["headlamp", "monitoring"],
-      "crashing": "invoice-worker"
+      "crashing": "invoice-worker",
+      "nodeCustomisation": {
+        "files": [
+          {
+            "path": "/etc/audit/rules.d/50-payments.rules",
+            "permissions": "0640",
+            "content": "-w /etc/kubernetes/ -p wa -k kube-config",
+            "roles": ["controlPlane"]
+          },
+          { "path": "/etc/ssl/certs/payments-ca.crt", "secret": { "name": "payments-ca", "key": "ca.crt" } }
+        ],
+        "commands": [{ "run": "augenrules --load", "roles": ["controlPlane"] }],
+        "kubeletArgs": [{ "name": "event-qps", "value": "50" }],
+        "apiServerArgs": [{ "name": "request-timeout", "value": "30s" }],
+        "auditPolicy": { "configMap": "payments-audit-policy" },
+        "auditWebhook": { "secret": "payments-siem", "key": "kubeconfig" }
+      }
     },
     {
       "name": "edge",

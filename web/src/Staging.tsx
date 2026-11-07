@@ -5,6 +5,7 @@ import { autoscalerText } from "./Autoscaling";
 import { backupsRows } from "./Backups";
 import { everything, optionRows, type OptionRow } from "./ClusterOptions";
 import { etcdSnapshotsRows } from "./EtcdSnapshots";
+import { nodeCustomisationChanges, nodeCustomisationOf } from "./node-customisation";
 import { timeoutsText } from "./NodeTimeouts";
 import { StagingContext, useStaging, type Staging } from "./staging-context";
 import type { ChangeRequest, Cluster, ClusterClass, Effect, PlannedChange } from "./types";
@@ -132,6 +133,7 @@ const settingLabels: Record<string, string[]> = {
   workerMachine: ["Worker size"],
   workerNodes: ["Worker node settings"],
   cis: ["CIS hardening"],
+  nodeCustomisation: ["Node customisation"],
   autoscaling: ["Autoscaling"],
   allowedNodes: ["Placement"],
   namespaceLabels: ["Namespace labels"],
@@ -233,10 +235,30 @@ interface PlanRow {
   label: string;
   now: string;
   after: string;
-  effect: Effect;
+  /** Unset on the rows that follow the first of a setting, which the first row's effect covers. */
+  effect: Effect | undefined;
 }
 
 const valueOf = (rows: Setting[], label: string): string => rows.find((r) => r.label === label)?.value ?? "";
+
+// nodeRows are the node customisation's row as one row per item that differs, each with what it was
+// and becomes, since a line of counts would read the same on both sides. The row itself when no
+// item differs.
+function nodeRows(row: PlanRow, before: Cluster, after: Cluster): PlanRow[] {
+  const diff = nodeCustomisationChanges(
+    nodeCustomisationOf(before.variables["nodeCustomisation"]),
+    nodeCustomisationOf(after.variables["nodeCustomisation"]),
+  );
+  if (diff.was.length === 0) {
+    return [row];
+  }
+  return diff.was.map((was, i) => ({
+    label: i === 0 ? row.label : "",
+    now: was,
+    after: diff.now[i] ?? "",
+    effect: i === 0 ? row.effect : undefined,
+  }));
+}
 
 /** planRows are the rows of a plan: one per row of the page whose value a change sets anew. */
 export function planRows(
@@ -257,7 +279,8 @@ export function planRows(
       effect,
     }));
     const changed = rows.filter((r) => r.now !== r.after);
-    return changed.length > 0 ? changed : rows.slice(0, 1);
+    const shown = changed.length > 0 ? changed : rows.slice(0, 1);
+    return shown.flatMap((r) => (r.label === "Node customisation" ? nodeRows(r, before, after) : [r]));
   });
 }
 
@@ -363,13 +386,15 @@ function PlanDialog({
             </tr>
           </thead>
           <tbody>
-            {planRows({ before: c, after: plan.cluster }, plan.changes, cls).map((r) => (
-              <tr key={r.label}>
+            {planRows({ before: c, after: plan.cluster }, plan.changes, cls).map((r, i) => (
+              // The item rows of a setting share its label, so the position tells them apart.
+              // oxlint-disable-next-line react/no-array-index-key
+              <tr key={`${r.label}-${i}`}>
                 <th scope="row">{r.label}</th>
                 <td data-label="Now">{r.now}</td>
                 <td data-label="After">{r.after}</td>
                 <td data-label="Machines" className={r.effect === "none" ? "muted" : "plan-replaces"}>
-                  {effects[r.effect]}
+                  {r.effect === undefined ? "" : effects[r.effect]}
                 </td>
               </tr>
             ))}

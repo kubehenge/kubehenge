@@ -933,6 +933,25 @@ const cases: Case[] = [
     },
   },
   {
+    name: "node customisation",
+    path: "/clusters/default/web/options",
+    routes: detail,
+    ready: loaded,
+    walk: async (check, user) => {
+      await user.click(await screen.findByRole("button", { name: "Edit node customisation" }));
+      const dialog = within(screen.getByRole("dialog", { name: "Edit node customisation" }));
+      await user.click(dialog.getByRole("button", { name: "Add file" }));
+      await user.click(dialog.getByRole("button", { name: "Add command" }));
+      await user.click(
+        within(dialog.getByRole("group", { name: "Kubelet flags" })).getByRole("button", { name: "Add flag" }),
+      );
+      await user.selectOptions(dialog.getByLabelText("File 1 source"), "secret");
+      await check("Node customisation rows");
+      await user.click(dialog.getByRole("button", { name: "Save" }));
+      await check("Node customisation problems");
+    },
+  },
+  {
     name: "options with etcd snapshots and backups",
     path: "/clusters/default/bk/options",
     routes: bkRoutes,
@@ -1276,6 +1295,7 @@ const dialogsExpected = [
   /^Edit placement$/u,
   /^Edit load balancer$/u,
   /^Edit pod security$/u,
+  /^Edit node customisation$/u,
   /^Edit identity providers$/u,
   /^Edit Headlamp$/u,
   /^Edit monitoring$/u,

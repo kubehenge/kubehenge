@@ -15,7 +15,9 @@ import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBala
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { labelsOf, labelsText } from "./namespace-labels";
 import { NamespaceLabelsDialog } from "./NamespaceLabels";
+import { nodeCustomisationOf, nodeCustomisationText } from "./node-customisation";
 import { choosable, cpuNote, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
+import { NodeCustomisationDialog } from "./NodeCustomisation";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import {
   PlacementDialog,
@@ -75,6 +77,7 @@ export type OptionAction =
   | "namespaceLabels"
   | "talos"
   | "etcd"
+  | "nodeCustomisation"
   | "oidc";
 
 /** A setting the Options view lists, and the action of the dialog that changes it. */
@@ -167,6 +170,9 @@ export function OptionDialog({
     }
     case "etcd": {
       return <EtcdDialog cluster={c} onClose={onClose} />;
+    }
+    case "nodeCustomisation": {
+      return <NodeCustomisationDialog cluster={c} onClose={onClose} />;
     }
     case "oidc": {
       break;
@@ -320,6 +326,13 @@ export function optionRows<A extends string = never>(
       name: "the load balancer",
     },
     { label: "CIS hardening", value: cisText(cis), group: "Security", action: "cis", name: "CIS hardening" },
+    {
+      label: "Node customisation",
+      value: nodeCustomisationText(nodeCustomisationOf(c.variables["nodeCustomisation"])),
+      group: "Nodes",
+      action: "nodeCustomisation",
+      name: "node customisation",
+    },
     {
       label: "Placement",
       value: placeText(placeOf(texts(c.variables["allowedNodes"]))),
