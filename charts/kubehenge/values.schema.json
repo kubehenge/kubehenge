@@ -251,7 +251,9 @@
         "timeZone": { "type": "string", "minLength": 1 },
         "soakHours": { "type": "integer", "minimum": 0, "maximum": 720 },
         "secret": { "$ref": "#/$defs/name" },
-        "node": { "type": "string" },
+        "node": {
+          "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string", "minLength": 1 } }]
+        },
         "storage": { "type": "string" },
         "importStorage": { "type": "string" },
         "isoStorage": { "type": "string" },
@@ -266,7 +268,9 @@
       "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] },
       "then": {
         "properties": {
-          "node": { "minLength": 1 },
+          "node": {
+            "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "array", "minItems": 1 }]
+          },
           "storage": { "minLength": 1 },
           "importStorage": { "minLength": 1 }
         }

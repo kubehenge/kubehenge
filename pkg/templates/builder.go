@@ -23,6 +23,12 @@ type Builder struct {
 	Client  *proxmox.Client
 	Sources *Sources
 	Node    string
+	// Candidates, when set, are the nodes a build may run on. Create uses the first that is online and
+	// whose CPU runs the template's node OS, and sets Node to it.
+	Candidates []string
+	// SiteCache, when set, keeps each template's site between Inventory calls, so a repeated call
+	// reads no template configuration.
+	SiteCache *SiteCache
 	// ImportStorage is a file storage with the `import` content type, where images are downloaded.
 	ImportStorage string
 	// Storage holds the templates' disks. On a Proxmox VE cluster it should be shared, so clones can
@@ -49,6 +55,8 @@ type Builder struct {
 	selectablePoll   time.Duration
 	// execRetry paces waitForExec. Zero means defaultExecRetry.
 	execRetry time.Duration
+	// isoChosen is the ISO storage the pre-flight found a bake can write to, when ISOStorage is empty.
+	isoChosen string
 }
 
 // Network is a static address for a VM being baked. Without it the VM asks DHCP.
@@ -148,6 +156,17 @@ type Inventory struct {
 	// Down are the Kubehenge VMs of the pool whose node is down. They are left out of Templates
 	// and Storages, since nothing can be read from them. They may be builds not yet templates.
 	Down []*proxmox.ClusterResource
+	// Sites say, for each of Templates in the same order, where its disks are and which CPU type it
+	// carries: a clone runs on a node only if the disks are reachable from it.
+	Sites []Site
+}
+
+// Site is where one template's disks are.
+type Site struct {
+	// Storages are the storages of the template's disks, sorted.
+	Storages []string
+	// CPU is the template's QEMU CPU type setting, empty for Proxmox VE's default.
+	CPU string
 }
 
 // NodeDownError is a VM that cannot be read because its node is down.
@@ -177,33 +196,71 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
-	var inv Inventory
+	type placed struct {
+		resource *proxmox.ClusterResource
+		site     Site
+	}
+	var found []placed
+	var down []*proxmox.ClusterResource
+	seen := map[int]bool{}
 	for _, r := range resources {
 		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
 			continue
 		}
+		id, err := vmID(r)
+		if err != nil {
+			return Inventory{}, err
+		}
+		seen[id] = true
+		// A cached site skips the configuration read, which is where a down node shows, so the
+		// resource view's word that the node is down goes first.
+		if name, site, ok := b.SiteCache.get(id); ok && r.Status != pve.StatusUnknown {
+			out := *r
+			out.Name, out.Template = name, 1
+			found = append(found, placed{&out, site})
+			continue
+		}
 		c, err := b.config(ctx, r)
-		if _, down := errors.AsType[*NodeDownError](err); down {
-			inv.Down = append(inv.Down, r)
+		if _, isDown := errors.AsType[*NodeDownError](err); isDown {
+			down = append(down, r)
 			continue
 		}
 		if err != nil {
 			return Inventory{}, err
 		}
-		if !bool(c.Template) {
-			continue
+		if bool(c.Template) {
+			site := siteOf(c)
+			b.SiteCache.put(id, c.Name, site)
+			found = append(found, placed{confirmed(r, c), site})
 		}
-		inv.Templates = append(inv.Templates, confirmed(r, c))
-		disks := slices.Collect(maps.Values(c.MergeDisks()))
-		for _, disk := range append(disks, c.EFIDisk0, c.TPMState0) {
-			if s := diskStorage(disk); s != "" && !slices.Contains(inv.Storages, s) {
+	}
+	b.SiteCache.keepOnly(seen)
+	slices.SortFunc(found, func(x, y placed) int { return strings.Compare(x.resource.Name, y.resource.Name) })
+	inv := Inventory{Down: down}
+	for _, p := range found {
+		inv.Templates = append(inv.Templates, p.resource)
+		inv.Sites = append(inv.Sites, p.site)
+		for _, s := range p.site.Storages {
+			if !slices.Contains(inv.Storages, s) {
 				inv.Storages = append(inv.Storages, s)
 			}
 		}
 	}
-	slices.SortFunc(inv.Templates, func(x, y *proxmox.ClusterResource) int { return strings.Compare(x.Name, y.Name) })
 	slices.Sort(inv.Storages)
 	return inv, nil
+}
+
+// siteOf reads where a template's disks are from its configuration.
+func siteOf(c *proxmox.VirtualMachineConfig) Site {
+	site := Site{CPU: c.CPU}
+	disks := slices.Collect(maps.Values(c.MergeDisks()))
+	for _, disk := range append(disks, c.EFIDisk0, c.TPMState0) {
+		if s := diskStorage(disk); s != "" && !slices.Contains(site.Storages, s) {
+			site.Storages = append(site.Storages, s)
+		}
+	}
+	slices.Sort(site.Storages)
+	return site
 }
 
 // diskStorage is the storage of a disk as a VM's configuration names it, storage:volume followed by
@@ -251,8 +308,14 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	case !errors.Is(err, ErrNoTemplate):
 		return 0, err
 	}
+	if err = b.pickNode(ctx, t); err != nil {
+		return 0, err
+	}
 	cpuType, recipe, err := b.prepare(ctx, t)
 	if err != nil {
+		return 0, err
+	}
+	if err = b.checkBuild(ctx, t, recipe); err != nil {
 		return 0, err
 	}
 	image, err := b.Sources.Resolve(ctx, t.Image)
@@ -1097,6 +1160,9 @@ func (b *Builder) output(ctx context.Context, vm *proxmox.VirtualMachine, comman
 func (b *Builder) isoStorage(ctx context.Context, node *proxmox.Node) (string, error) {
 	if b.ISOStorage != "" {
 		return b.ISOStorage, nil
+	}
+	if b.isoChosen != "" {
+		return b.isoChosen, nil
 	}
 	s, err := node.StorageISO(ctx)
 	if err != nil {

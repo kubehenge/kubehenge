@@ -219,7 +219,7 @@ func (f *fakePVE) pools(a answer, r *http.Request) {
 		a.reply([]map[string]any{{"members": []any{}}})
 		return
 	}
-	a.reply([]map[string]any{{"members": []map[string]any{{"type": "qemu", "vmid": 4242, "name": webNames.VolumeOwner, "node": f.at}}}})
+	a.reply([]map[string]any{{"comment": poolComment, "members": []map[string]any{{"type": "qemu", "vmid": 4242, "name": webNames.VolumeOwner, "node": f.at}}}})
 }
 
 func (f *fakePVE) writeACL(body map[string]any) {

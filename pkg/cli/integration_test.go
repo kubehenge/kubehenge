@@ -402,7 +402,8 @@ func TestIntegrationTemplateRefreshRunsUnderItsLease(t *testing.T) { //nolint:pa
 	}
 	refresh := func(conn *pve.Config) error {
 		o := &templateRefreshOptions{namespace: ns, classNamespace: ns, keep: 2, missingOnly: true, trigger: "Build now", tokenSecret: "kubehenge-proxmox"} //nolint:gosec // a Secret's name, not a credential
-		o.flags.builder.Node = "pve1"
+		// The chart always passes --storage to the refresh.
+		o.flags.builder.Node, o.flags.builder.Storage = "pve1", "local-lvm"
 		var log bytes.Buffer
 		cmd := &cobra.Command{}
 		cmd.SetContext(ctx)

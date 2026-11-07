@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
@@ -29,9 +32,21 @@ type Placer struct {
 	Client         client.Client
 	ClassNamespace string
 	Nodes          Nodes
+	// Sites, when set, leaves out of a cluster's placement the nodes its storage is not available
+	// on and the nodes its templates cannot be cloned on.
+	Sites SiteSource
 	// Interval is how often the nodes are looked at: a node that goes down is left out of the
 	// clusters' placement within about that long.
 	Interval time.Duration
+}
+
+// NodesSkippedCondition on a Cluster says that Placer left Proxmox VE nodes out of its placement
+// because their status could not be read.
+const NodesSkippedCondition = "NodesSkipped"
+
+// skippingNodes is implemented by a Nodes that skips the nodes it cannot read.
+type skippingNodes interface {
+	Unreadable() []string
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -58,6 +73,17 @@ func (p *Placer) placeAll(ctx context.Context) {
 		log.Error(err, "reading the Proxmox VE nodes")
 		return
 	}
+	var sites *Sites
+	if p.Sites != nil {
+		if sites, err = p.Sites.Sites(ctx); err != nil {
+			log.Error(err, "reading the Proxmox VE storages and templates")
+			return
+		}
+	}
+	var skipped []string
+	if u, ok := p.Nodes.(skippingNodes); ok {
+		skipped = u.Unreadable()
+	}
 	clusters := &clusterv1.ClusterList{}
 	if err := p.Client.List(ctx, clusters, client.UnsafeDisableDeepCopy); err != nil {
 		log.Error(err, "listing clusters")
@@ -68,12 +94,17 @@ func (p *Placer) placeAll(ctx context.Context) {
 		if !Owns(c, p.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
 			continue
 		}
+		p.markSkipped(ctx, c, skipped)
 		level, err := clusterCPULevel(c)
 		if err != nil {
 			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
 			continue
 		}
-		value := strings.Join(nodesFor(online, level), ",")
+		hosts := nodesFor(online, level)
+		if sites != nil {
+			hosts = sites.Hosts(c, online, level)
+		}
+		value := strings.Join(hosts, ",")
 		if c.Annotations[OnlineNodesAnnotation] == value {
 			continue
 		}
@@ -83,6 +114,27 @@ func (p *Placer) placeAll(ctx context.Context) {
 		if err := p.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil && ctx.Err() == nil {
 			log.Error(err, "recording the online Proxmox VE nodes", "cluster", client.ObjectKeyFromObject(c))
 		}
+	}
+}
+
+// markSkipped records on the cluster the nodes left out of placement for want of a status, and
+// clears the record once they answer.
+func (p *Placer) markSkipped(ctx context.Context, c *clusterv1.Cluster, skipped []string) {
+	var cond *metav1.Condition
+	have := meta.FindStatusCondition(c.Status.Conditions, NodesSkippedCondition)
+	if len(skipped) > 0 {
+		cond = &metav1.Condition{
+			Status: metav1.ConditionTrue, Reason: "StatusUnreadable",
+			Message: fmt.Sprintf("%d Proxmox VE node(s) left out of placement because their status could not be read: %s", len(skipped), strings.Join(skipped, ", ")),
+		}
+		if have != nil && have.Message == cond.Message {
+			return
+		}
+	} else if have == nil {
+		return
+	}
+	if _, err := markCluster(ctx, p.Client, p.Client, client.ObjectKeyFromObject(c), NodesSkippedCondition, cond); err != nil && !apierrors.IsNotFound(err) && ctx.Err() == nil {
+		ctrl.LoggerFrom(ctx).WithName("placer").Error(err, "recording the nodes left out of placement", "cluster", client.ObjectKeyFromObject(c))
 	}
 }
 
@@ -213,5 +265,12 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster) ([]
 	if err != nil {
 		return nil, fmt.Errorf("reading the Proxmox VE nodes: %w", err)
 	}
-	return nodesFor(online, level), nil
+	if h.Sites == nil {
+		return nodesFor(online, level), nil
+	}
+	sites, err := h.Sites.Sites(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)
+	}
+	return sites.Hosts(cluster, online, level), nil
 }

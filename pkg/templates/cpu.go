@@ -52,6 +52,16 @@ func TalosCPULevel() int {
 	return cpuTypeLevel(DefaultCPUType)
 }
 
+// SettingLevel is the level a template's `cpu` setting presents, and false for a setting that
+// names none: empty, `host` (the node's own CPU, whatever it is) or a custom model.
+func SettingLevel(setting string) (int, bool) {
+	model, _, _ := strings.Cut(strings.TrimPrefix(setting, "cputype="), ",")
+	if model == "" || model == "host" || strings.HasPrefix(model, "custom-") {
+		return 0, false
+	}
+	return cpuTypeLevel(model), true
+}
+
 // cpuTypeLevel is the level a QEMU CPU type of Proxmox VE's x86-64-v* models presents.
 func cpuTypeLevel(cpuType string) int {
 	for l := len(cpuLevelFlags) - 1; l >= 2; l-- {

@@ -1139,7 +1139,7 @@ func TestCreateKeepsToWhatClustersMayUse(t *testing.T) {
 	b.signIn("admin@pve")
 	rec := b.do("POST", "/api/clusters", strings.Replace(createBody, `"local-lvm"`, `"tank"`, 1))
 	expect(t, rec, http.StatusUnprocessableEntity)
-	if !strings.Contains(rec.Body.String(), "storage: choose local-lvm") {
+	if !strings.Contains(rec.Body.String(), "storage tank is not in workload_datastores (local-lvm)") {
 		t.Fatalf("refusal = %s", rec.Body)
 	}
 	expect(t, b.do("POST", "/api/clusters", strings.Replace(createBody, `"vmbr0"`, `"vmbr1"`, 1)), http.StatusUnprocessableEntity)

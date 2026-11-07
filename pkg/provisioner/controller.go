@@ -362,7 +362,7 @@ func (r *Reconciler) ensureCloud(ctx context.Context, cluster *clusterv1.Cluster
 	record := func(c Credentials) error { return r.keep(ctx, cluster, c, false) }
 	creds, err := r.Cloud.Ensure(ctx, names, access, held, record)
 	if err != nil {
-		return creds, fmt.Errorf("creating the cluster's Proxmox VE objects: %w", err)
+		return creds, &cloudError{err: err}
 	}
 	return creds, nil
 }

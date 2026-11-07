@@ -248,7 +248,8 @@ The interface refuses a cluster whose template the controller does not find in t
 - Talos needs the template of the release in the cluster's `kubehenge.dev/talos-image` annotation (**Build template**, Distribution: Talos, or `kubehenge template create talos --talos-version <release>`). The weekly build keeps the template of every release a cluster boots or is upgraded to, so one missing there was deleted by hand or never made.
 - A cluster's machines clone the build its node image time picks ([templates.md](templates.md#how-clusters-find-them)). With that build deleted they take the one before it, or the oldest left. With none left of the line, they take none.
 - The template has to be in the template pool, `kubehenge-templates`, the only one Cluster API may clone from.
-- A template on storage local to one node can only be cloned there. Put templates on shared storage.
+- A template on storage that is not shared can be cloned only on its own node. Kubehenge keeps such a cluster to that node and refuses one whose allowed nodes leave none, naming the template and its storage.
+  - Rebuild the template on shared storage (`--storage`, or **Template disk** in the dialog), or allow the template's node.
 
 `kubehenge template list` shows what the template pool holds, with each template's tags. `kubehenge template list --pool ''` lists every pool's templates, including one made elsewhere ([templates.md](templates.md)).
 
@@ -274,7 +275,9 @@ A build from the interface or the weekly build is tried three times, 2 and then 
   - Once no build runs, delete that VM, which is not a template yet, and build again.
   - The weekly build deletes such a VM itself once it is three hours old.
 - **"node …'s CPU reaches x86-64-v…, and … needs x86-64-v…: build its templates on another node":** the node OS needs a newer CPU level than that node's ([templates.md](templates.md#node-oses)). Build on a node whose CPU reaches it.
-- **"no storage on … takes ISO images":** the build VM's cloud-init data comes on an ISO. Allow the `iso` content type on a storage of that node, or choose one (**Cloud-init image** in the dialog, `--iso-storage` on the command line).
+- **"no storage on … takes ISO images" or "… does not take … content":** the build VM's cloud-init data comes on an ISO. Allow the `iso` content type under Datacenter, Storage, Edit, Content on a storage of that node, or choose one (**Cloud-init image** in the dialog, `--iso-storage` on the command line). The build checks the content types of all three storages before it downloads anything.
+- **"the builder's token lacks Datastore.AllocateSpace on …":** the token cannot write to that storage. Without `--iso-storage`, the build takes the first ISO storage the token can write to.
+- **"the datacenter option user-tag-access refuses …" or "registered-tags lists …":** the datacenter options keep the builder's token from setting the template's tags. Under Datacenter, Options, add them to **User Tag Access** (list) or remove them from **Registered Tags**. Tags match with their case. With **User Tag Access** set to existing, a tag already on a guest the token can audit also passes. Only `Sys.Modify` on `/` bypasses the options.
 - **The downloaded image:** the storage under **Downloaded image** (`--import-storage`) must allow the `import` content type ([templates.md](templates.md#requirements)). Proxmox VE downloads the image itself and checks it against its checksum. "task … failed" names its reason. The task's log is under the node's **Task History**.
 - **"not signed by …'s key"**, **"… serves a key other than …"** or **"… is not listed in its checksum file":** the publisher's checksum file, or a package repository's key, is not the one Kubehenge knows by its fingerprint. Nothing was imported.
   - Check that nothing between the appliance and the publisher changes downloads, and try again later.
@@ -317,7 +320,16 @@ Either the cluster switched it off, or an administrator switched off **HA group 
 
 ### A cluster waits before any VM exists
 
-The cluster's conditions say it is waiting for its Proxmox VE pool, user and token. Kubehenge's controller has not finished creating them. Its log says why, often a privilege missing from the controller's token after Proxmox VE objects were changed by hand. Applying the management cluster again puts the module's users, roles and ACLs back.
+The cluster's conditions say it is waiting for its Proxmox VE pool, user and token. Kubehenge's controller has not finished creating them.
+
+When creating one failed, the message reads `Proxmox VE objects:` followed by the error. The cluster has a `ProxmoxObjectsFailed` Warning Event with the same text, and the interface shows it under Health. Often it is a privilege missing from the controller's token after Proxmox VE objects were changed by hand. Applying the management cluster again puts the module's users, roles and ACLs back.
+
+- **"pool … already exists with … guest(s) that Kubehenge did not create":** a pool of the cluster's name holds other VMs. Choose another cluster name, or move those VMs out of the pool.
+- **"the datacenter option user-tag-access refuses …" or "registered-tags lists …":** the datacenter's **User Tag Access** or **Registered Tags** keep the controller's token from tagging the cluster's volume owner VM. Allow `kubehenge` and `volumes` there.
+
+A Proxmox VE node that shows online but whose status cannot be read is left out of every cluster's placement. Each cluster then has a `NodesSkipped` condition naming the node, and it clears once the node answers.
+
+A cluster is refused when its storage is available on none of the nodes it may use, or its template cannot be cloned on any of them. The message names the storage or template and the fix. A storage outside the management cluster's `workload_datastores` is refused too, because the clusters' tokens hold no rights there. When Proxmox VE cannot be read within about 2 seconds at admission, the cluster is let in and the creation hook, which retries, makes the same check.
 
 The first cluster of a distribution also waits while that distribution's Cluster API controllers start ([architecture.md](architecture.md#management-cluster)). Until then its conditions say the ClusterClass is not successfully reconciled. This takes a minute or so. If it lasts longer, look at:
 

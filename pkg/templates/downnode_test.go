@@ -63,6 +63,27 @@ func TestInventoryOfOnlyDownNodes(t *testing.T) {
 	}
 }
 
+// A template whose site is cached is still reported down once the view says its node is.
+func TestInventoryReportsACachedTemplateOnADownNode(t *testing.T) {
+	t.Parallel()
+	tmpl, tags := rke2(t)
+	up := template(101, tmpl.Name, tags, testPool)
+	f := &fakeCluster{t: t, views: [][]map[string]any{{up}, {onNode(up, "pve1", "unknown")}}, configs: configsOf(up)}
+	cache := &SiteCache{}
+	b := &Builder{Client: f.client(), Pool: testPool, SiteCache: cache}
+
+	if inv, err := b.Inventory(t.Context()); err != nil || len(inv.Templates) != 1 || cache.Len() != 1 {
+		t.Fatalf("first Inventory = %+v, %v; want template 101 listed and cached", inv, err)
+	}
+	inv, err := b.Inventory(t.Context())
+	if err != nil || len(inv.Templates) != 0 || len(inv.Down) != 1 || inv.Down[0].VMID != 101 {
+		t.Errorf("Inventory = %+v, %v; want 101 down and nothing listed", inv, err)
+	}
+	if cache.Len() != 1 {
+		t.Errorf("the cache holds %d templates, want 101 kept for when its node is back", cache.Len())
+	}
+}
+
 // The view still showed the node online when the node went down: only the 595 on the VM's
 // configuration tells.
 func TestInventoryTakesA595OnAConfigurationForADownNode(t *testing.T) {
