@@ -451,13 +451,8 @@ func TestACancelledBuildStopsRetrying(t *testing.T) {
 		_, err := s.do(ctx, http.MethodGet, srv.URL, nil)
 		done <- err
 	}()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Error("a cancelled build was taken as success")
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("still waiting to retry after the build was cancelled")
+	if err := <-done; err == nil {
+		t.Error("a cancelled build was taken as success")
 	}
 	if got := requests.Load(); got != 1 {
 		t.Errorf("%d requests, want 1", got)

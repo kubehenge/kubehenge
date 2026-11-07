@@ -371,10 +371,7 @@ func TestSetupAndRemovalWaitForTheRunningJob(t *testing.T) {
 	// The build ends, and records itself in the appliance's folder, before the test's folder goes.
 	defer func() {
 		close(built)
-		deadline := time.Now().Add(5 * time.Second)
-		for h.server.Appliance.TemplateJob().State == "running" && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
+		templateBuildEnded(h.server.Appliance)
 	}()
 	rec := a.do("POST", "/api/setup/remove", `{"passphrase":"correct horse battery staple","confirm":"remove"}`)
 	expect(t, rec, http.StatusConflict)
