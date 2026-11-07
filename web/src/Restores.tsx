@@ -131,7 +131,7 @@ function MessagesTable({ title, messages: m }: { title: string; messages: Restor
       {rows.length === 0 ? (
         <p className="muted">None.</p>
       ) : (
-        <table className="grid">
+        <table className="grid events">
           <thead>
             <tr>
               <th>Where</th>

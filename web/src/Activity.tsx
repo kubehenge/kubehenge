@@ -152,7 +152,7 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
         </div>
       )}
       {events.truncated === true && <p className="muted">First {events.items.length} shown</p>}
-      <table className="grid">
+      <table className="grid events">
         <thead>
           <tr>
             <th>Last</th>
