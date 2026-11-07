@@ -279,6 +279,14 @@ if [ -n "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:-}" ]; then
     export TF_VAR_node_memory_mb="${KUBEHENGE_E2E_MANAGEMENT_MEMORY}"
     echo "the management node has ${TF_VAR_node_memory_mb} MiB of memory"
 fi
+# The workload nodes of the tests in balloon_tests give memory back through their balloons too, down
+# to what the sizing figures say they need (room.sh).
+# shellcheck source=room.sh
+. "${repo}/test/e2e/ci/room.sh"
+case " ${balloon_tests} " in
+    *" ${test} "*) export KUBEHENGE_E2E_BALLOON_FILE="${RUNNER_TEMP:-/tmp}/balloon.txt" ;;
+    *) ;;
+esac
 # Talos keeps its page cache, so the management node gives memory back only through its balloon.
 # It used up to 2752 MB with the add-on tests (docs/testing.md). At 3072 MiB it saw only 2874 MB
 # and thrashed, so the minimum leaves it about 3350 MB.
