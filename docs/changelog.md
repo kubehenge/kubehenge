@@ -1,43 +1,8 @@
 # Changelog
 
-Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor version may change behaviour.
+Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor version may change behaviour. Changes not yet released are in `docs/changes/`, one file per pull request, and appear here under `[Unreleased]` on the website.
 
 ## [Unreleased]
-
-- Add-on chart and value changes from a new release wait for a cluster's upgrade window and show on its page and in the Upgrade dialog. **Apply now**, `kubehenge cluster apply-addon-changes` or the annotation `kubehenge.dev/apply-addon-changes` applies them at once.
-- Kubehenge no longer installs cert-manager, Kyverno or monitoring over a cluster's own install, and the condition `AddonConflict` names the definition. `useExisting.certManager` uses the cluster's own cert-manager, and the docs list what each add-on owns.
-- The docs list each add-on's namespaces, privileges and registries, from the code. The new `namespaceLabels` setting labels the add-on namespaces before their first pod.
-
-- The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
-- New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
-- The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
-- The installer stops when the cluster has an appliance already. `--upgrade` and `--certificate` on the wrong node name the node that runs the container.
-- The installer asks about the Proxmox VE interface entry on the same terminal as its other questions, also when piped into `sh`.
-- A dropped session or an interrupt now removes the half-made container and the temporary files.
-- The installer stops early, in plain words, without quorum, with a resolver that names only loopback servers, or with too little room for the downloads.
-- A failed download gives curl's exit code and the HTTP status.
-- An option without its value reports `<option> needs a value`. A storage name is matched as written.
-- New `--tofu <file>` option installs OpenTofu from a local archive, checked against the script's checksum.
-- A container that cannot resolve the API's name makes the installer take the next name or address the certificate covers. It names every one it tried when none works.
-- The usage text and the docs describe how `--template-storage` is chosen.
-- Once the container has an address, the installer checks its network from inside it. It tests the gateway, the name server and the API's port in turn, and a failure names the option to check (`--vlan`, `--gateway`, `--dns` or the node's firewall).
-- A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
-- A container that gets no DHCP address now names `--vlan` and the DHCP server.
-- Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
-- SDN VNets work wherever a bridge is chosen, listed with their zone and alias, and `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone. A VLAN tag on a VNet of a VLAN zone is refused.
-- AlmaLinux and Rocky Linux templates get the kernel's extra modules with the kernel itself. In the hours after a kernel release, a bake could reach a mirror without that kernel's modules and fail.
-- New management VMs get their MAC addresses from Proxmox VE, so two installs on one network never share them. An existing management cluster keeps its addresses and is not changed by an upgrade.
-- A "Time servers" setting writes Talos's `TimeSyncConfig` for the management nodes. Empty keeps Talos's default servers.
-- A cut-off apply sends OpenTofu an interrupt and waits up to five minutes for it to write its state before killing it.
-- A failed run's error carries OpenTofu's error diagnostics, not only the exit status.
-- Every Helm release of the management module that waits has a timeout of 900 seconds.
-- The setup checks the settings against Proxmox VE before it runs. It covers storages, bridges, memory, disk space, answering addresses and leftover pools, roles, users and groups.
-- A failed check names the node or storage and the fix. The setup page shows it before Apply and disables Apply while an error stands.
-- Too little free space is an error on thick LVM and on ZFS without sparse. On other storage, such as LVM-thin, Ceph RBD or files on a directory, it is a warning.
-- Changing the management cluster's Proxmox VE nodes once it is Ready is refused, as its VMs would migrate.
-- The setup warns of VMs sharing nodes and of an API address that is one node's. It also warns of pod or service ranges that overlap a node's networks, and shows the ranges chosen.
-- The management cluster's health shows when the controller cannot reach the Proxmox VE API from inside the cluster.
-- An answer from Proxmox VE larger than 1 MiB fails with an error naming the path.
 
 ## [0.4.2] - 2026-11-05
 
@@ -359,7 +324,7 @@ The first release of 0.4. The v0.4.0 tag was never published.
   - Templates come from the Talos Image Factory, one per release. They are built on the Administration page, from the create wizard where creators may ask for one, or with `kubehenge template create talos --talos-version`.
   - Changing `talosVersion` upgrades the nodes in place through the Talos API, one at a time. Control planes go first, each is drained first, and the upgrade moves a minor version at a time.
   - An upgrade that fails or rolls back stops the rest until **Try again** on the cluster's page.
-  - With node image updates on, the nodes move to new Talos patch releases inside the upgrade window.
+  - With node image updates on, the nodes move to new Talos patch releases inside the maintenance window.
   - The cluster page shows the release, the upgrade under way and the last one. It downloads the talosconfig for those who may download the kubeconfig.
   - etcd snapshots are taken and restored through the Talos API. The restore wipes etcd on every control plane, recovers it on the first and lets the others join again.
   - Talos's service and kernel logs reach Loki through the node collector, under `job="talos"`.
@@ -381,7 +346,7 @@ The first release of 0.4. The v0.4.0 tag was never published.
 - **Node OS refresh.** The management cluster builds the node OS VM templates again every week with their node OS's updates.
   - This is on by default, Sunday at 01:00 UTC, and is set on the Administration page or with the module's `template_refresh`.
   - The builds use an API token of its own that may build and delete templates in the template pool and nothing else. Each build is a template of its own.
-  - A cluster's nodes move to a new one inside its upgrade window once it is a day old, one at a time. They do so whether automatic Kubernetes upgrades are on or not, unless the cluster switches node image updates off.
+  - A cluster's nodes move to a new one inside its maintenance window once it is a day old, one at a time. They do so whether automatic Kubernetes upgrades are on or not, unless the cluster switches node image updates off.
   - The two newest builds of each template stay, with any a cluster still runs.
   - The cluster page shows which build the nodes run and when they next move.
   - The Administration page shows the last run with its log and has Build now.

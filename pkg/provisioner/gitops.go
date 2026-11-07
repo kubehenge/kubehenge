@@ -468,7 +468,7 @@ func solverPolicy() *unstructured.Unstructured {
 		"kind":        "NetworkPolicy",
 		"metadata":    map[string]any{"name": fluxSolverPolicy, "namespace": fluxNamespace},
 		"spec": map[string]any{
-			"podSelector": map[string]any{"matchLabels": map[string]any{"acme.cert-manager.io/http01-solver": "true"}},
+			"podSelector": map[string]any{matchLabelsKey: map[string]any{"acme.cert-manager.io/http01-solver": "true"}},
 			"policyTypes": []any{"Ingress"},
 			"ingress":     []any{map[string]any{"ports": []any{map[string]any{protocolKey: "TCP", "port": int64(solverPort)}}}},
 		},
