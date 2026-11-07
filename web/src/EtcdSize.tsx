@@ -10,9 +10,8 @@ export const minEtcdQuotaGiB = 2;
 export const maxEtcdQuotaGiB = 8;
 export const defaultEtcdQuotaGiB = 8;
 
-/** The share of the limit at which the controller warns, and the whole in percent. */
+/** The share of the limit at which the controller warns. */
 const warnPercent = 60;
-const wholePercent = 100;
 
 /** etcdQuotaOf is the quota a cluster's etcd variable sets, in GiB. */
 export function etcdQuotaOf(v: unknown): number {
@@ -82,9 +81,7 @@ export function EtcdDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
   );
 }
 
-const percentOf = (part: number, whole: number): number => (whole > 0 ? Math.round((part * wholePercent) / whole) : 0);
-
-function memberState(m: EtcdMember, quota: number): { state: "ok" | "error" | "warning"; text: string } {
+function memberState(m: EtcdMember): { state: "ok" | "error" | "warning"; text: string } {
   if (m.alarms?.includes("NOSPACE") === true) {
     return { state: "error", text: "Full" };
   }
@@ -94,7 +91,7 @@ function memberState(m: EtcdMember, quota: number): { state: "ok" | "error" | "w
   if (m.learner === true) {
     return { state: "warning", text: "Learner" };
   }
-  const used = percentOf(m.dbSize, quota);
+  const used = m.quotaPercent ?? 0;
   return used >= warnPercent ? { state: "warning", text: `${used}% of the limit` } : { state: "ok", text: "Healthy" };
 }
 
@@ -137,7 +134,7 @@ export function EtcdSizeView({
         <>
           {filled(sizes.warning) && <p className="warning">{sizes.warning}</p>}
           {filled(sizes.error) && <p className="warning">{sizes.error}</p>}
-          <table className="grid">
+          <table className="grid etcd-members">
             <thead>
               <tr>
                 <th>Member</th>
@@ -148,16 +145,20 @@ export function EtcdSizeView({
             </thead>
             <tbody>
               {sizes.members.map((m) => {
-                const s = memberState(m, sizes.quotaBytes);
+                const s = memberState(m);
                 return (
                   <tr key={m.name}>
-                    <td>
+                    <td className="etcd-cell etcd-member">
                       {m.name}
                       {m.leader === true && <span className="muted"> (leader)</span>}
                     </td>
-                    <td>{bytes(m.dbSize)}</td>
-                    <td>{bytes(m.dbSizeInUse)}</td>
-                    <td>
+                    <td className="etcd-cell" data-label="Database">
+                      {bytes(m.dbSize)}
+                    </td>
+                    <td className="etcd-cell" data-label="In use">
+                      {bytes(m.dbSizeInUse)}
+                    </td>
+                    <td className="etcd-cell" data-label="State">
                       <Status state={s.state} text={s.text} />
                     </td>
                   </tr>

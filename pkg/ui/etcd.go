@@ -40,6 +40,9 @@ func etcdStatusView(c *clusterv1.Cluster) *etcdView {
 	if v.Members == nil {
 		v.Members = []provisioner.EtcdMember{}
 	}
+	for i := range v.Members {
+		v.Members[i].QuotaPercent = status.Percent(&v.Members[i])
+	}
 	_, v.Requested = c.Annotations[provisioner.EtcdDefragRequestAnnotation]
 	var last provisioner.EtcdDefrag
 	if raw, ok := c.Annotations[provisioner.EtcdDefragAnnotation]; ok && json.Unmarshal([]byte(raw), &last) == nil {

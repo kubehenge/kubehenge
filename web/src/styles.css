@@ -2147,6 +2147,73 @@ fieldset.choices .check {
   }
 }
 
+/* No value of an etcd member wraps: on a narrow screen each member is the name over its figures. */
+.etcd-members .etcd-cell {
+  white-space: nowrap;
+}
+
+@media (width < 600px) {
+  .etcd-members :is(table, tbody) {
+    display: block;
+  }
+
+  .etcd-members thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .etcd-members tr {
+    display: grid;
+    grid-template:
+      "name name name" auto
+      "size used state" auto
+      / max-content max-content max-content;
+    gap: 6px 20px;
+
+    padding: 12px 0;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .etcd-members tbody tr:last-child {
+    border-block-end: none;
+  }
+
+  .etcd-members .etcd-cell {
+    display: block;
+    padding: 0;
+    border: none;
+  }
+
+  .etcd-members .etcd-member {
+    grid-area: name;
+  }
+
+  .etcd-members td[data-label="Database"] {
+    grid-area: size;
+  }
+
+  .etcd-members td[data-label="In use"] {
+    grid-area: used;
+  }
+
+  .etcd-members td[data-label="State"] {
+    grid-area: state;
+  }
+
+  .etcd-members td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.85em;
+    color: var(--dim);
+  }
+}
+
 /* A restore's errors and its warnings line up, each place in a column of the same width. */
 .results .grid {
   table-layout: fixed;

@@ -57,7 +57,7 @@ func TestClusterShowsItsEtcdSizesAndWarning(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
 		t.Fatal(err)
 	}
-	if v.Etcd == nil || v.Etcd.QuotaBytes != 2<<30 || len(v.Etcd.Members) != 1 || v.Etcd.Members[0].DBSizeInUse != 1<<29 ||
+	if v.Etcd == nil || v.Etcd.QuotaBytes != 2<<30 || len(v.Etcd.Members) != 1 || v.Etcd.Members[0].DBSizeInUse != 1<<29 || v.Etcd.Members[0].QuotaPercent != 75 ||
 		!strings.Contains(v.Etcd.Warning, "etcd member etcd-cp-0 is at 75% of its quota") {
 		t.Fatalf("etcd %+v", v.Etcd)
 	}
@@ -84,7 +84,7 @@ func TestHealthWarnsOfAFillingEtcdDatabase(t *testing.T) {
 		warns  string
 	}{
 		{"small", provisioner.EtcdMember{Name: "cp-0", DBSize: 100 << 20}, ""},
-		{"above 60 percent", provisioner.EtcdMember{Name: "cp-0", DBSize: 7 << 29}, "etcd member cp-0 is at 87% of its quota"},
+		{"above 60 percent", provisioner.EtcdMember{Name: "cp-0", DBSize: 7 << 29}, "etcd member cp-0 is at 88% of its quota"},
 		{"alarm", provisioner.EtcdMember{Name: "cp-0", DBSize: 1 << 30, Alarms: []string{"NOSPACE"}}, "etcd member cp-0 refuses writes"},
 	} {
 		etcdStatused(t, h, provisioner.EtcdStatus{At: time.Now().UTC(), QuotaBytes: 4 << 30, Members: []provisioner.EtcdMember{c.member}})

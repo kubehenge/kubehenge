@@ -537,6 +537,8 @@ export interface EtcdMember {
   /** The database file's size, and the part of it that holds data, in bytes. */
   dbSize: number;
   dbSizeInUse: number;
+  /** The database as a whole percent of the limit, rounded as the warning rounds it. */
+  quotaPercent?: number;
   alarms?: string[];
   errors?: string[];
 }

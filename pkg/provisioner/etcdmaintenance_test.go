@@ -165,12 +165,29 @@ func TestEtcdStatusWarnsAbove60PercentAndOnAnAlarm(t *testing.T) {
 		{"at 60 percent", []EtcdMember{{Name: "a", DBSize: quota * 60 / 100}}, ""},
 		{"above 60 percent", []EtcdMember{{Name: "a", DBSize: quota*60/100 + 1}}, "etcd member a is at 60% of its quota"},
 		{"the alarm, whatever the size", []EtcdMember{{Name: "a", DBSize: gib, Alarms: []string{"NOSPACE"}}}, "etcd member a refuses writes, its database is full"},
-		{"two members", []EtcdMember{{Name: "a", DBSize: quota / 4 * 3}, {Name: "b", DBSize: quota / 8 * 7}}, "etcd member a is at 75% of its quota, etcd member b is at 87% of its quota"},
+		{"two members", []EtcdMember{{Name: "a", DBSize: quota / 4 * 3}, {Name: "b", DBSize: quota / 8 * 7}}, "etcd member a is at 75% of its quota, etcd member b is at 88% of its quota"},
 	} {
 		s := EtcdStatus{QuotaBytes: quota, Members: c.members}
 		if got := s.Warning(); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+func TestPercentRoundsOnceForEveryPlaceThatShowsIt(t *testing.T) {
+	t.Parallel()
+	s := EtcdStatus{QuotaBytes: 8 * gib}
+	for size, want := range map[int64]int{0: 0, 7 * gib: 88, 5 * gib: 63, 8*gib/100*60 + 1: 60, 8 * gib: 100} {
+		if got := s.Percent(&EtcdMember{DBSize: size}); got != want {
+			t.Errorf("%d of %d bytes: %d%%, want %d%%", size, s.QuotaBytes, got, want)
+		}
+	}
+	if got := (&EtcdStatus{}).Percent(&EtcdMember{DBSize: gib}); got != 0 {
+		t.Errorf("without a quota: %d%%", got)
+	}
+	s.Members = []EtcdMember{{Name: "a", DBSize: 7 * gib}}
+	if got := s.Warning(); got != "etcd member a is at 88% of its quota" {
+		t.Errorf("the warning rounds differently: %q", got)
 	}
 }
 

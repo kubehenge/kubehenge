@@ -106,6 +106,8 @@ type EtcdMember struct {
 	// DBSize is the database file's size, and DBSizeInUse the part of it that holds data.
 	DBSize      int64 `json:"dbSize"`
 	DBSizeInUse int64 `json:"dbSizeInUse"`
+	// QuotaPercent is DBSize as a share of the quota, filled in only where the status is shown.
+	QuotaPercent int `json:"quotaPercent,omitempty"`
 	// Alarms are the member's etcd alarms, NOSPACE once its database reached the quota.
 	Alarms []string `json:"alarms,omitempty"`
 	// Errors are what the member reports to be wrong with itself, such as having no leader.
@@ -155,10 +157,19 @@ func (s *EtcdStatus) Warning() string {
 		case m.Alarmed():
 			parts = append(parts, fmt.Sprintf("etcd member %s refuses writes, its database is full", m.Name))
 		case s.QuotaBytes > 0 && m.DBSize*100 > s.QuotaBytes*EtcdWarnPercent:
-			parts = append(parts, fmt.Sprintf("etcd member %s is at %d%% of its quota", m.Name, m.DBSize*100/s.QuotaBytes))
+			parts = append(parts, fmt.Sprintf("etcd member %s is at %d%% of its quota", m.Name, s.Percent(m)))
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+// Percent is the share of the quota a member's database takes, rounded to the nearest whole percent.
+// Every place that shows the share takes it from here.
+func (s *EtcdStatus) Percent(m *EtcdMember) int {
+	if s.QuotaBytes <= 0 {
+		return 0
+	}
+	return int((m.DBSize*100 + s.QuotaBytes/2) / s.QuotaBytes)
 }
 
 // EtcdDefragRequest asks for a defragmentation at once.
