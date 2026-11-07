@@ -179,6 +179,7 @@ spec:
                   seccompDefault: true
                   streamingConnectionIdleTimeout: 5m
         {{- end }}
+    {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "kubeadm") | nindent 4 }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate

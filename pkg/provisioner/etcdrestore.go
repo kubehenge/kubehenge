@@ -449,12 +449,11 @@ func (run *restoreRun) readSnapshot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	o, err := t.Store.Stat(ctx, t.Folder+"/"+run.request.Snapshot)
+	s, err := ReadEtcdSnapshot(ctx, t.Store, t.Folder, run.request.Snapshot)
 	if err != nil {
-		return fmt.Errorf("reading snapshot %s: %w", run.request.Snapshot, err)
+		return err
 	}
-	s, ok := snapshotOf(o, t.Folder)
-	if !ok || s.SHA256 == "" {
+	if s.SHA256 == "" {
 		return fmt.Errorf("%s is not a whole snapshot: it has no checksum", run.request.Snapshot)
 	}
 	if err := Restorable(run.cluster, &s); err != nil {

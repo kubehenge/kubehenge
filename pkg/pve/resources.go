@@ -394,24 +394,31 @@ func (a *Accounts) vnets(ctx context.Context, t *Ticket, node string) []Bridge {
 	return bridges
 }
 
-// DNS lists the DNS servers a node resolves with, in its order. Proxmox VE shows them to users with
-// Sys.Audit on the node.
-func (a *Accounts) DNS(ctx context.Context, t *Ticket, node string) ([]string, error) {
+// NodeDNS is how a node resolves names: its DNS servers in order, and its search domain, which is
+// empty when the node has none.
+type NodeDNS struct {
+	Servers []string `json:"servers"`
+	Search  string   `json:"search"`
+}
+
+// DNS reads a node's resolver settings. Proxmox VE shows them to users with Sys.Audit on the node.
+func (a *Accounts) DNS(ctx context.Context, t *Ticket, node string) (NodeDNS, error) {
 	var res struct {
-		DNS1 string `json:"dns1"`
-		DNS2 string `json:"dns2"`
-		DNS3 string `json:"dns3"`
+		Search string `json:"search"`
+		DNS1   string `json:"dns1"`
+		DNS2   string `json:"dns2"`
+		DNS3   string `json:"dns3"`
 	}
 	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/dns", &res); err != nil {
-		return nil, err
+		return NodeDNS{}, err
 	}
-	servers := []string{}
+	dns := NodeDNS{Servers: []string{}, Search: strings.TrimSpace(res.Search)}
 	for _, s := range []string{res.DNS1, res.DNS2, res.DNS3} {
 		if s = strings.TrimSpace(s); s != "" {
-			servers = append(servers, s)
+			dns.Servers = append(dns.Servers, s)
 		}
 	}
-	return servers, nil
+	return dns, nil
 }
 
 // Names are the IDs of the pools, roles, users and groups the user may see. A listing the user may

@@ -107,6 +107,20 @@ variable "dns_servers" {
   type        = list(string)
 }
 
+variable "search_domains" {
+  description = "Domains the nodes append to a name without dots, as DNS names. Empty derives one from each node's host name, as Talos does."
+  type        = list(string)
+  default     = []
+
+  validation {
+    # glibc's resolver reads six. The pattern is the one of the clusters' network.searchDomains.
+    condition = length(var.search_domains) <= 6 && alltrue([
+      for d in var.search_domains : length(d) <= 253 && can(regex("^([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?$", d))
+    ])
+    error_message = "search_domains are at most six DNS names, without a trailing dot."
+  }
+}
+
 variable "time_servers" {
   description = "NTP servers the management cluster's nodes keep their clocks with, as host names or addresses. Empty keeps Talos's default public servers."
   type        = list(string)

@@ -45,7 +45,7 @@ import { networkOf } from "./network";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import { clusterKey, fromCluster, startable, startDefault, startKeys } from "./start-from";
-import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
+import type { Bridge, Cluster, ClusterClass, NodeDNS, PveNode, Storage, Versions } from "./types";
 import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
 
 // versionsKey is where the versions offered are kept: a distribution's, kubeadm's per node OS.
@@ -84,7 +84,7 @@ export function CreateCluster({
   const [classes, setClasses] = useState<ClusterClass[]>([]);
   const [discarding, setDiscarding] = useState(false);
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
-  const [dnsByNode, setDNSByNode] = useState<Record<string, string[]>>({});
+  const [dnsByNode, setDNSByNode] = useState<Record<string, NodeDNS>>({});
   const [storages, setStorages] = useState<Storage[]>([]);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);

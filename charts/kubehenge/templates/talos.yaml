@@ -185,6 +185,23 @@ spec:
             - op: add
               path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
               value: {{ dict "apiVersion" "v1alpha1" "kind" "KubeFlannelCNIConfig" "kubeNetworkPoliciesEnabled" true | toJson | quote }}
+    # capmox's network configuration has no search domains, so Talos gets them as its resolver
+    # configuration. Without nameservers there, the ones from the platform stay.
+    - name: talos-search-domains
+      enabledIf: {{ include "kubehenge.searchDomainsEnabled" . }}
+      definitions:
+        {{- range $role, $sel := dict "controlPlane" (dict "kind" "TalosControlPlaneTemplate" "api" "controlplane.cluster.x-k8s.io/v1beta1" "match" (dict "controlPlane" true) "path" "/spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-") "worker" (dict "kind" "TalosConfigTemplate" "api" "bootstrap.cluster.x-k8s.io/v1beta1" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/strategicPatches/-") }}
+        - selector:
+            apiVersion: {{ $sel.api }}
+            kind: {{ $sel.kind }}
+            matchResources:
+              {{- toYaml $sel.match | nindent 14 }}
+          jsonPatches:
+            - op: add
+              path: {{ $sel.path }}
+              valueFrom:
+                template: {{ `{{ dict "apiVersion" "v1alpha1" "kind" "ResolverConfig" "searchDomains" (dict "domains" .network.searchDomains) | toJson | toJson }}` | quote }}
+        {{- end }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate

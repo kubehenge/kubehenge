@@ -36,7 +36,18 @@ import {
 } from "./GitOps";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
-import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
+import {
+  addressBits,
+  addressCount,
+  inList,
+  ipv4,
+  isVLAN,
+  list,
+  networkOf,
+  rangeProblem,
+  searchDomainsProblem,
+  whole,
+} from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -51,6 +62,7 @@ import {
 import { forRelease, talosRelease } from "./Talos";
 import type {
   Bridge,
+  NodeDNS,
   Cluster,
   ClusterClass,
   CreateRequest,
@@ -128,6 +140,7 @@ export interface Form {
   prefix: number;
   gateway: string;
   dnsServers: string;
+  searchDomains: string;
   loadBalancer: Implementation;
   loadBalancerAddresses: string;
   pods: string;
@@ -515,6 +528,7 @@ export interface BridgeNetwork {
   cidr?: string | undefined;
   gateway?: string | undefined;
   dns: string[];
+  search: string;
 }
 
 /**
@@ -524,7 +538,7 @@ export interface BridgeNetwork {
 export function bridgeNetwork(
   bridge: string,
   bridgesByNode: Record<string, Bridge[]>,
-  dnsByNode: Record<string, string[]>,
+  dnsByNode: Record<string, NodeDNS>,
 ): { net?: BridgeNetwork; network?: string; node?: string } {
   const on = Object.values(bridgesByNode)
     .flat()
@@ -532,7 +546,8 @@ export function bridgeNetwork(
   if (on === undefined) {
     return {};
   }
-  const net = { cidr: on.cidr, gateway: on.gateway, dns: dnsByNode[on.node] ?? [] };
+  const dns = dnsByNode[on.node];
+  const net = { cidr: on.cidr, gateway: on.gateway, dns: dns?.servers ?? [], search: dns?.search ?? "" };
   const network = on.cidr === undefined ? undefined : networkOf(on.cidr);
   return network === undefined ? { net, node: on.node } : { net, network, node: on.node };
 }
@@ -573,6 +588,7 @@ export function withBridgeNetwork(f: Form, net: BridgeNetwork | undefined, touch
     prefix: touched("prefix") || !whole(bits, 1, addressBits) ? f.prefix : bits,
     gateway: f.gateway === "" && !touched("gateway") ? (net.gateway ?? "") : f.gateway,
     dnsServers: f.dnsServers === "" && !touched("dnsServers") ? net.dns.join(", ") : f.dnsServers,
+    searchDomains: f.searchDomains === "" && !touched("searchDomains") ? net.search : f.searchDomains,
   };
 }
 
@@ -596,6 +612,7 @@ export const newForm = (): Form => ({
   prefix: 24,
   gateway: "",
   dnsServers: "",
+  searchDomains: "",
   loadBalancer: "",
   loadBalancerAddresses: "",
   pods: "",
@@ -808,6 +825,9 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (form.vlan) {
     network["vlan"] = Number(form.vlan);
   }
+  if (list(form.searchDomains).length > 0) {
+    network["searchDomains"] = list(form.searchDomains);
+  }
   const variables: Record<string, unknown> = {
     controlPlaneEndpoint: form.endpoint,
     network,
@@ -923,6 +943,7 @@ export function summary(
     ["Node addresses", list(form.addresses).join(", ")],
     ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
     ["DNS servers", list(form.dnsServers).join(", ")],
+    ["Search domains", list(form.searchDomains).join(", ") || "None"],
   ];
   if (defined.has("loadBalancer")) {
     rows.push([
@@ -1044,6 +1065,7 @@ export type FieldKey =
   | "prefix"
   | "gateway"
   | "dnsServers"
+  | "searchDomains"
   | "loadBalancerAddresses"
   | "pods"
   | "services"
@@ -1181,6 +1203,10 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
     p.dnsServers = "Enter at least one DNS server";
   } else if (list(form.dnsServers).some((d) => !ipv4.test(d))) {
     p.dnsServers = "DNS servers must be IPv4 addresses";
+  }
+  const domains = searchDomainsProblem(list(form.searchDomains));
+  if (domains !== undefined) {
+    p.searchDomains = domains;
   }
   const lb =
     form.loadBalancer === ""

@@ -43,9 +43,7 @@ type StoredObject struct {
 type ObjectStore interface {
 	// Put streams r into key with metadata and reports the bytes stored.
 	Put(ctx context.Context, key string, r io.Reader, metadata map[string]string) (int64, error)
-	// SetMetadata replaces the metadata of an object.
-	SetMetadata(ctx context.Context, key string, metadata map[string]string) error
-	// List lists the objects under prefix, with their metadata.
+	// List lists the objects under prefix, with their size and time. Their metadata is Stat's.
 	List(ctx context.Context, prefix string) ([]StoredObject, error)
 	// Stat reads one object's size and metadata.
 	Stat(ctx context.Context, key string) (StoredObject, error)
@@ -147,31 +145,13 @@ func (s *s3Store) Put(ctx context.Context, key string, r io.Reader, metadata map
 	return info.Size, nil
 }
 
-func (s *s3Store) SetMetadata(ctx context.Context, key string, metadata map[string]string) error {
-	_, err := s.client.CopyObject(ctx,
-		minio.CopyDestOptions{Bucket: s.bucket, Object: key, ReplaceMetadata: true, UserMetadata: metadata},
-		minio.CopySrcOptions{Bucket: s.bucket, Object: key})
-	if err != nil {
-		return fmt.Errorf("setting the metadata of %s: %w", key, err)
-	}
-	return nil
-}
-
 func (s *s3Store) List(ctx context.Context, prefix string) ([]StoredObject, error) {
 	var out []StoredObject
 	for o := range s.client.ListObjectsIter(ctx, s.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
 		if o.Err != nil {
 			return nil, fmt.Errorf("listing %s: %w", prefix, o.Err)
 		}
-		// A listing carries no user metadata. Each object's is read on its own.
-		st, err := s.Stat(ctx, o.Key)
-		if errors.Is(err, ErrNoObject) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, st)
+		out = append(out, StoredObject{Key: o.Key, Size: o.Size, Modified: o.LastModified})
 	}
 	return out, nil
 }
