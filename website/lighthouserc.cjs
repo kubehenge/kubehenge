@@ -16,34 +16,37 @@ const binary = ["accessibility", "best-practices", "seo"].flatMap((category) =>
     .map((ref) => [ref.id, ["error", { minScore: 1 }]]),
 );
 
-// Limits per page and form factor. A docs page goes by its file, as this server has no clean URLs.
-// The performance score is a floor below the lowest of 20 runs. Bytes and requests do not vary
-// between runs: bytes get 3 to 5 per cent of room for a docs edit, requests none. Layout shift
-// stays near 0 only while no late file reflows the page, as a web font that arrives after the first
-// paint does unless a stand-in with its metrics holds the place. A shift here is a defect, even
-// when most runs miss it.
-const limits = {
-  mobile: {
-    "/": { performance: 0.93, cls: 0.01, bytes: 215_000, fontBytes: 95_000, requests: 16 },
-    "/docs/install.html": {
-      performance: 0.84,
-      cls: 0.01,
-      bytes: 285_000,
-      fontBytes: 76_000,
-      requests: 14,
-    },
+// What each page loads for itself, as [requests, bytes] per resource type. A docs page goes by its
+// file, as this server has no clean URLs. Bytes and requests do not vary between runs: bytes get 3
+// to 5 per cent of room for a docs edit, requests none. The pages the sidebar's links prefetch
+// arrive as type "other" and have no limit, since every docs page added grows them.
+const own = {
+  "/": {
+    document: [1, 13_300],
+    script: [6, 80_000],
+    stylesheet: [1, 25_400],
+    font: [6, 95_000],
+    image: [1, 740],
   },
-  desktop: {
-    "/": { performance: 0.99, cls: 0.01, bytes: 215_000, fontBytes: 95_000, requests: 16 },
-    "/docs/install.html": {
-      performance: 0.99,
-      cls: 0.01,
-      bytes: 470_000,
-      fontBytes: 76_000,
-      requests: 25,
-    },
+  "/docs/install.html": {
+    document: [1, 40_000],
+    script: [6, 80_000],
+    stylesheet: [1, 25_400],
+    font: [1, 76_000],
+    image: [2, 19_700],
   },
+};
+
+// The performance score is a floor below the lowest of 20 runs.
+const performance = {
+  mobile: { "/": 0.93, "/docs/install.html": 0.84 },
+  desktop: { "/": 0.99, "/docs/install.html": 0.99 },
 }[formFactor];
+
+// Layout shift stays near 0 only while no late file reflows the page, as a web font that arrives
+// after the first paint does unless a stand-in with its metrics holds the place. A shift here is a
+// defect, even when most runs miss it.
+const cls = 0.01;
 
 const escape = (path) => path.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 
@@ -51,7 +54,7 @@ module.exports = {
   ci: {
     collect: {
       staticDistDir: ".vitepress/dist",
-      url: Object.keys(limits).map((path) => `http://localhost${path}`),
+      url: Object.keys(own).map((path) => `http://localhost${path}`),
       numberOfRuns: Number(process.env.KUBEHENGE_LIGHTHOUSE_RUNS ?? 5),
       chromePath: chromium.executablePath(),
       settings: {
@@ -64,16 +67,19 @@ module.exports = {
       },
     },
     assert: {
-      assertMatrix: Object.entries(limits).map(([path, limit]) => ({
+      assertMatrix: Object.entries(own).map(([path, types]) => ({
         matchingUrlPattern: `^http://[^/]+${escape(path)}$`,
         aggregationMethod: "median-run",
         assertions: {
           ...Object.fromEntries(binary),
-          "categories:performance": ["error", { minScore: limit.performance }],
-          "cumulative-layout-shift": ["error", { maxNumericValue: limit.cls }],
-          "total-byte-weight": ["error", { maxNumericValue: limit.bytes }],
-          "resource-summary:font:size": ["error", { maxNumericValue: limit.fontBytes }],
-          "resource-summary:total:count": ["error", { maxNumericValue: limit.requests }],
+          "categories:performance": ["error", { minScore: performance[path] }],
+          "cumulative-layout-shift": ["error", { maxNumericValue: cls }],
+          ...Object.fromEntries(
+            Object.entries(types).flatMap(([type, [requests, bytes]]) => [
+              [`resource-summary:${type}:count`, ["error", { maxNumericValue: requests }]],
+              [`resource-summary:${type}:size`, ["error", { maxNumericValue: bytes }]],
+            ]),
+          ),
         },
       })),
     },
