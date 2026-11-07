@@ -255,10 +255,8 @@ func TestDemoShowsPoolLabelsTaintsAndPodChecks(t *testing.T) {
 		t.Errorf("taint notes %q, want one naming the pool and the taint", notes)
 	}
 	var check struct {
-		Checked int `json:"checked"`
-		Refused []struct {
-			Name string `json:"name"`
-		} `json:"refused"`
+		Checked int               `json:"checked"`
+		Refused []json.RawMessage `json:"refused"`
 	}
 	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/staging/pod-security-check", ""), &check)
 	if check.Checked == 0 || len(check.Refused) == 0 {
