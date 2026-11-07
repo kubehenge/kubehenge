@@ -1,0 +1,2 @@
+- Activity keeps a kubectl change made before an API server restarted, also when the interface first meets the API server after the restart.
+- Activity follows the management cluster's API servers as soon as the cluster is set up. A change made right after the setup is no longer missed.

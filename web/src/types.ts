@@ -1003,6 +1003,8 @@ export interface SetupStatus {
   resumes?: boolean;
   /** Which release last applied the management cluster, and what applying this one changes. */
   upgrade?: ManagementUpgrade;
+  /** The interface reads every API server's log as it is written. For administrators only. */
+  activityFollows?: boolean;
 }
 
 /** How the management cluster itself is doing. For administrators only. */

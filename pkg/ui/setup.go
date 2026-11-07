@@ -53,6 +53,9 @@ type setupView struct {
 	// Upgrade tells which release last applied the management cluster, and what applying the
 	// appliance's own would change.
 	Upgrade *managementUpgrade `json:"upgrade,omitempty"`
+	// ActivityFollows tells that the interface reads every API server's log as it is written, so
+	// a change made now reaches Activity.
+	ActivityFollows bool `json:"activityFollows,omitempty"`
 }
 
 func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request, u user) {
@@ -82,6 +85,7 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 	v.Resumes = !v.Ready && a.HasState()
 	if v.Ready {
 		v.Upgrade = s.managementUpgrade()
+		v.ActivityFollows = s.followsAuditLog()
 		if last := a.LastApplied(); last != nil && !last.CredentialsExpire.IsZero() {
 			v.CredentialsExpire = &last.CredentialsExpire
 		}
