@@ -14,6 +14,7 @@ import (
 
 	"filippo.io/age"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -25,7 +26,7 @@ var sealedValue = regexp.MustCompile(provisioner.SealedSecretAnnotation + `: (\S
 
 // typedSecrets are the credentials a user types into the interface for the cluster web. Their
 // values must reach the spec sealed and come back with the cluster.
-var typedSecrets = map[string]string{
+var typedSecrets = map[string]string{ //nolint:gosec // fixed test values
 	"/api/clusters/default/web/credentials/backup":      `{"values":{"accessKeyID":"AKIA-web","secretAccessKey":"backup-secret-value"}}`,
 	"/api/clusters/default/web/credentials/gitops":      `{"values":{"username":"deploy","password":"gitops-token-value"}}`,
 	"/api/clusters/default/web/credentials/oidc-client": `{"values":{"clientSecret":"oidc-secret-value"}}`,
@@ -38,7 +39,9 @@ var (
 		"web-gitops": "deploy-key-value", "web-backup-keys": "backup-keys-value",
 		"web-encryption": "etcd-encryption-key-value", "web-ingress-ca": "ingress-ca-key-value",
 	}
-	regenerated = map[string]string{"web-kubeconfig": "kubeconfig-value", "web-ca": "capi-ca-value", "web-credentials": "pve-token-value"}
+	regenerated = map[string]string{ //nolint:gosec // fixed test values
+		"web-kubeconfig": "kubeconfig-value", "web-ca": "capi-ca-value", "web-credentials": "pve-token-value",
+	}
 )
 
 func cleanWeb(t *testing.T, h *harness, names []string) {
@@ -48,7 +51,7 @@ func cleanWeb(t *testing.T, h *harness, names []string) {
 		t.Fatal(err)
 	}
 	for _, name := range names {
-		if err := h.kube.Delete(ctx, &corev1.Secret{Namespace: "default", Name: name}); client.IgnoreNotFound(err) != nil {
+		if err := h.kube.Delete(ctx, &corev1.Secret{Namespace: "default", Name: name}); err != nil && !apierrors.IsNotFound(err) {
 			t.Fatal(err)
 		}
 	}
@@ -104,7 +107,7 @@ func TestSpecSecretsOpenOfflineWithAnExtraRecipientsKey(t *testing.T) {
 	if err != nil || len(secrets) == 0 {
 		t.Fatalf("the stored spec holds no Secrets: %v\n%s", err, spec)
 	}
-	var opened []map[string]any
+	opened := make([]map[string]any, 0, len(secrets))
 	for i := range secrets {
 		plain, openErr := appliance.OpenSealedSecret(secrets[i].Sealed, offline)
 		if openErr != nil {
@@ -153,6 +156,39 @@ func TestSpecSecretsOpenOfflineWithAnExtraRecipientsKey(t *testing.T) {
 	}
 }
 
+// checkRestored asserts that every wanted Secret came back with its value, that a typed credential
+// kept its type, labels and annotations, and that the Secrets the controller makes again did not.
+func checkRestored(t *testing.T, h *harness, want map[string]string) {
+	t.Helper()
+	ctx := t.Context()
+	for name, value := range want {
+		got := &corev1.Secret{}
+		if err := h.kube.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, got); err != nil {
+			t.Errorf("Secret %s was not restored: %v", name, err)
+			continue
+		}
+		found := false
+		for _, v := range got.Data {
+			found = found || string(v) == value
+		}
+		if !found {
+			t.Errorf("Secret %s holds %v", name, got.Data)
+		}
+	}
+	typed := &corev1.Secret{}
+	if err := h.kube.Get(ctx, client.ObjectKey{Namespace: "default", Name: "web.backup"}, typed); err != nil {
+		t.Fatal(err)
+	}
+	if typed.Type != provisioner.CredentialType || typed.Labels[provisioner.CredentialClusterLabel] != "web" || typed.Annotations[provisioner.CredentialSetBy] != "admin@pve" {
+		t.Errorf("the restored credential lost its type, labels or annotations: %+v", typed.ObjectMeta)
+	}
+	for name := range regenerated {
+		if err := h.kube.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, &corev1.Secret{}); err == nil {
+			t.Errorf("Secret %s, which the controller makes again, was restored", name)
+		}
+	}
+}
+
 func TestSpecSecretsAreSealedStoredAndRestoredWithTheCluster(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -164,7 +200,7 @@ func TestSpecSecretsAreSealedStoredAndRestoredWithTheCluster(t *testing.T) {
 	expect(t, dev.do("POST", "/api/clusters", createBody), http.StatusCreated)
 	ctx := t.Context()
 	setUpBackups(t, admin)
-	var names []string
+	names := make([]string, 0, len(typedSecrets)+len(controllerSecrets)+len(regenerated))
 	for path, body := range typedSecrets {
 		expect(t, admin.do("PUT", path, body), http.StatusOK)
 		names = append(names, "web."+path[strings.LastIndex(path, "/")+1:])
@@ -185,8 +221,11 @@ func TestSpecSecretsAreSealedStoredAndRestoredWithTheCluster(t *testing.T) {
 	h.server.storeSpecsOnce(ctx, map[string]string{})
 
 	stored := string(store.data["clusters/default.web/cluster.yaml"])
-	for _, value := range []string{"backup-secret-value", "gitops-token-value", "oidc-secret-value", "AKIA-web", "deploy-key-value",
-		"backup-keys-value", "etcd-encryption-key-value", "ingress-ca-key-value"} {
+	plainValues := []string{
+		"backup-secret-value", "gitops-token-value", "oidc-secret-value", "AKIA-web", "deploy-key-value",
+		"backup-keys-value", "etcd-encryption-key-value", "ingress-ca-key-value",
+	}
+	for _, value := range plainValues {
 		if strings.Contains(stored, value) || strings.Contains(stored, base64.StdEncoding.EncodeToString([]byte(value))) {
 			t.Fatalf("the backup target holds %q in plain text:\n%s", value, stored)
 		}
@@ -214,32 +253,7 @@ func TestSpecSecretsAreSealedStoredAndRestoredWithTheCluster(t *testing.T) {
 		"web-gitops": "deploy-key-value", "web-backup-keys": "backup-keys-value",
 		"web-encryption": "etcd-encryption-key-value", "web-ingress-ca": "ingress-ca-key-value",
 	}
-	for name, value := range want {
-		got := &corev1.Secret{}
-		if err := h.kube.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, got); err != nil {
-			t.Errorf("Secret %s was not restored: %v", name, err)
-			continue
-		}
-		found := false
-		for _, v := range got.Data {
-			found = found || string(v) == value
-		}
-		if !found {
-			t.Errorf("Secret %s holds %v", name, got.Data)
-		}
-	}
-	typed := &corev1.Secret{}
-	if err := h.kube.Get(ctx, client.ObjectKey{Namespace: "default", Name: "web.backup"}, typed); err != nil {
-		t.Fatal(err)
-	}
-	if typed.Type != provisioner.CredentialType || typed.Labels[provisioner.CredentialClusterLabel] != "web" || typed.Annotations[provisioner.CredentialSetBy] != "admin@pve" {
-		t.Errorf("the restored credential lost its type, labels or annotations: %+v", typed.ObjectMeta)
-	}
-	for name := range regenerated {
-		if err := h.kube.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, &corev1.Secret{}); err == nil {
-			t.Errorf("Secret %s, which the controller makes again, was restored", name)
-		}
-	}
+	checkRestored(t, h, want)
 
 	// A Secret of another cluster in a spec is refused, before anything is written.
 	cleanWeb(t, h, names)

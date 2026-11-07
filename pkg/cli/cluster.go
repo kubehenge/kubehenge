@@ -407,7 +407,7 @@ func openWithIdentity(spec []byte, identityFile string) ([]map[string]any, error
 	defer func() { _ = f.Close() }()
 	ids, err := appliance.ParseSpecIdentities(f)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", identityFile, err)
 	}
 	secrets, err := provisioner.ParseSpecSecrets(spec)
 	if err != nil {

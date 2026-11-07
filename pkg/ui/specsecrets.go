@@ -9,6 +9,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -89,7 +90,7 @@ func (s *Server) createFromSpec(w http.ResponseWriter, r *http.Request, u user) 
 	}
 	// A dry run applies every check and the user's rights, so that nothing is written for a request
 	// the real one refuses.
-	dry := s.createWith(r, u, body, true)
+	dry := s.createWith(r, u, body, url.Values{"dryRun": {metav1.DryRunAll}})
 	if dry.status >= http.StatusMultipleChoices {
 		dry.relay(w)
 		return
@@ -100,7 +101,7 @@ func (s *Server) createFromSpec(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusInternalServerError, "no cluster was created, because its Secrets were not restored: "+err.Error())
 		return
 	}
-	got := s.createWith(r, u, body, false)
+	got := s.createWith(r, u, body, nil)
 	if got.status != http.StatusCreated {
 		s.removeSecrets(r.Context(), made)
 	}
@@ -108,13 +109,15 @@ func (s *Server) createFromSpec(w http.ResponseWriter, r *http.Request, u user) 
 }
 
 // createWith runs the create handler on a request body of its own.
-func (s *Server) createWith(r *http.Request, u user, body []byte, dryRun bool) *capturedResponse {
+func (s *Server) createWith(r *http.Request, u user, body []byte, query url.Values) *capturedResponse {
 	req := r.Clone(r.Context())
 	req.Body = io.NopCloser(bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	if dryRun {
+	if len(query) > 0 {
 		q := req.URL.Query()
-		q.Set("dryRun", metav1.DryRunAll)
+		for k, v := range query {
+			q[k] = v
+		}
 		req.URL.RawQuery = q.Encode()
 	}
 	got := &capturedResponse{header: http.Header{}}

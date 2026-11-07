@@ -195,16 +195,16 @@ func TestEtcdBackups(t *testing.T) {
 	ctx := context.Background()
 	settings := EtcdBackupSettings{Target: "minio", EveryHours: 6, Keep: 2, By: "root@pam", Since: now}
 
-	if err := a.ConfigureEtcdBackups(ctx, settings, "AKID", "secret", "wrong passphrase, long enough"); !errors.Is(err, ErrPassphrase) {
+	if err := a.ConfigureEtcdBackups(ctx, &settings, "AKID", "secret", "wrong passphrase, long enough"); !errors.Is(err, ErrPassphrase) {
 		t.Fatalf("wrong passphrase: %v", err)
 	}
 	bad := settings
 	bad.Target, bad.Keep = "elsewhere", 0
-	if err := a.ConfigureEtcdBackups(ctx, bad, "AKID", "secret", passphrase); err == nil ||
+	if err := a.ConfigureEtcdBackups(ctx, &bad, "AKID", "secret", passphrase); err == nil ||
 		!strings.Contains(err.Error(), "not one of the backup targets") || !strings.Contains(err.Error(), "keep:") {
 		t.Fatalf("bad settings: %v", err)
 	}
-	if err := a.ConfigureEtcdBackups(ctx, settings, "AKID", "secret", passphrase); err != nil {
+	if err := a.ConfigureEtcdBackups(ctx, &settings, "AKID", "secret", passphrase); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(talos.asked, []string{"10.0.0.11"}) {
@@ -261,7 +261,7 @@ func TestEtcdBackups(t *testing.T) {
 
 	// Another appliance on the same target needs the passphrase the key was stored with.
 	other, _ := backupAppliance(t, store)
-	if err := other.ConfigureEtcdBackups(ctx, settings, "AKID", "secret", passphrase); err != nil {
+	if err := other.ConfigureEtcdBackups(ctx, &settings, "AKID", "secret", passphrase); err != nil {
 		t.Fatalf("same passphrase: %v", err)
 	}
 
@@ -284,7 +284,7 @@ func TestEtcdBackupFailure(t *testing.T) {
 	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
 	a.Now = func() time.Time { return now }
 	ctx := context.Background()
-	if err := a.ConfigureEtcdBackups(ctx, EtcdBackupSettings{Target: "minio", EveryHours: 1, Keep: 3, Since: now}, "AKID", "secret", passphrase); err != nil {
+	if err := a.ConfigureEtcdBackups(ctx, &EtcdBackupSettings{Target: "minio", EveryHours: 1, Keep: 3, Since: now}, "AKID", "secret", passphrase); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(a.etcdBackupFile("talosconfig"), []byte("expired"), 0o600); err != nil {

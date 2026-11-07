@@ -199,7 +199,7 @@ func (a *Appliance) EtcdBackupDue(now time.Time) bool {
 // state's admin talosconfig and encrypts the key the snapshots are encrypted to. Empty access keys
 // keep the ones stored. The target gets that key, encrypted, beside the snapshots. A target that
 // holds one already keeps it, when the passphrase opens it.
-func (a *Appliance) ConfigureEtcdBackups(ctx context.Context, s EtcdBackupSettings, accessKeyID, secretAccessKey, passphrase string) error {
+func (a *Appliance) ConfigureEtcdBackups(ctx context.Context, s *EtcdBackupSettings, accessKeyID, secretAccessKey, passphrase string) error {
 	saved := a.SavedSettings()
 	if saved == nil {
 		return errors.New("there is no management cluster yet")

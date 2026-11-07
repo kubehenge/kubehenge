@@ -29,7 +29,7 @@ func backedUp(t *testing.T) (*Appliance, *memoryStore, *time.Time) {
 func configure(t *testing.T, a *Appliance, at time.Time) {
 	t.Helper()
 	s := EtcdBackupSettings{Target: "minio", EveryHours: 6, Keep: 3, By: "root@pam", Since: at}
-	if err := a.ConfigureEtcdBackups(context.Background(), s, "AKID", "secret", passphrase); err != nil {
+	if err := a.ConfigureEtcdBackups(context.Background(), &s, "AKID", "secret", passphrase); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -173,7 +173,7 @@ func TestSpecsAreSealedToTheExtraRecipientsAndOpenOffline(t *testing.T) {
 		Target: "minio", EveryHours: 6, Keep: 3, By: "root@pam", Since: *now,
 		SpecRecipients: []string{offline.Recipient().String()},
 	}
-	if err = a.ConfigureEtcdBackups(context.Background(), s, "AKID", "secret", passphrase); err != nil {
+	if err = a.ConfigureEtcdBackups(context.Background(), &s, "AKID", "secret", passphrase); err != nil {
 		t.Fatal(err)
 	}
 	sealed, err := a.SealSpecSecret([]byte(`{"k":"dg=="}`))

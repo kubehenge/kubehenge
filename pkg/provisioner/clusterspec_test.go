@@ -137,7 +137,7 @@ func TestClusterSpecObjectsFollowTheClusterAndNotALabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []string
+	got := make([]string, 0, len(objects))
 	for _, o := range objects {
 		got = append(got, o.GetName())
 	}

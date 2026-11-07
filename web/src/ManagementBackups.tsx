@@ -373,7 +373,7 @@ function SetUpDialog({
           />
         )}
       </Field>
-      <Field label="Extra recipients (age1…, one per line)">
+      <Field label="Extra recipients">
         {(id) => (
           <textarea
             id={id}
@@ -385,7 +385,9 @@ function SetUpDialog({
           />
         )}
       </Field>
-      <p className="muted">An offline recipient opens the specs&apos; Secrets without this appliance.</p>
+      <p className="muted">
+        One age1… key per line. An offline recipient opens the specs&apos; Secrets without this appliance.
+      </p>
       <p className="warning">
         The appliance keeps the access key and a talosconfig that can only take etcd snapshots. Restoring needs this
         passphrase.

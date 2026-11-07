@@ -66,7 +66,7 @@ export function FleetBackupWarning(): JSX.Element | null {
   if (b?.exportDue === true && b.specKey === true) {
     return (
       <div className="pad">
-        <p className="warning">Export due: stored Secrets open only with this appliance&apos;s key.</p>
+        <p className="warning">Export due. Stored Secrets open only with this appliance&apos;s key.</p>
         <Link to={adminPath("backups")}>Export the appliance</Link>
       </div>
     );

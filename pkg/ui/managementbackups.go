@@ -125,7 +125,7 @@ func (s *Server) configureManagementBackups(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	err := a.ConfigureEtcdBackups(r.Context(), settings, req.AccessKeyID, req.SecretAccessKey, req.Passphrase)
+	err := a.ConfigureEtcdBackups(r.Context(), &settings, req.AccessKeyID, req.SecretAccessKey, req.Passphrase)
 	if !checkPassphrase(w, done, err) {
 		return
 	}

@@ -119,7 +119,7 @@ describe("management cluster backups", () => {
     render(<ManagementBackups running={false} />);
 
     await user.click(await screen.findByRole("button", { name: "Change…" }));
-    const recipients = within(screen.getByRole("dialog")).getByLabelText(/^Extra recipients/u);
+    const recipients = within(screen.getByRole("dialog")).getByLabelText("Extra recipients");
     expect(recipients).toHaveValue(key);
     await user.type(recipients, "{Enter}  {Enter}age1second");
     await user.type(within(screen.getByRole("dialog")).getByLabelText("State passphrase"), `${passphrase}{Enter}`);
@@ -132,7 +132,7 @@ describe("management cluster backups", () => {
   it("warns in the fleet header once the key exists and no export was taken", async () => {
     fakeServer({ "GET /api/appliance/etcd-backups": { body: { ...on, exportDue: true, specKey: true } } });
     render(<FleetBackupWarning />);
-    await expect(screen.findByText(/stored Secrets open only with this appliance/u)).resolves.toBeInTheDocument();
+    await expect(screen.findByText(/Stored Secrets open only with this appliance/u)).resolves.toBeInTheDocument();
   });
 
   it("keeps the fleet header quiet while the export is due but no key exists", async () => {
