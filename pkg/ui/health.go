@@ -115,6 +115,9 @@ type attentionView struct {
 	Pod *podRef `json:"pod,omitempty"`
 	// Machine names the Cluster API machine an item is about, which its own view acts on.
 	Machine string `json:"machine,omitempty"`
+	// Accept is the version whose findings the item's Upgrade anyway button accepts for the
+	// automatic upgrade.
+	Accept string `json:"accept,omitempty"`
 }
 
 type podRef struct {
@@ -380,6 +383,7 @@ func assemble(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now tim
 	}
 	watchAttention(c, &a)
 	etcdAttention(c, &a)
+	pausedAttention(c, now, &a)
 	v.Attention = a.sorted()
 	v.Verdict = verdict(c, wl.unreachable(), v.Attention)
 	return v

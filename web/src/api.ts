@@ -29,6 +29,7 @@ import type {
   NotificationSent,
   PodLogs,
   Plan,
+  UpgradeChecks,
   PveNode,
   Realm,
   RestoreRequest,
@@ -350,6 +351,10 @@ export interface Api {
   setupCheck: (settings: ManagementSettings) => Promise<SetupFindings>;
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
+  /** upgradeChecks reads the removed APIs in use and the fail-closed webhooks an upgrade to version would meet. */
+  upgradeChecks: (ns: string, name: string, version: string) => Promise<UpgradeChecks>;
+  /** acceptUpgrade lets the automatic upgrade to version go past the findings that are listed now. */
+  acceptUpgrade: (ns: string, name: string, version: string) => Promise<UpgradeChecks>;
   /** runEvents are the management cluster's events about a cluster's objects since a time, oldest first. */
   runEvents: (ns: string, name: string, since: string) => Promise<HealthEvent[]>;
   fleetHealth: () => Promise<FleetHealth[]>;
@@ -481,6 +486,10 @@ export const api: Api = {
   setupCheck: (settings) => request("POST", "/api/setup/check", { settings }),
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
+  upgradeChecks: (ns, name, version) =>
+    request("GET", `${clusterPath(ns, name)}/upgrade-checks?version=${encodeURIComponent(version)}`),
+  acceptUpgrade: (ns, name, version) =>
+    request("POST", `${clusterPath(ns, name)}/upgrade-checks/accept?version=${encodeURIComponent(version)}`),
   runEvents: (ns, name, since) => request("GET", `${clusterPath(ns, name)}/events?since=${encodeURIComponent(since)}`),
   fleetHealth: () => request("GET", "/api/fleet/health"),
   runs: () => request("GET", "/api/runs"),

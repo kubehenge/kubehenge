@@ -62,18 +62,22 @@ func etcdAttention(c *clusterv1.Cluster, a *attention) {
 	}
 }
 
+// defragRefusal says why an etcd defragmentation cannot be asked for now, or returns "".
+func defragRefusal(c *clusterv1.Cluster) string {
+	if provisioner.RestoreInProgress(c) {
+		return "an etcd restore is running"
+	}
+	return ""
+}
+
 // defragEtcd asks the controller to defragment every etcd member at once.
 func (s *Server) defragEtcd(w http.ResponseWriter, r *http.Request, u user) {
 	c, _, ok := s.cluster(w, r, u, privChange)
 	if !ok {
 		return
 	}
-	if provisioner.RestoreInProgress(c) {
-		writeError(w, http.StatusConflict, "an etcd restore is running")
-		return
-	}
 	req := provisioner.EtcdDefragRequest{By: u.ticket.Username, At: time.Now().UTC()}
-	if !s.annotate(w, r, u, c, provisioner.EtcdDefragRequestAnnotation, req) {
+	if !s.annotate(w, r, u, c, provisioner.EtcdDefragRequestAnnotation, req, defragRefusal) {
 		return
 	}
 	s.Log.InfoContext(r.Context(), "asked for an etcd defragmentation", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
