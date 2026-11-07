@@ -98,6 +98,15 @@ It can touch no VM outside the template pool, no cluster's VM and none of the ma
 
 Switching the refresh off removes the user, its token and the CronJob. The templates stay.
 
+## Management cluster VM IDs
+
+The management cluster's VMs get random VM IDs, because Proxmox VE offers the same lowest free ID to everything created at the same moment. The setup draws them from the `next-id` range under Datacenter, Options, so a band you reserved for Kubehenge holds them too.
+
+- **With `next-id` set,** the IDs come from the upper half of the range, clear of the lowest free ID Proxmox VE hands out. A range whose upper half holds under ten IDs per management VM is used whole. A missing bound is Proxmox VE's own, 100 or 1000000 (exclusive).
+- **Without it,** or without `Sys.Audit` on `/` to read it, the IDs come from 10000 to 99998.
+- **Too few free IDs** in the range stop the setup. Widen `next-id`.
+- **A running management cluster** keeps its VMs' IDs when the range changes. The module's `vm_id_range` sets the range, `start` included and `end` excluded.
+
 ## Where the template builds run
 
 Three settings of `template_refresh` place the VM that builds a node image:

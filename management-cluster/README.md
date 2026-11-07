@@ -19,7 +19,7 @@ One Terraform/OpenTofu apply creates Kubehenge's management cluster on Proxmox V
 - **A group for the clusters' own users,** allowed to use space on the listed storages and to read the nodes. Each cluster's user, created by the controller, adds rights on its own pool only ([architecture](../docs/architecture.md#each-clusters-own-corner-of-proxmox-ve)).
 - **The Talos disk image,** built by the Talos Image Factory with the QEMU guest agent.
 - **One, three or five VMs,** each a Talos control-plane node, with static addresses and a virtual IP in front of the Kubernetes API.
-  - Their VM IDs are picked at random between 10000 and 99999, away from the lowest free ID. Proxmox VE offers that ID to anything else created at the same moment.
+  - Their VM IDs are picked at random from `vm_id_range`, away from the lowest free ID that Proxmox VE offers to anything else created at the same moment. The default is 10000 up to, not including, 99999, and the appliance sets it from `next-id` ([install settings](../docs/install-settings.md#management-cluster-vm-ids)).
 
 ### Optional users and rights
 

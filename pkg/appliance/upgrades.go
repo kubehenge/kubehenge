@@ -323,7 +323,7 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 			from = last.Release
 		}
 		j.Add(fmt.Sprintf("Upgrading the management cluster automatically, from what %s applied to what %s carries", from, a.Release))
-		kubeconfig, err := a.run(ctx, j, s, u.Passphrase, tokenAuth(u.Token))
+		kubeconfig, err := a.run(ctx, j, s, u.Passphrase, &pve.Ticket{Username: user, Token: u.Token, Issued: time.Now()})
 		if err != nil {
 			return err
 		}

@@ -697,6 +697,14 @@ func (*demoAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]str
 	return map[string]string{}, nil
 }
 
+func (*demoAccounts) NextID(context.Context, *pve.Ticket) (pve.NextID, error) {
+	return pve.NextID{}, nil
+}
+
+func (*demoAccounts) VMIDs(context.Context, *pve.Ticket) ([]int, error) {
+	return nil, nil
+}
+
 func (*demoAccounts) NodeAffinityRules(context.Context, *pve.Ticket) ([]pve.HARule, error) {
 	return nil, nil
 }
