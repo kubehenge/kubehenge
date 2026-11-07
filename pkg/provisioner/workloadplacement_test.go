@@ -36,8 +36,6 @@ func (m *memNodes) OnlineNodes(context.Context) ([]Node, error) {
 	return out, nil
 }
 
-func (*memNodes) TemplateTags(context.Context) ([][]string, error) { return nil, nil }
-
 func (m *memNodes) set(name string, free int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

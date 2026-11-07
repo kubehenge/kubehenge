@@ -39,7 +39,7 @@ type EtcdMemberHealth struct {
 // EtcdSet is the etcd members of one cluster.
 type EtcdSet struct {
 	// Cluster is namespace/name, or ManagementEtcdName.
-	Cluster string       `json:"cluster"`
+	Cluster string             `json:"cluster"`
 	Members []EtcdMemberHealth `json:"members"`
 }
 

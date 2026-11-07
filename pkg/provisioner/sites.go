@@ -29,8 +29,10 @@ type TemplateSite struct {
 	Tags     []string
 	Storages []string
 	// CPU is the template's own cpu setting, which its clones keep.
-	CPU   string
-	Built time.Time
+	CPU string
+	// Hardware is what the template's hardware tags record, zero for one made before they were.
+	Hardware templates.Hardware
+	Built    time.Time
 }
 
 // Sites is where the storages and the templates of a Proxmox VE cluster can be used, as one look
@@ -74,8 +76,9 @@ func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
 	for i, r := range inv.Templates {
 		tags := templates.ParseTags(r.Tags)
 		at, _ := templates.BuildOf(tags)
+		hw, _ := templates.HardwareOf(templates.ParseAllTags(r.Tags))
 		s.Templates = append(s.Templates, TemplateSite{
-			Name: r.Name, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Built: at,
+			Name: r.Name, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Hardware: hw, Built: at,
 		})
 	}
 	p.readNetworks(ctx, s)
@@ -289,23 +292,15 @@ func templateCPU(s *Sites, c *clusterv1.Cluster) (need int, cpu string, set bool
 	return need, cpu, set
 }
 
-// needsOnSites are the cluster's needs with the cpu setting of its newest templates where they set
-// one: their clones keep it, so it rules over the tags and the node OS. The CPU type is named only
-// where it asks more than the node OS or Talos does.
-func needsOnSites(s *Sites, c *clusterv1.Cluster, needs templateNeeds) (templateNeeds, error) {
-	level, cpu, set := templateCPU(s, c)
-	if !set {
-		return needs, nil
+// templateNUMA tells whether a newest template of the cluster's lines gives its clones a NUMA
+// topology.
+func templateNUMA(s *Sites, c *clusterv1.Cluster) bool {
+	for _, line := range templateLines(c) {
+		if slices.ContainsFunc(newest(s, line), func(t TemplateSite) bool { return t.Hardware.NUMA }) {
+			return true
+		}
 	}
-	own, err := clusterCPULevel(c)
-	if err != nil {
-		return needs, err
-	}
-	needs.Level, needs.CPUType = level, ""
-	if level > own {
-		needs.CPUType = cpu
-	}
-	return needs, nil
+	return false
 }
 
 func storageRefusal(s *Sites, c *clusterv1.Cluster, names []string) error {

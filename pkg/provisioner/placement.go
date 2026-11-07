@@ -102,11 +102,6 @@ func (p *Placer) placeAll(ctx context.Context) {
 	if u, ok := p.Nodes.(skippingNodes); ok {
 		skipped = u.Unreadable()
 	}
-	// Without the templates' hardware a cluster is placed by its node OS alone.
-	templateTags, err := p.Nodes.TemplateTags(ctx)
-	if err != nil {
-		log.Error(err, "reading the templates' hardware")
-	}
 	clusters := &clusterv1.ClusterList{}
 	if err := p.Client.List(ctx, clusters, client.UnsafeDisableDeepCopy); err != nil {
 		log.Error(err, "listing clusters")
@@ -118,7 +113,7 @@ func (p *Placer) placeAll(ctx context.Context) {
 			continue
 		}
 		p.markSkipped(ctx, c, skipped)
-		needs, err := clusterNeeds(c, templateTags)
+		needs, err := clusterNeeds(c, sites)
 		if err != nil {
 			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
 			continue
@@ -313,11 +308,6 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster, cho
 	if h.Nodes == nil {
 		return nil, "", nil
 	}
-	needs, err := h.reads().templateNeeds(ctx, cluster)
-	if err != nil {
-		return nil, "", err
-	}
-	level := needs.Level
 	online, err := h.Nodes.OnlineNodes(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("reading the Proxmox VE nodes: %w", err)
@@ -326,15 +316,21 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster, cho
 	if err != nil {
 		return nil, "", err
 	}
-	hosts, _ := nodesToPlace(online, level, nil, storage)
-	_, blocked := nodesToPlace(online, level, chosen, storage)
-	usable := placeable(online, storage)
+	var sites *Sites
 	if h.Sites != nil {
-		sites, err := h.Sites.Sites(ctx)
-		if err != nil {
+		if sites, err = h.Sites.Sites(ctx); err != nil {
 			return nil, "", fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)
 		}
-		hosts = sites.Hosts(cluster, usable, level)
+	}
+	needs, err := clusterNeeds(cluster, sites)
+	if err != nil {
+		return nil, "", err
+	}
+	hosts, _ := nodesToPlace(online, needs.Level, nil, storage)
+	_, blocked := nodesToPlace(online, needs.Level, chosen, storage)
+	usable := placeable(online, storage)
+	if sites != nil {
+		hosts = sites.Hosts(cluster, usable, needs.Level)
 	}
 	hosts, _ = fitMemory(ctx, h.Reader, h.ClassNamespace, cluster, usable, hosts)
 	return hosts, blocked, nil

@@ -231,11 +231,6 @@ func (l *lateNodes) OnlineNodes(ctx context.Context) ([]Node, error) {
 	return nil, ctx.Err()
 }
 
-func (*lateNodes) TemplateTags(ctx context.Context) ([][]string, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
 func TestAdmissionSpendsOneBudgetOnAllItsChecksOfProxmoxVE(t *testing.T) {
 	t.Parallel()
 	const budget = 400 * time.Millisecond
@@ -345,10 +340,6 @@ type skippingFake struct {
 
 func (s *skippingFake) OnlineNodes(ctx context.Context) ([]Node, error) {
 	return s.nodes.OnlineNodes(ctx)
-}
-
-func (s *skippingFake) TemplateTags(ctx context.Context) ([][]string, error) {
-	return s.nodes.TemplateTags(ctx)
 }
 
 func (s *skippingFake) Unreadable() []string { return s.skipped }

@@ -31,13 +31,6 @@ type fakeNodes struct {
 	// maintenance are the nodes in HA maintenance, inactive each node's inactive storages.
 	maintenance []string
 	inactive    map[string][]string
-	// templateTags are the tags of the templates Proxmox VE lists.
-	templateTags [][]string
-	tagsErr      error
-}
-
-func (f *fakeNodes) TemplateTags(context.Context) ([][]string, error) {
-	return f.templateTags, f.tagsErr
 }
 
 func (f *fakeNodes) OnlineNodes(context.Context) ([]Node, error) {
