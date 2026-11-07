@@ -22,15 +22,15 @@ func TimeServerProblem(server string) string {
 	switch {
 	case err == nil && (ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast()):
 		return server + " is no address the nodes can reach"
-	case err != nil && !validHostName(server):
+	case err != nil && !ValidHostName(server):
 		return server + " is no host name or IP address"
 	}
 	return ""
 }
 
-// validHostName tells whether s is a DNS name: dot-separated labels of letters, digits and hyphens,
+// ValidHostName tells whether s is a DNS name: dot-separated labels of letters, digits and hyphens,
 // none starting or ending with a hyphen, at most 253 characters.
-func validHostName(s string) bool {
+func ValidHostName(s string) bool {
 	const longestName, longestLabel = 253, 63
 	s = strings.TrimSuffix(s, ".")
 	if s == "" || len(s) > longestName {

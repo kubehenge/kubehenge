@@ -47,11 +47,13 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			return
 		}
 		if !r.URL.Query().Has("path") {
-			reply(w, map[string]any{"/": map[string]int{"Sys.Audit": 1}, "/pool/kubehenge/default.one": map[string]int{"VM.Audit": 1, "VM.Allocate": 0}})
+			reply(w, map[string]any{"/": map[string]int{"Sys.Audit": 1}, "/pool/kubehenge/default.one": map[string]int{"VM.Audit": 1, "VM.Clone": 0}})
 			return
 		}
 		path := r.URL.Query().Get("path")
-		reply(w, map[string]any{path: map[string]int{"VM.Audit": 1, "VM.Allocate": 0}})
+		// The value is the propagate flag. 0 is a privilege from a pool's ACL, or one set without
+		// propagate, held all the same.
+		reply(w, map[string]any{path: map[string]int{"VM.Audit": 1, "VM.Clone": 0}})
 	})
 	mux.HandleFunc("GET /api2/json/cluster/resources", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, []map[string]any{
@@ -229,14 +231,14 @@ func TestPrivileges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !privs.Has("VM.Audit") || privs.Has("VM.Allocate") || privs.Has("VM.Audit", "Sys.Modify") {
+	if !privs.Has("VM.Audit", "VM.Clone") || privs.Has("VM.Allocate") || privs.Has("VM.Audit", "Sys.Modify") {
 		t.Fatalf("privileges = %v", privs)
 	}
 	if _, err = a.Privileges(ctx, &Ticket{Username: "alice@pve", Ticket: "forged"}, "/"); !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("forged ticket: %v, want ErrAuthentication", err)
 	}
 	all, err := a.AllPrivileges(ctx, ticket)
-	if err != nil || len(all) != 2 || !all["/"].Has("Sys.Audit") || !all["/pool/kubehenge/default.one"].Has("VM.Audit") || all["/pool/kubehenge/default.one"].Has("VM.Allocate") {
+	if err != nil || len(all) != 2 || !all["/"].Has("Sys.Audit") || !all["/pool/kubehenge/default.one"].Has("VM.Audit", "VM.Clone") || all["/pool/kubehenge/default.one"].Has("VM.Allocate") {
 		t.Fatalf("all privileges = %v, %v", all, err)
 	}
 }

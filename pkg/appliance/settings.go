@@ -98,6 +98,12 @@ type TemplateRefresh struct {
 	TimeZone string `json:"timeZone,omitempty"`
 	// Storage holds the templates' disks, one of the cluster storages.
 	Storage string `json:"storage,omitempty"`
+	// Node is the Proxmox VE node the build VM runs on. Empty takes the first management node.
+	Node string `json:"node,omitempty"`
+	// Bridge is the build VM's bridge, a VNet written zone/vnet. Empty takes the first cluster bridge.
+	Bridge string `json:"bridge,omitempty"`
+	// VLAN tags the build VM's network. 0 or empty sends it untagged.
+	VLAN int `json:"vlan,omitempty"`
 	// Address, Gateway and DNS are the static network of the VM that prepares an image.
 	Address string   `json:"address,omitempty"`
 	Gateway string   `json:"gateway,omitempty"`
@@ -147,6 +153,15 @@ func (r *TemplateRefresh) check(p *problems, workloadDatastores []string) {
 	if r.Storage != "" && !slices.Contains(workloadDatastores, r.Storage) {
 		p.addf("Template disks: one of the cluster storages")
 	}
+	if r.Node != "" && !provisioner.ValidHostName(r.Node) {
+		p.addf("Template build node: a Proxmox VE node name")
+	}
+	if r.Bridge != "" && !bridgeRef.MatchString(r.Bridge) {
+		p.addf("Template build bridge: a bridge, or a VNet written zone/vnet")
+	}
+	if r.VLAN < 0 || r.VLAN > maxVLAN {
+		p.addf("Template build VLAN: 0 to %d", maxVLAN)
+	}
 	r.checkNetwork(p)
 }
 
@@ -187,10 +202,14 @@ func moduleTemplateRefresh(r *TemplateRefresh) map[string]any {
 	for key, value := range map[string]string{
 		"weekday": r.Weekday, "time": r.Time, "time_zone": r.TimeZone, "storage": r.Storage,
 		"address": r.Address, "gateway": r.Gateway,
+		"node": r.Node, "bridge": r.Bridge,
 	} {
 		if value != "" {
 			out[key] = value
 		}
+	}
+	if r.VLAN > 0 {
+		out["vlan"] = r.VLAN
 	}
 	if len(r.DNS) > 0 {
 		out["dns"] = r.DNS

@@ -377,12 +377,13 @@ func parseChallenge(ticket string) (*Challenge, error) {
 	return c, nil
 }
 
+// held reads Proxmox VE's answer for one path, which lists every privilege set there with its
+// propagate flag as the value. A privilege from a pool's ACL, or from one set without propagate,
+// comes with 0 and is held all the same (PVE::RPCEnvironment::permissions).
 func held(granted map[string]int) Privileges {
-	privs := Privileges{}
-	for name, g := range granted {
-		if g != 0 {
-			privs[name] = true
-		}
+	privs := make(Privileges, len(granted))
+	for name := range granted {
+		privs[name] = true
 	}
 	return privs
 }
