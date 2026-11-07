@@ -117,7 +117,10 @@ printf '[req]\ndistinguished_name = dn\n[dn]\n' > "${root}/openssl.cnf"
 OPENSSL_CONF=${root}/openssl.cnf
 export OPENSSL_CONF
 make_certificate kubehenge 192.0.2.40
-seconds() { date -d "$(openssl x509 -in "${work}/tls.crt" -noout "$1" | cut -d= -f2)" +%s; }
+seconds() {
+    stamp=$(openssl x509 -in "${work}/tls.crt" -noout "$1")
+    date -d "${stamp#*=}" +%s
+}
 expect "a new certificate starts between 59 and 61 minutes back" yes sh -c \
     "age=\$(( \$(date +%s) - $(seconds -startdate) )); [ \"\${age}\" -ge 3540 ] && [ \"\${age}\" -le 3660 ] && echo yes"
 expect "and ends within 825 days of its start" yes sh -c \

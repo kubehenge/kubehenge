@@ -38,7 +38,7 @@ func ProbeTalosClock(ctx context.Context, raw []byte, address string) (bool, err
 // IsTalosCluster tells whether a cluster is built from the Talos ClusterClass.
 func IsTalosCluster(c *clusterv1.Cluster) bool { return isTalos(c) }
 
-// ReadTalosconfig reads a Talos cluster's talosconfig, which signs in to its nodes' Talos API.
-func ReadTalosconfig(ctx context.Context, r client.Reader, namespace, cluster string) ([]byte, error) {
+// TalosconfigOf reads a Talos cluster's talosconfig, which signs in to its nodes' Talos API.
+func TalosconfigOf(ctx context.Context, r client.Reader, namespace, cluster string) ([]byte, error) {
 	return readTalosconfig(ctx, r, namespace, cluster)
 }

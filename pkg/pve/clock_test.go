@@ -56,7 +56,7 @@ func TestARefusedFreshTicketBlamesTheNodesClocks(t *testing.T) {
 		if !errors.Is(err, ErrAuthentication) {
 			t.Errorf("%s: %v is no authentication failure", name, err)
 		}
-		if c.want == ErrAuthentication && errors.Is(err, ErrNodesDisagree) {
+		if !errors.Is(c.want, ErrNodesDisagree) && errors.Is(err, ErrNodesDisagree) {
 			t.Errorf("%s: blamed the nodes' clocks", name)
 		}
 	}

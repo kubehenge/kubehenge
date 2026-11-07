@@ -20,7 +20,7 @@ func TestARefusedFreshTicketTellsTheUserTheNodesDisagreeAboutTheTime(t *testing.
 		"session ended":  {pve.ErrAuthentication, "session expired. Sign in again"},
 	} {
 		rec := httptest.NewRecorder()
-		s.proxmoxError(rec, httptest.NewRequest(http.MethodGet, "/", http.NoBody), c.err)
+		s.proxmoxError(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody), c.err)
 		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), c.want) {
 			t.Errorf("%s: %d %s, want 401 with %q", name, rec.Code, rec.Body.String(), c.want)
 		}

@@ -26,7 +26,7 @@ func (s *Server) readTalosClocks(ctx context.Context, kube client.Client, c *clu
 	if !provisioner.IsTalosCluster(c) || len(wl.nodes) == 0 {
 		return
 	}
-	raw, err := provisioner.ReadTalosconfig(ctx, kube, c.Namespace, c.Name)
+	raw, err := provisioner.TalosconfigOf(ctx, kube, c.Namespace, c.Name)
 	if err != nil {
 		return
 	}
@@ -69,8 +69,8 @@ func internalAddress(n *corev1.Node) string {
 
 // clockSyncAttention warns about a Talos node whose time sync has not succeeded. Talos waits for it
 // before it signs the cluster's certificates, so the node boots on after five minutes without.
-func clockSyncAttention(a *attention, v *nodeView, unsynced bool) {
-	if !unsynced {
+func clockSyncAttention(a *attention, v *nodeView, unsynced map[string]bool) {
+	if !unsynced[v.Name] {
 		return
 	}
 	a.addMachine(v.Machine, severityWarning, roleWord(v.Role)+" "+v.Name+": clock not synced",
@@ -96,25 +96,7 @@ func (s *Server) addNodeClocks(ctx context.Context, u user, v *healthView) {
 		names = append(names, n)
 	}
 	slices.Sort(names)
-	found := make([]time.Duration, len(names))
-	asked := make([]bool, len(names))
-	var wg sync.WaitGroup
-	for i, name := range names {
-		wg.Go(func() {
-			rctx, cancel := context.WithTimeout(ctx, healthDeadline)
-			defer cancel()
-			asked0 := s.now()
-			theirs, err := s.Accounts.NodeTime(rctx, u.ticket, name)
-			if err != nil {
-				if !errors.Is(err, pve.ErrForbidden) {
-					s.Log.DebugContext(ctx, "reading a Proxmox VE node's time", "node", name, "error", err)
-				}
-				return
-			}
-			found[i], asked[i] = theirs.Sub(asked0), true
-		})
-	}
-	wg.Wait()
+	found, asked := s.nodeSkews(ctx, u, names)
 	var a attention
 	for i, name := range names {
 		if asked[i] && found[i].Abs() > nodeClockWarn {
@@ -134,6 +116,31 @@ func (s *Server) addNodeClocks(ctx context.Context, u user, v *healthView) {
 	if v.Verdict == verdictHealthy || v.Verdict == verdictChanging {
 		v.Verdict = verdictDegraded
 	}
+}
+
+// nodeSkews asks each node for its time and returns how far it is ahead of this machine. A node that
+// did not answer has false in asked.
+func (s *Server) nodeSkews(ctx context.Context, u user, names []string) ([]time.Duration, []bool) {
+	found := make([]time.Duration, len(names))
+	asked := make([]bool, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Go(func() {
+			rctx, cancel := context.WithTimeout(ctx, healthDeadline)
+			defer cancel()
+			asked0 := s.now()
+			theirs, err := s.Accounts.NodeTime(rctx, u.ticket, name)
+			if err != nil {
+				if !errors.Is(err, pve.ErrForbidden) {
+					s.Log.DebugContext(ctx, "reading a Proxmox VE node's time", "node", name, "error", err)
+				}
+				return
+			}
+			found[i], asked[i] = theirs.Sub(asked0), true
+		})
+	}
+	wg.Wait()
+	return found, asked
 }
 
 // proxmoxTicketGraceMinutes is how far a ticket's age may be negative on a node whose clock is behind

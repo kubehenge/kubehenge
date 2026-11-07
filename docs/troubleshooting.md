@@ -304,6 +304,7 @@ The Health page warns `clock is off by` when a ready node's lease, stamped by it
 - On a kubeadm, RKE2 or k3s node, look at `chronyc tracking` and `chronyc sources` (a debug shell, or the guest agent). A network that blocks UDP port 123 to the public pools leaves chrony without a source. Allow it, or point the node at an internal time server.
 - Older templates did not guarantee a time daemon. Build the node image again and let the cluster replace its nodes ([templates.md](templates.md#the-weekly-build)).
 - Check the Proxmox VE hosts' own time. A VM starts from its host's clock. The health page lists a host over 30 seconds from the controller's to users with `Sys.Audit` on it.
+
 ### A node's clock is not synced
 
 - **A kubeadm, RKE2 or k3s node** waited 3 minutes for chrony and stopped before it made any certificate. Its boot log says `clock not synced`. Open UDP 123 or set the cluster's **Time servers**.

@@ -59,15 +59,22 @@ func TestAgentAndKubeadmNodesWaitForTheClockAndTakeTheClusterServers(t *testing.
 			if !ok || len(commands) == 0 || commands[0] != "/etc/kubehenge/wait-clock.sh || exit 1" {
 				t.Errorf("%s: the first command must wait for the clock and end the bootstrap when it fails: %v", name, commands)
 			}
-			files, _ := spec["files"].([]any)
+			files, ok := spec["files"].([]any)
+			if !ok {
+				t.Fatalf("%s: no files", name)
+			}
 			var script, dropin string
 			for _, f := range files {
 				file := asMap(t, f)
+				content, ok := file["content"].(string)
+				if !ok {
+					continue
+				}
 				switch file["path"] {
 				case "/etc/kubehenge/wait-clock.sh":
-					script, _ = file["content"].(string)
+					script = content
 				case "/etc/chrony.d/50-kubehenge.conf":
-					dropin, _ = file["content"].(string)
+					dropin = content
 				}
 			}
 			if !strings.Contains(script, "chronyc waitsync 18") || !strings.Contains(script, "clock not synced") {

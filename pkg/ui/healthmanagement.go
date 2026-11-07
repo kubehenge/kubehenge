@@ -228,7 +228,7 @@ func nodesSection(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now
 			if n := nodes[s.Items[i].Name]; n != nil && !s.Items[i].leaving {
 				taintDriftAttention(a, c, &s.Items[i], n)
 				clockSkewAttention(a, &s.Items[i], wl.leases[n.Name], now)
-				clockSyncAttention(a, &s.Items[i], wl.unsynced[n.Name])
+				clockSyncAttention(a, &s.Items[i], wl.unsynced)
 			}
 		}
 	}

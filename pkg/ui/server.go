@@ -60,7 +60,6 @@ type Resources interface {
 	Nodes(ctx context.Context, t *pve.Ticket) ([]pve.Node, error)
 	Bridges(ctx context.Context, t *pve.Ticket, node string) ([]pve.Bridge, error)
 	DNS(ctx context.Context, t *pve.Ticket, node string) ([]string, error)
-	NodeTime(ctx context.Context, t *pve.Ticket, node string) (time.Time, error)
 	AccessNames(ctx context.Context, t *pve.Ticket) (pve.Names, error)
 	NodeAddresses(ctx context.Context, t *pve.Ticket) (map[string]string, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
@@ -73,6 +72,7 @@ type Guests interface {
 	VMLoad(ctx context.Context, t *pve.Ticket, node string, vmid int) ([]pve.LoadPoint, error)
 	Templates(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
 	BackupCovers(ctx context.Context, t *pve.Ticket, vmid int) (bool, error)
+	NodeTime(ctx context.Context, t *pve.Ticket, node string) (time.Time, error)
 }
 
 // Removals are what an administrator's runs remove from Proxmox VE that the management-cluster
