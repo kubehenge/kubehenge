@@ -1805,7 +1805,11 @@ if [ "${restores_etcd}" = true ]; then
     snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
     etcd_prefix=$(target_folder "${name}" etcd)
     keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-    [ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
+    # Each snapshot has a record of its facts and checksum beside it.
+    expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${snapshot_name}.json" | sort)
+    [ "$(printf '%s\n' "${keys}" | sort)" = "${expected_keys}" ] ||
+        fail "the store's etcd snapshots are not the one taken with its record: ${keys}"
+    record_sum=$(s3 "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}.json" | jq -r .sha256)
     s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
     header=$(head -c 21 "${work}/snapshot.db.age")
     [ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
@@ -1815,6 +1819,7 @@ if [ "${restores_etcd}" = true ]; then
     sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
     taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
     [ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
+    [ "${sum}" = "${record_sum}" ] || fail "the snapshot's record in the store holds SHA-256 ${record_sum}, not the snapshot's ${sum}"
     curl -sS --fail -L --proto '=https' --retry 8 --retry-all-errors -o "${work}/etcd.tar.gz" \
         "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
     printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
@@ -1889,7 +1894,8 @@ if [ "${restores_etcd}" = true ]; then
     before_name=$(printf '%s' "${restore}" | jq -r '.before // ""')
     [ -n "${before_name}" ] || fail "the restore took no snapshot of etcd as it was first: ${restore}"
     keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
-    expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${before_name}" | sort)
+    expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${snapshot_name}.json" \
+        "${etcd_prefix}" "${before_name}" "${etcd_prefix}" "${before_name}.json" | sort)
     [ "${keys}" = "${expected_keys}" ] ||
         fail "the store's etcd snapshots after the restore are not the one restored and the one of etcd as it was: ${keys}"
     s3 -o "${work}/before.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${before_name}"
