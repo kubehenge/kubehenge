@@ -1989,7 +1989,7 @@ fieldset.choices .check {
 
 /* A long message keeps a readable width, and its scrolling box scrolls sideways instead. */
 .grid td.message {
-  min-width: 16rem;
+  min-inline-size: 16rem;
 }
 
 .fleet-controls {
