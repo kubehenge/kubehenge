@@ -1,12 +1,8 @@
 import { newForm, type Form, type Machine } from "./create-form";
-import { etcdQuotaOf } from "./EtcdSize";
-import { etcdFieldsOf, etcdSnapshotsOf } from "./EtcdSnapshots";
 import { loadBalancerOf } from "./LoadBalancer";
-import { logsOf } from "./Logs";
 import { nodeOSKey } from "./node-os";
-import { oidcProviders } from "./OIDCProviders";
 import { placeOf } from "./Placement";
-import { podSecurityOf } from "./PodSecurity";
+import { featuresOf } from "./start-from-features";
 import type { Cluster } from "./types";
 import { flag, quantity, record, text, texts } from "./values";
 
@@ -80,10 +76,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
   const base = newForm();
   const network = record(v["network"]);
   const vlan = quantity(network["vlan"]);
-  const headlamp = record(v["headlamp"]);
   const autoscaling = c.workerPools.find((p) => p.autoscaling !== undefined)?.autoscaling;
-  // A cluster that never had etcd snapshots set leaves a new one at the default.
-  const etcd = v["etcdSnapshots"] === undefined ? undefined : etcdSnapshotsOf(v["etcdSnapshots"]);
   return {
     ...base,
     from: clusterKey(c),
@@ -108,18 +101,6 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     haGroups: flag(record(v["ccm"])["haGroups"]) !== false,
     controlPlaneMachine: machineOf(v["controlPlaneMachine"], base.controlPlaneMachine),
     workerMachine: machineOf(v["workerMachine"], base.workerMachine),
-    cni: text(v["cni"]) ?? "",
-    headlamp: flag(headlamp["enabled"]) === true,
-    headlampView: text(headlamp["access"]) === "view",
-    monitoring: flag(record(v["monitoring"])["enabled"]) === true,
-    logs: logsOf(v["logs"]),
-    podSecurity: podSecurityOf(v["podSecurity"]),
-    cis: flag(v["cis"]) === true,
-    etcdQuotaGiB: etcdQuotaOf(v["etcd"]),
-    istio: flag(record(v["istio"])["enabled"]) === true,
-    rancherRegister: flag(record(v["rancher"])["register"]) !== false,
-    oidc: oidcProviders(v["oidc"]),
-    etcdSnapshots: etcd?.enabled ?? base.etcdSnapshots,
-    etcdFields: etcd === undefined ? base.etcdFields : etcdFieldsOf(etcd),
+    ...featuresOf(v, base),
   };
 }
