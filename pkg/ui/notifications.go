@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"maps"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -39,6 +40,9 @@ const (
 	// notifyBatch is the most notices one pass sends one by one. More, as when the management
 	// cluster stops answering and every cluster with it, go as one.
 	notifyBatch = 5
+	// notifyOutOfSupportEvery is how often a cluster on a Kubernetes minor past support is told
+	// again while it stays there.
+	notifyOutOfSupportEvery = 30 * 24 * time.Hour
 
 	notifyStateFile             = "notifications.json"
 	notifyStateMode fs.FileMode = 0o600
@@ -63,6 +67,8 @@ type notifyProblem struct {
 	// Seen is when the problem began, or was first seen.
 	Seen time.Time `json:"seen"`
 	Told bool      `json:"told"`
+	// ToldAt is when it was last told, for a notice that repeats.
+	ToldAt time.Time `json:"toldAt,omitzero"`
 }
 
 type notifySent struct {
@@ -176,6 +182,15 @@ func (st *notifyState) step(now time.Time, found *notifyFound) []notify.Notice {
 	return tell
 }
 
+// repeatEvery is how long a problem that stands is told again after it was last told. Most are
+// told once, so for them it is never.
+func repeatEvery(key string) time.Duration {
+	if strings.HasSuffix(key, "/"+outOfSupportWhat) {
+		return notifyOutOfSupportEvery
+	}
+	return time.Duration(math.MaxInt64)
+}
+
 // stepProblems records the problems found and tells those that have stood notifyHold.
 func (st *notifyState) stepProblems(now time.Time, found []notify.Notice) []notify.Notice {
 	var tell []notify.Notice
@@ -191,8 +206,9 @@ func (st *notifyState) stepProblems(now time.Time, found []notify.Notice) []noti
 		}
 		told := p.Told
 		p.Notice = *f
-		if !told && now.Sub(p.Seen) >= notifyHold {
-			p.Told = true
+		again := told && now.Sub(p.ToldAt) >= repeatEvery(f.Key)
+		if (!told && now.Sub(p.Seen) >= notifyHold) || again {
+			p.Told, p.ToldAt = true, now
 			n := p.Notice
 			n.At = now
 			tell = append(tell, n)

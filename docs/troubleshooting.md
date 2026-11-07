@@ -489,6 +489,22 @@ A Kubernetes upgrade waits while the Cluster has the condition `UpgradeHeld`. It
 kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.type=="UpgradeHeld")].reason}'
 ```
 
+### Kubernetes out of support
+
+A cluster on a Kubernetes minor version older than the oldest one offered for new clusters gets the condition `KubernetesOutOfSupport`. The Health page shows **Kubernetes out of support**, and the appliance's notifications tell it once and again each month while it stays. Upgrade one minor version at a time ([upgrading.md](upgrading.md#workload-clusters)).
+
+### Automatic upgrade skipped
+
+An automatic upgrade that is due waits while the Cluster has the condition `AutoUpgradeSkipped`. The Health page shows it as **Automatic upgrade skipped**, and the cluster has a warning event of the same name. The message names the version and what is in the way.
+
+| Reason | What to do |
+| --- | --- |
+| `RemovedAPIs` | A client still calls an API the new version removes. Move the client to the current API. The list stays until the API server restarts, so after the fix replace the control-plane nodes or upgrade by hand. |
+| `FailClosedWebhooks` | A webhook that rejects requests when it is down has fewer than two ready endpoints, or all on one node. Run two replicas on different nodes, or set `failurePolicy: Ignore` on the webhook. |
+| `ChecksUnavailable` | The cluster could not be read. The message says why. Often the cluster's read access is not set up yet or has expired, and the next controller pass fixes it. |
+
+`kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.type=="AutoUpgradeSkipped")].message}'` prints it. An upgrade by hand goes past the warning.
+
 ### GitOps
 
 - **`GitOpsWaiting`**, "GitOps waits for …": the engine syncs nothing until it has what follows.
@@ -513,6 +529,7 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.t
   - For RKE2 and k3s the controller rolls the workers' pool, and rolls k3s's control plane through its `rolloutAfter`.
   - An RKE2 control plane of three or more machines is replaced one machine at a time, through its health check.
   - An event `RenewingCertificates` names the machines. `CertificatesRenewed` says when nothing runs out within 60 days any more.
+- Reason `Paused`: the cluster is paused (`spec.paused`), so nothing replaces the machines. Resume it and the controller renews them. A cluster paused for a week or more also shows **Paused since** on its Health page.
 - Reason `RestartNeeded`: an RKE2 control plane of fewer than three machines cannot be replaced one at a time without stopping the cluster. Restart `rke2-server` on the node the message names (`systemctl restart rke2-server`). RKE2 renews certificates on a restart once they are within 120 days of running out.
 - Reason `NotRenewed`: they run out within 30 days and nothing renewed them. The message says how to fix each:
   - Replace a machine whose replacement stalled, once the rest of the cluster is healthy.

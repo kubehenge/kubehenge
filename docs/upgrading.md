@@ -169,6 +169,13 @@ When there is neither, the version can be typed in. For kubeadm, the dialog asks
 
 Cluster API replaces the control-plane nodes one by one, then the workers. Each new node is created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)).
 
+The dialog also warns of two things inside the cluster. A warning does not stop the upgrade. `kubehenge cluster upgrade web --version v1.37.1` prints the same list and asks first, and `--yes` skips the question.
+
+- **Removed APIs.** Deprecated APIs that clients requested and that the target version or an earlier one removes. They come from the API server's `apiserver_requested_deprecated_apis` gauge, which only resets when the API server restarts.
+- **Fail-closed webhooks.** Webhooks with `failurePolicy: Fail` (the default) whose Service has under two ready endpoints, or all of them on one node. Kubehenge's own add-ons and URL webhooks are left out.
+
+Kubehenge reads both as the cluster's health identity, which may read `/metrics`, webhook configurations and endpoint slices. What cannot be read shows as **Not checked**.
+
 The upgrade shows as a run, with each step and how many nodes it has replaced so far.
 
 ![An upgrade under way: the control plane replaced, one of two workers replaced, the cluster yet to settle](images/run.png)
@@ -201,6 +208,7 @@ The upgrade shows as a run, with each step and how many nodes it has replaced so
 Kubehenge's controller looks at every cluster every five minutes. It starts an upgrade only:
 
 - inside the cluster's window
+- with no removed API in use and no fail-closed webhook at risk ([below](#what-holds-an-upgrade-back))
 - while the cluster is available, with every node at the same version and no rollout running
 - one step at a time, the next once the cluster is settled again.
   - `patch` mode steps to the newest release of the cluster's minor version.
@@ -236,6 +244,7 @@ To hold a cluster on its build, switch `nodeImages` off. Deleting a broken build
 
 ### What holds an upgrade back
 
+- **Removed APIs and fail-closed webhooks.** An automatic upgrade makes the [same checks](#by-hand) and waits when they find something. The Cluster gets the condition `AutoUpgradeSkipped` ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)).
 - **Rancher.** The cluster that runs Rancher stays within the Kubernetes versions Rancher's release runs on.
   - An upgrade beyond them, by hand or automatic, waits (the cluster's conditions say why) until a Kubehenge release brings a Rancher that runs there.
 - **A missing kubeadm template.** New kubeadm nodes cannot be created without the template of their version ([troubleshooting.md](troubleshooting.md#template-missing)).

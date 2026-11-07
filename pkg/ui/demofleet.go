@@ -453,8 +453,10 @@ func (f *demoFleet) workload(d *demoCluster, machines []*clusterv1.Machine) *Wor
 	if d.Crashing != "" {
 		objects, alerts = f.crashing(d, machines[len(machines)-1].Name, objects)
 	}
+	objects = append(objects, demoThinWebhook()...)
 	return &Workload{
 		Kube:    kubefake.NewClientset(objects...),
+		Metrics: demoDeprecatedAPIs,
 		Dynamic: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), demoVeleroKinds, f.velero(d)...),
 		Readyz: func(context.Context) (string, error) {
 			return "[+]ping ok\n[+]log ok\n[+]etcd ok\n[+]etcd-readiness ok\n[+]informer-sync ok\nreadyz check passed\n", nil

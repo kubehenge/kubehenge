@@ -428,6 +428,42 @@ describe("clusters", () => {
     expect(dialog.getByRole("button", { name: "Upgrade" })).toBeDisabled();
   });
 
+  it("warns of removed APIs and fail-closed webhooks in the upgrade dialog, and still upgrades", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const old: Cluster = { ...web, version: "v1.32.4+rke2r1" };
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": () => ({ body: old }),
+      "GET /api/clusters/default/web/upgrade-checks?version=v1.33.13%2Brke2r3": () => ({
+        body: {
+          removedAPIs: [{ api: "flowcontrol.apiserver.k8s.io/v1beta3 flowschemas", removedIn: "1.32" }],
+          webhooks: [
+            { kind: "validating", name: "policy-guard", service: "guard/policy", why: "has 1 ready endpoint" },
+          ],
+          unchecked: [],
+          lines: [],
+        },
+      }),
+      "GET /api/versions/rke2": () => ({ body: { versions: [], older: ["v1.33.13+rke2r3"] } }),
+      "PATCH /api/clusters/default/web": () => ({ body: old }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Upgrade" }));
+    const dialog = within(screen.getByRole("dialog"));
+    await waitFor(() => expect(dialog.getByText("1 in use")).toBeInTheDocument());
+    expect(dialog.getByText("1 at risk")).toBeInTheDocument();
+    expect(dialog.getByText("flowcontrol.apiserver.k8s.io/v1beta3 flowschemas, removed in 1.32")).toBeInTheDocument();
+    expect(dialog.getByText("policy-guard: Service guard/policy has 1 ready endpoint")).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Upgrade" }));
+    await applyStaged(user);
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
+        version: "v1.33.13+rke2r3",
+      }),
+    );
+  });
+
   it("upgrades a cluster on a minor version too old for new clusters to the next one", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const old = { ...web, version: "v1.32.4+rke2r1" };

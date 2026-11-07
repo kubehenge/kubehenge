@@ -1207,6 +1207,18 @@ export interface PlannedChange {
   effect: Effect;
 }
 
+/** What an upgrade would run into inside the cluster, read before it starts. */
+export interface UpgradeChecks {
+  /** APIs in use that the target version removes. */
+  removedAPIs: { api: string; removedIn: string }[];
+  /** Webhooks that reject every request when their backend is down, with a backend one drain can take. */
+  webhooks: { kind: "validating" | "mutating"; name: string; service: string; why: string }[];
+  /** What could not be read, and why. */
+  unchecked: string[];
+  /** Every finding as a sentence. */
+  lines: string[];
+}
+
 /** A change as it would land, checked by the API server without being made. */
 export interface Plan {
   cluster: Cluster;

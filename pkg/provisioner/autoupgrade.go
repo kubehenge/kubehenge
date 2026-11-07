@@ -17,6 +17,7 @@ import (
 	"github.com/luthermonson/go-proxmox"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -152,7 +153,7 @@ func (ch Channels) Versions() Offer {
 		return o
 	}
 	for _, m := range minors {
-		if m > minors[0]-supportedMinors || m >= ch.StableMinor {
+		if ch.offeredNew(m, minors[0]) {
 			o.Current = append(o.Current, ch.Latest[m].Raw)
 		} else {
 			o.Older = append(o.Older, ch.Latest[m].Raw)
@@ -160,6 +161,18 @@ func (ch Channels) Versions() Offer {
 	}
 	o.Stable = ch.Latest[ch.StableMinor].Raw
 	return o
+}
+
+// OldestOffered is the oldest minor version a new cluster may start on, false when the channels
+// list none.
+func (ch Channels) OldestOffered() (int, bool) {
+	if len(ch.Latest) == 0 {
+		return 0, false
+	}
+	minors := slices.Sorted(maps.Keys(ch.Latest))
+	newest := minors[len(minors)-1]
+	i := slices.IndexFunc(minors, func(m int) bool { return ch.offeredNew(m, newest) })
+	return minors[i], true
 }
 
 // The modes of automatic upgrades, as a cluster's upgrades variable names them.
@@ -185,6 +198,11 @@ func (ch Channels) Target(current, mode string) string {
 		return same.Raw
 	}
 	return ""
+}
+
+// offeredNew tells whether a new cluster may start on minor, given the newest minor there is.
+func (ch Channels) offeredNew(minor, newest int) bool {
+	return minor > newest-supportedMinors || minor >= ch.StableMinor
 }
 
 // Releases tells which Kubernetes versions a distribution offers on a node OS.
@@ -493,8 +511,16 @@ type Upgrader struct {
 	Soak time.Duration
 	// TalosImages lists the Talos releases Talos clusters move to the newest patch of.
 	TalosImages TalosImages
-	Interval    time.Duration
-	Now         func() time.Time
+	// Checker reads each cluster for removed APIs in use and fail-closed webhooks before an upgrade
+	// starts. Unset, no check is made.
+	Checker UpgradeChecker
+	// Events records a skipped upgrade and a cluster that fell out of support. Unset, none are.
+	Events   events.EventRecorder
+	Interval time.Duration
+	Now      func() time.Time
+
+	// supportAt is when the clusters' minors were last compared with what Kubehenge offers.
+	supportAt time.Time
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable: one replica upgrades.
@@ -523,8 +549,12 @@ func (u *Upgrader) RunOnce(ctx context.Context) {
 		return
 	}
 	channels := map[string]Channels{}
+	compare := u.supportDue()
 	for i := range list.Items {
 		c := &list.Items[i]
+		if compare {
+			u.markSupport(ctx, c, channels)
+		}
 		to, err := u.next(ctx, c, channels)
 		if err != nil {
 			log.Error(err, "automatic upgrade", "cluster", client.ObjectKeyFromObject(c))
@@ -552,6 +582,10 @@ func (u *Upgrader) RunOnce(ctx context.Context) {
 			continue
 		}
 		log.Info("automatic upgrade started", "cluster", client.ObjectKeyFromObject(c), "from", from, "to", to)
+		u.clearSkipped(ctx, c)
+	}
+	if compare {
+		u.supportAt = u.Now()
 	}
 }
 
@@ -562,6 +596,7 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 	}
 	policy, set, err := optionalVariable[UpgradePolicy](c, "upgrades")
 	if err != nil || !set || (policy.Mode != upgradePatch && policy.Mode != upgradeMinor) {
+		u.clearSkipped(ctx, c)
 		return "", err
 	}
 	if !settled(c) {
@@ -577,6 +612,7 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 	}
 	to := ch.Target(c.Spec.Topology.Version, policy.Mode)
 	if to == "" {
+		u.clearSkipped(ctx, c)
 		return "", nil
 	}
 	if r, err := rancherOf(c); err == nil && r.Install && !u.RancherKubernetes.Allows(to) {
@@ -591,6 +627,9 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 		if _, upgrading := c.Annotations[TalosUpgradingAnnotation]; upgrading {
 			return "", nil
 		}
+	}
+	if !u.vetUpgrade(ctx, c, to) {
+		return "", nil
 	}
 	return to, nil
 }
