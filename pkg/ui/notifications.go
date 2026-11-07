@@ -71,6 +71,17 @@ type notifyProblem struct {
 	ToldAt time.Time `json:"toldAt,omitzero"`
 }
 
+// notifyRepeatEvery is how often a missing management backup or export is told again while it
+// stands: nobody else will notice it before it is too late.
+const notifyRepeatEvery = 7 * 24 * time.Hour
+
+// notifyEtcdBackupsKey is the problem that the management cluster's etcd is not backed up.
+const notifyEtcdBackupsKey = "management/etcd-backups"
+
+// notifyExportKey is the problem that the appliance's state was not exported since its backup
+// settings last changed.
+const notifyExportKey = "management/export"
+
 type notifySent struct {
 	At    time.Time `json:"at"`
 	Title string    `json:"title,omitempty"`
@@ -155,6 +166,7 @@ func (s *Server) notifyOnce(ctx context.Context) {
 		return
 	}
 	s.findManagement(ctx, kube, namespaces, &found)
+	s.findBackupGaps(&found)
 	if kube != nil && namespaces != nil {
 		s.findClusters(ctx, kube, namespaces, &found)
 	}
@@ -185,8 +197,11 @@ func (st *notifyState) step(now time.Time, found *notifyFound) []notify.Notice {
 // repeatEvery is how long a problem that stands is told again after it was last told. Most are
 // told once, so for them it is never.
 func repeatEvery(key string) time.Duration {
-	if strings.HasSuffix(key, "/"+outOfSupportWhat) {
+	switch {
+	case strings.HasSuffix(key, "/"+outOfSupportWhat):
 		return notifyOutOfSupportEvery
+	case key == notifyEtcdBackupsKey || key == notifyExportKey:
+		return notifyRepeatEvery
 	}
 	return time.Duration(math.MaxInt64)
 }
@@ -323,6 +338,28 @@ func oneNotice(tell []notify.Notice, now time.Time) notify.Notice {
 	return notify.Notice{
 		Key: "batch", Severity: sorted[0].Severity, Title: fmt.Sprintf("%d things need a look", len(sorted)),
 		Text: strings.Join(lines, "\n"), At: now,
+	}
+}
+
+// findBackupGaps adds the problems of the management cluster's recovery: etcd backups that are
+// off and not dismissed, and an export of the appliance's state that is out of date.
+func (s *Server) findBackupGaps(found *notifyFound) {
+	if s.Appliance == nil {
+		return
+	}
+	link := s.notifyLink("/administration")
+	st := s.Appliance.EtcdBackups()
+	if st.Warning.Shown() {
+		found.problems = append(found.problems, notify.Notice{
+			Key: notifyEtcdBackupsKey, Severity: notify.Warning, Title: "Management cluster's etcd is not backed up",
+			Text: "Every cluster's CAs, kubeconfigs and backup keys live only there. Set up its backups in Administration.", Link: link,
+		})
+	}
+	if st.ExportDue {
+		found.problems = append(found.problems, notify.Notice{
+			Key: notifyExportKey, Severity: notify.Warning, Title: "Export the appliance's state",
+			Text: "The backup settings changed since the last export. A new appliance cannot restore without it.", Link: link,
+		})
 	}
 }
 

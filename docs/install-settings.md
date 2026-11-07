@@ -74,7 +74,24 @@ The key that opens the snapshots is kept in the target as `<prefix>/management/i
 
 An appliance set up later on the same target, whose state has another passphrase, cannot open the key and is refused. Deleting `<prefix>/management` in the bucket starts afresh. The snapshots taken so far then stay unreadable.
 
-A restore needs the passphrase too. It uses the admin talosconfig from the state, so it reaches every node even with Kubernetes down. It needs the control-plane VMs running and creates no VMs.
+A restore needs the passphrase too. It uses the admin talosconfig from the state, so it reaches every node even with Kubernetes down. It needs the control-plane VMs running and creates no VMs. **Recreate…** makes them first ([troubleshooting](troubleshooting.md#the-management-clusters-vms-are-lost)).
+
+### Export for a new appliance
+
+The state, the settings and the target's access key live only in the appliance. **Export…** under **Administration, Backups**, or `kubehenge appliance export`, saves them in one file. The file is encrypted with an export passphrase you set, with [age](https://age-encryption.org). It holds the admin talosconfig, OpenTofu's state (still encrypted with the state passphrase), the applied settings and the target with its access key.
+
+### Restore from an export
+
+After the appliance is lost:
+
+1. Install a new appliance on the same Proxmox VE cluster.
+2. In its setup choose **Restore from an export**, or run `kubehenge appliance import <file>`. Both ask for the export passphrase.
+3. Restore a snapshot under **Administration, Backups**. It asks for the state passphrase.
+4. Apply the settings once, which signs the interface in to the management cluster.
+
+An import is refused where a management cluster is already set up. A wrong passphrase and a changed file are refused before anything is written.
+
+After a snapshot succeeds, the appliance warns when no export was taken since the target, its access key or the snapshots' key last changed. Keep the file and both passphrases apart from the appliance.
 
 ## What the template builds may do
 

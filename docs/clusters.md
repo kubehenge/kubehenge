@@ -1084,6 +1084,8 @@ Neither key is in the store. So whoever can read the bucket sees the names of th
 
 The Secret outlives the cluster. So a cluster created again under the same name, backing up to the same target, can restore what the one before backed up. Deleting the Secret leaves those backups unreadable for good.
 
+Create the cluster again under the same name and variables before restoring its Velero backups, as the section above says.
+
 The **Backups** view says whether Velero reaches the target and when it last backed up. It lists every backup with its state, who started it or whether the schedule did, and when it started and runs out. It also shows how many items each holds and what went wrong. The restores below show what each brings back and how far it has come. Seeing it needs `VM.Audit` on the cluster's pool.
 
 - **Back up now** makes a backup at once, as the schedule would. It needs `VM.Allocate` on the cluster's pool.
@@ -1116,6 +1118,47 @@ Velero runs as `cluster-admin`, which backing up and restoring every resource ne
 When backups are on, the cluster's health page and the fleet's **Needs you** list report a failed or partly failed last backup. They also say so if no backup has completed while the schedule came round twice. That counts from the last backup that did complete, or from when backups were switched on.
 
 Each links to the Backups view. Kubehenge reads this from Velero's own schedule and backups, so it holds for a schedule changed with kubectl too.
+
+### The cluster's spec
+
+After every change, the appliance writes the cluster to `<prefix>/clusters/<namespace>.<name>/cluster.yaml` in the management etcd's backup target. The file holds the Cluster and the Secrets a rebuilt cluster needs. Their values are sealed with age to a recovery key that only the appliance holds, so the target never sees one in plain text.
+
+The **Backups** tab downloads it, as does `kubehenge cluster export <name>`. Both say whether the Secrets are included. Without a target the download still works.
+
+`kubehenge cluster create --from <file>` creates the cluster again with the wizard's checks. It opens the sealed Secrets with the appliance's key and makes them first, so the controller finds the old keys. A Secret that already exists is left as it is.
+
+A Secret it cannot open stops the command, which names it. `--without-secrets` goes on without it. The appliance export carries the key, so a new appliance reads every stored spec. The export opens every stored Secret, so keep it like a password vault.
+
+The fleet shows an export-due warning once the key exists, because a lost appliance without an export locks every stored Secret for good.
+
+Extra age public keys (`age1...`) go in the backup settings or `etcd-backups set-up --spec-recipient`. Each spec is sealed to the appliance key and to each of them. An offline recipient removes the dependence on the appliance. `create --from <file> --identity <identity file>` opens the Secrets on your machine.
+
+#### Which Secrets are kept
+
+The spec collects these by name, whatever labels they carry:
+
+| Secret | Why it is kept |
+| --- | --- |
+| `<name>.backup`, `<name>.dns01`, `<name>.gitops`, `<name>.oidc-client` | The credentials typed into the interface exist nowhere else. |
+| `<name>-gitops` | It holds the deploy key registered at the repository host. |
+| `<name>-backup-keys` | It decrypts the cluster's backups in the target. |
+| `<name>-encryption` | It decrypts the Secrets in a restored etcd (kubeadm). |
+| `<name>-ingress-ca` | It is the root that clients already trust. |
+| kubeadm: `<name>-ca`, `-etcd`, `-proxy`, `-sa` | A restored etcd keeps the old certificates and service account tokens, so the new control plane has to reuse these. |
+| RKE2: `<name>-ca`, `-cca`, `-etcd`, `-peer-etcd`, `-token` | The same, and the token also encrypts RKE2's bootstrap data in etcd. |
+| k3s: `<name>-ca`, `-cca`, `-etcd`, `-token` | The same. `-etcd` exists with embedded etcd only. |
+| Talos: `<name>-talos`, `-ca` | The bundle holds the Kubernetes, etcd and Talos CAs and the service account key. |
+
+The providers use a Secret that exists when the control plane is created. `create --from` restores these before the Cluster.
+
+Anything labelled `kubehenge.dev/cluster-name: <name>`, ConfigMaps included, is kept too.
+
+The controller makes the rest again. These are left out:
+
+- The kubeconfig and talosconfig, which the providers sign again from the authorities above.
+- The Proxmox VE identities' tokens, and the autoscaler's and cluster mesh's copies.
+
+Credentials the appliance keeps for every cluster belong to the appliance and come back with the management etcd. A Secret named by `existingSecret` lives in the workload cluster.
 
 ### Restore into another cluster
 

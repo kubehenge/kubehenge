@@ -137,6 +137,7 @@ const signedIn: Record<string, Route> = {
   "GET /api/clusters/default/bk/pod-security-check": {
     body: { checked: 0, truncated: false, refused: [], skipped: "No pod is running" },
   },
+  "GET /api/appliance/etcd-backups": { body: { targets: ["main"], keysStored: true } },
   "DELETE /api/session": { status: 204 },
 };
 

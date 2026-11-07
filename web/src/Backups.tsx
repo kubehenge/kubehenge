@@ -5,7 +5,7 @@ import { ago, deletable, outcome, phaseStatus, restorable, running, when } from 
 import type { OptionRow } from "./ClusterOptions";
 import { CredentialField, type CredentialKey } from "./CredentialField";
 import { useFleet } from "./fleet";
-import { RestoreDialog, RestoredNotice, RestoresTable, ResultsDialog } from "./Restores";
+import { RestoreDialog, RestoredNotice, RestoresTable, ResultsDialog, SpecExport } from "./Restores";
 import type { BackupRun, BackupSource, Cluster, ClusterBackups, ClusterClass, RestoreRun } from "./types";
 import {
   Detail,
@@ -658,14 +658,17 @@ export function BackupsView({
   }
   if (!v.enabled) {
     return (
-      <div className="box">
-        <p>Backups are off</p>
-        <div className="actions">
-          <button type="button" disabled={!can} onClick={() => onEdit("backups")}>
-            Set up backups…
-          </button>
+      <>
+        <div className="box">
+          <p>Backups are off</p>
+          <div className="actions">
+            <button type="button" disabled={!can} onClick={() => onEdit("backups")}>
+              Set up backups…
+            </button>
+          </div>
         </div>
-      </div>
+        <SpecExport cluster={c} />
+      </>
     );
   }
 
@@ -718,6 +721,7 @@ export function BackupsView({
         <ErrorBox message={actionError} />
         <ErrorBox message={error} />
       </div>
+      <SpecExport cluster={c} />
 
       <BackupsTable
         title="Backups"

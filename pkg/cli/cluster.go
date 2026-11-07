@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/spf13/pflag"
 	"sigs.k8s.io/yaml"
 
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -118,7 +120,7 @@ decide what it may do, as they do for a user signed in to the interface.`,
 	o.namespaceFlag(deleteCmd.Flags())
 
 	cmd.AddCommand(slices.Concat([]*cobra.Command{
-		list, get, kubeconfig, o.createCommand(), scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd,
+		list, get, kubeconfig, o.createCommand(), o.exportCommand(), scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd,
 		o.poolCommand(), o.updateCommand(), o.machineCommand(), o.etcdCommand(),
 	}, o.addonCommands())...)
 	return cmd
@@ -199,6 +201,63 @@ request the controller defragments large, fragmented members inside the cluster'
 }
 
 const clusterNameArg = "give the cluster's name"
+
+func (o *clusterOptions) createCommand() *cobra.Command {
+	var file, from, identity string
+	var withoutSecrets bool
+	var grace int
+	custom := &nodeCustomFlags{}
+	create := &cobra.Command{
+		Use:   "create (-f FILE | --from FILE)",
+		Short: "Create a cluster from the interface's create request, or from an exported spec",
+		Long: `Create a cluster from the interface's create request, in JSON or YAML.
+
+The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
+workerReplicas, variables, and namespace where the interface has more than one. It is checked as
+the wizard's request is.
+
+With -f, --` + graceFlag + ` sets hostOutageGraceMinutes over the file's value. The --node-*,
+--kubelet-arg, --apiserver-arg, --controller-manager-arg, --scheduler-arg and --audit-* flags set the
+cluster variable nodeCustomisation. They add to the lists in the file, and replace its audit policy
+and audit webhook.
+
+--from takes a spec saved by "kubehenge cluster export", or found in the backup target under
+clusters/<namespace>.<name>/cluster.yaml, and creates the cluster it describes. The same checks apply.
+The spec's Secrets are opened with the appliance's recovery key and made too. Where one cannot be
+opened the command stops and names it. --without-secrets creates the cluster without them.
+
+--identity takes an age identity file that opens the Secrets sealed to one of the extra recipients
+set in the backup settings. It opens them on this machine, so a new appliance needs no recovery key.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if (file == "") == (from == "") {
+				return errors.New("give the request with -f, or an exported spec with --from")
+			}
+			if from != "" {
+				// An exported spec is created as it was saved, so that it matches what was backed up.
+				if cmd.Flags().Changed(graceFlag) || custom.any() {
+					return fmt.Errorf("--%s and the node customisation flags belong to -f", graceFlag)
+				}
+				return o.createFromSpec(cmd.Context(), cmd.OutOrStdout(), from, identity, withoutSecrets)
+			}
+			if identity != "" || withoutSecrets {
+				return errors.New("--identity and --without-secrets belong to --from")
+			}
+			var set *int
+			if cmd.Flags().Changed(graceFlag) {
+				set = &grace
+			}
+			return o.create(cmd.Context(), cmd.OutOrStdout(), file, set, custom)
+		},
+	}
+	custom.register(create.Flags())
+	create.Flags().IntVar(&grace, graceFlag, 0, graceHelp())
+	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
+	create.Flags().StringVar(&from, "from", "", "an exported cluster spec, or - for standard input")
+	create.Flags().StringVar(&identity, "identity", "", "with --from, an age identity file that opens the spec's Secrets offline")
+	create.Flags().BoolVar(&withoutSecrets, "without-secrets", false, "with --from, go on where the spec's Secrets cannot be restored")
+	return create
+}
 
 // namespaceFlag adds -n to a command that finds a cluster by its name. The others either list
 // every namespace or, as create, take the namespace in the request.
@@ -361,16 +420,77 @@ func (o *clusterOptions) raw(ctx context.Context, out io.Writer, method, name, t
 	return nil
 }
 
-func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string, grace *int, custom *nodeCustomFlags) error {
-	var raw []byte
-	var err error
-	if file == "-" {
-		raw, err = io.ReadAll(os.Stdin)
-	} else {
-		raw, err = os.ReadFile(file) //nolint:gosec // the file the user names
+func (o *clusterOptions) exportCommand() *cobra.Command {
+	var file string
+	cmd := &cobra.Command{
+		Use:   "export NAME",
+		Short: "Print a cluster's spec as the backup target keeps it, without Secrets' values",
+		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return o.export(cmd.Context(), cmd.OutOrStdout(), args[0], file)
+		},
 	}
+	cmd.Flags().StringVarP(&file, "output", "o", "", "save the spec to this file")
+	o.namespaceFlag(cmd.Flags())
+	return cmd
+}
+
+// export saves a cluster's spec, as the backup target keeps it, to a file or the output.
+func (o *clusterOptions) export(ctx context.Context, out io.Writer, name, file string) error {
+	path, err := o.clusterPath(ctx, name)
 	if err != nil {
-		return fmt.Errorf("reading the create request: %w", err)
+		return err
+	}
+	body, err := o.call(ctx, http.MethodGet, path+"/spec", nil)
+	if err != nil {
+		return err
+	}
+	state, count := provisioner.SpecSecretsState(body)
+	if file == "" {
+		_, err = out.Write(body) // Its first line says whether the Secrets are in it.
+		return err               //nolint:wrapcheck // the writer's own error
+	}
+	if err := os.WriteFile(file, body, privateFileMode); err != nil {
+		return fmt.Errorf("saving the spec: %w", err)
+	}
+	_, _ = fmt.Fprintln(out, "spec saved to "+file+". "+secretsNote(state, count))
+	return nil
+}
+
+// secretsNote says whether a saved spec holds its Secrets' values.
+func secretsNote(state string, count int) string {
+	switch state {
+	case provisioner.SpecSecretsSealed:
+		return fmt.Sprintf("Its %d Secrets are included, sealed with the appliance's recovery key.", count)
+	case provisioner.SpecSecretsNone:
+		return "It has no Secrets."
+	default:
+		return fmt.Sprintf("Its %d Secrets are not included. A cluster created from it lacks them.", count)
+	}
+}
+
+// readInput reads the file the user names, or standard input for "-".
+func readInput(file string) ([]byte, error) {
+	if file == "-" {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("reading standard input: %w", err)
+		}
+		return raw, nil
+	}
+	raw, err := os.ReadFile(filepath.Clean(file))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", file, err)
+	}
+	return raw, nil
+}
+
+// create makes a cluster from the wizard's request in file, with the host outage grace and the
+// node customisation the flags set over it.
+func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string, grace *int, custom *nodeCustomFlags) error {
+	raw, err := readInput(file)
+	if err != nil {
+		return err
 	}
 	req, err := yaml.YAMLToJSON(raw)
 	if err != nil {
@@ -390,12 +510,73 @@ func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string,
 			return err
 		}
 	}
-	body, err := o.call(ctx, http.MethodPost, "/api/clusters", json.RawMessage(req))
+	return o.created(ctx, out, "/api/clusters", json.RawMessage(req))
+}
+
+// createFromSpec makes a cluster from a spec saved by export. The interface checks it as it checks
+// the wizard's request.
+func (o *clusterOptions) createFromSpec(ctx context.Context, out io.Writer, file, identityFile string, withoutSecrets bool) error {
+	raw, err := readInput(file)
+	if err != nil {
+		return err
+	}
+	request := map[string]any{"spec": string(raw), "withoutSecrets": withoutSecrets}
+	if identityFile != "" {
+		opened, err := openWithIdentity(raw, identityFile)
+		if err != nil {
+			return err
+		}
+		request["opened"] = opened
+	}
+	return o.created(ctx, out, "/api/cluster-specs", request)
+}
+
+// openWithIdentity opens the spec's Secrets on this machine with an identity file, so that the
+// private key never leaves it. A Secret the file's keys cannot open is left for the appliance's own
+// key.
+func openWithIdentity(spec []byte, identityFile string) ([]map[string]any, error) {
+	f, err := os.Open(identityFile) //nolint:gosec // the file the administrator named
+	if err != nil {
+		return nil, fmt.Errorf("reading the identity file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	ids, err := appliance.ParseSpecIdentities(f)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", identityFile, err)
+	}
+	secrets, err := provisioner.ParseSpecSecrets(spec)
+	if err != nil {
+		return nil, fmt.Errorf("reading the spec: %w", err)
+	}
+	opened := make([]map[string]any, 0, len(secrets))
+	for i := range secrets {
+		sp := &secrets[i]
+		if sp.Sealed == "" {
+			continue
+		}
+		plain, err := appliance.OpenSealedSecret(sp.Sealed, ids...)
+		if errors.Is(err, appliance.ErrWrongSpecKey) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("secret %s/%s: %w", sp.Namespace, sp.Name, err)
+		}
+		var data map[string][]byte
+		if err = json.Unmarshal(plain, &data); err != nil {
+			return nil, fmt.Errorf("secret %s/%s: the sealed values are damaged", sp.Namespace, sp.Name)
+		}
+		opened = append(opened, map[string]any{"namespace": sp.Namespace, "name": sp.Name, "data": data})
+	}
+	return opened, nil
+}
+
+func (o *clusterOptions) created(ctx context.Context, out io.Writer, path string, request any) error {
+	body, err := o.call(ctx, http.MethodPost, path, request)
 	if err != nil {
 		return err
 	}
 	var made listedCluster
-	if err := json.Unmarshal(body, &made); err != nil || made.Name == "" {
+	if err = json.Unmarshal(body, &made); err != nil || made.Name == "" {
 		_, _ = fmt.Fprintln(out, "cluster created")
 		return nil //nolint:nilerr // the cluster was created; only its description did not read.
 	}
@@ -481,40 +662,6 @@ func checkGrace(minutes int) error {
 			provisioner.MinHostOutageGraceMinutes, provisioner.MaxHostOutageGraceMinutes)
 	}
 	return nil
-}
-
-func (o *clusterOptions) createCommand() *cobra.Command {
-	var file string
-	var grace int
-	custom := &nodeCustomFlags{}
-	create := &cobra.Command{
-		Use:   "create -f FILE",
-		Short: "Create a cluster from the interface's create request, in JSON or YAML",
-		Long: `Create a cluster from the interface's create request, in JSON or YAML.
-
-The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
-workerReplicas, variables, and namespace where the interface has more than one. It is checked as
-the wizard's request is.
-
---` + graceFlag + ` sets hostOutageGraceMinutes over the file's value.
-
-The --node-*, --kubelet-arg, --apiserver-arg, --controller-manager-arg, --scheduler-arg and --audit-*
-flags set the cluster variable nodeCustomisation. They add to the lists in the file, and replace its
-audit policy and audit webhook.`,
-		Args: noArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			var set *int
-			if cmd.Flags().Changed(graceFlag) {
-				set = &grace
-			}
-			return o.create(cmd.Context(), cmd.OutOrStdout(), file, set, custom)
-		},
-	}
-	custom.register(create.Flags())
-	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
-	create.Flags().IntVar(&grace, graceFlag, 0, graceHelp())
-	_ = create.MarkFlagRequired("filename")
-	return create
 }
 
 // withGrace sets the host outage grace in a create request, over the file's own value.

@@ -4,6 +4,7 @@ import { adminPath } from "./admin-views";
 import { clusterPath } from "./cluster-paths";
 import { FirstCluster } from "./FirstCluster";
 import { FleetProvider, fleetKey, groups, ranked, useFleet, type Group, type Standing } from "./fleet";
+import { FleetBackupWarning } from "./ManagementRecovery";
 import { score } from "./Palette";
 import { Link, navigate } from "./router";
 import type { Cluster, FleetHealth } from "./types";
@@ -89,6 +90,7 @@ function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; c
           Create cluster
         </button>
       </div>
+      {canManage && <FleetBackupWarning />}
       {refused && !first && (
         <p className="muted pad" id="create-needs">
           {createNeeds}

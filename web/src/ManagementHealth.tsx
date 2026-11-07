@@ -87,6 +87,20 @@ function RebootReady({ ready }: { ready: RebootReadiness }): JSX.Element {
   );
 }
 
+function UnownedVMs({ vms }: { vms: { vmid: number }[] }): JSX.Element | null {
+  if (vms.length === 0) {
+    return null;
+  }
+  return (
+    <div className="unowned-vms">
+      <p className="warning">
+        Unowned VMs: <span className="mono">{vms.map((v) => v.vmid).join(", ")}</span>
+      </p>
+      <p className="muted">In Kubehenge&apos;s pools, owned by no cluster. Nothing deletes them.</p>
+    </div>
+  );
+}
+
 // ManagementHealthCard is the management cluster's own health, read on its own so that it answers
 // while the cluster does not, when the Administration page is what repairs it.
 export function ManagementHealthCard(): JSX.Element {
@@ -152,6 +166,7 @@ export function ManagementHealthCard(): JSX.Element {
             )}
           </dl>
           {reboot !== undefined && <RebootReady ready={reboot} />}
+          <UnownedVMs vms={h.unowned?.vms ?? []} />
           <ProxmoxNotes proxmox={h.proxmox} />
           {(nodesDown.length > 0 || controllersShort.length > 0) && (
             <ul className="health-short">

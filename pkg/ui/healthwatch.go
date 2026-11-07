@@ -60,6 +60,9 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		a.add(severity, sectionNodes, vmTitles[cond.Reason], cond.Message, cond.LastTransitionTime.Time)
 	}
 	hostAttention(c, a)
+	if cond := trueCondition(c, provisioner.VMsMissingCondition); cond != nil {
+		a.add(severityError, sectionNodes, "VMs missing", cond.Message, cond.LastTransitionTime.Time)
+	}
 	if cond := trueCondition(c, provisioner.StorageCondition); cond != nil {
 		severity, what := severityWarning, "Storage nearly full"
 		if cond.Reason == provisioner.StorageFull {

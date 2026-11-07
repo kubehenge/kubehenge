@@ -73,7 +73,7 @@ checks apply as on its pages.`,
 	f.StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "certificate the interface must present")
 	f.StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
-		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand())
+		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand(), o.exportCommand(), o.importCommand())
 	return cmd
 }
 
@@ -241,7 +241,8 @@ func (o *applianceOptions) etcdBackupsCommand() *cobra.Command {
 	}
 	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
-	cmd.AddCommand(o.setUpBackupsCommand(), o.backupsOffCommand(), o.snapshotsCommand(), o.takeSnapshotCommand(), o.restoreEtcdCommand())
+	cmd.AddCommand(o.setUpBackupsCommand(), o.backupsOffCommand(), o.snapshotsCommand(), o.takeSnapshotCommand(), o.restoreEtcdCommand(),
+		o.recreateCommand(), o.dismissWarningCommand())
 	return cmd
 }
 
@@ -249,9 +250,21 @@ func printBackups(cmd *cobra.Command, v *appliance.EtcdBackupStatus) error {
 	t := table(cmd)
 	if v.Settings == nil {
 		row(t, "Backups", "Off")
+		if v.Warning.Shown() {
+			row(t, "Warning", "The management cluster's etcd is not backed up. Every cluster's CAs, kubeconfigs and backup keys live only there.")
+		} else if v.Warning != nil && v.Warning.Dismissal != nil {
+			d := v.Warning.Dismissal
+			row(t, "Warning", fmt.Sprintf("Dismissed by %s on %s until %s", d.By, d.At.UTC().Format(time.DateOnly), d.Until.UTC().Format(time.DateOnly)))
+		}
 		return flush(t)
 	}
+	if v.ExportDue {
+		row(t, "Warning", "No export of the appliance's state since the backup settings or the recovery key changed. Stored Secrets open only with this appliance's key: kubehenge appliance export")
+	}
 	row(t, "Target", v.Settings.Target)
+	if len(v.Settings.SpecRecipients) > 0 {
+		row(t, "Extra recipients", strings.Join(v.Settings.SpecRecipients, ", "))
+	}
 	row(t, "Schedule", fmt.Sprintf("every %d h, newest %d kept", v.Settings.EveryHours, v.Settings.Keep))
 	if v.Last != nil {
 		row(t, "Last snapshot", v.Last.Name)
@@ -276,6 +289,8 @@ func (o *applianceOptions) setUpBackupsCommand() *cobra.Command {
 		AccessKeyID     string `json:"accessKeyID,omitempty"`
 		SecretAccessKey string `json:"secretAccessKey,omitempty"`
 		Passphrase      string `json:"passphrase"`
+		// SpecRecipients replace the stored ones, so that a run without any removes them.
+		SpecRecipients []string `json:"specRecipients,omitempty"`
 	}
 	var secretFile, passphraseFile string
 	cmd := &cobra.Command{
@@ -309,6 +324,7 @@ comes from --passphrase-file or KUBEHENGE_PASSPHRASE. The target's secret access
 	f.StringVar(&req.AccessKeyID, "access-key-id", "", "the target's access key ID, or empty to keep the stored one")
 	f.StringVar(&secretFile, "secret-access-key-file", "", "file holding the secret access key, else KUBEHENGE_SECRET_ACCESS_KEY holds it")
 	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
+	f.StringArrayVar(&req.SpecRecipients, "spec-recipient", nil, "an age public key (age1...) that every cluster spec's Secrets are also sealed to, repeatable")
 	_ = cmd.MarkFlagRequired("target")
 	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
@@ -432,39 +448,14 @@ func (s *applianceSession) untilTaken(ctx context.Context, before *appliance.Etc
 }
 
 func (o *applianceOptions) restoreEtcdCommand() *cobra.Command {
-	wait := true
-	var passphraseFile string
-	cmd := &cobra.Command{
-		Use:   "restore <snapshot>",
-		Short: "Restore the management cluster's etcd from a snapshot, losing every change since",
-		Long: `Restore the management cluster's etcd from a snapshot. It wipes etcd on every control-plane
+	return o.snapshotRunCommand(&snapshotRun{
+		use:   "restore <snapshot>",
+		short: "Restore the management cluster's etcd from a snapshot, losing every change since",
+		long: `Restore the management cluster's etcd from a snapshot. It wipes etcd on every control-plane
 node and restores the snapshot. Every cluster and every change made since goes back to how it was
 then. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
-		Args: argsSay(cobra.ExactArgs(1), "give the snapshot's name"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			passphrase, err := secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE")
-			if err != nil {
-				return err
-			}
-			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
-				path := "/api/appliance/etcd-backups/snapshots/" + url.PathEscape(args[0]) + "/restore"
-				if _, err := s.call(ctx, http.MethodPost, path, map[string]string{"passphrase": passphrase}, nil); err != nil {
-					return err
-				}
-				if !wait {
-					return say(cmd, "Restoring from "+args[0])
-				}
-				if err := s.untilJobEnds(ctx, cmd.OutOrStdout()); err != nil {
-					return err
-				}
-				return say(cmd, "Restored from "+args[0])
-			})
-		},
-	}
-	cmd.Flags().BoolVar(&wait, "wait", true, "wait until the restore ends, printing its log")
-	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
-	o.signInFlags(cmd)
-	return cmd
+		action: "restore", started: "Restoring from ", done: "Restored from ",
+	})
 }
 
 func (o *applianceOptions) takeOverCommand() *cobra.Command {

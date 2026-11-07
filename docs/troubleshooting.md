@@ -930,7 +930,7 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 - **"the passphrase does not open the target's key for the management cluster's snapshots":** the target holds a key stored under another state's passphrase. See [details](install-settings.md#management-cluster-etcd-backups).
 - **A restore fails**: its run's log on Administration says at which node and step.
   - "Leaving … out" names a node whose Talos API did not answer, which keeps the etcd from before. Once it runs, wipe that with `talosctl -n <address> reset --system-labels-to-wipe EPHEMERAL --reboot --graceful=false` and the admin talosconfig (**Appliance**, repair access). It then joins the restored one.
-  - "no control-plane node answers on its Talos API": start the management cluster's VMs in Proxmox VE first.
+  - "no control-plane node answers on its Talos API": start the management cluster's VMs in Proxmox VE first. If they are gone, [recreate the management cluster](#the-management-clusters-vms-are-lost).
   - "snapshot … does not match its checksum": the object in the target is damaged. Restore another snapshot.
 
 ### A Proxmox VE token is refused or lacks a privilege
@@ -949,6 +949,29 @@ The problem is one of these:
 - **Privileges:** for example `Controller token lacks Realm.AllocateUser on /access/realm/pve.` Give the token's user that privilege on that path, or apply the management cluster again.
 
 The warning clears at the next test after the cause is fixed.
+
+### The management cluster's VMs are lost
+
+The three Talos VMs or their datastore are gone, or someone deleted the pool `kubehenge-management`. The appliance and its state are intact, and the target holds snapshots.
+
+**Administration, Backups, Recreate…** on a snapshot, or `kubehenge appliance etcd-backups recreate <snapshot>`, does it in one run:
+
+1. It opens the snapshot and checks its checksum. A wrong passphrase or a damaged snapshot stops it before anything is made.
+2. It applies the module for the VMs and the nodes' configuration only. Bootstrap and health steps wait, as they cannot finish on an empty etcd.
+3. It restores the snapshot into the new nodes, as **Restore…** does.
+4. It applies the module whole, which signs the interface in.
+
+Clusters changed since the snapshot go back to then, and the controller [lists what no longer matches](#a-restore-left-clusters-that-do-not-match-proxmox-ve). If the appliance is lost too, import an [export](install-settings.md#export-for-a-new-appliance) first.
+
+### A restore left clusters that do not match Proxmox VE
+
+After a restore of the management cluster, and then daily, the controller compares every cluster with the VMs in its pool.
+
+- **VMs missing** on a cluster's Health: none of its VMs exists in Proxmox VE, as for a cluster created before the snapshot and deleted since. Delete the cluster, or create it again with `kubehenge cluster create --from <spec>` after restoring its VMs.
+- **Unowned VMs** on the management cluster's Health: VMs in Kubehenge's pools that no cluster owns, as for a cluster created since the snapshot. Delete them in Proxmox VE when you are sure.
+- The token that lists the VMs must see them. A list with no VM at all is taken as a token that sees nothing, and marks no cluster.
+
+`kubehenge cluster create --from` restores the spec's Secrets with the appliance's recovery key, which an export carries. It names any Secret it cannot open. `--without-secrets` goes on without them.
 
 ### The Proxmox VE certificate or CA changed
 

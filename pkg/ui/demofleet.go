@@ -149,6 +149,8 @@ type demoCluster struct {
 	// QuorumLost is set on a cluster with three control planes whose first two VMs are stopped, so
 	// that its API is silent and etcd has no quorum.
 	QuorumLost bool `json:"quorumLost"`
+	// VMsMissing marks a cluster whose VMs are all gone from Proxmox VE.
+	VMsMissing bool `json:"vmsMissing"`
 }
 
 type demoTalosHold struct {
@@ -629,16 +631,23 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		c.Annotations[provisioner.TalosUpgradingAnnotation] = fmt.Sprintf("%s to %s since %s", node, h.To, since)
 		c.Annotations[provisioner.TalosWaitingAnnotation] = h.held(node)
 	}
+	conditions := []metav1.Condition{
+		{Type: clusterv1.AvailableCondition, Status: metav1.ConditionTrue, Reason: clusterv1.AvailableReason, LastTransitionTime: since},
+		{Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue, Reason: clusterv1.ClusterControlPlaneInitializedReason, LastTransitionTime: since},
+		{Type: provisioner.KubehengeReadyCondition, Status: metav1.ConditionTrue, Reason: clusterv1.ReadyReason, LastTransitionTime: since},
+		reconciled,
+	}
+	if d.VMsMissing {
+		conditions = append(conditions, metav1.Condition{
+			Type: provisioner.VMsMissingCondition, Status: metav1.ConditionTrue, Reason: "AllVMsGone",
+			Message: "none of the cluster's machines has a VM in its Proxmox VE pool", LastTransitionTime: since,
+		})
+	}
 	c.Status = clusterv1.ClusterStatus{
 		Phase:              string(clusterv1.ClusterPhaseProvisioned),
 		ObservedGeneration: c.Generation,
 		Initialization:     clusterv1.ClusterInitializationStatus{InfrastructureProvisioned: new(true), ControlPlaneInitialized: new(true)},
-		Conditions: []metav1.Condition{
-			{Type: clusterv1.AvailableCondition, Status: metav1.ConditionTrue, Reason: clusterv1.AvailableReason, LastTransitionTime: since},
-			{Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue, Reason: clusterv1.ClusterControlPlaneInitializedReason, LastTransitionTime: since},
-			{Type: provisioner.KubehengeReadyCondition, Status: metav1.ConditionTrue, Reason: clusterv1.ReadyReason, LastTransitionTime: since},
-			reconciled,
-		},
+		Conditions:         conditions,
 		ControlPlane: &clusterv1.ClusterControlPlaneStatus{
 			DesiredReplicas: &cp, Replicas: &cp, ReadyReplicas: &cp, AvailableReplicas: &cp, UpToDateReplicas: &upToDateCP,
 		},

@@ -4,6 +4,7 @@ import { api, bridgesOf, dnsOf } from "./api";
 import { backupKeys } from "./Backups";
 import { BackupTargets, cleanTargets, targetProblems, targetSummary } from "./BackupTargets";
 import { CredentialField } from "./CredentialField";
+import { ImportBox } from "./ManagementRecovery";
 import {
   bridgeLabel,
   bridgeRef,
@@ -959,12 +960,21 @@ export function Setup({ onReady }: { onReady?: () => void }): JSX.Element {
     return <Progress job={status.job} />;
   }
   return (
-    <SetupWizard
-      status={status}
-      onStarted={() => {
-        void reload();
-      }}
-    />
+    <>
+      {status.settings === undefined && (
+        <ImportBox
+          onImported={() => {
+            void reload();
+          }}
+        />
+      )}
+      <SetupWizard
+        status={status}
+        onStarted={() => {
+          void reload();
+        }}
+      />
+    </>
   );
 }
 
@@ -2792,6 +2802,10 @@ function setupFields({
         </fieldset>
         <fieldset className="group">
           <legend>Backup targets</legend>
+          <p className="muted">
+            Without etcd backups, every cluster&apos;s CAs, kubeconfigs and backup keys are lost with the management
+            cluster.
+          </p>
           <BackupTargets
             initial={form.backupTargets}
             showAll={more.attempted}

@@ -1005,6 +1005,8 @@ export interface ManagementBackupSettings {
   keep: number;
   by?: string;
   since?: string;
+  /** Public age keys every cluster spec's Secrets are also sealed to, so an offline key opens them. */
+  specRecipients?: string[];
 }
 
 /** The management cluster's etcd backups, and the targets they may go to. */
@@ -1017,6 +1019,13 @@ export interface ManagementBackups {
   taking?: boolean;
   targets: string[];
   keysStored: boolean;
+  /** Stands while the management cluster's etcd is not backed up. */
+  warning?: { dismissal?: { by: string; at: string; until: string } };
+  /** Set when no export of the appliance's state was taken since its backup settings changed. */
+  exportDue?: boolean;
+  exportedAt?: string;
+  /** Set once the appliance holds the recovery key that opens the specs' Secrets. */
+  specKey?: boolean;
 }
 
 export interface ManagementSnapshots {
@@ -1032,6 +1041,7 @@ export interface ManagementBackupRequest {
   accessKeyID: string;
   secretAccessKey: string;
   passphrase: string;
+  specRecipients?: string[];
 }
 
 export type EtcdRestorePhase =
@@ -1186,6 +1196,8 @@ export interface ManagementHealth {
   };
   /** How many of its control-plane nodes' etcd members are healthy. Unset where they cannot be read. */
   etcd?: { healthy: number; members: number };
+  /** VMs in Kubehenge's pools that no cluster owns. Nothing deletes them. */
+  unowned?: { checked: string; vms: { vmid: number; name?: string; node?: string; pool: string }[] };
 }
 
 /** Whether a Proxmox VE node may be rebooted, or why not. */

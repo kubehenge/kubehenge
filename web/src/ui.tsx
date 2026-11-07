@@ -348,6 +348,7 @@ const negativePolarity = new Set([
   "MachinesStalled",
   "CertificatesExpiring",
   "VMsNotRunning",
+  "VMsMissing",
   "StorageNearlyFull",
   "TemplateNodeDown",
   "NodeImageHeld",

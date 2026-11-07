@@ -443,6 +443,15 @@ export interface Api {
   takeManagementSnapshot: () => Promise<ManagementBackups>;
   /** restoreManagement restores the management cluster's etcd as a run of the appliance's. */
   restoreManagement: (snapshot: string, passphrase: string) => Promise<Job>;
+  /** recreateManagement makes the management cluster's VMs again and restores a snapshot into them. */
+  recreateManagement: (snapshot: string, passphrase: string) => Promise<Job>;
+  dismissBackupWarning: () => Promise<ManagementBackups>;
+  /** exportManagement downloads the appliance's state, encrypted with exportPassphrase. */
+  exportManagement: (passphrase: string, exportPassphrase: string) => Promise<Blob>;
+  /** importManagement puts an export, as base64, into an appliance with no management cluster. */
+  importManagement: (bundle: string, exportPassphrase: string) => Promise<ManagementBackups>;
+  /** clusterSpec downloads the cluster's spec as the backup target keeps it. */
+  clusterSpec: (ns: string, name: string) => Promise<Blob>;
   upgrades: () => Promise<Upgrades>;
   upgrade: (version: string) => Promise<void>;
   /** nodeOS, such as almalinux-10, narrows kubeadm's versions to those with a template on it. */
@@ -595,6 +604,14 @@ export const api: Api = {
   takeManagementSnapshot: () => request("POST", "/api/appliance/etcd-backups/snapshots"),
   restoreManagement: (snapshot, passphrase) =>
     request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/restore`, { passphrase }),
+  recreateManagement: (snapshot, passphrase) =>
+    request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/recreate`, { passphrase }),
+  dismissBackupWarning: () => request("POST", "/api/appliance/etcd-backups/warning/dismissal"),
+  exportManagement: (passphrase, exportPassphrase) =>
+    download("POST", "/api/appliance/export", { passphrase, exportPassphrase }),
+  importManagement: (bundle, exportPassphrase) =>
+    request("POST", "/api/appliance/import", { bundle, exportPassphrase }),
+  clusterSpec: (ns, name) => download("GET", `${clusterPath(ns, name)}/spec`),
   upgrades: () => request("GET", "/api/appliance/upgrades"),
   upgrade: (version) => act("POST", "/api/appliance/upgrades", { version }),
   versions: (distribution, nodeOS) =>

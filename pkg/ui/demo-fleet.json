@@ -164,7 +164,8 @@
       "subnet": 70,
       "ageDays": 9,
       "addOns": ["headlamp"],
-      "lackingMemory": "No Proxmox VE node this cluster may use has 16 GiB of free memory for its largest machine. The best, pve2, has 11 GiB"
+      "lackingMemory": "No Proxmox VE node this cluster may use has 16 GiB of free memory for its largest machine. The best, pve2, has 11 GiB",
+      "vmsMissing": true
     },
     {
       "name": "legacy",
