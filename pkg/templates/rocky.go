@@ -34,6 +34,7 @@ func (rocky) Releases() []Release {
 		// Rocky Linux 10 is built for x86-64-v3 and stops at boot on anything less.
 		CPUType: "x86-64-v3",
 		Mode:    ImageMode,
+		FIPS:    true,
 	}}
 }
 

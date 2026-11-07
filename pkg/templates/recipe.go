@@ -25,6 +25,8 @@ const (
 	imagesPath = "/usr/libexec/kubehenge/images"
 	// nodePreset names the services a node's boot enables.
 	nodePreset = "/usr/lib/systemd/system-preset/80-kubehenge.preset"
+	// fipsMarker, among a bake's files, has the node built in FIPS mode.
+	fipsMarker = "fips"
 )
 
 // The commands a bake runs in the guest more than once.
@@ -113,6 +115,9 @@ func recipeBuild(b Bake, repos []*repository, keys map[string]string, dir string
 		return nil, nil, fmt.Errorf("the Kubernetes version %q is not of the form v1.2.3", b.KubernetesVersion)
 	}
 	files := map[string]string{}
+	if b.NodeOS.FIPS {
+		files[fipsMarker] = "1\n"
+	}
 	for _, r := range repos {
 		files["repos/"+r.id+".repo"] = r.file()
 	}
@@ -294,7 +299,20 @@ func nodeChecks(b Bake) [][]string {
 		}
 	case Talos:
 	}
+	if b.NodeOS.FIPS {
+		checks = append(checks, fipsChecks...)
+	}
 	return append(checks, []string{"sh", "-c", avcDenied})
+}
+
+// fipsChecks prove a node in FIPS mode: the kernel booted with fips=1 and passed its self-tests,
+// the initramfs holds dracut's fips module, which checks the kernel's integrity, every library
+// takes the FIPS policy, and OpenSSL has its FIPS provider.
+var fipsChecks = [][]string{
+	{"sh", "-c", `grep -qw fips=1 /proc/cmdline && test "$(cat /proc/sys/crypto/fips_enabled)" = 1`},
+	{"sh", "-c", `lsinitrd -m "/usr/lib/modules/$(uname -r)/initramfs.img" | grep -qx fips`},
+	{"sh", "-c", `test "$(update-crypto-policies --show)" = FIPS`},
+	{"sh", "-c", "test -e /usr/lib64/ossl-modules/fips.so"},
 }
 
 func active(unit string) []string {

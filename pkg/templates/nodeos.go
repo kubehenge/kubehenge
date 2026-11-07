@@ -8,38 +8,66 @@ import (
 )
 
 // NodeOS is the operating system the nodes of an RKE2, k3s or kubeadm cluster run, as the cluster's
-// nodeOS variable names it: a family and one of its releases.
+// nodeOS variable names it: a family, one of its releases, and whether its nodes run in FIPS mode.
 type NodeOS struct {
 	Family  string `json:"family"`
 	Release string `json:"release"`
+	// FIPS boots the nodes with the kernel in FIPS mode and every crypto library on the FIPS
+	// policy. The template's build fixes it, so a FIPS node OS has template lines of its own.
+	FIPS bool `json:"fips,omitempty"`
 }
 
 // DefaultNodeOS is what nodes run where a cluster names nothing else.
 var DefaultNodeOS = NodeOS{Family: almaLinuxName, Release: "10"}
 
-// String is the node OS as one word, such as almalinux-10, as template names and requests carry it.
-func (o NodeOS) String() string { return o.Family + "-" + o.Release }
+// String is the node OS as one word, such as almalinux-10 or almalinux-10-fips, as template names
+// and requests carry it.
+func (o NodeOS) String() string {
+	if o.FIPS {
+		return o.Family + "-" + o.Release + fipsSuffix
+	}
+	return o.Family + "-" + o.Release
+}
 
-// Tag is the template tag of the node OS.
-func (o NodeOS) Tag() string { return nodeOSTagPrefix + o.String() }
+// Base is the node OS without FIPS mode: the family's release it is built of.
+func (o NodeOS) Base() NodeOS { return NodeOS{Family: o.Family, Release: o.Release} }
+
+// Tags are the template tags of the node OS: its release's, and FIPSTag for FIPS mode.
+func (o NodeOS) Tags() []string {
+	tags := []string{nodeOSTagPrefix + o.Base().String()}
+	if o.FIPS {
+		tags = append(tags, FIPSTag)
+	}
+	return tags
+}
 
 const nodeOSTagPrefix = "os-"
 
-// ParseNodeOS reads a node OS written as one word, such as almalinux-10 or leap-16.1. A family's
-// name holds no dash, so the first one ends it.
+// FIPSTag marks the template lines of a node OS in FIPS mode, and fipsSuffix the node OS's word.
+const (
+	FIPSTag    = "fips"
+	fipsSuffix = "-" + FIPSTag
+)
+
+// ParseNodeOS reads a node OS written as one word, such as almalinux-10, leap-16.1 or
+// rocky-10-fips. A family's name holds no dash, so the first one ends it, and no release ends in
+// -fips.
 func ParseNodeOS(s string) (NodeOS, error) {
 	family, release, ok := strings.Cut(s, "-")
+	release, fips := strings.CutSuffix(release, fipsSuffix)
 	if !ok || family == "" || release == "" {
-		return NodeOS{}, fmt.Errorf("node OS %q is not of the form <family>-<release>, such as %s", s, DefaultNodeOS)
+		return NodeOS{}, fmt.Errorf("node OS %q is not of the form <family>-<release>, such as %s, or %s for FIPS mode",
+			s, DefaultNodeOS, NodeOS{Family: DefaultNodeOS.Family, Release: DefaultNodeOS.Release, FIPS: true})
 	}
-	return NodeOS{Family: family, Release: release}, nil
+	return NodeOS{Family: family, Release: release, FIPS: fips}, nil
 }
 
 // NodeOSOf is the node OS a template's tags name, if they name one.
 func NodeOSOf(tags []string) (NodeOS, bool) {
 	for _, tag := range tags {
 		if s, ok := strings.CutPrefix(tag, nodeOSTagPrefix); ok {
-			if o, err := ParseNodeOS(s); err == nil {
+			if o, err := ParseNodeOS(s); err == nil && !o.FIPS {
+				o.FIPS = slices.Contains(tags, FIPSTag)
 				return o, true
 			}
 		}
@@ -87,6 +115,9 @@ type Release struct {
 	// CPUType is the QEMU CPU type the release needs at the least; "" means DefaultCPUType.
 	CPUType string
 	Mode    BuildMode
+	// FIPS says templates of the release are also built in FIPS mode. It sits beside Mode, so
+	// the two bytes share one word and Release stays small enough to pass by value.
+	FIPS bool
 	// Unreleased, when set, says why no template of the release can be built yet: the family is
 	// complete, but its publisher has not released it.
 	Unreleased string
@@ -171,7 +202,7 @@ func FamilyOf(name string) (Family, bool) {
 	return Families[i], true
 }
 
-// ReleaseOf finds a node OS's family and release, released or not.
+// ReleaseOf finds a node OS's family and release, released or not, in FIPS mode or not.
 func ReleaseOf(o NodeOS) (Family, Release, error) {
 	f, ok := FamilyOf(o.Family)
 	if !ok {
@@ -193,6 +224,9 @@ func Available(o NodeOS) (Family, Release, error) {
 	if r.Unreleased != "" {
 		return nil, Release{}, fmt.Errorf("%s %s: %s", f.Title(), r.Name, r.Unreleased)
 	}
+	if o.FIPS && !r.FIPS {
+		return nil, Release{}, fmt.Errorf("%s %s has no FIPS mode. FIPS mode is built on %s", f.Title(), r.Name, orList(FIPSNodeOSes()))
+	}
 	return f, r, nil
 }
 
@@ -208,16 +242,22 @@ type NodeOSInfo struct {
 	Unreleased string `json:"unreleased,omitempty"`
 }
 
-// NodeOSes lists every family's releases, in the families' order and newest first.
+// NodeOSes lists every family's releases, in the families' order and newest first, each followed
+// by its FIPS mode where it has one.
 func NodeOSes() []NodeOSInfo {
 	var out []NodeOSInfo
 	for _, f := range Families {
 		for _, r := range f.Releases() {
 			o := NodeOS{Family: f.Name(), Release: r.Name}
-			out = append(out, NodeOSInfo{
+			info := NodeOSInfo{
 				NodeOS: o, Title: f.Title() + " " + r.Name, CPUType: CPUTypeOf(r), MAC: f.MAC(),
 				Default: o == DefaultNodeOS, Unreleased: r.Unreleased,
-			})
+			}
+			out = append(out, info)
+			if r.FIPS {
+				info.FIPS, info.Title, info.Default = true, info.Title+" FIPS", false
+				out = append(out, info)
+			}
 		}
 	}
 	return out
@@ -225,9 +265,18 @@ func NodeOSes() []NodeOSInfo {
 
 // AvailableNodeOSes are the node OSes templates can be made of, as one word each.
 func AvailableNodeOSes() []string {
+	return nodeOSesWhere(func(NodeOS) bool { return true })
+}
+
+// FIPSNodeOSes are the node OSes templates can be made of in FIPS mode, as one word each.
+func FIPSNodeOSes() []string {
+	return nodeOSesWhere(func(o NodeOS) bool { return o.FIPS })
+}
+
+func nodeOSesWhere(keep func(NodeOS) bool) []string {
 	var out []string
 	for _, o := range NodeOSes() {
-		if o.Unreleased == "" {
+		if o.Unreleased == "" && keep(o.NodeOS) {
 			out = append(out, o.String())
 		}
 	}

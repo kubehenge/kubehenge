@@ -177,6 +177,26 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 	}
 
 	checkRulesOnChanges(ctx, t, c)
+	checkFIPSRules(ctx, t, c)
+}
+
+// checkFIPSRules has the API server take FIPS mode on RKE2 alone, as pkg/templates.FIPSDistribution
+// does, and on the releases built in it.
+func checkFIPSRules(ctx context.Context, t *testing.T, c client.Client) {
+	t.Helper()
+	fips := map[string]string{NodeOSVariable: `{"family":"rocky","release":"10","fips":true}`}
+	for class, refused := range map[string]string{
+		"kubehenge-rke2":    "",
+		"kubehenge-k3s":     "k3s has no FIPS mode. Choose RKE2 for FIPS mode",
+		"kubehenge-kubeadm": "kubeadm has no FIPS mode. Choose RKE2 for FIPS mode",
+	} {
+		cluster := clusterOf(class, "fips", 2, roomy)
+		withAddons(cluster, fips)
+		err := c.Create(ctx, cluster, client.DryRunAll)
+		if refused == "" && err != nil || refused != "" && (!apierrors.IsInvalid(err) || !strings.Contains(err.Error(), refused)) {
+			t.Errorf("%s in FIPS mode: %v, want refused %q", class, err, refused)
+		}
+	}
 }
 
 // checkUnstoredDefaults holds the rules on a cluster made before Cluster API passed its class, whose

@@ -1762,6 +1762,36 @@ func TestClasses(t *testing.T) {
 	}
 }
 
+func TestNodeOSChoicesOfferFIPSModeToRKE2Alone(t *testing.T) {
+	t.Parallel()
+	class := &clusterv1.ClusterClass{}
+	for dist, want := range map[string][]string{
+		"rke2":    {"almalinux-10", "almalinux-10-fips", "rocky-10", "rocky-10-fips", "leap-16.1"},
+		"k3s":     {"almalinux-10", "rocky-10", "leap-16.1"},
+		"kubeadm": {"almalinux-10", "rocky-10", "leap-16.1"},
+		"talos":   nil,
+	} {
+		var got []string
+		for _, o := range nodeOSChoices(class, dist) {
+			got = append(got, o.String())
+			if o.FIPS && !strings.HasSuffix(o.Title, " FIPS") {
+				t.Errorf("%s: %s is titled %q", dist, o, o.Title)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s offers %v, want %v", dist, got, want)
+		}
+	}
+	for dist, refused := range map[string]bool{"rke2": false, "k3s": true, "kubeadm": true} {
+		if _, err := requestNodeOS(json.RawMessage(`{"family":"almalinux","release":"10","fips":true}`), dist); (err != nil) != refused {
+			t.Errorf("%s in FIPS mode: %v", dist, err)
+		}
+	}
+	if o, err := requestNodeOS(json.RawMessage(`{"family":"rocky","release":"10"}`), "k3s"); err != nil || o.FIPS {
+		t.Errorf("k3s on Rocky Linux: %+v, %v", o, err)
+	}
+}
+
 func TestAssets(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

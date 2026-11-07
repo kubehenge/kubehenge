@@ -31,6 +31,7 @@ func (almaLinux) Releases() []Release {
 		// renovate: datasource=custom.almalinux-cloud-images depName=almalinux-10
 		Build: "10.2-20261012.0",
 		Mode:  ImageMode,
+		FIPS:  true,
 	}}
 }
 

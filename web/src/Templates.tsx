@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api, bridgesOf } from "./api";
 import { bridgeLabel, isVLAN, list } from "./network";
-import { choosable, cpuNote, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSLabel } from "./node-os";
+import { choosable, cpuNote, defaultNodeOS, findNodeOS, forDistribution, nodeOSKey, nodeOSLabel } from "./node-os";
 import { ReleasePins } from "./ReleasePins";
 import { loadingReleases, offeredReleases, releaseToMake, talosExample, talosRelease, useTalosReleases } from "./Talos";
 import type {
@@ -499,8 +499,11 @@ function BuildDialog({
   // node's first. The Talos release is the one templates are made of by default, unless it has
   // one already.
   const releaseOffered = releases ? releaseToMake(releases) : "";
+  const osOffered = forDistribution(nodeOSes, entered.distribution);
   const form: BuildForm = {
     ...entered,
+    nodeOS:
+      findNodeOS(osOffered, entered.nodeOS) === undefined && usual !== undefined ? nodeOSKey(usual) : entered.nodeOS,
     talosVersion: filled(entered.talosVersion) ? entered.talosVersion : releaseOffered,
     storage: filled(entered.storage) ? entered.storage : (sole(diskStorages) ?? ""),
     importStorage: filled(entered.importStorage) ? entered.importStorage : (sole(onNode("import")) ?? ""),
@@ -577,7 +580,7 @@ function BuildDialog({
           </select>
         )}
       </Field>
-      {!talos && <NodeOSField nodeOSes={nodeOSes} value={form.nodeOS} onChange={(v) => set("nodeOS", v)} />}
+      {!talos && <NodeOSField nodeOSes={osOffered} value={form.nodeOS} onChange={(v) => set("nodeOS", v)} />}
       {talos && (
         <Field label="Talos release" hint={talosHint(releases)} error={shown("talosVersion")}>
           {releaseField}

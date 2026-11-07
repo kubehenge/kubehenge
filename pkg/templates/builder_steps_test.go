@@ -660,9 +660,9 @@ func TestABakeThatShowsNoWorkFailsOnceItHasStalled(t *testing.T) {
 func TestABakeAtWorkRunsUntilItsTimeout(t *testing.T) {
 	t.Parallel()
 	for name, work := range map[string]func(h *bakeHost){
-		"its log grows":     func(h *bakeHost) { h.logGrows = true },
-		"it receives a MiB": func(h *bakeHost) { h.netInStep = bakeStallReceived },
-		"it writes 16 MiB":  func(h *bakeHost) { h.diskWriteStep = bakeStallWritten },
+		"its log grows":            func(h *bakeHost) { h.logGrows = true },
+		"it receives a MiB":        func(h *bakeHost) { h.netInStep = bakeStallReceived },
+		"it writes 16 MiB":         func(h *bakeHost) { h.diskWriteStep = bakeStallWritten },
 		"one CPU of eight is busy": func(h *bakeHost) { h.cpu = 1.0 / bakeCPUs },
 		"all of them at once": func(h *bakeHost) {
 			h.logGrows, h.netInStep, h.diskWriteStep, h.cpu = true, 1<<30, 1<<30, 1

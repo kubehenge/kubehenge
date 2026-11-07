@@ -23,7 +23,7 @@ import { HostOutageField, graceVariable } from "./HostOutage";
 import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
-import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
+import { baseTitle, choosable, cpuNote, findNodeOS, fipsCNI, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { NodeCustomisationFields } from "./NodeCustomisation";
 import { NodeSettingsFields } from "./NodeSettings";
 import { NodeTimeoutFields } from "./NodeTimeouts";
@@ -319,6 +319,12 @@ function TemplateAsk({
   );
 }
 
+/** nodeOSInfo says what a node OS holds, and for FIPS mode that the OS is not a validated module of its own. */
+export function nodeOSInfo(os: NodeOSChoice, oses: NodeOSChoice[]): string {
+  const from = `Minimal, from ${baseTitle(os, oses)}'s signed packages, with ${macName(os.mac)} enforcing`;
+  return os.fips === true ? `${from} and FIPS mode on. The OS itself is not CMVP validated.` : `${from}.`;
+}
+
 // NodeOSField chooses what the nodes run, for every distribution but Talos, whose nodes run Talos.
 function NodeOSField({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element | null {
   const oses = cls?.nodeOSes ?? [];
@@ -327,12 +333,7 @@ function NodeOSField({ form, set, shown, cls }: StepProps & { cls: ClusterClass 
     return null;
   }
   return (
-    <Field
-      label="Node OS"
-      error={shown("nodeOS")}
-      hint={cpuNote(os, oses)}
-      info={`Minimal, from ${os.title}'s signed packages, with ${macName(os.mac)} enforcing.`}
-    >
+    <Field label="Node OS" error={shown("nodeOS")} hint={cpuNote(os, oses)} info={nodeOSInfo(os, oses)}>
       {(id) => (
         <select id={id} value={nodeOSKey(os)} onChange={(e) => set("nodeOS", e.target.value)}>
           {oses.map((o) => (
@@ -651,6 +652,7 @@ export function NetworkStep({
   checked?: FreeAddresses | undefined;
 }): JSX.Element {
   const cni = variable(cls, "cni");
+  const fips = chosenNodeOS(form, cls)?.fips === true;
   const answering = checked?.answering ?? [];
   const endpointInUse = inUse(answering.filter((a) => a === form.endpoint));
   const nodesInUse = inUse(answering.filter((a) => a !== form.endpoint));
@@ -808,7 +810,7 @@ export function NetworkStep({
                 Choose…
               </option>
               {(cni.enum ?? []).map((v) => (
-                <option key={String(v)} value={String(v)}>
+                <option key={String(v)} value={String(v)} disabled={fips && v !== fipsCNI}>
                   {cniName(String(v))}
                   {v === ownNetworks[cls?.distribution ?? ""]
                     ? ` (${distributionName(cls?.distribution ?? "")}'s own)`

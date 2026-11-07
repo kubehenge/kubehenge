@@ -42,6 +42,24 @@ SELinux enforces on every node, with the targeted policy, never permissive. cont
 
 On kubeadm nodes, kube-vip and the control plane's static pods (etcd, API server, controller manager, scheduler) run as `spc_t` through kubeadm patches. That type, for containers that manage the host, lets them read the node's certificates and keep etcd's data on the host. Every other pod stays confined.
 
+### FIPS mode
+
+An RKE2 cluster's node OS can run in FIPS mode, as `almalinux-10-fips` or `rocky-10-fips`. Its nodes boot with the kernel argument `fips=1`. Every crypto library takes the `FIPS` policy of `update-crypto-policies`. The build fixes both, so FIPS mode has template lines of its own, tagged `fips`.
+
+Each build checks in its own boot that `/proc/sys/crypto/fips_enabled` reads 1 and that the policy is `FIPS`. No end-to-end test has created a cluster in FIPS mode yet. Until one passes, FIPS mode is unsupported on every node OS and distribution.
+
+| | FIPS mode |
+| --- | --- |
+| AlmaLinux 10 | Template proven: the end-to-end template test builds one and boots a clone in FIPS mode. No cluster tested yet. FIPS mode as the family sets it in image mode. No FIPS 140-3 certificate covers the release's modules |
+| Rocky Linux 10 | Built, not yet proven. Built as AlmaLinux 10. No FIPS 140-3 certificate covers the release's modules |
+| openSUSE Leap 16.1 | Not offered |
+| RKE2 | Built, not yet proven. RKE2 builds every release with BoringCrypto, a FIPS 140 validated module, so the [release pins](architecture.md#release-pins-for-rke2-and-k3s) stay the same. Canal is the only CNI it builds so. A cluster in FIPS mode is refused Calico and Cilium |
+| k3s | Refused: k3s is not built for FIPS mode |
+| kubeadm | Refused: the upstream Kubernetes binaries, containerd and etcd are not built or documented for FIPS mode |
+| Talos | Not offered: Sidero Labs builds Talos for FIPS mode in its Enterprise Image Factory alone |
+
+The parts Kubehenge adds to every cluster run their projects' own builds, which are not FIPS builds. That covers kube-vip, the Proxmox CSI plugin, Traefik and the add-ons.
+
 ### The guest agent
 
 The guest agent runs the commands Proxmox VE sends it (guest-exec) as root unconfined, as a root shell would. Cluster API's Proxmox VE provider asks cloud-init through it whether a node has booted. The controller's etcd restore runs through it. Proxmox VE lets only holders of `VM.GuestAgent.Unrestricted` send them, who could run anything in the VM anyway.
@@ -73,7 +91,7 @@ kubehenge template create k3s --node-os rocky-10 --node pve1 --storage shared-st
 kubehenge template create kubeadm --kubernetes-version v1.36.5 --node pve1
 ```
 
-`--node-os` chooses the node OS, `almalinux-10` unless set. A Talos template takes none.
+`--node-os` chooses the node OS, `almalinux-10` unless set. For RKE2, `almalinux-10-fips` or `rocky-10-fips` builds it in [FIPS mode](#fips-mode). A Talos template takes none.
 
 A node OS template is built by a VM of its own, which boots the family's cloud image. In image mode the VM composes the node image from the family's packages and checks it with `bootc container lint`. It installs the image onto the template's disk, then boots it once on its own. A transactional node OS installs what a node needs as a new snapshot and reboots into it.
 
@@ -87,7 +105,7 @@ A failed run removes what it made. `--keep-on-failure` leaves the VM for inspect
 
 ## How clusters find them
 
-Each template carries a unique set of Proxmox VE tags, such as `kubehenge;talos;talos-v1.14.5` or `kubehenge;os-almalinux-10;rke2`. Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB. Each clone gets the network, size and disk its machine asks for.
+Each template carries a unique set of Proxmox VE tags, such as `kubehenge;talos;talos-v1.14.5`, `kubehenge;os-almalinux-10;rke2` or, in FIPS mode, `fips;kubehenge;os-almalinux-10;rke2`. Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB. Each clone gets the network, size and disk its machine asks for.
 
 ### Builds
 

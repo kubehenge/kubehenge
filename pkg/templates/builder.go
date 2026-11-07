@@ -1205,8 +1205,8 @@ func (b *Builder) activity(ctx context.Context, vm *proxmox.VirtualMachine, log 
 		return bakeActivity{}, err
 	}
 	var status struct {
-		NetIn     uint64  `json:"netin"`
-		DiskWrite uint64  `json:"diskwrite"`
+		NetIn     uint64 `json:"netin"`
+		DiskWrite uint64 `json:"diskwrite"`
 		// CPU is the share of all CPUs in use, so CPU times CPUs is the CPUs kept busy.
 		CPU  float64 `json:"cpu"`
 		CPUs int     `json:"cpus"`

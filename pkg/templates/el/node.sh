@@ -53,6 +53,11 @@ case "${distribution}" in
         exit 1
         ;;
 esac
+fips=false
+if [ -e "${files}/fips" ]; then
+    fips=true
+    packages="${packages} crypto-policies-scripts"
+fi
 # A slow mirror is left for the next, as in build.sh.
 # shellcheck disable=SC2086 # one word per package
 dnf -y install --setopt=reposdir="${repos}" --setopt=install_weak_deps=False --setopt=minrate=100k ${packages}
@@ -85,6 +90,13 @@ printf '[install]\nroot-fs-type = "xfs"\n' > /usr/lib/bootc/install/20-kubehenge
 # stall information off unless asked, which the kubelet's pressure metrics read, and which tells a
 # node short of memory, CPU or IO from a slow one.
 printf 'kargs = ["console=tty0", "console=ttyS0,115200n8", "psi=1"]\n' > /usr/lib/bootc/kargs.d/10-kubehenge.toml
+if [ "${fips}" = true ]; then
+    # FIPS mode as the family sets it in image mode: the kernel's argument, which bootc installs with
+    # the image, and the policy every crypto library reads. The image's initramfs has dracut's fips
+    # module, which checks the kernel's integrity at boot.
+    printf 'kargs = ["fips=1"]\n' > /usr/lib/bootc/kargs.d/20-kubehenge-fips.toml
+    update-crypto-policies --no-reload --set FIPS
+fi
 
 # A clone's first boot, with its new machine ID, applies the presets again, and the family's end in
 # disabling every service they do not name.

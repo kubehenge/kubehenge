@@ -102,8 +102,11 @@ func TestRecipesOfEveryNodeOS(t *testing.T) {
 	bakes := []Bake{{Distribution: RKE2}, {Distribution: K3s}, {Distribution: Kubeadm, KubernetesVersion: "v1.37.1"}}
 	for _, f := range Families {
 		for _, r := range f.Releases() {
-			for _, b := range bakes {
-				b.NodeOS = NodeOS{Family: f.Name(), Release: r.Name}
+			for _, b := range append(slices.Clone(bakes), Bake{Distribution: RKE2, NodeOS: NodeOS{FIPS: true}}) {
+				if b.NodeOS.FIPS && !r.FIPS {
+					continue
+				}
+				b.NodeOS = NodeOS{Family: f.Name(), Release: r.Name, FIPS: b.NodeOS.FIPS}
 				t.Run(b.NodeOS.String()+"/"+string(b.Distribution), func(t *testing.T) {
 					t.Parallel()
 					checkRecipe(t, f, r, b)
@@ -306,6 +309,43 @@ func TestNodeChecks(t *testing.T) {
 		for _, want := range append([]string{"getenforce", "kubehenge-qga", "/usr/kubehenge", "modinfo br_netfilter", "enable qemu-guest-agent.service"}, distributionChecks(t, b.Distribution)...) {
 			if !strings.Contains(all, want) {
 				t.Errorf("%s: no check of %s in %q", b.Distribution, want, checks)
+			}
+		}
+	}
+}
+
+// A FIPS bake marks itself for node.sh, which sets the kernel's argument and the policy, and its node
+// is proven in FIPS mode. Every other bake has neither.
+func TestFIPSBakes(t *testing.T) {
+	t.Parallel()
+	for _, f := range Families {
+		for _, r := range f.Releases() {
+			if !r.FIPS {
+				continue
+			}
+			for _, fips := range []bool{true, false} {
+				b := Bake{Distribution: RKE2, NodeOS: NodeOS{Family: f.Name(), Release: r.Name, FIPS: fips}}
+				keys := f.Keys(r, b)
+				recipe, err := f.Recipe(r, b, fakeKeys(keys))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, files := parseCloudConfig(t, recipe.UserData)
+				if _, marked := files[fipsMarker]; marked != fips {
+					t.Errorf("%s: marked for FIPS mode %t", b.NodeOS, marked)
+				}
+				checks := fmt.Sprint(nodeBootChecks(t, &recipe, r.Mode, b, files))
+				for _, want := range []string{"/proc/sys/crypto/fips_enabled", "update-crypto-policies --show", "fips=1"} {
+					if strings.Contains(checks, want) != fips {
+						t.Errorf("%s: a check of %s is %t in %s", b.NodeOS, want, !fips, checks)
+					}
+				}
+				node := files[filesDir(t, r.Mode)+"/node.sh"]
+				for _, want := range []string{`[ -e "${files}/fips" ]`, `kargs = ["fips=1"]`, "update-crypto-policies --no-reload --set FIPS", "crypto-policies-scripts"} {
+					if !strings.Contains(node, want) {
+						t.Errorf("%s: node.sh does not hold %s", b.NodeOS, want)
+					}
+				}
 			}
 		}
 	}

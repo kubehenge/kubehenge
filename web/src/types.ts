@@ -98,10 +98,12 @@ export interface NodeTimeouts {
   nodeDeletionTimeoutSeconds?: number;
 }
 
-/** A node OS as a cluster's nodeOS variable names it: a family, such as almalinux, and one of its releases. */
+/** A node OS as a cluster's nodeOS variable names it: a family, such as almalinux, one of its releases, and FIPS mode. */
 export interface NodeOSRef {
   family: string;
   release: string;
+  /** Boots the nodes in FIPS mode, from templates of their own. */
+  fips?: boolean;
 }
 
 /** A node OS Kubehenge builds VM templates of. */
