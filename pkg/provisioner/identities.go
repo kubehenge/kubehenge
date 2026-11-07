@@ -105,6 +105,8 @@ type workloadIdentity struct {
 	// need. Rules are granted with a Role in the namespace.
 	clusterRules []rbacv1.PolicyRule
 	rules        []rbacv1.PolicyRule
+	// rulesIn are granted with a Role in another namespace, by its name, to the same account.
+	rulesIn map[string][]rbacv1.PolicyRule
 	// issues is an account beside the identity whose tokens it makes: created before the identity,
 	// and deleted before it, which ends every token made of the account.
 	issues *issuedAccount
@@ -147,10 +149,13 @@ var workloadIdentities = []workloadIdentity{
 		id: IdentityHealth, namespace: metav1.NamespaceSystem, wanted: always,
 		clusterRules: []rbacv1.PolicyRule{
 			{APIGroups: []string{""}, Resources: []string{"nodes", "pods", "events", "persistentvolumeclaims"}, Verbs: []string{"get", "list"}},
-			// The nodes' leases carry their kubelets' clocks, which the health page compares with its own.
-			{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{"get", "list"}},
 			{APIGroups: []string{"events.k8s.io"}, Resources: []string{"events"}, Verbs: []string{"get", "list"}},
 			{NonResourceURLs: []string{"/readyz", "/readyz/*"}, Verbs: []string{"get"}},
+		},
+		// The nodes' leases carry their kubelets' clocks, which the health page compares with its
+		// own. They live in this namespace alone, so the right does not reach other leases.
+		rulesIn: map[string][]rbacv1.PolicyRule{
+			corev1.NamespaceNodeLease: {{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{"get", "list"}}},
 		},
 	},
 	{
@@ -616,6 +621,15 @@ func (w *workloadIdentity) ownObjects() []identityObject {
 		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: roleKind, Name: account}
 		objects = append(objects,
 			identityObject{roleKind, role, func() { role.Rules = w.rules }},
+			identityObject{"RoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }})
+	}
+	for _, namespace := range slices.Sorted(maps.Keys(w.rulesIn)) {
+		role := &rbacv1.Role{Namespace: namespace, Name: account}
+		binding := &rbacv1.RoleBinding{Namespace: namespace, Name: account}
+		ref := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: roleKind, Name: account}
+		rules := w.rulesIn[namespace]
+		objects = append(objects,
+			identityObject{roleKind, role, func() { role.Rules = rules }},
 			identityObject{"RoleBinding", binding, func() { binding.RoleRef, binding.Subjects = ref, subjects }})
 	}
 	return objects

@@ -854,7 +854,7 @@ It is where Kubehenge starts and what looks after it:
     - its control plane and HelmReleaseProxies
     - the events of its namespace
   - **From inside the cluster:** for clusters in the interface's namespaces, as two of the interface's identities in the workload cluster's `kube-system`.
-    - `kubehenge-health` may get and list nodes, pods, events and PersistentVolumeClaims and read `/readyz`. `kubehenge-health-logs` may only read pods' logs.
+    - `kubehenge-health` may get and list nodes, pods, events and PersistentVolumeClaims and read `/readyz` and the nodes' Leases in `kube-node-lease` alone. `kubehenge-health-logs` may only read pods' logs.
     - With monitoring on, `kubehenge-alerts` in `monitoring` may only GET through the API server's proxy to Alertmanager's port. It cannot set a silence, which is a POST.
     - Once their tokens run out, the page says since when its view is stale.
   - **Cordons:** `kubehenge-nodes`, a third identity there, may get and patch nodes, for those with `VM.Allocate` on the cluster's pool.

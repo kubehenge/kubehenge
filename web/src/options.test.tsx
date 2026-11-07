@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { applyStaged, fakeServer } from "./fake-server";
+import { cisHint } from "./PodSecurity";
 
 const cluster = {
   namespace: "clusters",
@@ -44,6 +45,10 @@ async function cisDialog(
 }
 
 describe("a cluster's options", () => {
+  it("tells the wizard's CIS choice can be switched on later and never off", () => {
+    expect(cisHint).toBe("Can be switched on later, not off");
+  });
+
   it("save only a change", async () => {
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
     const calls = fakeServer({

@@ -37,7 +37,7 @@ export function podSecurityOf(v: unknown): PodSecurity {
 export const cisText = (on: boolean): string => (on ? "On" : "Off");
 
 /** cisHint is what a user must know before choosing CIS hardening: it cannot be undone. */
-export const cisHint = "Fixed once the cluster exists";
+export const cisHint = "Can be switched on later, not off";
 
 /** cisInfo says what CIS hardening costs workloads, beyond the baseline every cluster gets. */
 export const cisInfo =

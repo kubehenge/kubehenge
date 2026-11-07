@@ -266,6 +266,46 @@ describe("health page", () => {
     expect(within(screen.getByRole("row", { name: /^KubeNodeNotReady/u })).getByText("Critical")).toBeInTheDocument();
   });
 
+  it("links clock skew and taint drift to the machine's row in the Machines view", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [
+            { severity: "warning", section: "nodes", what: "Clock skew on web-cp-a", machine: "web-cp-a" },
+            { severity: "warning", section: "nodes", what: "Taint drift on web-md-0-a", machine: "web-md-0-a" },
+          ],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    await expect(screen.findByRole("link", { name: "Clock skew on web-cp-a" })).resolves.toHaveAttribute(
+      "href",
+      "/clusters/default/web/machines?machine=web-cp-a",
+    );
+    expect(screen.getByRole("link", { name: "Taint drift on web-md-0-a" })).toHaveAttribute(
+      "href",
+      "/clusters/default/web/machines?machine=web-md-0-a",
+    );
+  });
+
+  it("shows an item of an unknown section without a link", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [{ severity: "warning", section: "mystery", what: "Something odd" }],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    const row = within(await screen.findByRole("row", { name: /Something odd/u }));
+    expect(row.getByText("Something odd")).toBeInTheDocument();
+    expect(row.queryByRole("link", { name: "Something odd" })).not.toBeInTheDocument();
+  });
+
   it("shows no alerts section for a cluster without monitoring", async () => {
     fakeServer({ [healthPath]: { body: degraded } });
     render(<HealthView cluster={cluster} headlamp={undefined} />);

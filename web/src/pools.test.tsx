@@ -2,10 +2,10 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
+import { poolNameProblem } from "./AddPool";
 import { App } from "./App";
 import { applyStaged, fakeServer, type Call } from "./fake-server";
 import { sizeProblem } from "./pool-machine";
-import { poolNameProblem } from "./Pools";
 import type { Cluster } from "./types";
 
 const web: Cluster = {
@@ -198,6 +198,53 @@ describe("the pools", () => {
         pools: { gpu: { replicas: 1, machine: { cores: 2, memoryMiB: 16_384, diskGiB: 40 } } },
       }),
     );
+  });
+
+  it("add a pool with labels and taints of its own", async () => {
+    const { calls, user } = await machinesView();
+    await user.click(screen.getByRole("button", { name: "Add pool…" }));
+    const dialog = screen.getByRole("dialog", { name: "Add pool to web" });
+    await user.type(within(dialog).getByLabelText("Name"), "gpu");
+    expect(within(dialog).queryByText(/replaces this pool's nodes/u)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Add label" }));
+    const label = within(dialog).getByRole("group", { name: "Label 1" });
+    await user.type(within(label).getByLabelText("Key"), "team");
+    await user.type(within(label).getByLabelText("Value"), "a");
+    await user.click(within(dialog).getByRole("button", { name: "Add taint" }));
+    const taint = within(dialog).getByRole("group", { name: "Taint 1" });
+    await user.type(within(taint).getByLabelText("Key"), "dedicated");
+    await user.type(within(taint).getByLabelText("Value"), "gpu");
+    expect(within(dialog).queryByText(/replaces this pool's nodes/u)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    await applyStaged(user);
+    await waitFor(() =>
+      expect(sent(calls)).toStrictEqual({
+        pools: {
+          gpu: {
+            replicas: 1,
+            machine: { cores: 2, memoryMiB: 8192, diskGiB: 40 },
+            nodes: {
+              labels: [{ key: "team", value: "a" }],
+              taints: [{ key: "dedicated", value: "gpu", effect: "NoSchedule" }],
+            },
+          },
+        },
+      }),
+    );
+  });
+
+  it("show a new pool's node problem only once a field was touched", async () => {
+    const { user } = await machinesView();
+    await user.click(screen.getByRole("button", { name: "Add pool…" }));
+    const dialog = screen.getByRole("dialog", { name: "Add pool to web" });
+    await user.type(within(dialog).getByLabelText("Name"), "gpu");
+    await user.click(within(dialog).getByRole("button", { name: "Add label" }));
+    const key = within(within(dialog).getByRole("group", { name: "Label 1" })).getByLabelText("Key");
+    expect(key).not.toHaveAccessibleDescription(/Enter a key/u);
+    expect(within(dialog).getByRole("button", { name: "Add" })).toBeDisabled();
+    await user.click(key);
+    await user.tab();
+    expect(key).toHaveAccessibleDescription("Enter a key");
   });
 
   it("resize the control plane", async () => {

@@ -52,6 +52,20 @@ const severityRank: Severity[] = ["error", "warning", "progress"];
 /** The id of the part of the page a section's details are in, which the tiles and the list link to. */
 const anchor = (section: string): string => `health-${section}`;
 
+// The sections of this page that have an anchor. An item of any other section gets no link, since
+// it would point nowhere.
+const pageSections: ReadonlySet<string> = new Set([
+  "nodes",
+  "pods",
+  "volumes",
+  "addons",
+  "alerts",
+  "cluster-api",
+  "control-plane",
+  "events",
+  "conditions",
+]);
+
 type PodRef = NonNullable<Attention["pod"]>;
 
 // What may be done with an unwell pod from this page: its logs to those who may read them, and its
@@ -356,11 +370,9 @@ function NeedsAttention({
                   <Status state={severityState[a.severity]} text={severityText[a.severity]} />
                 </td>
                 <td>
-                  {fix === undefined ? (
-                    <a href={`#${anchor(a.section)}`}>{a.what}</a>
-                  ) : (
-                    <Link to={fix.to}>{a.what}</Link>
-                  )}
+                  {fix !== undefined && <Link to={fix.to}>{a.what}</Link>}
+                  {fix === undefined && pageSections.has(a.section) && <a href={`#${anchor(a.section)}`}>{a.what}</a>}
+                  {fix === undefined && !pageSections.has(a.section) && a.what}
                   {filled(a.message) && <div className="hint message">{a.message}</div>}
                 </td>
                 <Since at={a.since} />
