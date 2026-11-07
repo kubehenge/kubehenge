@@ -153,7 +153,11 @@ Cluster API sees a node's VM only through the node. A VM paused by hand, or by Q
 
 Kubehenge's controller therefore reads Proxmox VE's resource list every 15 seconds. Its token holds `VM.Audit` on the workload pool and `Datastore.Audit` on the clusters' storages. For a started VM, that list gives the state QEMU reports, such as paused or a disk error.
 
-The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). It changes nothing. Resuming, starting or replacing a VM is the administrator's call.
+The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). It changes nothing about the VMs. Resuming, starting or replacing a VM is the administrator's call.
+
+The same look reads the nodes and the HA manager's status (`/cluster/ha/status/manager_status`). A machine whose VM sits on a node that is offline or in maintenance gets Cluster API's `cluster.x-k8s.io/skip-remediation` annotation. So does one on a node where the cluster's storage is unavailable. The Cluster gets `RemediationHeld` ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)).
+
+The hold ends when the node is back and the machine's node is Ready, or after 30 minutes. The placer leaves such nodes out of `kubehenge.dev/online-nodes`. Cluster API's patch of the cluster is refused while no node is left.
 
 ## Each cluster's own corner of Proxmox VE
 

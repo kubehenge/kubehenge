@@ -618,6 +618,30 @@ describe("clusters", () => {
     await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/cp-a/replacement")).toBe(1));
   });
 
+  it("says why a machine's replacement is held", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: {
+          ...web,
+          machines: [
+            {
+              ...runningOn("md-a", "pve2", "worker"),
+              held: "Proxmox VE node pve2 is in maintenance",
+              heldUntil: "2027-01-02T14:40:00Z",
+            },
+            runningOn("md-b", "pve1", "worker"),
+          ],
+        },
+      },
+    });
+    render(<App />);
+    const row = await screen.findByRole("row", { name: /^md-a .*Replacement held/u });
+    expect(row).toHaveTextContent("Proxmox VE node pve2 is in maintenance. Replaced after");
+    expect(screen.getByRole("row", { name: /^md-b /u })).not.toHaveTextContent("Replacement held");
+  });
+
   it("deletes a worker after asking, and opens a machine's console", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/machines");
     const console = "https://pve.example.org:8006/?console=kvm&novnc=1&vmid=201&node=pve1";

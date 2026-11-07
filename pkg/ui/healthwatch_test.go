@@ -60,6 +60,19 @@ func TestHealthSaysVMsStorageAndHeldUpgrades(t *testing.T) {
 			attentionView{Severity: severityWarning, Section: sectionVolumes, What: "Storage nearly full", Message: storage},
 		},
 		{
+			provisioner.StorageUnavailableCondition, provisioner.StorageUnavailableReason,
+			"Storage nfs is unavailable on pve2. Its machines are not replaced for 30 minutes. Bring the storage back in Proxmox VE.",
+			attentionView{Severity: severityError, Section: sectionVolumes, What: "Storage unavailable", Message: "Storage nfs is unavailable on pve2"},
+		},
+		{
+			provisioner.RemediationHeldCondition, provisioner.HeldNodeMaintenance,
+			"web-md-0-a: Proxmox VE node pve2 is in maintenance, replacement waits until 14:40 UTC",
+			attentionView{
+				Severity: severityWarning, Section: sectionNodes, What: "Replacement waits",
+				Message: "web-md-0-a: Proxmox VE node pve2 is in maintenance, replacement waits until 14:40 UTC",
+			},
+		},
+		{
 			provisioner.UpgradeHeldCondition, provisioner.UpgradeHeldRancherKubernetes, rancher,
 			attentionView{Severity: severityWarning, Section: sectionClusterAPI, What: "Upgrade held for Rancher", Message: rancher},
 		},

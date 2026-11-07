@@ -94,6 +94,9 @@ type demoCluster struct {
 	Crashing string `json:"crashing"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
+	// Held is set on a cluster whose last machine sits on a Proxmox VE node in maintenance, so that
+	// its replacement is held.
+	Held bool `json:"held"`
 }
 
 type demoUpgrade struct {
@@ -206,6 +209,13 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 	}
 	nodes := f.data.ProxmoxNodes
 	for i, m := range machines {
+		if d.Held && i == len(machines)-1 {
+			m.Annotations = map[string]string{
+				clusterv1.MachineSkipRemediationAnnotation: "",
+				provisioner.HoldAnnotation:                 "Proxmox VE node " + nodes[i%len(nodes)] + " is in maintenance",
+				provisioner.HoldSinceAnnotation:            f.now.Add(-7 * time.Minute).Format(time.RFC3339),
+			}
+		}
 		f.objects = append(f.objects, m)
 		mem := int64(8) * demoGiB
 		if !isControlPlane(m) {
@@ -283,6 +293,16 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		c.Annotations[changeAnnotation] = string(raw)
 		c.Generation++
 	}
+	held := []metav1.Condition{}
+	if d.Held {
+		since := f.now.Add(-7 * time.Minute)
+		held = append(held, metav1.Condition{
+			Type: provisioner.RemediationHeldCondition, Status: metav1.ConditionTrue, Reason: provisioner.HeldNodeMaintenance, LastTransitionTime: metav1.NewTime(since),
+			Message: fmt.Sprintf("%s-%s-%s: Proxmox VE node %s is in maintenance, replacement waits until %s",
+				d.Name, workerPool, demoSuffix(d.Name, workerPool, int(d.Workers-1)), f.data.ProxmoxNodes[int(d.ControlPlanes+d.Workers-1)%len(f.data.ProxmoxNodes)],
+				since.Add(provisioner.HoldCeiling).UTC().Format("15:04 MST")),
+		})
+	}
 	c.Status = clusterv1.ClusterStatus{
 		Phase:              string(clusterv1.ClusterPhaseProvisioned),
 		ObservedGeneration: c.Generation,
@@ -300,6 +320,7 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 			DesiredReplicas: &workers, Replicas: &workers, ReadyReplicas: &workers, AvailableReplicas: &workers, UpToDateReplicas: &upToDateWorkers,
 		},
 	}
+	c.Status.Conditions = append(c.Status.Conditions, held...)
 	return c
 }
 

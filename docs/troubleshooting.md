@@ -535,6 +535,27 @@ Kubehenge's controller looks every 15 seconds at the VMs of every cluster's mach
 
 A warning event of the condition's name records each start and change. `VMsRunning` and `StorageFreed` record the end.
 
+### Machines whose replacement waits for a host
+
+A node that reboots or sits in HA maintenance is down longer than the five minutes after which the health check replaces a node. Kubehenge holds the replacement back.
+
+- **Replacement waits** in **Health** and **Replacement held** in **Machines** mean a machine's VM sits on a node that is offline or in HA maintenance. They also show for a node without the cluster's storage.
+- The Cluster has the condition `RemediationHeld`, with the reason `NodeOffline`, `NodeMaintenance`, `StorageUnavailable` or `NodeRecovering`.
+- The Machine carries `cluster.x-k8s.io/skip-remediation`, which keeps the health check off it. `kubehenge.dev/remediation-hold` says why. `kubehenge.dev/remediation-hold-since` is when it began.
+- `kubehenge cluster get <name>` prints `held` and `heldUntil` for each machine.
+- The hold ends when the node is back and the machine's Kubernetes node is Ready. After 30 minutes it ends anyway, and the same outage never holds the machine twice.
+- A skip annotation without Kubehenge's two is yours, and Kubehenge leaves it alone.
+
+#### Storage unavailable
+
+**Storage unavailable** in **Health** and the condition `StorageUnavailable` mean the cluster's `storage` is not available on a node that runs one of its VMs. The message names the nodes. Check `pvesm status` on them and bring the storage back.
+
+The machines on it are held meanwhile, since a replacement would clone onto the same missing storage.
+
+#### No node for a new VM
+
+A node in maintenance, or without the cluster's storage, gets no new VMs. When no node is left, the Cluster's `TopologyReconciled` condition says why. The annotation `kubehenge.dev/placement-blocked` on the Cluster holds the same text.
+
 ### Autoscaling
 
 - **`AutoscalerNoRoom`**, "Proxmox VE has no node with the memory for a new worker of pool …: …": the new worker waits for room. After 30 minutes the autoscaler gives the machine up and tries again. Free memory on the Proxmox VE nodes the cluster may use, or let it use more nodes ([clusters.md](clusters.md#autoscaling)).

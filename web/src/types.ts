@@ -170,6 +170,10 @@ export interface Machine {
   waiting?: string;
   /** Marked for its health check to replace. */
   replacing?: boolean;
+  /** Why replacement is held back for now, such as a Proxmox VE node that reboots. */
+  held?: string;
+  /** When the hold ends whatever the node does. */
+  heldUntil?: string;
   addresses?: string[];
   created: string;
   /** The Talos release its node runs, on a Talos cluster. */

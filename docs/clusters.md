@@ -14,6 +14,7 @@ Every cluster Kubehenge creates is a Cluster API Cluster built from one of Kubeh
 - **Health checks.** A node that stays not ready for five minutes, or does not join within twenty, is replaced, workers one at a time.
   - A machine marked with `kubectl annotate machine <name> cluster.x-k8s.io/remediate-machine=` is replaced the same way.
   - A control-plane machine is replaced only while etcd keeps its majority.
+  - Machines on a Proxmox VE node that is offline or in HA maintenance, or on unavailable storage, wait up to 30 minutes ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)).
 - **Control-plane nodes kept for the control plane.** Once a worker has joined, the control-plane nodes carry the taint `node-role.kubernetes.io/control-plane:NoSchedule` in every distribution.
   - A cluster scaled to no workers has the taint taken off, and its control-plane nodes run the workloads.
   - A worker that fails leaves the taint in place.
