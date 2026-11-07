@@ -2646,6 +2646,17 @@ form.box > *,
   grid-template-columns: 100px 1fr;
 }
 
+/* A box's fields inside a disclosure line up with the box's other fields. */
+.group > details.advanced > .field {
+  grid-template-columns: calc(190px - 12px - 1px) 1fr;
+}
+
+@media (width <= 600px) {
+  .group > details.advanced > .field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .signin .sso {
   display: grid;
   gap: 8px;

@@ -12,6 +12,7 @@ import {
   certificatesProblems,
   certificatesText,
   certificatesVariable,
+  needsBindingKey,
   needsClusterToken,
   newCertificates,
   tokenLabel,
@@ -159,6 +160,7 @@ export interface Form {
   certificates: CertificatesForm;
   // The DNS provider's credential, stored for the cluster once it is created. Never in the request.
   dns01Token: string;
+  eabKey: string;
   gitops: GitOpsChoice;
   oidc: OIDCProvider[];
   upgradeMode: UpgradeMode;
@@ -625,6 +627,7 @@ export const newForm = (): Form => ({
   rancherRegister: true,
   certificates: newCertificates(),
   dns01Token: "",
+  eabKey: "",
   gitops: newGitOps(),
   oidc: [],
   upgradeMode: "off",
@@ -777,6 +780,15 @@ export function pendingCredentials(form: Form, c: ClusterClass): PendingCredenti
       label: tokenLabel(form.certificates.provider),
       section: "Certificates",
       forget: { dns01Token: "" },
+    });
+  }
+  if (variable(c, "certificates") && needsBindingKey(form.certificates) && filled(form.eabKey)) {
+    pending.push({
+      purpose: "acme-eab",
+      values: { hmacKey: form.eabKey },
+      label: "ACME HMAC key",
+      section: "Certificates",
+      forget: { eabKey: "" },
     });
   }
   return pending;
@@ -972,6 +984,21 @@ export function summary(
   return rows;
 }
 
+const storedOnceCreated = (typed: string): string =>
+  filled(typed) ? "Stored once created" : "None yet: the cluster waits";
+
+// certificatesRows sums up the certificates and whether the credentials they take are held.
+function certificatesRows(form: Form): [string, string][] {
+  const rows: [string, string][] = [["Certificates", certificatesText(form.certificates)]];
+  if (needsClusterToken(form.certificates)) {
+    rows.push([tokenLabel(form.certificates.provider), storedOnceCreated(form.dns01Token)]);
+  }
+  if (needsBindingKey(form.certificates)) {
+    rows.push(["ACME HMAC key", storedOnceCreated(form.eabKey)]);
+  }
+  return rows;
+}
+
 // addOnRows sums up the add-ons and the hardening the class offers.
 function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   const rows: [string, string][] = [];
@@ -1008,13 +1035,7 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
     rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off"]);
   }
   if (defined.has("certificates")) {
-    rows.push(["Certificates", certificatesText(form.certificates)]);
-    if (needsClusterToken(form.certificates)) {
-      rows.push([
-        tokenLabel(form.certificates.provider),
-        filled(form.dns01Token) ? "Stored once created" : "None yet: the cluster waits",
-      ]);
-    }
+    rows.push(...certificatesRows(form));
   }
   if (defined.has("gitops")) {
     rows.push(["GitOps", gitOpsText(form.gitops)]);

@@ -681,13 +681,35 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           default: false
         issuer:
           type: string
-          enum: [acme-dns01, acme-http01, ca]
+          enum: [acme-dns01, acme-http01, ca, external]
           default: acme-dns01
           description: >-
             Where certificates come from: an ACME server such as Let's Encrypt, proving the names
             through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which
-            gives no default certificate), or a CA of the cluster's own (ca), whose certificate the
-            interface hands out for clients to trust.
+            gives no default certificate), a CA of the cluster's own (ca), whose certificate the
+            interface hands out for clients to trust, or an issuer you run in the cluster
+            (external), such as Vault's or an existing ClusterIssuer, named by issuerName.
+        issuerName:
+          type: string
+          maxLength: 253
+          pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+          description: >-
+            With the issuer external: the issuer in the workload cluster that signs every
+            certificate. Kubehenge makes none of its own.
+        issuerKind:
+          type: string
+          maxLength: 63
+          pattern: "^[A-Z][A-Za-z0-9]*$"
+          description: >-
+            With the issuer external: the issuer's kind, ClusterIssuer when unset. An Issuer serves
+            one namespace, so it cannot be named here.
+        issuerGroup:
+          type: string
+          maxLength: 253
+          pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+          description: >-
+            With the issuer external: the issuer's API group, cert-manager.io when unset, for an
+            external issuer's own kind.
         domain:
           type: string
           format: hostname
@@ -716,6 +738,19 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
               description: >-
                 PEM of the CA that signed the ACME server's own certificate, for a server whose
                 certificate the system's CAs do not vouch for.
+            externalAccountBinding:
+              type: object
+              required: [keyID]
+              description: >-
+                For an ACME server that requires an account tied to one its operator made (step-ca
+                with a provisioner key, Sectigo, DigiCert, ZeroSSL, Google Trust Services). The
+                HMAC key is the cluster's acme-eab credential.
+              properties:
+                keyID:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                  description: The key ID the server gave you.
           x-kubernetes-validations:
             - rule: "!has(self.server) || !self.staging"
               message: Staging is Let's Encrypt's own directory; it cannot go with another server.
@@ -844,6 +879,16 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           message: DNS-01 and the cluster's CA need a domain.
         - rule: "!self.enabled || self.issuer != 'acme-dns01' || (has(self.dns01) && has(self.dns01.provider))"
           message: DNS-01 needs a DNS provider.
+        - rule: "!self.enabled || self.issuer == 'external' || (!has(self.issuerName) && !has(self.issuerKind) && !has(self.issuerGroup))"
+          message: The issuer's name, kind and group go with the issuer external.
+        - rule: "!self.enabled || self.issuer != 'external' || has(self.issuerName)"
+          message: An issuer of your own needs its name.
+        - rule: "!self.enabled || self.issuer != 'external' || (!has(self.acme) && !has(self.dns01))"
+          message: An issuer of your own takes no ACME or DNS-01 settings.
+        - rule: "!self.enabled || self.issuer != 'ca' || !has(self.acme) || !has(self.acme.externalAccountBinding)"
+          message: An external account binding goes with an ACME issuer.
+        - rule: "!self.enabled || !has(self.issuerKind) || self.issuerKind != 'Issuer' || (has(self.issuerGroup) && self.issuerGroup != 'cert-manager.io')"
+          message: An Issuer serves one namespace, so name a ClusterIssuer.
 - name: gitops
   required: false
   schema:

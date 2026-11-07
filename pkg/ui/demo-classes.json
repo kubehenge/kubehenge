@@ -636,6 +636,21 @@
                       "format": "email",
                       "type": "string"
                     },
+                    "externalAccountBinding": {
+                      "description": "For an ACME server that requires an account tied to one its operator made (step-ca with a provisioner key, Sectigo, DigiCert, ZeroSSL, Google Trust Services). The HMAC key is the cluster's acme-eab credential.",
+                      "properties": {
+                        "keyID": {
+                          "description": "The key ID the server gave you.",
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "keyID"
+                      ],
+                      "type": "object"
+                    },
                     "server": {
                       "description": "The ACME server's directory; Let's Encrypt's when unset.",
                       "pattern": "^https://",
@@ -846,12 +861,31 @@
                 },
                 "issuer": {
                   "default": "acme-dns01",
-                  "description": "Where certificates come from: an ACME server such as Let's Encrypt, proving the names through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which gives no default certificate), or a CA of the cluster's own (ca), whose certificate the interface hands out for clients to trust.",
+                  "description": "Where certificates come from: an ACME server such as Let's Encrypt, proving the names through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which gives no default certificate), a CA of the cluster's own (ca), whose certificate the interface hands out for clients to trust, or an issuer you run in the cluster (external), such as Vault's or an existing ClusterIssuer, named by issuerName.",
                   "enum": [
                     "acme-dns01",
                     "acme-http01",
-                    "ca"
+                    "ca",
+                    "external"
                   ],
+                  "type": "string"
+                },
+                "issuerGroup": {
+                  "description": "With the issuer external: the issuer's API group, cert-manager.io when unset, for an external issuer's own kind.",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                  "type": "string"
+                },
+                "issuerKind": {
+                  "description": "With the issuer external: the issuer's kind, ClusterIssuer when unset. An Issuer serves one namespace, so it cannot be named here.",
+                  "maxLength": 63,
+                  "pattern": "^[A-Z][A-Za-z0-9]*$",
+                  "type": "string"
+                },
+                "issuerName": {
+                  "description": "With the issuer external: the issuer in the workload cluster that signs every certificate. Kubehenge makes none of its own.",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
                   "type": "string"
                 }
               },
@@ -864,6 +898,26 @@
                 {
                   "message": "DNS-01 needs a DNS provider.",
                   "rule": "!self.enabled || self.issuer != 'acme-dns01' || (has(self.dns01) \u0026\u0026 has(self.dns01.provider))"
+                },
+                {
+                  "message": "The issuer's name, kind and group go with the issuer external.",
+                  "rule": "!self.enabled || self.issuer == 'external' || (!has(self.issuerName) \u0026\u0026 !has(self.issuerKind) \u0026\u0026 !has(self.issuerGroup))"
+                },
+                {
+                  "message": "An issuer of your own needs its name.",
+                  "rule": "!self.enabled || self.issuer != 'external' || has(self.issuerName)"
+                },
+                {
+                  "message": "An issuer of your own takes no ACME or DNS-01 settings.",
+                  "rule": "!self.enabled || self.issuer != 'external' || (!has(self.acme) \u0026\u0026 !has(self.dns01))"
+                },
+                {
+                  "message": "An external account binding goes with an ACME issuer.",
+                  "rule": "!self.enabled || self.issuer != 'ca' || !has(self.acme) || !has(self.acme.externalAccountBinding)"
+                },
+                {
+                  "message": "An Issuer serves one namespace, so name a ClusterIssuer.",
+                  "rule": "!self.enabled || !has(self.issuerKind) || self.issuerKind != 'Issuer' || (has(self.issuerGroup) \u0026\u0026 self.issuerGroup != 'cert-manager.io')"
                 }
               ]
             }
@@ -1953,6 +2007,21 @@
                       "format": "email",
                       "type": "string"
                     },
+                    "externalAccountBinding": {
+                      "description": "For an ACME server that requires an account tied to one its operator made (step-ca with a provisioner key, Sectigo, DigiCert, ZeroSSL, Google Trust Services). The HMAC key is the cluster's acme-eab credential.",
+                      "properties": {
+                        "keyID": {
+                          "description": "The key ID the server gave you.",
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "keyID"
+                      ],
+                      "type": "object"
+                    },
                     "server": {
                       "description": "The ACME server's directory; Let's Encrypt's when unset.",
                       "pattern": "^https://",
@@ -2163,12 +2232,31 @@
                 },
                 "issuer": {
                   "default": "acme-dns01",
-                  "description": "Where certificates come from: an ACME server such as Let's Encrypt, proving the names through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which gives no default certificate), or a CA of the cluster's own (ca), whose certificate the interface hands out for clients to trust.",
+                  "description": "Where certificates come from: an ACME server such as Let's Encrypt, proving the names through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which gives no default certificate), a CA of the cluster's own (ca), whose certificate the interface hands out for clients to trust, or an issuer you run in the cluster (external), such as Vault's or an existing ClusterIssuer, named by issuerName.",
                   "enum": [
                     "acme-dns01",
                     "acme-http01",
-                    "ca"
+                    "ca",
+                    "external"
                   ],
+                  "type": "string"
+                },
+                "issuerGroup": {
+                  "description": "With the issuer external: the issuer's API group, cert-manager.io when unset, for an external issuer's own kind.",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                  "type": "string"
+                },
+                "issuerKind": {
+                  "description": "With the issuer external: the issuer's kind, ClusterIssuer when unset. An Issuer serves one namespace, so it cannot be named here.",
+                  "maxLength": 63,
+                  "pattern": "^[A-Z][A-Za-z0-9]*$",
+                  "type": "string"
+                },
+                "issuerName": {
+                  "description": "With the issuer external: the issuer in the workload cluster that signs every certificate. Kubehenge makes none of its own.",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
                   "type": "string"
                 }
               },
@@ -2181,6 +2269,26 @@
                 {
                   "message": "DNS-01 needs a DNS provider.",
                   "rule": "!self.enabled || self.issuer != 'acme-dns01' || (has(self.dns01) \u0026\u0026 has(self.dns01.provider))"
+                },
+                {
+                  "message": "The issuer's name, kind and group go with the issuer external.",
+                  "rule": "!self.enabled || self.issuer == 'external' || (!has(self.issuerName) \u0026\u0026 !has(self.issuerKind) \u0026\u0026 !has(self.issuerGroup))"
+                },
+                {
+                  "message": "An issuer of your own needs its name.",
+                  "rule": "!self.enabled || self.issuer != 'external' || has(self.issuerName)"
+                },
+                {
+                  "message": "An issuer of your own takes no ACME or DNS-01 settings.",
+                  "rule": "!self.enabled || self.issuer != 'external' || (!has(self.acme) \u0026\u0026 !has(self.dns01))"
+                },
+                {
+                  "message": "An external account binding goes with an ACME issuer.",
+                  "rule": "!self.enabled || self.issuer != 'ca' || !has(self.acme) || !has(self.acme.externalAccountBinding)"
+                },
+                {
+                  "message": "An Issuer serves one namespace, so name a ClusterIssuer.",
+                  "rule": "!self.enabled || !has(self.issuerKind) || self.issuerKind != 'Issuer' || (has(self.issuerGroup) \u0026\u0026 self.issuerGroup != 'cert-manager.io')"
                 }
               ]
             }
@@ -3267,6 +3375,21 @@
                       "format": "email",
                       "type": "string"
                     },
+                    "externalAccountBinding": {
+                      "description": "For an ACME server that requires an account tied to one its operator made (step-ca with a provisioner key, Sectigo, DigiCert, ZeroSSL, Google Trust Services). The HMAC key is the cluster's acme-eab credential.",
+                      "properties": {
+                        "keyID": {
+                          "description": "The key ID the server gave you.",
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "keyID"
+                      ],
+                      "type": "object"
+                    },
                     "server": {
                       "description": "The ACME server's directory; Let's Encrypt's when unset.",
                       "pattern": "^https://",
@@ -3477,12 +3600,31 @@
                 },
                 "issuer": {
                   "default": "acme-dns01",
-                  "description": "Where certificates come from: an ACME server such as Let's Encrypt, proving the names through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which gives no default certificate), or a CA of the cluster's own (ca), whose certificate the interface hands out for clients to trust.",
+                  "description": "Where certificates come from: an ACME server such as Let's Encrypt, proving the names through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which gives no default certificate), a CA of the cluster's own (ca), whose certificate the interface hands out for clients to trust, or an issuer you run in the cluster (external), such as Vault's or an existing ClusterIssuer, named by issuerName.",
                   "enum": [
                     "acme-dns01",
                     "acme-http01",
-                    "ca"
+                    "ca",
+                    "external"
                   ],
+                  "type": "string"
+                },
+                "issuerGroup": {
+                  "description": "With the issuer external: the issuer's API group, cert-manager.io when unset, for an external issuer's own kind.",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                  "type": "string"
+                },
+                "issuerKind": {
+                  "description": "With the issuer external: the issuer's kind, ClusterIssuer when unset. An Issuer serves one namespace, so it cannot be named here.",
+                  "maxLength": 63,
+                  "pattern": "^[A-Z][A-Za-z0-9]*$",
+                  "type": "string"
+                },
+                "issuerName": {
+                  "description": "With the issuer external: the issuer in the workload cluster that signs every certificate. Kubehenge makes none of its own.",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
                   "type": "string"
                 }
               },
@@ -3495,6 +3637,26 @@
                 {
                   "message": "DNS-01 needs a DNS provider.",
                   "rule": "!self.enabled || self.issuer != 'acme-dns01' || (has(self.dns01) \u0026\u0026 has(self.dns01.provider))"
+                },
+                {
+                  "message": "The issuer's name, kind and group go with the issuer external.",
+                  "rule": "!self.enabled || self.issuer == 'external' || (!has(self.issuerName) \u0026\u0026 !has(self.issuerKind) \u0026\u0026 !has(self.issuerGroup))"
+                },
+                {
+                  "message": "An issuer of your own needs its name.",
+                  "rule": "!self.enabled || self.issuer != 'external' || has(self.issuerName)"
+                },
+                {
+                  "message": "An issuer of your own takes no ACME or DNS-01 settings.",
+                  "rule": "!self.enabled || self.issuer != 'external' || (!has(self.acme) \u0026\u0026 !has(self.dns01))"
+                },
+                {
+                  "message": "An external account binding goes with an ACME issuer.",
+                  "rule": "!self.enabled || self.issuer != 'ca' || !has(self.acme) || !has(self.acme.externalAccountBinding)"
+                },
+                {
+                  "message": "An Issuer serves one namespace, so name a ClusterIssuer.",
+                  "rule": "!self.enabled || !has(self.issuerKind) || self.issuerKind != 'Issuer' || (has(self.issuerGroup) \u0026\u0026 self.issuerGroup != 'cert-manager.io')"
                 }
               ]
             }
@@ -4584,6 +4746,21 @@
                       "format": "email",
                       "type": "string"
                     },
+                    "externalAccountBinding": {
+                      "description": "For an ACME server that requires an account tied to one its operator made (step-ca with a provisioner key, Sectigo, DigiCert, ZeroSSL, Google Trust Services). The HMAC key is the cluster's acme-eab credential.",
+                      "properties": {
+                        "keyID": {
+                          "description": "The key ID the server gave you.",
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "keyID"
+                      ],
+                      "type": "object"
+                    },
                     "server": {
                       "description": "The ACME server's directory; Let's Encrypt's when unset.",
                       "pattern": "^https://",
@@ -4794,12 +4971,31 @@
                 },
                 "issuer": {
                   "default": "acme-dns01",
-                  "description": "Where certificates come from: an ACME server such as Let's Encrypt, proving the names through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which gives no default certificate), or a CA of the cluster's own (ca), whose certificate the interface hands out for clients to trust.",
+                  "description": "Where certificates come from: an ACME server such as Let's Encrypt, proving the names through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which gives no default certificate), a CA of the cluster's own (ca), whose certificate the interface hands out for clients to trust, or an issuer you run in the cluster (external), such as Vault's or an existing ClusterIssuer, named by issuerName.",
                   "enum": [
                     "acme-dns01",
                     "acme-http01",
-                    "ca"
+                    "ca",
+                    "external"
                   ],
+                  "type": "string"
+                },
+                "issuerGroup": {
+                  "description": "With the issuer external: the issuer's API group, cert-manager.io when unset, for an external issuer's own kind.",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+                  "type": "string"
+                },
+                "issuerKind": {
+                  "description": "With the issuer external: the issuer's kind, ClusterIssuer when unset. An Issuer serves one namespace, so it cannot be named here.",
+                  "maxLength": 63,
+                  "pattern": "^[A-Z][A-Za-z0-9]*$",
+                  "type": "string"
+                },
+                "issuerName": {
+                  "description": "With the issuer external: the issuer in the workload cluster that signs every certificate. Kubehenge makes none of its own.",
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
                   "type": "string"
                 }
               },
@@ -4812,6 +5008,26 @@
                 {
                   "message": "DNS-01 needs a DNS provider.",
                   "rule": "!self.enabled || self.issuer != 'acme-dns01' || (has(self.dns01) \u0026\u0026 has(self.dns01.provider))"
+                },
+                {
+                  "message": "The issuer's name, kind and group go with the issuer external.",
+                  "rule": "!self.enabled || self.issuer == 'external' || (!has(self.issuerName) \u0026\u0026 !has(self.issuerKind) \u0026\u0026 !has(self.issuerGroup))"
+                },
+                {
+                  "message": "An issuer of your own needs its name.",
+                  "rule": "!self.enabled || self.issuer != 'external' || has(self.issuerName)"
+                },
+                {
+                  "message": "An issuer of your own takes no ACME or DNS-01 settings.",
+                  "rule": "!self.enabled || self.issuer != 'external' || (!has(self.acme) \u0026\u0026 !has(self.dns01))"
+                },
+                {
+                  "message": "An external account binding goes with an ACME issuer.",
+                  "rule": "!self.enabled || self.issuer != 'ca' || !has(self.acme) || !has(self.acme.externalAccountBinding)"
+                },
+                {
+                  "message": "An Issuer serves one namespace, so name a ClusterIssuer.",
+                  "rule": "!self.enabled || !has(self.issuerKind) || self.issuerKind != 'Issuer' || (has(self.issuerGroup) \u0026\u0026 self.issuerGroup != 'cert-manager.io')"
                 }
               ]
             }
