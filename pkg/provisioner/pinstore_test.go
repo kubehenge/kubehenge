@@ -10,7 +10,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
@@ -65,7 +64,7 @@ func TestPinStoreRemovesAPinOnlyWhileNoClusterRunsIt(t *testing.T) {
 	t.Parallel()
 	const version = "v1.99.9+rke2r1"
 	pins := version + " " + strings.Repeat("a", 64) + " " + strings.Repeat("b", 64) + "\n"
-	pinsMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "kubehenge-system", Name: ReleasePinsName}, Data: map[string]string{"pins": pins}}
+	pinsMap := &corev1.ConfigMap{Namespace: "kubehenge-system", Name: ReleasePinsName, Data: map[string]string{"pins": pins}}
 	running := settledCluster("web", version, nil)
 	s := pinStore(t, pinsMap, running)
 	if err := s.Remove(context.Background(), version); !errors.Is(err, ErrPinInUse) {
@@ -145,7 +144,7 @@ func TestAnAddedPinIsPinnedForTheNodesOfAReleaseThisBuildLacks(t *testing.T) {
 	if err != nil || before.pinned(pinnedLater) {
 		t.Fatalf("before: %v, %v", before, err)
 	}
-	if err := store.Add(context.Background(), pinnedLater, pin, "admin", time.Now()); err != nil {
+	if err = store.Add(context.Background(), pinnedLater, pin, "admin", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	after, err := r.pins(context.Background())

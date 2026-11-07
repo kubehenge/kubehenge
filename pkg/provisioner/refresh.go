@@ -33,10 +33,10 @@ const DefaultBuildsKept = 2
 
 const (
 	// OlderRetries is how many times a line whose newest build has a kernel older than the previous
-	// build's is built again, in case its mirror was one sync behind. OlderRetryAfter is the wait
-	// before each. The controller starts each as a run of its own (TemplateVersions), so no run
-	// sleeps for it.
-	OlderRetries    = 3
+	// build's is built again, in case its mirror was one sync behind. The controller starts each as
+	// a run of its own (TemplateVersions), so no run sleeps for it.
+	OlderRetries = 3
+	// OlderRetryAfter is the wait before each of those builds.
 	OlderRetryAfter = time.Hour
 )
 
@@ -335,8 +335,7 @@ func (r *TemplateRefresh) patchRequests(ctx context.Context, clusters []refreshe
 	}
 	var reqs []templates.Request
 	var errs []error
-	newest := map[int]string{}
-	failed := map[int]bool{}
+	markers := patchMarkers{read: r.Patches, newest: map[int]string{}, failed: map[int]bool{}}
 	for _, c := range clusters {
 		for _, line := range c.lines {
 			running, ok := kubeadmVersionOf(line)
@@ -345,29 +344,47 @@ func (r *TemplateRefresh) patchRequests(ctx context.Context, clusters []refreshe
 				continue
 			}
 			for _, minor := range []int{running.Minor, running.Minor + 1} {
-				if _, read := newest[minor]; !read && !failed[minor] {
-					v, found, err := r.Patches(ctx, minor)
-					switch {
-					case err != nil:
-						failed[minor] = true
-						r.logf("reading the newest Kubernetes 1.%d release failed: %v", minor, err)
-						errs = append(errs, fmt.Errorf("reading the newest Kubernetes 1.%d release: %w", minor, err))
-					case found:
-						newest[minor] = v
-					default:
-						newest[minor] = ""
-					}
+				v, err := markers.of(ctx, minor)
+				if err != nil {
+					r.logf("%v", err)
+					errs = append(errs, err)
 				}
-				if v := newest[minor]; v != "" {
-					req := templates.Request{Distribution: templates.Kubeadm, NodeOS: nodeOS, KubernetesVersion: v}
-					if !slices.Contains(reqs, req) {
-						reqs = append(reqs, req)
-					}
+				req := templates.Request{Distribution: templates.Kubeadm, NodeOS: nodeOS, KubernetesVersion: v}
+				if v != "" && !slices.Contains(reqs, req) {
+					reqs = append(reqs, req)
 				}
 			}
 		}
 	}
 	return reqs, errs
+}
+
+// patchMarkers reads each minor version's newest release once, and a marker that failed not again.
+type patchMarkers struct {
+	read   func(ctx context.Context, minor int) (string, bool, error)
+	newest map[int]string
+	failed map[int]bool
+}
+
+// of is the newest release of minor, or "" when Kubernetes has none or the marker could not be
+// read. The error is reported on the first failed read only.
+func (m *patchMarkers) of(ctx context.Context, minor int) (string, error) {
+	if v, read := m.newest[minor]; read {
+		return v, nil
+	}
+	if m.failed[minor] {
+		return "", nil
+	}
+	v, found, err := m.read(ctx, minor)
+	if err != nil {
+		m.failed[minor] = true
+		return "", err
+	}
+	if !found {
+		v = ""
+	}
+	m.newest[minor] = v
+	return v, nil
 }
 
 // refreshedRequests are the lines every run builds: RKE2's on the default node OS, so that a first

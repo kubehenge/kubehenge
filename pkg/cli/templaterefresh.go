@@ -103,21 +103,13 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 	if o.keep < 1 {
 		return errors.New("--keep must be at least 1: the newest build of a template always stays")
 	}
-	var missing []templates.Request
-	for _, key := range o.missing {
-		req, err := provisioner.ParseRequestLine(key)
-		if err != nil {
-			return fmt.Errorf("--missing: %w", err)
-		}
-		missing = append(missing, req)
+	missing, err := requestLines("--missing", o.missing)
+	if err != nil {
+		return err
 	}
-	var again []templates.Request
-	for _, key := range o.again {
-		req, err := provisioner.ParseRequestLine(key)
-		if err != nil {
-			return fmt.Errorf("--again: %w", err)
-		}
-		again = append(again, req)
+	again, err := requestLines("--again", o.again)
+	if err != nil {
+		return err
 	}
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -186,6 +178,19 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 	})
 }
 
+// requestLines reads the template lines a flag names.
+func requestLines(flag string, keys []string) ([]templates.Request, error) {
+	var out []templates.Request
+	for _, key := range keys {
+		req, err := provisioner.ParseRequestLine(key)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", flag, err)
+		}
+		out = append(out, req)
+	}
+	return out, nil
+}
+
 // releaseMarkerTimeout bounds the read of one of Kubernetes's release markers.
 const releaseMarkerTimeout = 30 * time.Second
 
@@ -197,8 +202,7 @@ func (o *templateRefreshOptions) patches() func(context.Context, int) (string, b
 	}
 	server := &provisioner.ChannelServer{HTTP: &http.Client{Timeout: releaseMarkerTimeout}}
 	return func(ctx context.Context, minor int) (string, bool, error) {
-		v, found, err := server.NewestPatch(ctx, o.markers, minor)
-		return v.Raw, found, err
+		return server.NewestPatch(ctx, o.markers, minor)
 	}
 }
 

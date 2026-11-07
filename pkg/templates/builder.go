@@ -834,40 +834,10 @@ func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.Virt
 		return BuildFacts{}, err
 	}
 	defer b.removeSeed(context.WithoutCancel(ctx), node, vm, isoStorage)
-	if err = growDisk(ctx, vm, recipe); err != nil {
+	if err = b.install(ctx, node, vm, isoStorage, recipe); err != nil {
 		return BuildFacts{}, err
 	}
-	if err = b.boot(ctx, node, vm, isoStorage, "bake", recipe.UserData); err != nil {
-		return BuildFacts{}, err
-	}
-	b.logf("VM %d is building the node; waiting for its guest agent", vm.VMID)
-	if err = b.waitAndCheck(ctx, vm, recipe.Checks, recipe.Log); err != nil {
-		return BuildFacts{}, err
-	}
-	if recipe.Reboot {
-		b.logf("VM %d boots what it installed", vm.VMID)
-		if err = restart(ctx, vm); err != nil {
-			return BuildFacts{}, err
-		}
-		if err = b.waitAndCheck(ctx, vm, recipe.RebootChecks, recipe.Log); err != nil {
-			return BuildFacts{}, err
-		}
-	}
-	if recipe.Image != nil {
-		b.logf("VM %d boots the node image it installed", vm.VMID)
-		if err = b.bootNodeImage(ctx, node, vm, isoStorage, recipe.Image); err != nil {
-			return BuildFacts{}, err
-		}
-		if err = b.waitAndCheck(ctx, vm, recipe.Image.Checks, ""); err != nil {
-			return BuildFacts{}, err
-		}
-	}
-	if recipe.BootLog {
-		if err = b.checkBootLog(ctx, vm); err != nil {
-			return BuildFacts{}, err
-		}
-	}
-	facts, err := b.facts(ctx, vm)
+	facts, err := b.readFacts(ctx, vm)
 	if err != nil {
 		return BuildFacts{}, err
 	}
@@ -879,8 +849,44 @@ func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.Virt
 	return facts, detach(ctx, vm)
 }
 
-// facts reads the kernel the node booted and a hash of its packages.
-func (b *Builder) facts(ctx context.Context, vm *proxmox.VirtualMachine) (BuildFacts, error) {
+// install runs the recipe's boots and checks, up to a node that is ready for its clean-up.
+func (b *Builder) install(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, isoStorage string, recipe *Recipe) error {
+	if err := growDisk(ctx, vm, recipe); err != nil {
+		return err
+	}
+	if err := b.boot(ctx, node, vm, isoStorage, "bake", recipe.UserData); err != nil {
+		return err
+	}
+	b.logf("VM %d is building the node; waiting for its guest agent", vm.VMID)
+	if err := b.waitAndCheck(ctx, vm, recipe.Checks, recipe.Log); err != nil {
+		return err
+	}
+	if recipe.Reboot {
+		b.logf("VM %d boots what it installed", vm.VMID)
+		if err := restart(ctx, vm); err != nil {
+			return err
+		}
+		if err := b.waitAndCheck(ctx, vm, recipe.RebootChecks, recipe.Log); err != nil {
+			return err
+		}
+	}
+	if recipe.Image != nil {
+		b.logf("VM %d boots the node image it installed", vm.VMID)
+		if err := b.bootNodeImage(ctx, node, vm, isoStorage, recipe.Image); err != nil {
+			return err
+		}
+		if err := b.waitAndCheck(ctx, vm, recipe.Image.Checks, ""); err != nil {
+			return err
+		}
+	}
+	if recipe.BootLog {
+		return b.checkBootLog(ctx, vm)
+	}
+	return nil
+}
+
+// readFacts reads the kernel the node booted and a hash of its packages.
+func (b *Builder) readFacts(ctx context.Context, vm *proxmox.VirtualMachine) (BuildFacts, error) {
 	out, err := b.output(ctx, vm, []string{"sh", "-c", factsCommand})
 	if err != nil {
 		return BuildFacts{}, err

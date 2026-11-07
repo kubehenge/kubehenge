@@ -88,28 +88,7 @@ func (p *TemplateVersions) retryOlder(ctx context.Context, seen *poolTemplates) 
 func olderLinesDue(accepted, older NodeImageBuilds, now time.Time) []string {
 	var due []string
 	for _, line := range older.Lines() {
-		if len(older[line]) == 0 {
-			continue
-		}
-		newest := slices.MaxFunc(older[line], time.Time.Compare)
-		if now.Sub(newest) < OlderRetryAfter || now.Sub(newest) > olderGiveUp {
-			continue
-		}
-		after := time.Time{}
-		for _, at := range accepted[line] {
-			after = maxTime(after, at)
-		}
-		if after.After(newest) {
-			continue
-		}
-		chain := 0
-		for _, at := range older[line] {
-			if at.After(after) {
-				chain++
-			}
-		}
-		// The first older build is not a retry.
-		if chain-1 >= OlderRetries {
+		if !retryDue(accepted[line], older[line], now) {
 			continue
 		}
 		req, ok := templates.RequestOf(strings.Split(line, ";"))
@@ -123,9 +102,28 @@ func olderLinesDue(accepted, older NodeImageBuilds, now time.Time) []string {
 	return due
 }
 
-func maxTime(a, b time.Time) time.Time {
-	if b.After(a) {
-		return b
+// retryDue tells whether a line with these accepted and older builds is built again at now.
+func retryDue(accepted, older []time.Time, now time.Time) bool {
+	if len(older) == 0 {
+		return false
 	}
-	return a
+	newest := slices.MaxFunc(older, time.Time.Compare)
+	if age := now.Sub(newest); age < OlderRetryAfter || age > olderGiveUp {
+		return false
+	}
+	var after time.Time
+	if len(accepted) > 0 {
+		after = slices.MaxFunc(accepted, time.Time.Compare)
+	}
+	if after.After(newest) {
+		return false
+	}
+	chain := 0
+	for _, at := range older {
+		if at.After(after) {
+			chain++
+		}
+	}
+	// The first older build is not a retry.
+	return chain-1 < OlderRetries
 }

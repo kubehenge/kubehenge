@@ -271,26 +271,46 @@ func (s *ChannelServer) Channels(ctx context.Context, distribution string, os te
 	if ch.StableMinor == 0 {
 		return Channels{}, fmt.Errorf("%s names no stable channel", url)
 	}
-	if s.Pins != nil {
-		pins := s.Pins
-		if s.Store != nil {
-			added, err := s.Store.Added(ctx)
-			if err != nil {
-				return Channels{}, err
-			}
-			pins = maps.Clone(s.Pins)
-			maps.Copy(pins, added)
-		}
-		release := map[string]*distributionRelease{string(templates.RKE2): rke2Release, string(templates.K3s): k3sRelease}[distribution]
-		for m := range ch.Latest {
-			if v, ok := pins.newest(release, m); ok {
-				ch.Latest[m] = v
-			} else {
-				delete(ch.Latest, m)
-			}
-		}
+	if err := s.keepPinned(ctx, distribution, &ch); err != nil {
+		return Channels{}, err
 	}
 	return ch, nil
+}
+
+// NewestPatch is the newest release of Kubernetes minor version 1.<minor> that Kubernetes names in
+// base/stable-1.<minor>.txt, or false for a minor it has not released yet.
+func (s *ChannelServer) NewestPatch(ctx context.Context, base string, minor int) (string, bool, error) {
+	v, found, err := s.newestPatch(ctx, base, minor)
+	if err != nil {
+		return "", false, fmt.Errorf("the newest Kubernetes 1.%d release: %w", minor, err)
+	}
+	return v.Raw, found, nil
+}
+
+// keepPinned leaves in ch the newest pinned release of each minor version, the built-in pins and
+// those an administrator added, and drops a minor version with none.
+func (s *ChannelServer) keepPinned(ctx context.Context, distribution string, ch *Channels) error {
+	if s.Pins == nil {
+		return nil
+	}
+	pins := s.Pins
+	if s.Store != nil {
+		added, err := s.Store.Added(ctx)
+		if err != nil {
+			return err
+		}
+		pins = maps.Clone(s.Pins)
+		maps.Copy(pins, added)
+	}
+	release := map[string]*distributionRelease{string(templates.RKE2): rke2Release, string(templates.K3s): k3sRelease}[distribution]
+	for m := range ch.Latest {
+		if v, ok := pins.newest(release, m); ok {
+			ch.Latest[m] = v
+		} else {
+			delete(ch.Latest, m)
+		}
+	}
+	return nil
 }
 
 // get reads a channel server's answer, and whether there is one at url.
@@ -332,7 +352,7 @@ func (s *ChannelServer) kubernetesChannels(ctx context.Context, base string) (Ch
 	}
 	ch := Channels{Latest: map[int]kubeVersion{}, StableMinor: stable.Minor}
 	for _, m := range minors {
-		v, found, err := s.NewestPatch(ctx, base, m)
+		v, found, err := s.newestPatch(ctx, base, m)
 		if err != nil {
 			return Channels{}, err
 		}
@@ -347,9 +367,7 @@ func (s *ChannelServer) kubernetesChannels(ctx context.Context, base string) (Ch
 	return ch, nil
 }
 
-// NewestPatch is the newest release of Kubernetes minor version 1.<minor> that Kubernetes names in
-// base/stable-1.<minor>.txt, or false for a minor it has not released yet.
-func (s *ChannelServer) NewestPatch(ctx context.Context, base string, minor int) (kubeVersion, bool, error) {
+func (s *ChannelServer) newestPatch(ctx context.Context, base string, minor int) (kubeVersion, bool, error) {
 	url := fmt.Sprintf("%s/stable-1.%d.txt", base, minor)
 	raw, found, err := s.get(ctx, url)
 	if err != nil || !found {

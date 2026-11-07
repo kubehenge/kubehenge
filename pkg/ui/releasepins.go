@@ -42,12 +42,14 @@ type releasePinRequest struct {
 type managementReader struct{ s *Server }
 
 // ManagementReader reads the management cluster, and finds nothing before it exists.
+//
+//nolint:ireturn // callers need only the reader, and the adapter is private
 func (s *Server) ManagementReader() client.Reader { return managementReader{s} }
 
 func (m managementReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	kube := m.s.currentKube()
 	if kube == nil {
-		return apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, key.Name)
+		return apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, key.Name) //nolint:wrapcheck // the status error is the answer
 	}
 	return kube.Get(ctx, key, obj, opts...) //nolint:wrapcheck // the caller names what it read
 }

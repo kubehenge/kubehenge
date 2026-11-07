@@ -20,8 +20,8 @@ func patchRefresh(t *testing.T, markers map[int]string, failing ...int) (*Templa
 		Kube: refreshKube(t, kubeadmCluster("api", "v1.36.5", day(20))), Pool: pool, ClassNamespace: "kubehenge-system",
 		Keep: DefaultBuildsKept, Soak: DefaultNodeImageSoak, Now: func() time.Time { return day(22) },
 		Planned: func(lines []templates.Template) {
-			for _, l := range lines {
-				planned = append(planned, l.LineName)
+			for i := range lines {
+				planned = append(planned, lines[i].LineName)
 			}
 		},
 		Patches: func(_ context.Context, minor int) (string, bool, error) {

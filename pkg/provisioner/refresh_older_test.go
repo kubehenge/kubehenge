@@ -29,7 +29,7 @@ func olderRefresh(t *testing.T, kernels ...string) (*TemplateRefresh, *fakePool,
 	r := &TemplateRefresh{
 		Kube: refreshKube(t), Pool: pool, ClassNamespace: "kubehenge-system", Keep: DefaultBuildsKept, Soak: DefaultNodeImageSoak,
 		Now: func() time.Time { return day(8) },
-		Log: func(format string, args ...any) { log = append(log, format) },
+		Log: func(format string, _ ...any) { log = append(log, format) },
 	}
 	return r, pool, &log
 }
@@ -99,15 +99,15 @@ func TestOlderBuildsAreLeftOutOfWhatClustersMoveTo(t *testing.T) {
 	var p poolTemplates
 	p.builds, p.older, p.facts = NodeImageBuilds{}, NodeImageBuilds{}, map[string]map[time.Time]templates.BuildFacts{}
 	p.kubeadm = map[templates.NodeOS][]kubeVersion{}
-	p.nodeOSes = map[templates.Distribution][]templates.NodeOS{}
+	p.nodeOSes = make(map[templates.Distribution][]templates.NodeOS)
 	line, err := templates.Plan(&templates.Request{Distribution: templates.RKE2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i, kernel := range []string{kernelGood, kernelOlder, kernelNewer, kernelOlder} {
-		build, err := line.Build(day(1 + 7*i))
-		if err != nil {
-			t.Fatal(err)
+		build, buildErr := line.Build(day(1 + 7*i))
+		if buildErr != nil {
+			t.Fatal(buildErr)
 		}
 		p.add(build.Tags, &templates.BuildFacts{Kernel: kernel})
 	}
@@ -167,7 +167,7 @@ func TestOlderBuildStaysOnlyWhileItIsTheNewest(t *testing.T) {
 	// A newer build exists beside it: the older one no longer stays.
 	builds[key] = append([]templates.Built{res(5, day(29))}, builds[key]...)
 	got = unneededBuilds(builds, map[uint64]bool{4: true}, nil, nil, 2, DefaultNodeImageSoak)
-	ids := []uint64{}
+	ids := make([]uint64, 0, len(got))
 	for _, b := range got {
 		ids = append(ids, b.Resource.VMID)
 	}

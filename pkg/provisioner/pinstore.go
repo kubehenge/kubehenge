@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -214,11 +215,7 @@ func (r *ReleaseChecksums) pins(ctx context.Context) (ReleasePins, error) {
 		return nil, err
 	}
 	all := ReleasePins{}
-	for v, p := range r.Pins {
-		all[v] = p
-	}
-	for v, p := range added {
-		all[v] = p
-	}
+	maps.Copy(all, r.Pins)
+	maps.Copy(all, added)
 	return all, nil
 }

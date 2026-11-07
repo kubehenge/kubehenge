@@ -17,22 +17,22 @@ const olderLine = "kubehenge;os-almalinux-10;rke2"
 func TestOlderLinesDueFollowTheHourAndTheThreeTries(t *testing.T) {
 	t.Parallel()
 	built := day(8)
-	at := func(d time.Duration) time.Time { return built.Add(d) }
+	at := built.Add
 	for name, c := range map[string]struct {
 		accepted, older []time.Time
 		now             time.Time
 		want            []string
 	}{
-		"before the hour is over":    {[]time.Time{day(1)}, []time.Time{built}, at(59 * time.Minute), nil},
-		"an hour after the build":    {[]time.Time{day(1)}, []time.Time{built}, at(time.Hour), []string{"rke2-almalinux-10"}},
-		"after the first try":        {[]time.Time{day(1)}, []time.Time{built, at(70 * time.Minute)}, at(3 * time.Hour), []string{"rke2-almalinux-10"}},
-		"after the second try":       {[]time.Time{day(1)}, []time.Time{built, at(70 * time.Minute), at(140 * time.Minute)}, at(4 * time.Hour), []string{"rke2-almalinux-10"}},
-		"after the third try":        {[]time.Time{day(1)}, []time.Time{built, at(70 * time.Minute), at(140 * time.Minute), at(210 * time.Minute)}, at(5 * time.Hour), nil},
-		"a newer accepted build":     {[]time.Time{day(1), at(90 * time.Minute)}, []time.Time{built}, at(3 * time.Hour), nil},
-		"tries before an accepted":   {[]time.Time{day(1), day(9)}, []time.Time{built, at(70 * time.Minute), at(140 * time.Minute), at(210 * time.Minute), day(10)}, day(10).Add(2 * time.Hour), []string{"rke2-almalinux-10"}},
-		"given up on a stuck line":   {[]time.Time{day(1)}, []time.Time{built}, at(7 * time.Hour), nil},
-		"no older build":             {[]time.Time{day(1)}, nil, at(2 * time.Hour), nil},
-		"just inside the give-up":    {[]time.Time{day(1)}, []time.Time{built}, at(5 * time.Hour), []string{"rke2-almalinux-10"}},
+		"before the hour is over":  {[]time.Time{day(1)}, []time.Time{built}, at(59 * time.Minute), nil},
+		"an hour after the build":  {[]time.Time{day(1)}, []time.Time{built}, at(time.Hour), []string{"rke2-almalinux-10"}},
+		"after the first try":      {[]time.Time{day(1)}, []time.Time{built, at(70 * time.Minute)}, at(3 * time.Hour), []string{"rke2-almalinux-10"}},
+		"after the second try":     {[]time.Time{day(1)}, []time.Time{built, at(70 * time.Minute), at(140 * time.Minute)}, at(4 * time.Hour), []string{"rke2-almalinux-10"}},
+		"after the third try":      {[]time.Time{day(1)}, []time.Time{built, at(70 * time.Minute), at(140 * time.Minute), at(210 * time.Minute)}, at(5 * time.Hour), nil},
+		"a newer accepted build":   {[]time.Time{day(1), at(90 * time.Minute)}, []time.Time{built}, at(3 * time.Hour), nil},
+		"tries before an accepted": {[]time.Time{day(1), day(9)}, []time.Time{built, at(70 * time.Minute), at(140 * time.Minute), at(210 * time.Minute), day(10)}, day(10).Add(2 * time.Hour), []string{"rke2-almalinux-10"}},
+		"given up on a stuck line": {[]time.Time{day(1)}, []time.Time{built}, at(7 * time.Hour), nil},
+		"no older build":           {[]time.Time{day(1)}, nil, at(2 * time.Hour), nil},
+		"just inside the give-up":  {[]time.Time{day(1)}, []time.Time{built}, at(5 * time.Hour), []string{"rke2-almalinux-10"}},
 	} {
 		older := NodeImageBuilds{olderLine: c.older}
 		if c.older == nil {

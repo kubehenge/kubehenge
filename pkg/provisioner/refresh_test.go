@@ -48,14 +48,6 @@ func (p *fakePool) Facts(context.Context) (map[uint64]templates.BuildFacts, erro
 	return maps.Clone(p.facts), nil
 }
 
-// record gives the build made as VM vmid a kernel.
-func (p *fakePool) record(vmid uint64, kernel string) {
-	if p.facts == nil {
-		p.facts = map[uint64]templates.BuildFacts{}
-	}
-	p.facts[vmid] = templates.BuildFacts{Kernel: kernel, Packages: strings.Repeat("a", 64)}
-}
-
 func (p *fakePool) Create(_ context.Context, t *templates.Template) (int, error) {
 	if p.fail[t.LineName] {
 		return 0, errors.New("the mirror is down")
@@ -67,9 +59,10 @@ func (p *fakePool) Create(_ context.Context, t *templates.Template) (int, error)
 	p.built = append(p.built, t.Name)
 	id := 9100 + p.created
 	p.created++
-	p.list = append(p.list, &proxmox.ClusterResource{VMID: uint64(id), Name: t.Name, Tags: strings.Join(t.Tags, ";")})
+	vmid := uint64(id) //nolint:gosec // test IDs are small and positive
+	p.list = append(p.list, &proxmox.ClusterResource{VMID: vmid, Name: t.Name, Tags: strings.Join(t.Tags, ";")})
 	if next := p.kernels[t.LineName]; len(next) > 0 {
-		p.record(uint64(id), next[0])
+		p.record(vmid, next[0])
 		p.kernels[t.LineName] = next[1:]
 	}
 	return id, nil
@@ -97,6 +90,14 @@ func (p *fakePool) add(t *testing.T, req *templates.Request, at time.Time) {
 		t.Fatal(err)
 	}
 	p.list = append(p.list, &proxmox.ClusterResource{VMID: uint64(9000 + len(p.list)), Name: build.Name, Tags: strings.Join(build.Tags, ";")})
+}
+
+// record gives the build made as VM vmid a kernel.
+func (p *fakePool) record(vmid uint64, kernel string) {
+	if p.facts == nil {
+		p.facts = map[uint64]templates.BuildFacts{}
+	}
+	p.facts[vmid] = templates.BuildFacts{Kernel: kernel, Packages: strings.Repeat("a", 64)}
 }
 
 func refreshKube(t *testing.T, objects ...client.Object) client.Client {

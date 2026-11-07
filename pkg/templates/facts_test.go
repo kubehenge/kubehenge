@@ -57,7 +57,7 @@ func TestOlderBuildsCompareWithTheNewestEarlierBuildThatIsNotOlder(t *testing.T)
 		"older":                     {[]*BuildFacts{good, older}, []bool{false, true}},
 		"equal":                     {[]*BuildFacts{good, good}, []bool{false, false}},
 		"newer":                     {[]*BuildFacts{good, newer}, []bool{false, false}},
-		"the baseline skips olders": {[]*BuildFacts{good, older, &BuildFacts{Kernel: "6.12.0-124.5.1"}}, []bool{false, true, true}},
+		"the baseline skips olders": {[]*BuildFacts{good, older, {Kernel: "6.12.0-124.5.1"}}, []bool{false, true, true}},
 		"unknown never older":       {[]*BuildFacts{nil, good, nil, older}, []bool{false, false, false, true}},
 	} {
 		got := OlderBuilds(tt.facts)

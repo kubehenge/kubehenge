@@ -44,7 +44,7 @@ func ParseBuildFacts(description string) (BuildFacts, bool) {
 			continue
 		}
 		var f BuildFacts
-		for _, field := range strings.Fields(rest) {
+		for field := range strings.FieldsSeq(rest) {
 			if v, ok := strings.CutPrefix(field, "kernel="); ok {
 				f.Kernel = v
 			}
