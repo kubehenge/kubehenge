@@ -337,6 +337,8 @@ func (s *Server) clusterHealth(w http.ResponseWriter, r *http.Request, u user) {
 	v := shared
 	v.Nodes.Items = slices.Clone(shared.Nodes.Items)
 	v.VMs = s.addVMs(r.Context(), u, c, access.path, v.Nodes.Items)
+	v.Attention = slices.Clone(shared.Attention)
+	s.addNodeClocks(r.Context(), u, &v)
 	v.Logs = u.namespaces.has(c.Namespace) && access.held.Has(privKubeconfig) && v.Workload == ""
 	writeJSON(w, http.StatusOK, v)
 }
@@ -361,7 +363,7 @@ func assemble(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now tim
 	v := healthView{
 		Read:         now,
 		Workload:     wl.why(),
-		Nodes:        nodesSection(m, wl, now, &a),
+		Nodes:        nodesSection(c, m, wl, now, &a),
 		Pods:         podsSection(wl, now, &a),
 		Volumes:      volumesSection(wl, now, &a),
 		Addons:       addonsSection(c, m, &a),

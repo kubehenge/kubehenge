@@ -159,6 +159,24 @@ export const inList = (address: string, entries: string[]): boolean =>
 /** isIP tells whether a server address is IPv4 or looks like IPv6. */
 export const isIP = (v: string): boolean => ipv4.test(v) || (/^[0-9a-f:.]+$/iu.test(v) && v.includes(":"));
 
+/** maxTimeServers is how many NTP servers a cluster takes. */
+export const maxTimeServers = 8;
+const longestHostName = 253;
+const hostName = /^(?!-)[a-z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-z0-9-]{1,63}(?<!-))*\.?$/iu;
+
+/** timeServersProblem says what is wrong with a list of NTP servers, or nothing. */
+export function timeServersProblem(servers: string[]): string | undefined {
+  if (servers.length > maxTimeServers) {
+    return `Enter at most ${maxTimeServers} time servers`;
+  }
+  const bad = servers.find((s) => !isIP(s) && !(hostName.test(s) && s.length <= longestHostName));
+  if (bad !== undefined) {
+    return `${bad} is not a host name or IP address`;
+  }
+  const twice = servers.find((s, i) => servers.indexOf(s) !== i);
+  return twice === undefined ? undefined : `${twice} is listed twice`;
+}
+
 /** rangeProblem says what is wrong with a pod or service range, if anything. */
 export const rangeProblem = (v: string): string | undefined =>
   cidr.test(v) && isNetwork(v) ? undefined : "Enter a network like 10.244.0.0/16, without host bits";

@@ -414,6 +414,17 @@ func (a *Accounts) DNS(ctx context.Context, t *Ticket, node string) ([]string, e
 	return servers, nil
 }
 
+// NodeTime reads a node's clock. Proxmox VE shows it to users with Sys.Audit on the node.
+func (a *Accounts) NodeTime(ctx context.Context, t *Ticket, node string) (time.Time, error) {
+	var res struct {
+		Time int64 `json:"time"`
+	}
+	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/time", &res); err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(res.Time, 0), nil
+}
+
 // Names are the IDs of the pools, roles, users and groups the user may see. A listing the user may
 // not read is nil.
 type Names struct {

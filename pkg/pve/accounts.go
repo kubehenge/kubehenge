@@ -16,6 +16,17 @@ import (
 // tell an unknown user from a wrong password.
 var ErrAuthentication = errors.New("authentication failure")
 
+// ErrNodesDisagree is Proxmox VE refusing a ticket it issued seconds ago. A ticket is accepted when
+// its age on the node that checks it is between minus five minutes and two hours, so the node that
+// checked it runs a clock over five minutes behind the node that signed it. That happens when the
+// address is a name with several records, or a virtual address in front of several nodes. It is an
+// ErrAuthentication as well.
+var ErrNodesDisagree = fmt.Errorf("%w: Proxmox VE nodes disagree about the time", ErrAuthentication)
+
+// freshTicket is how soon after its sign-in a refused ticket reads as the nodes' clocks and not as a
+// session that ended.
+const freshTicket = 10 * time.Second
+
 // ErrForbidden is Proxmox VE refusing a request for want of privileges.
 var ErrForbidden = errors.New("permission denied")
 
@@ -285,7 +296,11 @@ func (a *Accounts) get(ctx context.Context, t *Ticket, path string, out any) err
 		return err
 	}
 	t.authorise(req)
-	return a.do(req, out)
+	err = a.do(req, out)
+	if t.Token == "" && errors.Is(err, ErrAuthentication) && time.Since(t.Issued) < freshTicket {
+		return ErrNodesDisagree
+	}
+	return err
 }
 
 func (a *Accounts) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {

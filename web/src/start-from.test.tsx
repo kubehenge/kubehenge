@@ -71,6 +71,7 @@ const chosen: Form = {
   prefix: 16,
   gateway: "10.1.0.1",
   dnsServers: "10.1.0.53, 1.1.1.1",
+  ntpServers: "ntp.example.org, 192.0.2.5",
   loadBalancer: "kube-vip",
   loadBalancerAddresses: "10.1.0.40-10.1.0.49",
   storage: "tank",
@@ -101,6 +102,7 @@ describe("a new cluster started from another", () => {
     const existing = { ...web, variables: request(chosen, rke2).variables };
     const started = fromCluster(existing, { ...newForm(), name: "next" });
     expect(taken(started)).toStrictEqual(taken(chosen));
+    expect(started.ntpServers).toBe("ntp.example.org, 192.0.2.5");
     expect(started).toMatchObject({
       from: "default/web",
       name: "next",

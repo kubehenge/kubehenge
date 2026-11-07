@@ -242,6 +242,36 @@ func TestHealthIdentitiesReadOnly(t *testing.T) {
 	}
 }
 
+// The health identity reads leases in kube-node-lease alone, never cluster-wide.
+func TestHealthIdentityReadsLeasesOnlyInTheNodeLeaseNamespace(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	c := initialised(storageCluster())
+	f := newIdentities(t, c, &clock)
+	reconcileIdentities(t, f.w, c)
+
+	for _, r := range clusterRights(t, f.workload, "kubehenge-health") {
+		if slices.Contains(r.Resources, "leases") {
+			t.Errorf("the health identity reads leases cluster-wide: %+v", r)
+		}
+	}
+	role, binding := &rbacv1.Role{}, &rbacv1.RoleBinding{}
+	key := client.ObjectKey{Namespace: corev1.NamespaceNodeLease, Name: "kubehenge-health"}
+	for _, o := range []client.Object{role, binding} {
+		if err := f.workload.Get(context.Background(), key, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []rbacv1.PolicyRule{{APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{"get", "list"}}}
+	if !reflect.DeepEqual(role.Rules, want) {
+		t.Errorf("rules in %s: %+v, want %+v", key.Namespace, role.Rules, want)
+	}
+	subjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "kubehenge-health", Namespace: metav1.NamespaceSystem}}
+	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != "kubehenge-health" || !slices.Equal(binding.Subjects, subjects) {
+		t.Errorf("binding %+v to %+v", binding.RoleRef, binding.Subjects)
+	}
+}
+
 // The nodes identity may get and patch nodes and nothing else, and its admission policy acts on its
 // own requests alone.
 func TestNodesIdentityPatchesNodesAlone(t *testing.T) {

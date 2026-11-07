@@ -59,6 +59,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | Prefix length | Of the nodes' network. |
 | Gateway | The nodes' default gateway. |
 | DNS servers | IPv4 addresses, one per line or separated by commas. |
+| Time servers | Up to 8 NTP host names or IP addresses, separated by commas. Empty keeps the node image's public servers. The nodes reach them on UDP 123, and a node that cannot sync is reported on the health page ([troubleshooting](troubleshooting.md#a-nodes-clock-is-off)). |
 | Load balancer | What gives Services of type `LoadBalancer` their addresses, [below](#load-balancer). |
 | Load-balancer addresses | With a load balancer: the addresses it hands out, as ranges, networks or single addresses. |
 | Pod network | The CNI, [below](#pod-network). |
@@ -251,7 +252,10 @@ Each add-on the class offers is a card with the memory its pods take by the clas
   - They are exempt from Kyverno only where the cluster runs that add-on ([architecture.md](architecture.md#add-ons)). So switching an add-on never replaces nodes.
   - Who may run privileged pods is decided, as everywhere in Kubernetes, by who may create and label namespaces. A namespace's labels set its own level.
   - A workload that needs more gets its namespace labelled, and with Kyverno a PolicyException in the `kyverno` namespace.
-- **CIS hardening** to the CIS Kubernetes Benchmark, beyond the baseline every cluster gets ([architecture.md](architecture.md#add-ons)). It is fixed once the cluster exists.
+- **CIS hardening** to the CIS Kubernetes Benchmark, beyond the baseline every cluster gets ([architecture.md](architecture.md#add-ons)). It can be switched on after creation, and never off again.
+  - Switching it on replaces the control plane and the workers, one node at a time.
+  - **Options** lists the running pods that the `restricted` level would refuse, before you save. They keep running until their node is replaced.
+  - From the command line: `kubehenge cluster update NAME --cis`.
   - Pod Security Admission enforces `restricted` outside the exempt namespaces.
   - Every container that asks for no seccomp profile of its own runs under the container runtime's default.
   - Exec, attach and port-forward sessions end after five idle minutes.
@@ -443,6 +447,20 @@ Nothing changes in the cluster until the changes are applied. A bar above the vi
 
 Each is staged with the cluster's other changes. The API server holds it to the class's least size and to the room the add-ons need.
 
+### Labels and taints
+
+**Labels and taints** on a pool, or in the **Machines** step of a new cluster for every pool, are what its nodes register with. A replaced node comes back with them. One put on a node by hand does not.
+
+- A label is `key=value`, at most 50 per pool. A taint is `key=value:effect` with the effect `NoSchedule`, `PreferNoSchedule` or `NoExecute`, at most 20 per pool. A key appears once per pool.
+- The kubelet refuses to set labels in `kubernetes.io` and `k8s.io`, but for `kubelet.kubernetes.io/`, `node.kubernetes.io/` and a few standard keys such as `kubernetes.io/os`. The class refuses the rest with that reason.
+- Changing them replaces the pool's nodes, one at a time. The dialog says so before it saves.
+- Cluster API copies only labels of `node.cluster.x-k8s.io` and two Kubernetes domains from a pool to its nodes. A plain label such as `team=a` therefore goes through the kubelet, or on Talos through the node configuration.
+- Autoscaled pools tell the autoscaler their labels and taints, so a pool at zero still takes the pods that select it.
+- Control planes take none: Kubehenge keeps their taint itself.
+- With kubectl, set `workerNodes` on the Cluster, or a pool's own value in its `variables.overrides`. From the command line: `kubehenge cluster pool set NAME POOL --label team=a --taint dedicated=db:NoSchedule`. `--inherit` drops the pool's own.
+
+The Health page notes a worker whose taints differ from its pool's setting. It names the pool, so that a taint put on by hand shows before a replacement removes it.
+
 A pool's name takes lowercase letters, digits and dashes and starts with a letter. With the cluster's name it takes at most 44 characters, so that its nodes' host names stay within one DNS label.
 
 ## Autoscaling
@@ -557,7 +575,7 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 | Storage | CSI plugin | where the management cluster lets clusters choose its newest release, or while the cluster runs it | [Persistent volumes](#persistent-volumes). |
 | Storage | Volume snapshots | where the management cluster lets clusters take them, or while they are on | [Volume snapshots](#volume-snapshots). |
 | Add-ons | Headlamp, Monitoring, Logs, Certificates, Istio, Rancher, GitOps | always | See the list below. |
-| Security | CIS hardening | always | Fixed for the cluster's life ([Add-ons](#add-ons)). |
+| Security | CIS hardening | always | Off to on only, which replaces every node ([Add-ons](#add-ons)). |
 | Security | Pod security, Identity providers | always | See the list below. |
 | Maintenance | Backups | where an administrator set a backup target, or while they are on | See the list below. |
 | Maintenance | etcd snapshots | where an administrator set a backup target, or while they are on | [etcd snapshots](#etcd-snapshots). |
@@ -623,9 +641,9 @@ In the cluster's audit log, what you do appears as the ServiceAccount `kube-syst
 
 **Log out** in Headlamp signs you out of that cluster. The appliance drops your session's token, and Headlamp asks for a token or a sign-in of your own. That lasts until you open the cluster again with **Headlamp** on its page here, which signs you in again.
 
-Where the administrator switched on the [Headlamp actions](install-settings.md#headlamp-actions), Headlamp also offers the Helm app catalog and the Prometheus charts it ships with. The app catalog lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them. It acts with your own credentials in the cluster, or the sign-in's.
+Where the administrator switched on the [Headlamp actions](install-settings.md#headlamp-actions), Headlamp also offers the Helm app catalogue and the Prometheus charts it ships with. The app catalogue lists a cluster's Helm releases and installs, upgrades, rolls back and uninstalls them. It acts with your own credentials in the cluster, or the sign-in's.
 
-The app catalog installs charts only from the Helm repositories set for the appliance. Only those who may set up the appliance add or remove them.
+The app catalogue installs charts only from the Helm repositories set for the appliance. Only those who may set up the appliance add or remove them.
 
 The Prometheus plugin charts a cluster's metrics from a Prometheus running in it, such as the monitoring add-on's. It reads them through the cluster's API with your credentials. Node drain is offered either way, with your own credentials.
 
@@ -975,6 +993,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Create a cluster | `VM.Allocate` | the workload pool |
 | | `Datastore.AllocateSpace` | `/storage/<storage>` |
 | | `SDN.Use` | `/sdn/zones/<zone>/<bridge>`, or `…/<bridge>/<vlan>` with a VLAN tag |
+| See a Proxmox VE node's clock on the health page | `Sys.Audit` | `/nodes/<node>` |
 | Place a cluster by an HA rule's nodes | `Sys.Audit`, or `VM.Allocate` where the rules are offered to cluster creators | `/` for `Sys.Audit`, the workload pool or the cluster's pool for `VM.Allocate` |
 | Install Rancher | `Sys.Modify` | the workload pool |
 | Run the CSI plugin's newest release | `Datastore.Allocate` | `/storage/<storage>` |
@@ -996,7 +1015,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Store a cluster's own backup access key | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
 | Download the admin kubeconfig | `Sys.Modify` | the cluster's pool |
 | Open the cluster in the shared Headlamp signed in as cluster-admin, where the [Headlamp sign-in](install-settings.md#headlamp-sign-in) is on | `Sys.Modify` | the cluster's pool |
-| Use the Helm app catalog and the Prometheus charts in the shared Headlamp, where the [Headlamp actions](install-settings.md#headlamp-actions) are on. In the cluster they act with the cluster's own rights | `VM.Audit` | the cluster's pool |
+| Use the Helm app catalogue and the Prometheus charts in the shared Headlamp, where the [Headlamp actions](install-settings.md#headlamp-actions) are on. In the cluster they act with the cluster's own rights | `VM.Audit` | the cluster's pool |
 | Add, update or remove a Helm repository in the shared Headlamp | the [setup privileges](install.md#who-may-set-it-up) | `/` |
 | Read an unwell pod's logs on the health page | `Sys.Modify` | the cluster's pool |
 | Trust identity providers beyond those set for every cluster | `Sys.Modify` | the workload pool when creating, the cluster's pool when changing |
@@ -1137,7 +1156,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | Variable | Required | What it is |
 | --- | --- | --- |
 | `controlPlaneEndpoint` | yes | The control plane's virtual IP: an IPv4 address, unused, outside `network.addresses`. |
-| `network` | yes | `bridge`, one of the bridges clusters may use. `vlan` (optional, 1 to 4094). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. |
+| `network` | yes | `bridge`, one of the bridges clusters may use. `vlan` (optional, 1 to 4094). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. `ntp` (optional, at most 8 host names or IP addresses, each once). Create a cluster from a file with `kubehenge cluster create -f`, which takes the same variable. |
 | `storage` | yes | The storage for the nodes' disks and the persistent volumes, one of those clusters may use. |
 | `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one. Every node when unset. New VMs go to those of them that are online ([above](#machines)). The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)). Default true, where the management cluster has Proxmox VE HA and the storage is shared. |
@@ -1146,7 +1165,8 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096 for the control plane and 6144 for workers, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20). A disk only grows. |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s and Talos: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
 | `nodeOS` | no | kubeadm, RKE2 and k3s: `family` and `release`, a node OS Kubehenge builds templates of ([templates.md](templates.md#node-oses)). Default AlmaLinux 10. Changing it replaces every node ([above](#change-settings)). |
-| `cis` | no | Harden the cluster to the CIS Kubernetes Benchmark ([above](#add-ons)). Default false. The class refuses a change once the cluster exists. |
+| `cis` | no | Harden the cluster to the CIS Kubernetes Benchmark ([above](#add-ons)). Default false. It may change from false to true, which replaces every node. The class refuses true to false. |
+| `workerNodes` | no | The `labels` (`key`, `value`) and `taints` (`key`, `value`, `effect`) the workers register with, for every pool that sets none of its own ([Pools](#pools)). |
 | `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)). `enabled` (default false). `implementation`, `metallb` (default) or `kube-vip`. `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network, needed while `enabled`. |
 | `headlamp` | no | `enabled` (default false). `hostname`, to serve it through the cluster's ingress controller. `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname`. When unset, one from the certificates add-on while it is on, else the ingress controller's default certificate. `access`, `token` (default) or `view`, read-only without sign-in ([above](#add-ons)). |
 | `monitoring` | no | `enabled` (default false), which installs cert-manager too ([above](#add-ons)). `hostname`, to serve Grafana through the cluster's ingress controller. `tlsSecret`, a Secret in the `monitoring` namespace with the certificate for `hostname`. When unset, as for `headlamp`. |

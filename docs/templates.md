@@ -25,6 +25,7 @@ A node OS whose CPU type is above `x86-64-v2-AES` stops at boot on an older CPU.
 Every node OS holds only what a node needs:
 
 - Its family's minimal system, cloud-init and the QEMU guest agent.
+- chrony, enabled, as its time daemon, since a VM's host corrects its clock only on resume and migration. The bake checks that `chronyd` is enabled and that `chronyc tracking` answers. Talos keeps its own.
 - The SELinux policy packages and the kernel modules a pod network bridges through.
 - For kubeadm, containerd and the kubelet's tools.
 - For RKE2 and k3s, their prerequisites and SELinux policy.
@@ -41,7 +42,7 @@ On kubeadm nodes, kube-vip and the control plane's static pods (etcd, API server
 
 ### The guest agent
 
-The guest agent runs the commands Proxmox VE sends it (guest-exec) as root unconfined, as a root shell would. Cluster API's Proxmox VE provider asks cloud-init through it whether a node has booted. The controller's etcd restore runs through it. Proxmox VE lets only holders of `VM.GuestAgent.Unrestricted` (or `VM.Monitor`) send them, who could run anything in the VM anyway.
+The guest agent runs the commands Proxmox VE sends it (guest-exec) as root unconfined, as a root shell would. Cluster API's Proxmox VE provider asks cloud-init through it whether a node has booted. The controller's etcd restore runs through it. Proxmox VE lets only holders of `VM.GuestAgent.Unrestricted` send them, who could run anything in the VM anyway.
 
 The agent also hands out the node's boot log to holders of `VM.GuestAgent.FileRead`. The log is cloud-init's output and a copy of its boot's journals (cloud-init, containerd, the kubelet, RKE2 or k3s). A timer writes the copy into `/var/log/kubehenge` every 15 seconds from 5 seconds after boot, the last 200 lines of each. It is readable by root alone.
 

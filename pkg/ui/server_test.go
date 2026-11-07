@@ -50,6 +50,8 @@ type fakeAccounts struct {
 	renewals       int
 	tokenChecks    int
 	now            func() time.Time
+	// nodeSkew is how far each Proxmox VE node's clock is from now.
+	nodeSkew map[string]time.Duration
 	// members are every pool's guests. deleted records the VMs deleted.
 	members []pve.Member
 	deleted []int
@@ -234,6 +236,17 @@ func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]p
 		{Bridge: "corp", Node: node, Zone: "vlanz", ZoneType: "vlan", Alias: "Corporate"},
 		{Bridge: "tenants", Node: node, Zone: "evpn", ZoneType: "evpn"},
 	}, nil
+}
+
+// NodeTime answers the time of the fake's clock-skewed nodes, or Proxmox VE's refusal for a user
+// without Sys.Audit on the node.
+func (f *fakeAccounts) NodeTime(_ context.Context, t *pve.Ticket, node string) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.effective(t.Username, "/nodes/"+node).Has("Sys.Audit") {
+		return time.Time{}, pve.ErrForbidden
+	}
+	return f.now().Add(f.nodeSkew[node]), nil
 }
 
 func (*fakeAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {

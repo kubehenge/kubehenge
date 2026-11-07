@@ -1,82 +1,24 @@
-import { useEffect, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 
-import { api } from "./api";
+import { AddPoolDialog, fallbackSize } from "./AddPool";
 import { poolText } from "./Autoscaling";
-import { machineMinimums, memoryStepMiB } from "./create-form";
+import { machineMinimums } from "./create-form";
 import { MachineFields } from "./MachineFields";
-import { whole } from "./network";
+import { poolSize, sizeOf, sizeProblem, useClass } from "./pool-machine";
+import { NodesDialog, NodeTags, poolNodes } from "./PoolNodes";
 import { useStaging } from "./staging-context";
-import type { Cluster, ClusterClass, MachineSize, WorkerPool } from "./types";
-import { Dialog, ErrorBox, Field, RowMenu, maxWorkers, shownNumber, typedNumber, useChange } from "./ui";
-import { quantity, record } from "./values";
-
-// As the API server holds them: a DNS label, and host names of <cluster>-<pool>-<three random
-// parts> within one.
-const poolNamePattern = /^[a-z](?:[-a-z0-9]*[a-z0-9])?$/u;
-const maxPoolNames = 44;
+import type { Cluster, MachineSize, WorkerPool } from "./types";
+import { Dialog, ErrorBox, RowMenu, useChange } from "./ui";
 
 const mibPerGiB = 1024;
 
 const memoryText = (mib: number): string => (mib % mibPerGiB === 0 ? `${mib / mibPerGiB} GiB` : `${mib} MiB`);
 
-/** sizeOf reads a machine variable's value, or undefined where it holds none. */
-function sizeOf(v: unknown): MachineSize | undefined {
-  const r = record(v);
-  const cores = quantity(r["cores"]);
-  const memoryMiB = quantity(r["memoryMiB"]);
-  const diskGiB = quantity(r["diskGiB"]);
-  return cores === undefined || memoryMiB === undefined || diskGiB === undefined
-    ? undefined
-    : { cores, memoryMiB, diskGiB };
-}
-
-/** poolSize is a pool's machine size: its own, or the cluster's for its workers. */
-export const poolSize = (c: Cluster, p: WorkerPool): MachineSize | undefined =>
-  p.machine ?? sizeOf(c.variables["workerMachine"]);
-
-/** sizeProblem says what keeps a size from being sent, by the class's least. */
-export function sizeProblem(m: MachineSize, min: MachineSize): string | undefined {
-  if (!whole(m.cores, min.cores)) {
-    return `At least ${min.cores} cores`;
-  }
-  if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
-    return `At least ${min.memoryMiB} MiB of memory, in steps of ${memoryStepMiB}`;
-  }
-  if (!whole(m.diskGiB, min.diskGiB)) {
-    return `At least ${min.diskGiB} GiB of disk`;
-  }
-  return undefined;
-}
-
-/** poolNameProblem says what is wrong with a new pool's name, as the API server would. */
-export function poolNameProblem(c: Cluster, name: string): string | undefined {
-  if (!poolNamePattern.test(name)) {
-    return "Lowercase letters, digits and dashes, from a letter";
-  }
-  if (c.name.length + name.length > maxPoolNames) {
-    return `At most ${maxPoolNames - c.name.length} characters for this cluster`;
-  }
-  return c.workerPools.some((p) => p.name === name) ? "A pool has this name" : undefined;
-}
-
-// useClass reads the cluster's class, for the least size its machines may have.
-function useClass(name: string): ClusterClass | undefined {
-  const [cls, setCls] = useState<ClusterClass>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        setCls(classes.find((x) => x.name === name));
-      } catch {
-        // The API server checks every size. Without the class the dialog checks only the form.
-      }
-    }
-    void load();
-  }, [name]);
-  return cls;
-}
-
-type PoolAction = { kind: "add" } | { kind: "resize"; pool?: WorkerPool } | { kind: "delete"; pool: WorkerPool };
+type PoolAction =
+  | { kind: "add" }
+  | { kind: "resize"; pool?: WorkerPool }
+  | { kind: "nodes"; pool: WorkerPool }
+  | { kind: "delete"; pool: WorkerPool };
 
 function SizeCells({ size }: { size: MachineSize | undefined }): JSX.Element {
   return (
@@ -147,7 +89,10 @@ export function Pools({
           </tr>
           {c.workerPools.map((p) => (
             <tr key={p.name}>
-              <td className="id">{p.name}</td>
+              <td className="id">
+                {p.name}
+                <NodeTags nodes={poolNodes(c, p)} />
+              </td>
               <td>{poolText(p)}</td>
               <SizeCells size={poolSize(c, p)} />
               <td className="row-action">
@@ -160,6 +105,15 @@ export function Pools({
                     onClick={() => setAction({ kind: "resize", pool: p })}
                   >
                     Resize…
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!can}
+                    title={why}
+                    aria-label={`Edit pool ${p.name} nodes`}
+                    onClick={() => setAction({ kind: "nodes", pool: p })}
+                  >
+                    Labels and taints…
                   </button>
                   <button
                     type="button"
@@ -179,60 +133,9 @@ export function Pools({
       </table>
       {action?.kind === "add" && <AddPoolDialog cluster={c} onClose={close} />}
       {action?.kind === "resize" && <ResizeDialog cluster={c} pool={action.pool} onClose={close} />}
+      {action?.kind === "nodes" && <NodesDialog cluster={c} pool={action.pool} onClose={close} />}
       {action?.kind === "delete" && <DeletePoolDialog cluster={c} pool={action.pool} onClose={close} />}
     </section>
-  );
-}
-
-const fallbackSize: MachineSize = { cores: 2, memoryMiB: 4096, diskGiB: 30 };
-
-function AddPoolDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const cls = useClass(c.class);
-  const [name, setName] = useState("");
-  const [workers, setWorkers] = useState(1);
-  const [size, setSize] = useState<MachineSize>(sizeOf(c.variables["workerMachine"]) ?? fallbackSize);
-  const { busy, error, send } = useChange(c, onClose);
-  const min = machineMinimums(cls, "workerMachine");
-  const nameProblem = name === "" ? undefined : poolNameProblem(c, name);
-  const workersProblem = whole(workers, 0, maxWorkers) ? undefined : `A whole number from 0 to ${maxWorkers}`;
-  const problem = sizeProblem(size, min);
-  const ready = name !== "" && nameProblem === undefined && workersProblem === undefined && problem === undefined;
-  return (
-    <Dialog
-      title={`Add pool to ${c.name}`}
-      onClose={onClose}
-      onSubmit={() => {
-        void send({ pools: { [name]: { replicas: workers, machine: size } } });
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || !ready}>
-            Add
-          </button>
-        </>
-      }
-    >
-      <Field label="Name" error={nameProblem}>
-        {(id) => <input id={id} value={name} autoComplete="off" onChange={(e) => setName(e.target.value.trim())} />}
-      </Field>
-      <Field label="Workers" error={workersProblem}>
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={0}
-            max={maxWorkers}
-            value={shownNumber(workers)}
-            onChange={(e) => setWorkers(typedNumber(e.target.value))}
-          />
-        )}
-      </Field>
-      <MachineFields label="Each worker" value={size} min={min} error={problem} onChange={setSize} />
-      <ErrorBox message={error} />
-    </Dialog>
   );
 }
 

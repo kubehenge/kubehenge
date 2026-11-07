@@ -56,7 +56,14 @@
       "workers": 4,
       "subnet": 10,
       "ageDays": 96,
-      "addOns": ["headlamp", "monitoring", "logs", "backups"]
+      "addOns": ["headlamp", "monitoring", "logs", "backups"],
+      "workerNodes": {
+        "labels": [
+          { "key": "team", "value": "storefront" },
+          { "key": "tier", "value": "web" }
+        ],
+        "taints": [{ "key": "dedicated", "value": "web", "effect": "NoSchedule" }]
+      }
     },
     {
       "name": "payments",
@@ -88,7 +95,8 @@
       "workers": 3,
       "subnet": 40,
       "ageDays": 120,
-      "addOns": ["headlamp", "monitoring"]
+      "addOns": ["headlamp", "monitoring"],
+      "unsynced": true
     },
     {
       "name": "staging",
@@ -98,7 +106,12 @@
       "workers": 2,
       "subnet": 50,
       "ageDays": 14,
-      "addOns": ["headlamp"]
+      "addOns": ["headlamp"],
+      "workerNodes": {
+        "labels": [{ "key": "team", "value": "release" }],
+        "taints": [{ "key": "dedicated", "value": "canary", "effect": "PreferNoSchedule" }]
+      },
+      "driftTaint": "maintenance"
     },
     {
       "name": "data",

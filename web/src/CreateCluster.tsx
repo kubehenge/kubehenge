@@ -382,6 +382,7 @@ export function CreateCluster({
               haGroups={haGroups}
               nodes={nodes}
               rules={rules}
+              attempted={attempted.has(step)}
             />
           )}
           {step === "Add-ons" && (

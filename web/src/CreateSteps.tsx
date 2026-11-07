@@ -6,6 +6,7 @@ import {
   chosenNodeOS,
   controlPlaneSizes,
   machineLeast,
+  mostWorkers,
   templateMissing,
   variable,
   versionExamples,
@@ -18,6 +19,7 @@ import { LoadBalancerFields } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
+import { NodeSettingsFields } from "./NodeSettings";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
 import { clusterKey } from "./start-from";
@@ -710,6 +712,9 @@ export function NetworkStep({
       <Field label="DNS servers" error={shown("dnsServers")}>
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
+      <Field label="Time servers" hint="Optional, separated by commas" error={shown("ntpServers")}>
+        {(id) => <input id={id} value={form.ntpServers} onChange={(e) => set("ntpServers", e.target.value)} />}
+      </Field>
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
@@ -782,7 +787,10 @@ export function MachinesStep({
   haGroups,
   nodes,
   rules,
+  attempted = false,
 }: StepProps & {
+  /** Next was pressed on the step: every row's problem shows. */
+  attempted?: boolean;
   cls: ClusterClass | undefined;
   usableStorages: Storage[];
   placed: boolean;
@@ -850,6 +858,14 @@ export function MachinesStep({
         error={shown("workerMachine")}
         onChange={(m) => set("workerMachine", m)}
       />
+      {variable(cls, "workerNodes") !== undefined && mostWorkers(form) > 0 && (
+        <NodeSettingsFields
+          value={form.workerNodes}
+          onChange={(v) => set("workerNodes", v)}
+          showAll={attempted}
+          workers
+        />
+      )}
     </>
   );
 }

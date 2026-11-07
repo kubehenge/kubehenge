@@ -69,6 +69,16 @@
                   "format": "ipv4",
                   "type": "string"
                 },
+                "ntp": {
+                  "description": "NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123. Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).",
+                  "items": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
+                },
                 "prefix": {
                   "maximum": 32,
                   "minimum": 1,
@@ -1281,14 +1291,120 @@
           "schema": {
             "openAPIV3Schema": {
               "default": false,
-              "description": "Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod Security Admission enforces restricted outside the exempt namespaces, every container runs under the runtime's default seccomp profile unless it asks for another, and exec, attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace, DNS and a few of RKE2's own services aside. Fixed once the cluster exists.",
+              "description": "Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod Security Admission enforces restricted outside the exempt namespaces, every container runs under the runtime's default seccomp profile unless it asks for another, and exec, attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace, DNS and a few of RKE2's own services aside. May be switched on after creation, which replaces every node, and never off again.",
               "type": "boolean",
               "x-kubernetes-validations": [
                 {
-                  "message": "CIS hardening is chosen when the cluster is created and cannot be changed",
-                  "rule": "self == oldSelf"
+                  "message": "CIS hardening cannot be switched off once it is on. Pod Security Admission, seccomp and RKE2's network policies stay until the cluster is rebuilt.",
+                  "rule": "!oldSelf || self"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "workerNodes",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "Labels and taints the nodes of the worker pools register with, kept when a node is replaced. A worker pool may set its own, which replaces these. Changing them replaces the pool's nodes, one at a time.",
+              "properties": {
+                "labels": {
+                  "description": "Node labels. Each key once.",
+                  "items": {
+                    "properties": {
+                      "key": {
+                        "maxLength": 317,
+                        "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 63,
+                        "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A label key's name is at most 63 characters.",
+                        "rule": "self.key.split('/')[size(self.key.split('/')) - 1].size() \u003c= 63"
+                      },
+                      {
+                        "message": "A label key's prefix is at most 253 characters.",
+                        "rule": "!self.key.contains('/') || self.key.split('/')[0].size() \u003c= 253"
+                      },
+                      {
+                        "message": "The kubelet refuses to set labels in kubernetes.io and k8s.io, except in kubelet.kubernetes.io and node.kubernetes.io and for its standard keys such as kubernetes.io/os.",
+                        "rule": "!self.key.contains('/') || !(self.key.split('/')[0] in ['kubernetes.io', 'k8s.io'] || self.key.split('/')[0].endsWith('.kubernetes.io') || self.key.split('/')[0].endsWith('.k8s.io')) || self.key in ['kubernetes.io/hostname', 'kubernetes.io/os', 'kubernetes.io/arch', 'beta.kubernetes.io/os', 'beta.kubernetes.io/arch', 'beta.kubernetes.io/instance-type', 'node.kubernetes.io/instance-type', 'topology.kubernetes.io/zone', 'topology.kubernetes.io/region', 'failure-domain.beta.kubernetes.io/zone', 'failure-domain.beta.kubernetes.io/region'] || self.key.split('/')[0] in ['kubelet.kubernetes.io', 'node.kubernetes.io'] || self.key.split('/')[0].endsWith('.kubelet.kubernetes.io') || self.key.split('/')[0].endsWith('.node.kubernetes.io')"
+                      }
+                    ]
+                  },
+                  "maxItems": 50,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each label key once.",
+                      "rule": "self.all(x, self.exists_one(y, x.key == y.key))"
+                    }
+                  ]
+                },
+                "taints": {
+                  "description": "Node taints. Each key once.",
+                  "items": {
+                    "properties": {
+                      "effect": {
+                        "enum": [
+                          "NoSchedule",
+                          "PreferNoSchedule",
+                          "NoExecute"
+                        ],
+                        "type": "string"
+                      },
+                      "key": {
+                        "maxLength": 317,
+                        "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 63,
+                        "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "effect"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A taint key's name is at most 63 characters.",
+                        "rule": "self.key.split('/')[size(self.key.split('/')) - 1].size() \u003c= 63"
+                      },
+                      {
+                        "message": "A taint key's prefix is at most 253 characters.",
+                        "rule": "!self.key.contains('/') || self.key.split('/')[0].size() \u003c= 253"
+                      }
+                    ]
+                  },
+                  "maxItems": 20,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each taint key once.",
+                      "rule": "self.all(x, self.exists_one(y, x.key == y.key))"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
             }
           }
         },
@@ -1385,6 +1501,16 @@
                 "gateway": {
                   "format": "ipv4",
                   "type": "string"
+                },
+                "ntp": {
+                  "description": "NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123. Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).",
+                  "items": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
                 },
                 "prefix": {
                   "maximum": 32,
@@ -2598,14 +2724,120 @@
           "schema": {
             "openAPIV3Schema": {
               "default": false,
-              "description": "Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod Security Admission enforces restricted outside the exempt namespaces, every container runs under the runtime's default seccomp profile unless it asks for another, and exec, attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace, DNS and a few of RKE2's own services aside. Fixed once the cluster exists.",
+              "description": "Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod Security Admission enforces restricted outside the exempt namespaces, every container runs under the runtime's default seccomp profile unless it asks for another, and exec, attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace, DNS and a few of RKE2's own services aside. May be switched on after creation, which replaces every node, and never off again.",
               "type": "boolean",
               "x-kubernetes-validations": [
                 {
-                  "message": "CIS hardening is chosen when the cluster is created and cannot be changed",
-                  "rule": "self == oldSelf"
+                  "message": "CIS hardening cannot be switched off once it is on. Pod Security Admission, seccomp and RKE2's network policies stay until the cluster is rebuilt.",
+                  "rule": "!oldSelf || self"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "workerNodes",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "Labels and taints the nodes of the worker pools register with, kept when a node is replaced. A worker pool may set its own, which replaces these. Changing them replaces the pool's nodes, one at a time.",
+              "properties": {
+                "labels": {
+                  "description": "Node labels. Each key once.",
+                  "items": {
+                    "properties": {
+                      "key": {
+                        "maxLength": 317,
+                        "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 63,
+                        "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A label key's name is at most 63 characters.",
+                        "rule": "self.key.split('/')[size(self.key.split('/')) - 1].size() \u003c= 63"
+                      },
+                      {
+                        "message": "A label key's prefix is at most 253 characters.",
+                        "rule": "!self.key.contains('/') || self.key.split('/')[0].size() \u003c= 253"
+                      },
+                      {
+                        "message": "The kubelet refuses to set labels in kubernetes.io and k8s.io, except in kubelet.kubernetes.io and node.kubernetes.io and for its standard keys such as kubernetes.io/os.",
+                        "rule": "!self.key.contains('/') || !(self.key.split('/')[0] in ['kubernetes.io', 'k8s.io'] || self.key.split('/')[0].endsWith('.kubernetes.io') || self.key.split('/')[0].endsWith('.k8s.io')) || self.key in ['kubernetes.io/hostname', 'kubernetes.io/os', 'kubernetes.io/arch', 'beta.kubernetes.io/os', 'beta.kubernetes.io/arch', 'beta.kubernetes.io/instance-type', 'node.kubernetes.io/instance-type', 'topology.kubernetes.io/zone', 'topology.kubernetes.io/region', 'failure-domain.beta.kubernetes.io/zone', 'failure-domain.beta.kubernetes.io/region'] || self.key.split('/')[0] in ['kubelet.kubernetes.io', 'node.kubernetes.io'] || self.key.split('/')[0].endsWith('.kubelet.kubernetes.io') || self.key.split('/')[0].endsWith('.node.kubernetes.io')"
+                      }
+                    ]
+                  },
+                  "maxItems": 50,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each label key once.",
+                      "rule": "self.all(x, self.exists_one(y, x.key == y.key))"
+                    }
+                  ]
+                },
+                "taints": {
+                  "description": "Node taints. Each key once.",
+                  "items": {
+                    "properties": {
+                      "effect": {
+                        "enum": [
+                          "NoSchedule",
+                          "PreferNoSchedule",
+                          "NoExecute"
+                        ],
+                        "type": "string"
+                      },
+                      "key": {
+                        "maxLength": 317,
+                        "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 63,
+                        "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "effect"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A taint key's name is at most 63 characters.",
+                        "rule": "self.key.split('/')[size(self.key.split('/')) - 1].size() \u003c= 63"
+                      },
+                      {
+                        "message": "A taint key's prefix is at most 253 characters.",
+                        "rule": "!self.key.contains('/') || self.key.split('/')[0].size() \u003c= 253"
+                      }
+                    ]
+                  },
+                  "maxItems": 20,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each taint key once.",
+                      "rule": "self.all(x, self.exists_one(y, x.key == y.key))"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
             }
           }
         },
@@ -2699,6 +2931,16 @@
                 "gateway": {
                   "format": "ipv4",
                   "type": "string"
+                },
+                "ntp": {
+                  "description": "NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123. Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).",
+                  "items": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
                 },
                 "prefix": {
                   "maximum": 32,
@@ -3912,14 +4154,120 @@
           "schema": {
             "openAPIV3Schema": {
               "default": false,
-              "description": "Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod Security Admission enforces restricted outside the exempt namespaces, every container runs under the runtime's default seccomp profile unless it asks for another, and exec, attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace, DNS and a few of RKE2's own services aside. Fixed once the cluster exists.",
+              "description": "Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod Security Admission enforces restricted outside the exempt namespaces, every container runs under the runtime's default seccomp profile unless it asks for another, and exec, attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace, DNS and a few of RKE2's own services aside. May be switched on after creation, which replaces every node, and never off again.",
               "type": "boolean",
               "x-kubernetes-validations": [
                 {
-                  "message": "CIS hardening is chosen when the cluster is created and cannot be changed",
-                  "rule": "self == oldSelf"
+                  "message": "CIS hardening cannot be switched off once it is on. Pod Security Admission, seccomp and RKE2's network policies stay until the cluster is rebuilt.",
+                  "rule": "!oldSelf || self"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "workerNodes",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "Labels and taints the nodes of the worker pools register with, kept when a node is replaced. A worker pool may set its own, which replaces these. Changing them replaces the pool's nodes, one at a time.",
+              "properties": {
+                "labels": {
+                  "description": "Node labels. Each key once.",
+                  "items": {
+                    "properties": {
+                      "key": {
+                        "maxLength": 317,
+                        "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 63,
+                        "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A label key's name is at most 63 characters.",
+                        "rule": "self.key.split('/')[size(self.key.split('/')) - 1].size() \u003c= 63"
+                      },
+                      {
+                        "message": "A label key's prefix is at most 253 characters.",
+                        "rule": "!self.key.contains('/') || self.key.split('/')[0].size() \u003c= 253"
+                      },
+                      {
+                        "message": "The kubelet refuses to set labels in kubernetes.io and k8s.io, except in kubelet.kubernetes.io and node.kubernetes.io and for its standard keys such as kubernetes.io/os.",
+                        "rule": "!self.key.contains('/') || !(self.key.split('/')[0] in ['kubernetes.io', 'k8s.io'] || self.key.split('/')[0].endsWith('.kubernetes.io') || self.key.split('/')[0].endsWith('.k8s.io')) || self.key in ['kubernetes.io/hostname', 'kubernetes.io/os', 'kubernetes.io/arch', 'beta.kubernetes.io/os', 'beta.kubernetes.io/arch', 'beta.kubernetes.io/instance-type', 'node.kubernetes.io/instance-type', 'topology.kubernetes.io/zone', 'topology.kubernetes.io/region', 'failure-domain.beta.kubernetes.io/zone', 'failure-domain.beta.kubernetes.io/region'] || self.key.split('/')[0] in ['kubelet.kubernetes.io', 'node.kubernetes.io'] || self.key.split('/')[0].endsWith('.kubelet.kubernetes.io') || self.key.split('/')[0].endsWith('.node.kubernetes.io')"
+                      }
+                    ]
+                  },
+                  "maxItems": 50,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each label key once.",
+                      "rule": "self.all(x, self.exists_one(y, x.key == y.key))"
+                    }
+                  ]
+                },
+                "taints": {
+                  "description": "Node taints. Each key once.",
+                  "items": {
+                    "properties": {
+                      "effect": {
+                        "enum": [
+                          "NoSchedule",
+                          "PreferNoSchedule",
+                          "NoExecute"
+                        ],
+                        "type": "string"
+                      },
+                      "key": {
+                        "maxLength": 317,
+                        "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 63,
+                        "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "effect"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A taint key's name is at most 63 characters.",
+                        "rule": "self.key.split('/')[size(self.key.split('/')) - 1].size() \u003c= 63"
+                      },
+                      {
+                        "message": "A taint key's prefix is at most 253 characters.",
+                        "rule": "!self.key.contains('/') || self.key.split('/')[0].size() \u003c= 253"
+                      }
+                    ]
+                  },
+                  "maxItems": 20,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each taint key once.",
+                      "rule": "self.all(x, self.exists_one(y, x.key == y.key))"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
             }
           }
         },
@@ -4016,6 +4364,16 @@
                 "gateway": {
                   "format": "ipv4",
                   "type": "string"
+                },
+                "ntp": {
+                  "description": "NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123. Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).",
+                  "items": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
                 },
                 "prefix": {
                   "maximum": 32,
@@ -5192,14 +5550,120 @@
           "schema": {
             "openAPIV3Schema": {
               "default": false,
-              "description": "Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod Security Admission enforces restricted outside the exempt namespaces, every container runs under the runtime's default seccomp profile unless it asks for another, and exec, attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace, DNS and a few of RKE2's own services aside. Fixed once the cluster exists.",
+              "description": "Harden the cluster to the CIS Kubernetes Benchmark beyond what every cluster gets: Pod Security Admission enforces restricted outside the exempt namespaces, every container runs under the runtime's default seccomp profile unless it asks for another, and exec, attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS profile, under which pods in kube-system, kube-public and default take connections only from their own namespace, DNS and a few of RKE2's own services aside. May be switched on after creation, which replaces every node, and never off again.",
               "type": "boolean",
               "x-kubernetes-validations": [
                 {
-                  "message": "CIS hardening is chosen when the cluster is created and cannot be changed",
-                  "rule": "self == oldSelf"
+                  "message": "CIS hardening cannot be switched off once it is on. Pod Security Admission, seccomp and RKE2's network policies stay until the cluster is rebuilt.",
+                  "rule": "!oldSelf || self"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "workerNodes",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {},
+              "description": "Labels and taints the nodes of the worker pools register with, kept when a node is replaced. A worker pool may set its own, which replaces these. Changing them replaces the pool's nodes, one at a time.",
+              "properties": {
+                "labels": {
+                  "description": "Node labels. Each key once.",
+                  "items": {
+                    "properties": {
+                      "key": {
+                        "maxLength": 317,
+                        "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 63,
+                        "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A label key's name is at most 63 characters.",
+                        "rule": "self.key.split('/')[size(self.key.split('/')) - 1].size() \u003c= 63"
+                      },
+                      {
+                        "message": "A label key's prefix is at most 253 characters.",
+                        "rule": "!self.key.contains('/') || self.key.split('/')[0].size() \u003c= 253"
+                      },
+                      {
+                        "message": "The kubelet refuses to set labels in kubernetes.io and k8s.io, except in kubelet.kubernetes.io and node.kubernetes.io and for its standard keys such as kubernetes.io/os.",
+                        "rule": "!self.key.contains('/') || !(self.key.split('/')[0] in ['kubernetes.io', 'k8s.io'] || self.key.split('/')[0].endsWith('.kubernetes.io') || self.key.split('/')[0].endsWith('.k8s.io')) || self.key in ['kubernetes.io/hostname', 'kubernetes.io/os', 'kubernetes.io/arch', 'beta.kubernetes.io/os', 'beta.kubernetes.io/arch', 'beta.kubernetes.io/instance-type', 'node.kubernetes.io/instance-type', 'topology.kubernetes.io/zone', 'topology.kubernetes.io/region', 'failure-domain.beta.kubernetes.io/zone', 'failure-domain.beta.kubernetes.io/region'] || self.key.split('/')[0] in ['kubelet.kubernetes.io', 'node.kubernetes.io'] || self.key.split('/')[0].endsWith('.kubelet.kubernetes.io') || self.key.split('/')[0].endsWith('.node.kubernetes.io')"
+                      }
+                    ]
+                  },
+                  "maxItems": 50,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each label key once.",
+                      "rule": "self.all(x, self.exists_one(y, x.key == y.key))"
+                    }
+                  ]
+                },
+                "taints": {
+                  "description": "Node taints. Each key once.",
+                  "items": {
+                    "properties": {
+                      "effect": {
+                        "enum": [
+                          "NoSchedule",
+                          "PreferNoSchedule",
+                          "NoExecute"
+                        ],
+                        "type": "string"
+                      },
+                      "key": {
+                        "maxLength": 317,
+                        "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+                        "type": "string"
+                      },
+                      "value": {
+                        "default": "",
+                        "maxLength": 63,
+                        "pattern": "^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "key",
+                      "effect"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A taint key's name is at most 63 characters.",
+                        "rule": "self.key.split('/')[size(self.key.split('/')) - 1].size() \u003c= 63"
+                      },
+                      {
+                        "message": "A taint key's prefix is at most 253 characters.",
+                        "rule": "!self.key.contains('/') || self.key.split('/')[0].size() \u003c= 253"
+                      }
+                    ]
+                  },
+                  "maxItems": 20,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each taint key once.",
+                      "rule": "self.all(x, self.exists_one(y, x.key == y.key))"
+                    }
+                  ]
+                }
+              },
+              "type": "object"
             }
           }
         },

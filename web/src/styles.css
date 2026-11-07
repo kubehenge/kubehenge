@@ -3000,11 +3000,16 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
   white-space: nowrap;
 }
 
-/* A VM's use beside its figure: a line for the last hour's CPU, a bar for memory. */
+/* A VM's use beside its figure: a line for the last hour's CPU, a bar for memory. The figure drops
+   under the line or bar before its column outgrows the table. */
 .use {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 2px 8px;
   align-items: center;
+}
+
+.use-figure {
   white-space: nowrap;
 }
 
@@ -3055,4 +3060,112 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
 
 .restore-steps .steps p {
   margin: 10px 0 4px;
+}
+
+/* One label or taint a line: its key, value and effect side by side, its problem under them. */
+.node-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 5.5rem;
+  gap: 8px;
+  align-items: start;
+
+  margin-block-end: 8px;
+}
+
+.node-row.taint-row {
+  grid-template-columns: 1fr 1fr 11em 5.5rem;
+}
+
+.node-row.bare input,
+.node-row.bare select {
+  inline-size: 100%;
+  min-inline-size: 0;
+}
+
+.node-row .field-error {
+  grid-column: 1 / -1;
+  margin-block-start: -4px;
+}
+
+.node-head {
+  margin-block-end: 2px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+.node-field {
+  min-inline-size: 0;
+}
+
+.node-field-name {
+  display: none;
+}
+
+/* The rows follow the width of their dialog, not the window's. Where the fields no longer fit side
+   by side, each takes the full width under its name and Remove follows, aligned to the row's start. */
+.node-rows {
+  container-type: inline-size;
+}
+
+@container (inline-size < 32rem) {
+  .node-row,
+  .node-row.taint-row {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  .node-head {
+    display: none;
+  }
+
+  .node-field-name {
+    display: block;
+    margin-block-end: 2px;
+    font-size: 12.5px;
+    color: var(--dim);
+  }
+
+  .node-row.bare > button {
+    justify-self: start;
+  }
+}
+
+.node-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+
+  margin: 4px 0 0;
+  padding: 0;
+
+  list-style: none;
+}
+
+.node-tags li {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+
+  /* Wraps only at the separators BreakableText marks. A tag longer than its whole cell still breaks
+     inside a word as a last resort. */
+  overflow-wrap: break-word;
+  white-space: normal;
+}
+
+.pod-check ul {
+  margin-block: 6px;
+  padding-inline-start: 18px;
+}
+
+.pod-check li {
+  margin-block-end: 4px;
+}
+
+.node-tags .taint {
+  border-color: var(--warning);
 }

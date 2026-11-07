@@ -1,5 +1,6 @@
 import {
   Component,
+  Fragment,
   cloneElement,
   isValidElement,
   useCallback,
@@ -336,6 +337,26 @@ const negativePolarity = new Set([
 // abnormal tells whether a condition is worth a look.
 export function abnormal(type: string, status: string): boolean {
   return negativePolarity.has(type) ? status === "True" : status !== "True";
+}
+
+/**
+ * BreakableText is a label or taint that may wrap after each `=`, `:` and `/` and nowhere else, so a
+ * narrow cell breaks "dedicated:PreferNoSchedule" at the colon and not in the middle of a word.
+ */
+export function BreakableText({ text }: { text: string }): JSX.Element {
+  const parts = text.split(/(?<=[=:/])/u);
+  return (
+    <>
+      {parts.map((part, i) => (
+        // The parts of a fixed string never reorder.
+        // oxlint-disable-next-line react/no-array-index-key
+        <Fragment key={i}>
+          {part}
+          {i < parts.length - 1 && <wbr />}
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 /** Status shows a state as Proxmox VE does: an icon, then the text. */

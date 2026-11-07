@@ -374,11 +374,10 @@ func (a *AutoscalerReconciler) applyCapacity(ctx context.Context, cluster *clust
 					return fmt.Errorf("reading the ClusterClass of cluster %s/%s: %w", cluster.Namespace, cluster.Name, err)
 				}
 			}
-			size, err := nodeShape(cluster, class, "workerMachine", pool.Variables.Overrides)
-			if err != nil {
+			var err error
+			if want, err = poolCapacity(cluster, class, pool, md.Spec.Template.Labels); err != nil {
 				return err
 			}
-			want = capacityAnnotations(size, md.Spec.Template.Labels)
 		}
 		if capacityCurrent(md.Annotations, want) {
 			continue
@@ -395,6 +394,19 @@ func (a *AutoscalerReconciler) applyCapacity(ctx context.Context, cluster *clust
 		}
 	}
 	return nil
+}
+
+// poolCapacity is the capacity annotations an autoscaled pool's nodes call for.
+func poolCapacity(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass, pool *clusterv1.MachineDeploymentTopology, machineLabels map[string]string) (map[string]string, error) {
+	size, err := nodeShape(cluster, class, "workerMachine", pool.Variables.Overrides)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := PoolNodeSettings(cluster, pool.Variables.Overrides)
+	if err != nil {
+		return nil, err
+	}
+	return capacityAnnotations(size, machineLabels, nodes), nil
 }
 
 // capacityCurrent tells whether a MachineDeployment's capacity annotations are those wanted.

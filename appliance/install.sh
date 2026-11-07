@@ -107,16 +107,19 @@ container_hostname() {
 # make_certificate <host name> <address> [<DNS name>]: a certificate and key for the appliance in
 # $work, signed by this cluster's CA, so that browsers trusting Proxmox VE's certificates trust
 # Kubehenge's too. The CA's key stays on this node. 825 days is the longest validity browsers accept
-# from a private CA.
+# from a private CA, so the hour the certificate starts back takes one day off its end. That hour
+# keeps a browser whose clock is a few minutes behind this node's from refusing it as not yet valid.
+# OpenSSL 3.4 added -not_before, and Proxmox VE 9's Debian 13 has 3.5.
 make_certificate() {
+    start=$(date -u -d '1 hour ago' +%Y%m%d%H%M%SZ)
     printf 'subjectAltName = DNS:%s, IP:%s%s\nextendedKeyUsage = serverAuth\n' "$1" "$2" "${3:+, DNS:$3}" > "${work}/san.cnf"
     openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=${3:-$1}" \
         -keyout "${work}/tls.key" -out "${work}/tls.csr" 2> /dev/null
     if [ -r /etc/pve/priv/pve-root-ca.key ]; then
         openssl x509 -req -in "${work}/tls.csr" -CA /etc/pve/pve-root-ca.pem -CAkey /etc/pve/priv/pve-root-ca.key \
-            -CAcreateserial -CAserial "${work}/ca.srl" -days 825 -sha256 -extfile "${work}/san.cnf" -out "${work}/tls.crt" 2> /dev/null
+            -CAcreateserial -CAserial "${work}/ca.srl" -not_before "${start}" -days 824 -sha256 -extfile "${work}/san.cnf" -out "${work}/tls.crt" 2> /dev/null
     else
-        openssl x509 -req -in "${work}/tls.csr" -signkey "${work}/tls.key" -days 825 -sha256 -extfile "${work}/san.cnf" -out "${work}/tls.crt" 2> /dev/null
+        openssl x509 -req -in "${work}/tls.csr" -signkey "${work}/tls.key" -not_before "${start}" -days 824 -sha256 -extfile "${work}/san.cnf" -out "${work}/tls.crt" 2> /dev/null
     fi
 }
 

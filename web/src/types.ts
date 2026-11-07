@@ -140,6 +140,8 @@ export interface WorkerPool {
   autoscaling?: Autoscaling;
   /** The pool's own size. Unset, it takes the cluster's workerMachine. */
   machine?: MachineSize;
+  /** The pool's own labels and taints, as the workerNodes variable holds them. Unset, it takes the cluster's. */
+  nodes?: unknown;
 }
 
 /** A machine's size, as the controlPlaneMachine and workerMachine variables give it. */
@@ -153,6 +155,30 @@ export interface MachineSize {
 export interface PoolChange {
   replicas?: number;
   machine?: MachineSize | null;
+  /** The pool's own labels and taints, or the cluster's with null. */
+  nodes?: NodesVariable | null;
+}
+
+/** The workerNodes variable's value. */
+export interface NodesVariable {
+  labels: { key: string; value: string }[];
+  taints: { key: string; value?: string; effect: string }[];
+}
+
+/** A pod that the restricted Pod Security level would refuse to start. */
+export interface RefusedPod {
+  namespace: string;
+  name: string;
+  reasons: string;
+}
+
+/** The running pods the restricted Pod Security level would refuse. */
+export interface PodSecurityCheck {
+  checked: number;
+  truncated: boolean;
+  refused: RefusedPod[];
+  /** Why nothing was checked. */
+  skipped?: string;
 }
 
 export interface Machine {
