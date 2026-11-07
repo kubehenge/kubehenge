@@ -45,9 +45,10 @@ cat > "${bin}/pgrep" << 'EOF'
 #!/bin/sh
 printf '7101\n7102\n'
 EOF
+# The stand-ins read their files with read, as every process they start costs time on Windows.
 cat > "${bin}/date" << EOF
 #!/bin/sh
-now=\$(cat "${root}/now")
+read -r now < "${root}/now"
 case "\$*" in
     *+%s*) echo "\${now}" ;;
     *) printf '00:%02d:%02d\n' \$(((now / 60) % 60)) \$((now % 60)) ;;
@@ -56,8 +57,11 @@ EOF
 # Fails the tenth round, which ends record, as it runs under set -e.
 cat > "${bin}/sleep" << EOF
 #!/bin/sh
-echo \$((\$(cat "${root}/now") + 15)) > "${root}/now"
-rounds=\$((\$(cat "${root}/rounds" 2> /dev/null || echo 0) + 1))
+read -r now < "${root}/now"
+echo \$((now + 15)) > "${root}/now"
+rounds=0
+[ ! -f "${root}/rounds" ] || read -r rounds < "${root}/rounds"
+rounds=\$((rounds + 1))
 echo "\${rounds}" > "${root}/rounds"
 [ "\${rounds}" -lt 10 ]
 EOF
@@ -78,10 +82,17 @@ run() {
 read_back() {
     asks=0 first_ask='' trims=''
     if [ -f "${root}/asked" ]; then
-        asks=$(wc -l < "${root}/asked" | tr -d ' ')
-        first_ask=$(sed -n 1p "${root}/asked")
+        while IFS= read -r line; do
+            [ "${asks}" -gt 0 ] || first_ask=${line}
+            asks=$((asks + 1))
+        done < "${root}/asked"
     fi
-    [ ! -f "${root}/guests.txt.trims" ] || trims=$(cat "${root}/guests.txt.trims")
+    if [ -f "${root}/guests.txt.trims" ]; then
+        while IFS= read -r line; do
+            trims=${trims:+${trims}
+}${line}
+        done < "${root}/guests.txt.trims"
+    fi
 }
 
 run 1500 trim
@@ -106,11 +117,21 @@ read_back
 same "record asks each guest again only after 2 minutes" 4 "${asks}"
 same "record notes each time the guest dropped it" "00:01:00 101 1500
 00:03:00 101 1500" "${trims}"
-first_sample=$(sed -n 1p "${root}/guests.txt")
+read -r first_sample < "${root}/guests.txt"
 same "record samples each VM from the same processes it lists" "00:01:00 7101 101 cp 500 2048 0 4096 8192 - - -" \
     "${first_sample}"
-summary=$(sh "${guests}" summary "${root}/guests.txt" 2>&1 || true)
-line=$(printf '%s\n' "${summary}" | sed -n '/^guests that dropped/,$p' | grep '^  101:' || true)
+sh "${guests}" summary "${root}/guests.txt" > "${root}/summary" 2>&1 || true
+line='' dropped=false
+while IFS= read -r summary_line; do
+    case ${summary_line} in
+        'guests that dropped'*) dropped=true ;;
+        *) ;;
+    esac
+    case ${dropped}:${summary_line} in
+        true:'  101:'*) line=${summary_line} ;;
+        *) ;;
+    esac
+done < "${root}/summary"
 same "the summary names the guest that dropped its cache" \
     "  101: 2 times, first at 00:01:00 (1500), last at 00:03:00 (1500)" "${line}"
 

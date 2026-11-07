@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/client-go/util/retry"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -132,16 +133,12 @@ func (s *Server) takeEtcdSnapshot(w http.ResponseWriter, r *http.Request, u user
 	if !ok {
 		return
 	}
-	if settings, _ := provisioner.EtcdSnapshotsOf(c); !settings.Enabled {
-		writeError(w, http.StatusConflict, "etcd snapshots are off for this cluster")
-		return
-	}
-	if provisioner.RestoreInProgress(c) {
-		writeError(w, http.StatusConflict, "an etcd restore is running")
+	if msg := snapshotRefusal(c); msg != "" {
+		writeError(w, http.StatusConflict, msg)
 		return
 	}
 	req := provisioner.EtcdSnapshotRequest{By: u.ticket.Username, At: time.Now().UTC()}
-	if !s.annotate(w, r, u, c, provisioner.EtcdSnapshotRequestAnnotation, req) {
+	if !s.annotate(w, r, u, c, provisioner.EtcdSnapshotRequestAnnotation, req, snapshotRefusal) {
 		return
 	}
 	s.Log.InfoContext(r.Context(), "asked for an etcd snapshot", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
@@ -217,8 +214,8 @@ func (s *Server) restoreEtcd(w http.ResponseWriter, r *http.Request, u user) {
 	if !readJSON(w, r, &req) || !confirmed(w, c, req.Confirm) {
 		return
 	}
-	if provisioner.RestoreInProgress(c) {
-		writeError(w, http.StatusConflict, "an etcd restore is already running")
+	if msg := restoreRefusal(c); msg != "" {
+		writeError(w, http.StatusConflict, msg)
 		return
 	}
 	automatic, err := s.automaticRestore(r.Context(), u, c)
@@ -240,7 +237,7 @@ func (s *Server) restoreEtcd(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	settings, _ := provisioner.EtcdSnapshotsOf(c)
 	restore := provisioner.EtcdRestoreRequest{Snapshot: snapshot.Name, Target: settings.Target, By: u.ticket.Username, At: time.Now().UTC()}
-	if !s.annotate(w, r, u, c, provisioner.EtcdRestoreAnnotation, restore) {
+	if !s.annotate(w, r, u, c, provisioner.EtcdRestoreAnnotation, restore, restoreRefusal) {
 		return
 	}
 	s.Log.InfoContext(r.Context(), "asked for an etcd restore", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "snapshot", snapshot.Name)
@@ -297,21 +294,67 @@ func (s *Server) snapshotError(w http.ResponseWriter, r *http.Request, c *cluste
 	writeError(w, http.StatusBadGateway, err.Error())
 }
 
-// annotate sets one of Kubehenge's requests on the cluster, as JSON.
-func (s *Server) annotate(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, key string, value any) bool {
+// annotate sets one of Kubehenge's requests on the cluster, as JSON. Controllers update a cluster
+// all the time, so a conflicting write is made again on a fresh read, and refusal says whether the
+// request is still allowed on it ("" when it is). It answers the request with that refusal as 409.
+func (s *Server) annotate(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, key string, value any, refusal func(*clusterv1.Cluster) string) bool {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "the request could not be encoded")
 		return false
 	}
-	patch := client.MergeFromWithOptions(c.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	if c.Annotations == nil {
-		c.Annotations = map[string]string{}
-	}
-	c.Annotations[key] = string(raw)
-	if err := u.kube.Patch(r.Context(), c, patch); err != nil {
+	refused, err := setRequest(r.Context(), u.kube, client.ObjectKeyFromObject(c), key, string(raw), refusal)
+	switch {
+	case refused != "":
+		writeError(w, http.StatusConflict, refused)
+		return false
+	case err != nil:
 		s.kubeError(w, r, err)
 		return false
 	}
 	return true
+}
+
+// setRequest sets the annotation key on the cluster unless refusal, asked of each fresh read, gives
+// a reason not to. It returns that reason.
+func setRequest(ctx context.Context, kube client.Client, cluster client.ObjectKey, key, value string, refusal func(*clusterv1.Cluster) string) (string, error) {
+	refused := ""
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		fresh := &clusterv1.Cluster{}
+		if err := kube.Get(ctx, cluster, fresh); err != nil {
+			return fmt.Errorf("reading the cluster: %w", err)
+		}
+		if refused = refusal(fresh); refused != "" {
+			return nil
+		}
+		patch := client.MergeFromWithOptions(fresh.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		if fresh.Annotations == nil {
+			fresh.Annotations = map[string]string{}
+		}
+		fresh.Annotations[key] = value
+		if err := kube.Patch(ctx, fresh, patch); err != nil {
+			return fmt.Errorf("asking the cluster: %w", err)
+		}
+		return nil
+	})
+	return refused, err //nolint:wrapcheck // kubeError answers as the API server did
+}
+
+// snapshotRefusal says why an etcd snapshot cannot be asked for now, or returns "".
+func snapshotRefusal(c *clusterv1.Cluster) string {
+	if settings, _ := provisioner.EtcdSnapshotsOf(c); !settings.Enabled {
+		return "etcd snapshots are off for this cluster"
+	}
+	if provisioner.RestoreInProgress(c) {
+		return "an etcd restore is running"
+	}
+	return ""
+}
+
+// restoreRefusal says why an etcd restore cannot be asked for now, or returns "".
+func restoreRefusal(c *clusterv1.Cluster) string {
+	if provisioner.RestoreInProgress(c) {
+		return "an etcd restore is already running"
+	}
+	return ""
 }

@@ -1,5 +1,34 @@
+/* Stand-in for Inter until it arrives (the font is swapped in, so a late file reflows the page).
+   size-adjust is Inter's average character width over the docs' text divided by Arial's, and each
+   override is Inter's own metric divided by size-adjust. Liberation Sans and Arimo have Arial's
+   metrics. */
+@font-face {
+  font-family: "Inter Fallback";
+  font-weight: 100 599;
+
+  ascent-override: 90.67%;
+  descent-override: 22.58%;
+  line-gap-override: 0%;
+  size-adjust: 106.84%;
+  src: local("Arial"), local("ArialMT"), local("Liberation Sans"), local("Arimo");
+}
+
+@font-face {
+  font-family: "Inter Fallback";
+  font-weight: 600 900;
+
+  ascent-override: 94.86%;
+  descent-override: 23.62%;
+  line-gap-override: 0%;
+  size-adjust: 102.12%;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Liberation Sans Bold"), local("Arimo Bold");
+}
+
 /* The logo's teal, lighter on the dark theme where the darker shade would not stand out. */
 :root {
+  --vp-font-family-base:
+    "Inter", "Inter Fallback", -apple-system, blinkmacsystemfont, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+    "Segoe UI Symbol", "Noto Color Emoji";
   --vp-c-brand-1: #0f766e;
   --vp-c-brand-2: #0d9488;
   --vp-c-brand-3: #0d9488;

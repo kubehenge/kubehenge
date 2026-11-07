@@ -33,6 +33,22 @@ describe("error references", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Reference: ffee01");
   });
 
+  it("shows Proxmox VE's own reason when it refused a request", async () => {
+    render(<ErrorBox message={await failure({ error: "Proxmox VE refused: VM is locked (backup)" })} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Proxmox VE refused: VM is locked (backup).");
+  });
+
+  it("shows what a refused second factor can mean", async () => {
+    render(
+      <ErrorBox
+        message={await failure({ error: "Wrong code, or the factor is locked. A recovery key unlocks it." })}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Wrong code, or the factor is locked. A recovery key unlocks it.",
+    );
+  });
+
   it("shows no reference without an id", async () => {
     render(<ErrorBox message={await failure({ error: "not found" })} />);
     const box = screen.getByRole("alert");

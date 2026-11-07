@@ -33,44 +33,63 @@ yes_or_no() {
     if "$@" > /dev/null 2>&1; then echo yes; else echo no; fi
 }
 
+# The stand-ins read their files with the shell's own read, as every process they start costs time
+# on Windows. Each starts with these two functions: show prints a file, and listed <file> <line>
+# whether one of its lines is the line.
+# shellcheck disable=SC2016 # the stand-ins expand them.
+stand_in_functions='show() {
+    [ -r "$1" ] || return 1
+    while IFS= read -r show_line || [ -n "${show_line}" ]; do printf "%s\n" "${show_line}"; done < "$1"
+}
+listed() {
+    [ -r "$1" ] || return 1
+    while IFS= read -r listed_line || [ -n "${listed_line}" ]; do
+        [ "${listed_line}" != "$2" ] || return 0
+    done < "$1"
+    return 1
+}'
 cat > "${bin}/pvesh" << EOF
 #!/bin/sh
+${stand_in_functions}
 case "\$2" in
-    /cluster/resources) cat "${root}/resources" ;;
-    /nodes/*/network) cat "${root}/network" ;;
-    /cluster/sdn/vnets) cat "${root}/vnets" 2> /dev/null || exit 1 ;;
+    /cluster/resources) show "${root}/resources" ;;
+    /nodes/*/network) show "${root}/network" ;;
+    /cluster/sdn/vnets) show "${root}/vnets" 2> /dev/null || exit 1 ;;
     *) exit 1 ;;
 esac
 EOF
 cat > "${bin}/ip" << EOF
 #!/bin/sh
-cat "${root}/route" 2> /dev/null
+${stand_in_functions}
+show "${root}/route" 2> /dev/null
 EOF
 cat > "${bin}/pvecm" << EOF
 #!/bin/sh
-cat "${root}/quorum" 2> /dev/null || exit 1
+${stand_in_functions}
+show "${root}/quorum" 2> /dev/null || exit 1
 EOF
 # pct exec <id> -- <command>: getent succeeds for the names in $root/resolvable. The route query
 # prints $root/gateway. ping succeeds for the gateways in $root/pinging, and is missing (127) where
 # $root/noping exists. A connection by bash succeeds for the host:port lines of $root/open.
 cat > "${bin}/pct" << EOF
 #!/bin/sh
+${stand_in_functions}
 case "\$1" in
     exec)
         case "\$4" in
-            getent) grep -qxF -- "\$6" "${root}/resolvable" ;;
-            timeout) grep -qxF -- "\${10}:\${11}" "${root}/open" ;;
+            getent) listed "${root}/resolvable" "\$6" ;;
+            timeout) listed "${root}/open" "\${10}:\${11}" ;;
             sh)
                 case "\$6" in
-                    *'route show'*) cat "${root}/gateway" 2> /dev/null ;;
+                    *'route show'*) show "${root}/gateway" 2> /dev/null ;;
                     *) [ ! -e "${root}/noping" ] || exit 127
-                       grep -qxF -- "\$8" "${root}/pinging" ;;
+                       listed "${root}/pinging" "\$8" ;;
                 esac
                 ;;
             *) exit 2 ;;
         esac
         ;;
-    config) cat "${root}/config" 2> /dev/null ;;
+    config) show "${root}/config" 2> /dev/null ;;
     *) exit 2 ;;
 esac
 EOF

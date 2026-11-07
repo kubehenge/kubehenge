@@ -1,0 +1,9 @@
+- The upgrade dialog warns of deprecated APIs in use that the target removes. It also warns of fail-closed webhooks with under two ready endpoints or all on one node. The health identity may read `/metrics`, webhook configurations and endpoint slices for it.
+- An automatic upgrade waits with the condition `AutoUpgradeSkipped` and a warning event while those checks find something or cannot read the cluster.
+- New `kubehenge cluster upgrade NAME --version V` prints the same list and asks before it upgrades.
+- A deprecated API holds an automatic upgrade only while its request count moved in the last 7 days. The controller keeps the counts in the annotation `kubehenge.dev/deprecated-api-use`.
+- **Upgrade anyway** on the Health page, `kubehenge cluster accept-upgrade` and the annotation `kubehenge.dev/acknowledged-upgrade-findings` let a skipped automatic upgrade go ahead for one minor version.
+- A cluster on a Kubernetes minor older than the oldest offered for new clusters gets the condition `KubernetesOutOfSupport` and a Health warning. The appliance's notifications repeat monthly while it stays.
+- The controller stores what an upgrade to the next minor and the next patch would run into as the conditions `UpgradeFindingsNextMinor` and `UpgradeFindingsNextPatch`. Changing `spec.topology.version` with kubectl or GitOps prints them as warnings and is never refused.
+- The demo fleet has a cluster out of support and paused, and one whose automatic upgrade waits for a removed API.
+- A paused cluster whose certificates run out gets `CertificatesExpiring` with the reason `Paused`. A cluster paused for 7 days shows **Paused**, with the date, on its Health page.
