@@ -43,17 +43,17 @@ func CPULevel(o NodeOS) int {
 	if err != nil {
 		return 1
 	}
-	return cpuTypeLevel(CPUTypeOf(r))
+	return x86LevelOf(CPUTypeOf(r))
 }
 
 // TalosCPULevel is the x86-64 microarchitecture level Talos's templates need of the Proxmox VE
 // nodes. Talos is its own OS, of no node OS family, and its templates are made with DefaultCPUType.
 func TalosCPULevel() int {
-	return cpuTypeLevel(DefaultCPUType)
+	return x86LevelOf(DefaultCPUType)
 }
 
-// cpuTypeLevel is the level a QEMU CPU type of Proxmox VE's x86-64-v* models presents.
-func cpuTypeLevel(cpuType string) int {
+// x86LevelOf is the level a QEMU CPU type of Proxmox VE's x86-64-v* models presents.
+func x86LevelOf(cpuType string) int {
 	for l := len(cpuLevelFlags) - 1; l >= 2; l-- {
 		model := fmt.Sprintf("x86-64-v%d", l)
 		if cpuType == model || strings.HasPrefix(cpuType, model+"-") {

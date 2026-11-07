@@ -46,7 +46,7 @@ func TestFsyncQuantile(t *testing.T) {
 	}{
 		{"a fast disk", []uint64{0, 900, 90, 10}, time.Millisecond, 8 * time.Millisecond, 1000},
 		{"just under the limit", []uint64{0, 0, 0, 0, 990, 10}, 16 * time.Millisecond, 25 * time.Millisecond, 1000},
-		{"just over the limit", []uint64{0, 0, 0, 0, 900, 100}, 25 * time.Millisecond + 1, 32 * time.Millisecond, 1000},
+		{"just over the limit", []uint64{0, 0, 0, 0, 900, 100}, 25*time.Millisecond + 1, 32 * time.Millisecond, 1000},
 		{"a slow disk", []uint64{0, 0, 0, 0, 0, 400, 500, 100}, 32 * time.Millisecond, 128 * time.Millisecond, 1000},
 		{"past the last bound", []uint64{0, 0, 0, 0, 0, 0, 0, 0, 1000}, 128 * time.Millisecond, 128 * time.Millisecond, 1000},
 		{"no syncs yet", nil, 0, 0, 0},

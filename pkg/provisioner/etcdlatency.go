@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -40,6 +41,11 @@ const (
 	etcdFsyncSamples = 100
 	// etcdMetricsMax bounds what is read of a member's metrics.
 	etcdMetricsMax = 16 << 20
+	// etcdMetricsLine and etcdMetricsLineMax are the scanner's first and largest line buffers.
+	etcdMetricsLine    = 64 << 10
+	etcdMetricsLineMax = 1 << 20
+	// fsyncQuantileRank is the quantile that is watched.
+	fsyncQuantileRank = 0.99
 	// etcdMetricsTimeout bounds one member's reading.
 	etcdMetricsTimeout = 20 * time.Second
 	// etcdLatencySuffix ends the condition's message: why it matters and what to do.
@@ -151,52 +157,15 @@ func memberFsync(ctx context.Context, dial func(context.Context) (net.Conn, erro
 // buckets of its histogram as Prometheus's histogram_quantile does: linearly within the bucket the
 // quantile falls in. Values past the last finite bucket give that bucket's bound.
 func fsyncQuantile(metrics io.Reader) (time.Duration, uint64, error) {
-	type bucket struct {
-		le    float64
-		count float64
+	buckets, err := fsyncBuckets(metrics)
+	if err != nil {
+		return 0, 0, err
 	}
-	var buckets []bucket
-	scanner := bufio.NewScanner(metrics)
-	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
-	for scanner.Scan() {
-		rest, ok := strings.CutPrefix(scanner.Text(), walFsyncBucket+"{")
-		if !ok {
-			continue
-		}
-		labels, value, ok := strings.Cut(rest, "} ")
-		if !ok {
-			return 0, 0, fmt.Errorf("the metric line %q has no value", scanner.Text())
-		}
-		le, ok := leOf(labels)
-		if !ok {
-			return 0, 0, fmt.Errorf("the metric line %q has no le label", scanner.Text())
-		}
-		count, err := strconv.ParseFloat(strings.Fields(value)[0], 64)
-		if err != nil {
-			return 0, 0, fmt.Errorf("the metric line %q: %w", scanner.Text(), err)
-		}
-		buckets = append(buckets, bucket{le, count})
-	}
-	if err := scanner.Err(); err != nil {
-		return 0, 0, fmt.Errorf("reading the metrics: %w", err)
-	}
-	if len(buckets) == 0 {
-		return 0, 0, errors.New("the member reports no write-ahead log sync times")
-	}
-	slices.SortFunc(buckets, func(a, b bucket) int {
-		switch {
-		case a.le < b.le:
-			return -1
-		case a.le > b.le:
-			return 1
-		}
-		return 0
-	})
 	total := buckets[len(buckets)-1].count
 	if total == 0 {
 		return 0, 0, nil
 	}
-	rank := 0.99 * total
+	rank := fsyncQuantileRank * total
 	lower, below := 0.0, 0.0
 	for _, b := range buckets {
 		if b.count >= rank {
@@ -212,6 +181,46 @@ func fsyncQuantile(metrics io.Reader) (time.Duration, uint64, error) {
 		lower, below = b.le, b.count
 	}
 	return seconds(lower), uint64(total), nil
+}
+
+// fsyncBucket is one cumulative bucket of the histogram: the syncs that took at most le seconds.
+type fsyncBucket struct {
+	le    float64
+	count float64
+}
+
+// fsyncBuckets reads the write-ahead log sync histogram from a member's metrics, sorted by bound.
+func fsyncBuckets(metrics io.Reader) ([]fsyncBucket, error) {
+	var buckets []fsyncBucket
+	scanner := bufio.NewScanner(metrics)
+	scanner.Buffer(make([]byte, 0, etcdMetricsLine), etcdMetricsLineMax)
+	for scanner.Scan() {
+		rest, ok := strings.CutPrefix(scanner.Text(), walFsyncBucket+"{")
+		if !ok {
+			continue
+		}
+		labels, value, ok := strings.Cut(rest, "} ")
+		if !ok {
+			return nil, fmt.Errorf("the metric line %q has no value", scanner.Text())
+		}
+		le, ok := leOf(labels)
+		if !ok {
+			return nil, fmt.Errorf("the metric line %q has no le label", scanner.Text())
+		}
+		count, err := strconv.ParseFloat(strings.Fields(value)[0], 64)
+		if err != nil {
+			return nil, fmt.Errorf("the metric line %q: %w", scanner.Text(), err)
+		}
+		buckets = append(buckets, fsyncBucket{le, count})
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading the metrics: %w", err)
+	}
+	if len(buckets) == 0 {
+		return nil, errors.New("the member reports no write-ahead log sync times")
+	}
+	slices.SortFunc(buckets, func(a, b fsyncBucket) int { return cmp.Compare(a.le, b.le) })
+	return buckets, nil
 }
 
 func seconds(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
@@ -258,7 +267,10 @@ func (w *EtcdLatencyWatch) watch(ctx context.Context, c *clusterv1.Cluster) erro
 	}
 	members, err := w.Etcd.WALFsync(ctx, c)
 	if len(members) == 0 {
-		return err
+		if err != nil {
+			return fmt.Errorf("reading the etcd members of %s: %w", c.Name, err)
+		}
+		return nil
 	}
 	return errors.Join(err, w.mark(ctx, c, EtcdLatencyConditionOf(members)))
 }

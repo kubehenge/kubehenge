@@ -72,33 +72,6 @@ type hardwareOption struct {
 	on  bool
 }
 
-func (h Hardware) options() []hardwareOption {
-	return []hardwareOption{{ssdTag, h.SSD}, {discardTag, h.Discard}, {ioThreadTag, h.IOThread}, {numaTag, h.NUMA}}
-}
-
-// diskOptions are the options of the template's disks, each led by a comma.
-func (h Hardware) diskOptions() string {
-	var s string
-	if h.Discard {
-		s += ",discard=on"
-	}
-	if h.SSD {
-		s += ",ssd=1"
-	}
-	if h.IOThread {
-		s += ",iothread=1"
-	}
-	return s
-}
-
-// controller is the disk controller. An IO thread per disk needs the single-disk controller.
-func (h Hardware) controller() string {
-	if h.IOThread {
-		return "virtio-scsi-single"
-	}
-	return "virtio-scsi-pci"
-}
-
 // IsHardwareTag tells whether a tag records hardware rather than naming the template's line.
 func IsHardwareTag(tag string) bool {
 	return strings.HasPrefix(tag, hardwareTagPrefix)
@@ -168,19 +141,54 @@ func (h Hardware) Describe() string {
 	return strings.Join(parts, ", ")
 }
 
+func (h Hardware) options() []hardwareOption {
+	return []hardwareOption{{ssdTag, h.SSD}, {discardTag, h.Discard}, {ioThreadTag, h.IOThread}, {numaTag, h.NUMA}}
+}
+
+// diskOptions are the options of the template's disks, each led by a comma.
+func (h Hardware) diskOptions() string {
+	var s string
+	if h.Discard {
+		s += ",discard=on"
+	}
+	if h.SSD {
+		s += ",ssd=1"
+	}
+	if h.IOThread {
+		s += ",iothread=1"
+	}
+	return s
+}
+
+// controller is the disk controller. An IO thread per disk needs the single-disk controller.
+func (h Hardware) controller() string {
+	if h.IOThread {
+		return "virtio-scsi-single"
+	}
+	return "virtio-scsi-pci"
+}
+
+// The x86-64 microarchitecture levels a CPU model needs of the host.
+const (
+	level1 = iota + 1
+	level2
+	level3
+	level4
+)
+
 // cpuModels are the x86 CPU types Proxmox VE offers, each with the x86-64 microarchitecture level
 // its CPU model needs of the host.
 var cpuModels = map[string]int{
-	"x86-64-v2": 2, "x86-64-v2-AES": 2, "x86-64-v3": 3, "x86-64-v4": 4,
-	"host": 1, "max": 1, "kvm32": 1, "kvm64": 1, "qemu32": 1, "qemu64": 1,
-	"486": 1, "pentium": 1, "pentium2": 1, "pentium3": 1, "coreduo": 1, "core2duo": 1, "Conroe": 1, "Penryn": 1,
-	"Nehalem": 2, "Westmere": 2, "SandyBridge": 2, "IvyBridge": 2,
-	"Haswell": 3, "Broadwell": 3, "Skylake-Client": 3,
-	"Skylake-Server": 4, "Cascadelake-Server": 4, "Cooperlake": 4, "KnightsMill": 4,
-	"Icelake-Client": 4, "Icelake-Server": 4, "SapphireRapids": 4, "GraniteRapids": 4,
-	"SierraForest": 3, "ClearwaterForest": 3,
-	"athlon": 1, "phenom": 1, "Opteron_G1": 1, "Opteron_G2": 1, "Opteron_G3": 1, "Opteron_G4": 2, "Opteron_G5": 2,
-	"EPYC": 3, "EPYC-Rome": 3, "EPYC-Milan": 3, "EPYC-Genoa": 4, "EPYC-Turin": 4,
+	"x86-64-v2": level2, "x86-64-v2-AES": level2, "x86-64-v3": level3, "x86-64-v4": level4,
+	"host": level1, "max": level1, "kvm32": level1, "kvm64": level1, "qemu32": level1, "qemu64": level1,
+	"486": level1, "pentium": level1, "pentium2": level1, "pentium3": level1, "coreduo": level1, "core2duo": level1, "Conroe": level1, "Penryn": level1,
+	"Nehalem": level2, "Westmere": level2, "SandyBridge": level2, "IvyBridge": level2,
+	"Haswell": level3, "Broadwell": level3, "Skylake-Client": level3,
+	"Skylake-Server": level4, "Cascadelake-Server": level4, "Cooperlake": level4, "KnightsMill": level4,
+	"Icelake-Client": level4, "Icelake-Server": level4, "SapphireRapids": level4, "GraniteRapids": level4,
+	"SierraForest": level3, "ClearwaterForest": level3,
+	"athlon": level1, "phenom": level1, "Opteron_G1": level1, "Opteron_G2": level1, "Opteron_G3": level1, "Opteron_G4": level2, "Opteron_G5": level2,
+	"EPYC": level3, "EPYC-Rome": level3, "EPYC-Milan": level3, "EPYC-Genoa": level4, "EPYC-Turin": level4,
 }
 
 // cpuModelSuffix is what Proxmox VE appends to a model for a mitigation or a revision.

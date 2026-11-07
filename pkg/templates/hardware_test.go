@@ -80,10 +80,7 @@ func TestCreateAppliesTheHardware(t *testing.T) {
 		cpu    string
 		tags   []string
 	}{
-		{
-			"the defaults", HardwareChoice{},
-			",discard=on,ssd=1", "virtio-scsi-pci", false, DefaultCPUType, []string{"hw-cpu-x86-64-v2-aes", "hw-discard", "hw-ssd"},
-		},
+		{"the defaults", HardwareChoice{}, ",discard=on,ssd=1", "virtio-scsi-pci", false, DefaultCPUType, []string{"hw-cpu-x86-64-v2-aes", "hw-discard", "hw-ssd"}},
 		{
 			"every option changed", HardwareChoice{CPUType: "Haswell", SSD: &no, Discard: &no, IOThread: &yes, NUMA: &yes},
 			",iothread=1", "virtio-scsi-single", true, "Haswell", []string{"hw-cpu-haswell", "hw-iothread", "hw-numa"},
@@ -106,7 +103,10 @@ func TestCreateAppliesTheHardware(t *testing.T) {
 			if _, numa := c["numa"]; numa != tc.numa {
 				t.Errorf("numa set: %v, want %v (%v)", numa, tc.numa, c["numa"])
 			}
-			tags, _ := c["tags"].(string)
+			tags, isString := c["tags"].(string)
+			if !isString {
+				t.Fatalf("tags are %T, want a string", c["tags"])
+			}
 			for _, want := range tc.tags {
 				if !slices.Contains(ParseAllTags(tags), want) {
 					t.Errorf("tags %q lack %s", tags, want)
