@@ -844,13 +844,18 @@ The spec collects these by name, whatever labels they carry:
 | `<name>-backup-keys` | It decrypts the cluster's backups in the target. |
 | `<name>-encryption` | It decrypts the Secrets in a restored etcd (kubeadm). |
 | `<name>-ingress-ca` | It is the root that clients already trust. |
+| kubeadm: `<name>-ca`, `-etcd`, `-proxy`, `-sa` | A restored etcd keeps the old certificates and service account tokens, so the new control plane has to reuse these. |
+| RKE2: `<name>-ca`, `-cca`, `-etcd`, `-peer-etcd`, `-token` | The same, and the token also encrypts RKE2's bootstrap data in etcd. |
+| k3s: `<name>-ca`, `-cca`, `-etcd`, `-token` | The same. `-etcd` exists with embedded etcd only. |
+| Talos: `<name>-talos`, `-ca` | The bundle holds the Kubernetes, etcd and Talos CAs and the service account key. |
+
+The providers use a Secret that exists when the control plane is created. `create --from` restores these before the Cluster.
 
 Anything labelled `kubehenge.dev/cluster-name: <name>`, ConfigMaps included, is kept too.
 
 The controller makes the rest again. These are left out:
 
-- The kubeconfig and talosconfig.
-- Cluster API's certificates, since a rebuilt cluster is made of new machines.
+- The kubeconfig and talosconfig, which the providers sign again from the authorities above.
 - The Proxmox VE identities' tokens, and the autoscaler's and cluster mesh's copies.
 
 Credentials the appliance keeps for every cluster belong to the appliance and come back with the management etcd. A Secret named by `existingSecret` lives in the workload cluster.

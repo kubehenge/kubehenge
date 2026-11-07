@@ -141,7 +141,7 @@ func TestClusterSpecObjectsFollowTheClusterAndNotALabel(t *testing.T) {
 	for _, o := range objects {
 		got = append(got, o.GetName())
 	}
-	want := "web-backup-keys web-encryption web-extra web-gitops web-ingress-ca web.backup web.dns01 web.gitops web.oidc-client"
+	want := "web-backup-keys web-ca web-encryption web-extra web-gitops web-ingress-ca web-sa web.backup web.dns01 web.gitops web.oidc-client"
 	if strings.Join(got, " ") != want {
 		t.Errorf("collected\n%s\nwant\n%s", strings.Join(got, " "), want)
 	}

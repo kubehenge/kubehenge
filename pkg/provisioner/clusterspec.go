@@ -201,6 +201,19 @@ func cleanYAML(o any) ([]byte, error) {
 	return out, nil
 }
 
+// providerSecretSuffixes are the suffixes of the Secrets the control-plane and bootstrap providers
+// create beside a Cluster and look up again when they exist, read from the pinned sources of each.
+// A suffix a cluster's distribution does not use is skipped, since ClusterSpecObjects keeps only
+// the Secrets that exist.
+//   - kubeadm (Cluster API util/secret): ca, etcd, proxy (front proxy CA), sa (service account key)
+//   - RKE2 (pkg/secret): ca (server CA), cca (client CA), peer-etcd (etcd peer CA), etcd (etcd server
+//     CA) and token (the join token, which also encrypts RKE2's bootstrap data in etcd)
+//   - k3s (pkg/secret, pkg/token): ca, cca, etcd (embedded etcd only) and token
+//   - Talos (the bootstrap provider's secrets.go): talos (the secrets bundle, which holds the
+//     Kubernetes, etcd, aggregator and Talos CAs and the service account key) and ca (the
+//     Kubernetes CA derived from it)
+var providerSecretSuffixes = []string{"ca", "cca", "etcd", "peer-etcd", "proxy", "sa", "token", "talos"}
+
 // ClusterSpecSecretNames are the Secrets in a cluster's namespace that a rebuilt cluster cannot do
 // without, by the names the controller and the interface give them. Each is here because it cannot
 // be made again, or only at a cost:
@@ -211,16 +224,23 @@ func cleanYAML(o any) ([]byte, error) {
 //   - the backup keys decrypt the cluster's backups in the target
 //   - the encryption key decrypts the Secrets in a restored etcd
 //   - the ingress CA is the root clients already trust
+//   - the certificate authorities, service account key and join token the control-plane providers
+//     keep (see providerSecretSuffixes): a restored etcd keeps the old certificates and tokens, and
+//     a rebuilt control plane that made new ones would break every kubeconfig, service account
+//     token, etcd member and webhook that trusts the old
 //
-// Left out because a rebuilt cluster or the controller makes them again: the kubeconfig and the
-// talosconfig, Cluster API's certificates (a rebuilt cluster is made of new machines), the
-// Proxmox VE identities' tokens (new ones are minted), and the autoscaler's and cluster mesh's
-// copies, which the controller derives from other Secrets. Credentials the appliance keeps for
-// every cluster (notifications, a shared backup or DNS login) belong to the appliance and come
-// back with the management cluster's etcd. A Secret of the cluster's owner inside the workload
-// cluster, named by existingSecret, is not in the management cluster.
+// Left out because the controller makes them again: the kubeconfig and the talosconfig (both are
+// signed from the authorities above), the Proxmox VE identities' tokens (new ones are minted), and
+// the autoscaler's and cluster mesh's copies, which the controller derives from other Secrets.
+// Credentials the appliance keeps for every cluster (notifications, a shared backup or DNS login)
+// belong to the appliance and come back with the management cluster's etcd. A Secret of the
+// cluster's owner inside the workload cluster, named by existingSecret, is not in the management
+// cluster.
 func ClusterSpecSecretNames(c *clusterv1.Cluster) []string {
 	names := []string{GitOpsSecretName(c.Name), BackupKeysSecretName(c.Name), encryptionSecretName(c), IngressCAName(c.Name)}
+	for _, suffix := range providerSecretSuffixes {
+		names = append(names, c.Name+"-"+suffix)
+	}
 	for _, p := range credentialPurposes {
 		if !p.ApplianceOnly {
 			names = append(names, CredentialName(c.Name, p.Name))

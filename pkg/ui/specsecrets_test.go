@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,7 +41,7 @@ var (
 		"web-encryption": "etcd-encryption-key-value", "web-ingress-ca": "ingress-ca-key-value",
 	}
 	regenerated = map[string]string{ //nolint:gosec // fixed test values
-		"web-kubeconfig": "kubeconfig-value", "web-ca": "capi-ca-value", "web-credentials": "pve-token-value",
+		"web-kubeconfig": "kubeconfig-value", "web-credentials": "pve-token-value",
 	}
 )
 
@@ -64,6 +65,70 @@ func specRequest(t *testing.T, spec string, withoutSecrets bool) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+// providerSecrets are the Secrets each distribution's providers keep beside a Cluster, by their
+// pinned sources, with the type and labels Cluster API gives them.
+var providerSecrets = map[string][]string{
+	"kubeadm": {"ca", "etcd", "proxy", "sa"},
+	"rke2":    {"ca", "cca", "peer-etcd", "etcd", "token"},
+	"k3s":     {"ca", "cca", "etcd", "token"},
+	"talos":   {"talos", "ca"},
+}
+
+func TestRebuiltClusterGetsTheProvidersSecretsBackForEveryDistribution(t *testing.T) {
+	t.Parallel()
+	for distribution, suffixes := range providerSecrets {
+		t.Run(distribution, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			managementWithTarget(t, h)
+			admin := h.browser()
+			admin.signIn("admin@pve")
+			dev := h.browser()
+			dev.signIn("dev@pve")
+			expect(t, dev.do("POST", "/api/clusters", createBody), http.StatusCreated)
+			setUpBackups(t, admin)
+			ctx := t.Context()
+			original := map[string]*corev1.Secret{}
+			names := make([]string, 0, len(suffixes))
+			for _, suffix := range suffixes {
+				name := "web-" + suffix
+				s := &corev1.Secret{
+					Namespace: "default", Name: name, Type: "cluster.x-k8s.io/secret",
+					Labels: map[string]string{"cluster.x-k8s.io/cluster-name": "web"},
+					Data:   map[string][]byte{"tls.crt": []byte(distribution + "-crt-" + suffix), "tls.key": []byte(distribution + "-key-" + suffix)},
+				}
+				if err := h.kube.Create(ctx, s.DeepCopy()); err != nil {
+					t.Fatal(err)
+				}
+				original[name] = s
+				names = append(names, name)
+			}
+			h.server.storeSpecsOnce(ctx, map[string]string{})
+			rec := dev.do("GET", "/api/clusters/default/web/spec", "")
+			expect(t, rec, http.StatusOK)
+			spec := rec.Body.String()
+			for _, s := range original {
+				if strings.Contains(spec, string(s.Data["tls.key"])) || strings.Contains(spec, base64.StdEncoding.EncodeToString(s.Data["tls.key"])) {
+					t.Fatalf("the spec holds %s in plain text", s.Name)
+				}
+			}
+
+			cleanWeb(t, h, names)
+			expect(t, dev.do("POST", "/api/cluster-specs", specRequest(t, spec, false)), http.StatusCreated)
+			for name, want := range original {
+				got := &corev1.Secret{}
+				if err := h.kube.Get(ctx, client.ObjectKey{Namespace: "default", Name: name}, got); err != nil {
+					t.Errorf("%s was not restored: %v", name, err)
+					continue
+				}
+				if !maps.EqualFunc(got.Data, want.Data, bytes.Equal) || got.Type != want.Type || got.Labels["cluster.x-k8s.io/cluster-name"] != "web" {
+					t.Errorf("%s differs from the original: %v, %q, %v", name, got.Data, got.Type, got.Labels)
+				}
+			}
+		})
+	}
 }
 
 func TestSpecSecretsOpenOfflineWithAnExtraRecipientsKey(t *testing.T) {
