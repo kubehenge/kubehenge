@@ -964,32 +964,33 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 
 // A bake that shows no work for bakeStall has hung, as a package manager waiting on nothing does,
 // and would otherwise hold its build until bakeTimeout. Work is a new line in its log, a MiB
-// received, 16 MiB written, or a quarter of its CPUs busy at a reading. A mirror at dnf's least
-// rate (build.sh) still sends 60 MB in that time.
+// received, 16 MiB written, or half a CPU busy at a reading, whatever the VM's CPU count, as one
+// thread of a long step keeps one CPU busy. A mirror at dnf's least rate (build.sh) still sends
+// 60 MB in that time.
 const (
 	bakeStall         = 10 * time.Minute
 	bakeStallReceived = 1 << 20
 	bakeStallWritten  = 16 << 20
-	bakeStallCPU      = 0.25
+	bakeStallCores    = 0.5
 )
 
 // bakeWatch is how often a running bake's work is read.
 const bakeWatch = time.Minute
 
 // bakeActivity is what shows a bake at work: its log's size, and the bytes its VM received and
-// wrote and the share of its CPUs it used, as Proxmox VE counts them.
+// wrote and the CPUs it kept busy, as Proxmox VE counts them.
 type bakeActivity struct {
 	log      string
 	received uint64
 	written  uint64
-	cpu      float64
+	cores    float64
 }
 
 // busySince tells whether a shows work since earlier. A counter that went back, as after a
 // restart, counts as work.
 func (a bakeActivity) busySince(earlier bakeActivity) bool {
 	return a.log != earlier.log || a.received-earlier.received >= bakeStallReceived ||
-		a.written-earlier.written >= bakeStallWritten || a.cpu >= bakeStallCPU
+		a.written-earlier.written >= bakeStallWritten || a.cores >= bakeStallCores
 }
 
 func (b *Builder) activity(ctx context.Context, vm *proxmox.VirtualMachine, log string) (bakeActivity, error) {
@@ -1000,12 +1001,15 @@ func (b *Builder) activity(ctx context.Context, vm *proxmox.VirtualMachine, log 
 	var status struct {
 		NetIn     uint64  `json:"netin"`
 		DiskWrite uint64  `json:"diskwrite"`
-		CPU       float64 `json:"cpu"`
+		// CPU is the share of all CPUs in use, so CPU times CPUs is the CPUs kept busy.
+		CPU  float64 `json:"cpu"`
+		CPUs int     `json:"cpus"`
 	}
 	if err := b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/status/current", vm.Node, vm.VMID), &status); err != nil {
 		return bakeActivity{}, fmt.Errorf("reading the status of VM %d: %w", vm.VMID, err)
 	}
-	return bakeActivity{log: size, received: status.NetIn, written: status.DiskWrite, cpu: status.CPU}, nil
+	cores := status.CPU * float64(max(status.CPUs, 1))
+	return bakeActivity{log: size, received: status.NetIn, written: status.DiskWrite, cores: cores}, nil
 }
 
 // runCheck runs a check of a bake, watched for a stall when the bake keeps a log.

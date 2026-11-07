@@ -37,6 +37,9 @@ type guestResult struct {
 	out  string
 }
 
+// bakeCPUs is how many CPUs a bake VM's status gives.
+const bakeCPUs = 8
+
 // bakeHost is one Proxmox VE node, pve1, in memory, as far as making a template takes it: its
 // storages and their volumes, its VMs with their state and guest agents, and the tasks it runs. It
 // writes every call that changes something into changes, in the order made, as a short step.
@@ -64,7 +67,7 @@ type bakeHost struct {
 	// logGrows has each stat of a file answer a larger size than the one before.
 	logGrows bool
 	// Each read of a VM's status counts netInStep more bytes received and diskWriteStep more
-	// written, and finds its CPUs at cpu.
+	// written, and finds its bakeCPUs CPUs at cpu, the share of all of them in use.
 	netIn, diskWrite, netInStep, diskWriteStep uint64
 	cpu                                        float64
 	stats                                      int
@@ -251,7 +254,7 @@ func (h *bakeHost) power(r *http.Request, vmid int, rest string, step func(chang
 		h.diskWrite += h.diskWriteStep
 		return map[string]any{
 			"vmid": vmid, "name": h.vms[vmid]["name"], "status": status,
-			"netin": h.netIn, "diskwrite": h.diskWrite, "cpu": h.cpu,
+			"netin": h.netIn, "diskwrite": h.diskWrite, "cpu": h.cpu, "cpus": bakeCPUs,
 		}, ""
 	case r.Method == http.MethodPost && rest == "/status/start":
 		h.running[vmid] = true
@@ -640,7 +643,7 @@ func TestABakeAtWorkRunsUntilItsTimeout(t *testing.T) {
 		"its log grows":     func(h *bakeHost) { h.logGrows = true },
 		"it receives a MiB": func(h *bakeHost) { h.netInStep = bakeStallReceived },
 		"it writes 16 MiB":  func(h *bakeHost) { h.diskWriteStep = bakeStallWritten },
-		"its CPUs are busy": func(h *bakeHost) { h.cpu = bakeStallCPU },
+		"one CPU of eight is busy": func(h *bakeHost) { h.cpu = 1.0 / bakeCPUs },
 		"all of them at once": func(h *bakeHost) {
 			h.logGrows, h.netInStep, h.diskWriteStep, h.cpu = true, 1<<30, 1<<30, 1
 		},
