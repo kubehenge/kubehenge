@@ -717,7 +717,11 @@ describe("clusters", () => {
     const calls = fakeServer({
       ...signedIn,
       "GET /api/clusters/default/web": {
-        body: { ...web, allowed: { change: true, kubeconfig: true }, machines: [stuck, runningOn("md-a", "pve1", "worker")] },
+        body: {
+          ...web,
+          allowed: { change: true, kubeconfig: true },
+          machines: [stuck, runningOn("md-a", "pve1", "worker")],
+        },
       },
       "PUT /api/clusters/default/web/machines/cp-a/forgotten": { status: 202 },
     });

@@ -276,6 +276,17 @@ func (o *controllerOptions) addAutoscalerFlags(f *pflag.FlagSet) {
 	_ = cobra.MarkFlagRequired(f, "autoscaler-images")
 }
 
+// readPlaces decodes --token-places and adds the places the other flags name.
+func (o *controllerOptions) readPlaces() error {
+	if o.tokenPlaces != "" {
+		if err := json.Unmarshal([]byte(o.tokenPlaces), &o.places); err != nil {
+			return fmt.Errorf("--token-places: %w", err)
+		}
+	}
+	o.places.WorkloadPool, o.places.ClusterGroup, o.places.BootLogs = o.r.WorkloadPool, o.settings.Group, o.bootLogs
+	return nil
+}
+
 func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if conn.CAFile == "" {
 		return errors.New("--proxmox-ca is required: workload clusters are given the CA to verify the Proxmox VE API with")
@@ -283,12 +294,9 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err := provisioner.ValidWorkloadPool(o.r.WorkloadPool); err != nil {
 		return fmt.Errorf("--workload-pool: %w", err)
 	}
-	if o.tokenPlaces != "" {
-		if err := json.Unmarshal([]byte(o.tokenPlaces), &o.places); err != nil {
-			return fmt.Errorf("--token-places: %w", err)
-		}
+	if err := o.readPlaces(); err != nil {
+		return err
 	}
-	o.places.WorkloadPool, o.places.ClusterGroup, o.places.BootLogs = o.r.WorkloadPool, o.settings.Group, o.bootLogs
 	o.connect = func(token string) (*proxmox.Client, error) {
 		return pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile, Insecure: conn.Insecure})
 	}

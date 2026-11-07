@@ -124,9 +124,7 @@ func (f *vmFixture) located() []string {
 	for _, role := range []string{"controlPlane", "workers"} {
 		locations, _, _ := unstructured.NestedSlice(pc.Object, "status", "nodeLocations", role)
 		for _, l := range locations {
-			entry, _ := l.(map[string]any)
-			name, _, _ := unstructured.NestedString(entry, "machine", "name")
-			names = append(names, name)
+			names = append(names, locatedMachine(l))
 		}
 	}
 	return names

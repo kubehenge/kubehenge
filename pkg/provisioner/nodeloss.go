@@ -171,9 +171,9 @@ func equalConditions(a, b []metav1.Condition) bool {
 
 // answerForget applies an administrator's request to forget a machine, or refuses it with the reason.
 func (w *VMWatch) answerForget(ctx context.Context, c *clusterv1.Cluster, d *deletingMachine, look *vmLook) error {
-	refusal := ""
-	if d.m.Annotations[ForgetAnnotation] != d.m.Name {
-		refusal = fmt.Sprintf("the request names %q, not the machine %q", d.m.Annotations[ForgetAnnotation], d.m.Name)
+	var refusal string
+	if asked := d.m.Annotations[ForgetAnnotation]; asked != d.m.Name {
+		refusal = fmt.Sprintf("the request names %q, not the machine %q", asked, d.m.Name)
 	} else {
 		refusal = forgetRefusal(d, look, w.now())
 	}
@@ -222,26 +222,7 @@ func (w *VMWatch) forgetLocation(ctx context.Context, c *clusterv1.Cluster, mach
 	for i := range pcs.Items {
 		pc := &pcs.Items[i]
 		before := pc.DeepCopy()
-		changed := false
-		for _, role := range []string{"controlPlane", "workers"} {
-			path := []string{"status", "nodeLocations", role}
-			locations, found, _ := unstructured.NestedSlice(pc.Object, path...)
-			if !found {
-				continue
-			}
-			kept := make([]any, 0, len(locations))
-			for _, l := range locations {
-				entry, _ := l.(map[string]any)
-				if name, _, _ := unstructured.NestedString(entry, "machine", "name"); name != machine {
-					kept = append(kept, l)
-				}
-			}
-			if len(kept) != len(locations) {
-				changed = true
-				_ = unstructured.SetNestedSlice(pc.Object, kept, path...)
-			}
-		}
-		if !changed {
+		if !dropLocation(pc, machine) {
 			continue
 		}
 		if err := w.Client.Status().Patch(ctx, pc, client.MergeFrom(before)); err != nil && !apierrors.IsNotFound(err) {
@@ -249,4 +230,33 @@ func (w *VMWatch) forgetLocation(ctx context.Context, c *clusterv1.Cluster, mach
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// dropLocation removes the machine from a ProxmoxCluster's control-plane and worker locations and
+// tells whether it was in either.
+func dropLocation(pc *unstructured.Unstructured, machine string) bool {
+	dropped := false
+	for _, role := range []string{"controlPlane", "workers"} {
+		path := []string{"status", "nodeLocations", role}
+		locations, found, _ := unstructured.NestedSlice(pc.Object, path...)
+		if !found {
+			continue
+		}
+		kept := slices.DeleteFunc(slices.Clone(locations), func(l any) bool { return locatedMachine(l) == machine })
+		if len(kept) != len(locations) {
+			dropped = true
+			_ = unstructured.SetNestedSlice(pc.Object, kept, path...)
+		}
+	}
+	return dropped
+}
+
+// locatedMachine is the name of the machine one node location records.
+func locatedMachine(l any) string {
+	entry, ok := l.(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _, _ := unstructured.NestedString(entry, "machine", "name")
+	return name
 }

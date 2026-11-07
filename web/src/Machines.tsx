@@ -268,7 +268,7 @@ export function Machines({
             onChanged();
           }}
         >
-          Lets go of the machine without destroying its VM. Remove the VM in Proxmox VE yourself if it is still there.
+          Lets go of the machine, not its VM. Remove the VM in Proxmox VE yourself if it is still there.
         </MachineDialog>
       )}
     </div>
