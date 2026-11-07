@@ -66,7 +66,13 @@ shift 3
 case $1 in
     list)
         echo '      VMID NAME                 STATUS     MEM(MB)    BOOTDISK(GB) PID'
-        for vm in '100 mgmt-0' '101 talos-cp' '102 talos-worker' '103 talos-down' '104 talos-hang' '105 kubeadm-cp'; do
+        # The node that never answers is listed alone, in a run of its own with a short cut-off.
+        # Beside the others it would force one cut-off on nodes whose stand-ins only start slowly.
+        if [ -e "${0%/*}/../hang-only" ]; then
+            echo '       104 talos-hang running 4096 30.00 1'
+            exit 0
+        fi
+        for vm in '100 mgmt-0' '101 talos-cp' '102 talos-worker' '103 talos-down' '105 kubeadm-cp'; do
             echo "       ${vm} running 4096 30.00 1"
         done
         echo '       106 stopped-vm stopped 4096 30.00 0'
@@ -195,12 +201,13 @@ esac
 EOF
 chmod +x "${bin}"/*
 
-# collect_into <out> <work directory>: guests.sh collect with the stand-ins, whose exit code it prints.
-# The cut-off ends the node that never answers, which is asked once. It is well above what a
-# stand-in's answer takes on a loaded machine, where a few processes can take seconds to start.
+# collect_into <out> <work directory> [cut-off in seconds]: guests.sh collect with the stand-ins,
+# whose exit code it prints. The default cut-off is far above what a stand-in's answer takes on a
+# loaded machine, where a few processes can take seconds to start. Only the run of the node that
+# never answers uses a short one.
 collect_into() {
     code=0
-    env PATH="${bin}:${PATH}" TMPDIR="${root}/tmp" KUBEHENGE_E2E_TALOSCTL_TIMEOUT=10 \
+    env PATH="${bin}:${PATH}" TMPDIR="${root}/tmp" KUBEHENGE_E2E_TALOSCTL_TIMEOUT="${3:-120}" \
         sh "${guests}" collect "$1" "$2" > "${root}/collect.log" 2>&1 || code=$?
     echo "${code}"
 }
@@ -253,9 +260,7 @@ has "a node that refuses says why" "${d}/state.txt" "connection refused"
 has "and is asked nothing more" "${d}/state.txt" "nothing more was asked of it"
 truth "so it has no other parts" [ ! -e "${d}/services.txt" ]
 
-h=${out}/104-talos-hang
-has "a node that never answers is cut off" "${h}/state.txt" "exit code: none, cut off after 10 s"
-truth "and has no other parts" [ ! -e "${h}/services.txt" ]
+truth "the node that never answers is not in the main run" [ ! -e "${out}/104-talos-hang" ]
 
 k=${out}/105-kubeadm-cp
 has "a VM of a cluster without a talosconfig is read through its guest agent" "${k}/state.txt" "guest 105 says hi"
@@ -269,6 +274,18 @@ has "the management cluster's node says why" "${out}/100-mgmt-0/state.txt" "no t
 has "a VM tagged talos says why" "${out}/101-talos-cp/state.txt" "cannot be read through its API"
 has "an untagged VM falls back to its guest agent" "${out}/102-talos-worker/state.txt" "QEMU guest agent is not running"
 has "the kubeadm VM is still read" "${out}/105-kubeadm-cp/state.txt" "guest 105 says hi"
+
+# The node that never answers is cut off after the short timeout, and nothing more is asked of it.
+: > "${root}/hang-only"
+out=${root}/out-hang
+code=$(collect_into "${out}" "${root}/work" 2)
+truth "collect succeeds although a node never answers" [ "${code}" = 0 ]
+left=$(ls -A "${root}/tmp")
+truth "the talosconfigs and kubeconfig are removed after the cut-off" [ -z "${left}" ]
+h=${out}/104-talos-hang
+has "a node that never answers is cut off" "${h}/state.txt" "exit code: none, cut off after 2 s"
+truth "and has no other parts" [ ! -e "${h}/services.txt" ]
+rm "${root}/hang-only"
 
 echo "guests-talos: ${passes} passed, ${failures} failed"
 [ "${failures}" -eq 0 ]
