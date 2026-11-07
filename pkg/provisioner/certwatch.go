@@ -43,6 +43,8 @@ const (
 	CertificatesRestartNeeded = "RestartNeeded"
 	// CertificatesNotRenewed: they run out within certificateWarnWithin and nothing renewed them.
 	CertificatesNotRenewed = "NotRenewed"
+	// CertificatesPaused: they are due and the cluster is paused, so no machine is replaced.
+	CertificatesPaused = "Paused"
 )
 
 const (
@@ -149,7 +151,7 @@ func (w *CertificateWatch) pass(ctx context.Context) time.Duration {
 
 // watch looks at one cluster's certificates and tells whether they are being renewed.
 func (w *CertificateWatch) watch(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
-	if !c.DeletionTimestamp.IsZero() || ptr.Deref(c.Spec.Paused, false) || RestoreInProgress(c) {
+	if !c.DeletionTimestamp.IsZero() || RestoreInProgress(c) {
 		return false, nil
 	}
 	machines, err := clusterMachines(ctx, w.Client, c)
@@ -166,6 +168,10 @@ func (w *CertificateWatch) watch(ctx context.Context, c *clusterv1.Cluster) (boo
 	}
 	if len(due) == 0 {
 		return false, errors.Join(readErr, w.mark(ctx, c, nil))
+	}
+	if ptr.Deref(c.Spec.Paused, false) {
+		// Cluster API replaces no machine of a paused cluster, so asking for one would only queue it.
+		return false, errors.Join(readErr, w.mark(ctx, c, pausedCondition(due)))
 	}
 	cond, renewErr := w.renew(ctx, c, due)
 	return cond != nil && cond.Reason == CertificatesRenewing, errors.Join(readErr, renewErr, w.mark(ctx, c, cond))
@@ -500,14 +506,29 @@ func (w *CertificateWatch) remediate(ctx context.Context, c *clusterv1.Cluster, 
 	return replaceStarted, nil
 }
 
-func (r *renewal) condition(c *clusterv1.Cluster) *metav1.Condition {
-	all := slices.Concat(r.late, r.restart, r.renewing)
+// pausedCondition is the condition of a paused cluster whose certificates are due: the dates, and
+// that nothing renews them while it is paused.
+func pausedCondition(due []expiry) *metav1.Condition {
+	return &metav1.Condition{
+		Status: metav1.ConditionTrue, Reason: CertificatesPaused,
+		Message: certificatesRunOut(due) + certificatesRest + " them, resume the cluster. The machines holding them are not replaced while it is paused.",
+	}
+}
+
+// certificatesRunOut is the first sentence of the condition's message: what runs out when.
+func certificatesRunOut(all []expiry) string {
+	all = slices.Clone(all)
 	slices.SortStableFunc(all, func(a, b expiry) int { return a.at.Compare(b.at) })
 	items := make([]string, len(all))
 	for i, e := range all {
 		items[i] = e.what + " on " + e.at.UTC().Format(time.DateOnly)
 	}
-	msg := "Certificates run out: " + strings.Join(items, ", ") + "."
+	return "Certificates run out: " + strings.Join(items, ", ") + "."
+}
+
+func (r *renewal) condition(c *clusterv1.Cluster) *metav1.Condition {
+	all := slices.Concat(r.late, r.restart, r.renewing)
+	msg := certificatesRunOut(all)
 	switch {
 	case len(r.restart) > 0:
 		nodes := make([]string, len(r.restart))

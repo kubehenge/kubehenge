@@ -736,6 +736,8 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 		Interval:          o.upgradeInterval,
 		Soak:              o.nodeImageSoak,
 		TalosImages:       templates.DefaultSources(),
+		Checker:           &provisioner.IdentityChecker{Reader: mgr.GetAPIReader(), Now: time.Now},
+		Events:            mgr.GetEventRecorder("kubehenge"),
 		Now:               time.Now,
 	}
 	if err := mgr.Add(upgrader); err != nil {

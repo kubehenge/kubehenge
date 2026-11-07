@@ -380,6 +380,7 @@ The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upg
   - For Talos, the release the nodes run and the one new machines boot first when it differs ([Talos upgrades](#talos-upgrades)). It also shows the node being upgraded and the last upgrade.
 - **Health:** whether the cluster is healthy, changing, degraded or unreachable. It has tiles for the control plane (and etcd, on kubeadm), workers, node pressure, unwell pods, add-ons and machine health checks.
   - Then what needs attention, most serious first, each linking to its details.
+  - A cluster on a Kubernetes minor older than the oldest offered for new clusters shows **Kubernetes out of support**, also as the condition `KubernetesOutOfSupport`. One paused for 7 days or more shows **Paused since** with the date.
   - Below come the nodes, with ready, pressure, cordons and taints and what their pods ask for.
   - They also show the VM's CPU over the last hour and its memory, as far as you may see the VMs.
   - Then the pods that are not well (crash loops, images that do not pull, pods that cannot be scheduled, containers killed for memory).
@@ -497,7 +498,11 @@ The newest version the cluster may move to is chosen already. Under it the dialo
 
 - the API server's dry run of the change and what it replaces (a refusal disables **Upgrade**)
 - whether the node addresses leave one spare for the extra node a rollout adds
+- the deprecated APIs in use that the target version removes ([upgrading.md](upgrading.md#by-hand))
+- the fail-closed webhooks with a thin backend
 - how many problems the cluster's Health page lists
+
+The two checks of the cluster's insides warn and do not disable **Upgrade**.
 
 Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
 
@@ -1037,7 +1042,7 @@ An administrator can let cluster creators choose among more namespaces than `clu
 
 ## From the command line
 
-`kubehenge cluster` lists, creates, scales and deletes clusters through the interface, signed in with a Proxmox VE API token instead of a password. The token is held to the privileges above as a user is. One with privilege separation holds only what both it and its user are given. One without holds its user's. Proxmox VE is asked about a token at most once a minute, so one revoked there stops working within that minute.
+`kubehenge cluster` lists, creates, scales, upgrades and deletes clusters through the interface, signed in with a Proxmox VE API token instead of a password. The token is held to the privileges above as a user is. One with privilege separation holds only what both it and its user are given. One without holds its user's. Proxmox VE is asked about a token at most once a minute, so one revoked there stops working within that minute.
 
 ```sh
 export KUBEHENGE_URL=https://kubehenge.example.org
@@ -1045,6 +1050,7 @@ export KUBEHENGE_PROXMOX_TOKEN='ci@pve!kubehenge=<secret>'
 kubehenge cluster list
 kubehenge cluster create -f web.yaml
 kubehenge cluster scale web --control-planes 3 --workers md-0=5
+kubehenge cluster upgrade web --version v1.37.1
 kubehenge cluster kubeconfig web > web.kubeconfig
 kubehenge cluster get web
 kubehenge cluster machine cordon web web-md-0-x7k2p
@@ -1054,6 +1060,8 @@ kubehenge cluster delete web --yes
 - The token is read only from `KUBEHENGE_PROXMOX_TOKEN`, so it never shows in a process list. `--ca` (or `KUBEHENGE_CA`) names the CA of the interface's certificate where the system does not trust it.
 - A cluster is found by its name. `-n` names its namespace where more than one has a cluster of that name.
 - `create` takes what the wizard sends, in YAML or JSON, and the interface checks it the same way. That is `name`, `class`, `version`, `controlPlaneReplicas`, `workerReplicas` and `variables`, and `namespace` where there are [more namespaces](#more-namespaces-for-clusters).
+- `upgrade` prints the removed APIs and fail-closed webhooks the new version meets and asks before it upgrades. `--yes` skips the question.
+- `accept-upgrade` lets a skipped automatic upgrade go ahead past the findings it lists, for the minor version given.
 - `machine` takes a machine's name, as `get` lists it. `replace`, `keep`, `delete`, `cordon`, `uncordon` and `reboot` do what a machine's actions in the interface do.
 - `get` and `list -o json` print the interface's own description of a cluster for scripts to read.
 - Any HTTP client can do the same: send `Authorization: PVEAPIToken=<user>@<realm>!<name>=<secret>` to the interface's `/api/clusters`.
