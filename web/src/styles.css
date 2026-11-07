@@ -3076,10 +3076,49 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
   grid-template-columns: 1fr 1fr 11em 5.5rem;
 }
 
+.node-row.file-row {
+  grid-template-columns: minmax(0, 1fr) 6.5em 9em 5.5rem;
+}
+
+.node-row.command-row {
+  grid-template-columns: minmax(0, 1fr) 9em 5.5rem;
+}
+
+.node-row.source-row {
+  grid-template-columns: 9em minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.node-row.source-row.text {
+  grid-template-columns: 9em minmax(0, 1fr);
+}
+
+.node-row.wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.node-row.pair {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
 .node-row.bare input,
-.node-row.bare select {
+.node-row.bare select,
+.node-row.file-row input,
+.node-row.file-row select,
+.node-row.source-row input,
+.node-row.source-row select,
+.node-row.source-row textarea,
+.node-row.wide input,
+.node-row.pair input {
   inline-size: 100%;
   min-inline-size: 0;
+}
+
+.node-row.source-row textarea {
+  font-family: var(--mono);
+}
+
+.custom-file {
+  margin-block-end: 12px;
 }
 
 .node-row .field-error {
@@ -3101,6 +3140,18 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
   display: none;
 }
 
+/* Rows of more than one line keep their field names, as there is no heading line above them. */
+.node-rows.labelled .node-field-name {
+  display: block;
+  margin-block-end: 2px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+.node-rows.labelled .node-row > button {
+  align-self: end;
+}
+
 /* The rows follow the width of their dialog, not the window's. Where the fields no longer fit side
    by side, each takes the full width under its name and Remove follows, aligned to the row's start. */
 .node-rows {
@@ -3109,7 +3160,12 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
 
 @container (inline-size < 32rem) {
   .node-row,
-  .node-row.taint-row {
+  .node-row.taint-row,
+  .node-row.file-row,
+  .node-row.command-row,
+  .node-row.source-row,
+  .node-row.source-row.text,
+  .node-row.pair {
     grid-template-columns: minmax(0, 1fr);
     row-gap: 6px;
   }

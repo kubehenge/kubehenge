@@ -522,6 +522,76 @@ A cluster with one control plane runs on two etcd members while its control plan
 
 If the new machine is not ready after 20 minutes, the cluster's page says the roll stalled. It says why, and whether the API still answers. It offers **Recover…**, which keeps one control-plane machine and replaces the others ([troubleshooting.md](troubleshooting.md#one-control-plane-its-roll-stalled)).
 
+## Node customisation
+
+The `nodeCustomisation` variable adds files, boot commands, arguments and audit settings to a cluster's nodes. Edits to the generated bootstrap objects are reverted by Cluster API, so this is the way to make them last. Kubehenge's own settings come first and stay: the variable cannot set a path or argument that Kubehenge sets ([troubleshooting.md](troubleshooting.md#node-customisation-is-refused)).
+
+| Field | What it adds |
+| --- | --- |
+| `files` | Up to 10 files. `path`, `permissions` (`0400`, `0440`, `0444`, `0600`, `0640`, `0644` by default, `0700`, `0750` or `0755`), and either `content` or `secret` (`name`, `key`). `roles` is `controlPlane`, `worker` or both (default). |
+| `commands` | Up to 10 commands (`run`, `roles`) that run in order before the distribution starts. |
+| `kubeletArgs` | Kubelet arguments (`name` without dashes, `value`) for every node. |
+| `apiServerArgs`, `controllerManagerArgs`, `schedulerArgs` | The same for the control-plane components. |
+| `auditPolicy` | `configMap`, a ConfigMap in the cluster's namespace whose key `policy.yaml` replaces Kubehenge's audit policy. Or `policy`, the policy itself. |
+| `auditWebhook` | `secret` and `key` (default `kubeconfig`): a Secret in the cluster's namespace that holds the webhook's kubeconfig. The API server sends its audit events there. |
+
+Secrets and the ConfigMap sit in the cluster's namespace and have to exist when the cluster is saved. No secret value goes into the variable. Put a certificate or key in a Secret and name it in `secret`. Kubehenge copies a ConfigMap policy into the Secret `<cluster>-audit-policy` for the nodes to read.
+
+Nodes read a Secret once, as they bootstrap. A new value in a Secret or ConfigMap reaches new nodes only after the variable changes. Give the new value a new name.
+
+Each distribution takes what it can carry. Anything else is refused when the cluster is saved.
+
+| | kubeadm | RKE2 and k3s | Talos |
+| --- | --- | --- | --- |
+| `files` | `files` | `files` | `machine.files`, under `/var` and `/etc/cri/conf.d` only, content inline |
+| `commands` | `preKubeadmCommands` | `preRKE2Commands`, `preK3sCommands` | refused, Talos has no shell |
+| Arguments | `extraArgs`, `kubeletExtraArgs` | a configuration drop-in (`kube-apiserver-arg+` and the like) | `extraArgs` of the Kube configuration documents |
+| `auditPolicy` | a file at the policy's path | the same | `policy` only |
+| `auditWebhook` | a file and `audit-webhook-config-file` | the same | refused, Talos reads no Secret |
+
+Examples, as `spec.topology.variables` of a Cluster:
+
+```yaml
+# kubeadm: audit events to a SIEM, an auditd rule, a boot command.
+- name: nodeCustomisation
+  value:
+    auditWebhook: {secret: siem-webhook}
+    files:
+      - {path: /etc/audit/rules.d/50-company.rules, content: "-w /etc/kubernetes/ -p wa", roles: [controlPlane]}
+    commands: [{run: augenrules --load, roles: [controlPlane]}]
+    apiServerArgs: [{name: audit-log-maxage, value: "90"}]
+```
+
+```yaml
+# RKE2 or k3s: a company CA on every node, and a kubelet argument.
+- name: nodeCustomisation
+  value:
+    files: [{path: /etc/pki/ca-trust/source/anchors/company.crt, secret: {name: company-ca, key: ca.crt}}]
+    commands: [{run: update-ca-trust}]
+    kubeletArgs: [{name: event-qps, value: "50"}]
+```
+
+```yaml
+# Talos: its own audit policy and a file the machine keeps.
+- name: nodeCustomisation
+  value:
+    auditPolicy:
+      policy: {apiVersion: audit.k8s.io/v1, kind: Policy, rules: [{level: Metadata}]}
+    files: [{path: /var/company/syslog.conf, content: "target=siem.example.org"}]
+```
+
+In the interface the **Advanced** section of the create wizard and the node customisation row under **Options** hold the same fields. With the command line:
+
+```sh
+kubehenge cluster update prod \
+  --node-file /etc/audit/rules.d/50-company.rules=./company.rules,roles=control-plane \
+  --node-command control-plane:'augenrules --load' \
+  --kubelet-arg event-qps=50 --apiserver-arg request-timeout=30s \
+  --audit-policy-configmap company-audit --audit-webhook-secret siem-webhook/kubeconfig
+```
+
+Changing the variable replaces every node it reaches, one at a time. The plan says so, as it does for other changes that replace nodes. A change to `files`, the arguments or the audit settings reaches both roles unless its `roles` limit it.
+
 ## Node image refresh
 
 The nodes of kubeadm, RKE2 and k3s clusters are clones of a VM template of their node OS. The management cluster builds the template again every week with the node OS's updates ([templates.md](templates.md#the-weekly-build)).
@@ -1165,6 +1235,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `nodeOS` | no | kubeadm, RKE2 and k3s: `family` and `release`, a node OS Kubehenge builds templates of ([templates.md](templates.md#node-oses)). Default AlmaLinux 10. Changing it replaces every node ([above](#change-settings)). |
 | `cis` | no | Harden the cluster to the CIS Kubernetes Benchmark ([above](#add-ons)). Default false. It may change from false to true, which replaces every node. The class refuses true to false. |
 | `workerNodes` | no | The `labels` (`key`, `value`) and `taints` (`key`, `value`, `effect`) the workers register with, for every pool that sets none of its own ([Pools](#pools)). |
+| `nodeCustomisation` | no | `files`, `commands`, `kubeletArgs`, `apiServerArgs`, `controllerManagerArgs`, `schedulerArgs`, `auditPolicy` and `auditWebhook` for the nodes ([Node customisation](#node-customisation)). Changing it replaces the nodes it reaches. |
 | `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)). `enabled` (default false). `implementation`, `metallb` (default) or `kube-vip`. `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network, needed while `enabled`. |
 | `headlamp` | no | `enabled` (default false). `hostname`, to serve it through the cluster's ingress controller. `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname`. When unset, one from the certificates add-on while it is on, else the ingress controller's default certificate. `access`, `token` (default) or `view`, read-only without sign-in ([above](#add-ons)). |
 | `monitoring` | no | `enabled` (default false), which installs cert-manager too ([above](#add-ons)). `hostname`, to serve Grafana through the cluster's ingress controller. `tlsSecret`, a Secret in the `monitoring` namespace with the certificate for `hostname`. When unset, as for `headlamp`. |

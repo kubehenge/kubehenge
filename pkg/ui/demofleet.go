@@ -97,6 +97,8 @@ type demoCluster struct {
 	Upgrade *demoUpgrade `json:"upgrade"`
 	// WorkerNodes is the cluster's workerNodes variable: the labels and taints its workers carry.
 	WorkerNodes json.RawMessage `json:"workerNodes"`
+	// NodeCustomisation is the cluster's nodeCustomisation variable.
+	NodeCustomisation json.RawMessage `json:"nodeCustomisation"`
 	// DriftTaint is a taint key put by hand on the last worker, which the pool does not set.
 	DriftTaint string `json:"driftTaint"`
 }
@@ -254,6 +256,9 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 	}
 	if d.WorkerNodes != nil {
 		vars[workerNodesVariable] = d.WorkerNodes
+	}
+	if d.NodeCustomisation != nil {
+		vars[provisioner.NodeCustomisationVariable] = d.NodeCustomisation
 	}
 	c := &clusterv1.Cluster{
 		Namespace: demoNamespace, Name: d.Name, UID: types.UID("demo-" + d.Name), Generation: 4,

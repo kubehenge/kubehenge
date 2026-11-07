@@ -315,6 +315,20 @@ A label in `kubernetes.io` or `k8s.io` is refused with `The kubelet refuses to s
 
 The class refuses `cis` from true to false: `CIS hardening cannot be switched off once it is on`. Pod Security Admission, seccomp and RKE2's network policies stay until the cluster is rebuilt. Pods that the `restricted` level refuses start only in a namespace labelled for a lower level ([clusters.md](clusters.md#add-ons)).
 
+### Node customisation is refused
+
+The webhook refuses `nodeCustomisation` with one message per problem, and kubectl, the interface and the CLI show it.
+
+- `<path> is a path Kubehenge keeps`: Kubehenge writes under `/etc/kubernetes`, `/etc/kubehenge`, `/etc/rancher`, `/var/lib/rancher` and `/var/lib/kubelet`. Use another directory, such as `/etc/audit`.
+- `<name> is an argument Kubehenge sets`: the identity, security and CIS arguments stay Kubehenge's. The audit policy and webhook have their own fields, and with either set the audit log rotation arguments may be set.
+- `Talos has no shell`: Talos takes no `commands`. Put the work in a file or a Talos extension.
+- `Talos reads no Secret` or `no ConfigMap`: Talos takes file content and the audit policy inline. Its audit webhook cannot be set here.
+- `Talos writes machine files under /var and /etc/cri/conf.d only`: move the file there.
+- `Secret <name> is not in namespace <ns>`: create the Secret beside the Cluster. A Secret in another namespace is not read.
+- `Secret <name> has no key <key>` and `ConfigMap <name> has no key policy.yaml`: add the key, or name the one that exists.
+- `the audit policy has no rules` or `has to be a Policy of audit.k8s.io/v1`: the API server would not start with it.
+- A bad `permissions`, a path with `..` or a double slash, or both `content` and `secret`: the class schema refuses these.
+
 ### A cluster waits before any VM exists
 
 The cluster's conditions say it is waiting for its Proxmox VE pool, user and token. Kubehenge's controller has not finished creating them. Its log says why, often a privilege missing from the controller's token after Proxmox VE objects were changed by hand. Applying the management cluster again puts the module's users, roles and ACLs back.

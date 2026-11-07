@@ -110,6 +110,7 @@ spec:
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
     {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -343,6 +344,8 @@ spec:
               value: {{ . }}
             {{- end }}
         {{- end }}
+    # Last, so that Kubehenge's own settings come first.
+    {{- include "kubehenge.nodeCustomisationPatches" "k3s" | nindent 4 }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate

@@ -81,10 +81,10 @@ async function planOf(routes: Record<string, Route>, path: string, body: unknown
   };
 }
 
-// What the server's plan says a setting does to the machines: CIS hardening replaces every one, a
-// pool's labels and taints its workers.
+// What the server's plan says a setting does to the machines: CIS hardening and the node
+// customisation replace every one, a pool's labels and taints its workers.
 function effectOf(setting: string, req: unknown): string {
-  if (setting === "cis") {
+  if (setting === "cis" || setting === "nodeCustomisation") {
     return "all";
   }
   const pools = isRecord(req) && isRecord(req["pools"]) ? Object.values(req["pools"]) : [];

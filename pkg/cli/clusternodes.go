@@ -122,23 +122,68 @@ needs --workers.`,
 	return cmd
 }
 
+func (o *clusterOptions) createCommand() *cobra.Command {
+	var file string
+	custom := &nodeCustomFlags{}
+	create := &cobra.Command{
+		Use:   "create -f FILE",
+		Short: "Create a cluster from the interface's create request, in JSON or YAML",
+		Long: `Create a cluster from the interface's create request, in JSON or YAML.
+
+The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
+workerReplicas, variables, and namespace where the interface has more than one. It is checked as
+the wizard's request is.
+
+The --node-*, --kubelet-arg, --apiserver-arg, --controller-manager-arg, --scheduler-arg and --audit-*
+flags set the cluster variable nodeCustomisation. They add to the lists in the file, and replace its
+audit policy and audit webhook.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return o.create(cmd.Context(), cmd.OutOrStdout(), file, custom)
+		},
+	}
+	custom.register(create.Flags())
+	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
+	_ = create.MarkFlagRequired("filename")
+	return create
+}
+
 func (o *clusterOptions) updateCommand() *cobra.Command {
 	var cis bool
+	custom := &nodeCustomFlags{}
 	update := &cobra.Command{
-		Use:   "update NAME --cis",
-		Short: "Switch on a cluster's CIS hardening, which replaces every node",
+		Use:   "update NAME (--cis | --node-file ... | --node-command ... | --kubelet-arg ...)",
+		Short: "Switch on a cluster's CIS hardening or set its node customisation, which replaces every node",
 		Long: `Switch on CIS hardening on a cluster that was created without it. It enforces the restricted Pod
-Security level, the runtime's seccomp profile and, on RKE2, its CIS profile, and it replaces the
-control plane and the workers, one node at a time. It cannot be switched off again.`,
+Security level, the runtime's seccomp profile and, on RKE2, its CIS profile. It cannot be switched
+off again.
+
+The --node-*, --kubelet-arg, --apiserver-arg, --controller-manager-arg, --scheduler-arg and --audit-*
+flags set the cluster variable nodeCustomisation. They replace the whole variable, so give every
+file, command and flag the cluster should keep.
+
+Either change replaces the control plane and the workers, one node at a time.`,
 		Args: argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !cis {
-				return errors.New("give --cis, the only setting this changes")
+			variables := map[string]any{}
+			if cis {
+				variables["cis"] = true
 			}
-			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{"variables": map[string]any{"cis": true}})
+			if custom.any() {
+				value, err := custom.value()
+				if err != nil {
+					return err
+				}
+				variables[nodeCustomisationVariable] = value
+			}
+			if len(variables) == 0 {
+				return errors.New("give --cis or a node customisation flag, such as --node-file or --kubelet-arg")
+			}
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{"variables": variables})
 		},
 	}
 	update.Flags().BoolVar(&cis, "cis", false, "switch CIS hardening on")
+	custom.register(update.Flags())
 	o.namespaceFlag(update.Flags())
 	return update
 }

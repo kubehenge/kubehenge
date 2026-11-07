@@ -37,6 +37,13 @@ import {
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
+import {
+  noNodeCustomisation,
+  nodeCustomisationProblem,
+  nodeCustomisationText,
+  nodeCustomisationVariable,
+  type NodeCustomisation,
+} from "./node-customisation";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import {
   hasNodeSettings,
@@ -87,6 +94,8 @@ import {
   sole,
 } from "./ui";
 import { quantity, record, text, texts } from "./values";
+
+export { nodeCustomisationOf } from "./node-customisation";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
 export type Step = (typeof steps)[number];
@@ -150,6 +159,8 @@ export interface Form {
   workerMachine: Machine;
   /** The labels and taints every worker gets, for a class that has the workerNodes variable. */
   workerNodes: NodeSettings;
+  /** The files, commands, flags and audit settings of every node, for a class that has the variable. */
+  nodeCustomisation: NodeCustomisation;
   cni: string;
   headlamp: boolean;
   headlampHostname: string;
@@ -619,6 +630,7 @@ export const newForm = (): Form => ({
   controlPlaneMachine: machineDefaults(undefined),
   workerMachine: machineDefaults(undefined),
   workerNodes: noNodeSettings,
+  nodeCustomisation: noNodeCustomisation,
   cni: "",
   headlamp: false,
   headlampHostname: "",
@@ -855,6 +867,10 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     variables["ccm"] = { haGroups: false };
   }
   Object.assign(variables, distributionVariables(form), workerNodesVariable(form, defined));
+  const customised = nodeCustomisationVariable(form.nodeCustomisation, c.distribution === "talos");
+  if (Object.keys(customised).length > 0) {
+    variables["nodeCustomisation"] = customised;
+  }
   const lb = loadBalancerVariable({ implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) });
   if (lb) {
     variables["loadBalancer"] = lb;
@@ -983,7 +999,7 @@ export function summary(
   if (defined.has("cni")) {
     rows.push(["Pod network", cniName(form.cni) || "Not chosen"]);
   }
-  rows.push(...addOnRows(form, defined));
+  rows.push(...customisationRows(form, defined), ...addOnRows(form, defined));
   if (defined.has("upgrades")) {
     const upgrades = newUpgrades(form.upgradeMode, browserZone());
     rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
@@ -994,6 +1010,9 @@ export function summary(
   }
   return rows;
 }
+
+const customisationRows = (form: Form, defined: Set<string>): [string, string][] =>
+  defined.has("nodeCustomisation") ? [["Node customisation", nodeCustomisationText(form.nodeCustomisation)]] : [];
 
 // addOnRows sums up the add-ons and the hardening the class offers.
 function addOnRows(form: Form, defined: Set<string>): [string, string][] {
@@ -1077,6 +1096,7 @@ export type FieldKey =
   | "controlPlaneMachine"
   | "workerMachine"
   | "workerNodes"
+  | "nodeCustomisation"
   | "cni"
   | "rancherHostname"
   | "headlampHostname"
@@ -1276,6 +1296,12 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   const nodes = variable(c, "workerNodes") && mostWorkers(form) > 0 ? nodeSettingsProblem(form.workerNodes) : undefined;
   if (nodes !== undefined) {
     p.workerNodes = nodes;
+  }
+  const customised = variable(c, "nodeCustomisation")
+    ? nodeCustomisationProblem(form.nodeCustomisation, c?.distribution === "talos")
+    : undefined;
+  if (customised !== undefined) {
+    p.nodeCustomisation = customised;
   }
   return p;
 }

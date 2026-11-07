@@ -123,6 +123,7 @@ const settingLabels: Record<string, string[]> = {
   workerMachine: ["Worker size"],
   workerNodes: ["Worker node settings"],
   cis: ["CIS hardening"],
+  nodeCustomisation: ["Node customisation"],
   autoscaling: ["Autoscaling"],
   allowedNodes: ["Placement"],
   autoscaler: ["Autoscaler"],
