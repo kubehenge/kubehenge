@@ -42,6 +42,23 @@ function TokenProblems({ tokens }: { tokens: TokenProblem[] }): JSX.Element | nu
   );
 }
 
+// ProxmoxNotes says what is wrong with the controller's access to Proxmox VE, beneath the figures.
+function ProxmoxNotes({ proxmox }: { proxmox: ManagementHealth["proxmox"] }): JSX.Element {
+  return (
+    <>
+      {proxmox?.ok === false && proxmox.error !== undefined && (
+        <Detail>
+          <p className="mono">{proxmox.error}</p>
+        </Detail>
+      )}
+      {filled(proxmox?.blind) && (
+        <p className="warning">Host maintenance is not visible: the token lacks {proxmox?.blind}</p>
+      )}
+      <TokenProblems tokens={proxmox?.tokens ?? []} />
+    </>
+  );
+}
+
 // ManagementHealthCard is the management cluster's own health, read on its own so that it answers
 // while the cluster does not, when the Administration page is what repairs it.
 export function ManagementHealthCard(): JSX.Element {
@@ -59,7 +76,6 @@ export function ManagementHealthCard(): JSX.Element {
   const controllers = h.controllers ?? [];
   const nodesDown = nodes.filter((n) => !n.ready);
   const controllersShort = controllers.filter((c) => c.ready < c.wanted);
-  const tokensFailing = h.proxmox?.tokens ?? [];
   return (
     <div className={stale ? "box management-health management-health-stale" : "box management-health"}>
       <h3>
@@ -90,15 +106,7 @@ export function ManagementHealthCard(): JSX.Element {
               </>
             )}
           </dl>
-          {h.proxmox?.ok === false && h.proxmox.error !== undefined && (
-            <Detail>
-              <p className="mono">{h.proxmox.error}</p>
-            </Detail>
-          )}
-          {filled(h.proxmox?.blind) && (
-            <p className="warning">Host maintenance is not visible: the token lacks {h.proxmox?.blind}</p>
-          )}
-          <TokenProblems tokens={tokensFailing} />
+          <ProxmoxNotes proxmox={h.proxmox} />
           {(nodesDown.length > 0 || controllersShort.length > 0) && (
             <ul className="health-short">
               {nodesDown.map((n) => (
