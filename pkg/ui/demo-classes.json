@@ -2639,7 +2639,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as Harbor's proxy projects need.",
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
               "items": {
                 "properties": {
                   "caBundle": {
@@ -5331,7 +5331,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as Harbor's proxy projects need.",
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
               "items": {
                 "properties": {
                   "caBundle": {
@@ -8050,7 +8050,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as Harbor's proxy projects need.",
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
               "items": {
                 "properties": {
                   "caBundle": {
@@ -10660,7 +10660,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as Harbor's proxy projects need.",
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
               "items": {
                 "properties": {
                   "caBundle": {

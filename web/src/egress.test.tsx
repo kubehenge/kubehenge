@@ -101,7 +101,7 @@ describe("the egress proxy settings", () => {
     expect(egressProblems(own({ httpsUrl: "" }))).toStrictEqual({});
     expect(egressProblems(own({ url: "http://$(id).example" })).url).toBeDefined();
     expect(egressProblems(own({ noProxy: "*.corp, 10.0.0.0/8, fd00::/8" }))).toStrictEqual({});
-    expect(egressProblems(own({ noProxy: "a'b" })).noProxy).toBe("Use letters, digits and . _ * : / [ ] - only");
+    expect(egressProblems(own({ noProxy: "a'b" })).noProxy).toBe("Use letters, digits, hyphens and . _ * : / [ ] only");
   });
 
   it("go into the wizard's request, summary and problems only for a class that defines the variable", () => {

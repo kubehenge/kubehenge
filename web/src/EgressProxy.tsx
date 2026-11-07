@@ -87,7 +87,7 @@ export function egressProblems(e: EgressChoice): Partial<Record<EgressField, str
   if (list(e.noProxy).length > maxExceptions) {
     p.noProxy = `At most ${maxExceptions} exceptions`;
   } else if (!list(e.noProxy).every((x) => exception.test(x))) {
-    p.noProxy = "Use letters, digits and . _ * : / [ ] - only";
+    p.noProxy = "Use letters, digits, hyphens and . _ * : / [ ] only";
   }
   return p;
 }

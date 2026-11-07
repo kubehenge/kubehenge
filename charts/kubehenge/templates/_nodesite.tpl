@@ -27,7 +27,7 @@ pattern: '^(-----BEGIN CERTIFICATE-----\n([A-Za-z0-9+/=]+\n)+-----END CERTIFICAT
       maxItems: 16
       description: >-
         Mirrors the nodes pull images from, per registry, tried in order before the registry itself.
-        An address may end in /v2 to be used as given, as Harbor's proxy projects need.
+        An address may end in /v2 to be used as given, as a registry's proxy project needs.
       items:
         type: object
         required: [registry, endpoints]
