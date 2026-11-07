@@ -359,7 +359,7 @@ func TestNodeOSFlag(t *testing.T) {
 
 func TestBuildUsersNeedsTheManagementCluster(t *testing.T) {
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
-	if _, err := buildUsers(t.Context(), refreshNamespace, nil); err == nil || !strings.Contains(err.Error(), "needs the management cluster's API (KUBECONFIG)") {
+	if _, err := buildUsers(t.Context(), refreshNamespace, nil, nil); err == nil || !strings.Contains(err.Error(), "needs the management cluster's API (KUBECONFIG)") {
 		t.Errorf("buildUsers gave %v", err)
 	}
 }

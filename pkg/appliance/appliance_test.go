@@ -183,6 +183,10 @@ func TestModuleTemplateRefresh(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("placement set: got %v, want %v", got, want)
 	}
+	off := false
+	if got := moduleTemplateRefresh(&TemplateRefresh{Enabled: true, KubeadmPatches: &off}); got["kubeadm_patches"] != off {
+		t.Errorf("kubeadm patches switched off: %v", got)
+	}
 }
 
 func TestClusterOIDC(t *testing.T) {

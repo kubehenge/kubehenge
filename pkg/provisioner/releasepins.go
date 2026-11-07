@@ -48,6 +48,8 @@ func ParseReleasePins(file string) (ReleasePins, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		// A pin an administrator added ends in a comment saying who added it.
+		line, _, _ = strings.Cut(line, " #")
 		fields := strings.Fields(line)
 		if len(fields) != 3 || distributionReleaseOf(fields[0]) == nil || !sha256Hex.MatchString(fields[1]) || !sha256Hex.MatchString(fields[2]) {
 			return nil, fmt.Errorf("release pins, line %d: not an RKE2 or k3s version and two SHA-256s: %q", n, line)

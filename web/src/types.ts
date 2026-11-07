@@ -715,6 +715,8 @@ export interface TemplateRefreshSettings {
   gateway?: string;
   dns?: string[];
   creatorBuilds?: boolean;
+  /** Unset is on. */
+  kubeadmPatches?: boolean;
 }
 
 /** An S3 store clusters back up to, each under a folder of its own beneath the prefix. */
@@ -1088,6 +1090,8 @@ export interface VMTemplate {
   built?: string;
   /** The newest build of its template. */
   newest?: boolean;
+  /** Its kernel is older than the previous build's, so no cluster moves to it. */
+  older?: boolean;
   /** The cluster that clones from it, which keeps it from being deleted. */
   inUse?: string;
   /** The operating system its machines run, such as AlmaLinux 10. Absent for a Talos template. */
@@ -1123,6 +1127,25 @@ export interface Templates {
   refresh?: TemplateRefresh;
   /** The node OSes templates can be built of, and those not released yet. */
   nodeOSes?: NodeOS[];
+}
+
+/** A release an administrator pinned, or one being checked before it is. */
+export interface ReleasePin {
+  version: string;
+  /** SHA-256 of the release's checksum file. */
+  file: string;
+  /** SHA-256 of its install script. */
+  script: string;
+  by?: string;
+  at?: string;
+  /** A cluster that runs the release, which keeps its pin from being removed. */
+  inUse?: string;
+}
+
+export interface ReleasePins {
+  pins: ReleasePin[];
+  /** Whether this interface can read a release to pin it. */
+  checks: boolean;
 }
 
 /** Whether a cluster creator may have a missing template built, and which builds are under way. */

@@ -175,7 +175,7 @@ func TestReleasePatchesInstallThePinnedFiles(t *testing.T) {
 			if !strings.HasSuffix(tc.kind, "ControlPlaneTemplate") {
 				controlPlane, workers = "v1.0.0", tc.version
 			}
-			patch, err := r.patch(releaseItem(t, tc.kind, controlPlane, workers), cluster(tc.variables...))
+			patch, err := r.patch(t.Context(), releaseItem(t, tc.kind, controlPlane, workers), cluster(tc.variables...))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -210,13 +210,13 @@ func TestReleasePatchesKeepThePinWhenAReleaseIsReplaced(t *testing.T) {
 	t.Parallel()
 	r, f := newReleaseChecksums(t)
 	item := releaseItem(t, "RKE2ControlPlaneTemplate", "v1.37.1+rke2r1", "v1.36.5+rke2r1")
-	first, err := r.patch(item, cluster())
+	first, err := r.patch(t.Context(), item, cluster())
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.set("/rancher/rke2/v1.37.1+rke2r1/install.sh", "#!/bin/sh\n# replaced under the tag\n")
 	f.set("/rancher/rke2/releases/download/v1.37.1+rke2r1/sha256sum-amd64.txt", rke2Listing+"# replaced\n")
-	again, err := r.patch(item, cluster())
+	again, err := r.patch(t.Context(), item, cluster())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestReleasePatchesRefuse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r, _ := newReleaseChecksums(t)
-			_, err := r.patch(tc.item(t), cluster(tc.variables...))
+			_, err := r.patch(t.Context(), tc.item(t), cluster(tc.variables...))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error with %q", err, tc.want)
 			}
@@ -294,7 +294,7 @@ func TestReleasePatchesLeaveOtherTemplates(t *testing.T) {
 		if kind == "" {
 			item.Object.Raw = nil
 		}
-		if patch, err := r.patch(item, cluster()); patch != nil || err != nil {
+		if patch, err := r.patch(t.Context(), item, cluster()); patch != nil || err != nil {
 			t.Errorf("%q: %s, %v", kind, patch, err)
 		}
 	}

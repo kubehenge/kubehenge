@@ -246,6 +246,20 @@ The interface refuses a cluster whose template the controller does not find in t
 
 `kubehenge template list` shows what the template pool holds, with each template's tags. `kubehenge template list --pool ''` lists every pool's templates, including one made elsewhere ([templates.md](templates.md)).
 
+### A build is shown as older
+
+**Older than the previous build** on the Administration page means the build installed an older kernel than the previous build of its line, as when a mirror was one sync behind. No cluster moves to it. The controller asks for another build an hour later, 3 times at most. Its log line names the build.
+
+If the mirror stays behind, the build stays out until a newer one arrives. **Build now** makes another. `kubehenge template list` shows the builds, and each template's description holds `kubehenge-build: kernel=… packages=…`.
+
+### No newer kubeadm patch release is offered
+
+A kubeadm cluster is offered only versions with a template. The weekly build makes the template of the newest patch release of its minor version and of the next minor version ([templates.md](templates.md#kubeadm-patch-releases)). If none appears:
+
+- `template_refresh.kubeadm_patches` is `false`.
+- The refresh could not read `dl.k8s.io/release/stable-1.<minor>.txt`. Its log on the Administration page says so, and the other minor versions go on.
+- The last run failed, or has not run yet. **Build now** runs it.
+
 ### Template build fails
 
 The error and the run's log are on the Administration page ([where to look](#the-appliance)). `kubehenge template create` prints them. A failed run removes the VM it made, unless `--keep-on-failure` kept it.
@@ -488,6 +502,14 @@ A Kubernetes upgrade waits while the Cluster has the condition `UpgradeHeld`. It
 ```sh
 kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.type=="UpgradeHeld")].reason}'
 ```
+
+### A release is refused as not pinned
+
+RKE2 and k3s nodes install only releases whose checksum file and install script Kubehenge pins. The API server refuses a cluster on any other release, and the interface offers only pinned ones. An administrator adds the release under **Administration**, **Release pins**, or with `kubehenge release pin <version>` ([upgrading.md](upgrading.md#releases-kubehenge-does-not-pin)).
+
+- **"not an RKE2 or k3s release"** or **"has no usable checksum file":** the version does not exist or its release has no checksum file. Check its spelling against the release page.
+- **"a cluster runs it":** the pin stays until the cluster upgrades.
+- **"this Kubehenge release carries it":** a built-in pin is never removed.
 
 ### Kubernetes out of support
 

@@ -215,6 +215,7 @@ const admin: Record<string, Route> = {
   "GET /api/appliance/etcd-backups": { body: { targets: ["main"], keysStored: true } },
   "GET /api/appliance/etcd-backups/snapshots": { body: { snapshots: [] } },
   "GET /api/templates": { body: { templates: [] } },
+  "GET /api/release-pins": { body: { pins: [], checks: true } },
   "GET /api/credentials/dns01": { body: { purpose: "dns01", set: false, canChange: true } },
   "GET /api/credentials/notify-webhook": { body: { purpose: "notify-webhook", set: false, canChange: true } },
   "GET /api/credentials/notify-ntfy": { body: { purpose: "notify-ntfy", set: false, canChange: true } },
@@ -648,6 +649,27 @@ const richAdmin: Record<string, Route> = {
     },
   },
   "GET /api/appliance/etcd-backups/snapshots": { body: { snapshots: [snapshot, { ...snapshot, name: "snap-2" }] } },
+  "GET /api/release-pins": {
+    body: {
+      pins: [
+        {
+          version: "v1.36.6+rke2r1",
+          file: "a".repeat(64),
+          script: "b".repeat(64),
+          by: "admin@pve",
+          at: "2026-11-01T10:00:00Z",
+        },
+        {
+          version: "v1.36.5+rke2r1",
+          file: "c".repeat(64),
+          script: "d".repeat(64),
+          by: "admin@pve",
+          inUse: "clusters/web",
+        },
+      ],
+      checks: true,
+    },
+  },
   "GET /api/templates": {
     body: {
       templates: [

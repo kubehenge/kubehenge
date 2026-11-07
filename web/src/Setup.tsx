@@ -106,6 +106,7 @@ export interface SetupForm {
   refreshGateway: string;
   refreshDNS: string;
   creatorBuilds: boolean;
+  kubeadmPatches: boolean;
   clusterSysAudit: boolean;
   nodeBootLogs: boolean;
   apiAuditLog: boolean;
@@ -152,6 +153,9 @@ function refreshSettings(f: SetupForm): NonNullable<ManagementSettings["template
   }
   if (f.creatorBuilds) {
     r.creatorBuilds = true;
+  }
+  if (!f.kubeadmPatches) {
+    r.kubeadmPatches = false;
   }
   return r;
 }
@@ -298,6 +302,7 @@ type RefreshFields = Pick<
   | "refreshGateway"
   | "refreshDNS"
   | "creatorBuilds"
+  | "kubeadmPatches"
 >;
 
 // refreshFields fills the refresh's fields. Settings that name no refresh have it on, with every
@@ -314,6 +319,7 @@ function refreshFields(r: ManagementSettings["templateRefresh"]): RefreshFields 
     refreshGateway: r?.gateway ?? "",
     refreshDNS: (r?.dns ?? []).join(", "),
     creatorBuilds: r?.creatorBuilds === true,
+    kubeadmPatches: r?.kubeadmPatches !== false,
   };
 }
 
@@ -776,6 +782,9 @@ function refreshSummary(s: ManagementSettings): string {
   ];
   if (f.creatorBuilds) {
     parts.push("creators may request builds");
+  }
+  if (!f.kubeadmPatches) {
+    parts.push("no kubeadm patch builds");
   }
   return parts.join(", ");
 }
@@ -1422,6 +1431,18 @@ function RefreshChoice({ form, set, shown, nodes }: FieldsProps & { nodes: strin
           <Info about="build requests">
             Cluster creators missing a template can have it built from the create wizard. Off, only administrators build
             templates.
+          </Info>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.kubeadmPatches}
+              onChange={(e) => set("kubeadmPatches", e.target.checked)}
+            />{" "}
+            Build kubeadm patches
+          </label>
+          <Info about="kubeadm patches">
+            Builds the newest patch of each Kubernetes version a kubeadm cluster runs, and of the next version. Off,
+            clusters get only versions you build.
           </Info>
         </>
       )}

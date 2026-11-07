@@ -274,7 +274,10 @@ func (h *bakeHost) agent(r *http.Request, vmid int, rest string) (any, string) {
 			h.t.Errorf("the status of pid %q", r.URL.Query().Get("pid"))
 			return nil, "no such process"
 		}
-		result := h.exit[h.pids[pid-1]]
+		result, known := h.exit[h.pids[pid-1]]
+		if !known && h.pids[pid-1] == "sh -c "+factsCommand {
+			result = guestResult{out: testKernel + "\n" + strings.Repeat("ab", 32) + "\n"}
+		}
 		return map[string]any{"exited": 1, "exitcode": result.code, "out-data": result.out}, ""
 	}
 	h.t.Errorf("unexpected %s on VM %d%s", r.Method, vmid, rest)
@@ -377,6 +380,9 @@ func (h *bakeHost) forget() {
 	h.changes = nil
 }
 
+// testKernel is the kernel the fake host's guests boot.
+const testKernel = "6.12.0-124.8.1.el10_1.x86_64"
+
 // imageRecipe is a bake in image mode that reboots into what it installed.
 func imageRecipe() *Recipe {
 	return &Recipe{
@@ -464,6 +470,7 @@ func TestFinishBakesAnImageModeBuildStepByStep(t *testing.T) {
 	ctx := t.Context()
 	recipe := imageRecipe()
 	k := bakeVM(ctx, t, h, recipe)
+	facts := BuildFacts{Kernel: testKernel, Packages: strings.Repeat("ab", 32)}
 
 	if err := k.finish(ctx); err != nil {
 		t.Fatal(err)
@@ -482,10 +489,12 @@ func TestFinishBakesAnImageModeBuildStepByStep(t *testing.T) {
 		"shutdown", "unlink scsi1", "config boot=order=scsi0 delete=ide2", "remove " + seed,
 		"upload " + seed, attach, "start",
 		"run true", "run getenforce",
+		// Read before the clean-up, which leaves a first boot.
+		"run sh -c " + factsCommand,
 		"run cloud-init clean --logs",
 		"shutdown", "config delete=ide2,net0",
 		"remove " + seed,
-		"config boot=order=scsi0 cores=1 memory=512 tags=" + strings.Join(k.tmpl.Tags, ";"),
+		"config boot=order=scsi0 cores=1 description=" + facts.Description(templateDescription) + " memory=512 tags=" + strings.Join(k.tmpl.Tags, ";"),
 		"template",
 	}
 	if got := h.steps(); !slices.Equal(got, want) {
@@ -494,6 +503,9 @@ func TestFinishBakesAnImageModeBuildStepByStep(t *testing.T) {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if recorded, ok := ParseBuildFacts(fmt.Sprint(h.vms[101]["description"])); !ok || recorded != facts {
+		t.Errorf("the template's description records %+v, want %+v", recorded, facts)
+	}
 	if len(h.uploads) != 2 {
 		t.Fatalf("%d seeds uploaded, want the bake's and the node image's", len(h.uploads))
 	}

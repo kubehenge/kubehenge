@@ -2,7 +2,9 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed" // the demo's sample fleet
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -68,7 +70,32 @@ type demoData struct {
 	BackupTargets    json.RawMessage            `json:"backupTargets"`
 	Clusters         []demoCluster              `json:"clusters"`
 	KubeadmTemplates []string                   `json:"kubeadmTemplates"`
-	Activity         []demoActivityLine         `json:"activity"`
+	// Management are the appliance's saved settings, as its settings.json holds them.
+	Management     json.RawMessage    `json:"management"`
+	TemplateBuilds []demoTemplateLine `json:"templateBuilds"`
+	ReleasePins    []demoPin          `json:"releasePins"`
+	Activity       []demoActivityLine `json:"activity"`
+}
+
+// demoTemplateLine is a template line of the demo's template pool.
+type demoTemplateLine struct {
+	Distribution      templates.Distribution `json:"distribution"`
+	KubernetesVersion string                 `json:"kubernetesVersion"`
+	// Builds are the line's builds. A line without any is a single template, as Talos has.
+	Builds []demoBuild `json:"builds"`
+}
+
+type demoBuild struct {
+	AgoDays int `json:"agoDays"`
+	// Older says its kernel is older than the previous build's.
+	Older bool `json:"older"`
+}
+
+// demoPin is a release an administrator pinned.
+type demoPin struct {
+	Version string `json:"version"`
+	By      string `json:"by"`
+	AgoDays int    `json:"agoDays"`
 }
 
 // demoAddOnData is an add-on: the chart it installs and the cluster variable that switches it on.
@@ -131,6 +158,10 @@ type demoFleet struct {
 	// members are each cluster pool's guests, by pool.
 	members  map[string][]pve.Member
 	activity []activityEntry
+	// templates are the VM templates of the template pool. builds and older are their builds as the
+	// ClusterClasses record them.
+	templates     []pve.Member
+	builds, older provisioner.NodeImageBuilds
 }
 
 func newDemoFleet(now time.Time) (*demoFleet, error) {
@@ -138,11 +169,15 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 	if err := json.Unmarshal(demoFleetJSON, &f.data); err != nil {
 		return nil, fmt.Errorf("the demo's fleet: %w", err)
 	}
+	if err := f.templateLines(); err != nil {
+		return nil, err
+	}
 	classes, err := f.classes()
 	if err != nil {
 		return nil, err
 	}
 	f.objects = append(f.objects, classes...)
+	f.objects = append(f.objects, f.settingsObjects()...)
 	vmid := 101
 	for i := range f.data.Clusters {
 		if err := f.add(&f.data.Clusters[i], &vmid); err != nil {
@@ -172,8 +207,16 @@ func (f *demoFleet) classes() ([]client.Object, error) {
 		return nil, fmt.Errorf("the demo's kubeadm templates: %w", err)
 	}
 	var storage string
-	if err := json.Unmarshal(f.data.Settings["storage"], &storage); err != nil {
+	if err = json.Unmarshal(f.data.Settings["storage"], &storage); err != nil {
 		return nil, fmt.Errorf("the demo's storage: %w", err)
+	}
+	builds, err := f.builds.Encode()
+	if err != nil {
+		return nil, fmt.Errorf("the demo's template builds: %w", err)
+	}
+	older, err := f.older.Encode()
+	if err != nil {
+		return nil, fmt.Errorf("the demo's older template builds: %w", err)
 	}
 	objects := make([]client.Object, 0, len(classes))
 	for i := range classes {
@@ -181,16 +224,94 @@ func (f *demoFleet) classes() ([]client.Object, error) {
 		switch templates.Distribution(strings.TrimPrefix(c.Name, provisioner.ClassPrefix)) {
 		case templates.Kubeadm:
 			c.Annotations[provisioner.KubeadmVersionsAnnotation] = string(kubeadm)
+			c.Annotations[provisioner.NodeImageBuildsAnnotation], c.Annotations[provisioner.NodeImageOlderAnnotation] = builds, older
 		case templates.Talos:
 			c.Annotations[provisioner.TalosTemplatesAnnotation] = templates.DefaultTalosVersion
 		case templates.RKE2, templates.K3s:
 			c.Annotations[provisioner.NodeOSTemplatesAnnotation] = nodeOS
+			c.Annotations[provisioner.NodeImageBuildsAnnotation], c.Annotations[provisioner.NodeImageOlderAnnotation] = builds, older
 		}
 		c.Annotations[provisioner.SnapshotStoragesAnnotation] = storage
 		c.Annotations[provisioner.BackupTargetsAnnotation] = string(f.data.BackupTargets)
 		objects = append(objects, c)
 	}
 	return objects, nil
+}
+
+// demoTemplateVMID is the first guest ID of the demo's templates.
+const demoTemplateVMID = 9000
+
+// templateLines makes the templates of the template pool and the builds the ClusterClasses record.
+func (f *demoFleet) templateLines() error {
+	f.builds, f.older = provisioner.NodeImageBuilds{}, provisioner.NodeImageBuilds{}
+	vmid := demoTemplateVMID
+	add := func(t *templates.Template) {
+		f.templates = append(f.templates, pve.Member{
+			VMID: vmid, Node: f.data.ProxmoxNodes[vmid%len(f.data.ProxmoxNodes)], Type: "qemu", Name: t.Name, Template: 1, Tags: strings.Join(t.Tags, ";"),
+		})
+		vmid++
+	}
+	for _, l := range f.data.TemplateBuilds {
+		line, err := templates.Plan(&templates.Request{Distribution: l.Distribution, KubernetesVersion: l.KubernetesVersion})
+		if err != nil {
+			return fmt.Errorf("the demo's template line %s: %w", l.Distribution, err)
+		}
+		if len(l.Builds) == 0 {
+			add(&line)
+			continue
+		}
+		for _, b := range l.Builds {
+			at := f.now.AddDate(0, 0, -b.AgoDays).Truncate(time.Minute)
+			build, err := line.Build(at)
+			if err != nil {
+				return fmt.Errorf("the demo's template line %s: %w", l.Distribution, err)
+			}
+			add(&build)
+			recorded := f.builds
+			if b.Older {
+				recorded = f.older
+			}
+			key := templates.LineKey(build.Tags)
+			recorded[key] = append(recorded[key], at)
+		}
+	}
+	return nil
+}
+
+// settingsObjects are the ConfigMaps of the management cluster that hold the weekly template build
+// and the release pins administrators added.
+func (f *demoFleet) settingsObjects() []client.Object {
+	now := f.now.UTC()
+	day := now.Truncate(24 * time.Hour)
+	// The weekly build runs on Sundays at 01:00 UTC. The last one finished soon after it started.
+	started := day.AddDate(0, 0, -int(day.Weekday())).Add(time.Hour)
+	if started.After(now) {
+		started = started.AddDate(0, 0, -7)
+	}
+	refresh := &corev1.ConfigMap{Data: map[string]string{
+		provisioner.RefreshWeekday: "Sun", provisioner.RefreshTime: "01:00", provisioner.RefreshTimeZone: time.UTC.String(),
+		provisioner.RefreshSoakHours: "24", provisioner.RefreshCreatorBuilds: "false",
+		provisioner.RefreshState: runSucceeded, provisioner.RefreshTrigger: "schedule",
+		provisioner.RefreshStarted:  started.Format(time.RFC3339),
+		provisioner.RefreshFinished: started.Add(41 * time.Minute).Format(time.RFC3339),
+		provisioner.RefreshLines:    "rke2-almalinux-10, k3s-almalinux-10, kubeadm-v1.37.1-almalinux-10, kubeadm-v1.36.5-almalinux-10",
+	}}
+	refresh.Namespace, refresh.Name = demoClassNamespace, provisioner.TemplateRefreshName
+	var pins strings.Builder
+	for _, p := range f.data.ReleasePins {
+		file, script := demoDigest(p.Version, "checksums"), demoDigest(p.Version, "install.sh")
+		at := now.AddDate(0, 0, -p.AgoDays).Truncate(time.Minute)
+		fmt.Fprintf(&pins, "%s %s %s # added by %s at %s\n", p.Version, file, script, p.By, at.Format(time.RFC3339))
+	}
+	pinned := &corev1.ConfigMap{Data: map[string]string{"pins": pins.String()}}
+	pinned.Namespace, pinned.Name = demoClassNamespace, provisioner.ReleasePinsName
+	return []client.Object{refresh, pinned}
+}
+
+// demoDigest is a stand-in SHA-256 for a release's file.
+func demoDigest(version, file string) string {
+	sum := sha256.Sum256([]byte(version + " " + file))
+	return hex.EncodeToString(sum[:])
 }
 
 // add puts one cluster into the fleet: its Cluster API objects, its VMs and its own API.
@@ -621,7 +742,7 @@ var demoPrivileges = pve.Privileges{
 
 // demoTicket is issued now, not at the demo's time: sessions end by the real clock.
 func demoTicket(username string) *pve.Ticket {
-	return &pve.Ticket{Username: username, Ticket: "demo", CSRF: "demo", Issued: time.Now()}
+	return &pve.Ticket{Username: username, Ticket: demoName, CSRF: demoName, Issued: time.Now()}
 }
 
 func (*demoAccounts) SignIn(_ context.Context, username, _ string) (*pve.Ticket, *pve.Challenge, error) {
@@ -721,8 +842,8 @@ func (a *demoAccounts) VMLoad(_ context.Context, _ *pve.Ticket, _ string, vmid i
 	return points, nil
 }
 
-func (*demoAccounts) Templates(context.Context, *pve.Ticket, string) ([]pve.Member, error) {
-	return nil, nil
+func (a *demoAccounts) Templates(context.Context, *pve.Ticket, string) ([]pve.Member, error) {
+	return a.fleet.templates, nil
 }
 
 func (*demoAccounts) BackupCovers(context.Context, *pve.Ticket, int) (bool, error) { return true, nil }
