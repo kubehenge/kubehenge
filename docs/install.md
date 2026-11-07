@@ -118,7 +118,7 @@ Each node OS template build takes 12 GiB on the template storage. The two newest
 A Proxmox VE cluster that runs two major versions at once is only a stopover.
 
 - **Finish the upgrade before installing.** The installer checks the node it runs on, and nothing checks the others.
-- **Upgrade the nodes one at a time.** While the major versions differ, new VMs go only to the nodes on the oldest one. An event on each cluster names the nodes left out, and the Health page lists the nodes of each version.
+- **Upgrade the nodes one at a time.** While the major versions differ, new VMs go to the oldest version's nodes that have room, and to newer nodes only when none has. The Health page lists the nodes of each version, and an event warns when a cluster has to use a newer node.
 - **Move VMs from old to new only.** A VM started on a newer node gets a machine version an older node cannot run.
 - **HA rules wait.** Proxmox VE refuses them until every node runs 9. Kubehenge writes none meanwhile and sets the condition `HARulesPending` on the cluster, which the interface and `kubectl describe cluster` show.
 

@@ -50,19 +50,26 @@ func (p *Placer) annotate(ctx context.Context, c *clusterv1.Cluster, key, value 
 }
 
 // markVersions records on the cluster which Proxmox VE nodes run which major version while they
-// differ, and says in an event which nodes are left out of placement for it.
+// differ.
 func (p *Placer) markVersions(ctx context.Context, c *clusterv1.Cluster, online []Node) {
-	note := versionNote(online)
-	if !p.annotate(ctx, c, ProxmoxVersionsAnnotation, note) || note == "" || p.Events == nil {
+	p.annotate(ctx, c, ProxmoxVersionsAnnotation, versionNote(online))
+}
+
+// markNewer says in an event, once each time it starts, that the cluster's placement holds nodes of a
+// newer Proxmox VE version because none of the older nodes has room.
+func (p *Placer) markNewer(c *clusterv1.Cluster, online []Node, newer bool) {
+	key := client.ObjectKeyFromObject(c).String()
+	was := p.newer[key]
+	if p.newer == nil {
+		p.newer = map[string]bool{}
+	}
+	p.newer[key] = newer
+	if !newer || was || p.Events == nil {
 		return
 	}
-	_, left := oldestMajor(online)
-	names := make([]string, len(left))
-	for i, n := range left {
-		names[i] = n.Name
-	}
 	p.Events.Eventf(c, nil, corev1.EventTypeWarning, "ProxmoxVersionsMixed", "Place",
-		"Proxmox VE nodes %s are left out of placement while the nodes run different major versions, so every VM can start on every node", strings.Join(names, ", "))
+		"No older Proxmox VE node has room for the cluster's machines (%s), so new VMs may start on a newer node. A VM started there cannot move back to an older node",
+		strings.ReplaceAll(strings.ReplaceAll(versionNote(online), "=", ": "), ";", ", "))
 }
 
 // markMTUs records the interface sizes of the cluster's VMs per node while they differ.

@@ -111,6 +111,32 @@ func oldestMajor(online []Node) ([]Node, []Node) {
 	return kept, left
 }
 
+// preferOldest narrows hosts, as fit does, to those on the oldest major version while they have
+// room: a VM started on an older node can move to any node later. When none of them has room, or
+// there are none, every host is offered as before, and newer reports that the result holds a node
+// of a newer version, which the VM cannot leave for an older one. A machine is never refused for
+// the versions alone.
+func preferOldest(online []Node, hosts []string, fit func([]string) ([]string, *roomOn)) ([]string, *roomOn, bool) {
+	kept, left := oldestMajor(online)
+	if len(left) == 0 {
+		fitted, short := fit(hosts)
+		return fitted, short, false
+	}
+	oldest := slices.DeleteFunc(slices.Clone(hosts), func(h string) bool {
+		return !slices.ContainsFunc(kept, func(n Node) bool { return n.Name == h })
+	})
+	if len(oldest) > 0 {
+		if fitted, short := fit(oldest); short == nil {
+			return fitted, nil, false
+		}
+	}
+	fitted, short := fit(hosts)
+	newer := short == nil && slices.ContainsFunc(fitted, func(h string) bool {
+		return slices.ContainsFunc(left, func(n Node) bool { return n.Name == h })
+	})
+	return fitted, short, newer
+}
+
 // versionGroups are the nodes of each known major version, by version.
 func versionGroups(online []Node) map[int][]string {
 	groups := map[int][]string{}

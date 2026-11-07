@@ -152,39 +152,98 @@ func nodesOf(majors map[string]int) []Node {
 	return out
 }
 
-func TestPlacementKeepsToTheOldestMajorVersion(t *testing.T) {
+func TestVersionNoteNamesTheNodesOfEachVersion(t *testing.T) {
 	t.Parallel()
+	for note, majors := range map[string]map[string]int{
+		"none":                    {"pve1": 9, "pve2": 9},
+		"8=pve2,pve4;9=pve1,pve3": {"pve1": 9, "pve2": 8, "pve3": 9, "pve4": 8},
+		"8=pve3;9=pve2;10=pve1":   {"pve1": 10, "pve2": 9, "pve3": 8},
+		"8=pve3;9=pve1":           {"pve1": 9, "pve2": 0, "pve3": 8},
+		"":                        {"pve1": 0, "pve2": 0},
+	} {
+		if note == "none" {
+			note = ""
+		}
+		if got := versionNote(nodesOf(majors)); got != note {
+			t.Errorf("note %q for %v, want %q", got, majors, note)
+		}
+	}
+}
+
+// A VM goes to the oldest nodes while one has room, to any placeable node when none has, and is
+// never refused for the versions alone.
+func TestPlacementPrefersTheOldestMajorVersionWhileItHasRoom(t *testing.T) {
+	t.Parallel()
+	const need = 4096
+	free := func(majors map[string]int, freeMiB map[string]int64) []Node {
+		online := nodesOf(majors)
+		for i := range online {
+			online[i].FreeMiB, online[i].MemoryKnown = freeMiB[online[i].Name], true
+		}
+		return online
+	}
 	for _, tc := range []struct {
-		name   string
-		majors map[string]int
-		want   []string
-		note   string
+		name      string
+		online    []Node
+		want      []string
+		short     bool
+		wantNewer bool
 	}{
-		{"one version", map[string]int{"pve1": 9, "pve2": 9}, []string{"pve1", "pve2"}, ""},
-		{"8 and 9", map[string]int{"pve1": 9, "pve2": 8, "pve3": 9, "pve4": 8}, []string{"pve2", "pve4"}, "8=pve2,pve4;9=pve1,pve3"},
-		{"three versions", map[string]int{"pve1": 10, "pve2": 9, "pve3": 8}, []string{"pve3"}, "8=pve3;9=pve2;10=pve1"},
-		{"a node whose version cannot be read stays", map[string]int{"pve1": 9, "pve2": 0, "pve3": 8}, []string{"pve2", "pve3"}, "8=pve3;9=pve1"},
-		{"no version read", map[string]int{"pve1": 0, "pve2": 0}, []string{"pve1", "pve2"}, ""},
+		{"one version", free(map[string]int{"pve1": 9, "pve2": 9}, map[string]int64{"pve1": 9000, "pve2": 9000}), []string{"pve1", "pve2"}, false, false},
+		{"one version, no room", free(map[string]int{"pve1": 9, "pve2": 9}, map[string]int64{"pve1": 1000, "pve2": 1000}), []string{"pve1", "pve2"}, true, false},
+		{"the oldest nodes have room", free(map[string]int{"pve1": 8, "pve2": 9, "pve3": 8}, map[string]int64{"pve1": 9000, "pve2": 90000, "pve3": 9000}), []string{"pve1", "pve3"}, false, false},
+		{"the oldest nodes are full and a newer one is free", free(map[string]int{"pve1": 8, "pve2": 9}, map[string]int64{"pve1": 1000, "pve2": 90000}), []string{"pve2"}, false, true},
+		{"three versions fall back to the nodes with room", free(map[string]int{"pve1": 8, "pve2": 9, "pve3": 10}, map[string]int64{"pve1": 1000, "pve2": 1000, "pve3": 90000}), []string{"pve3"}, false, true},
+		{"every node is full", free(map[string]int{"pve1": 8, "pve2": 9}, map[string]int64{"pve1": 1000, "pve2": 1000}), []string{"pve1", "pve2"}, true, false},
+		{"a node whose version cannot be read counts as the oldest", free(map[string]int{"pve1": 9, "pve2": 0, "pve3": 8}, map[string]int64{"pve1": 90000, "pve2": 9000, "pve3": 9000}), []string{"pve2", "pve3"}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			online := nodesOf(tc.majors)
-			got, _ := nodesToPlace(online, 1, nil, "")
-			if !slices.Equal(got, tc.want) {
-				t.Errorf("nodesToPlace = %v, want %v", got, tc.want)
+			hosts := make([]string, len(tc.online))
+			for i, n := range tc.online {
+				hosts[i] = n.Name
 			}
-			usable := placeable(online, "")
-			names := make([]string, len(usable))
-			for i, n := range usable {
-				names[i] = n.Name
+			fit := func(list []string) ([]string, *roomOn) {
+				room := withRoom(tc.online, list, list, need)
+				if room.short(list) {
+					return list, &room
+				}
+				return room.Nodes, nil
 			}
-			if !slices.Equal(names, tc.want) {
-				t.Errorf("placeable = %v, want %v", names, tc.want)
-			}
-			if note := versionNote(online); note != tc.note {
-				t.Errorf("note %q, want %q", note, tc.note)
+			got, short, newer := preferOldest(tc.online, hosts, fit)
+			if !slices.Equal(got, tc.want) || (short != nil) != tc.short || newer != tc.wantNewer {
+				t.Errorf("preferOldest = %v, short %v, newer %v, want %v, short %v, newer %v", got, short != nil, newer, tc.want, tc.short, tc.wantNewer)
 			}
 		})
+	}
+}
+
+func TestPlacerSaysOnceThatItFellBackToANewerNode(t *testing.T) {
+	t.Parallel()
+	web := cluster()
+	rec := events.NewFakeRecorder(10)
+	p := &Placer{Events: rec}
+	online := nodesOf(map[string]int{"pve1": 8, "pve2": 9})
+	p.markNewer(web, online, false)
+	p.markNewer(web, online, true)
+	p.markNewer(web, online, true)
+	select {
+	case e := <-rec.Events:
+		if !strings.Contains(e, "8: pve1, 9: pve2") || !strings.Contains(e, "cannot move back to an older node") {
+			t.Errorf("event %q does not name the versions and the one-way move", e)
+		}
+	default:
+		t.Fatal("no event")
+	}
+	select {
+	case e := <-rec.Events:
+		t.Errorf("a second look repeats the event: %q", e)
+	default:
+	}
+	p.markNewer(web, online, false)
+	p.markNewer(web, online, true)
+	if len(rec.Events) != 1 {
+		t.Errorf("%d events after the placement fell back again, want 1", len(rec.Events))
 	}
 }
 
@@ -221,20 +280,7 @@ func TestPlacerRecordsMixedVersionsAndNamesTheNodesLeftOut(t *testing.T) {
 	if v := got.Annotations[ProxmoxVersionsAnnotation]; v != "8=pve1;9=pve2" {
 		t.Errorf("versions %q", v)
 	}
-	select {
-	case e := <-rec.Events:
-		if !strings.Contains(e, "pve2") || strings.Contains(e, "pve1") {
-			t.Errorf("event %q does not name just pve2", e)
-		}
-	default:
-		t.Fatal("no event")
-	}
 	p.placeAll(t.Context())
-	select {
-	case e := <-rec.Events:
-		t.Errorf("a second look repeats the event: %q", e)
-	default:
-	}
 	p.Nodes = &versionedNodes{online: nodesOf(map[string]int{"pve1": 9, "pve2": 9})}
 	p.placeAll(t.Context())
 	got = get()

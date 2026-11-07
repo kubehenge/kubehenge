@@ -159,7 +159,6 @@ func nodesFor(online []Node, need int) []string {
 // placeable are the online nodes that can take a new VM now: not in maintenance, and with the
 // cluster's storage active.
 func placeable(online []Node, storage string) []Node {
-	online, _ = oldestMajor(online)
 	return slices.DeleteFunc(slices.Clone(online), func(n Node) bool {
 		return n.Maintenance || storage != "" && slices.Contains(n.InactiveStorages, storage)
 	})
@@ -170,9 +169,6 @@ func placeable(online []Node, storage string) []Node {
 // When nodes the cluster could use are online but every one is left out for those last two, there is
 // nowhere to put a VM, and blocked says why.
 func nodesToPlace(online []Node, level int, chosen []string, storage string) ([]string, string) {
-	// While the nodes run different major versions a VM keeps to the oldest: it carries a machine
-	// version every node can start, so drains and HA moves work in both directions.
-	online, _ = oldestMajor(online)
 	capable := slices.DeleteFunc(slices.Clone(online), func(n Node) bool {
 		return n.CPULevel < level || len(chosen) > 0 && !slices.Contains(chosen, n.Name)
 	})
