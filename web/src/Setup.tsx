@@ -9,7 +9,10 @@ import {
   bridgeRef,
   cidr,
   isIP,
+  isMTU,
   isVLAN,
+  maxMTU,
+  minMTU,
   list,
   maskOf,
   networkOf,
@@ -70,6 +73,8 @@ export interface SetupForm {
   vmDatastore: string;
   bridge: string;
   vlan: string;
+  // Empty: the bridge's.
+  mtu: string;
   nodeAddresses: string;
   apiAddress: string;
   gateway: string;
@@ -253,6 +258,11 @@ function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
   return s;
 }
 
+/** linkSettings holds the optional numbers of the management VMs' interface: set ones only. */
+function linkSettings(f: SetupForm): Pick<ManagementSettings, "vlan" | "mtu"> {
+  return { ...(f.vlan ? { vlan: Number(f.vlan) } : {}), ...(f.mtu ? { mtu: Number(f.mtu) } : {}) };
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -267,10 +277,8 @@ export function settings(f: SetupForm): ManagementSettings {
     workloadDatastores: f.workloadDatastores,
     workloadBridges: f.workloadBridges,
     bootstrapDatastore: f.bootstrapDatastore,
+    ...linkSettings(f),
   };
-  if (f.vlan) {
-    s.vlan = Number(f.vlan);
-  }
   Object.assign(s, outboundSettings(f));
   if (filled(f.controllerImage)) {
     s.controllerImage = f.controllerImage;
@@ -382,6 +390,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     vmDatastore: saved.vmDatastore,
     bridge: saved.bridge,
     vlan: saved.vlan !== undefined && saved.vlan > 0 ? String(saved.vlan) : "",
+    mtu: saved.mtu !== undefined && saved.mtu > 0 ? String(saved.mtu) : "",
     nodeAddresses: saved.nodeAddresses.join("\n"),
     apiAddress: saved.apiAddress,
     gateway: saved.gateway,
@@ -426,6 +435,7 @@ export type SetupField =
   | "vmDatastore"
   | "bridge"
   | "vlan"
+  | "mtu"
   | "nodeAddresses"
   | "apiAddress"
   | "gateway"
@@ -460,6 +470,7 @@ const stepFields: Record<SetupStep, SetupField[]> = {
   Network: [
     "bridge",
     "vlan",
+    "mtu",
     "nodeAddresses",
     "apiAddress",
     "gateway",
@@ -593,6 +604,9 @@ function placementProblems(f: SetupForm): SetupProblems {
   }
   if (f.vlan && !isVLAN(f.vlan)) {
     p.vlan = "A whole number from 1 to 4094.";
+  }
+  if (f.mtu && !isMTU(f.mtu)) {
+    p.mtu = `A whole number from ${minMTU} to ${maxMTU}.`;
   }
   return p;
 }
@@ -2476,6 +2490,17 @@ function setupFields({
         <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
           {(id) => (
             <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
+          )}
+        </Field>
+        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.mtu}
+              onChange={(e) => set("mtu", e.target.value.trim())}
+              placeholder="1500"
+            />
           )}
         </Field>
         <Field

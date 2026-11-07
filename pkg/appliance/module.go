@@ -40,6 +40,7 @@ module "management" {
   vm_datastore           = var.settings.vmDatastore
   bridge                 = var.settings.bridge
   vlan_id                = try(var.settings.vlan, null)
+  mtu                    = try(var.settings.mtu, null)
   node_addresses         = var.settings.nodeAddresses
   api_address            = var.settings.apiAddress
   gateway                = var.settings.gateway
@@ -179,6 +180,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"vmDatastore":            s.VMDatastore,
 		"bridge":                 s.Bridge,
 		"vlan":                   s.VLAN,
+		"mtu":                    nilIfZero(s.MTU),
 		"nodeAddresses":          s.NodeAddresses,
 		"apiAddress":             s.APIAddress,
 		"gateway":                s.Gateway,
@@ -430,6 +432,13 @@ func nonNilMirrors(m map[string][]string) map[string][]string {
 		return map[string][]string{}
 	}
 	return m
+}
+
+func nilIfZero(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }
 
 func nilIfEmpty(s string) any {

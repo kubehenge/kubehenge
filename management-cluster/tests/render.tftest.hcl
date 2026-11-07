@@ -1120,6 +1120,61 @@ run "api_audit_log" {
 
 }
 
+run "mtu" {
+  command = plan
+
+  variables {
+    mtu = 1450
+  }
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].mtu == 1450])
+    error_message = "the management VMs' interface must carry the MTU"
+  }
+
+  assert {
+    condition = anytrue([
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) :
+      try(yamldecode(d).kind == "LinkConfig" && yamldecode(d).name == "lan" && yamldecode(d).mtu == 1450, false)
+    ])
+    error_message = "the node's own link, by its alias, must carry the MTU"
+  }
+}
+
+run "mtu_unset" {
+  command = plan
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].mtu == null])
+    error_message = "without an MTU the interface must keep the bridge's"
+  }
+
+  assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "LinkConfig")
+    error_message = "without an MTU the node's link must not be configured"
+  }
+}
+
+run "mtu_below_ipv6_minimum_is_refused" {
+  command = plan
+
+  variables {
+    mtu = 1279
+  }
+
+  expect_failures = [var.mtu]
+}
+
+run "mtu_above_maximum_is_refused" {
+  command = plan
+
+  variables {
+    mtu = 65521
+  }
+
+  expect_failures = [var.mtu]
+}
+
 run "audit_policy_is_the_workload_clusters" {
   command = plan
 

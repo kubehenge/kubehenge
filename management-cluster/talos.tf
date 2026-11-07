@@ -158,6 +158,9 @@ data "talos_machine_configuration" "node" {
         [yamlencode({ machine = { env = local.proxy_talos_env } })],
         local.proxy_has_ca ? [yamlencode({ apiVersion = "v1alpha1", kind = "TrustedRootsConfig", name = "kubehenge-proxy", certificates = var.proxy.ca_bundle })] : [],
       ) : [],
+      # The same MTU as the Proxmox VE interface, on the link by its alias, so it holds whatever
+      # the guest driver negotiates.
+      var.mtu == null ? [] : [yamlencode({ apiVersion = "v1alpha1", kind = "LinkConfig", name = "lan", mtu = var.mtu })],
     )),
   ]
 }

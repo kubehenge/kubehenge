@@ -275,7 +275,7 @@ func TestBridgesListVNetsWithTheirZones(t *testing.T) {
 	})
 	mux.HandleFunc("GET /api2/json/cluster/sdn/zones", func(w http.ResponseWriter, _ *http.Request) {
 		replyData(t, w, []map[string]any{
-			{"zone": "evpn1", "type": "evpn"},
+			{"zone": "evpn1", "type": "evpn", "mtu": 1450},
 			{"zone": "vlanz", "type": "vlan"},
 			{"zone": "simplez", "type": "simple"},
 			{"zone": "pinned", "type": "vxlan", "nodes": "two,three"},
@@ -290,7 +290,7 @@ func TestBridgesListVNetsWithTheirZones(t *testing.T) {
 		{Bridge: "vmbr0", Node: "one", MTU: defaultBridgeMTU},
 		{Bridge: "corp", Node: "one", Zone: "vlanz", ZoneType: "vlan", VLANAware: true},
 		{Bridge: "dmz", Node: "one", Zone: "simplez", ZoneType: "simple"},
-		{Bridge: "web", Node: "one", Zone: "evpn1", ZoneType: "evpn", Alias: "Web tier"},
+		{Bridge: "web", Node: "one", Zone: "evpn1", ZoneType: "evpn", Alias: "Web tier", MTU: 1450},
 	}
 	if !reflect.DeepEqual(bridges, want) {
 		t.Errorf("bridges %+v, want %+v", bridges, want)
