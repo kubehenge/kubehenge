@@ -110,8 +110,8 @@ onBeforeUnmount(() => stop());
               </li>
               <li>
                 <b>Keeps them running.</b> A node that stays not ready for five minutes is replaced. Kubernetes is
-                upgraded one node at a time, by hand or inside a maintenance window. Kubehenge upgrades itself and
-                installs only signed releases.
+                upgraded one node at a time, by hand or inside an upgrade window. Kubehenge upgrades itself and installs
+                only signed releases.
               </li>
             </ul>
           </div>

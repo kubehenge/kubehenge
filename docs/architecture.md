@@ -338,7 +338,7 @@ A node OS template is a line of builds, each tagged with when it was made. Every
   - `GeneratePatches` selects the newest build of each line made by then that is past the soak time (24 hours by default, `--node-image-soak`).
   - The same cluster therefore gets the same build on every reconcile, scale-up and repair until the time moves.
 - **The time moves** in two places.
-  - Every five minutes the upgrader sets it to now for each cluster settled inside its maintenance window with a newer build soaked. It skips a cluster whose `upgrades.nodeImages` is false.
+  - Every five minutes the upgrader sets it to now for each cluster settled inside its upgrade window with a newer build soaked. It skips a cluster whose `upgrades.nodeImages` is false.
   - The `BeforeClusterUpgrade` hook sets it too, so that any Kubernetes upgrade takes the newest builds with it.
   - Outside the window, the upgrader records the hold, the build that waits and when the window opens in the annotation `kubehenge.dev/node-image-held`. The interface shows it.
 - **The refresh** holds a Lease so that one run builds at a time. It builds each line, then deletes all but its two newest builds.
@@ -373,7 +373,7 @@ It deletes the rest.
   - The controller upgrades nothing more in the cluster until an operator removes the record (**Try again** on the cluster's page).
   - A stalled install (no word for three minutes) or an unreachable or busy node is retried after one, two and four minutes. Nothing on the node changes before the reboot.
   - A node whose machine Cluster API deletes mid-upgrade, as when the cluster scales down onto it, has its upgrade dropped, not failed. A machine being deleted is never picked.
-- **Automatic patch upgrades.** Where the cluster's `upgrades.nodeImages` is on, the upgrader moves `talosVersion` to its minor version's newest patch release, inside the maintenance window. Talos releases get no soak time. A new minor version is always an operator's choice.
+- **Automatic patch upgrades.** Where the cluster's `upgrades.nodeImages` is on, the upgrader moves `talosVersion` to its minor version's newest patch release, inside the upgrade window. Talos releases get no soak time. A new minor version is always an operator's choice.
 
 ## Add-ons
 
@@ -1054,6 +1054,10 @@ The `upgrades` variable of every ClusterClass asks Kubehenge's controller to upg
 For Talos it never goes to a release the cluster's Talos release does not run, and never while its nodes are being upgraded.
 
 An upgrade starts only inside the window (days of the week or of the month, a start time and length in a named time zone). It starts only while the cluster is available with no rollout running, and not beyond the Kubernetes versions an installed Rancher runs on. A rollout that has started finishes even if the window closes. The last automatic upgrade is recorded on the Cluster as `kubehenge.dev/auto-upgraded`.
+
+The same window gates the controller's changes to a cluster's add-ons. Each HelmChartProxy records the release stamp (the controller's build and pins) and the settings stamp (the cluster's variables but `upgrades`) its spec was made for. A spec that differs from the stored one with a new release stamp and an unchanged settings stamp waits while the window is closed. Any other change applies at once: a new proxy, a change of the cluster's variables, a spec the same release made. A Cluster without a window has none held. The Cluster's annotation `kubehenge.dev/addon-changes` and condition `AddonChangesPending` record what waits, and the annotation `kubehenge.dev/apply-addon-changes` asks for it now.
+
+Before it first installs cert-manager, Kyverno or monitoring, the controller asks the workload cluster for the custom resource definitions of that software. It leaves the add-on out when one exists that its release does not own, and records the condition `AddonConflict`. `useExisting.certManager` leaves cert-manager's chart out, and the issuers and certificates are made in the existing install. The controller puts `namespaceLabels` on the namespaces of the proxies before it applies them, and creates a missing namespace with them.
 
 ## Networking
 

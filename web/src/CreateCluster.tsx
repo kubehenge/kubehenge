@@ -73,6 +73,7 @@ const raising = new Set<keyof Form>([
   "rancherRegister",
   "backups",
   "certificates",
+  "existingCertManager",
 ]);
 
 export function CreateCluster({

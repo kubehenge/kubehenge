@@ -3,6 +3,7 @@ import { newForm, type Form, type Machine } from "./create-form";
 import { etcdFieldsOf, etcdSnapshotsOf } from "./EtcdSnapshots";
 import { loadBalancerOf } from "./LoadBalancer";
 import { logsOf } from "./Logs";
+import { labelsLines, labelsOf } from "./namespace-labels";
 import { nodeOSKey } from "./node-os";
 import { entryOf } from "./NodeTimeouts";
 import { oidcProviders } from "./OIDCProviders";
@@ -59,6 +60,8 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "oidc",
   "etcdSnapshots",
   "etcdFields",
+  "namespaceLabels",
+  "existingCertManager",
 ]);
 
 function machineOf(v: unknown, fallback: Machine): Machine {
@@ -130,5 +133,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     oidc: oidcProviders(v["oidc"]),
     etcdSnapshots: etcd?.enabled ?? base.etcdSnapshots,
     etcdFields: etcd === undefined ? base.etcdFields : etcdFieldsOf(etcd),
+    namespaceLabels: labelsLines(labelsOf(v["namespaceLabels"])),
+    existingCertManager: flag(record(v["useExisting"])["certManager"]) === true,
   };
 }

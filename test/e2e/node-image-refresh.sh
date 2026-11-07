@@ -3,7 +3,7 @@
 # cluster whose refresh is on with no soak, k3s's template on the default node OS built once, and
 # on Rocky Linux 10 too unless KUBEHENGE_E2E_ROCKY_TEMPLATE makes it later: a one-node k3s cluster
 # runs the first build; a run of the refresh, asked for as Build now asks, makes a new one; the
-# cluster's node stays on its build while the maintenance window is closed and moves to the new one
+# cluster's node stays on its build while the upgrade window is closed and moves to the new one
 # once it opens; a second run makes a third build and deletes the first, which nothing runs any
 # more, while the two newest stay; the cluster's node OS changed to Rocky Linux replaces its node
 # with a clone of that template, SELinux enforcing on it and its boot log read through its guest

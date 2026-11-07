@@ -335,7 +335,7 @@ describe("vM templates", () => {
     render(<Templates />);
     const builds = within(await screen.findByRole("region", { name: "Automatic builds" }));
     expect(builds.getByText("Every Sunday, 01:00 Europe/Zurich")).toBeInTheDocument();
-    expect(builds.getByText("After 24 h, in maintenance windows")).toBeInTheDocument();
+    expect(builds.getByText("After 24 h, in upgrade windows")).toBeInTheDocument();
     expect(builds.getByText(/^Last run failed, /u)).toBeInTheDocument();
     expect(builds.getByText("the mirror is down")).toBeInTheDocument();
     await user.click(builds.getByRole("button", { name: "Build now" }));

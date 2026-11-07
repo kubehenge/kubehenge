@@ -64,7 +64,7 @@ const (
 // Variables a cluster may change after creation. The others describe where its VMs live.
 var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
-	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true, egressVariable: true,
+	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true, egressVariable: true, "namespaceLabels": true,
 	// A new node OS rolls every node onto its template, as a node image refresh does. A new size
 	// rolls the machines it sizes.
 	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true,
@@ -233,6 +233,8 @@ type clusterView struct {
 	GitOps *gitOpsView `json:"gitops,omitempty"`
 	// Talos is how a Talos cluster's nodes stand with its Talos release.
 	Talos *talosView `json:"talos,omitempty"`
+	// AddonChanges are the add-on changes that wait for the cluster's upgrade window.
+	AddonChanges *provisioner.AddonChangesStatus `json:"addonChanges,omitempty"`
 	// Generation counts the changes to the cluster's spec. A change made against it carries it back
 	// (generationHeader).
 	Generation int64 `json:"generation"`
@@ -382,6 +384,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	if dist == string(templates.Talos) {
 		v.Talos = talosViewOf(c)
 	}
+	v.AddonChanges = addonChangesOf(c)
 	if e := c.Spec.ControlPlaneEndpoint; e.Host != "" {
 		v.Endpoint = e.Host
 		if e.Port != 0 {
@@ -1517,6 +1520,35 @@ func (s *Server) retryTalosUpgrade(w http.ResponseWriter, r *http.Request, u use
 	}
 	s.Log.InfoContext(r.Context(), "Talos upgrade tried again", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// addonChangesOf reads the add-on changes that wait for the cluster's window, nil when none do.
+func addonChangesOf(c *clusterv1.Cluster) *provisioner.AddonChangesStatus {
+	raw, ok := c.Annotations[provisioner.AddonChangesAnnotation]
+	if !ok {
+		return nil
+	}
+	var status provisioner.AddonChangesStatus
+	if err := json.Unmarshal([]byte(raw), &status); err != nil || len(status.Changes) == 0 {
+		return nil
+	}
+	return &status
+}
+
+// applyAddonChanges asks the controller to apply the add-on changes that wait for the cluster's
+// window now, as a security fix needs.
+func (s *Server) applyAddonChanges(w http.ResponseWriter, r *http.Request, u user) {
+	c, _, ok := s.cluster(w, r, u, privChange)
+	if !ok {
+		return
+	}
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, provisioner.ApplyAddonChangesAnnotation, s.now().UTC().Format(time.RFC3339))
+	if err := u.kube.Patch(r.Context(), c, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		s.kubeError(w, r, err)
+		return
+	}
+	s.Log.InfoContext(r.Context(), "add-on changes applied now", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // kubeError answers with what the management cluster refused. Validation messages are the user's

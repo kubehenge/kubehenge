@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState, type JSX } from "react";
 
 import { ClusterActivity } from "./Activity";
+import { AddonChangesWaiting, AddonConflict } from "./AddonChanges";
 import { api } from "./api";
 import { AutoscalerDialog, ScaleDialog, autoscalerText, poolText } from "./Autoscaling";
 import { BackupsDialog, BackupsView, backupsOf, backupsRows, useClassTargets } from "./Backups";
@@ -419,6 +420,7 @@ export function ClusterDetail({
         </div>
         {pageNote(c) !== undefined && <p className="muted page-note">{pageNote(c)}</p>}
         <HeldUp cluster={c} />
+        <AddonConflict cluster={c} />
         <ErrorBox message={error} />
         <ErrorBox message={downloadError} />
         <Deleting
@@ -707,6 +709,7 @@ function Summary({
       {filled(c.talos?.failed) && (
         <TalosFailure cluster={c} failed={c.talos.failed} can={can} why={why} onRetried={onChanged} />
       )}
+      <AddonChangesWaiting cluster={c} can={can} why={why} onApplied={onChanged} />
       <RecoveryState cluster={c} />
     </div>
   );
@@ -833,9 +836,14 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
           healthPath={clusterPath(c.namespace, c.name, "health")}
         />
       )}
+      <UpgradeAddonChanges cluster={c} onClose={onClose} />
       <ErrorBox message={error} />
     </Dialog>
   );
+}
+
+function UpgradeAddonChanges({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  return <AddonChangesWaiting cluster={c} can={c.allowed.change && !c.deleting} why={whyNot(c)} onApplied={onClose} />;
 }
 
 // TalosNote says what the Talos release in the way holds back: versions it does not run, or the

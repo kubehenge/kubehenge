@@ -11,6 +11,8 @@ import { EgressDialog, egressOf, egressText } from "./EgressProxy";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
+import { labelsOf, labelsText } from "./namespace-labels";
+import { NamespaceLabelsDialog } from "./NamespaceLabels";
 import { choosable, cpuNote, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import {
@@ -66,6 +68,7 @@ export type OptionAction =
   | "egressProxy"
   | "upgrades"
   | "certificates"
+  | "namespaceLabels"
   | "talos"
   | "oidc";
 
@@ -138,6 +141,9 @@ export function OptionDialog({
     }
     case "certificates": {
       return <CertificatesDialog cluster={c} onClose={onClose} />;
+    }
+    case "namespaceLabels": {
+      return <NamespaceLabelsDialog cluster={c} onClose={onClose} />;
     }
     case "nodeOS": {
       return <NodeOSDialog cluster={c} onClose={onClose} />;
@@ -359,12 +365,24 @@ export function optionRows<A extends string = never>(
       action: "certificates",
       name: "certificates",
     },
+  );
+  if (flag(record(c.variables["useExisting"])["certManager"]) === true) {
+    rows.push({ label: "Existing cert-manager", value: "Yes", group: "Add-ons" });
+  }
+  rows.push(
     {
       label: "Pod security",
       value: podSecurityText(podSecurity),
       group: "Security",
       action: "podSecurity",
       name: "pod security",
+    },
+    {
+      label: "Namespace labels",
+      value: labelsText(labelsOf(c.variables["namespaceLabels"])),
+      group: "Security",
+      action: "namespaceLabels",
+      name: "namespace labels",
     },
     { label: "Istio", value: istioText(istioOn(c)), group: "Add-ons", toggle: istioToggle },
   );

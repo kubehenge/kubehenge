@@ -552,6 +552,29 @@ An automatic upgrade that is due waits while the Cluster has the condition `Auto
 
 To let the automatic upgrade go ahead without a fix, accept what is listed. Choose **Upgrade anyway** on the Health page, run `kubehenge cluster accept-upgrade NAME --version V`, or set the annotation `kubehenge.dev/acknowledged-upgrade-findings` to `{"1.37":["<API or webhook name>"]}` with kubectl. It holds for that minor version only. A finding that was not listed, such as a new API in use, skips the upgrade again. `ChecksUnavailable` cannot be accepted.
 
+### Add-on changes wait
+
+A cluster with an upgrade window gets the changes a new Kubehenge release makes to its add-ons when the window opens. Until then it has the condition `AddonChangesPending`, and the annotation `kubehenge.dev/addon-changes` lists each add-on, its chart, and the versions it moves from and to ([upgrading.md](upgrading.md#add-on-changes)).
+
+To apply them now, use **Apply now** on the cluster's page. With the command line, run `kubehenge cluster apply-addon-changes <name>`. With kubectl, annotate the Cluster with `kubehenge.dev/apply-addon-changes` set to any value.
+
+Changes that never apply mean the window never opens. Check the `upgrades` variable's days, start time and time zone.
+
+### An add-on is not installed over an existing install
+
+The Cluster has the condition `AddonConflict`, and the add-on's HelmChartProxy does not exist. The message names the custom resource definition the cluster already holds, which no Kubehenge release owns. Helm refuses to install over it.
+
+- **cert-manager.** Create the cluster with `useExisting.certManager`, which uses yours, or remove yours first. A cluster that exists cannot switch, since removing Kubehenge's cert-manager deletes the definitions and with them every certificate.
+- **Kyverno and monitoring.** Remove the cluster's own install, or switch the add-on off.
+
+`kubectl get crd <name> -o yaml` shows who owns a definition in its `meta.helm.sh/release-name` annotation. Kubehenge installs the add-on on its next look, within ten minutes, once the definition is gone or is its own. [clusters.md](clusters.md#installs-that-collide) lists the definitions it checks.
+
+### An admission policy denies an add-on
+
+A Helm error such as `admission webhook … denied the request` in an add-on's not-ready message means a policy of the cluster refuses what the add-on creates. It may refuse a namespace without labels, a host path, a host port, a privileged pod or an image from a registry the policy does not allow.
+
+[clusters.md](clusters.md#what-the-add-ons-need-from-a-policy) lists each add-on's namespaces, privileges and registries. Exempt the namespaces and name the registries in the policy. If the policy wants labels on namespaces, set `namespaceLabels`, which puts them on the namespaces from before the first pod.
+
 ### GitOps
 
 - **`GitOpsWaiting`**, "GitOps waits for …": the engine syncs nothing until it has what follows.

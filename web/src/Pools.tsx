@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import { poolText } from "./Autoscaling";
-import { machineMinimums, memoryStepMiB } from "./create-form";
+import { coresText, machineMinimums, memoryStepMiB } from "./create-form";
 import { MachineFields, sizeOf } from "./MachineFields";
 import { whole } from "./network";
 import { TimeoutsDialog } from "./PoolTimeouts";
@@ -26,7 +26,7 @@ export const poolSize = (c: Cluster, p: WorkerPool): MachineSize | undefined =>
 /** sizeProblem says what keeps a size from being sent, by the class's least. */
 export function sizeProblem(m: MachineSize, min: MachineSize): string | undefined {
   if (!whole(m.cores, min.cores)) {
-    return `At least ${min.cores} cores`;
+    return `At least ${coresText(min.cores)}`;
   }
   if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
     return `At least ${min.memoryMiB} MiB of memory, in steps of ${memoryStepMiB}`;

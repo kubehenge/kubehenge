@@ -1527,7 +1527,7 @@ function RefreshChoice({ form, set, shown, nodes }: FieldsProps & { nodes: strin
         templates weekly
       </label>
       <Info about="template refresh">
-        Clusters move to a build once it is a day old, in their maintenance window. The two newest builds stay.
+        Clusters move to a build once it is a day old, in their upgrade window. The two newest builds stay.
       </Info>
       {form.refresh && (
         <>

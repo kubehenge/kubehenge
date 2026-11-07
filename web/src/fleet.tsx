@@ -155,7 +155,7 @@ export function standing(c: Cluster, found?: FleetHealth, now = Date.now()): Sta
     finding(found) ?? {
       group: "healthy",
       state: "ok",
-      reason: c.talos ? `Talos ${c.talos.version}, ${c.version}` : `${distributionName(c.distribution)} ${c.version}`,
+      reason: restingReason(c),
       view: "",
       verdict: "Available",
     }
@@ -248,12 +248,44 @@ function held(c: Cluster): Standing | undefined {
   return { group: "needs", state: "warning", reason, view: "health", verdict: "Upgrade held" };
 }
 
+/** The condition Kubehenge sets while an add-on is not installed because the cluster already holds that software. */
+export const addonConflictCondition = "AddonConflict";
+
+/** The condition Kubehenge sets while add-on chart changes wait for the upgrade window. */
+export const addonChangesPendingCondition = "AddonChangesPending";
+
+const isTrue = (c: Cluster, type: string): boolean => c.conditions.some((x) => x.type === type && x.status === "True");
+
+/** windowTime is when an upgrade window opens, to the minute. */
+export const windowTime = (iso: string): string =>
+  new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+
+// windowShort is windowTime without the year, for the rail's narrow lines.
+const windowShort = (iso: string): string =>
+  new Date(iso).toLocaleString(undefined, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+// addonStanding is what the add-ons hold up: a conflict that needs someone. Changes that wait for the
+// upgrade window leave the cluster as it is, since nothing runs until the window opens.
+function addonStanding(c: Cluster): Standing | undefined {
+  return isTrue(c, addonConflictCondition)
+    ? { group: "needs", state: "warning", reason: "Add-on conflict", view: "", verdict: "Add-on conflict" }
+    : undefined;
+}
+
+// restingReason is the line of a cluster that is available and has nothing going on.
+function restingReason(c: Cluster): string {
+  if (isTrue(c, addonChangesPendingCondition) && c.addonChanges !== undefined) {
+    return `Add-on changes ${windowShort(c.addonChanges.opens)}`;
+  }
+  return c.talos ? `Talos ${c.talos.version}, ${c.version}` : `${distributionName(c.distribution)} ${c.version}`;
+}
+
 // underWay is the change going on in an available cluster, if one is.
 function underWay(c: Cluster): Standing | undefined {
   if (filled(c.talos?.upgrading)) {
     return moving(`Upgrading Talos on ${firstWord(c.talos.upgrading)}`, "Upgrading");
   }
-  const hold = held(c);
+  const hold = held(c) ?? addonStanding(c);
   if (hold !== undefined) {
     return hold;
   }

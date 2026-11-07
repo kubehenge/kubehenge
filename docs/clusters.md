@@ -547,7 +547,9 @@ The newest version the cluster may move to is chosen already. Under it the dialo
 
 The two checks of the cluster's insides warn and do not disable **Upgrade**.
 
-Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
+Automatic upgrades inside an upgrade window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
+
+A new Kubehenge release also moves the charts of the cluster's add-ons. In a cluster with an upgrade window, those changes wait for it. The dialog and the cluster's page list each one with its chart and the version it moves from and to. **Apply now** applies them at once, as `kubehenge cluster apply-addon-changes NAME` does ([upgrading.md](upgrading.md#add-on-changes)).
 
 A cluster with one control plane runs on two etcd members while its control plane is replaced. Its API stops if either does. The plan of such a change warns of it, as kubectl does.
 
@@ -557,7 +559,7 @@ If the new machine is not ready after 20 minutes, the cluster's page says the ro
 
 The nodes of kubeadm, RKE2 and k3s clusters are clones of a VM template of their node OS. The management cluster builds the template again every week with the node OS's updates ([templates.md](templates.md#the-weekly-build)).
 
-Once a new build is a day old, each cluster's nodes are replaced with clones of it inside the cluster's maintenance window. They are replaced one at a time as in an upgrade. This happens only while the cluster is healthy and nothing else rolls out. It happens whether automatic Kubernetes upgrades are on or not.
+Once a new build is a day old, each cluster's nodes are replaced with clones of it inside the cluster's upgrade window. They are replaced one at a time as in an upgrade. This happens only while the cluster is healthy and nothing else rolls out. It happens whether automatic Kubernetes upgrades are on or not.
 
 The day gives a broken build time to be noticed before every cluster takes it. Deleting the build stops clusters that have not moved yet. Scaling up or replacing a failed node in between clones the build the other nodes run.
 
@@ -581,7 +583,7 @@ The controller upgrades no other node until **Try again** (which needs `VM.Alloc
 
 New machines, from scaling up or a repair, clone the template of the release the cluster was created on, or upgraded Kubernetes on last. They are upgraded to the cluster's release once they join, so a Talos upgrade replaces no machine. A Kubernetes upgrade moves new machines to the cluster's release once its template is in the pool.
 
-**Apply Talos patch releases** is on by default (`upgrades.nodeImages`, under Automatic upgrades). With it on, the controller moves the cluster to the newest patch release of its minor version inside the maintenance window. The cluster must be healthy and nothing else may roll out. A new minor version is always chosen by hand.
+**Apply Talos patch releases** is on by default (`upgrades.nodeImages`, under Automatic upgrades). With it on, the controller moves the cluster to the newest patch release of its minor version inside the upgrade window. The cluster must be healthy and nothing else may roll out. A new minor version is always chosen by hand.
 
 ## Change settings
 
@@ -607,6 +609,7 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 | Add-ons | Headlamp, Monitoring, Logs, Certificates, Istio, Rancher, GitOps | always | See the list below. |
 | Security | CIS hardening | always | Fixed for the cluster's life ([Add-ons](#add-ons)). |
 | Security | Pod security, Identity providers | always | See the list below. |
+| Security | Namespace labels | always | Put on the namespaces the add-ons install into ([Add-ons and your policies](#add-ons-and-your-policies)). |
 | Maintenance | Backups | where an administrator set a backup target, or while they are on | See the list below. |
 | Maintenance | etcd snapshots | where an administrator set a backup target, or while they are on | [etcd snapshots](#etcd-snapshots). |
 | Maintenance | Automatic upgrades | always | The Kubernetes upgrades, their window and the move to new node images ([upgrading.md](upgrading.md#automatically-inside-a-window), [Node image refresh](#node-image-refresh)). |
@@ -1076,6 +1079,73 @@ Deleting the cluster that runs Rancher first removes every registered cluster fr
 
 While the cluster is being deleted, its page lists what the deletion waits on. That is each object whose finalizer holds it, with what that object reports. Examples are a node drain a disruption budget refuses, or a VM on a node that is offline. A deletion still waiting after 20 minutes is reported stalled. One that can never finish can be abandoned ([troubleshooting.md](troubleshooting.md#a-cluster-does-not-finish-deleting)).
 
+## Add-ons and your policies
+
+Each add-on installs into namespaces of its own. A cluster that enforces an admission policy, or that already runs cert-manager, Kyverno or the Prometheus Operator, needs to know which.
+
+### What the add-ons need from a policy
+
+Namespaces, privileges and registries, as the code and the chart define them. A namespace marked exempt is outside Pod Security Admission in every cluster. Kyverno exempts it only where the cluster runs the add-on. Every image is pinned by its digest.
+
+<!-- addon-footprint:start -->
+
+| Add-on | Namespaces | Pod Security | Privileges | Registries |
+| --- | --- | --- | --- | --- |
+| Every cluster | `kube-system` | exempt | Cilium agents are privileged on the host network. kube-vip uses the host network and `NET_ADMIN`. Traefik binds host ports 80 and 443 on kubeadm and Talos. | `docker.io`, `ghcr.io`, `registry.k8s.io` |
+| Calico | `calico-system`, `tigera-operator` | exempt | `calico-node` is privileged on the host network and mounts host paths. | `quay.io` |
+| Headlamp | `headlamp` | the cluster's level | none | `ghcr.io` |
+| cert-manager | `cert-manager` | the cluster's level | none | `quay.io` |
+| Monitoring | `monitoring`, `node-exporter` | exempt: `node-exporter`. The others follow the cluster's level | `node-exporter` uses the host network and PID namespace and mounts host paths. | `docker.io`, `ghcr.io`, `quay.io`, `registry.k8s.io` |
+| Logs | `logging`, `logging-node` | exempt: `logging-node`. The others follow the cluster's level | Alloy's node collectors run as root and mount host paths. | `docker.io` |
+| Backups | `velero` | exempt | Velero's node agents mount host paths, and its backup pods run privileged. | `docker.io` |
+| Kyverno | `kyverno` | the cluster's level | none | `ghcr.io`, `reg.kyverno.io` |
+| Istio | `istio-node`, `istio-system` | exempt: `istio-node`. The others follow the cluster's level | `ztunnel` and the CNI agent are privileged on the host network and mount host paths. | `docker.io`, `ghcr.io` |
+| MetalLB | `metallb-system` | exempt | The speakers use the host network and `NET_RAW`. | `quay.io` |
+| Rancher | `cattle-fleet-local-system`, `cattle-fleet-system`, `cattle-system`, `cattle-turtles-system` | exempt | Rancher's agents and controllers run privileged. | `docker.io` |
+| Argo CD | `argocd` | the cluster's level | none | `docker.io`, `quay.io` |
+
+<!-- addon-footprint:end -->
+
+An allowed-registries policy has to name every registry in the last column of the add-ons the cluster runs. A policy that forbids host paths, host ports, the host network or privileged pods has to leave the namespaces marked exempt alone.
+
+**Namespace labels** (`namespaceLabels`) put labels on the namespaces the add-ons install into, from before their first pod. A policy that requires labels on namespaces, or sets Pod Security levels by label, then admits them. Kubehenge creates a namespace that is not there yet with the labels, so a policy that refuses an unlabelled namespace never sees one. `kube-system` and `default` are left alone, and so are namespaces that a chart's own operator creates. Change them under **Options**, with `kubehenge cluster namespace-labels NAME --label key=value`, or in the variable.
+
+### Installs that collide
+
+Helm refuses to install over objects that another release or tool owns, so an add-on cannot share its custom resource definitions with the cluster's own install of the same software. Before it installs cert-manager, Kyverno or monitoring, Kubehenge asks the cluster for the definitions in the last column below. If one exists and no Kubehenge release owns it, the add-on is not installed. The cluster's `AddonConflict` condition names the definition and what to do.
+
+<!-- addon-owned:start -->
+
+| Add-on | Release | Namespace | Custom resource definitions checked before it installs |
+| --- | --- | --- | --- |
+| cni | `cilium` | `kube-system` | none |
+| proxmox-ccm | `proxmox-cloud-controller-manager` | `kube-system` | none |
+| proxmox-csi | `proxmox-csi-plugin` | `kube-system` | none |
+| traefik | `traefik` | `kube-system` | none |
+| cni | `calico` | `tigera-operator` | none |
+| headlamp | `headlamp` | `headlamp` | none |
+| cert-manager | `cert-manager` | `cert-manager` | `certificates.cert-manager.io`, `clusterissuers.cert-manager.io` |
+| monitoring | `kube-prometheus-stack` | `monitoring` | `prometheuses.monitoring.coreos.com`, `servicemonitors.monitoring.coreos.com` |
+| alloy | `alloy` | `logging` | none |
+| alloy-node | `alloy-node` | `logging-node` | none |
+| loki | `loki` | `logging` | none |
+| velero | `velero` | `velero` | none |
+| kyverno | `kyverno` | `kyverno` | `clusterpolicies.kyverno.io`, `policyexceptions.kyverno.io` |
+| kyverno-policies | `kyverno-policies` | `kyverno` | none |
+| istio-base | `istio-base` | `istio-system` | none |
+| istio-cni | `istio-cni` | `istio-node` | none |
+| istiod | `istiod` | `istio-system` | none |
+| ztunnel | `ztunnel` | `istio-node` | none |
+| load-balancer | `metallb` | `metallb-system` | none |
+| rancher | `rancher` | `cattle-system` | none |
+| argocd | `argocd` | `argocd` | none |
+
+<!-- addon-owned:end -->
+
+To use a cert-manager the cluster runs already, choose **Use existing cert-manager** under Certificates when you create the cluster, or set `useExisting.certManager`. Kubehenge then installs no cert-manager and still makes its issuers and certificates in yours, for the certificates add-on, monitoring and Rancher. It is fixed once the cluster exists, since switching would delete the definitions with every certificate. The existing cert-manager must run with its custom resource definitions installed.
+
+Kyverno and the Prometheus Operator have no such choice. Remove the cluster's own install, or switch the add-on off.
+
 ## Who may do what
 
 The interface checks the signed-in user's Proxmox VE privileges on each cluster's pool. It then acts with its own account in the management cluster. Clusters are shared with the same ACLs as VMs.
@@ -1273,6 +1343,8 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. While `backups` is enabled too, `target` must be the backups' target. |
 | `podSecurity` | no | `admission`, the level Pod Security Admission enforces in every namespace that labels none of its own: `privileged`, `baseline` (default) or `restricted`. Changing it replaces the control-plane machines. `kyverno`, the level Kyverno enforces in every namespace: `off` (default), `baseline` or `restricted` ([above](#add-ons)). |
 | `istio` | no | `enabled` (default false): Istio in ambient mode ([above](#add-ons)). |
+| `namespaceLabels` | no | Up to 20 labels, as key and value, put on the namespaces the add-ons install into ([above](#add-ons-and-your-policies)). Keys and values follow Kubernetes' label syntax. The webhook refuses `kubernetes.io/metadata.name`. |
+| `useExisting` | no | `certManager` (default false) uses the cert-manager the cluster runs and installs none ([above](#installs-that-collide)). The webhook refuses a change once the cluster exists. |
 | `clusterMesh` | no | For a cluster that runs Cilium ([above](#add-ons)). `enabled` (default false). `peers`, the clusters of this namespace to link with, by name. |
 | `certificates` | no | `enabled` (default false). `issuer`, `acme-dns01` (default), `acme-http01` or `ca`. `domain`, needed with `acme-dns01` and `ca`. `acme` holds `email`, `server`, `staging`, `caBundle`. `dns01` holds `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node. `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false uninstalls it ([above](#change-settings)). |

@@ -120,7 +120,7 @@ func newTemplateDeleteCommand(conn *pve.Config) *cobra.Command {
 build, or with --build the one build with that tag, as kubehenge template list shows it.
 
 A build that a cluster's machines are cloned from is refused, as in the interface, naming the
-clusters. Deleting it would replace their nodes at once, outside their maintenance windows. Those
+clusters. Deleting it would replace their nodes at once, outside their upgrade windows. Those
 clusters are read from the management cluster KUBECONFIG points at. For a broken build,
 --roll-clusters deletes it anyway and replaces those clusters' nodes now with clones of the build
 before it. The last build of a template is never deleted while a cluster runs it.`,
@@ -158,7 +158,7 @@ before it. The last build of a template is never deleted while a cluster runs it
 	f.StringVar(&req.KubernetesVersion, "kubernetes-version", "", "Kubernetes release (kubeadm)")
 	f.StringVar(&build, "build", "", "the build to delete, such as build-202610181200, else every build")
 	f.StringVar(&classNamespace, "class-namespace", "kubehenge-system", "namespace of Kubehenge's ClusterClasses in the management cluster")
-	f.BoolVar(&roll, "roll-clusters", false, "delete builds that clusters run too, replacing their nodes now with clones of the build before, outside their maintenance windows")
+	f.BoolVar(&roll, "roll-clusters", false, "delete builds that clusters run too, replacing their nodes now with clones of the build before, outside their upgrade windows")
 	poolFlag(cmd, &pool, "pool the template is in, or empty to look in every pool")
 	return cmd
 }
@@ -228,7 +228,7 @@ func refusedBuilds(builds, doomed []templates.Built, checks deleteChecks) ([]str
 		case len(doomed) == len(builds):
 			refused = append(refused, fmt.Sprintf("%s: %s clone from it, and no build of the template would be left for them", b.Resource.Name, strings.Join(who, ", ")))
 		case !checks.roll:
-			refused = append(refused, fmt.Sprintf("%s: %s clone from it. --roll-clusters deletes it and replaces their nodes now, outside their maintenance windows", b.Resource.Name, strings.Join(who, ", ")))
+			refused = append(refused, fmt.Sprintf("%s: %s clone from it. --roll-clusters deletes it and replaces their nodes now, outside their upgrade windows", b.Resource.Name, strings.Join(who, ", ")))
 		}
 	}
 	return refused, nil
@@ -382,7 +382,7 @@ containerd, the kubelet and kubeadm at one Kubernetes version. Every image and p
 against its publisher's signature.
 
 Node OS templates are built again for their updates. Each build is a template of its own, tagged
-with when it was made. Clusters move to a new build inside their maintenance windows. Without
+with when it was made. Clusters move to a new build inside their upgrade windows. Without
 --new-build the newest build is kept when there is one.
 
 A node OS template is made by a VM that boots the node OS's cloud image and builds the node from

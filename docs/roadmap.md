@@ -19,7 +19,7 @@ What each release changed is in the [changelog](changelog.md).
 #### Nodes and scaling
 
 - VM templates for every distribution. kubeadm, RKE2 and k3s get a node OS each cluster chooses (AlmaLinux 10 or Rocky Linux 10, in image mode, SELinux enforcing).
-- Node OS templates rebuilt weekly with their updates. Nodes move to each build in their maintenance windows once it is a day old.
+- Node OS templates rebuilt weekly with their updates. Nodes move to each build in their upgrade windows once it is a day old.
 - The cluster autoscaler for worker pools, from none up to 100 workers.
 - Placement over every online node, chosen nodes or one of Proxmox VE's HA node-affinity rules. Optionally, Proxmox VE HA keeps the control-plane VMs apart and restarts them after a node failure.
 
@@ -39,7 +39,7 @@ What each release changed is in the [changelog](changelog.md).
 - The appliance, an LXC container installed from the Proxmox VE shell, whose interface creates the management cluster and keeps it upgraded. One Terraform/OpenTofu apply creates the same management cluster.
 - The interface creates, lists, scales, upgrades and deletes clusters, with changes staged and applied together after a plan. It picks each cluster's distribution and add-ons and downloads its kubeconfig.
 - Permissions follow Proxmox VE's on each cluster's pool. Optionally, the shared Headlamp opens each cluster signed in as cluster-admin for those who may download its kubeconfig.
-- The appliance upgrades itself and, by choice, the management cluster, without a shell. Each cluster can upgrade Kubernetes automatically inside a maintenance window its owner sets.
+- The appliance upgrades itself and, by choice, the management cluster, without a shell. Each cluster can upgrade Kubernetes automatically inside an upgrade window its owner sets.
 - The optional Kubernetes entry inside Proxmox VE's own interface.
 
 ## Next

@@ -96,6 +96,8 @@ type demoCluster struct {
 	LackingMemory string `json:"lackingMemory"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
+	// AddonChanges wait for the cluster's upgrade window.
+	AddonChanges []provisioner.AddonChange `json:"addonChanges"`
 	// Paused is a cluster whose reconciling is paused.
 	Paused bool `json:"paused"`
 	// Conditions are what Kubehenge's controller has noted on the cluster.
@@ -329,7 +331,22 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 			Message: d.LackingMemory, LastTransitionTime: metav1.NewTime(f.now.Add(-25 * time.Minute)),
 		})
 	}
+	f.waitForWindow(c, d.AddonChanges)
 	return c
+}
+
+// waitForWindow records on the cluster the add-on changes that wait for its next window.
+func (f *demoFleet) waitForWindow(c *clusterv1.Cluster, changes []provisioner.AddonChange) {
+	if len(changes) == 0 {
+		return
+	}
+	opens := f.now.Add(9 * time.Hour).UTC().Truncate(time.Hour)
+	raw, _ := json.Marshal(provisioner.AddonChangesStatus{Opens: opens, Changes: changes}) //nolint:errchkjson // strings and a time
+	c.Annotations[provisioner.AddonChangesAnnotation] = string(raw)
+	c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
+		Type: provisioner.AddonChangesPendingCondition, Status: metav1.ConditionTrue, Reason: provisioner.AddonChangesWaiting,
+		Message: "Add-on changes wait for the upgrade window, which opens " + opens.Format(time.RFC3339), LastTransitionTime: metav1.NewTime(f.now.Add(-2 * time.Hour)),
+	})
 }
 
 // demoCondition is a condition that holds, as an unstructured object carries it.
