@@ -94,6 +94,18 @@ type demoCluster struct {
 	Crashing string `json:"crashing"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
+	// Paused is a cluster whose reconciling is paused.
+	Paused bool `json:"paused"`
+	// Conditions are what Kubehenge's controller has noted on the cluster.
+	Conditions []demoNote `json:"conditions"`
+}
+
+// demoNote is a condition on a demo cluster that holds, set AgoHours before the demo's now.
+type demoNote struct {
+	Type     string `json:"type"`
+	Reason   string `json:"reason"`
+	Message  string `json:"message"`
+	AgoHours int    `json:"agoHours"`
 }
 
 type demoUpgrade struct {
@@ -299,6 +311,15 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		Workers: &clusterv1.WorkersStatus{
 			DesiredReplicas: &workers, Replicas: &workers, ReadyReplicas: &workers, AvailableReplicas: &workers, UpToDateReplicas: &upToDateWorkers,
 		},
+	}
+	if d.Paused {
+		c.Spec.Paused = new(true)
+	}
+	for _, n := range d.Conditions {
+		c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
+			Type: n.Type, Status: metav1.ConditionTrue, Reason: n.Reason, Message: n.Message,
+			LastTransitionTime: metav1.NewTime(f.now.Add(-time.Duration(n.AgoHours) * time.Hour)),
+		})
 	}
 	return c
 }

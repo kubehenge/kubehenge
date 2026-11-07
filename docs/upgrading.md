@@ -167,7 +167,7 @@ tofu apply
 
 When there is neither, the version can be typed in. For kubeadm, the dialog asks for a template of a newer version first. The interface refuses skipping a minor version or going back.
 
-Cluster API replaces the control-plane nodes one by one, then the workers. Each new node is created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)).
+Cluster API replaces the control-plane nodes one by one, then the workers. Each new node is created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)). The change prints the same findings as warnings, from what the controller read within the last hour, and goes through either way.
 
 The dialog also warns of two things inside the cluster. A warning does not stop the upgrade. `kubehenge cluster upgrade web --version v1.37.1` prints the same list and asks first, and `--yes` skips the question.
 

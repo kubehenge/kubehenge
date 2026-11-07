@@ -275,6 +275,32 @@ func TestDemoUpgradeChecksFindSomething(t *testing.T) {
 	}
 }
 
+// The demo fleet has a cluster out of support and paused, and one whose automatic upgrade waits for
+// a removed API, so its Health pages show these as they are read from the clusters.
+func TestDemoHealthShowsVersionAndPauseNotes(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	whats := func(cluster string) []string {
+		var v healthView
+		decodeDemo(t, b.do("GET", "/api/clusters/clusters/"+cluster+"/health", ""), &v)
+		out := make([]string, len(v.Attention))
+		for i := range v.Attention {
+			out[i] = v.Attention[i].What
+		}
+		return out
+	}
+	legacy := whats("legacy")
+	for _, want := range []string{outOfSupportWhat, "Paused since 2026-10-01", "Certificates expire"} {
+		if !slices.Contains(legacy, want) {
+			t.Errorf("legacy: %q lacks %q", legacy, want)
+		}
+	}
+	if got := whats("staging"); !slices.Contains(got, "Automatic upgrade skipped") {
+		t.Errorf("staging: %q", got)
+	}
+}
+
 func TestUpgradeChecksNeedToSeeTheCluster(t *testing.T) {
 	t.Parallel()
 	h, _ := healthHarness(t)

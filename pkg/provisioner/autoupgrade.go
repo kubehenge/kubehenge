@@ -585,6 +585,10 @@ func (u *Upgrader) RunOnce(ctx context.Context) {
 		u.clearSkipped(ctx, c)
 	}
 	if compare {
+		// After the loop, since a condition written first would make the upgrade's patch conflict.
+		for i := range list.Items {
+			u.recordChecks(ctx, &list.Items[i], channels)
+		}
 		u.supportAt = u.Now()
 	}
 }
