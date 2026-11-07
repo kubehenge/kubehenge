@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -26,9 +27,15 @@ type Reachability struct {
 	// OK tells whether the API answered.
 	OK bool `json:"ok"`
 	// Error says why it did not, as the connection failed (no such host, refused, timed out).
-	Error   string    `json:"error,omitempty"`
+	Error string `json:"error,omitempty"`
+	// Blind names the privilege the token lacks to see which hosts are in maintenance, empty when it
+	// has it. Without it Kubehenge cannot keep machines from replacement while a host is emptied.
+	Blind   string    `json:"blind,omitempty"`
 	Checked time.Time `json:"checked"`
 }
+
+// hostBlindPrivilege is what reading the HA manager's status takes (`Status.pm`, manager_status).
+const hostBlindPrivilege = "Sys.Audit on /"
 
 // ParseReachability reads the outcome out of the ConfigMap.
 func ParseReachability(cm *corev1.ConfigMap) (Reachability, error) {
@@ -85,6 +92,8 @@ func (r *ProxmoxReach) publish(ctx context.Context) error {
 	defer cancel()
 	if err := r.Proxmox.Get(ask, "/version", &version); err != nil {
 		outcome.OK, outcome.Error = false, err.Error()
+	} else if _, err := haMaintenance(ask, r.Proxmox); errors.Is(err, proxmox.ErrNotAuthorized) {
+		outcome.Blind = hostBlindPrivilege
 	}
 	raw, err := json.Marshal(outcome)
 	if err != nil {

@@ -27,6 +27,16 @@ function intoView(row: HTMLTableRowElement | null): void {
   row?.scrollIntoView({ block: "center" });
 }
 
+// heldText says why a machine is not replaced yet, and the latest time it is.
+function heldText(m: Machine): string {
+  const held = m.held ?? "";
+  if (m.heldUntil === undefined) {
+    return held;
+  }
+  const until = new Date(m.heldUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `${held}. Replaced after ${until} at the latest.`;
+}
+
 // The Proxmox VE nodes, kept for every view of every cluster that places machines on them.
 const nodesCache = pollCache<PveNode[]>();
 const nodesKept = { cache: nodesCache, key: "nodes" };
@@ -43,6 +53,9 @@ export function machineStatus(m: Machine, offline = false, node?: HealthNode): {
   }
   if (m.replacing === true) {
     return { state: "progress", text: filled(m.waiting) ? "Replacement waits" : "Replacing" };
+  }
+  if (filled(m.held)) {
+    return { state: "progress", text: "Replacement held" };
   }
   if (node?.down === true) {
     return { state: "error", text: node.silent === true ? "Not reporting" : "Not ready" };
@@ -261,6 +274,7 @@ function MachineStatusCell({
       {node?.unschedulable === true && <div className="hint">Cordoned</div>}
       {node?.down === true && filled(node.message) && <Detail>{node.message}</Detail>}
       {m.replacing === true && filled(m.waiting) && <Detail>{m.waiting}</Detail>}
+      {filled(m.held) && <Detail>{heldText(m)}</Detail>}
     </td>
   );
 }

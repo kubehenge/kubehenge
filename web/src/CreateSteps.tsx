@@ -19,6 +19,7 @@ import {
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
+import { HostOutageField, graceVariable } from "./HostOutage";
 import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
@@ -904,6 +905,13 @@ export function MachinesStep({
           warning={memoryNodeWarning(form, nodes)}
           nodes={nodes}
           rules={rules}
+        />
+      )}
+      {variable(cls, graceVariable) !== undefined && (
+        <HostOutageField
+          value={form.hostOutageGrace}
+          onChange={(minutes) => set("hostOutageGrace", minutes)}
+          problem={shown("hostOutageGrace")}
         />
       )}
       {haOffered && <HAField checked={form.proxmoxHA} onChange={(on) => set("proxmoxHA", on)} />}

@@ -160,6 +160,10 @@ For the VMs in a cluster's own pool, the same look sets back two things the clou
 - **The VM's name.** The controller renames it back to its machine's, with `VM.Config.Options`. A VM whose name does not start with its node's name makes the cloud controller manager report the instance gone, and Kubernetes deletes the Node once it is not ready.
 - **The node's zone label.** `topology.kubernetes.io/zone` follows the Proxmox VE node a moved VM runs on. The controller sets it through the cluster's kubeconfig and restarts the CSI plugin's node pod on that node ([clusters.md](clusters.md#a-worker-moved-to-another-proxmox-ve-node)).
 
+The same look reads the nodes and the HA manager's status (`/cluster/ha/status/manager_status`). A machine whose VM sits on a node that is offline or in maintenance gets Cluster API's `cluster.x-k8s.io/skip-remediation` annotation. So does one on a node where the cluster's storage is unavailable. The Cluster gets `RemediationHeld` ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)).
+
+The hold ends when the node is back and the machine's node is Ready, or after the cluster's `hostOutageGraceMinutes` (30 by default, 0 for no ceiling), which each machine's `remediation-hold-until` records. The placer leaves such nodes out of `kubehenge.dev/online-nodes`. Cluster API's patch of the cluster is refused while no node is left.
+
 ## Each cluster's own corner of Proxmox VE
 
 A workload cluster runs a cloud controller manager and a CSI plugin that talk to the Proxmox VE API with credentials of its own. They reach that cluster's VMs and volumes and nothing else, so a compromised cluster cannot touch its neighbours or the management cluster.

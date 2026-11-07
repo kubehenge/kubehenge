@@ -1404,6 +1404,22 @@ func TestChangeOptsOutOfProxmoxHA(t *testing.T) {
 	}
 }
 
+func TestChangeSetsTheHostOutageGrace(t *testing.T) {
+	t.Parallel()
+	c := cluster("default", "one")
+	h := newHarness(t, c)
+	b := h.browser()
+	b.signIn("dev@pve")
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"hostOutageGraceMinutes":45}}`), http.StatusOK)
+	got := &clusterv1.Cluster{}
+	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatal(err)
+	}
+	if v := string(variableValue(got, "hostOutageGraceMinutes")); v != "45" {
+		t.Fatalf("hostOutageGraceMinutes = %s", v)
+	}
+}
+
 // Datastore.Allocate on a cluster's storage takes the user's own, there.
 func TestDatastoreAllocateNeedsTheUsersOwn(t *testing.T) {
 	t.Parallel()

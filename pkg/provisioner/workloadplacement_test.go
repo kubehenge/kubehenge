@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -171,12 +172,12 @@ func TestCreationHookLeavesOutNodesWithoutRoom(t *testing.T) {
 	nodes := &memNodes{free: map[string]int64{"pve1": 20_000, "pve2": 2048}}
 	h.Nodes = nodes
 	web := bigWorkers(t, nil)
-	got, err := h.onlineNodes(t.Context(), web)
+	got, _, err := h.onlineNodes(t.Context(), web, nil)
 	if err != nil || !slices.Equal(got, []string{"pve1"}) {
 		t.Errorf("onlineNodes = %v, %v; want only the node with room", got, err)
 	}
 	nodes.set("pve1", 1000)
-	got, err = h.onlineNodes(t.Context(), web)
+	got, _, err = h.onlineNodes(t.Context(), web, nil)
 	if err != nil || !slices.Equal(got, []string{"pve1", "pve2"}) {
 		t.Errorf("onlineNodes = %v, %v; want every capable node while none has room", got, err)
 	}
@@ -322,7 +323,7 @@ func TestOnlineNodesReportTheMemoryProxmoxVEHasFree(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Node{{Name: "pve1", CPULevel: 3, FreeMiB: 28 * 1024, MemoryKnown: true}, {Name: "pve2", CPULevel: 3}}
-	if !slices.Equal(online, want) {
+	if !reflect.DeepEqual(online, want) {
 		t.Errorf("online = %+v, want %+v", online, want)
 	}
 }

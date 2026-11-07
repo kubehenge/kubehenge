@@ -14,6 +14,7 @@ Every cluster Kubehenge creates is a Cluster API Cluster built from one of Kubeh
 - **Health checks.** A node that stays not ready for five minutes, or does not join within twenty, is replaced, workers one at a time.
   - A machine marked with `kubectl annotate machine <name> cluster.x-k8s.io/remediate-machine=` is replaced the same way.
   - A control-plane machine is replaced only while etcd keeps its majority.
+  - Machines on a Proxmox VE node that is offline or in HA maintenance, or on unavailable storage, wait for it, 30 minutes by default ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)).
 - **Control-plane nodes kept for the control plane.** Once a worker has joined, the control-plane nodes carry the taint `node-role.kubernetes.io/control-plane:NoSchedule` in every distribution.
   - A cluster scaled to no workers has the taint taken off, and its control-plane nodes run the workloads.
   - A worker that fails leaves the taint in place.
@@ -537,7 +538,7 @@ Each is staged with the cluster's other changes. The API server holds it to the 
 - Cluster API copies only labels of `node.cluster.x-k8s.io` and two Kubernetes domains from a pool to its nodes. A plain label such as `team=a` therefore goes through the kubelet, or on Talos through the node configuration.
 - Autoscaled pools tell the autoscaler their labels and taints, so a pool at zero still takes the pods that select it.
 - Control planes take none: Kubehenge keeps their taint itself.
-- With kubectl, set `workerNodes` on the Cluster, or a pool's own value in its `variables.overrides`. From the command line: `kubehenge cluster pool set NAME POOL --label team=a --taint dedicated=db:NoSchedule`. `--inherit` drops the pool's own.
+- With kubectl, set `workerNodes` on the Cluster, or a pool's own value in its `variables.overrides`. From the command line, `kubehenge cluster update NAME --label team=a --taint dedicated=db:NoSchedule` sets the cluster's, and `kubehenge cluster pool set NAME POOL` with the same flags sets a pool's. `--inherit` drops the pool's own.
 
 The Health page notes a worker whose taints differ from its pool's setting. It names the pool, so that a taint put on by hand shows before a replacement removes it.
 
@@ -1328,6 +1329,7 @@ kubehenge cluster list
 kubehenge cluster create -f web.yaml
 kubehenge cluster scale web --control-planes 3 --workers md-0=5
 kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h
+kubehenge cluster update web --host-outage-grace-minutes 60 --label team=web
 kubehenge cluster upgrade web --version v1.37.1
 kubehenge cluster kubeconfig web > web.kubeconfig
 kubehenge cluster get web
@@ -1339,6 +1341,7 @@ kubehenge cluster delete web --yes
 - A cluster is found by its name. `-n` names its namespace where more than one has a cluster of that name.
 - `create` takes what the wizard sends, in YAML or JSON, and the interface checks it the same way. That is `name`, `class`, `version`, `controlPlaneReplicas`, `workerReplicas` and `variables`, and `namespace` where there are [more namespaces](#more-namespaces-for-clusters). `controlPlaneTimeouts` and `workerTimeouts` hold the [node timeouts](#pools) in seconds, as `nodeDrainTimeoutSeconds`, `nodeVolumeDetachTimeoutSeconds` and `nodeDeletionTimeoutSeconds`.
 - `timeouts` sets the timeouts of the control planes (`--control-planes`) and of pools (`--pool POOL=…`) as `drain`, `detach` and `deletion`. Each is a duration such as `30m`, or 0. A group's three are replaced together, and one left out is the class's.
+- `update` changes only the settings given: `--cis` switches CIS hardening on, `--host-outage-grace-minutes` sets `hostOutageGraceMinutes`, and `--label` and `--taint` replace the workers' `workerNodes`. It refuses a call without one.
 - `upgrade` prints the removed APIs and fail-closed webhooks the new version meets and asks before it upgrades. `--yes` skips the question.
 - `accept-upgrade` lets a skipped automatic upgrade go ahead past the findings it lists, for the minor version given.
 - `machine` takes a machine's name, as `get` lists it. `replace`, `keep`, `delete`, `cordon`, `uncordon` and `reboot` do what a machine's actions in the interface do.
@@ -1431,6 +1434,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one. Every node when unset. New VMs go to those of them that are online, where the storage is available and where the template can be cloned ([above](#machines)). A template on storage that is not shared can be cloned only on its own node. The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)). Default true, where the management cluster has Proxmox VE HA and the storage is shared. |
 | `csi` | no | `datastoreAllocate` (default false) runs the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on its storage ([above](#persistent-volumes)). It needs a management cluster that lets clusters choose it and a storage of the cluster's own. `volumeSnapshots` (default false) takes volume snapshots, with the cluster's own volumes copied with its own token ([above](#volume-snapshots)), on storage local to each node. |
+| `hostOutageGraceMinutes` | no | Minutes to hold the replacement of machines whose host is offline or in HA maintenance, or whose storage is unavailable ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)). Default 30. 0 waits for the host for ever, otherwise 5 to 10080. A server that needs longer to start than 30 minutes needs more. A host removed from the Proxmox VE cluster ends the wait at once. Set in the wizard's **Machines** step, in **Options**, or with `kubehenge cluster create --host-outage-grace-minutes` and `kubehenge cluster update NAME --host-outage-grace-minutes`. |
 | `ccm` | no | `haGroups` has the cloud controller manager label the nodes with their Proxmox VE HA groups, with `Sys.Audit` on `/` for the cluster's token ([above](#machines)). Default true, unless the management cluster switched the labels off for every cluster. Then it may not be true. |
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096 for the control plane and 6144 for workers, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20). A disk only grows. |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s and Talos: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |

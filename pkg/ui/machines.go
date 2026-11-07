@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -46,6 +47,12 @@ func machineOf(m *clusterv1.Machine, proxmoxNode string) machineView {
 		// What holds the replacement back, such as a control plane that would lose etcd's majority.
 		if owner := meta.FindStatusCondition(m.Status.Conditions, clusterv1.MachineOwnerRemediatedCondition); owner != nil && owner.Message != "" {
 			mv.Waiting = owner.Message
+		}
+	}
+	if why, held := m.Annotations[provisioner.HoldAnnotation]; held {
+		mv.Held = why
+		if until, err := time.Parse(time.RFC3339, m.Annotations[provisioner.HoldUntilAnnotation]); err == nil {
+			mv.HeldUntil = until
 		}
 	}
 	for _, a := range m.Status.Addresses {

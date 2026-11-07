@@ -31,7 +31,6 @@ func releaseServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-
 func pinHarness(t *testing.T) (*harness, *lockedBuffer) {
 	t.Helper()
 	h := newHarness(t)

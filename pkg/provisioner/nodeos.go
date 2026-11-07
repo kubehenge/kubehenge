@@ -24,6 +24,10 @@ type Node struct {
 	// MemoryKnown tells whether it reported any. Without it the node is judged by its CPU alone.
 	FreeMiB     int64
 	MemoryKnown bool
+	// Maintenance is set while the HA manager has the node in maintenance mode: it is being emptied.
+	Maintenance bool
+	// InactiveStorages are the storages that are defined for the node and not available on it.
+	InactiveStorages []string
 }
 
 // Nodes tells which Proxmox VE nodes are online; *Proxmox is the real one.
@@ -38,6 +42,11 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 	if err := p.Client.Get(ctx, "/nodes", &nodes); err != nil {
 		return nil, fmt.Errorf("listing nodes: %w", err)
 	}
+	var storages []pveStorageUse
+	if err := p.Client.Get(ctx, "/cluster/resources?type=storage", &storages); err != nil {
+		return nil, fmt.Errorf("listing storages: %w", err)
+	}
+	maintenance, _ := haMaintenance(ctx, p.Client) // a refusal is ProxmoxReach's to report, once
 	var online []Node
 	var skipped []string
 	for _, n := range nodes {
@@ -52,9 +61,14 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 			skipped = append(skipped, n.Node)
 			continue
 		}
-		node := Node{Name: n.Node, CPULevel: level}
+		node := Node{Name: n.Node, CPULevel: level, Maintenance: maintenance[n.Node]}
 		if n.MaxMem > 0 {
 			node.FreeMiB, node.MemoryKnown = max(0, n.MaxMem-n.Mem)/bytesPerMiB, true
+		}
+		for _, s := range storages {
+			if s.Node == n.Node && s.Status != storageAvailable && !slices.Contains(node.InactiveStorages, s.Storage) {
+				node.InactiveStorages = append(node.InactiveStorages, s.Storage)
+			}
 		}
 		online = append(online, node)
 	}
@@ -130,6 +144,42 @@ func nodesFor(online []Node, need int) []string {
 		}
 	}
 	return names
+}
+
+// placeable are the online nodes that can take a new VM now: not in maintenance, and with the
+// cluster's storage active.
+func placeable(online []Node, storage string) []Node {
+	return slices.DeleteFunc(slices.Clone(online), func(n Node) bool {
+		return n.Maintenance || storage != "" && slices.Contains(n.InactiveStorages, storage)
+	})
+}
+
+// nodesToPlace are the nodes capmox may put a cluster's new VMs on: the chosen ones that are
+// online, run the cluster's node OS, are not in maintenance and have the cluster's storage active.
+// When nodes the cluster could use are online but every one is left out for those last two, there is
+// nowhere to put a VM, and blocked says why.
+func nodesToPlace(online []Node, level int, chosen []string, storage string) ([]string, string) {
+	capable := slices.DeleteFunc(slices.Clone(online), func(n Node) bool {
+		return n.CPULevel < level || len(chosen) > 0 && !slices.Contains(chosen, n.Name)
+	})
+	if len(capable) == 0 {
+		return placement(chosen, nodesFor(online, level)), ""
+	}
+	var names, why []string
+	for _, n := range capable {
+		switch {
+		case n.Maintenance:
+			why = append(why, n.Name+" is in maintenance")
+		case storage != "" && slices.Contains(n.InactiveStorages, storage):
+			why = append(why, "storage "+storage+" is not active on "+n.Name)
+		default:
+			names = append(names, n.Name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, "No Proxmox VE node can take a new VM: " + strings.Join(why, ", ")
+	}
+	return placement(chosen, names), ""
 }
 
 // checkNodeOS refuses a node OS Kubehenge builds no templates of, and one whose CPU type none of the

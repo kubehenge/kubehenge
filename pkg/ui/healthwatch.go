@@ -50,6 +50,7 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionNodes, vmTitles[cond.Reason], cond.Message, cond.LastTransitionTime.Time)
 	}
+	hostAttention(c, a)
 	if cond := trueCondition(c, provisioner.StorageCondition); cond != nil {
 		severity, what := severityWarning, "Storage nearly full"
 		if cond.Reason == provisioner.StorageFull {
@@ -66,6 +67,17 @@ func templateAttention(c *clusterv1.Cluster, a *attention) {
 	}
 	if cond := trueCondition(c, provisioner.NodeImageHeldCondition); cond != nil {
 		a.add(severityWarning, sectionNodes, "Node image refresh held", cond.Message, cond.LastTransitionTime.Time)
+	}
+}
+
+// hostAttention adds what the Proxmox VE hosts and storage under the cluster do to it: machines
+// whose replacement waits for a host, and storage that is gone.
+func hostAttention(c *clusterv1.Cluster, a *attention) {
+	if cond := trueCondition(c, provisioner.RemediationHeldCondition); cond != nil {
+		a.add(severityWarning, sectionNodes, "Replacement waits", cond.Message, cond.LastTransitionTime.Time)
+	}
+	if cond := trueCondition(c, provisioner.StorageUnavailableCondition); cond != nil {
+		a.add(severityError, sectionVolumes, "Storage unavailable", provisioner.MessageHead(cond.Message), cond.LastTransitionTime.Time)
 	}
 }
 

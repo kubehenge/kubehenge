@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // taintEffects are the effects Kubernetes knows for a taint.
@@ -122,23 +124,80 @@ needs --workers.`,
 	return cmd
 }
 
+// updateFlags are the settings update changes. A nil or empty one is left as the cluster has it.
+type updateFlags struct {
+	cis            *bool
+	grace          *int
+	labels, taints []string
+}
+
+// updateRequest is the interface's change for update's flags: each sets its own variable only.
+func updateRequest(f updateFlags) (map[string]any, error) {
+	vars := map[string]any{}
+	if f.cis != nil {
+		if !*f.cis {
+			return nil, errors.New("--cis=false: CIS hardening cannot be switched off once on")
+		}
+		vars["cis"] = true
+	}
+	if f.grace != nil {
+		if err := checkGrace(*f.grace); err != nil {
+			return nil, err
+		}
+		vars[provisioner.HostOutageGraceVariable] = *f.grace
+	}
+	if len(f.labels) > 0 || len(f.taints) > 0 {
+		nodes, err := nodesValue(f.labels, f.taints)
+		if err != nil {
+			return nil, err
+		}
+		vars["workerNodes"] = nodes
+	}
+	if len(vars) == 0 {
+		return nil, errors.New("give --cis, --" + graceFlag + ", --label, --taint or a mix")
+	}
+	return map[string]any{"variables": vars}, nil
+}
+
 func (o *clusterOptions) updateCommand() *cobra.Command {
 	var cis bool
+	var grace int
+	var labels, taints []string
 	update := &cobra.Command{
-		Use:   "update NAME --cis",
-		Short: "Switch on a cluster's CIS hardening, which replaces every node",
-		Long: `Switch on CIS hardening on a cluster that was created without it. It enforces the restricted Pod
+		Use:   "update NAME [--cis] [--" + graceFlag + " N] [--label KEY=VALUE] [--taint KEY=VALUE:EFFECT]",
+		Short: "Change a cluster's CIS hardening, host outage wait, or its workers' labels and taints",
+		Long: `Change the settings given, and leave the others as the cluster has them.
+
+--cis switches CIS hardening on for a cluster created without it. It enforces the restricted Pod
 Security level, the runtime's seccomp profile and, on RKE2, its CIS profile, and it replaces the
-control plane and the workers, one node at a time. It cannot be switched off again.`,
+control plane and the workers, one node at a time. It cannot be switched off again.
+
+--` + graceFlag + ` sets how long a machine on a host that is offline or in maintenance
+waits before it is replaced.
+
+--label and --taint set the labels and taints every worker registers with, unless its pool has its
+own. They replace the cluster's labels and taints, so give them all. The workers are replaced, one
+node at a time.`,
 		Args: argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !cis {
-				return errors.New("give --cis, the only setting this changes")
+			f := updateFlags{labels: labels, taints: taints}
+			if cmd.Flags().Changed("cis") {
+				f.cis = &cis
 			}
-			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{"variables": map[string]any{"cis": true}})
+			if cmd.Flags().Changed(graceFlag) {
+				f.grace = &grace
+			}
+			req, err := updateRequest(f)
+			if err != nil {
+				return err
+			}
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], req)
 		},
 	}
-	update.Flags().BoolVar(&cis, "cis", false, "switch CIS hardening on")
+	update.Flags().BoolVar(&cis, "cis", false, "switch CIS hardening on, which replaces every node")
+	update.Flags().IntVar(&grace, graceFlag, 0, graceHelp())
+	update.Flags().StringArrayVar(&labels, "label", nil, "a worker label as KEY=VALUE, such as team=a, repeated for more")
+	update.Flags().StringArrayVar(&taints, "taint", nil, "a worker taint as KEY=VALUE:EFFECT or KEY:EFFECT, such as dedicated=db:NoSchedule, repeated for more")
 	o.namespaceFlag(update.Flags())
 	return update
 }

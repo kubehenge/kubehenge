@@ -192,6 +192,21 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
       items:
         type: string
         minLength: 1
+- name: hostOutageGraceMinutes
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: integer
+      default: 30
+      minimum: 0
+      maximum: 10080
+      description: >-
+        Minutes a machine whose Proxmox VE node is offline or in maintenance, or whose storage is
+        unavailable, is kept from replacement. After that it is replaced. 0 waits for the host for
+        as long as it is away.
+      x-kubernetes-validations:
+        - rule: self == 0 || self >= 5
+          message: The grace is 0, for no ceiling, or at least 5 minutes.
 - name: proxmoxHA
   required: false
   schema:

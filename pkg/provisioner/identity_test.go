@@ -260,7 +260,7 @@ func TestVMWatchFollowsAMovedVMWithItsNodesZone(t *testing.T) {
 		t.Fatalf("a cluster whose VMs stay put was asked again: %v, %d", err, w.asked)
 	}
 
-	f.nodes[102] = "pve3"
+	f.vmNodes[102] = "pve3"
 	f.render()
 	if err := f.tick(15 * time.Second); err != nil {
 		t.Fatal(err)
@@ -327,7 +327,7 @@ func TestVMWatchLeavesANodeWithoutAZoneToTheCloudControllerManager(t *testing.T)
 	}
 	f := newVMFixture(t)
 	f.watch.Workloads = w
-	f.nodes[102] = "pve3"
+	f.vmNodes[102] = "pve3"
 	f.render()
 	if err := f.tick(0); err != nil {
 		t.Fatal(err)
@@ -345,7 +345,7 @@ func TestVMWatchNeverTouchesTheNodesOfAVMOutsideThePool(t *testing.T) {
 	w := workloadFixture(t)
 	f := newVMFixture(t)
 	f.watch.Workloads = w
-	f.nodes[102], f.pools[102] = "pve3", "kubehenge/team-b.web"
+	f.vmNodes[102], f.pools[102] = "pve3", "kubehenge/team-b.web"
 	f.render()
 	if err := f.tick(0); err != nil {
 		t.Fatal(err)
@@ -361,7 +361,7 @@ func TestVMWatchRetriesAnUnreachableWorkloadClusterWithoutBlockingTheRest(t *tes
 	w := workloadFixture(t)
 	w.err = errors.New("dial tcp: i/o timeout")
 	f.watch.Workloads = w
-	f.nodes[102] = "pve3"
+	f.vmNodes[102] = "pve3"
 	f.names[103] = "renamed"
 	f.render()
 	err := f.tick(0)
@@ -408,7 +408,7 @@ func TestVMWatchRetriesAFailedPluginRestart(t *testing.T) {
 	})
 	f := newVMFixture(t)
 	f.watch.Workloads = w
-	f.nodes[102] = "pve3"
+	f.vmNodes[102] = "pve3"
 	f.render()
 	if err := f.tick(0); err == nil || !strings.Contains(err.Error(), "restarting the CSI node pod csi-node-web-cp-1") {
 		t.Fatalf("error %v", err)

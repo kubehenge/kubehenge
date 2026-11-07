@@ -63,6 +63,7 @@ import {
   type GitOpsChoice,
   type GitOpsField,
 } from "./GitOps";
+import { defaultGrace, graceProblem, graceText, graceVariable } from "./HostOutage";
 import {
   loadBalancerFrom,
   loadBalancerProblems,
@@ -214,6 +215,8 @@ export interface Form {
   services: string;
   storage: string;
   place: Place;
+  /** Minutes machines of an away host wait before replacement, as text. */
+  hostOutageGrace: string;
   proxmoxHA: boolean;
   datastoreAllocate: boolean;
   volumeSnapshots: boolean;
@@ -740,6 +743,7 @@ export const newForm = (): Form => ({
   services: "",
   storage: "",
   place: anyNode,
+  hostOutageGrace: defaultGrace,
   proxmoxHA: true,
   datastoreAllocate: false,
   volumeSnapshots: false,
@@ -1080,6 +1084,11 @@ function workerNodesVariable(form: Form, defined: ReadonlySet<string>): Record<s
     : {};
 }
 
+// The wait is sent only when it differs from the class's default. request drops it if the class lacks it.
+function graceVariables(form: Form): Record<string, unknown> {
+  return form.hostOutageGrace === defaultGrace ? {} : { [graceVariable]: Number(form.hostOutageGrace) };
+}
+
 // request turns the form into the API's request, with only the variables the class defines.
 export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
@@ -1104,6 +1113,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (nodes !== undefined) {
     variables["allowedNodes"] = nodes;
   }
+  Object.assign(variables, graceVariables(form));
   // Left out, the class's default has the cluster take part once HA applies to it.
   if (!form.proxmoxHA) {
     variables["proxmoxHA"] = false;
@@ -1260,6 +1270,9 @@ export function summary(
   );
   if (defined.has("allowedNodes")) {
     rows.push(["Placement", placeText(form.place)]);
+  }
+  if (defined.has(graceVariable)) {
+    rows.push(["Host outage wait", graceText(form.hostOutageGrace)]);
   }
   if (offered.ha === true) {
     rows.push(["Proxmox VE HA", haText(form.proxmoxHA)]);
@@ -1422,6 +1435,7 @@ export type FieldKey =
   | "datastoreAllocate"
   | "volumeSnapshots"
   | "placement"
+  | "hostOutageGrace"
   | "controlPlaneMachine"
   | "workerMachine"
   | "workerNodes"
@@ -1663,6 +1677,10 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   if (variable(c, "etcd") !== undefined && !whole(form.etcdQuotaGiB, minEtcdQuotaGiB, maxEtcdQuotaGiB)) {
     p.etcdQuotaGiB = `A whole number from ${minEtcdQuotaGiB} to ${maxEtcdQuotaGiB}`;
+  }
+  const grace = variable(c, graceVariable) ? graceProblem(form.hostOutageGrace) : undefined;
+  if (grace !== undefined) {
+    p.hostOutageGrace = grace;
   }
   for (const [key, m] of [
     ["controlPlaneMachine", form.controlPlaneMachine],

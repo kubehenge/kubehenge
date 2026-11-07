@@ -2,7 +2,7 @@ import type { JSX } from "react";
 
 import { api } from "./api";
 import type { ManagementHealth } from "./types";
-import { Detail, ErrorBox, Skeleton, Status, pollCache, pollIdle, usePoll } from "./ui";
+import { Detail, ErrorBox, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
 
 const managementCache = pollCache<ManagementHealth>();
 const managementKept = { cache: managementCache, key: "" };
@@ -16,7 +16,10 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
     return { state: "error", text: "Down" };
   }
   const short =
-    nodes.some((n) => !n.ready) || (h.controllers ?? []).some((c) => c.ready < c.wanted) || h.proxmox?.ok === false;
+    nodes.some((n) => !n.ready) ||
+    (h.controllers ?? []).some((c) => c.ready < c.wanted) ||
+    h.proxmox?.ok === false ||
+    filled(h.proxmox?.blind);
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
 
@@ -71,6 +74,9 @@ export function ManagementHealthCard(): JSX.Element {
             <Detail>
               <p className="mono">{h.proxmox.error}</p>
             </Detail>
+          )}
+          {filled(h.proxmox?.blind) && (
+            <p className="warning">Host maintenance is not visible: the token lacks {h.proxmox?.blind}</p>
           )}
           {(nodesDown.length > 0 || controllersShort.length > 0) && (
             <ul className="health-short">

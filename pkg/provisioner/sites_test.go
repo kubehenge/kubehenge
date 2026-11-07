@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -297,12 +298,18 @@ func TestPlacementPatchFollowsTheSites(t *testing.T) {
 		Nodes: &fakeNodes{online: []string{"pve1", "pve2"}},
 		Sites: fakeSites{sites: &Sites{Storages: map[string]StorageSite{"t": shared}, Templates: []TemplateSite{templateSiteOf(t, c, "pve2", "", "t")}}},
 	}
-	got, err := h.onlineNodes(t.Context(), c)
+	got, _, err := h.onlineNodes(t.Context(), c, nil)
 	if err != nil || !slices.Equal(got, []string{"pve2"}) {
 		t.Errorf("onlineNodes = %v, %v; want only the template's node", got, err)
 	}
+	// The template's node in maintenance leaves no node, and the cluster says why.
+	h.Nodes = &fakeNodes{online: []string{"pve1", "pve2"}, maintenance: []string{"pve2"}}
+	got, blocked, err := h.onlineNodes(t.Context(), c, []string{"pve2"})
+	if err != nil || len(got) != 0 || !strings.Contains(blocked, "pve2 is in maintenance") {
+		t.Errorf("onlineNodes = %v, %q, %v; want none, blocked by pve2's maintenance", got, blocked, err)
+	}
 	h.Sites = fakeSites{err: errors.New("down")}
-	if _, err = h.onlineNodes(t.Context(), c); err == nil {
+	if _, _, err = h.onlineNodes(t.Context(), c, nil); err == nil {
 		t.Error("a failed look at the storages was ignored")
 	}
 }
@@ -346,6 +353,8 @@ func TestOnlineNodesSkipsANodeWhoseStatusCannotBeRead(t *testing.T) {
 			data = []map[string]any{{"node": "pve1", "status": "online"}, {"node": "pve2", "status": "online"}}
 		case "/api2/json/nodes/pve1/status":
 			data = map[string]any{"cpuinfo": map[string]any{"flags": zen3Flags}}
+		case "/api2/json/cluster/resources":
+			data = []any{}
 		default:
 			http.Error(w, "500 connection refused", http.StatusInternalServerError)
 			return
@@ -355,7 +364,7 @@ func TestOnlineNodesSkipsANodeWhoseStatusCannotBeRead(t *testing.T) {
 	t.Cleanup(srv.Close)
 	p := &Proxmox{Client: proxmox.NewClient(srv.URL + "/api2/json")}
 	online, err := p.OnlineNodes(t.Context())
-	if err != nil || !slices.Equal(online, []Node{{Name: "pve1", CPULevel: 3}}) {
+	if err != nil || !reflect.DeepEqual(online, []Node{{Name: "pve1", CPULevel: 3}}) {
 		t.Fatalf("OnlineNodes = %v, %v; want pve1 alone and no error", online, err)
 	}
 	if got := p.Unreadable(); !slices.Equal(got, []string{"pve2"}) {
