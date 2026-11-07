@@ -48,6 +48,16 @@ metadata:
     # operator, more with Cilium's agent than Calico's other pods come to. k3s's local path
     # provisioner is off.
     kubehenge.dev/node-cpu: '{"controlPlane":430,"worker":350}'
+    {{- include "kubehenge.addonMemoryRequests" . | nindent 4 }}
+    # The memory, in MiB, a node keeps from the add-ons' requests, counted as node-cpu counts CPU. On
+    # a worker the kernel's 104 of a 2 GiB VM, as Talos's measured, the kubelet's 100 eviction
+    # threshold (its default, LAB, as k3s sets thresholds for disk only), the CNI's agent where one
+    # is chosen (Cilium's 128 with its Envoy's 64), CoreDNS's and the metrics server's 70 each,
+    # Traefik's 64 and the CSI plugin's 64. A control plane without workers keeps back the kernel's
+    # 198 of 4096 MiB, runs all of that and adds the CSI controller's 80, the cloud controller
+    # manager's and kube-vip's 32 each, Cilium's operator's 64, and the 160 by which Calico's agent,
+    # operator, Typha, controllers and API server ask for more than Cilium's.
+    kubehenge.dev/node-memory-requests: '{"controlPlane":1128,"worker":664}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

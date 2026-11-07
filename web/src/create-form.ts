@@ -449,6 +449,15 @@ export function addonCPU(form: Form, c: ClusterClass | undefined): { names: stri
   return { names, millicores: total };
 }
 
+/**
+ * addonMemoryRequests is the memory, in MiB, the pods of the add-ons a form chooses request by its
+ * class's figures, and which add-ons ask for any, counted as addonMemory counts them.
+ */
+export function addonMemoryRequests(form: Form, c: ClusterClass | undefined): { names: string[]; mib: number } {
+  const { names, total } = addonTotal(form, c, { pods: "kubehenge.dev/addon-memory-requests" });
+  return { names, mib: total };
+}
+
 // addonTotal sums a class's figures by add-on over the add-ons a form chooses: the pods' annotation,
 // and where given the one of what they add to each control plane's own use.
 function addonTotal(
@@ -549,6 +558,26 @@ export function addonNeedCores(form: Form, c: ClusterClass | undefined): number 
 }
 
 /**
+ * addonNeedRequestedMiB is the memory each node that carries a form's add-ons needs for what their
+ * pods request, as the controller asks: what such a node keeps from requests itself, by its class,
+ * and its share of the add-ons' requests and of what the workers run once per cluster. Without add-ons
+ * that request memory, or without the class's figures, it is 0.
+ */
+export function addonNeedRequestedMiB(form: Form, c: ClusterClass | undefined): number {
+  const key = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
+  const nodes = key === "workerMachine" ? form.workerReplicas : form.controlPlaneReplicas;
+  const { mib } = addonMemoryRequests(form, c);
+  if (mib === 0 || nodes <= 0) {
+    return 0;
+  }
+  const figures = classFigures(c, "kubehenge.dev/node-memory-requests");
+  const own =
+    quantity(figures[key === "workerMachine" ? "worker" : "controlPlane"]) ?? plainLeast(form, c, key).memoryMiB;
+  const once = key === "workerMachine" ? (quantity(figures["workers"]) ?? 0) : 0;
+  return own + Math.ceil((mib + once) / nodes / memoryStepMiB) * memoryStepMiB;
+}
+
+/**
  * controlPlaneNeedMiB is the memory each control plane of a form with workers and add-ons needs, as
  * the controller asks: what it uses itself, by its class, with what the add-ons add to it. Otherwise
  * it is 0.
@@ -573,7 +602,7 @@ export function machineLeast(
     return {
       ...min,
       cores: Math.max(min.cores, addonNeedCores(form, c)),
-      memoryMiB: Math.max(min.memoryMiB, addonNeedMiB(form, c)),
+      memoryMiB: Math.max(min.memoryMiB, addonNeedMiB(form, c), addonNeedRequestedMiB(form, c)),
     };
   }
   if (key === "controlPlaneMachine") {

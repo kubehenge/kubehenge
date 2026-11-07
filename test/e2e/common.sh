@@ -13,6 +13,41 @@ pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde33
 # renovate: datasource=docker depName=docker.io/gitea/gitea
 gitea=docker.io/gitea/gitea:28.3.0-rootless@sha256:40c5a68a0463c0940e1ae32626c8300dd0572f3558e390073ad8379ca67c0e1d
 export agnhost pause_image gitea
+# What the test's own pods request, in MiB. The manifests and the worker's sizing both read these.
+# Every agnhost pod workload-cluster.sh creates is listed as <namespace>/<name> in one of two lists,
+# which test/unit/lane-sizing.sh enforces. The first runs while the GitOps steps do, so a worker is
+# sized for it. The second is deleted before them.
+gitops_fixture_pods='e2e-lb/web e2e-mesh/server e2e-mesh/client e2e-plain/client e2e-git/client'
+# shellcheck disable=SC2034 # read by test/unit/lane-sizing.sh.
+earlier_fixture_pods='e2e-policy/server e2e-policy/client e2e-health/crasher e2e-ingress/web e2e-certs/web e2e-acme/client'
+agnhost_request_mib=16
+gitea_request_mib=128
+# word_count <words...>
+word_count() {
+    echo "$#"
+}
+# shellcheck disable=SC2086 # one pod per word.
+gitops_agnhost_pods=$(word_count ${gitops_fixture_pods})
+
+# worker_memory_for <class JSON> <add-ons JSON array> <gitops: true|false>: the least memory in MiB
+# a worker may have for a class with those add-ons on. It is the largest of the class's own minimum,
+# what a worker and the add-ons use, and what the scheduler needs for the requests of a worker's own
+# pods, the add-ons' pods and, with GitOps, the test's own pods, to a multiple of 8.
+worker_memory_for() {
+    worker_memory_fixtures=0
+    if [ "$3" = true ]; then
+        worker_memory_fixtures=$((gitea_request_mib + gitops_agnhost_pods * agnhost_request_mib))
+    fi
+    printf '%s' "$1" | jq -r --argjson on "$2" --argjson fixtures "${worker_memory_fixtures}" '
+        (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
+        | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
+        | (.metadata.annotations["kubehenge.dev/addon-memory-requests"] | fromjson) as $requests
+        | (.metadata.annotations["kubehenge.dev/node-memory-requests"] | fromjson) as $requested
+        | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
+            $node.worker + ([$on[] | $addon[.]] | add) + $fixtures,
+            (($requested.worker + ($requested.workers // 0) + ([$on[] | if . == "argocd" then ([$requests.argocd, $requests.flux] | max) else $requests[.] end] | add) + $fixtures) / 8 | ceil) * 8]
+        | max'
+}
 # The S3 store the backup tests write to.
 # renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
 SEAWEEDFS_VERSION=4.52
@@ -178,6 +213,54 @@ absent() {
         *"(NotFound)"*) ;;
         *) return 1 ;;
     esac
+}
+
+# flux_ready <kubeconfig>: whether the Flux Operator reports its FluxInstance ready. Until then seen
+# holds the Ready condition, whose message names the component or sync object the operator waits for.
+flux_ready() {
+    flux_instance=$(KUBECONFIG="$1" kubectl -n flux-system get fluxinstance flux -o json 2>&1) || {
+        seen=$(printf '%s\n' "${flux_instance}" | tail -n 1 | cut -c1-400)
+        return 1
+    }
+    flux_condition=$(printf '%s' "${flux_instance}" | jq -j '[.status.conditions[]? | select(.type == "Ready")][0] //
+        {status: "Unknown", message: "no Ready condition yet"} | "\(.status) \(.reason // "-"): \(.message // "" | gsub("\\s+"; " "))"' |
+        cut -c1-400) || return 1
+    case ${flux_condition} in
+        "True "*) return 0 ;;
+        *) seen=${flux_condition} ;;
+    esac
+    return 1
+}
+
+# flux_state <kubeconfig>: what holds a FluxInstance up in a failed test, which no collected log
+# keeps: its conditions, the sync's GitRepository and Kustomization, each pod in flux-system with
+# the conditions it does not meet and how its containers last ended, the namespace's events and the
+# operator's last lines. A cluster without Flux prints nothing.
+flux_state() {
+    KUBECONFIG="$1" kubectl get namespace flux-system > /dev/null 2>&1 || return 0
+    printf '\nFlux:\n'
+    if flux_instance=$(KUBECONFIG="$1" kubectl -n flux-system get fluxinstance flux -o json 2>&1); then
+        printf '%s' "${flux_instance}" | jq -r '.status.conditions[]? | "FluxInstance \(.type)=\(.status) \(.reason // "-"): \(.message // "")"' || true
+    else
+        printf 'FluxInstance: %s\n' "${flux_instance}"
+    fi
+    KUBECONFIG="$1" kubectl -n flux-system get gitrepositories,kustomizations 2>&1 || true
+    if flux_pods=$(KUBECONFIG="$1" kubectl -n flux-system get pods -o json 2>&1); then
+        # A pending pod's PodScheduled says what no node had room for; a waiting container says
+        # why, such as an image pull backing off; a container killed for memory ended with 137.
+        printf '%s' "${flux_pods}" | jq -r '.items[] |
+            "\(.metadata.name) on \(.spec.nodeName // "no node"): \(.status.phase)",
+            (.status.conditions[]? | select(.status != "True") | "  \(.type) \(.reason // "-"): \(.message // "")"),
+            ((.status.initContainerStatuses // []) + (.status.containerStatuses // []) | .[] |
+                "  \(.name): \(.state | keys[0])" +
+                (.state[] | (if .reason then " " + .reason else "" end) + (if .message then " (" + .message[:200] + ")" else "" end)) +
+                ", ready \(.ready), \(.restartCount) restarts" +
+                (if .lastState.terminated then ", last ended \(.lastState.terminated.reason // "-") with exit \(.lastState.terminated.exitCode) at \(.lastState.terminated.finishedAt // "-")" else "" end))' || true
+    else
+        printf 'pods: %s\n' "${flux_pods}"
+    fi
+    KUBECONFIG="$1" kubectl -n flux-system get events --sort-by=.metadata.creationTimestamp 2>&1 | tail -n 40 || true
+    KUBECONFIG="$1" kubectl -n flux-system logs deployment/flux-operator --tail=40 2>&1 || true
 }
 
 # seaweedfs <directory>: downloads SeaweedFS's weed into the directory, checked by its SHA-256.

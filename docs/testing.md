@@ -99,7 +99,7 @@ The workload and Rancher tests print each node's and namespace's memory and the 
 
 The classes' memory figures come from these prints. They cover the add-ons, what a CNI other than the class's own adds to a control plane, and the nodes (`kubehenge.dev/addon-memory`, `kubehenge.dev/addon-control-plane-memory`, `kubehenge.dev/cni-control-plane-memory` and `kubehenge.dev/node-memory`, [clusters.md](clusters.md#machines)). The workload test gives its control plane and worker the least the figures let them have. A figure a new add-on or release outgrows is raised in `charts/kubehenge/templates`.
 
-The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the requests of the pinned charts and distributions as Kubehenge configures them, and move with them. A figure that falls behind shows in the requests the tests print. The test's worker, given the fewest cores the figures allow, then leaves a pod pending.
+The CPU and requested memory figures are the requests of the pinned charts and distributions as Kubehenge configures them, and move with them. They are `kubehenge.dev/addon-cpu`, `kubehenge.dev/node-cpu`, `kubehenge.dev/addon-memory-requests` and `kubehenge.dev/node-memory-requests`. A figure that falls behind shows in the requests the tests print. The test's worker, given the least the figures allow, then leaves a pod pending.
 
 ### The workload cluster test
 
@@ -319,24 +319,24 @@ Swap does not count as room for the guests. Cold pages of the runner's own proce
 
 #### Each test's guests
 
-Every node is at the least Kubehenge allows for what its test switches on. With GitOps the worker also holds the 208 MiB its Git server and test pods request. The management node has the module's default 4 GiB. A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). The guests of each add-on part together, per CNI, in MiB:
+Every node is at the least Kubehenge allows for what its test switches on. With GitOps the worker also holds the memory its Git server and test pods request, 208 MiB (`gitea_request_mib`, `gitops_agnhost_pods` and `agnhost_request_mib` in `common.sh`). A worker is sized for the larger of what its pods use and what they request. The management node has the module's default 4 GiB. A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). The guests of each add-on part together, per CNI, in MiB:
 
 | Test | Worker | Default CNI | Cilium | Calico |
 | --- | --- | --- | --- | --- |
 | `kubeadm-addons-a` | 3648 | 11840 | (default) | 12688 |
 | `kubeadm-addons-b` | 2368 | 10576 | (default) | 12000 |
-| `kubeadm-addons-c` | 2448 | 10640 | (default) | 12064 |
+| `kubeadm-addons-c` | 2552 | 10744 | (default) | 12168 |
 | `rke2-addons-a` | 4096 | 12288 | 12288 | 12288 |
 | `rke2-addons-b` | 4096 | 12288 | 12368 | 12288 |
 | `rke2-addons-c` | 4096 | 12288 | 12288 | 12288 |
 | `rke2-addons-d` | 4096 | 12288 | 12288 | 12288 |
 | `k3s-addons-a` | 3392 | 11584 | 11584 | 11760 |
-| `k3s-addons-b` | 3216 | 11408 | 11728 | 12376 |
+| `k3s-addons-b` | 3320 | 11512 | 11832 | 12480 |
 | `talos-addons-a` | 3648 | 11840 | 11840 | 11840 |
 | `talos-addons-b` | 2368 | 10560 | 10560 | 10560 |
-| `talos-addons-c` | 2448 | 10640 | 10640 | 10640 |
+| `talos-addons-c` | 2552 | 10744 | 10744 | 10744 |
 
-`kubeadm-addons-a` and `k3s-addons-b` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176, 11864 and 11856 MiB. The guard's samples show what the management node uses in every run (below).
+`kubeadm-addons-a` and `k3s-addons-b` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176, 11968 and 11856 MiB. The guard's samples show what the management node uses in every run (below).
 
 These tests outgrow 12 GiB as well. Only the RKE2 ones read back from swap past the guard's line, 570 to 1220 MiB in a minute:
 

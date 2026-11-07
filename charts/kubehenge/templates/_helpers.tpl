@@ -284,9 +284,9 @@ end-to-end tests' working sets once every add-on has started, with room to grow.
 Prometheus, Alertmanager, Grafana, node-exporter and the metrics proxies, at 1.5 GiB as Prometheus
 grows while it fills its first two-hour block; Rancher's own pod peaks at about 1.6 GiB as it
 first starts, and with a cluster registered Rancher, Fleet and their controllers hold about 1.2 GiB.
-Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, which the node they
-share has to have; the clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
-controller and a node's speaker, or kube-vip and its cloud provider; in BGP mode frr-k8s adds the
+Istio uses about 100 MiB, but istiod, the ztunnel and the CNI agent beside them ask for 484 MiB,
+which the node they share has to have. The clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
+controller and a node's speaker, or kube-vip and its cloud provider. In BGP mode frr-k8s adds the
 requests of its controller, frr and exporters, and of the status cleaner (176 MiB). Logs are Loki, which asks for
 256 MiB, the Alloy that reads the events and a node's Alloy. Backups are Velero's server and a
 node's agent, which grow while a backup reads a volume. Argo CD is its application, ApplicationSet
@@ -294,7 +294,33 @@ and repository controllers, its server and Redis; Flux is the operator and Flux'
 Kyverno's four controllers, the admission controller twice, hold about 520 MiB.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":640,"istio":384,"clusterMesh":128,"loadBalancer":128,"loadBalancerBGP":176,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":640,"istio":488,"clusterMesh":128,"loadBalancer":128,"loadBalancerBGP":176,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
+{{- end -}}
+
+{{/*
+The memory, in MiB, each add-on's pods request in a cluster, the same for every distribution: what
+its charts ask for at their pinned versions with the values Kubehenge gives them, counting the pods
+that run once and one node's share of those on every node, as the CPU figures count. The scheduler
+places a pod only on a node with that much memory not yet requested, however little its pods use.
+Headlamp asks for 64 MiB. Monitoring is Prometheus's 256 MiB, its operator's 64 MiB, Grafana's
+128 MiB with two sidecars at 32 MiB, Prometheus's and Alertmanager's reloaders at 16 MiB,
+Alertmanager's 32 MiB, kube-state-metrics' 64 MiB, a node's node-exporter at 32 MiB with its 16 MiB
+proxy, and four metrics proxies at 16 MiB, a node's and a control plane's three. Logs are Loki's
+256 MiB with its 16 MiB proxy, the events' Alloy at 64 MiB and a node's at 128 MiB. Backups are
+Velero's 128 MiB and a node's agent at 64 MiB. Kyverno's admission controller asks for 128 MiB
+twice and its other three controllers for 64 MiB each. Istio is istiod's 256 MiB, a node's ztunnel
+at 128 MiB and its CNI agent at the chart's 100 MiB. Cluster Mesh is the clustermesh-apiserver's
+three containers, 128 MiB together. The load balancer is MetalLB's controller and a node's speaker
+at 64 MiB each, more than kube-vip's. cert-manager is its controller and CA injector at 64 MiB and
+its webhook at 32 MiB. Rancher is Rancher's 128 MiB, its webhook's 64 MiB, Turtles' controller at
+the chart's 128 MiB and Fleet's five containers at 64 MiB each. Rancher's agent is the cluster
+agent, Fleet's agent and the webhook at 64 MiB each. Argo CD is its application controller's
+128 MiB, its server, repository server and ApplicationSet controller at 64 MiB each and Redis at
+32 MiB. Flux is its operator and its four controllers at 64 MiB each. In BGP mode frr-k8s adds its
+controller, frr and exporters, and the status cleaner, 176 MiB together.
+*/}}
+{{- define "kubehenge.addonMemoryRequests" -}}
+kubehenge.dev/addon-memory-requests: '{"headlamp":64,"monitoring":752,"logs":464,"backups":192,"kyverno":448,"istio":484,"clusterMesh":128,"loadBalancer":128,"loadBalancerBGP":176,"certManager":160,"rancher":640,"rancherAgent":192,"argocd":352,"flux":320}'
 {{- end -}}
 
 {{/*

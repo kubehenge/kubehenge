@@ -48,6 +48,18 @@ const AddonCPUAnnotation = "kubehenge.dev/addon-cpu"
 // per cluster, such as two CoreDNS replicas, which can all land on one worker.
 const NodeCPUAnnotation = "kubehenge.dev/node-cpu"
 
+// AddonMemoryRequestsAnnotation on a ClusterClass is the memory, in MiB, each add-on's pods request
+// in one of its clusters, by the keys of AddonMemoryAnnotation, counted as AddonCPUAnnotation counts
+// CPU. The scheduler places a pod only on a node with that much memory not yet requested, however
+// little the node's pods use, so a node can hold the add-ons' use and still leave one pending.
+const AddonMemoryRequestsAnnotation = "kubehenge.dev/addon-memory-requests"
+
+// NodeMemoryRequestsAnnotation on a ClusterClass is the memory, in MiB, a node of one of its
+// clusters keeps from the add-ons' requests, by the kinds of NodeCPUAnnotation: what the kernel and
+// the kubelet keep back from the scheduler, and what the pods of the distribution, its CNI and
+// Kubehenge's own request.
+const NodeMemoryRequestsAnnotation = "kubehenge.dev/node-memory-requests"
+
 // The keys in AddonMemoryAnnotation of what is not an add-on of its own.
 const (
 	certManagerFigure  = "certManager"
@@ -120,6 +132,10 @@ var (
 		addons: AddonMemoryAnnotation, nodes: NodeMemoryAnnotation, growth: AddonControlPlaneMemoryAnnotation,
 		cni: CNIControlPlaneMemoryAnnotation, unit: "MiB", name: "memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
 	}
+	addonMemoryRequests = &addonResource{
+		addons: AddonMemoryRequestsAnnotation, nodes: NodeMemoryRequestsAnnotation,
+		unit: "MiB", name: "requested memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
+	}
 	addonCPU = &addonResource{
 		addons: AddonCPUAnnotation, nodes: NodeCPUAnnotation,
 		unit: "millicores", name: "CPU", of: func(s controlPlaneSize) int { return s.Cores * millicores },
@@ -147,13 +163,13 @@ func (r addonRoom) short() int { return r.Need - r.Have }
 func (r addonRoom) controlPlaneShort() int { return r.ControlPlaneNeed - r.ControlPlaneHave }
 
 // checkAddonRoom refuses a cluster whose workers, beyond what each takes itself, have less memory
-// than its add-ons' pods use, or less CPU than they request. Without workers, the same holds for its
+// than its add-ons' pods use, or less memory or CPU than they request. Without workers, the same holds for its
 // control planes, beyond what each takes itself with the add-ons. So a node needs its distribution's least or that,
 // whichever is more. With workers, each control plane of a cluster with add-ons needs the memory it
 // uses itself with them. Updating a cluster that was already short is refused only when the update
 // leaves it shorter.
 func checkAddonRoom(old, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
-	for _, r := range []*addonResource{addonMemory, addonCPU} {
+	for _, r := range []*addonResource{addonMemory, addonMemoryRequests, addonCPU} {
 		if err := checkRoomFor(r, old, cluster, class); err != nil {
 			return err
 		}

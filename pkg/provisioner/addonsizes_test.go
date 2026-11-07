@@ -338,6 +338,80 @@ func TestAddonRoomWithoutNodeFigures(t *testing.T) {
 	}
 }
 
+// talosAddonClass is addonClass with the Talos class's memory figures from the chart, for what the
+// add-ons' pods use and for what they request.
+func talosAddonClass() *clusterv1.ClusterClass {
+	class := addonClass()
+	class.Name = "kubehenge-talos"
+	class.Annotations[AddonMemoryAnnotation] = `{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":640,"istio":488,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}`
+	class.Annotations[NodeMemoryAnnotation] = `{"controlPlane":2392,"worker":704}`
+	class.Annotations[AddonMemoryRequestsAnnotation] = `{"headlamp":64,"monitoring":752,"logs":464,"backups":192,"kyverno":448,"istio":484,"clusterMesh":128,"loadBalancer":128,"certManager":160,"rancher":640,"rancherAgent":192,"argocd":352,"flux":320}`
+	class.Annotations[NodeMemoryRequestsAnnotation] = `{"controlPlane":2328,"worker":960,"workers":140}`
+	return class
+}
+
+// istioAndFlux switches on Istio, the load balancer and Flux beside Rancher's agent, as the
+// end-to-end test's GitOps part does.
+var istioAndFlux = map[string]string{
+	"istio": `{"enabled":true}`, "gitops": `{"enabled":true,"engine":"flux"}`,
+	"loadBalancer": `{"enabled":true,"addresses":["192.0.2.100-192.0.2.110"]}`,
+}
+
+// istioAlone switches on Istio and nothing else, with no Rancher to register with.
+var istioAlone = map[string]string{"istio": `{"enabled":true}`, "rancher": `{"register":false}`}
+
+func TestWorkersHaveRoomForTheAddonsRequests(t *testing.T) {
+	t.Parallel()
+	class := talosAddonClass()
+	for _, tc := range []struct {
+		name, worker string
+		addons       map[string]string
+		want         string
+	}{
+		// What the pods use fits exactly: 704 MiB for the worker and 1512 for the add-ons.
+		{
+			"a worker with room for the pods' use alone", `{"memoryMiB":2216}`, istioAndFlux,
+			"add-ons (Istio, the load balancer, Rancher's agent, Flux) need 1124 MiB of requested memory on workers, which have 1116 MiB for them",
+		},
+		{"a worker with room for their requests", `{"memoryMiB":2224}`, istioAndFlux, ""},
+		{
+			"Istio alone on a small worker", `{"memoryMiB":1536}`, istioAlone,
+			"add-ons (Istio) need 484 MiB of requested memory on workers, which have 436 MiB for them",
+		},
+		{"Istio alone with room for its requests", `{"memoryMiB":1584}`, istioAlone, ""},
+	} {
+		c := workerMemory(withAddons(sized("", new(int32(1))), tc.addons), tc.worker)
+		if err := checkRoomFor(addonMemory, nil, c, class); err != nil {
+			t.Errorf("%s: refused for what the pods use: %v", tc.name, err)
+		}
+		err := checkAddonRoom(nil, c, class)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: refused: %v", tc.name, err)
+		case tc.want != "" && (err == nil || err.Error() != tc.want):
+			t.Errorf("%s: %v, want %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+func TestAddonMemoryRequestsHoldChangesThatLeaveLess(t *testing.T) {
+	t.Parallel()
+	class := talosAddonClass()
+	short := workerMemory(withAddons(sized("", new(int32(1))), istioAlone), `{"memoryMiB":1536}`)
+	if err := checkAddonRoom(nil, short, class); err == nil || !strings.Contains(err.Error(), "of requested memory") {
+		t.Fatalf("Istio on a worker of 1536 MiB: %v", err)
+	}
+	edited := short.DeepCopy()
+	edited.Labels = map[string]string{"team": "a"}
+	if err := checkAddonRoom(short, edited, class); err != nil {
+		t.Errorf("an unrelated edit to a cluster already short of requested memory: %v", err)
+	}
+	if err := checkAddonRoom(short, withAddons(short.DeepCopy(), map[string]string{"headlamp": `{"enabled":true}`}), class); err == nil ||
+		!strings.Contains(err.Error(), "of requested memory") {
+		t.Errorf("Headlamp switched on in a cluster already short of requested memory: %v", err)
+	}
+}
+
 func TestAddonRoomHoldsChangesThatLeaveLess(t *testing.T) {
 	t.Parallel()
 	class := addonClass()
