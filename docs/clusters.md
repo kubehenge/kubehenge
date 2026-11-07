@@ -59,6 +59,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | Prefix length | Of the nodes' network. |
 | Gateway | The nodes' default gateway. |
 | DNS servers | IPv4 addresses, one per line or separated by commas. |
+| Time servers | Up to 8 NTP host names or IP addresses, separated by commas. Empty keeps the node image's public servers. The nodes reach them on UDP 123, and a node that cannot sync is reported on the health page ([troubleshooting](troubleshooting.md#a-nodes-clock-is-off)). |
 | Load balancer | What gives Services of type `LoadBalancer` their addresses, [below](#load-balancer). |
 | Load-balancer addresses | With a load balancer: the addresses it hands out, as ranges, networks or single addresses. |
 | Pod network | The CNI, [below](#pod-network). |
@@ -992,6 +993,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Create a cluster | `VM.Allocate` | the workload pool |
 | | `Datastore.AllocateSpace` | `/storage/<storage>` |
 | | `SDN.Use` | `/sdn/zones/<zone>/<bridge>`, or `…/<bridge>/<vlan>` with a VLAN tag |
+| See a Proxmox VE node's clock on the health page | `Sys.Audit` | `/nodes/<node>` |
 | Place a cluster by an HA rule's nodes | `Sys.Audit`, or `VM.Allocate` where the rules are offered to cluster creators | `/` for `Sys.Audit`, the workload pool or the cluster's pool for `VM.Allocate` |
 | Install Rancher | `Sys.Modify` | the workload pool |
 | Run the CSI plugin's newest release | `Datastore.Allocate` | `/storage/<storage>` |
@@ -1154,7 +1156,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | Variable | Required | What it is |
 | --- | --- | --- |
 | `controlPlaneEndpoint` | yes | The control plane's virtual IP: an IPv4 address, unused, outside `network.addresses`. |
-| `network` | yes | `bridge`, one of the bridges clusters may use. `vlan` (optional, 1 to 4094). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. |
+| `network` | yes | `bridge`, one of the bridges clusters may use. `vlan` (optional, 1 to 4094). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. `ntp` (optional, at most 8 host names or IP addresses, each once). Create a cluster from a file with `kubehenge cluster create -f`, which takes the same variable. |
 | `storage` | yes | The storage for the nodes' disks and the persistent volumes, one of those clusters may use. |
 | `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one. Every node when unset. New VMs go to those of them that are online ([above](#machines)). The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)). Default true, where the management cluster has Proxmox VE HA and the storage is shared. |
