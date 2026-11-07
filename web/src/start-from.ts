@@ -1,3 +1,4 @@
+import { alertingOf } from "./Alerting";
 import { newForm, type Form, type Machine } from "./create-form";
 import { loadBalancerOf } from "./LoadBalancer";
 import { logsOf } from "./Logs";
@@ -43,6 +44,7 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "headlamp",
   "headlampView",
   "monitoring",
+  "alerting",
   "logs",
   "podSecurity",
   "cis",
@@ -105,6 +107,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     headlamp: flag(headlamp["enabled"]) === true,
     headlampView: text(headlamp["access"]) === "view",
     monitoring: flag(record(v["monitoring"])["enabled"]) === true,
+    alerting: alertingOf(v["monitoring"]),
     logs: logsOf(v["logs"]),
     podSecurity: podSecurityOf(v["podSecurity"]),
     cis: flag(v["cis"]) === true,

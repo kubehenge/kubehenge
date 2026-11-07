@@ -100,6 +100,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 		errs = append(errs, field.Invalid(topology.Child("variables").Key(backupsVariable), backupsVariable, err.Error()))
 	}
 	errs = append(errs, validateCertificates(c)...)
+	errs = append(errs, validateMonitoring(c)...)
 	errs = append(errs, validateGitOps(c)...)
 	errs = append(errs, validateAutoscaling(c)...)
 	if err := checkEtcdSnapshots(old, c, class); err != nil {

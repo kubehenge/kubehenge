@@ -366,6 +366,127 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: >-
             Secret in the monitoring namespace holding the certificate for hostname. When unset, the
             certificates add-on's while it is on, else the ingress controller's own default.
+        alertReceivers:
+          type: array
+          maxItems: 4
+          description: >-
+            Where Alertmanager sends what fires, each type once. Every receiver gets every alert but
+            the Watchdog's. The secret of each is a credential stored for the cluster, never a value
+            here: alerts-email (the password), alerts-webhook (the URL, and a bearer token if the
+            endpoint wants one), alerts-slack and alerts-teams (the webhook URL). A receiver whose
+            credential is not stored waits and sends nothing.
+          x-kubernetes-validations:
+            - rule: "self.all(a, self.filter(b, b.type == a.type).size() == 1)"
+              message: Each receiver type can be given once.
+          items:
+            type: object
+            required: [type]
+            properties:
+              type:
+                type: string
+                enum: [email, webhook, slack, teams]
+                description: >-
+                  email, webhook, slack (Slack and the services that take its webhook format) or
+                  teams (Microsoft Teams and the services that take its Workflows webhook).
+              smarthost:
+                type: string
+                pattern: "^[^\\s:]+:[0-9]{1,5}$"
+                description: The mail server to send through, as host:port. Email only.
+              from:
+                type: string
+                minLength: 3
+                maxLength: 254
+                description: The sender's address. Email only.
+              to:
+                type: array
+                minItems: 1
+                maxItems: 20
+                description: The addresses that get the mail. Email only.
+                items:
+                  type: string
+                  minLength: 3
+                  maxLength: 254
+              username:
+                type: string
+                minLength: 1
+                maxLength: 254
+                description: >-
+                  The user the mail server signs in. Its password is the alerts-email credential.
+                  Without one the server takes the mail without signing in. Email only.
+              requireTLS:
+                type: boolean
+                description: Refuse a mail server that cannot start TLS. On unless set. Email only.
+              channel:
+                type: string
+                minLength: 1
+                maxLength: 80
+                description: The channel to post to, where the webhook's own is not wanted. Slack only.
+            x-kubernetes-validations:
+              - rule: "self.type != 'email' || (has(self.smarthost) && has(self.from) && has(self.to))"
+                message: An email receiver needs smarthost, from and to.
+              - rule: "self.type == 'email' || !(has(self.smarthost) || has(self.from) || has(self.to) || has(self.username) || has(self.requireTLS))"
+                message: Only an email receiver takes smarthost, from, to, username and requireTLS.
+              - rule: "self.type == 'slack' || !has(self.channel)"
+                message: Only a Slack receiver takes a channel.
+        remoteWrite:
+          type: object
+          required: [url]
+          description: >-
+            Another store Prometheus sends every sample to (Prometheus remote write: Mimir, Thanos,
+            VictoriaMetrics, Grafana Cloud and the like). With auth basic or bearer, the secret is the
+            remote-write credential stored for the cluster.
+          properties:
+            url:
+              type: string
+              maxLength: 2048
+              pattern: "^https?://[^/@\\s]+(/\\S*)?$"
+              description: The store's write address, without a user name or password.
+            auth:
+              type: string
+              enum: [none, basic, bearer]
+              default: none
+              description: basic sends username and the credential as the password. bearer sends the credential as a token.
+            username:
+              type: string
+              minLength: 1
+              maxLength: 254
+              description: The user name for basic authentication.
+          x-kubernetes-validations:
+            - rule: "self.auth != 'basic' || has(self.username)"
+              message: Basic authentication needs a username.
+            - rule: "self.auth == 'basic' || !has(self.username)"
+              message: Only basic authentication takes a username.
+        externalAlertmanagers:
+          type: object
+          required: [urls]
+          description: >-
+            Alertmanagers besides the cluster's own that Prometheus sends its alerts to. With auth
+            basic or bearer, the secret is the external-alertmanager credential stored for the cluster.
+          properties:
+            urls:
+              type: array
+              minItems: 1
+              maxItems: 8
+              description: The Alertmanagers' addresses, without a user name or password.
+              items:
+                type: string
+                maxLength: 2048
+                pattern: "^https?://[^/@\\s]+(/\\S*)?$"
+            auth:
+              type: string
+              enum: [none, basic, bearer]
+              default: none
+              description: basic sends username and the credential as the password. bearer sends the credential as a token.
+            username:
+              type: string
+              minLength: 1
+              maxLength: 254
+              description: The user name for basic authentication.
+          x-kubernetes-validations:
+            - rule: "self.auth != 'basic' || has(self.username)"
+              message: Basic authentication needs a username.
+            - rule: "self.auth == 'basic' || !has(self.username)"
+              message: Only basic authentication takes a username.
 - name: logs
   required: false
   schema:

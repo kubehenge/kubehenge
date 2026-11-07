@@ -206,6 +206,8 @@ type Addons struct {
 	backupSources []backupSource
 	// gitOpsFound is what the controller found for GitOps before writing the charts' values.
 	gitOpsFound gitOpsState
+	// monitoringFound is the credentials stored for the settings of monitoring that need one.
+	monitoringFound monitoringState
 	// talosServing is set when every controller manager and scheduler of a Talos cluster serves a
 	// certificate of the cluster CA (talosServesControlPlaneMetrics), so that their metrics are
 	// scraped as on the other distributions.

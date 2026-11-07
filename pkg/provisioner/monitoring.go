@@ -22,6 +22,13 @@ type Monitoring struct {
 	Enabled   bool   `json:"enabled"`
 	Hostname  string `json:"hostname,omitempty"`
 	TLSSecret string `json:"tlsSecret,omitempty"`
+	// AlertReceivers are where Alertmanager sends what fires, one entry per type. The secrets of
+	// each are stored credentials.
+	AlertReceivers []AlertReceiver `json:"alertReceivers,omitempty"`
+	// RemoteWrite sends every sample Prometheus takes to another store.
+	RemoteWrite *RemoteWrite `json:"remoteWrite,omitempty"`
+	// ExternalAlertmanagers get Prometheus's alerts besides the cluster's own Alertmanager.
+	ExternalAlertmanagers *ExternalAlertmanagers `json:"externalAlertmanagers,omitempty"`
 }
 
 const (
@@ -149,18 +156,14 @@ func monitoringValues(distribution templates.Distribution, proxy Image, addons *
 			"resources":                reserved("50m", memory64Mi),
 			"prometheusConfigReloader": map[string]any{"resources": reserved(cpu10m, "16Mi")},
 		},
-		prometheus: map[string]any{"prometheusSpec": map[string]any{
-			"storageSpec":   claim(prometheusStorage),
-			"retentionSize": prometheusRetention,
-			"resources":     reserved("100m", "256Mi"),
-		}},
-		"alertmanager": map[string]any{"alertmanagerSpec": map[string]any{
-			"storage":   claim(alertmanagerStorage),
-			"resources": reserved(cpu10m, "32Mi"),
-			"portName":  alertmanagerPort,
-		}},
+		prometheus:           map[string]any{"prometheusSpec": prometheusSpec(&addons.Monitoring, &addons.monitoringFound)},
+		"alertmanager":       alertmanagerValues(&addons.Monitoring, &addons.monitoringFound),
 		"kube-state-metrics": map[string]any{"resources": reserved(cpu10m, memory64Mi)},
 		"extraManifests":     metricsManifests(distribution, proxy, addons),
+		// Helm leaves a chart's CRDs as they were installed. The chart's own job applies the new
+		// ones before the operator that needs them rolls out, with the images the chart's values
+		// pin.
+		"crds": map[string]any{"upgradeJob": map[string]any{"enabled": true, "resources": reserved(cpu10m, "32Mi")}},
 	}
 	switch distribution {
 	case templates.K3s:

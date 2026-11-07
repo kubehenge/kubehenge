@@ -229,6 +229,9 @@ Each add-on the class offers is a card with the memory its pods take by the clas
   - It installs cert-manager too, and takes about 1.5 GiB of the workers' memory ([Machines](#machines)) and a 20 GiB volume.
   - Grafana's `admin` password is in the `kube-prometheus-stack-grafana` Secret of the `monitoring` namespace.
   - With a host name, Grafana is served at it through the cluster's ingress controller. Without one, reach it with `kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80`.
+  - Prometheus reads every ServiceMonitor, PodMonitor, Probe, ScrapeConfig and PrometheusRule in the cluster, whatever its labels. The charts you install need no `release` label.
+  - Alerts go nowhere until you name a receiver ([Monitoring alerts and remote write](#monitoring-alerts-and-remote-write)).
+  - The Prometheus Operator's CRDs are applied again on every chart upgrade, by the chart's own job in the `monitoring` namespace.
 - **Logs**, beside monitoring: Loki keeps the cluster's logs on a volume of its own and Grafana Alloy collects them.
   - Monitoring's Grafana reads them as its Loki data source ([architecture.md](architecture.md#add-ons)).
   - Logs are kept for 7 days in a 10 GiB volume unless set otherwise. The volume only grows and should hold the days kept, since Loki deletes by age, not by size.
@@ -566,8 +569,8 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 The add-ons and sign-in:
 
 - **Headlamp:** switch it on or off, set or clear its host name, and switch read-only access for everyone on or off. Switching it off uninstalls it.
-- **Monitoring:** switch it on or off, and set or clear Grafana's host name.
-  - Switching it off uninstalls it with its metrics proxies and certificates, and cert-manager unless Rancher or the certificates add-on runs in the cluster. Prometheus's and Alertmanager's volumes are kept.
+- **Monitoring:** switch it on or off, set or clear Grafana's host name, and choose where alerts and samples go ([Monitoring alerts and remote write](#monitoring-alerts-and-remote-write)). The credentials are stored in the dialog at once, the rest with **Save**.
+  - Switching it off uninstalls it with its metrics proxies and certificates, and cert-manager unless Rancher or the certificates add-on runs in the cluster. The volumes and CRDs stay, as the dialog notes ([What stays](#what-stays-after-an-add-on-is-switched-off)).
   - With logs on, the dialog switches them off too.
 - **Logs:** switch them on or off, choose the collector, and change the days kept or grow the volume.
   - Switching the collector replaces one Alloy with the other. Switching logs off uninstalls Loki and Alloy, and Loki's volume is kept.
@@ -753,6 +756,41 @@ The credential comes from one of three places, the first that applies:
 Kubehenge's controller copies the stored credential into the `cert-manager` namespace of the workload cluster (`kubehenge-dns01`). It replaces the copy, or removes it, as soon as the credential is stored again or removed. A cluster without a credential gets a `NoDNS01Credential` event, and its certificates wait.
 
 Where the domain's DNS answers differently inside the network than outside (split-horizon DNS), `dns01.nameservers` names the servers (host:port). They are the ones cert-manager checks the challenge's record with, such as the domain's authoritative servers.
+
+## Monitoring alerts and remote write
+
+The monitoring add-on's Alertmanager routes every alert but the always-firing Watchdog to the receivers you name. Without one, alerts fire into nothing. Three settings of the `monitoring` variable send data elsewhere:
+
+| Setting | What it does | The credential |
+| --- | --- | --- |
+| `alertReceivers` | Alertmanager's own receivers, each type once. `email` takes `smarthost` (host:port), `from`, `to` and optionally `username` and `requireTLS` (default true). `webhook`, `slack` and `teams` take no other setting but `slack`'s optional `channel`. | `alerts-email`: `password`, needed only with `username`. `alerts-webhook`: `url`, and `token` if the endpoint wants a bearer token. `alerts-slack` and `alerts-teams`: `url`. |
+| `remoteWrite` | Sends every sample Prometheus takes to `url`. `auth` is `none` (default), `basic` (with `username`) or `bearer`. | `remote-write`: `secret`, the password or the token. |
+| `externalAlertmanagers` | Sends Prometheus's alerts to the Alertmanagers at `urls`, besides the cluster's own. `auth` and `username` as for `remoteWrite`. | `external-alertmanager`: `secret`. |
+
+`slack` takes the services that read Slack's webhook format. `teams` takes Microsoft Teams Workflows webhooks, through Alertmanager's `msteamsv2` receiver.
+
+An address holds no user name or password. The variable is plain text, so every secret is a stored credential, like the [DNS-01 one](#dns-providers):
+
+- Type it under the cluster's **Options**, **Monitoring**, or when creating the cluster. The interface keeps it in the Secret `<cluster>.<purpose>` beside the Cluster and never shows it again.
+- With kubectl, create that Secret yourself ([With kubectl](#with-kubectl)) with the type `kubehenge.dev/user-credential` and the labels `kubehenge.dev/user-credential=<purpose>` and `kubehenge.dev/credential-cluster=<cluster>`.
+- Kubehenge's controller copies the values into the Secrets `kubehenge-alertmanager` and `kubehenge-prometheus` of the `monitoring` namespace. Alertmanager and Prometheus read them as files.
+- Storing, replacing or removing a credential needs `Sys.Modify` on the cluster's pool ([Who may do what](#who-may-do-what)).
+
+A receiver, remote write target or Alertmanager whose credential is not stored yet is left out, and the cluster gets a `MonitoringWaiting` event. It is added as soon as the credential is stored.
+
+## What stays after an add-on is switched off
+
+Switching an add-on off uninstalls its Helm release. Helm keeps volumes, CRDs and namespaces, so these stay until you delete them:
+
+| Add-on | What stays | Remove it with |
+| --- | --- | --- |
+| Monitoring | The volumes of Prometheus (20 GiB) and Alertmanager (1 GiB) in the `monitoring` namespace. They count against the storage until deleted, and switching monitoring on again reuses their data. | `kubectl -n monitoring delete pvc --all` |
+| Monitoring | The Prometheus Operator's CRDs (`prometheuses`, `alertmanagers`, `servicemonitors` and the rest of `monitoring.coreos.com`). | `kubectl get crd -o name \| grep monitoring.coreos.com \| xargs kubectl delete`, which deletes every monitor and rule of the cluster too. |
+| Monitoring | The `monitoring` namespace. Kubehenge removes the Secrets of the stored credentials from it. | `kubectl delete namespace monitoring` |
+| Logs | Loki's volume (`logs.sizeGiB`) in the `logging` namespace. | `kubectl -n logging delete pvc --all` |
+| Headlamp | Nothing but the `headlamp` namespace, which the chart creates. | `kubectl delete namespace headlamp` |
+
+The interface says which volumes stay when you switch monitoring off. Delete the volumes after the add-on is gone.
 
 ## Persistent volumes
 
@@ -1149,7 +1187,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `cis` | no | Harden the cluster to the CIS Kubernetes Benchmark ([above](#add-ons)). Default false. The class refuses a change once the cluster exists. |
 | `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)). `enabled` (default false). `implementation`, `metallb` (default) or `kube-vip`. `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network, needed while `enabled`. |
 | `headlamp` | no | `enabled` (default false). `hostname`, to serve it through the cluster's ingress controller. `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname`. When unset, one from the certificates add-on while it is on, else the ingress controller's default certificate. `access`, `token` (default) or `view`, read-only without sign-in ([above](#add-ons)). |
-| `monitoring` | no | `enabled` (default false), which installs cert-manager too ([above](#add-ons)). `hostname`, to serve Grafana through the cluster's ingress controller. `tlsSecret`, a Secret in the `monitoring` namespace with the certificate for `hostname`. When unset, as for `headlamp`. |
+| `monitoring` | no | `enabled` (default false), which installs cert-manager too ([above](#add-ons)). `hostname`, to serve Grafana through the cluster's ingress controller. `tlsSecret`, a Secret in the `monitoring` namespace with the certificate for `hostname`. When unset, as for `headlamp`. `alertReceivers`, `remoteWrite` and `externalAlertmanagers`, with their secrets as stored credentials ([above](#monitoring-alerts-and-remote-write)). |
 | `logs` | no | Loki and Grafana Alloy, which need `monitoring` ([above](#add-ons)). `enabled` (default false). `collector`, `node` (default) or `api`. `retentionDays` (1 to 366, default 7). `sizeGiB`, Loki's volume (1 to 1024, default 10), which only grows. |
 | `backups` | no | Velero ([above](#back-up-and-restore)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`). `timeZone` (default `UTC`). `retentionDays` (1 to 3650, default 7). `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation. `existingSecret`, a Secret of your own in the cluster's `velero` namespace. It holds the store's keys as Velero's credentials file under the key `cloud`. It replaces the credential stored through the interface for the cluster, or else for every cluster. Kubehenge creates the namespace, and switching backups off deletes it with the Secret. `readFrom`, up to 10 clusters of the same namespace backing up to the same target whose backups this one lists to restore ([Restore into another cluster](#restore-into-another-cluster)). |
 | `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. |

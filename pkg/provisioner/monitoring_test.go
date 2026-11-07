@@ -36,10 +36,11 @@ func TestParseImage(t *testing.T) {
 }
 
 // monitoringProxies are the cluster's proxies with monitoring on, by name, each with its values.
-func monitoringProxies(t *testing.T, distribution templates.Distribution, m Monitoring) (map[string]map[string]any, map[string]string) {
+func monitoringProxies(t *testing.T, distribution templates.Distribution, m *Monitoring) (map[string]map[string]any, map[string]string) {
 	t.Helper()
-	m.Enabled = true
-	return proxiesOf(t, distribution, &Addons{Monitoring: m})
+	enabled := *m
+	enabled.Enabled = true
+	return proxiesOf(t, distribution, &Addons{Monitoring: enabled})
 }
 
 func proxiesOf(t *testing.T, distribution templates.Distribution, addons *Addons) (map[string]map[string]any, map[string]string) {
@@ -78,7 +79,7 @@ func TestMonitoringVerifiesEveryScrape(t *testing.T) {
 	for _, distribution := range []templates.Distribution{templates.Kubeadm, templates.RKE2, templates.K3s} {
 		t.Run(string(distribution), func(t *testing.T) {
 			t.Parallel()
-			values, raw := monitoringProxies(t, distribution, Monitoring{})
+			values, raw := monitoringProxies(t, distribution, &Monitoring{})
 			if !lookup[bool](t, values["web-cert-manager"], "enableCertificateOwnerRef") {
 				t.Error("cert-manager is not installed with monitoring, or keeps Secrets past their Certificates")
 			}
@@ -147,7 +148,7 @@ func TestMonitoringVerifiesEveryScrape(t *testing.T) {
 // past its probes.
 func TestMonitoringRequestsWhatItRuns(t *testing.T) {
 	t.Parallel()
-	values, _ := monitoringProxies(t, templates.RKE2, Monitoring{})
+	values, _ := monitoringProxies(t, templates.RKE2, &Monitoring{})
 	v := values["web-monitoring"]
 	for _, path := range [][]any{
 		{"prometheusOperator"},
@@ -211,7 +212,7 @@ func checkControlPlaneScrapes(t *testing.T, distribution templates.Distribution,
 func TestMetricsProxiesDeclareNoPorts(t *testing.T) {
 	t.Parallel()
 	for _, distribution := range []templates.Distribution{templates.Kubeadm, templates.RKE2} {
-		values, _ := monitoringProxies(t, distribution, Monitoring{})
+		values, _ := monitoringProxies(t, distribution, &Monitoring{})
 		proxies := 0
 		objects := manifests(t, values["web-monitoring"])
 		for name := range objects {
@@ -262,7 +263,7 @@ func TestMonitoringReachesCoreDNSPastRKE2sCISPolicies(t *testing.T) {
 
 func TestMonitoringServesGrafanaAtItsHostname(t *testing.T) {
 	t.Parallel()
-	values, _ := monitoringProxies(t, "kubeadm", Monitoring{Hostname: "grafana.example.org", TLSSecret: "grafana-tls"}) //nolint:gosec // names a Secret
+	values, _ := monitoringProxies(t, "kubeadm", &Monitoring{Hostname: "grafana.example.org", TLSSecret: "grafana-tls"}) //nolint:gosec // names a Secret
 	grafana := lookup[map[string]any](t, values["web-monitoring"], "grafana")
 	if lookup[string](t, grafana, "ingress", "tls", 0, "secretName") != "grafana-tls" ||
 		lookup[string](t, grafana, "ingress", "hosts", 0) != "grafana.example.org" ||
