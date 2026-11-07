@@ -24,6 +24,24 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
 
+type TokenProblem = NonNullable<NonNullable<ManagementHealth["proxmox"]>["tokens"]>[number];
+
+// TokenProblems lists the Proxmox VE tokens that failed their last test, each with what is wrong.
+function TokenProblems({ tokens }: { tokens: TokenProblem[] }): JSX.Element | null {
+  if (tokens.length === 0) {
+    return null;
+  }
+  return (
+    <ul className="health-short" aria-label="Proxmox VE tokens">
+      {tokens.map((t) => (
+        <li key={`token/${t.name}`}>
+          <Status state="error" text={t.problem} /> {t.message}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 // ManagementHealthCard is the management cluster's own health, read on its own so that it answers
 // while the cluster does not, when the Administration page is what repairs it.
 export function ManagementHealthCard(): JSX.Element {
@@ -80,15 +98,7 @@ export function ManagementHealthCard(): JSX.Element {
           {filled(h.proxmox?.blind) && (
             <p className="warning">Host maintenance is not visible: the token lacks {h.proxmox?.blind}</p>
           )}
-          {tokensFailing.length > 0 && (
-            <ul className="health-short" aria-label="Proxmox VE tokens">
-              {tokensFailing.map((t) => (
-                <li key={`token/${t.name}`}>
-                  <Status state="error" text={t.problem} /> {t.message}
-                </li>
-              ))}
-            </ul>
-          )}
+          <TokenProblems tokens={tokensFailing} />
           {(nodesDown.length > 0 || controllersShort.length > 0) && (
             <ul className="health-short">
               {nodesDown.map((n) => (

@@ -12,10 +12,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// The privileges and paths the tokens are tested for, as Proxmox VE names them.
 // PrivRealmAllocateUser is what the controller's token needs on the realm to make cluster users.
 const PrivRealmAllocateUser = "Realm.AllocateUser"
 
+// The privileges and paths the tokens are tested for, as Proxmox VE names them.
 const (
 	privSysAudit = "Sys.Audit"
 	privVMAudit  = "VM.Audit"
