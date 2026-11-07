@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -14,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -55,15 +59,21 @@ const (
 	// dns01TokenKey is the key a DNS provider's credential is under, in the user credential and in
 	// the Secret cert-manager reads.
 	dns01TokenKey = "token"
+	// eabPurpose is the user credential of an ACME server's external account binding, whose HMAC key
+	// is stored under eabKey, in the user credential and in the Secret cert-manager reads.
+	eabPurpose = "acme-eab"
+	eabKey     = "hmacKey"
 
 	// What the controller makes in the workload cluster: the ClusterIssuer every certificate of the
 	// add-on comes from, and the default certificate of the same name, its ACME account's key, its
-	// certificate's Secret, the copy of the cluster's CA and the DNS provider's credential.
+	// certificate's Secret, the copy of the cluster's CA, the DNS provider's credential and the ACME
+	// account's binding key.
 	ingressIssuer    = "kubehenge-ingress"
 	ingressACMEKey   = "kubehenge-ingress-acme"
 	ingressTLSSecret = "kubehenge-ingress-tls" //nolint:gosec // a Secret's name, not a credential
 	ingressCASecret  = "kubehenge-ingress-ca"  //nolint:gosec // a Secret's name, not a credential
 	dns01Secret      = "kubehenge-dns01"       //nolint:gosec // a Secret's name, not a credential
+	eabSecret        = "kubehenge-acme-eab"    //nolint:gosec // a Secret's name, not a credential
 	// traefikValuesSecret in kube-system holds, under traefikValuesKey, the values RKE2's and k3s's
 	// Traefik take from the cluster's certificates. The classes' HelmChartConfig names it.
 	traefikValuesSecret = "kubehenge-traefik" //nolint:gosec // a Secret's name, not a credential
@@ -85,11 +95,12 @@ const (
 )
 
 // The issuers a cluster's certificates come from: an ACME server proving names by DNS-01 or by
-// HTTP-01, or the cluster's own CA.
+// HTTP-01, the cluster's own CA, or an issuer the owner runs in the cluster.
 const (
 	IssuerACMEDNS01  = "acme-dns01"
 	IssuerACMEHTTP01 = "acme-http01"
 	IssuerCA         = "ca"
+	IssuerExternal   = "external"
 )
 
 // IngressCAName is the Secret beside a cluster that holds the CA its certificates come from with
@@ -104,16 +115,27 @@ type Certificates struct {
 	Enabled bool   `json:"enabled"`
 	Issuer  string `json:"issuer,omitempty"`
 	Domain  string `json:"domain,omitempty"`
-	ACME    ACME   `json:"acme,omitzero"`
-	DNS01   DNS01  `json:"dns01,omitzero"`
+	// IssuerName, IssuerKind and IssuerGroup name the issuer the owner runs, with the issuer external.
+	IssuerName  string `json:"issuerName,omitempty"`
+	IssuerKind  string `json:"issuerKind,omitempty"`
+	IssuerGroup string `json:"issuerGroup,omitempty"`
+	ACME        ACME   `json:"acme,omitzero"`
+	DNS01       DNS01  `json:"dns01,omitzero"`
 }
 
 // ACME is how a cluster's certificates are asked of an ACME server.
 type ACME struct {
-	Email    string `json:"email,omitempty"`
-	Server   string `json:"server,omitempty"`
-	Staging  bool   `json:"staging,omitempty"`
-	CABundle string `json:"caBundle,omitempty"`
+	Email                  string                 `json:"email,omitempty"`
+	Server                 string                 `json:"server,omitempty"`
+	Staging                bool                   `json:"staging,omitempty"`
+	CABundle               string                 `json:"caBundle,omitempty"`
+	ExternalAccountBinding ExternalAccountBinding `json:"externalAccountBinding,omitzero"`
+}
+
+// ExternalAccountBinding ties the ACME account to one the server's operator made. The HMAC key is the
+// credential.
+type ExternalAccountBinding struct {
+	KeyID string `json:"keyID,omitempty"`
 }
 
 // DNS01 is how ACME's DNS-01 challenge is answered: the DNS provider, where its credential is, and
@@ -211,6 +233,39 @@ func (c *Certificates) copiesDNS01Credential() bool {
 	return c.on() && c.issuer() == IssuerACMEDNS01 && c.DNS01.ExistingSecret == ""
 }
 
+// bindsAccount reports whether the ACME account is made with an external account binding, whose
+// HMAC key the controller copies into the workload cluster.
+func (c *Certificates) bindsAccount() bool {
+	acme := c.issuer() == IssuerACMEDNS01 || c.issuer() == IssuerACMEHTTP01
+	return c.on() && acme && c.ACME.ExternalAccountBinding.KeyID != ""
+}
+
+// external reports whether the certificates come from an issuer the owner runs, which Kubehenge makes
+// none of its own beside.
+func (c *Certificates) external() bool { return c.on() && c.issuer() == IssuerExternal }
+
+// issuerReference names an issuer the way cert-manager's issuerRef does.
+type issuerReference struct{ name, kind, group string }
+
+// issuerRef names the issuer every certificate of the add-on comes from.
+func (c *Certificates) issuerRef() issuerReference {
+	if !c.external() {
+		return issuerReference{ingressIssuer, clusterIssuerKind, certManagerGroup}
+	}
+	return issuerReference{c.IssuerName, cmp.Or(c.IssuerKind, clusterIssuerKind), cmp.Or(c.IssuerGroup, certManagerGroup)}
+}
+
+// issuerAnnotations ask cert-manager's ingress-shim for an Ingress's certificate from the issuer.
+func (c *Certificates) issuerAnnotations() map[string]any {
+	ref := c.issuerRef()
+	if ref.kind == clusterIssuerKind && ref.group == certManagerGroup {
+		return map[string]any{issuerAnnotation: ref.name}
+	}
+	return map[string]any{
+		certManagerGroup + "/issuer": ref.name, certManagerGroup + "/issuer-kind": ref.kind, certManagerGroup + "/issuer-group": ref.group,
+	}
+}
+
 // CertificatesOf reads a cluster's certificates variable, the zero value if it has none.
 func CertificatesOf(cluster *clusterv1.Cluster) (Certificates, error) {
 	c, _, err := optionalVariable[Certificates](cluster, certificatesVariable)
@@ -236,9 +291,8 @@ func certManagerValues(c *Certificates) map[string]any {
 	if !c.on() {
 		return values
 	}
-	values["ingressShim"] = map[string]any{
-		"defaultIssuerName": ingressIssuer, "defaultIssuerKind": clusterIssuerKind, "defaultIssuerGroup": certManagerGroup,
-	}
+	ref := c.issuerRef()
+	values["ingressShim"] = map[string]any{"defaultIssuerName": ref.name, "defaultIssuerKind": ref.kind, "defaultIssuerGroup": ref.group}
 	if c.issuer() == IssuerACMEDNS01 && len(c.DNS01.Nameservers) > 0 {
 		values["dns01RecursiveNameservers"] = strings.Join(c.DNS01.Nameservers, ",")
 		values["dns01RecursiveNameserversOnly"] = true
@@ -253,7 +307,7 @@ func addonIngress(c *Certificates, release, hostname, secret string) (map[string
 	if secret != "" || !c.on() || c.covers(hostname) {
 		return ingressTLS(hostname, secret), nil
 	}
-	return ingressTLS(hostname, release+"-tls"), map[string]any{issuerAnnotation: ingressIssuer}
+	return ingressTLS(hostname, release+"-tls"), c.issuerAnnotations()
 }
 
 // traefikCertificateValues give Traefik the default certificate, for routes and Ingresses that name
@@ -277,22 +331,66 @@ func traefikCertificateValues(c *Certificates) map[string]any {
 	}
 }
 
-// validateCertificates holds the add-ons' host names to the cluster's CA, which signs nothing
-// outside its domain.
+// issuerKindPattern is a Kubernetes kind: a camel-case word.
+var issuerKindPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
+
+// validateIssuer holds the issuer the owner runs to a name Kubernetes accepts, and the ACME settings
+// to an ACME issuer. The ClusterClass schema says the same, for the checks CEL can make.
+func (c *Certificates) validateIssuer(path *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	named := c.IssuerName != "" || c.IssuerKind != "" || c.IssuerGroup != ""
+	switch {
+	case c.issuer() != IssuerExternal:
+		if named {
+			errs = append(errs, field.Forbidden(path.Child("issuerName"), "the issuer's name, kind and group go with the issuer external"))
+		}
+		if c.issuer() == IssuerCA && c.ACME.ExternalAccountBinding.KeyID != "" {
+			errs = append(errs, field.Forbidden(path.Child("acme", "externalAccountBinding"), "an external account binding goes with an ACME issuer"))
+		}
+		return errs
+	case !reflect.ValueOf(c.ACME).IsZero() || !reflect.ValueOf(c.DNS01).IsZero():
+		errs = append(errs, field.Forbidden(path.Child("acme"), "an issuer of your own takes no ACME or DNS-01 settings"))
+	}
+	for _, problem := range validation.IsDNS1123Subdomain(c.IssuerName) {
+		errs = append(errs, field.Invalid(path.Child("issuerName"), c.IssuerName, problem))
+	}
+	ref := c.issuerRef()
+	name, kind, group := ref.name, ref.kind, ref.group
+	if !issuerKindPattern.MatchString(kind) {
+		errs = append(errs, field.Invalid(path.Child("issuerKind"), kind, "a kind is a word such as ClusterIssuer"))
+	}
+	if kind == "Issuer" && group == certManagerGroup {
+		errs = append(errs, field.Invalid(path.Child("issuerKind"), kind,
+			"an Issuer serves one namespace and the add-on's certificates are in several. Name a ClusterIssuer"))
+	}
+	if problems := validation.IsDNS1123Subdomain(group); len(problems) > 0 {
+		errs = append(errs, field.Invalid(path.Child("issuerGroup"), group, problems[0]))
+	}
+	if name == ingressIssuer && kind == clusterIssuerKind && group == certManagerGroup {
+		errs = append(errs, field.Invalid(path.Child("issuerName"), name, "that is the name of the issuer Kubehenge makes itself"))
+	}
+	return errs
+}
+
+// validateCertificates holds the issuer to its settings, and the add-ons' host names to the cluster's
+// CA, which signs nothing outside its domain.
 func validateCertificates(cluster *clusterv1.Cluster) field.ErrorList {
 	variables := field.NewPath("spec", "topology", "variables")
 	c, err := CertificatesOf(cluster)
 	if err != nil {
 		return field.ErrorList{field.Invalid(variables.Key(certificatesVariable), certificatesVariable, err.Error())}
 	}
-	if !c.on() || c.issuer() != IssuerCA {
+	if !c.on() {
 		return nil
+	}
+	errs := c.validateIssuer(variables.Key(certificatesVariable))
+	if c.issuer() != IssuerCA {
+		return errs
 	}
 	addons, err := addonsOf(cluster)
 	if err != nil {
-		return field.ErrorList{field.Invalid(variables, "add-ons", err.Error())}
+		return append(errs, field.Invalid(variables, "add-ons", err.Error()))
 	}
-	var errs field.ErrorList
 	for _, h := range []struct{ variable, hostname, secret string }{
 		{headlampAddon, addons.Headlamp.Hostname, addons.Headlamp.TLSSecret},
 		{monitoringAddon, addons.Monitoring.Hostname, addons.Monitoring.TLSSecret},
@@ -326,20 +424,11 @@ func (r *Reconciler) reconcileCertificates(ctx context.Context, cluster *cluster
 			return false, err
 		}
 	}
-	var ca *corev1.Secret
-	if c.on() && c.issuer() == IssuerCA {
-		var err error
-		if ca, err = r.ingressCA(ctx, cluster, c.Domain); err != nil {
-			return false, err
-		}
+	in, ready, err := r.certificateInputs(ctx, cluster, c)
+	if err != nil || !ready {
+		return false, err
 	}
-	var credential map[string][]byte
-	if c.copiesDNS01Credential() {
-		var err error
-		if credential, _, err = r.dns01Credential(ctx, cluster, c); err != nil {
-			return false, err
-		}
-	}
+	ca, credential, binding := in.ca, in.credential, in.binding
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
 		// Without a kubeconfig, nothing was ever applied to take out.
@@ -352,7 +441,7 @@ func (r *Reconciler) reconcileCertificates(ctx context.Context, cluster *cluster
 		}
 		return false, r.unmarkCertificates(ctx, cluster)
 	}
-	objects, err := certificateObjects(c, ca, credential)
+	objects, err := certificateObjects(c, ca, credential, binding)
 	if err != nil {
 		return false, fmt.Errorf("cluster %s/%s: %w", cluster.Namespace, cluster.Name, err)
 	}
@@ -363,6 +452,36 @@ func (r *Reconciler) reconcileCertificates(ctx context.Context, cluster *cluster
 	return waiting, err
 }
 
+// certificateInputs are what the add-on takes from the management cluster: the cluster's CA, the DNS
+// provider's credential and the ACME account's binding key, each only where the settings use it.
+type certificateInputs struct {
+	ca                  *corev1.Secret
+	credential, binding map[string][]byte
+}
+
+// certificateInputs reads them. It reports false when the issuer is to be left out until the binding
+// key is stored, since an ACME server that requires the binding refuses an account made without it.
+func (r *Reconciler) certificateInputs(ctx context.Context, cluster *clusterv1.Cluster, c *Certificates) (certificateInputs, bool, error) {
+	var in certificateInputs
+	var err error
+	if c.on() && c.issuer() == IssuerCA {
+		if in.ca, err = r.ingressCA(ctx, cluster, c.Domain); err != nil {
+			return in, false, err
+		}
+	}
+	if c.copiesDNS01Credential() {
+		if in.credential, _, err = r.dns01Credential(ctx, cluster, c); err != nil {
+			return in, false, err
+		}
+	}
+	if !c.bindsAccount() {
+		return in, true, nil
+	}
+	var stored bool
+	in.binding, stored, err = r.eabCredential(ctx, cluster)
+	return in, stored && err == nil, err
+}
+
 // applyIssued applies the add-on's objects. When the issuer is another than before, every
 // certificate it issued is issued again: cert-manager would keep a certificate whose names and
 // issuer's name stay as they are, though another CA signed it. The issuer carries the change until
@@ -371,6 +490,14 @@ func (r *Reconciler) reconcileCertificates(ctx context.Context, cluster *cluster
 // that gives none.
 func applyIssued(ctx context.Context, workload client.Client, objects []*unstructured.Unstructured, identity string) (bool, error) {
 	i := slices.IndexFunc(objects, func(o *unstructured.Unstructured) bool { return o.GetKind() == clusterIssuerKind })
+	if i < 0 {
+		// An issuer of the owner's has no identity to carry, and its certificates are asked of it by name.
+		waiting, err := applyCertificates(ctx, workload, objects)
+		if err != nil || waiting {
+			return waiting, err
+		}
+		return false, removeUnwanted(ctx, workload, objects)
+	}
 	issuer := objects[i]
 	reissue, err := reissueNeeded(ctx, workload, identity)
 	if err != nil {
@@ -539,35 +666,57 @@ func (r *Reconciler) dns01Credential(ctx context.Context, cluster *clusterv1.Clu
 	if c.SharesDNS01Credential() {
 		name = CredentialName("", dns01Purpose)
 	}
+	credential, stored, err := r.storedCredential(ctx, cluster, name, dns01Purpose, dns01TokenKey)
+	if err == nil && !stored {
+		ctrl.LoggerFrom(ctx).Info("no DNS-01 credential stored, so no certificate can be issued", "credential", name)
+		if r.Events != nil {
+			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "NoDNS01Credential", "IssueCertificates",
+				"no DNS-01 credential is stored for the cluster (%s): store one, or name an existing Secret", name)
+		}
+	}
+	return credential, stored, err
+}
+
+// eabCredential reads the HMAC key of the cluster's ACME external account binding, and whether
+// anyone has stored it.
+func (r *Reconciler) eabCredential(ctx context.Context, cluster *clusterv1.Cluster) (map[string][]byte, bool, error) {
+	name := CredentialName(cluster.Name, eabPurpose)
+	credential, stored, err := r.storedCredential(ctx, cluster, name, eabPurpose, eabKey)
+	if err == nil && !stored {
+		ctrl.LoggerFrom(ctx).Info("no external account binding key stored, so the ACME issuer is left out", "credential", name)
+		if r.Events != nil {
+			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "NoACMEEABCredential", "IssueCertificates",
+				"no external account binding key is stored for the cluster (%s): store the key your ACME server gave you", name)
+		}
+	}
+	return credential, stored, err
+}
+
+// storedCredential reads the user credential name, of purpose, with its key set, and whether it
+// is one.
+func (r *Reconciler) storedCredential(ctx context.Context, cluster *clusterv1.Cluster, name, purpose, key string) (map[string][]byte, bool, error) {
 	s := &corev1.Secret{}
 	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, s)
 	if apierrors.IsNotFound(err) {
-		r.noDNS01Credential(ctx, cluster, name)
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("reading the DNS-01 credential %s: %w", name, err)
+		return nil, false, fmt.Errorf("reading the %s credential %s: %w", purpose, name, err)
 	}
-	if s.Type != CredentialType || s.Labels[CredentialLabel] != dns01Purpose || len(s.Data[dns01TokenKey]) == 0 {
-		r.noDNS01Credential(ctx, cluster, name)
+	if s.Type != CredentialType || s.Labels[CredentialLabel] != purpose || len(s.Data[key]) == 0 {
 		return nil, false, nil
 	}
-	return map[string][]byte{dns01TokenKey: s.Data[dns01TokenKey]}, true, nil
-}
-
-func (r *Reconciler) noDNS01Credential(ctx context.Context, cluster *clusterv1.Cluster, name string) {
-	ctrl.LoggerFrom(ctx).Info("no DNS-01 credential stored, so no certificate can be issued", "credential", name)
-	if r.Events != nil {
-		r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "NoDNS01Credential", "IssueCertificates",
-			"no DNS-01 credential is stored for the cluster (%s): store one, or name an existing Secret", name)
-	}
+	return map[string][]byte{key: s.Data[key]}, true, nil
 }
 
 // certificateObjects are what the cluster's certificates need in the workload cluster: the CA's or
 // the credential's Secret when there is one, the issuer, and the default certificate when the issuer
 // gives one, in the order they are applied.
-func certificateObjects(c *Certificates, ca *corev1.Secret, credential map[string][]byte) ([]*unstructured.Unstructured, error) {
+func certificateObjects(c *Certificates, ca *corev1.Secret, credential, binding map[string][]byte) ([]*unstructured.Unstructured, error) {
 	var objects []*unstructured.Unstructured
+	if binding != nil {
+		objects = append(objects, secretObject(eabSecret, corev1.SecretTypeOpaque, binding))
+	}
 	if ca != nil {
 		objects = append(objects, secretObject(ingressCASecret, corev1.SecretTypeTLS, map[string][]byte{
 			corev1.TLSCertKey: ca.Data[corev1.TLSCertKey], corev1.TLSPrivateKeyKey: ca.Data[corev1.TLSPrivateKeyKey],
@@ -576,13 +725,15 @@ func certificateObjects(c *Certificates, ca *corev1.Secret, credential map[strin
 	if credential != nil {
 		objects = append(objects, secretObject(dns01Secret, corev1.SecretTypeOpaque, credential))
 	}
-	issuer, err := clusterIssuer(c)
-	if err != nil {
-		return nil, err
+	if !c.external() {
+		issuer, err := clusterIssuer(c)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, issuer)
 	}
-	objects = append(objects, issuer)
 	if c.defaultCertificate() {
-		objects = append(objects, defaultCertificate(c.Domain))
+		objects = append(objects, defaultCertificate(c))
 	}
 	return objects, nil
 }
@@ -602,24 +753,11 @@ func secretObject(name string, t corev1.SecretType, data map[string][]byte) *uns
 
 // clusterIssuer is the ClusterIssuer the cluster's certificates come from.
 func clusterIssuer(c *Certificates) (*unstructured.Unstructured, error) {
-	var spec map[string]any
-	if c.issuer() == IssuerCA {
-		spec = map[string]any{"ca": map[string]any{"secretName": ingressCASecret}}
-	} else {
-		solver, err := acmeSolver(c)
+	spec := map[string]any{"ca": map[string]any{"secretName": ingressCASecret}}
+	if c.issuer() != IssuerCA {
+		acme, err := acmeIssuerSpec(c)
 		if err != nil {
 			return nil, err
-		}
-		acme := map[string]any{
-			"server":              acmeServer(c.ACME),
-			"privateKeySecretRef": map[string]any{"name": ingressACMEKey},
-			"solvers":             []any{solver},
-		}
-		if c.ACME.Email != "" {
-			acme["email"] = c.ACME.Email
-		}
-		if c.ACME.CABundle != "" {
-			acme["caBundle"] = base64.StdEncoding.EncodeToString([]byte(c.ACME.CABundle))
 		}
 		spec = map[string]any{"acme": acme}
 	}
@@ -628,6 +766,32 @@ func clusterIssuer(c *Certificates) (*unstructured.Unstructured, error) {
 		"metadata": map[string]any{"name": ingressIssuer},
 		"spec":     spec,
 	}}, nil
+}
+
+// acmeIssuerSpec is the ACME account's and the solver's settings.
+func acmeIssuerSpec(c *Certificates) (map[string]any, error) {
+	solver, err := acmeSolver(c)
+	if err != nil {
+		return nil, err
+	}
+	acme := map[string]any{
+		"server":              acmeServer(c.ACME),
+		"privateKeySecretRef": map[string]any{"name": ingressACMEKey},
+		"solvers":             []any{solver},
+	}
+	if c.ACME.Email != "" {
+		acme["email"] = c.ACME.Email
+	}
+	if c.ACME.CABundle != "" {
+		acme["caBundle"] = base64.StdEncoding.EncodeToString([]byte(c.ACME.CABundle))
+	}
+	if id := c.ACME.ExternalAccountBinding.KeyID; id != "" {
+		// keyAlgorithm is deprecated in cert-manager: the algorithm is always HS256.
+		acme["externalAccountBinding"] = map[string]any{
+			"keyID": id, "keySecretRef": map[string]any{"name": eabSecret, "key": eabKey},
+		}
+	}
+	return acme, nil
 }
 
 // acmeServer is the ACME directory the cluster's certificates are asked of.
@@ -711,14 +875,17 @@ func acmeSolver(c *Certificates) (map[string]any, error) {
 
 // defaultCertificate is the certificate for domain and every name one label beneath it, in Traefik's
 // namespace, where its default TLS store and its Gateway read it.
-func defaultCertificate(domain string) *unstructured.Unstructured {
+func defaultCertificate(c *Certificates) *unstructured.Unstructured {
+	domain := c.Domain
+	ref := c.issuerRef()
+	name, kind, group := ref.name, ref.kind, ref.group
 	return &unstructured.Unstructured{Object: map[string]any{
 		apiVersionKey: certManagerAPI, "kind": certificateKind,
 		"metadata": map[string]any{"name": ingressIssuer, "namespace": metav1.NamespaceSystem},
 		"spec": map[string]any{
 			"secretName": ingressTLSSecret,
 			"dnsNames":   []any{domain, "*." + domain},
-			"issuerRef":  map[string]any{"name": ingressIssuer, "kind": clusterIssuerKind, "group": certManagerGroup},
+			"issuerRef":  map[string]any{"name": name, "kind": kind, "group": group},
 			// int64, the only integer an unstructured object can be copied with.
 			"privateKey": map[string]any{"algorithm": "ECDSA", "size": int64(keyBits), "rotationPolicy": "Always"},
 		},
@@ -758,6 +925,7 @@ func certificateKinds() []*unstructured.Unstructured {
 		object("v1", secretKind, certManagerAddon, ingressACMEKey),
 		object("v1", secretKind, certManagerAddon, ingressCASecret),
 		object("v1", secretKind, certManagerAddon, dns01Secret),
+		object("v1", secretKind, certManagerAddon, eabSecret),
 	}
 }
 

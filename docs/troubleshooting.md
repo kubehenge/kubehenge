@@ -628,6 +628,9 @@ A Helm error such as `admission webhook … denied the request` in an add-on's n
   - Look at the control-plane provider's log for a kubeconfig or talosconfig it did not renew.
   - Rotate the cluster's CAs as the distribution documents.
 - **`NoDNS01Credential`**, "no DNS-01 credential is stored for the cluster (…): store one, or name an existing Secret": the `acme-dns01` issuer has no credential for the DNS provider, and the cluster's certificates wait. Type it in under the cluster's **Options**, take the one an administrator stored for every cluster (`dns01.sharedCredential`), or name a Secret of your own in `dns01.existingSecret` ([clusters.md](clusters.md#dns-providers)).
+- **`NoACMEEABCredential`**, "no external account binding key is stored for the cluster (…)": the variable names a key ID but the HMAC key is missing, so no issuer is made. Type it in under the cluster's **Options**, **Certificates** ([clusters.md](clusters.md#external-account-binding)).
+- **`externalAccountRequired`** in the ClusterIssuer's `Ready` message (`kubectl describe clusterissuer kubehenge-ingress` in the cluster): the ACME server accepts only accounts tied to one its operator made. Set `acme.externalAccountBinding.keyID` and store the HMAC key it gave you.
+- **An issuer of your own that is not `Ready`** (`issuer: external`): Kubehenge only points its certificates at it. Read its `Ready` condition with `kubectl get clusterissuer <issuerName> -o yaml` in the cluster, and create it with the name, kind and group the variable gives ([clusters.md](clusters.md#an-issuer-you-run)).
 
 ### Monitoring
 

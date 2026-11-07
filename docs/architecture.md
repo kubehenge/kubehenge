@@ -578,7 +578,8 @@ A peer added or taken away changes those objects only, so nothing restarts. Swit
 
 Certificates (`certificates: {enabled: true, issuer: …, domain: …}`) installs cert-manager with its Gateway API support on. Like Traefik, it is held back until the cluster has the Gateway API. Kubehenge's controller writes the rest into the workload cluster with its admin kubeconfig once cert-manager answers:
 
-- **The issuer** is the ClusterIssuer `kubehenge-ingress`, either ACME or a CA.
+- **The issuer** is the ClusterIssuer `kubehenge-ingress`, either ACME or a CA. With the issuer `external` there is none, and every certificate and cert-manager's default issuer name the one the owner gave.
+  - An ACME account with an external account binding reads its HMAC key from the Secret `kubehenge-acme-eab` in `cert-manager`, copied from the cluster's `acme-eab` credential like the DNS-01 one. Without that credential the issuer is left out.
   - ACME is Let's Encrypt's or another server, answering DNS-01 through one of cert-manager's DNS providers, or HTTP-01 through an HTTPRoute on Traefik's Gateway.
   - cert-manager's default issuer is set to it, so an Ingress annotated `kubernetes.io/tls-acme: "true"` gets its certificate there.
 - **The default certificate**, with DNS-01 or the CA, is the Certificate `kubehenge-ingress` in `kube-system` for `domain` and `*.domain`, ECDSA P-256.

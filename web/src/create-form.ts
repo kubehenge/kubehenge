@@ -20,6 +20,7 @@ import {
   certificatesProblems,
   certificatesText,
   certificatesVariable,
+  needsBindingKey,
   needsClusterToken,
   newCertificates,
   tokenLabel,
@@ -217,6 +218,7 @@ export interface Form {
   existingCertManager: boolean;
   // The DNS provider's credential, stored for the cluster once it is created. Never in the request.
   dns01Token: string;
+  eabKey: string;
   gitops: GitOpsChoice;
   egress: EgressChoice;
   oidc: OIDCProvider[];
@@ -724,6 +726,7 @@ export const newForm = (): Form => ({
   namespaceLabels: "",
   existingCertManager: false,
   dns01Token: "",
+  eabKey: "",
   gitops: newGitOps(),
   egress: newEgress(),
   oidc: [],
@@ -918,6 +921,15 @@ export function pendingCredentials(form: Form, c: ClusterClass): PendingCredenti
       label: tokenLabel(form.certificates.provider),
       section: "Certificates",
       forget: { dns01Token: "" },
+    });
+  }
+  if (variable(c, "certificates") && needsBindingKey(form.certificates) && filled(form.eabKey)) {
+    pending.push({
+      purpose: "acme-eab",
+      values: { hmacKey: form.eabKey },
+      label: "ACME HMAC key",
+      section: "Certificates",
+      forget: { eabKey: "" },
     });
   }
   if (form.monitoring && variable(c, "monitoring")) {
@@ -1163,6 +1175,21 @@ function monitoringText(form: Form): string {
   return `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}${sends ? `, sends to ${sends}` : ""}`;
 }
 
+const storedOnceCreated = (typed: string): string =>
+  filled(typed) ? "Stored once created" : "None yet: the cluster waits";
+
+// certificatesRows sums up the certificates and whether the credentials they take are held.
+function certificatesRows(form: Form): [string, string][] {
+  const rows: [string, string][] = [["Certificates", certificatesText(form.certificates)]];
+  if (needsClusterToken(form.certificates)) {
+    rows.push([tokenLabel(form.certificates.provider), storedOnceCreated(form.dns01Token)]);
+  }
+  if (needsBindingKey(form.certificates)) {
+    rows.push(["ACME HMAC key", storedOnceCreated(form.eabKey)]);
+  }
+  return rows;
+}
+
 // backupRows sums up the backups and etcd snapshots, each with where its access key comes from.
 function backupRows(form: Form, c: ClusterClass, defined: Set<string>): [string, string][] {
   const rows: [string, string][] = [];
@@ -1207,13 +1234,7 @@ function addOnRows(form: Form, c: ClusterClass, defined: Set<string>): [string, 
   }
   rows.push(...backupRows(form, c, defined));
   if (defined.has("certificates")) {
-    rows.push(["Certificates", certificatesText(form.certificates)]);
-    if (needsClusterToken(form.certificates)) {
-      rows.push([
-        tokenLabel(form.certificates.provider),
-        filled(form.dns01Token) ? "Stored once created" : "None yet: the cluster waits",
-      ]);
-    }
+    rows.push(...certificatesRows(form));
   }
   return [...rows, ...reachRows(form, defined)];
 }

@@ -968,6 +968,7 @@ describe("create", () => {
     namespaceLabels: "",
     existingCertManager: false,
     dns01Token: "",
+    eabKey: "",
     gitops: newForm().gitops,
     egress: newForm().egress,
     oidc: [],

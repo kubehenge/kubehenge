@@ -299,7 +299,7 @@ spec:
     - expression: >-
         variables.cluster == ''
         ? variables.purpose in ['backup', 'dns01', 'notify-webhook', 'notify-ntfy', 'notify-email']
-        : variables.purpose in ['backup', 'dns01', 'gitops', 'oidc-client',
+        : variables.purpose in ['backup', 'dns01', 'acme-eab', 'gitops', 'oidc-client',
           'alerts-email', 'alerts-webhook', 'alerts-slack', 'alerts-teams',
           'remote-write', 'external-alertmanager']
       messageExpression: >-

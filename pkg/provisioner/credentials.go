@@ -48,6 +48,8 @@ type CredentialPurpose struct {
 var credentialPurposes = []CredentialPurpose{
 	{Name: "backup", Keys: []string{"accessKeyID", "secretAccessKey"}, Appliance: true},
 	{Name: "dns01", Keys: []string{"token"}, Appliance: true},
+	// One ACME account's key is no other cluster's, so there is none for every cluster.
+	{Name: eabPurpose, Keys: []string{eabKey}},
 	{Name: "gitops", Keys: []string{"username", "password"}},
 	{Name: "oidc-client", Keys: []string{"clientSecret"}},
 	// What the monitoring add-on sends alerts and samples with. The controller copies each into the
