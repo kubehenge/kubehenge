@@ -126,6 +126,7 @@ spec:
     {{- include "kubehenge.etcdVariable" . | nindent 4 }}
     {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
     {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeSiteVariables" (dict) | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -263,6 +264,9 @@ spec:
               valueFrom:
                 template: {{ `{{ dict "apiVersion" "v1alpha1" "kind" "ResolverConfig" "searchDomains" (dict "domains" .network.searchDomains) | toJson | toJson }}` | quote }}
         {{- end }}
+    {{- include "kubehenge.talosNodeSitePatches" (dict "pods" "10.244.0.0/16" "services" "10.96.0.0/12" "selectors" (list
+      (dict "api" "controlplane.cluster.x-k8s.io/v1beta1" "kind" "TalosControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-")
+      (dict "api" "bootstrap.cluster.x-k8s.io/v1beta1" "kind" "TalosConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/strategicPatches/-"))) | nindent 4 }}
     # Last, so that Kubehenge's own settings come first.
     {{- include "kubehenge.nodeCustomisationPatches" "talos" | nindent 4 }}
 ---

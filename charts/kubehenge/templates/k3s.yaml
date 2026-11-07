@@ -126,6 +126,7 @@ spec:
     {{- include "kubehenge.etcdVariable" . | nindent 4 }}
     {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
     {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeSiteVariables" (dict "artifacts" "k3s's releases" "script" "get.k3s.io") | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -374,6 +375,7 @@ spec:
             {{- end }}
         {{- end }}
     {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "k3s") | nindent 4 }}
+    {{- include "kubehenge.nodeSitePatches" (dict "root" . "distribution" "k3s" "pods" "10.42.0.0/16" "services" "10.43.0.0/16" "artifacts" "k3s's releases" "export" `{{ printf "export INSTALL_K3S_ARTIFACT_URL=%s" (dig "distributionMirror" "" . | squote) | toJson }}`) | nindent 4 }}
     # Last, so that Kubehenge's own settings come first.
     {{- include "kubehenge.nodeCustomisationPatches" "k3s" | nindent 4 }}
 ---

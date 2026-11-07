@@ -151,6 +151,9 @@ var (
 		"/etc/kubernetes", "/etc/kubehenge", "/etc/rancher", "/var/lib/rancher", "/var/lib/kubelet", "/etc/sysconfig/kubelet",
 		"/etc/sysctl.d/90-kubehenge.conf", "/etc/systemd/system/rke2-server.service.d", "/etc/systemd/system/k3s.service.d",
 		"/etc/systemd/system/kubelet.service.d", "/var/log/kubernetes", "/usr",
+		// The site settings' proxy environment, registry mirrors and container runtime drop-in.
+		"/etc/default/rke2-server", "/etc/default/rke2-agent", "/etc/default/k3s", "/etc/containerd/certs.d",
+		"/etc/systemd/system/containerd.service.d",
 	}
 
 	// talosPathPrefixes are where Talos writes machine files, and talosProtectedPrefixes what is
