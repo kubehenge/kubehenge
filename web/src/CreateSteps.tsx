@@ -16,7 +16,7 @@ import {
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { LoadBalancerFields } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
-import { addressBits, addressIn } from "./network";
+import { addressBits, addressIn, bridgeLabel } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
@@ -646,8 +646,7 @@ export function NetworkStep({
               </option>
               {bridgeOptions.map((b) => (
                 <option key={b.bridge} value={b.bridge} disabled={!b.usable}>
-                  {b.bridge}
-                  {filled(b.comment) ? ` (${b.comment})` : ""}
+                  {bridgeLabel(b)}
                   {b.usable ? "" : " (no SDN.Use)"}
                 </option>
               ))}

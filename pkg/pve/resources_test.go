@@ -82,8 +82,8 @@ func clusterResources(t *testing.T) *Accounts {
 		switch r.URL.Query().Get("type") {
 		case "storage":
 			all = []map[string]any{
-				{"id": "storage/one/local-lvm", "storage": "local-lvm", "node": "one", "shared": 0, "content": "rootdir,images", "disk": 300, "maxdisk": 1000, "status": "available"},
-				{"id": "storage/two/ceph", "storage": "ceph", "node": "two", "shared": 1, "content": "images", "disk": 10, "maxdisk": 50, "status": "unknown"},
+				{"id": "storage/one/local-lvm", "storage": "local-lvm", "node": "one", "shared": 0, "content": "rootdir,images", "plugintype": "zfspool", "disk": 300, "maxdisk": 1000, "status": "available"},
+				{"id": "storage/two/ceph", "storage": "ceph", "node": "two", "shared": 1, "content": "images", "plugintype": "rbd", "disk": 10, "maxdisk": 50, "status": "unknown"},
 			}
 		case "node":
 			all = []map[string]any{
@@ -101,7 +101,41 @@ func clusterResources(t *testing.T) *Accounts {
 		}
 		replyData(t, w, visible)
 	})
+	mux.HandleFunc("GET /api2/json/storage", func(w http.ResponseWriter, _ *http.Request) {
+		replyData(t, w, []map[string]any{
+			{"storage": "local-lvm", "type": "zfspool", "sparse": 1},
+			{"storage": "ceph", "type": "rbd"},
+		})
+	})
 	return serveAPI(t, mux)
+}
+
+func TestAllocatesOnWriteFollowsTheStorageType(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	for _, c := range []struct {
+		s           Storage
+		thin, known bool
+	}{
+		{Storage{Type: "lvm"}, false, true},
+		{Storage{Type: "lvmthin"}, true, true},
+		{Storage{Type: "rbd"}, true, true},
+		{Storage{Type: "zfspool", Sparse: &yes}, true, true},
+		{Storage{Type: "zfspool", Sparse: &no}, false, true},
+		{Storage{Type: "zfspool"}, false, false},
+		{Storage{Type: "zfs", Sparse: &no}, false, true},
+		{Storage{Type: "dir"}, true, true},
+		{Storage{Type: "nfs"}, true, true},
+		{Storage{Type: "cifs", Preallocation: "off"}, true, true},
+		{Storage{Type: "dir", Preallocation: "metadata"}, true, true},
+		{Storage{Type: "dir", Preallocation: "falloc"}, false, true},
+		{Storage{Type: "nfs", Preallocation: "full"}, false, true},
+		{Storage{}, false, false},
+	} {
+		if thin, known := c.s.AllocatesOnWrite(); thin != c.thin || known != c.known {
+			t.Errorf("%s %s: thin, known = %v, %v, want %v, %v", c.s.Type, c.s.Preallocation, thin, known, c.thin, c.known)
+		}
+	}
 }
 
 func TestStoragesShowSpaceOnlyWhereAvailable(t *testing.T) {
@@ -111,12 +145,26 @@ func TestStoragesShowSpaceOnlyWhereAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	yes := true
 	want := []Storage{
-		{Storage: "local-lvm", Node: "one", Content: []string{"rootdir", "images"}, Avail: 700, Total: 1000},
-		{Storage: "ceph", Node: "two", Shared: true, Content: []string{"images"}},
+		{Storage: "local-lvm", Node: "one", Type: "zfspool", Sparse: &yes, Content: []string{"rootdir", "images"}, Active: true, Avail: 700, Total: 1000},
+		{Storage: "ceph", Node: "two", Type: "rbd", Shared: true, Content: []string{"images"}},
 	}
 	if !reflect.DeepEqual(storages, want) {
 		t.Errorf("storages %+v, want %+v", storages, want)
+	}
+}
+
+func TestAnswerCutAtTheLimitIsAnExplicitError(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api2/json/cluster/resources", func(w http.ResponseWriter, _ *http.Request) {
+		replyData(t, w, strings.Repeat("x", maxResponseBytes))
+	})
+	a := serveAPI(t, mux)
+	_, err := a.Nodes(context.Background(), alice)
+	if err == nil || !strings.Contains(err.Error(), "/api2/json/cluster/resources: the answer is larger than 1 MiB") {
+		t.Fatalf("error = %v, want one naming the path and the 1 MiB limit", err)
 	}
 }
 
@@ -210,39 +258,154 @@ func TestAllowedNodesOfAnHARule(t *testing.T) {
 	}
 }
 
-func TestZoneOfABridge(t *testing.T) {
+func TestBridgesListVNetsWithTheirZones(t *testing.T) {
 	t.Parallel()
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api2/json/nodes/{node}/network", func(w http.ResponseWriter, _ *http.Request) {
+		replyData(t, w, []map[string]any{{"iface": "vmbr0", "type": "bridge"}})
+	})
+	mux.HandleFunc("GET /api2/json/cluster/sdn/vnets", func(w http.ResponseWriter, _ *http.Request) {
+		replyData(t, w, []map[string]any{
+			{"vnet": "web", "zone": "evpn1", "type": "vnet", "alias": " Web tier ", "tag": 100},
+			{"vnet": "corp", "zone": "vlanz", "type": "vnet", "vlanaware": 1},
+			{"vnet": "dmz", "zone": "simplez", "type": "vnet"},
+			{"vnet": "edge", "zone": "pinned", "type": "vnet"},
+			{"vnet": "orphan", "type": "vnet"},
+		})
+	})
+	mux.HandleFunc("GET /api2/json/cluster/sdn/zones", func(w http.ResponseWriter, _ *http.Request) {
+		replyData(t, w, []map[string]any{
+			{"zone": "evpn1", "type": "evpn"},
+			{"zone": "vlanz", "type": "vlan"},
+			{"zone": "simplez", "type": "simple"},
+			{"zone": "pinned", "type": "vxlan", "nodes": "two,three"},
+		})
+	})
+	a := serveAPI(t, mux)
+	bridges, err := a.Bridges(context.Background(), alice, "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Bridge{
+		{Bridge: "vmbr0", Node: "one"},
+		{Bridge: "corp", Node: "one", Zone: "vlanz", ZoneType: "vlan", VLANAware: true},
+		{Bridge: "dmz", Node: "one", Zone: "simplez", ZoneType: "simple"},
+		{Bridge: "web", Node: "one", Zone: "evpn1", ZoneType: "evpn", Alias: "Web tier"},
+	}
+	if !reflect.DeepEqual(bridges, want) {
+		t.Errorf("bridges %+v, want %+v", bridges, want)
+	}
+	for _, b := range bridges {
+		if ref := b.Ref(); (b.Zone == "") != (ref == b.Bridge) || b.Zone != "" && ref != b.Zone+"/"+b.Bridge {
+			t.Errorf("%s has reference %s", b.Bridge, ref)
+		}
+	}
+}
+
+func TestBridgesWithoutSDNAreTheNodesOwn(t *testing.T) {
+	t.Parallel()
+	for name, status := range map[string]int{"absent": http.StatusNotImplemented, "refused": http.StatusForbidden} {
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /api2/json/nodes/{node}/network", func(w http.ResponseWriter, _ *http.Request) {
+			replyData(t, w, []map[string]any{{"iface": "vmbr0", "type": "bridge"}})
+		})
+		mux.HandleFunc("GET /api2/json/cluster/sdn/vnets", func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "no SDN", status)
+		})
+		bridges, err := serveAPI(t, mux).Bridges(context.Background(), alice, "one")
+		if want := []Bridge{{Bridge: "vmbr0", Node: "one"}}; err != nil || !reflect.DeepEqual(bridges, want) {
+			t.Errorf("%s: bridges %+v, %v, want %+v", name, bridges, err, want)
+		}
+	}
+}
+
+func TestSplitBridge(t *testing.T) {
+	t.Parallel()
+	for ref, want := range map[string][2]string{"vmbr0": {LocalZone, "vmbr0"}, "evpn1/web": {"evpn1", "web"}} {
+		if zone, name := SplitBridge(ref); zone != want[0] || name != want[1] {
+			t.Errorf("%s: %s, %s, want %v", ref, zone, name, want)
+		}
+	}
+}
+
+func TestVLANZoneVNetsTagTheirTraffic(t *testing.T) {
+	t.Parallel()
+	for n, want := range map[Network]bool{
+		{Zone: LocalZone}:                              false,
+		{Zone: "z", ZoneType: "vlan"}:                  true,
+		{Zone: "z", ZoneType: "evpn"}:                  false,
+		{Zone: "z", ZoneType: "simple"}:                false,
+		{Zone: "z"}:                                    false,
+		{Zone: "z", ZoneType: "vlan", VLANAware: true}: false,
+	} {
+		if got := n.TagsTraffic(); got != want {
+			t.Errorf("%+v tags traffic: %v", n, got)
+		}
+	}
+}
+
+func TestNetworkOfABridge(t *testing.T) {
+	t.Parallel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api2/json/cluster/sdn/zones/{zone}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("zone") == "locked" {
+			http.Error(w, "Permission check failed (/sdn/zones/locked, SDN.Audit)", http.StatusForbidden)
+			return
+		}
+		replyData(t, w, map[string]any{"zone": r.PathValue("zone"), "type": "vlan"})
+	})
 	mux.HandleFunc("GET /api2/json/cluster/sdn/vnets/{vnet}", func(w http.ResponseWriter, r *http.Request) {
 		switch vnet := r.PathValue("vnet"); vnet {
 		case "tenants":
 			replyData(t, w, map[string]any{"vnet": vnet, "zone": "evpn1", "type": "vnet"})
+		case "aware":
+			replyData(t, w, map[string]any{"vnet": vnet, "zone": "vlanz", "type": "vnet", "vlanaware": true})
+		case "unreadable":
+			replyData(t, w, map[string]any{"vnet": vnet, "zone": "locked", "type": "vnet"})
 		case "zoneless":
 			replyData(t, w, map[string]any{"vnet": vnet})
 		case "hidden":
 			http.Error(w, "Permission check failed (/sdn/zones, SDN.Audit)", http.StatusForbidden)
 		case "broken":
 			refuseInStatusLine(t, w, "500 cfs-lock 'file-sdn_cfg' error: got lock request timeout")
+		case "vmbr1", "badparam":
+			// Newer releases refuse the name as a parameter, for a VNet that does not exist and for
+			// one the user may not see alike.
+			field, reason := "vnet", "could not find vnet '"+vnet+"'"
+			if vnet == "badparam" {
+				field, reason = "pending", "type check ('boolean') failed"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": nil, "errors": map[string]string{field: reason}})
 		default:
 			refuseInStatusLine(t, w, "500 sdn vnet object ID '"+vnet+"' does not exist")
 		}
 	})
 	a := serveAPI(t, mux)
 	ctx := context.Background()
-	for bridge, want := range map[string]string{"tenants": "evpn1", "vmbr0": "localnetwork"} {
-		if zone, err := a.Zone(ctx, alice, bridge); err != nil || zone != want {
-			t.Errorf("%s: %q, %v, want %q", bridge, zone, err, want)
+	for bridge, want := range map[string]Network{
+		"tenants":    {Zone: "evpn1", ZoneType: "vlan"},
+		"aware":      {Zone: "vlanz", ZoneType: "vlan", VLANAware: true},
+		"unreadable": {Zone: "locked"},
+		"vmbr0":      {Zone: LocalZone},
+		"vmbr1":      {Zone: LocalZone},
+	} {
+		if got, err := a.Network(ctx, alice, bridge); err != nil || got != want {
+			t.Errorf("%s: %+v, %v, want %+v", bridge, got, err, want)
 		}
 	}
-	if _, err := a.Zone(ctx, alice, "zoneless"); err == nil || !strings.Contains(err.Error(), "names no zone for VNet zoneless") {
+	if _, err := a.Network(ctx, alice, "zoneless"); err == nil || !strings.Contains(err.Error(), "names no zone for VNet zoneless") {
 		t.Errorf("a VNet without a zone: %v", err)
 	}
-	if _, err := a.Zone(ctx, alice, "hidden"); !errors.Is(err, ErrForbidden) {
+	if _, err := a.Network(ctx, alice, "hidden"); !errors.Is(err, ErrForbidden) {
 		t.Errorf("a VNet the user may not see: %v", err)
 	}
-	// Only "does not exist" means a plain bridge. Any other failure is no zone at all.
-	if zone, err := a.Zone(ctx, alice, "broken"); err == nil {
-		t.Errorf("a failed lookup gave zone %q", zone)
+	// Only a VNet Proxmox VE does not know means a plain bridge. Any other failure is no zone at all.
+	for _, bridge := range []string{"broken", "badparam"} {
+		if n, err := a.Network(ctx, alice, bridge); err == nil {
+			t.Errorf("%s: a failed lookup gave %+v", bridge, n)
+		}
 	}
 }
 

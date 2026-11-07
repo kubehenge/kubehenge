@@ -35,6 +35,17 @@ type Storage struct {
 	Node    string   `json:"node"`
 	Shared  bool     `json:"shared"`
 	Content []string `json:"content"`
+	// Active tells whether Proxmox VE reports the storage as available on the node, which an offline
+	// NFS or CIFS share is not.
+	Active bool `json:"active"`
+	// Type is the storage plugin, such as lvm, lvmthin, zfspool, rbd, dir or nfs.
+	Type string `json:"type,omitempty"`
+	// Sparse tells whether a ZFS pool allocates a disk's space on write. Nil where Proxmox VE did not
+	// say, which the user's privileges can cause.
+	Sparse *bool `json:"sparse,omitempty"`
+	// Preallocation is how a storage that keeps files lays out a new disk: off, metadata, falloc or
+	// full. Empty is Proxmox VE's default, off.
+	Preallocation string `json:"preallocation,omitempty"`
 	// Avail and Total are bytes. They are zero when the storage is not active on the node.
 	Avail int64 `json:"avail"`
 	Total int64 `json:"total"`
@@ -61,6 +72,62 @@ type Bridge struct {
 	Gateway string `json:"gateway,omitempty"`
 	// MTU is the bridge's, 1500 where Proxmox VE lists none: a node's interface on it takes no more.
 	MTU int `json:"mtu,omitempty"`
+	// Zone is the SDN zone of a VNet. A node's own bridge has none and sits in LocalZone.
+	Zone string `json:"zone,omitempty"`
+	// ZoneType is the type of the VNet's zone: simple, vlan, qinq, vxlan or evpn. Empty where the
+	// user may not read the zone.
+	ZoneType string `json:"zoneType,omitempty"`
+	// Alias is the VNet's display name, which Proxmox VE's interface shows beside its ID.
+	Alias string `json:"alias,omitempty"`
+}
+
+// LocalZone is the SDN zone of the bridges in a node's network configuration.
+const LocalZone = "localnetwork"
+
+// Ref is how a bridge is written in settings and in the management-cluster module: a VNet as
+// zone/vnet, a node's bridge as its name.
+func (b *Bridge) Ref() string {
+	if b.Zone == "" {
+		return b.Bridge
+	}
+	return b.Zone + "/" + b.Bridge
+}
+
+// InZone is the zone Proxmox VE checks SDN.Use in for the bridge.
+func (b *Bridge) InZone() string {
+	if b.Zone == "" {
+		return LocalZone
+	}
+	return b.Zone
+}
+
+// SplitBridge splits a bridge reference into its zone and the name a VM's network device takes.
+func SplitBridge(ref string) (string, string) {
+	if zone, name, ok := strings.Cut(ref, "/"); ok {
+		return zone, name
+	}
+	return LocalZone, ref
+}
+
+// Network is where Proxmox VE checks the use of a bridge or VNet, and whether the VNet tags its
+// traffic already.
+type Network struct {
+	Zone string
+	// ZoneType is empty for a node's bridge and where the user may not read the zone.
+	ZoneType  string
+	VLANAware bool
+}
+
+// TagsTraffic tells whether the network puts every frame in a VLAN of its own, so that a VLAN tag on
+// a VM's device would add a second one. A VLAN-aware VNet leaves the tag to the device.
+func (n Network) TagsTraffic() bool { return n.ZoneType == "vlan" && !n.VLANAware }
+
+// flag is a Proxmox VE boolean, which its API writes as 1 or true.
+type flag bool
+
+func (f *flag) UnmarshalJSON(b []byte) error {
+	*f = string(b) == "1" || string(b) == "true"
+	return nil
 }
 
 // defaultBridgeMTU is what a Linux bridge has where Proxmox VE lists no MTU.
@@ -153,6 +220,40 @@ func (a *Accounts) Realms(ctx context.Context) ([]Realm, error) {
 	return realms, nil
 }
 
+// isZFS is a storage plugin that makes a ZFS volume per disk, which holds its space back unless the
+// storage is sparse.
+func isZFS(plugin string) bool { return plugin == "zfspool" || plugin == "zfs" }
+
+// Disk formats a VM disk is made in on a storage that keeps files.
+const (
+	FormatRaw   = "raw"
+	FormatQCOW2 = "qcow2"
+)
+
+// AllocatesOnWrite tells whether a disk takes its space as the guest writes, which Proxmox VE lets
+// exceed the free space. LVM-thin and Ceph RBD always do. A ZFS volume does when the storage is
+// sparse, and otherwise reserves its whole size. Thick LVM reserves it too. On storage that keeps
+// files, qemu-img makes a sparse file, unless the storage's preallocation is falloc or full.
+// The second result is false where Proxmox VE did not say which type the storage is, or whether a
+// ZFS storage is sparse, and the first is then meaningless.
+func (s *Storage) AllocatesOnWrite() (bool, bool) {
+	switch {
+	case s.Type == "lvmthin" || s.Type == "rbd":
+		return true, true
+	case isZFS(s.Type):
+		if s.Sparse == nil {
+			return false, false
+		}
+		return *s.Sparse, true
+	case s.Type == "lvm":
+		return false, true
+	case s.Type == "":
+		return false, false
+	default:
+		return s.Preallocation != "falloc" && s.Preallocation != "full", true
+	}
+}
+
 // Storages lists the storages on every node the user may see, with the content types each takes.
 func (a *Accounts) Storages(ctx context.Context, t *Ticket) ([]Storage, error) {
 	var res []struct {
@@ -160,6 +261,7 @@ func (a *Accounts) Storages(ctx context.Context, t *Ticket) ([]Storage, error) {
 		Node    string `json:"node"`
 		Shared  int    `json:"shared"`
 		Content string `json:"content"`
+		Type    string `json:"plugintype"`
 		Disk    int64  `json:"disk"`
 		MaxDisk int64  `json:"maxdisk"`
 		Status  string `json:"status"`
@@ -167,16 +269,59 @@ func (a *Accounts) Storages(ctx context.Context, t *Ticket) ([]Storage, error) {
 	if err := a.get(ctx, t, "/cluster/resources?type=storage", &res); err != nil {
 		return nil, err
 	}
+	configs := a.storageConfigs(ctx, t)
 	var storages []Storage
 	for _, r := range res {
 		content := strings.Split(r.Content, ",")
-		s := Storage{Storage: r.Storage, Node: r.Node, Shared: r.Shared != 0, Content: content}
+		s := Storage{Storage: r.Storage, Node: r.Node, Shared: r.Shared != 0, Content: content, Type: r.Type}
+		if c, ok := configs[r.Storage]; ok {
+			s.Preallocation = c.preallocation
+			if isZFS(r.Type) {
+				s.Sparse = &c.sparse
+			}
+		}
 		if r.Status == "available" {
+			s.Active = true
 			s.Avail, s.Total = r.MaxDisk-r.Disk, r.MaxDisk
 		}
 		storages = append(storages, s)
 	}
 	return storages, nil
+}
+
+// storageConfig is what the storage configuration says of how a storage allocates, which the
+// cluster's resources leave out.
+type storageConfig struct {
+	sparse        bool
+	preallocation string
+}
+
+// storageConfigs reads the storage configuration. A read that fails, as for a user without the right
+// to it, leaves every storage's answer unknown.
+func (a *Accounts) storageConfigs(ctx context.Context, t *Ticket) map[string]storageConfig {
+	var res []struct {
+		Storage       string `json:"storage"`
+		Sparse        any    `json:"sparse"`
+		Preallocation string `json:"preallocation"`
+	}
+	if err := a.get(ctx, t, "/storage", &res); err != nil {
+		return nil
+	}
+	out := make(map[string]storageConfig, len(res))
+	for _, r := range res {
+		c := storageConfig{preallocation: r.Preallocation}
+		// Proxmox VE leaves the key out of a pool that never set it, which means thick.
+		switch v := r.Sparse.(type) {
+		case float64:
+			c.sparse = v != 0
+		case bool:
+			c.sparse = v
+		case string:
+			c.sparse = v == "1" || v == "true"
+		}
+		out[r.Storage] = c
+	}
+	return out
 }
 
 // Nodes lists the nodes the user may see.
@@ -217,7 +362,55 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 			CIDR: r.CIDR, Gateway: r.Gateway, MTU: cmp.Or(int(r.MTU), defaultBridgeMTU),
 		})
 	}
-	return bridges, nil
+	return append(bridges, a.vnets(ctx, t, node)...), nil
+}
+
+// vnets lists the VNets a node carries: those of zones that name it or no node. The user sees the
+// VNets they hold SDN.Audit on. Where SDN is absent or unreadable the node has its bridges only.
+func (a *Accounts) vnets(ctx context.Context, t *Ticket, node string) []Bridge {
+	var vnets []struct {
+		VNet      string `json:"vnet"`
+		Zone      string `json:"zone"`
+		Alias     string `json:"alias"`
+		VLANAware flag   `json:"vlanaware"`
+	}
+	if a.get(ctx, t, "/cluster/sdn/vnets", &vnets) != nil {
+		return nil
+	}
+	var zones []struct {
+		Zone  string `json:"zone"`
+		Type  string `json:"type"`
+		Nodes string `json:"nodes"`
+	}
+	// Without the zones every VNet is offered, on the strength of its own zone name.
+	_ = a.get(ctx, t, "/cluster/sdn/zones", &zones)
+	type zoneInfo struct {
+		kind  string
+		nodes []string
+	}
+	known := map[string]zoneInfo{}
+	for _, z := range zones {
+		info := zoneInfo{kind: z.Type}
+		for n := range strings.SplitSeq(z.Nodes, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				info.nodes = append(info.nodes, n)
+			}
+		}
+		known[z.Zone] = info
+	}
+	var bridges []Bridge
+	for _, v := range vnets {
+		z := known[v.Zone]
+		if v.VNet == "" || v.Zone == "" || len(z.nodes) > 0 && !slices.Contains(z.nodes, node) {
+			continue
+		}
+		bridges = append(bridges, Bridge{
+			Bridge: v.VNet, Node: node, VLANAware: bool(v.VLANAware), Zone: v.Zone, ZoneType: z.kind,
+			Alias: strings.TrimSpace(v.Alias),
+		})
+	}
+	slices.SortFunc(bridges, func(x, y Bridge) int { return strings.Compare(x.Bridge, y.Bridge) })
+	return bridges
 }
 
 // DNS lists the DNS servers a node resolves with, in its order. Proxmox VE shows them to users with
@@ -238,6 +431,64 @@ func (a *Accounts) DNS(ctx context.Context, t *Ticket, node string) ([]string, e
 		}
 	}
 	return servers, nil
+}
+
+// Names are the IDs of the pools, roles, users and groups the user may see. A listing the user may
+// not read is nil.
+type Names struct {
+	Pools, Roles, Users, Groups map[string]bool
+}
+
+// AccessNames lists the IDs of the pools, roles, users and groups, for telling whether what a setup
+// would create exists already.
+func (a *Accounts) AccessNames(ctx context.Context, t *Ticket) (Names, error) {
+	var names Names
+	for _, l := range [...]struct {
+		path, key string
+		into      *map[string]bool
+	}{
+		{"/pools", "poolid", &names.Pools},
+		{"/access/roles", "roleid", &names.Roles},
+		{"/access/users", "userid", &names.Users},
+		{"/access/groups", "groupid", &names.Groups},
+	} {
+		var res []map[string]any
+		err := a.get(ctx, t, l.path, &res)
+		if errors.Is(err, ErrForbidden) {
+			continue
+		}
+		if err != nil {
+			return Names{}, err
+		}
+		ids := make(map[string]bool, len(res))
+		for _, r := range res {
+			if id, ok := r[l.key].(string); ok {
+				ids[id] = true
+			}
+		}
+		*l.into = ids
+	}
+	return names, nil
+}
+
+// NodeAddresses lists the addresses Proxmox VE's cluster reports for its nodes, by node. A node on
+// its own reports none.
+func (a *Accounts) NodeAddresses(ctx context.Context, t *Ticket) (map[string]string, error) {
+	var res []struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+		IP   string `json:"ip"`
+	}
+	if err := a.get(ctx, t, "/cluster/status", &res); err != nil {
+		return nil, err
+	}
+	addresses := map[string]string{}
+	for _, r := range res {
+		if r.Type == "node" && r.IP != "" {
+			addresses[r.Name] = r.IP
+		}
+	}
+	return addresses, nil
 }
 
 // Allowed are those of the nodes given that the rule keeps its resources to: its own, or for a
@@ -295,23 +546,34 @@ func EnabledRules(res []HARuleEntry) []HARule {
 	return rules
 }
 
-// Zone returns the SDN zone of the bridge a VM connects to: a VNet's own zone, or localnetwork for
-// a plain bridge, as Proxmox VE decides where SDN.Use is checked.
-func (a *Accounts) Zone(ctx context.Context, t *Ticket, bridge string) (string, error) {
+// Network looks up the bridge a VM connects to: a VNet's own zone, or LocalZone for a plain bridge,
+// as Proxmox VE decides where SDN.Use is checked. A VNet the user may not see reads as a plain
+// bridge on releases that answer both alike, and Proxmox VE still checks its zone at the clone.
+func (a *Accounts) Network(ctx context.Context, t *Ticket, bridge string) (Network, error) {
 	var vnet struct {
-		Zone string `json:"zone"`
+		Zone      string `json:"zone"`
+		VLANAware flag   `json:"vlanaware"`
 	}
 	err := a.get(ctx, t, "/cluster/sdn/vnets/"+url.PathEscape(bridge), &vnet)
-	if notFound(err) {
-		return "localnetwork", nil
+	if notFound(err) || unknownVNet(err) {
+		return Network{Zone: LocalZone}, nil
 	}
 	if err != nil {
-		return "", err
+		return Network{}, err
 	}
 	if vnet.Zone == "" {
-		return "", fmt.Errorf("proxmox VE names no zone for VNet %s", bridge)
+		return Network{}, fmt.Errorf("proxmox VE names no zone for VNet %s", bridge)
 	}
-	return vnet.Zone, nil
+	n := Network{Zone: vnet.Zone, VLANAware: bool(vnet.VLANAware)}
+	var zone struct {
+		Type string `json:"type"`
+	}
+	// Proxmox VE may refuse the zone to a user who may use the VNet. Without its type nothing is
+	// known of the tagging, so nothing is refused for it.
+	if a.get(ctx, t, "/cluster/sdn/zones/"+url.PathEscape(vnet.Zone), &zone) == nil {
+		n.ZoneType = zone.Type
+	}
+	return n, nil
 }
 
 // BackupCovers tells whether an enabled backup job of the Proxmox VE cluster includes the guest,
@@ -516,4 +778,12 @@ func (a *Accounts) waitTask(ctx context.Context, t *Ticket, node, upid string) e
 func notFound(err error) bool {
 	apiErr, ok := errors.AsType[*APIError](err)
 	return ok && strings.Contains(apiErr.Status, "does not exist")
+}
+
+// unknownVNet tells whether Proxmox VE refused the vnet parameter as a VNet it knows none of. Newer
+// releases answer so for a VNet that does not exist and for one the user may not see alike, where
+// older ones said "does not exist" or refused the permission.
+func unknownVNet(err error) bool {
+	apiErr, ok := errors.AsType[*APIError](err)
+	return ok && strings.HasPrefix(apiErr.Errors["vnet"], "could not find vnet")
 }
