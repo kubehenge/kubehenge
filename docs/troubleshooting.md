@@ -307,7 +307,7 @@ The Health page warns `clock is off by` when a ready node's lease, stamped by it
 
 ### A node's clock is not synced
 
-- **A kubeadm, RKE2 or k3s node** waited 3 minutes for chrony and stopped before it made any certificate. Its boot log says `clock not synced`. Open UDP 123 or set the cluster's **Time servers**.
+- **A kubeadm, RKE2 or k3s node** waited 3 minutes for chrony and stopped before it made any certificate, with `clock not synced` in its boot log. The host's clock (`/dev/ptp0`) is the fallback, so the time servers and `/dev/ptp0` both failed: open UDP 123, set **Time servers**, or check that `chronyc sources` lists `KVM`.
 - **A Talos node** booted after 5 minutes without a time source, and the health page says `clock not synced`. `talosctl get timestatus` shows whether it has one now.
 - A running cluster's nodes take new **Time servers** at their next replacement.
 

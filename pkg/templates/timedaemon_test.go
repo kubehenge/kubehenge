@@ -35,7 +35,7 @@ func TestNodeImagesHoldATimeDaemon(t *testing.T) {
 
 func TestNodeChecksProveTheTimeDaemon(t *testing.T) {
 	t.Parallel()
-	want := [][]string{preset("enable " + timeDaemonUnit), active(timeDaemon), {"sh", "-c", "chronyc tracking > /dev/null"}, {"sh", "-c", chronyDropIns}}
+	want := [][]string{preset("enable " + timeDaemonUnit), active(timeDaemon), {"sh", "-c", "chronyc tracking > /dev/null"}, {"sh", "-c", chronyDropIns}, {"sh", "-c", hostClockCheck}}
 	for _, b := range []Bake{
 		{Distribution: Kubeadm, KubernetesVersion: "v1.37.2"}, {Distribution: RKE2}, {Distribution: K3s},
 	} {

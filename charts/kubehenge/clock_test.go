@@ -57,7 +57,7 @@ func TestAgentAndKubeadmNodesWaitForTheClockAndTakeTheClusterServers(t *testing.
 			if !ok {
 				t.Fatalf("%s: no files", name)
 			}
-			var script, dropin string
+			var script, dropin, modules string
 			for _, f := range files {
 				file := asMap(t, f)
 				content, ok := file["content"].(string)
@@ -69,12 +69,18 @@ func TestAgentAndKubeadmNodesWaitForTheClockAndTakeTheClusterServers(t *testing.
 					script = content
 				case "/etc/chrony.d/50-kubehenge.conf":
 					dropin = content
+				case "/etc/modules-load.d/50-kubehenge-ptp.conf":
+					modules = content
 				}
+			}
+			if modules != "ptp_kvm\n" {
+				t.Errorf("%s: modules-load file %q, want ptp_kvm so that /dev/ptp0 exists at boot", name, modules)
 			}
 			if !strings.Contains(script, "chronyc waitsync 18") || !strings.Contains(script, "clock not synced") {
 				t.Errorf("%s: wait-clock.sh is %q", name, script)
 			}
-			if want := "makestep 1.0 3\n" + servers; dropin != want {
+			// Stratum 5 keeps the host clock behind any time server that answers.
+			if want := "makestep 1.0 3\n" + servers + "refclock PHC /dev/ptp0 poll 2 stratum 5 refid KVM\n"; dropin != want {
 				t.Errorf("%s: chrony drop-in %q, want %q", name, dropin, want)
 			}
 		}

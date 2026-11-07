@@ -1160,6 +1160,11 @@ the clock (files/wait-clock.sh). The command list's first entry is kubehenge.clo
 The chrony drop-in of a kubeadm, RKE2 or k3s cluster, from the network variable's ntp (call with
 "kubeadm", "rke2" or "k3s"). It steps the clock at start-up whatever the image's chrony.conf says,
 and adds the cluster's servers to the image's own.
+
+It also gives chrony the hypervisor's clock (the ptp_kvm module, loaded at boot) as a source, so that a
+closed network, with UDP 123 blocked and no internal time server, still syncs. The source reports
+stratum 5, which a time server of stratum 1 to 4 beats wherever it answers: the host clock is the
+fallback only. Talos nodes get the same clock as /dev/ptp0 (talos.yaml).
 */}}
 {{- define "kubehenge.clockPatches" -}}
 {{- $targets := dict
@@ -1172,7 +1177,7 @@ and adds the cluster's servers to the image's own.
   "k3s" (list
     (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "KThreesControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/kthreesConfigSpec/files/-")
     (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KThreesConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-")) }}
-{{- $drop := `{{ $c := "makestep 1.0 3\n" }}{{ with .network }}{{ range .ntp }}{{ $c = printf "%sserver %s iburst\n" $c . }}{{ end }}{{ end }}{{ dict "path" "/etc/chrony.d/50-kubehenge.conf" "owner" "root:root" "permissions" "0644" "content" $c | toJson }}` }}
+{{- $drop := `{{ $c := "makestep 1.0 3\n" }}{{ with .network }}{{ range .ntp }}{{ $c = printf "%sserver %s iburst\n" $c . }}{{ end }}{{ end }}{{ $c = printf "%srefclock PHC /dev/ptp0 poll 2 stratum 5 refid KVM\n" $c }}{{ dict "path" "/etc/chrony.d/50-kubehenge.conf" "owner" "root:root" "permissions" "0644" "content" $c | toJson }}` }}
 - name: {{ . }}-clock
   definitions:
     {{- range get $targets . }}
@@ -1186,6 +1191,14 @@ and adds the cluster's servers to the image's own.
           path: {{ .path }}
           valueFrom:
             template: {{ $drop | quote }}
+        - op: add
+          path: {{ .path }}
+          value:
+            path: /etc/modules-load.d/50-kubehenge-ptp.conf
+            owner: root:root
+            permissions: "0644"
+            content: |
+              ptp_kvm
     {{- end }}
 {{- end -}}
 
