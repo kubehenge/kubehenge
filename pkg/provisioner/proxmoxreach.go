@@ -1,10 +1,13 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
@@ -30,8 +33,10 @@ type Reachability struct {
 	Error string `json:"error,omitempty"`
 	// Blind names the privilege the token lacks to see which hosts are in maintenance, empty when it
 	// has it. Without it Kubehenge cannot keep machines from replacement while a host is emptied.
-	Blind   string    `json:"blind,omitempty"`
-	Checked time.Time `json:"checked"`
+	Blind string `json:"blind,omitempty"`
+	// Tokens is the last test of every token Kubehenge relies on, which Tokens of ProxmoxReach makes.
+	Tokens  []TokenState `json:"tokens,omitempty"`
+	Checked time.Time    `json:"checked"`
 }
 
 // hostBlindPrivilege is what reading the HA manager's status takes (`Status.pm`, manager_status).
@@ -57,6 +62,15 @@ type ProxmoxReach struct {
 	Interval time.Duration
 	// Now is the clock, time.Now unless a test sets it.
 	Now func() time.Time
+	// Tokens tests the tokens Kubehenge relies on every TokenInterval, or TokenCheckInterval where
+	// that is zero. Nil leaves them untested.
+	Tokens        *TokenProbes
+	TokenInterval time.Duration
+
+	mu         sync.Mutex
+	lastStates []TokenState
+	lastTested time.Time
+	testing    bool
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -95,6 +109,7 @@ func (r *ProxmoxReach) publish(ctx context.Context) error {
 	} else if _, err := haMaintenance(ask, r.Proxmox); errors.Is(err, proxmox.ErrNotAuthorized) {
 		outcome.Blind = hostBlindPrivilege
 	}
+	outcome.Tokens = r.tokenStates(ctx, outcome.Checked)
 	raw, err := json.Marshal(outcome)
 	if err != nil {
 		return fmt.Errorf("encoding the outcome: %w", err)
@@ -115,4 +130,30 @@ func (r *ProxmoxReach) publish(ctx context.Context) error {
 		return fmt.Errorf("recording the outcome in %s: %w", ProxmoxReachName, err)
 	}
 	return nil
+}
+
+// tokenStates returns the last test of the tokens, and starts the next when it is due. The tests
+// run beside the reachability check, since a token only a Job holds takes a Job to test.
+func (r *ProxmoxReach) tokenStates(ctx context.Context, now time.Time) []TokenState {
+	if r.Tokens == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.testing && now.Sub(r.lastTested) >= cmp.Or(r.TokenInterval, TokenCheckInterval) {
+		r.testing = true
+		go r.testTokens(ctx, now)
+	}
+	return slices.Clone(r.lastStates)
+}
+
+// testTokens tests every token and puts the cluster tokens' outcome on their Clusters.
+func (r *ProxmoxReach) testTokens(ctx context.Context, started time.Time) {
+	states := CheckTokens(ctx, r.Tokens.Probes(ctx))
+	if err := r.Tokens.MarkClusters(ctx, states); err != nil && ctx.Err() == nil {
+		ctrl.LoggerFrom(ctx).WithName("proxmox-reach").Error(err, "recording a cluster's refused token")
+	}
+	r.mu.Lock()
+	r.lastStates, r.lastTested, r.testing = states, started, false
+	r.mu.Unlock()
 }

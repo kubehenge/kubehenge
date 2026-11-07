@@ -19,7 +19,8 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
     nodes.some((n) => !n.ready) ||
     (h.controllers ?? []).some((c) => c.ready < c.wanted) ||
     h.proxmox?.ok === false ||
-    filled(h.proxmox?.blind);
+    filled(h.proxmox?.blind) ||
+    (h.proxmox?.tokens ?? []).length > 0;
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
 
@@ -40,6 +41,7 @@ export function ManagementHealthCard(): JSX.Element {
   const controllers = h.controllers ?? [];
   const nodesDown = nodes.filter((n) => !n.ready);
   const controllersShort = controllers.filter((c) => c.ready < c.wanted);
+  const tokensFailing = h.proxmox?.tokens ?? [];
   return (
     <div className={stale ? "box management-health management-health-stale" : "box management-health"}>
       <h3>
@@ -77,6 +79,15 @@ export function ManagementHealthCard(): JSX.Element {
           )}
           {filled(h.proxmox?.blind) && (
             <p className="warning">Host maintenance is not visible: the token lacks {h.proxmox?.blind}</p>
+          )}
+          {tokensFailing.length > 0 && (
+            <ul className="health-short" aria-label="Proxmox VE tokens">
+              {tokensFailing.map((t) => (
+                <li key={`token/${t.name}`}>
+                  <Status state="error" text={t.problem} /> {t.message}
+                </li>
+              ))}
+            </ul>
           )}
           {(nodesDown.length > 0 || controllersShort.length > 0) && (
             <ul className="health-short">

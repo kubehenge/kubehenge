@@ -950,7 +950,7 @@ Where an administrator has switched on [etcd restores](install-settings.md#etcd-
 
 Before Kubehenge stops anything, it takes a snapshot of etcd as it is into the same target. It names that snapshot in the restore's status, so that a restore from the wrong snapshot can be undone with another. A cluster whose etcd does not answer is restored without one. The status says why.
 
-The controller decrypts the snapshot and encrypts it again for the copy, with a password of its own for that restore. The snapshot reaches the node from a link into the target that expires within the hour. A control-plane VM that is off is replaced with the others. A restore that fails before etcd was restored starts every control plane again as it was. One that fails after finishes the restore.
+The controller decrypts the snapshot and encrypts it again for the copy, with a password of its own for that restore. The snapshot reaches the node from a link into the target that expires within the hour. A control-plane VM that is off, or that no longer exists in Proxmox VE, is replaced with the others. The restore's message names the machines that had no VM. With no control-plane VM left, the restore says so. A restore that fails before etcd was restored starts every control plane again as it was. One that fails after finishes the restore.
 
 Otherwise **Restore…** lists the steps for the chosen snapshot, with the commands for the cluster's distribution. Those for the nodes run as root over SSH or the VM's console, after downloading the snapshot to the first node as `/var/lib/kubehenge-restore/snapshot.db`. On RKE2 and k3s, `etcdutl` and `openssl` first move the snapshot's revision on, on any machine that has both. The `kubectl` ones run with the management cluster's kubeconfig.
 

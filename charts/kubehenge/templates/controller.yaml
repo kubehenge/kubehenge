@@ -363,6 +363,10 @@ spec:
             - --stall-after={{ .Values.watch.stallMinutes }}m
             {{- if .Values.templateRefresh.enabled }}
             - --template-refresh
+            - --test-template-builder-token={{ .Release.Namespace }}/{{ .Values.templateRefresh.secret }}
+            {{- end }}
+            {{- with .Values.proxmox.capmoxSecret }}
+            - --test-capmox-token={{ . }}
             {{- end }}
             {{- if .Values.proxmox.ha }}
             - --proxmox-ha

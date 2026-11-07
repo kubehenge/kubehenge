@@ -137,11 +137,17 @@ type controllerOptions struct {
 	offerHARules      bool
 	nodeImageSoak     time.Duration
 	templateRefresh   bool
-	proxmoxHA         bool
-	etcdRestore       bool
-	autoscaler        provisioner.AutoscalerReconciler
-	autoscalerImages  []string
-	headlampSignIn    []string
+	// probeCapmox and probeBuilder are the Secrets, as <namespace>/<name>, of the tokens of Cluster
+	// API's Proxmox VE provider and the template builder, which the controller tests though it does
+	// not use them.
+	probeCapmox      string
+	probeBuilder     string
+	connect          func(token string) (*proxmox.Client, error)
+	proxmoxHA        bool
+	etcdRestore      bool
+	autoscaler       provisioner.AutoscalerReconciler
+	autoscalerImages []string
+	headlampSignIn   []string
 }
 
 func newControllerCommand(conn *pve.Config) *cobra.Command {
@@ -188,6 +194,8 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.BoolVar(&o.templateRefresh, "template-refresh", false, "start the template refresh CronJob's Job for the builds asked for in the interface")
 	f.BoolVar(&o.proxmoxHA, "proxmox-ha", false, "keep clusters' control-plane VMs on separate nodes with Proxmox VE HA, writing HA through Jobs of the PodTemplate "+provisioner.HAJobTemplate)
 	f.BoolVar(&o.etcdRestore, "etcd-restore", false, "restore clusters' etcd through the VMs' guest agents, through Jobs of the PodTemplate "+provisioner.GuestJobTemplate)
+	f.StringVar(&o.probeCapmox, "test-capmox-token", "", "<namespace>/<name> of the Secret with the token of Cluster API's Proxmox VE provider, to test it for the privileges it needs. Empty, it is not tested")
+	f.StringVar(&o.probeBuilder, "test-template-builder-token", "", "<namespace>/<name> of the Secret with the template builder's token, to test it for the privileges it needs. Empty, it is not tested")
 	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
@@ -269,6 +277,9 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	if err := provisioner.ValidWorkloadPool(o.r.WorkloadPool); err != nil {
 		return fmt.Errorf("--workload-pool: %w", err)
+	}
+	o.connect = func(token string) (*proxmox.Client, error) {
+		return pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile, Insecure: conn.Insecure})
 	}
 	ca, err := os.ReadFile(conn.CAFile)
 	if err != nil {
@@ -707,6 +718,7 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 		Namespace: o.r.ClassNamespace,
 		Proxmox:   cloud.Client,
 		Interval:  proxmoxReachInterval,
+		Tokens:    o.tokenProbes(mgr, cloud.Client),
 	}
 	if err := mgr.Add(reach); err != nil {
 		return fmt.Errorf("the Proxmox VE reachability check: %w", err)
@@ -869,6 +881,35 @@ func (o *controllerOptions) addHA(mgr manager.Manager, c *proxmox.Client) error 
 		return fmt.Errorf("the Proxmox VE HA reconciler: %w", err)
 	}
 	return nil
+}
+
+// tokenProbes tests the controller's own token and every other token that exists: the HA and restore
+// tokens through their Jobs, Cluster API's and the template builder's from their Secrets, and each
+// cluster's.
+func (o *controllerOptions) tokenProbes(mgr manager.Manager, c *proxmox.Client) *provisioner.TokenProbes {
+	t := &provisioner.TokenProbes{
+		Reader: mgr.GetAPIReader(), Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace,
+		WorkloadPool: o.r.WorkloadPool, Controller: c, Connect: o.connect,
+	}
+	if o.proxmoxHA {
+		t.HA = o.tokenJob(mgr, provisioner.HAJobTemplate)
+	}
+	if o.etcdRestore {
+		t.Restore = o.tokenJob(mgr, provisioner.GuestJobTemplate)
+	}
+	pool := o.r.WorkloadPool
+	for _, s := range []struct {
+		name, ref string
+		needs     []provisioner.Need
+	}{
+		{"Cluster API provider", o.probeCapmox, provisioner.CapmoxNeeds(pool)},
+		{"Template builder", o.probeBuilder, provisioner.TemplateBuilderNeeds()},
+	} {
+		if namespace, name, ok := strings.Cut(s.ref, "/"); ok {
+			t.Secrets = append(t.Secrets, provisioner.SecretProbe{Name: s.name, Namespace: namespace, From: name, Needs: s.needs})
+		}
+	}
+	return t
 }
 
 // tokenJob runs requests in Jobs of the chart's PodTemplate template, beside the controller.

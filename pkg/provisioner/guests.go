@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -86,6 +87,9 @@ func (g *JobGuests) Run(ctx context.Context, vmid int64, script string, timeout 
 
 // ServeGuestRequest runs a GuestRequest with the restore token.
 func ServeGuestRequest(ctx context.Context, restore *proxmox.Client, raw []byte) (string, error) {
+	if out, ok, err := servePermissions(ctx, restore, raw); ok {
+		return out, err
+	}
 	var req GuestRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return "", fmt.Errorf("the request: %w", err)
@@ -152,8 +156,12 @@ func locateVM(ctx context.Context, c *proxmox.Client, vmid int64) (string, bool,
 			return vm.Node, vm.Status == guestRunning, nil
 		}
 	}
-	return "", false, fmt.Errorf("VM %d is not there, or not one this token may see", vmid)
+	return "", false, fmt.Errorf("VM %d %w", vmid, ErrVMNotListed)
 }
+
+// ErrVMNotListed is the answer for a VM that Proxmox VE's resource list does not show: destroyed,
+// or on a pool the token cannot read.
+var ErrVMNotListed = errors.New("is not there, or not one this token may see")
 
 // tail is the end of s, at most n bytes of it.
 func tail(s string, n int) string {

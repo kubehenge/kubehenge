@@ -75,8 +75,30 @@ type proxmoxReachView struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 	// Blind is the privilege the controller's token lacks to see hosts in maintenance.
-	Blind   string    `json:"blind,omitempty"`
-	Checked time.Time `json:"checked"`
+	Blind string `json:"blind,omitempty"`
+	// Tokens are the tokens that fail their test, each with what is wrong. Working ones are not listed.
+	Tokens  []tokenProblemView `json:"tokens,omitempty"`
+	Checked time.Time          `json:"checked"`
+}
+
+// tokenProblemView is a Proxmox VE token that is refused, cannot verify the API or lacks privileges.
+type tokenProblemView struct {
+	Name string `json:"name"`
+	// Problem is Refused, Certificate, Unreachable or Privileges.
+	Problem string `json:"problem"`
+	// Message says what is wrong. Each missing privilege is named with its path.
+	Message string `json:"message"`
+}
+
+// tokenProblems lists the tokens that failed their last test.
+func tokenProblems(states []provisioner.TokenState) []tokenProblemView {
+	var out []tokenProblemView
+	for i := range states {
+		if s := &states[i]; !s.OK {
+			out = append(out, tokenProblemView{Name: s.Name, Problem: s.Problem, Message: s.Message()})
+		}
+	}
+	return out
 }
 
 // proxmoxReach reads the controller's record of its last ask. It is nil where there is none yet, as
@@ -95,7 +117,7 @@ func (s *Server) proxmoxReach(ctx context.Context, kube client.Client) *proxmoxR
 		s.Log.WarnContext(ctx, "reading whether the controller reaches Proxmox VE", "error", err)
 		return nil
 	}
-	return &proxmoxReachView{OK: r.OK, Error: r.Error, Blind: r.Blind, Checked: r.Checked}
+	return &proxmoxReachView{OK: r.OK, Error: r.Error, Blind: r.Blind, Tokens: tokenProblems(r.Tokens), Checked: r.Checked}
 }
 
 func readManagementHealth(ctx context.Context, kube client.Client) (managementHealthView, error) {

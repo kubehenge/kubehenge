@@ -106,6 +106,30 @@ describe("the management cluster's health", () => {
     expect(screen.getByText("Reachable")).toBeInTheDocument();
   });
 
+  it("names each token that is refused or lacks a privilege", async () => {
+    show({
+      answers: true,
+      nodes: [ready("mgmt-1")],
+      controllers: [],
+      proxmox: {
+        ok: true,
+        checked: "2026-01-02T12:00:00Z",
+        tokens: [
+          {
+            name: "Controller",
+            problem: "Privileges",
+            message: "Controller token lacks Realm.AllocateUser on /access/realm/pve.",
+          },
+          { name: "Cluster team-a/web", problem: "Certificate", message: "Cluster team-a/web token cannot verify the API." },
+        ],
+      },
+    });
+    await expect(screen.findByText("Degraded")).resolves.toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Proxmox VE tokens" });
+    expect(list).toHaveTextContent("Controller token lacks Realm.AllocateUser on /access/realm/pve.");
+    expect(list).toHaveTextContent("Certificate");
+  });
+
   it("warns when the token cannot see host maintenance", async () => {
     show({
       answers: true,

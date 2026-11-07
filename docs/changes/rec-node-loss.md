@@ -1,0 +1,6 @@
+- Machines being deleted on a Proxmox VE node that left the cluster for good no longer stay in Deleting. Kubehenge lets go of them, and the Cluster gets the event `NodeGone`.
+- A control plane carries on replacing its members after that. A node that is only offline keeps its machines.
+- An etcd restore goes on without control-plane VMs that no longer exist in Proxmox VE. It replaces their machines and names them in its message.
+- The controller tests every token it relies on every 10 minutes. That covers its own, the HA, etcd restore, Cluster API provider and template builder tokens, and each cluster's.
+- A refused token, a certificate from another CA or a missing privilege shows in the management cluster's Health and goes out as a notification. The message names each missing privilege and its path.
+- A cluster whose token fails gets the condition `ProxmoxAccessRefused`.

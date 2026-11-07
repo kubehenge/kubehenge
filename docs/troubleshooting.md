@@ -555,6 +555,15 @@ A node that reboots or sits in HA maintenance is down longer than the five minut
 
 Only `maintenance` in the HA manager's `node_status` holds a machine for maintenance. `gone` means the host left the cluster's member list, and it ends the wait. So does a host missing from the cluster's own node list (`/cluster/config/nodes`). `fence` and `unknown` do not, since a fenced or unreachable host reboots and returns.
 
+#### A host that is gone for good
+
+A machine being deleted keeps its VM until Cluster API's Proxmox VE provider destroys it. It cannot while the VM's node does not answer. The machine stays in Deleting, and the control plane neither scales up nor replaces a member meanwhile.
+
+- A node that is only offline keeps its machines. They wait for it to return.
+- A node the HA manager has as `gone`, or that left the cluster's node list, will not return. Kubehenge lets go of the machines being deleted on it. The Cluster gets the event `NodeGone`.
+- Kubehenge does not destroy the VM. Its configuration stays in `/etc/pve/nodes/<node>/qemu-server/` until you remove it.
+- To retire a dead node at once, run `pvecm delnode <node>` on a live one.
+
 #### Storage unavailable
 
 **Storage unavailable** in **Health** and the condition `StorageUnavailable` mean the cluster's `storage` is not available on a node that runs one of its VMs. The message names the nodes. Check `pvesm status` on them and bring the storage back.
@@ -622,6 +631,23 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
   - "Leaving … out" names a node whose Talos API did not answer, which keeps the etcd from before. Once it runs, wipe that with `talosctl -n <address> reset --system-labels-to-wipe EPHEMERAL --reboot --graceful=false` and the admin talosconfig (**Appliance**, repair access). It then joins the restored one.
   - "no control-plane node answers on its Talos API": start the management cluster's VMs in Proxmox VE first.
   - "snapshot … does not match its checksum": the object in the target is damaged. Restore another snapshot.
+
+### A Proxmox VE token is refused or lacks a privilege
+
+The management cluster's **Health** and your notification targets name each token that fails its test. They give its holder, the problem and any missing privilege with its path. The controller tests these every 10 minutes:
+
+- its own token, and the HA and etcd restore tokens where those are on
+- the tokens of Cluster API's Proxmox VE provider and of the template builder
+- the token of each cluster's cloud controller manager and CSI plugin, whose failure sets `ProxmoxAccessRefused` on that Cluster
+
+The problem is one of these:
+
+- **Refused:** the token expired, was disabled, or lost its user. Make a new token, or apply the management cluster again.
+- **Certificate:** the API's certificate is from another CA ([below](#the-proxmox-ve-certificate-or-ca-changed)).
+- **Unreachable:** the API did not answer, or the Secret with the token cannot be read.
+- **Privileges:** for example `Controller token lacks Realm.AllocateUser on /access/realm/pve.` Give the token's user that privilege on that path, or apply the management cluster again.
+
+The warning clears at the next test after the cause is fixed.
 
 ### The Proxmox VE certificate or CA changed
 

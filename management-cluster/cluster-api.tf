@@ -419,6 +419,7 @@ resource "helm_release" "kubehenge" {
         url          = var.proxmox_endpoint
         insecure     = var.proxmox_insecure
         secret       = local.controller_secret.name
+        capmoxSecret = "${local.capmox_variables.namespace}/${local.capmox_variables.name}"
         clusterGroup = proxmox_virtual_environment_group.clusters.group_id
         clusterRole  = proxmox_virtual_environment_role.cluster_vms.role_id
         ha           = var.proxmox_ha

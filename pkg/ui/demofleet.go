@@ -140,6 +140,11 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 			return nil, err
 		}
 	}
+	reach, err := f.proxmoxReach()
+	if err != nil {
+		return nil, err
+	}
+	f.objects = append(f.objects, reach)
 	for _, l := range f.data.Activity {
 		e := activityEntry{At: now.Add(-time.Duration(l.AgoMinutes) * time.Minute), User: l.User, What: l.What, Details: l.Details}
 		if l.Cluster != "" {
@@ -148,6 +153,31 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 		f.activity = append(f.activity, e)
 	}
 	return f, nil
+}
+
+// proxmoxReach is the controller's record of its last test of the Proxmox VE tokens, with two that
+// fail: the controller's, which lost a privilege, and a cluster's, whose API certificate is from a
+// CA it does not know.
+func (f *demoFleet) proxmoxReach() (*corev1.ConfigMap, error) {
+	tokens := []provisioner.TokenState{
+		{Name: "Controller", Problem: provisioner.TokenPrivileges, Missing: []provisioner.Need{{Path: "/access/realm/pve", Privilege: "Realm.AllocateUser"}}},
+		{Name: "Template builder", OK: true},
+	}
+	if len(f.data.Clusters) > 0 {
+		name := f.data.Clusters[0].Name
+		tokens = append(tokens, provisioner.TokenState{
+			Name: "Cluster " + demoNamespace + "/" + name, Cluster: demoNamespace + "/" + name,
+			Problem: provisioner.TokenCertificate, Error: "x509: certificate signed by unknown authority",
+		})
+	}
+	raw, err := json.Marshal(provisioner.Reachability{OK: true, Tokens: tokens, Checked: f.now})
+	if err != nil {
+		return nil, fmt.Errorf("the demo's Proxmox VE reachability: %w", err)
+	}
+	return &corev1.ConfigMap{
+		Namespace: demoClassNamespace, Name: provisioner.ProxmoxReachName,
+		Data: map[string]string{provisioner.ProxmoxReachKey: string(raw)},
+	}, nil
 }
 
 // classes are the chart's ClusterClasses, with the templates, snapshot storages and backup
