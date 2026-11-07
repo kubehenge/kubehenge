@@ -17,6 +17,7 @@ const form: SetupForm = {
   apiAddress: "192.0.2.10",
   gateway: "192.0.2.1",
   dnsServers: "192.0.2.1, 1.1.1.1",
+  timeServers: "",
   workloadDatastores: ["local-lvm"],
   workloadBridges: ["vmbr0"],
   bootstrapDatastore: "local",
@@ -474,6 +475,54 @@ describe("setup", () => {
     expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
       settings: { bridge: "evpn1/web", workloadBridges: ["evpn1/web"] },
     });
+  });
+
+  it.each<
+    [string, { findings: { errors: string[]; warnings: string[] }; message: string; disabled: boolean; reason: string }]
+  >([
+    [
+      "errors",
+      {
+        findings: { errors: ["Address 192.0.2.11 answers already."], warnings: [] },
+        message: "Address 192.0.2.11 answers already.",
+        disabled: true,
+        reason: "Fix the errors above to apply.",
+      },
+    ],
+    [
+      "warnings",
+      {
+        findings: { errors: [], warnings: ["3 management VMs share 1 Proxmox VE node."] },
+        message: "3 management VMs share 1 Proxmox VE node.",
+        disabled: false,
+        reason: "",
+      },
+    ],
+  ])("lets %s decide whether Apply is possible", async (_kind, { findings, message, disabled, reason }) => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "POST /api/setup/check": { body: findings },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
+    await user.type(screen.getByLabelText("Node addresses"), "192.0.2.11/24");
+    await user.type(screen.getByLabelText("API address"), "192.0.2.10");
+    await next(user);
+    await next(user);
+    await next(user);
+    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
+
+    const create = screen.getByRole("button", { name: "Create management cluster" });
+    await expect(screen.findByText(message)).resolves.toBeInTheDocument();
+    expect(create).toHaveProperty("disabled", disabled);
+    expect(create).toHaveAccessibleDescription(reason);
   });
 
   it("offers the management cluster only what every chosen node has, and clusters what any node has", async () => {

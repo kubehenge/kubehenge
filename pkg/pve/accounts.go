@@ -27,7 +27,8 @@ const (
 	userRequestTimeout = 30 * time.Second
 	// maxResponseBytes caps what is read of an answer. Proxmox VE's largest, the cluster's
 	// resources, stay far below it.
-	maxResponseBytes = 1 << 20
+	maxResponseBytes = mebibyte
+	mebibyte         = 1 << 20
 	// halfTicketParts are those of PVE:!tfa!<challenge>::<signature> when split at the first two
 	// colons.
 	halfTicketParts = 3
@@ -302,9 +303,13 @@ func (a *Accounts) do(req *http.Request, out any) error {
 		return fmt.Errorf("asking proxmox VE: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	// One byte past the cap tells an answer that fills it exactly from one that is cut.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return fmt.Errorf("proxmox VE %s %s: reading the answer: %w", req.Method, req.URL.Path, err)
+	}
+	if len(body) > maxResponseBytes {
+		return fmt.Errorf("proxmox VE %s %s: the answer is larger than %d MiB", req.Method, req.URL.Path, maxResponseBytes/mebibyte)
 	}
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:

@@ -60,6 +60,8 @@ type Resources interface {
 	Nodes(ctx context.Context, t *pve.Ticket) ([]pve.Node, error)
 	Bridges(ctx context.Context, t *pve.Ticket, node string) ([]pve.Bridge, error)
 	DNS(ctx context.Context, t *pve.Ticket, node string) ([]string, error)
+	AccessNames(ctx context.Context, t *pve.Ticket) (pve.Names, error)
+	NodeAddresses(ctx context.Context, t *pve.Ticket) (map[string]string, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
 	Network(ctx context.Context, t *pve.Ticket, bridge string) (pve.Network, error)
 }
@@ -265,6 +267,7 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/setup", s.signedIn(s.setupStatus))
 	mux.HandleFunc("POST /api/setup", s.signedIn(s.setup))
+	mux.HandleFunc("POST /api/setup/check", s.signedIn(s.setupCheck))
 	mux.HandleFunc("POST /api/setup/credential", s.signedIn(s.credential))
 	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
 	mux.HandleFunc("GET /api/setup/health", s.signedIn(s.managementHealth))

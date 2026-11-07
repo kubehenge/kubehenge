@@ -23,6 +23,7 @@ const storage = (name: string, node: string, usable = true) => ({
   node,
   shared: false,
   content: ["images"],
+  active: true,
   avail: 0,
   total: 0,
   usable,

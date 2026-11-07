@@ -166,31 +166,37 @@ func TestSetupNeedsAnAdministrator(t *testing.T) {
 // the wrong zone would get an ACL that Proxmox VE never checks.
 func TestSetupHoldsBridgesToTheirZones(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
-	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
-	a := h.browser()
-	a.signIn("admin@pve")
-	setUp := func(settings string) *httptest.ResponseRecorder {
-		return a.do("POST", "/api/setup", `{"settings":`+settings+`,"passphrase":"correct horse battery staple"}`)
+	h, a := preflightHarness(t)
+	bridges := func(bridge, workload string) string {
+		s := strings.Replace(preflightSettings, `"bridge":"vmbr0"`, `"bridge":"`+bridge+`"`, 1)
+		return strings.Replace(s, `"workloadBridges":["vmbr0"]`, `"workloadBridges":[`+workload+`]`, 1)
 	}
 	for name, c := range map[string]struct{ settings, want string }{
-		"management VNet as a plain bridge": {`{"bridge":"tenants"}`, "write it as evpn/tenants"},
-		"workload VNet in another zone":     {`{"bridge":"vmbr0","workloadBridges":["vmbr0","localnetwork/tenants"]}`, "write it as evpn/tenants"},
-		"node bridge in a zone":             {`{"bridge":"evpn/vmbr0"}`, "Proxmox VE shows you no VNet vmbr0. A node's own bridge is written as vmbr0"},
-		"VNet that is not there":            {`{"bridge":"evpn/nosuch"}`, "Proxmox VE shows you no VNet nosuch"},
-		"VLAN on a VLAN zone":               {`{"bridge":"vlanz/corp","vlan":20}`, "VNet corp is in a VLAN zone and tags already"},
+		"management VNet as a plain bridge": {bridges("tenants", `"vmbr0"`), "Bridge tenants is in zone evpn. Write it as evpn/tenants."},
+		"workload VNet in another zone":     {bridges("vmbr0", `"vmbr0","localnetwork/tenants"`), "Write it as evpn/tenants."},
+		"node bridge in a zone":             {bridges("evpn/vmbr0", `"vmbr0"`), "Proxmox VE shows you no VNet vmbr0. A node's own bridge is written as vmbr0."},
+		"VNet that is not there":            {bridges("evpn/nosuch", `"vmbr0"`), "Proxmox VE shows you no VNet nosuch."},
+		"VLAN on a VLAN zone": {
+			strings.Replace(bridges("vlanz/corp", `"vmbr0"`), `"bridge":`, `"vlan":20,"bridge":`, 1),
+			"VNet corp is in a VLAN zone and tags already",
+		},
 	} {
-		rec := setUp(c.settings)
+		joined := strings.Join(checkSettings(t, a, c.settings).Errors, "\n")
+		if !strings.Contains(joined, c.want) {
+			t.Errorf("%s: errors %q, want %q", name, joined, c.want)
+		}
+		rec := a.do("POST", "/api/setup", strings.TrimSuffix(c.settings, "}")+`,"passphrase":"correct horse battery staple"}`)
 		expect(t, rec, http.StatusUnprocessableEntity)
 		if !strings.Contains(rec.Body.String(), c.want) {
-			t.Errorf("%s: answer %s, want %q", name, rec.Body, c.want)
+			t.Errorf("%s: apply answered %s, want %q", name, rec.Body, c.want)
 		}
 	}
-	// Right zones pass this check and meet the settings' own, which says what else is missing.
-	rec := setUp(`{"bridge":"vlanz/corp","workloadBridges":["vmbr0","evpn/tenants"]}`)
-	expect(t, rec, http.StatusUnprocessableEntity)
-	if body := rec.Body.String(); strings.Contains(body, "write it as") || strings.Contains(body, "shows you no VNet") || strings.Contains(body, "tags already") {
-		t.Errorf("answer = %s", rec.Body)
+	if h.server.Appliance.Current() != nil {
+		t.Error("a run started although a bridge was in the wrong zone")
+	}
+	// VNets in their own zones, on a node that carries them, pass.
+	if errs := checkSettings(t, a, bridges("vlanz/corp", `"vmbr0","evpn/tenants"`)).Errors; len(errs) != 0 {
+		t.Errorf("errors = %q", errs)
 	}
 }
 

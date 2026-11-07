@@ -34,6 +34,17 @@ type Storage struct {
 	Node    string   `json:"node"`
 	Shared  bool     `json:"shared"`
 	Content []string `json:"content"`
+	// Active tells whether Proxmox VE reports the storage as available on the node, which an offline
+	// NFS or CIFS share is not.
+	Active bool `json:"active"`
+	// Type is the storage plugin, such as lvm, lvmthin, zfspool, rbd, dir or nfs.
+	Type string `json:"type,omitempty"`
+	// Sparse tells whether a ZFS pool allocates a disk's space on write. Nil where Proxmox VE did not
+	// say, which the user's privileges can cause.
+	Sparse *bool `json:"sparse,omitempty"`
+	// Preallocation is how a storage that keeps files lays out a new disk: off, metadata, falloc or
+	// full. Empty is Proxmox VE's default, off.
+	Preallocation string `json:"preallocation,omitempty"`
 	// Avail and Total are bytes. They are zero when the storage is not active on the node.
 	Avail int64 `json:"avail"`
 	Total int64 `json:"total"`
@@ -191,6 +202,40 @@ func (a *Accounts) Realms(ctx context.Context) ([]Realm, error) {
 	return realms, nil
 }
 
+// isZFS is a storage plugin that makes a ZFS volume per disk, which holds its space back unless the
+// storage is sparse.
+func isZFS(plugin string) bool { return plugin == "zfspool" || plugin == "zfs" }
+
+// Disk formats a VM disk is made in on a storage that keeps files.
+const (
+	FormatRaw   = "raw"
+	FormatQCOW2 = "qcow2"
+)
+
+// AllocatesOnWrite tells whether a disk takes its space as the guest writes, which Proxmox VE lets
+// exceed the free space. LVM-thin and Ceph RBD always do. A ZFS volume does when the storage is
+// sparse, and otherwise reserves its whole size. Thick LVM reserves it too. On storage that keeps
+// files, qemu-img makes a sparse file, unless the storage's preallocation is falloc or full.
+// The second result is false where Proxmox VE did not say which type the storage is, or whether a
+// ZFS storage is sparse, and the first is then meaningless.
+func (s *Storage) AllocatesOnWrite() (bool, bool) {
+	switch {
+	case s.Type == "lvmthin" || s.Type == "rbd":
+		return true, true
+	case isZFS(s.Type):
+		if s.Sparse == nil {
+			return false, false
+		}
+		return *s.Sparse, true
+	case s.Type == "lvm":
+		return false, true
+	case s.Type == "":
+		return false, false
+	default:
+		return s.Preallocation != "falloc" && s.Preallocation != "full", true
+	}
+}
+
 // Storages lists the storages on every node the user may see, with the content types each takes.
 func (a *Accounts) Storages(ctx context.Context, t *Ticket) ([]Storage, error) {
 	var res []struct {
@@ -198,6 +243,7 @@ func (a *Accounts) Storages(ctx context.Context, t *Ticket) ([]Storage, error) {
 		Node    string `json:"node"`
 		Shared  int    `json:"shared"`
 		Content string `json:"content"`
+		Type    string `json:"plugintype"`
 		Disk    int64  `json:"disk"`
 		MaxDisk int64  `json:"maxdisk"`
 		Status  string `json:"status"`
@@ -205,16 +251,59 @@ func (a *Accounts) Storages(ctx context.Context, t *Ticket) ([]Storage, error) {
 	if err := a.get(ctx, t, "/cluster/resources?type=storage", &res); err != nil {
 		return nil, err
 	}
+	configs := a.storageConfigs(ctx, t)
 	var storages []Storage
 	for _, r := range res {
 		content := strings.Split(r.Content, ",")
-		s := Storage{Storage: r.Storage, Node: r.Node, Shared: r.Shared != 0, Content: content}
+		s := Storage{Storage: r.Storage, Node: r.Node, Shared: r.Shared != 0, Content: content, Type: r.Type}
+		if c, ok := configs[r.Storage]; ok {
+			s.Preallocation = c.preallocation
+			if isZFS(r.Type) {
+				s.Sparse = &c.sparse
+			}
+		}
 		if r.Status == "available" {
+			s.Active = true
 			s.Avail, s.Total = r.MaxDisk-r.Disk, r.MaxDisk
 		}
 		storages = append(storages, s)
 	}
 	return storages, nil
+}
+
+// storageConfig is what the storage configuration says of how a storage allocates, which the
+// cluster's resources leave out.
+type storageConfig struct {
+	sparse        bool
+	preallocation string
+}
+
+// storageConfigs reads the storage configuration. A read that fails, as for a user without the right
+// to it, leaves every storage's answer unknown.
+func (a *Accounts) storageConfigs(ctx context.Context, t *Ticket) map[string]storageConfig {
+	var res []struct {
+		Storage       string `json:"storage"`
+		Sparse        any    `json:"sparse"`
+		Preallocation string `json:"preallocation"`
+	}
+	if err := a.get(ctx, t, "/storage", &res); err != nil {
+		return nil
+	}
+	out := make(map[string]storageConfig, len(res))
+	for _, r := range res {
+		c := storageConfig{preallocation: r.Preallocation}
+		// Proxmox VE leaves the key out of a pool that never set it, which means thick.
+		switch v := r.Sparse.(type) {
+		case float64:
+			c.sparse = v != 0
+		case bool:
+			c.sparse = v
+		case string:
+			c.sparse = v == "1" || v == "true"
+		}
+		out[r.Storage] = c
+	}
+	return out
 }
 
 // Nodes lists the nodes the user may see.
@@ -323,6 +412,64 @@ func (a *Accounts) DNS(ctx context.Context, t *Ticket, node string) ([]string, e
 		}
 	}
 	return servers, nil
+}
+
+// Names are the IDs of the pools, roles, users and groups the user may see. A listing the user may
+// not read is nil.
+type Names struct {
+	Pools, Roles, Users, Groups map[string]bool
+}
+
+// AccessNames lists the IDs of the pools, roles, users and groups, for telling whether what a setup
+// would create exists already.
+func (a *Accounts) AccessNames(ctx context.Context, t *Ticket) (Names, error) {
+	var names Names
+	for _, l := range [...]struct {
+		path, key string
+		into      *map[string]bool
+	}{
+		{"/pools", "poolid", &names.Pools},
+		{"/access/roles", "roleid", &names.Roles},
+		{"/access/users", "userid", &names.Users},
+		{"/access/groups", "groupid", &names.Groups},
+	} {
+		var res []map[string]any
+		err := a.get(ctx, t, l.path, &res)
+		if errors.Is(err, ErrForbidden) {
+			continue
+		}
+		if err != nil {
+			return Names{}, err
+		}
+		ids := make(map[string]bool, len(res))
+		for _, r := range res {
+			if id, ok := r[l.key].(string); ok {
+				ids[id] = true
+			}
+		}
+		*l.into = ids
+	}
+	return names, nil
+}
+
+// NodeAddresses lists the addresses Proxmox VE's cluster reports for its nodes, by node. A node on
+// its own reports none.
+func (a *Accounts) NodeAddresses(ctx context.Context, t *Ticket) (map[string]string, error) {
+	var res []struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+		IP   string `json:"ip"`
+	}
+	if err := a.get(ctx, t, "/cluster/status", &res); err != nil {
+		return nil, err
+	}
+	addresses := map[string]string{}
+	for _, r := range res {
+		if r.Type == "node" && r.IP != "" {
+			addresses[r.Name] = r.IP
+		}
+	}
+	return addresses, nil
 }
 
 // Allowed are those of the nodes given that the rule keeps its resources to: its own, or for a

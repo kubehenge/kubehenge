@@ -1,31 +1,8 @@
 # Changelog
 
-Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor version may change behaviour.
+Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor version may change behaviour. Changes not yet released are in `docs/changes/`, one file per pull request, and appear here under `[Unreleased]` on the website.
 
 ## [Unreleased]
-
-- The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
-- New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
-- The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
-- The installer stops when the cluster has an appliance already. `--upgrade` and `--certificate` on the wrong node name the node that runs the container.
-- The installer asks about the Proxmox VE interface entry on the same terminal as its other questions, also when piped into `sh`.
-- A dropped session or an interrupt now removes the half-made container and the temporary files.
-- The installer stops early, in plain words, without quorum, with a resolver that names only loopback servers, or with too little room for the downloads.
-- A failed download gives curl's exit code and the HTTP status.
-- An option without its value reports `<option> needs a value`. A storage name is matched as written.
-- New `--tofu <file>` option installs OpenTofu from a local archive, checked against the script's checksum.
-- A container that cannot resolve the API's name makes the installer take the next name or address the certificate covers. It names every one it tried when none works.
-- The usage text and the docs describe how `--template-storage` is chosen.
-- Once the container has an address, the installer checks its network from inside it. It tests the gateway, the name server and the API's port in turn, and a failure names the option to check (`--vlan`, `--gateway`, `--dns` or the node's firewall).
-- A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
-- A container that gets no DHCP address now names `--vlan` and the DHCP server.
-- A user whose only second factor is a security key signs in with a Proxmox VE API token (`Use API token` on the sign-in page). The session has the token's privileges, a CSRF token and the usual limits.
-- A tab whose session another tab replaced picks up the new CSRF token after a refused change and asks for a retry. It returns to sign-in when the other tab signed in as someone else.
-- OpenID sign-in works from any name the interface answers to. A start under another name moves to `--public-url` first, so the provider's return finds the state cookie.
-- New `--trusted-proxy` option for `kubehenge serve` and the installer (`KUBEHENGE_TRUSTED_PROXIES`). Behind a listed reverse proxy, the sign-in limits count the client in `X-Forwarded-For`. `install.sh --upgrade --no-trusted-proxy` removes the list.
-- The install guide covers reverse proxies. The interface needs a host name of its own, not a path prefix, and the proxy forwards Headlamp's port 8443 too.
-- Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
-- SDN VNets work wherever a bridge is chosen, listed with their zone and alias, and `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone. A VLAN tag on a VNet of a VLAN zone is refused.
 
 ## [0.4.2] - 2026-11-05
 

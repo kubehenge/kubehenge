@@ -83,6 +83,29 @@ describe("the management cluster's health", () => {
     vi.useRealTimers();
   });
 
+  it("shows when the controller cannot reach the Proxmox VE API, with the reason behind Details", async () => {
+    show({
+      answers: true,
+      nodes: [ready("mgmt-1")],
+      controllers: [deployment("capi-system", "capi-controller-manager")],
+      proxmox: { ok: false, error: "lookup pve.internal: no such host", checked: "2026-01-02T12:00:00Z" },
+    });
+    await expect(screen.findByText("Degraded")).resolves.toBeInTheDocument();
+    expect(screen.getByText("Not reachable")).toBeInTheDocument();
+    expect(screen.getByText("lookup pve.internal: no such host")).toBeInTheDocument();
+  });
+
+  it("shows a reachable Proxmox VE API as healthy", async () => {
+    show({
+      answers: true,
+      nodes: [ready("mgmt-1")],
+      controllers: [],
+      proxmox: { ok: true, checked: "2026-01-02T12:00:00Z" },
+    });
+    await expect(screen.findByText("Healthy")).resolves.toBeInTheDocument();
+    expect(screen.getByText("Reachable")).toBeInTheDocument();
+  });
+
   it("calls a cluster with no ready node down", () => {
     expect(healthVerdict({ answers: true, nodes: [{ name: "mgmt-1", ready: false }] })).toStrictEqual({
       state: "error",

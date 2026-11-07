@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -269,7 +270,13 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	if !s.require(w, r, u, "/", privileges...) {
 		return
 	}
-	if !s.checkBridges(w, r, u, &req.Settings) {
+	findings, err := s.setupPreflight(r.Context(), u, &req.Settings)
+	if err != nil {
+		s.writeSetupError(w, r, err)
+		return
+	}
+	if len(findings.Errors) > 0 {
+		writeError(w, http.StatusUnprocessableEntity, strings.Join(findings.Errors, " "))
 		return
 	}
 	// The run needs the whole of a ticket's life, so it gets a new one rather than the session's.
@@ -289,43 +296,6 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	s.Log.InfoContext(r.Context(), "management cluster apply started", "user", u.ticket.Username)
 	writeJSON(w, http.StatusAccepted, a.Current())
-}
-
-// checkBridges holds the settings' bridges to the zones Proxmox VE has them in, since the module
-// grants SDN.Use on the path the settings name and Proxmox VE checks the one it knows. It also
-// refuses a VLAN tag on a management bridge that tags already. It answers the request when one fails.
-func (s *Server) checkBridges(w http.ResponseWriter, r *http.Request, u user, settings *appliance.Settings) bool {
-	refs := append([]string{settings.Bridge}, settings.WorkloadBridges...)
-	for i, ref := range refs {
-		zone, name := pve.SplitBridge(ref)
-		// Settings that name no bridge are refused by their own check.
-		if name == "" {
-			continue
-		}
-		network, err := s.Accounts.Network(r.Context(), u.ticket, name)
-		if errors.Is(err, pve.ErrForbidden) {
-			// A VNet the user may not read cannot be checked, and Proxmox VE decides at the first clone.
-			continue
-		}
-		if err != nil {
-			s.proxmoxError(w, r, err)
-			return false
-		}
-		if network.Zone != zone {
-			// Proxmox VE answers alike for a VNet that does not exist and one the user may not see.
-			message := fmt.Sprintf("Bridge %s: Proxmox VE shows you no VNet %s. A node's own bridge is written as %s", ref, name, name)
-			if network.Zone != pve.LocalZone {
-				message = fmt.Sprintf("Bridge %s: write it as %s/%s", ref, network.Zone, name)
-			}
-			writeError(w, http.StatusUnprocessableEntity, message)
-			return false
-		}
-		if i == 0 && settings.VLAN != nil && *settings.VLAN > 0 && network.TagsTraffic() {
-			writeError(w, http.StatusUnprocessableEntity, vlanOnTaggedNetwork(name))
-			return false
-		}
-	}
-	return true
 }
 
 // jobConflict tells whether a job could not start because another one, of any kind, holds the
