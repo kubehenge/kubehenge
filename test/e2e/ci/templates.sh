@@ -100,6 +100,25 @@ template() { # distribution [flags]
 # the n-th baked template of the test, where `kubehenge template create` then finds it. One baked
 # here whose slot KUBEHENGE_E2E_KEEP_TEMPLATES lists (as in "1 2") is backed up there for the cache.
 pve() { docker exec kubehenge-e2e-pve "$@"; }
+# pve_in: pve with this shell's standard input.
+pve_in() { docker exec -i kubehenge-e2e-pve "$@"; }
+
+# vzdump leaves out every disk set to backup=0, as a template's disks are, so a template is backed
+# up with the option cleared on a copy of its config, and the restore sets it again. These read a
+# VM config on standard input.
+# no_backup_drives: the drives of the config that backups leave out, one per line.
+no_backup_drives() { sed -n '/^\[/q; s/^\([a-z]*[0-9]*\): .*,backup=0\(,.*\)\{0,1\}$/\1/p'; }
+# backed_up: the config with every drive in its backups.
+backed_up() { sed 's/,backup=0//'; }
+# backup_off <drive>...: the config with the drives given left out of backups again.
+backup_off() {
+    backup_off_script=
+    for backup_off_drive in "$@"; do
+        backup_off_script="${backup_off_script}s/^\(${backup_off_drive}: [^,]*\)/\1,backup=0/;"
+    done
+    sed "${backup_off_script}"
+}
+
 # made <slot> <options>: restores the template or makes it. Slot 0 is never kept.
 made() {
     made_slot=$1
@@ -116,6 +135,11 @@ made() {
         made_id=$(pve pvesh get /cluster/nextid)
         pve qmrestore "${made_archive}" "${made_id}" --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
             --pool kubehenge-templates > /dev/null
+        made_conf=/etc/pve/qemu-server/${made_id}.conf
+        made_drives=$(cat "${work}/vz/template-${made_slot}/no-backup")
+        # shellcheck disable=SC2086 # one drive per word
+        pve cat "${made_conf}" | backup_off ${made_drives} |
+            pve_in sh -c "cat > /tmp/restored.conf && cat /tmp/restored.conf > ${made_conf}"
         echo "template $* restored from the cache as VM ${made_id}"
         template "$@"
         return
@@ -141,7 +165,15 @@ made() {
     }
     pve rm -rf "${made_kept}"
     pve mkdir -p "${made_kept}"
-    pve vzdump "${made_id}" --dumpdir "${made_kept}" --compress zstd --quiet 1
+    made_conf=/etc/pve/qemu-server/${made_id}.conf
+    pve cp "${made_conf}" "${made_kept}.conf"
+    pve cat "${made_kept}.conf" | no_backup_drives | pve_in sh -c "cat > ${made_kept}/no-backup"
+    pve cat "${made_kept}.conf" | backed_up | pve_in sh -c "cat > ${made_conf}"
+    made_dump=0
+    # shellcheck disable=SC2310 # the config is put back before the status is returned.
+    pve vzdump "${made_id}" --dumpdir "${made_kept}" --compress zstd --quiet 1 || made_dump=$?
+    pve sh -c "cat ${made_kept}.conf > ${made_conf} && rm ${made_kept}.conf"
+    [ "${made_dump}" = 0 ] || return "${made_dump}"
     pve sh -c "rm -f ${made_kept}/vzdump-qemu-*.log ${made_kept}/vzdump-qemu-*.notes"
     made_size=$(du -ch "${work}/vz/template-${made_slot}"/vzdump-qemu-*.vma.zst | tail -n 1)
     echo "template $* kept for the cache: ${made_size%%[[:space:]]*}"
