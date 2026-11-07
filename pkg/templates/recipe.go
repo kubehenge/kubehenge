@@ -269,9 +269,11 @@ func nodeChecks(b Bake) [][]string {
 }
 
 // fipsChecks prove a node in FIPS mode: the kernel booted with fips=1 and passed its self-tests,
-// every library takes the FIPS policy, and OpenSSL has its FIPS provider.
+// the initramfs holds dracut's fips module, which checks the kernel's integrity, every library
+// takes the FIPS policy, and OpenSSL has its FIPS provider.
 var fipsChecks = [][]string{
 	{"sh", "-c", `grep -qw fips=1 /proc/cmdline && test "$(cat /proc/sys/crypto/fips_enabled)" = 1`},
+	{"sh", "-c", `lsinitrd -m "/usr/lib/modules/$(uname -r)/initramfs.img" | grep -qx fips`},
 	{"sh", "-c", `test "$(update-crypto-policies --show)" = FIPS`},
 	{"sh", "-c", "test -e /usr/lib64/ossl-modules/fips.so"},
 }
