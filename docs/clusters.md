@@ -441,6 +441,8 @@ Nothing changes in the cluster until the changes are applied. A bar above the vi
 
 **Resize** gives the control plane, or one pool, another size, and replaces those nodes one at a time. A resized pool keeps its own size from then on. The other pools keep the cluster's. **Delete** drains and deletes a pool's workers and their disks.
 
+**Timeouts…** sets how long a removed machine of the control plane, or of one pool, waits for its node's drain, its volumes' detach and the node's removal. An empty field takes the class's, shown beside it, and 0 waits for ever. A new cluster sets them for its control planes and its first pool under **Node timeouts** in **General**. [upgrading.md](upgrading.md#what-holds-an-upgrade-back) says what each does.
+
 Each is staged with the cluster's other changes. The API server holds it to the class's least size and to the room the add-ons need.
 
 A pool's name takes lowercase letters, digits and dashes and starts with a letter. With the cluster's name it takes at most 44 characters, so that its nodes' host names stay within one DNS label.
@@ -1045,6 +1047,7 @@ export KUBEHENGE_PROXMOX_TOKEN='ci@pve!kubehenge=<secret>'
 kubehenge cluster list
 kubehenge cluster create -f web.yaml
 kubehenge cluster scale web --control-planes 3 --workers md-0=5
+kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h
 kubehenge cluster kubeconfig web > web.kubeconfig
 kubehenge cluster get web
 kubehenge cluster machine cordon web web-md-0-x7k2p
@@ -1053,7 +1056,8 @@ kubehenge cluster delete web --yes
 
 - The token is read only from `KUBEHENGE_PROXMOX_TOKEN`, so it never shows in a process list. `--ca` (or `KUBEHENGE_CA`) names the CA of the interface's certificate where the system does not trust it.
 - A cluster is found by its name. `-n` names its namespace where more than one has a cluster of that name.
-- `create` takes what the wizard sends, in YAML or JSON, and the interface checks it the same way. That is `name`, `class`, `version`, `controlPlaneReplicas`, `workerReplicas` and `variables`, and `namespace` where there are [more namespaces](#more-namespaces-for-clusters).
+- `create` takes what the wizard sends, in YAML or JSON, and the interface checks it the same way. That is `name`, `class`, `version`, `controlPlaneReplicas`, `workerReplicas` and `variables`, and `namespace` where there are [more namespaces](#more-namespaces-for-clusters). `controlPlaneTimeouts` and `workerTimeouts` hold the [node timeouts](#pools) in seconds, as `nodeDrainTimeoutSeconds`, `nodeVolumeDetachTimeoutSeconds` and `nodeDeletionTimeoutSeconds`.
+- `timeouts` sets the timeouts of the control planes (`--control-planes`) and of pools (`--pool POOL=…`) as `drain`, `detach` and `deletion`. Each is a duration such as `30m`, or 0. A group's three are replaced together, and one left out is the class's.
 - `machine` takes a machine's name, as `get` lists it. `replace`, `keep`, `delete`, `cordon`, `uncordon` and `reboot` do what a machine's actions in the interface do.
 - `get` and `list -o json` print the interface's own description of a cluster for scripts to read.
 - Any HTTP client can do the same: send `Authorization: PVEAPIToken=<user>@<realm>!<name>=<secret>` to the interface's `/api/clusters`.
@@ -1129,6 +1133,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
   - A Cluster may have several, each named once. A pool added later is held to the [pool name rule](#pools).
   - A pool's own size is an override of `workerMachine` under `variables.overrides`.
   - An autoscaled pool has no `replicas`. It carries Cluster API's annotations `cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size` and `-max-size` under `metadata.annotations` (at most 100), with the pool's node labels under `metadata.labels`.
+- **Node timeouts** are Cluster API's own fields `deletion.nodeDrainTimeoutSeconds`, `deletion.nodeVolumeDetachTimeoutSeconds` and `deletion.nodeDeletionTimeoutSeconds`. They sit under `topology.controlPlane` and under each machine deployment, override the class's and take 0 to 86400 seconds.
 - **Ranges** come from `spec.clusterNetwork`. Without it, Kubehenge picks them as the interface does ([Network](#network)).
   - Kubehenge refuses to create a cluster whose ranges overlap its nodes' network.
 

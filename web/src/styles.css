@@ -1313,6 +1313,82 @@ button.go {
   color: var(--warning);
 }
 
+h4.subsection {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dim);
+}
+
+/* On a phone each row of a stacking table becomes a card: its first cell is the title and every other
+   cell shows its label before its value. */
+@media (width <= 600px) {
+  .grid.stack,
+  .grid.stack tbody {
+    display: block;
+  }
+
+  .grid.stack thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .grid.stack tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+
+    padding: 10px 0;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .grid.stack :is(td, th) {
+    display: block;
+
+    min-inline-size: 0;
+    padding: 0;
+    border: none;
+
+    text-align: start;
+    white-space: normal;
+  }
+
+  .grid.stack :is(td, th):not(.row-action, .pool-name) {
+    grid-column: 1 / -1;
+  }
+
+  .grid.stack tbody th {
+    grid-column: 1 / -1;
+    padding-block-end: 2px;
+  }
+
+  .grid.stack td[data-label]::before {
+    content: attr(data-label) " ";
+    display: inline-block;
+    min-inline-size: 6em;
+    color: var(--dim);
+  }
+
+  .grid.stack .row-action {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    inline-size: auto;
+  }
+
+  .grid.stack .pool-name {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+  }
+}
+
 .object-view {
   min-inline-size: 0;
 }

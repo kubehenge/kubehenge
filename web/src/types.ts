@@ -83,6 +83,19 @@ export interface ClusterClass {
   noTemplate?: string;
   /** The operating systems the class's nodes may run, in the order to offer them. Absent for Talos. */
   nodeOSes?: NodeOSChoice[];
+  /** The waits the class gives a removed machine's node, for the control planes and for the workers. */
+  controlPlaneTimeouts?: NodeTimeouts;
+  workerTimeouts?: NodeTimeouts;
+}
+
+/**
+ * How long a removed machine waits for its node, in seconds, before the deletion goes on without
+ * it. A timeout that is absent is the class's, and 0 is never.
+ */
+export interface NodeTimeouts {
+  nodeDrainTimeoutSeconds?: number;
+  nodeVolumeDetachTimeoutSeconds?: number;
+  nodeDeletionTimeoutSeconds?: number;
 }
 
 /** A node OS as a cluster's nodeOS variable names it: a family, such as almalinux, and one of its releases. */
@@ -140,6 +153,8 @@ export interface WorkerPool {
   autoscaling?: Autoscaling;
   /** The pool's own size. Unset, it takes the cluster's workerMachine. */
   machine?: MachineSize;
+  /** The pool's own timeouts. Those it lacks are the class's. */
+  timeouts?: NodeTimeouts;
 }
 
 /** A machine's size, as the controlPlaneMachine and workerMachine variables give it. */
@@ -153,6 +168,8 @@ export interface MachineSize {
 export interface PoolChange {
   replicas?: number;
   machine?: MachineSize | null;
+  /** Replaces all the pool's timeouts. Those left out are the class's. */
+  timeouts?: NodeTimeouts;
 }
 
 export interface Machine {
@@ -478,6 +495,8 @@ export interface Cluster {
   controlPlane: Replicas;
   workers: Replicas;
   workerPools: WorkerPool[];
+  /** The control planes' own timeouts. Those absent are the class's. */
+  controlPlaneTimeouts?: NodeTimeouts;
   variables: Record<string, unknown>;
   pool: string;
   allowed: { change: boolean; kubeconfig: boolean };
@@ -1182,6 +1201,9 @@ export interface CreateRequest {
   workerReplicas: number;
   /** Has the cluster autoscaler size the worker pool in place of workerReplicas. */
   workerAutoscaling?: Autoscaling;
+  /** Timeouts for the control planes and for the first worker pool, in place of the class's. */
+  controlPlaneTimeouts?: NodeTimeouts;
+  workerTimeouts?: NodeTimeouts;
   variables: Record<string, unknown>;
   pods?: string[];
   services?: string[];
@@ -1195,6 +1217,8 @@ export interface ChangeRequest {
   autoscaling?: Record<string, Autoscaling | null>;
   /** Adds and changes worker pools by name, or deletes one with null. */
   pools?: Record<string, PoolChange | null>;
+  /** Replaces all the control planes' timeouts. Those left out are the class's. */
+  controlPlaneTimeouts?: NodeTimeouts;
   variables?: Record<string, unknown>;
 }
 

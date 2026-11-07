@@ -23,6 +23,12 @@ func TestClusterValidatorHoldsTopologyToWhatTheInterfaceOffers(t *testing.T) {
 	if _, err := v.ValidateCreate(context.Background(), base()); err != nil {
 		t.Fatalf("a cluster the interface would make: %v", err)
 	}
+	kept := base()
+	kept.Spec.Topology.ControlPlane.Deletion.NodeDrainTimeoutSeconds = new(int32(0))
+	kept.Spec.Topology.Workers.MachineDeployments[0].Deletion.NodeVolumeDetachTimeoutSeconds = new(int32(MaxNodeTimeoutSeconds))
+	if _, err := v.ValidateCreate(context.Background(), kept); err != nil {
+		t.Fatalf("timeouts of 0 and of a day: %v", err)
+	}
 	for _, tc := range []struct {
 		name   string
 		change func(c *clusterv1.Cluster)
@@ -38,6 +44,15 @@ func TestClusterValidatorHoldsTopologyToWhatTheInterfaceOffers(t *testing.T) {
 			c.Spec.Topology.Workers.MachineDeployments[0].Name = strings.Repeat("p", MaxPoolNames-len(c.Name)+1)
 		}, PoolLengthRule},
 		{"a pool name with a capital", func(c *clusterv1.Cluster) { c.Spec.Topology.Workers.MachineDeployments[0].Name = "GPU" }, PoolNameRule},
+		{"a negative control-plane drain timeout", func(c *clusterv1.Cluster) {
+			c.Spec.Topology.ControlPlane.Deletion.NodeDrainTimeoutSeconds = new(int32(-1))
+		}, "spec.topology.controlPlane.deletion.nodeDrainTimeoutSeconds"},
+		{"a pool's volume detach timeout over a day", func(c *clusterv1.Cluster) {
+			c.Spec.Topology.Workers.MachineDeployments[0].Deletion.NodeVolumeDetachTimeoutSeconds = new(int32(MaxNodeTimeoutSeconds + 1))
+		}, "nodeVolumeDetachTimeoutSeconds"},
+		{"a negative pool node deletion timeout", func(c *clusterv1.Cluster) {
+			c.Spec.Topology.Workers.MachineDeployments[0].Deletion.NodeDeletionTimeoutSeconds = new(int32(-5))
+		}, NodeTimeoutRule},
 		{"two pools of one name", func(c *clusterv1.Cluster) {
 			w := &c.Spec.Topology.Workers
 			w.MachineDeployments = append(w.MachineDeployments, w.MachineDeployments[0])

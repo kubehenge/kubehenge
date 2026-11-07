@@ -133,7 +133,35 @@ the wizard's request is.`,
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
 	o.namespaceFlag(deleteCmd.Flags())
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, deleteCmd, o.machineCommand())
+	cmd.AddCommand(list, get, kubeconfig, create, scale, o.timeoutsCommand(), deleteCmd, o.machineCommand())
+	return cmd
+}
+
+func (o *clusterOptions) timeoutsCommand() *cobra.Command {
+	var controlPlanes string
+	var pools []string
+	cmd := &cobra.Command{
+		Use:   "timeouts NAME",
+		Short: "Set how long a removed machine waits for its node's drain, volumes and deletion",
+		Long: `Set how long a removed machine waits for its node before its deletion goes on without it.
+
+A value is drain, detach or deletion, set to a duration such as 30m, or to 0 for never. The
+drain is the eviction of the node's pods, and a pod it cannot evict is deleted with the machine. The
+detach is the wait for the node's volumes. The deletion is the removal of the node's Node object.
+A value left out is the cluster class's.`,
+		Example: `  kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h`,
+		Args:    argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req, err := timeoutsRequest(controlPlanes, pools)
+			if err != nil {
+				return err
+			}
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], req)
+		},
+	}
+	cmd.Flags().StringVar(&controlPlanes, "control-planes", "", "the control planes' timeouts as drain=30m,detach=10m,deletion=1m")
+	cmd.Flags().StringArrayVar(&pools, "pool", nil, "a pool's timeouts as POOL=drain=30m,detach=10m, repeated for more pools")
+	o.namespaceFlag(cmd.Flags())
 	return cmd
 }
 
@@ -321,6 +349,63 @@ func scaleRequest(controlPlanes *int32, workers []string) (map[string]any, error
 	}
 	if len(req) == 0 {
 		return nil, errors.New("give --control-planes, --workers or both")
+	}
+	return req, nil
+}
+
+// timeoutKeys are the names timeouts takes, and the field of the interface's request each sets.
+var timeoutKeys = map[string]string{
+	"drain": "nodeDrainTimeoutSeconds", "detach": "nodeVolumeDetachTimeoutSeconds", "deletion": "nodeDeletionTimeoutSeconds",
+}
+
+// timeoutValues reads "drain=30m,detach=10m" as the interface's timeouts in seconds.
+func timeoutValues(spec string) (map[string]int64, error) {
+	out := map[string]int64{}
+	for part := range strings.SplitSeq(spec, ",") {
+		key, value, ok := strings.Cut(part, "=")
+		field := timeoutKeys[key]
+		if !ok || field == "" {
+			return nil, fmt.Errorf("timeouts %q: give drain, detach or deletion as NAME=30m", spec)
+		}
+		d, err := time.ParseDuration(value)
+		if value == "0" {
+			d, err = 0, nil
+		}
+		if err != nil || d < 0 {
+			return nil, fmt.Errorf("timeouts %q: %q is not a duration such as 30m, or 0 for never", spec, value)
+		}
+		out[field] = int64(d / time.Second)
+	}
+	return out, nil
+}
+
+// timeoutsRequest is the interface's change for timeouts' flags.
+func timeoutsRequest(controlPlanes string, pools []string) (map[string]any, error) {
+	req := map[string]any{}
+	if controlPlanes != "" {
+		t, err := timeoutValues(controlPlanes)
+		if err != nil {
+			return nil, err
+		}
+		req["controlPlaneTimeouts"] = t
+	}
+	if len(pools) > 0 {
+		changes := map[string]any{}
+		for _, p := range pools {
+			pool, spec, ok := strings.Cut(p, "=")
+			if !ok || pool == "" {
+				return nil, fmt.Errorf("--pool %q: give POOL=drain=30m, such as md-0=drain=30m,detach=10m", p)
+			}
+			t, err := timeoutValues(spec)
+			if err != nil {
+				return nil, err
+			}
+			changes[pool] = map[string]any{"timeouts": t}
+		}
+		req["pools"] = changes
+	}
+	if len(req) == 0 {
+		return nil, errors.New("give --control-planes, --pool or both")
 	}
 	return req, nil
 }
