@@ -2679,13 +2679,15 @@ form.box > *,
 }
 
 /* A box's fields start their controls where the fields around the box do: its label column gives
-   up the box's border and left padding. */
-.group > .field {
+   up the box's border and left padding. An add-on card is such a box. */
+.group > .field,
+.addon-card > .field {
   grid-template-columns: calc(190px - 12px - 1px) 1fr;
 }
 
 @media (width <= 600px) {
-  .group > .field {
+  .group > .field,
+  .addon-card > .field {
     grid-template-columns: 1fr;
   }
 }
@@ -2702,6 +2704,7 @@ form.box > *,
 
   .field,
   .group > .field,
+  .addon-card > .field,
   .summary {
     grid-template-columns: minmax(0, 1fr);
   }

@@ -606,6 +606,16 @@ To let the automatic upgrade go ahead without a fix, accept what is listed. Choo
   - Rotate the cluster's CAs as the distribution documents.
 - **`NoDNS01Credential`**, "no DNS-01 credential is stored for the cluster (…): store one, or name an existing Secret": the `acme-dns01` issuer has no credential for the DNS provider, and the cluster's certificates wait. Type it in under the cluster's **Options**, take the one an administrator stored for every cluster (`dns01.sharedCredential`), or name a Secret of your own in `dns01.existingSecret` ([clusters.md](clusters.md#dns-providers)).
 
+### Monitoring
+
+- **Alerts or samples do not arrive.**
+  - A `MonitoringWaiting` event ("monitoring leaves out what needs a credential not stored for the cluster yet: …") names the credentials still missing. Store them under the cluster's **Options**, **Monitoring** ([clusters.md](clusters.md#monitoring-alerts-and-remote-write)).
+  - Without that event, read Alertmanager's log with `kubectl -n monitoring logs alertmanager-kube-prometheus-stack-alertmanager-0`. It names the receiver that failed and the server's answer.
+  - Prometheus's `/targets` page and the `prometheus_remote_storage_` metrics show a remote write that fails.
+- **The Alertmanager pod stays in `ContainerCreating`.** It waits for the Secret `kubehenge-alertmanager` in `monitoring`, which the controller writes once the chart has created the namespace. Check `kubectl -n monitoring get secret` and the cluster's events. Prometheus waits the same way for `kubehenge-prometheus`.
+- **A workload's ServiceMonitor or rule is not picked up.** Prometheus reads every one in every namespace. Check that its `namespaceSelector` and its Service's labels and port name match, then look at Prometheus's `/targets` and `/rules` pages.
+- **The monitoring add-on is not ready after a chart upgrade.** The chart's CRD upgrade job (`kube-prometheus-stack-upgrade` in `monitoring`) applies the new CRDs first. Read its log with `kubectl -n monitoring logs job/kube-prometheus-stack-upgrade`. It needs to pull its images from `docker.io` and `registry.k8s.io`.
+
 ### VMs that do not run, storage nearly full
 
 Kubehenge's controller looks every 15 seconds at the VMs of every cluster's machines whose node has joined. It also looks at the storage in the cluster's `storage` variable. Both show in the cluster's **Health** view. The fleet lists the cluster under what needs you.

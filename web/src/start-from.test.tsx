@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
+import { newAlerting } from "./Alerting";
 import { App } from "./App";
 import { newForm, request, type Form } from "./create-form";
 import { fakeServer, reads } from "./fake-server";
@@ -88,6 +89,20 @@ const chosen: Form = {
   headlampView: true,
   monitoring: true,
   grafanaHostname: "grafana.example",
+  alerting: {
+    ...newAlerting(),
+    email: {
+      on: true,
+      smarthost: "mail.example:587",
+      from: "alerts@example.org",
+      to: "ops@example.org, oncall@example.org",
+      username: "alerts",
+      requireTLS: false,
+    },
+    slack: { on: true, channel: "#ops" },
+    remoteWrite: { on: true, url: "https://mimir.example/push", auth: "basic", username: "tenant" },
+    external: { on: true, urls: "https://am.example\nhttps://am2.example:9093", auth: "bearer", username: "" },
+  },
   logs: { enabled: true, collector: "api", retentionDays: 14, sizeGiB: 20 },
   podSecurity: { admission: "restricted", kyverno: "restricted" },
   cis: true,

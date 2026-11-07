@@ -299,7 +299,9 @@ spec:
     - expression: >-
         variables.cluster == ''
         ? variables.purpose in ['backup', 'dns01', 'notify-webhook', 'notify-ntfy', 'notify-email']
-        : variables.purpose in ['backup', 'dns01', 'gitops', 'oidc-client']
+        : variables.purpose in ['backup', 'dns01', 'gitops', 'oidc-client',
+          'alerts-email', 'alerts-webhook', 'alerts-slack', 'alerts-teams',
+          'remote-write', 'external-alertmanager']
       messageExpression: >-
         'the interface writes and deletes only credentials labelled {{ $credential }} with a purpose it knows, not '
         + (variables.purpose == '' ? 'an unlabelled Secret' : 'one for ' + variables.purpose)

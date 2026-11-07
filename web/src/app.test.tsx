@@ -953,6 +953,8 @@ describe("create", () => {
     headlampView: false,
     monitoring: true,
     grafanaHostname: "grafana.example",
+    alerting: newForm().alerting,
+    alertingSecrets: {},
     logs: { enabled: false, collector: "node", retentionDays: 7, sizeGiB: 10 },
     podSecurity: { admission: "restricted", kyverno: "off" },
     cis: false,

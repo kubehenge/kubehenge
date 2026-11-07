@@ -24,7 +24,8 @@ extend-ignore-re = [
   "\\(Unauthorized\\)|\\*Unauthorized\\*",
   # OpenID Connect's discovery field and Prometheus' ServiceMonitor field.
   "authorization_endpoint",
-  "\\[?\"authorization\"(:|\\])",
+  "\\[?\"authorization\"(:|\\]|,)",
+  "credentialsAuthKey += \"authorization\"",
   # Istio's policy kind.
   "AuthorizationPolicy",
   # go-proxmox's error text.

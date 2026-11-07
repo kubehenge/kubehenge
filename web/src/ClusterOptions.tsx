@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useId, useState, type JSX } from "react";
 
+import { AlertingFields, alertingOf, alertingText, alertingVariable, type AlertingForm } from "./Alerting";
 import { api } from "./api";
 import { CertificatesDialog, certificatesOf, certificatesText } from "./Certificates";
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
+import { CredentialField } from "./CredentialField";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { EgressDialog, egressOf, egressText } from "./EgressProxy";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
@@ -268,6 +270,7 @@ export function optionRows<A extends string = never>(
 ): OptionRow<OptionAction | A>[] {
   const headlamp = hostedValue(c.variables["headlamp"]);
   const monitoring = hostedValue(c.variables["monitoring"]);
+  const sends = alertingText(alertingOf(c.variables["monitoring"]));
   const rancher = rancherValue(c.variables["rancher"]);
   const upgrades = upgradePolicy(c.variables["upgrades"]);
   const cis = c.variables["cis"] === true;
@@ -341,7 +344,7 @@ export function optionRows<A extends string = never>(
       label: "Monitoring",
       value:
         monitoring.enabled === true
-          ? `On${filled(monitoring.hostname) ? `, Grafana at ${monitoring.hostname}` : ""}`
+          ? `On${filled(monitoring.hostname) ? `, Grafana at ${monitoring.hostname}` : ""}${sends === "" ? "" : `, sends to ${sends}`}`
           : "Off",
       group: "Add-ons",
       action: "monitoring",
@@ -765,6 +768,88 @@ const hostedAddons = {
 
 type HostedAddon = keyof typeof hostedAddons;
 
+interface HostedState {
+  enabled: boolean;
+  hostname: string;
+  view: boolean;
+  alerting: AlertingForm;
+}
+
+// hostedChange is the add-on's variable the dialog saves, and whether it differs from the held one.
+// Settings of an add-on that is off go with it.
+function hostedChange(
+  addon: HostedAddon,
+  current: HostedValue & { alerting: AlertingForm },
+  state: HostedState,
+): { value: Record<string, unknown>; changed: boolean } {
+  const value: Record<string, unknown> = { enabled: state.enabled };
+  if (!state.enabled) {
+    return { value, changed: current.enabled === true };
+  }
+  if (state.hostname) {
+    value["hostname"] = state.hostname;
+    if (filled(current.tlsSecret)) {
+      value["tlsSecret"] = current.tlsSecret;
+    }
+  }
+  if (state.view) {
+    value["access"] = "view";
+  }
+  const alerts = addon === "monitoring" ? alertingVariable(state.alerting) : {};
+  Object.assign(value, alerts);
+  const alertsChanged =
+    JSON.stringify(alerts) !== JSON.stringify(addon === "monitoring" ? alertingVariable(current.alerting) : {});
+  const changed =
+    current.enabled !== true ||
+    state.hostname !== (current.hostname ?? "") ||
+    state.view !== (current.access === "view") ||
+    alertsChanged;
+  return { value, changed };
+}
+
+// MonitoringExtras are the monitoring dialog's alerting settings while it is on. Switched off, it
+// says what stays.
+function MonitoringExtras({
+  cluster: c,
+  switchedOff,
+  withLogs,
+  alerting,
+  onAlerting,
+}: {
+  cluster: Cluster;
+  switchedOff: boolean;
+  withLogs: boolean;
+  alerting: AlertingForm | undefined;
+  onAlerting: (a: AlertingForm) => void;
+}): JSX.Element {
+  return (
+    <>
+      {alerting !== undefined && (
+        <AlertingFields
+          value={alerting}
+          onChange={onAlerting}
+          renderCredential={(purpose, label, keys) => (
+            <CredentialField
+              label={label}
+              purpose={purpose}
+              cluster={{ namespace: c.namespace, name: c.name }}
+              keys={keys}
+            />
+          )}
+        />
+      )}
+      {switchedOff && (
+        <output className="warning notice">
+          {withLogs ? "Logs switch off too. " : ""}
+          {withLogs
+            ? "The volumes of Loki, Prometheus and Alertmanager stay."
+            : "The volumes of Prometheus and Alertmanager stay."}
+        </output>
+      )}
+    </>
+  );
+}
+
 function HostedAddonDialog({
   cluster: c,
   addon,
@@ -780,19 +865,13 @@ function HostedAddonDialog({
   const [hostname, setHostname] = useState(current.hostname ?? "");
   const [view, setView] = useState(current.access === "view");
   const { busy, error, send } = useChange(c, onClose);
-  const value: HostedValue = { enabled };
-  if (enabled && hostname) {
-    value.hostname = hostname;
-  }
-  if (enabled && hostname && filled(current.tlsSecret)) {
-    value.tlsSecret = current.tlsSecret;
-  }
-  if (enabled && view) {
-    value.access = "view";
-  }
-  const changed =
-    enabled !== (current.enabled === true) ||
-    (enabled && (hostname !== (current.hostname ?? "") || view !== (current.access === "view")));
+  const heldAlerting = alertingOf(c.variables["monitoring"]);
+  const [alerting, setAlerting] = useState(heldAlerting);
+  const { value, changed } = hostedChange(
+    addon,
+    { ...current, alerting: heldAlerting },
+    { enabled, hostname, view, alerting },
+  );
   const viewHint = useId();
   // Logs are read in monitoring's Grafana, so they go with it.
   const heldLogs = record(c.variables["logs"]);
@@ -842,7 +921,15 @@ function HostedAddonDialog({
           </p>
         </>
       )}
-      {logsGo && <output className="warning notice">Logs switch off too. Loki&apos;s volume stays.</output>}
+      {addon === "monitoring" && (
+        <MonitoringExtras
+          cluster={c}
+          switchedOff={!enabled && current.enabled === true}
+          withLogs={logsGo}
+          alerting={enabled ? alerting : undefined}
+          onAlerting={setAlerting}
+        />
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );
