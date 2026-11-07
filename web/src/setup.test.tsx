@@ -674,6 +674,25 @@ describe("setup", () => {
     expect(screen.queryByText(/certificate expires on/u)).not.toBeInTheDocument();
   });
 
+  it("warns administrators that the appliance's address moved away from its certificate's", async () => {
+    fakeServer({
+      ...administrator,
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          applianceVMID: 105,
+          addressMoved: { from: ["192.0.2.40"], to: ["192.0.2.41"] },
+        },
+      },
+      "GET /api/clusters": { body: [] },
+    });
+    render(<App />);
+    const alert = await screen.findByText(/Appliance address moved from 192\.0\.2\.40 to 192\.0\.2\.41\./u);
+    expect(within(alert).getByText("sh install.sh --certificate --ctid 105")).toBeInTheDocument();
+  });
+
   it("warns administrators that the management cluster's credentials run out", async () => {
     fakeServer({
       ...administrator,

@@ -997,6 +997,8 @@ export interface SetupStatus {
   credentialsExpire?: string;
   /** The appliance's guest ID in Proxmox VE. For administrators only. */
   applianceVMID?: number;
+  /** The appliance's addresses moved away from those its certificate is for. For administrators only. */
+  addressMoved?: { from: string[]; to: string[] };
   /** The Proxmox VE API's certificate goes unverified (--proxmox-insecure); for administrators only. */
   proxmoxInsecure?: boolean;
   /** An earlier run left its encrypted state, so the setup takes that run's passphrase. */
@@ -1051,6 +1053,8 @@ export interface ManagementAutomatic {
   since?: string;
   /** The Proxmox VE user the runs act as. */
   user: string;
+  /** The runs cannot open what was kept, as after a restore, until switched off and on. */
+  keyLost?: boolean;
 }
 
 export type UpgradePolicy = "off" | "patch" | "minor";
