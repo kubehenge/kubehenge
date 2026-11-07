@@ -1,0 +1,4 @@
+- A cluster's VM that an administrator renamed is destroyed with its machine. Once the machine has booted, its SMBIOS UUID alone identifies the VM.
+- A VM of another name under the machine's VM ID, with no UUID to check, is no longer released silently. The machine stays, with a warning event and a condition naming the VM ID and the VM found.
+- Deleting a machine's VM removes it from HA resources, backup jobs and replication jobs in one call, and drops disks left under its ID.
+- A VM with Proxmox VE's protection flag is not destroyed, and the stalled deletion names the flag and `qm set <vmid> --protection 0`.

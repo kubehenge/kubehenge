@@ -35,6 +35,9 @@ const form: SetupForm = {
   refreshTime: "01:00",
   refreshTimeZone: "UTC",
   refreshStorage: "",
+  refreshNode: "",
+  refreshBridge: "",
+  refreshVLAN: "",
   refreshAddress: "",
   refreshGateway: "",
   refreshDNS: "",
@@ -431,6 +434,68 @@ describe("setup", () => {
         headlampActions: true,
       },
     });
+  });
+
+  it("sends the node, bridge and VLAN the template build is given", async () => {
+    const job = { user: "root@pam", started: new Date().toISOString(), state: "running", log: ["Applying"] };
+    const routes: Record<string, Route> = {
+      ...administrator,
+      ...oneNode,
+      "GET /api/proxmox/nodes": {
+        body: [
+          { node: "pve1", online: true },
+          { node: "pve2", online: true },
+        ],
+      },
+      "GET /api/proxmox/nodes/pve2/bridges": { body: [] },
+      "GET /api/proxmox/nodes/pve2/dns": { body: { servers: [] } },
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "POST /api/setup": () => {
+        routes["GET /api/setup"] = { body: { appliance: true, ready: false, allowed: true, job } };
+        return { status: 202, body: job };
+      },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
+    await user.type(screen.getByLabelText("Node addresses"), "192.0.2.11/24");
+    await user.type(screen.getByLabelText("API address"), "192.0.2.10");
+    await next(user);
+    await user.click(forClusters("Bridges").getByRole("checkbox", { name: "vmbr1" }));
+
+    expect(screen.getByLabelText("Build node")).toHaveValue("");
+    expect(screen.getByLabelText("Build bridge")).toHaveValue("");
+    await user.selectOptions(screen.getByLabelText("Build node"), "pve2");
+    await user.selectOptions(screen.getByLabelText("Build bridge"), "vmbr1");
+    await user.type(screen.getByLabelText("Build VLAN"), "4095");
+    expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+    await next(user);
+    expect(screen.getByRole("button", { name: "Clusters" })).toHaveAttribute("aria-current", "step");
+    await user.clear(screen.getByLabelText("Build VLAN"));
+    await user.type(screen.getByLabelText("Build VLAN"), "120");
+    await next(user);
+    await next(user);
+    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
+    await user.click(screen.getByRole("button", { name: "Create management cluster" }));
+
+    await screen.findByText("Now: Applying");
+    expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
+      settings: { templateRefresh: { enabled: true, node: "pve2", bridge: "vmbr1", vlan: 120 } },
+    });
+  });
+
+  it("loads the template build's node, bridge and VLAN from the saved settings", () => {
+    const saved = settings({ ...form, refreshNode: "pve2", refreshBridge: "evpn1/build", refreshVLAN: "120" });
+    expect(saved.templateRefresh).toMatchObject({ node: "pve2", bridge: "evpn1/build", vlan: 120 });
+    expect(formOf(saved)).toMatchObject({ refreshNode: "pve2", refreshBridge: "evpn1/build", refreshVLAN: "120" });
+    expect(formOf(settings(form))).toMatchObject({ refreshNode: "", refreshBridge: "", refreshVLAN: "" });
+    expect(setupFieldProblems({ ...form, refreshVLAN: "4095" })).toHaveProperty("refreshVLAN");
+    expect(setupFieldProblems({ ...form, refreshVLAN: "4094" })).not.toHaveProperty("refreshVLAN");
   });
 
   it("lists VNets with their alias and zone and sends the one chosen as zone/vnet", async () => {
