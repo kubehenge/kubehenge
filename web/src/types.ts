@@ -600,6 +600,8 @@ export interface TalosStatus {
   failed?: string;
   /** Why the next control-plane node waits: its reboot would cost etcd its quorum. */
   waiting?: string;
+  /** What holds the node under way before its reboot: pods a disruption budget keeps, or StatefulSets short of replicas. */
+  held?: string;
 }
 
 /** One etcd member as the controller last read it. */

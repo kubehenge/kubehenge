@@ -963,7 +963,7 @@ function HealthChecks({ checks }: { checks: HealthSection<HealthCheck> }): JSX.E
 
 function ConditionTable({ conditions, empty }: { conditions: Condition[]; empty: string }): JSX.Element {
   return (
-    <table className="grid">
+    <table className="grid events">
       <thead>
         <tr>
           <th>Type</th>
@@ -1050,7 +1050,7 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
         </label>
       </div>
       <SectionNote section={events} what="events" />
-      <table className="grid">
+      <table className="grid events">
         <thead>
           <tr>
             <th>Last</th>
@@ -1080,7 +1080,7 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
               </td>
               <td>{e.object}</td>
               <td className="message">{e.message}</td>
-              <td>{e.count}</td>
+              <td className={e.count > 1 ? "count" : "count once"}>{e.count}</td>
             </tr>
           ))}
         </tbody>

@@ -271,6 +271,9 @@ type talosView struct {
 	Failed    string `json:"failed,omitempty"`
 	// Waiting says why the next control-plane node waits: its reboot would cost etcd its quorum.
 	Waiting string `json:"waiting,omitempty"`
+	// Held says what holds the node under way before its reboot: pods a disruption budget keeps,
+	// or StatefulSets short of ready replicas.
+	Held string `json:"held,omitempty"`
 }
 
 func talosViewOf(c *clusterv1.Cluster) *talosView {
@@ -282,6 +285,7 @@ func talosViewOf(c *clusterv1.Cluster) *talosView {
 		Upgraded:  c.Annotations[provisioner.TalosUpgradedAnnotation],
 		Failed:    c.Annotations[provisioner.TalosUpgradeFailedAnnotation],
 		Waiting:   c.Annotations[provisioner.TalosUpgradeWaitingAnnotation],
+		Held:      c.Annotations[provisioner.TalosWaitingAnnotation],
 	}
 }
 

@@ -117,7 +117,8 @@
       "ageDays": 120,
       "held": true,
       "addOns": ["headlamp", "monitoring"],
-      "unsynced": true
+      "unsynced": true,
+      "talosHold": { "to": "v1.14.5", "sinceMinutes": 25, "pod": "data/orders-db-0", "budget": "orders-db" }
     },
     {
       "name": "staging",

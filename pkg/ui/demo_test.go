@@ -200,6 +200,34 @@ func TestDemoAnswersEveryRead(t *testing.T) { //nolint:paralleltest // swaps Go'
 	}
 }
 
+// The demo's Talos cluster has an upgrade a disruption budget holds, with the event in its activity,
+// and no other cluster has either.
+func TestDemoHoldsTheTalosUpgradeOfPlatform(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var clusters []clusterView
+	decodeDemo(t, b.do("GET", "/api/clusters", ""), &clusters)
+	for i := range clusters {
+		c := &clusters[i]
+		held := c.Talos != nil && c.Talos.Held != ""
+		if held != (c.Name == "platform") {
+			t.Errorf("cluster %s: held %v", c.Name, held)
+		}
+	}
+	var platform clusterView
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform", ""), &platform)
+	if platform.Talos == nil || !strings.HasPrefix(platform.Talos.Upgrading, "platform-control-plane-") ||
+		!strings.Contains(platform.Talos.Held, "The disruption budget orders-db needs") {
+		t.Errorf("platform's Talos view %+v", platform.Talos)
+	}
+	var activity activityView
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform/activity", ""), &activity)
+	if !slices.ContainsFunc(activity.Events.Items, func(e eventView) bool { return e.Reason == "TalosDrainBlocked" }) {
+		t.Errorf("platform's events %+v", activity.Events)
+	}
+}
+
 func TestDemoShowsItsFleet(t *testing.T) {
 	t.Parallel()
 	_, b := newDemo(t)

@@ -610,7 +610,11 @@ Shut that VM down in Proxmox VE before the node goes down. Start it again once t
 - **`TalosInstallRetry`**, "node … to Talos …, try … of 4 at …: …": the installer's pull or install stalled, or the node did not answer. The controller tries again at the time named, and after the fourth try fails as above. Check that the node reaches factory.talos.dev.
 - **`TalosUpgradeWaiting`**, "the upgrade of node … waits for etcd: …": another etcd member is unhealthy, a learner or not answering, and rebooting the node would cost etcd its quorum. The upgrade goes on by itself once every other member is healthy. Check the member the event names with `talosctl etcd status`.
 - **`TalosUpgradeAbandoned`**, "node … to Talos …: its machine is being deleted": the cluster scaled down or replaced the node while it was upgraded. Nothing to do. Its successor is upgraded as any other node.
-- **`TalosDrain`**, "node … reboots without all its pods moved: …": the node's pods did not all leave within five minutes, and the node rebooted anyway. A PodDisruptionBudget often holds them, so check the budgets of the workloads named.
+- **`TalosDrainBlocked`**, "node … is held while it drains: Pod … cannot evict pod …": a PodDisruptionBudget keeps a pod on the node and the upgrade waits. The text names the pod and the budget, and **Upgrade held by** on the cluster shows it too.
+  - `kubectl get pdb -A` shows why the budget allows no disruption, and a workload short of ready replicas explains most. Once it is healthy the pod leaves and the upgrade goes on.
+  - A budget that can never be met, such as `minAvailable` equal to a single replica, holds until the drain timeout. Lower the budget, or shorten the drain timeout of the control plane or the pool under **Machines**, **Timeouts…**.
+- **`TalosStatefulSetsWaiting`**, "node … waits to drain: StatefulSet … replicas ready": a StatefulSet with a ready pod on the node is short of replicas. Bring it back, or wait for the drain timeout (`TalosStatefulSetsNotReady`).
+- **`TalosDrain`**, "node … reboots without all its pods moved: the drain timeout of … ran out": the pods named were still on the node at the timeout. It rebooted anyway.
 
 ### Upgrades held back
 
