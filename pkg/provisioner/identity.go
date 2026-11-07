@@ -178,8 +178,8 @@ func setZone(ctx context.Context, workload client.Client, node *corev1.Node, pve
 func restartCSINode(ctx context.Context, workload client.Client, node string) error {
 	pods := &corev1.PodList{}
 	err := workload.List(ctx, pods, client.InNamespace(metav1.NamespaceSystem), client.MatchingLabels{
-		"app.kubernetes.io/name":      csiPluginName,
-		"app.kubernetes.io/component": csiNodeComponent,
+		appName:      csiPluginName,
+		appComponent: csiNodeComponent,
 	})
 	if err != nil {
 		return fmt.Errorf("listing the CSI node pods: %w", err)

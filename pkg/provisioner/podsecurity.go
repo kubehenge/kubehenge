@@ -130,7 +130,7 @@ func kyvernoPoliciesProxy(cluster *clusterv1.Cluster) string {
 // workers are enough, they are preferred.
 func kyvernoValues() map[string]any {
 	lease := func() map[string]any { return map[string]any{"leaderElectionRetryPeriod": leaseRetry} }
-	admission := map[string]any{"app.kubernetes.io/component": "admission-controller"}
+	admission := map[string]any{appComponent: "admission-controller"}
 	return map[string]any{
 		"features": map[string]any{
 			"policyExceptions": map[string]any{"enabled": true, "namespace": kyvernoAddon},
