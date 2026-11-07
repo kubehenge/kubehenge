@@ -54,8 +54,8 @@ func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	var paths []string
-	for _, st := range storages {
-		if p := storagePath(st.Storage); !slices.Contains(paths, p) {
+	for i := range storages {
+		if p := storagePath(storages[i].Storage); !slices.Contains(paths, p) {
 			paths = append(paths, p)
 		}
 	}
