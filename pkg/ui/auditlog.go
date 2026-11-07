@@ -345,10 +345,7 @@ func (s *Server) keepStreaming(ctx context.Context, f *auditFollower, open audit
 	p.stop, p.done, p.heard, p.finished = stop, done, s.now(), false
 	f.streams.Go(func() {
 		// Runs after done is closed, to wake whoever waits for the stream to end.
-		defer func() {
-			f.mu.Lock()
-			f.mu.Unlock() //nolint:staticcheck // the unlock is the wake, there is nothing to guard
-		}()
+		defer f.mu.wake()
 		defer close(done)
 		defer stop()
 		s.streamPod(streamCtx, f, open, name, p)

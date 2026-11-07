@@ -49,7 +49,14 @@ type activityEntry struct {
 // for a reader.
 type changeMutex struct {
 	sync.Mutex
+
 	changed chan struct{}
+}
+
+// wake tells the waiters that something changed that the lock does not guard.
+func (m *changeMutex) wake() {
+	m.Lock()
+	defer m.Unlock()
 }
 
 // Unlock unlocks and wakes the waiters.
