@@ -118,7 +118,8 @@
       "workers": 3,
       "subnet": 70,
       "ageDays": 9,
-      "addOns": ["headlamp"]
+      "addOns": ["headlamp"],
+      "vmsMissing": true
     }
   ],
   "kubeadmTemplates": ["v1.37.1", "v1.36.5", "v1.35.9"],

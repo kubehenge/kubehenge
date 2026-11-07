@@ -103,7 +103,7 @@ func (m *ManagementTalos) Snapshot(ctx context.Context, raw []byte, nodes []stri
 func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []string, open func() (io.ReadCloser, error), log func(string)) error {
 	up := m.answering(ctx, admin, nodes, log)
 	if len(up) == 0 {
-		return errors.New("no control-plane node answers on its Talos API")
+		return errors.New("no control-plane node answers on its Talos API: start the management cluster's VMs in Proxmox VE, or if they are gone, recreate the management cluster from this snapshot")
 	}
 	boots := make([]string, len(up))
 	for i, address := range up {
