@@ -148,6 +148,14 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 	mux.HandleFunc("GET /api2/json/nodes/one/dns", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, map[string]any{"search": "example.org", "dns1": "192.0.2.53", "dns2": "2001:db8::53"})
 	})
+	// As Proxmox VE answers: Sys.Audit on the node is needed, which bob lacks.
+	mux.HandleFunc("GET /api2/json/nodes/one/time", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("PVEAuthCookie"); err != nil || c.Value != "PVE:alice@pve:1" {
+			http.Error(w, "Permission check failed (/nodes/one, Sys.Audit)", http.StatusForbidden)
+			return
+		}
+		reply(w, map[string]any{"timezone": "Europe/Zurich", "time": 1760000000, "localtime": 1760007200})
+	})
 	mux.HandleFunc("GET /api2/json/access/domains", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, []map[string]any{{"realm": "pve", "type": "pve", "default": 1}, {"realm": "pam", "type": "pam"}})
 	})

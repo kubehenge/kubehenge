@@ -75,6 +75,9 @@ func SetUpDemo(s *Server, clock func() time.Time) error {
 	s.Releases = &provisioner.ChannelServer{
 		HTTP: &http.Client{Transport: demoChannels{}}, URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
 	}
+	s.TalosClock = func(_ context.Context, _ []byte, address string) (bool, error) {
+		return address != demoUnsyncedAddress, nil
+	}
 	s.TalosReleases = func(context.Context) ([]string, error) {
 		return []string{templates.DefaultTalosVersion}, nil
 	}

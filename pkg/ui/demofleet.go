@@ -99,7 +99,13 @@ type demoCluster struct {
 	WorkerNodes json.RawMessage `json:"workerNodes"`
 	// DriftTaint is a taint key put by hand on the last worker, which the pool does not set.
 	DriftTaint string `json:"driftTaint"`
+	// Unsynced is set on a Talos cluster whose last worker has not synced its clock.
+	Unsynced bool `json:"unsynced"`
 }
+
+// demoUnsyncedAddress is the address of the node whose clock the demo's Talos API reports as not
+// synced.
+const demoUnsyncedAddress = "192.0.2.250"
 
 type demoUpgrade struct {
 	From   string          `json:"from"`
@@ -205,6 +211,12 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 	server := fmt.Sprintf("https://10.20.%d.10:6443", d.Subnet)
 	for _, id := range []provisioner.Identity{provisioner.IdentityHealth, provisioner.IdentityLogs, provisioner.IdentityAlerts, provisioner.IdentityBackups} {
 		f.objects = append(f.objects, f.identity(d.Name, id, server))
+	}
+	if d.Distribution == templates.Talos {
+		f.objects = append(f.objects, &corev1.Secret{
+			Namespace: demoNamespace, Name: provisioner.TalosconfigSecret(d.Name),
+			Data: map[string][]byte{provisioner.TalosconfigKey: []byte("demo")},
+		})
 	}
 	for _, a := range d.AddOns {
 		f.objects = append(f.objects, demoAddOn(d, a, f.data.AddOns[a], created))
@@ -449,6 +461,9 @@ func (f *demoFleet) workload(d *demoCluster, machines []*clusterv1.Machine) *Wor
 	}
 	for i, m := range machines {
 		node := demoNode(m)
+		if d.Unsynced && i == len(machines)-1 {
+			node.Status.Addresses[0].Address = demoUnsyncedAddress
+		}
 		if !isControlPlane(m) {
 			drift := ""
 			if i == len(machines)-1 {
@@ -518,6 +533,7 @@ func demoNode(m *clusterv1.Machine) *corev1.Node {
 	return &corev1.Node{
 		Name: m.Status.NodeRef.Name, Labels: labels, CreationTimestamp: since,
 		Status: corev1.NodeStatus{
+			Addresses:   []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "192.0.2.10"}},
 			NodeInfo:    corev1.NodeSystemInfo{KubeletVersion: m.Spec.Version},
 			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse(mem)},
 			Conditions: []corev1.NodeCondition{
@@ -701,6 +717,14 @@ func (*demoAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]p
 
 func (*demoAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
 	return []string{"10.20.0.53"}, nil
+}
+
+// NodeTime is the node's clock, which the demo has the second node run a minute and a half ahead.
+func (a *demoAccounts) NodeTime(_ context.Context, _ *pve.Ticket, node string) (time.Time, error) {
+	if nodes := a.fleet.data.ProxmoxNodes; len(nodes) > 1 && node == nodes[1] {
+		return a.fleet.now.Add(95 * time.Second), nil
+	}
+	return a.fleet.now, nil
 }
 
 func (*demoAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, error) {
