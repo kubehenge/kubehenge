@@ -65,6 +65,9 @@ expect() {
     fi
 }
 
+expect test/e2e/appliance-upgrade.sh appliance-upgrade yes
+expect test/e2e/appliance-upgrade.sh appliance no
+expect test/e2e/appliance.sh appliance-upgrade no
 expect test/e2e/rancher.sh rancher yes
 expect test/e2e/rancher.sh two-nodes no
 expect test/e2e/two-nodes.sh two-nodes yes
@@ -112,7 +115,7 @@ expect test/e2e/workload-cluster.sh cluster-mesh yes
 expect test/e2e/workload-cluster.sh appliance no
 # Without a base to compare with, any change to the values may touch Rancher's.
 expect charts/kubehenge/values.yaml rancher yes
-for t in rancher two-nodes control-plane-ha management-cluster-upgrade; do
+for t in rancher two-nodes control-plane-ha management-cluster-upgrade appliance-upgrade; do
     expect pkg/provisioner/cluster.go "${t}" no
     [ "${t}" = rancher ] || expect charts/kubehenge/values.yaml "${t}" no
     expect test/e2e/common.sh "${t}" no
@@ -280,13 +283,14 @@ expect_each "${diffed}" yes talos talos-addons-a
 
 # Every test a rule names is one the nightly run has: scope.sh refuses an unknown name, and the
 # nightly run holds all of them. The same list holds the checks of --all, which stays the merge
-# queue's set without the nightly run's four. It holds 20 lanes at most, as many as a run's jobs at
+# queue's set without the nightly run's own. It holds 20 lanes at most, as many as a run's jobs at
 # once, with every pair, and each test in one lane only.
 nightly_tests=$(sh "${ci}/nightly.sh" 20000 | jq -j '.[] | split(",")[] | split("+")[0] | . + " "')
 checks=$(
     printf '%s' "${all}" | jq -j '
       (if type == "array" then "" else "not-a-list " end),
       (if index("rancher") == null then "" else "rancher " end),
+      (if index("appliance-upgrade") == null then "" else "appliance-upgrade " end),
       (if length <= 20 then "" else "over-20 " end),
       (["appliance,management-cluster", "k3s-etcd,cluster-mesh", "k3s-addons-b,autoscaler"][] as $p
         | if index($p) == null then "no-lane:\($p) " else "" end),
@@ -298,7 +302,7 @@ problems=${checks%%|*}
 rest=${checks#*|}
 tests_of_all=${rest%%|*}
 pairs=${rest#*|}
-for t in ${tests_of_all} management-cluster-upgrade rancher control-plane-ha two-nodes; do
+for t in ${tests_of_all} management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade; do
     case " ${nightly_tests}" in
         *" ${t} "*) ;;
         *)
@@ -362,10 +366,11 @@ expect_values "with Rancher's Turtles changed" yes
 sed 's|depName=ghcr.io/headlamp-k8s/headlamp|depName=ghcr.io/headlamp-k8s/headlamp2|; s|^  # Prometheus, Alertmanager|  # Prometheus and Alertmanager|' "${work}/original.yaml" > "${values}"
 expect_values 'changed outside addons.rancher' no
 
-# --all stays the merge queue's set, without the nightly run's four.
+# --all stays the merge queue's set, without the nightly run's own.
 for problem in ${problems}; do
     case ${problem} in
         rancher) echo 'FAIL: --all lists rancher' ;;
+        appliance-upgrade) echo 'FAIL: --all lists appliance-upgrade' ;;
         over-20) printf 'FAIL: --all has over 20 lanes: %s\n' "${all}" ;;
         no-lane:*) printf 'FAIL: --all has no lane %s: %s\n' "${problem#no-lane:}" "${all}" ;;
         twice) printf 'FAIL: --all runs a test in two lanes: %s\n' "${all}" ;;

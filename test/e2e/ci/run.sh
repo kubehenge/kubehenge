@@ -7,7 +7,8 @@
 #
 # <test> is management-cluster (applies the management cluster, runs the templates and volumes tests
 # while it is up, and destroys it), management-cluster-upgrade (applies and destroys it), appliance
-# (installs the appliance, which sets the management cluster up and removes it), or kubeadm, rke2,
+# (installs the appliance, which sets the management cluster up and removes it), appliance-upgrade
+# (installs the latest published release and upgrades it to the tree under test), or kubeadm, rke2,
 # k3s, talos, the halves of rke2 and k3s rke2-etcd, rke2-machines, k3s-etcd and k3s-machines, their
 # add-on parts kubeadm-addons-a, -b and -c, rke2-addons-a to -d, k3s-addons-a and -b and
 # talos-addons-a, -b and -c, rancher,
@@ -15,7 +16,7 @@
 # second Proxmox VE node, test/e2e/ci/second-node.sh), which first apply the management cluster and
 # create the templates they need, and leave it up. The workload tests and their add-on halves take
 # options after their name, each after a +: the cluster's CNI, its node OS, or cis-off
-# (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off. Every test but the appliance
+# (test/e2e/ci/variant.sh), as in kubeadm+calico+rocky-10+cis-off. Every test but the appliance's two
 # takes management-<MiB>, the management node's memory, as in management-cluster-upgrade+management-3584.
 #
 # The workload clusters start one minor version behind the management cluster's Kubernetes and are
@@ -78,7 +79,7 @@ settings=$(variant "${test}") || exit 2
 eval "${settings}"
 test=${test%%+*}
 case "${test}" in
-    management-cluster | management-cluster-upgrade | appliance | kubeadm | rke2 | k3s | talos) ;;
+    management-cluster | management-cluster-upgrade | appliance | appliance-upgrade | kubeadm | rke2 | k3s | talos) ;;
     rke2-etcd | rke2-machines | k3s-etcd | k3s-machines) ;;
     kubeadm-addons-a | kubeadm-addons-b | kubeadm-addons-c) ;;
     rke2-addons-a | rke2-addons-b | rke2-addons-c | rke2-addons-d) ;;
@@ -338,6 +339,59 @@ case "${test}" in
             "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \
             /root/kubehenge/kubehenge_0.0.1_linux_amd64.tar.gz /root/kubehenge/kubehenge_0.0.2_linux_amd64.tar.gz \
             /root/kubehenge/kubehenge_0.0.3_linux_amd64.tar.gz /root/kubehenge/settings.json
+        ;;
+    appliance-upgrade)
+        # What a user does: the newest published release installed with the installer published
+        # beside it, then the tree under test as the release after it. The tag is read when the run
+        # starts, from the redirect of the releases page rather than the API, whose limit a shared
+        # runner address may have used up. The published files are checked against the release's
+        # SHA256SUMS, so no key of this run's is involved in installing them.
+        tag=$(curl -sSL --proto '=https' --retry 8 --retry-all-errors -o /dev/null -w '%{url_effective}' \
+            https://github.com/kubehenge/kubehenge/releases/latest)
+        tag=${tag##*/}
+        printf '%s' "${tag}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "the latest release is tagged ${tag}, not vX.Y.Z" >&2
+            exit 1
+        }
+        published=${tag#v}
+        mkdir "${work}/published"
+        for asset in install.sh "kubehenge_${published}_linux_amd64.tar.gz" "kubehenge_${published}_SHA256SUMS"; do
+            curl -sSfL --proto '=https' --retry 8 --retry-all-errors -o "${work}/published/${asset}" \
+                "https://github.com/kubehenge/kubehenge/releases/download/${tag}/${asset}"
+        done
+        (cd "${work}/published" && sha256sum -c --strict "kubehenge_${published}_SHA256SUMS") || {
+            echo "the published release does not have the sums its SHA256SUMS names" >&2
+            exit 1
+        }
+        # install.sh refuses an older release, so the build is the published version's next patch.
+        next=${published%.*}.$((${published##*.} + 1))
+        make -s -C "${repo}" build > /dev/null
+        make -s -C "${repo}" dist VERSION="${next}" > /dev/null
+        # The fields the published release's interface takes, which refuses one it does not know:
+        # the network and storage ones every release's setup has asked for, and the registry
+        # mirror, whose misses the nodes pass on to the registry. The controller image is the
+        # published release's own, and the tree under test's goes in with the upgrade's apply.
+        jq -n '{
+            nodes: ["pve"], imageDatastore: "local", vmDatastore: "local", bootstrapDatastore: "local",
+            bridge: "vmbr0", nodeAddresses: ["172.20.99.11/24"], apiAddress: "172.20.99.10",
+            gateway: "172.20.99.1", dnsServers: ["172.20.99.1"],
+            workloadDatastores: ["local"], workloadBridges: ["vmbr0"],
+            registryMirrors: {"ghcr.io": ["http://172.21.99.3:5000"]}
+        }' > "${work}/appliance-settings.json"
+        pve=kubehenge-e2e-pve
+        docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'
+        docker cp "${repo}/test/e2e" "${pve}:/root/kubehenge/test/e2e"
+        docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
+        docker cp "${work}/published/install.sh" "${pve}:/root/kubehenge/published-install.sh"
+        docker cp "${work}/published/kubehenge_${published}_linux_amd64.tar.gz" "${pve}:/root/kubehenge/"
+        docker cp "${repo}/dist/kubehenge_${next}_linux_amd64.tar.gz" "${pve}:/root/kubehenge/"
+        docker cp "${work}/appliance-settings.json" "${pve}:/root/kubehenge/settings.json"
+        exec docker exec -e KUBEHENGE_E2E_APPLIANCE_ID=900 -e KUBEHENGE_E2E_APPLIANCE_ADDRESS=172.20.99.40/24 \
+            -e KUBEHENGE_E2E_GATEWAY="${KUBEHENGE_E2E_GATEWAY}" -e KUBEHENGE_E2E_DNS="${KUBEHENGE_E2E_DNS}" \
+            -e KUBEHENGE_E2E_STORAGE=local -e KUBEHENGE_E2E_CONTROLLER_IMAGE="${TF_VAR_controller_image}" \
+            "${pve}" sh /root/kubehenge/test/e2e/appliance-upgrade.sh /root/kubehenge/published-install.sh \
+            "/root/kubehenge/kubehenge_${published}_linux_amd64.tar.gz" "/root/kubehenge/kubehenge_${next}_linux_amd64.tar.gz" \
+            /root/kubehenge/settings.json
         ;;
     # The other tests run against a management cluster applied here first. The runner has 4 vCPUs,
     # and a workload cluster with every add-on starting starves when the management node holds 4 of
