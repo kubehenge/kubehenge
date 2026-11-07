@@ -106,6 +106,7 @@ The management cluster's VMs get random VM IDs, because Proxmox VE offers the sa
 - **Without it,** or without `Sys.Audit` on `/` to read it, the IDs come from 10000 to 99998.
 - **Too few free IDs** in the range stop the setup. Widen `next-id`.
 - **A running management cluster** keeps its VMs' IDs when the range changes. The module's `vm_id_range` sets the range, `start` included and `end` excluded.
+
 ## Where the template builds run
 
 Three settings of `template_refresh` place the VM that builds a node image:
