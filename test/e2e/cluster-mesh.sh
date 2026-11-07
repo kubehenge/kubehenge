@@ -127,7 +127,7 @@ reads_peer() {
 }
 # The pods: restricted, as the clusters enforce.
 agnhost_pod() { # <kubeconfig> <name> <args...>
-    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
+    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
     agnhost_kubeconfig=$1 agnhost_name=$2
     shift 2
     KUBECONFIG="${work}/${agnhost_kubeconfig}" kubectl -n e2e-mesh run "${agnhost_name}" --image="${agnhost}" --labels="app=${agnhost_name}" \

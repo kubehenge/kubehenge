@@ -256,7 +256,9 @@ describe("sign-in", () => {
       "GET /api/realms": () => ({ body: [{ realm: "pve", type: "pve" }] }),
       "POST /api/session": () => ({
         status: 401,
-        body: { error: "sign-in failed: check the user name, password and realm" },
+        body: {
+          error: "Sign-in failed. Check the user name, password and realm, or set up the required second factor.",
+        },
       }),
     });
     const user = userEvent.setup({ delay: null });
@@ -268,7 +270,7 @@ describe("sign-in", () => {
     await user.type(screen.getByLabelText("Password"), "wrong");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
-      "Sign-in failed: check the user name, password and realm.",
+      "Sign-in failed. Check the user name, password and realm, or set up the required second factor.",
     );
   });
 
@@ -527,6 +529,79 @@ describe("clusters", () => {
     await waitFor(() => expect(dialog.getByText("2 problems")).toBeInTheDocument());
     expect(dialog.getByRole("link", { name: "Health" })).toHaveAttribute("href", "/clusters/default/web/health");
     expect(dialog.getByRole("button", { name: "Upgrade" })).toBeDisabled();
+  });
+
+  it("warns of removed APIs and fail-closed webhooks in the upgrade dialog, and still upgrades", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const old: Cluster = { ...web, version: "v1.32.4+rke2r1" };
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": () => ({ body: old }),
+      "GET /api/clusters/default/web/upgrade-checks?version=v1.33.13%2Brke2r3": () => ({
+        body: {
+          removedAPIs: [{ api: "flowcontrol.apiserver.k8s.io/v1beta3 flowschemas", removedIn: "1.32" }],
+          webhooks: [
+            { kind: "validating", name: "policy-guard", service: "guard/policy", why: "has 1 ready endpoint" },
+          ],
+          unchecked: [],
+          lines: [],
+        },
+      }),
+      "GET /api/versions/rke2": () => ({ body: { versions: [], older: ["v1.33.13+rke2r3"] } }),
+      "PATCH /api/clusters/default/web": () => ({ body: old }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Upgrade" }));
+    const dialog = within(screen.getByRole("dialog"));
+    await waitFor(() => expect(dialog.getByText("1 in use")).toBeInTheDocument());
+    expect(dialog.getByText("1 at risk")).toBeInTheDocument();
+    expect(dialog.getByText("flowcontrol.apiserver.k8s.io/v1beta3 flowschemas, removed in 1.32")).toBeInTheDocument();
+    expect(dialog.getByText("policy-guard: Service guard/policy has 1 ready endpoint")).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Upgrade" }));
+    await applyStaged(user);
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
+        version: "v1.33.13+rke2r3",
+      }),
+    );
+  });
+
+  it("lets a skipped automatic upgrade go ahead from the Health page", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/health");
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": () => ({ body: web }),
+      "GET /api/clusters/default/web/health": () => ({
+        body: {
+          ...quietHealth,
+          verdict: "degraded",
+          attention: [
+            {
+              severity: "warning",
+              section: "cluster-api",
+              what: "Automatic upgrade skipped",
+              message: "The automatic upgrade to v1.37.1+rke2r1 waits, last requested 2026-10-12.",
+              accept: "v1.37.1+rke2r1",
+            },
+          ],
+        },
+      }),
+      "POST /api/clusters/default/web/upgrade-checks/accept?version=v1.37.1%2Brke2r1": () => ({
+        body: { removedAPIs: [], webhooks: [], unchecked: [], lines: [], basis: "requests" },
+      }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const day = new Date("2026-10-12T00:00:00Z").toLocaleDateString(undefined, { timeZone: "UTC" });
+    await expect(
+      screen.findByText(`The automatic upgrade to v1.37.1+rke2r1 waits, last requested ${day}.`),
+    ).resolves.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Upgrade anyway" }));
+    await expect(screen.findByText(/Accepted/u)).resolves.toBeInTheDocument();
+    expect(calls.filter((c) => c.key.startsWith("POST /api/clusters/default/web/upgrade-checks/accept"))).toHaveLength(
+      1,
+    );
   });
 
   it("upgrades a cluster on a minor version too old for new clusters to the next one", async () => {

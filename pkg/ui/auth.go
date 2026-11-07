@@ -3,11 +3,13 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -15,7 +17,7 @@ import (
 func (s *Server) realms(w http.ResponseWriter, r *http.Request) {
 	realms, err := s.Accounts.Realms(r.Context())
 	if err != nil {
-		s.proxmoxError(w, r, err)
+		s.anonymousProxmoxError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, realms)
@@ -85,6 +87,10 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "enter a user name and password")
 		return
 	}
+	if utf8.RuneCountInString(username) > maxUsernameLength {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("The user name and realm together are at most %d characters.", maxUsernameLength))
+		return
+	}
 	done, ok := s.limiter.reserve(signInCounts(username, r)...)
 	if !ok {
 		writeError(w, http.StatusTooManyRequests, "too many failed sign-ins. Try again later")
@@ -92,14 +98,15 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessions.end(w, r)
 	ticket, challenge, err := s.Accounts.SignIn(r.Context(), username, req.Password)
-	done(errors.Is(err, pve.ErrAuthentication))
+	refused := errors.Is(err, pve.ErrAuthentication) || refusedAsClient(err)
+	done(refused)
 	if err != nil {
-		if errors.Is(err, pve.ErrAuthentication) {
-			s.Log.InfoContext(r.Context(), "sign-in refused", "user", username, "address", clientAddress(r))
-			writeError(w, http.StatusUnauthorized, "sign-in failed: check the user name, password and realm")
+		if refused {
+			s.Log.InfoContext(r.Context(), "sign-in refused", "user", username, "address", clientAddress(r), "error", err)
+			writeError(w, http.StatusUnauthorized, signInRefused)
 			return
 		}
-		s.proxmoxError(w, r, err)
+		s.anonymousProxmoxError(w, r, err)
 		return
 	}
 	if ticket != nil {
@@ -150,6 +157,36 @@ func (s *Server) signInWithToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.signedInView(r.Context(), ticket.Username, sess))
 }
 
+// maxUsernameLength is the longest sign-in name Proxmox VE takes, realm included. It answers a
+// longer one with a 400 that has nothing to do with the password.
+const maxUsernameLength = 64
+
+// signInRefused is the one answer to every refused password. Proxmox VE answers a wrong password,
+// an unknown or disabled user and a missing second factor all the same, so this text does too.
+const signInRefused = "Sign-in failed. Check the user name, password and realm, or set up the required second factor."
+
+// secondFactorRefused says what a refused second factor can mean. Proxmox VE answers a wrong code,
+// a factor locked after too many tries and a cluster without quorum (which cannot record a used
+// recovery key) with the same 401. The user has given the right password, so naming them tells
+// no stranger anything.
+func secondFactorRefused(kind string, c *pve.Challenge) string {
+	switch {
+	case kind == "recovery":
+		return "Wrong recovery key, or the cluster has no quorum. Without quorum, use a node's console."
+	case len(c.Recovery) > 0:
+		return "Wrong code, or the factor is locked. A recovery key unlocks it."
+	default:
+		return "Wrong code, or the factor is locked after too many tries. Ask an administrator to reset it."
+	}
+}
+
+// refusedAsClient tells whether Proxmox VE refused the request itself as malformed or not allowed.
+// On a sign-in that must read as a wrong password, since a stranger learns from nothing else.
+func refusedAsClient(err error) bool {
+	apiErr, ok := errors.AsType[*pve.APIError](err)
+	return ok && strings.HasPrefix(apiErr.Status, "4")
+}
+
 func (s *Server) secondFactor(w http.ResponseWriter, r *http.Request) {
 	sess := s.sessions.lookup(r)
 	if sess == nil || !sess.checkCSRF(r) {
@@ -182,14 +219,15 @@ func (s *Server) secondFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ticket, err := s.Accounts.Answer(r.Context(), challenge, req.Kind, strings.TrimSpace(req.Code))
-	done(errors.Is(err, pve.ErrAuthentication))
+	refused := errors.Is(err, pve.ErrAuthentication) || refusedAsClient(err)
+	done(refused)
 	if err != nil {
-		if errors.Is(err, pve.ErrAuthentication) {
-			s.Log.InfoContext(r.Context(), "second factor refused", "user", challenge.Username, "address", clientAddress(r))
-			writeError(w, http.StatusUnauthorized, "wrong code. Try again")
+		if refused {
+			s.Log.InfoContext(r.Context(), "second factor refused", "user", challenge.Username, "address", clientAddress(r), "error", err)
+			writeError(w, http.StatusUnauthorized, secondFactorRefused(req.Kind, challenge))
 			return
 		}
-		s.proxmoxError(w, r, err)
+		s.anonymousProxmoxError(w, r, err)
 		return
 	}
 	s.sessions.end(w, r)

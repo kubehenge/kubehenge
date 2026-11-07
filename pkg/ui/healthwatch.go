@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"time"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
@@ -31,6 +34,7 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionClusterAPI, what, cond.Message, cond.LastTransitionTime.Time)
 	}
+	versionAttention(c, a)
 	if cond := trueCondition(c, provisioner.CertificatesCondition); cond != nil {
 		if cond.Reason == provisioner.CertificatesRenewing {
 			a.add(severityProgress, sectionNodes, "Renewing certificates", provisioner.CertificatesHead(cond.Message), cond.LastTransitionTime.Time)
@@ -52,6 +56,37 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionVolumes, what, provisioner.StorageSummary(cond.Message), cond.LastTransitionTime.Time)
 	}
+}
+
+// versionAttention adds what the controller found about the cluster's Kubernetes version: that it
+// is out of support, and that an automatic upgrade waits.
+func versionAttention(c *clusterv1.Cluster, a *attention) {
+	if cond := trueCondition(c, provisioner.KubernetesOutOfSupportCondition); cond != nil {
+		a.add(severityWarning, sectionControlPlane, outOfSupportWhat, cond.Message, cond.LastTransitionTime.Time)
+	}
+	if cond := trueCondition(c, provisioner.AutoUpgradeSkippedCondition); cond != nil {
+		a.add(severityWarning, sectionClusterAPI, "Automatic upgrade skipped", cond.Message, cond.LastTransitionTime.Time)
+		(*a)[len(*a)-1].Accept = provisioner.SkippedTarget(cond.Message)
+	}
+}
+
+// pausedNoteAfter is how long a cluster stays paused before its Health page says so: a pause for a
+// maintenance is no problem, a forgotten one holds back upgrades, renewals and replacements.
+const pausedNoteAfter = 7 * 24 * time.Hour
+
+// outOfSupportWhat is the Health item of a cluster on a Kubernetes minor older than any offered.
+const outOfSupportWhat = "Kubernetes out of support"
+
+// pausedAttention notes a cluster paused for pausedNoteAfter. Cluster API records when its Paused
+// condition last changed.
+func pausedAttention(c *clusterv1.Cluster, now time.Time, a *attention) {
+	cond := trueCondition(c, clusterv1.PausedCondition)
+	if cond == nil || !ptr.Deref(c.Spec.Paused, false) || now.Sub(cond.LastTransitionTime.Time) < pausedNoteAfter {
+		return
+	}
+	since := cond.LastTransitionTime.UTC().Format(time.DateOnly)
+	a.add(severityWarning, sectionClusterAPI, "Paused",
+		"Paused since "+since+". Nothing upgrades, renews certificates or replaces machines while the cluster is paused.", cond.LastTransitionTime.Time)
 }
 
 // vmTitles name the worst state a cluster's VMs are in.

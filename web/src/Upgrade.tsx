@@ -3,8 +3,8 @@ import { useEffect, useState, type JSX } from "react";
 import { api } from "./api";
 import { addressRoom } from "./Autoscaling";
 import { Link } from "./router";
-import type { Cluster, ClusterHealth, Effect, Plan } from "./types";
-import { Status, errorMessage } from "./ui";
+import type { Cluster, ClusterHealth, Effect, Plan, UpgradeChecks } from "./types";
+import { Detail, Status, errorMessage, localDates } from "./ui";
 
 // What the machines go through, by the most a change does.
 const replaces: Record<Effect, string> = {
@@ -58,6 +58,87 @@ interface Check {
   what: string;
   state: CheckState;
   text: string;
+  /** The findings behind a warning, one per line. */
+  detail?: string[];
+}
+
+/** useUpgradeChecks reads what the version would run into inside the cluster. */
+function useUpgradeChecks(c: Cluster, version: string): UpgradeChecks | string | undefined {
+  const [read, setRead] = useState<{ version: string; checks: UpgradeChecks | string }>();
+  const { namespace, name } = c;
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      try {
+        const checks = await api.upgradeChecks(namespace, name, version);
+        if (current) {
+          setRead({ version, checks });
+        }
+      } catch (err) {
+        if (current) {
+          setRead({ version, checks: errorMessage(err) });
+        }
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, [namespace, name, version]);
+  return read?.version === version ? read.checks : undefined;
+}
+
+// isoDateLength is the part of a timestamp that names the day.
+const isoDateLength = 10;
+
+function removedAPIsCheck(checks: UpgradeChecks | string | undefined): Check {
+  const what = "Removed APIs";
+  if (checks === undefined) {
+    return { what, state: "progress", text: "Checking" };
+  }
+  if (typeof checks === "string") {
+    return { what, state: "warning", text: "Not checked", detail: [checks] };
+  }
+  if (checks.removedAPIs.length > 0) {
+    return {
+      what,
+      state: "warning",
+      text: `${checks.removedAPIs.length} in use`,
+      detail: [
+        ...checks.removedAPIs.map(
+          (a) =>
+            `${a.api}, removed in ${a.removedIn}${a.seen === undefined ? "" : `, last requested ${localDates(a.seen.slice(0, isoDateLength))}`}`,
+        ),
+        ...(checks.basis === "gauge" ? ["No request counts, so every use since start counts."] : []),
+      ],
+    };
+  }
+  const unread = checks.unchecked.filter((u) => !u.startsWith("the admission webhooks"));
+  return unread.length > 0
+    ? { what, state: "warning", text: "Not checked", detail: unread }
+    : { what, state: "ok", text: "None in use" };
+}
+
+function webhooksCheck(checks: UpgradeChecks | string | undefined): Check | undefined {
+  const what = "Webhooks";
+  if (checks === undefined) {
+    return { what, state: "progress", text: "Checking" };
+  }
+  if (typeof checks === "string") {
+    return undefined;
+  }
+  if (checks.webhooks.length > 0) {
+    return {
+      what,
+      state: "warning",
+      text: `${checks.webhooks.length} at risk`,
+      detail: checks.webhooks.map((w) => `${w.name}: Service ${w.service} ${w.why}`),
+    };
+  }
+  const unread = checks.unchecked.filter((u) => u.startsWith("the admission webhooks"));
+  return unread.length > 0
+    ? { what, state: "warning", text: "Not checked", detail: unread }
+    : { what, state: "ok", text: "None at risk" };
 }
 
 function changeCheck(read: PlanRead | undefined): Check {
@@ -107,18 +188,22 @@ function healthCheck(health: ClusterHealth | string | undefined): Check {
 }
 
 /**
- * UpgradeChecks is what to know before an upgrade: what the API server makes of it and what it
- * replaces, whether the rollout has the address it needs, and what is wrong with the cluster already.
+ * UpgradeChecksList is what to know before an upgrade: what the API server makes of it and what it
+ * replaces, whether the rollout has the address it needs, the removed APIs and fail-closed webhooks
+ * it meets, and what is wrong with the cluster already.
  */
-export function UpgradeChecks({
+export function UpgradeChecksList({
   cluster: c,
+  version,
   read,
   healthPath,
 }: {
   cluster: Cluster;
+  version: string;
   read: PlanRead | undefined;
   healthPath: string;
 }): JSX.Element {
+  const found = useUpgradeChecks(c, version);
   const [health, setHealth] = useState<ClusterHealth | string>();
   const { namespace, name } = c;
   useEffect(() => {
@@ -141,7 +226,14 @@ export function UpgradeChecks({
     };
   }, [namespace, name]);
   const address = addressCheck(c);
-  const checks = [changeCheck(read), ...(address === undefined ? [] : [address]), healthCheck(health)];
+  const webhooks = webhooksCheck(found);
+  const checks = [
+    changeCheck(read),
+    ...(address === undefined ? [] : [address]),
+    removedAPIsCheck(found),
+    ...(webhooks === undefined ? [] : [webhooks]),
+    healthCheck(health),
+  ];
   return (
     <dl className="preflight" aria-label="Before upgrading">
       {checks.map((ch) => (
@@ -149,6 +241,15 @@ export function UpgradeChecks({
           <dt>{ch.what === "Health" ? <Link to={healthPath}>Health</Link> : ch.what}</dt>
           <dd>
             <Status state={ch.state} text={ch.text} />
+            {ch.detail !== undefined && (
+              <Detail>
+                <ul>
+                  {ch.detail.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </Detail>
+            )}
           </dd>
         </div>
       ))}
