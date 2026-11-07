@@ -1934,6 +1934,10 @@ fieldset.choices .check {
   white-space: nowrap;
 }
 
+.grid .row-action > button + button {
+  margin-inline-start: 6px;
+}
+
 /* A row with a button centres its text beside it. Rows of text alone keep to the top, where a
    cell of several lines starts. */
 .grid tr:has(> .row-action) > :is(td, th) {
@@ -3036,8 +3040,13 @@ form.box > *,
 }
 
 /* The frame closes round the wizard, instead of running on empty across the page. */
-.panel:has(> .wizard) {
+.panel:has(> .wizard),
+.panel.setup-import {
   max-inline-size: calc(var(--form-width) + 2px);
+}
+
+.panel.setup-import > .box {
+  border-block-end: 0;
 }
 
 /* The frame closes round a page of fields too. */

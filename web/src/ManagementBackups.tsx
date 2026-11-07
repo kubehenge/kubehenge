@@ -190,7 +190,7 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
     <div className="box scroll">
       <h3>Snapshots in the target</h3>
       <ErrorBox message={error ?? v?.error} />
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Taken</th>
@@ -214,8 +214,8 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
               <td title={s.name}>
                 {when(s.time)} <span className="muted">({age(s.time)} ago)</span>
               </td>
-              <td>{s.kubernetesVersion ?? ""}</td>
-              <td>{s.size === undefined ? "" : bytes(s.size)}</td>
+              <td data-label="Kubernetes">{s.kubernetesVersion ?? ""}</td>
+              <td data-label="Size">{s.size === undefined ? "" : bytes(s.size)}</td>
               <td className="row-action">
                 <button
                   type="button"

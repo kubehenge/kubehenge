@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { fakeServer, type Route } from "./fake-server";
-import { TakeOver } from "./TakeOver";
+import { TakeOver } from "./ManagementRecovery";
 
 describe("taking the management cluster over", () => {
   it("takes over on Enter only once the words are typed", async () => {

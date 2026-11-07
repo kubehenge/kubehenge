@@ -115,10 +115,6 @@ export function ManagementHealthCard(): JSX.Element {
     );
   }
   const verdict = healthVerdict(h);
-  const nodes = h.nodes ?? [];
-  const controllers = h.controllers ?? [];
-  const nodesDown = nodes.filter((n) => !n.ready);
-  const controllersShort = controllers.filter((c) => c.ready < c.wanted);
   return (
     <div className={stale ? "box management-health management-health-stale" : "box management-health"}>
       <h3>
@@ -130,63 +126,7 @@ export function ManagementHealthCard(): JSX.Element {
         )}
       </h3>
       {h.answers ? (
-        <>
-          <dl className="summary">
-            <dt>Nodes</dt>
-            <dd className="mono">
-              {nodes.length - nodesDown.length} of {nodes.length} ready
-            </dd>
-            <dt>Controllers</dt>
-            <dd className="mono">
-              {controllers.length - controllersShort.length} of {controllers.length} ready
-            </dd>
-            {h.etcd !== undefined && (
-              <>
-                <dt>etcd</dt>
-                <dd className="mono">
-                  {h.etcd.healthy} of {h.etcd.members} members
-                </dd>
-              </>
-            )}
-            {h.proxmox !== undefined && (
-              <>
-                <dt>Proxmox VE API</dt>
-                <dd>
-                  <Status state={h.proxmox.ok ? "ok" : "error"} text={h.proxmox.ok ? "Reachable" : "Not reachable"} />
-                </dd>
-              </>
-            )}
-            {reboot !== undefined && (
-              <>
-                <dt>Ready for reboot</dt>
-                <dd>
-                  <Status state={reboot.ready ? "ok" : "warning"} text={reboot.ready ? "Ready" : "Wait"} />
-                </dd>
-              </>
-            )}
-          </dl>
-          {reboot !== undefined && <RebootReady ready={reboot} />}
-          <UnownedVMs vms={h.unowned?.vms ?? []} />
-          <ProxmoxNotes proxmox={h.proxmox} />
-          {(nodesDown.length > 0 || controllersShort.length > 0) && (
-            <ul className="health-short">
-              {nodesDown.map((n) => (
-                <li key={`node/${n.name}`}>
-                  <Status state="error" text="Not ready" /> <span className="mono">{n.name}</span>
-                  {n.message !== undefined && <span className="muted"> {n.message}</span>}
-                </li>
-              ))}
-              {controllersShort.map((c) => (
-                <li key={`deploy/${c.namespace}/${c.name}`}>
-                  <Status state="warning" text={`${c.ready} of ${c.wanted}`} />{" "}
-                  <span className="mono">
-                    {c.namespace}/{c.name}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </>
+        <AnsweringHealth health={h} reboot={reboot} />
       ) : (
         h.error !== undefined && (
           <Detail>
@@ -195,5 +135,71 @@ export function ManagementHealthCard(): JSX.Element {
         )
       )}
     </div>
+  );
+}
+
+function AnsweringHealth({ health: h, reboot }: { health: ManagementHealth; reboot?: RebootReadiness }): JSX.Element {
+  const nodes = h.nodes ?? [];
+  const controllers = h.controllers ?? [];
+  const nodesDown = nodes.filter((n) => !n.ready);
+  const controllersShort = controllers.filter((c) => c.ready < c.wanted);
+  return (
+    <>
+      <dl className="summary">
+        <dt>Nodes</dt>
+        <dd className="mono">
+          {nodes.length - nodesDown.length} of {nodes.length} ready
+        </dd>
+        <dt>Controllers</dt>
+        <dd className="mono">
+          {controllers.length - controllersShort.length} of {controllers.length} ready
+        </dd>
+        {h.etcd !== undefined && (
+          <>
+            <dt>etcd</dt>
+            <dd className="mono">
+              {h.etcd.healthy} of {h.etcd.members} members
+            </dd>
+          </>
+        )}
+        {h.proxmox !== undefined && (
+          <>
+            <dt>Proxmox VE API</dt>
+            <dd>
+              <Status state={h.proxmox.ok ? "ok" : "error"} text={h.proxmox.ok ? "Reachable" : "Not reachable"} />
+            </dd>
+          </>
+        )}
+        {reboot !== undefined && (
+          <>
+            <dt>Ready for reboot</dt>
+            <dd>
+              <Status state={reboot.ready ? "ok" : "warning"} text={reboot.ready ? "Ready" : "Wait"} />
+            </dd>
+          </>
+        )}
+      </dl>
+      {reboot !== undefined && <RebootReady ready={reboot} />}
+      <UnownedVMs vms={h.unowned?.vms ?? []} />
+      <ProxmoxNotes proxmox={h.proxmox} />
+      {(nodesDown.length > 0 || controllersShort.length > 0) && (
+        <ul className="health-short">
+          {nodesDown.map((n) => (
+            <li key={`node/${n.name}`}>
+              <Status state="error" text="Not ready" /> <span className="mono">{n.name}</span>
+              {n.message !== undefined && <span className="muted"> {n.message}</span>}
+            </li>
+          ))}
+          {controllersShort.map((c) => (
+            <li key={`deploy/${c.namespace}/${c.name}`}>
+              <Status state="warning" text={`${c.ready} of ${c.wanted}`} />{" "}
+              <span className="mono">
+                {c.namespace}/{c.name}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }

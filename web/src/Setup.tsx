@@ -4,7 +4,7 @@ import { api, bridgesOf, dnsOf } from "./api";
 import { backupKeys } from "./Backups";
 import { BackupTargets, cleanTargets, targetProblems, targetSummary } from "./BackupTargets";
 import { CredentialField } from "./CredentialField";
-import { ImportBox } from "./ManagementRecovery";
+import { ImportBox, TakeOver } from "./ManagementRecovery";
 import {
   bridgeLabel,
   bridgeRef,
@@ -24,7 +24,6 @@ import {
   toInt,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
-import { TakeOver } from "./TakeOver";
 import type {
   BackupTarget,
   Bridge,
