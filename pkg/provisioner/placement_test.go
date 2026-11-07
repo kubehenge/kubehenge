@@ -247,7 +247,7 @@ func TestCheckNodeOSLeavesTalosAlone(t *testing.T) {
 	t.Parallel()
 	c := talosCluster("web", "v1.14.4")
 	h := &Hooks{Nodes: &fakeNodes{online: []string{"pve1"}, levels: map[string]int{"pve1": 1}}}
-	if err := h.checkNodeOS(t.Context(), c); err != nil {
+	if err := h.checkNodeOS(t.Context(), h.reads(), c); err != nil {
 		t.Errorf("a Talos cluster refused for its node OS: %v", err)
 	}
 }
@@ -280,7 +280,7 @@ func TestCheckNodeOSRefusesWhatNoAllowedNodeRuns(t *testing.T) {
 			t.Parallel()
 			c := cluster(tc.vars...)
 			h := &Hooks{Nodes: &fakeNodes{online: tc.online, levels: tc.levels}}
-			err := h.checkNodeOS(t.Context(), c)
+			err := h.checkNodeOS(t.Context(), h.reads(), c)
 			if tc.refused == "" && err != nil || tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)) {
 				t.Errorf("checkNodeOS = %v, want a refusal naming %q", err, tc.refused)
 			}

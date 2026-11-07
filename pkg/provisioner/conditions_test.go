@@ -35,13 +35,13 @@ func TestReconcileReportsItsOutcomeOnTheCluster(t *testing.T) {
 		t.Fatal("no error from a failed creation")
 	}
 	cond := kubehengeReady(t, kube, c)
-	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != ReconcileFailedReason ||
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != CloudFailedReason ||
 		!strings.Contains(cond.Message, "describing volume owner VM 4242: not authorized") {
 		t.Fatalf("%s = %+v, want False with the error", KubehengeReadyCondition, cond)
 	}
 	select {
 	case e := <-recorder.Events:
-		if !strings.HasPrefix(e, corev1.EventTypeWarning+" "+ReconcileFailedReason) || !strings.Contains(e, "not authorized") {
+		if !strings.HasPrefix(e, corev1.EventTypeWarning+" "+CloudFailedReason) || !strings.Contains(e, "not authorized") {
 			t.Errorf("event %q, want a Warning carrying the error", e)
 		}
 	default:
