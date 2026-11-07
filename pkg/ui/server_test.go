@@ -1420,7 +1420,7 @@ func TestClusterShowsWhereItsVMsRun(t *testing.T) {
 	worker.Status.Conditions = []metav1.Condition{{Type: clusterv1.MachineReadyCondition, Status: metav1.ConditionFalse, Message: waiting}}
 	h := newHarness(t, cluster("default", "one"), cp, worker)
 	// The provider names a VM after its infrastructure machine, not after the Machine.
-	h.accounts.members = []pve.Member{{VMID: 201, Node: "pve2", Type: "qemu", Name: "one-cp-a-x1"}, {VMID: 202, Node: "pve1", Type: "qemu", Name: "one-cp-a"}}
+	h.accounts.members = []pve.Member{{VMID: 201, Node: "pve2", Type: "qemu", Name: "one-cp-a-x1", Status: "stopped"}, {VMID: 202, Node: "pve1", Type: "qemu", Name: "one-cp-a"}}
 	h.server.ProxmoxURL = "https://pve.example.org:8006"
 	view := func(username string) clusterView {
 		b := h.browser()
@@ -1434,7 +1434,7 @@ func TestClusterShowsWhereItsVMsRun(t *testing.T) {
 		return v
 	}
 	admin := view("admin@pve")
-	if len(admin.Machines) != 2 || admin.Machines[0].ProxmoxNode != "pve2" || admin.Machines[1].ProxmoxNode != "" {
+	if len(admin.Machines) != 2 || admin.Machines[0].ProxmoxNode != "pve2" || admin.Machines[0].VM != "stopped" || admin.Machines[1].ProxmoxNode != "" || admin.Machines[1].VM != "" {
 		t.Fatalf("machines = %+v", admin.Machines)
 	}
 	// The console opens in Proxmox VE's own web interface, for a VM it named.

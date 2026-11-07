@@ -82,7 +82,7 @@ func SetUpDemo(s *Server, clock func() time.Time) error {
 	if s.SessionMaxAge == 0 {
 		s.SessionMaxAge = demoSessionMaxAge
 	}
-	s.demo = &demoState{}
+	s.demo = &demoState{hosts: fleet.data.ProxmoxNodes}
 	s.clock = clock
 	s.init()
 	for i := range fleet.activity {
@@ -120,6 +120,8 @@ func demoScheme() (*runtime.Scheme, *meta.DefaultRESTMapper, error) {
 type demoState struct {
 	mu      sync.Mutex
 	session *session
+	// hosts are the Proxmox VE nodes the sample management cluster's VMs take in turn.
+	hosts []string
 }
 
 // demoGuard marks every answer as the demo's, signs in whoever opens it, and refuses every change.

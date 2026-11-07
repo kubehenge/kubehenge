@@ -1,0 +1,11 @@
+- `kubehenge appliance ready-for-reboot [--node NODE]` exits 0 only when every etcd member of the management cluster and of every cluster is healthy. With `--node`, that node's guests must also be able to go away without costing any etcd its quorum.
+- A blocked reboot prints its first blocker in one line, naming the cluster, the member and the node.
+- Administration, Health shows the same answer for each Proxmox VE node under Ready for reboot. It counts the management cluster's healthy etcd members.
+- The controller records every cluster's etcd members every 30 seconds. A record older than three minutes blocks every node.
+- The management VMs get `startup: order=1,up=90`, so they start first after a host boots.
+- Patching Proxmox VE hosts in `docs/install.md` says to check, reboot one host, wait for the check to pass and go on to the next.
+- A cluster gets the condition `ControlPlaneQuorumLost`, an event of that name and a Health item. That happens when its API is silent for 10 minutes and fewer than a majority of its control-plane machines have a running VM.
+- Recover… accepts that condition besides a stalled roll, through the interface, the CLI and kubectl. It lists the control planes whose VM runs.
+- Recover… says that what only the lost members held is gone.
+- A Talos cluster's etcd reset is tested after the loss of two of three control planes, as the kubeadm, RKE2 and k3s resets are.
+- The troubleshooting page documents recovering a cluster that lost two of three control planes, with the kubectl annotation.

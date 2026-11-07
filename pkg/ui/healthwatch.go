@@ -18,6 +18,9 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionControlPlane, "Control-plane roll stalled", provisioner.RollStallHead(cond.Message), cond.LastTransitionTime.Time)
 	}
+	if cond := trueCondition(c, provisioner.QuorumLostCondition); cond != nil {
+		a.add(severityError, sectionControlPlane, "Control-plane quorum lost", provisioner.QuorumLostHead(cond.Message), cond.LastTransitionTime.Time)
+	}
 	if cond := trueCondition(c, provisioner.DeletionStalledCondition); cond != nil && !provisioner.Abandoned(c) {
 		a.add(severityWarning, sectionClusterAPI, "Deletion stalled", provisioner.DeletionStallHead(cond.Message), cond.LastTransitionTime.Time)
 	}

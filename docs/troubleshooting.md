@@ -363,6 +363,27 @@ The same through kubectl: `kubectl annotate cluster <name> kubehenge.dev/etcd-re
 
 Three control planes keep a majority through the loss of one, rolls included.
 
+### Two of three control planes are gone
+
+Two Proxmox VE nodes fail together, or a datastore holding two control planes is lost. The third control plane runs, but etcd has no majority, so the API stays silent. Cluster API does not replace a member without a quorum.
+
+After 10 minutes of silence with fewer than a majority of control-plane machines running, the Cluster gets the condition `ControlPlaneQuorumLost` and a warning event of that name. The cluster's page shows it with **Recover…**, and its **Health** view lists it. The message says how many machines run.
+
+First start what stopped. A host that only reboots brings its members back, and the condition ends once the API answers.
+
+#### Recovering with the survivors
+
+If the members cannot come back, **Recover…** lists the control planes whose VM runs. It keeps the one picked and replaces the others, as for [a stalled roll](#recovering). Whatever only the lost members held is gone.
+
+The same through kubectl. Pick a machine whose VM runs:
+
+```sh
+kubectl -n <namespace> annotate cluster <name> \
+  kubehenge.dev/etcd-restore="{\"machine\":\"<machine to keep>\",\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+```
+
+The status follows in `kubehenge.dev/etcd-restore-status`. A Talos cluster is reset through the nodes' Talos API, the others through the guest agent.
+
 ### Not enough memory for the add-ons
 
 A message saying "add-ons (…) need … MiB of memory on workers, which have … MiB for them" means the workers lack the memory the named add-ons take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off.

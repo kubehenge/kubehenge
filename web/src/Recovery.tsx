@@ -96,6 +96,89 @@ export function RollStalled({
   );
 }
 
+/** The condition Kubehenge's controller sets on a cluster whose API is silent and whose control planes mostly do not run. */
+export const quorumLostCondition = "ControlPlaneQuorumLost";
+
+/** quorumLoss is the cluster's lost-quorum condition while it holds. */
+export function quorumLoss(c: Cluster): Condition | undefined {
+  return c.conditions.find((x) => x.type === quorumLostCondition && x.status === "True");
+}
+
+// The control planes whose VM runs, which etcd can be reset to. Where Proxmox VE does not say which
+// VMs run, every control plane is offered.
+function survivors(c: Cluster): { name: string; ready: boolean; created: string }[] {
+  const all = keepable(c);
+  const known = (c.machines ?? []).filter((m) => m.role === "control-plane" && m.vm !== undefined);
+  if (known.length === 0) {
+    return all;
+  }
+  const running = new Set(known.filter((m) => m.vm === "running").map((m) => m.name));
+  return all.filter((m) => running.has(m.name));
+}
+
+const annotateCommand = (c: Cluster, machine: string): string =>
+  `kubectl --namespace ${c.namespace} annotate cluster ${c.name} kubehenge.dev/etcd-restore="{\\"machine\\":\\"${machine}\\",\\"at\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\"}"`;
+
+/** QuorumLost says that etcd lost its quorum with the control planes that stopped, and offers the way out. */
+export function QuorumLost({
+  cluster: c,
+  why,
+  onRecovered,
+}: {
+  cluster: Cluster;
+  why: string | undefined;
+  onRecovered: () => void;
+}): JSX.Element | null {
+  const [recovering, setRecovering] = useState(false);
+  const lost = quorumLoss(c);
+  if (lost === undefined) {
+    return null;
+  }
+  const alive = survivors(c);
+  const total = keepable(c).length;
+  const allowed = c.allowed.kubeconfig && !c.deleting && alive.length > 0;
+  return (
+    <section aria-label="Lost control-plane quorum" className="callout callout-error">
+      <p className="callout-title">Control-plane quorum lost</p>
+      <p className="callout-said">
+        {alive.length} of {total} control planes run.
+      </p>
+      <div className="callout-actions">
+        <details className="advanced">
+          <summary>Details</summary>
+          <p className="callout-said">{sentence(lost.message ?? "")}</p>
+          {alive[0] !== undefined && (
+            <pre className="restore-command" aria-label="Recover with kubectl">
+              {annotateCommand(c, alive[0].name)}
+            </pre>
+          )}
+        </details>
+        <button
+          type="button"
+          className="danger"
+          disabled={!allowed}
+          title={allowed ? undefined : (why ?? "Needs Sys.Modify")}
+          onClick={() => setRecovering(true)}
+        >
+          Recover…
+        </button>
+      </div>
+      {recovering && (
+        <RecoverDialog
+          cluster={c}
+          choices={alive}
+          warning="Resets etcd to the kept control plane and replaces the others. What only the lost ones held is gone."
+          onClose={() => setRecovering(false)}
+          onDone={() => {
+            setRecovering(false);
+            onRecovered();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
 /** RecoveryState is how the last recovery of the control plane went, or is going. */
 export function RecoveryState({ cluster: c }: { cluster: Cluster }): JSX.Element | null {
   const r = c.recovery;
@@ -121,16 +204,24 @@ export function RecoveryState({ cluster: c }: { cluster: Cluster }): JSX.Element
   );
 }
 
+const rollWarning =
+  "Replaces the other control planes. With the API down, etcd resets to the kept one and loses what it lacks.";
+
 function RecoverDialog({
   cluster: c,
+  choices,
+  warning = rollWarning,
   onClose,
   onDone,
 }: {
   cluster: Cluster;
+  /** The machines that may be kept. Unset, every control plane. */
+  choices?: { name: string; ready: boolean }[];
+  warning?: string;
   onClose: () => void;
   onDone: () => void;
 }): JSX.Element {
-  const machines = keepable(c);
+  const machines = choices ?? keepable(c);
   const [keep, setKeep] = useState(machines[0]?.name ?? "");
   // What the server said, with the machine it was asked about, so that a newly picked machine shows
   // as being checked until its own answer comes.
@@ -172,7 +263,9 @@ function RecoverDialog({
       setBusy(false);
     }
   };
-  const others = machines.filter((m) => m.name !== keep).map((m) => m.name);
+  const others = keepable(c)
+    .filter((m) => m.name !== keep)
+    .map((m) => m.name);
   const automatic = how?.automatic === true;
   return (
     <Dialog
@@ -200,9 +293,7 @@ function RecoverDialog({
         )
       }
     >
-      <p className="warning">
-        Replaces the other control planes. With the API down, etcd resets to the kept one and loses what it lacks.
-      </p>
+      <p className="warning">{warning}</p>
       <Field label="Keep">
         {(id) => (
           <select id={id} value={keep} onChange={(e) => setKeep(e.target.value)}>

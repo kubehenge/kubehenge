@@ -28,6 +28,7 @@ import type {
   ManagementSnapshots,
   NotificationSent,
   PodLogs,
+  RebootReadiness,
   Plan,
   PveNode,
   Realm,
@@ -389,6 +390,7 @@ export interface Api {
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string) => Promise<Job>;
   managementHealth: () => Promise<ManagementHealth>;
+  rebootReady: () => Promise<RebootReadiness>;
   managementBackups: () => Promise<ManagementBackups>;
   configureManagementBackups: (req: ManagementBackupRequest) => Promise<ManagementBackups>;
   stopManagementBackups: () => Promise<void>;
@@ -521,6 +523,7 @@ export const api: Api = {
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
   managementHealth: () => request("GET", "/api/setup/health"),
+  rebootReady: () => request("GET", "/api/appliance/reboot-ready"),
   managementBackups: () => request("GET", "/api/appliance/etcd-backups"),
   configureManagementBackups: (req) => request("PUT", "/api/appliance/etcd-backups", req),
   stopManagementBackups: () => act("DELETE", "/api/appliance/etcd-backups"),

@@ -65,7 +65,7 @@ const (
 // talosControlPlaneServices those of them that only a control-plane node runs.
 var (
 	talosServices             = []string{"machined", "apid", kubeletService}
-	talosControlPlaneServices = []string{"trustd", "etcd"}
+	talosControlPlaneServices = []string{"trustd", etcdKey}
 )
 
 const kubeletService = "kubelet"

@@ -1,11 +1,13 @@
 import type { JSX } from "react";
 
 import { api } from "./api";
-import type { ManagementHealth } from "./types";
+import type { ManagementHealth, RebootReadiness } from "./types";
 import { Detail, ErrorBox, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
 
 const managementCache = pollCache<ManagementHealth>();
 const managementKept = { cache: managementCache, key: "" };
+const rebootCache = pollCache<RebootReadiness>();
+const rebootKept = { cache: rebootCache, key: "" };
 
 export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | "error"; text: string } {
   if (!h.answers) {
@@ -20,7 +22,8 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
     (h.controllers ?? []).some((c) => c.ready < c.wanted) ||
     h.proxmox?.ok === false ||
     filled(h.proxmox?.blind) ||
-    (h.proxmox?.tokens ?? []).length > 0;
+    (h.proxmox?.tokens ?? []).length > 0 ||
+    (h.etcd !== undefined && h.etcd.healthy < h.etcd.members);
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
 
@@ -60,10 +63,32 @@ function ProxmoxNotes({ proxmox }: { proxmox: ManagementHealth["proxmox"] }): JS
   );
 }
 
+// RebootReady answers, for each Proxmox VE node, whether it may be rebooted now. The controller's
+// own record can be late, which the answer then says once for every node.
+function RebootReady({ ready }: { ready: RebootReadiness }): JSX.Element {
+  return (
+    <>
+      {!ready.ready && filled(ready.blocker) && <p className="warning">{ready.blocker}</p>}
+      <ul className="health-short" aria-label="Ready for reboot">
+        {ready.nodes.map((n) => (
+          <li key={`reboot/${n.node ?? ""}`}>
+            <Status state={n.ready ? "ok" : "warning"} text={n.ready ? "Ready" : "Wait"} />{" "}
+            <span className="mono">{n.node}</span>
+            {!n.ready && filled(n.blocker) && n.blocker !== ready.blocker && (
+              <span className="muted"> {n.blocker}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 // ManagementHealthCard is the management cluster's own health, read on its own so that it answers
 // while the cluster does not, when the Administration page is what repairs it.
 export function ManagementHealthCard(): JSX.Element {
   const { data: h, error, stale } = usePoll(api.managementHealth, pollIdle, managementKept);
+  const { data: reboot } = usePoll(api.rebootReady, pollIdle, rebootKept);
   if (!h) {
     return (
       <div className="box">
@@ -98,6 +123,14 @@ export function ManagementHealthCard(): JSX.Element {
             <dd className="mono">
               {controllers.length - controllersShort.length} of {controllers.length} ready
             </dd>
+            {h.etcd !== undefined && (
+              <>
+                <dt>etcd</dt>
+                <dd className="mono">
+                  {h.etcd.healthy} of {h.etcd.members} members
+                </dd>
+              </>
+            )}
             {h.proxmox !== undefined && (
               <>
                 <dt>Proxmox VE API</dt>
@@ -106,7 +139,16 @@ export function ManagementHealthCard(): JSX.Element {
                 </dd>
               </>
             )}
+            {reboot !== undefined && (
+              <>
+                <dt>Ready for reboot</dt>
+                <dd>
+                  <Status state={reboot.ready ? "ok" : "warning"} text={reboot.ready ? "Ready" : "Wait"} />
+                </dd>
+              </>
+            )}
           </dl>
+          {reboot !== undefined && <RebootReady ready={reboot} />}
           <ProxmoxNotes proxmox={h.proxmox} />
           {(nodesDown.length > 0 || controllersShort.length > 0) && (
             <ul className="health-short">

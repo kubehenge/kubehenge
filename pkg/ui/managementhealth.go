@@ -29,6 +29,13 @@ type managementHealthView struct {
 	Controllers []managementController `json:"controllers,omitempty"`
 	// Proxmox tells whether the controller reaches the Proxmox VE API from inside the cluster.
 	Proxmox *proxmoxReachView `json:"proxmox,omitempty"`
+	// Etcd is how many of the control-plane nodes' etcd members are healthy.
+	Etcd *etcdMembersView `json:"etcd,omitempty"`
+}
+
+type etcdMembersView struct {
+	Healthy int `json:"healthy"`
+	Members int `json:"members"`
 }
 
 type managementNode struct {
@@ -65,8 +72,23 @@ func (s *Server) managementHealth(w http.ResponseWriter, r *http.Request, u user
 	}
 	if v.Answers {
 		v.Proxmox = s.proxmoxReach(ctx, kube)
+		v.Etcd = s.managementMembers(ctx, kube)
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// managementMembers counts the management cluster's healthy etcd members. It is nil where they
+// cannot be read, so the card shows nothing rather than a wrong figure.
+func (s *Server) managementMembers(ctx context.Context, kube client.Client) *etcdMembersView {
+	set, err := provisioner.ManagementEtcd(ctx, kube, s.managementHosts())
+	if err != nil {
+		s.Log.WarnContext(ctx, "reading the management cluster's etcd members", "error", err)
+		return nil
+	}
+	if len(set.Members) == 0 {
+		return nil
+	}
+	return &etcdMembersView{Healthy: set.Healthy(), Members: len(set.Members)}
 }
 
 // proxmoxReachView is whether the controller reaches the Proxmox VE API from inside the management

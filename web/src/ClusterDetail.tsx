@@ -14,7 +14,7 @@ import { useClusterChanges } from "./live";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
 import { Pools } from "./Pools";
-import { RecoveryState, RollStalled } from "./Recovery";
+import { QuorumLost, RecoveryState, RollStalled } from "./Recovery";
 import { Link, navigate, useQuery } from "./router";
 import { StagedBar, StagingProvider } from "./Staging";
 import { useStaging } from "./staging-context";
@@ -428,6 +428,13 @@ export function ClusterDetail({
           }}
         />
         <RollStalled
+          cluster={c}
+          why={why}
+          onRecovered={() => {
+            void reload();
+          }}
+        />
+        <QuorumLost
           cluster={c}
           why={why}
           onRecovered={() => {

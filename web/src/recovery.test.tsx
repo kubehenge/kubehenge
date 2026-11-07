@@ -155,6 +155,96 @@ describe("a stalled roll of a single control plane", () => {
   });
 });
 
+const withVM = (name: string, created: string, vm: string): Machine => ({
+  ...machine(name, created, vm === "running"),
+  vm,
+});
+
+/** lostWith is a three-control-plane cluster whose control planes' VMs are in the states given. */
+const lostWith = (...vms: string[]): Cluster => ({
+  ...stalled,
+  conditions: [
+    {
+      type: "ControlPlaneQuorumLost",
+      status: "True",
+      reason: "NoMajorityRunning",
+      message: "Fewer than 2 of 3 control-plane machines have a running VM, and etcd needs 2.",
+      since: "2026-10-21T10:00:00Z",
+    },
+  ],
+  controlPlane: { desired: 3, ready: 1, available: 0, upToDate: 3 },
+  machines: vms.map((vm, i) => withVM(`web-cp-${"abc"[i] ?? "z"}`, `2026-10-20T08:0${i}:00Z`, vm)),
+});
+
+describe("a control plane that lost its quorum", () => {
+  const lost: Cluster = {
+    ...stalled,
+    conditions: [
+      {
+        type: "ControlPlaneQuorumLost",
+        status: "True",
+        reason: "NoMajorityRunning",
+        message:
+          "1 of 3 control-plane machines have a running VM (web-cp-c), and etcd needs 2. The API has been silent for 10m0s or more. " +
+          "Start what stopped if it can be. Otherwise reset etcd to a machine that runs.",
+        since: "2026-10-21T10:00:00Z",
+      },
+    ],
+    controlPlane: { desired: 3, ready: 1, available: 0, upToDate: 3 },
+    machines: [
+      withVM("web-cp-a", "2026-10-20T08:00:00Z", "stopped"),
+      withVM("web-cp-b", "2026-10-20T08:01:00Z", "stopped"),
+      withVM("web-cp-c", "2026-10-20T08:02:00Z", "running"),
+    ],
+  };
+
+  it("offers the control planes that run, and recovers keeping the one picked once the name is typed", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web");
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/clusters/web": { body: lost },
+      "GET /api/clusters/clusters/web/control-plane-recovery?machine=web-cp-c": { body: { automatic: true } },
+      "POST /api/clusters/clusters/web/control-plane-recovery": { status: 202 },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    const notice = await screen.findByRole("region", { name: "Lost control-plane quorum" });
+    expect(notice).toHaveTextContent("Control-plane quorum lost");
+    expect(notice).toHaveTextContent("1 of 3 control planes run.");
+    expect(within(notice).getByLabelText("Recover with kubectl")).toHaveTextContent(
+      String.raw`annotate cluster web kubehenge.dev/etcd-restore="{\"machine\":\"web-cp-c\"`,
+    );
+
+    await user.click(within(notice).getByRole("button", { name: "Recover…" }));
+    const dialog = screen.getByRole("dialog", { name: "Recover web's control plane" });
+    expect(
+      within(dialog)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toStrictEqual(["web-cp-c (ready)"]);
+    expect(dialog).toHaveTextContent("What only the lost ones held is gone.");
+    expect(dialog).toHaveTextContent("Replaced: web-cp-a, web-cp-b");
+    await user.type(await within(dialog).findByLabelText("Confirm name"), "web");
+    await user.click(within(dialog).getByRole("button", { name: "Recover" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(
+      calls.findLast((c) => c.key === "POST /api/clusters/clusters/web/control-plane-recovery")?.body,
+    ).toStrictEqual({ machine: "web-cp-c", confirm: "web" });
+  });
+
+  it("offers nothing to keep where no control plane runs", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web");
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/clusters/web": { body: lostWith("stopped", "stopped", "stopped") },
+    });
+    render(<App />);
+    await expect(screen.findByRole("button", { name: "Recover…" })).resolves.toBeDisabled();
+    expect(screen.getByText("0 of 3 control planes run.")).toBeInTheDocument();
+  });
+});
+
 describe("a plan that rolls the only control plane", () => {
   it("warns before it is applied", async () => {
     window.history.replaceState(null, "", "/clusters/clusters/web");

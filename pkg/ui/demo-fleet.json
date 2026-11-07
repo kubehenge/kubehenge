@@ -109,6 +109,7 @@
       "workers": 5,
       "subnet": 60,
       "ageDays": 203,
+      "quorumLost": true,
       "addOns": ["headlamp", "monitoring", "logs", "backups"]
     },
     {

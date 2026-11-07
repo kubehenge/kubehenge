@@ -160,6 +160,8 @@ export interface Machine {
   node?: string;
   /** The Proxmox VE node its VM runs on, where the user may see the VM. */
   proxmoxNode?: string;
+  /** The state Proxmox VE gives its VM, such as running or stopped, where the user may see the VM. */
+  vm?: string;
   role: "control-plane" | "worker";
   /** The worker pool a worker belongs to. */
   pool?: string;
@@ -1030,6 +1032,24 @@ export interface ManagementHealth {
     tokens?: { name: string; problem: "Refused" | "Certificate" | "Unreachable" | "Privileges"; message: string }[];
     checked: string;
   };
+  /** How many of its control-plane nodes' etcd members are healthy. Unset where they cannot be read. */
+  etcd?: { healthy: number; members: number };
+}
+
+/** Whether a Proxmox VE node may be rebooted, or why not. */
+export interface RebootAnswer {
+  node?: string;
+  ready: boolean;
+  blocker?: string;
+}
+
+/** Whether Proxmox VE nodes may be rebooted: the whole, and each node by itself. */
+export interface RebootReadiness {
+  checked: string;
+  ready: boolean;
+  blocker?: string;
+  nodes: RebootAnswer[];
+  answer: RebootAnswer;
 }
 
 /** What the setup would run into: errors stop it, warnings do not. */

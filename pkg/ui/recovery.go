@@ -5,15 +5,14 @@ import (
 	"slices"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/meta"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// recoveryView is how the control plane of a cluster whose roll stalled can be recovered: by the
-// controller, or by hand with the plan's steps.
+// recoveryView is how the control plane of a cluster whose roll stalled or whose quorum is lost can
+// be recovered: by the controller, or by hand with the plan's steps.
 type recoveryView struct {
 	Automatic bool                         `json:"automatic"`
 	Plan      *provisioner.EtcdRestorePlan `json:"plan,omitempty"`
@@ -55,7 +54,7 @@ func (s *Server) controlPlaneRecovery(w http.ResponseWriter, r *http.Request, u 
 }
 
 // recoverControlPlane asks the controller to reset the cluster's etcd to one control-plane
-// machine's own and replace the others, as the way out of a roll that stalled. It takes what an
+// machine's own and replace the others, as the way out of a roll that stalled or a quorum that is lost. It takes what an
 // etcd restore takes, Sys.Modify on the cluster's pool, and the cluster's name typed: whatever the
 // other machines' etcd held beyond the kept one's is gone.
 func (s *Server) recoverControlPlane(w http.ResponseWriter, r *http.Request, u user) {
@@ -75,8 +74,8 @@ func (s *Server) recoverControlPlane(w http.ResponseWriter, r *http.Request, u u
 		writeError(w, http.StatusConflict, "the cluster's etcd is being restored already")
 		return
 	}
-	if !meta.IsStatusConditionTrue(c.Status.Conditions, provisioner.RollStalledCondition) {
-		writeError(w, http.StatusConflict, "the control plane's roll has not stalled")
+	if !provisioner.NeedsRecovery(c) {
+		writeError(w, http.StatusConflict, "the control plane's roll has not stalled and it has not lost its quorum")
 		return
 	}
 	if !s.isControlPlaneMachine(w, r, u, c, req.Machine) {
