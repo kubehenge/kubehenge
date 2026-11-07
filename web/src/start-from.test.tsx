@@ -67,6 +67,8 @@ const chosen: Form = {
   endpoint: "10.1.0.20",
   bridge: "vmbr1",
   vlan: "20",
+  mtu: "1450",
+  queues: "2",
   addresses: "10.1.0.21-10.1.0.29",
   prefix: 16,
   gateway: "10.1.0.1",

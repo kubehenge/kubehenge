@@ -36,7 +36,22 @@ import {
 } from "./GitOps";
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
-import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
+import {
+  addressBits,
+  addressCount,
+  inList,
+  ipv4,
+  isMTU,
+  isQueues,
+  isVLAN,
+  list,
+  maxMTU,
+  maxQueues,
+  minMTU,
+  networkOf,
+  rangeProblem,
+  whole,
+} from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -124,6 +139,10 @@ export interface Form {
   endpoint: string;
   bridge: string;
   vlan: string;
+  /** The nodes' interface MTU, empty to leave Proxmox VE's default. */
+  mtu: string;
+  /** The nodes' interface queues, empty for one. */
+  queues: string;
   addresses: string;
   prefix: number;
   gateway: string;
@@ -592,6 +611,8 @@ export const newForm = (): Form => ({
   endpoint: "",
   bridge: "",
   vlan: "",
+  mtu: "",
+  queues: "",
   addresses: "",
   prefix: 24,
   gateway: "",
@@ -795,6 +816,17 @@ function distributionVariables(form: Form): Record<string, unknown> {
   return variables;
 }
 
+// interfaceOptions are the nodes' interface settings the user entered: the VLAN tag, MTU and queues.
+function interfaceOptions(form: Form): Record<string, number> {
+  const options: Record<string, number> = {};
+  for (const key of ["vlan", "mtu", "queues"] as const) {
+    if (form[key]) {
+      options[key] = Number(form[key]);
+    }
+  }
+  return options;
+}
+
 // request turns the form into the API's request, with only the variables the class defines.
 export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
@@ -804,10 +836,8 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     prefix: form.prefix,
     gateway: form.gateway,
     dnsServers: list(form.dnsServers),
+    ...interfaceOptions(form),
   };
-  if (form.vlan) {
-    network["vlan"] = Number(form.vlan);
-  }
   const variables: Record<string, unknown> = {
     controlPlaneEndpoint: form.endpoint,
     network,
@@ -901,6 +931,17 @@ function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string
   return rows;
 }
 
+function interfaceRows(form: Form): [string, string][] {
+  const rows: [string, string][] = [];
+  if (form.mtu) {
+    rows.push(["MTU", form.mtu]);
+  }
+  if (form.queues) {
+    rows.push(["Queues", form.queues]);
+  }
+  return rows;
+}
+
 // summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
@@ -919,6 +960,7 @@ export function summary(
       autoscales(form, c) ? `${form.workerReplicas} to ${form.workerMax}, autoscaled` : String(form.workerReplicas),
     ],
     ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
+    ...interfaceRows(form),
     ["API address", form.endpoint],
     ["Node addresses", list(form.addresses).join(", ")],
     ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
@@ -1039,6 +1081,8 @@ export type FieldKey =
   | "addons"
   | "bridge"
   | "vlan"
+  | "mtu"
+  | "queues"
   | "endpoint"
   | "addresses"
   | "prefix"
@@ -1162,14 +1206,26 @@ function addressProblems(form: Form): Problems {
   return p;
 }
 
+function interfaceProblems(form: Form): Problems {
+  const p: Problems = {};
+  if (form.vlan && !isVLAN(form.vlan)) {
+    p.vlan = "A whole number from 1 to 4094";
+  }
+  if (form.mtu && !isMTU(form.mtu)) {
+    p.mtu = `A whole number from ${minMTU} to ${maxMTU}`;
+  }
+  if (form.queues && !isQueues(form.queues)) {
+    p.queues = `A whole number from 1 to ${maxQueues}`;
+  }
+  return p;
+}
+
 function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
   if (!form.bridge) {
     p.bridge = "Choose a bridge";
   }
-  if (form.vlan && !isVLAN(form.vlan)) {
-    p.vlan = "A whole number from 1 to 4094";
-  }
+  Object.assign(p, interfaceProblems(form));
   if (!whole(form.prefix, 1, addressBits)) {
     p.prefix = `A whole number from 1 to ${addressBits}`;
   }
@@ -1471,6 +1527,18 @@ export function snapshotsProblems(step: Step, form: Form, offer: SnapshotsOffer)
     return {};
   }
   return { volumeSnapshots: offer.problem };
+}
+
+/** bridgeMtuProblems holds the network step's MTU to the chosen bridge's, where a node lists it. */
+export function bridgeMtuProblems(step: Step, form: Form, bridges: Bridge[]): Problems {
+  if (step !== "Network" || !form.mtu || !isMTU(form.mtu)) {
+    return {};
+  }
+  const mtu = bridges.find((b) => b.bridge === form.bridge)?.mtu;
+  if (mtu === undefined || Number(form.mtu) <= mtu) {
+    return {};
+  }
+  return { mtu: `The bridge has MTU ${mtu}. Use ${mtu} or less` };
 }
 
 /** csiProblems holds the machines step to the CSI plugin's release a new cluster chose. */

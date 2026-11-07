@@ -24,7 +24,8 @@ import (
 // alone, volume snapshots where they cannot be taken, Sys.Audit on / where no cluster may hold it,
 // autoscaled pools whose bounds the autoscaler cannot work with or whose nodes would run out of
 // addresses, and a Talos release that does not run the Kubernetes version or that Talos cannot
-// upgrade to from the one before. A cluster that already fell short before a change is not held to it for unrelated
+// upgrade to from the one before, and an interface MTU or queue count out of bounds, or an MTU above the
+// bridge's. A cluster that already fell short before a change is not held to it for unrelated
 // edits.
 type ClusterValidator struct {
 	Hooks *Hooks
@@ -79,6 +80,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	topology := field.NewPath("spec", "topology")
 	errs = append(errs, validateTopology(old, c)...)
 	errs = append(errs, v.validatePinned(old, c)...)
+	errs = append(errs, v.validateNodeNIC(ctx, old, c)...)
 	errs = append(errs, v.validateNodeOS(ctx, old, c)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))

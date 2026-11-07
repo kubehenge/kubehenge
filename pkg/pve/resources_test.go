@@ -226,7 +226,7 @@ func TestBridgesOfANodeNeedSysAuditOnIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Bridge{{Bridge: "vmbr0", Node: "one", VLANAware: true, Comment: "uplink"}, {Bridge: "vmbr1", Node: "one"}}
+	want := []Bridge{{Bridge: "vmbr0", Node: "one", VLANAware: true, Comment: "uplink", MTU: 1500}, {Bridge: "vmbr1", Node: "one", MTU: 1500}}
 	if !reflect.DeepEqual(bridges, want) {
 		t.Errorf("bridges %+v, want %+v", bridges, want)
 	}
@@ -287,7 +287,7 @@ func TestBridgesListVNetsWithTheirZones(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Bridge{
-		{Bridge: "vmbr0", Node: "one"},
+		{Bridge: "vmbr0", Node: "one", MTU: defaultBridgeMTU},
 		{Bridge: "corp", Node: "one", Zone: "vlanz", ZoneType: "vlan", VLANAware: true},
 		{Bridge: "dmz", Node: "one", Zone: "simplez", ZoneType: "simple"},
 		{Bridge: "web", Node: "one", Zone: "evpn1", ZoneType: "evpn", Alias: "Web tier"},
@@ -313,7 +313,7 @@ func TestBridgesWithoutSDNAreTheNodesOwn(t *testing.T) {
 			http.Error(w, "no SDN", status)
 		})
 		bridges, err := serveAPI(t, mux).Bridges(context.Background(), alice, "one")
-		if want := []Bridge{{Bridge: "vmbr0", Node: "one"}}; err != nil || !reflect.DeepEqual(bridges, want) {
+		if want := []Bridge{{Bridge: "vmbr0", Node: "one", MTU: defaultBridgeMTU}}; err != nil || !reflect.DeepEqual(bridges, want) {
 			t.Errorf("%s: bridges %+v, %v, want %+v", name, bridges, err, want)
 		}
 	}
