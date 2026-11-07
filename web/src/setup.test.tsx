@@ -171,7 +171,7 @@ describe("setup", () => {
     });
     const off = settings({ ...form, kubeadmPatches: false });
     expect(off.templateRefresh).toMatchObject({ kubeadmPatches: false });
-    expect(formOf(off).kubeadmPatches).toBe(false);
+    expect(formOf(off)).toMatchObject({ kubeadmPatches: false });
     expect(setupFieldProblems({ ...form, refreshGateway: "192.0.2.1" })).toHaveProperty("refreshAddress");
     expect(setupFieldProblems({ ...form, refreshAddress: "192.0.2.50" })).toHaveProperty("refreshAddress");
     const outside = setupFieldProblems({

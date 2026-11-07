@@ -343,7 +343,7 @@ describe("vM templates", () => {
       "GET /api/release-pins": { body: { pins: [], checks: false } },
     });
     render(<Templates />);
-    expect(await screen.findByText("Older than the previous build")).toBeInTheDocument();
+    await expect(screen.findByText("Older than the previous build")).resolves.toBeInTheDocument();
     expect(screen.getAllByText("Older than the previous build")).toHaveLength(1);
   });
 
@@ -354,7 +354,13 @@ describe("vM templates", () => {
       "GET /api/release-pins": {
         body: {
           pins: [
-            { version: "v1.36.5+rke2r1", file: "c".repeat(64), script: "d".repeat(64), by: "admin@pve", inUse: "clusters/web" },
+            {
+              version: "v1.36.5+rke2r1",
+              file: "c".repeat(64),
+              script: "d".repeat(64),
+              by: "admin@pve",
+              inUse: "clusters/web",
+            },
             { version: "v1.36.4+rke2r1", file: "e".repeat(64), script: "f".repeat(64), by: "admin@pve" },
           ],
           checks: true,
@@ -366,12 +372,12 @@ describe("vM templates", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<Templates />);
-    expect(await screen.findByRole("button", { name: "Unpin v1.36.5+rke2r1" })).toBeDisabled();
+    await expect(screen.findByRole("button", { name: "Unpin v1.36.5+rke2r1" })).resolves.toBeDisabled();
     await user.type(screen.getByLabelText("Release"), "v1.36.6+k3s1");
     await user.click(screen.getByRole("button", { name: "Check release" }));
-    expect(await screen.findByText("a".repeat(64))).toBeInTheDocument();
+    await expect(screen.findByText("a".repeat(64))).resolves.toBeInTheDocument();
     expect(screen.getByText("b".repeat(64))).toBeInTheDocument();
-    expect(calls.some((c) => c.key === "POST /api/release-pins")).toBe(false);
+    expect(calls.map((c) => c.key)).not.toContain("POST /api/release-pins");
     await user.click(screen.getByRole("button", { name: "Pin v1.36.6+k3s1" }));
     await waitFor(() =>
       expect(calls.find((c) => c.key === "POST /api/release-pins")?.body).toStrictEqual({
@@ -381,6 +387,6 @@ describe("vM templates", () => {
       }),
     );
     await user.click(screen.getByRole("button", { name: "Unpin v1.36.4+rke2r1" }));
-    await waitFor(() => expect(calls.some((c) => c.key === "DELETE /api/release-pins/v1.36.4%2Brke2r1")).toBe(true));
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("DELETE /api/release-pins/v1.36.4%2Brke2r1"));
   });
 });

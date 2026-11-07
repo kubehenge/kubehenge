@@ -652,8 +652,20 @@ const richAdmin: Record<string, Route> = {
   "GET /api/release-pins": {
     body: {
       pins: [
-        { version: "v1.36.6+rke2r1", file: "a".repeat(64), script: "b".repeat(64), by: "admin@pve", at: "2026-11-01T10:00:00Z" },
-        { version: "v1.36.5+rke2r1", file: "c".repeat(64), script: "d".repeat(64), by: "admin@pve", inUse: "clusters/web" },
+        {
+          version: "v1.36.6+rke2r1",
+          file: "a".repeat(64),
+          script: "b".repeat(64),
+          by: "admin@pve",
+          at: "2026-11-01T10:00:00Z",
+        },
+        {
+          version: "v1.36.5+rke2r1",
+          file: "c".repeat(64),
+          script: "d".repeat(64),
+          by: "admin@pve",
+          inUse: "clusters/web",
+        },
       ],
       checks: true,
     },

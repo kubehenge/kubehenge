@@ -1356,8 +1356,8 @@ function RefreshChoice({ form, set, shown }: FieldsProps): JSX.Element {
             Build kubeadm patches
           </label>
           <Info about="kubeadm patches">
-            Builds the newest patch release of each Kubernetes version a kubeadm cluster runs, and of the next version.
-            Off, kubeadm clusters get only versions you build.
+            Builds the newest patch of each Kubernetes version a kubeadm cluster runs, and of the next version. Off,
+            clusters get only versions you build.
           </Info>
         </>
       )}

@@ -18,8 +18,8 @@ export function ReleasePins(): JSX.Element {
     setProblem("");
     try {
       await step();
-    } catch (e) {
-      setProblem(errorMessage(e));
+    } catch (err) {
+      setProblem(errorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -58,12 +58,12 @@ export function ReleasePins(): JSX.Element {
                     disabled={filled(p.inUse) || busy}
                     aria-label={`Unpin ${p.version}`}
                     title={filled(p.inUse) ? `In use by ${p.inUse}` : undefined}
-                    onClick={() =>
+                    onClick={() => {
                       void run(async () => {
                         await api.removeReleasePin(p.version);
                         await reload();
-                      })
-                    }
+                      });
+                    }}
                   >
                     Unpin
                   </button>
@@ -119,14 +119,14 @@ export function ReleasePins(): JSX.Element {
               type="button"
               className="primary"
               disabled={busy}
-              onClick={() =>
+              onClick={() => {
                 void run(async () => {
                   await api.addReleasePin(shown);
                   setShown(undefined);
                   setVersion("");
                   await reload();
-                })
-              }
+                });
+              }}
             >
               Pin {shown.version}
             </button>

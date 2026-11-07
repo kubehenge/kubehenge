@@ -3,6 +3,7 @@ import { useEffect, useState, type JSX } from "react";
 import { api, bridgesOf } from "./api";
 import { bridgeLabel, isVLAN, list } from "./network";
 import { choosable, cpuNote, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSLabel } from "./node-os";
+import { ReleasePins } from "./ReleasePins";
 import { loadingReleases, offeredReleases, releaseToMake, talosExample, talosRelease, useTalosReleases } from "./Talos";
 import type {
   Bridge,
@@ -32,7 +33,6 @@ import {
   usePoll,
   weekdayName,
 } from "./ui";
-import { ReleasePins } from "./ReleasePins";
 import { oneOf } from "./values";
 
 const kubernetesVersion = /^v1\.\d+\.\d+$/u;
