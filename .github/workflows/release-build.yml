@@ -159,6 +159,10 @@ jobs:
           [ -s pkg/release/release.pub ] ||
             fail "pkg/release/release.pub is missing: a build without it upgrades nothing"
           mkdir -p "$RUNNER_TEMP/notes"
+          # Unfolded fragments would be left out of the section the notes are cut from.
+          if [ -n "$(find docs/changes -name '*.md' 2> /dev/null)" ]; then
+            fail "docs/changes/ has fragments: fold them with make changelog VERSION=$version first"
+          fi
           awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {p = 1; next} /^## \[/ {p = 0} p' \
             docs/changelog.md > "$RUNNER_TEMP/changes.md"
           [ -s "$RUNNER_TEMP/changes.md" ] || fail "docs/changelog.md has no section for $version"
