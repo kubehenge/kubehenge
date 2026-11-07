@@ -298,8 +298,10 @@ lint-docker:
 # configuration against mocked providers, and the shell scripts' own tests.
 unit: unit-go unit-web unit-tofu unit-shell
 
+# KUBEHENGE_REQUIRE_ALLOY turns a missing alloy (scripts/tools.sh) from a skip into a failure, so the
+# generated Alloy configurations are always validated here.
 unit-go: web gateway-api
-	go test -race ./...
+	KUBEHENGE_REQUIRE_ALLOY=1 go test -race ./...
 
 unit-web: web/node_modules/.package-lock.json
 	cd web && npm test

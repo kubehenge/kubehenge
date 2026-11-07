@@ -300,6 +300,7 @@ spec:
         variables.cluster == ''
         ? variables.purpose in ['backup', 'dns01', 'notify-webhook', 'notify-ntfy', 'notify-email']
         : variables.purpose in ['backup', 'dns01', 'gitops', 'oidc-client']
+          || variables.purpose.matches('^log-[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$')
       messageExpression: >-
         'the interface writes and deletes only credentials labelled {{ $credential }} with a purpose it knows, not '
         + (variables.purpose == '' ? 'an unlabelled Secret' : 'one for ' + variables.purpose)
