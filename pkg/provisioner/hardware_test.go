@@ -119,10 +119,7 @@ func TestCheckNodeOSRefusesATemplateCPUTypeNoNodeRuns(t *testing.T) {
 		{"a node reaches it", cluster(), [][]string{templateTagsOf(hw, "rke2", "os-almalinux-10")}, map[string]int{"pve1": 4}, ""},
 		{"no node does", cluster(), [][]string{templateTagsOf(hw, "rke2", "os-almalinux-10")}, map[string]int{"pve1": 3}, "use CPU type x86-64-v4, which no allowed node (pve1) offers"},
 		{"other templates are no concern", cluster(), [][]string{templateTagsOf(hw, "k3s", "os-almalinux-10")}, map[string]int{"pve1": 3}, ""},
-		{
-			"Talos too", talosCluster("web", "v1.14.4"), [][]string{templateTagsOf(hw, "talos", "talos-v1.14.4")}, map[string]int{"pve1": 3},
-			"use CPU type x86-64-v4",
-		},
+		{"Talos too", talosCluster("web", "v1.14.4"), [][]string{templateTagsOf(hw, "talos", "talos-v1.14.4")}, map[string]int{"pve1": 3}, "use CPU type x86-64-v4"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

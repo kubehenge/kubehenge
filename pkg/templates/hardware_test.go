@@ -81,10 +81,7 @@ func TestCreateAppliesTheHardware(t *testing.T) {
 		tags   []string
 	}{
 		{"the defaults", HardwareChoice{}, ",discard=on,ssd=1", "virtio-scsi-pci", false, DefaultCPUType, []string{"hw-cpu-x86-64-v2-aes", "hw-discard", "hw-ssd"}},
-		{
-			"every option changed", HardwareChoice{CPUType: "Haswell", SSD: &no, Discard: &no, IOThread: &yes, NUMA: &yes},
-			",iothread=1", "virtio-scsi-single", true, "Haswell", []string{"hw-cpu-haswell", "hw-iothread", "hw-numa"},
-		},
+		{"every option changed", HardwareChoice{CPUType: "Haswell", SSD: &no, Discard: &no, IOThread: &yes, NUMA: &yes}, ",iothread=1", "virtio-scsi-single", true, "Haswell", []string{"hw-cpu-haswell", "hw-iothread", "hw-numa"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
