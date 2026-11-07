@@ -240,3 +240,10 @@ To hold a cluster on its build, switch `nodeImages` off. Deleting a broken build
   - An upgrade beyond them, by hand or automatic, waits (the cluster's conditions say why) until a Kubehenge release brings a Rancher that runs there.
 - **A missing kubeadm template.** New kubeadm nodes cannot be created without the template of their version ([troubleshooting.md](troubleshooting.md#template-missing)).
 - **No spare addresses.** Each rollout creates a node before removing one ([troubleshooting.md](troubleshooting.md#node-addresses-run-out)).
+- **A node that will not let go.** A rollout, a node image refresh and the replacement of an unhealthy node each remove a machine. The machine first waits for its node, and three timeouts bound that wait.
+  - **Drain** (60 minutes by default) is how long the node's pods get to leave. After that the machine is removed with the pods a PodDisruptionBudget still protects, and with pods that ignore their stop signal.
+  - **Volume detach** (10 minutes) is how long the node's volumes get to detach. Proxmox VE refuses a detach while a backup or snapshot holds the VM. Once the time runs out the machine is deleted anyway.
+  - **Node removal** (1 minute) is how long the controller retries deleting the node's Node object.
+  - A timeout of 0 keeps waiting for ever, for single-replica workloads that must not go down. The rollout then stays on that machine until the pod or the volume lets go.
+  - Set them per cluster and per pool with **Timeouts…** under **Machines**, with `kubehenge cluster timeouts`, or as `deletion` in the Cluster ([clusters.md](clusters.md#pools)).
+  - Talos nodes upgraded in place use the drain timeout too, before their reboot. At the timeout the node reboots with the pods left, as a removed machine is deleted ([clusters.md](clusters.md#talos-upgrades)).

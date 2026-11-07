@@ -106,6 +106,9 @@ func planned(ch *changed, reach map[string]provisioner.MachineReach) []plannedCh
 	if len(ch.req.Pools) > 0 {
 		out = append(out, plannedChange{Setting: "pools", Effect: poolsEffect(ch.before, ch.req.Pools)})
 	}
+	if ch.req.ControlPlaneTimeouts != nil {
+		out = append(out, plannedChange{Setting: "controlPlaneTimeouts", Effect: effectNone})
+	}
 	if len(ch.req.Autoscaling) > 0 {
 		out = append(out, plannedChange{Setting: "autoscaling", Effect: effectNone})
 	}

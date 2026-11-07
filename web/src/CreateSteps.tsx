@@ -18,6 +18,7 @@ import { LoadBalancerFields } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
+import { NodeTimeoutFields } from "./NodeTimeouts";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
 import { clusterKey } from "./start-from";
@@ -598,6 +599,21 @@ export function GeneralStep({
         )}
       </Field>
       <WorkerFields form={form} set={set} shown={shown} cls={cls} />
+      <details className="advanced" open={shown("timeouts") === undefined ? undefined : true}>
+        <summary>Node timeouts</summary>
+        <h4 className="subsection">Control planes</h4>
+        <NodeTimeoutFields
+          value={form.controlPlaneTimeouts}
+          onChange={(v) => set("controlPlaneTimeouts", v)}
+          fallback={cls?.controlPlaneTimeouts}
+        />
+        <h4 className="subsection">Workers</h4>
+        <NodeTimeoutFields
+          value={form.workerTimeouts}
+          onChange={(v) => set("workerTimeouts", v)}
+          fallback={cls?.workerTimeouts}
+        />
+      </details>
     </>
   );
 }

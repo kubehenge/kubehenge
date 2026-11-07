@@ -88,7 +88,8 @@
       "workers": 3,
       "subnet": 40,
       "ageDays": 120,
-      "addOns": ["headlamp", "monitoring"]
+      "addOns": ["headlamp", "monitoring"],
+      "talosHold": { "to": "v1.14.5", "sinceMinutes": 25, "pod": "data/orders-db-0", "budget": "orders-db" }
     },
     {
       "name": "staging",

@@ -838,10 +838,15 @@ button.go {
 .status {
   display: inline-flex;
   gap: 6px;
-  align-items: center;
+  align-items: flex-start;
 
   font-size: 14px;
   font-weight: 400;
+}
+
+/* The icon sits on the text's first line, so a message of several lines keeps it at the top. */
+.status::before {
+  margin-block-start: calc((1lh - 12px) / 2);
 }
 
 .status::before,
@@ -1311,6 +1316,82 @@ button.go {
 
 .grid.plan td.plan-replaces {
   color: var(--warning);
+}
+
+h4.subsection {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dim);
+}
+
+/* On a phone each row of a stacking table becomes a card: its first cell is the title and every other
+   cell shows its label before its value. */
+@media (width <= 600px) {
+  .grid.stack,
+  .grid.stack tbody {
+    display: block;
+  }
+
+  .grid.stack thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .grid.stack tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+
+    padding: 10px 0;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .grid.stack :is(td, th) {
+    display: block;
+
+    min-inline-size: 0;
+    padding: 0;
+    border: none;
+
+    text-align: start;
+    white-space: normal;
+  }
+
+  .grid.stack :is(td, th):not(.row-action, .pool-name) {
+    grid-column: 1 / -1;
+  }
+
+  .grid.stack tbody th {
+    grid-column: 1 / -1;
+    padding-block-end: 2px;
+  }
+
+  .grid.stack td[data-label]::before {
+    content: attr(data-label) " ";
+    display: inline-block;
+    min-inline-size: 6em;
+    color: var(--dim);
+  }
+
+  .grid.stack .row-action {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    inline-size: auto;
+  }
+
+  .grid.stack .pool-name {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+  }
 }
 
 .object-view {
@@ -1909,6 +1990,69 @@ fieldset.choices .check {
 .grid .hint.message {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* On a phone each row of an events table is a block: its short cells share the first line and the
+   message takes the full width below. The header stays for screen readers. */
+@media (width <= 600px) {
+  .grid.events,
+  .grid.events tbody {
+    display: block;
+  }
+
+  .grid.events thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .grid.events tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+
+    padding: 10px 0;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .grid.events :is(td, th) {
+    display: block;
+
+    min-inline-size: 0;
+    padding: 0;
+    border: none;
+
+    white-space: normal;
+  }
+
+  .grid.events td.message {
+    flex: 1 0 100%;
+    order: 1;
+  }
+
+  /* The header that named the count is hidden, so the count names itself, and says nothing for one. */
+  .grid.events td.count::before {
+    content: "×";
+  }
+
+  .grid.events td.count.once {
+    display: none;
+  }
+
+  /* The marker moves from the first cell to the row, so it does not touch the text. */
+  .grid.events tr.attention {
+    padding-inline-start: 10px;
+    box-shadow: inset 3px 0 0 var(--warning);
+  }
+
+  .grid.events tr.attention td:first-child {
+    box-shadow: none;
+  }
 }
 
 .fleet-controls {

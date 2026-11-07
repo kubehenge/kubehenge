@@ -471,7 +471,11 @@ Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its o
   - The controller upgrades no other node until **Try again** on the cluster's Summary, or until the annotation `kubehenge.dev/talos-upgrade-failed` is removed ([clusters.md](clusters.md#talos-upgrades)). Correct what the reason names first.
 - **`TalosInstallRetry`**, "node … to Talos …, try … of 4 at …: …": the installer's pull or install stalled, or the node did not answer. The controller tries again at the time named, and after the fourth try fails as above. Check that the node reaches factory.talos.dev.
 - **`TalosUpgradeAbandoned`**, "node … to Talos …: its machine is being deleted": the cluster scaled down or replaced the node while it was upgraded. Nothing to do. Its successor is upgraded as any other node.
-- **`TalosDrain`**, "node … reboots without all its pods moved: …": the node's pods did not all leave within five minutes, and the node rebooted anyway. A PodDisruptionBudget often holds them, so check the budgets of the workloads named.
+- **`TalosDrainBlocked`**, "node … is held while it drains: Pod … cannot evict pod …": a PodDisruptionBudget keeps a pod on the node and the upgrade waits. The text names the pod and the budget, and **Upgrade held by** on the cluster shows it too.
+  - `kubectl get pdb -A` shows why the budget allows no disruption, and a workload short of ready replicas explains most. Once it is healthy the pod leaves and the upgrade goes on.
+  - A budget that can never be met, such as `minAvailable` equal to a single replica, holds until the drain timeout. Lower the budget, or shorten the drain timeout of the control plane or the pool under **Machines**, **Timeouts…**.
+- **`TalosStatefulSetsWaiting`**, "node … waits to drain: StatefulSet … replicas ready": a StatefulSet with a ready pod on the node is short of replicas. Bring it back, or wait for the drain timeout (`TalosStatefulSetsNotReady`).
+- **`TalosDrain`**, "node … reboots without all its pods moved: the drain timeout of … ran out": the pods named were still on the node at the timeout. It rebooted anyway.
 
 ### Upgrades held back
 
@@ -549,7 +553,8 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.metadata.annotations.ku
 ```
 
 - **Hook BeforeClusterDelete:** a cluster registered with Rancher leaves it first, while its VMs still run. The reason is Rancher's.
-- **Machine … Drain not completed:** a node's pods are being evicted, and a PodDisruptionBudget, or a pod that does not stop, holds that up. Delete the pod in the cluster, or abandon the deletion.
+- **Machine … Drain not completed:** a PodDisruptionBudget, or a pod that does not stop, holds up the eviction. The drain timeout ends the wait after 60 minutes by default ([upgrading.md](upgrading.md#what-holds-an-upgrade-back)). With 0 it never ends: delete the pod, set a timeout, or abandon the deletion.
+- **Machine … Waiting for Node volumes to be detached:** the volume detach timeout bounds this the same way, 10 minutes by default.
 - **ProxmoxMachine … (a VM on an offline node):** capmox cannot delete the VM. Bring the node back.
 - **Cluster … removing the Proxmox VE objects:** Kubehenge's controller waits while an offline Proxmox VE node may hold some of the cluster's volumes on local storage. It also waits while Proxmox VE refuses to delete the pool, user or volume owner VM. The reason is Proxmox VE's.
 
