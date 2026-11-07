@@ -36,11 +36,16 @@ at_most() {
 }
 
 # The floors.
-same "a node's floor is its need and the guest's reserve" 3312 "$(balloon_floor 3120 4096)"
-same "the floor is in steps of 8" 1200 "$(balloon_floor 1001 4096)"
-same "a floor already in a step stays" 1192 "$(balloon_floor 1000 4096)"
-same "a node that needs all its memory keeps it" 4096 "$(balloon_floor 3904 4096)"
-same "a node that needs more keeps its memory too" 4096 "$(balloon_floor 5000 4096)"
+balloon_floor 3120 4096
+same "a node's floor is its need and the guest's reserve" 3312 "${floor}"
+balloon_floor 1001 4096
+same "the floor is in steps of 8" 1200 "${floor}"
+balloon_floor 1000 4096
+same "a floor already in a step stays" 1192 "${floor}"
+balloon_floor 3904 4096
+same "a node that needs all its memory keeps it" 4096 "${floor}"
+balloon_floor 5000 4096
+same "a node that needs more keeps its memory too" 4096 "${floor}"
 
 # The tests' figures come from the class and the chart that sizes the nodes, as the workload test
 # reads them.
@@ -68,8 +73,10 @@ management_nominal=4096
 worker_need=$((node_worker + load_balancer + rancher_agent))
 worker=$((worker_need > least_worker ? worker_need : least_worker))
 control_plane=$((node_control_plane > least_control_plane ? node_control_plane : least_control_plane))
-worker_floor=$(balloon_floor "${worker_need}" "${worker}")
-control_plane_floor=$(balloon_floor "${node_control_plane}" "${control_plane}")
+balloon_floor "${worker_need}" "${worker}"
+worker_floor=${floor}
+balloon_floor "${node_control_plane}" "${control_plane}"
+control_plane_floor=${floor}
 budget=$((runner_mib - runner_fixed_mib - runner_headroom_mib))
 
 # fits <what> <control planes> <workers>: whether the guests at their peak fit the budget at their
@@ -135,8 +142,9 @@ asked=$(cat "${root}/asked" 2> /dev/null || true)
 same "each node is set once, the worker by its name and the control plane by the cluster's" \
     "exec kubehenge-e2e-pve qm set 101 --balloon 3312
 exec kubehenge-e2e-pve qm set 102 --balloon 1536" "${asked}"
+notes=$(cat "${root}/guests.txt.balloons")
 same "the notes hold each VM with its floor" "00:00:00 101 3312
-00:00:00 102 1536" "$(cat "${root}/guests.txt.balloons")"
+00:00:00 102 1536" "${notes}"
 summary=$(sh "${guests}" summary "${root}/guests.txt" 2>&1 || true)
 same "the summary lists them" "  101: 3312 MiB, set at 00:00:00" "$(printf '%s\n' "${summary}" | grep '^  101:' || true)"
 

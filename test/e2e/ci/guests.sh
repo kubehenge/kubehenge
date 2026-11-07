@@ -148,7 +148,8 @@ balloon() {
         [ -n "${least}" ] || continue
         if timeout -k 5 30 docker exec kubehenge-e2e-pve qm set "${vmid}" --balloon "${least}" < /dev/null > /dev/null 2>&1; then
             eval "ballooned_${vmid}=1"
-            printf '%s %s %s\n' "$(date -u +%T)" "${vmid}" "${least}" >> "$1"
+            at=$(date -u +%T)
+            printf '%s %s %s\n' "${at}" "${vmid}" "${least}" >> "$1"
         fi
     done
 }

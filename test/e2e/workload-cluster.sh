@@ -499,8 +499,10 @@ echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the
 # memory back only while the runner is short of it: down to what Kubehenge's figures say they need.
 # A node's name starts with the cluster's, and a worker's goes on with -md-.
 if [ -n "${KUBEHENGE_E2E_BALLOON_FILE:-}" ]; then
-    printf '%s-md-* %s\n%s-* %s\n' "${name}" "$(balloon_floor "${worker_need}" "${worker_memory}")" \
-        "${name}" "$(balloon_floor "${control_plane_need}" "${control_plane_memory}")" > "${KUBEHENGE_E2E_BALLOON_FILE}"
+    balloon_floor "${worker_need}" "${worker_memory}"
+    worker_floor=${floor}
+    balloon_floor "${control_plane_need}" "${control_plane_memory}"
+    printf '%s-md-* %s\n%s-* %s\n' "${name}" "${worker_floor}" "${name}" "${floor}" > "${KUBEHENGE_E2E_BALLOON_FILE}"
 fi
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
