@@ -204,6 +204,12 @@ The task log shows what each Kubehenge account did. In an appliance's management
   - **Kubeconfig** needs `Sys.Modify` on the cluster's pool and shows once the cluster is available.
   - Clusters outside the interface's namespaces are read-only there.
 - **No bridges to choose from:** Proxmox VE lists a node's bridges only with `Sys.Audit` on the node. Type the bridge's name instead. A bridge marked "no SDN.Use" needs that privilege on `/sdn/zones/localnetwork/<bridge>`, or on `/sdn/zones/<zone>/<vnet>` for a VNet.
+- **"`<user>` needs `Pool.Audit` on `<pool>`":** Proxmox VE lists a pool's VMs only to a user with `Pool.Audit` on it. Without it a cluster shows no nodes, console links or reboot. `PVEPoolUser` and `PVEAuditor` hold it, and a role of your own needs it added.
+- **"Proxmox VE refused: …":** Proxmox VE answered, and the reason after the colon is its own, such as "VM is locked (backup)" or "cluster not ready - no quorum?". Fix that first. "Proxmox VE did not answer" means no connection, a timeout or a certificate error.
+- **"The user name and realm together are at most 64 characters":** Proxmox VE takes no longer sign-in name, `user@realm` counted whole.
+- **"Sign-in failed" with a right password:** Proxmox VE gives a wrong password, an unknown or disabled user and a realm that requires a second factor the user lacks one answer. Ask an administrator to set up the factor.
+- **"Wrong code, or the factor is locked":** eight wrong TOTP codes lock TOTP until a recovery key is used, and Proxmox VE says nothing of it. Sign in with a recovery key. Without one, an administrator resets the user's factors.
+- **"Wrong recovery key, or the cluster has no quorum":** a recovery key is written to Proxmox VE's cluster files, which a cluster without quorum cannot change. Sign in on a node's console until quorum returns.
 - **`"Session ended. Sign in again."`:** Proxmox VE no longer accepts the session. A session lasts eight hours at most.
 - **Sign-in refused after several tries:** five failures within 15 minutes lock a user out from that address until the 15 minutes are up. Twenty failures from one address, whichever users they name, lock the address out.
 - **"Security keys work only in Proxmox VE":** a WebAuthn key answers only on Proxmox VE's own page. Sign in with a TOTP code or recovery key, or through an OpenID realm.

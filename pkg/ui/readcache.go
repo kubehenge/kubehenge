@@ -64,3 +64,13 @@ func (rc *readCache[T]) get(ctx context.Context, key string, fresh time.Duration
 		return none, fmt.Errorf("waiting for the cluster's read: %w", ctx.Err())
 	}
 }
+
+// forget drops the key's finished read when failed says it failed, so the next look reads again
+// rather than taking the failure as fresh.
+func (rc *readCache[T]) forget(key string, failed func(T) bool) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if r, ok := rc.byCluster[key]; ok && !r.inFlight && failed(r.view) {
+		delete(rc.byCluster, key)
+	}
+}

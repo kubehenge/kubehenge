@@ -52,6 +52,22 @@ func proxmoxMachineList() *unstructured.UnstructuredList {
 	return l
 }
 
+// ProxmoxMachineVMIDs maps the names of a cluster's ProxmoxMachines to the guest IDs capmox recorded
+// on them. A ProxmoxMachine whose VM does not exist yet is left out.
+func ProxmoxMachineVMIDs(ctx context.Context, c client.Reader, namespace, cluster string) (map[string]int, error) {
+	pms := proxmoxMachineList()
+	if err := c.List(ctx, pms, client.InNamespace(namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: cluster}); err != nil {
+		return nil, fmt.Errorf("listing the cluster's ProxmoxMachines: %w", err)
+	}
+	ids := make(map[string]int, len(pms.Items))
+	for i := range pms.Items {
+		if vmid, found, _ := unstructured.NestedInt64(pms.Items[i].Object, "spec", "virtualMachineID"); found && vmid != 0 {
+			ids[pms.Items[i].GetName()] = int(vmid)
+		}
+	}
+	return ids, nil
+}
+
 // What Proxmox VE's resource list says of whether a VM runs.
 const (
 	guestRunning = "running"

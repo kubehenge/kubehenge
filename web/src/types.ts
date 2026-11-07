@@ -160,6 +160,8 @@ export interface Machine {
   node?: string;
   /** The Proxmox VE node its VM runs on, where the user may see the VM. */
   proxmoxNode?: string;
+  /** Its VM is not among those Proxmox VE lists with a name, because its node dropped out of the statistics. */
+  notReporting?: boolean;
   role: "control-plane" | "worker";
   /** The worker pool a worker belongs to. */
   pool?: string;

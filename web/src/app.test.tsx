@@ -256,7 +256,9 @@ describe("sign-in", () => {
       "GET /api/realms": () => ({ body: [{ realm: "pve", type: "pve" }] }),
       "POST /api/session": () => ({
         status: 401,
-        body: { error: "sign-in failed: check the user name, password and realm" },
+        body: {
+          error: "Sign-in failed. Check the user name, password and realm, or set up the required second factor.",
+        },
       }),
     });
     const user = userEvent.setup({ delay: null });
@@ -268,7 +270,7 @@ describe("sign-in", () => {
     await user.type(screen.getByLabelText("Password"), "wrong");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
-      "Sign-in failed: check the user name, password and realm.",
+      "Sign-in failed. Check the user name, password and realm, or set up the required second factor.",
     );
   });
 
@@ -586,6 +588,26 @@ describe("clusters", () => {
     expect(within(name).getByText(/VM template not found/u)).toHaveTextContent(
       "* InfrastructureReady: * VirtualMachineProvisioned: VM template not found",
     );
+  });
+
+  it("shows a machine whose node does not report as such", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const silent: Machine = {
+      name: "md-a",
+      role: "worker",
+      phase: "Running",
+      ready: true,
+      created: new Date().toISOString(),
+      notReporting: true,
+    };
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": { body: { ...web, machines: [runningOn("cp-a", "pve1"), silent] } },
+    });
+    render(<App />);
+    const row = await screen.findByRole("row", { name: /^md-a /u });
+    expect(within(row).getByRole("cell", { name: "Not reporting" })).toBeInTheDocument();
+    expect(within(await screen.findByRole("row", { name: /^cp-a /u })).queryByText("Not reporting")).toBeNull();
   });
 
   it("replaces a machine after asking, and keeps one marked for replacement", async () => {

@@ -1008,15 +1008,16 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 - An SDN VNet is in its own zone, as in `/sdn/zones/evpn1/web`. The wizard lists the VNets you hold `SDN.Audit` on.
 - A cluster you may not see is answered as not found.
 - As everywhere in Proxmox VE, a role given on a cluster's own pool replaces, for that pool, what is inherited from the workload pool. It has to hold `VM.Audit` too.
-- Proxmox VE's `PVEAuditor` role holds `VM.Audit`, and `PVEVMAdmin` holds `VM.Audit` and `VM.Allocate`. `Sys.Modify` needs a role of your own.
+- Proxmox VE's `PVEAuditor` role holds `VM.Audit` and `Pool.Audit`, and `PVEVMAdmin` holds `VM.Audit` and `VM.Allocate`. `Sys.Modify` needs a role of your own.
+- `Pool.Audit` lets Proxmox VE list a pool's VMs. Without it a cluster shows no nodes, console links or reboot. `PVEPoolUser` holds it, and a role of your own needs it added.
 
 For example, to let a group create and look after clusters, and one user download the kubeconfig of one cluster:
 
 ```sh
-pveum acl modify /pool/kubehenge --groups developers --roles PVEVMAdmin
+pveum acl modify /pool/kubehenge --groups developers --roles PVEVMAdmin,PVEPoolUser
 pveum acl modify /storage/shared-storage --groups developers --roles PVEDatastoreUser
 pveum acl modify /sdn/zones/localnetwork/vmbr0 --groups developers --roles PVESDNUser
-pveum role add KubehengeClusterAdmin --privs "VM.Audit VM.Allocate Sys.Modify"
+pveum role add KubehengeClusterAdmin --privs "VM.Audit VM.Allocate Sys.Modify Pool.Audit"
 pveum acl modify /pool/kubehenge/clusters.prod --users platform@pve --roles KubehengeClusterAdmin
 ```
 

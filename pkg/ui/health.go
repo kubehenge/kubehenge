@@ -405,23 +405,21 @@ type vmLoad struct {
 func (s *Server) addVMs(ctx context.Context, u user, c *clusterv1.Cluster, poolPath string, nodes []nodeView) string {
 	members, err := s.Accounts.PoolMembers(ctx, u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
 	if errors.Is(err, pve.ErrForbidden) {
-		return "Proxmox VE does not show you this cluster's VMs."
+		return missingPrivilege(u, privPoolAudit, poolPath) + " to see this cluster's VMs."
 	}
 	if err != nil {
 		s.Log.ErrorContext(ctx, "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		return "Proxmox VE did not answer."
 	}
-	byName := make(map[string]*pve.Member, len(members))
-	for i := range members {
-		byName[members[i].Name] = &members[i]
-	}
+	vms := s.newVMSet(ctx, u.kube, c, members)
 	sem := make(chan struct{}, vmLoadAsks)
 	var wg sync.WaitGroup
 	for i := range nodes {
-		m, ok := byName[nodes[i].vmName]
-		if !ok || nodes[i].vmName == "" {
+		found, ok := vms.of(nodes[i].vmName)
+		if !ok {
 			continue
 		}
+		m := &found
 		vm := &vmView{ID: m.VMID, Node: m.Node, Status: m.Status, CPU: m.CPU, Cores: m.Cores, Memory: m.Memory, MaxMem: m.MaxMem, Uptime: m.Uptime}
 		nodes[i].VM = vm
 		if m.Status != "running" {
