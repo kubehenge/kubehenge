@@ -106,7 +106,7 @@ The versions of Talos, Kubernetes and every provider are pinned together in `ver
 
 `version_overrides` holds a component back below the tested set. `provider_images` runs a provider's controller from another image, keyed `"<kind>/<name>"` (`"InfrastructureProvider/proxmox"`), such as a registry mirror or a build with a fix its release lacks. The provider's manifests still come from its version.
 
-capmox at its tested release runs Kubehenge's reproducible build of that release with two fixes added (`capmox_build` in `versions.tf`, [releasing.md](../docs/releasing.md)).
+capmox at its tested release runs Kubehenge's reproducible build of that release with three fixes added (`capmox_build` in `versions.tf`, [releasing.md](../docs/releasing.md)).
 
 ## Remove
 

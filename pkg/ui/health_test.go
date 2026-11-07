@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -41,7 +42,10 @@ type fakeWorkloads struct {
 	// alerts is Alertmanager's answer, and alertsBy the token it answers.
 	alerts   string
 	alertsBy string
-	tokens   []string
+	// metrics is the API server's /metrics, and metricsErr why reading it fails.
+	metrics    string
+	metricsErr error
+	tokens     []string
 }
 
 func (f *fakeWorkloads) connect(server string, ca []byte, token string) (*Workload, error) {
@@ -57,7 +61,13 @@ func (f *fakeWorkloads) connect(server string, ca []byte, token string) (*Worklo
 		}
 		return []byte(f.alerts), nil
 	}
-	return &Workload{Kube: f.kube, Dynamic: f.velero, Readyz: func(context.Context) (string, error) { return f.readyz, nil }, Alerts: alerts}, nil
+	metrics := func(context.Context) (io.ReadCloser, error) {
+		if f.metricsErr != nil {
+			return nil, f.metricsErr
+		}
+		return io.NopCloser(strings.NewReader(f.metrics)), nil
+	}
+	return &Workload{Kube: f.kube, Dynamic: f.velero, Readyz: func(context.Context) (string, error) { return f.readyz, nil }, Alerts: alerts, Metrics: metrics}, nil
 }
 
 func (f *fakeWorkloads) connected() []string {

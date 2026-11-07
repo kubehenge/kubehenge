@@ -164,8 +164,11 @@ func assertTemplateShape(t *testing.T, b *Builder, vmid int, tmpl *Template) {
 	if c.Cores == nil || *c.Cores != templateCores || int(c.Memory) != templateMemoryMB {
 		t.Errorf("template has %v cores and %d MiB, want %d and %d", c.Cores, c.Memory, templateCores, templateMemoryMB)
 	}
-	if !strings.HasPrefix(c.Agent, "enabled=1") && c.Agent != "1" {
-		t.Errorf("guest agent %q, want enabled", c.Agent)
+	if !strings.HasPrefix(c.Agent, "enabled=1") || !strings.Contains(c.Agent, "freeze-fs=0") {
+		t.Errorf("guest agent %q, want enabled without a freeze for backups", c.Agent)
+	}
+	if disk := c.SCSIs[templateDisk]; !strings.Contains(disk, "backup=0") {
+		t.Errorf("disk %q, want it left out of backups", disk)
 	}
 	if !bool(c.OnBoot) {
 		t.Error("onboot off: the clones would stay stopped after their host reboots")

@@ -85,11 +85,13 @@ website:
 changelog:
 	sh scripts/changelog.sh $(if $(filter command line,$(origin VERSION)),$(VERSION),$(error VERSION is not set: make changelog VERSION=0.4.3))
 
-# Lighthouse CI over the built website on loopback, in Playwright's Chromium, for mobile and then
-# desktop: the limits in website/lighthouserc.cjs against the median of 5 runs. The reports go to
-# website/.vitepress/lighthouse.
+# Checks over the built website in Playwright's Chromium. First website/check-layers.js: no
+# composited layer on the home page over 1.5 windows at a phone and a desktop size, and no motion
+# under reduced motion. Then Lighthouse CI on loopback, for mobile and then desktop: the limits in
+# website/lighthouserc.cjs against the median of 5 runs. The reports go to website/.vitepress/lighthouse.
 website-check: website
 	cd website && npm exec --no -- playwright install chromium
+	cd website && npm run layers
 	set -e; cd website && rm -rf .vitepress/lighthouse; for form in mobile desktop; do \
 		rm -rf .lighthouseci; \
 		KUBEHENGE_LIGHTHOUSE=$$form npm exec --no -- lhci autorun --config=lighthouserc.cjs; \
@@ -225,18 +227,20 @@ fmt: web/node_modules/.package-lock.json
 # Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
 # govulncheck fails on a known vulnerability only where the code calls into it, for the system it
 # runs on: GOOS would also build govulncheck itself for another one.
-# golangci-lint holds one lock per user, so a gate in a second worktree waits for it rather than fail.
+# golangci-lint gives up on its per-user lock at the first error from the lock file, even with
+# --allow-serial-runners, and gates in several worktrees at once meet that error. Its cache is safe
+# to share, so they lint side by side instead.
 lint-go: web gateway-api
 	go mod tidy -diff
 	golangci-lint config verify
-	CGO_ENABLED=0 GOOS=linux golangci-lint run --allow-serial-runners ./...
-	CGO_ENABLED=0 GOOS=windows golangci-lint run --allow-serial-runners ./...
+	CGO_ENABLED=0 GOOS=linux golangci-lint run --allow-parallel-runners ./...
+	CGO_ENABLED=0 GOOS=windows golangci-lint run --allow-parallel-runners ./...
 	$(GOVULNCHECK) ./...
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
 # The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools, and so is
 # the formatting of the website's own code. stylelint checks the interface's and the website's CSS.
-WEBSITE_CODE := website/prepare.js website/.vitepress/config.mts website/.vitepress/theme website/lighthouserc.cjs
+WEBSITE_CODE := website/prepare.js website/check-scripts.js website/check-layers.js website/.vitepress/config.mts website/.vitepress/theme website/lighthouserc.cjs
 lint-web: web/node_modules/.package-lock.json
 	cd web && npm run lint
 	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json appliance/pve-entry $(WEBSITE_CODE)

@@ -19,6 +19,8 @@ import {
   addonMemory,
   type AddonKey,
   addonsProblem,
+  backupsChosen,
+  etcdOffered,
   logsChosen,
   machineLeast,
   offersMesh,
@@ -27,6 +29,7 @@ import {
 } from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import type { CredentialKey } from "./CredentialField";
+import { EtcdSnapshotFieldset, etcdSnapshotsInfo } from "./EtcdSnapshots";
 import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { PodSecurityFields, cisHint, cisInfo } from "./PodSecurity";
@@ -133,7 +136,6 @@ function BackupsChoice({
 }): JSX.Element {
   const targets = classTargets(cls);
   const none = targets.length === 0;
-  const own = form.storeBackupKey && canTrust !== false;
   return (
     <>
       <label className="check">
@@ -174,29 +176,70 @@ function BackupsChoice({
               onChange={(readFrom) => set("backupFields", { ...form.backupFields, readFrom })}
             />
           )}
-          <fieldset className="group">
-            <legend>Access key</legend>
-            {canTrust === false ? (
-              <p className="hint">Storing it needs Sys.Modify on the workload pool</p>
-            ) : (
-              <p className="hint">{backupCredentialHint}</p>
+          <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} />
+        </>
+      )}
+    </>
+  );
+}
+
+// AccessKey takes the S3 access key that backups and etcd snapshots are both written with. It is
+// stored once the cluster exists, which needs Sys.Modify on the pool.
+function AccessKey({ form, set, shown, canTrust }: StepProps & { canTrust: boolean | undefined }): JSX.Element {
+  const own = form.storeBackupKey && canTrust !== false;
+  return (
+    <fieldset className="group">
+      <legend>Access key</legend>
+      {canTrust === false ? (
+        <p className="hint">Storing it needs Sys.Modify on the workload pool</p>
+      ) : (
+        <p className="hint">{backupCredentialHint}</p>
+      )}
+      {own &&
+        backupKeys.map((k, i) => (
+          <Field key={k.key} label={k.label} error={i === backupKeys.length - 1 ? shown("backupKey") : undefined}>
+            {(id) => (
+              <input
+                id={id}
+                type={k.plain === true ? "text" : "password"}
+                autoComplete={k.plain === true ? "off" : "new-password"}
+                spellCheck={false}
+                value={form.backupKey[k.key] ?? ""}
+                onChange={(e) => set("backupKey", { ...form.backupKey, [k.key]: e.target.value })}
+              />
             )}
-            {own &&
-              backupKeys.map((k, i) => (
-                <Field key={k.key} label={k.label} error={i === backupKeys.length - 1 ? shown("backupKey") : undefined}>
-                  {(id) => (
-                    <input
-                      id={id}
-                      type={k.plain === true ? "text" : "password"}
-                      autoComplete={k.plain === true ? "off" : "new-password"}
-                      spellCheck={false}
-                      value={form.backupKey[k.key] ?? ""}
-                      onChange={(e) => set("backupKey", { ...form.backupKey, [k.key]: e.target.value })}
-                    />
-                  )}
-                </Field>
-              ))}
-          </fieldset>
+          </Field>
+        ))}
+    </fieldset>
+  );
+}
+
+// EtcdSnapshotsChoice switches a new cluster's etcd snapshots on, as they are its way back from lost
+// state. It takes the access key only when backups, which ask for it in their own block, are off.
+function EtcdSnapshotsChoice({
+  form,
+  set,
+  shown,
+  cls,
+  canTrust,
+}: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
+  return (
+    <>
+      <label className="check">
+        <input type="checkbox" checked={form.etcdSnapshots} onChange={(e) => set("etcdSnapshots", e.target.checked)} />{" "}
+        Take etcd snapshots
+      </label>
+      <Info about="etcd snapshots">{etcdSnapshotsInfo}</Info>
+      {form.etcdSnapshots && (
+        <>
+          <EtcdSnapshotFieldset
+            value={form.etcdFields}
+            onChange={(f) => set("etcdFields", f)}
+            targets={classTargets(cls)}
+            problems={{ target: shown("etcdTarget"), schedule: shown("etcdSchedule"), keep: shown("etcdKeep") }}
+            distribution={cls?.distribution ?? ""}
+          />
+          {!backupsChosen(form, cls) && <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} />}
         </>
       )}
     </>
@@ -536,6 +579,11 @@ function AddonCards({
       {variable(cls, "backups") && (
         <AddonCard mib={cost("backups")} on={form.backups}>
           <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
+        </AddonCard>
+      )}
+      {etcdOffered(cls) && (
+        <AddonCard mib={0} on={form.etcdSnapshots}>
+          <EtcdSnapshotsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />
         </AddonCard>
       )}
       {variable(cls, "certificates") && (

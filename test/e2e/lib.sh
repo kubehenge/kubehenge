@@ -107,7 +107,7 @@ check_kubehenge() {
 # restricted level. The overrides merge into the container by its name, which kubectl run gives
 # the pod's.
 netpol_probe() {
-    netpol_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
+    netpol_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
     kubectl -n "$1" run "$2" --image="${agnhost}" --restart=Never --labels="${3:-app=$2}" \
         --override-type=strategic --overrides="${netpol_overrides}" -- pause
     kubectl -n "$1" wait --for=condition=Ready "pod/$2" --timeout=5m
