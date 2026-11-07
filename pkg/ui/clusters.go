@@ -889,7 +889,7 @@ func (s *Server) mayUseStorage(w http.ResponseWriter, r *http.Request, u user, c
 		return true
 	}
 	if allowed := classChoices(class, "storage"); allowed != nil && !slices.Contains(allowed, storage) {
-		writeError(w, http.StatusUnprocessableEntity, "storage: choose "+strings.Join(allowed, ", "))
+		writeError(w, http.StatusUnprocessableEntity, provisioner.StorageNotListed(storage, allowed))
 		return false
 	}
 	return s.require(w, r, u, storagePath(storage), privStorage)

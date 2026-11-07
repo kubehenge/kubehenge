@@ -322,7 +322,7 @@ func TestBuilderFlagsConnect(t *testing.T) {
 	}
 
 	f := &builderFlags{address: "192.0.2.50/24", gateway: "192.0.2.1", dns: []string{"192.0.2.53"}}
-	f.builder.Node = "pve1"
+	f.builder.Node, f.builder.Storage = "pve1", "ceph"
 	cmd, out := command(t.Context())
 	b, err := f.connect(cmd, conn)
 	if err != nil {

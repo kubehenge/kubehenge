@@ -16,7 +16,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
+
+// volumeOwnerTags are the tags of a cluster's volume owner VM.
+const volumeOwnerTags = "kubehenge;volumes"
 
 // Settings are the Proxmox VE objects every cluster's share, created with the management cluster.
 type Settings struct {
@@ -64,6 +68,11 @@ type Proxmox struct {
 	region string
 	// cpuLevels are the online nodes' x86-64 levels as read.
 	cpuLevels map[string]int
+	// siteCache keeps where each template's disks are, so a look at the templates reads one
+	// configuration per new template.
+	siteCache templates.SiteCache
+	// skipped are the online nodes the last OnlineNodes could not read.
+	skipped []string
 	// newHolders are the holder VMs created lately, by pool, which Proxmox VE may not list yet.
 	newHolders map[string][]holderVM
 }
@@ -80,6 +89,12 @@ type Access struct {
 // more. held is what an earlier call returned, as far as it was kept. record keeps a chosen VMID
 // before the VM is created, so that a failure after creating it never leads to a second one.
 func (p *Proxmox) Ensure(ctx context.Context, n Names, access Access, held Credentials, record func(Credentials) error) (Credentials, error) {
+	if held.VolumeOwner == 0 {
+		// The volume owner VM is the first VM Kubehenge creates for the cluster, with these tags.
+		if err := templates.CheckTags(ctx, p.Client, strings.Split(volumeOwnerTags, ";")); err != nil {
+			return held, fmt.Errorf("creating the volume owner VM: %w", err)
+		}
+	}
 	members, err := p.ensureAccess(ctx, n, access)
 	if err != nil {
 		return held, err
@@ -216,6 +231,9 @@ const (
 type pveNode struct {
 	Node   string `json:"node"`
 	Status string `json:"status"`
+	// Mem and MaxMem are the memory in use and the total, in bytes, of an online node.
+	Mem    int64 `json:"mem"`
+	MaxMem int64 `json:"maxmem"`
 }
 
 // removeLocalVolumes deletes the owner VM's volumes on node-local storages. Destroying the VM
@@ -284,29 +302,53 @@ type poolMember struct {
 
 // poolMembers lists a pool's VMs, and whether the pool exists.
 func (p *Proxmox) poolMembers(ctx context.Context, pool string) ([]poolMember, bool, error) {
-	var pools []struct {
-		Members []poolMember `json:"members"`
-	}
+	info, err := p.poolDetails(ctx, pool)
+	return info.Members, info.Found, err
+}
+
+// poolInfo is a pool as Proxmox VE lists it.
+type poolInfo struct {
+	Comment string       `json:"comment"`
+	Members []poolMember `json:"members"`
+	// Found is false for a pool that does not exist.
+	Found bool `json:"-"`
+}
+
+// poolDetails reads a pool's VMs and its comment.
+func (p *Proxmox) poolDetails(ctx context.Context, pool string) (poolInfo, error) {
+	var pools []poolInfo
 	err := p.Client.Get(ctx, "/pools?"+url.Values{"poolid": {pool}}.Encode(), &pools)
 	if isMissing(err) {
-		return nil, false, nil
+		return poolInfo{}, nil
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("reading pool %s: %w", pool, err)
+		return poolInfo{}, fmt.Errorf("reading pool %s: %w", pool, err)
 	}
 	if len(pools) == 0 {
-		return nil, false, nil
+		return poolInfo{}, nil
 	}
-	return pools[0].Members, true, nil
+	pools[0].Found = true
+	return pools[0], nil
 }
+
+// poolComment marks a pool as one Kubehenge made for a cluster.
+const poolComment = "Kubernetes cluster created by Kubehenge"
 
 // ensurePool creates the cluster's pool if it is missing, and returns its members.
 func (p *Proxmox) ensurePool(ctx context.Context, pool string) ([]poolMember, error) {
-	members, found, err := p.poolMembers(ctx, pool)
-	if err != nil || found {
-		return members, err
+	info, err := p.poolDetails(ctx, pool)
+	if err != nil {
+		return nil, err
 	}
-	err = p.Client.Post(ctx, "/pools", map[string]any{"poolid": pool, "comment": "Kubernetes cluster created by Kubehenge"}, nil)
+	if info.Found {
+		// A pool Kubehenge made carries its comment. Another with VMs in it would make those VMs
+		// part of the cluster, to be deleted with it.
+		if info.Comment != poolComment && slices.ContainsFunc(info.Members, func(m poolMember) bool { return m.Type == qemuType || m.Type == "lxc" }) {
+			return nil, fmt.Errorf("pool %s already exists with %d guest(s) that Kubehenge did not create. Use another cluster name or move the guests out of the pool", pool, len(info.Members))
+		}
+		return info.Members, nil
+	}
+	err = p.Client.Post(ctx, "/pools", map[string]any{"poolid": pool, "comment": poolComment}, nil)
 	if err != nil && !isExisting(err) {
 		return nil, fmt.Errorf("creating pool %s: %w", pool, err)
 	}
@@ -618,7 +660,7 @@ type ownerFound struct {
 // lands in Proxmox VE's task log.
 func (p *Proxmox) describeVolumeOwner(ctx context.Context, node string, vmid int, n Names, current ownerConfig) error {
 	config := map[string]any{}
-	if tags := "kubehenge;volumes"; current.Tags != tags {
+	if tags := volumeOwnerTags; current.Tags != tags {
 		config["tags"] = tags
 	}
 	if description := "Owns the persistent volumes of Kubernetes cluster " + n.Pool + ". Never started; deleting it deletes them."; current.Description != description {

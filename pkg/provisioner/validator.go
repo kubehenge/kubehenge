@@ -79,7 +79,12 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	topology := field.NewPath("spec", "topology")
 	errs = append(errs, validateTopology(old, c)...)
 	errs = append(errs, v.validatePinned(old, c)...)
-	errs = append(errs, v.validateNodeOS(ctx, old, c)...)
+	// One budget and one set of reads for every check of Proxmox VE, inside the webhook's timeout.
+	pveCtx, cancel := v.Hooks.admissionContext(ctx)
+	defer cancel()
+	reads := v.Hooks.reads()
+	errs = append(errs, v.validateNodeOS(pveCtx, reads, old, c)...)
+	errs = append(errs, v.validatePlacement(pveCtx, reads, old, c, class)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
@@ -154,14 +159,34 @@ func (v *ClusterValidator) validatePinned(old, c *clusterv1.Cluster) field.Error
 
 // validateNodeOS checks the node OS when it changes, and when the nodes the cluster may use do, which
 // may leave none whose CPU runs it.
-func (v *ClusterValidator) validateNodeOS(ctx context.Context, old, c *clusterv1.Cluster) field.ErrorList {
+func (v *ClusterValidator) validateNodeOS(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster) field.ErrorList {
 	if old != nil && !variableChanged(old, c, NodeOSVariable) && !variableChanged(old, c, allowedNodesVariable) {
 		return nil
 	}
-	if err := v.Hooks.checkNodeOS(ctx, c); err != nil {
+	if err := admitOnReadFailure(ctx, v.Hooks.checkNodeOS(ctx, reads, c)); err != nil {
 		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology", "variables").Key(NodeOSVariable), err.Error())}
 	}
 	return nil
+}
+
+// validatePlacement holds a cluster to a storage the management cluster gives rights on, and to
+// storage, bridge and templates that reach some node it may use, when it is created or the storage,
+// the network, the nodes or the node OS change.
+func (v *ClusterValidator) validatePlacement(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	variables := field.NewPath("spec", "topology", "variables")
+	var errs field.ErrorList
+	if old == nil || variableChanged(old, c, "storage") {
+		if err := checkStorageListed(c, class); err != nil {
+			errs = append(errs, field.Forbidden(variables.Key("storage"), err.Error()))
+		}
+	}
+	if old != nil && !slices.ContainsFunc([]string{"storage", allowedNodesVariable, NodeOSVariable, "network"}, func(name string) bool { return variableChanged(old, c, name) }) {
+		return errs
+	}
+	if err := admitOnReadFailure(ctx, v.Hooks.checkPlacement(ctx, reads, c)); err != nil {
+		errs = append(errs, field.Forbidden(variables.Key(allowedNodesVariable), err.Error()))
+	}
+	return errs
 }
 
 // validateGrants holds the privileges a cluster asks for beyond its pool to what the management

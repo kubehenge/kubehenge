@@ -211,7 +211,7 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(online, []Node{{"pve1", 2}, {"pve3", 3}}) {
+		if !slices.Equal(online, []Node{{Name: "pve1", CPULevel: 2}, {Name: "pve3", CPULevel: 3}}) {
 			t.Errorf("online = %v", online)
 		}
 	}
@@ -224,7 +224,7 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 
 func TestNodesForTheNodeOSesCPU(t *testing.T) {
 	t.Parallel()
-	online := []Node{{"pve1", 2}, {"pve2", 3}, {"pve3", 4}}
+	online := []Node{{Name: "pve1", CPULevel: 2}, {Name: "pve2", CPULevel: 3}, {Name: "pve3", CPULevel: 4}}
 	if got := nodesFor(online, templates.CPULevel(templates.DefaultNodeOS)); !slices.Equal(got, []string{"pve1", "pve2", "pve3"}) {
 		t.Errorf("AlmaLinux runs on %v", got)
 	}
@@ -247,7 +247,7 @@ func TestCheckNodeOSLeavesTalosAlone(t *testing.T) {
 	t.Parallel()
 	c := talosCluster("web", "v1.14.4")
 	h := &Hooks{Nodes: &fakeNodes{online: []string{"pve1"}, levels: map[string]int{"pve1": 1}}}
-	if err := h.checkNodeOS(t.Context(), c); err != nil {
+	if err := h.checkNodeOS(t.Context(), h.reads(), c); err != nil {
 		t.Errorf("a Talos cluster refused for its node OS: %v", err)
 	}
 }
@@ -280,7 +280,7 @@ func TestCheckNodeOSRefusesWhatNoAllowedNodeRuns(t *testing.T) {
 			t.Parallel()
 			c := cluster(tc.vars...)
 			h := &Hooks{Nodes: &fakeNodes{online: tc.online, levels: tc.levels}}
-			err := h.checkNodeOS(t.Context(), c)
+			err := h.checkNodeOS(t.Context(), h.reads(), c)
 			if tc.refused == "" && err != nil || tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)) {
 				t.Errorf("checkNodeOS = %v, want a refusal naming %q", err, tc.refused)
 			}

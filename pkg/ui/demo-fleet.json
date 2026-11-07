@@ -118,7 +118,8 @@
       "workers": 3,
       "subnet": 70,
       "ageDays": 9,
-      "addOns": ["headlamp"]
+      "addOns": ["headlamp"],
+      "lackingMemory": "No Proxmox VE node this cluster may use has 16 GiB of free memory for its largest machine. The best, pve2, has 11 GiB"
     }
   ],
   "kubeadmTemplates": ["v1.37.1", "v1.36.5", "v1.35.9"],

@@ -112,9 +112,10 @@ func (r *Reconciler) report(ctx context.Context, cluster *clusterv1.Cluster, rec
 	cond := metav1.Condition{Type: KubehengeReadyCondition, Status: metav1.ConditionTrue, Reason: ReconciledReason}
 	if reconcileErr != nil {
 		message := reconcileErr.Error()
-		cond.Status, cond.Reason, cond.Message = metav1.ConditionFalse, ReconcileFailedReason, clip(message, conditionMessageMax)
+		reason := failureReason(reconcileErr)
+		cond.Status, cond.Reason, cond.Message = metav1.ConditionFalse, reason, clip(message, conditionMessageMax)
 		if r.Events != nil {
-			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, ReconcileFailedReason, "Reconcile", "%s", clip(message, eventNoteMax))
+			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, reason, "Reconcile", "%s", clip(message, eventNoteMax))
 		}
 	}
 	if _, err := setClusterCondition(ctx, r.Client, r.Reader, client.ObjectKeyFromObject(cluster), KubehengeReadyCondition, &cond); err != nil && !apierrors.IsNotFound(err) {

@@ -219,6 +219,15 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	if verdicts["payments"] != "degraded" || verdicts["web"] != "healthy" || verdicts["edge"] != "changing" {
 		t.Errorf("verdicts %v", verdicts)
 	}
+	lacking := false
+	for i := range clusters {
+		for _, cond := range clusters[i].Conditions {
+			lacking = lacking || clusters[i].Name == "ci" && cond.Type == provisioner.NodesLackMemoryCondition && cond.Status == "True"
+		}
+	}
+	if !lacking {
+		t.Error("the demo's ci cluster does not show NodesLackMemory")
+	}
 	var runs []runView
 	decodeDemo(t, b.do("GET", "/api/runs", ""), &runs)
 	found := map[string]string{}

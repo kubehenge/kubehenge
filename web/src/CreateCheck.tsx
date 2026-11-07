@@ -76,6 +76,9 @@ export function CreateChecks({ read, room }: { read: CheckRead | undefined; room
   const checks = [
     serverCheck(read),
     ...roomCheck("Memory", room.memory, room.freeMemory),
+    ...(room.nodeWarning === undefined
+      ? []
+      : [{ what: "Largest machine", state: "warning" as const, text: room.nodeWarning }]),
     ...roomCheck("Disk", room.disk, room.freeDisk),
   ];
   return (

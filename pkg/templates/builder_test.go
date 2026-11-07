@@ -38,6 +38,13 @@ type fakeCluster struct {
 	// unstarted are VM IDs whose create task Proxmox VE kills before it runs, leaving the VM
 	// locked for creation.
 	unstarted map[int]bool
+	reads     int // configuration reads served
+}
+
+func (f *fakeCluster) configReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
 }
 
 var (
@@ -133,6 +140,7 @@ func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 			maps.Copy(c, f.body(r))
 			data = fmt.Sprintf("UPID:pve1:00001234:00005678:6700AB12:qmconfig:%d:root@pam:", vmid)
 		case m[2] == "/config":
+			f.reads++
 			data = c
 		case m[2] == "/status/current":
 			status := map[string]any{"vmid": vmid, "name": c["name"], "status": "stopped"}
@@ -280,6 +288,34 @@ func TestInventoryNamesTheStoragesOfThePoolsTemplates(t *testing.T) {
 	}
 	if len(inv.Templates) != 2 || !slices.Equal(inv.Storages, []string{"ceph", "local-lvm", "nvme"}) {
 		t.Errorf("Inventory gave %d templates on %v; want 2 on ceph, local-lvm and nvme", len(inv.Templates), inv.Storages)
+	}
+}
+
+func TestSiteCacheReadsEachTemplateConfigurationOnce(t *testing.T) {
+	t.Parallel()
+	tmpl, tags := rke2(t)
+	first := template(201, tmpl.Name, tags, testPool)
+	second := template(202, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool)
+	configs := configsOf(first, second)
+	configs[201]["scsi0"] = "ceph:base-201-disk-0,size=30G"
+	configs[202]["scsi0"] = "nvme:base-202-disk-0,size=10G"
+	f := &fakeCluster{t: t, views: [][]map[string]any{{first, second}, {first}}, configs: configs}
+	cache := &SiteCache{}
+	b := &Builder{Client: f.client(), Pool: testPool, SiteCache: cache}
+
+	inv, err := b.Inventory(t.Context())
+	if err != nil || len(inv.Templates) != 2 || f.configReads() != 2 {
+		t.Fatalf("first Inventory = %d templates, %d config reads, %v; want 2 and 2", len(inv.Templates), f.configReads(), err)
+	}
+	inv, err = b.Inventory(t.Context())
+	if err != nil || len(inv.Templates) != 1 || f.configReads() != 2 {
+		t.Fatalf("second Inventory = %d templates, %d config reads, %v; want 1 and no new read", len(inv.Templates), f.configReads(), err)
+	}
+	if inv.Templates[0].Name != tmpl.Name || !slices.Equal(inv.Sites[0].Storages, []string{"ceph"}) {
+		t.Errorf("cached template = %s on %v, want %s on ceph", inv.Templates[0].Name, inv.Sites[0].Storages, tmpl.Name)
+	}
+	if cache.Len() != 1 {
+		t.Errorf("the cache holds %d templates after one left the listing, want 1", cache.Len())
 	}
 }
 

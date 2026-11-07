@@ -292,6 +292,8 @@ const bytesPerGiB = 1_073_741_824;
 export interface Room {
   memory: number;
   freeMemory?: number | undefined;
+  /** Set where no node the cluster may use has room for its largest machine. */
+  nodeWarning?: string | undefined;
   disk: number;
   freeDisk?: number | undefined;
 }
@@ -313,6 +315,7 @@ export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): R
     freeMemory: known
       ? usable.reduce((sum, n) => sum + Math.max(0, (n.maxMemory ?? 0) - (n.memory ?? 0)), 0)
       : undefined,
+    nodeWarning: memoryNodeWarning(form, nodes),
     disk: (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB,
     freeDisk: disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined,
   };
@@ -1479,6 +1482,56 @@ export function csiProblems(step: Step, form: Form, csi: CSIOffer): Problems {
     return {};
   }
   return { datastoreAllocate: csi.problem };
+}
+
+/**
+ * bridgeNodeProblems holds the network step to a bridge that exists on a node the cluster may use,
+ * as the API server does. A node whose bridges are not listed to the user counts as having it, and
+ * so does a name no node lists, which may be a VNet.
+ */
+export function bridgeNodeProblems(
+  step: Step,
+  form: Form,
+  nodes: { bridgesByNode: Record<string, Bridge[]>; online: string[] },
+): Problems {
+  if (step !== "Network" || !form.bridge) {
+    return {};
+  }
+  const on = (node: string): boolean | undefined => {
+    const known = nodes.bridgesByNode[node];
+    return known === undefined || known.length === 0 ? undefined : known.some((b) => b.bridge === form.bridge);
+  };
+  const allowed = allowedNodes(form.place) ?? nodes.online;
+  const holders = Object.keys(nodes.bridgesByNode).filter((node) => on(node) === true);
+  if (holders.length === 0 || allowed.length === 0 || allowed.some((node) => on(node) !== false)) {
+    return {};
+  }
+  const [only, ...rest] = holders.toReversed();
+  const named = rest.length === 0 ? holders.join("") : `${rest.toReversed().join(", ")} and ${only}`;
+  const allow = rest.length === 0 ? `Allow ${named}` : "Allow one of them";
+  return { bridge: `${form.bridge} is only on ${named}. ${allow} or choose another bridge.` };
+}
+
+/**
+ * memoryNodeWarning warns when no node the cluster may use has the free memory for its largest
+ * machine, as the Placer judges them. The server accepts such a cluster, so this never blocks. A
+ * node whose memory is not reported counts as having it.
+ */
+export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefined {
+  const chosen = allowedNodes(form.place);
+  const candidates = nodes.filter((n) => n.online && (chosen === undefined || chosen.includes(n.node)));
+  const need = Math.max(form.controlPlaneMachine.memoryMiB, form.workerReplicas > 0 ? form.workerMachine.memoryMiB : 0);
+  const [best] = candidates.toSorted((a, b) => freeMiB(b) - freeMiB(a));
+  if (best === undefined || freeMiB(best) >= need) {
+    return undefined;
+  }
+  const needGiB = Math.ceil(need / mibPerGiB);
+  return `No node has ${needGiB} GiB free, the most is ${Math.floor(freeMiB(best) / mibPerGiB)} GiB on ${best.node}. The cluster waits for room.`;
+}
+
+// freeMiB is a node's free memory, unlimited while it reports none.
+function freeMiB(n: PveNode): number {
+  return n.maxMemory === undefined || n.memory === undefined ? Infinity : (n.maxMemory - n.memory) / bytesPerMiB;
 }
 
 // offeredStorages are the storages, once each, that take disks, the user may use and the class

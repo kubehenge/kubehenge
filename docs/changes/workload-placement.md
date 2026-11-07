@@ -1,0 +1,6 @@
+- New machines are no longer refused with "cannot reserve … of memory" on an overcommitted Proxmox VE host. Placement leaves out the nodes whose free memory cannot take the cluster's largest machine, and keeps its last placement with a `NodesLackMemory` condition when none can.
+- A cluster's bridge or VNet must exist on a node the cluster may use, or the cluster is refused. Placement leaves out the nodes without it.
+- The create wizard says that volumes on node-local storage stay on one node. The docs explain how replacements interact with them and how to move a volume, and troubleshooting covers "volume node affinity conflict".
+- The interface marks the `NodesSkipped` and `NodesLackMemory` conditions as problems while they are true.
+- A new cluster's first machines go only to nodes with room for its largest machine. The create wizard says so before submit when no node it may use has the free memory.
+- The create wizard shows that memory warning in amber at the Placement field and in the Confirm step's checks. A bridge missing on the allowed nodes names the nodes that have it.

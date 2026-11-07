@@ -119,7 +119,7 @@ Placement and the four options below it change later under **Options**.
 
 #### Placement
 
-Each new VM goes to an online node it may use. It is the one running the fewest of the cluster's VMs of its kind (control plane or worker) with the memory for it. So three control planes on three nodes run one to a node.
+Each new VM goes to an online node it may use. It is the one running the fewest of the cluster's VMs of its kind (control plane or worker). So three control planes on three nodes run one to a node.
 
 **Any node** means every node of the Proxmox VE cluster, nodes added later included. A node that goes down is left out within about 15 seconds, until it is online again. While every node chosen is down, no new VM is placed elsewhere.
 
@@ -128,6 +128,17 @@ Each new VM goes to an online node it may use. It is the one running the fewest 
 Without it the choice says so. The nodes can still be chosen one by one, unless an administrator has the rules offered to cluster creators ([install-settings.md](install-settings.md#ha-rule-placements)). Then everyone who may create or change a cluster sees each rule's name and nodes, up to 30 seconds old. They do not see its comment or whether it is strict.
 
 The rules Kubehenge keeps for its own clusters' Proxmox VE HA are not offered.
+
+#### Nodes left out of the placement
+
+A node is left out while it lacks the cluster's storage, template, bridge or VNet. It is also left out while it has less free memory than the cluster's largest machine.
+
+- **Free memory** is what Proxmox VE reports as unused. Memory that stopped guests are configured with does not count, so an overcommitted node still takes VMs.
+- **Headroom:** placement counts the memory free now, as Proxmox VE does when it starts a VM. Memory configured for stopped VMs is not held back, so a node can run short once they start. Allowed nodes keep clusters on hosts with real headroom.
+- **Rejoining** takes a tenth more free memory than the machine needs. That keeps the placement steady as memory moves.
+- **New clusters** are judged the same way before the first look. The create wizard warns, without blocking, when no node it may use has the free memory.
+- **No room anywhere:** the placement stays as it was. The cluster's `NodesLackMemory` condition names the memory needed and the best node's free memory.
+- **Bridge or VNet:** a bridge that exists on none of the nodes the cluster may use is refused when the cluster is created or changed. A VNet counts as present where its zone is applied.
 
 #### Proxmox VE HA
 
@@ -758,6 +769,17 @@ Where the domain's DNS answers differently inside the network than outside (spli
 
 The default StorageClass `proxmox` puts volumes on the cluster's storage. They belong to a VM named `<name>-<hash>-volumes`, tagged `kubehenge` and `volumes`, in the cluster's pool. The VM is never started and exists so that only this cluster's token may attach them. A released volume is deleted through that VM. On storage local to each node, a volume lives on one node.
 
+### Volumes on node-local storage
+
+A pod can use such a volume only on a worker running on the volume's node.
+
+The Proxmox VE provider places a replacement worker in an upgrade, a node image refresh or a health-check repair. It does not look at volumes, and Kubehenge cannot steer it. When no worker is left on a volume's node, its pod stays Pending with `volume node affinity conflict`.
+
+- **Shared storage** has no such limit.
+- **Workers on every node with volumes:** choose the nodes under **Placement** so that each has a worker.
+- **Moving a volume:** the CSI plugin's `pvecsictl migrate --config <file> -n <namespace> <pvc> <node>` moves the disk and rewrites its node affinity. It stops the pod using the volume.
+- **Root access:** the tool needs `root@pam` credentials, so Kubehenge never runs it.
+
 By default a cluster runs the last release of the Proxmox VE CSI plugin that needs no more than `Datastore.AllocateSpace` on the cluster's storage. Its newer releases read the storage's configuration and need `Datastore.Allocate` there. That lets the cluster's token delete any volume on that storage and change the storage's definition.
 
 Where the administrator lets clusters choose it ([install-settings.md](install-settings.md#csi-plugin)), a cluster can run the newest release instead. Choose it with **Newest CSI plugin release**, or the `csi` variable's `datastoreAllocate`. Its token then gets `Datastore.Allocate` on the cluster's storage, and loses it again when switched off.
@@ -1137,9 +1159,9 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | Variable | Required | What it is |
 | --- | --- | --- |
 | `controlPlaneEndpoint` | yes | The control plane's virtual IP: an IPv4 address, unused, outside `network.addresses`. |
-| `network` | yes | `bridge`, one of the bridges clusters may use. `vlan` (optional, 1 to 4094). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. |
-| `storage` | yes | The storage for the nodes' disks and the persistent volumes, one of those clusters may use. |
-| `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one. Every node when unset. New VMs go to those of them that are online ([above](#machines)). The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
+| `network` | yes | `bridge`, one of the bridges clusters may use. It has to exist on a node the cluster may use ([above](#nodes-left-out-of-the-placement)). `vlan` (optional, 1 to 4094). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. |
+| `storage` | yes | The storage for the nodes' disks and the persistent volumes, one of the management cluster's `workload_datastores`. It has to be available on an online node the cluster may use. |
+| `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one. Every node when unset. New VMs go to those of them that are online, where the storage is available and where the template can be cloned ([above](#machines)). A template on storage that is not shared can be cloned only on its own node. The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)). Default true, where the management cluster has Proxmox VE HA and the storage is shared. |
 | `csi` | no | `datastoreAllocate` (default false) runs the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on its storage ([above](#persistent-volumes)). It needs a management cluster that lets clusters choose it and a storage of the cluster's own. `volumeSnapshots` (default false) takes volume snapshots, with the cluster's own volumes copied with its own token ([above](#volume-snapshots)), on storage local to each node. |
 | `ccm` | no | `haGroups` has the cloud controller manager label the nodes with their Proxmox VE HA groups, with `Sys.Audit` on `/` for the cluster's token ([above](#machines)). Default true, unless the management cluster switched the labels off for every cluster. Then it may not be true. |

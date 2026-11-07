@@ -339,6 +339,7 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		Registrar:         registrar,
 		RancherKubernetes: rancherMinors,
 		Nodes:             cloud,
+		Sites:             cloud,
 		DatastoreAllocate: o.r.DatastoreAllocate,
 		SysAuditGroup:     o.r.SysAuditGroup,
 		VolumeSnapshots:   o.r.VolumeSnapshots,
@@ -686,7 +687,7 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	if err := addHooks(extensions, scheme, hooks); err != nil {
 		return err
 	}
-	placer := &provisioner.Placer{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Nodes: cloud, Interval: placementInterval}
+	placer := &provisioner.Placer{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Nodes: cloud, Sites: cloud, Interval: placementInterval}
 	if err := mgr.Add(placer); err != nil {
 		return fmt.Errorf("the placer: %w", err)
 	}
