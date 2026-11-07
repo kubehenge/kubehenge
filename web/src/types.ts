@@ -707,6 +707,8 @@ export interface TemplateRefreshSettings {
   gateway?: string;
   dns?: string[];
   creatorBuilds?: boolean;
+  /** Unset is on. */
+  kubeadmPatches?: boolean;
 }
 
 /** An S3 store clusters back up to, each under a folder of its own beneath the prefix. */
@@ -1080,6 +1082,8 @@ export interface VMTemplate {
   built?: string;
   /** The newest build of its template. */
   newest?: boolean;
+  /** Its kernel is older than the previous build's, so no cluster moves to it. */
+  older?: boolean;
   /** The cluster that clones from it, which keeps it from being deleted. */
   inUse?: string;
   /** The operating system its machines run, such as AlmaLinux 10. Absent for a Talos template. */

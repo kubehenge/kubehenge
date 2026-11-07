@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -48,6 +49,8 @@ type templateRefreshOptions struct {
 	soak           time.Duration
 	missing        []string
 	missingOnly    bool
+	kubeadmPatches bool
+	markers        string
 	trigger        string
 	tokenSecret    string
 }
@@ -83,6 +86,8 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 	f.IntVar(&o.keep, "keep", provisioner.DefaultBuildsKept, "builds of each template kept beside those in use")
 	f.DurationVar(&o.soak, "soak", provisioner.DefaultNodeImageSoak, "how old a build must be before clusters move to it, as the controller's --node-image-soak")
 	f.StringArrayVar(&o.missing, "missing", nil, "a template to build if it has no build yet, such as rke2-almalinux-10 or kubeadm-v1.37.1-almalinux-10 (repeatable)")
+	f.BoolVar(&o.kubeadmPatches, "kubeadm-patches", true, "also build the kubeadm template of the newest patch release of each Kubernetes minor version a kubeadm cluster runs, and of the next minor version")
+	f.StringVar(&o.markers, "release-markers", provisioner.KubernetesReleaseMarkers, "where Kubernetes names its newest releases, as stable-1.<minor>.txt")
 	f.BoolVar(&o.missingOnly, "missing-only", false, "build only the --missing templates, and only those without a build")
 	f.StringVar(&o.trigger, "trigger", "", "what started the run, shown with its status")
 	f.StringVar(&o.tokenSecret, "token-secret", "", "the Secret KUBEHENGE_PROXMOX_TOKEN comes from, named in the run's status when it is missing")
@@ -132,6 +137,7 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 	}
 	builder.Log = status.logf
 	refresh := &provisioner.TemplateRefresh{
+		Patches:        o.patches(),
 		Kube:           kube,
 		Pool:           builder,
 		ClassNamespace: o.classNamespace,
@@ -167,6 +173,22 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 		}
 		return nil
 	})
+}
+
+// releaseMarkerTimeout bounds the read of one of Kubernetes's release markers.
+const releaseMarkerTimeout = 30 * time.Second
+
+// patches reads the newest Kubernetes release of a minor version, or is nil when the run is not to
+// build kubeadm's newest patches.
+func (o *templateRefreshOptions) patches() func(context.Context, int) (string, bool, error) {
+	if !o.kubeadmPatches {
+		return nil
+	}
+	server := &provisioner.ChannelServer{HTTP: &http.Client{Timeout: releaseMarkerTimeout}}
+	return func(ctx context.Context, minor int) (string, bool, error) {
+		v, found, err := server.NewestPatch(ctx, o.markers, minor)
+		return v.Raw, found, err
+	}
 }
 
 // withRefreshLease runs fn while holding the refresh's Lease, so that a scheduled run and one an

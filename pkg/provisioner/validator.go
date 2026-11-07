@@ -78,7 +78,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	var errs field.ErrorList
 	topology := field.NewPath("spec", "topology")
 	errs = append(errs, validateTopology(old, c)...)
-	errs = append(errs, v.validatePinned(old, c)...)
+	errs = append(errs, v.validatePinned(ctx, old, c)...)
 	errs = append(errs, v.validateNodeOS(ctx, old, c)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
@@ -139,17 +139,24 @@ func validateRanges(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) fi
 
 // validatePinned holds an RKE2 or k3s cluster to a release this Kubehenge pins, when it is created
 // or its version changes. Its nodes could install no other.
-func (v *ClusterValidator) validatePinned(old, c *clusterv1.Cluster) field.ErrorList {
+func (v *ClusterValidator) validatePinned(ctx context.Context, old, c *clusterv1.Cluster) field.ErrorList {
 	version := c.Spec.Topology.Version
 	if v.Hooks.Releases == nil || (old != nil && old.Spec.Topology.Version == version) {
 		return nil
 	}
 	release := distributionReleaseOf(version)
-	if release == nil || v.Hooks.Releases.Pins.pinned(version) {
+	if release == nil {
+		return nil
+	}
+	pins, err := v.Hooks.Releases.pins(ctx)
+	if err != nil {
+		return field.ErrorList{field.InternalError(field.NewPath("spec", "topology", "version"), err)}
+	}
+	if pins.pinned(version) {
 		return nil
 	}
 	return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "version"), version,
-		fmt.Sprintf("%s; the newest it pins of each minor version: %s", unpinnedRelease(release, version), strings.Join(v.Hooks.Releases.Pins.offered(release), ", ")))}
+		fmt.Sprintf("%s; the newest it pins of each minor version: %s", unpinnedRelease(release, version), strings.Join(pins.offered(release), ", ")))}
 }
 
 // validateNodeOS checks the node OS when it changes, and when the nodes the cluster may use do, which

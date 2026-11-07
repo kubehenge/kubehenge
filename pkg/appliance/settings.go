@@ -104,6 +104,10 @@ type TemplateRefresh struct {
 	DNS     []string `json:"dns,omitempty"`
 	// CreatorBuilds lets those who may create clusters have a missing template built.
 	CreatorBuilds bool `json:"creatorBuilds,omitempty"`
+	// KubeadmPatches has the weekly build also make the kubeadm template of the newest patch
+	// release of each Kubernetes minor version a kubeadm cluster runs, and of the next minor
+	// version. Unset, it is on.
+	KubeadmPatches *bool `json:"kubeadmPatches,omitempty"`
 }
 
 // RefreshWeekdays are the days the template refresh may run on, as the module names them.
@@ -184,6 +188,9 @@ func moduleTemplateRefresh(r *TemplateRefresh) map[string]any {
 	}
 	out["enabled"] = r.Enabled
 	out["creator_builds"] = r.CreatorBuilds
+	if r.KubeadmPatches != nil {
+		out["kubeadm_patches"] = *r.KubeadmPatches
+	}
 	for key, value := range map[string]string{
 		"weekday": r.Weekday, "time": r.Time, "time_zone": r.TimeZone, "storage": r.Storage,
 		"address": r.Address, "gateway": r.Gateway,

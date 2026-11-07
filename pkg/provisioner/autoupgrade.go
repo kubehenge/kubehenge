@@ -203,6 +203,8 @@ type ChannelServer struct {
 	// Pins, when set, have RKE2's and k3s's channels name the newest release of each minor version
 	// that they pin, and leave out a minor version of which they pin none: a node installs no other.
 	Pins ReleasePins
+	// Store, when set, adds the pins administrators added to Pins.
+	Store *PinStore
 }
 
 // DefaultChannelURLs are the publishers' own. Talos's is where Kubernetes names the newest release
@@ -210,8 +212,12 @@ type ChannelServer struct {
 var DefaultChannelURLs = map[string]string{
 	"rke2":  "https://update.rke2.io/v1-release/channels",
 	"k3s":   "https://update.k3s.io/v1-release/channels",
-	"talos": "https://dl.k8s.io/release",
+	"talos": KubernetesReleaseMarkers,
 }
+
+// KubernetesReleaseMarkers is where Kubernetes names the newest release of each minor version, in
+// stable-1.<minor>.txt.
+const KubernetesReleaseMarkers = "https://dl.k8s.io/release"
 
 // channelList is a release channel server's answer.
 type channelList struct {
@@ -266,9 +272,18 @@ func (s *ChannelServer) Channels(ctx context.Context, distribution string, os te
 		return Channels{}, fmt.Errorf("%s names no stable channel", url)
 	}
 	if s.Pins != nil {
+		pins := s.Pins
+		if s.Store != nil {
+			added, err := s.Store.Added(ctx)
+			if err != nil {
+				return Channels{}, err
+			}
+			pins = maps.Clone(s.Pins)
+			maps.Copy(pins, added)
+		}
 		release := map[string]*distributionRelease{string(templates.RKE2): rke2Release, string(templates.K3s): k3sRelease}[distribution]
 		for m := range ch.Latest {
-			if v, ok := s.Pins.newest(release, m); ok {
+			if v, ok := pins.newest(release, m); ok {
 				ch.Latest[m] = v
 			} else {
 				delete(ch.Latest, m)
@@ -317,25 +332,34 @@ func (s *ChannelServer) kubernetesChannels(ctx context.Context, base string) (Ch
 	}
 	ch := Channels{Latest: map[int]kubeVersion{}, StableMinor: stable.Minor}
 	for _, m := range minors {
-		url := fmt.Sprintf("%s/stable-1.%d.txt", base, m)
-		raw, found, err := s.get(ctx, url)
+		v, found, err := s.NewestPatch(ctx, base, m)
 		if err != nil {
 			return Channels{}, err
 		}
-		if !found {
-			// A minor Talos runs that Kubernetes has not released yet.
-			continue
+		// A minor Talos runs that Kubernetes has not released yet is left out.
+		if found {
+			ch.Latest[m] = v
 		}
-		v, ok := parseKubeVersion(strings.TrimSpace(string(raw)))
-		if !ok || v.Minor != m || v.Build != 0 {
-			return Channels{}, fmt.Errorf("%s names no Kubernetes 1.%d release: %q", url, m, raw)
-		}
-		ch.Latest[m] = v
 	}
 	if _, ok := ch.Latest[ch.StableMinor]; !ok {
 		return Channels{}, fmt.Errorf("%s names no Kubernetes 1.%d release", base, ch.StableMinor)
 	}
 	return ch, nil
+}
+
+// NewestPatch is the newest release of Kubernetes minor version 1.<minor> that Kubernetes names in
+// base/stable-1.<minor>.txt, or false for a minor it has not released yet.
+func (s *ChannelServer) NewestPatch(ctx context.Context, base string, minor int) (kubeVersion, bool, error) {
+	url := fmt.Sprintf("%s/stable-1.%d.txt", base, minor)
+	raw, found, err := s.get(ctx, url)
+	if err != nil || !found {
+		return kubeVersion{}, false, err
+	}
+	v, ok := parseKubeVersion(strings.TrimSpace(string(raw)))
+	if !ok || v.Minor != minor || v.Build != 0 {
+		return kubeVersion{}, false, fmt.Errorf("%s names no Kubernetes 1.%d release: %q", url, minor, raw)
+	}
+	return v, true, nil
 }
 
 var kubeadmTemplateVersion = regexp.MustCompile(`^kubernetes-(v1\.\d+\.\d+)$`)
@@ -366,8 +390,14 @@ type poolTemplates struct {
 	nodeOSes map[templates.Distribution][]templates.NodeOS
 	// storages are those any of Kubehenge's templates have disks on, whatever their OS.
 	storages []string
-	// builds are the builds of each line.
+	// builds are the builds of each line that clusters may move to.
 	builds NodeImageBuilds
+	// older are the builds whose kernel is older than the previous build's, which clusters never
+	// move to.
+	older NodeImageBuilds
+	// facts are what each build recorded, by line and build time, until sort sets the older ones
+	// aside.
+	facts map[string]map[time.Time]templates.BuildFacts
 	// talos are the Talos releases of the Talos templates, newest first.
 	talos []string
 }
@@ -409,19 +439,24 @@ func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, e
 		return poolTemplates{}, fmt.Errorf("listing the Proxmox VE templates: %w", err)
 	}
 	seen := poolTemplates{
-		storages: inv.Storages, builds: NodeImageBuilds{},
+		storages: inv.Storages, builds: NodeImageBuilds{}, older: NodeImageBuilds{},
+		facts:   map[string]map[time.Time]templates.BuildFacts{},
 		kubeadm: map[templates.NodeOS][]kubeVersion{}, nodeOSes: make(map[templates.Distribution][]templates.NodeOS),
 	}
 	for _, r := range inv.Templates {
-		seen.add(templates.ParseTags(r.Tags))
+		var facts *templates.BuildFacts
+		if f, ok := inv.Facts[r.VMID]; ok {
+			facts = &f
+		}
+		seen.add(templates.ParseTags(r.Tags), facts)
 	}
 	seen.sort()
 	return seen, nil
 }
 
 // add records what the template of these tags offers: a Talos release, which has no builds, or a
-// build of a node OS line.
-func (p *poolTemplates) add(tags []string) {
+// build of a node OS line, with what it recorded of itself, if anything.
+func (p *poolTemplates) add(tags []string, facts *templates.BuildFacts) {
 	if v, ok := talosVersionOf(tags); ok && !slices.Contains(p.talos, v) {
 		p.talos = append(p.talos, v)
 	}
@@ -432,6 +467,12 @@ func (p *poolTemplates) add(tags []string) {
 	}
 	line := templates.LineKey(tags)
 	p.builds[line] = append(p.builds[line], at)
+	if facts != nil {
+		if p.facts[line] == nil {
+			p.facts[line] = map[time.Time]templates.BuildFacts{}
+		}
+		p.facts[line][at.UTC()] = *facts
+	}
 	for _, d := range []templates.Distribution{templates.RKE2, templates.K3s} {
 		if slices.Contains(tags, string(d)) && !slices.Contains(p.nodeOSes[d], os) {
 			p.nodeOSes[d] = append(p.nodeOSes[d], os)
@@ -460,8 +501,24 @@ func (p *poolTemplates) sort() {
 		slices.SortFunc(p.nodeOSes[d], func(a, b templates.NodeOS) int { return strings.Compare(a.String(), b.String()) })
 	}
 	slices.SortFunc(p.talos, newerFirst)
-	for line := range p.builds {
-		slices.SortFunc(p.builds[line], time.Time.Compare)
+	for line, builds := range p.builds {
+		slices.SortFunc(builds, time.Time.Compare)
+		recorded := make([]*templates.BuildFacts, len(builds))
+		for i, at := range builds {
+			if f, ok := p.facts[line][at.UTC()]; ok {
+				recorded[i] = &f
+			}
+		}
+		older := templates.OlderBuilds(recorded)
+		accepted := builds[:0:0]
+		for i, at := range builds {
+			if older[i] {
+				p.older[line] = append(p.older[line], at)
+			} else {
+				accepted = append(accepted, at)
+			}
+		}
+		p.builds[line] = accepted
 	}
 }
 
@@ -815,6 +872,22 @@ func ClassBuilds(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (No
 	recorded, ok := class.Annotations[NodeImageBuildsAnnotation]
 	if !ok {
 		return nil, fmt.Errorf("ClusterClass %s/%s: %w", ns, ref.Name, errNoBuildsRecorded)
+	}
+	return ParseNodeImageBuilds(recorded)
+}
+
+// OlderBuilds reads the builds with an older kernel than the previous build's, as the controller
+// records them on the RKE2 ClusterClass in namespace. They are the same on every class that has any.
+// None is recorded before the controller has looked at the template pool.
+func OlderBuilds(ctx context.Context, r client.Reader, namespace string) (NodeImageBuilds, error) {
+	class := &clusterv1.ClusterClass{}
+	name := ClassPrefix + string(templates.RKE2)
+	if err := client.IgnoreNotFound(r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, class)); err != nil {
+		return nil, fmt.Errorf("reading ClusterClass %s/%s: %w", namespace, name, err)
+	}
+	recorded, ok := class.Annotations[NodeImageOlderAnnotation]
+	if !ok {
+		return NodeImageBuilds{}, nil
 	}
 	return ParseNodeImageBuilds(recorded)
 }

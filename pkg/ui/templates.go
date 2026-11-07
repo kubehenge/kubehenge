@@ -37,6 +37,8 @@ type templateView struct {
 	Built *time.Time `json:"built,omitempty"`
 	// Newest is the line's newest build, which new machines are cloned from once it is offered.
 	Newest bool `json:"newest,omitempty"`
+	// Older says its kernel is older than the previous build's, so no cluster moves to it.
+	Older bool `json:"older,omitempty"`
 	// InUse names a cluster that clones from it, which keeps it from being deleted.
 	InUse string `json:"inUse,omitempty"`
 	// NodeOS is the operating system its machines run, such as AlmaLinux 10. A Talos template has
@@ -83,6 +85,14 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request, u user) {
 	if err != nil {
 		s.kubeError(w, r, err)
 		return
+	}
+	older, err := provisioner.OlderBuilds(r.Context(), s.currentKube(), s.ClassNamespace)
+	if err != nil {
+		s.kubeError(w, r, err)
+		return
+	}
+	for i := range list {
+		list[i].Older = list[i].Built != nil && slices.ContainsFunc(older[templates.LineKey(list[i].Tags)], list[i].Built.Equal)
 	}
 	needs, err := s.templateNeeds(r.Context(), list, state.soak())
 	if err != nil {
@@ -166,7 +176,7 @@ func (s *Server) templateNeeds(ctx context.Context, list []templateView, soak ti
 func listedBuilds(list []templateView) provisioner.NodeImageBuilds {
 	builds := provisioner.NodeImageBuilds{}
 	for i := range list {
-		if t := &list[i]; t.Built != nil {
+		if t := &list[i]; t.Built != nil && !t.Older {
 			key := templates.LineKey(t.Tags)
 			builds[key] = append(builds[key], *t.Built)
 		}

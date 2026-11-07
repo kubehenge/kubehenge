@@ -98,6 +98,10 @@ func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	older, err := seen.older.Encode()
+	if err != nil {
+		return err
+	}
 	return errors.Join(
 		p.annotate(ctx, "kubeadm", KubeadmVersionsAnnotation, kubeadm),
 		p.annotate(ctx, "rke2", NodeOSTemplatesAnnotation, joinNodeOSes(seen.nodeOSes[templates.RKE2])),
@@ -110,6 +114,9 @@ func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 		p.annotate(ctx, "kubeadm", NodeImageBuildsAnnotation, builds),
 		p.annotate(ctx, "rke2", NodeImageBuildsAnnotation, builds),
 		p.annotate(ctx, "k3s", NodeImageBuildsAnnotation, builds),
+		p.annotate(ctx, "kubeadm", NodeImageOlderAnnotation, older),
+		p.annotate(ctx, "rke2", NodeImageOlderAnnotation, older),
+		p.annotate(ctx, "k3s", NodeImageOlderAnnotation, older),
 	)
 }
 

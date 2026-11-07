@@ -440,7 +440,7 @@ func TestIntegrationTemplateRefreshRunsUnderItsLease(t *testing.T) { //nolint:pa
 		t.Errorf("the status of a run without its token is %v", s)
 	}
 
-	users, err := buildUsers(ctx, ns, nil)
+	users, err := buildUsers(ctx, ns, nil, nil)
 	if err != nil || len(users) != 0 {
 		t.Errorf("buildUsers gave %v, %v; want no builds in use", users, err)
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -61,6 +62,45 @@ func TestTemplatesListedWithTheClustersThatNeedThem(t *testing.T) {
 	d := h.browser()
 	d.signIn("dev@pve")
 	expect(t, d.do("GET", "/api/templates", ""), http.StatusForbidden)
+}
+
+// A build the controller recorded as older than the previous build is marked on the page, and
+// no cluster is shown cloning from it.
+func TestTemplateWithAnOlderKernelIsMarkedOlder(t *testing.T) {
+	t.Parallel()
+	one := cluster("default", "one")
+	one.Annotations = map[string]string{"kubehenge.dev/node-image": "2026-12-10T00:00:00Z"}
+	h := newHarness(t, one)
+	withTemplates(t, h)
+	class := &clusterv1.ClusterClass{}
+	if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "kubehenge-system", Name: "kubehenge-rke2"}, class); err != nil {
+		t.Fatal(err)
+	}
+	class.Annotations["kubehenge.dev/node-image-older"] = `{"` + templates.LineKey([]string{"kubehenge", "os-almalinux-10", "rke2"}) + `":["2026-10-15T00:00:00Z"]}`
+	if err := h.kube.Update(context.Background(), class); err != nil {
+		t.Fatal(err)
+	}
+	h.server.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) { return 0, nil }
+	a := h.browser()
+	a.signIn("admin@pve")
+	rec := a.do("GET", "/api/templates", "")
+	expect(t, rec, http.StatusOK)
+	var got templatesView
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	older := map[int]bool{}
+	for _, v := range got.Templates {
+		older[v.VMID] = v.Older
+	}
+	if !older[9004] || older[9001] || older[9002] {
+		t.Errorf("older builds = %v, want only 9004", older)
+	}
+	for _, v := range got.Templates {
+		if v.VMID == 9004 && v.InUse != "" {
+			t.Errorf("%s clones from the older build", v.InUse)
+		}
+	}
 }
 
 func TestTemplatesOnlyInAnApplianceWithItsManagementCluster(t *testing.T) {

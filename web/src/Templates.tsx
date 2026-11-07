@@ -21,6 +21,7 @@ import {
   Dialog,
   ErrorBox,
   Field,
+  Status,
   errorMessage,
   filled,
   logLines,
@@ -79,6 +80,12 @@ export function Templates(): JSX.Element {
                     <>
                       {new Date(t.built).toLocaleString()}
                       {t.newest === true && <span className="muted"> (newest)</span>}
+                      {t.older === true && (
+                        <>
+                          {" "}
+                          <Status state="warning" text="Older than the previous build" />
+                        </>
+                      )}
                     </>
                   )}
                 </td>

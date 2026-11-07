@@ -431,23 +431,24 @@ resource "helm_release" "kubehenge" {
         sysAuditGroup = var.cluster_sys_audit ? proxmox_virtual_environment_group.clusters_audit[0].group_id : ""
       }
       templateRefresh = {
-        enabled       = local.template_builder.enabled
-        weekday       = var.template_refresh.weekday
-        time          = var.template_refresh.time
-        timeZone      = var.template_refresh.time_zone
-        soakHours     = var.template_refresh.soak_hours
-        secret        = local.builder_secret.name
-        node          = local.template_builder.node
-        storage       = local.template_builder.storage
-        importStorage = local.template_builder.import
-        isoStorage    = local.template_builder.iso
-        pool          = proxmox_virtual_environment_pool.templates.pool_id
-        bridge        = local.bridges[local.template_builder.bridge].name
-        vlan          = var.template_refresh.vlan
-        address       = var.template_refresh.address == null ? "" : var.template_refresh.address
-        gateway       = var.template_refresh.gateway == null ? "" : var.template_refresh.gateway
-        dns           = var.template_refresh.dns
-        creatorBuilds = var.template_refresh.creator_builds
+        enabled        = local.template_builder.enabled
+        weekday        = var.template_refresh.weekday
+        time           = var.template_refresh.time
+        timeZone       = var.template_refresh.time_zone
+        soakHours      = var.template_refresh.soak_hours
+        secret         = local.builder_secret.name
+        node           = local.template_builder.node
+        storage        = local.template_builder.storage
+        importStorage  = local.template_builder.import
+        isoStorage     = local.template_builder.iso
+        pool           = proxmox_virtual_environment_pool.templates.pool_id
+        bridge         = local.bridges[local.template_builder.bridge].name
+        vlan           = var.template_refresh.vlan
+        address        = var.template_refresh.address == null ? "" : var.template_refresh.address
+        gateway        = var.template_refresh.gateway == null ? "" : var.template_refresh.gateway
+        dns            = var.template_refresh.dns
+        creatorBuilds  = var.template_refresh.creator_builds
+        kubeadmPatches = var.template_refresh.kubeadm_patches
       }
       clusterOIDC = [for p in var.cluster_oidc : merge(
         {
