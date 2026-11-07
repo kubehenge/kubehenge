@@ -203,6 +203,7 @@ describe("talos clusters", () => {
         upgrading: "web-cp-abc to v1.15.1 since 2026-10-23T10:00:00Z",
         upgraded: "web-cp-xyz to v1.15.1 at 2026-10-23T09:50:00Z",
         failed: "web-md-1 to v1.15.1 at 2026-10-23T09:40:00Z: the node did not come back",
+        waiting: "web-cp-abc waits: web-cp-xyz is a learner in etcd's member list",
       },
     };
     const calls = fakeServer({
@@ -218,6 +219,7 @@ describe("talos clusters", () => {
     await waitFor(() => expect(term("Talos release")).toHaveTextContent("v1.15.1"));
     expect(term("New nodes boot")).toHaveTextContent("v1.14.4, then v1.15.1");
     expect(term("Talos upgrade")).toHaveTextContent(`web-cp-abc to v1.15.1, since ${shown("2026-10-23T10:00:00Z")}`);
+    expect(term("Upgrade waits")).toHaveTextContent("web-cp-abc waits: web-cp-xyz is a learner in etcd's member list");
     expect(term("Last Talos upgrade")).toHaveTextContent(`web-cp-xyz to v1.15.1, ${shown("2026-10-23T09:50:00Z")}`);
     const failure = within(screen.getByRole("region", { name: "Failed Talos upgrade" }));
     expect(

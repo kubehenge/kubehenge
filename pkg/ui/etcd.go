@@ -15,8 +15,8 @@ const etcdVariable = "etcd"
 
 // etcdView is what the controller last read of a cluster's etcd members.
 type etcdView struct {
-	Read       time.Time               `json:"read"`
-	QuotaBytes int64                   `json:"quotaBytes"`
+	Read       time.Time                `json:"read"`
+	QuotaBytes int64                    `json:"quotaBytes"`
 	Members    []provisioner.EtcdMember `json:"members"`
 	// Error is why some member could not be read.
 	Error string `json:"error,omitempty"`

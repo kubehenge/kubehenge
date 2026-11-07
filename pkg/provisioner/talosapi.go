@@ -47,6 +47,12 @@ type TalosNode interface {
 	// BootstrapRecovered starts etcd on the node as a cluster of one from the uploaded snapshot, a
 	// database without etcd's checksum.
 	BootstrapRecovered(ctx context.Context) error
+	TalosEtcdNode
+	Close() error
+}
+
+// TalosEtcdNode is what the controller reads and maintains of the etcd member on one node.
+type TalosEtcdNode interface {
 	// EtcdMember is the state of the etcd member on the node, and its alarms. Name is left empty.
 	EtcdMember(ctx context.Context) (EtcdMember, error)
 	// EtcdMembers is the cluster's member list as the node's etcd has it.
@@ -55,7 +61,6 @@ type TalosNode interface {
 	EtcdDefragment(ctx context.Context) error
 	// EtcdDisarm clears the etcd alarms.
 	EtcdDisarm(ctx context.Context) error
-	Close() error
 }
 
 // EtcdListed is a member of etcd's member list.
@@ -284,12 +289,15 @@ func (n *talosNode) EtcdMembers(ctx context.Context) ([]EtcdListed, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: etcd member list: %w", n.address, notReady(err))
 	}
-	var listed []EtcdListed
-	for _, msg := range resp.GetMessages() {
-		for _, m := range msg.GetMembers() {
-			listed = append(listed, EtcdListed{ID: m.GetId(), Name: m.GetHostname(), Learner: m.GetIsLearner()})
-		}
-		break
+	// One node was asked, so one message answers.
+	messages := resp.GetMessages()
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	members := messages[0].GetMembers()
+	listed := make([]EtcdListed, 0, len(members))
+	for _, m := range members {
+		listed = append(listed, EtcdListed{ID: m.GetId(), Name: m.GetHostname(), Learner: m.GetIsLearner()})
 	}
 	return listed, nil
 }

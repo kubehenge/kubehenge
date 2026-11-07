@@ -106,10 +106,13 @@ func (u *TalosUpgrader) readEtcd(ctx context.Context, raw []byte, m *clusterv1.M
 	defer func() { _ = node.Close() }()
 	member, err := node.EtcdMember(ctx)
 	if err != nil {
-		return EtcdMember{}, nil, err
+		return EtcdMember{}, nil, fmt.Errorf("reading the etcd member: %w", err)
 	}
 	list, err := node.EtcdMembers(ctx)
-	return member, list, err
+	if err != nil {
+		return EtcdMember{}, nil, fmt.Errorf("reading the etcd member list: %w", err)
+	}
+	return member, list, nil
 }
 
 // stillHoldsQuorum asks holdForQuorum again for a node whose installer is written, just before it is

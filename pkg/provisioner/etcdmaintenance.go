@@ -52,8 +52,32 @@ const (
 	etcdDefragTimeout = 30 * time.Minute
 	// etcdMemberTimeout bounds one call to a member.
 	etcdMemberTimeout = 2 * time.Minute
+	// etcdReadTimeout bounds reading every member, which are asked in turn.
+	etcdReadTimeout = 2 * etcdMemberTimeout
+	// etcdDefragMemberTimeout bounds the defragmentation of one member, which takes far longer than
+	// reading it.
+	etcdDefragMemberTimeout = 5 * etcdMemberTimeout
 
 	alarmNoSpace = "NOSPACE"
+)
+
+// defragTrigger says why a maintenance pass may defragment: on its schedule, inside the window, or
+// because someone asked for it now.
+type defragTrigger int
+
+const (
+	defragScheduled defragTrigger = iota
+	defragRequested
+)
+
+// defragAllowance is what lets a pass defragment a member that is not full: nothing, the upgrade
+// window, or a request.
+type defragAllowance int
+
+const (
+	defragHeld defragAllowance = iota
+	defragInWindow
+	defragAsked
 )
 
 // EtcdSettings is a cluster's etcd variable.
@@ -180,11 +204,11 @@ func defragOrder(members []EtcdMember) []EtcdMember {
 
 // defragPlan names the members to defragment, in order. A request takes all of them. Otherwise a
 // full database takes every member at once, and a large, fragmented one waits for the window.
-func defragPlan(members []EtcdMember, requested, windowOpen bool) []string {
+func defragPlan(members []EtcdMember, allowance defragAllowance) []string {
 	full := slices.ContainsFunc(members, func(m EtcdMember) bool { return m.Alarmed() })
 	var plan []string
 	for _, m := range defragOrder(members) {
-		if requested || full || (windowOpen && m.DBSize >= etcdDefragMinBytes && m.Fragmentation() > etcdDefragPercent) {
+		if allowance == defragAsked || full || (allowance == defragInWindow && m.DBSize >= etcdDefragMinBytes && m.Fragmentation() > etcdDefragPercent) {
 			plan = append(plan, m.Name)
 		}
 	}
@@ -206,8 +230,8 @@ type EtcdMaintainer struct {
 	Now      func() time.Time
 }
 
-// SetupWithManager registers the maintainer. One cluster is looked at at a time, since a defragmentation
-// blocks a member.
+// SetupWithManager registers the maintainer. It looks at one cluster after another, since a
+// defragmentation blocks a member.
 func (m *EtcdMaintainer) SetupWithManager(mgr ctrl.Manager) error {
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&clusterv1.Cluster{}, builder.WithPredicates(predicate.Or(
@@ -238,30 +262,33 @@ func (m *EtcdMaintainer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if RestoreInProgress(c) || !meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
 		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, nil
 	}
-	_, requested := c.Annotations[EtcdDefragRequestAnnotation]
+	trigger := defragScheduled
+	if _, asked := c.Annotations[EtcdDefragRequestAnnotation]; asked {
+		trigger = defragRequested
+	}
 	now, interval := m.now(), cmp.Or(m.Interval, etcdReadInterval)
 	last, recorded := LastEtcdStatus(c)
-	if !requested && recorded && now.Sub(last.At) < interval {
+	if trigger == defragScheduled && recorded && now.Sub(last.At) < interval {
 		return ctrl.Result{RequeueAfter: interval - now.Sub(last.At)}, nil
 	}
 	settings, err := EtcdSettingsOf(c)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	return m.maintain(ctx, c, &settings, &last, requested, interval)
+	return m.maintain(ctx, c, &settings, &last, trigger, interval)
 }
 
 // maintain reads the members, defragments those due, and records both.
-func (m *EtcdMaintainer) maintain(ctx context.Context, c *clusterv1.Cluster, settings *EtcdSettings, previous *EtcdStatus, requested bool, interval time.Duration) (ctrl.Result, error) {
-	rctx, cancel := context.WithTimeout(ctx, etcdMemberTimeout*2)
+func (m *EtcdMaintainer) maintain(ctx context.Context, c *clusterv1.Cluster, settings *EtcdSettings, previous *EtcdStatus, trigger defragTrigger, interval time.Duration) (ctrl.Result, error) {
+	rctx, cancel := context.WithTimeout(ctx, etcdReadTimeout)
 	members, readErr := m.Etcd.Members(rctx, c)
 	cancel()
 	status := EtcdStatus{At: m.now().UTC(), QuotaBytes: settings.QuotaBytes(), Members: members}
 	if readErr != nil {
 		status.Error = readErr.Error()
 	}
-	defrag := m.defragment(ctx, c, &status, requested)
-	if err := m.record(ctx, c, &status, defrag, requested); err != nil {
+	defrag := m.defragment(ctx, c, &status, trigger)
+	if err := m.record(ctx, c, &status, defrag, trigger); err != nil {
 		return ctrl.Result{}, err
 	}
 	if w := status.Warning(); w != "" && w != previous.Warning() {
@@ -275,50 +302,79 @@ func (m *EtcdMaintainer) maintain(ctx context.Context, c *clusterv1.Cluster, set
 
 // defragment visits the members due, one at a time and the leader last, and returns the record of it,
 // or nil when none was due. The status is read again afterwards.
-func (m *EtcdMaintainer) defragment(ctx context.Context, c *clusterv1.Cluster, status *EtcdStatus, requested bool) *EtcdDefrag {
-	if status.Error != "" {
-		// A defragmentation blocks a member, which the others must carry: with one unread, none is
-		// started.
-		if requested {
-			return &EtcdDefrag{At: m.now().UTC(), Error: "not all etcd members could be read: " + status.Error}
-		}
-		return nil
+func (m *EtcdMaintainer) defragment(ctx context.Context, c *clusterv1.Cluster, status *EtcdStatus, trigger defragTrigger) *EtcdDefrag {
+	v := m.defragGate(c, status, trigger)
+	if !v.proceed {
+		return v.refusal
 	}
-	policy, _, err := optionalVariable[UpgradePolicy](c, "upgrades")
-	if err != nil {
-		return nil
-	}
-	open, _ := policy.Window.Open(m.now())
-	if !requested && !settled(c) {
-		open = false
-	}
-	for i := range status.Members {
-		if !status.Members[i].Healthy() {
-			if requested {
-				return &EtcdDefrag{At: m.now().UTC(), Error: fmt.Sprintf("etcd member %s is not healthy", status.Members[i].Name)}
-			}
-			return nil
-		}
-	}
-	plan := defragPlan(status.Members, requested, open)
+	plan := defragPlan(status.Members, v.allowance)
 	if len(plan) == 0 {
 		return nil
 	}
+	done := m.visit(ctx, c, status, plan, &v.policy, trigger)
+	m.afterDefrag(ctx, c, status, done)
+	return done
+}
+
+// defragVerdict is whether a defragmentation may start, and what lets it.
+type defragVerdict struct {
+	policy    UpgradePolicy
+	allowance defragAllowance
+	// refusal says why a request cannot run. A scheduled run that cannot start stays quiet.
+	refusal *EtcdDefrag
+	proceed bool
+}
+
+// defragGate decides whether a defragmentation may start at all. A defragmentation blocks a member,
+// which the others must carry: with one unread or unwell, none is started.
+func (m *EtcdMaintainer) defragGate(c *clusterv1.Cluster, status *EtcdStatus, trigger defragTrigger) defragVerdict {
+	var v defragVerdict
+	refuse := func(reason string) defragVerdict {
+		if trigger == defragRequested {
+			v.refusal = &EtcdDefrag{At: m.now().UTC(), Error: reason}
+		}
+		return v
+	}
+	if status.Error != "" {
+		return refuse("not all etcd members could be read: " + status.Error)
+	}
+	policy, _, err := optionalVariable[UpgradePolicy](c, "upgrades")
+	if err != nil {
+		return v
+	}
+	v.policy = policy
+	for i := range status.Members {
+		if !status.Members[i].Healthy() {
+			return refuse(fmt.Sprintf("etcd member %s is not healthy", status.Members[i].Name))
+		}
+	}
+	v.proceed = true
+	switch open, _ := policy.Window.Open(m.now()); {
+	case trigger == defragRequested:
+		v.allowance = defragAsked
+	case open && settled(c):
+		v.allowance = defragInWindow
+	}
+	return v
+}
+
+// visit defragments the planned members one at a time and stops at the first failure. A scheduled
+// run also stops when the window closes, unless a full database makes it urgent.
+func (m *EtcdMaintainer) visit(ctx context.Context, c *clusterv1.Cluster, status *EtcdStatus, plan []string, policy *UpgradePolicy, trigger defragTrigger) *EtcdDefrag {
 	done := &EtcdDefrag{At: m.now().UTC(), Members: []string{}}
 	byName := map[string]EtcdMember{}
 	for _, member := range status.Members {
 		byName[member.Name] = member
 	}
+	urgent := trigger == defragRequested || slices.ContainsFunc(status.Members, func(x EtcdMember) bool { return x.Alarmed() })
 	dctx, cancel := context.WithTimeout(ctx, etcdDefragTimeout)
 	defer cancel()
 	for _, name := range plan {
-		if !requested && !slices.ContainsFunc(status.Members, func(x EtcdMember) bool { return x.Alarmed() }) {
-			if stillOpen, _ := policy.Window.Open(m.now()); !stillOpen {
-				break
-			}
+		if stillOpen, _ := policy.Window.Open(m.now()); !urgent && !stillOpen {
+			break
 		}
 		before := byName[name]
-		mctx, stop := context.WithTimeout(dctx, etcdMemberTimeout*5)
+		mctx, stop := context.WithTimeout(dctx, etcdDefragMemberTimeout)
 		err := m.Etcd.Defragment(mctx, c, name)
 		stop()
 		if err != nil {
@@ -330,7 +386,6 @@ func (m *EtcdMaintainer) defragment(ctx context.Context, c *clusterv1.Cluster, s
 		m.eventf(c, corev1.EventTypeNormal, "EtcdDefragmented", "defragmented etcd member %s, which held %s of a %s database",
 			name, formatBytes(before.DBSizeInUse), formatBytes(before.DBSize))
 	}
-	m.afterDefrag(ctx, c, status, done)
 	return done
 }
 
@@ -340,7 +395,7 @@ func (m *EtcdMaintainer) afterDefrag(ctx context.Context, c *clusterv1.Cluster, 
 	if len(done.Members) == 0 {
 		return
 	}
-	rctx, cancel := context.WithTimeout(ctx, etcdMemberTimeout*2)
+	rctx, cancel := context.WithTimeout(ctx, etcdReadTimeout)
 	defer cancel()
 	members, err := m.Etcd.Members(rctx, c)
 	if err != nil {
@@ -363,7 +418,7 @@ func (m *EtcdMaintainer) afterDefrag(ctx context.Context, c *clusterv1.Cluster, 
 }
 
 // record writes the status, the defragmentation if there was one, and takes a request away.
-func (m *EtcdMaintainer) record(ctx context.Context, c *clusterv1.Cluster, status *EtcdStatus, defrag *EtcdDefrag, requested bool) error {
+func (m *EtcdMaintainer) record(ctx context.Context, c *clusterv1.Cluster, status *EtcdStatus, defrag *EtcdDefrag, trigger defragTrigger) error {
 	raw, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("recording the etcd status: %w", err)
@@ -377,7 +432,7 @@ func (m *EtcdMaintainer) record(ctx context.Context, c *clusterv1.Cluster, statu
 		}
 		metav1.SetMetaDataAnnotation(&c.ObjectMeta, EtcdDefragAnnotation, string(rawDefrag))
 	}
-	if requested {
+	if trigger == defragRequested {
 		delete(c.Annotations, EtcdDefragRequestAnnotation)
 	}
 	if err := m.Client.Patch(ctx, c, patch); err != nil {

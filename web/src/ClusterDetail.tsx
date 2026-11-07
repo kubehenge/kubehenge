@@ -8,6 +8,7 @@ import { issuesFromCA, saveCA } from "./Certificates";
 import { attentionFix, clusterActions, clusterPath, headlampURL, views, type Intent, type View } from "./cluster-paths";
 import { OptionDialog, Options, type OptionAction, type OptionRow } from "./ClusterOptions";
 import { Deleting } from "./Deletion";
+import { EtcdSizeView } from "./EtcdSize";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { ClusterStatus, fleetKey, useFleet } from "./fleet";
 import { useClusterChanges } from "./live";
@@ -475,6 +476,14 @@ export function ClusterDetail({
               <>
                 <BackupsView cluster={c} can={can} onEdit={setAction} />
                 <EtcdSnapshotsView cluster={c} can={can} onEdit={setAction} />
+                <EtcdSizeView
+                  cluster={c}
+                  can={can}
+                  onEdit={setAction}
+                  onChanged={() => {
+                    void reload();
+                  }}
+                />
               </>
             )}
             {view === "options" && <OptionsView cluster={c} can={can} onEdit={setAction} />}

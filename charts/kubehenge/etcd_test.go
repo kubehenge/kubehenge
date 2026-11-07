@@ -2,10 +2,13 @@ package kubehenge_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"sigs.k8s.io/yaml"
@@ -13,42 +16,89 @@ import (
 
 // classDocument is a rendered ClusterClass, with its variables as the API server stores them.
 type classDocument struct {
-	Kind string `json:"kind"`
-	Spec struct {
-		Variables []struct {
-			Name   string `json:"name"`
-			Schema struct {
-				OpenAPIV3Schema map[string]any `json:"openAPIV3Schema"`
-			} `json:"schema"`
-		} `json:"variables"`
-		Patches []classPatch `json:"patches"`
-	} `json:"spec"`
+	Kind     string        `json:"kind"`
+	Metadata classMetadata `json:"metadata"`
+	Spec     classContent  `json:"spec"`
 }
 
-func renderClass(t *testing.T, file string) classDocument {
-	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system",
-		"--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--show-only", "templates/"+file)
+type classMetadata struct {
+	Name string `json:"name"`
+}
+
+type classContent struct {
+	Variables []classVariable `json:"variables"`
+	Patches   []classPatch    `json:"patches"`
+}
+
+type classVariable struct {
+	Name   string         `json:"name"`
+	Schema variableSchema `json:"schema"`
+}
+
+type variableSchema struct {
+	OpenAPIV3Schema map[string]any `json:"openAPIV3Schema"`
+}
+
+type etcdTalosConfig struct {
+	Cluster talosClusterConfig `json:"cluster"`
+}
+
+type talosClusterConfig struct {
+	Etcd talosEtcdConfig `json:"etcd"`
+}
+
+type talosEtcdConfig struct {
+	ExtraArgs map[string]string `json:"extraArgs"`
+}
+
+// renderedClasses is every ClusterClass the chart renders, by name. Rendering the whole chart keeps
+// the helm arguments constant.
+var renderedClasses = sync.OnceValues(func() (map[string]classDocument, error) {
+	cmd := exec.CommandContext(context.Background(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system",
+		"--values", "../../pkg/provisioner/testdata/integration-values.yaml")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("helm template: %v: %s", err, stderr.String())
+		return nil, fmt.Errorf("helm template: %w: %s", err, stderr.String())
 	}
+	classes := map[string]classDocument{}
 	for doc := range strings.SplitSeq(string(out), "\n---\n") {
 		var d classDocument
 		if err := yaml.Unmarshal([]byte(doc), &d); err != nil {
-			t.Fatal(err)
+			continue
 		}
 		if d.Kind == "ClusterClass" {
-			return d
+			classes[d.Metadata.Name] = d
 		}
 	}
-	t.Fatalf("%s renders no ClusterClass", file)
-	return classDocument{}
+	return classes, nil
+})
+
+func renderClass(t *testing.T, file string) *classDocument {
+	t.Helper()
+	classes, err := renderedClasses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "kubehenge-" + strings.TrimSuffix(file, ".yaml")
+	d, ok := classes[name]
+	if !ok {
+		t.Fatalf("%s renders no ClusterClass", file)
+	}
+	return &d
 }
 
-func (d classDocument) patch(t *testing.T, name string) classPatch {
+func asMap(t *testing.T, v any) map[string]any {
+	t.Helper()
+	m, ok := v.(map[string]any)
+	if !ok {
+		t.Fatalf("not an object: %v", v)
+	}
+	return m
+}
+
+func (d *classDocument) patch(t *testing.T, name string) classPatch {
 	t.Helper()
 	for _, p := range d.Spec.Patches {
 		if p.Name == name {
@@ -58,6 +108,8 @@ func (d classDocument) patch(t *testing.T, name string) classPatch {
 	t.Fatalf("no patch %s", name)
 	return classPatch{}
 }
+
+type kubeadmArg struct{ Name, Value string }
 
 // etcdArguments are the etcd arguments a distribution's patch renders for a cluster's variables, as
 // name=value, in order.
@@ -78,11 +130,11 @@ func etcdArguments(t *testing.T, file, patch, variables string) []string {
 		if jp.Path != "/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/etcd/local/extraArgs" {
 			t.Fatalf("path %s", jp.Path)
 		}
-		var args []struct{ Name, Value string }
+		var args []kubeadmArg
 		if err := yaml.Unmarshal([]byte(rendered), &args); err != nil {
 			t.Fatalf("%v:\n%s", err, rendered)
 		}
-		var out []string
+		out := make([]string, 0, len(args))
 		for _, a := range args {
 			out = append(out, a.Name+"="+a.Value)
 		}
@@ -92,17 +144,11 @@ func etcdArguments(t *testing.T, file, patch, variables string) []string {
 		if err := yaml.Unmarshal([]byte(rendered), &doc); err != nil {
 			t.Fatalf("%v:\n%s", err, rendered)
 		}
-		var cfg struct {
-			Cluster struct {
-				Etcd struct {
-					ExtraArgs map[string]string `json:"extraArgs"`
-				} `json:"etcd"`
-			} `json:"cluster"`
-		}
+		var cfg etcdTalosConfig
 		if err := yaml.Unmarshal([]byte(doc), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		var out []string
+		out := make([]string, 0, len(cfg.Cluster.Etcd.ExtraArgs))
 		for k, v := range cfg.Cluster.Etcd.ExtraArgs {
 			out = append(out, k+"="+v)
 		}
@@ -159,12 +205,13 @@ func TestEtcdVariableBounds(t *testing.T) {
 				continue
 			}
 			found = true
-			props, _ := v.Schema.OpenAPIV3Schema["properties"].(map[string]any)
-			quota, _ := props["quotaGiB"].(map[string]any)
+			props := asMap(t, v.Schema.OpenAPIV3Schema["properties"])
+			quota := asMap(t, props["quotaGiB"])
 			if quota["minimum"] != float64(2) || quota["maximum"] != float64(8) || quota["default"] != float64(8) || quota["type"] != "integer" {
 				t.Errorf("%s: quotaGiB = %v", file, quota)
 			}
-			if rules, _ := v.Schema.OpenAPIV3Schema["x-kubernetes-validations"].([]any); len(rules) != 1 {
+			rules, ok := v.Schema.OpenAPIV3Schema["x-kubernetes-validations"].([]any)
+			if !ok || len(rules) != 1 {
 				t.Errorf("%s: the quota cannot be lowered: %v", file, rules)
 			}
 		}

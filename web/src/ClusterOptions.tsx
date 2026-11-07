@@ -5,6 +5,7 @@ import { CertificatesDialog, certificatesOf, certificatesText } from "./Certific
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
+import { EtcdDialog, etcdQuotaOf, etcdText } from "./EtcdSize";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
@@ -63,6 +64,7 @@ export type OptionAction =
   | "upgrades"
   | "certificates"
   | "talos"
+  | "etcd"
   | "oidc";
 
 /** A setting the Options view lists, and the action of the dialog that changes it. */
@@ -140,6 +142,9 @@ export function OptionDialog({
     }
     case "talos": {
       return <TalosDialog cluster={c} onClose={onClose} />;
+    }
+    case "etcd": {
+      return <EtcdDialog cluster={c} onClose={onClose} />;
     }
     case "oidc": {
       break;
@@ -393,6 +398,15 @@ export function optionRows<A extends string = never>(
       name: "automatic upgrades",
     },
   );
+  if ("etcd" in c.variables) {
+    rows.push({
+      label: "etcd",
+      value: etcdText(etcdQuotaOf(c.variables["etcd"])),
+      group: "Maintenance",
+      action: "etcd",
+      name: "the etcd database limit",
+    });
+  }
   if ("oidc" in c.variables) {
     const hosts = providers(c).map((p) => (URL.canParse(p.issuerURL) ? new URL(p.issuerURL).host : p.issuerURL));
     rows.push({

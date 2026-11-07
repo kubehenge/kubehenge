@@ -872,9 +872,9 @@ Kubehenge may be unable to take volume snapshots for the cluster, such as on a s
 
 Every cluster gives etcd a database limit and periodic compaction. Before, kubeadm, RKE2, k3s and Talos set neither, so each ran etcd's own limit of 2 GiB. etcd then refuses every write while the API server still answers reads.
 
-The `etcd` variable sets the limit as `quotaGiB`, from 2 to 8 GiB, default 8. It can be raised and not lowered. A change replaces the control-plane nodes one at a time. With the CLI, `kubehenge cluster etcd set NAME --quota-gib 6`.
+The `etcd` variable sets the limit as `quotaGiB`, from 2 to 8 GiB, default 8. It can be raised and not lowered. A change replaces the control-plane nodes one at a time. The wizard sets it under **etcd** on the Machines step, and Options under Maintenance changes it. With the CLI, `kubehenge cluster etcd set NAME --quota-gib 6`.
 
-Every ten minutes the controller reads each member's database size and the part in use. The cluster page shows them with the limit. The Health view warns above 60 percent of the limit and when a member has a `NOSPACE` alarm. An `EtcdDatabaseLarge` event says the same.
+Every ten minutes the controller reads each member's database size and the part in use. The **etcd size** section of the Backups view shows them with the limit. The Health view warns above 60 percent of the limit and when a member has a `NOSPACE` alarm. An `EtcdDatabaseLarge` event says the same.
 
 ### Defragmenting etcd
 

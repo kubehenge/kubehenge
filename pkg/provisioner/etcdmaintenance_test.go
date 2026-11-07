@@ -90,7 +90,9 @@ func newMaintenanceRig(t *testing.T, variables map[string]string, members ...Etc
 
 func (r *maintenanceRig) reconcile(t *testing.T) (*clusterv1.Cluster, ctrl.Result) {
 	t.Helper()
-	res, err := r.m.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKey{Namespace: "clusters", Name: "web"}})
+	var req ctrl.Request
+	req.Namespace, req.Name = "clusters", "web"
+	res, err := r.m.Reconcile(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +126,10 @@ func askForDefrag(t *testing.T, r *maintenanceRig) {
 	if err := r.kube.Get(context.Background(), client.ObjectKey{Namespace: "clusters", Name: "web"}, c); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(EtcdDefragRequest{By: "dev@pve", At: r.now})
+	raw, err := json.Marshal(EtcdDefragRequest{By: "dev@pve", At: r.now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	c.Annotations = map[string]string{EtcdDefragRequestAnnotation: string(raw)}
 	if err := r.kube.Update(context.Background(), c); err != nil {
 		t.Fatal(err)
@@ -172,7 +177,7 @@ func TestEtcdStatusWarnsAbove60PercentAndOnAnAlarm(t *testing.T) {
 func TestDefragPlanVisitsFollowersBeforeTheLeader(t *testing.T) {
 	t.Parallel()
 	members := []EtcdMember{fragmented("cp-0", true), fragmented("cp-2", false), fragmented("cp-1", false)}
-	if got := defragPlan(members, false, true); !slices.Equal(got, []string{"cp-1", "cp-2", "cp-0"}) {
+	if got := defragPlan(members, defragInWindow); !slices.Equal(got, []string{"cp-1", "cp-2", "cp-0"}) {
 		t.Errorf("plan %v", got)
 	}
 }
@@ -185,7 +190,7 @@ func TestDefragPlanLeavesSmallAndTidyDatabasesAlone(t *testing.T) {
 		{Name: "half", DBSize: 2 * gib, DBSizeInUse: gib},
 		fragmented("loose", false),
 	}
-	if got := defragPlan(members, false, true); !slices.Equal(got, []string{"loose"}) {
+	if got := defragPlan(members, defragInWindow); !slices.Equal(got, []string{"loose"}) {
 		t.Errorf("plan %v", got)
 	}
 }
@@ -193,15 +198,15 @@ func TestDefragPlanLeavesSmallAndTidyDatabasesAlone(t *testing.T) {
 func TestDefragPlanWaitsForTheWindowUnlessAskedOrFull(t *testing.T) {
 	t.Parallel()
 	members := []EtcdMember{fragmented("cp-0", false), {Name: "cp-1", DBSize: 10 << 20, DBSizeInUse: 10 << 20}}
-	if got := defragPlan(members, false, false); got != nil {
+	if got := defragPlan(members, defragHeld); got != nil {
 		t.Errorf("outside the window: %v", got)
 	}
-	if got := defragPlan(members, true, false); !slices.Equal(got, []string{"cp-0", "cp-1"}) {
+	if got := defragPlan(members, defragAsked); !slices.Equal(got, []string{"cp-0", "cp-1"}) {
 		t.Errorf("asked: %v", got)
 	}
 	full := slices.Clone(members)
 	full[1].Alarms = []string{"NOSPACE"}
-	if got := defragPlan(full, false, false); !slices.Equal(got, []string{"cp-0", "cp-1"}) {
+	if got := defragPlan(full, defragHeld); !slices.Equal(got, []string{"cp-0", "cp-1"}) {
 		t.Errorf("full: %v", got)
 	}
 }

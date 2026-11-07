@@ -113,8 +113,8 @@ func readEtcdMember(ctx context.Context, cli *clientv3.Client, name string) (Etc
 		m.Errors = append(m.Errors, "no leader")
 	}
 	for _, a := range alarms.Alarms {
-		if a.MemberID == id {
-			m.Alarms = append(m.Alarms, a.Alarm.String())
+		if a.GetMemberID() == id {
+			m.Alarms = append(m.Alarms, a.GetAlarm().String())
 		}
 	}
 	return m, nil
@@ -223,8 +223,11 @@ func (d *EtcdDialer) talosMember(ctx context.Context, raw []byte, machine *clust
 	}
 	defer func() { _ = node.Close() }()
 	m, err := node.EtcdMember(ctx)
+	if err != nil {
+		return EtcdMember{}, fmt.Errorf("reading the etcd member: %w", err)
+	}
 	m.Name = machine.Name
-	return m, err
+	return m, nil
 }
 
 // talosEach runs fn on the Talos node of the named control-plane machine, or on the first that
