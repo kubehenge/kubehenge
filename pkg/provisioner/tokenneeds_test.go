@@ -61,9 +61,8 @@ func privsAt(needs []Need, path string) []string {
 	return out
 }
 
-// What a token is tested for is what the module grants it. A role the module takes from Proxmox VE
-// (PVEVMAdmin, PVETemplateUser, PVEDatastoreAdmin) lists no privileges there, so capmox's pool and
-// bootstrap storage are the only places not compared.
+// What a token is tested for is what the module grants it. Cluster API's bootstrap storage and
+// bridges are the only places not compared: the token's places do not name them.
 func TestTheTestedPrivilegesAreTheModulesRoles(t *testing.T) {
 	t.Parallel()
 	roles := moduleRoles(t)
@@ -81,6 +80,7 @@ func TestTheTestedPrivilegesAreTheModulesRoles(t *testing.T) {
 		}},
 		"Cluster API": {CapmoxNeeds(&places), map[string][]string{
 			pathRoot: {"audit"}, pathNodes: {"audit"}, pathStorage + "local-lvm": {"allocate_space"},
+			pool: {"cluster_api_vms"}, templates: {"cluster_api_templates"},
 		}},
 		"template builder": {TemplateBuilderNeeds(&places), map[string][]string{
 			pathRoot: {"audit"}, pathNodes: {"audit"}, node: {"template_builder_network"}, templates: {"template_builder_vms"},
