@@ -525,7 +525,7 @@ A Talos cluster's nodes are upgraded in place rather than replaced. **Options**,
 
 Talos installs the release to its other partition. The node is drained, rebooted and taken back into service once it is Ready on it.
 
-Before a node is drained, the upgrade waits until every StatefulSet in the cluster has all its replicas ready. That keeps a quorum service from losing a second member while the first is still coming back. The cluster's page says what it waits for, under **Upgrade held by**.
+Before a node is drained, the upgrade waits until each StatefulSet with a ready pod on that node has all its replicas ready. That keeps a quorum service from losing a second member while the first is still coming back. A StatefulSet broken on other nodes holds no drain. The cluster's page says what it waits for, under **Upgrade held by**.
 
 The drain then waits for the node's pods to leave, however long a PodDisruptionBudget holds them. The drain timeout of the node's place bounds both waits: the control plane's for a control-plane node, the pool's for a worker ([Timeouts…](#pools)). The default is 60 minutes, and 0 waits for ever.
 

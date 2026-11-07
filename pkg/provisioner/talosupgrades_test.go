@@ -204,7 +204,7 @@ func (d *fakeDrainer) Drain(_ context.Context, _ *clusterv1.Cluster, node string
 	return nil
 }
 
-func (d *fakeDrainer) ShortStatefulSets(context.Context, *clusterv1.Cluster) ([]string, error) {
+func (d *fakeDrainer) ShortStatefulSets(context.Context, *clusterv1.Cluster, string) ([]string, error) {
 	d.mu.Lock()
 	d.looks++
 	look, fn := d.looks, d.shortFn

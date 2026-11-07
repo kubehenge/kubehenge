@@ -358,7 +358,8 @@ It deletes the rest.
   - A new machine boots that release and is then upgraded like the others. Changing `talosVersion` therefore never rolls the cluster.
 - **The in-place upgrade.** The controller upgrades a node that runs another release than `talosVersion` through the Talos API with the cluster's talosconfig. It goes one node at a time, control planes first.
   - It has Talos install the release's installer to the inactive partition.
-  - It waits until no StatefulSet has fewer ready replicas than it wants, then drains the node and reboots it. Each wait is bounded by the node's `nodeDrainTimeoutSeconds`, the control plane's or the pool's, with the class's value or 60 minutes where the Cluster sets none.
+  - It waits while a StatefulSet with a ready pod on the node is short of replicas, then drains the node and reboots it.
+  - Each wait is bounded by the node's `nodeDrainTimeoutSeconds`: the control plane's or the pool's, else the class's, else 60 minutes.
   - At the timeout it reboots the node with a `TalosDrain` warning event, as Cluster API deletes a Machine whose drain timeout ran out. What holds the node is recorded in `kubehenge.dev/talos-waiting`.
   - It uncordons the node once it is Ready on the new release.
   - It deletes the DaemonSets' pods the node's kubelet rejected while it shut down. Otherwise they would keep their DaemonSets reading not ready for up to 15 minutes.

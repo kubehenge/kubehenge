@@ -70,8 +70,9 @@ type NodeDrainer interface {
 	// out with pods left.
 	Drain(ctx context.Context, c *clusterv1.Cluster, node string, o DrainOptions) error
 	Uncordon(ctx context.Context, c *clusterv1.Cluster, node string) error
-	// ShortStatefulSets names each StatefulSet of the cluster with fewer ready replicas than it wants.
-	ShortStatefulSets(ctx context.Context, c *clusterv1.Cluster) ([]string, error)
+	// ShortStatefulSets names each StatefulSet with a ready pod on the node and fewer ready replicas
+	// than it wants.
+	ShortStatefulSets(ctx context.Context, c *clusterv1.Cluster, node string) ([]string, error)
 }
 
 // TalosUpgrader upgrades the nodes of Talos clusters in place to their talosVersion, one node at a

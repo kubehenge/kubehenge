@@ -403,6 +403,8 @@ func TestRemoteDrainerCancelledIsNotATimeout(t *testing.T) {
 }
 
 // A StatefulSet is short when fewer replicas are ready than it wants, one replica when it says none.
+// It holds the drain only with a ready pod on the node: its broken pod, or its pods on other nodes,
+// lose it nothing more.
 func TestRemoteDrainerNamesTheStatefulSetsShortOfReplicas(t *testing.T) {
 	t.Parallel()
 	three, none := int32(3), int32(0)
@@ -412,15 +414,32 @@ func TestRemoteDrainerNamesTheStatefulSetsShortOfReplicas(t *testing.T) {
 			Spec: appsv1.StatefulSetSpec{Replicas: want}, Status: appsv1.StatefulSetStatus{ReadyReplicas: ready},
 		}
 	}
-	d, api, c := drainRig(t)
-	api.sets = []appsv1.StatefulSet{set("db", &three, 2), set("ok", &three, 3), set("off", &none, 0), set("default", nil, 0), set("fine", nil, 1)}
-	got, err := d.ShortStatefulSets(t.Context(), c)
+	pod := func(set, node string, ready corev1.ConditionStatus) *corev1.Pod {
+		p := nodePod(set+"-0", "StatefulSet", corev1.PodRunning)
+		p.OwnerReferences[0].Name = set
+		p.Spec.NodeName = node
+		p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: ready}}
+		return p
+	}
+	on, ready := "web-w-1", corev1.ConditionTrue
+	d, api, c := drainRig(t,
+		pod("db", on, ready), pod("ok", on, ready), pod("default", on, ready), pod("fine", on, ready),
+		pod("broken", on, corev1.ConditionFalse), pod("elsewhere", "web-w-2", ready),
+	)
+	api.sets = []appsv1.StatefulSet{
+		set("db", &three, 2), set("ok", &three, 3), set("off", &none, 0), set("default", nil, 0), set("fine", nil, 1),
+		set("broken", &three, 2), set("elsewhere", &three, 1), set("idle", &three, 0),
+	}
+	got, err := d.ShortStatefulSets(t.Context(), c, on)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"StatefulSet apps/db has 2 of 3 replicas ready", "StatefulSet apps/default has 0 of 1 replicas ready"}
 	if !slices.Equal(got, want) {
 		t.Errorf("short %q, want %q", got, want)
+	}
+	if got, err := d.ShortStatefulSets(t.Context(), c, "web-w-3"); err != nil || got != nil {
+		t.Errorf("an empty node: short %q, %v", got, err)
 	}
 }
 

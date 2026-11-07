@@ -13,7 +13,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubectl/pkg/drain"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -42,11 +44,28 @@ type DrainOptions struct {
 	Blocked func(held string, refused bool)
 }
 
-// ShortStatefulSets implements NodeDrainer.
-func (d *RemoteDrainer) ShortStatefulSets(ctx context.Context, c *clusterv1.Cluster) ([]string, error) {
+// ShortStatefulSets implements NodeDrainer. A StatefulSet short of replicas elsewhere loses nothing
+// more to the drain, and a broken one would make every node wait out its timeout.
+func (d *RemoteDrainer) ShortStatefulSets(ctx context.Context, c *clusterv1.Cluster, node string) ([]string, error) {
 	h, err := d.helper(ctx, c)
 	if err != nil {
 		return nil, err
+	}
+	pods, err := h.Client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", node).String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing the pods on node %s: %w", node, err)
+	}
+	held := map[types.NamespacedName]bool{}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if owner := metav1.GetControllerOf(p); owner != nil && owner.Kind == "StatefulSet" && podReady(p) {
+			held[types.NamespacedName{Namespace: p.Namespace, Name: owner.Name}] = true
+		}
+	}
+	if len(held) == 0 {
+		return nil, nil
 	}
 	list, err := h.Client.AppsV1().StatefulSets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -55,6 +74,9 @@ func (d *RemoteDrainer) ShortStatefulSets(ctx context.Context, c *clusterv1.Clus
 	var short []string
 	for i := range list.Items {
 		s := &list.Items[i]
+		if !held[types.NamespacedName{Namespace: s.Namespace, Name: s.Name}] {
+			continue
+		}
 		want := int32(1)
 		if s.Spec.Replicas != nil {
 			want = *s.Spec.Replicas
@@ -312,7 +334,7 @@ func (w *nodeWait) remaining() time.Duration {
 
 func (w *nodeWait) statefulSets(ctx context.Context) error {
 	for {
-		short, err := w.u.Nodes.ShortStatefulSets(ctx, w.c)
+		short, err := w.u.Nodes.ShortStatefulSets(ctx, w.c, w.node)
 		if err != nil {
 			short = []string{"the StatefulSets cannot be read: " + err.Error()}
 		}
