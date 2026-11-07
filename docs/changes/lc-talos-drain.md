@@ -1,0 +1,1 @@
+- A Talos upgrade drains a node for its drain timeout (60 minutes by default), not a fixed five. It first waits for every StatefulSet to be ready. The cluster page names the budget and pod that hold a drain.
