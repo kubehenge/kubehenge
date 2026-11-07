@@ -1333,22 +1333,22 @@ describe("create", () => {
     });
     expect(fieldProblems("Network", bgp, withLB)).toStrictEqual({});
     // The password is stored as the cluster's credential, never sent as a variable.
-    const signed = { ...bgp, loadBalancerAuthenticated: true, loadBalancerPassword: "s3cret" }; // betterleaks:allow
+    const signed = { ...bgp, loadBalancerAuthenticated: true, loadBalancerPassword: "s3cret" };
     expect(request(signed, withLB).variables["loadBalancer"]).toMatchObject({ bgp: { authenticated: true } });
     expect(JSON.stringify(request(signed, withLB))).not.toContain("s3cret");
-    expect(pendingCredentials(signed, withLB)).toMatchObject([{ purpose: "bgp", values: { password: "s3cret" } }]); // betterleaks:allow
+    expect(pendingCredentials(signed, withLB)).toMatchObject([{ purpose: "bgp", values: { password: "s3cret" } }]);
     expect(pendingCredentials({ ...signed, loadBalancerPassword: "" }, withLB)).toStrictEqual([]);
     expect(pendingCredentials({ ...signed, loadBalancerAuthenticated: false }, withLB)).toStrictEqual([]);
     expect(pendingCredentials({ ...signed, loadBalancerMode: "l2" }, withLB)).toStrictEqual([]);
     expect(Object.fromEntries(summary(signed, withLB))).toMatchObject({
       "Load balancer": "MetalLB, on 198.51.100.0/28, over BGP as AS 65001, with a password",
-      "BGP password": "Stored once created", // betterleaks:allow
+      "BGP password": "Stored once created",
     });
     expect(Object.fromEntries(summary({ ...signed, loadBalancerPassword: "" }, withLB))).toMatchObject({
-      "BGP password": "None yet: the cluster waits", // betterleaks:allow
+      "BGP password": "None yet: the cluster waits",
     });
     expect(fieldProblems("Network", { ...signed, loadBalancerPassword: "a:b" }, withLB)).toStrictEqual({
-      loadBalancerPassword: "No spaces, colons or commas", // betterleaks:allow
+      loadBalancerPassword: "No spaces, colons or commas",
     });
     // Layer 2 holds the pool and the API address to the nodes' network.
     expect(fieldProblems("Network", { ...bgp, loadBalancerMode: "l2" }, withLB)).toMatchObject({

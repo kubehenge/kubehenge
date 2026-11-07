@@ -1578,7 +1578,7 @@ function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
     p.loadBalancerPeers = lb.peers;
   }
   if (form.loadBalancerAuthenticated && /[\s:,]/u.test(form.loadBalancerPassword)) {
-    p.loadBalancerPassword = "No spaces, colons or commas"; // betterleaks:allow
+    p.loadBalancerPassword = "No spaces, colons or commas";
   }
   return p;
 }
