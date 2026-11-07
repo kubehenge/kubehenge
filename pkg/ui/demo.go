@@ -104,7 +104,7 @@ func withDemoWebhook(c client.WithWatch) client.WithWatch {
 		}
 		return provisioner.ValidateNodeCustomisation(ctx, c, old, cluster)
 	}
-	return interceptor.NewClient(c, interceptor.Funcs{
+	return &demoKube{WithWatch: interceptor.NewClient(c, interceptor.Funcs{
 		Create: func(ctx context.Context, kube client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
 			if err := check(ctx, obj, nil); err != nil {
 				return err
@@ -121,8 +121,12 @@ func withDemoWebhook(c client.WithWatch) client.WithWatch {
 			}
 			return kube.Update(ctx, obj, opts...)
 		},
-	})
+	})}
 }
+
+// demoKube is a pointer type so that the server can compare one client with another, which the
+// interceptor's own value type, holding functions, cannot do.
+type demoKube struct{ client.WithWatch }
 
 // demoScheme knows the kinds the interface reads: Cluster API's typed, the add-ons and the
 // control planes of each distribution as unstructured objects, as a management cluster serves them.

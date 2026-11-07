@@ -211,6 +211,13 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 	for _, a := range d.AddOns {
 		f.objects = append(f.objects, demoAddOn(d, a, f.data.AddOns[a], created))
 	}
+	if d.NodeCustomisation != nil {
+		var n provisioner.NodeCustomisation
+		if err := json.Unmarshal(d.NodeCustomisation, &n); err != nil {
+			return fmt.Errorf("the demo's node customisation of %s: %w", d.Name, err)
+		}
+		f.objects = append(f.objects, demoReferences(&n)...)
+	}
 	nodes := f.data.ProxmoxNodes
 	for i, m := range machines {
 		f.objects = append(f.objects, m)
@@ -427,6 +434,33 @@ func (f *demoFleet) identity(cluster string, id provisioner.Identity, server str
 		Annotations: map[string]string{provisioner.IdentityExpiresAnnotation: f.now.Add(24 * time.Hour).Format(time.RFC3339)},
 		Data:        map[string][]byte{provisioner.IdentityServerKey: []byte(server), provisioner.IdentityCAKey: []byte("demo"), provisioner.IdentityTokenKey: []byte("demo")},
 	}
+}
+
+// demoReferences are the Secrets and the ConfigMap a cluster's node customisation names, so that a
+// change to it passes the checks that they exist.
+func demoReferences(n *provisioner.NodeCustomisation) []client.Object {
+	secret := func(name, key string) client.Object {
+		return &corev1.Secret{Namespace: demoNamespace, Name: name, Data: map[string][]byte{key: []byte("demo")}}
+	}
+	var out []client.Object
+	for _, f := range n.Files {
+		if f.Secret != nil {
+			out = append(out, secret(f.Secret.Name, f.Secret.Key))
+		}
+	}
+	if w := n.AuditWebhook; w != nil {
+		key := w.Key
+		if key == "" {
+			key = provisioner.IdentityKubeconfigKey
+		}
+		out = append(out, secret(w.Secret, key))
+	}
+	if p := n.AuditPolicy; p != nil && p.ConfigMap != "" {
+		out = append(out, &corev1.ConfigMap{Namespace: demoNamespace, Name: p.ConfigMap, Data: map[string]string{
+			"policy.yaml": "apiVersion: audit.k8s.io/v1\nkind: Policy\nrules:\n  - level: Metadata\n",
+		}})
+	}
+	return out
 }
 
 // demoAddOn is an add-on's release in the cluster, as the Add-on Provider for Helm keeps it.

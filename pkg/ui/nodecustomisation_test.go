@@ -9,9 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
@@ -90,6 +92,30 @@ func TestNodeCustomisationReplacesEveryNode(t *testing.T) {
 	}
 	if !changeableVariables[provisioner.NodeCustomisationVariable] {
 		t.Error("nodeCustomisation cannot change after creation")
+	}
+}
+
+// The server compares its client with the one it watches, which panics for a type that cannot be
+// compared.
+func TestDemoClientCanBeCompared(t *testing.T) {
+	t.Parallel()
+	s, _ := newDemo(t)
+	if s.currentKube() != s.currentKube() {
+		t.Error("the demo's client differs from itself")
+	}
+}
+
+// The demo keeps what its cluster's node customisation names, or saving any change to it is refused.
+func TestDemoHasWhatItsNodeCustomisationNames(t *testing.T) {
+	t.Parallel()
+	s, _ := newDemo(t)
+	for _, key := range []string{"payments-ca", "payments-siem"} {
+		if err := s.Kube.Get(t.Context(), client.ObjectKey{Namespace: demoNamespace, Name: key}, &corev1.Secret{}); err != nil {
+			t.Errorf("Secret %s: %v", key, err)
+		}
+	}
+	if err := s.Kube.Get(t.Context(), client.ObjectKey{Namespace: demoNamespace, Name: "payments-audit-policy"}, &corev1.ConfigMap{}); err != nil {
+		t.Errorf("ConfigMap: %v", err)
 	}
 }
 
