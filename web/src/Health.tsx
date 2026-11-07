@@ -339,19 +339,10 @@ function AcceptUpgrade({
   );
 }
 
-function PodButtons({
-  pod,
-  actions,
-  children,
-}: {
-  pod: UnwellPod | undefined;
-  actions: PodActions;
-  children?: JSX.Element | false;
-}): JSX.Element {
+function PodButtons({ pod, actions }: { pod: UnwellPod | undefined; actions: PodActions }): JSX.Element {
   const { logs, headlamp } = actions;
   return (
     <td className="row-action">
-      {children}
       {pod !== undefined && logs !== undefined && pod.containers.length > 0 && (
         <button type="button" onClick={() => logs(pod)}>
           Logs
@@ -413,11 +404,10 @@ function NeedsAttention({
                     <Link to={fix.to}>{a.what}</Link>
                   )}
                   {filled(a.message) && <div className="hint message">{a.message}</div>}
+                  {filled(a.accept) && <AcceptUpgrade cluster={cluster} version={a.accept} />}
                 </td>
                 <Since at={a.since} />
-                <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions}>
-                  {filled(a.accept) && <AcceptUpgrade cluster={cluster} version={a.accept} />}
-                </PodButtons>
+                <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions} />
               </tr>
             );
           })}
