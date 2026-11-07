@@ -46,7 +46,11 @@ lane() {
         # A GitOps worker never gets less than without it, nor more than the fixtures and one 8 MiB step.
         lane_without=$(worker_memory_for "${lane_class}" "${lane_on}" false)
         lane_grown=$((lane_got - lane_without))
-        expect "${lane_test} grows by the fixtures at most" 1 "$([ "${lane_grown}" -ge 0 ] && [ "${lane_grown}" -le $((fixtures + 7)) ] && echo 1 || echo 0)"
+        lane_fits=0
+        if [ "${lane_grown}" -ge 0 ] && [ "${lane_grown}" -le $((fixtures + 7)) ]; then
+            lane_fits=1
+        fi
+        expect "${lane_test} grows by the fixtures at most" 1 "${lane_fits}"
     fi
 }
 lane kubeadm-addons-a kubeadm headlamp monitoring logs certManager
@@ -66,8 +70,10 @@ lane talos-addons-c talos istio argocd
 class='{"metadata":{"annotations":{"kubehenge.dev/addon-memory":"{\"a\":100}","kubehenge.dev/node-memory":"{\"worker\":100}",
 "kubehenge.dev/addon-memory-requests":"{\"a\":1000}","kubehenge.dev/node-memory-requests":"{\"worker\":500}"}},
 "spec":{"variables":[{"name":"workerMachine","schema":{"openAPIV3Schema":{"properties":{"memoryMiB":{"minimum":1024}}}}}]}}'
-expect "requests set the size" 1504 "$(worker_memory_for "${class}" '["a"]' false)"
-expect "the fixtures add to the requests" 1712 "$(worker_memory_for "${class}" '["a"]' true)"
+synthetic=$(worker_memory_for "${class}" '["a"]' false)
+expect "requests set the size" 1504 "${synthetic}"
+synthetic=$(worker_memory_for "${class}" '["a"]' true)
+expect "the fixtures add to the requests" 1712 "${synthetic}"
 
 printf 'lane-sizing: %d passed, %d failed\n' "${passes}" "${failures}"
 [ "${failures}" -eq 0 ]
