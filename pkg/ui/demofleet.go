@@ -450,7 +450,11 @@ func (f *demoFleet) workload(d *demoCluster, machines []*clusterv1.Machine) *Wor
 	for i, m := range machines {
 		node := demoNode(m)
 		if !isControlPlane(m) {
-			setPoolNodes(node, pool, d.DriftTaint != "" && i == len(machines)-1, d.DriftTaint)
+			drift := ""
+			if i == len(machines)-1 {
+				drift = d.DriftTaint
+			}
+			setPoolNodes(node, pool, drift)
 		}
 		objects = append(objects, node, demoLease(node.Name, f.now))
 		for j, app := range []string{"api", "frontend", "cache"} {
@@ -527,12 +531,12 @@ func demoNode(m *clusterv1.Machine) *corev1.Node {
 }
 
 // setPoolNodes gives a worker its pool's labels and taints, and a taint set by hand when drifted.
-func setPoolNodes(node *corev1.Node, pool provisioner.NodeSettings, drifted bool, driftTaint string) {
+func setPoolNodes(node *corev1.Node, pool provisioner.NodeSettings, driftTaint string) {
 	for _, l := range pool.Labels {
 		node.Labels[l.Key] = l.Value
 	}
 	node.Spec.Taints = pool.CoreTaints()
-	if drifted {
+	if driftTaint != "" {
 		node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{Key: driftTaint, Effect: corev1.TaintEffectNoSchedule})
 	}
 }
