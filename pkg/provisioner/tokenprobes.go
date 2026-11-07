@@ -13,6 +13,9 @@ import (
 )
 
 // The privileges and paths the tokens are tested for, as Proxmox VE names them.
+// PrivRealmAllocateUser is what the controller's token needs on the realm to make cluster users.
+const PrivRealmAllocateUser = "Realm.AllocateUser"
+
 const (
 	privSysAudit = "Sys.Audit"
 	privVMAudit  = "VM.Audit"
@@ -54,7 +57,7 @@ func ControllerNeeds(pool string) []Need {
 		{pathPool + pool, "Permissions.Modify"},
 		{pathPool + pool, "VM.Allocate"},
 		{pathPool + pool, privVMAudit},
-		{"/access/realm/pve", "Realm.AllocateUser"},
+		{"/access/realm/pve", PrivRealmAllocateUser},
 	}
 }
 

@@ -140,9 +140,9 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 			return nil, err
 		}
 	}
-	reach, err := f.proxmoxReach()
-	if err != nil {
-		return nil, err
+	reach, reachErr := f.proxmoxReach()
+	if reachErr != nil {
+		return nil, reachErr
 	}
 	f.objects = append(f.objects, reach)
 	for _, l := range f.data.Activity {
@@ -160,7 +160,7 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 // CA it does not know.
 func (f *demoFleet) proxmoxReach() (*corev1.ConfigMap, error) {
 	tokens := []provisioner.TokenState{
-		{Name: "Controller", Problem: provisioner.TokenPrivileges, Missing: []provisioner.Need{{Path: "/access/realm/pve", Privilege: "Realm.AllocateUser"}}},
+		{Name: "Controller", Problem: provisioner.TokenPrivileges, Missing: []provisioner.Need{{Path: "/access/realm/pve", Privilege: provisioner.PrivRealmAllocateUser}}},
 		{Name: "Template builder", OK: true},
 	}
 	if len(f.data.Clusters) > 0 {

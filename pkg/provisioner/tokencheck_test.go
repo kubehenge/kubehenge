@@ -124,7 +124,8 @@ func newTokenFixture(t *testing.T) *tokenFixture {
 		t.Fatal(err)
 	}
 	web := cluster()
-	creds := credentialsSecret(web, Credentials{TokenID: "cluster@pve!web", TokenSecret: "w"}, true)
+	id, value, _ := strings.Cut(clusterTk, "=")
+	creds := credentialsSecret(web, Credentials{TokenID: id, TokenSecret: value}, true)
 	provider := &corev1.Secret{ObjectMeta: objectMeta("proxmox-infrastructure-system", "capmox-variables"), Data: map[string][]byte{"PROXMOX_TOKEN": []byte("capmox@pve!capmox")}}
 	provider.Data["PROXMOX_"+"SECRET"] = []byte("m")
 	builder := &corev1.Secret{ObjectMeta: objectMeta("kubehenge-system", "kubehenge-template-builder"), Data: map[string][]byte{"token": []byte(builderTk)}}
