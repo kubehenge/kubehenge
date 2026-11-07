@@ -116,6 +116,47 @@ func TestClusterSpecSealsSecretValuesAndLeavesNoneInPlainText(t *testing.T) {
 	}
 }
 
+func TestClusterSpecObjectsFollowTheClusterAndNotALabel(t *testing.T) {
+	t.Parallel()
+	c := cluster()
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	secret := func(name string, labels map[string]string) *corev1.Secret {
+		return &corev1.Secret{Name: name, Namespace: "team-a", Labels: labels, Data: map[string][]byte{"k": []byte("v")}}
+	}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		secret("web-gitops", nil), secret("web-backup-keys", nil), secret("web-encryption", nil), secret("web-ingress-ca", nil),
+		secret("web.backup", nil), secret("web.dns01", nil), secret("web.gitops", nil), secret("web.oidc-client", nil),
+		secret("web-extra", map[string]string{ClusterSpecClusterLabel: "web"}),
+		secret("web-kubeconfig", nil), secret("web-ca", nil), secret("web-sa", nil), secret("web-credentials", nil),
+		secret("kubehenge-backup", nil), secret("kubehenge-webhook", nil), secret("other-gitops", nil),
+	).Build()
+	objects, err := ClusterSpecObjects(context.Background(), kube, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, o := range objects {
+		got = append(got, o.GetName())
+	}
+	want := "web-backup-keys web-encryption web-extra web-gitops web-ingress-ca web.backup web.dns01 web.gitops web.oidc-client"
+	if strings.Join(got, " ") != want {
+		t.Errorf("collected\n%s\nwant\n%s", strings.Join(got, " "), want)
+	}
+	for _, name := range []string{"web-gitops", "web-extra"} {
+		if !SpecSecretBelongs(c, &SpecSecret{Namespace: "team-a", Name: name, Labels: map[string]string{ClusterSpecClusterLabel: "web"}}) {
+			t.Errorf("%s does not belong to its cluster", name)
+		}
+	}
+	for _, s := range []SpecSecret{{Namespace: "team-a", Name: "other-gitops"}, {Namespace: "kube-system", Name: "web-gitops"}, {Namespace: "team-a", Name: "web-kubeconfig"}} {
+		if SpecSecretBelongs(c, &s) {
+			t.Errorf("%s/%s was taken for the cluster's", s.Namespace, s.Name)
+		}
+	}
+}
+
 func TestParseClusterSpecRefusesWhatIsNoCluster(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"", "kind: ConfigMap\nmetadata:\n  name: a\n", "kind: Cluster\nspec: {}\n", "kind: Cluster\nmetadata:\n  name: a\nbogus: 1\n"} {

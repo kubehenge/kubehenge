@@ -821,11 +821,35 @@ Each links to the Backups view. Kubehenge reads this from Velero's own schedule 
 
 ### The cluster's spec
 
-After every change, the appliance writes the cluster to `<prefix>/clusters/<namespace>.<name>/cluster.yaml` in the management etcd's backup target. The file holds the Cluster and the ConfigMaps and Secrets labelled `kubehenge.dev/cluster-name: <name>`. The Secrets' values are in it, sealed with age to a recovery key that only the appliance holds. The backup target never sees a value in plain text. The file's first line says whether the Secrets are included.
+After every change, the appliance writes the cluster to `<prefix>/clusters/<namespace>.<name>/cluster.yaml` in the management etcd's backup target. The file holds the Cluster and the Secrets a rebuilt cluster needs. Their values are sealed with age to a recovery key that only the appliance holds, so the target never sees one in plain text.
 
-The **Backups** tab downloads it, as does `kubehenge cluster export <name>`, and both say whether the Secrets are included. `kubehenge cluster create --from <file>` creates the cluster again with the wizard's checks. It opens the sealed Secrets with the appliance's key and makes them too.
+The **Backups** tab downloads it, as does `kubehenge cluster export <name>`. Both say whether the Secrets are included. Without a target the download still works.
 
-A Secret it cannot open stops the command, which names it. `--without-secrets` creates the cluster without those Secrets. The appliance export carries the key, so a new appliance reads every stored spec. Without a target the download still works.
+`kubehenge cluster create --from <file>` creates the cluster again with the wizard's checks. It opens the sealed Secrets with the appliance's key and makes them first, so the controller finds the old keys. A Secret that already exists is left as it is.
+
+A Secret it cannot open stops the command, which names it. `--without-secrets` goes on without it. The appliance export carries the key, so a new appliance reads every stored spec.
+
+#### Which Secrets are kept
+
+The spec collects these by name, whatever labels they carry:
+
+| Secret | Why it is kept |
+| --- | --- |
+| `<name>.backup`, `<name>.dns01`, `<name>.gitops`, `<name>.oidc-client` | The credentials typed into the interface exist nowhere else. |
+| `<name>-gitops` | It holds the deploy key registered at the repository host. |
+| `<name>-backup-keys` | It decrypts the cluster's backups in the target. |
+| `<name>-encryption` | It decrypts the Secrets in a restored etcd (kubeadm). |
+| `<name>-ingress-ca` | It is the root that clients already trust. |
+
+Anything labelled `kubehenge.dev/cluster-name: <name>`, ConfigMaps included, is kept too.
+
+The controller makes the rest again. These are left out:
+
+- The kubeconfig and talosconfig.
+- Cluster API's certificates, since a rebuilt cluster is made of new machines.
+- The Proxmox VE identities' tokens, and the autoscaler's and cluster mesh's copies.
+
+Credentials the appliance keeps for every cluster belong to the appliance and come back with the management etcd. A Secret named by `existingSecret` lives in the workload cluster.
 
 ### Restore into another cluster
 

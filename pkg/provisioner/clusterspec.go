@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -136,6 +137,7 @@ func sealedCopy(s *corev1.Secret, seal SecretSealer) (*corev1.Secret, error) {
 type SpecSecret struct {
 	Name, Namespace string
 	Labels          map[string]string
+	Annotations     map[string]string
 	Type            corev1.SecretType
 	// Sealed is the values, sealed. It is empty where the spec was made without them.
 	Sealed string
@@ -157,7 +159,7 @@ func ParseSpecSecrets(raw []byte) ([]SpecSecret, error) {
 		}
 		sealed := s.Annotations[SealedSecretAnnotation]
 		delete(s.Annotations, SealedSecretAnnotation)
-		out = append(out, SpecSecret{Name: s.Name, Namespace: s.Namespace, Labels: s.Labels, Type: s.Type, Sealed: sealed})
+		out = append(out, SpecSecret{Name: s.Name, Namespace: s.Namespace, Labels: s.Labels, Annotations: s.Annotations, Type: s.Type, Sealed: sealed})
 	}
 	return out, nil
 }
@@ -199,8 +201,47 @@ func cleanYAML(o any) ([]byte, error) {
 	return out, nil
 }
 
-// ClusterSpecObjects lists the ConfigMaps and Secrets that belong to the cluster, in a fixed order.
-// The Secrets keep their values, which ClusterSpecYAML seals or leaves out.
+// ClusterSpecSecretNames are the Secrets in a cluster's namespace that a rebuilt cluster cannot do
+// without, by the names the controller and the interface give them. Each is here because it cannot
+// be made again, or only at a cost:
+//   - the credentials typed into the interface for the cluster (a backup target's keys, a DNS
+//     provider's token, a Git repository's login, an identity provider's client secret) exist
+//     nowhere else
+//   - the GitOps Secret holds the deploy key registered at the repository host
+//   - the backup keys decrypt the cluster's backups in the target
+//   - the encryption key decrypts the Secrets in a restored etcd
+//   - the ingress CA is the root clients already trust
+//
+// Left out because a rebuilt cluster or the controller makes them again: the kubeconfig and the
+// talosconfig, Cluster API's certificates (a rebuilt cluster is made of new machines), the
+// Proxmox VE identities' tokens (new ones are minted), and the autoscaler's and cluster mesh's
+// copies, which the controller derives from other Secrets. Credentials the appliance keeps for
+// every cluster (notifications, a shared backup or DNS login) belong to the appliance and come
+// back with the management cluster's etcd. A Secret of the cluster's owner inside the workload
+// cluster, named by existingSecret, is not in the management cluster.
+func ClusterSpecSecretNames(c *clusterv1.Cluster) []string {
+	names := []string{GitOpsSecretName(c.Name), BackupKeysSecretName(c.Name), encryptionSecretName(c), IngressCAName(c.Name)}
+	for _, p := range credentialPurposes {
+		if !p.ApplianceOnly {
+			names = append(names, CredentialName(c.Name, p.Name))
+		}
+	}
+	return names
+}
+
+// SpecSecretBelongs tells whether a Secret of a spec may be restored for the cluster in it: one the
+// cluster is known by, in the cluster's own namespace, or one labelled for it.
+func SpecSecretBelongs(c *clusterv1.Cluster, s *SpecSecret) bool {
+	if s.Namespace != c.Namespace {
+		return false
+	}
+	return slices.Contains(ClusterSpecSecretNames(c), s.Name) || s.Labels[ClusterSpecClusterLabel] == c.Name
+}
+
+// ClusterSpecObjects collects what a cluster is rebuilt from besides itself, in a fixed order: the
+// Secrets named by ClusterSpecSecretNames, and every ConfigMap and Secret labelled
+// kubehenge.dev/cluster-name for the cluster, for what a user wants kept besides. The Secrets keep
+// their values, which ClusterSpecYAML seals or leaves out.
 func ClusterSpecObjects(ctx context.Context, kube client.Reader, c *clusterv1.Cluster) ([]client.Object, error) {
 	in := client.InNamespace(c.Namespace)
 	label := client.MatchingLabels{ClusterSpecClusterLabel: c.Name}
@@ -212,16 +253,36 @@ func ClusterSpecObjects(ctx context.Context, kube client.Reader, c *clusterv1.Cl
 	if err := kube.List(ctx, &secrets, in, label); err != nil {
 		return nil, fmt.Errorf("listing the cluster's Secrets: %w", err)
 	}
+	have := map[string]bool{}
 	var out []client.Object
 	for i := range maps.Items {
 		cm := &maps.Items[i]
 		cm.APIVersion, cm.Kind = "v1", "ConfigMap"
+		cm.Annotations = withoutKubectl(cm.Annotations)
 		out = append(out, cm)
 	}
 	for i := range secrets.Items {
-		s := &secrets.Items[i]
-		s.APIVersion, s.Kind = "v1", "Secret"
+		have[secrets.Items[i].Name] = true
+		out = append(out, &secrets.Items[i])
+	}
+	for _, name := range ClusterSpecSecretNames(c) {
+		if have[name] {
+			continue
+		}
+		s := &corev1.Secret{}
+		switch err := kube.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: name}, s); {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			return nil, fmt.Errorf("reading Secret %s: %w", name, err)
+		}
 		out = append(out, s)
+	}
+	for _, o := range out {
+		if s, ok := o.(*corev1.Secret); ok {
+			s.APIVersion, s.Kind = "v1", secretKind
+			s.Annotations = withoutKubectl(s.Annotations)
+		}
 	}
 	slices.SortFunc(out, func(a, b client.Object) int {
 		return strings.Compare(a.GetObjectKind().GroupVersionKind().Kind+a.GetName(), b.GetObjectKind().GroupVersionKind().Kind+b.GetName())
