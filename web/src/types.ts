@@ -170,6 +170,14 @@ export interface Machine {
   waiting?: string;
   /** Marked for its health check to replace. */
   replacing?: boolean;
+  /** Why replacement is held back for now, such as a Proxmox VE node that reboots. */
+  held?: string;
+  /** When the hold ends whatever the node does. */
+  heldUntil?: string;
+  /** Why a machine that has been deleting for long cannot finish. */
+  stalled?: string;
+  /** Why the last request to forget the machine was refused. */
+  forgetRefused?: string;
   addresses?: string[];
   created: string;
   /** The Talos release its node runs, on a Talos cluster. */
@@ -1014,7 +1022,14 @@ export interface ManagementHealth {
   /** Its deployments: Cluster API's providers, Kubehenge's controller and the cluster's own. */
   controllers?: { namespace: string; name: string; ready: number; wanted: number }[];
   /** Whether the controller reaches the Proxmox VE API from inside the cluster. Unset until it has asked. */
-  proxmox?: { ok: boolean; error?: string; checked: string };
+  proxmox?: {
+    ok: boolean;
+    error?: string;
+    blind?: string;
+    /** The tokens that are refused, cannot verify the API's certificate or lack a privilege. */
+    tokens?: { name: string; problem: "Refused" | "Certificate" | "Unreachable" | "Privileges"; message: string }[];
+    checked: string;
+  };
 }
 
 /** What the setup would run into: errors stop it, warnings do not. */

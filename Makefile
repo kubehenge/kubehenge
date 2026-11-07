@@ -304,6 +304,13 @@ unit-go: web gateway-api
 unit-web: web/node_modules/.package-lock.json
 	cd web && npm test
 
+# tofu test starts each of the three providers' plugins about 140 times, one process per run block
+# phase, and Go's plugin client gives each a minute to answer. Beside the race tests of every package
+# the starts queue for a core, so in a whole run it waits for them.
+ifneq ($(filter test unit,$(MAKECMDGOALS)),)
+unit-tofu: | unit-go
+endif
+
 unit-tofu: tofu-init capi-operator-chart
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m test; done
 

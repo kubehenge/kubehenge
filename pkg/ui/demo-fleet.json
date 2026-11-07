@@ -88,6 +88,7 @@
       "workers": 3,
       "subnet": 40,
       "ageDays": 120,
+      "held": true,
       "addOns": ["headlamp", "monitoring"]
     },
     {

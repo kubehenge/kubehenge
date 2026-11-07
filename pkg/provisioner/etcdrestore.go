@@ -103,6 +103,8 @@ type EtcdRestoreStatus struct {
 	Node    string `json:"node,omitempty"`
 	// Replaced are the other control-plane machines, which Cluster API makes again.
 	Replaced []string `json:"replaced,omitempty"`
+	// Missing are those of Replaced whose VM no longer exists in Proxmox VE.
+	Missing []string `json:"missing,omitempty"`
 	// Before is the snapshot of etcd as it was, taken into the restore's target before anything
 	// of it was stopped or wiped. NoBefore says why none could be taken.
 	Before   string     `json:"before,omitempty"`
@@ -347,6 +349,10 @@ func (run *restoreRun) prepare(ctx context.Context) error {
 		return err
 	}
 	if len(run.nodes) == 0 {
+		if len(run.status.Missing) > 0 {
+			return fmt.Errorf("no control-plane VM of the cluster exists in Proxmox VE (missing: %s), so there is no node to restore etcd on. Rebuild it from its saved file with `kubehenge cluster create --from <file>`",
+				strings.Join(run.status.Missing, ", "))
+		}
 		return errors.New("no control-plane VM of the cluster runs")
 	}
 	run.status.Machine, run.status.Node = run.nodes[0].Machine, run.nodes[0].Node
@@ -429,6 +435,12 @@ func (run *restoreRun) reach(ctx context.Context, n *RestoreNode) error {
 		return fmt.Errorf("control-plane machine %s has no VM yet. Restore once all are running", n.Machine)
 	}
 	running, err := run.r.Guests.Running(ctx, n.VMID)
+	if errors.Is(err, ErrVMNotListed) {
+		// Cluster API makes the machine again once it is deleted, as for a VM that is off.
+		run.status.Replaced = append(run.status.Replaced, n.Machine)
+		run.status.Missing = append(run.status.Missing, n.Machine)
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("control-plane machine %s: %w", n.Machine, err)
 	}
@@ -874,6 +886,9 @@ func (run *restoreRun) succeededMessage() string {
 		m += fmt.Sprintf(" Cluster API makes the %d control-plane machines whose Talos API did not answer again.", len(s.Replaced))
 	default:
 		m += fmt.Sprintf(" Cluster API makes the other %d control-plane machines again.", len(s.Replaced))
+	}
+	if len(s.Missing) > 0 {
+		m += " No VM existed in Proxmox VE for " + strings.Join(s.Missing, ", ") + "."
 	}
 	if ptr.Deref(run.cluster.Spec.Paused, false) && !s.Paused {
 		m += " The cluster was paused before the restore and stays paused until it is unpaused."

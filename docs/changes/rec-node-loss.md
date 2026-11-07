@@ -1,0 +1,8 @@
+- Machines being deleted on a Proxmox VE node that left the cluster for good no longer stay in Deleting. Kubehenge lets go of them, and the Cluster gets the event `NodeGone`.
+- A node that is only offline keeps its machines. A machine deleting for 20 minutes gets the condition `MachineDeletionStalled`, with why.
+- A stuck machine can be forgotten from the interface, with `kubehenge cluster machine forget`, or with `kubectl annotate machine MACHINE kubehenge.dev/forget-machine=MACHINE`. One rule refuses it while the VM runs on a node that answers.
+- A forgotten machine leaves the ProxmoxCluster's node locations.
+- An etcd restore goes on without control-plane VMs that no longer exist in Proxmox VE. With none left it says to rebuild the cluster with `kubehenge cluster create --from <file>`.
+- The controller tests every token it relies on every 10 minutes. A refused token, a certificate from another CA or a missing privilege shows in Health and goes out as a notification.
+- A cluster whose token fails gets the condition `ProxmoxAccessRefused`.
+- The privileges tested are the ones the module's roles grant, and a test fails when they differ.

@@ -31,9 +31,20 @@ rules:
   - apiGroups: [cluster.x-k8s.io]
     resources: [machines]
     verbs: [get, list, watch, patch, delete]
+  # MachineDeletionStalled says why a machine cannot finish deleting.
+  - apiGroups: [cluster.x-k8s.io]
+    resources: [machines/status]
+    verbs: [patch]
   - apiGroups: [infrastructure.cluster.x-k8s.io]
     resources: [proxmoxmachines]
     verbs: [get, list, watch, patch]
+  # A machine let go of leaves the ProxmoxCluster's record of where machines run.
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [proxmoxclusters]
+    verbs: [list]
+  - apiGroups: [infrastructure.cluster.x-k8s.io]
+    resources: [proxmoxclusters/status]
+    verbs: [patch]
   # What a node of each autoscaled pool holds goes onto its MachineDeployment, for the autoscaler.
   - apiGroups: [cluster.x-k8s.io]
     resources: [machinedeployments]
@@ -356,6 +367,7 @@ spec:
             {{- end }}
             - {{ printf "--pod-security-exempt=%s" (toJson .Values.podSecurityExempt) | quote }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
+            - {{ printf "--token-places=%s" (toJson (dict "templatePool" .Values.templateRefresh.pool "storages" .Values.clusters.storages "builder" (dict "node" .Values.templateRefresh.node "storage" .Values.templateRefresh.storage "import" .Values.templateRefresh.importStorage "iso" .Values.templateRefresh.isoStorage))) | quote }}
             {{- if .Values.interface.offerHARules }}
             - --offer-ha-rules
             {{- end }}
@@ -363,6 +375,10 @@ spec:
             - --stall-after={{ .Values.watch.stallMinutes }}m
             {{- if .Values.templateRefresh.enabled }}
             - --template-refresh
+            - --test-template-builder-token={{ .Release.Namespace }}/{{ .Values.templateRefresh.secret }}
+            {{- end }}
+            {{- with .Values.proxmox.capmoxSecret }}
+            - --test-capmox-token={{ . }}
             {{- end }}
             {{- if .Values.proxmox.ha }}
             - --proxmox-ha

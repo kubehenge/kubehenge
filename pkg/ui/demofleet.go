@@ -94,6 +94,9 @@ type demoCluster struct {
 	Crashing string `json:"crashing"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
+	// Held is set on a cluster whose last machine sits on a Proxmox VE node in maintenance, so that
+	// its replacement is held.
+	Held bool `json:"held"`
 }
 
 type demoUpgrade struct {
@@ -137,6 +140,11 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 			return nil, err
 		}
 	}
+	reach, reachErr := f.proxmoxReach()
+	if reachErr != nil {
+		return nil, reachErr
+	}
+	f.objects = append(f.objects, reach)
 	for _, l := range f.data.Activity {
 		e := activityEntry{At: now.Add(-time.Duration(l.AgoMinutes) * time.Minute), User: l.User, What: l.What, Details: l.Details}
 		if l.Cluster != "" {
@@ -145,6 +153,31 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 		f.activity = append(f.activity, e)
 	}
 	return f, nil
+}
+
+// proxmoxReach is the controller's record of its last test of the Proxmox VE tokens, with two that
+// fail: the controller's, which lost a privilege, and a cluster's, whose API certificate is from a
+// CA it does not know.
+func (f *demoFleet) proxmoxReach() (*corev1.ConfigMap, error) {
+	tokens := []provisioner.TokenState{
+		{Name: "Controller", Problem: provisioner.TokenPrivileges, Missing: []provisioner.Need{{Path: "/access/realm/pve", Privilege: provisioner.PrivRealmAllocateUser}}},
+		{Name: "Template builder", OK: true},
+	}
+	if len(f.data.Clusters) > 0 {
+		name := f.data.Clusters[0].Name
+		tokens = append(tokens, provisioner.TokenState{
+			Name: "Cluster " + demoNamespace + "/" + name, Cluster: demoNamespace + "/" + name,
+			Problem: provisioner.TokenCertificate, Error: "x509: certificate signed by unknown authority",
+		})
+	}
+	raw, err := json.Marshal(provisioner.Reachability{OK: true, Tokens: tokens, Checked: f.now})
+	if err != nil {
+		return nil, fmt.Errorf("the demo's Proxmox VE reachability: %w", err)
+	}
+	return &corev1.ConfigMap{
+		Namespace: demoClassNamespace, Name: provisioner.ProxmoxReachName,
+		Data: map[string]string{provisioner.ProxmoxReachKey: string(raw)},
+	}, nil
 }
 
 // classes are the chart's ClusterClasses, with the templates, snapshot storages and backup
@@ -206,6 +239,14 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 	}
 	nodes := f.data.ProxmoxNodes
 	for i, m := range machines {
+		if d.Held && i == len(machines)-1 {
+			m.Annotations = map[string]string{
+				clusterv1.MachineSkipRemediationAnnotation: "",
+				provisioner.HoldAnnotation:                 "Proxmox VE node " + nodes[i%len(nodes)] + " is in maintenance",
+				provisioner.HoldSinceAnnotation:            f.now.Add(-7 * time.Minute).Format(time.RFC3339),
+				provisioner.HoldUntilAnnotation:            f.now.Add(23 * time.Minute).Format(time.RFC3339),
+			}
+		}
 		f.objects = append(f.objects, m)
 		mem := int64(8) * demoGiB
 		if !isControlPlane(m) {
@@ -283,6 +324,16 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		c.Annotations[changeAnnotation] = string(raw)
 		c.Generation++
 	}
+	held := []metav1.Condition{}
+	if d.Held {
+		since := f.now.Add(-7 * time.Minute)
+		held = append(held, metav1.Condition{
+			Type: provisioner.RemediationHeldCondition, Status: metav1.ConditionTrue, Reason: provisioner.HeldNodeMaintenance, LastTransitionTime: metav1.NewTime(since),
+			Message: fmt.Sprintf("%s-%s-%s: Proxmox VE node %s is in maintenance, replacement waits until %s",
+				d.Name, workerPool, demoSuffix(d.Name, workerPool, int(d.Workers-1)), f.data.ProxmoxNodes[int(d.ControlPlanes+d.Workers-1)%len(f.data.ProxmoxNodes)],
+				since.Add(30*time.Minute).UTC().Format("15:04 MST")),
+		})
+	}
 	c.Status = clusterv1.ClusterStatus{
 		Phase:              string(clusterv1.ClusterPhaseProvisioned),
 		ObservedGeneration: c.Generation,
@@ -300,6 +351,7 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 			DesiredReplicas: &workers, Replicas: &workers, ReadyReplicas: &workers, AvailableReplicas: &workers, UpToDateReplicas: &upToDateWorkers,
 		},
 	}
+	c.Status.Conditions = append(c.Status.Conditions, held...)
 	return c
 }
 

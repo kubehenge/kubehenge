@@ -1,4 +1,5 @@
 import { newForm, type Form, type Machine } from "./create-form";
+import { graceOf, graceVariable } from "./HostOutage";
 import { loadBalancerOf } from "./LoadBalancer";
 import { logsOf } from "./Logs";
 import { nodeOSKey } from "./node-os";
@@ -35,6 +36,7 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "loadBalancer",
   "storage",
   "place",
+  "hostOutageGrace",
   "proxmoxHA",
   "haGroups",
   "controlPlaneMachine",
@@ -97,6 +99,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     loadBalancer: loadBalancerOf(v["loadBalancer"]).implementation,
     storage: text(v["storage"]) ?? "",
     place: placeOf(texts(v["allowedNodes"])),
+    hostOutageGrace: graceOf(v[graceVariable]),
     proxmoxHA: flag(v["proxmoxHA"]) !== false,
     haGroups: flag(record(v["ccm"])["haGroups"]) !== false,
     controlPlaneMachine: machineOf(v["controlPlaneMachine"], base.controlPlaneMachine),

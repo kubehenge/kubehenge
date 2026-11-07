@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -70,6 +71,43 @@ func TestMachinesAreMarkedForReplacementAndKept(t *testing.T) {
 	}
 }
 
+func TestAStuckMachineIsForgottenOnAnAdministratorsWord(t *testing.T) {
+	t.Parallel()
+	stuck := clusterMachine("one", "one-cp-1")
+	stuck.Finalizers = []string{clusterv1.MachineFinalizer}
+	stuck.DeletionTimestamp = &metav1.Time{Time: time.Now().Add(-time.Hour)}
+	healthy := clusterMachine("one", "one-cp-2")
+	h := newHarness(t, cluster("default", "one"), stuck, healthy)
+	const path = "/api/clusters/default/one/machines/one-cp-1/forgotten"
+	annotations := func(name string) map[string]string {
+		t.Helper()
+		got := &clusterv1.Machine{}
+		if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Annotations
+	}
+
+	viewer := h.browser()
+	viewer.signIn("viewer@pve")
+	expect(t, viewer.do("PUT", path, `{"confirm":"one-cp-1"}`), http.StatusForbidden)
+
+	dev := h.browser()
+	dev.signIn("dev@pve")
+	expect(t, dev.do("PUT", path, `{"confirm":"another"}`), http.StatusUnprocessableEntity)
+	expect(t, dev.do("PUT", "/api/clusters/default/one/machines/one-cp-2/forgotten", `{"confirm":"one-cp-2"}`), http.StatusConflict)
+	if _, asked := annotations("one-cp-1")[provisioner.ForgetAnnotation]; asked {
+		t.Fatal("a refused request marked the machine")
+	}
+	expect(t, dev.do("PUT", path, `{"confirm":"one-cp-1"}`), http.StatusAccepted)
+	if got := annotations("one-cp-1")[provisioner.ForgetAnnotation]; got != "one-cp-1" {
+		t.Errorf("annotation %q, want the machine's name", got)
+	}
+	if _, asked := annotations("one-cp-2")[provisioner.ForgetAnnotation]; asked {
+		t.Error("another machine is marked")
+	}
+}
+
 func TestAWorkerIsDeletedAndItsPoolShrinks(t *testing.T) {
 	t.Parallel()
 	worker := clusterMachine("one", "one-md-0-a")
@@ -118,6 +156,44 @@ func TestAWorkerIsDeletedAndItsPoolShrinks(t *testing.T) {
 	}
 	if _, ok := got.Annotations[clusterv1.DeleteMachineAnnotation]; ok {
 		t.Error("an autoscaled pool's worker is marked")
+	}
+}
+
+func TestAMachineKubehengeHoldsSaysWhyAndUntilWhen(t *testing.T) {
+	t.Parallel()
+	m := clusterMachine("one", "one-cp-1")
+	since := time.Date(2027, 1, 2, 14, 10, 0, 0, time.UTC)
+	m.Annotations = map[string]string{
+		clusterv1.MachineSkipRemediationAnnotation: "",
+		provisioner.HoldAnnotation:                 "Proxmox VE node pve2 is offline",
+		provisioner.HoldSinceAnnotation:            since.Format(time.RFC3339),
+		provisioner.HoldUntilAnnotation:            since.Add(45 * time.Minute).Format(time.RFC3339),
+	}
+	h := newHarness(t, cluster("default", "one"), m, clusterMachine("one", "one-cp-2"))
+	b := h.browser()
+	b.signIn("viewer@pve")
+	rec := b.do("GET", "/api/clusters/default/one", "")
+	expect(t, rec, http.StatusOK)
+	var v struct {
+		Machines []machineView `json:"machines"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Machines) != 2 {
+		t.Fatalf("machines %+v", v.Machines)
+	}
+	for _, mv := range v.Machines {
+		switch mv.Name {
+		case "one-cp-1":
+			if mv.Held != "Proxmox VE node pve2 is offline" || !mv.HeldUntil.Equal(since.Add(45*time.Minute)) {
+				t.Errorf("held machine %+v", mv)
+			}
+		default:
+			if mv.Held != "" || !mv.HeldUntil.IsZero() {
+				t.Errorf("a machine nothing holds: %+v", mv)
+			}
+		}
 	}
 }
 

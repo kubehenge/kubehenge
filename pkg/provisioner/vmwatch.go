@@ -109,6 +109,9 @@ type VMWatch struct {
 
 	// seen is when each VM was first found in the state it is in, while that is not running.
 	seen map[int64]vmSeen
+	// haErr is the last failure of reading the HA manager's status, so that a failure that goes on
+	// is logged once.
+	haErr string
 }
 
 type vmSeen struct {
@@ -140,6 +143,11 @@ type vmLook struct {
 	guests   map[int64]pveGuest
 	down     map[int64]string
 	storages []pveStorageUse
+	// nodes is each Proxmox VE node's status, and maintenance the nodes the HA manager has emptied.
+	nodes       map[string]string
+	maintenance map[string]bool
+	// gone is the nodes that have left the cluster for good, which no wait can bring back.
+	gone map[string]bool
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -171,11 +179,20 @@ func (w *VMWatch) read(ctx context.Context) (*vmLook, error) {
 	if err := w.Proxmox.Get(ctx, "/cluster/resources?type=storage", &look.storages); err != nil {
 		return nil, fmt.Errorf("listing the storages: %w", err)
 	}
+	var nodes []pveNodeUse
+	if err := w.Proxmox.Get(ctx, "/cluster/resources?type=node", &nodes); err != nil {
+		return nil, fmt.Errorf("listing the nodes: %w", err)
+	}
+	look.nodes = make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		look.nodes[n.Node] = n.Status
+	}
 	for _, g := range guests {
 		if g.Type == qemuType {
 			look.guests[g.VMID] = g
 		}
 	}
+	look.maintenance, look.gone = hostFactsOf(ctx, w.Proxmox, look.guests, &w.haErr)
 	w.settle(look)
 	return look, nil
 }
@@ -231,26 +248,39 @@ func vmStateOf(g pveGuest) string {
 }
 
 func (w *VMWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *vmLook) error {
+	// A cluster being deleted is released too, or its deletion would wait on a node that is gone.
+	lostErr := w.settleDeletingMachines(ctx, c, look)
 	if !c.DeletionTimestamp.IsZero() || RestoreInProgress(c) {
-		return nil
+		return lostErr
 	}
 	vms, err := w.clusterVMs(ctx, c)
 	if err != nil {
-		return err
+		return errors.Join(lostErr, err)
 	}
-	vmsErr := w.mark(ctx, c, VMsCondition, vmsCondition(vms, look), "VMsRunning", "every VM of the cluster runs")
-	storage, set, err := optionalVariable[string](c, "storage")
-	if err != nil || !set {
-		return errors.Join(vmsErr, err)
+	vmsErr := errors.Join(lostErr, w.mark(ctx, c, VMsCondition, vmsCondition(vms, look), "VMsRunning", "every VM of the cluster runs"))
+	storage, _, err := optionalVariable[string](c, "storage")
+	ceiling, graceErr := hostOutageGrace(c)
+	if graceErr != nil {
+		return errors.Join(vmsErr, graceErr)
 	}
-	return errors.Join(vmsErr, w.mark(ctx, c, StorageCondition, storageCondition(storage, vms, look), "StorageFreed",
-		fmt.Sprintf("storage %s is below %d%% full", storage, storageWarnPercent)))
+	held, holdErr := w.holdMachines(ctx, vms, storage, look, ceiling)
+	errs := errors.Join(vmsErr, err, holdErr,
+		w.mark(ctx, c, RemediationHeldCondition, held, "RemediationReleased", "replacement of the cluster's machines is no longer held"))
+	if err != nil || storage == "" {
+		return errs
+	}
+	return errors.Join(errs,
+		w.mark(ctx, c, StorageCondition, storageCondition(storage, vms, look), "StorageFreed",
+			fmt.Sprintf("storage %s is below %d%% full", storage, storageWarnPercent)),
+		w.mark(ctx, c, StorageUnavailableCondition, storageUnavailableCondition(storage, vms, look, ceiling), "StorageAvailable",
+			fmt.Sprintf("storage %s is available again", storage)))
 }
 
 // clusterVM is the VM of a machine whose node joined, so that its VM ran once.
 type clusterVM struct {
 	machine string
 	vmid    int64
+	m       *clusterv1.Machine
 }
 
 // clusterVMs lists the VMs of the cluster's machines that joined and are not being deleted.
@@ -276,7 +306,7 @@ func (w *VMWatch) clusterVMs(ctx context.Context, c *clusterv1.Cluster) ([]clust
 		if !ok || m.Status.NodeRef.Name == "" {
 			continue
 		}
-		vms = append(vms, clusterVM{machine: m.Name, vmid: vmid})
+		vms = append(vms, clusterVM{machine: m.Name, vmid: vmid, m: m})
 	}
 	slices.SortFunc(vms, func(a, b clusterVM) int { return int(a.vmid - b.vmid) })
 	return vms, nil

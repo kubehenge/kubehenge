@@ -6,6 +6,7 @@ import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
+import { HostOutageDialog, graceOf, graceText, graceVariable } from "./HostOutage";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { choosable, cpuNote, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
@@ -52,6 +53,7 @@ import { flag, record, text, texts } from "./values";
 export type OptionAction =
   | "nodeOS"
   | "placement"
+  | "hostOutage"
   | "headlamp"
   | "monitoring"
   | "logs"
@@ -137,6 +139,9 @@ export function OptionDialog({
     }
     case "placement": {
       return <PlacementDialog cluster={c} onClose={onClose} />;
+    }
+    case "hostOutage": {
+      return <HostOutageDialog cluster={c} onClose={onClose} />;
     }
     case "talos": {
       return <TalosDialog cluster={c} onClose={onClose} />;
@@ -298,6 +303,13 @@ export function optionRows<A extends string = never>(
       group: "Nodes",
       action: "placement",
       name: "placement",
+    },
+    {
+      label: "Host outage wait",
+      value: graceText(graceOf(c.variables[graceVariable])),
+      group: "Nodes",
+      action: "hostOutage",
+      name: "the host outage wait",
     },
   ];
   if (offered.ha) {

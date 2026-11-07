@@ -535,6 +535,55 @@ Kubehenge's controller looks every 15 seconds at the VMs of every cluster's mach
 
 A warning event of the condition's name records each start and change. `VMsRunning` and `StorageFreed` record the end.
 
+### Machines whose replacement waits for a host
+
+A node that reboots or sits in HA maintenance is down longer than the five minutes after which the health check replaces a node. Kubehenge holds the replacement back.
+
+- **Replacement waits** in **Health** and **Replacement held** in **Machines** mean a machine's VM sits on a node that is offline or in HA maintenance. They also show for a node without the cluster's storage.
+- The Cluster has the condition `RemediationHeld`, with the reason `NodeOffline`, `NodeMaintenance`, `StorageUnavailable` or `NodeRecovering`.
+- The Machine carries `cluster.x-k8s.io/skip-remediation`, which keeps the health check off it. `kubehenge.dev/remediation-hold` says why. `kubehenge.dev/remediation-hold-since` is when it began.
+- `kubehenge cluster get <name>` prints `held` and `heldUntil` for each machine.
+- The hold ends when the node is back and the machine's Kubernetes node is Ready.
+- It ends anyway after the cluster's `hostOutageGraceMinutes`, 30 by default. `kubehenge.dev/remediation-hold-until` is when. The same outage never holds the machine twice.
+- A server that needs longer than 30 minutes to start needs a higher value, and 0 waits for the host for ever ([clusters.md](clusters.md#variables)).
+- A host removed from the Proxmox VE cluster ends the wait at once, since it will not come back.
+- A skip annotation without Kubehenge's two is yours, and Kubehenge leaves it alone.
+
+#### Host maintenance is not visible
+
+**Host maintenance is not visible: the token lacks Sys.Audit on /** on the management cluster's **Health** means Proxmox VE refused the controller's read of the HA manager's status. Without it Kubehenge sees offline hosts but not HA maintenance, so it does not hold replacements for a host in maintenance. It cannot tell a removed host either. Give the controller's token `Sys.Audit` on `/`, which the read-privileges setting grants unless you switched it off.
+
+Only `maintenance` in the HA manager's `node_status` holds a machine for maintenance. `gone` means the host left the cluster's member list, and it ends the wait. So does a host missing from the cluster's own node list (`/cluster/config/nodes`). `fence` and `unknown` do not, since a fenced or unreachable host reboots and returns.
+
+#### A host that is gone for good
+
+A machine being deleted keeps its VM until Cluster API's Proxmox VE provider destroys it. It cannot while the VM's node does not answer. The machine stays in Deleting, and the control plane neither scales up nor replaces a member meanwhile.
+
+- A node that is only offline keeps its machines. They wait for it to return.
+- A node the HA manager has as `gone`, or that left the cluster's node list, will not return. Kubehenge lets go of the machines being deleted on it. The Cluster gets the event `NodeGone`.
+- Kubehenge does not destroy the VM. Its configuration stays in `/etc/pve/nodes/<node>/qemu-server/` until you remove it.
+- To retire a dead node at once, run `pvecm delnode <node>` on a live one.
+
+A machine that has been deleting for 20 minutes gets the condition `MachineDeletionStalled`, with the reason in its message. The reason is an offline node, a node in maintenance, a VM that is not listed, or a VM capmox does not destroy though its node answers.
+
+To release such a machine without waiting for its node, forget it. Its VM stays in Proxmox VE, so remove it there if it is still listed.
+
+- Interface: **Forget…** in the machine's actions, for those who may download the admin kubeconfig.
+- CLI: `kubehenge cluster machine forget CLUSTER MACHINE --yes`.
+- kubectl: `kubectl annotate machine MACHINE kubehenge.dev/forget-machine=MACHINE`. The value must be the machine's own name.
+
+All three set the same annotation, and the controller applies one rule. It refuses a request in the first 20 minutes of the deletion, and while the VM runs on a node that answers. The refusal is in the annotation `kubehenge.dev/forget-refused` and in an event on the Cluster. A forgotten machine also leaves the ProxmoxCluster's node locations.
+
+#### Storage unavailable
+
+**Storage unavailable** in **Health** and the condition `StorageUnavailable` mean the cluster's `storage` is not available on a node that runs one of its VMs. The message names the nodes. Check `pvesm status` on them and bring the storage back.
+
+The machines on it are held meanwhile, since a replacement would clone onto the same missing storage.
+
+#### No node for a new VM
+
+A node in maintenance, or without the cluster's storage, gets no new VMs. When no node is left, the Cluster's `TopologyReconciled` condition says why. The annotation `kubehenge.dev/placement-blocked` on the Cluster holds the same text.
+
 ### Autoscaling
 
 - **`AutoscalerNoRoom`**, "Proxmox VE has no node with the memory for a new worker of pool …: …": the new worker waits for room. After 30 minutes the autoscaler gives the machine up and tries again. Free memory on the Proxmox VE nodes the cluster may use, or let it use more nodes ([clusters.md](clusters.md#autoscaling)).
@@ -592,6 +641,23 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
   - "Leaving … out" names a node whose Talos API did not answer, which keeps the etcd from before. Once it runs, wipe that with `talosctl -n <address> reset --system-labels-to-wipe EPHEMERAL --reboot --graceful=false` and the admin talosconfig (**Appliance**, repair access). It then joins the restored one.
   - "no control-plane node answers on its Talos API": start the management cluster's VMs in Proxmox VE first.
   - "snapshot … does not match its checksum": the object in the target is damaged. Restore another snapshot.
+
+### A Proxmox VE token is refused or lacks a privilege
+
+The management cluster's **Health** and your notification targets name each token that fails its test. They give its holder, the problem and any missing privilege with its path. The controller tests these every 10 minutes:
+
+- its own token, and the HA and etcd restore tokens where those are on
+- the tokens of Cluster API's Proxmox VE provider and of the template builder
+- the token of each cluster's cloud controller manager and CSI plugin, whose failure sets `ProxmoxAccessRefused` on that Cluster
+
+The problem is one of these:
+
+- **Refused:** the token expired, was disabled, or lost its user. Make a new token, or apply the management cluster again.
+- **Certificate:** the API's certificate is from another CA ([below](#the-proxmox-ve-certificate-or-ca-changed)).
+- **Unreachable:** the API did not answer, or the Secret with the token cannot be read.
+- **Privileges:** for example `Controller token lacks Realm.AllocateUser on /access/realm/pve.` Give the token's user that privilege on that path, or apply the management cluster again.
+
+The warning clears at the next test after the cause is fixed.
 
 ### The Proxmox VE certificate or CA changed
 

@@ -189,19 +189,24 @@ func (r *auditRig) tick(t *testing.T) {
 	}
 }
 
-// wait waits until done holds of the follower, and fails after a few seconds.
+// wait waits until done holds of the follower. It wakes on each change the follower makes to its
+// state, so `go test -timeout` is its only bound.
 func (r *auditRig) wait(t *testing.T, what string, done func(f *auditFollower) bool) {
 	t.Helper()
-	for range 300 {
+	for {
 		r.f.mu.Lock()
 		ok := done(r.f)
-		r.f.mu.Unlock()
+		changed := r.f.mu.next()
+		r.f.mu.release()
 		if ok {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-changed:
+		case <-t.Context().Done():
+			t.Fatalf("waited in vain for %s", what)
+		}
 	}
-	t.Fatalf("waited in vain for %s", what)
 }
 
 // waitRead waits until the follower has read a pod's log to the line n seconds after auditBase.

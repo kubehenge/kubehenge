@@ -618,6 +618,30 @@ describe("clusters", () => {
     await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/cp-a/replacement")).toBe(1));
   });
 
+  it("says why a machine's replacement is held", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: {
+          ...web,
+          machines: [
+            {
+              ...runningOn("md-a", "pve2", "worker"),
+              held: "Proxmox VE node pve2 is in maintenance",
+              heldUntil: "2027-01-02T14:40:00Z",
+            },
+            runningOn("md-b", "pve1", "worker"),
+          ],
+        },
+      },
+    });
+    render(<App />);
+    const row = await screen.findByRole("row", { name: /^md-a .*Replacement held/u });
+    expect(row).toHaveTextContent("Proxmox VE node pve2 is in maintenance. Replaced after");
+    expect(screen.getByRole("row", { name: /^md-b /u })).not.toHaveTextContent("Replacement held");
+  });
+
   it("deletes a worker after asking, and opens a machine's console", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/machines");
     const console = "https://pve.example.org:8006/?console=kvm&novnc=1&vmid=201&node=pve1";
@@ -682,6 +706,35 @@ describe("clusters", () => {
     await waitFor(() => expect(reads(calls, "POST /api/clusters/default/web/machines/cp-a/reboot")).toBe(1));
   });
 
+  it("offers to forget a machine that cannot finish deleting, only to those who may", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const stuck = {
+      ...runningOn("cp-a", "pve2"),
+      node: "cp-a",
+      phase: "Deleting",
+      stalled: "Proxmox VE node pve2 is offline, so capmox waits for it to return",
+    };
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: {
+          ...web,
+          allowed: { change: true, kubeconfig: true },
+          machines: [stuck, runningOn("md-a", "pve1", "worker")],
+        },
+      },
+      "PUT /api/clusters/default/web/machines/cp-a/forgotten": { status: 202 },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await expect(screen.findByText(stuck.stalled)).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Forget md-a" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Forget cp-a" }));
+    const dialog = screen.getByRole("dialog", { name: "Forget cp-a" });
+    await user.click(within(dialog).getByRole("button", { name: "Forget" }));
+    await waitFor(() => expect(reads(calls, "PUT /api/clusters/default/web/machines/cp-a/forgotten")).toBe(1));
+  });
+
   it("reads the setup status no more once signed out, even when the last read fails after", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const setup = held();
@@ -741,6 +794,7 @@ describe("create", () => {
     services: "",
     storage: "local-lvm",
     place: { placement: "any", haRule: "", nodes: [] },
+    hostOutageGrace: "30",
     proxmoxHA: true,
     datastoreAllocate: false,
     volumeSnapshots: false,

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -234,6 +235,32 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/web/backups", ""), &backups)
 	if len(backups.Backups) != 8 {
 		t.Errorf("%d backups of web, want 8", len(backups.Backups))
+	}
+}
+
+func TestDemoHoldsOneMachinesReplacement(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var detail struct {
+		Machines []machineView `json:"machines"`
+	}
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform", ""), &detail)
+	var held []machineView
+	for _, m := range detail.Machines {
+		if m.Held != "" {
+			held = append(held, m)
+		}
+	}
+	if len(held) != 1 || held[0].Held != "Proxmox VE node pve3 is in maintenance" || held[0].HeldUntil.IsZero() {
+		t.Fatalf("held machines %+v", held)
+	}
+	var health struct {
+		Attention []attentionView `json:"attention"`
+	}
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform/health", ""), &health)
+	if !slices.ContainsFunc(health.Attention, func(a attentionView) bool { return a.What == "Replacement waits" }) {
+		t.Errorf("platform's health: %+v", health.Attention)
 	}
 }
 
