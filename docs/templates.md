@@ -144,7 +144,7 @@ A cluster creator's request names a Talos template as `talos-v1.14.5`.
   - On the storages of `--import-storage` and `--iso-storage`: `Datastore.Allocate`, `Datastore.AllocateTemplate` and `Datastore.Audit`.
   - On the storage of `--storage`: `Datastore.AllocateSpace` and `Datastore.Audit`.
   - On `/nodes/<node>` of `--node`: `Sys.AccessNetwork` and `Sys.Audit`.
-  - On `/sdn/zones/localnetwork/<bridge>` of `--bridge`: the role `PVESDNUser`.
+  - On `/sdn/zones/localnetwork/<bridge>` of `--bridge`, or `/sdn/zones/<zone>/<vnet>` for a VNet: the role `PVESDNUser`.
   - On `/`, and on `/nodes` propagated: `Sys.Audit`.
 
   A token of a user with the Administrator role on `/`, such as `root@pam`'s in the examples, holds all of them.

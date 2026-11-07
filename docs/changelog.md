@@ -1,37 +1,8 @@
 # Changelog
 
-Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor version may change behaviour.
+Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor version may change behaviour. Changes not yet released are in `docs/changes/`, one file per pull request, and appear here under `[Unreleased]` on the website.
 
 ## [Unreleased]
-
-- The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
-- New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
-- The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
-- The installer stops when the cluster has an appliance already. `--upgrade` and `--certificate` on the wrong node name the node that runs the container.
-- The installer asks about the Proxmox VE interface entry on the same terminal as its other questions, also when piped into `sh`.
-- A dropped session or an interrupt now removes the half-made container and the temporary files.
-- The installer stops early, in plain words, without quorum, with a resolver that names only loopback servers, or with too little room for the downloads.
-- A failed download gives curl's exit code and the HTTP status.
-- An option without its value reports `<option> needs a value`. A storage name is matched as written.
-- New `--tofu <file>` option installs OpenTofu from a local archive, checked against the script's checksum.
-- A container that cannot resolve the API's name makes the installer take the next name or address the certificate covers. It names every one it tried when none works.
-- The usage text and the docs describe how `--template-storage` is chosen.
-- Once the container has an address, the installer checks its network from inside it. It tests the gateway, the name server and the API's port in turn, and a failure names the option to check (`--vlan`, `--gateway`, `--dns` or the node's firewall).
-- A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
-- A container that gets no DHCP address now names `--vlan` and the DHCP server.
-- Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
-- A template on storage that is not shared can be cloned only on its own node. Clusters now run only on the nodes that can clone their template. A cluster whose allowed nodes leave none is refused, with the template, its storage and the fix named.
-- `kubehenge template create` and the build dialog say when the template's storage is not shared. Without `--storage` the command takes the shared storage with the most room that allows disk images, else asks for `--storage`.
-- A cluster's storage must be available on at least one online node it may use. Placement leaves out the nodes where it is not.
-- A cluster storage outside the management cluster's `workload_datastores` is refused with the setting to add it to. Before, the clusters' tokens failed with a permission error.
-- A template build checks the import, ISO and disk storages' content types and its own `Datastore.AllocateSpace` before downloading. Without `--iso-storage` it takes the first ISO storage the token can write to.
-- Placement takes the CPU level from the chosen template's own `cpu` setting when it names one, such as `x86-64-v4`.
-- A Proxmox VE node that shows online but whose status cannot be read is left out of placement and counted in the clusters' `NodesSkipped` condition. It no longer stops every cluster from being placed.
-- A failure creating a cluster's Proxmox VE pool, user, token or volume owner is a `ProxmoxObjectsFailed` Warning Event. The creation hook's message reads `Proxmox VE objects:` followed by the error.
-- Template builds and new clusters check the datacenter's `user-tag-access` and `registered-tags` first, as Proxmox VE does. Tags match with their case, `existing` allows tags already on guests the token can audit, and only `Sys.Modify` on `/` bypasses the options.
-- Cluster admission reads Proxmox VE for 2 seconds at most and reads each template's configuration once. A failed or late read admits the cluster, and the creation hook, which retries, checks its storage and templates.
-- `--node` of `kubehenge template create` and `refresh`, and the chart's `templateRefresh.node`, take several nodes. The build runs on the first that is online and whose CPU runs the node OS.
-- A cluster whose name matches an existing Proxmox VE pool that holds other VMs is refused instead of taking the pool over.
 
 ## [0.4.2] - 2026-11-05
 
