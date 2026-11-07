@@ -1,0 +1,7 @@
+{
+  "config": {
+    // A fragment is the bullets of a release's section, which scripts/changelog.sh folds in under the
+    // changelog's headings, so it has none of its own.
+    "MD041": false
+  }
+}

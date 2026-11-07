@@ -41,6 +41,7 @@ const storage = (name: string, allocatable: boolean): Storage => ({
   node: "pve1",
   shared: false,
   content: ["images"],
+  active: true,
   avail: 1,
   total: 2,
   usable: true,
