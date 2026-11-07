@@ -254,6 +254,7 @@ run "controller_and_clusters_are_least_privilege" {
         url          = "https://pve.example.org:8006"
         insecure     = false
         secret       = "kubehenge-proxmox"
+        capmoxSecret = "proxmox-infrastructure-system/capmox-variables"
         clusterGroup = "kubehenge-clusters"
         clusterRole  = "kubehenge-cluster-vms"
         ha           = false

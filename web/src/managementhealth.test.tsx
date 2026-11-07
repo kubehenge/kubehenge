@@ -120,7 +120,11 @@ describe("the management cluster's health", () => {
             problem: "Privileges",
             message: "Controller token lacks Realm.AllocateUser on /access/realm/pve.",
           },
-          { name: "Cluster team-a/web", problem: "Certificate", message: "Cluster team-a/web token cannot verify the API." },
+          {
+            name: "Cluster team-a/web",
+            problem: "Certificate",
+            message: "Cluster team-a/web token cannot verify the API.",
+          },
         ],
       },
     });
