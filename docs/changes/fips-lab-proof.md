@@ -1,0 +1,1 @@
+- FIPS mode is proven on Rocky Linux 10 with RKE2 and Canal, in a cluster run end to end with every node in FIPS mode. AlmaLinux 10's template is proven, but no cluster has run on it yet ([templates.md](templates.md#fips-mode)).

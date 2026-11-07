@@ -45,14 +45,14 @@ On kubeadm nodes, kube-vip and the control plane's static pods (etcd, API server
 
 An RKE2 cluster's node OS can run in FIPS mode, as `almalinux-10-fips` or `rocky-10-fips`. Its nodes boot with the kernel argument `fips=1`. Every crypto library takes the `FIPS` policy of `update-crypto-policies`. The build fixes both, so FIPS mode has template lines of its own, tagged `fips`.
 
-Each build checks in its own boot that `/proc/sys/crypto/fips_enabled` reads 1 and that the policy is `FIPS`. No end-to-end test has created a cluster in FIPS mode yet. Until one passes, FIPS mode is unsupported on every node OS and distribution.
+Each build checks in its own boot that `/proc/sys/crypto/fips_enabled` reads 1 and that the policy is `FIPS`. The workload cluster test has run an RKE2 cluster in FIPS mode on `rocky-10-fips` with Canal. Both nodes passed the test's FIPS checks, and the cluster passed the test's cluster, etcd snapshot and restore checks. No cluster has run on `almalinux-10-fips` yet, so FIPS mode is proven on Rocky Linux 10 and not yet on AlmaLinux 10.
 
 | | FIPS mode |
 | --- | --- |
-| AlmaLinux 10 | Template proven: the end-to-end template test builds one and boots a clone in FIPS mode. No cluster tested yet. FIPS mode as the family sets it in image mode. No FIPS 140-3 certificate covers the release's modules |
-| Rocky Linux 10 | Built, not yet proven. Built as AlmaLinux 10. No FIPS 140-3 certificate covers the release's modules |
+| AlmaLinux 10 | Template proven: the end-to-end template test builds one and boots a clone in FIPS mode. No cluster tested on it yet. FIPS mode as the family sets it in image mode. No FIPS 140-3 certificate covers the release's modules |
+| Rocky Linux 10 | Proven: the end-to-end template test builds one and boots a clone in FIPS mode, and an RKE2 cluster on it with Canal ran the workload cluster test. Built as AlmaLinux 10. No FIPS 140-3 certificate covers the release's modules |
 | openSUSE Leap 16.1 | Not offered |
-| RKE2 | Built, not yet proven. RKE2 builds every release with BoringCrypto, a FIPS 140 validated module, so the [release pins](architecture.md#release-pins-for-rke2-and-k3s) stay the same. Canal is the only CNI it builds so. A cluster in FIPS mode is refused Calico and Cilium |
+| RKE2 | Proven on Rocky Linux 10 with Canal: every node reads `fips_enabled` as 1, and `rke2`, `kubelet` and `containerd` are BoringCrypto builds. RKE2 builds every release with BoringCrypto, a FIPS 140 validated module, so the [release pins](architecture.md#release-pins-for-rke2-and-k3s) stay the same. Canal is the only CNI it builds so. A cluster in FIPS mode is refused Calico and Cilium |
 | k3s | Refused: k3s is not built for FIPS mode |
 | kubeadm | Refused: the upstream Kubernetes binaries, containerd and etcd are not built or documented for FIPS mode |
 | Talos | Not offered: Sidero Labs builds Talos for FIPS mode in its Enterprise Image Factory alone |
