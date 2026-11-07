@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -27,6 +28,9 @@ type fakeNodes struct {
 	levels map[string]int
 	err    error
 	asked  int
+	// maintenance are the nodes in HA maintenance, inactive each node's inactive storages.
+	maintenance []string
+	inactive    map[string][]string
 }
 
 func (f *fakeNodes) OnlineNodes(context.Context) ([]Node, error) {
@@ -40,7 +44,7 @@ func (f *fakeNodes) OnlineNodes(context.Context) ([]Node, error) {
 		if !ok {
 			level = 3
 		}
-		out[i] = Node{Name: n, CPULevel: level}
+		out[i] = Node{Name: n, CPULevel: level, Maintenance: slices.Contains(f.maintenance, n), InactiveStorages: f.inactive[n]}
 	}
 	return out, nil
 }
@@ -190,6 +194,15 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var data any = []any{}
 		switch r.URL.Path {
+		case "/api2/json/cluster/resources":
+			data = []map[string]any{
+				{"storage": "local-lvm", "node": "pve1", "status": "available"},
+				{"storage": "nfs", "node": "pve1", "status": "unknown"},
+				{"storage": "nfs", "node": "pve3", "status": "available"},
+				{"storage": "nfs", "node": "pve2", "status": "unknown"},
+			}
+		case "/api2/json/cluster/ha/status/manager_status":
+			data = map[string]any{"manager_status": map[string]any{"node_status": map[string]string{"pve1": "online", "pve2": "online", "pve3": "maintenance"}}}
 		case "/api2/json/nodes":
 			data = []map[string]any{{"node": "pve3", "status": "online"}, {"node": "pve2", "status": "offline"}, {"node": "pve1", "status": "online"}}
 		case "/api2/json/nodes/pve1/status", "/api2/json/nodes/pve3/status":
@@ -211,7 +224,8 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(online, []Node{{"pve1", 2}, {"pve3", 3}}) {
+		want := []Node{{Name: "pve1", CPULevel: 2, InactiveStorages: []string{"nfs"}}, {Name: "pve3", CPULevel: 3, Maintenance: true}}
+		if !reflect.DeepEqual(online, want) {
 			t.Errorf("online = %v", online)
 		}
 	}
@@ -224,7 +238,7 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 
 func TestNodesForTheNodeOSesCPU(t *testing.T) {
 	t.Parallel()
-	online := []Node{{"pve1", 2}, {"pve2", 3}, {"pve3", 4}}
+	online := []Node{{Name: "pve1", CPULevel: 2}, {Name: "pve2", CPULevel: 3}, {Name: "pve3", CPULevel: 4}}
 	if got := nodesFor(online, templates.CPULevel(templates.DefaultNodeOS)); !slices.Equal(got, []string{"pve1", "pve2", "pve3"}) {
 		t.Errorf("AlmaLinux runs on %v", got)
 	}

@@ -79,23 +79,6 @@ decide what it may do, as they do for a user signed in to the interface.`,
 	}
 	o.namespaceFlag(kubeconfig.Flags())
 
-	var file string
-	create := &cobra.Command{
-		Use:   "create -f FILE",
-		Short: "Create a cluster from the interface's create request, in JSON or YAML",
-		Long: `Create a cluster from the interface's create request, in JSON or YAML.
-
-The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
-workerReplicas, variables, and namespace where the interface has more than one. It is checked as
-the wizard's request is.`,
-		Args: noArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return o.create(cmd.Context(), cmd.OutOrStdout(), file)
-		},
-	}
-	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
-	_ = create.MarkFlagRequired("filename")
-
 	var controlPlanes int32
 	var workers []string
 	scale := &cobra.Command{
@@ -133,7 +116,7 @@ the wizard's request is.`,
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
 	o.namespaceFlag(deleteCmd.Flags())
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, o.upgradeCommand(), o.acceptUpgradeCommand(), deleteCmd, o.machineCommand())
+	cmd.AddCommand(list, get, kubeconfig, o.createCommand(), o.updateCommand(), scale, o.upgradeCommand(), o.acceptUpgradeCommand(), deleteCmd, o.machineCommand())
 	return cmd
 }
 
@@ -273,7 +256,7 @@ func (o *clusterOptions) raw(ctx context.Context, out io.Writer, method, name, t
 	return nil
 }
 
-func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string) error {
+func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string, grace *int) error {
 	var raw []byte
 	var err error
 	if file == "-" {
@@ -287,6 +270,11 @@ func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string)
 	req, err := yaml.YAMLToJSON(raw)
 	if err != nil {
 		return fmt.Errorf("the create request is neither JSON nor YAML: %w", err)
+	}
+	if grace != nil {
+		if req, err = withGrace(req, *grace); err != nil {
+			return err
+		}
 	}
 	body, err := o.call(ctx, http.MethodPost, "/api/clusters", json.RawMessage(req))
 	if err != nil {
@@ -323,6 +311,93 @@ func scaleRequest(controlPlanes *int32, workers []string) (map[string]any, error
 		return nil, errors.New("give --control-planes, --workers or both")
 	}
 	return req, nil
+}
+
+// graceFlag is the flag for the cluster variable hostOutageGraceMinutes. The interface and the
+// webhook check the value too, so a bad one is refused before a request goes out and again there.
+const graceFlag = "host-outage-grace-minutes"
+
+func graceHelp() string {
+	return fmt.Sprintf("minutes to wait for a host that is offline or in maintenance before replacing its machines: 0 waits for the host, otherwise %d to %d (default %d)",
+		provisioner.MinHostOutageGraceMinutes, provisioner.MaxHostOutageGraceMinutes, provisioner.DefaultHostOutageGraceMinutes)
+}
+
+func checkGrace(minutes int) error {
+	if minutes != 0 && (minutes < provisioner.MinHostOutageGraceMinutes || minutes > provisioner.MaxHostOutageGraceMinutes) {
+		return fmt.Errorf("--%s %d: give 0, or %d to %d", graceFlag, minutes,
+			provisioner.MinHostOutageGraceMinutes, provisioner.MaxHostOutageGraceMinutes)
+	}
+	return nil
+}
+
+func (o *clusterOptions) createCommand() *cobra.Command {
+	var file string
+	var grace int
+	create := &cobra.Command{
+		Use:   "create -f FILE",
+		Short: "Create a cluster from the interface's create request, in JSON or YAML",
+		Long: `Create a cluster from the interface's create request, in JSON or YAML.
+
+The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
+workerReplicas, variables, and namespace where the interface has more than one. It is checked as
+the wizard's request is.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var set *int
+			if cmd.Flags().Changed(graceFlag) {
+				set = &grace
+			}
+			return o.create(cmd.Context(), cmd.OutOrStdout(), file, set)
+		},
+	}
+	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
+	create.Flags().IntVar(&grace, graceFlag, 0, graceHelp())
+	_ = create.MarkFlagRequired("filename")
+	return create
+}
+
+func (o *clusterOptions) updateCommand() *cobra.Command {
+	var grace int
+	update := &cobra.Command{
+		Use:   "update NAME --" + graceFlag + " N",
+		Short: "Change a cluster's host outage wait",
+		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !cmd.Flags().Changed(graceFlag) {
+				return errors.New("give --" + graceFlag)
+			}
+			if err := checkGrace(grace); err != nil {
+				return err
+			}
+			req := map[string]any{"variables": map[string]any{provisioner.HostOutageGraceVariable: grace}}
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], req)
+		},
+	}
+	update.Flags().IntVar(&grace, graceFlag, 0, graceHelp())
+	o.namespaceFlag(update.Flags())
+	return update
+}
+
+// withGrace sets the host outage grace in a create request, over the file's own value.
+func withGrace(request []byte, minutes int) ([]byte, error) {
+	if err := checkGrace(minutes); err != nil {
+		return nil, err
+	}
+	req := map[string]any{}
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("the create request is not an object: %w", err)
+	}
+	vars, isObject := req["variables"].(map[string]any)
+	if !isObject {
+		vars = map[string]any{}
+	}
+	vars[provisioner.HostOutageGraceVariable] = minutes
+	req["variables"] = vars
+	out, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("writing the create request: %w", err)
+	}
+	return out, nil
 }
 
 func (o *clusterOptions) change(ctx context.Context, out io.Writer, name string, req map[string]any) error {

@@ -33,6 +33,29 @@ type chartSpec struct {
 	Variables []any `json:"variables"`
 }
 
+// checkHostOutageGraceSchema holds every ClusterClass to the variable's default of 30 minutes and
+// its rule that 0 or at least 5 is allowed, since the wizard and the webhook read the same numbers.
+func checkHostOutageGraceSchema(t *testing.T, class *chartDocument) {
+	t.Helper()
+	for _, v := range class.Spec.Variables {
+		variable, isObject := v.(map[string]any)
+		if !isObject || variable["name"] != provisioner.HostOutageGraceVariable {
+			continue
+		}
+		schema, err := json.Marshal(variable["schema"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`"default":30`, `"minimum":0`, `"maximum":10080`, `"rule":"self == 0 || self `, `= 5"`} {
+			if !strings.Contains(string(schema), want) {
+				t.Errorf("class %s: %s lacks %s: %s", class.Metadata.Name, provisioner.HostOutageGraceVariable, want, schema)
+			}
+		}
+		return
+	}
+	t.Errorf("class %s has no variable %s", class.Metadata.Name, provisioner.HostOutageGraceVariable)
+}
+
 // The demo's ClusterClasses are the chart's, cut to what the interface reads, so the wizard it
 // shows is the real one.
 func TestDemoClassesMatchTheChart(t *testing.T) {
@@ -54,6 +77,7 @@ func TestDemoClassesMatchTheChart(t *testing.T) {
 		if obj.Kind != "ClusterClass" {
 			continue
 		}
+		checkHostOutageGraceSchema(t, &obj)
 		classes = append(classes, map[string]any{
 			"apiVersion": obj.APIVersion,
 			"kind":       obj.Kind,

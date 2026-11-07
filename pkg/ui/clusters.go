@@ -63,7 +63,7 @@ const (
 
 // Variables a cluster may change after creation. The others describe where its VMs live.
 var changeableVariables = map[string]bool{
-	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
+	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, provisioner.HostOutageGraceVariable: true, csiVariable: true, ccmVariable: true,
 	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
 	// A new node OS rolls every node onto its template, as a node image refresh does. A new size
 	// rolls the machines it sizes.
@@ -328,7 +328,11 @@ type machineView struct {
 	// Waiting is what keeps a machine that is not ready from it, as Cluster API sums it up.
 	Waiting string `json:"waiting,omitempty"`
 	// Replacing is set while the machine is marked for its health check to replace.
-	Replacing bool      `json:"replacing,omitempty"`
+	Replacing bool `json:"replacing,omitempty"`
+	// Held says why Kubehenge keeps Cluster API from replacing the machine for now, such as a
+	// Proxmox VE node that reboots. HeldUntil is when the hold ends whatever the node does.
+	Held      string    `json:"held,omitempty"`
+	HeldUntil time.Time `json:"heldUntil,omitzero"`
 	Addresses []string  `json:"addresses,omitempty"`
 	Created   time.Time `json:"created"`
 	// Console opens the VM's console in Proxmox VE's web interface, for a user who may use it.

@@ -344,6 +344,8 @@ const negativePolarity = new Set([
   "CertificatesExpiring",
   "VMsNotRunning",
   "StorageNearlyFull",
+  "StorageUnavailable",
+  "RemediationHeld",
 ]);
 
 // abnormal tells whether a condition is worth a look.

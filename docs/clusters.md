@@ -14,6 +14,7 @@ Every cluster Kubehenge creates is a Cluster API Cluster built from one of Kubeh
 - **Health checks.** A node that stays not ready for five minutes, or does not join within twenty, is replaced, workers one at a time.
   - A machine marked with `kubectl annotate machine <name> cluster.x-k8s.io/remediate-machine=` is replaced the same way.
   - A control-plane machine is replaced only while etcd keeps its majority.
+  - Machines on a Proxmox VE node that is offline or in HA maintenance, or on unavailable storage, wait for it, 30 minutes by default ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)).
 - **Control-plane nodes kept for the control plane.** Once a worker has joined, the control-plane nodes carry the taint `node-role.kubernetes.io/control-plane:NoSchedule` in every distribution.
   - A cluster scaled to no workers has the taint taken off, and its control-plane nodes run the workloads.
   - A worker that fails leaves the taint in place.
@@ -1051,6 +1052,7 @@ export KUBEHENGE_PROXMOX_TOKEN='ci@pve!kubehenge=<secret>'
 kubehenge cluster list
 kubehenge cluster create -f web.yaml
 kubehenge cluster scale web --control-planes 3 --workers md-0=5
+kubehenge cluster update web --host-outage-grace-minutes 60
 kubehenge cluster upgrade web --version v1.37.1
 kubehenge cluster kubeconfig web > web.kubeconfig
 kubehenge cluster get web
@@ -1151,6 +1153,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one. Every node when unset. New VMs go to those of them that are online ([above](#machines)). The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)). Default true, where the management cluster has Proxmox VE HA and the storage is shared. |
 | `csi` | no | `datastoreAllocate` (default false) runs the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on its storage ([above](#persistent-volumes)). It needs a management cluster that lets clusters choose it and a storage of the cluster's own. `volumeSnapshots` (default false) takes volume snapshots, with the cluster's own volumes copied with its own token ([above](#volume-snapshots)), on storage local to each node. |
+| `hostOutageGraceMinutes` | no | Minutes to hold the replacement of machines whose host is offline or in HA maintenance, or whose storage is unavailable ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)). Default 30. 0 waits for the host for ever, otherwise 5 to 10080. A server that needs longer to start than 30 minutes needs more. A host removed from the Proxmox VE cluster ends the wait at once. Set in the wizard's **Machines** step, in **Options**, or with `kubehenge cluster create --host-outage-grace-minutes` and `kubehenge cluster update NAME --host-outage-grace-minutes`. |
 | `ccm` | no | `haGroups` has the cloud controller manager label the nodes with their Proxmox VE HA groups, with `Sys.Audit` on `/` for the cluster's token ([above](#machines)). Default true, unless the management cluster switched the labels off for every cluster. Then it may not be true. |
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096 for the control plane and 6144 for workers, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20). A disk only grows. |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s and Talos: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
