@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,10 +18,12 @@ import (
 	"github.com/luthermonson/go-proxmox"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
@@ -624,6 +627,9 @@ type Upgrader struct {
 	Events   events.EventRecorder
 	Interval time.Duration
 	Now      func() time.Time
+	// Informers, if set, start a round as soon as a cluster's upgrades change, a cluster settles or
+	// a ClusterClass is offered other builds, rather than at the next Interval.
+	Informers cache.Informers
 
 	// supportAt is when the clusters' minors were last compared with what Kubehenge offers.
 	supportAt time.Time
@@ -634,6 +640,12 @@ func (*Upgrader) NeedLeaderElection() bool { return true }
 
 // Start implements manager.Runnable.
 func (u *Upgrader) Start(ctx context.Context) error {
+	wake := make(chan struct{}, 1)
+	if u.Informers != nil {
+		if err := u.watch(ctx, wake); err != nil {
+			return err
+		}
+	}
 	t := time.NewTicker(u.Interval)
 	defer t.Stop()
 	for {
@@ -642,6 +654,7 @@ func (u *Upgrader) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
+		case <-wake:
 		}
 	}
 }
@@ -697,6 +710,65 @@ func (u *Upgrader) RunOnce(ctx context.Context) {
 		}
 		u.supportAt = u.Now()
 	}
+}
+
+// watch sends on wake when a round could find something to do. A full channel already holds a
+// round to come, so changes in a burst start one.
+func (u *Upgrader) watch(ctx context.Context, wake chan<- struct{}) error {
+	nudge := func() {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
+	for _, w := range []struct {
+		obj     client.Object
+		changed func(before, after client.Object) bool
+	}{
+		{&clusterv1.Cluster{}, func(before, after client.Object) bool {
+			b, ok := before.(*clusterv1.Cluster)
+			a, ok2 := after.(*clusterv1.Cluster)
+			return ok && ok2 && upgradeInputChanged(b, a)
+		}},
+		{&clusterv1.ClusterClass{}, func(before, after client.Object) bool {
+			return before.GetAnnotations()[NodeImageBuildsAnnotation] != after.GetAnnotations()[NodeImageBuildsAnnotation]
+		}},
+	} {
+		informer, err := u.Informers.GetInformer(ctx, w.obj)
+		if err != nil {
+			return fmt.Errorf("watching %T: %w", w.obj, err)
+		}
+		changed := w.changed
+		_, err = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+			UpdateFunc: func(oldObj, newObj any) {
+				before, ok := oldObj.(client.Object)
+				after, ok2 := newObj.(client.Object)
+				if ok && ok2 && changed(before, after) {
+					nudge()
+				}
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("watching %T: %w", w.obj, err)
+		}
+	}
+	return nil
+}
+
+// upgradeInputChanged tells whether a round could decide otherwise for the cluster now: its
+// upgrades variable changed, or it settled. The upgrader's own annotations change neither.
+func upgradeInputChanged(before, after *clusterv1.Cluster) bool {
+	return !settled(before) && settled(after) ||
+		!bytes.Equal(variableValue(before, "upgrades"), variableValue(after, "upgrades"))
+}
+
+func variableValue(c *clusterv1.Cluster, name string) []byte {
+	for _, v := range c.Spec.Topology.Variables {
+		if v.Name == name {
+			return v.Value.Raw
+		}
+	}
+	return nil
 }
 
 // next returns the version a cluster should move to now, or "".

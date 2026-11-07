@@ -803,6 +803,7 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 		Checker:           &provisioner.IdentityChecker{Reader: mgr.GetAPIReader(), Now: time.Now},
 		Events:            mgr.GetEventRecorder("kubehenge"),
 		Now:               time.Now,
+		Informers:         mgr.GetCache(),
 	}
 	if err := mgr.Add(upgrader); err != nil {
 		return fmt.Errorf("the upgrader: %w", err)

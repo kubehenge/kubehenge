@@ -37,6 +37,9 @@ type guestResult struct {
 	out  string
 }
 
+// bakeCPUs is how many CPUs a bake VM's status gives.
+const bakeCPUs = 8
+
 // bakeHost is one Proxmox VE node, pve1, in memory, as far as making a template takes it: its
 // storages and their volumes, its VMs with their state and guest agents, and the tasks it runs. It
 // writes every call that changes something into changes, in the order made, as a short step.
@@ -59,6 +62,16 @@ type bakeHost struct {
 	noISO bool
 	// exit is how each guest command ends, by its words joined with spaces. Others exit 0.
 	exit map[string]guestResult
+	// hangs are the guest commands that never end, by their words.
+	hangs map[string]bool
+	// logGrows has each stat of a file answer a larger size than the one before.
+	logGrows bool
+	// Each read of a VM's status counts netInStep more bytes received and diskWriteStep more
+	// written, and finds its bakeCPUs CPUs at cpu, the share of all of them in use.
+	netIn, diskWrite, netInStep, diskWriteStep uint64
+	cpu                                        float64
+	stats                                      int
+	pidOut                                     map[int]string
 
 	changes []string
 	uploads [][]byte // each cloud-init ISO uploaded, in turn
@@ -67,7 +80,10 @@ type bakeHost struct {
 
 func newBakeHost(t *testing.T) *bakeHost {
 	t.Helper()
-	return &bakeHost{t: t, vms: map[int]map[string]any{}, running: map[int]bool{}, nextID: 101, flags: v2Flags, exit: map[string]guestResult{}}
+	return &bakeHost{
+		t: t, vms: map[int]map[string]any{}, running: map[int]bool{}, nextID: 101, flags: v2Flags,
+		exit: map[string]guestResult{}, hangs: map[string]bool{}, pidOut: map[int]string{},
+	}
 }
 
 var (
@@ -242,7 +258,12 @@ func (h *bakeHost) power(r *http.Request, vmid int, rest string, step func(chang
 		if h.running[vmid] {
 			status = "running"
 		}
-		return map[string]any{"vmid": vmid, "name": h.vms[vmid]["name"], "status": status}, ""
+		h.netIn += h.netInStep
+		h.diskWrite += h.diskWriteStep
+		return map[string]any{
+			"vmid": vmid, "name": h.vms[vmid]["name"], "status": status,
+			"netin": h.netIn, "diskwrite": h.diskWrite, "cpu": h.cpu, "cpus": bakeCPUs,
+		}, ""
 	case r.Method == http.MethodPost && rest == "/status/start":
 		h.running[vmid] = true
 		return step("start", "qmstart")
@@ -275,6 +296,10 @@ func (h *bakeHost) agent(r *http.Request, vmid int, rest string) (any, string) {
 		words := strings.Join(command.Command, " ")
 		h.pids = append(h.pids, words)
 		h.changes = append(h.changes, "run "+words)
+		if h.logGrows && command.Command[0] == "stat" {
+			h.stats++
+			h.pidOut[len(h.pids)] = strconv.Itoa(h.stats * 100)
+		}
 		return map[string]any{"pid": len(h.pids)}, ""
 	case "/agent/exec-status":
 		pid, err := strconv.Atoi(r.URL.Query().Get("pid"))
@@ -282,9 +307,15 @@ func (h *bakeHost) agent(r *http.Request, vmid int, rest string) (any, string) {
 			h.t.Errorf("the status of pid %q", r.URL.Query().Get("pid"))
 			return nil, "no such process"
 		}
+		if h.hangs[h.pids[pid-1]] {
+			return map[string]any{"exited": 0}, ""
+		}
 		result, known := h.exit[h.pids[pid-1]]
 		if !known && h.pids[pid-1] == "sh -c "+factsCommand {
 			result = guestResult{out: testKernel + "\n" + strings.Repeat("ab", 32) + "\n"}
+		}
+		if out, ok := h.pidOut[pid]; ok {
+			result.out = out
 		}
 		return map[string]any{"exited": 1, "exitcode": result.code, "out-data": result.out}, ""
 	}
@@ -590,6 +621,74 @@ func TestABakeWaitsForTheGuestAgentNoLongerThanItsTimeout(t *testing.T) {
 			t.Errorf("the last step was %q, not the seed's removal", last)
 		}
 	})
+}
+
+func TestABakeThatShowsNoWorkFailsOnceItHasStalled(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		h := newBakeHost(t)
+		recipe := imageRecipe()
+		h.hangs[strings.Join(recipe.Checks[0], " ")] = true
+		// An idle guest's own traffic and journal, below what counts as work.
+		h.netInStep, h.diskWriteStep, h.cpu = 64<<10, 1<<20, 0.05
+		ctx := t.Context()
+		k := bakeVM(ctx, t, h, recipe)
+		start := time.Now()
+
+		err := k.finish(ctx)
+		for _, want := range []string{"no work for " + bakeStall.String(), recipe.Log + ", the first line of each second"} {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("finish gave %v; want it to carry %q", err, want)
+			}
+		}
+		if waited := time.Since(start); waited < bakeStall || waited > bakeStall+2*bakeWatch {
+			t.Errorf("gave up on the bake after %s, not once it had shown no work for %s", waited, bakeStall)
+		}
+		steps := h.steps()
+		if !slices.Contains(steps, "run stat -c %s "+recipe.Log) {
+			t.Errorf("the bake's log was never read: %v", steps)
+		}
+		if slices.Contains(steps, "template") {
+			t.Errorf("a stalled bake became a template: %v", steps)
+		}
+		if last := steps[len(steps)-1]; last != "remove local:iso/user-data-101.iso" {
+			t.Errorf("the last step was %q, not the seed's removal", last)
+		}
+	})
+}
+
+func TestABakeAtWorkRunsUntilItsTimeout(t *testing.T) {
+	t.Parallel()
+	for name, work := range map[string]func(h *bakeHost){
+		"its log grows":     func(h *bakeHost) { h.logGrows = true },
+		"it receives a MiB": func(h *bakeHost) { h.netInStep = bakeStallReceived },
+		"it writes 16 MiB":  func(h *bakeHost) { h.diskWriteStep = bakeStallWritten },
+		"one CPU of eight is busy": func(h *bakeHost) { h.cpu = 1.0 / bakeCPUs },
+		"all of them at once": func(h *bakeHost) {
+			h.logGrows, h.netInStep, h.diskWriteStep, h.cpu = true, 1<<30, 1<<30, 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				h := newBakeHost(t)
+				recipe := imageRecipe()
+				h.hangs[strings.Join(recipe.Checks[0], " ")] = true
+				work(h)
+				ctx := t.Context()
+				k := bakeVM(ctx, t, h, recipe)
+				start := time.Now()
+
+				err := k.finish(ctx)
+				if err == nil || !strings.Contains(err.Error(), "still running after "+bakeTimeout.String()) {
+					t.Fatalf("finish gave %v; want the bake's timeout", err)
+				}
+				if waited := time.Since(start); waited < bakeTimeout {
+					t.Errorf("gave up on a bake at work after %s, before its %s", waited, bakeTimeout)
+				}
+			})
+		})
+	}
 }
 
 func TestAFailedTaskStopsTheBakeBeforeTheVMStarts(t *testing.T) {

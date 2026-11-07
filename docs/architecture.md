@@ -342,7 +342,8 @@ A node OS template is a line of builds, each tagged with when it was made. Every
   - `GeneratePatches` selects the newest build of each line made by then that is past the soak time (24 hours by default, `--node-image-soak`).
   - The same cluster therefore gets the same build on every reconcile, scale-up and repair until the time moves.
 - **The time moves** in two places.
-  - Every five minutes the upgrader sets it to now for each cluster settled inside its upgrade window with a newer build soaked. It skips a cluster whose `upgrades.nodeImages` is false.
+  - The upgrader sets it to now for each cluster settled inside its upgrade window with a newer build soaked. It skips a cluster whose `upgrades.nodeImages` is false.
+  - It looks every five minutes, and at once when a cluster's `upgrades` change, a cluster settles or a ClusterClass is offered new builds.
   - The `BeforeClusterUpgrade` hook sets it too, so that any Kubernetes upgrade takes the newest builds with it.
   - Outside the window, the upgrader records the hold, the build that waits and when the window opens in the annotation `kubehenge.dev/node-image-held`. The interface shows it.
 - **The refresh** holds a Lease so that one run builds at a time. It builds each line, then deletes all but its two newest builds.
