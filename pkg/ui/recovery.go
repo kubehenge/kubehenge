@@ -5,15 +5,14 @@ import (
 	"slices"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/meta"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// recoveryView is how the control plane of a cluster whose roll stalled can be recovered: by the
-// controller, or by hand with the plan's steps.
+// recoveryView is how the control plane of a cluster whose roll stalled or whose quorum is lost can
+// be recovered: by the controller, or by hand with the plan's steps.
 type recoveryView struct {
 	Automatic bool                         `json:"automatic"`
 	Plan      *provisioner.EtcdRestorePlan `json:"plan,omitempty"`
@@ -55,9 +54,10 @@ func (s *Server) controlPlaneRecovery(w http.ResponseWriter, r *http.Request, u 
 }
 
 // recoverControlPlane asks the controller to reset the cluster's etcd to one control-plane
-// machine's own and replace the others, as the way out of a roll that stalled. It takes what an
-// etcd restore takes, Sys.Modify on the cluster's pool, and the cluster's name typed: whatever the
-// other machines' etcd held beyond the kept one's is gone.
+// machine's own and replace the others, as the way out of a roll that stalled or a quorum that is
+// lost. It takes what an etcd restore takes, Sys.Modify on the cluster's pool, and the cluster's name
+// typed: whatever the other machines' etcd held beyond the kept one's is gone. Whether the cluster
+// needs it is the controller's to judge, for kubectl and GitOps ask as well.
 func (s *Server) recoverControlPlane(w http.ResponseWriter, r *http.Request, u user) {
 	c, _, ok := s.cluster(w, r, u, privKubeconfig)
 	if !ok {
@@ -95,13 +95,11 @@ func (s *Server) recoverControlPlane(w http.ResponseWriter, r *http.Request, u u
 	writeJSON(w, http.StatusAccepted, request)
 }
 
-// recoveryRefusal says why a control plane cannot be recovered now, or returns "".
+// recoveryRefusal says why a control plane cannot be recovered now, or returns "". Whether the
+// roll stalled or the quorum is lost is the controller's to judge, not the interface's.
 func recoveryRefusal(c *clusterv1.Cluster) string {
 	if provisioner.RestoreInProgress(c) {
 		return "the cluster's etcd is being restored already"
-	}
-	if !meta.IsStatusConditionTrue(c.Status.Conditions, provisioner.RollStalledCondition) {
-		return "the control plane's roll has not stalled"
 	}
 	return ""
 }

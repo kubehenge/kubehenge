@@ -30,6 +30,7 @@ import type {
   NotificationSent,
   PodLogs,
   PodSecurityCheck,
+  RebootReadiness,
   Plan,
   UpgradeChecks,
   PveNode,
@@ -434,6 +435,7 @@ export interface Api {
   removeManagement: (passphrase: string) => Promise<Job>;
   takeOverManagement: (passphrase: string) => Promise<void>;
   managementHealth: () => Promise<ManagementHealth>;
+  rebootReady: () => Promise<RebootReadiness>;
   managementBackups: () => Promise<ManagementBackups>;
   configureManagementBackups: (req: ManagementBackupRequest) => Promise<ManagementBackups>;
   stopManagementBackups: () => Promise<void>;
@@ -585,6 +587,7 @@ export const api: Api = {
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
   takeOverManagement: (passphrase) => act("POST", "/api/setup/take-over", { passphrase }),
   managementHealth: () => request("GET", "/api/setup/health"),
+  rebootReady: () => request("GET", "/api/appliance/reboot-ready"),
   managementBackups: () => request("GET", "/api/appliance/etcd-backups"),
   configureManagementBackups: (req) => request("PUT", "/api/appliance/etcd-backups", req),
   stopManagementBackups: () => act("DELETE", "/api/appliance/etcd-backups"),

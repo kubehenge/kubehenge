@@ -1567,7 +1567,7 @@ kubectl -n clusters patch cluster prod --type=merge -p '{"spec":{"topology":{"ve
 kubectl -n clusters delete cluster prod
 ```
 
-A control plane whose roll stalled is recovered keeping one of its machines, as **Recover…** does. The cluster's conditions and events say how it goes:
+A control plane whose roll stalled, or that lost its quorum ([troubleshooting.md](troubleshooting.md#two-of-three-control-planes-are-gone)), is recovered keeping one of its machines, as **Recover…** does. The cluster's conditions and events say how it goes:
 
 ```sh
 kubectl -n clusters annotate cluster prod \

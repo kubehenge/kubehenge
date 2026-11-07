@@ -53,7 +53,7 @@ func stepOf(script string) string {
 		return stepPing
 	case strings.Contains(script, "openssl enc -d"):
 		return stepFetch
-	case strings.Contains(script, "systemctl stop"):
+	case strings.Contains(script, "systemctl stop"), strings.Contains(script, "the control plane is stopped"):
 		return stepStop
 	case strings.Contains(script, "reset etcd to this server alone") || strings.Contains(script, `cp "$data/member/snap/db"`):
 		return stepReset

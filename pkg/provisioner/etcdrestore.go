@@ -388,6 +388,11 @@ func (run *restoreRun) reachAll(ctx context.Context) error {
 // address. If it does, etcd has its quorum, and Cluster API removes each other machine's member
 // itself as it deletes the machine, so nothing is reset and nothing is stopped.
 func (run *restoreRun) prepareReset(ctx context.Context) error {
+	// The one guard of a reset: the interface, the CLI, GitOps and kubectl all arrive here, and a
+	// reset of a healthy control plane would throw away what the other members hold.
+	if !NeedsRecovery(run.cluster) {
+		return errors.New("the control plane's roll has not stalled and it has not lost its quorum, so there is nothing to reset. Restore from a snapshot instead")
+	}
 	machines, err := controlPlaneMachines(ctx, run.r.Client, run.cluster)
 	if err != nil {
 		return err

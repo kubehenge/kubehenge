@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,6 +144,9 @@ type demoCluster struct {
 	Conditions []demoNote `json:"conditions"`
 	// TalosHold is a Talos upgrade of the first control-plane node that a disruption budget holds.
 	TalosHold *demoTalosHold `json:"talosHold"`
+	// QuorumLost is set on a cluster with three control planes whose first two VMs are stopped, so
+	// that its API is silent and etcd has no quorum.
+	QuorumLost bool `json:"quorumLost"`
 }
 
 type demoTalosHold struct {
@@ -226,6 +230,11 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 		return nil, reachErr
 	}
 	f.objects = append(f.objects, reach)
+	health, healthErr := f.etcdHealth()
+	if healthErr != nil {
+		return nil, healthErr
+	}
+	f.objects = append(f.objects, health...)
 	for _, l := range f.data.Activity {
 		e := activityEntry{At: now.Add(-time.Duration(l.AgoMinutes) * time.Minute), User: l.User, What: l.What, Details: l.Details}
 		if l.Cluster != "" {
@@ -234,6 +243,57 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 		f.activity = append(f.activity, e)
 	}
 	return f, nil
+}
+
+// demoQuorumLostVMs is how many of a cluster's control-plane VMs stop when it has lost its quorum.
+const demoQuorumLostVMs = 2
+
+// vmStatus is the state the demo gives a machine's VM.
+func (f *demoFleet) vmStatus(d *demoCluster, m *clusterv1.Machine, i int) string {
+	if d.QuorumLost && isControlPlane(m) && i < demoQuorumLostVMs {
+		return "stopped"
+	}
+	return f.data.VMStatus
+}
+
+// etcdHealth is the management cluster's control-plane nodes with their apiserver pods, and the
+// controller's record of the clusters' etcd members, which follow the VMs of the fleet.
+func (f *demoFleet) etcdHealth() ([]client.Object, error) {
+	var objects []client.Object
+	for i := range f.data.ProxmoxNodes {
+		name := "kubehenge-cp-" + strconv.Itoa(i)
+		node := demoNode(&clusterv1.Machine{
+			Name: name, Labels: map[string]string{clusterv1.MachineControlPlaneLabel: ""}, CreationTimestamp: metav1.NewTime(f.now.AddDate(0, 0, -240)),
+			Spec:   clusterv1.MachineSpec{Version: "v1.37.1"},
+			Status: clusterv1.MachineStatus{NodeRef: clusterv1.MachineNodeReference{Name: name}},
+		})
+		pod := demoPod(metav1.NamespaceSystem, "kube-apiserver-"+name, name, f.now.AddDate(0, 0, -30), "250m", "512Mi")
+		objects = append(objects, node, pod)
+	}
+	record := provisioner.EtcdHealth{Checked: f.now, Nodes: f.data.ProxmoxNodes, Clusters: []provisioner.EtcdSet{}}
+	for i := range f.data.Clusters {
+		d := &f.data.Clusters[i]
+		set := provisioner.EtcdSet{Cluster: clusterKey(demoNamespace, d.Name)}
+		for j := range d.ControlPlanes {
+			m := provisioner.EtcdMemberHealth{
+				Machine: fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, int(j))),
+				Node:    f.data.ProxmoxNodes[int(j)%len(f.data.ProxmoxNodes)], Healthy: true,
+			}
+			if d.QuorumLost && int(j) < demoQuorumLostVMs {
+				m.Healthy, m.Reason = false, "its VM is stopped"
+			}
+			set.Members = append(set.Members, m)
+		}
+		record.Clusters = append(record.Clusters, set)
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("the demo's etcd health: %w", err)
+	}
+	return append(objects, &corev1.ConfigMap{
+		Namespace: demoClassNamespace, Name: provisioner.EtcdHealthName,
+		Data: map[string]string{provisioner.EtcdHealthKey: string(raw)},
+	}), nil
 }
 
 // proxmoxReach is the controller's record of its last test of the Proxmox VE tokens, with two that
@@ -439,7 +499,7 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 		}
 		f.members[names.Pool] = append(f.members[names.Pool], pve.Member{
 			VMID: *vmid, Node: nodes[i%len(nodes)], Type: "qemu", Name: m.Spec.InfrastructureRef.Name,
-			Status: f.data.VMStatus, CPU: 0.08 + float64((*vmid*7)%23)/100, Cores: 4, Memory: mem * int64(40+(*vmid*13)%35) / 100, MaxMem: mem,
+			Status: f.vmStatus(d, m, i), CPU: 0.08 + float64((*vmid*7)%23)/100, Cores: 4, Memory: mem * int64(40+(*vmid*13)%35) / 100, MaxMem: mem,
 			Uptime: int64(f.now.Sub(m.CreationTimestamp.Time).Seconds()),
 		})
 		*vmid++
@@ -589,6 +649,16 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		c.Spec.Paused = new(true)
 	}
 	f.waitForWindow(c, d.AddonChanges)
+	if d.QuorumLost {
+		since := f.now.Add(-14 * time.Minute)
+		lost := d.ControlPlanes - demoQuorumLostVMs
+		c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
+			Type: provisioner.QuorumLostCondition, Status: metav1.ConditionTrue, Reason: provisioner.QuorumLostReason, LastTransitionTime: metav1.NewTime(since),
+			Message: fmt.Sprintf("%d of %d control-plane machines have a running VM, and etcd needs %d. The API has been silent for 10m0s or more.",
+				lost, d.ControlPlanes, d.ControlPlanes/2+1),
+		})
+		c.Status.ControlPlane.ReadyReplicas, c.Status.ControlPlane.AvailableReplicas = &lost, new(int32)
+	}
 	return c
 }
 

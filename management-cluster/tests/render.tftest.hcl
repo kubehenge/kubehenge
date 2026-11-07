@@ -230,6 +230,11 @@ run "nodes" {
   }
 
   assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.startup[0].order == 1 && vm.startup[0].up_delay == 90])
+    error_message = "the management VMs must start first after a host reboot, and give their etcd members 90 seconds before the next guest"
+  }
+
+  assert {
     condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.memory[0].dedicated == 4096 && vm.memory[0].floating == 4096])
     error_message = "without a minimum, each node keeps all its memory and still has a balloon device"
   }

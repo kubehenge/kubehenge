@@ -145,6 +145,90 @@ describe("the management cluster's health", () => {
     expect(screen.getByText("Host maintenance is not visible: the token lacks Sys.Audit on /")).toBeInTheDocument();
   });
 
+  it("counts the etcd members and calls the cluster degraded when one is not healthy", async () => {
+    show({ answers: true, nodes: [ready("mgmt-1")], controllers: [], etcd: { healthy: 2, members: 3 } });
+    await expect(screen.findByText("Degraded")).resolves.toBeInTheDocument();
+    expect(screen.getByText("2 of 3 members")).toBeInTheDocument();
+    expect(healthVerdict({ answers: true, etcd: { healthy: 3, members: 3 } }).text).toBe("Healthy");
+  });
+
+  it("answers for each Proxmox VE node whether it may reboot, and why not", async () => {
+    fakeServer({
+      "GET /api/setup/health": {
+        body: { answers: true, nodes: [ready("mgmt-1")], controllers: [], etcd: { healthy: 3, members: 3 } },
+      },
+      "GET /api/appliance/reboot-ready": {
+        body: {
+          checked: "2026-01-02T12:00:00Z",
+          ready: true,
+          nodes: [
+            { node: "pve1", ready: true },
+            { node: "pve2", ready: false, blocker: "team-a/web: stopping pve2 would leave 1 of 3 etcd members" },
+          ],
+          answer: { ready: true },
+        },
+      },
+    });
+    render(<ManagementHealthCard />);
+    const list = await screen.findByRole("list", { name: "Ready for reboot" });
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map((i) => i.textContent),
+    ).toStrictEqual(["Ready pve1", "Wait pve2 team-a/web: stopping pve2 would leave 1 of 3 etcd members"]);
+  });
+
+  it("says once why no node may reboot while a member is down", async () => {
+    const blocker = "team-a/web: etcd member web-cp-1 on pve2 is not healthy: its VM is stopped";
+    fakeServer({
+      "GET /api/setup/health": { body: { answers: true, nodes: [ready("mgmt-1")], controllers: [] } },
+      "GET /api/appliance/reboot-ready": {
+        body: {
+          checked: "2026-01-02T12:00:00Z",
+          ready: false,
+          blocker,
+          nodes: [
+            { node: "pve1", ready: false, blocker },
+            { node: "pve2", ready: false, blocker },
+          ],
+          answer: { ready: false },
+        },
+      },
+    });
+    render(<ManagementHealthCard />);
+    await expect(screen.findByText(blocker)).resolves.toBeInTheDocument();
+    expect(screen.getAllByText(blocker)).toHaveLength(1);
+    expect(screen.getAllByText("Wait")).toHaveLength(3);
+  });
+
+  it("lets a node go that holds no member of the degraded cluster, with the cluster as a note", async () => {
+    const note = "team-a/web: etcd member web-cp-1 on pve2 is not healthy: its VM is stopped";
+    fakeServer({
+      "GET /api/setup/health": { body: { answers: true, nodes: [ready("mgmt-1")], controllers: [] } },
+      "GET /api/appliance/reboot-ready": {
+        body: {
+          checked: "2026-01-02T12:00:00Z",
+          ready: false,
+          blocker: note,
+          nodes: [
+            {
+              node: "pve1",
+              ready: false,
+              blocker: "team-a/web: stopping pve1 would leave 1 of 3 etcd members healthy",
+            },
+            { node: "pve4", ready: true, note },
+          ],
+          answer: { ready: false },
+        },
+      },
+    });
+    render(<ManagementHealthCard />);
+    const text = await screen.findByText(note);
+    expect(text).toHaveClass("muted");
+    const list = await screen.findByRole("list", { name: "Ready for reboot" });
+    expect(within(list).getByText("Ready")).toBeInTheDocument();
+  });
+
   it("calls a cluster with no ready node down", () => {
     expect(healthVerdict({ answers: true, nodes: [{ name: "mgmt-1", ready: false }] })).toStrictEqual({
       state: "error",

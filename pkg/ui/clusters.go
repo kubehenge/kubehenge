@@ -357,7 +357,9 @@ type machineView struct {
 	Node string `json:"node,omitempty"`
 	// ProxmoxNode is the Proxmox VE node its VM runs on, where the user may see the VM.
 	ProxmoxNode string `json:"proxmoxNode,omitempty"`
-	Role        string `json:"role"`
+	// VM is the state Proxmox VE gives the VM (running, stopped), where the user may see it.
+	VM   string `json:"vm,omitempty"`
+	Role string `json:"role"`
 	// Pool is the worker pool a worker belongs to.
 	Pool    string `json:"pool,omitempty"`
 	Version string `json:"version,omitempty"`
@@ -735,6 +737,7 @@ func (s *Server) machineViews(machines []clusterv1.Machine, vms *vmSet, can mach
 		m := &machines[i]
 		vm := &found[i]
 		mv := machineOf(m, vm.Node)
+		mv.VM = vm.Status
 		mv.NotReporting = !matched[i] && vms.silent() && m.Status.NodeRef.Name != ""
 		if can.console {
 			mv.Console = consoleURL(s.ProxmoxURL, vm)

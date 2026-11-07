@@ -73,6 +73,9 @@ const (
 	// list for every cluster: a VM out of the running state is reported within this of its grace
 	// running out, and the report cleared within this of it running again.
 	vmWatchInterval = 15 * time.Second
+	// etcdWatchInterval is how often every control plane's etcd members are looked at. A host
+	// reboot waits on a record at most provisioner.EtcdHealthStale old.
+	etcdWatchInterval = 30 * time.Second
 	// templateRequestsInterval is how soon a build asked for in the interface starts.
 	templateRequestsInterval = 15 * time.Second
 	// talosUpgradeInterval is how soon a Talos node's upgrade starts after the one before, or after
@@ -909,6 +912,13 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 	}
 	if err := mgr.Add(vms); err != nil {
 		return fmt.Errorf("the VM watch: %w", err)
+	}
+	etcd := &provisioner.EtcdWatch{
+		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, APIs: remotes, Workload: remotes.Workload,
+		Talos: provisioner.DialTalos, Events: mgr.GetEventRecorder("kubehenge"), Interval: etcdWatchInterval,
+	}
+	if err := mgr.Add(etcd); err != nil {
+		return fmt.Errorf("the etcd watch: %w", err)
 	}
 	return nil
 }

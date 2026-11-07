@@ -412,6 +412,13 @@ resource "proxmox_virtual_environment_vm" "node" {
   # memory takes effect when each node next reboots, as a Talos upgrade reboots them one by one.
   reboot_after_update = false
 
+  # After a host reboot the management VMs start first, and the next guest waits 90 seconds for
+  # their etcd members to rejoin before the workload control planes come up.
+  startup {
+    order    = 1
+    up_delay = 90
+  }
+
   agent {
     enabled = true
   }

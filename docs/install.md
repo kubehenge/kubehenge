@@ -489,6 +489,25 @@ The appliance keeps the record in its own folder for 90 days. Changes made with 
 | `kubehenge appliance activity` | lists the appliance's activity of the last 7 days. `--days` goes back up to 90 |
 | `kubehenge appliance activity --cluster namespace/name` | lists one cluster's |
 
+### Patching Proxmox VE hosts
+
+Patch the hosts one at a time. A control plane needs a minute or two after its host is back before its etcd member has rejoined. Two members down at once stop a cluster.
+
+1. Run `kubehenge appliance ready-for-reboot --node <host>`.
+2. Reboot the host.
+3. Run `kubehenge appliance ready-for-reboot` without `--node` until it exits 0.
+4. Do the next host.
+
+#### Reading the answer
+
+Without `--node`, the command exits 0 only when every etcd member of the management cluster and of every cluster is healthy. With `--node`, it exits 0 when stopping that host's guests leaves every etcd a majority of healthy members. Members already down count as gone. A cluster that is degraded but has no member on the host does not hold it back. Otherwise the command prints the first blocker in one line, with the cluster, the member and the node.
+
+**Administration, Health** shows the answer for each node under **Ready for reboot**, and names a degraded cluster that holds no node back. **etcd** there counts the management cluster's healthy members. A record the controller has not renewed for three minutes blocks every node.
+
+#### Start order
+
+The management VMs start first after a host boots. They carry `startup: order=1,up=90`, so the next guest waits 90 seconds for their etcd members.
+
 ### Back up the appliance
 
 The appliance holds the only copy of the management cluster's state. Add it to a Proxmox VE backup job (Datacenter, Backup) by its ID, its pool or all guests on its node. Once the management cluster exists, and until a backup job includes the appliance, administrators with `Sys.Audit` on `/` see a warning.

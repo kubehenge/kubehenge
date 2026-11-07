@@ -234,7 +234,25 @@ const admin: Record<string, Route> = {
       applianceVMID: 105,
     },
   },
-  "GET /api/setup/health": { body: { answers: true, nodes: [{ name: "mgmt-1", ready: true }], controllers: [] } },
+  "GET /api/setup/health": {
+    body: {
+      answers: true,
+      nodes: [{ name: "mgmt-1", ready: true }],
+      controllers: [],
+      etcd: { healthy: 3, members: 3 },
+    },
+  },
+  "GET /api/appliance/reboot-ready": {
+    body: {
+      checked: "2026-01-02T12:00:00Z",
+      ready: true,
+      nodes: [
+        { node: "pve1", ready: true },
+        { node: "pve2", ready: false, blocker: "default/web: stopping pve2 would leave 1 of 3 etcd members" },
+      ],
+      answer: { ready: true },
+    },
+  },
   "GET /api/appliance/upgrades": {
     body: { version: "0.1.0", available: ["0.2.0"], settings: { policy: "off", hour: 3, timeZone: "UTC" } },
   },
@@ -662,6 +680,18 @@ const richAdmin: Record<string, Route> = {
       answers: true,
       nodes: [{ name: "mgmt-1", ready: false, message: "down", kubelet: "v1.36.1" }],
       controllers: [{ namespace: "kubehenge", name: "controller", ready: 0, wanted: 1 }],
+      etcd: { healthy: 2, members: 3 },
+    },
+  },
+  "GET /api/appliance/reboot-ready": {
+    body: {
+      checked: "2026-01-02T12:00:00Z",
+      ready: false,
+      blocker: "management: etcd member mgmt-1 is not healthy: its node is not ready",
+      nodes: [
+        { node: "pve1", ready: false, blocker: "management: etcd member mgmt-1 is not healthy: its node is not ready" },
+      ],
+      answer: { ready: false },
     },
   },
   "GET /api/appliance/upgrades": {
@@ -887,6 +917,34 @@ const waitingRoutes: Record<string, Route> = {
   "GET /api/versions/kubeadm": { body: { versions: ["v1.36.2"], stable: "v1.36.2" } },
   "POST /api/clusters/default/waiting/addon-changes": { status: 202 },
 };
+const lostCp = (name: string, vm: string) => ({ ...machine(name, "control-plane"), vm, ready: vm === "running" });
+const quorumless = cluster("quorumless", {
+  controlPlane: { desired: 3, ready: 1, available: 0, upToDate: 3 },
+  conditions: [
+    {
+      type: "ControlPlaneQuorumLost",
+      status: "True",
+      reason: "NoMajorityRunning",
+      message: "1 of 3 control-plane machines have a running VM (quorumless-cp-c), and etcd needs 2.",
+      since: when,
+    },
+  ],
+  machines: [
+    lostCp("quorumless-cp-a", "stopped"),
+    lostCp("quorumless-cp-b", "stopped"),
+    lostCp("quorumless-cp-c", "running"),
+  ],
+});
+const quorumlessRoutes: Record<string, Route> = {
+  ...detail,
+  "GET /api/clusters": { body: [quorumless] },
+  "GET /api/clusters/default/quorumless": { body: quorumless },
+  "GET /api/clusters/default/quorumless/health": { body: health },
+  "GET /api/clusters/default/quorumless/backups": { body: backups },
+  "GET /api/clusters/default/quorumless/etcd-snapshots": { body: etcd },
+  "GET /api/clusters/default/quorumless/activity?days=7": { body: activity },
+  "GET /api/clusters/default/quorumless/control-plane-recovery?machine=quorumless-cp-c": { body: { automatic: true } },
+};
 
 const oops = { status: 500, body: { error: "Disk on fire. Try again." } };
 const failing = (key: string): Record<string, Route> => ({ [key]: oops });
@@ -958,6 +1016,7 @@ const cases: Case[] = [
     ready: loaded,
   },
   { name: "stalled control plane", path: "/clusters/default/stuck", routes: stuckRoutes, ready: loaded },
+  { name: "lost control-plane quorum", path: "/clusters/default/quorumless", routes: quorumlessRoutes, ready: loaded },
   {
     name: "waiting add-on changes",
     path: "/clusters/default/waiting",

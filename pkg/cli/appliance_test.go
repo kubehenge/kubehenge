@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,6 +44,17 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		answer(w, http.StatusOK, `{"version":"0.1.0","available":["0.2.0"],"status":{"state":"failed","from":"0.1.0","to":"0.2.0",
 			"time":"2027-03-01T12:00:00Z","rolledBack":true,
 			"error":"release 0.2.0 did not start: the interface did not answer within 2m0s; rolled back to 0.1.0"}}`)
+	}))
+	mux.HandleFunc("GET /api/appliance/reboot-ready", f.admin(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("node") {
+		case "pve2":
+			answer(w, http.StatusOK, `{"ready":true,"answer":{"node":"pve2","ready":false,"blocker":"team-a/web: stopping pve2 would leave 1 of 3 etcd members, and its quorum is 2 (web-cp-0, web-cp-1)"}}`)
+		case "":
+			answer(w, http.StatusOK, `{"ready":false,"blocker":"management: etcd member kubehenge-cp-1 on pve2 is not healthy: its node is not ready",
+				"answer":{"ready":false,"blocker":"management: etcd member kubehenge-cp-1 on pve2 is not healthy: its node is not ready"}}`)
+		default:
+			answer(w, http.StatusOK, `{"ready":true,"answer":{"node":"pve1","ready":true}}`)
+		}
 	}))
 	mux.HandleFunc("POST /api/appliance/upgrades", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -238,6 +250,27 @@ func TestApplianceRefusalsAreTheInterfaces(t *testing.T) {
 		if _, err := run(t, c.args...); err == nil || err.Error() != c.want {
 			t.Errorf("%v: %v, want %q", c.args[len(c.args)-1], err, c.want)
 		}
+	}
+}
+
+// ready-for-reboot ends with an error, which is exit status 1. The error names the first blocker.
+func TestApplianceReadyForReboot(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	out, err := run(t, f.args("admin@pve", "ready-for-reboot", "--node", "pve1")...)
+	if err != nil || out != "Ready to reboot pve1\n" {
+		t.Errorf("a node that may go: %v\n%s", err, out)
+	}
+	_, err = run(t, f.args("admin@pve", "ready-for-reboot", "--node", "pve2")...)
+	if !errors.Is(err, errNotReadyForReboot) || !strings.Contains(err.Error(), "team-a/web: stopping pve2 would leave 1 of 3 etcd members") {
+		t.Errorf("a node that holds a quorum: %v", err)
+	}
+	_, err = run(t, f.args("admin@pve", "ready-for-reboot")...)
+	if !errors.Is(err, errNotReadyForReboot) || !strings.Contains(err.Error(), "management: etcd member kubehenge-cp-1 on pve2 is not healthy") {
+		t.Errorf("a member down: %v", err)
+	}
+	if _, err = run(t, f.args("user@pve", "ready-for-reboot")...); err == nil || err.Error() != "user@pve needs Sys.Modify on /" {
+		t.Errorf("a user without privileges: %v", err)
 	}
 }
 
