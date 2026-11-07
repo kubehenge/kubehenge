@@ -231,6 +231,10 @@ The Administration page (or the setup page) shows the error and the run's log. F
   - After five wrong ones within 15 minutes, repair access refuses further tries until those 15 minutes are up.
   - A passphrase that is lost cannot be recovered: [what still works, and how to start over](install.md#the-state-passphrase).
 - **"The appliance stopped during the run":** the appliance restarted while a run was going on. Apply again.
+- **"this appliance's state is from apply N, and the management cluster is at apply M":** a newer state changed the cluster since this one was saved. A snapshot rollback, an older backup or a second appliance does that.
+  - Restore the newest backup instead, or use the appliance that applied last.
+  - To go ahead with this state, [take the cluster over](install.md#a-state-older-than-the-management-cluster). The next apply undoes the newer changes.
+- **"another appliance started applying the management cluster at the same time":** two appliances act on one cluster. Stop one of them, then apply again from the other.
 - **"job wait-for-providers failed"** after ten minutes: a provider was not installed or did not roll out. `kubectl -n capi-operator-system logs job/wait-for-providers` names each one with the Cluster API Operator's reason.
   - A version lowered through `version_overrides` is refused ("Downgrade is not supported"). Setting it back does not repair the provider object by itself. To repair it:
     1. Set its `spec.version` back with `kubectl patch`.

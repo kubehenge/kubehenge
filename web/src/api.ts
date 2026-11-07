@@ -391,6 +391,7 @@ export interface Api {
   testNotifications: () => Promise<NotificationSent[]>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string) => Promise<Job>;
+  takeOverManagement: (passphrase: string) => Promise<void>;
   managementHealth: () => Promise<ManagementHealth>;
   managementBackups: () => Promise<ManagementBackups>;
   configureManagementBackups: (req: ManagementBackupRequest) => Promise<ManagementBackups>;
@@ -525,6 +526,7 @@ export const api: Api = {
   testNotifications: () => request("POST", "/api/notifications/test"),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
+  takeOverManagement: (passphrase) => act("POST", "/api/setup/take-over", { passphrase }),
   managementHealth: () => request("GET", "/api/setup/health"),
   managementBackups: () => request("GET", "/api/appliance/etcd-backups"),
   configureManagementBackups: (req) => request("PUT", "/api/appliance/etcd-backups", req),

@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -57,6 +59,9 @@ type Appliance struct {
 	// InterfaceKubeconfig makes the interface's kubeconfig from the management cluster's admin
 	// kubeconfig and API endpoint, once an apply has succeeded, with its token in tokenFile.
 	InterfaceKubeconfig func(ctx context.Context, admin []byte, endpoint, tokenFile string) ([]byte, error)
+	// ManagementClient reaches the management cluster with its admin kubeconfig, for the lease each
+	// apply claims. Nil makes a client of the kubeconfig.
+	ManagementClient func(admin []byte) (kubernetes.Interface, error)
 	// Talos reaches the management cluster's nodes for its etcd backups. OpenStore opens their
 	// target, provisioner.OpenTarget when nil.
 	Talos     TalosAccess
@@ -226,6 +231,9 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 		if _, err := a.output(ctx, env, "api_endpoint"); err != nil {
 			return ErrPassphrase
 		}
+		if err := a.checkLease(ctx, env); err != nil {
+			return err
+		}
 		if err := before(ctx, j); err != nil {
 			return err
 		}
@@ -236,15 +244,7 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 		if err := a.tofu(ctx, j, env, jsonMessage, "destroy", "-auto-approve", "-input=false", "-json"); err != nil {
 			return err
 		}
-		// The state now records nothing. It goes, so that the next setup starts with a passphrase of
-		// its own. The settings stay to fill that setup in.
-		for _, name := range []string{a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath()} {
-			if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return fmt.Errorf("clearing the removed cluster's state: %w", err)
-			}
-		}
-		// Its snapshots stay in the target. The keys and the talosconfig that took them go with it.
-		if err := a.StopEtcdBackups(); err != nil {
+		if err := a.forgetRemoved(); err != nil {
 			return err
 		}
 		gone()
@@ -289,7 +289,7 @@ func (a *Appliance) LoadLast() {
 		if v.State == StateRunning {
 			v.State, v.Error = StateFailed, "the appliance stopped during the run"
 		}
-		*slot = &Job{User: v.User, Automatic: v.Automatic, Kind: v.Kind, Started: v.Started, Finished: v.Finished, State: v.State, Error: v.Error, Request: v.Request, log: v.Log}
+		*slot = &Job{User: v.User, Automatic: v.Automatic, Kind: v.Kind, Started: v.Started, Finished: v.Finished, State: v.State, Error: v.Error, Stale: v.Stale, Request: v.Request, log: v.Log}
 	}
 }
 
@@ -315,6 +315,19 @@ func (a *Appliance) Stop(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// forgetRemoved clears what the appliance kept of a management cluster just destroyed. The state
+// now records nothing. It goes, so that the next setup starts with a passphrase of its own. The
+// settings stay to fill that setup in. The etcd snapshots stay in their target, and the keys and
+// the talosconfig that took them go.
+func (a *Appliance) forgetRemoved() error {
+	for _, name := range []string{a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath()} {
+		if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("clearing the removed cluster's state: %w", err)
+		}
+	}
+	return a.StopEtcdBackups()
 }
 
 // stateOutput reads one output of the encrypted state with the passphrase, outside any run.
@@ -413,13 +426,15 @@ func (a *Appliance) startIn(slot **Job, by runner, what string, request any, run
 		if err != nil {
 			state, errText = StateFailed, err.Error()
 		}
+		var stale *StaleStateError
+		errors.As(err, &stale)
 		// The record is on disk before the outcome shows, so a restart right after still has it.
 		// From then on an upgrade may restart the service, and a new job may start once the
 		// outcome shows.
-		a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, Finished: time.Now(), State: state, Error: errText, Request: j.Request, Log: j.Log()})
+		a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, Finished: time.Now(), State: state, Error: errText, Stale: stale, Request: j.Request, Log: j.Log()})
 		unlock()
 		j.mu.Lock()
-		j.Finished, j.State, j.Error = time.Now(), state, errText
+		j.Finished, j.State, j.Error, j.Stale = time.Now(), state, errText, stale
 		j.mu.Unlock()
 		if err != nil {
 			a.Log.Error(what+" failed", "user", j.User, "error", err)

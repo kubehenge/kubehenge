@@ -477,6 +477,14 @@ pct set <new ctid> --onboot 0 --net0 <that net0>,link_down=1
 
 `--unique 1` gives the copy a MAC address of its own, and `link_down=1` keeps it off the network. A `pct clone` keeps the original's address too, and copies the key of automatic upgrades.
 
+#### A state older than the management cluster
+
+Each apply counts a generation up, kept with the appliance's state and in the management cluster. An apply or removal whose state is behind the cluster's is refused before it changes anything. A snapshot rollback, an older backup, a storage replica that took over after a crash or a second appliance leaves the state behind.
+
+The Administration page then offers **Take over…**, with the state passphrase. The next apply brings the management cluster to this state and undoes the newer changes. In the appliance's shell, run `kubehenge appliance take-over --overwrite --passphrase-file <file>`.
+
+While the management cluster does not answer, an administrator's apply goes ahead unchecked and its log says so. An automatic upgrade is refused.
+
 ### Back up the management cluster's etcd
 
 The management cluster's etcd holds every cluster's objects. **Administration, Backups** snapshots it into one of the [backup targets](install-settings.md#backup-targets) every 6 hours unless set otherwise. It keeps the newest 28.

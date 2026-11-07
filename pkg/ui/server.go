@@ -281,6 +281,7 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/setup/check", s.signedIn(s.setupCheck))
 	mux.HandleFunc("POST /api/setup/credential", s.signedIn(s.credential))
 	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
+	mux.HandleFunc("POST /api/setup/take-over", s.signedIn(s.takeOver))
 	mux.HandleFunc("GET /api/setup/health", s.signedIn(s.managementHealth))
 	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
 	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))

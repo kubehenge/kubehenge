@@ -805,6 +805,24 @@ describe("setup", () => {
     expect(alert).toHaveTextContent("wrong passphrase");
   });
 
+  it("offers to take over when a newer state changed the management cluster", async () => {
+    withJob({
+      user: "root@pam",
+      automatic: true,
+      kind: "apply",
+      started: new Date().toISOString(),
+      state: "failed",
+      error: "this appliance's state is from apply 2, and the management cluster is at apply 3",
+      stale: { local: 2, cluster: 3 },
+      log: [],
+    });
+    render(<App />);
+    const alert = await screen.findByText(/A newer state changed the management cluster\./u);
+    expect(alert).toHaveTextContent("This appliance's state is from apply 2.");
+    expect(within(alert).getByRole("button", { name: "Take over…" })).toBeInTheDocument();
+    expect(screen.queryByText(/retries at the next upgrade hour/u)).not.toBeInTheDocument();
+  });
+
   it("warns administrators of a certificate about to run out, and no one long before", async () => {
     certificateIn(10);
     const { unmount } = render(<App />);
