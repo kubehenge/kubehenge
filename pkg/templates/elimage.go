@@ -44,7 +44,7 @@ var (
 )
 
 // repositories are those a bake of the distribution adds to the family's.
-func (f *elFamily) repositories(b Bake) []*repository {
+func (f *elFamily) repositories(b *Bake) []*repository {
 	switch b.Distribution {
 	case RKE2:
 		return []*repository{rke2SELinux}
@@ -82,7 +82,7 @@ func (f *elFamily) manifest(d Distribution) string {
 
 // recipe builds the node image in a VM of the family's cloud image and installs it onto the
 // template's disk (el/build.sh), then boots it as a clone would be.
-func (f *elFamily) recipe(b Bake, keys map[string]string) (Recipe, error) {
+func (f *elFamily) recipe(b *Bake, keys map[string]string) (Recipe, error) {
 	repos := f.repositories(b)
 	if repos == nil {
 		return Recipe{}, fmt.Errorf("no node image of %s", b.Distribution)

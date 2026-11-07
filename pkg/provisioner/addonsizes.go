@@ -127,14 +127,17 @@ type addonResource struct {
 	of func(controlPlaneSize) int
 }
 
+// mebibytes is the unit of memory figures.
+const mebibytes = "MiB"
+
 var (
 	addonMemory = &addonResource{
 		addons: AddonMemoryAnnotation, nodes: NodeMemoryAnnotation, growth: AddonControlPlaneMemoryAnnotation,
-		cni: CNIControlPlaneMemoryAnnotation, unit: "MiB", name: "memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
+		cni: CNIControlPlaneMemoryAnnotation, unit: mebibytes, name: "memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
 	}
 	addonMemoryRequests = &addonResource{
 		addons: AddonMemoryRequestsAnnotation, nodes: NodeMemoryRequestsAnnotation,
-		unit: "MiB", name: "requested memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
+		unit: mebibytes, name: "requested memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
 	}
 	addonCPU = &addonResource{
 		addons: AddonCPUAnnotation, nodes: NodeCPUAnnotation,

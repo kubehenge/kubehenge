@@ -339,8 +339,8 @@ export function settings(f: SetupForm): ManagementSettings {
     workloadBridges: f.workloadBridges,
     bootstrapDatastore: f.bootstrapDatastore,
     ...linkSettings(f),
+    ...outboundSettings(f),
   };
-  Object.assign(s, outboundSettings(f));
   if (filled(f.controllerImage)) {
     s.controllerImage = f.controllerImage;
   }
@@ -445,38 +445,62 @@ function refreshPlacementFields(
   };
 }
 
-/** formOf fills the form from saved settings, or with nothing chosen yet. */
 const chartFields = (saved: ManagementSettings): Pick<SetupForm, "chartMirrors" | "chartMirrorCA"> => ({
   chartMirrors: formatChartMirrors(saved.chartRepositories?.mirrors),
   chartMirrorCA: saved.chartRepositories?.caBundle ?? "",
 });
 
+const positive = (n: number | undefined): string => (n !== undefined && n > 0 ? String(n) : "");
+const joined = (values: string[] | undefined): string => (values ?? []).join(", ");
+
+const networkFields = (
+  saved: ManagementSettings,
+): Pick<SetupForm, "vlan" | "mtu" | "searchDomains" | "timeServers"> => ({
+  vlan: positive(saved.vlan),
+  mtu: positive(saved.mtu),
+  searchDomains: joined(saved.searchDomains),
+  timeServers: joined(saved.timeServers),
+});
+
+const proxyFields = (
+  saved: ManagementSettings,
+): Pick<
+  SetupForm,
+  | "proxyURL"
+  | "proxyUser"
+  | "proxyPassword"
+  | "proxyPasswordSaved"
+  | "proxyPasswordAction"
+  | "proxyExceptions"
+  | "proxyCA"
+> => ({
+  proxyURL: saved.proxy?.url ?? "",
+  proxyUser: saved.proxy?.user ?? "",
+  proxyPassword: "",
+  proxyPasswordSaved: saved.proxy?.passwordSet === true,
+  proxyPasswordAction: "keep",
+  proxyExceptions: joined(saved.proxy?.noProxy),
+  proxyCA: saved.proxy?.caBundle ?? "",
+});
+
+/** formOf fills the form from saved settings, or with nothing chosen yet. */
 export function formOf(saved: ManagementSettings = unsaved): SetupForm {
   return {
     nodes: saved.nodes,
     imageDatastore: saved.imageDatastore,
     vmDatastore: saved.vmDatastore,
     bridge: saved.bridge,
-    vlan: saved.vlan !== undefined && saved.vlan > 0 ? String(saved.vlan) : "",
-    mtu: saved.mtu !== undefined && saved.mtu > 0 ? String(saved.mtu) : "",
     nodeAddresses: saved.nodeAddresses.join("\n"),
     apiAddress: saved.apiAddress,
     gateway: saved.gateway,
     dnsServers: saved.dnsServers.join(", "),
-    searchDomains: (saved.searchDomains ?? []).join(", "),
-    timeServers: (saved.timeServers ?? []).join(", "),
+    ...networkFields(saved),
     workloadDatastores: saved.workloadDatastores,
     workloadBridges: saved.workloadBridges,
     bootstrapDatastore: saved.bootstrapDatastore,
     mirrors: formatMirrors(saved.registryMirrors),
     ...chartFields(saved),
-    proxyURL: saved.proxy?.url ?? "",
-    proxyUser: saved.proxy?.user ?? "",
-    proxyPassword: "",
-    proxyPasswordSaved: saved.proxy?.passwordSet === true,
-    proxyPasswordAction: "keep",
-    proxyExceptions: (saved.proxy?.noProxy ?? []).join(", "),
-    proxyCA: saved.proxy?.caBundle ?? "",
+    ...proxyFields(saved),
     podSubnets: (saved.podSubnets ?? []).join(", "),
     serviceSubnets: (saved.serviceSubnets ?? []).join(", "),
     controllerImage: saved.controllerImage,

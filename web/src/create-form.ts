@@ -1134,10 +1134,9 @@ function graceVariables(form: Form): Record<string, unknown> {
   return form.hostOutageGrace === defaultGrace ? {} : { [graceVariable]: Number(form.hostOutageGrace) };
 }
 
-// request turns the form into the API's request, with only the variables the class defines.
-export function request(form: Form, c: ClusterClass): CreateRequest {
-  const defined = new Set(c.variables.map((v) => v.name));
-  const network: Record<string, unknown> = {
+// networkVariable is the network variable of the form's nodes.
+function networkVariable(form: Form): Record<string, unknown> {
+  return {
     bridge: form.bridge,
     addresses: list(form.addresses),
     prefix: form.prefix,
@@ -1147,19 +1146,15 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     ...(list(form.searchDomains).length > 0 && { searchDomains: list(form.searchDomains) }),
     ...(list(form.ntpServers).length > 0 && { ntp: list(form.ntpServers) }),
   };
-  const variables: Record<string, unknown> = {
-    controlPlaneEndpoint: form.endpoint,
-    network,
-    storage: form.storage,
-    controlPlaneMachine: form.controlPlaneMachine,
-    workerMachine: form.workerMachine,
-    ...nodeOSVariable(form, c),
-  };
+}
+
+// proxmoxVariables are the variables of where the nodes go on Proxmox VE and how it looks after them.
+function proxmoxVariables(form: Form, defined: ReadonlySet<string>): Record<string, unknown> {
+  const variables: Record<string, unknown> = { ...graceVariables(form) };
   const nodes = allowedNodes(form.place);
   if (nodes !== undefined) {
     variables["allowedNodes"] = nodes;
   }
-  Object.assign(variables, graceVariables(form));
   // Left out, the class's default has the cluster take part once HA applies to it.
   if (!form.proxmoxHA) {
     variables["proxmoxHA"] = false;
@@ -1174,7 +1169,23 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (!form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: false };
   }
-  Object.assign(variables, distributionVariables(form), workerNodesVariable(form, defined));
+  return variables;
+}
+
+// request turns the form into the API's request, with only the variables the class defines.
+export function request(form: Form, c: ClusterClass): CreateRequest {
+  const defined = new Set(c.variables.map((v) => v.name));
+  const variables: Record<string, unknown> = {
+    controlPlaneEndpoint: form.endpoint,
+    network: networkVariable(form),
+    storage: form.storage,
+    controlPlaneMachine: form.controlPlaneMachine,
+    workerMachine: form.workerMachine,
+    ...nodeOSVariable(form, c),
+    ...proxmoxVariables(form, defined),
+    ...distributionVariables(form),
+    ...workerNodesVariable(form, defined),
+  };
   const customised = nodeCustomisationVariable(form.nodeCustomisation, c.distribution === "talos");
   if (Object.keys(customised).length > 0) {
     variables["nodeCustomisation"] = customised;
@@ -1288,13 +1299,41 @@ function loadBalancerRows(form: Form, c: ClusterClass): [string, string][] {
 const timeServersRow = (form: Form): [string, string][] =>
   list(form.ntpServers).length > 0 ? [["Time servers", list(form.ntpServers).join(", ")]] : [];
 
+/** SummaryOffered names the settings the Confirm step shows only where they can be chosen. */
+interface SummaryOffered {
+  ha?: boolean;
+  csi?: boolean;
+  snapshots?: boolean;
+  haGroups?: boolean;
+}
+
+// proxmoxRows are the summary's rows of where the nodes go on Proxmox VE and how it looks after them.
+function proxmoxRows(form: Form, defined: ReadonlySet<string>, offered: SummaryOffered): [string, string][] {
+  const rows: [string, string][] = [];
+  if (defined.has("allowedNodes")) {
+    rows.push(["Placement", placeText(form.place)]);
+  }
+  if (defined.has(graceVariable)) {
+    rows.push(["Host outage wait", graceText(form.hostOutageGrace)]);
+  }
+  if (offered.ha === true) {
+    rows.push(["Proxmox VE HA", haText(form.proxmoxHA)]);
+  }
+  if (offered.csi === true) {
+    rows.push(["CSI plugin", csiText(form.datastoreAllocate)]);
+  }
+  if (offered.snapshots === true) {
+    rows.push(["Volume snapshots", snapshotsText(form.volumeSnapshots)]);
+  }
+  if (offered.haGroups === true) {
+    rows.push(["HA group labels", haGroupsText(form.haGroups)]);
+  }
+  return rows;
+}
+
 // summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
-export function summary(
-  form: Form,
-  c: ClusterClass,
-  offered: { ha?: boolean; csi?: boolean; snapshots?: boolean; haGroups?: boolean } = {},
-): [string, string][] {
+export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {}): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
   const rows: [string, string][] = [
     ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
@@ -1321,26 +1360,9 @@ export function summary(
     ["Pod range", form.pods || "Automatic"],
     ["Service range", form.services || "Automatic"],
     ["Storage", form.storage],
+    ...proxmoxRows(form, defined, offered),
+    ["Control-plane machines", machine(form.controlPlaneMachine)],
   );
-  if (defined.has("allowedNodes")) {
-    rows.push(["Placement", placeText(form.place)]);
-  }
-  if (defined.has(graceVariable)) {
-    rows.push(["Host outage wait", graceText(form.hostOutageGrace)]);
-  }
-  if (offered.ha === true) {
-    rows.push(["Proxmox VE HA", haText(form.proxmoxHA)]);
-  }
-  if (offered.csi === true) {
-    rows.push(["CSI plugin", csiText(form.datastoreAllocate)]);
-  }
-  if (offered.snapshots === true) {
-    rows.push(["Volume snapshots", snapshotsText(form.volumeSnapshots)]);
-  }
-  if (offered.haGroups === true) {
-    rows.push(["HA group labels", haGroupsText(form.haGroups)]);
-  }
-  rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
   if (mostWorkers(form) > 0) {
     rows.push(["Worker machines", machine(form.workerMachine)]);
     if (defined.has("workerNodes")) {
@@ -1743,6 +1765,40 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   return p;
 }
 
+// machineProblem holds a machine to its least cores, memory and disk. MachineFields places the
+// message by its cores, memory or disk.
+function machineProblem(
+  form: Form,
+  c: ClusterClass | undefined,
+  key: "controlPlaneMachine" | "workerMachine",
+): string | undefined {
+  const m = form[key];
+  const min = machineLeast(form, c, key);
+  const plain = plainLeast(form, c, key);
+  // The reason a minimum is higher than usual: the add-ons, or control planes that run the
+  // workloads without workers.
+  const why = (raised: boolean): string => {
+    if (raised) {
+      return " for the add-ons chosen";
+    }
+    return key === "controlPlaneMachine" && mostWorkers(form) === 0 ? " without workers" : "";
+  };
+  if (!whole(m.cores, min.cores)) {
+    return `A whole number of cores, at least ${min.cores}${why(min.cores > plain.cores)}`;
+  }
+  if (
+    form.rancherInstall &&
+    m.cores < rancherMinimumCores &&
+    (key === "controlPlaneMachine" || form.workerReplicas > 0)
+  ) {
+    return `Rancher needs at least ${rancherMinimumCores} cores on every node`;
+  }
+  if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
+    return `At least ${min.memoryMiB} MiB of memory${why(min.memoryMiB > plain.memoryMiB)}, in steps of ${memoryStepMiB}`;
+  }
+  return whole(m.diskGiB, min.diskGiB) ? undefined : `A whole number of GiB of disk, at least ${min.diskGiB}`;
+}
+
 function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
   if (!form.storage) {
@@ -1759,33 +1815,10 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (grace !== undefined) {
     p.hostOutageGrace = grace;
   }
-  for (const [key, m] of [
-    ["controlPlaneMachine", form.controlPlaneMachine],
-    ["workerMachine", form.workerMachine],
-  ] as const) {
-    const min = machineLeast(form, c, key);
-    const plain = plainLeast(form, c, key);
-    // The reason a minimum is higher than usual: the add-ons, or control planes that run the
-    // workloads without workers. MachineFields places the message by its cores, memory or disk.
-    const why = (raised: boolean): string => {
-      if (raised) {
-        return " for the add-ons chosen";
-      }
-      return key === "controlPlaneMachine" && mostWorkers(form) === 0 ? " without workers" : "";
-    };
-    if (!whole(m.cores, min.cores)) {
-      p[key] = `A whole number of cores, at least ${min.cores}${why(min.cores > plain.cores)}`;
-    } else if (
-      form.rancherInstall &&
-      m.cores < rancherMinimumCores &&
-      (key === "controlPlaneMachine" || form.workerReplicas > 0)
-    ) {
-      p[key] = `Rancher needs at least ${rancherMinimumCores} cores on every node`;
-    } else if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
-      p[key] =
-        `At least ${min.memoryMiB} MiB of memory${why(min.memoryMiB > plain.memoryMiB)}, in steps of ${memoryStepMiB}`;
-    } else if (!whole(m.diskGiB, min.diskGiB)) {
-      p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}`;
+  for (const key of ["controlPlaneMachine", "workerMachine"] as const) {
+    const problem = machineProblem(form, c, key);
+    if (problem !== undefined) {
+      p[key] = problem;
     }
   }
   const nodes = variable(c, "workerNodes") && mostWorkers(form) > 0 ? nodeSettingsProblem(form.workerNodes) : undefined;

@@ -58,10 +58,10 @@ var almaLinux10EL = &elFamily{
 		}),
 }
 
-func (almaLinux) Keys(_ Release, b Bake) []RepositoryKey {
+func (almaLinux) Keys(_ Release, b *Bake) []RepositoryKey {
 	return keysOf(almaLinux10EL.repositories(b))
 }
 
-func (almaLinux) Recipe(_ Release, b Bake, keys map[string]string) (Recipe, error) {
+func (almaLinux) Recipe(_ Release, b *Bake, keys map[string]string) (Recipe, error) {
 	return almaLinux10EL.recipe(b, keys)
 }

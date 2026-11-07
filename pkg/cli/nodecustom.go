@@ -199,10 +199,7 @@ func mergeNodeCustomisation(request []byte, flagValue map[string]any) ([]byte, e
 	if err := json.Unmarshal(request, &req); err != nil || req == nil {
 		return nil, errors.New("the create request must be an object to take --node-* flags")
 	}
-	variables, ok := req["variables"].(map[string]any)
-	if !ok {
-		variables = map[string]any{}
-	}
+	variables := requestVariables(req)
 	merged, ok := variables[nodeCustomisationVariable].(map[string]any)
 	if !ok {
 		merged = map[string]any{}
@@ -217,7 +214,6 @@ func mergeNodeCustomisation(request []byte, flagValue map[string]any) ([]byte, e
 		merged[field] = v
 	}
 	variables[nodeCustomisationVariable] = merged
-	req["variables"] = variables
 	out, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("writing the create request: %w", err)

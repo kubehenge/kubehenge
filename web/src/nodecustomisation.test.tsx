@@ -15,7 +15,7 @@ import {
   nodeCustomisationVariable,
   type NodeCustomisation,
 } from "./node-customisation";
-import { planRows } from "./Staging";
+import { planRows } from "./plan-rows";
 import type { ClusterClass } from "./types";
 
 const k3s: ClusterClass = {

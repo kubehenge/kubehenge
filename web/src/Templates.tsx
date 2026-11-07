@@ -414,6 +414,37 @@ function NodeOSField({
   );
 }
 
+const typedOrSole = (typed: string, offered: string[]): string => (filled(typed) ? typed : (sole(offered) ?? ""));
+
+/**
+ * withChoices fills what the user has not picked. A lone choice is taken. The cloud-init storage is
+ * optional, so stays the node's first. The Talos release is the one templates are made of by
+ * default, unless it has one already.
+ */
+function withChoices(
+  entered: BuildForm,
+  o: {
+    osOffered: NodeOS[];
+    usual: NodeOS | undefined;
+    release: string;
+    diskStorages: string[];
+    importStorages: string[];
+    bridges: string[];
+  },
+): BuildForm {
+  return {
+    ...entered,
+    nodeOS:
+      findNodeOS(o.osOffered, entered.nodeOS) === undefined && o.usual !== undefined
+        ? nodeOSKey(o.usual)
+        : entered.nodeOS,
+    talosVersion: filled(entered.talosVersion) ? entered.talosVersion : o.release,
+    storage: typedOrSole(entered.storage, o.diskStorages),
+    importStorage: typedOrSole(entered.importStorage, o.importStorages),
+    bridge: typedOrSole(entered.bridge, o.bridges),
+  };
+}
+
 function BuildDialog({
   nodeOSes,
   onClose,
@@ -495,20 +526,15 @@ function BuildDialog({
   const bridgeLabels = Object.fromEntries(bridges.map((b) => [b.bridge, bridgeLabel(b)]));
   const talos = entered.distribution === "talos";
   const releases = useTalosReleases(talos);
-  // A lone choice is taken until the user picks. The cloud-init storage is optional, so stays the
-  // node's first. The Talos release is the one templates are made of by default, unless it has
-  // one already.
-  const releaseOffered = releases ? releaseToMake(releases) : "";
   const osOffered = forDistribution(nodeOSes, entered.distribution);
-  const form: BuildForm = {
-    ...entered,
-    nodeOS:
-      findNodeOS(osOffered, entered.nodeOS) === undefined && usual !== undefined ? nodeOSKey(usual) : entered.nodeOS,
-    talosVersion: filled(entered.talosVersion) ? entered.talosVersion : releaseOffered,
-    storage: filled(entered.storage) ? entered.storage : (sole(diskStorages) ?? ""),
-    importStorage: filled(entered.importStorage) ? entered.importStorage : (sole(onNode("import")) ?? ""),
-    bridge: filled(entered.bridge) ? entered.bridge : (sole(bridgeNames) ?? ""),
-  };
+  const form = withChoices(entered, {
+    osOffered,
+    usual,
+    release: releases ? releaseToMake(releases) : "",
+    diskStorages,
+    importStorages: onNode("import"),
+    bridges: bridgeNames,
+  });
   const unshared = storages.some((s) => s.storage === form.storage && s.node === form.node && !s.shared);
   const problems = buildProblems(form);
   const shown = (k: keyof BuildForm): string | undefined => (touched.has(k) ? problems[k] : undefined);

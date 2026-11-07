@@ -139,7 +139,7 @@ func TestTemplatesEndToEnd(t *testing.T) {
 			}
 
 			if tmpl.Bake != nil {
-				bootClone(t, b, vmid, *tmpl.Bake)
+				bootClone(t, b, vmid, tmpl.Bake)
 			}
 		})
 	}
@@ -185,7 +185,7 @@ func assertTemplateShape(t *testing.T, b *Builder, vmid int, tmpl *Template) {
 // bootClone does what Cluster API's Proxmox VE provider does with a template and checks the clone
 // from inside: cloud-init runs afresh and finishes without warnings, and the clone is not a copy of
 // the bake VM's identity.
-func bootClone(t *testing.T, b *Builder, template int, bake Bake) {
+func bootClone(t *testing.T, b *Builder, template int, bake *Bake) {
 	t.Helper()
 	ctx := context.Background()
 	node, err := b.Client.Node(ctx, b.Node)

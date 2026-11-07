@@ -118,67 +118,34 @@ export function OptionDialog({
   cluster: Cluster;
   onClose: () => void;
 }): JSX.Element {
-  switch (action) {
-    case "headlamp":
-    case "monitoring": {
-      return <HostedAddonDialog cluster={c} addon={action} onClose={onClose} />;
-    }
-    case "logs": {
-      return <LogsDialog cluster={c} onClose={onClose} />;
-    }
-    case "podSecurity": {
-      return <PodSecurityDialog cluster={c} onClose={onClose} />;
-    }
-    case "cis": {
-      return <CISDialog cluster={c} onClose={onClose} />;
-    }
-    case "clusterMesh": {
-      return <ClusterMeshDialog cluster={c} onClose={onClose} />;
-    }
-    case "loadBalancer": {
-      return <LoadBalancerDialog cluster={c} onClose={onClose} />;
-    }
-    case "rancher": {
-      return <RancherDialog cluster={c} onClose={onClose} />;
-    }
-    case "gitops": {
-      return <GitOpsDialog cluster={c} onClose={onClose} />;
-    }
-    case "egressProxy": {
-      return <EgressDialog cluster={c} onClose={onClose} />;
-    }
-    case "upgrades": {
-      return <UpgradesDialog cluster={c} onClose={onClose} />;
-    }
-    case "certificates": {
-      return <CertificatesDialog cluster={c} onClose={onClose} />;
-    }
-    case "namespaceLabels": {
-      return <NamespaceLabelsDialog cluster={c} onClose={onClose} />;
-    }
-    case "nodeOS": {
-      return <NodeOSDialog cluster={c} onClose={onClose} />;
-    }
-    case "placement": {
-      return <PlacementDialog cluster={c} onClose={onClose} />;
-    }
-    case "hostOutage": {
-      return <HostOutageDialog cluster={c} onClose={onClose} />;
-    }
-    case "talos": {
-      return <TalosDialog cluster={c} onClose={onClose} />;
-    }
-    case "etcd": {
-      return <EtcdDialog cluster={c} onClose={onClose} />;
-    }
-    case "nodeCustomisation": {
-      return <NodeCustomisationDialog cluster={c} onClose={onClose} />;
-    }
-    case "oidc": {
-      break;
-    }
+  if (action === "headlamp" || action === "monitoring") {
+    return <HostedAddonDialog cluster={c} addon={action} onClose={onClose} />;
   }
-  return <OIDCDialog cluster={c} onClose={onClose} />;
+  const dialogs: Record<
+    Exclude<OptionAction, "headlamp" | "monitoring">,
+    (props: { cluster: Cluster; onClose: () => void }) => JSX.Element
+  > = {
+    logs: LogsDialog,
+    podSecurity: PodSecurityDialog,
+    cis: CISDialog,
+    clusterMesh: ClusterMeshDialog,
+    loadBalancer: LoadBalancerDialog,
+    rancher: RancherDialog,
+    gitops: GitOpsDialog,
+    egressProxy: EgressDialog,
+    upgrades: UpgradesDialog,
+    certificates: CertificatesDialog,
+    namespaceLabels: NamespaceLabelsDialog,
+    nodeOS: NodeOSDialog,
+    placement: PlacementDialog,
+    hostOutage: HostOutageDialog,
+    talos: TalosDialog,
+    etcd: EtcdDialog,
+    nodeCustomisation: NodeCustomisationDialog,
+    oidc: OIDCDialog,
+  };
+  const Chosen = dialogs[action];
+  return <Chosen cluster={c} onClose={onClose} />;
 }
 
 interface HostedValue {

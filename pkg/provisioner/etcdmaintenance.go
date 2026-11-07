@@ -469,7 +469,7 @@ func (m *EtcdMaintainer) now() time.Time {
 func formatBytes(n int64) string {
 	const unit = 1024
 	value := float64(n)
-	for _, suffix := range []string{"B", "KiB", "MiB", "GiB"} {
+	for _, suffix := range []string{"B", "KiB", mebibytes, "GiB"} {
 		if value < unit {
 			return fmt.Sprintf("%.1f %s", value, suffix)
 		}

@@ -47,8 +47,8 @@ func (leap) Image(ctx context.Context, s *Sources, r Release) (Resolved, error) 
 	return s.signedImage(ctx, key, dir+"/"+file, dir+"/"+file+".sha256", dir+"/"+file+".sha256.asc", "leap-"+r.Name+"-"+r.Build)
 }
 
-func (leap) Keys(_ Release, b Bake) []RepositoryKey { return keysOf(leapRepositories(b)) }
+func (leap) Keys(_ Release, b *Bake) []RepositoryKey { return keysOf(leapRepositories(b)) }
 
-func (leap) Recipe(_ Release, b Bake, keys map[string]string) (Recipe, error) {
+func (leap) Recipe(_ Release, b *Bake, keys map[string]string) (Recipe, error) {
 	return leapRecipe(b, keys)
 }

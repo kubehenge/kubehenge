@@ -110,7 +110,7 @@ func minorSeries(v string) string {
 
 // recipeBuild gathers a bake's files, the family's directory and node/ with the repositories and
 // their keys, and the command that runs the family's build.sh on them.
-func recipeBuild(b Bake, repos []*repository, keys map[string]string, dir string) (map[string]string, []string, error) {
+func recipeBuild(b *Bake, repos []*repository, keys map[string]string, dir string) (map[string]string, []string, error) {
 	if b.Distribution == Kubeadm && !versionRE.MatchString(b.KubernetesVersion) {
 		return nil, nil, fmt.Errorf("the Kubernetes version %q is not of the form v1.2.3", b.KubernetesVersion)
 	}
@@ -118,30 +118,12 @@ func recipeBuild(b Bake, repos []*repository, keys map[string]string, dir string
 	if b.NodeOS.FIPS {
 		files[fipsMarker] = "1\n"
 	}
-	for _, r := range repos {
-		files["repos/"+r.id+".repo"] = r.file()
-	}
-	for _, k := range keysOf(repos) {
-		armoured, ok := keys[k.Name]
-		if !ok {
-			return nil, nil, fmt.Errorf("the bake needs the %s key", k.Name)
-		}
-		files["keys/"+k.Name+".asc"] = armoured
+	if err := addRepositoryFiles(files, repos, keys); err != nil {
+		return nil, nil, err
 	}
 	for _, d := range []string{dir, "node"} {
-		err := fs.WalkDir(recipeFiles, d, func(name string, e fs.DirEntry, err error) error {
-			if err != nil || e.IsDir() {
-				return err
-			}
-			content, err := recipeFiles.ReadFile(name)
-			if err != nil {
-				return fmt.Errorf("reading %s: %w", name, err)
-			}
-			files[name] = string(content)
-			return nil
-		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("reading the bake's files: %w", err)
+		if err := addRecipeFiles(files, d); err != nil {
+			return nil, nil, err
 		}
 	}
 	build := []string{"sh", path.Join(buildDir, dir, "build.sh"), string(b.Distribution)}
@@ -156,6 +138,40 @@ func recipeBuild(b Bake, repos []*repository, keys map[string]string, dir string
 		build = proxyBuild(build)
 	}
 	return files, build, nil
+}
+
+// addRepositoryFiles adds the repositories' definitions and each one's armoured key to files.
+func addRepositoryFiles(files map[string]string, repos []*repository, keys map[string]string) error {
+	for _, r := range repos {
+		files["repos/"+r.id+".repo"] = r.file()
+	}
+	for _, k := range keysOf(repos) {
+		armoured, ok := keys[k.Name]
+		if !ok {
+			return fmt.Errorf("the bake needs the %s key", k.Name)
+		}
+		files["keys/"+k.Name+".asc"] = armoured
+	}
+	return nil
+}
+
+// addRecipeFiles adds every file under dir of the embedded recipe files to files.
+func addRecipeFiles(files map[string]string, dir string) error {
+	err := fs.WalkDir(recipeFiles, dir, func(name string, e fs.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return err
+		}
+		content, err := recipeFiles.ReadFile(name)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", name, err)
+		}
+		files[name] = string(content)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("reading the bake's files: %w", err)
+	}
+	return nil
 }
 
 // enableGuestExec is the first thing the bake's VM does, before cloud-init's other modules: the EL
@@ -227,7 +243,7 @@ const avcDenied = `! journalctl -b -k -o cat --no-pager | grep -qF 'avc:  denied
 // nodeChecks prove a node's boot as a clone's goes: cloud-init finishes without warnings, which
 // Cluster API's Proxmox VE provider counts as a failed boot, the root is read-only, SELinux enforces
 // and denied nothing, and the distribution's parts are in place.
-func nodeChecks(b Bake) [][]string {
+func nodeChecks(b *Bake) [][]string {
 	checks := [][]string{
 		{cloudInit, "status", "--wait"},
 		active("qemu-guest-agent"),

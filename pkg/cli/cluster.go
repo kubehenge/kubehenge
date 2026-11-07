@@ -189,7 +189,7 @@ request the controller defragments large, fragmented members inside the cluster'
 			if quota < minEtcdQuotaGiB || quota > maxEtcdQuotaGiB {
 				return fmt.Errorf("--quota-gib is %d to %d, not %d", minEtcdQuotaGiB, maxEtcdQuotaGiB, quota)
 			}
-			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{"variables": map[string]any{"etcd": map[string]any{"quotaGiB": quota}}})
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{variablesKey: map[string]any{"etcd": map[string]any{"quotaGiB": quota}}})
 		},
 	}
 	set.Flags().IntVar(&quota, "quota-gib", 0, "the most one member's database may reach, in GiB: 2 to 8, never lower than now")
@@ -457,6 +457,19 @@ func timeoutValues(spec string) (map[string]int64, error) {
 // webhook check the value too, so a bad one is refused before a request goes out and again there.
 const graceFlag = "host-outage-grace-minutes"
 
+// variablesKey is the field of a request body that holds the cluster's variables.
+const variablesKey = "variables"
+
+// requestVariables are the variables of a request body, an empty set put in when it has none.
+func requestVariables(req map[string]any) map[string]any {
+	vars, ok := req[variablesKey].(map[string]any)
+	if !ok {
+		vars = map[string]any{}
+		req[variablesKey] = vars
+	}
+	return vars
+}
+
 func graceHelp() string {
 	return fmt.Sprintf("minutes to wait for a host that is offline or in maintenance before replacing its machines: 0 waits for the host, otherwise %d to %d (default %d)",
 		provisioner.MinHostOutageGraceMinutes, provisioner.MaxHostOutageGraceMinutes, provisioner.DefaultHostOutageGraceMinutes)
@@ -513,12 +526,7 @@ func withGrace(request []byte, minutes int) ([]byte, error) {
 	if err := json.Unmarshal(request, &req); err != nil {
 		return nil, fmt.Errorf("the create request is not an object: %w", err)
 	}
-	vars, isObject := req["variables"].(map[string]any)
-	if !isObject {
-		vars = map[string]any{}
-	}
-	vars[provisioner.HostOutageGraceVariable] = minutes
-	req["variables"] = vars
+	requestVariables(req)[provisioner.HostOutageGraceVariable] = minutes
 	out, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("writing the create request: %w", err)

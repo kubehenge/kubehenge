@@ -17,7 +17,7 @@ func TestCreateCarriesTheTimeoutsItIsGiven(t *testing.T) {
 	body := strings.Replace(createBody, `"workerReplicas":2,`,
 		`"workerReplicas":2,"controlPlaneTimeouts":{"nodeDrainTimeoutSeconds":1200,"nodeDeletionTimeoutSeconds":0},"workerTimeouts":{"nodeVolumeDetachTimeoutSeconds":300},`, 1)
 	expect(t, b.do("POST", "/api/clusters", body), http.StatusCreated)
-	c := storedCluster(t, h, "default", "web")
+	c := storedCluster(t, h, "web")
 	cp, pool := c.Spec.Topology.ControlPlane.Deletion, c.Spec.Topology.Workers.MachineDeployments[0].Deletion
 	if cp.NodeDrainTimeoutSeconds == nil || *cp.NodeDrainTimeoutSeconds != 1200 || cp.NodeDeletionTimeoutSeconds == nil || *cp.NodeDeletionTimeoutSeconds != 0 || cp.NodeVolumeDetachTimeoutSeconds != nil {
 		t.Errorf("control plane deletion = %+v", cp)
@@ -62,14 +62,14 @@ func TestChangeSetsAndClearsTimeouts(t *testing.T) {
 	if p := view.WorkerPools[0].Timeouts; p.Drain == nil || *p.Drain != 600 || p.VolumeDetach == nil || *p.VolumeDetach != 120 {
 		t.Errorf("pool timeouts shown = %+v", p)
 	}
-	c := storedCluster(t, h, "default", "one")
+	c := storedCluster(t, h, "one")
 	if d := c.Spec.Topology.Workers.MachineDeployments[0].Deletion.NodeDrainTimeoutSeconds; d == nil || *d != 600 {
 		t.Errorf("stored pool drain = %v", d)
 	}
 
 	// An empty object takes the class's timeouts again.
 	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"controlPlaneTimeouts":{},"pools":{"md-0":{"timeouts":{}}}}`), http.StatusOK)
-	c = storedCluster(t, h, "default", "one")
+	c = storedCluster(t, h, "one")
 	if provisioner.NodeTimeoutsOf(&c.Spec.Topology.ControlPlane.Deletion) != (provisioner.NodeTimeouts{}) ||
 		provisioner.NodeTimeoutsOfPool(&c.Spec.Topology.Workers.MachineDeployments[0].Deletion) != (provisioner.NodeTimeouts{}) {
 		t.Errorf("after clearing: %+v", c.Spec.Topology)

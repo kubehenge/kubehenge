@@ -158,7 +158,7 @@ var (
 	talosPathPrefixes      = []string{"/var/", "/etc/cri/conf.d/"}
 	talosProtectedPrefixes = []string{"/var/lib/etcd", "/var/lib/kubelet", "/var/log/audit", "/var/run", "/var/lib/rancher", "/var/log/kubernetes"}
 
-	nodeRoles = set("controlPlane", "worker")
+	nodeRoles = set(roleControlPlane, roleWorker)
 )
 
 // ProtectedNodeFlag reports whether the variable refuses an argument of a component (kubelet,
@@ -215,7 +215,7 @@ func checkNodeCustomisation(distribution templates.Distribution, n *NodeCustomis
 	for i, c := range n.Commands {
 		for _, r := range c.Roles {
 			if !nodeRoles[r] {
-				errs = append(errs, field.NotSupported(base.Child("commands").Index(i).Child("roles"), r, []string{"controlPlane", "worker"}))
+				errs = append(errs, field.NotSupported(base.Child("commands").Index(i).Child("roles"), r, []string{roleControlPlane, roleWorker}))
 			}
 		}
 	}
@@ -241,7 +241,7 @@ func checkNodeFile(distribution templates.Distribution, f NodeFile, at *field.Pa
 	}
 	for _, r := range f.Roles {
 		if !nodeRoles[r] {
-			errs = append(errs, field.NotSupported(at.Child("roles"), r, []string{"controlPlane", "worker"}))
+			errs = append(errs, field.NotSupported(at.Child("roles"), r, []string{roleControlPlane, roleWorker}))
 		}
 	}
 	return errs

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "./api";
-import { coresText, memoryStepMiB } from "./create-form";
+import { coresText, machineMinimums, memoryStepMiB } from "./create-form";
 import { sizeOf } from "./MachineFields";
 import { whole } from "./network";
 import type { Cluster, ClusterClass, MachineSize, WorkerPool } from "./types";
@@ -9,6 +9,10 @@ import type { Cluster, ClusterClass, MachineSize, WorkerPool } from "./types";
 /** poolSize is a pool's machine size: its own, or the cluster's for its workers. */
 export const poolSize = (c: Cluster, p: WorkerPool): MachineSize | undefined =>
   p.machine ?? sizeOf(c.variables["workerMachine"]);
+
+/** leastSize is the least size the class allows a pool's machines, or the control plane's for none. */
+export const leastSize = (cls: ClusterClass | undefined, pool: WorkerPool | undefined): MachineSize =>
+  machineMinimums(cls, pool === undefined ? "controlPlaneMachine" : "workerMachine");
 
 /** sizeProblem says what keeps a size from being sent, by the class's least. */
 export function sizeProblem(m: MachineSize, min: MachineSize): string | undefined {

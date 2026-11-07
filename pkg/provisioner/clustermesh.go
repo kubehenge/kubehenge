@@ -552,7 +552,7 @@ type meshCert struct {
 // The remote one is what its KVStoreMesh reads the peers with.
 func meshCerts(name, endpoint string) []meshCert {
 	dns := []string{meshServer}
-	ips := []net.IP{net.ParseIP("127.0.0.1"), net.IPv6loopback}
+	ips := []net.IP{net.ParseIP(loopback), net.IPv6loopback}
 	if ip := net.ParseIP(endpoint); ip != nil {
 		ips = append(ips, ip)
 	} else if endpoint != "" {

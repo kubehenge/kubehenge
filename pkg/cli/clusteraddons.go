@@ -56,7 +56,7 @@ cluster whose admission policy requires labels or reads Pod Security levels from
 					return err
 				}
 			}
-			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{"variables": map[string]any{"namespaceLabels": set}})
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{variablesKey: map[string]any{"namespaceLabels": set}})
 		},
 	}
 	namespaceLabels.Flags().StringArrayVar(&labels, "label", nil, "a label as KEY=VALUE, repeated for more")

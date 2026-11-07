@@ -157,7 +157,6 @@ func logsCharts(charts *Charts, distribution templates.Distribution, logs Logs) 
 // paths by unauthenticated.
 func lokiValues(proxy Image, logs Logs) map[string]any {
 	const (
-		loopback = "127.0.0.1"
 		grpcPort = "9095"
 	)
 	off := map[string]any{"enabled": false}
@@ -563,7 +562,7 @@ func alloyCommon(image Image, config, namespace string, objects ...any) (map[str
 	alloy := map[string]any{
 		// The chart renders the content as a Helm template, which would empty Alloy's own templates.
 		"configMap":            map[string]any{"content": strings.ReplaceAll(config, "{{", `{{"{{"}}`)},
-		"listenAddr":           "127.0.0.1",
+		"listenAddr":           loopback,
 		"enableHttpServerPort": false,
 		"enableReporting":      false,
 	}

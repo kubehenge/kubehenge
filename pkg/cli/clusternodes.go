@@ -164,7 +164,7 @@ func updateRequest(f updateFlags) (map[string]any, error) {
 	if len(vars) == 0 {
 		return nil, errors.New("give --cis, --" + graceFlag + ", --label, --taint, a node customisation flag such as --node-file or --kubelet-arg, or a mix")
 	}
-	return map[string]any{"variables": vars}, nil
+	return map[string]any{variablesKey: vars}, nil
 }
 
 func (o *clusterOptions) updateCommand() *cobra.Command {

@@ -21,12 +21,12 @@ func TestBakeWithoutProxyIsUnchanged(t *testing.T) {
 		for _, r := range f.Releases() {
 			for _, b := range proxyBakes() {
 				b.NodeOS = NodeOS{Family: f.Name(), Release: r.Name}
-				plain, err := f.Recipe(r, b, fakeKeys(f.Keys(r, b)))
+				plain, err := f.Recipe(r, &b, fakeKeys(f.Keys(r, &b)))
 				if err != nil {
 					t.Fatal(err)
 				}
 				b.Proxy = &GuestProxy{}
-				empty, err := f.Recipe(r, b, fakeKeys(f.Keys(r, b)))
+				empty, err := f.Recipe(r, &b, fakeKeys(f.Keys(r, &b)))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -55,7 +55,7 @@ func TestBakeWithProxy(t *testing.T) {
 			for _, b := range proxyBakes() {
 				b.NodeOS = NodeOS{Family: f.Name(), Release: r.Name}
 				b.Proxy = &GuestProxy{URL: testProxy, NoProxy: "10.0.0.0/24,.svc", CABundle: ca}
-				recipe, err := f.Recipe(r, b, fakeKeys(f.Keys(r, b)))
+				recipe, err := f.Recipe(r, &b, fakeKeys(f.Keys(r, &b)))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -133,7 +133,7 @@ func TestProxyRefusesLineBreaks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.Recipe(r, b, fakeKeys(f.Keys(r, b))); err == nil {
+	if _, err := f.Recipe(r, &b, fakeKeys(f.Keys(r, &b))); err == nil {
 		t.Error("an address with a line break was accepted")
 	}
 }
@@ -243,7 +243,7 @@ func TestProxyRunsInOrder(t *testing.T) {
 		for _, b := range proxyBakes() {
 			b.NodeOS = NodeOS{Family: family.Name(), Release: r.Name}
 			b.Proxy = &GuestProxy{URL: testProxy, CABundle: ca}
-			recipe, err := family.Recipe(r, b, fakeKeys(family.Keys(r, b)))
+			recipe, err := family.Recipe(r, &b, fakeKeys(family.Keys(r, &b)))
 			if err != nil {
 				t.Fatal(err)
 			}

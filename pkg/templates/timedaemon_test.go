@@ -39,7 +39,7 @@ func TestNodeChecksProveTheTimeDaemon(t *testing.T) {
 	for _, b := range []Bake{
 		{Distribution: Kubeadm, KubernetesVersion: "v1.37.2"}, {Distribution: RKE2}, {Distribution: K3s},
 	} {
-		checks := nodeChecks(b)
+		checks := nodeChecks(&b)
 		for _, w := range want {
 			if !slices.ContainsFunc(checks, func(c []string) bool { return slices.Equal(c, w) }) {
 				t.Errorf("%s: no check %q among %q", b.Distribution, w, checks)

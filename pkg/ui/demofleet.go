@@ -462,12 +462,8 @@ func isControlPlane(m *clusterv1.Machine) bool {
 	return ok
 }
 
-func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluster {
-	cp, workers := d.ControlPlanes, d.Workers
-	pods, services := "10.42.0.0/16", "10.43.0.0/16"
-	if d.Distribution == templates.Kubeadm || d.Distribution == templates.Talos {
-		pods, services = "10.244.0.0/16", "10.96.0.0/12"
-	}
+// clusterVariables are a demo cluster's variables, sorted by name.
+func (f *demoFleet) clusterVariables(d *demoCluster) []clusterv1.ClusterVariable {
 	vars := map[string]json.RawMessage{
 		"controlPlaneEndpoint": json.RawMessage(fmt.Sprintf(`"10.20.%d.10"`, d.Subnet)),
 		"network": json.RawMessage(fmt.Sprintf(
@@ -489,6 +485,47 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 	if d.NodeCustomisation != nil {
 		vars[provisioner.NodeCustomisationVariable] = d.NodeCustomisation
 	}
+	out := make([]clusterv1.ClusterVariable, 0, len(vars))
+	for _, name := range slices.Sorted(maps.Keys(vars)) {
+		out = append(out, clusterv1.ClusterVariable{Name: name, Value: apiextensionsv1.JSON{Raw: vars[name]}})
+	}
+	return out
+}
+
+// heldConditions are a demo cluster's conditions beside the ones every cluster has: a held
+// replacement, those the demo data names and a lack of memory.
+func (f *demoFleet) heldConditions(d *demoCluster) []metav1.Condition {
+	var out []metav1.Condition
+	if d.Held {
+		since := f.now.Add(-7 * time.Minute)
+		out = append(out, metav1.Condition{
+			Type: provisioner.RemediationHeldCondition, Status: metav1.ConditionTrue, Reason: provisioner.HeldNodeMaintenance, LastTransitionTime: metav1.NewTime(since),
+			Message: fmt.Sprintf("%s-%s-%s: Proxmox VE node %s is in maintenance, replacement waits until %s",
+				d.Name, workerPool, demoSuffix(d.Name, workerPool, int(d.Workers-1)), f.data.ProxmoxNodes[int(d.ControlPlanes+d.Workers-1)%len(f.data.ProxmoxNodes)],
+				since.Add(30*time.Minute).UTC().Format("15:04 MST")),
+		})
+	}
+	for _, n := range d.Conditions {
+		out = append(out, metav1.Condition{
+			Type: n.Type, Status: metav1.ConditionTrue, Reason: n.Reason, Message: n.Message,
+			LastTransitionTime: metav1.NewTime(f.now.Add(-time.Duration(n.AgoHours) * time.Hour)),
+		})
+	}
+	if d.LackingMemory != "" {
+		out = append(out, metav1.Condition{
+			Type: provisioner.NodesLackMemoryCondition, Status: metav1.ConditionTrue, Reason: "NoRoom",
+			Message: d.LackingMemory, LastTransitionTime: metav1.NewTime(f.now.Add(-25 * time.Minute)),
+		})
+	}
+	return out
+}
+
+func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluster {
+	cp, workers := d.ControlPlanes, d.Workers
+	pods, services := "10.42.0.0/16", "10.43.0.0/16"
+	if d.Distribution == templates.Kubeadm || d.Distribution == templates.Talos {
+		pods, services = "10.244.0.0/16", "10.96.0.0/12"
+	}
 	c := &clusterv1.Cluster{
 		Namespace: demoNamespace, Name: d.Name, UID: types.UID("demo-" + d.Name), Generation: 4,
 		CreationTimestamp: metav1.NewTime(created), Annotations: map[string]string{createdBy: demoUser},
@@ -503,11 +540,9 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 				Version:      d.Version,
 				ControlPlane: clusterv1.ControlPlaneTopology{Replicas: &cp},
 				Workers:      clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{{Class: workerClass, Name: workerPool, Replicas: &workers}}},
+				Variables:    f.clusterVariables(d),
 			},
 		},
-	}
-	for _, name := range slices.Sorted(maps.Keys(vars)) {
-		c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: name, Value: apiextensionsv1.JSON{Raw: vars[name]}})
 	}
 	c.Annotations[provisioner.EtcdStatusAnnotation] = f.etcdStatus(d)
 	since := metav1.NewTime(created.Add(9 * time.Minute))
@@ -525,16 +560,6 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		raw, _ := json.Marshal(changeRecord{By: demoUser, At: started, Settings: u.Change}) //nolint:errchkjson // strings and a time
 		c.Annotations[changeAnnotation] = string(raw)
 		c.Generation++
-	}
-	held := []metav1.Condition{}
-	if d.Held {
-		since := f.now.Add(-7 * time.Minute)
-		held = append(held, metav1.Condition{
-			Type: provisioner.RemediationHeldCondition, Status: metav1.ConditionTrue, Reason: provisioner.HeldNodeMaintenance, LastTransitionTime: metav1.NewTime(since),
-			Message: fmt.Sprintf("%s-%s-%s: Proxmox VE node %s is in maintenance, replacement waits until %s",
-				d.Name, workerPool, demoSuffix(d.Name, workerPool, int(d.Workers-1)), f.data.ProxmoxNodes[int(d.ControlPlanes+d.Workers-1)%len(f.data.ProxmoxNodes)],
-				since.Add(30*time.Minute).UTC().Format("15:04 MST")),
-		})
 	}
 	if h := d.TalosHold; h != nil {
 		node := fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, 0))
@@ -559,21 +584,9 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 			DesiredReplicas: &workers, Replicas: &workers, ReadyReplicas: &workers, AvailableReplicas: &workers, UpToDateReplicas: &upToDateWorkers,
 		},
 	}
-	c.Status.Conditions = append(c.Status.Conditions, held...)
+	c.Status.Conditions = append(c.Status.Conditions, f.heldConditions(d)...)
 	if d.Paused {
 		c.Spec.Paused = new(true)
-	}
-	for _, n := range d.Conditions {
-		c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
-			Type: n.Type, Status: metav1.ConditionTrue, Reason: n.Reason, Message: n.Message,
-			LastTransitionTime: metav1.NewTime(f.now.Add(-time.Duration(n.AgoHours) * time.Hour)),
-		})
-	}
-	if d.LackingMemory != "" {
-		c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
-			Type: provisioner.NodesLackMemoryCondition, Status: metav1.ConditionTrue, Reason: "NoRoom",
-			Message: d.LackingMemory, LastTransitionTime: metav1.NewTime(f.now.Add(-25 * time.Minute)),
-		})
 	}
 	f.waitForWindow(c, d.AddonChanges)
 	return c

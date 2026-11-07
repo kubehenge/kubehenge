@@ -27,7 +27,7 @@ var (
 
 // leapRepositories are what a bake of the distribution adds to Leap's own repositories, which have
 // containerd.
-func leapRepositories(b Bake) []*repository {
+func leapRepositories(b *Bake) []*repository {
 	switch b.Distribution {
 	case RKE2:
 		return []*repository{rke2SELinuxSUSE}
@@ -42,7 +42,7 @@ func leapRepositories(b Bake) []*repository {
 
 // leapRecipe installs what a node needs as a new snapshot of the image's root (leap/build.sh) and
 // reboots into it, where a kubeadm node pulls its control-plane images.
-func leapRecipe(b Bake, keys map[string]string) (Recipe, error) {
+func leapRecipe(b *Bake, keys map[string]string) (Recipe, error) {
 	repos := leapRepositories(b)
 	if repos == nil {
 		return Recipe{}, fmt.Errorf("no node of %s", b.Distribution)

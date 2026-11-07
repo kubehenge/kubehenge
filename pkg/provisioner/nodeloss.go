@@ -236,7 +236,7 @@ func (w *VMWatch) forgetLocation(ctx context.Context, c *clusterv1.Cluster, mach
 // tells whether it was in either.
 func dropLocation(pc *unstructured.Unstructured, machine string) bool {
 	dropped := false
-	for _, role := range []string{"controlPlane", "workers"} {
+	for _, role := range []string{roleControlPlane, "workers"} {
 		path := []string{"status", "nodeLocations", role}
 		locations, found, _ := unstructured.NestedSlice(pc.Object, path...)
 		if !found {

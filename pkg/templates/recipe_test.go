@@ -109,14 +109,14 @@ func TestRecipesOfEveryNodeOS(t *testing.T) {
 				b.NodeOS = NodeOS{Family: f.Name(), Release: r.Name, FIPS: b.NodeOS.FIPS}
 				t.Run(b.NodeOS.String()+"/"+string(b.Distribution), func(t *testing.T) {
 					t.Parallel()
-					checkRecipe(t, f, r, b)
+					checkRecipe(t, f, r, &b)
 				})
 			}
 		}
 	}
 }
 
-func checkRecipe(t *testing.T, f Family, r Release, b Bake) {
+func checkRecipe(t *testing.T, f Family, r Release, b *Bake) {
 	t.Helper()
 	keys := f.Keys(r, b)
 	names := checkKeys(t, keys)
@@ -241,7 +241,7 @@ func checkScriptPaths(t *testing.T, files map[string]string, dir string) {
 }
 
 // nodeBootChecks are the checks of the node's own boot, past what the build mode runs first.
-func nodeBootChecks(t *testing.T, recipe *Recipe, m BuildMode, b Bake, files map[string]string) [][]string {
+func nodeBootChecks(t *testing.T, recipe *Recipe, m BuildMode, b *Bake, files map[string]string) [][]string {
 	t.Helper()
 	switch m {
 	case ImageMode:
@@ -298,7 +298,7 @@ func distributionChecks(t *testing.T, d Distribution) []string {
 func TestNodeChecks(t *testing.T) {
 	t.Parallel()
 	for _, b := range []Bake{{Distribution: RKE2}, {Distribution: K3s}, {Distribution: Kubeadm, KubernetesVersion: "v1.37.1"}} {
-		checks := nodeChecks(b)
+		checks := nodeChecks(&b)
 		if !slices.Equal(checks[0], []string{cloudInit, "status", "--wait"}) {
 			t.Errorf("%s: the first check is %q, want cloud-init finished without warnings", b.Distribution, checks[0])
 		}
@@ -325,8 +325,8 @@ func TestFIPSBakes(t *testing.T) {
 			}
 			for _, fips := range []bool{true, false} {
 				b := Bake{Distribution: RKE2, NodeOS: NodeOS{Family: f.Name(), Release: r.Name, FIPS: fips}}
-				keys := f.Keys(r, b)
-				recipe, err := f.Recipe(r, b, fakeKeys(keys))
+				keys := f.Keys(r, &b)
+				recipe, err := f.Recipe(r, &b, fakeKeys(keys))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -334,7 +334,7 @@ func TestFIPSBakes(t *testing.T) {
 				if _, marked := files[fipsMarker]; marked != fips {
 					t.Errorf("%s: marked for FIPS mode %t", b.NodeOS, marked)
 				}
-				checks := fmt.Sprint(nodeBootChecks(t, &recipe, r.Mode, b, files))
+				checks := fmt.Sprint(nodeBootChecks(t, &recipe, r.Mode, &b, files))
 				for _, want := range []string{"/proc/sys/crypto/fips_enabled", "update-crypto-policies --show", "fips=1"} {
 					if strings.Contains(checks, want) != fips {
 						t.Errorf("%s: a check of %s is %t in %s", b.NodeOS, want, !fips, checks)
@@ -359,11 +359,11 @@ func TestImageModeRKE2NodesLetContainersInstallCNIPlugins(t *testing.T) {
 		t.Fatalf("the default node OS is not image mode: %+v, %v", r, err)
 	}
 	const check = "stat -L -c %C /opt/cni/bin | grep -q ':container_file_t:'"
-	if all := fmt.Sprint(nodeChecks(Bake{NodeOS: DefaultNodeOS, Distribution: RKE2})); !strings.Contains(all, check) {
+	if all := fmt.Sprint(nodeChecks(&Bake{NodeOS: DefaultNodeOS, Distribution: RKE2})); !strings.Contains(all, check) {
 		t.Errorf("no check of /opt/cni/bin's label in %s", all)
 	}
 	for _, b := range []Bake{{Distribution: RKE2}, {NodeOS: DefaultNodeOS, Distribution: K3s}} {
-		if all := fmt.Sprint(nodeChecks(b)); strings.Contains(all, "/opt/cni/bin") {
+		if all := fmt.Sprint(nodeChecks(&b)); strings.Contains(all, "/opt/cni/bin") {
 			t.Errorf("%s on %v is checked for the label of /opt/cni/bin, which nothing set: %s", b.Distribution, b.NodeOS, all)
 		}
 	}
@@ -408,7 +408,7 @@ func TestNodesLetTheTigeraOperatorReadCalicosMTU(t *testing.T) {
 		}
 	}
 	for _, d := range []Distribution{RKE2, K3s, Kubeadm} {
-		if all := fmt.Sprint(nodeChecks(Bake{Distribution: d, KubernetesVersion: "v1.37.1"})); !strings.Contains(all, "/var/lib/calico | grep -q ':container_ro_file_t:'") {
+		if all := fmt.Sprint(nodeChecks(&Bake{Distribution: d, KubernetesVersion: "v1.37.1"})); !strings.Contains(all, "/var/lib/calico | grep -q ':container_ro_file_t:'") {
 			t.Errorf("%s: no check of /var/lib/calico's label in %s", d, all)
 		}
 	}
@@ -444,23 +444,23 @@ func TestRecipeRefuses(t *testing.T) {
 	kubeadm := Bake{NodeOS: DefaultNodeOS, Distribution: Kubeadm, KubernetesVersion: "v1.37.1"}
 	for name, try := range map[string]func() error{
 		"a missing key": func() error {
-			keys := fakeKeys(alma.Keys(release, kubeadm))
+			keys := fakeKeys(alma.Keys(release, &kubeadm))
 			delete(keys, "kubernetes")
-			_, err := alma.Recipe(release, kubeadm, keys)
+			_, err := alma.Recipe(release, &kubeadm, keys)
 			return err
 		},
 		"a Kubernetes version that is none": func() error {
 			b := kubeadm
 			b.KubernetesVersion = "1.37"
-			_, err := alma.Recipe(release, b, fakeKeys(alma.Keys(release, kubeadm)))
+			_, err := alma.Recipe(release, &b, fakeKeys(alma.Keys(release, &kubeadm)))
 			return err
 		},
 		"Talos": func() error {
-			_, err := alma.Recipe(release, Bake{Distribution: Talos}, nil)
+			_, err := alma.Recipe(release, &Bake{Distribution: Talos}, nil)
 			return err
 		},
 		"Talos on Leap": func() error {
-			_, err := leapFamily.Recipe(leapRelease, Bake{Distribution: Talos}, nil)
+			_, err := leapFamily.Recipe(leapRelease, &Bake{Distribution: Talos}, nil)
 			return err
 		},
 	} {

@@ -2,9 +2,8 @@ import { useState, type JSX } from "react";
 
 import { AddPoolDialog, fallbackSize } from "./AddPool";
 import { poolText } from "./Autoscaling";
-import { machineMinimums } from "./create-form";
 import { MachineFields, sizeOf } from "./MachineFields";
-import { poolSize, sizeProblem, useClass } from "./pool-machine";
+import { leastSize, poolSize, sizeProblem, useClass } from "./pool-machine";
 import { NodesDialog, NodeTags, poolNodes } from "./PoolNodes";
 import { TimeoutsDialog } from "./PoolTimeouts";
 import { useStaging } from "./staging-context";
@@ -191,7 +190,7 @@ function ResizeDialog({
   const was = (pool === undefined ? sizeOf(c.variables["controlPlaneMachine"]) : poolSize(c, pool)) ?? fallbackSize;
   const [size, setSize] = useState<MachineSize>(was);
   const { busy, error, send } = useChange(c, onClose);
-  const min = machineMinimums(cls, pool === undefined ? "controlPlaneMachine" : "workerMachine");
+  const min = leastSize(cls, pool);
   const problem = sizeProblem(size, min);
   const same = size.cores === was.cores && size.memoryMiB === was.memoryMiB && size.diskGiB === was.diskGiB;
   return (

@@ -55,7 +55,7 @@ type roomOn struct {
 }
 
 // short tells whether there were candidates and none had room.
-func (r roomOn) short(candidates []string) bool { return len(candidates) > 0 && len(r.Nodes) == 0 }
+func (r *roomOn) short(candidates []string) bool { return len(candidates) > 0 && len(r.Nodes) == 0 }
 
 // withRoom keeps of the candidates the nodes whose free memory takes a machine of need MiB. A node
 // outside current, the placement as recorded, has to clear the entry margin as well. A node whose

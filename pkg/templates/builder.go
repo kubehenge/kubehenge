@@ -208,59 +208,26 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
-	type placed struct {
-		resource *proxmox.ClusterResource
-		site     Site
-		facts    *BuildFacts
+	l, err := b.readTemplates(ctx, resources)
+	if err != nil {
+		return Inventory{}, err
 	}
-	var found []placed
-	var down []*proxmox.ClusterResource
-	var cached []cachedTemplate
-	seen := map[int]bool{}
-	for _, r := range resources {
-		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
-			continue
-		}
-		id, err := vmID(r)
-		if err != nil {
-			return Inventory{}, err
-		}
-		seen[id] = true
-		// A cached site skips the configuration read, which is where a down node shows, so the
-		// resource view's word that the node is down goes first.
-		if e, ok := b.SiteCache.get(id); ok && r.Status != pve.StatusUnknown {
-			cached = append(cached, cachedTemplate{r, e})
-			continue
-		}
-		c, err := b.config(ctx, r)
-		if _, isDown := errors.AsType[*NodeDownError](err); isDown {
-			down = append(down, r)
-			continue
-		}
-		if err != nil {
-			return Inventory{}, err
-		}
-		if bool(c.Template) {
-			e := cachedSite{name: c.Name, site: siteOf(c)}
-			if facts, ok := ParseBuildFacts(c.Description); ok {
-				e.facts = &facts
-			}
-			b.SiteCache.put(id, e)
-			found = append(found, placed{confirmed(r, c), e.site, e.facts})
-		}
-	}
-	b.SiteCache.keepOnly(seen)
-	unreachable := b.unreachableNodes(ctx, cached)
-	for _, t := range cached {
+	unreachable := b.unreachableNodes(ctx, l.cached)
+	for _, t := range l.cached {
 		if unreachable[t.resource.Node] {
-			down = append(down, t.resource)
+			l.down = append(l.down, t.resource)
 			continue
 		}
 		out := *t.resource
 		out.Name, out.Template = t.name, 1
-		found = append(found, placed{&out, t.site, t.facts})
+		l.found = append(l.found, placedTemplate{&out, t.site, t.facts})
 	}
-	slices.SortFunc(found, func(x, y placed) int { return strings.Compare(x.resource.Name, y.resource.Name) })
+	return inventoryFrom(l.found, l.down), nil
+}
+
+// inventoryFrom is the inventory of the templates found, sorted by name, and those on down nodes.
+func inventoryFrom(found []placedTemplate, down []*proxmox.ClusterResource) Inventory {
+	slices.SortFunc(found, func(x, y placedTemplate) int { return strings.Compare(x.resource.Name, y.resource.Name) })
 	inv := Inventory{Down: down, Facts: map[uint64]BuildFacts{}}
 	for _, p := range found {
 		inv.Templates = append(inv.Templates, p.resource)
@@ -275,35 +242,29 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 		}
 	}
 	slices.Sort(inv.Storages)
-	return inv, nil
+	return inv
+}
+
+// placedTemplate is a template of the listing with where its disks are and its build facts.
+type placedTemplate struct {
+	resource *proxmox.ClusterResource
+	site     Site
+	facts    *BuildFacts
 }
 
 // cachedTemplate is a template of the listing whose name, site and build facts the SiteCache holds.
 type cachedTemplate struct {
-	resource *proxmox.ClusterResource
 	cachedSite
+
+	resource *proxmox.ClusterResource
 }
 
-// unreachableNodes are the nodes of the cached templates that pveproxy cannot reach. The resource
-// view can still show such a node online, and a cached template's configuration is not read, so
-// one status read of a template per node is what notices it. Any other failure of that read keeps
-// the templates listed, as the configuration read would have been skipped anyway.
-func (b *Builder) unreachableNodes(ctx context.Context, cached []cachedTemplate) map[string]bool {
-	unreachable := map[string]bool{}
-	asked := map[string]bool{}
-	for _, t := range cached {
-		node := t.resource.Node
-		if asked[node] {
-			continue
-		}
-		asked[node] = true
-		var status map[string]any
-		err := b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/status/current", node, t.resource.VMID), &status)
-		if pve.NodeUnreachable(err) {
-			unreachable[node] = true
-		}
-	}
-	return unreachable
+// listing is what a read of the templates finds: those read, those on down nodes, and those whose
+// site the SiteCache holds, not yet known to be reachable.
+type listing struct {
+	found  []placedTemplate
+	down   []*proxmox.ClusterResource
+	cached []cachedTemplate
 }
 
 // siteOf reads where a template's disks are from its configuration.
@@ -538,6 +499,82 @@ func (b *Builder) DeleteBuild(ctx context.Context, r *proxmox.ClusterResource) e
 	}
 	task, err := vm.Delete(ctx, &proxmox.VirtualMachineDeleteOptions{Purge: true, DestroyUnreferencedDisks: true})
 	return waitTask(ctx, task, err, longTaskTimeout)
+}
+
+// readTemplates reads the site of each of Kubehenge's templates in the pool. A template whose site
+// the SiteCache holds is returned in cached unread, and one on a down node in down.
+func (b *Builder) readTemplates(ctx context.Context, resources proxmox.ClusterResources) (listing, error) {
+	var l listing
+	seen := map[int]bool{}
+	for _, r := range resources {
+		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
+			continue
+		}
+		id, err := vmID(r)
+		if err != nil {
+			return listing{}, err
+		}
+		seen[id] = true
+		// A cached site skips the configuration read, which is where a down node shows, so the
+		// resource view's word that the node is down goes first.
+		if e, ok := b.SiteCache.get(id); ok && r.Status != pve.StatusUnknown {
+			l.cached = append(l.cached, cachedTemplate{e, r})
+			continue
+		}
+		p, err := b.readSite(ctx, id, r)
+		if _, isDown := errors.AsType[*NodeDownError](err); isDown {
+			l.down = append(l.down, r)
+			continue
+		}
+		if err != nil {
+			return listing{}, err
+		}
+		if p != nil {
+			l.found = append(l.found, *p)
+		}
+	}
+	b.SiteCache.keepOnly(seen)
+	return l, nil
+}
+
+// readSite reads a VM's configuration and caches the site and build facts of a template. It returns
+// nil for a VM that is no template.
+func (b *Builder) readSite(ctx context.Context, id int, r *proxmox.ClusterResource) (*placedTemplate, error) {
+	c, err := b.config(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	if !bool(c.Template) {
+		return nil, nil //nolint:nilnil // a VM that is no template has no site to report
+	}
+	e := cachedSite{name: c.Name, site: siteOf(c)}
+	if facts, ok := ParseBuildFacts(c.Description); ok {
+		e.facts = &facts
+	}
+	b.SiteCache.put(id, e)
+	return &placedTemplate{confirmed(r, c), e.site, e.facts}, nil
+}
+
+// unreachableNodes are the nodes of the cached templates that pveproxy cannot reach. The resource
+// view can still show such a node online, and a cached template's configuration is not read, so
+// one status read of a template per node is what notices it. Any other failure of that read keeps
+// the templates listed, as the configuration read would have been skipped anyway.
+func (b *Builder) unreachableNodes(ctx context.Context, cached []cachedTemplate) map[string]bool {
+	unreachable := map[string]bool{}
+	asked := map[string]bool{}
+	for _, t := range cached {
+		node := t.resource.Node
+		if asked[node] {
+			continue
+		}
+		asked[node] = true
+		var status map[string]any
+		err := b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/status/current", node, t.resource.VMID), &status)
+		if pve.NodeUnreachable(err) {
+			unreachable[node] = true
+		}
+	}
+	return unreachable
 }
 
 // inPool tells whether a VM is in the builder's pool, any VM when it has none. The management
@@ -817,7 +854,7 @@ func (b *Builder) recipe(ctx context.Context, bake *Bake) (*Recipe, error) {
 		return nil, err
 	}
 	keys := map[string]string{}
-	for _, k := range f.Keys(r, *bake) {
+	for _, k := range f.Keys(r, bake) {
 		armoured, kerr := b.Sources.RepositoryKey(ctx, k)
 		if kerr != nil {
 			return nil, kerr
@@ -826,7 +863,7 @@ func (b *Builder) recipe(ctx context.Context, bake *Bake) (*Recipe, error) {
 	}
 	withProxy := *bake
 	withProxy.Proxy = b.Proxy
-	recipe, err := f.Recipe(r, withProxy, keys)
+	recipe, err := f.Recipe(r, &withProxy, keys)
 	if err != nil {
 		return nil, fmt.Errorf("the bake of %s %s: %w", f.Title(), r.Name, err)
 	}

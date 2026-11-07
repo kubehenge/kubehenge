@@ -27,7 +27,9 @@ const (
 	bgpPeerSecret = "kubehenge-bgp" //nolint:gosec // a Secret's name, not a credential
 	// kubeVipAdminConf is where the pod mounts the node's admin kubeconfig, whichever file it is on the host.
 	kubeVipAdminConf = "/etc/kubernetes/admin.conf"
-	capNetAdmin      = "NET_ADMIN"
+	// kubeVipKubeconfig names the volume of that kubeconfig.
+	kubeVipKubeconfig = "kubeconfig"
+	capNetAdmin       = "NET_ADMIN"
 )
 
 // KubeVipSecretName is the Secret beside a cluster that holds the control planes' kube-vip static
@@ -80,7 +82,7 @@ func KubeVipStaticPod(image, hostKubeconfig, endpoint string, bgp *BGP, password
 		APIVersion: "v1", Kind: "Pod", Name: "kube-vip", Namespace: metav1.NamespaceSystem,
 		Spec: corev1.PodSpec{
 			HostNetwork: true,
-			HostAliases: []corev1.HostAlias{{IP: "127.0.0.1", Hostnames: []string{"kubernetes"}}},
+			HostAliases: []corev1.HostAlias{{IP: loopback, Hostnames: []string{"kubernetes"}}},
 			SecurityContext: &corev1.PodSecurityContext{
 				SELinuxOptions: &corev1.SELinuxOptions{Type: "spc_t", Level: "s0"},
 			},
@@ -92,9 +94,9 @@ func KubeVipStaticPod(image, hostKubeconfig, endpoint string, bgp *BGP, password
 				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
 					corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("32Mi"),
 				}},
-				VolumeMounts: []corev1.VolumeMount{{Name: "kubeconfig", MountPath: kubeVipAdminConf, ReadOnly: true}},
+				VolumeMounts: []corev1.VolumeMount{{Name: kubeVipKubeconfig, MountPath: kubeVipAdminConf, ReadOnly: true}},
 			}},
-			Volumes: []corev1.Volume{{Name: "kubeconfig", HostPath: &corev1.HostPathVolumeSource{Path: hostKubeconfig, Type: &fileType}}},
+			Volumes: []corev1.Volume{{Name: kubeVipKubeconfig, HostPath: &corev1.HostPathVolumeSource{Path: hostKubeconfig, Type: &fileType}}},
 		},
 	}
 	out, err := yaml.Marshal(pod)

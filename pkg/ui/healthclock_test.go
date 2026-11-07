@@ -18,8 +18,8 @@ import (
 
 func attentionWhats(v *healthView) []string {
 	whats := make([]string, 0, len(v.Attention))
-	for _, a := range v.Attention {
-		whats = append(whats, a.What)
+	for i := range v.Attention {
+		whats = append(whats, v.Attention[i].What)
 	}
 	return whats
 }

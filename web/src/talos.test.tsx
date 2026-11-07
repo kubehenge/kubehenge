@@ -201,8 +201,7 @@ describe("talos clusters", () => {
         version: "v1.15.1",
         image: "v1.14.4",
         upgrading: "web-cp-abc to v1.15.1 since 2026-10-23T10:00:00Z",
-        held:
-          "Draining web-cp-abc: Pod apps/db-0: cannot evict pod as it would violate the pod's disruption budget. The disruption budget db-pdb needs 2 healthy pods and has 2 currently",
+        held: "Draining web-cp-abc: Pod apps/db-0: cannot evict pod as it would violate the pod's disruption budget. The disruption budget db-pdb needs 2 healthy pods and has 2 currently",
         upgraded: "web-cp-xyz to v1.15.1 at 2026-10-23T09:50:00Z",
         failed: "web-md-1 to v1.15.1 at 2026-10-23T09:40:00Z: the node did not come back",
         waiting: "web-cp-abc waits: web-cp-xyz is a learner in etcd's member list",

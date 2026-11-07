@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { timeoutsText } from "./NodeTimeouts";
-import { planRows } from "./Staging";
+import { planRows } from "./plan-rows";
 import type { Cluster, ClusterClass } from "./types";
 
 const cls: ClusterClass = {

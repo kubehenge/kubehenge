@@ -140,9 +140,9 @@ type Family interface {
 	Image(ctx context.Context, s *Sources, r Release) (Resolved, error)
 	// Keys are the signing keys of the package repositories a bake of the release adds, fetched
 	// and checked against their fingerprints before the bake starts.
-	Keys(r Release, b Bake) []RepositoryKey
+	Keys(r Release, b *Bake) []RepositoryKey
 	// Recipe is what the bake of a template does: keys holds each of Keys's, armoured, by name.
-	Recipe(r Release, b Bake, keys map[string]string) (Recipe, error)
+	Recipe(r Release, b *Bake, keys map[string]string) (Recipe, error)
 }
 
 // Recipe is the work of one bake, which the builder carries out through Proxmox VE and the guest

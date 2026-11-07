@@ -86,6 +86,13 @@ func TestKubeadmNodesTakeTheirCustomisation(t *testing.T) {
 	class := renderClass(t, "kubeadm.yaml")
 	vars := variablesOf(t, customised)
 	cp := asMap(t, field(t, class.patched(t, "KubeadmControlPlaneTemplate", vars), "spec", "template", "spec", "kubeadmConfigSpec"))
+	checkKubeadmControlPlaneFiles(t, cp)
+	checkKubeadmControlPlaneArgs(t, cp)
+	checkKubeadmWorker(t, asMap(t, field(t, class.patched(t, "KubeadmConfigTemplate", vars), "spec", "template", "spec")))
+}
+
+func checkKubeadmControlPlaneFiles(t *testing.T, cp map[string]any) {
+	t.Helper()
 	files := cp["files"]
 	rules, _ := fileOf(t, files, "/etc/audit/rules.d/50-co.rules")
 	if rules["content"] != "-w /etc/passwd -p wa" || rules["permissions"] != "0640" || rules["owner"] != "root:root" {
@@ -108,6 +115,10 @@ func TestKubeadmNodesTakeTheirCustomisation(t *testing.T) {
 	if i := slices.Index(commands, "sysctl --system"); i != 1 || commands[0] != waitClockCommand || !slices.Equal(commands[len(commands)-2:], []string{"augenrules --load", "cp-only"}) {
 		t.Errorf("commands %v: Kubehenge's first, then the company's for the control plane", commands)
 	}
+}
+
+func checkKubeadmControlPlaneArgs(t *testing.T, cp map[string]any) {
+	t.Helper()
 	api := asMap(t, field(t, cp, "clusterConfiguration", "apiServer"))
 	if args := argsOf(t, api["extraArgs"]); !strings.Contains(args, `{"name":"request-timeout","value":"30s"}`) ||
 		!strings.Contains(args, `{"name":"audit-webhook-config-file","value":"/etc/kubernetes/audit-webhook.yaml"}`) || !strings.Contains(args, `"profiling"`) {
@@ -128,8 +139,10 @@ func TestKubeadmNodesTakeTheirCustomisation(t *testing.T) {
 			t.Errorf("%s kubelet arguments %s", config, args)
 		}
 	}
+}
 
-	worker := asMap(t, field(t, class.patched(t, "KubeadmConfigTemplate", vars), "spec", "template", "spec"))
+func checkKubeadmWorker(t *testing.T, worker map[string]any) {
+	t.Helper()
 	if f, _ := fileOf(t, worker["files"], "/etc/co/worker.crt"); asJSON(t, f["contentFrom"]) != `{"secret":{"key":"ca","name":"cacert"}}` {
 		t.Errorf("worker secret file %v", f)
 	}
