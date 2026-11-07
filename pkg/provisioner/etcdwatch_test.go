@@ -335,13 +335,15 @@ func TestRebootBlocker(t *testing.T) {
 		{"all healthy", []EtcdSet{management, web}, "", ""},
 		{"all healthy, one node", []EtcdSet{management, web}, "pve1", ""},
 		{"a member is down", []EtcdSet{management, sick, web}, "", "team-a/db: etcd member db-cp-1 on pve2 is not healthy: its VM is stopped"},
-		{"a member is down, another node", []EtcdSet{management, sick}, "pve1", "team-a/db: etcd member db-cp-1 on pve2 is not healthy"},
+		{"a member of a cluster already one down", []EtcdSet{management, sick}, "pve1", "team-a/db: stopping pve1 would leave 1 of 3 etcd members healthy"},
+		{"the down member's own node", []EtcdSet{management, sick}, "pve2", ""},
+		{"a degraded cluster without a member on the node", []EtcdSet{management, set("team-a/two", member("two-cp-0", "pve1"), stopped("two-cp-1"))}, "pve3", ""},
 		{"the management cluster first", []EtcdSet{set(ManagementEtcdName, stopped("kubehenge-cp-1")), sick}, "", "management: etcd member kubehenge-cp-1 on pve2"},
-		{"a single control plane on the node", []EtcdSet{management, web, one}, "pve2", "team-a/one: stopping pve2 would leave 0 of 1 etcd members, and its quorum is 1 (one-cp-0)"},
+		{"a single control plane on the node", []EtcdSet{management, web, one}, "pve2", "team-a/one: stopping pve2 would leave 0 of 1 etcd members healthy, and its quorum is 1 (one-cp-0)"},
 		{
 			"two members on the node",
 			[]EtcdSet{set("team-a/dense", member("dense-cp-0", "pve1"), member("dense-cp-1", "pve1"), member("dense-cp-2", "pve2"))},
-			"pve1", "team-a/dense: stopping pve1 would leave 1 of 3 etcd members, and its quorum is 2 (dense-cp-0, dense-cp-1)",
+			"pve1", "team-a/dense: stopping pve1 would leave 1 of 3 etcd members healthy, and its quorum is 2 (dense-cp-0, dense-cp-1)",
 		},
 		{"a node without members", []EtcdSet{management, web}, "pve4", ""},
 	} {
@@ -380,11 +382,15 @@ func TestReadyForReboot(t *testing.T) {
 	if r.Ready || !strings.Contains(r.Blocker, "web-cp-1") || r.For("pve1").Ready || r.For("").Ready {
 		t.Errorf("readiness %+v", r)
 	}
+	// A node with no member of the degraded cluster may still go, with the cluster as a note.
+	if a := r.For("pve4"); !a.Ready || !strings.Contains(a.Note, "web-cp-1") {
+		t.Errorf("pve4 %+v", a)
+	}
 
 	// A record the controller has not kept up blocks as well, and so does none at all.
 	old := record
 	old.Checked = now.Add(-EtcdHealthStale - time.Second)
-	if r = ReadyForReboot(old, true, &management, now); r.Ready || !strings.Contains(r.Blocker, "has not checked") {
+	if r = ReadyForReboot(old, true, &management, now); r.Ready || !strings.Contains(r.Blocker, "has not checked") || r.For("pve4").Ready || r.For("pve1").Ready {
 		t.Errorf("a stale record: %+v", r)
 	}
 	if r = ReadyForReboot(EtcdHealth{}, false, &management, now); r.Ready || !strings.Contains(r.Blocker, "not recorded") {

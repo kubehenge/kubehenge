@@ -93,31 +93,43 @@ const EtcdHealthStale = 3 * time.Minute
 func majority(n int) int { return n/2 + 1 }
 
 // RebootBlocker says why the Proxmox VE host node cannot go down now, or "" when it can. With node
-// empty it asks only that every member of every cluster is healthy. With a node, the members of the
-// VMs on it must also leave each cluster its quorum. The first blocker is the one named.
+// empty it asks that every member of every cluster is healthy. With a node it asks only whether
+// stopping that node's members leaves each cluster a majority of healthy members, counting those
+// already down anywhere. A degraded cluster with no member on the node does not block it.
 func RebootBlocker(sets []EtcdSet, node string) string {
+	if node == "" {
+		return unhealthyMember(sets)
+	}
+	for i := range sets {
+		healthy, onThis := 0, 0
+		var names []string
+		for _, m := range sets[i].Members {
+			switch {
+			case m.Node == node:
+				names = append(names, m.Machine)
+				if m.Healthy {
+					onThis++
+				}
+			case m.Healthy:
+				healthy++
+			}
+		}
+		total := len(sets[i].Members)
+		if len(names) > 0 && onThis > 0 && healthy < majority(total) {
+			return fmt.Sprintf("%s: stopping %s would leave %d of %d etcd members healthy, and its quorum is %d (%s)",
+				sets[i].Cluster, node, healthy, total, majority(total), strings.Join(names, ", "))
+		}
+	}
+	return ""
+}
+
+// unhealthyMember names the first etcd member of any cluster that is not healthy, or is "".
+func unhealthyMember(sets []EtcdSet) string {
 	for i := range sets {
 		for _, m := range sets[i].Members {
 			if !m.Healthy {
 				return fmt.Sprintf("%s: etcd member %s%s is not healthy: %s", sets[i].Cluster, m.Machine, onNode(m.Node), m.Reason)
 			}
-		}
-	}
-	if node == "" {
-		return ""
-	}
-	for i := range sets {
-		total, here := len(sets[i].Members), 0
-		var names []string
-		for _, m := range sets[i].Members {
-			if m.Node == node {
-				here++
-				names = append(names, m.Machine)
-			}
-		}
-		if here > 0 && total-here < majority(total) {
-			return fmt.Sprintf("%s: stopping %s would leave %d of %d etcd members, and its quorum is %d (%s)",
-				sets[i].Cluster, node, total-here, total, majority(total), strings.Join(names, ", "))
 		}
 	}
 	return ""
@@ -135,6 +147,8 @@ type RebootAnswer struct {
 	Node    string `json:"node"`
 	Ready   bool   `json:"ready"`
 	Blocker string `json:"blocker,omitempty"`
+	// Note names a degraded cluster that does not hold this node back.
+	Note string `json:"note,omitempty"`
 }
 
 // RebootReadiness is the answer for the whole cluster of hosts and for each node.
@@ -163,22 +177,28 @@ func ReadyForReboot(record EtcdHealth, haveRecord bool, management *EtcdSet, now
 		}
 	}
 	slices.Sort(nodes)
-	var blocker string
+	var unknown string
 	switch {
 	case !haveRecord:
-		blocker = "The controller has not recorded the clusters' etcd members yet."
+		unknown = "The controller has not recorded the clusters' etcd members yet."
 	case now.Sub(record.Checked) > EtcdHealthStale:
-		blocker = "The controller has not checked the clusters' etcd members since " + record.Checked.UTC().Format(time.RFC3339) + "."
-	default:
-		blocker = RebootBlocker(sets, "")
+		unknown = "The controller has not checked the clusters' etcd members since " + record.Checked.UTC().Format(time.RFC3339) + "."
 	}
-	r.Ready, r.Blocker = blocker == "", blocker
+	fleet := unknown
+	if fleet == "" {
+		fleet = RebootBlocker(sets, "")
+	}
+	r.Ready, r.Blocker = fleet == "", fleet
 	for _, n := range nodes {
-		b := blocker
-		if b == "" {
-			b = RebootBlocker(sets, n)
+		a := RebootAnswer{Node: n, Blocker: unknown}
+		if unknown == "" {
+			a.Blocker = RebootBlocker(sets, n)
+			if a.Blocker == "" {
+				a.Note = fleet
+			}
 		}
-		r.Nodes = append(r.Nodes, RebootAnswer{Node: n, Ready: b == "", Blocker: b})
+		a.Ready = a.Blocker == ""
+		r.Nodes = append(r.Nodes, a)
 	}
 	return r
 }

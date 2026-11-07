@@ -66,9 +66,12 @@ function ProxmoxNotes({ proxmox }: { proxmox: ManagementHealth["proxmox"] }): JS
 // RebootReady answers, for each Proxmox VE node, whether it may be rebooted now. The controller's
 // own record can be late, which the answer then says once for every node.
 function RebootReady({ ready }: { ready: RebootReadiness }): JSX.Element {
+  // A degraded cluster holds back only the nodes that carry its members, so it is a note while some
+  // node may still go. When none may, the blocker is the reason for them all.
+  const noneMayGo = ready.nodes.every((n) => !n.ready);
   return (
     <>
-      {!ready.ready && filled(ready.blocker) && <p className="warning">{ready.blocker}</p>}
+      {!ready.ready && filled(ready.blocker) && <p className={noneMayGo ? "warning" : "muted"}>{ready.blocker}</p>}
       <ul className="health-short" aria-label="Ready for reboot">
         {ready.nodes.map((n) => (
           <li key={`reboot/${n.node ?? ""}`}>

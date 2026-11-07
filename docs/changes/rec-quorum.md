@@ -1,4 +1,4 @@
-- `kubehenge appliance ready-for-reboot [--node NODE]` exits 0 only when every etcd member of the management cluster and of every cluster is healthy. With `--node`, that node's guests must also be able to go away without costing any etcd its quorum.
+- `kubehenge appliance ready-for-reboot [--node NODE]` exits 0 only when every etcd member of the management cluster and of every cluster is healthy. With `--node`, it exits 0 when stopping that node's guests leaves every etcd a majority of healthy members. A degraded cluster with no member on the node does not hold it back.
 - A blocked reboot prints its first blocker in one line, naming the cluster, the member and the node.
 - Administration, Health shows the same answer for each Proxmox VE node under Ready for reboot. It counts the management cluster's healthy etcd members.
 - The controller records every cluster's etcd members every 30 seconds. A record older than three minutes blocks every node.

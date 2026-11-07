@@ -1041,6 +1041,8 @@ export interface RebootAnswer {
   node?: string;
   ready: boolean;
   blocker?: string;
+  /** A degraded cluster that does not hold this node back. */
+  note?: string;
 }
 
 /** Whether Proxmox VE nodes may be rebooted: the whole, and each node by itself. */

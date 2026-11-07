@@ -99,8 +99,17 @@ func TestRebootReady(t *testing.T) {
 		},
 		{
 			"a management member is down",
-			append(managementNodes(true, false, true), etcdRecord(t, fresh, webMembers(true, true, true))), "?node=pve1", false,
+			append(managementNodes(true, false, true), etcdRecord(t, fresh, webMembers(true, true, true))), "", false,
 			"management: etcd member kubehenge-cp-1 is not healthy",
+		},
+		{
+			"a degraded cluster with no member on the node",
+			append(managementNodes(true, true, true), etcdRecord(t, fresh, webMembers(true, false))), "?node=pve3", true, "",
+		},
+		{
+			"a degraded cluster with a member on the node",
+			append(managementNodes(true, true, true), etcdRecord(t, fresh, webMembers(true, false, true))), "?node=pve1", false,
+			"default/web: stopping pve1 would leave 1 of 3 etcd members healthy",
 		},
 		{
 			"the node holds the quorum",

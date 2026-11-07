@@ -201,6 +201,34 @@ describe("the management cluster's health", () => {
     expect(screen.getAllByText("Wait")).toHaveLength(3);
   });
 
+  it("lets a node go that holds no member of the degraded cluster, with the cluster as a note", async () => {
+    const note = "team-a/web: etcd member web-cp-1 on pve2 is not healthy: its VM is stopped";
+    fakeServer({
+      "GET /api/setup/health": { body: { answers: true, nodes: [ready("mgmt-1")], controllers: [] } },
+      "GET /api/appliance/reboot-ready": {
+        body: {
+          checked: "2026-01-02T12:00:00Z",
+          ready: false,
+          blocker: note,
+          nodes: [
+            {
+              node: "pve1",
+              ready: false,
+              blocker: "team-a/web: stopping pve1 would leave 1 of 3 etcd members healthy",
+            },
+            { node: "pve4", ready: true, note },
+          ],
+          answer: { ready: false },
+        },
+      },
+    });
+    render(<ManagementHealthCard />);
+    const text = await screen.findByText(note);
+    expect(text).toHaveClass("muted");
+    const list = await screen.findByRole("list", { name: "Ready for reboot" });
+    expect(within(list).getByText("Ready")).toBeInTheDocument();
+  });
+
   it("calls a cluster with no ready node down", () => {
     expect(healthVerdict({ answers: true, nodes: [{ name: "mgmt-1", ready: false }] })).toStrictEqual({
       state: "error",

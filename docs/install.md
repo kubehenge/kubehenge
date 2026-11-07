@@ -443,12 +443,14 @@ Patch the hosts one at a time. A control plane needs a minute or two after its h
 
 1. Run `kubehenge appliance ready-for-reboot --node <host>`.
 2. Reboot the host.
-3. Run the command again until it exits 0.
+3. Run `kubehenge appliance ready-for-reboot` without `--node` until it exits 0.
 4. Do the next host.
 
-The command exits 0 only when every etcd member of the management cluster and of every cluster is healthy. With `--node`, the host's guests must also be able to go away without costing any etcd its quorum. Otherwise it prints the first blocker in one line, with the cluster, the member and the node.
+#### Reading the answer
 
-**Administration, Health** shows the same answer for each node under **Ready for reboot**. **etcd** there counts the management cluster's healthy members. A record the controller has not renewed for three minutes blocks every node.
+Without `--node`, the command exits 0 only when every etcd member of the management cluster and of every cluster is healthy. With `--node`, it exits 0 when stopping that host's guests leaves every etcd a majority of healthy members. Members already down count as gone. A cluster that is degraded but has no member on the host does not hold it back. Otherwise the command prints the first blocker in one line, with the cluster, the member and the node.
+
+**Administration, Health** shows the answer for each node under **Ready for reboot**, and names a degraded cluster that holds no node back. **etcd** there counts the management cluster's healthy members. A record the controller has not renewed for three minutes blocks every node.
 
 #### Start order
 
