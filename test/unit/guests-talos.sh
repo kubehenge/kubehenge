@@ -280,7 +280,8 @@ has "the kubeadm VM is still read" "${out}/105-kubeadm-cp/state.txt" "guest 105 
 out=${root}/out-hang
 code=$(collect_into "${out}" "${root}/work" 2)
 truth "collect succeeds although a node never answers" [ "${code}" = 0 ]
-truth "the talosconfigs and kubeconfig are removed after the cut-off" [ -z "$(ls -A "${root}/tmp")" ]
+left=$(ls -A "${root}/tmp")
+truth "the talosconfigs and kubeconfig are removed after the cut-off" [ -z "${left}" ]
 h=${out}/104-talos-hang
 has "a node that never answers is cut off" "${h}/state.txt" "exit code: none, cut off after 2 s"
 truth "and has no other parts" [ ! -e "${h}/services.txt" ]
