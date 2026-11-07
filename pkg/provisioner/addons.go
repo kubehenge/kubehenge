@@ -919,7 +919,7 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 	// The CCM and the CSI plugin's controller are what mount the cluster's Proxmox VE token (the
 	// CSI node plugin needs none); kept to the control-plane nodes, no worker ever holds it.
 	controlPlane := map[string]any{"nodeAffinity": map[string]any{"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
-		"nodeSelectorTerms": []any{map[string]any{"matchExpressions": []any{map[string]any{
+		"nodeSelectorTerms": []any{map[string]any{matchExpressionsKey: []any{map[string]any{
 			"key": controlPlaneRole, "operator": string(corev1.NodeSelectorOpExists),
 		}}}},
 	}}}

@@ -242,7 +242,7 @@ func metalLBPool(spans []addressSpan, lb LoadBalancer) []*unstructured.Unstructu
 	for _, p := range lb.BGP.Peers {
 		spec := map[string]any{
 			"myASN": int64(lb.BGP.ASN), "peerASN": int64(p.ASN), "peerAddress": p.Address,
-			"nodeSelectors": []any{map[string]any{"matchExpressions": []any{map[string]any{
+			"nodeSelectors": []any{map[string]any{matchExpressionsKey: []any{map[string]any{
 				"key": controlPlaneLabel, "operator": "DoesNotExist",
 			}}}},
 		}
