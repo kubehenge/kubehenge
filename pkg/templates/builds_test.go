@@ -87,15 +87,51 @@ func TestNewBuildKeepsTheCPUTypeOfTheNewest(t *testing.T) {
 		{"a line's first", "", &line, DefaultCPUType},
 		{"one the builder is told", "x86-64-v4", &next, "x86-64-v4"},
 	} {
-		b.CPUType = c.builder
-		if got, err := b.cpuType(t.Context(), c.t); err != nil || got != c.want {
-			t.Errorf("%s: CPU type %q, %v; want %q", c.name, got, err, c.want)
+		b.Hardware.CPUType = c.builder
+		if got, err := b.hardware(t.Context(), c.t); err != nil || got.CPUType != c.want {
+			t.Errorf("%s: CPU type %q, %v; want %q", c.name, got.CPUType, err, c.want)
 		}
 	}
 	delete(configs[102], "cpu")
-	b.CPUType = ""
-	if got, err := b.cpuType(t.Context(), &next); err != nil || got != "kvm64" {
-		t.Errorf("after a build without a CPU type: %q, %v; want Proxmox VE's default", got, err)
+	b.Hardware.CPUType = ""
+	if got, err := b.hardware(t.Context(), &next); err != nil || got.CPUType != "kvm64" {
+		t.Errorf("after a build without a CPU type: %q, %v; want Proxmox VE's default", got.CPUType, err)
+	}
+}
+
+func TestNewBuildKeepsTheHardwareOfTheNewest(t *testing.T) {
+	t.Parallel()
+	line, _ := rke2(t)
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC) }
+	yes, no := true, false
+	older, newer := buildVM(t, &line, 101, day(1)), buildVM(t, &line, 102, day(8))
+	newer["tags"] = fmt.Sprint(newer["tags"]) + ";" + strings.Join(Hardware{CPUType: "Haswell", Discard: true, IOThread: true, NUMA: true}.Tags(), ";")
+	configs := configsOf(older, newer)
+	configs[102]["cpu"] = "Haswell"
+	b := &Builder{Client: (&fakeCluster{t: t, views: [][]map[string]any{{older, newer}}, configs: configs}).client(), Pool: testPool}
+	next, err := line.Build(day(15))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name   string
+		choice HardwareChoice
+		t      *Template
+		want   Hardware
+	}{
+		{"a new build copies the newest", HardwareChoice{}, &next, Hardware{CPUType: "Haswell", Discard: true, IOThread: true, NUMA: true}},
+		{"a choice overrides options", HardwareChoice{SSD: &yes, NUMA: &no}, &next, Hardware{CPUType: "Haswell", SSD: true, Discard: true, IOThread: true}},
+		{"a line's first takes the defaults", HardwareChoice{}, &line, DefaultHardware(DefaultCPUType)},
+		{"a line's first takes a choice too", HardwareChoice{IOThread: &yes, Discard: &no}, &line, Hardware{CPUType: DefaultCPUType, SSD: true, IOThread: true}},
+	} {
+		b.Hardware = c.choice
+		if got, err := b.hardware(t.Context(), c.t); err != nil || got != c.want {
+			t.Errorf("%s: hardware %+v, %v; want %+v", c.name, got, err, c.want)
+		}
+	}
+	b.Hardware = HardwareChoice{CPUType: "x86-64-v5"}
+	if _, err := b.hardware(t.Context(), &next); err == nil {
+		t.Error("an unknown CPU type was accepted")
 	}
 }
 
@@ -152,7 +188,7 @@ func TestANewVMIsTaggedOnceInThePool(t *testing.T) {
 		t.Fatal(err)
 	}
 	recipe := &Recipe{Image: &NodeImageBoot{}, DiskGiB: 12, BuilderDiskGiB: 20, MemoryMiB: 4096}
-	if err = b.createVM(ctx, node, 104, &build, "local:import/almalinux.qcow2", DefaultCPUType, recipe); err != nil {
+	if err = b.createVM(ctx, node, 104, &build, "local:import/almalinux.qcow2", DefaultHardware(DefaultCPUType), recipe); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()

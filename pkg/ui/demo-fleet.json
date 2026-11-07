@@ -67,7 +67,8 @@
       "subnet": 20,
       "ageDays": 61,
       "addOns": ["headlamp", "monitoring"],
-      "crashing": "invoice-worker"
+      "crashing": "invoice-worker",
+      "etcdFsyncMs": 41
     },
     {
       "name": "edge",

@@ -232,8 +232,15 @@ func NormaliseTags(tags []string) []string {
 	return slices.Compact(out)
 }
 
-// ParseTags splits a Proxmox VE tag string, which uses ';' (and accepts ',' and spaces) as separators.
+// ParseTags splits a Proxmox VE tag string, which uses ';' (and accepts ',' and spaces) as
+// separators, and leaves out the tags that record hardware, since a template is identified by the
+// others (ParseAllTags keeps them).
 func ParseTags(s string) []string {
+	return IdentityOf(ParseAllTags(s))
+}
+
+// ParseAllTags splits a Proxmox VE tag string as ParseTags does, hardware tags included.
+func ParseAllTags(s string) []string {
 	return NormaliseTags(strings.FieldsFunc(s, func(r rune) bool { return r == ';' || r == ',' || r == ' ' }))
 }
 

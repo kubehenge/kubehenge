@@ -261,6 +261,7 @@ func (h *Hooks) storedCluster(ctx context.Context, sent *clusterv1.Cluster) (*cl
 func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
 	for _, check := range []func() error{
 		func() error { return h.checkNodeOS(ctx, cluster) },
+		func() error { return h.checkNUMA(ctx, cluster, class) },
 		func() error { return checkRanges(cluster, class) },
 		func() error { return h.checkAddresses(ctx, cluster) },
 		func() error { return h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version) },

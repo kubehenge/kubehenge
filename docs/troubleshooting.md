@@ -332,6 +332,16 @@ A message saying "with … workers, control planes need … vCPUs and … MiB ea
 
 A cluster that already fell short, after an upgrade of Kubehenge asked for more, can still be changed in other ways. Only more workers or smaller control planes are refused.
 
+### Template hardware refuses a cluster
+
+"The templates of … use CPU type …, which no allowed node … offers" means a template has a CPU type above what those Proxmox VE nodes reach. Allow more nodes. Or build the template again with a lower `--cpu-type` ([templates.md](templates.md#hardware-of-clones)).
+
+"The templates use NUMA, which needs at least 2 cores per machine" names the pool with fewer. Give it 2 cores or more, or build the template again with `--numa=false`.
+
+### etcd disk slow
+
+Health shows **etcd disk slow** when an etcd member's write-ahead log syncs have a 99th percentile above 25 ms. Move the control planes to local SSD or NVMe storage. Ceph and NFS add a network round trip to every write ([clusters.md](clusters.md#etcd-storage)). The monitoring add-on charts the figure as `etcd_disk_wal_fsync_duration_seconds`.
+
 ### One control plane, its roll stalled
 
 An upgrade or any change to the control planes replaces a cluster's only control plane. Meanwhile etcd runs on two members, each needing the other ([architecture.md](architecture.md#clusterclasses)). Nothing in Cluster API recovers a roll that stalls, so Kubehenge's controller watches for it.

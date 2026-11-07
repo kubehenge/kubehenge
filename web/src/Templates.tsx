@@ -11,6 +11,7 @@ import type {
   PveNode,
   Storage,
   TalosReleases,
+  TemplateHardware,
   TemplateRefresh,
   TemplateRequest,
   VMTemplate,
@@ -57,6 +58,7 @@ export function Templates(): JSX.Element {
             <tr>
               <th>Template</th>
               <th>Node OS</th>
+              <th>Hardware</th>
               <th>Build</th>
               <th>Node</th>
               <th>Used by</th>
@@ -72,6 +74,7 @@ export function Templates(): JSX.Element {
                   {t.line} <span className="muted">({t.vmid})</span>
                 </td>
                 <td>{t.nodeOS ?? "Talos Linux"}</td>
+                <td>{hardwareText(t.hardware)}</td>
                 <td>
                   {t.built === undefined ? (
                     <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
@@ -139,6 +142,17 @@ export function Templates(): JSX.Element {
 }
 
 // BuildJob says how the last build an administrator started went, with its log.
+/** hardwareText lists a template's CPU type and the options its clones carry over. */
+export function hardwareText(h: TemplateHardware | undefined): JSX.Element | string {
+  if (h === undefined) {
+    return <span className="muted">Not recorded</span>;
+  }
+  const options = [h.ssd && "SSD", h.discard && "discard", h.ioThread && "IO thread", h.numa && "NUMA"].filter(
+    (o): o is string => typeof o === "string",
+  );
+  return [h.cpuType, ...options].join(", ");
+}
+
 function BuildJob({ job }: { job: Job }): JSX.Element {
   const log = job.log ?? [];
   return (
@@ -292,7 +306,25 @@ interface BuildForm {
   buildAddress: string;
   buildGateway: string;
   buildDNS: string;
+  /** The QEMU CPU type. Empty keeps the newest build's. */
+  cpuType: string;
+  ssd: HardwareChoice;
+  discard: HardwareChoice;
+  ioThread: HardwareChoice;
+  numa: HardwareChoice;
 }
+
+/** HardwareChoice sets a template option: unset keeps the newest build's, else it is on or off. */
+type HardwareChoice = "" | "on" | "off";
+
+const hardwareOptions = [
+  { key: "ssd", label: "SSD" },
+  { key: "discard", label: "Discard" },
+  { key: "ioThread", label: "IO thread" },
+  { key: "numa", label: "NUMA" },
+] as const;
+
+const cpuTypePattern = /^[\w.-]+$/u;
 
 export function buildRequest(f: BuildForm): TemplateRequest {
   const req: TemplateRequest = {
@@ -302,6 +334,14 @@ export function buildRequest(f: BuildForm): TemplateRequest {
     importStorage: f.importStorage,
     bridge: f.bridge,
   };
+  if (f.cpuType.trim()) {
+    req.cpuType = f.cpuType.trim();
+  }
+  for (const { key } of hardwareOptions) {
+    if (f[key]) {
+      req[key] = f[key] === "on";
+    }
+  }
   if (f.distribution === "kubeadm") {
     req.kubernetesVersion = f.kubernetesVersion.trim();
   }
@@ -348,6 +388,9 @@ export function buildProblems(f: BuildForm): Partial<Record<keyof BuildForm, str
   }
   if (!f.bridge) {
     p.bridge = "Choose a bridge";
+  }
+  if (f.cpuType.trim() && !cpuTypePattern.test(f.cpuType.trim())) {
+    p.cpuType = "Enter a CPU type such as host or x86-64-v3";
   }
   if (f.distribution !== "talos" && f.vlan && !isVLAN(f.vlan)) {
     p.vlan = "A whole number from 1 to 4094";
@@ -421,6 +464,11 @@ function BuildDialog({
     buildAddress: "",
     buildGateway: "",
     buildDNS: "",
+    cpuType: "",
+    ssd: "",
+    discard: "",
+    ioThread: "",
+    numa: "",
   });
   const set = <K extends keyof BuildForm>(k: K, v: BuildForm[K]): void => {
     setEntered((f) => ({ ...f, [k]: v }));
@@ -627,6 +675,32 @@ function BuildDialog({
           )}
         </Field>
       )}
+      <details className="advanced">
+        <summary>Hardware</summary>
+        <Field label="CPU type" hint="Empty keeps the newest build's" error={shown("cpuType")}>
+          {(id) => <input id={id} value={form.cpuType} onChange={(e) => set("cpuType", e.target.value.trim())} />}
+        </Field>
+        {hardwareOptions.map(({ key, label }) => (
+          <Field key={key} label={label}>
+            {(id) => (
+              <select
+                id={id}
+                value={form[key]}
+                onChange={(e) => {
+                  const choice = e.target.value;
+                  if (oneOf(["", "on", "off"] as const, choice)) {
+                    set(key, choice);
+                  }
+                }}
+              >
+                <option value="">Keep newest build&apos;s</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            )}
+          </Field>
+        ))}
+      </details>
       {!talos && (
         <details className="advanced">
           <summary>Static address</summary>

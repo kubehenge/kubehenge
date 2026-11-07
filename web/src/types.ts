@@ -1084,6 +1084,17 @@ export interface VMTemplate {
   inUse?: string;
   /** The operating system its machines run, such as AlmaLinux 10. Absent for a Talos template. */
   nodeOS?: string;
+  /** What its clones carry over from it. Absent for a template made before this was recorded. */
+  hardware?: TemplateHardware;
+}
+
+/** The VM options a template's clones keep. */
+export interface TemplateHardware {
+  cpuType: string;
+  ssd: boolean;
+  discard: boolean;
+  ioThread: boolean;
+  numa: boolean;
 }
 
 /** The weekly template build: its schedule, what was asked for, and how the last run went. */
@@ -1151,6 +1162,12 @@ export interface TemplateRequest {
   buildAddress?: string;
   buildGateway?: string;
   buildDNS?: string[];
+  /** The hardware the clones keep. Absent, the line's newest build's, else the default. */
+  cpuType?: string;
+  ssd?: boolean;
+  discard?: boolean;
+  ioThread?: boolean;
+  numa?: boolean;
 }
 
 export interface Upgrades {

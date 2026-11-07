@@ -401,7 +401,7 @@ type bake struct {
 }
 
 func (k *bake) finish(ctx context.Context) error {
-	return k.b.finish(ctx, k.node, k.vm, 101, &k.tmpl, k.recipe)
+	return k.b.finish(ctx, k.node, k.vm, 101, &k.tmpl, DefaultHardware(DefaultCPUType), k.recipe)
 }
 
 // bakeVM creates the VM of an RKE2 build as Create does.
@@ -420,7 +420,7 @@ func bakeVM(ctx context.Context, t *testing.T, h *bakeHost, recipe *Recipe) *bak
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = b.createVM(ctx, node, 101, &tmpl, "local:import/image.qcow2", DefaultCPUType, recipe); err != nil {
+	if err = b.createVM(ctx, node, 101, &tmpl, "local:import/image.qcow2", DefaultHardware(DefaultCPUType), recipe); err != nil {
 		t.Fatal(err)
 	}
 	vm, err := node.VirtualMachine(ctx, 101)
@@ -485,7 +485,7 @@ func TestFinishBakesAnImageModeBuildStepByStep(t *testing.T) {
 		"run cloud-init clean --logs",
 		"shutdown", "config delete=ide2,net0",
 		"remove " + seed,
-		"config boot=order=scsi0 cores=1 memory=512 tags=" + strings.Join(k.tmpl.Tags, ";"),
+		"config boot=order=scsi0 cores=1 memory=512 tags=" + strings.Join(NormaliseTags(append(slices.Clone(k.tmpl.Tags), DefaultHardware(DefaultCPUType).Tags()...)), ";"),
 		"template",
 	}
 	if got := h.steps(); !slices.Equal(got, want) {
@@ -764,7 +764,7 @@ func TestCreateMakesATemplateAndRemovesItsDownload(t *testing.T) {
 		"download " + volume,
 		"create 101",
 		"config tags=" + kubehengeTag + ";" + buildingTag,
-		"config boot=order=scsi0 cores=1 memory=512 tags=" + strings.Join(tmpl.Tags, ";"),
+		"config boot=order=scsi0 cores=1 memory=512 tags=" + strings.Join(NormaliseTags(append(slices.Clone(tmpl.Tags), DefaultHardware(DefaultCPUType).Tags()...)), ";"),
 		"template",
 		"remove " + volume,
 	}

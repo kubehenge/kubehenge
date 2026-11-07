@@ -19,6 +19,11 @@ const form = {
   buildAddress: "",
   buildGateway: "",
   buildDNS: "",
+  cpuType: "",
+  ssd: "" as const,
+  discard: "" as const,
+  ioThread: "" as const,
+  numa: "" as const,
 };
 
 describe("vM templates", () => {
@@ -29,6 +34,15 @@ describe("vM templates", () => {
     });
     expect(buildProblems({ ...form, buildAddress: "192.0.2.50/24" })).toStrictEqual({
       buildAddress: "Enter the prefix length, a gateway and a DNS server",
+    });
+    // Hardware left open is not sent, so the newest build's stands.
+    expect(buildRequest(form)).not.toHaveProperty("cpuType");
+    expect(buildRequest(form)).not.toHaveProperty("ssd");
+    expect(
+      buildRequest({ ...form, cpuType: " host ", ssd: "off", discard: "on", ioThread: "on", numa: "off" }),
+    ).toMatchObject({ cpuType: "host", ssd: false, discard: true, ioThread: true, numa: false });
+    expect(buildProblems({ ...form, cpuType: "x86 64" })).toStrictEqual({
+      cpuType: "Enter a CPU type such as host or x86-64-v3",
     });
     expect(buildRequest({ ...form, distribution: "k3s", nodeOS: "rocky-10", vlan: "30" })).toStrictEqual({
       distribution: "k3s",
@@ -152,6 +166,7 @@ describe("vM templates", () => {
               tags: ["kubehenge", "rke2", "os-almalinux-10", "build-202610110100"],
               inUse: "default/web",
               nodeOS: "AlmaLinux 10",
+              hardware: { cpuType: "x86-64-v2-AES", ssd: true, discard: true, ioThread: false, numa: false },
             },
             {
               vmid: 9002,
@@ -222,9 +237,11 @@ describe("vM templates", () => {
     const inUse = within(await screen.findByRole("row", { name: /kubehenge-rke2-almalinux-10 \(9001\)/u }));
     expect(inUse.getByText(/\(newest\)/u)).toBeInTheDocument();
     expect(inUse.getByRole("cell", { name: "AlmaLinux 10" })).toBeInTheDocument();
+    expect(inUse.getByRole("cell", { name: "x86-64-v2-AES, SSD, discard" })).toBeInTheDocument();
     expect(inUse.getByRole("button", { name: "Delete kubehenge-rke2-almalinux-10-build-202610110100" })).toBeDisabled();
     const kubeadm = within(screen.getByRole("row", { name: /kubehenge-kubeadm-v1.36.5-rocky-10 \(9002\)/u }));
     expect(kubeadm.getByRole("cell", { name: "Rocky Linux 10" })).toBeInTheDocument();
+    expect(kubeadm.getByText("Not recorded")).toBeInTheDocument();
     const talos = within(screen.getByRole("row", { name: /kubehenge-talos-v1.12.0 \(9003\)/u }));
     expect(talos.getByRole("cell", { name: "Talos Linux" })).toBeInTheDocument();
     expect(screen.getByText("Build by root@pam failed")).toBeInTheDocument();
@@ -262,6 +279,10 @@ describe("vM templates", () => {
     // The node's only bridge is chosen, and nothing untouched is flagged.
     expect(within(dialog).getByLabelText("Bridge")).toHaveValue("vmbr0");
     expect(within(dialog).getByLabelText("Bridge")).not.toHaveAttribute("aria-invalid");
+    // Hardware keeps the newest build's unless set.
+    await user.type(within(dialog).getByLabelText("CPU type"), "host");
+    await user.selectOptions(within(dialog).getByLabelText("NUMA"), "on");
+    expect(within(dialog).getByLabelText("SSD")).toHaveValue("");
     await user.click(within(dialog).getByRole("button", { name: "Build" }));
     await waitFor(() =>
       expect(sent()).toStrictEqual({
@@ -272,6 +293,8 @@ describe("vM templates", () => {
         storage: "ceph",
         importStorage: "local",
         bridge: "vmbr0",
+        cpuType: "host",
+        numa: true,
       }),
     );
   });

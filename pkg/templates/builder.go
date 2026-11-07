@@ -38,10 +38,10 @@ type Builder struct {
 	Log     func(format string, args ...any)
 	// KeepOnFailure leaves a failed bake's VM in place for inspection.
 	KeepOnFailure bool
-	// CPUType is the template's QEMU CPU type, which its clones keep. Empty means that of the newest
-	// build of the template's line, so that a new build does not change what its clones run on, and
-	// DefaultCPUType for a line without one.
-	CPUType string
+	// Hardware is the VM options the template's clones keep. What it leaves open is that of the
+	// newest build of the template's line, so that a new build does not change what its clones run
+	// on, and for a line without one the default (the CPU type the node OS runs on at the least).
+	Hardware HardwareChoice
 
 	// selectableSettle and selectablePoll pace waitSelectable. Zero means selectableSettle and
 	// pve.PollLongest.
@@ -220,7 +220,7 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	case !errors.Is(err, ErrNoTemplate):
 		return 0, err
 	}
-	cpuType, recipe, err := b.prepare(ctx, t)
+	hw, recipe, err := b.prepare(ctx, t)
 	if err != nil {
 		return 0, err
 	}
@@ -252,7 +252,7 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("reading the Proxmox VE cluster: %w", err)
 	}
-	vmid, err := b.createFresh(ctx, cluster, node, t, volume, cpuType, image.URL, recipe)
+	vmid, err := b.createFresh(ctx, cluster, node, t, volume, hw, image.URL, recipe)
 	if err != nil {
 		return 0, err
 	}
@@ -265,11 +265,11 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 			b.discard(context.WithoutCancel(ctx), node, vm)
 		}
 	}()
-	err = b.finish(ctx, node, vm, vmid, t, recipe)
+	err = b.finish(ctx, node, vm, vmid, t, hw, recipe)
 	if err != nil {
 		return 0, err
 	}
-	b.logf("template %s is VM %d", strings.Join(t.Tags, ";"), vmid)
+	b.logf("template %s is VM %d (%s)", strings.Join(t.Tags, ";"), vmid, hw.Describe())
 	return vmid, nil
 }
 
@@ -429,8 +429,8 @@ func (b *Builder) config(ctx context.Context, r *proxmox.ClusterResource) (*prox
 }
 
 // finish tags the new VM as a build under way, bakes it if the template asks for it, gives it its
-// final tags and size, and turns it into the template.
-func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, vmid int, t *Template, recipe *Recipe) error {
+// final tags (those of its line and its hardware) and size, and turns it into the template.
+func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, vmid int, t *Template, hw Hardware, recipe *Recipe) error {
 	if err := markBuilding(ctx, vm); err != nil {
 		return err
 	}
@@ -440,7 +440,7 @@ func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.Vi
 		}
 	}
 	task, err := vm.Config(ctx,
-		proxmox.VirtualMachineOption{Name: "tags", Value: strings.Join(t.Tags, ";")},
+		proxmox.VirtualMachineOption{Name: "tags", Value: strings.Join(NormaliseTags(append(slices.Clone(t.Tags), hw.Tags()...)), ";")},
 		proxmox.VirtualMachineOption{Name: "cores", Value: templateCores},
 		proxmox.VirtualMachineOption{Name: "memory", Value: templateMemoryMB},
 		bootFrom(templateDisk),
@@ -610,21 +610,22 @@ func (b *Builder) download(ctx context.Context, storage *proxmox.Storage, image 
 	return waitTask(ctx, task, err, transferTimeout)
 }
 
-// prepare works out, before anything is made, the new template's CPU type and the bake's recipe.
-// It refuses a template already being made and a node OS this node's CPU cannot run.
-func (b *Builder) prepare(ctx context.Context, t *Template) (string, *Recipe, error) {
+// prepare works out, before anything is made, the new template's hardware and the bake's recipe.
+// It refuses a template already being made, hardware Proxmox VE does not know and a node OS this
+// node's CPU cannot run.
+func (b *Builder) prepare(ctx context.Context, t *Template) (Hardware, *Recipe, error) {
 	if err := b.checkNotInProgress(ctx, t); err != nil {
-		return "", nil, err
+		return Hardware{}, nil, err
 	}
-	cpuType, err := b.cpuType(ctx, t)
+	hw, err := b.hardware(ctx, t)
 	if err != nil || t.Bake == nil {
-		return cpuType, nil, err
+		return hw, nil, err
 	}
 	if err = b.checkCPU(ctx, t.Bake.NodeOS); err != nil {
-		return "", nil, err
+		return Hardware{}, nil, err
 	}
 	recipe, err := b.recipe(ctx, t.Bake)
-	return cpuType, recipe, err
+	return hw, recipe, err
 }
 
 // recipe fetches the keys of the package repositories a bake adds, each checked against the
@@ -675,11 +676,13 @@ func (b *Builder) checkCPU(ctx context.Context, o NodeOS) error {
 	return nil
 }
 
-// cpuType is the CPU type a new template gets, as CPUType says. A line's first build gets the least
-// its node OS runs on.
-func (b *Builder) cpuType(ctx context.Context, t *Template) (string, error) {
-	if b.CPUType != "" {
-		return b.CPUType, nil
+// hardware is the hardware a new template gets, as Hardware says. What it leaves open is the
+// newest build's, and for a line's first build the default, with the CPU type the least its node OS
+// runs on.
+func (b *Builder) hardware(ctx context.Context, t *Template) (Hardware, error) {
+	choice := b.Hardware
+	if err := ValidateCPUType(choice.CPUType); err != nil {
+		return Hardware{}, err
 	}
 	least := DefaultCPUType
 	if t.Bake != nil {
@@ -687,22 +690,57 @@ func (b *Builder) cpuType(ctx context.Context, t *Template) (string, error) {
 			least = CPUTypeOf(r)
 		}
 	}
-	if _, built := BuildOf(t.Tags); !built {
-		return least, nil
+	hw := DefaultHardware(least)
+	complete := choice.CPUType != "" && choice.SSD != nil && choice.Discard != nil && choice.IOThread != nil && choice.NUMA != nil
+	if _, built := BuildOf(t.Tags); built && !complete {
+		inherited, err := b.newestHardware(ctx, t)
+		if err != nil {
+			return Hardware{}, err
+		}
+		if inherited != nil {
+			hw = *inherited
+		}
 	}
+	return choice.apply(hw), nil
+}
+
+// apply is h with what the choice sets.
+func (c HardwareChoice) apply(h Hardware) Hardware {
+	if c.CPUType != "" {
+		h.CPUType = c.CPUType
+	}
+	for _, o := range []struct {
+		set *bool
+		to  *bool
+	}{{c.SSD, &h.SSD}, {c.Discard, &h.Discard}, {c.IOThread, &h.IOThread}, {c.NUMA, &h.NUMA}} {
+		if o.set != nil {
+			*o.to = *o.set
+		}
+	}
+	return h
+}
+
+// newestHardware is the hardware of the newest build of t's line, or nil for a line without one.
+// The CPU type is read from the VM's configuration, which keeps its case.
+func (b *Builder) newestHardware(ctx context.Context, t *Template) (*Hardware, error) {
 	builds, err := b.Builds(ctx, &Template{Tags: LineOf(t.Tags)})
 	if err != nil || len(builds) == 0 {
-		return least, err
+		return nil, err
 	}
 	c, err := b.config(ctx, builds[0].Resource)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if c.CPU == "" {
+	hw, recorded := HardwareOf(ParseAllTags(builds[0].Resource.Tags))
+	if !recorded {
+		hw = DefaultHardware("")
+	}
+	hw.CPUType, _, _ = strings.Cut(c.CPU, ",")
+	if hw.CPUType == "" {
 		// Proxmox VE's own default, which the VM's clones run on too.
-		return "kvm64", nil
+		hw.CPUType = "kvm64"
 	}
-	return c.CPU, nil
+	return &hw, nil
 }
 
 // createAttempts bounds createFresh: a VM ID Proxmox VE offers is not reserved, so another build or
@@ -713,7 +751,7 @@ const createAttempts = 5
 // createFresh creates t's VM under the next free VM ID, asking for another while the one offered
 // turns out taken.
 func (b *Builder) createFresh(
-	ctx context.Context, cluster *proxmox.Cluster, node *proxmox.Node, t *Template, volume, cpuType, source string, recipe *Recipe,
+	ctx context.Context, cluster *proxmox.Cluster, node *proxmox.Node, t *Template, volume string, hw Hardware, source string, recipe *Recipe,
 ) (int, error) {
 	for attempt := 1; ; attempt++ {
 		vmid, err := cluster.NextID(ctx)
@@ -721,7 +759,7 @@ func (b *Builder) createFresh(
 			return 0, fmt.Errorf("choosing a VM ID: %w", err)
 		}
 		b.logf("creating VM %d %s from %s", vmid, t.Name, source)
-		err = b.createVM(ctx, node, vmid, t, volume, cpuType, recipe)
+		err = b.createVM(ctx, node, vmid, t, volume, hw, recipe)
 		if err == nil {
 			return vmid, nil
 		}
@@ -740,15 +778,16 @@ func (b *Builder) createFresh(
 
 // createVM creates the VM that becomes the template. In image mode its own disk starts empty, and
 // the family's image boots from a second disk beside it to build the node image onto it.
-func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t *Template, volume, cpuType string, recipe *Recipe) error {
+func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t *Template, volume string, hw Hardware, recipe *Recipe) error {
 	cores, memory := templateCores, templateMemoryMB
-	imported := fmt.Sprintf("%s:0,import-from=%s,discard=on,ssd=1", b.Storage, volume)
+	diskOptions := hw.diskOptions()
+	imported := fmt.Sprintf("%s:0,import-from=%s%s", b.Storage, volume, diskOptions)
 	disks := []proxmox.VirtualMachineOption{{Name: templateDisk, Value: imported}, bootFrom(templateDisk)}
 	if recipe != nil {
 		cores, memory = bakeCores, cmp.Or(recipe.MemoryMiB, bakeMemoryMB)
 		if recipe.Image != nil {
 			disks = []proxmox.VirtualMachineOption{
-				{Name: templateDisk, Value: fmt.Sprintf("%s:%d,discard=on,ssd=1", b.Storage, recipe.DiskGiB)},
+				{Name: templateDisk, Value: fmt.Sprintf("%s:%d%s", b.Storage, recipe.DiskGiB, diskOptions)},
 				{Name: builderDisk, Value: imported},
 				bootFrom(builderDisk),
 			}
@@ -759,10 +798,10 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 		{Name: "description", Value: "Kubehenge template, made by `kubehenge template`; Cluster API selects it by its tags."},
 		{Name: "ostype", Value: "l26"},
 		{Name: "machine", Value: "q35"},
-		{Name: "cpu", Value: cpuType},
+		{Name: "cpu", Value: hw.CPUType},
 		{Name: "cores", Value: cores},
 		{Name: "memory", Value: memory},
-		{Name: "scsihw", Value: "virtio-scsi-pci"},
+		{Name: "scsihw", Value: hw.controller()},
 		{Name: "serial0", Value: "socket"},
 		{Name: "vga", Value: "serial0"},
 		{Name: "agent", Value: "enabled=1"},
@@ -771,6 +810,9 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 		{Name: "onboot", Value: 1},
 	}
 	options = append(options, disks...)
+	if hw.NUMA {
+		options = append(options, proxmox.VirtualMachineOption{Name: "numa", Value: 1})
+	}
 	if b.Pool != "" {
 		options = append(options, proxmox.VirtualMachineOption{Name: "pool", Value: b.Pool})
 	}

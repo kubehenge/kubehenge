@@ -27,6 +27,13 @@ type fakeNodes struct {
 	levels map[string]int
 	err    error
 	asked  int
+	// templateTags are the tags of the templates Proxmox VE lists.
+	templateTags [][]string
+	tagsErr      error
+}
+
+func (f *fakeNodes) TemplateTags(context.Context) ([][]string, error) {
+	return f.templateTags, f.tagsErr
 }
 
 func (f *fakeNodes) OnlineNodes(context.Context) ([]Node, error) {

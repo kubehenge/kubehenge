@@ -92,6 +92,8 @@ type demoCluster struct {
 	AddOns  []string `json:"addOns"`
 	// Crashing names a workload whose pod restarts again and again, with an alert firing for it.
 	Crashing string `json:"crashing"`
+	// EtcdFsyncMs, when set, is the 99th percentile of its etcd members' write-ahead log syncs.
+	EtcdFsyncMs int `json:"etcdFsyncMs"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
 }
@@ -300,8 +302,23 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 			DesiredReplicas: &workers, Replicas: &workers, ReadyReplicas: &workers, AvailableReplicas: &workers, UpToDateReplicas: &upToDateWorkers,
 		},
 	}
+	if d.EtcdFsyncMs > 0 {
+		members := make([]provisioner.MemberFsync, 0, d.ControlPlanes)
+		for i := range d.ControlPlanes {
+			members = append(members, provisioner.MemberFsync{
+				Member: fmt.Sprintf("etcd-%s-control-plane-%d", d.Name, i+1), P99: time.Duration(d.EtcdFsyncMs) * time.Millisecond, Syncs: demoFsyncs,
+			})
+		}
+		if cond := provisioner.EtcdLatencyConditionOf(members); cond != nil {
+			cond.Type, cond.LastTransitionTime = provisioner.EtcdLatencyCondition, since
+			c.Status.Conditions = append(c.Status.Conditions, *cond)
+		}
+	}
 	return c
 }
+
+// demoFsyncs is how many write-ahead log syncs the demo's slow etcd members report.
+const demoFsyncs = 48000
 
 // demoCondition is a condition that holds, as an unstructured object carries it.
 func demoCondition(kind, reason string, at time.Time) map[string]any {

@@ -58,6 +58,11 @@ func (p *Placer) placeAll(ctx context.Context) {
 		log.Error(err, "reading the Proxmox VE nodes")
 		return
 	}
+	// Without the templates' hardware a cluster is placed by its node OS alone.
+	templateTags, err := p.Nodes.TemplateTags(ctx)
+	if err != nil {
+		log.Error(err, "reading the templates' hardware")
+	}
 	clusters := &clusterv1.ClusterList{}
 	if err := p.Client.List(ctx, clusters, client.UnsafeDisableDeepCopy); err != nil {
 		log.Error(err, "listing clusters")
@@ -68,12 +73,12 @@ func (p *Placer) placeAll(ctx context.Context) {
 		if !Owns(c, p.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
 			continue
 		}
-		level, err := clusterCPULevel(c)
+		needs, err := clusterNeeds(c, templateTags)
 		if err != nil {
 			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
 			continue
 		}
-		value := strings.Join(nodesFor(online, level), ",")
+		value := strings.Join(nodesFor(online, needs.Level), ",")
 		if c.Annotations[OnlineNodesAnnotation] == value {
 			continue
 		}
@@ -205,7 +210,7 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster) ([]
 	if h.Nodes == nil {
 		return nil, nil
 	}
-	level, err := clusterCPULevel(cluster)
+	needs, err := h.clusterTemplateNeeds(ctx, cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -213,5 +218,5 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster) ([]
 	if err != nil {
 		return nil, fmt.Errorf("reading the Proxmox VE nodes: %w", err)
 	}
-	return nodesFor(online, level), nil
+	return nodesFor(online, needs.Level), nil
 }

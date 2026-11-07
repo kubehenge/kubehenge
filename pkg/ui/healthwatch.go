@@ -38,6 +38,9 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 			a.add(severityWarning, sectionNodes, "Certificates expire", provisioner.CertificatesSummary(cond.Message), cond.LastTransitionTime.Time)
 		}
 	}
+	if cond := trueCondition(c, provisioner.EtcdLatencyCondition); cond != nil {
+		a.add(severityWarning, sectionControlPlane, "etcd disk slow", provisioner.EtcdLatencySummary(cond.Message), cond.LastTransitionTime.Time)
+	}
 	if cond := trueCondition(c, provisioner.VMsCondition); cond != nil {
 		severity := severityWarning
 		if cond.Reason == provisioner.VMsIOError || cond.Reason == provisioner.VMsPanicked {
