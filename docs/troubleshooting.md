@@ -595,25 +595,23 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 ### The management cluster's VMs are lost
 
-The datastore of the three Talos VMs is gone, or someone deleted the VMs or the pool `kubehenge-management`. The appliance and its state are intact, and the target holds snapshots.
+The three Talos VMs or their datastore are gone, or someone deleted the pool `kubehenge-management`. The appliance and its state are intact, and the target holds snapshots.
 
 **Administration, Backups, Recreate…** on a snapshot, or `kubehenge appliance etcd-backups recreate <snapshot>`, does it in one run:
 
-1. It opens the snapshot and checks its checksum, so a wrong passphrase or a damaged snapshot stops it before anything is made.
-2. It applies the module for the VMs and the nodes' configuration only. The cluster's bootstrap and health steps wait, because they cannot finish on nodes with an empty etcd.
+1. It opens the snapshot and checks its checksum. A wrong passphrase or a damaged snapshot stops it before anything is made.
+2. It applies the module for the VMs and the nodes' configuration only. Bootstrap and health steps wait, as they cannot finish on an empty etcd.
 3. It restores the snapshot into the new nodes, as **Restore…** does.
-4. It applies the module whole, which finds the cluster bootstrapped as the state records, reads it healthy and signs the interface in.
+4. It applies the module whole, which signs the interface in.
 
-A whole apply first would wait out the 15 minutes of the health read and then fail. A restore first has no nodes to reach. Clusters created or changed since the snapshot go back to then, and the controller lists what no longer matches ([VMs missing, Unowned VMs](#a-restore-left-clusters-that-do-not-match-proxmox-ve)).
-
-If the appliance is lost too, import an [export](install-settings.md#export-for-a-new-appliance) first.
+Clusters changed since the snapshot go back to then, and the controller [lists what no longer matches](#a-restore-left-clusters-that-do-not-match-proxmox-ve). If the appliance is lost too, import an [export](install-settings.md#export-for-a-new-appliance) first.
 
 ### A restore left clusters that do not match Proxmox VE
 
 After a restore of the management cluster, and then daily, the controller compares every cluster with the VMs in its pool.
 
 - **VMs missing** on a cluster's Health: none of its VMs exists in Proxmox VE, as for a cluster created before the snapshot and deleted since. Delete the cluster, or create it again with `kubehenge cluster create --from <spec>` after restoring its VMs.
-- **Unowned VMs** on the management cluster's Health: VMs in Kubehenge's pools that no cluster owns, as for a cluster created since the snapshot. They are never deleted automatically. Delete them in Proxmox VE when you are sure.
+- **Unowned VMs** on the management cluster's Health: VMs in Kubehenge's pools that no cluster owns, as for a cluster created since the snapshot. Delete them in Proxmox VE when you are sure.
 - The token that lists the VMs must see them. A list with no VM at all is taken as a token that sees nothing, and marks no cluster.
 
 ### The Proxmox VE certificate or CA changed

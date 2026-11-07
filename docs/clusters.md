@@ -784,12 +784,6 @@ Neither key is in the store. So whoever can read the bucket sees the names of th
 
 The Secret outlives the cluster. So a cluster created again under the same name, backing up to the same target, can restore what the one before backed up. Deleting the Secret leaves those backups unreadable for good.
 
-### The cluster's spec
-
-After every change, the appliance writes the cluster's spec to `<prefix>/clusters/<namespace>.<name>/cluster.yaml` in the target the management cluster's etcd is backed up to. It is the Cluster as created, and the ConfigMaps and Secrets labelled `kubehenge.dev/cluster-name: <name>`. Secrets keep their keys and lose their values.
-
-The cluster's **Backups** tab downloads it, as does `kubehenge cluster export <name>`. `kubehenge cluster create --from <file>` creates the cluster again, with the checks of the create wizard. Without a target for the management backups the spec is still offered for download, and the warning that those backups are off stands.
-
 Create the cluster again under the same name and variables before restoring its Velero backups, as the section above says.
 
 The **Backups** view says whether Velero reaches the target and when it last backed up. It lists every backup with its state, who started it or whether the schedule did, and when it started and runs out. It also shows how many items each holds and what went wrong. The restores below show what each brings back and how far it has come. Seeing it needs `VM.Audit` on the cluster's pool.
@@ -824,6 +818,12 @@ Velero runs as `cluster-admin`, which backing up and restoring every resource ne
 When backups are on, the cluster's health page and the fleet's **Needs you** list report a failed or partly failed last backup. They also say so if no backup has completed while the schedule came round twice. That counts from the last backup that did complete, or from when backups were switched on.
 
 Each links to the Backups view. Kubehenge reads this from Velero's own schedule and backups, so it holds for a schedule changed with kubectl too.
+
+### The cluster's spec
+
+After every change, the appliance writes the cluster to `<prefix>/clusters/<namespace>.<name>/cluster.yaml` in the management etcd's backup target. The file holds the Cluster and the ConfigMaps and Secrets labelled `kubehenge.dev/cluster-name: <name>`. Secrets keep their keys and lose their values.
+
+The **Backups** tab downloads it, as does `kubehenge cluster export <name>`. `kubehenge cluster create --from <file>` creates the cluster again, with the wizard's checks. Without a target the download still works.
 
 ### Restore into another cluster
 

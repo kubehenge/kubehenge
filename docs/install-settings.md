@@ -80,14 +80,18 @@ A restore needs the passphrase too. It uses the admin talosconfig from the state
 
 The state, the settings and the target's access key live only in the appliance. **Export…** under **Administration, Backups**, or `kubehenge appliance export`, saves them in one file. The file is encrypted with an export passphrase you set, with [age](https://age-encryption.org). It holds the admin talosconfig, OpenTofu's state (still encrypted with the state passphrase), the applied settings and the target with its access key.
 
-To use it after the appliance is lost:
+### Restore from an export
+
+After the appliance is lost:
 
 1. Install a new appliance on the same Proxmox VE cluster.
 2. In its setup choose **Restore from an export**, or run `kubehenge appliance import <file>`. Both ask for the export passphrase.
 3. Restore a snapshot under **Administration, Backups**. It asks for the state passphrase.
 4. Apply the settings once, which signs the interface in to the management cluster.
 
-An import is refused where a management cluster is already set up. A wrong passphrase and a changed file are refused before anything is written. After a snapshot succeeds, the appliance warns when no export was taken since the target, its access key or the snapshots' key last changed. Keep the file and both passphrases apart from the appliance.
+An import is refused where a management cluster is already set up. A wrong passphrase and a changed file are refused before anything is written.
+
+After a snapshot succeeds, the appliance warns when no export was taken since the target, its access key or the snapshots' key last changed. Keep the file and both passphrases apart from the appliance.
 
 ## What the template builds may do
 

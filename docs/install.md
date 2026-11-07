@@ -451,9 +451,15 @@ The appliance takes each snapshot itself through the nodes' Talos API, with a ta
 
 #### Restoring
 
-**Restore…** on a snapshot wipes etcd on every control-plane node of the management cluster and restores it from the snapshot. Every cluster's objects go back to then. After a restore, and then daily, the controller compares each cluster with its VMs. A cluster whose VMs are all gone shows **VMs missing** on its Health page. VMs in Kubehenge's pools that no cluster owns show as **Unowned VMs** on the management cluster's Health. Nothing deletes them.
+**Restore…** on a snapshot wipes etcd on every control-plane node of the management cluster and restores it from the snapshot. Every cluster's objects go back to then.
 
-While the backups are off, a warning stands on **Administration, Backups** and above the cluster list, because every cluster's CAs, kubeconfigs and backup keys live only in this etcd. An administrator can dismiss it for 30 days, and the page records who did and when. Notifications repeat it weekly.
+After a restore, and then daily, the controller compares each cluster with its VMs. A cluster whose VMs are all gone shows **VMs missing** on its Health page. VMs in Kubehenge's pools that no cluster owns show as **Unowned VMs** on the management cluster's Health. Nothing deletes them.
+
+#### The warning while backups are off
+
+While the backups are off, a warning stands on **Administration, Backups** and above the cluster list. Every cluster's CAs, kubeconfigs and backup keys live only in this etcd.
+
+An administrator can dismiss the warning for 30 days. The page records who did and when. Notifications repeat it weekly.
 
 It asks for the state passphrase and counts as a run of the management cluster. It needs only the nodes' Talos API, so it works while the management cluster's own API does not answer.
 

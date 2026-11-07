@@ -1,8 +1,7 @@
-- While the management cluster's etcd backups are off, a warning stands on Administration, above the cluster list and in `kubehenge appliance etcd-backups`, and notifications repeat weekly. An administrator can dismiss it for 30 days.
-- The setup's backup step says what is lost without etcd backups: every cluster's CAs, kubeconfigs and backup keys.
-- **Export** and `kubehenge appliance export` save the appliance's state, encrypted with a passphrase of your own. **Restore from an export** in a new appliance's setup and `kubehenge appliance import` read it back.
+- A warning stands while the management etcd backups are off, and notifications repeat it weekly. An administrator can dismiss it for 30 days.
+- The setup's backup step says what is lost without etcd backups.
+- **Export** and `kubehenge appliance export` save the appliance's state, encrypted. **Restore from an export** and `kubehenge appliance import` read it back.
 - The appliance warns after a snapshot when no export was taken since the backup settings changed.
 - **Recreate…** and `kubehenge appliance etcd-backups recreate` make the management cluster's VMs again and restore a snapshot into them.
-- After a management restore, and then daily, a Cluster whose VMs are all gone shows **VMs missing** on Health.
-- VMs in Kubehenge's pools that no Cluster owns show as **Unowned VMs** on the management Health. Nothing deletes them.
-- Each cluster's spec is stored in the management backups' target after every change, without Secrets' values. The Backups tab and `kubehenge cluster export` download it, and `kubehenge cluster create --from` creates the cluster again.
+- A Cluster whose VMs are all gone shows **VMs missing** on Health. VMs no Cluster owns show as **Unowned VMs** and are never deleted.
+- Each cluster's spec is stored in the backup target after every change, without Secret values. `kubehenge cluster export` downloads it and `kubehenge cluster create --from` creates the cluster again.
