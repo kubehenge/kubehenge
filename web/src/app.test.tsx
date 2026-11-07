@@ -727,7 +727,7 @@ describe("clusters", () => {
     });
     const user = userEvent.setup();
     render(<App />);
-    expect(await screen.findByText(stuck.stalled)).toBeInTheDocument();
+    await expect(screen.findByText(stuck.stalled)).resolves.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Forget md-a" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Forget cp-a" }));
     const dialog = screen.getByRole("dialog", { name: "Forget cp-a" });
