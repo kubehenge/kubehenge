@@ -161,6 +161,12 @@ data "talos_machine_configuration" "node" {
       # The same MTU as the Proxmox VE interface, on the link by its alias, so it holds whatever
       # the guest driver negotiates.
       var.mtu == null ? [] : [yamlencode({ apiVersion = "v1alpha1", kind = "LinkConfig", name = "lan", mtu = var.mtu })],
+      # The nameservers stay the platform's: only search domains are set.
+      length(var.search_domains) == 0 ? [] : [yamlencode({
+        apiVersion    = "v1alpha1"
+        kind          = "ResolverConfig"
+        searchDomains = { domains = var.search_domains }
+      })],
     )),
   ]
 }

@@ -195,7 +195,7 @@ const storages = {
       { bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true, cidr: "192.0.2.5/24", gateway: "192.0.2.1" },
     ],
   },
-  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53"] } },
+  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53"], search: "" } },
 };
 
 const managementSettings = {

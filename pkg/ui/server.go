@@ -70,7 +70,7 @@ type Resources interface {
 	Storages(ctx context.Context, t *pve.Ticket) ([]pve.Storage, error)
 	Nodes(ctx context.Context, t *pve.Ticket) ([]pve.Node, error)
 	Bridges(ctx context.Context, t *pve.Ticket, node string) ([]pve.Bridge, error)
-	DNS(ctx context.Context, t *pve.Ticket, node string) ([]string, error)
+	DNS(ctx context.Context, t *pve.Ticket, node string) (pve.NodeDNS, error)
 	AccessNames(ctx context.Context, t *pve.Ticket) (pve.Names, error)
 	NodeAddresses(ctx context.Context, t *pve.Ticket) (map[string]string, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)

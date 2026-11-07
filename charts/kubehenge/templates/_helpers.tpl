@@ -162,6 +162,17 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
           items:
             type: string
             minLength: 1
+        searchDomains:
+          type: array
+          # glibc's resolver reads six.
+          maxItems: 6
+          description: >-
+            Domains the nodes and the pods append to a name without dots, so that "git" finds
+            git.example.com.
+          items:
+            type: string
+            maxLength: 253
+            pattern: '^([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?$'
 - name: storage
   required: true
   schema:
@@ -1433,6 +1444,57 @@ Proxmox VE HA take it from there. Applied before the distribution starts with sy
     kernel.panic_on_oops=1
     kernel.keys.root_maxkeys=1000000
     kernel.keys.root_maxbytes=25000000
+{{- end -}}
+
+{{- define "kubehenge.searchDomainsEnabled" -}}
+{{ "{{ with .network }}{{ if .searchDomains }}true{{ end }}{{ end }}" | quote }}
+{{- end -}}
+
+{{/*
+Gives a kubeadm, RKE2 or k3s node the cluster's search domains (network.searchDomains), which
+capmox's network configuration has no field for. They go onto the node's NetworkManager connection,
+so that the node and, through the kubelet's resolv.conf, its pods resolve a short name. Call with
+"distribution" (kubeadm, rke2 or k3s). The domains are DNS names by the variable's schema, so they
+carry nothing a shell would read.
+*/}}
+{{- define "kubehenge.searchDomainsPatch" -}}
+{{- $targets := dict
+  "kubeadm" (dict "controlPlane" "KubeadmControlPlaneTemplate" "worker" "KubeadmConfigTemplate" "spec" "/spec/template/spec/kubeadmConfigSpec" "commands" "preKubeadmCommands")
+  "rke2" (dict "controlPlane" "RKE2ControlPlaneTemplate" "worker" "RKE2ConfigTemplate" "spec" "/spec/template/spec" "commands" "preRKE2Commands")
+  "k3s" (dict "controlPlane" "KThreesControlPlaneTemplate" "worker" "KThreesConfigTemplate" "spec" "/spec/template/spec/kthreesConfigSpec" "commands" "preK3sCommands") -}}
+{{- $target := get $targets .distribution -}}
+{{- $api := dict "controlPlane" "controlplane.cluster.x-k8s.io/v1beta2" "worker" "bootstrap.cluster.x-k8s.io/v1beta2" -}}
+{{- $selector := dict "controlPlane" (dict "controlPlane" true) "worker" (dict "machineDeploymentClass" (dict "names" (list "worker"))) -}}
+- name: {{ .distribution }}-search-domains
+  enabledIf: {{ include "kubehenge.searchDomainsEnabled" . }}
+  definitions:
+    {{- range $role := list "controlPlane" "worker" }}
+    {{- $spec := ternary $target.spec "/spec/template/spec" (eq $role "controlPlane") }}
+    - selector:
+        apiVersion: {{ get $api $role }}
+        kind: {{ get $target $role }}
+        matchResources:
+          {{- toYaml (get $selector $role) | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: {{ $spec }}/files/-
+          valueFrom:
+            template: |
+              path: /etc/kubehenge/search-domains.sh
+              owner: root:root
+              permissions: "0700"
+              content: |
+                #!/bin/sh
+                set -eu
+                nmcli -t -f UUID,DEVICE,TYPE connection show --active | while IFS=: read -r uuid device type; do
+                  [ "$type" = 802-3-ethernet ] || continue
+                  nmcli connection modify "$uuid" ipv4.dns-search "{{ `{{ join " " .network.searchDomains }}` }}"
+                  nmcli device reapply "$device"
+                done
+        - op: add
+          path: {{ $spec }}/{{ $target.commands }}/-
+          value: /etc/kubehenge/search-domains.sh
+    {{- end }}
 {{- end -}}
 
 {{/*

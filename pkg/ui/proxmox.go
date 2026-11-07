@@ -199,12 +199,12 @@ type bridgeView struct {
 // dns answers with the DNS servers a node resolves with, which the setup offers the management
 // cluster.
 func (s *Server) dns(w http.ResponseWriter, r *http.Request, u user) {
-	servers, err := s.Accounts.DNS(r.Context(), u.ticket, r.PathValue("node"))
+	dns, err := s.Accounts.DNS(r.Context(), u.ticket, r.PathValue("node"))
 	if err != nil {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string][]string{"servers": servers})
+	writeJSON(w, http.StatusOK, dns)
 }
 
 func (s *Server) bridges(w http.ResponseWriter, r *http.Request, u user) {

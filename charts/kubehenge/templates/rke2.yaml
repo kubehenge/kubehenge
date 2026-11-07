@@ -243,6 +243,7 @@ spec:
               value: {{ . }}
             {{- end }}
         {{- end }}
+    {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "rke2") | nindent 4 }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate

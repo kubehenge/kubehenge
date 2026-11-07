@@ -1029,6 +1029,8 @@ The schedule is by default every 12 hours from 00:00 in the time zone chosen. Th
 
 Snapshots go under `<prefix>/<namespace>.<name>/etcd` in the target's bucket, beside the cluster's Velero backups. They are named by when they were taken in UTC and the Kubernetes version, as `20261021T120000Z-v1.36.5-rke2r1.db.age`. Each object carries the Kubernetes version, the distribution, etcd's revision and the SHA-256 and size of the database in its metadata. Snapshots work on their own, with or without Velero backups.
 
+A bucket with versioning and object lock keeps what is deleted until its retention ends. Set the retention shorter than the time the newest snapshots cover, which is `keep` times the interval, or the controller's deletions cannot take effect. On a versioned bucket, a deletion only hides the object, so the space returns when the bucket's lifecycle rule removes the old versions. Add one, for example `NoncurrentVersionExpiration` after the retention.
+
 Nothing runs in the cluster for them. No etcd key or S3 access key enters it, unless the distribution's own upload is on ([below](#the-distributions-own-upload)). For each snapshot the controller signs itself an etcd client certificate valid for an hour, in memory, from the cluster's etcd CA. The control-plane provider keeps that CA in the management cluster.
 
 The controller reaches one etcd member through the cluster's API server, or a control plane's Talos API on Talos. It keeps a snapshot only once etcd's own checksum matches.
@@ -1324,6 +1326,7 @@ spec:
           prefix: 24
           gateway: 192.0.2.1
           dnsServers: [192.0.2.1]
+          searchDomains: [corp.example]
       - name: storage
         value: shared-storage
       - name: cni
@@ -1364,7 +1367,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | Variable | Required | What it is |
 | --- | --- | --- |
 | `controlPlaneEndpoint` | yes | The control plane's virtual IP: an IPv4 address, unused, outside `network.addresses`. |
-| `network` | yes | `bridge`, one of the bridges clusters may use. It has to exist on a node the cluster may use ([above](#nodes-left-out-of-the-placement)). `vlan` (optional, 1 to 4094). `mtu` (optional, 1280 to 65520). `queues` (optional, 1 to 64). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. |
+| `network` | yes | `bridge`, one of the bridges clusters may use. It has to exist on a node the cluster may use ([above](#nodes-left-out-of-the-placement)). `vlan` (optional, 1 to 4094). `mtu` (optional, 1280 to 65520). `queues` (optional, 1 to 64). `addresses`, a list of ranges, networks in CIDR notation or single addresses. `prefix` (1 to 32). `gateway`. `dnsServers`. `searchDomains` (optional, at most 6 DNS names), which the nodes and the pods append to a name without dots, so that `git` finds `git.corp.example`. |
 | `storage` | yes | The storage for the nodes' disks and the persistent volumes, one of the management cluster's `workload_datastores`. It has to be available on an online node the cluster may use. |
 | `allowedNodes` | no | Proxmox VE nodes the cluster's VMs may run on, at least one. Every node when unset. New VMs go to those of them that are online, where the storage is available and where the template can be cloned ([above](#machines)). A template on storage that is not shared can be cloned only on its own node. The interface takes only nodes the user can see, or those the cluster already has. A change applies to VMs created after it. |
 | `proxmoxHA` | no | Whether Proxmox VE HA keeps the control-plane VMs on separate nodes ([above](#machines)). Default true, where the management cluster has Proxmox VE HA and the storage is shared. |

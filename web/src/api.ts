@@ -26,6 +26,7 @@ import type {
   ManagementBackups,
   ManagementSettings,
   ManagementSnapshots,
+  NodeDNS,
   NotificationSent,
   PodLogs,
   Plan,
@@ -454,8 +455,8 @@ export interface Api {
   storages: () => Promise<Storage[]>;
   nodes: () => Promise<PveNode[]>;
   bridges: (node: string) => Promise<Bridge[]>;
-  /** The DNS servers a node resolves with. */
-  dns: (node: string) => Promise<{ servers: string[] }>;
+  /** The DNS servers and search domain a node resolves with. */
+  dns: (node: string) => Promise<NodeDNS>;
   /** Free addresses on a bridge's network for a new cluster's API and nodes, where nodes is above 0, and which of check a host answers on. */
   freeAddresses: (
     node: string,
@@ -600,13 +601,12 @@ export const api: Api = {
   haRules: () => request("GET", "/api/proxmox/ha-rules"),
 };
 
-/** dnsOf lists the DNS servers a node resolves with. A node whose servers cannot be read offers none. */
-export async function dnsOf(node: string): Promise<string[]> {
+/** dnsOf reads how a node resolves names. A node whose DNS cannot be read offers none. */
+export async function dnsOf(node: string): Promise<NodeDNS> {
   try {
-    const { servers } = await api.dns(node);
-    return servers;
+    return await api.dns(node);
   } catch {
-    return [];
+    return { servers: [], search: "" };
   }
 }
 

@@ -44,13 +44,6 @@ func (m *memoryStore) Put(_ context.Context, key string, r io.Reader, metadata m
 	return int64(len(data)), nil
 }
 
-func (m *memoryStore) SetMetadata(_ context.Context, key string, metadata map[string]string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.meta[key] = metadata
-	return nil
-}
-
 func (m *memoryStore) List(_ context.Context, prefix string) ([]provisioner.StoredObject, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

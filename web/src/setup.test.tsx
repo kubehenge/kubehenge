@@ -18,6 +18,7 @@ const form: SetupForm = {
   apiAddress: "192.0.2.10",
   gateway: "192.0.2.1",
   dnsServers: "192.0.2.1, 1.1.1.1",
+  searchDomains: "",
   timeServers: "",
   workloadDatastores: ["local-lvm"],
   workloadBridges: ["vmbr0"],
@@ -100,7 +101,7 @@ const oneNode = {
       { bridge: "vmbr1", node: "pve1", vlanAware: true, usable: true },
     ],
   },
-  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53", "198.51.100.53"] } },
+  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53", "198.51.100.53"], search: "corp.example" } },
 };
 
 const next = async (user: UserEvent): Promise<void> => user.click(screen.getByRole("button", { name: "Next" }));
@@ -522,6 +523,7 @@ describe("setup", () => {
 
     // The bridge the node reaches its gateway through, that gateway and the node's DNS servers.
     await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
+    expect(screen.getByLabelText("Search domains")).toHaveValue("corp.example");
     expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0");
     expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1");
     const addresses = screen.getByLabelText("Node addresses");
@@ -572,6 +574,7 @@ describe("setup", () => {
         bridge: "vmbr0",
         gateway: "192.0.2.1",
         dnsServers: ["192.0.2.53", "198.51.100.53"],
+        searchDomains: ["corp.example"],
         workloadDatastores: ["local-lvm", "local"],
         workloadBridges: ["vmbr0"],
         headlampSignIn: true,
@@ -691,6 +694,44 @@ describe("setup", () => {
     expect(formOf(settings(form))).toMatchObject({ refreshNode: "", refreshBridge: "", refreshVLAN: "" });
     expect(setupFieldProblems({ ...form, refreshVLAN: "4095" })).toHaveProperty("refreshVLAN");
     expect(setupFieldProblems({ ...form, refreshVLAN: "4094" })).not.toHaveProperty("refreshVLAN");
+  });
+
+  it.each([
+    ["a node without a search domain", { servers: ["192.0.2.53"], search: "" }, ""],
+    ["a node with one", { servers: ["192.0.2.53"], search: "corp.example" }, "corp.example"],
+  ])("prefills Search domains from %s", async (_kind, dns, expected) => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/proxmox/nodes/pve1/dns": { body: dns },
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53"));
+    expect(screen.getByLabelText("Search domains")).toHaveValue(expected);
+  });
+
+  it("keeps Search domains as the user left them", async () => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    await next(user);
+    const search = screen.getByLabelText("Search domains");
+    await waitFor(() => expect(search).toHaveValue("corp.example"));
+    await user.clear(search);
+    expect(search).toHaveValue("");
+    await user.type(search, "lab.example");
+    expect(search).toHaveValue("lab.example");
   });
 
   it("lists VNets with their alias and zone and sends the one chosen as zone/vnet", async () => {
@@ -885,6 +926,14 @@ describe("setup", () => {
     expect(problemsOf({ apiAddress: "198.51.100.10" }).apiAddress).toBe("Use an address in the nodes' network.");
     expect(problemsOf({ dnsServers: "dns.example" }).dnsServers).toBe("Enter IP addresses only.");
     expect(problemsOf({ dnsServers: "2001:db8::53" }).dnsServers).toBeUndefined();
+    expect(problemsOf({ searchDomains: "corp.example, example.org" }).searchDomains).toBeUndefined();
+    expect(problemsOf({ searchDomains: "corp example." }).searchDomains).toBe("Enter domain names like corp.example");
+    expect(problemsOf({ searchDomains: "a b c d e f g" }).searchDomains).toBe("At most 6 domains");
+    expect(settings({ ...form, searchDomains: "corp.example example.org" }).searchDomains).toStrictEqual([
+      "corp.example",
+      "example.org",
+    ]);
+    expect(settings(form)).not.toHaveProperty("searchDomains");
     expect(problemsOf({ vlan: "4095" }).vlan).toBe("A whole number from 1 to 4094.");
     expect(problemsOf({ podSubnets: "10.244.0.0/16, 10.245.0.1/16" }).podSubnets).toMatch(
       /^10.245.0.1\/16 is not a network address/u,

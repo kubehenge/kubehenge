@@ -710,8 +710,8 @@ func (*demoAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]p
 	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.20.0.2/16", Gateway: "10.20.0.1"}}, nil
 }
 
-func (*demoAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
-	return []string{"10.20.0.53"}, nil
+func (*demoAccounts) DNS(context.Context, *pve.Ticket, string) (pve.NodeDNS, error) {
+	return pve.NodeDNS{Servers: []string{"10.20.0.53"}, Search: "corp.example"}, nil
 }
 
 func (*demoAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, error) {

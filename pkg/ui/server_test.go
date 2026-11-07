@@ -277,8 +277,11 @@ func (f *fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([
 	}, nil
 }
 
-func (*fakeAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
-	return []string{"192.0.2.53"}, nil
+func (*fakeAccounts) DNS(_ context.Context, _ *pve.Ticket, node string) (pve.NodeDNS, error) {
+	if node == "pve2" {
+		return pve.NodeDNS{Servers: []string{"192.0.2.54"}}, nil
+	}
+	return pve.NodeDNS{Servers: []string{"192.0.2.53"}, Search: "corp.example"}, nil
 }
 
 // PoolMembers answers as Proxmox VE does, without the tags.
@@ -1702,8 +1705,13 @@ func TestProxmoxResources(t *testing.T) {
 	}
 	rec = b.do("GET", "/api/proxmox/nodes/pve1/dns", "")
 	expect(t, rec, http.StatusOK)
-	if got := strings.TrimSpace(rec.Body.String()); got != `{"servers":["192.0.2.53"]}` {
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"servers":["192.0.2.53"],"search":"corp.example"}` {
 		t.Fatalf("dns = %s", got)
+	}
+	rec = b.do("GET", "/api/proxmox/nodes/pve2/dns", "")
+	expect(t, rec, http.StatusOK)
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"servers":["192.0.2.54"],"search":""}` {
+		t.Fatalf("dns of a node without a search domain = %s", got)
 	}
 }
 

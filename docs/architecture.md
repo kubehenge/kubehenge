@@ -525,16 +525,17 @@ etcd snapshots (`etcdSnapshots: {enabled: true, target: …}`) are taken by Kube
 - **Streaming.** etcd's snapshot stream goes straight into an S3 multipart upload in parts of 8 MiB.
   - It is encrypted on the way with age to the cluster's identity. A database of any size therefore takes the same few buffers in the controller.
   - etcd ends the stream with the SHA-256 of what it sent, which the controller checks before keeping the object. One cut off is deleted.
-  - The object's metadata then gets the database's SHA-256 and size, with the Kubernetes version, distribution and etcd revision. The controller reads that revision from the member just before the snapshot begins, since the stream carries none.
+  - A JSON object beside it (`<snapshot>.json`) then holds the database's SHA-256 and size, the Kubernetes version, the distribution and the etcd revision. The snapshot itself is never rewritten, as object lock would keep a second copy of the whole database.
+  - The controller reads the revision from the member just before the snapshot begins, since the stream carries none.
   - One snapshot runs at a time across clusters, each cluster up to 10 minutes after the scheduled time, at a delay of its own.
   - A failure is retried after 15 minutes, with a `Warning` event and the reason in the cluster's condition `EtcdSnapshotSucceeded`.
-  - After each snapshot, all but the newest `keep` are deleted.
+  - After each snapshot, all but the newest `keep` are deleted, each with its JSON object.
 - **Restoring.** A restore is asked for with the annotation `kubehenge.dev/etcd-restore` on the Cluster.
   - The interface sets it for those with `Sys.Modify` on the cluster's pool. The restore is recorded step by step in `kubehenge.dev/etcd-restore-status`.
   - While it runs, Cluster API is paused and the controller changes nothing else of the cluster, scheduled snapshots included.
   - Before it stops or wipes any of etcd, the restore snapshots etcd as it is into the same target. Its status names that snapshot, which can undo a restore from the wrong one.
   - A cluster whose etcd does not answer, often the reason it is restored, is restored without one. The status says why.
-  - The snapshot's SHA-256 comes from the store's metadata. It must be 64 lower-case hexadecimal digits, since it goes into commands run as root.
+  - The snapshot's SHA-256 comes from its JSON object. It must be 64 lower-case hexadecimal digits, since it goes into commands run as root.
   - The steps run as root scripts through the QEMU guest agent, with the restore token ([install-settings.md](install-settings.md#etcd-restores)) only. Each step runs in a Job ([tokens](#tokens-kept-out-of-the-controller)).
   - The controller decrypts the snapshot and stores it encrypted again as `openssl enc -aes-256-ctr -pbkdf2` reads it, with a random password for that restore.
   - RKE2's and k3s's restore keeps the snapshot's revision. For them the controller moves it on in a checked copy first, as etcdutl's `--bump-revision 1000000000 --mark-compacted` does.

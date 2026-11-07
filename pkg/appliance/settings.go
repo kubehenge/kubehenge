@@ -36,6 +36,9 @@ type Settings struct {
 	APIAddress    string   `json:"apiAddress"`
 	Gateway       string   `json:"gateway"`
 	DNSServers    []string `json:"dnsServers"`
+	// SearchDomains are appended to a name without dots, on the management cluster's nodes and in
+	// the clusters' network variable.
+	SearchDomains []string `json:"searchDomains,omitempty"`
 	// TimeServers are the NTP servers the nodes keep their clocks with. Empty keeps Talos's default
 	// public ones.
 	TimeServers        []string `json:"timeServers,omitempty"`
@@ -526,7 +529,29 @@ func (s *Settings) checkServers(p *problems) {
 			p.addf("What clusters may use: %q is no bridge, write a VNet as zone/vnet", b)
 		}
 	}
+	s.checkSearchDomains(p)
 	s.checkTimeServers(p)
+}
+
+// maxSearchDomains is what glibc's resolver reads, and what the clusters' network variable allows.
+const maxSearchDomains = 6
+
+// checkSearchDomains holds the domains to what the clusters' network variable accepts, so the
+// management cluster and the clusters made on it resolve short names alike.
+func (s *Settings) checkSearchDomains(p *problems) {
+	if len(s.SearchDomains) > maxSearchDomains {
+		p.addf("Search domains: at most %d", maxSearchDomains)
+	}
+	seen := map[string]bool{}
+	for _, d := range s.SearchDomains {
+		switch {
+		case seen[d]:
+			p.addf("Search domains: %s is listed twice", d)
+		case !validHostName(d) || strings.HasSuffix(d, "."):
+			p.addf("Search domains: %q is no domain name", d)
+		}
+		seen[d] = true
+	}
 }
 
 // checkTimeServers checks that each time server is a host name or an address Talos can resolve and

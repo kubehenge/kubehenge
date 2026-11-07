@@ -1852,6 +1852,55 @@ run "time_servers_refuse_urls" {
   expect_failures = [var.time_servers]
 }
 
+run "search_domains_become_resolver_config" {
+  command = apply
+
+  variables {
+    search_domains = ["corp.example", "example.org"]
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if yamldecode(d).kind == "ResolverConfig"
+      ] == [{
+        apiVersion    = "v1alpha1"
+        kind          = "ResolverConfig"
+        searchDomains = { domains = ["corp.example", "example.org"] }
+    }]
+    error_message = "search domains must become one ResolverConfig document, domains in order, without nameservers"
+  }
+}
+
+run "no_search_domains_keep_talos_defaults" {
+  command = apply
+
+  assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "ResolverConfig")
+    error_message = "without search domains the nodes derive theirs from the host name"
+  }
+}
+
+run "search_domains_refuse_bad_names" {
+  command = plan
+
+  variables {
+    search_domains = ["corp example"]
+  }
+
+  expect_failures = [var.search_domains]
+}
+
+run "search_domains_refuse_seven" {
+  command = plan
+
+  variables {
+    search_domains = ["a.example", "b.example", "c.example", "d.example", "e.example", "f.example", "g.example"]
+  }
+
+  expect_failures = [var.search_domains]
+}
+
 run "every_helm_release_that_waits_has_a_long_timeout" {
   command = apply
 

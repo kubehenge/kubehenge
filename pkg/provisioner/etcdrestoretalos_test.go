@@ -151,11 +151,9 @@ func TestTalosEtcdRestoreRefuses(t *testing.T) {
 		}},
 		{"a snapshot that does not match its checksum", "does not match its checksum", func(f *restoreFixture, _ *fakeTalos) {
 			key := snapshotFolder + "/" + restoreSnapshot
-			meta := f.store.objects[key].metadata
+			meta := f.info(key)
 			meta[SnapshotMetaSHA256] = strings.Repeat("0", 64)
-			if err := f.store.SetMetadata(context.Background(), key, meta); err != nil {
-				f.t.Fatal(err)
-			}
+			f.putInfo(key, meta)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

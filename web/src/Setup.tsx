@@ -19,6 +19,7 @@ import {
   pointToPoint,
   rangeProblem,
   sameNetwork,
+  searchDomainsProblem,
   toInt,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
@@ -28,6 +29,7 @@ import type {
   Bridge,
   Job,
   ManagementSettings,
+  NodeDNS,
   OIDCProvider,
   PveNode,
   SetupFindings,
@@ -79,6 +81,7 @@ export interface SetupForm {
   apiAddress: string;
   gateway: string;
   dnsServers: string;
+  searchDomains: string;
   timeServers: string;
   workloadDatastores: string[];
   workloadBridges: string[];
@@ -307,6 +310,16 @@ function linkSettings(f: SetupForm): Pick<ManagementSettings, "vlan" | "mtu"> {
   return { ...(f.vlan ? { vlan: Number(f.vlan) } : {}), ...(f.mtu ? { mtu: Number(f.mtu) } : {}) };
 }
 
+// The lists the settings leave out when empty, where the module has a default for them.
+function optionalLists(f: SetupForm): Pick<ManagementSettings, "searchDomains" | "timeServers"> {
+  const domains = list(f.searchDomains);
+  const servers = list(f.timeServers);
+  return {
+    ...(domains.length > 0 ? { searchDomains: domains } : {}),
+    ...(servers.length > 0 ? { timeServers: servers } : {}),
+  };
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -317,7 +330,7 @@ export function settings(f: SetupForm): ManagementSettings {
     apiAddress: f.apiAddress,
     gateway: f.gateway,
     dnsServers: list(f.dnsServers),
-    ...(list(f.timeServers).length > 0 ? { timeServers: list(f.timeServers) } : {}),
+    ...optionalLists(f),
     workloadDatastores: f.workloadDatastores,
     workloadBridges: f.workloadBridges,
     bootstrapDatastore: f.bootstrapDatastore,
@@ -444,6 +457,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     apiAddress: saved.apiAddress,
     gateway: saved.gateway,
     dnsServers: saved.dnsServers.join(", "),
+    searchDomains: (saved.searchDomains ?? []).join(", "),
     timeServers: (saved.timeServers ?? []).join(", "),
     workloadDatastores: saved.workloadDatastores,
     workloadBridges: saved.workloadBridges,
@@ -490,6 +504,7 @@ export type SetupField =
   | "apiAddress"
   | "gateway"
   | "dnsServers"
+  | "searchDomains"
   | "timeServers"
   | "workload"
   | "bootstrapDatastore"
@@ -527,6 +542,7 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "apiAddress",
     "gateway",
     "dnsServers",
+    "searchDomains",
     "timeServers",
     "mirrors",
     "chartMirrors",
@@ -695,6 +711,10 @@ function networkProblems(f: SetupForm, was: ManagementSettings | undefined): Set
     p.dnsServers = "Enter at least one DNS server.";
   } else if (dns.some((d) => !isIP(d))) {
     p.dnsServers = "Enter IP addresses only.";
+  }
+  const domains = searchDomainsProblem(list(f.searchDomains));
+  if (domains !== undefined) {
+    p.searchDomains = domains;
   }
   if (list(f.timeServers).some((t) => /[\s/:]/u.test(t) && !isIP(t))) {
     p.timeServers = "Enter host names or IP addresses only.";
@@ -1059,6 +1079,7 @@ function ManagedSummary({
     ["API address", s.apiAddress],
     ["Gateway", s.gateway],
     ["DNS servers", s.dnsServers.join(", ")],
+    ["Search domains", searchDomainsOf(s)],
     ["Time servers", timeServersOf(s)],
     ["Cluster storages", s.workloadDatastores.join(", ")],
     ["Cluster bridges", s.workloadBridges.join(", ")],
@@ -2030,7 +2051,7 @@ function SetupWizard({
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const [storages, setStorages] = useState<Storage[]>();
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
-  const [dnsByNode, setDNSByNode] = useState<Record<string, string[]>>({});
+  const [dnsByNode, setDNSByNode] = useState<Record<string, NodeDNS>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [form, setForm] = useState<SetupForm>(() => formOf(status.settings));
@@ -2276,6 +2297,7 @@ function SetupWizard({
   );
 }
 
+const searchDomainsOf = (s: ManagementSettings): string => s.searchDomains?.join(", ") ?? "None";
 const timeServersOf = (s: ManagementSettings): string => s.timeServers?.join(", ") ?? "Talos defaults";
 
 // checkDelay waits for typing to stop before Proxmox VE is asked, as the answer probes addresses.
@@ -2390,7 +2412,7 @@ const submitLabel = (manage: boolean, last: boolean): string => {
 interface Found {
   storages: Storage[] | undefined;
   bridgesByNode: Record<string, Bridge[]>;
-  dnsByNode: Record<string, string[]>;
+  dnsByNode: Record<string, NodeDNS>;
   fixed: ManagementSettings | undefined;
 }
 
@@ -2439,7 +2461,7 @@ function withDefaults(
   const uplinkBridge = uplink(home);
   const bridge = keepOffered(orElse(form.bridge, uplinkBridge ? bridgeRef(uplinkBridge) : ""), bridges, bridgesKnown);
   const onBridge = home.find((b) => bridgeRef(b) === bridge);
-  const detect = (k: "gateway" | "dnsServers", value: string): string =>
+  const detect = (k: "gateway" | "dnsServers" | "searchDomains", value: string): string =>
     form[k] === "" && !touched.has(k) ? value : form[k];
   const untouchedNone = (k: "workloadDatastores" | "workloadBridges", value: string): string[] =>
     form[k].length === 0 && !touched.has(k) && value !== "" ? [value] : form[k];
@@ -2451,7 +2473,8 @@ function withDefaults(
       bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
       bridge,
       gateway: detect("gateway", onBridge?.gateway ?? ""),
-      dnsServers: detect("dnsServers", (found.dnsByNode[first] ?? []).join(", ")),
+      dnsServers: detect("dnsServers", (found.dnsByNode[first]?.servers ?? []).join(", ")),
+      searchDomains: detect("searchDomains", found.dnsByNode[first]?.search ?? ""),
       workloadDatastores: untouchedNone("workloadDatastores", vmDatastore),
       workloadBridges: untouchedNone("workloadBridges", bridge),
       refreshStorage: offeredRefreshStorage(form),
@@ -2666,6 +2689,16 @@ function setupFields({
         </Field>
         <Field label="DNS servers" hint="Separated by commas" error={shown("dnsServers")}>
           {(id) => <input id={id} value={effective.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
+        </Field>
+        <Field label="Search domains" hint="Separated by commas" error={shown("searchDomains")}>
+          {(id) => (
+            <input
+              id={id}
+              value={effective.searchDomains}
+              placeholder="corp.example"
+              onChange={(e) => set("searchDomains", e.target.value)}
+            />
+          )}
         </Field>
         <Field
           label="Time servers"

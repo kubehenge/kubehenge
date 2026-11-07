@@ -691,6 +691,12 @@ export interface CreateCheck {
   manifest: string;
 }
 
+/** NodeDNS is how a Proxmox VE node resolves names: its DNS servers, and its search domain, empty where it has none. */
+export interface NodeDNS {
+  servers: string[];
+  search: string;
+}
+
 export interface ManagementSettings {
   /** Proxmox VE nodes the management cluster's VMs are placed on in turn. */
   nodes: string[];
@@ -704,6 +710,8 @@ export interface ManagementSettings {
   apiAddress: string;
   gateway: string;
   dnsServers: string[];
+  /** Domains appended to a name without dots, on the nodes and in the clusters' network. */
+  searchDomains?: string[];
   /** NTP servers for the nodes. Unset keeps Talos's default ones. */
   timeServers?: string[];
   workloadDatastores: string[];

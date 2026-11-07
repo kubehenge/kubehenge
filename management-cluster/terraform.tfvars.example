@@ -14,3 +14,4 @@ node_addresses = ["192.0.2.11/24"]
 api_address    = "192.0.2.10"
 gateway        = "192.0.2.1"
 dns_servers    = ["192.0.2.1"]
+search_domains = ["corp.example"]
