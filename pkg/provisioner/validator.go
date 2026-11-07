@@ -70,6 +70,7 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 	if rollsOnlyControlPlane(old, c, class) {
 		warnings = append(warnings, SingleControlPlaneRoll)
 	}
+	warnings = append(warnings, upgradeWarnings(old, c)...)
 	return warnings, v.check(ctx, old, c, class, r)
 }
 

@@ -38,7 +38,7 @@ import {
   Skeleton,
   Views,
 } from "./ui";
-import { UpgradeChecks, usePlan } from "./Upgrade";
+import { UpgradeChecksList, usePlan } from "./Upgrade";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
 
@@ -826,7 +826,12 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
       )}
       {c.talos && <TalosNote running={running} held={held} upgrading={filled(c.talos.upgrading)} />}
       {version !== c.version && (
-        <UpgradeChecks cluster={c} read={read} healthPath={clusterPath(c.namespace, c.name, "health")} />
+        <UpgradeChecksList
+          cluster={c}
+          version={version}
+          read={read}
+          healthPath={clusterPath(c.namespace, c.name, "health")}
+        />
       )}
       <ErrorBox message={error} />
     </Dialog>

@@ -14,11 +14,21 @@ mkdir "${bin}"
 trap 'rm -rf "${root}"' EXIT
 
 passes=0 failures=0
+# run_installer <arguments>...: sets got to what the installer printed. It goes through a file, as a
+# command substitution would start a process more.
+run_installer() {
+    sh "${installer}" "$@" > "${root}/said" 2>&1 || true
+    got=
+    while IFS= read -r line || [ -n "${line}" ]; do
+        got=${got:+${got}
+}${line}
+    done < "${root}/said"
+}
 # says <what> <text wanted> <arguments>...: whether the installer, run with them, ends saying the text.
 says() {
     what=$1 wanted=$2
     shift 2
-    got=$(sh "${installer}" "$@" 2>&1 || true)
+    run_installer "$@"
     case "${got}" in
         *"${wanted}"*) passes=$((passes + 1)) ;;
         *)
@@ -31,7 +41,7 @@ says() {
 does_not_say() {
     what=$1 unwanted=$2
     shift 2
-    got=$(sh "${installer}" "$@" 2>&1 || true)
+    run_installer "$@"
     case "${got}" in
         *"${unwanted}"*)
             printf 'FAIL: %s\n  it must not say: %s\n  it said: %s\n' "${what}" "${unwanted}" "${got}"
@@ -46,17 +56,26 @@ printf '#!/bin/sh\necho 0\n' > "${bin}/id"
 printf '#!/bin/sh\nexit 0\n' > "${bin}/pct"
 printf '#!/bin/sh\nexit 0\n' > "${bin}/pveam"
 printf '#!/bin/sh\necho pve-manager/9.0.3/abc\n' > "${bin}/pveversion"
+# The stand-ins print their files with the shell's own read, as every process they start costs time
+# on Windows.
+# shellcheck disable=SC2016 # the stand-ins expand them.
+show='show() {
+    [ -r "$1" ] || return 1
+    while IFS= read -r show_line || [ -n "${show_line}" ]; do printf "%s\n" "${show_line}"; done < "$1"
+}'
 cat > "${bin}/pvecm" << EOF
 #!/bin/sh
-cat "${root}/quorum" 2> /dev/null || exit 1
+${show}
+show "${root}/quorum" 2> /dev/null || exit 1
 EOF
 # pvesh answers from files: resources, network, vnets.
 cat > "${bin}/pvesh" << EOF
 #!/bin/sh
+${show}
 case "\$2" in
-    /cluster/resources) cat "${root}/resources" ;;
-    /nodes/*/network) cat "${root}/network" ;;
-    /cluster/sdn/vnets) cat "${root}/vnets" 2> /dev/null || exit 1 ;;
+    /cluster/resources) show "${root}/resources" ;;
+    /nodes/*/network) show "${root}/network" ;;
+    /cluster/sdn/vnets) show "${root}/vnets" 2> /dev/null || exit 1 ;;
     /cluster/nextid) echo 100 ;;
     *) exit 1 ;;
 esac

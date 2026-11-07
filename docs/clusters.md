@@ -243,6 +243,12 @@ Each add-on the class offers is a card with the memory its pods take by the clas
   - Choose the target, the schedule, its time zone, how long each backup is kept and the access key Velero signs in to the store with.
   - Storing that key needs `Sys.Modify` on the workload pool. Without it, backups wait until someone holding that stores one.
   - The key an administrator stored for every cluster never goes into a cluster. Without any target, the choice is off and says so.
+- **etcd snapshots** ([below](#etcd-snapshots)), on by default wherever an administrator set a backup target and absent without one.
+  - Choose the target, the schedule, its time zone and how many snapshots are kept. On RKE2 and k3s, also the distribution's own upload ([below](#the-distributions-own-upload)).
+  - The time zone starts as the browser's, as for backups.
+  - They are written with the same access key as the backups, which is entered once for both. Storing it needs `Sys.Modify` on the workload pool, and without it the snapshots wait as backups do.
+  - With backups on, the snapshots go to the backups' target, since one access key reaches one store.
+  - A cluster started from another takes that cluster's snapshot settings, or the default where it never set any.
 - **Certificates** from cert-manager for the cluster's Ingresses and routes, from Let's Encrypt or another ACME server, or from a CA of the cluster's own ([below](#certificates)).
 - **Pod security**: the [Pod Security Standard](https://kubernetes.io/docs/concepts/security/pod-security-standards/) pods are held to, `baseline` or `restricted`. Kubernetes' Pod Security Admission, Kyverno or both enforce it, each at a level of its own.
   - Pod Security Admission sets the level of every namespace that labels none of its own, `baseline` unless another is chosen. It warns about and audits pods short of `restricted` at every level.
@@ -383,6 +389,7 @@ The buttons beside the cluster's name act on the whole cluster: **Scale**, **Upg
   - For Talos, the release the nodes run and the one new machines boot first when it differs ([Talos upgrades](#talos-upgrades)). It also shows the node being upgraded and the last upgrade.
 - **Health:** whether the cluster is healthy, changing, degraded or unreachable. It has tiles for the control plane (and etcd, on kubeadm), workers, node pressure, unwell pods, add-ons and machine health checks.
   - Then what needs attention, most serious first, each linking to its details.
+  - A cluster on a Kubernetes minor older than the oldest offered for new clusters shows **Kubernetes out of support**, also as the condition `KubernetesOutOfSupport`. One paused for 7 days or more shows **Paused since** with the date.
   - Below come the nodes, with ready, pressure, cordons and taints and what their pods ask for.
   - They also show the VM's CPU over the last hour and its memory, as far as you may see the VMs.
   - Then the pods that are not well (crash loops, images that do not pull, pods that cannot be scheduled, containers killed for memory).
@@ -514,7 +521,11 @@ The newest version the cluster may move to is chosen already. Under it the dialo
 
 - the API server's dry run of the change and what it replaces (a refusal disables **Upgrade**)
 - whether the node addresses leave one spare for the extra node a rollout adds
+- the deprecated APIs in use that the target version removes ([upgrading.md](upgrading.md#by-hand))
+- the fail-closed webhooks with a thin backend
 - how many problems the cluster's Health page lists
+
+The two checks of the cluster's insides warn and do not disable **Upgrade**.
 
 Automatic upgrades inside a maintenance window are set under **Options**, **Edit** beside Automatic upgrades. Both are described in [upgrading.md](upgrading.md#workload-clusters).
 
@@ -973,7 +984,7 @@ Kubehenge may be unable to take volume snapshots for the cluster, such as on a s
 
 A cluster with etcd snapshots on has Kubehenge's controller copy its etcd database to one of the backup targets an administrator set. The database holds every object the cluster's API holds. The copy happens on the cluster's schedule and whenever asked.
 
-The schedule is by default every 12 hours from 00:00 UTC, with each cluster a few minutes after the hour of its own. The controller keeps the newest 14 by default and deletes older ones.
+The schedule is by default every 12 hours from 00:00 in the time zone chosen. The interface starts with the browser's zone and the variable without one means UTC. Each cluster a few minutes after the hour of its own. The controller keeps the newest 14 by default and deletes older ones.
 
 Snapshots go under `<prefix>/<namespace>.<name>/etcd` in the target's bucket, beside the cluster's Velero backups. They are named by when they were taken in UTC and the Kubernetes version, as `20261021T120000Z-v1.36.5-rke2r1.db.age`. Each object carries the Kubernetes version, the distribution, etcd's revision and the SHA-256 and size of the database in its metadata. Snapshots work on their own, with or without Velero backups.
 
@@ -983,7 +994,7 @@ The controller reaches one etcd member through the cluster's API server, or a co
 
 Each snapshot is encrypted with [age](https://age-encryption.org) to a key of the cluster's own, `etcd-snapshot-identity` in the Secret `<name>-backup-keys` beside the Cluster. The key is made with the cluster's other backup keys and outlives the cluster as they do. The snapshot is written with the same access key as Velero's backups. RKE2 and k3s also keep the snapshots they take themselves on their nodes, as they always do.
 
-The **Backups** view's etcd snapshots section says when the last snapshot was taken and what went wrong with the last try. It lists the snapshots in the target. Snapshots are switched on under Options or from **Set up snapshots…**. The target, schedule, time zone and number kept are chosen there too.
+The **Backups** view's etcd snapshots section says when the last snapshot was taken and what went wrong with the last try. It lists the snapshots in the target. Snapshots are switched on when the cluster is created, under Options or from **Set up snapshots…**. The target, schedule, time zone and number kept are chosen there too.
 
 - **Take snapshot** has the controller take one at once. It needs `VM.Allocate` on the cluster's pool.
 - **Download** hands the snapshot out decrypted, as etcd wrote it. It holds every Secret of the cluster, so it needs `Sys.Modify` on the cluster's pool, as the admin kubeconfig does.
@@ -1109,15 +1120,16 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 - An SDN VNet is in its own zone, as in `/sdn/zones/evpn1/web`. The wizard lists the VNets you hold `SDN.Audit` on.
 - A cluster you may not see is answered as not found.
 - As everywhere in Proxmox VE, a role given on a cluster's own pool replaces, for that pool, what is inherited from the workload pool. It has to hold `VM.Audit` too.
-- Proxmox VE's `PVEAuditor` role holds `VM.Audit`, and `PVEVMAdmin` holds `VM.Audit` and `VM.Allocate`. `Sys.Modify` needs a role of your own.
+- Proxmox VE's `PVEAuditor` role holds `VM.Audit` and `Pool.Audit`, and `PVEVMAdmin` holds `VM.Audit` and `VM.Allocate`. `Sys.Modify` needs a role of your own.
+- `Pool.Audit` lets Proxmox VE list a pool's VMs. Without it a cluster shows no nodes, console links or reboot. `PVEPoolUser` holds it, and a role of your own needs it added.
 
 For example, to let a group create and look after clusters, and one user download the kubeconfig of one cluster:
 
 ```sh
-pveum acl modify /pool/kubehenge --groups developers --roles PVEVMAdmin
+pveum acl modify /pool/kubehenge --groups developers --roles PVEVMAdmin,PVEPoolUser
 pveum acl modify /storage/shared-storage --groups developers --roles PVEDatastoreUser
 pveum acl modify /sdn/zones/localnetwork/vmbr0 --groups developers --roles PVESDNUser
-pveum role add KubehengeClusterAdmin --privs "VM.Audit VM.Allocate Sys.Modify"
+pveum role add KubehengeClusterAdmin --privs "VM.Audit VM.Allocate Sys.Modify Pool.Audit"
 pveum acl modify /pool/kubehenge/clusters.prod --users platform@pve --roles KubehengeClusterAdmin
 ```
 
@@ -1138,7 +1150,7 @@ An administrator can let cluster creators choose among more namespaces than `clu
 
 ## From the command line
 
-`kubehenge cluster` lists, creates, scales and deletes clusters through the interface, signed in with a Proxmox VE API token instead of a password. The token is held to the privileges above as a user is. One with privilege separation holds only what both it and its user are given. One without holds its user's. Proxmox VE is asked about a token at most once a minute, so one revoked there stops working within that minute.
+`kubehenge cluster` lists, creates, scales, upgrades and deletes clusters through the interface, signed in with a Proxmox VE API token instead of a password. The token is held to the privileges above as a user is. One with privilege separation holds only what both it and its user are given. One without holds its user's. Proxmox VE is asked about a token at most once a minute, so one revoked there stops working within that minute.
 
 ```sh
 export KUBEHENGE_URL=https://kubehenge.example.org
@@ -1146,6 +1158,7 @@ export KUBEHENGE_PROXMOX_TOKEN='ci@pve!kubehenge=<secret>'
 kubehenge cluster list
 kubehenge cluster create -f web.yaml
 kubehenge cluster scale web --control-planes 3 --workers md-0=5
+kubehenge cluster upgrade web --version v1.37.1
 kubehenge cluster kubeconfig web > web.kubeconfig
 kubehenge cluster get web
 kubehenge cluster machine cordon web web-md-0-x7k2p
@@ -1155,6 +1168,8 @@ kubehenge cluster delete web --yes
 - The token is read only from `KUBEHENGE_PROXMOX_TOKEN`, so it never shows in a process list. `--ca` (or `KUBEHENGE_CA`) names the CA of the interface's certificate where the system does not trust it.
 - A cluster is found by its name. `-n` names its namespace where more than one has a cluster of that name.
 - `create` takes what the wizard sends, in YAML or JSON, and the interface checks it the same way. That is `name`, `class`, `version`, `controlPlaneReplicas`, `workerReplicas` and `variables`, and `namespace` where there are [more namespaces](#more-namespaces-for-clusters).
+- `upgrade` prints the removed APIs and fail-closed webhooks the new version meets and asks before it upgrades. `--yes` skips the question.
+- `accept-upgrade` lets a skipped automatic upgrade go ahead past the findings it lists, for the minor version given.
 - `machine` takes a machine's name, as `get` lists it. `replace`, `keep`, `delete`, `cordon`, `uncordon` and `reboot` do what a machine's actions in the interface do.
 - `get` and `list -o json` print the interface's own description of a cluster for scripts to read.
 - Any HTTP client can do the same: send `Authorization: PVEAPIToken=<user>@<realm>!<name>=<secret>` to the interface's `/api/clusters`.
@@ -1255,7 +1270,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `monitoring` | no | `enabled` (default false), which installs cert-manager too ([above](#add-ons)). `hostname`, to serve Grafana through the cluster's ingress controller. `tlsSecret`, a Secret in the `monitoring` namespace with the certificate for `hostname`. When unset, as for `headlamp`. |
 | `logs` | no | Loki and Grafana Alloy, which need `monitoring` ([above](#add-ons)). `enabled` (default false). `collector`, `node` (default) or `api`. `retentionDays` (1 to 366, default 7). `sizeGiB`, Loki's volume (1 to 1024, default 10), which only grows. |
 | `backups` | no | Velero ([above](#back-up-and-restore)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`). `timeZone` (default `UTC`). `retentionDays` (1 to 3650, default 7). `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation. `existingSecret`, a Secret of your own in the cluster's `velero` namespace. It holds the store's keys as Velero's credentials file under the key `cloud`. It replaces the credential stored through the interface for the cluster, or else for every cluster. Kubehenge creates the namespace, and switching backups off deletes it with the Secret. `readFrom`, up to 10 clusters of the same namespace backing up to the same target whose backups this one lists to restore ([Restore into another cluster](#restore-into-another-cluster)). |
-| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. |
+| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. While `backups` is enabled too, `target` must be the backups' target. |
 | `podSecurity` | no | `admission`, the level Pod Security Admission enforces in every namespace that labels none of its own: `privileged`, `baseline` (default) or `restricted`. Changing it replaces the control-plane machines. `kyverno`, the level Kyverno enforces in every namespace: `off` (default), `baseline` or `restricted` ([above](#add-ons)). |
 | `istio` | no | `enabled` (default false): Istio in ambient mode ([above](#add-ons)). |
 | `clusterMesh` | no | For a cluster that runs Cilium ([above](#add-ons)). `enabled` (default false). `peers`, the clusters of this namespace to link with, by name. |

@@ -116,6 +116,9 @@ spec:
         - name: kube-bench
           image: ${image}
           command: [kube-bench, run, --benchmark, ${benchmark}, --targets, "$3", --config-dir, ${config}, --json, --noremediations]
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {memory: 512Mi}
           volumeMounts:${mounts}
       volumes:${volumes}
 EOF

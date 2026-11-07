@@ -26,6 +26,16 @@ import {
   type UpgradePolicy,
 } from "./ClusterUpgrades";
 import {
+  etcdFieldsOf,
+  etcdProblems,
+  etcdSnapshotsText,
+  etcdSnapshotsVariable,
+  uploadsItself,
+  withEtcdTarget,
+  type EtcdSnapshotFields,
+  type EtcdSnapshotsValue,
+} from "./EtcdSnapshots";
+import {
   gitOpsFields,
   gitOpsProblems,
   gitOpsText,
@@ -188,7 +198,10 @@ export interface Form {
   /** Whether the cluster gets an access key of its own, stored once it is created. */
   // storeBackupKey is whether the form stores the cluster's own access key for its backups.
   storeBackupKey: boolean;
+  // backupKey is the one access key that backups and etcd snapshots are both written with.
   backupKey: Record<string, string>;
+  etcdSnapshots: boolean;
+  etcdFields: EtcdSnapshotFields;
 }
 
 /** newUpgrades is the policy a new cluster starts with: every day from 02:00 for four hours, in the browser's time zone. */
@@ -510,15 +523,40 @@ export function withRoom(form: Form, c: ClusterClass | undefined): Form {
   return raised;
 }
 
+/** backupsChosen says whether the form's backups are on and its class has them. */
+export const backupsChosen = (f: Form, c: ClusterClass | undefined): boolean =>
+  f.backups && variable(c, "backups") !== undefined;
+
+/** etcdOffered says whether a class has etcd snapshots and a backup target to take them to. */
+export const etcdOffered = (c: ClusterClass | undefined): boolean =>
+  variable(c, "etcdSnapshots") !== undefined && classTargets(c).length > 0;
+
+/** etcdChosen says whether the form's etcd snapshots are on and its class offers them. */
+export const etcdChosen = (f: Form, c: ClusterClass | undefined): boolean => f.etcdSnapshots && etcdOffered(c);
+
+/** keyNeeded says whether the cluster gets the access key that its backups or etcd snapshots are written with. */
+export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) || etcdChosen(f, c);
+
 /**
- * withBackupChoices takes the one backup target a class offers until another is chosen, and a key of
- * the cluster's own only for those who may store one.
+ * withBackupChoices takes the one backup target a class offers until another is chosen, the backups'
+ * target for etcd snapshots when it is one of them, and a key of the cluster's own only for those who
+ * may store one.
  */
-export const withBackupChoices = (f: Form, c: ClusterClass | undefined, canTrust: boolean | undefined): Form => ({
-  ...f,
-  backupFields: withTarget(f.backupFields, classTargets(c)),
-  storeBackupKey: f.storeBackupKey && canTrust !== false,
-});
+export function withBackupChoices(f: Form, c: ClusterClass | undefined, canTrust: boolean | undefined): Form {
+  const targets = classTargets(c);
+  const backupFields = withTarget(f.backupFields, targets);
+  return {
+    ...f,
+    backupFields,
+    etcdFields: withEtcdTarget(f.etcdFields, targets, f.backups ? backupFields.target : undefined),
+    storeBackupKey: f.storeBackupKey && canTrust !== false,
+  };
+}
+
+// etcdVariable is the form's etcdSnapshots variable. A distribution without an upload of its own
+// gets none, as when the class changed after it was ticked.
+const etcdVariable = (f: Form, c: ClusterClass): EtcdSnapshotsValue =>
+  etcdSnapshotsVariable({ ...f.etcdFields, upload: f.etcdFields.upload && uploadsItself(c.distribution) });
 
 /**
  * withTalosRelease takes the newest Talos release with a template until another is chosen, and
@@ -655,6 +693,8 @@ export const newForm = (): Form => ({
   backupFields: newBackupFields(),
   storeBackupKey: true,
   backupKey: {},
+  etcdSnapshots: true,
+  etcdFields: etcdFieldsOf({ enabled: false }),
 });
 
 /** namespaceOf is the namespace the cluster goes to: the one chosen, else the interface's first. */
@@ -722,7 +762,7 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
 }
 
 // addOnVariables are the variables of the add-ons and the hardening a form chooses.
-function addOnVariables(form: Form, defined: Set<string>): Record<string, unknown> {
+function addOnVariables(form: Form, c: ClusterClass, defined: Set<string>): Record<string, unknown> {
   const variables: Record<string, unknown> = {};
   if (form.headlamp) {
     const headlamp: Record<string, unknown> = { enabled: true };
@@ -764,6 +804,9 @@ function addOnVariables(form: Form, defined: Set<string>): Record<string, unknow
   if (form.backups) {
     variables["backups"] = backupsVariable(form.backupFields);
   }
+  if (etcdChosen(form, c)) {
+    variables["etcdSnapshots"] = etcdVariable(form, c);
+  }
   const certificates = defined.has("certificates") ? certificatesVariable(form.certificates) : undefined;
   if (certificates) {
     variables["certificates"] = certificates;
@@ -791,8 +834,14 @@ export interface PendingCredential {
 /** pendingCredentials are the credentials to store for the created cluster that the form holds. */
 export function pendingCredentials(form: Form, c: ClusterClass): PendingCredential[] {
   const pending: PendingCredential[] = [];
-  if (form.backups && form.storeBackupKey && variable(c, "backups")) {
-    pending.push({ purpose: "backup", values: form.backupKey, label: "S3 access key", section: "Backups", forget: {} });
+  if (keyNeeded(form, c) && form.storeBackupKey) {
+    pending.push({
+      purpose: "backup",
+      values: form.backupKey,
+      label: "S3 access key",
+      section: backupsChosen(form, c) ? "Backups" : "etcd snapshots",
+      forget: {},
+    });
   }
   if (variable(c, "certificates") && needsClusterToken(form.certificates) && filled(form.dns01Token)) {
     pending.push({
@@ -875,7 +924,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (lb) {
     variables["loadBalancer"] = lb;
   }
-  Object.assign(variables, addOnVariables(form, defined));
+  Object.assign(variables, addOnVariables(form, c, defined));
   variables["oidc"] = cleanProviders(form.oidc);
   // A cluster whose nodes move to new template builds needs its window in the browser's time zone
   // even with Kubernetes upgrades off.
@@ -999,7 +1048,7 @@ export function summary(
   if (defined.has("cni")) {
     rows.push(["Pod network", cniName(form.cni) || "Not chosen"]);
   }
-  rows.push(...customisationRows(form, defined), ...addOnRows(form, defined));
+  rows.push(...customisationRows(form, defined), ...addOnRows(form, c, defined));
   if (defined.has("upgrades")) {
     const upgrades = newUpgrades(form.upgradeMode, browserZone());
     rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
@@ -1014,8 +1063,22 @@ export function summary(
 const customisationRows = (form: Form, defined: Set<string>): [string, string][] =>
   defined.has("nodeCustomisation") ? [["Node customisation", nodeCustomisationText(form.nodeCustomisation)]] : [];
 
+// backupRows sums up the backups and etcd snapshots, each with where its access key comes from.
+function backupRows(form: Form, c: ClusterClass, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [];
+  const key = form.storeBackupKey ? "own access key" : "access key to store later";
+  if (defined.has("backups")) {
+    rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off"]);
+  }
+  if (etcdOffered(c)) {
+    const sum = etcdSnapshotsText(etcdVariable(form, c), c.distribution);
+    rows.push(["etcd snapshots", form.etcdSnapshots ? `${sum}, ${key}` : "Off"]);
+  }
+  return rows;
+}
+
 // addOnRows sums up the add-ons and the hardening the class offers.
-function addOnRows(form: Form, defined: Set<string>): [string, string][] {
+function addOnRows(form: Form, c: ClusterClass, defined: Set<string>): [string, string][] {
   const rows: [string, string][] = [];
   if (defined.has("headlamp")) {
     rows.push(["Headlamp", headlampText(form.headlamp, form.headlampHostname, form.headlampView)]);
@@ -1045,10 +1108,7 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
   if (defined.has("rancher")) {
     rows.push(["Rancher", rancherChoice(form)]);
   }
-  if (defined.has("backups")) {
-    const key = form.storeBackupKey ? "own access key" : "access key to store later";
-    rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off"]);
-  }
+  rows.push(...backupRows(form, c, defined));
   if (defined.has("certificates")) {
     rows.push(["Certificates", certificatesText(form.certificates)]);
     if (needsClusterToken(form.certificates)) {
@@ -1105,6 +1165,9 @@ export type FieldKey =
   | "backupSchedule"
   | "backupRetention"
   | "backupKey"
+  | "etcdTarget"
+  | "etcdSchedule"
+  | "etcdKeep"
   | "certificates"
   | `gitops.${GitOpsField}`
   | "oidc";
@@ -1334,13 +1397,13 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
       }
     }
   }
-  return { ...p, ...backupsProblems(form, c) };
+  return { ...p, ...backupsProblems(form, c), ...etcdSnapshotsProblems(form, c), ...accessKeyProblems(form, c) };
 }
 
 // backupsProblems are what keeps the backups the form switches on from being complete.
 function backupsProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
-  if (!form.backups || variable(c, "backups") === undefined) {
+  if (!backupsChosen(form, c)) {
     return p;
   }
   const b = backupProblems(form.backupFields, classTargets(c));
@@ -1353,10 +1416,36 @@ function backupsProblems(form: Form, c: ClusterClass | undefined): Problems {
       p[key] = found;
     }
   }
-  if (form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
-    p.backupKey = "Enter both parts of the access key";
+  return p;
+}
+
+// etcdSnapshotsProblems are what keeps the etcd snapshots the form switches on from being complete.
+function etcdSnapshotsProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
+  if (!etcdChosen(form, c)) {
+    return p;
+  }
+  const e = etcdProblems(form.etcdFields, classTargets(c), {
+    ...(backupsChosen(form, c) && { backups: form.backupFields.target }),
+  });
+  for (const [key, found] of [
+    ["etcdTarget", e.target],
+    ["etcdSchedule", e.schedule],
+    ["etcdKeep", e.keep],
+  ] as const) {
+    if (found !== undefined) {
+      p[key] = found;
+    }
   }
   return p;
+}
+
+// accessKeyProblems keep the one key that backups and etcd snapshots share from being left out.
+function accessKeyProblems(form: Form, c: ClusterClass | undefined): Problems {
+  if (keyNeeded(form, c) && form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
+    return { backupKey: "Enter both parts of the access key" };
+  }
+  return {};
 }
 
 // fieldProblems says, by field, what keeps a step from being complete.

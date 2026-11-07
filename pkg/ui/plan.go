@@ -64,12 +64,10 @@ func planWarnings(after *clusterv1.Cluster, changes []plannedChange) []string {
 // planCluster checks a change as changeCluster would make it, the API server's admission included,
 // without making it, and says what each of its settings does to the machines.
 func (s *Server) planCluster(w http.ResponseWriter, r *http.Request, u user) {
-	ch, ok := s.prepareChange(w, r, u)
+	ch, ok := s.writeChange(r.Context(), w, r, u, func(ctx context.Context, ch *changed) error {
+		return u.kube.Update(ctx, ch.c, client.DryRunAll)
+	})
 	if !ok {
-		return
-	}
-	if err := u.kube.Update(r.Context(), ch.c, client.DryRunAll); err != nil {
-		s.kubeError(w, r, err)
 		return
 	}
 	changes, err := plannedOf(r.Context(), u, ch)
