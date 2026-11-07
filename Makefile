@@ -15,7 +15,7 @@ KO_FLAGS ?=
 # Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
 
-.PHONY: build web gateway-api capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
+.PHONY: build web changelog gateway-api capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
 .PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -79,6 +79,11 @@ web: pkg/ui/dist/index.html
 # The website (kubehenge.dev): docs/ with a home page, built into website/.vitepress/dist.
 website:
 	cd website && npm ci --no-audit --no-fund && npm run build
+
+# Folds the changelog fragments of docs/changes/ into the release's section of docs/changelog.md:
+# make changelog VERSION=0.4.3
+changelog:
+	sh scripts/changelog.sh $(if $(filter command line,$(origin VERSION)),$(VERSION),$(error VERSION is not set: make changelog VERSION=0.4.3))
 
 # Lighthouse CI over the built website on loopback, in Playwright's Chromium, for mobile and then
 # desktop: the limits in website/lighthouserc.cjs against the median of 5 runs. The reports go to
@@ -220,12 +225,14 @@ fmt: web/node_modules/.package-lock.json
 # Without cgo, as the binary is built, and so that a cross-system check needs no C toolchain.
 # govulncheck fails on a known vulnerability only where the code calls into it, for the system it
 # runs on: GOOS would also build govulncheck itself for another one.
-# golangci-lint holds one lock per user, so a gate in a second worktree waits for it rather than fail.
+# golangci-lint gives up on its per-user lock at the first error from the lock file, even with
+# --allow-serial-runners, and gates in several worktrees at once meet that error. Its cache is safe
+# to share, so they lint side by side instead.
 lint-go: web gateway-api
 	go mod tidy -diff
 	golangci-lint config verify
-	CGO_ENABLED=0 GOOS=linux golangci-lint run --allow-serial-runners ./...
-	CGO_ENABLED=0 GOOS=windows golangci-lint run --allow-serial-runners ./...
+	CGO_ENABLED=0 GOOS=linux golangci-lint run --allow-parallel-runners ./...
+	CGO_ENABLED=0 GOOS=windows golangci-lint run --allow-parallel-runners ./...
 	$(GOVULNCHECK) ./...
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.

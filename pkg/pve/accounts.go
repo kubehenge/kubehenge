@@ -27,7 +27,8 @@ const (
 	userRequestTimeout = 30 * time.Second
 	// maxResponseBytes caps what is read of an answer. Proxmox VE's largest, the cluster's
 	// resources, stay far below it.
-	maxResponseBytes = 1 << 20
+	maxResponseBytes = mebibyte
+	mebibyte         = 1 << 20
 	// halfTicketParts are those of PVE:!tfa!<challenge>::<signature> when split at the first two
 	// colons.
 	halfTicketParts = 3
@@ -115,9 +116,11 @@ type ticketResponse struct {
 	NeedTFA  int    `json:"NeedTFA"`
 }
 
-// APIError is any other refusal. Proxmox VE puts its reason in the HTTP status line.
+// APIError is any other refusal. Proxmox VE puts its reason in the HTTP status line, and the
+// reason for each parameter it refused in Errors.
 type APIError struct {
 	Method, Path, Status string
+	Errors               map[string]string
 }
 
 func (e *APIError) Error() string {
@@ -300,9 +303,13 @@ func (a *Accounts) do(req *http.Request, out any) error {
 		return fmt.Errorf("asking proxmox VE: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	// One byte past the cap tells an answer that fills it exactly from one that is cut.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return fmt.Errorf("proxmox VE %s %s: reading the answer: %w", req.Method, req.URL.Path, err)
+	}
+	if len(body) > maxResponseBytes {
+		return fmt.Errorf("proxmox VE %s %s: the answer is larger than %d MiB", req.Method, req.URL.Path, maxResponseBytes/mebibyte)
 	}
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
@@ -310,7 +317,12 @@ func (a *Accounts) do(req *http.Request, out any) error {
 	case resp.StatusCode == http.StatusForbidden:
 		return ErrForbidden
 	case resp.StatusCode != http.StatusOK:
-		return &APIError{Method: req.Method, Path: req.URL.Path, Status: resp.Status}
+		var refusal struct {
+			Errors map[string]string `json:"errors"`
+		}
+		// An answer that is not JSON still has its status line, which is the error.
+		_ = json.Unmarshal(body, &refusal)
+		return &APIError{Method: req.Method, Path: req.URL.Path, Status: resp.Status, Errors: refusal.Errors}
 	}
 	var envelope struct {
 		Data json.RawMessage `json:"data"`

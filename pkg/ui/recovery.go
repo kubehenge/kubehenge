@@ -71,12 +71,8 @@ func (s *Server) recoverControlPlane(w http.ResponseWriter, r *http.Request, u u
 		writeError(w, http.StatusUnprocessableEntity, "type the cluster's name to confirm")
 		return
 	}
-	if provisioner.RestoreInProgress(c) {
-		writeError(w, http.StatusConflict, "the cluster's etcd is being restored already")
-		return
-	}
-	if !meta.IsStatusConditionTrue(c.Status.Conditions, provisioner.RollStalledCondition) {
-		writeError(w, http.StatusConflict, "the control plane's roll has not stalled")
+	if msg := recoveryRefusal(c); msg != "" {
+		writeError(w, http.StatusConflict, msg)
 		return
 	}
 	if !s.isControlPlaneMachine(w, r, u, c, req.Machine) {
@@ -92,11 +88,22 @@ func (s *Server) recoverControlPlane(w http.ResponseWriter, r *http.Request, u u
 		return
 	}
 	request := provisioner.EtcdRestoreRequest{Machine: req.Machine, By: u.ticket.Username, At: time.Now().UTC()}
-	if !s.annotate(w, r, u, c, provisioner.EtcdRestoreAnnotation, request) {
+	if !s.annotate(w, r, u, c, provisioner.EtcdRestoreAnnotation, request, recoveryRefusal) {
 		return
 	}
 	s.Log.Info("asked to recover a control plane", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "keep", req.Machine)
 	writeJSON(w, http.StatusAccepted, request)
+}
+
+// recoveryRefusal says why a control plane cannot be recovered now, or returns "".
+func recoveryRefusal(c *clusterv1.Cluster) string {
+	if provisioner.RestoreInProgress(c) {
+		return "the cluster's etcd is being restored already"
+	}
+	if !meta.IsStatusConditionTrue(c.Status.Conditions, provisioner.RollStalledCondition) {
+		return "the control plane's roll has not stalled"
+	}
+	return ""
 }
 
 // isControlPlaneMachine answers 422 unless name is one of the cluster's control-plane machines
