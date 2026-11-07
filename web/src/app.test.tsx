@@ -1,5 +1,5 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { noAnswer } from "./api";
@@ -714,6 +714,50 @@ const freeOn: Route = (body) => {
   }
   return { body: { network: "10.0.0.0/16", endpoint: "10.0.0.30", addresses: "10.0.0.31-10.0.0.33", answering: [] } };
 };
+
+const bridgeOn = (node: string, bridge: string, n: number): Record<string, Route> => ({
+  [`GET /api/proxmox/nodes/${node}/bridges`]: () => ({
+    body: [{ bridge, node, vlanAware: false, usable: true, cidr: `10.${n}.0.5/16`, gateway: `10.${n}.0.1` }],
+  }),
+  [`POST /api/proxmox/nodes/${node}/bridges/${bridge}/free`]: () => ({
+    body: { network: `10.${n}.0.0/16`, answering: [] },
+  }),
+});
+
+// openNetwork is the wizard's Network step on three nodes whose search domains differ, with the
+// first node's bridge chosen. It returns the Search domains field.
+async function openNetwork(user: UserEvent): Promise<HTMLElement> {
+  window.history.replaceState(null, "", "/clusters/new");
+  fakeServer({
+    "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
+    "GET /api/classes": () => ({ body: [rke2OS] }),
+    "GET /api/proxmox/storages": () => ({ body: [] }),
+    "GET /api/proxmox/nodes": () => ({
+      body: [
+        { node: "pve1", online: true },
+        { node: "pve2", online: true },
+        { node: "pve3", online: true },
+      ],
+    }),
+    ...bridgeOn("pve1", "vmbr0", 1),
+    ...bridgeOn("pve2", "vmbr1", 2),
+    ...bridgeOn("pve3", "vmbr2", 3),
+    "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.1.0.53"], search: "corp.example" } }),
+    "GET /api/proxmox/nodes/pve2/dns": () => ({ body: { servers: ["10.2.0.53"], search: "other.example" } }),
+    "GET /api/proxmox/nodes/pve3/dns": () => ({ body: { servers: ["10.3.0.53"], search: "" } }),
+  });
+  render(<App />);
+  await user.type(await screen.findByLabelText("Name"), "lab");
+  await waitFor(() => expect(screen.getByRole("option", { name: "RKE2" })).toBeInTheDocument());
+  await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-rke2");
+  await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+rke2r1");
+  await user.click(screen.getByRole("button", { name: "Next" }));
+  await waitFor(() => expect(screen.getByLabelText("Bridge")).toBeInTheDocument());
+  await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr0");
+  const search = screen.getByLabelText("Search domains");
+  await waitFor(() => expect(search).toHaveValue("corp.example"));
+  return search;
+}
 
 describe("create", () => {
   const form: Form = {
@@ -1432,6 +1476,39 @@ describe("create", () => {
 
     await user.type(name, "lab");
     expect(name).not.toHaveAttribute("aria-invalid");
+  });
+
+  describe("search domains from the node", () => {
+    it("keeps what the user typed, or cleared, when another bridge's node answers differently", async () => {
+      const user = userEvent.setup({ delay: null });
+      const search = await openNetwork(user);
+
+      await user.clear(search);
+      await user.type(search, "lab.example");
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr1");
+      await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("10.2.0.1"));
+      expect(search).toHaveValue("lab.example");
+
+      await user.clear(search);
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr0");
+      await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("10.1.0.1"));
+      expect(search).toHaveValue("");
+    });
+
+    it("follows the node while untouched, and leaves the field empty for a node without a search domain", async () => {
+      const user = userEvent.setup({ delay: null });
+      const search = await openNetwork(user);
+
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr1");
+      await waitFor(() => expect(search).toHaveValue("other.example"));
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr2");
+      await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("10.3.0.1"));
+      expect(search).toHaveValue("");
+      await user.type(search, "lab.example");
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr1");
+      await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("10.2.0.1"));
+      expect(search).toHaveValue("lab.example");
+    });
   });
 
   it("walks through the wizard and creates the cluster", async () => {
