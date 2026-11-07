@@ -1,6 +1,6 @@
 #!/bin/sh
 # The memory of the runner a lane's VMs share, in one place. Sourced by the workload test, which
-# works out the floors a guest's balloon may take it down to, and by test/unit/lane-sizing.sh,
+# works out the floors a guest's balloon may take it down to, and by test/unit/runner-room.sh,
 # which holds each lane's VMs at those floors to the room left below.
 
 # MiB of memory the runner has.

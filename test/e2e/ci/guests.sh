@@ -169,14 +169,21 @@ summary() {
     else
         echo "no VM was sampled"
     fi
+    status=0
     if [ -s "$1.balloons" ]; then
         echo "guests whose balloon may take them down, with the MiB:"
         awk '{ printf "  %s: %s MiB, set at %s\n", $2, $3, $1 }' "$1.balloons"
+    elif [ -s "${KUBEHENGE_E2E_BALLOON_FILE:-${RUNNER_TEMP:-/tmp}/balloon.txt}" ]; then
+        # A lane that is sized for its balloons must never run without them unseen.
+        echo "::error::The test named balloon floors, but no VM's name matched one, so no balloon was set."
+        status=1
     fi
-    [ -s "$1.trims" ] || return 0
-    echo "guests that dropped their page cache, with the MiB the machine had available then:"
-    awk '{ n[$2]++; if (!($2 in first)) first[$2] = $1 " (" $3 ")"; last[$2] = $1 " (" $3 ")" }
-        END { for (vm in n) printf "  %s: %d times, first at %s, last at %s\n", vm, n[vm], first[vm], last[vm] }' "$1.trims"
+    if [ -s "$1.trims" ]; then
+        echo "guests that dropped their page cache, with the MiB the machine had available then:"
+        awk '{ n[$2]++; if (!($2 in first)) first[$2] = $1 " (" $3 ")"; last[$2] = $1 " (" $3 ")" }
+            END { for (vm in n) printf "  %s: %d times, first at %s, last at %s\n", vm, n[vm], first[vm], last[vm] }' "$1.trims"
+    fi
+    return "${status}"
 }
 
 # load <record>: the record's minutes and peaks by VM.

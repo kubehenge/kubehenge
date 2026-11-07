@@ -4,7 +4,7 @@
 # the headroom left, and how test/e2e/ci/guests.sh sets the floors, against stand-ins for docker
 # (Proxmox VE's qm), pgrep, date and sleep. Needs no Proxmox VE.
 #
-#   test/unit/lane-sizing.sh
+#   test/unit/runner-room.sh
 set -eu
 
 here=$(dirname "$0")
@@ -152,7 +152,25 @@ rm -f "${root}/asked" "${root}/guests.txt.balloons" "${root}/rounds"
 echo 0 > "${root}/now"
 env PATH="${bin}:${PATH}" KUBEHENGE_E2E_GUESTS_PROC="${root}/proc" KUBEHENGE_E2E_BALLOON_FILE="${root}/none" \
     sh "${guests}" record "${root}/guests.txt" > /dev/null 2>&1 || true
-same "without a floors file no balloon is touched" "" "$(cat "${root}/asked" 2> /dev/null || true)"
+asked=$(cat "${root}/asked" 2> /dev/null || true)
+same "without a floors file no balloon is touched" "" "${asked}"
+status=0
+KUBEHENGE_E2E_BALLOON_FILE="${root}/none" sh "${guests}" summary "${root}/guests.txt" > /dev/null 2>&1 || status=$?
+same "without a floors file the summary passes" 0 "${status}"
 
-echo "lane-sizing: ${passes} passed, ${failures} failed"
+# Floors that no VM's name matches fail the summary loudly.
+printf 'nomatch-* 1536\n' > "${root}/nomatch.txt"
+rm -f "${root}/guests.txt.balloons"
+status=0
+output=$(KUBEHENGE_E2E_BALLOON_FILE="${root}/nomatch.txt" sh "${guests}" summary "${root}/guests.txt" 2>&1) || status=$?
+same "floors that match no VM fail the summary" 1 "${status}"
+case ${output} in
+    *"::error::"*) passes=$((passes + 1)) ;;
+    *)
+        echo "FAIL: the summary names no error"
+        failures=$((failures + 1))
+        ;;
+esac
+
+echo "runner-room: ${passes} passed, ${failures} failed"
 [ "${failures}" -eq 0 ]
