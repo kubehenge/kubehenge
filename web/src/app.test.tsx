@@ -1037,6 +1037,8 @@ describe("create", () => {
     dnsServers: "10.0.0.1, 1.1.1.1",
     searchDomains: "",
     ntpServers: "",
+    registryMirrors: [],
+    trustedCAs: "",
     loadBalancer: "",
     loadBalancerAddresses: "",
     loadBalancerMode: "l2",

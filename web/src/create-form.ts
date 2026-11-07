@@ -111,6 +111,15 @@ import {
   nodesVariable,
   type NodeSettings,
 } from "./node-settings";
+import {
+  certificateProblem,
+  mirrorsProblem,
+  mirrorsText,
+  mirrorsVariable,
+  trustedText,
+  trustedVariable,
+  type MirrorRow,
+} from "./NodeSite";
 import { noTimeouts, timeoutProblems, timeoutsOf, timeoutsSet, type TimeoutEntry } from "./NodeTimeouts";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -215,6 +224,10 @@ export interface Form {
   searchDomains: string;
   /** NTP servers for the nodes. Empty keeps the node image's own. */
   ntpServers: string;
+  /** Where the nodes pull images from, per registry. */
+  registryMirrors: MirrorRow[];
+  /** PEM authorities the nodes trust besides their OS's own. */
+  trustedCAs: string;
   loadBalancer: Implementation;
   loadBalancerAddresses: string;
   loadBalancerMode: Mode;
@@ -776,6 +789,8 @@ export const newForm = (): Form => ({
   dnsServers: "",
   searchDomains: "",
   ntpServers: "",
+  registryMirrors: [],
+  trustedCAs: "",
   loadBalancer: "",
   loadBalancerAddresses: "",
   loadBalancerMode: "l2",
@@ -991,6 +1006,14 @@ function reachVariables(form: Form, defined: Set<string>): Record<string, unknow
   const egress = defined.has("egressProxy") ? egressVariable(form.egress) : undefined;
   if (egress !== undefined) {
     variables["egressProxy"] = egress;
+  }
+  const mirrors = defined.has("registryMirrors") ? mirrorsVariable(form.registryMirrors) : undefined;
+  if (mirrors !== undefined) {
+    variables["registryMirrors"] = mirrors;
+  }
+  const trusted = defined.has("trustedCAs") ? trustedVariable(form.trustedCAs) : undefined;
+  if (trusted !== undefined) {
+    variables["trustedCAs"] = trusted;
   }
   return { ...variables, ...installVariables(form, defined) };
 }
@@ -1462,6 +1485,12 @@ function reachRows(form: Form, defined: Set<string>): [string, string][] {
   if (defined.has("egressProxy")) {
     rows.push(["Egress proxy", egressText(form.egress)]);
   }
+  if (defined.has("registryMirrors") && mirrorsVariable(form.registryMirrors) !== undefined) {
+    rows.push(["Registry mirrors", mirrorsText(form.registryMirrors)]);
+  }
+  if (defined.has("trustedCAs") && trustedVariable(form.trustedCAs) !== undefined) {
+    rows.push(["Trusted CAs", trustedText(form.trustedCAs)]);
+  }
   return [...rows, ...installRows(form, defined)];
 }
 
@@ -1535,6 +1564,8 @@ export type FieldKey =
   | "namespaceLabels"
   | `gitops.${GitOpsField}`
   | `egress.${EgressField}`
+  | "registryMirrors"
+  | "trustedCAs"
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -1744,7 +1775,7 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (ntpProblem !== undefined) {
     p.ntpServers = ntpProblem;
   }
-  Object.assign(p, balancerProblems(form, c));
+  Object.assign(p, nodeSiteProblems(form, c), balancerProblems(form, c));
   for (const [key, v] of [
     ["pods", form.pods],
     ["services", form.services],
@@ -1887,6 +1918,20 @@ function egressFormProblems(form: Form, c: ClusterClass | undefined): Problems {
     if (problem !== undefined) {
       p[`egress.${field}`] = problem;
     }
+  }
+  return p;
+}
+
+// nodeSiteProblems are what is wrong with the registry mirrors and trusted authorities the form names.
+function nodeSiteProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
+  const mirrors = variable(c, "registryMirrors") === undefined ? undefined : mirrorsProblem(form.registryMirrors);
+  if (mirrors !== undefined) {
+    p.registryMirrors = mirrors;
+  }
+  const trusted = variable(c, "trustedCAs") === undefined ? undefined : certificateProblem(form.trustedCAs);
+  if (trusted !== undefined) {
+    p.trustedCAs = trusted;
   }
   return p;
 }

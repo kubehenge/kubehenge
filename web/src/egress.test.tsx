@@ -85,8 +85,23 @@ describe("the egress proxy settings", () => {
   });
 
   it("check nothing unless the proxy is the cluster's own", () => {
-    expect(egressProblems({ mode: "management", url: "junk", noProxy: "" })).toStrictEqual({});
-    expect(egressProblems({ mode: "none", url: "junk", noProxy: "" })).toStrictEqual({});
+    expect(egressProblems({ mode: "management", url: "junk", httpsUrl: "junk", noProxy: "" })).toStrictEqual({});
+    expect(egressProblems({ mode: "none", url: "junk", httpsUrl: "junk", noProxy: "" })).toStrictEqual({});
+  });
+
+  it("send the HTTPS address beside the address and hold both and the exceptions to the schema", () => {
+    expect(egressVariable(own({ httpsUrl: " http://secure.example:3129 " }))).toStrictEqual({
+      url: "http://proxy.example:3128",
+      httpsUrl: "http://secure.example:3129",
+    });
+    expect(egressOf({ url: "http://proxy.example:3128", httpsUrl: "http://secure.example:3129" })).toStrictEqual(
+      own({ httpsUrl: "http://secure.example:3129" }),
+    );
+    expect(egressProblems(own({ httpsUrl: "http://alice:pw@secure.example" })).httpsUrl).toBeDefined();
+    expect(egressProblems(own({ httpsUrl: "" }))).toStrictEqual({});
+    expect(egressProblems(own({ url: "http://$(id).example" })).url).toBeDefined();
+    expect(egressProblems(own({ noProxy: "*.corp, 10.0.0.0/8, fd00::/8" }))).toStrictEqual({});
+    expect(egressProblems(own({ noProxy: "a'b" })).noProxy).toBe("Use letters, digits and . _ * : / [ ] - only");
   });
 
   it("go into the wizard's request, summary and problems only for a class that defines the variable", () => {
