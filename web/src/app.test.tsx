@@ -853,6 +853,8 @@ describe("create", () => {
     },
     storeBackupKey: true,
     backupKey: {},
+    etcdSnapshots: true,
+    etcdFields: newForm().etcdFields,
   };
 
   it("keeps the VMs to the nodes of the placement chosen", () => {
