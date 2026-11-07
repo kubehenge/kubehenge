@@ -162,7 +162,7 @@ locals {
     { kind = "IPAMProvider", name = "in-cluster", namespace = "in-cluster-ipam-system", spec = { version = local.versions.ipam_in_cluster, patches = [local.patient_probes] } },
     { kind = "AddonProvider", name = "helm", namespace = "helm-addon-system", spec = {
       version = local.versions.helm_addon
-      patches = concat([local.patient_probes], local.proxy_enabled && local.proxy_has_ca ? [local.proxy_addon_ca_patch] : [])
+      patches = concat([local.patient_probes], local.addon_has_ca ? [local.proxy_addon_ca_patch] : [])
       manager = local.patient_leases
     } },
   ]
@@ -248,13 +248,13 @@ locals {
     imageUrl  = local.provider_images["${p.kind}/${p.name}"]
     resources = { requests = { cpu = "10m", memory = local.memory_requests["${p.kind}/${p.name}"] } }
     },
-    local.proxy_enabled && p.kind == "AddonProvider" ? {
+    local.addon_secret_on && p.kind == "AddonProvider" ? {
       env = concat(
-        [for k in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] : {
+        local.proxy_enabled ? [for k in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] : {
           name      = k
           valueFrom = { secretKeyRef = { name = local.proxy_addon_secret_name, key = k } }
-        }],
-        local.proxy_has_ca ? [{ name = "SSL_CERT_FILE", value = "${local.proxy_addon_ca_dir}/ca.crt" }] : [],
+        }] : [],
+        local.addon_has_ca ? [{ name = "SSL_CERT_FILE", value = "${local.proxy_addon_ca_dir}/ca.crt" }] : [],
       )
     } : {},
   ) }
@@ -367,7 +367,8 @@ resource "helm_release" "cluster_api_providers" {
       var.etcd_restore ? { (local.restore_secret.name) = { namespace = local.restore_secret.namespace, data = {} } } : {},
       # The controller's and the template builds' pods, and the Add-on Provider for Helm, each in
       # its own namespace. The operator's is the proxy release's.
-      local.proxy_enabled ? { for name, ns in local.proxy_secrets : name => { namespace = ns, data = local.proxy_secret_plain } } : {},
+      local.proxy_enabled ? { (local.proxy_secret_name) = { namespace = local.kubehenge_namespace, data = local.proxy_secret_plain } } : {},
+      local.addon_secret_on ? { (local.proxy_addon_secret_name) = { namespace = local.addon_namespace, data = local.addon_secret_plain } } : {},
     )
     },
     local.proxy_enabled ? { proxy = { secret = local.proxy_secret_name, ca = local.proxy_has_ca } } : {},
@@ -422,12 +423,34 @@ resource "helm_release" "cluster_api_providers" {
   depends_on = [helm_release.cluster_api_operator]
 }
 
+locals {
+  # Whether each repository host the charts come from serves OCI charts, whose digests name manifests,
+  # or a chart repository, whose digests name archives. A mirror serves the same kind.
+  pinned_chart_repositories = distinct([
+    for a in values(yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).addons) : a.repository if try(a.repository, "") != ""
+  ])
+  pinned_chart_hosts = { for host in distinct([for r in local.pinned_chart_repositories : regex("^[a-z]+://([^/]+)", r)[0]]) :
+    host => anytrue([for r in local.pinned_chart_repositories : startswith(r, "oci://") && regex("^[a-z]+://([^/]+)", r)[0] == host])
+  }
+  chart_mirror_problems = concat(
+    [for host in sort(keys(var.chart_repositories.mirrors)) : "no chart comes from ${host}" if !contains(keys(local.pinned_chart_hosts), host)],
+    [for host, url in var.chart_repositories.mirrors : "the mirror of ${host} has to be ${local.pinned_chart_hosts[host] ? "an oci://" : "an http(s)://"} address" if contains(keys(local.pinned_chart_hosts), host) && startswith(url, "oci://") != local.pinned_chart_hosts[host]],
+  )
+}
+
 resource "helm_release" "kubehenge" {
   name      = "kubehenge"
   namespace = local.kubehenge_namespace
   chart     = "${path.module}/../charts/kubehenge"
   wait      = true
   timeout   = 900
+
+  lifecycle {
+    precondition {
+      condition     = length(local.chart_mirror_problems) == 0
+      error_message = "chart_repositories.mirrors: ${join("; ", local.chart_mirror_problems)}. The hosts are ${join(", ", sort(keys(local.pinned_chart_hosts)))}."
+    }
+  }
 
   values = [yamlencode(merge(
     {
@@ -504,6 +527,7 @@ resource "helm_release" "kubehenge" {
     },
     { image = local.controller_image },
     local.proxy_enabled ? { proxy = { secret = local.proxy_secret_name, ca = local.proxy_has_ca } } : {},
+    length(var.chart_repositories.mirrors) > 0 ? { chartMirrors = var.chart_repositories.mirrors } : {},
   ))]
 
   depends_on = [helm_release.cluster_api_providers, proxmox_acl.provisioner, proxmox_acl.ha, proxmox_acl.template_builder, proxmox_acl.etcd_restore]

@@ -27,6 +27,7 @@ import {
   variable,
 } from "./create-form";
 import type { StepProps } from "./CreateSteps";
+import { EgressFields, egressFields } from "./EgressProxy";
 import { EtcdSnapshotFieldset, etcdSnapshotsInfo } from "./EtcdSnapshots";
 import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
@@ -536,6 +537,15 @@ function AddonCards({
       {variable(cls, "gitops") && (
         <AddonCard mib={cost(form.gitops.engine === "flux" ? "flux" : "argocd")} on={form.gitops.engine !== ""} corner>
           <GitOpsChoices form={form} set={set} shown={shown} canTrust={canTrust} />
+        </AddonCard>
+      )}
+      {variable(cls, "egressProxy") && (
+        <AddonCard mib={0} on={form.egress.mode !== "management"}>
+          <EgressFields
+            value={form.egress}
+            onChange={(e) => set("egress", e)}
+            problems={Object.fromEntries(egressFields.map((f) => [f, shown(`egress.${f}`)]))}
+          />
         </AddonCard>
       )}
     </div>

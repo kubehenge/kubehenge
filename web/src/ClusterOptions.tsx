@@ -5,6 +5,7 @@ import { CertificatesDialog, certificatesOf, certificatesText } from "./Certific
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
+import { EgressDialog, egressOf, egressText } from "./EgressProxy";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
@@ -60,6 +61,7 @@ export type OptionAction =
   | "loadBalancer"
   | "rancher"
   | "gitops"
+  | "egressProxy"
   | "upgrades"
   | "certificates"
   | "talos"
@@ -125,6 +127,9 @@ export function OptionDialog({
     }
     case "gitops": {
       return <GitOpsDialog cluster={c} onClose={onClose} />;
+    }
+    case "egressProxy": {
+      return <EgressDialog cluster={c} onClose={onClose} />;
     }
     case "upgrades": {
       return <UpgradesDialog cluster={c} onClose={onClose} />;
@@ -384,6 +389,13 @@ export function optionRows<A extends string = never>(
       group: "Add-ons",
       action: "gitops",
       name: "GitOps",
+    },
+    {
+      label: "Egress proxy",
+      value: egressText(egressOf(c.variables["egressProxy"])),
+      group: "Network",
+      action: "egressProxy",
+      name: "the egress proxy",
     },
     {
       label: "Automatic upgrades",

@@ -85,6 +85,10 @@ export interface SetupForm {
   bootstrapDatastore: string;
   // registry=endpoint, one per line.
   mirrors: string;
+  // host=address, one per line, for charts.
+  chartMirrors: string;
+  // PEM certificates of the chart mirrors' authority.
+  chartMirrorCA: string;
   // The address alone, with no user name or password.
   proxyURL: string;
   proxyUser: string;
@@ -215,6 +219,42 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .join("\n");
 }
 
+function parseChartMirrors(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of mirrorLines(text)) {
+    const at = line.indexOf("=");
+    const host = line.slice(0, Math.max(at, 0)).trim();
+    const address = line.slice(at + 1).trim();
+    if (at > 0 && filled(host) && filled(address)) {
+      out[host] = address;
+    }
+  }
+  return out;
+}
+
+function formatChartMirrors(m: Record<string, string> | undefined): string {
+  return Object.entries(m ?? {})
+    .map(([host, address]) => `${host}=${address}`)
+    .join("\n");
+}
+
+// chartRepositories is the chart mirrors the form names, if it names any.
+function chartRepositories(f: SetupForm): ManagementSettings["chartRepositories"] {
+  const mirrors = parseChartMirrors(f.chartMirrors);
+  const hasMirrors = Object.keys(mirrors).length > 0;
+  if (!hasMirrors && !filled(f.chartMirrorCA)) {
+    return undefined;
+  }
+  const out: NonNullable<ManagementSettings["chartRepositories"]> = {};
+  if (hasMirrors) {
+    out.mirrors = mirrors;
+  }
+  if (filled(f.chartMirrorCA)) {
+    out.caBundle = `${f.chartMirrorCA.trim()}\n`;
+  }
+  return out;
+}
+
 // proxySettings is the proxy the form names, if it names an address.
 function proxySettings(f: SetupForm): ManagementSettings["proxy"] {
   if (!filled(f.proxyURL)) {
@@ -238,12 +278,16 @@ function proxySettings(f: SetupForm): ManagementSettings["proxy"] {
   return proxy;
 }
 
-/** outboundSettings are the settings for how the management cluster reaches registries and the internet, and its subnets. */
+/** outboundSettings are the settings for how the management cluster reaches registries, chart mirrors and the internet, and its subnets. */
 function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
   const s: Partial<ManagementSettings> = {};
   const mirrors = parseMirrors(f.mirrors);
   if (Object.keys(mirrors).length > 0) {
     s.registryMirrors = mirrors;
+  }
+  const charts = chartRepositories(f);
+  if (charts) {
+    s.chartRepositories = charts;
   }
   const proxy = proxySettings(f);
   if (proxy) {
@@ -383,6 +427,11 @@ function refreshPlacementFields(
 }
 
 /** formOf fills the form from saved settings, or with nothing chosen yet. */
+const chartFields = (saved: ManagementSettings): Pick<SetupForm, "chartMirrors" | "chartMirrorCA"> => ({
+  chartMirrors: formatChartMirrors(saved.chartRepositories?.mirrors),
+  chartMirrorCA: saved.chartRepositories?.caBundle ?? "",
+});
+
 export function formOf(saved: ManagementSettings = unsaved): SetupForm {
   return {
     nodes: saved.nodes,
@@ -400,6 +449,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     workloadBridges: saved.workloadBridges,
     bootstrapDatastore: saved.bootstrapDatastore,
     mirrors: formatMirrors(saved.registryMirrors),
+    ...chartFields(saved),
     proxyURL: saved.proxy?.url ?? "",
     proxyUser: saved.proxy?.user ?? "",
     proxyPassword: "",
@@ -446,6 +496,8 @@ export type SetupField =
   | "clusterOIDC"
   | "backupTargets"
   | "mirrors"
+  | "chartMirrors"
+  | "chartMirrorCA"
   | "proxyURL"
   | "proxyUser"
   | "proxyPassword"
@@ -477,6 +529,8 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "dnsServers",
     "timeServers",
     "mirrors",
+    "chartMirrors",
+    "chartMirrorCA",
     "proxyURL",
     "proxyUser",
     "proxyPassword",
@@ -494,6 +548,8 @@ const stepOf = (k: SetupField): SetupStep => setupSteps.find((s) => stepFields[s
 
 const advancedFields: SetupField[] = [
   "mirrors",
+  "chartMirrors",
+  "chartMirrorCA",
   "proxyURL",
   "proxyUser",
   "proxyPassword",
@@ -702,6 +758,43 @@ function badMirror(mirrors: string): string | undefined {
   });
 }
 
+// badChartMirror is the first line of the chart mirrors that is no host=address with an oci://,
+// https:// or http:// address that has no credentials and no trailing slash.
+function badChartMirror(mirrors: string): string | undefined {
+  return mirrorLines(mirrors).find((line) => {
+    const at = line.indexOf("=");
+    if (at < 1) {
+      return true;
+    }
+    const host = line.slice(0, at).trim();
+    const address = line.slice(at + 1).trim();
+    return (
+      !filled(host) ||
+      /[\s/@=]/u.test(host) ||
+      !/^(?:oci|https?):\/\/[^\s/@?#=]+(?:\/[^\s@?#]*[^\s/@?#])?$/u.test(address)
+    );
+  });
+}
+
+// chartMirrorProblems are those of the chart mirrors and their certificate authority.
+function chartMirrorProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  const bad = badChartMirror(f.chartMirrors);
+  if (bad !== undefined) {
+    p.chartMirrors = `${bad} is not in the form host=oci://mirror.example/path.`;
+  }
+  if (filled(f.chartMirrorCA)) {
+    if (f.chartMirrorCA.includes("PRIVATE KEY")) {
+      p.chartMirrorCA = "Paste certificates only, no private key.";
+    } else if (!f.chartMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
+      p.chartMirrorCA = "Paste PEM certificates.";
+    } else if (mirrorLines(f.chartMirrors).length === 0) {
+      p.chartMirrorCA = "Add a chart mirror first.";
+    }
+  }
+  return p;
+}
+
 // offerProblems are those of what the management cluster offers the clusters it makes.
 function offerProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
@@ -722,7 +815,7 @@ function offerProblems(f: SetupForm): SetupProblems {
   if (bad !== undefined) {
     p.mirrors = `${bad} is not in the form ghcr.io=https://mirror.example:5000.`;
   }
-  Object.assign(p, proxyProblems(f));
+  Object.assign(p, chartMirrorProblems(f), proxyProblems(f));
   for (const key of ["podSubnets", "serviceSubnets"] as const) {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
@@ -939,6 +1032,11 @@ function headlampRows(s: ManagementSettings): [string, string][] {
   ];
 }
 
+function chartMirrorsSummary(s: ManagementSettings): string {
+  const mirrors = s.chartRepositories?.mirrors;
+  return mirrors ? formatChartMirrors(mirrors).split("\n").join(", ") : "None";
+}
+
 function ManagedSummary({
   status,
   settings: s,
@@ -978,6 +1076,7 @@ function ManagedSummary({
     ],
     ["etcd restores", s.etcdRestore === true ? "Guest agent" : "By hand"],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
+    ["Chart mirrors", chartMirrorsSummary(s)],
     ["Proxy", proxySummary(s.proxy)],
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Automatic"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Automatic"],
@@ -1804,6 +1903,30 @@ export function AdvancedFields({
         error={shown("mirrors")}
       >
         {(id) => <textarea id={id} rows={2} value={form.mirrors} onChange={(e) => set("mirrors", e.target.value)} />}
+      </Field>
+      <Field
+        label="Chart mirrors"
+        hint="One per line, like ghcr.io=oci://mirror.example/ghcr"
+        info="Registry mirrors do not reach charts. Use oci:// for OCI charts and https:// for a chart repository, with the same digests."
+        error={shown("chartMirrors")}
+      >
+        {(id) => (
+          <textarea id={id} rows={2} value={form.chartMirrors} onChange={(e) => set("chartMirrors", e.target.value)} />
+        )}
+      </Field>
+      <Field
+        label="Chart mirror certificate"
+        hint="PEM, for a mirror with its own authority"
+        error={shown("chartMirrorCA")}
+      >
+        {(id) => (
+          <textarea
+            id={id}
+            rows={3}
+            value={form.chartMirrorCA}
+            onChange={(e) => set("chartMirrorCA", e.target.value)}
+          />
+        )}
       </Field>
       <Field label="Proxy address" hint="Like http://proxy.example:3128" error={shown("proxyURL")}>
         {(id) => <input id={id} value={form.proxyURL} onChange={(e) => set("proxyURL", e.target.value)} />}

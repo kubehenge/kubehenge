@@ -109,6 +109,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	}
 	errs = append(errs, validateCertificates(c)...)
 	errs = append(errs, validateGitOps(c)...)
+	errs = append(errs, validateEgress(c)...)
 	errs = append(errs, validateAutoscaling(c)...)
 	if err := checkEtcdSnapshots(old, c, class); err != nil {
 		errs = append(errs, field.Invalid(topology.Child("variables").Key(etcdSnapshotsVariable), etcdSnapshotsVariable, err.Error()))
@@ -264,6 +265,19 @@ func validateClusterMesh(old, c *clusterv1.Cluster) field.ErrorList {
 	return errs
 }
 
+// validateEgress holds a cluster's egressProxy to checkEgress.
+func validateEgress(c *clusterv1.Cluster) field.ErrorList {
+	path := field.NewPath("spec", "topology", "variables").Key(egressVariable)
+	v, _, err := optionalVariable[EgressProxy](c, egressVariable)
+	if err != nil {
+		return field.ErrorList{field.Invalid(path, nil, err.Error())}
+	}
+	if err := checkEgress(&v); err != nil {
+		return field.ErrorList{field.Invalid(path, nil, err.Error())}
+	}
+	return nil
+}
+
 // validateGitOps holds a cluster's GitOps to the host keys of its repository, which a repository
 // reached over SSH has to give, and to the identity provider its web interface signs in with:
 // Flux's, and Argo CD's administrators, need the cluster's first OIDC provider.
@@ -281,6 +295,11 @@ func validateGitOps(c *clusterv1.Cluster) field.ErrorList {
 	if g.Enabled && g.knownHostsNeeded() && g.KnownHosts == "" {
 		return field.ErrorList{field.Required(path.Child("knownHosts"),
 			"a repository reached over SSH needs its host's keys as known_hosts lines; Kubehenge does not read them from the network")}
+	}
+	if g.Enabled && g.Repository.CABundle != "" {
+		if caErr := g.checkRepositoryCA(); caErr != nil {
+			return field.ErrorList{field.Invalid(path.Child("repository", "caBundle"), nil, caErr.Error())}
+		}
 	}
 	if !g.Enabled || (!g.UI && len(g.Admins) == 0) {
 		return nil

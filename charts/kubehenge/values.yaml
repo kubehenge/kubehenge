@@ -124,6 +124,12 @@ proxy:
   secret: ""
   ca: false
 
+# Mirrors of the chart repositories, by repository host, such as ghcr.io. Every chart a cluster
+# installs is fetched from the mirror of its host, which serves the same charts under the same
+# digests: an oci:// address for a host that serves OCI charts, an http(s):// one for a chart
+# repository.
+chartMirrors: {}
+
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.
   url: ""

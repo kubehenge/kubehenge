@@ -1,3 +1,114 @@
+run "no_chart_mirrors_leaves_charts_direct" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "chartMirrors") && !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets), "kubehenge-proxy-addon")
+    error_message = "without chart mirrors the controller is told none and the Add-on Provider for Helm gets no Secret"
+  }
+}
+
+run "chart_mirrors_reach_the_controller_and_the_helm_provider" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      mirrors = {
+        "ghcr.io"            = "oci://registry.example.org/ghcr"
+        "charts.jetstack.io" = "https://charts.example.org/jetstack"
+      }
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).chartMirrors == { "ghcr.io" = "oci://registry.example.org/ghcr", "charts.jetstack.io" = "https://charts.example.org/jetstack" }
+    error_message = "the controller is told every mirror by its repository host"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      length(p.spec.deployment.containers[0].env) == 1 &&
+      p.spec.deployment.containers[0].env[0].name == "SSL_CERT_FILE" &&
+      strcontains(p.spec.patches[1].patch, "\"secretName\": \"kubehenge-proxy-addon\"")
+    )])
+    error_message = "the Add-on Provider for Helm trusts the mirrors' authority from the Secret beside it, with no proxy variables"
+  }
+
+  assert {
+    condition     = strcontains(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data["ca.crt"], "MIIB") && !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data), "NO_PROXY")
+    error_message = "the Secret holds the authority and no proxy setting"
+  }
+}
+
+run "chart_mirror_authority_joins_the_proxy_authority" {
+  command = plan
+
+  variables {
+    proxy = {
+      url       = "https://proxy.example.com"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----"
+    }
+    chart_repositories = {
+      mirrors   = { "ghcr.io" = "oci://registry.example.org/ghcr" }
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIRRORCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition     = strcontains(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data["ca.crt"], "PROXYCA") && strcontains(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data["ca.crt"], "MIRRORCA")
+    error_message = "the Add-on Provider for Helm trusts the proxy's authority and the mirrors' alike"
+  }
+}
+
+run "rejects_a_mirror_that_is_no_address" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      mirrors = { "ghcr.io" = "registry.example.org/ghcr" }
+    }
+  }
+
+  expect_failures = [var.chart_repositories]
+}
+
+run "rejects_a_mirror_of_a_host_no_chart_uses" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      mirrors = { "quay.io" = "oci://registry.example.org/quay" }
+    }
+  }
+
+  expect_failures = [helm_release.kubehenge]
+}
+
+run "rejects_a_mirror_of_the_other_kind" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      mirrors = { "ghcr.io" = "https://charts.example.org/ghcr" }
+    }
+  }
+
+  expect_failures = [helm_release.kubehenge]
+}
+
+run "rejects_a_mirror_authority_without_mirrors" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    }
+  }
+
+  expect_failures = [var.chart_repositories]
+}
+
 mock_provider "proxmox" {
   mock_resource "proxmox_user_token" {
     defaults = {

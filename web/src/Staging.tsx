@@ -139,6 +139,7 @@ const settingLabels: Record<string, string[]> = {
   clusterMesh: ["Cluster Mesh"],
   csi: ["CSI plugin", "Volume snapshots"],
   etcdSnapshots: ["etcd snapshots"],
+  egressProxy: ["Egress proxy"],
   gitops: ["GitOps"],
   headlamp: ["Headlamp"],
   istio: ["Istio"],

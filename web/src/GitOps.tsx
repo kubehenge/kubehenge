@@ -23,6 +23,8 @@ export interface GitOpsChoice {
   auth: RepoAuth;
   existingSecret: string;
   knownHosts: string;
+  // PEM, for an https:// repository whose certificate the usual authorities do not sign.
+  caBundle: string;
   hostname: string;
   admins: string;
   clientSecret: ClientSecret;
@@ -38,6 +40,7 @@ export const newGitOps = (): GitOpsChoice => ({
   auth: "none",
   existingSecret: "",
   knownHosts: "",
+  caBundle: "",
   hostname: "",
   admins: "",
   clientSecret: "none",
@@ -63,6 +66,7 @@ export function gitOpsOf(v: unknown): GitOpsChoice {
     auth: oneOf(repoAuths, auth) ? auth : "none",
     existingSecret: text(r["existingSecret"]) ?? "",
     knownHosts: text(r["knownHosts"]) ?? "",
+    caBundle: text(repo["caBundle"]) ?? "",
     hostname: text(r["hostname"]) ?? "",
     admins: (texts(r["admins"]) ?? []).join(", "),
     clientSecret: oneOf(clientSecrets, secret) ? secret : "none",
@@ -79,12 +83,15 @@ export function gitOpsVariable(g: GitOpsChoice, held?: Record<string, unknown>):
   if (g.engine === "") {
     return held === undefined ? undefined : { ...held, enabled: false };
   }
-  const v: Record<string, unknown> = {
-    enabled: true,
-    engine: g.engine,
-    repository: { url: g.url.trim(), revision: g.revision.trim() || "main", path: g.path.trim() || "." },
-    auth: g.auth,
+  const repository: Record<string, unknown> = {
+    url: g.url.trim(),
+    revision: g.revision.trim() || "main",
+    path: g.path.trim() || ".",
   };
+  if (g.url.trim().startsWith("https://") && filled(g.caBundle.trim())) {
+    repository["caBundle"] = `${g.caBundle.trim()}\n`;
+  }
+  const v: Record<string, unknown> = { enabled: true, engine: g.engine, repository, auth: g.auth };
   if (g.auth === "existingSecret") {
     v["existingSecret"] = g.existingSecret.trim();
   }
@@ -128,11 +135,15 @@ export const gitOpsFields = [
   "path",
   "existingSecret",
   "knownHosts",
+  "caBundle",
   "admins",
   "clientSecretName",
   "ui",
 ] as const;
 export type GitOpsField = (typeof gitOpsFields)[number];
+
+// The schema's limit on the repository's caBundle, in characters, with its closing newline.
+const maxCABundle = 65_536;
 
 const refPattern = /^[A-Za-z0-9._/-]+$/u;
 
@@ -158,6 +169,26 @@ function urlProblem(g: GitOpsChoice): string | undefined {
 const knownHostsNeeded = (g: GitOpsChoice): boolean =>
   g.url.trim().startsWith("ssh://") && !(g.engine === "flux" && g.auth === "existingSecret");
 
+// caBundleProblem says what is wrong with the certificate authority of an https:// repository.
+function caBundleProblem(g: GitOpsChoice): string | undefined {
+  const ca = g.caBundle.trim();
+  if (!g.url.trim().startsWith("https://") || !filled(ca)) {
+    return undefined;
+  }
+  if (ca.includes("PRIVATE KEY")) {
+    return "Paste certificates only, no private key";
+  }
+  if (!ca.includes("-----BEGIN CERTIFICATE-----")) {
+    return "Paste one or more PEM certificates";
+  }
+  if (ca.length >= maxCABundle) {
+    return "At most 64 KiB";
+  }
+  return g.engine === "flux" && g.auth === "existingSecret"
+    ? "Flux reads ca.crt from your Secret. Add the certificate there"
+    : undefined;
+}
+
 /** gitOpsProblems says, by field, what is wrong with a choice. The server checks the same. */
 export function gitOpsProblems(g: GitOpsChoice): Partial<Record<GitOpsField, string>> {
   const p: Partial<Record<GitOpsField, string>> = {};
@@ -180,6 +211,10 @@ export function gitOpsProblems(g: GitOpsChoice): Partial<Record<GitOpsField, str
   }
   if (knownHostsNeeded(g) && !filled(g.knownHosts.trim())) {
     p.knownHosts = "Enter the host's keys";
+  }
+  const ca = caBundleProblem(g);
+  if (ca !== undefined) {
+    p.caBundle = ca;
   }
   if (g.clientSecret === "existingSecret" && !filled(g.clientSecretName.trim())) {
     p.clientSecretName = "Enter the Secret's name";
@@ -321,6 +356,23 @@ export function GitOpsFields({
                   spellCheck={false}
                   value={g.existingSecret}
                   onChange={(e) => set("existingSecret", e.target.value.trim())}
+                />
+              )}
+            </Field>
+          )}
+          {g.url.startsWith("https://") && (
+            <Field
+              label="Certificate authority"
+              hint="PEM, for a Git server with its own authority"
+              error={problems.caBundle}
+            >
+              {(id) => (
+                <textarea
+                  id={id}
+                  rows={3}
+                  spellCheck={false}
+                  value={g.caBundle}
+                  onChange={(e) => set("caBundle", e.target.value)}
                 />
               )}
             </Field>

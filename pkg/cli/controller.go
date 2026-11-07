@@ -129,6 +129,9 @@ type controllerOptions struct {
 	argoCDChart       string
 	fluxOperatorChart string
 	chartValues       string
+	chartMirrors      []string
+	egressProxy       string
+	egressNoProxy     string
 	podSecurityExempt string
 	calicoImages      []string
 	extensionConfig   string
@@ -210,6 +213,9 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringSliceVar(&o.calicoImages, "calico-images", nil, "the images the Tigera operator runs Calico from, all at its release, as <registry>/<repository>:<tag>@sha256:<digest> (comma-separated)")
 	f.StringVar(&o.chartValues, "chart-values", "{}", "Helm values for each chart, beneath Kubehenge's own and naming its images by digest, as a JSON object keyed by the chart flag's name without -chart, such as {\"cert-manager\":{...}}")
+	f.StringArrayVar(&o.chartMirrors, "chart-mirror", nil, "a mirror of a chart repository, as <host>=<address>, such as ghcr.io=oci://registry.example.org/ghcr or charts.jetstack.io=https://charts.example.org/jetstack. It serves the same charts under the same digests (repeatable)")
+	f.StringVar(&o.egressProxy, "egress-proxy", os.Getenv("HTTPS_PROXY"), "the proxy the add-ons of clusters that set none of their own go through (env HTTPS_PROXY). An address with credentials is not passed on")
+	f.StringVar(&o.egressNoProxy, "egress-no-proxy", os.Getenv("NO_PROXY"), "the exceptions to --egress-proxy, comma-separated (env NO_PROXY)")
 	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherChart, "rancher-chart", "", "Rancher chart, for the cluster that installs it, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherKubernetes, "rancher-kubernetes", "", "Kubernetes minor versions the Rancher chart runs on, as <min>-<max>, such as 34-36")
@@ -486,6 +492,9 @@ func (o *controllerOptions) parseCharts() error {
 	if len(values) > 0 {
 		return fmt.Errorf("--chart-values: no chart is called %s", strings.Join(slices.Sorted(maps.Keys(values)), ", "))
 	}
+	if err := o.parseMirrors(); err != nil {
+		return err
+	}
 	for _, i := range []struct {
 		flag  string
 		value string
@@ -516,6 +525,21 @@ func (o *controllerOptions) parseCharts() error {
 	if o.autoscaler.Images, err = provisioner.ParseAutoscalerImages(o.autoscalerImages); err != nil {
 		return fmt.Errorf("--autoscaler-images: %w", err)
 	}
+	return nil
+}
+
+// parseMirrors reads the chart mirrors, which have to belong to the charts parsed, and the proxy
+// the add-ons take by default.
+func (o *controllerOptions) parseMirrors() error {
+	mirrors, err := provisioner.ParseChartMirrors(o.chartMirrors)
+	if err == nil {
+		err = mirrors.Check(o.r.Charts.Pinned())
+	}
+	if err != nil {
+		return fmt.Errorf("--chart-mirror: %w", err)
+	}
+	o.r.Charts.Mirrors = mirrors
+	o.r.Egress = provisioner.Egress{URL: o.egressProxy, NoProxy: provisioner.SplitNoProxy(o.egressNoProxy)}
 	return nil
 }
 

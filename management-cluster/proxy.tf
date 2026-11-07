@@ -15,6 +15,17 @@ locals {
   }
   proxy_ca_path = "/etc/kubehenge/proxy/ca.crt"
 
+  # The Add-on Provider for Helm fetches every chart itself, through the proxy and from the chart
+  # mirrors, and trusts the authorities of both from one file. It gets the Secret for a mirror alone too.
+  addon_namespace = one([for p in local.providers : p.namespace if p.kind == "AddonProvider"])
+  addon_ca        = join("\n", compact([local.proxy_has_ca ? nonsensitive(var.proxy.ca_bundle) : "", var.chart_repositories.ca_bundle]))
+  addon_has_ca    = local.addon_ca != ""
+  addon_secret_on = local.proxy_enabled || local.addon_has_ca
+  addon_secret_plain = merge(
+    local.proxy_enabled ? { NO_PROXY = nonsensitive(var.proxy.no_proxy), no_proxy = nonsensitive(var.proxy.no_proxy) } : {},
+    local.addon_has_ca ? { "ca.crt" = local.addon_ca } : {},
+  )
+
   # The program-readable spellings, as the Secret that pods take with envFrom holds them.
   proxy_secret_encoded = local.proxy_enabled ? {
     for k, v in {

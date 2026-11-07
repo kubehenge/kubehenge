@@ -17,6 +17,9 @@ import (
 
 const gitopsVariable = "gitops"
 
+// egressVariable is the proxy the cluster's add-ons go through.
+const egressVariable = "egressProxy"
+
 // gitOpsView is what the cluster's owner needs to see of its GitOps: the deploy key's public half
 // the controller made, to add to the repository, and the fingerprints of the repository host's keys
 // the cluster trusts, to compare with the forge's published ones.

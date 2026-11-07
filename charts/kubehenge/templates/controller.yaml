@@ -339,6 +339,9 @@ spec:
             {{- end }}
             {{- end }}
             - {{ printf "--chart-values=%s" (toJson $chartValues) | quote }}
+            {{- range $host, $mirror := .Values.chartMirrors }}
+            - {{ printf "--chart-mirror=%s=%s" $host $mirror | quote }}
+            {{- end }}
             - --calico-images={{ join "," .Values.addons.calico.images }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
             - --rancher-turtles-image={{ .Values.addons.rancher.turtles.image }}
