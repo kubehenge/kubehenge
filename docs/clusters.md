@@ -220,10 +220,9 @@ etcd syncs its write-ahead log to disk before it acknowledges a write. Every cha
 - Ceph and NFS are often slower, since each write crosses the network first. Ceph waits for its replicas, and NFS for the server's own sync.
 - Both share disks and network with every other VM, so their latency swings with the load. Ceph on SSD or NVMe can keep up. Spinning disks cannot.
 
-Every 5 minutes Kubehenge reads each etcd member's sync times, on kubeadm, RKE2 and k3s clusters. When a member's 99th percentile is above 25 ms, the cluster's Health shows **etcd disk slow**. `kubectl describe cluster` shows the `EtcdDiskSlow` condition.
+Every 5 minutes Kubehenge reads each etcd member's sync times. On Talos it reads them from port 2379 of each control-plane node, with a certificate of the cluster's etcd CA. The management cluster's controller must reach that port. When a member's 99th percentile is above 25 ms, the cluster's Health shows **etcd disk slow**. `kubectl describe cluster` shows the `EtcdDiskSlow` condition.
 
-The figure covers the member's whole life, so it clears slowly once the disk is fast again. A member with under 100 syncs is not judged. A Talos cluster's etcd runs as a service on the node, which Kubehenge cannot reach for this. Read its `etcd_disk_wal_fsync_duration_seconds` from the monitoring add-on instead.
-
+The figure covers the member's whole life, so it clears slowly once the disk is fast again. A member with under 100 syncs is not judged.
 ### Add-ons
 
 Each add-on the class offers is a card with the memory its pods take by the class's figures. It opens on its settings once chosen. Under the cards is the least memory and cores each node that carries them needs.

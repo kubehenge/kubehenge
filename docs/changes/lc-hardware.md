@@ -2,6 +2,6 @@
 - Each template records its hardware in `hw-` tags. The Templates view and `kubehenge template list` show it.
 - Placement follows the CPU type of a cluster's templates. A cluster stays off Proxmox VE nodes that cannot run it and is refused when none can.
 - A cluster whose templates use NUMA is refused machines of one core, through the interface, kubectl and the CLI alike.
-- Health warns when an etcd member's write-ahead log syncs have a 99th percentile above 25 ms (kubeadm, RKE2 and k3s). `docs/clusters.md` has a sizing guide for etcd storage.
-- Clusters select their template with `matchPolicy: subset`, so the hardware tags never change the selection.
+- Health warns when an etcd member's write-ahead log syncs have a 99th percentile above 25 ms on every distribution, Talos included. `docs/clusters.md` has a sizing guide for etcd storage.
+- Clusters select their template with `matchPolicy: uniqueSubset`, so the hardware tags never change the selection.
 - The docs say that GPUs, PCI passthrough, extra disks and huge pages are not available yet.

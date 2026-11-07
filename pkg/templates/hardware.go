@@ -40,8 +40,9 @@ func DefaultHardware(cpuType string) Hardware {
 const NUMAMinCores = 2
 
 // hardwareTagPrefix starts the tags that record a template's hardware. They describe a template and
-// are no part of its line: Cluster API selects by the other tags (matchPolicy subset), and the line of
-// a template is the same whatever hardware a build was made with.
+// are no part of its line: Cluster API's Proxmox VE provider selects by the other tags
+// (matchPolicy uniqueSubset, which still refuses two matches), and the line of a template is the same
+// whatever hardware a build was made with.
 const hardwareTagPrefix = "hw-"
 
 // The tags of the options that are on. A CPU type has its own, hardwareTagPrefix + "cpu-" + the type.

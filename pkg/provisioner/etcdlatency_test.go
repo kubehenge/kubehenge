@@ -151,7 +151,7 @@ func TestEtcdLatencyWatch(t *testing.T) {
 	}
 }
 
-func TestEtcdLatencyWatchLeavesOtherClustersAlone(t *testing.T) {
+func TestEtcdLatencyWatchReadsOnlyClustersThatAreUp(t *testing.T) {
 	t.Parallel()
 	ready := metav1.Condition{Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue, Reason: "Initialised", LastTransitionTime: metav1.Now()}
 	etcd := &fakeEtcdMetrics{members: []MemberFsync{{Member: "etcd-a", P99: time.Second, Syncs: 9000}}}
@@ -166,7 +166,7 @@ func TestEtcdLatencyWatchLeavesOtherClustersAlone(t *testing.T) {
 	talos := talosCluster("web", "v1.14.4")
 	talos.Namespace = "team-a"
 	talos.Status.Conditions = []metav1.Condition{ready}
-	if err := w(newEtcdFixture(t, talos)).watch(t.Context(), talos); err != nil || etcd.asked != 0 {
-		t.Errorf("a Talos cluster was read (%d reads, %v)", etcd.asked, err)
+	if err := w(newEtcdFixture(t, talos)).watch(t.Context(), talos); err != nil || etcd.asked != 1 {
+		t.Errorf("a Talos cluster was not read like the others (%d reads, %v)", etcd.asked, err)
 	}
 }

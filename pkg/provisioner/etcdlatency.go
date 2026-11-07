@@ -73,17 +73,19 @@ type EtcdMetrics interface {
 
 var _ EtcdMetrics = &EtcdDialer{}
 
-// errNoEtcdMetrics says why a Talos cluster's etcd is not read: it runs as a service on the nodes,
-// not as a pod, and Talos's API reaches the node but not a port on it.
-var errNoEtcdMetrics = errors.New("a Talos cluster's etcd metrics are not reachable")
-
 // WALFsync reads each running member's /metrics through the same port-forward and client
-// certificate a snapshot uses.
+// certificate a snapshot uses. A Talos member runs as a service, not a pod, so it is read at its
+// node's address instead.
 func (d *EtcdDialer) WALFsync(ctx context.Context, cluster *clusterv1.Cluster) ([]MemberFsync, error) {
+	var (
+		ca  *etcdCAPair
+		err error
+	)
 	if isTalos(cluster) {
-		return nil, errNoEtcdMetrics
+		ca, err = talosEtcdCA(ctx, d.Reader, cluster)
+	} else {
+		ca, err = etcdCA(ctx, d.Reader, cluster)
 	}
-	ca, err := etcdCA(ctx, d.Reader, cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +96,9 @@ func (d *EtcdDialer) WALFsync(ctx context.Context, cluster *clusterv1.Cluster) (
 	tlsConfig, err := etcdClientTLS(ca, now())
 	if err != nil {
 		return nil, err
+	}
+	if isTalos(cluster) {
+		return d.talosWALFsync(ctx, cluster, tlsConfig, etcdPort)
 	}
 	workload, found, err := d.Remotes.get(ctx, cluster)
 	if err != nil {
@@ -261,7 +266,7 @@ func (w *EtcdLatencyWatch) Start(ctx context.Context) error {
 
 // watch reads one cluster's members. A cluster whose etcd cannot be read keeps the condition it has.
 func (w *EtcdLatencyWatch) watch(ctx context.Context, c *clusterv1.Cluster) error {
-	if !c.DeletionTimestamp.IsZero() || isTalos(c) || RestoreInProgress(c) ||
+	if !c.DeletionTimestamp.IsZero() || RestoreInProgress(c) ||
 		!meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
 		return nil
 	}
