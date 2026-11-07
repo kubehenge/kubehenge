@@ -195,6 +195,13 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if err = errors.Join(r.recordAddonChanges(ctx, cluster, &addons), r.recordAddonConflicts(ctx, cluster, addons.conflicts)); err != nil {
 		return ctrl.Result{}, err
 	}
+	bgpHeld, err := r.reconcileKubeVip(ctx, cluster, addons.LoadBalancer)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if bgpHeld {
+		return ctrl.Result{RequeueAfter: waitInterval}, nil
+	}
 	// Marked ready last: BeforeClusterCreate lets the cluster be built once it is.
 	if err = r.keep(ctx, cluster, creds, true); err != nil {
 		return ctrl.Result{}, err

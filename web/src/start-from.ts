@@ -37,6 +37,10 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "dnsServers",
   "searchDomains",
   "loadBalancer",
+  "loadBalancerMode",
+  "loadBalancerAsn",
+  "loadBalancerPeers",
+  "loadBalancerAuthenticated",
   "storage",
   "place",
   "proxmoxHA",
@@ -85,6 +89,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
   const base = newForm();
   const network = record(v["network"]);
   const vlan = quantity(network["vlan"]);
+  const lb = loadBalancerOf(v["loadBalancer"]);
   const autoscaling = c.workerPools.find((p) => p.autoscaling !== undefined)?.autoscaling;
   return {
     ...base,
@@ -108,7 +113,11 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     gateway: text(network["gateway"]) ?? "",
     dnsServers: (texts(network["dnsServers"]) ?? []).join(", "),
     searchDomains: (texts(network["searchDomains"]) ?? []).join(", "),
-    loadBalancer: loadBalancerOf(v["loadBalancer"]).implementation,
+    loadBalancer: lb.implementation,
+    loadBalancerMode: lb.mode,
+    loadBalancerAsn: lb.asn,
+    loadBalancerPeers: lb.peers,
+    loadBalancerAuthenticated: lb.authenticated,
     storage: text(v["storage"]) ?? "",
     place: placeOf(texts(v["allowedNodes"])),
     proxmoxHA: flag(v["proxmoxHA"]) !== false,

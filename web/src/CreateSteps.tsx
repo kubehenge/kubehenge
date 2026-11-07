@@ -5,8 +5,10 @@ import { WorkerFields } from "./Autoscaling";
 import {
   chosenNodeOS,
   controlPlaneSizes,
+  formLoadBalancerValue,
   machineLeast,
   memoryNodeWarning,
+  setLoadBalancer,
   templateMissing,
   variable,
   versionExamples,
@@ -16,7 +18,7 @@ import {
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
-import { LoadBalancerFields } from "./LoadBalancer";
+import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
 import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
@@ -766,11 +768,29 @@ export function NetworkStep({
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
-          implementation={form.loadBalancer}
-          addresses={form.loadBalancerAddresses}
-          error={shown("loadBalancerAddresses")}
-          onImplementation={(i) => set("loadBalancer", i)}
-          onAddresses={(a) => set("loadBalancerAddresses", a)}
+          value={formLoadBalancerValue(form)}
+          errors={{
+            addresses: shown("loadBalancerAddresses"),
+            asn: shown("loadBalancerAsn"),
+            peers: shown("loadBalancerPeers"),
+          }}
+          onChange={(patch) => {
+            setLoadBalancer(set, patch);
+          }}
+          password={
+            <Field label={passwordLabel} hint={passwordInfo} error={shown("loadBalancerPassword")}>
+              {(id) => (
+                <input
+                  id={id}
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  value={form.loadBalancerPassword}
+                  onChange={(e) => set("loadBalancerPassword", e.target.value)}
+                />
+              )}
+            </Field>
+          }
         />
       )}
       {cni && (
@@ -943,10 +963,7 @@ export function IdentityStep({
   set,
   canTrust,
   showAll,
-}: Omit<StepProps, "shown"> & {
-  canTrust: boolean | undefined;
-  showAll: boolean;
-}): JSX.Element {
+}: Omit<StepProps, "shown"> & { canTrust: boolean | undefined; showAll: boolean }): JSX.Element {
   return (
     <OIDCProviders initial={form.oidc} fixed={canTrust === false} showAll={showAll} onChange={(v) => set("oidc", v)} />
   );

@@ -17,11 +17,6 @@ type envFromSource struct {
 	SecretRef secretRef `json:"secretRef"`
 }
 
-type podEnvVar struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
 type volumeMount struct {
 	Name      string `json:"name"`
 	MountPath string `json:"mountPath"`

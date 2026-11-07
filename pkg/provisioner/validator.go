@@ -122,6 +122,9 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	if err := checkTalos(old, c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(TalosVersionVariable), err.Error()))
 	}
+	if err := checkBGP(c); err != nil {
+		errs = append(errs, field.Invalid(topology.Child("variables").Key(loadBalancerVariable), loadBalancerVariable, err.Error()))
+	}
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkAddresses(ctx, c); err != nil {
 			errs = append(errs, field.Forbidden(topology.Child("variables").Key("network"), err.Error()))

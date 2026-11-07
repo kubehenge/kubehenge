@@ -3,7 +3,10 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"maps"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -262,7 +265,7 @@ func TestMetalLBPoolHoldsTheAddresses(t *testing.T) {
 		t.Fatal(err)
 	}
 	kinds := map[string]map[string]any{}
-	for _, o := range metalLBPool(spans) {
+	for _, o := range metalLBPool(spans, LoadBalancer{}) {
 		if o.GetAPIVersion() != "metallb.io/v1beta1" || o.GetNamespace() != metalLBNamespace || o.GetName() != "kubehenge" {
 			t.Errorf("not MetalLB's: %v", o.Object)
 		}
@@ -284,6 +287,21 @@ type lbWorkload struct {
 	mu        sync.Mutex
 	installed bool
 	applied   map[string]map[string]any
+	// announcers are MetalLB's advertisements and peers in the cluster, by kind and name.
+	announcers map[string]*unstructured.Unstructured
+}
+
+func (w *lbWorkload) announcing(kind string) []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var names []string
+	for key, o := range w.announcers {
+		if o.GetKind() == kind {
+			names = append(names, strings.TrimPrefix(key, kind+"/"))
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 func newLBWorkload(t *testing.T, objs ...client.Object) *lbWorkload {
@@ -294,8 +312,35 @@ func newLBWorkload(t *testing.T, objs ...client.Object) *lbWorkload {
 			t.Fatal(err)
 		}
 	}
-	w := &lbWorkload{applied: map[string]map[string]any{}}
+	w := &lbWorkload{applied: map[string]map[string]any{}, announcers: map[string]*unstructured.Unstructured{}}
 	w.WithWatch = interceptor.NewClient(fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build(), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			l, ok := list.(*unstructured.UnstructuredList)
+			if !ok || l.GroupVersionKind().Group != metalLBGroup {
+				return c.List(ctx, list, opts...)
+			}
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			if !w.installed {
+				return &meta.NoKindMatchError{GroupKind: l.GroupVersionKind().GroupKind()}
+			}
+			kind := strings.TrimSuffix(l.GetKind(), "List")
+			for _, o := range w.announcers {
+				if o.GetKind() == kind {
+					l.Items = append(l.Items, *o.DeepCopy())
+				}
+			}
+			return nil
+		},
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if obj.GetObjectKind().GroupVersionKind().Group != metalLBGroup {
+				return c.Delete(ctx, obj, opts...)
+			}
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			delete(w.announcers, obj.GetObjectKind().GroupVersionKind().Kind+"/"+obj.GetName())
+			return nil
+		},
 		Apply: func(_ context.Context, _ client.WithWatch, obj runtime.ApplyConfiguration, _ ...client.ApplyOption) error {
 			u, ok := obj.(interface{ UnstructuredContent() map[string]any })
 			if !ok {
@@ -308,6 +353,9 @@ func newLBWorkload(t *testing.T, objs ...client.Object) *lbWorkload {
 				return &meta.NoKindMatchError{GroupKind: o.GroupVersionKind().GroupKind()}
 			}
 			w.applied[o.GetKind()] = o.Object
+			if _, announces := metalLBAnnouncers[o.GetKind()]; announces {
+				w.announcers[o.GetKind()+"/"+o.GetName()] = o.DeepCopy()
+			}
 			return nil
 		},
 	})
@@ -593,6 +641,230 @@ func TestValidatorHoldsOnlyChangedAddresses(t *testing.T) {
 	}
 	if _, err := v.ValidateUpdate(ctx, clashing, beside); err != nil {
 		t.Errorf("a change out of a clash was refused: %v", err)
+	}
+}
+
+// bgpOf is a loadBalancer variable in BGP mode with these routers, raw JSON, and addresses off the nodes' network.
+func bgpOf(asn string, peers ...string) string {
+	return `{"enabled":true,"mode":"bgp","addresses":["198.51.100.0/28"],"bgp":{"asn":` + asn + `,"peers":[` + strings.Join(peers, ",") + `]}}`
+}
+
+func peerOf(address, asn string) string {
+	return `{"address":"` + address + `","asn":` + asn + `}`
+}
+
+func TestMetalLBPoolAnnouncesOverBGPFromTheWorkers(t *testing.T) {
+	t.Parallel()
+	spans, err := parseAddresses([]string{"198.51.100.0/28"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, peers := range map[string][]BGPPeer{
+		"one router":  {{Address: "10.0.0.1", ASN: 64512}},
+		"two routers": {{Address: "10.0.0.1", ASN: 64512}, {Address: "10.0.1.1", ASN: 4_200_000_000}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			lb := LoadBalancer{Enabled: true, Mode: modeBGP, BGP: &BGP{ASN: 65001, Peers: peers}}
+			byName := map[string]*unstructured.Unstructured{}
+			for _, o := range metalLBPool(spans, lb) {
+				byName[o.GetKind()+"/"+o.GetName()] = o
+			}
+			if len(byName) != 2+len(peers) || byName["L2Advertisement/kubehenge"] != nil {
+				t.Fatalf("objects %v", slices.Collect(maps.Keys(byName)))
+			}
+			if got := lookup[[]any](t, byName["BGPAdvertisement/kubehenge"].Object, "spec", "ipAddressPools"); len(got) != 1 || got[0] != "kubehenge" {
+				t.Errorf("advertised pools %v", got)
+			}
+			for _, p := range peers {
+				o := byName["BGPPeer/"+peerName(p.Address)]
+				if o == nil || o.GetAPIVersion() != "metallb.io/v1beta2" || o.GetNamespace() != metalLBNamespace {
+					t.Fatalf("no peer for %s: %v", p.Address, o)
+				}
+				spec := lookup[map[string]any](t, o.Object, "spec")
+				if spec["myASN"] != int64(65001) || spec["peerASN"] != int64(p.ASN) || spec["peerAddress"] != p.Address {
+					t.Errorf("peer %s: %v", p.Address, spec)
+				}
+				// kube-vip on the control planes holds a session to the same routers from the same addresses.
+				selector := lookup[[]any](t, spec, "nodeSelectors")
+				want := []any{map[string]any{"matchExpressions": []any{map[string]any{"key": controlPlaneLabel, "operator": "DoesNotExist"}}}}
+				if !reflect.DeepEqual(selector, want) {
+					t.Errorf("peer %s selects %v", p.Address, selector)
+				}
+			}
+		})
+	}
+}
+
+func TestMetalLBRunsFRRK8sOnlyInBGPMode(t *testing.T) {
+	t.Parallel()
+	if !lookup[bool](t, metalLBValues(LoadBalancer{Mode: modeBGP}), "frrk8s", "enabled") ||
+		lookup[bool](t, metalLBValues(LoadBalancer{Mode: modeL2}), "frrk8s", "enabled") ||
+		lookup[bool](t, metalLBValues(LoadBalancer{}), "frrk8s", "enabled") {
+		t.Error("frr-k8s does not follow the mode")
+	}
+}
+
+// The pinned chart gives frr-k8s no requests, so each of its five containers and the status
+// cleaner, which shares the controller's value, gets one, and the class figures count them.
+func TestMetalLBGivesFRRK8sRequestsInBGPModeOnly(t *testing.T) {
+	t.Parallel()
+	if _, has := metalLBValues(LoadBalancer{Mode: modeL2})["frr-k8s"]; has {
+		t.Error("layer 2 sets values for a subchart that is off")
+	}
+	frr := lookup[map[string]any](t, metalLBValues(LoadBalancer{Mode: modeBGP}), "frr-k8s", "frrk8s")
+	cpu, memory := 0, 0
+	for _, container := range [][]any{{"resources"}, {"frr", "resources"}, {"reloader", "resources"}, {"frrMetrics", "resources"}, {"frrStatus", "resources"}, {"resources"}} {
+		requests := lookup[map[string]any](t, frr, append(container, "requests")...)
+		c, err := strconv.Atoi(strings.TrimSuffix(lookup[string](t, requests, "cpu"), "m"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := strconv.Atoi(strings.TrimSuffix(lookup[string](t, requests, "memory"), "Mi"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cpu, memory = cpu+c, memory+m
+	}
+	if wantCPU, wantMemory := BGPBackendRequests(); cpu != wantCPU || memory != wantMemory {
+		t.Errorf("values sum to %dm and %d MiB, BGPBackendRequests says %dm and %d MiB", cpu, memory, wantCPU, wantMemory)
+	}
+}
+
+func TestReconcileSwitchesBetweenLayer2AndBGP(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	workload := newLBWorkload(t)
+	workload.install()
+	spans, err := parseAddresses([]string{"198.51.100.0/28"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply := func(lb LoadBalancer) {
+		t.Helper()
+		if waiting, err := applyMetalLBPool(ctx, workload, spans, lb); err != nil || waiting {
+			t.Fatalf("waiting %v, %v", waiting, err)
+		}
+	}
+	both := &BGP{ASN: 65001, Peers: []BGPPeer{{Address: "10.0.0.1", ASN: 64512}, {Address: "10.0.1.1", ASN: 64513}}}
+	apply(LoadBalancer{Enabled: true})
+	for kind, want := range map[string][]string{"L2Advertisement": {"kubehenge"}, "BGPAdvertisement": nil, "BGPPeer": nil} {
+		if got := workload.announcing(kind); !slices.Equal(got, want) {
+			t.Errorf("layer 2: %s = %v, want %v", kind, got, want)
+		}
+	}
+	apply(LoadBalancer{Enabled: true, Mode: modeBGP, BGP: both})
+	for kind, want := range map[string][]string{
+		"L2Advertisement": nil, "BGPAdvertisement": {"kubehenge"}, "BGPPeer": {"kubehenge-peer-10-0-0-1", "kubehenge-peer-10-0-1-1"},
+	} {
+		if got := workload.announcing(kind); !slices.Equal(got, want) {
+			t.Errorf("bgp: %s = %v, want %v", kind, got, want)
+		}
+	}
+	apply(LoadBalancer{Enabled: true, Mode: modeBGP, BGP: &BGP{ASN: 65001, Peers: both.Peers[1:]}})
+	if got := workload.announcing("BGPPeer"); !slices.Equal(got, []string{"kubehenge-peer-10-0-1-1"}) {
+		t.Errorf("a router taken out stays: %v", got)
+	}
+	apply(LoadBalancer{Enabled: true})
+	for kind, want := range map[string][]string{"L2Advertisement": {"kubehenge"}, "BGPAdvertisement": nil, "BGPPeer": nil} {
+		if got := workload.announcing(kind); !slices.Equal(got, want) {
+			t.Errorf("back to layer 2: %s = %v, want %v", kind, got, want)
+		}
+	}
+}
+
+func TestCheckAddressesLetsBGPRouteBeyondTheNodesNetwork(t *testing.T) {
+	t.Parallel()
+	web := func(lb, endpoint string) *clusterv1.Cluster {
+		return lbCluster("web", 0, "10.0.0.10-10.0.0.20", endpoint, lb)
+	}
+	routed := bgpOf("65001", peerOf("10.0.0.1", "64512"))
+	for name, tc := range map[string]struct {
+		cluster *clusterv1.Cluster
+		want    string
+	}{
+		"a pool off the network in layer 2":      {cluster: web(onAt(`"198.51.100.0/28"`), "10.0.0.5"), want: "are outside the network 10.0.0.0/24"},
+		"a pool off the network in bgp":          {cluster: web(routed, "10.0.0.5")},
+		"an endpoint off the network in bgp":     {cluster: web(routed, "198.51.100.200")},
+		"an endpoint off the network in l2":      {cluster: web(onAt(`"10.0.0.100"`), "198.51.100.200"), want: "is outside the network"},
+		"the gateway still counts in bgp":        {cluster: web(strings.Replace(routed, "198.51.100.0/28", "10.0.0.0/30", 1), "10.0.0.5"), want: "include the gateway 10.0.0.1"},
+		"an endpoint on the gateway in bgp":      {cluster: web(routed, "10.0.0.1"), want: "is the gateway"},
+		"an endpoint among the nodes in bgp":     {cluster: web(routed, "10.0.0.15"), want: "is inside node addresses"},
+		"a pool on the endpoint in bgp":          {cluster: web(strings.Replace(routed, "198.51.100.0/28", "198.51.100.200", 1), "198.51.100.200"), want: "include the control-plane endpoint"},
+		"a pool on the nodes in bgp":             {cluster: web(strings.Replace(routed, "198.51.100.0/28", "10.0.0.15", 1), "10.0.0.5"), want: "overlap node addresses"},
+		"bgp settings without the load balancer": {cluster: web(`{"mode":"bgp","bgp":{"asn":65001,"peers":[`+peerOf("10.0.0.1", "64512")+`]}}`, "198.51.100.200")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := checkAddresses(tc.cluster, nil)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("refused: %v", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("got %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckBGP(t *testing.T) {
+	t.Parallel()
+	peer := peerOf("10.0.0.1", "64512")
+	web := func(lb string) *clusterv1.Cluster {
+		c := lbCluster("web", 0, "10.0.0.10-10.0.0.20", "10.0.0.5", lb)
+		c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{Class: "worker", Name: "md-0"}}
+		return c
+	}
+	for name, tc := range map[string]struct {
+		cluster *clusterv1.Cluster
+		want    string
+	}{
+		"one router":                       {cluster: web(bgpOf("65001", peer))},
+		"layer 2 needs no settings":        {cluster: web(onAt(`"10.0.0.100"`))},
+		"no load balancer":                 {cluster: web("")},
+		"the largest AS number":            {cluster: web(bgpOf("4294967295", peerOf("10.0.0.1", "4294967295")))},
+		"no settings":                      {cluster: web(`{"enabled":true,"mode":"bgp","addresses":["198.51.100.0/28"]}`), want: "needs bgp settings"},
+		"no routers":                       {cluster: web(bgpOf("65001")), want: "at least one router"},
+		"AS number zero":                   {cluster: web(bgpOf("0", peer)), want: "ASN 0 is outside 1 to 4294967295"},
+		"router AS number zero":            {cluster: web(bgpOf("65001", peerOf("10.0.0.1", "0"))), want: "router 10.0.0.1: ASN 0 is outside 1 to 4294967295"},
+		"AS number past 32 bits":           {cluster: web(bgpOf("4294967296", peer)), want: "loadBalancer"},
+		"router that is no address":        {cluster: web(bgpOf("65001", peerOf("router.example", "64512"))), want: `router "router.example" is not an IPv4 address`},
+		"IPv6 router":                      {cluster: web(bgpOf("65001", peerOf("fd00::1", "64512"))), want: "is not an IPv4 address"},
+		"router listed twice":              {cluster: web(bgpOf("65001", peer, peerOf("10.0.0.1", "64513"))), want: "router 10.0.0.1 is listed twice"},
+		"router inside the pool":           {cluster: web(strings.Replace(bgpOf("65001", peerOf("198.51.100.3", "64512")), "198.51.100.0/28", "198.51.100.0/24", 1)), want: "router 198.51.100.3 is an address the cluster announces"},
+		"router that is the endpoint":      {cluster: web(bgpOf("65001", peerOf("10.0.0.5", "64512"))), want: "router 10.0.0.5 is an address the cluster announces"},
+		"kube-vip":                         {cluster: web(strings.Replace(bgpOf("65001", peer), `"mode"`, `"implementation":"kube-vip","mode"`, 1)), want: "BGP needs MetalLB"},
+		"control planes only":              {cluster: lbCluster("web", 0, "10.0.0.10-10.0.0.20", "10.0.0.5", bgpOf("65001", peer)), want: "needs worker nodes"},
+		"control planes only, no balancer": {cluster: lbCluster("web", 0, "10.0.0.10-10.0.0.20", "10.0.0.5", `{"mode":"bgp","bgp":{"asn":65001,"peers":[`+peer+`]}}`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := checkBGP(tc.cluster)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Errorf("refused: %v", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Errorf("got %v, want %q", err, tc.want)
+			}
+		})
+	}
+	t.Run("Talos", func(t *testing.T) {
+		t.Parallel()
+		c := web(bgpOf("65001", peer))
+		c.Spec.Topology.ClassRef.Name = ClassPrefix + "talos"
+		if err := checkBGP(c); err == nil || !strings.Contains(err.Error(), "not available on Talos clusters") {
+			t.Errorf("got %v", err)
+		}
+	})
+}
+
+func TestValidatorRefusesBGPWhereItCannotWork(t *testing.T) {
+	t.Parallel()
+	h, _ := hooksFor(t)
+	v := &ClusterValidator{Hooks: h}
+	c := lbCluster("web", 0, "10.0.0.10-10.0.0.20", "10.0.0.5", bgpOf("65001", peerOf("10.0.0.1", "64512")))
+	if _, err := v.ValidateCreate(context.Background(), c); err == nil || !strings.Contains(err.Error(), "needs worker nodes") {
+		t.Errorf("a cluster without workers was let in: %v", err)
 	}
 }
 

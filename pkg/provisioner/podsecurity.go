@@ -29,6 +29,8 @@ const (
 
 	// matchLabelsKey is a label selector's key in the objects and values written as maps.
 	matchLabelsKey = "matchLabels"
+	// matchExpressionsKey is a selector term's key for the expressions written as maps.
+	matchExpressionsKey = "matchExpressions"
 
 	kyvernoAdmissionReplicas = 2
 	// kyvernoWorkerPreference is the highest weight a preferred node affinity takes.
@@ -147,7 +149,7 @@ func kyvernoValues() map[string]any {
 			}},
 			"nodeAffinity": map[string]any{"preferredDuringSchedulingIgnoredDuringExecution": []any{map[string]any{
 				"weight": kyvernoWorkerPreference,
-				"preference": map[string]any{"matchExpressions": []any{map[string]any{
+				"preference": map[string]any{matchExpressionsKey: []any{map[string]any{
 					"key": controlPlaneRole, "operator": string(corev1.NodeSelectorOpDoesNotExist),
 				}}},
 			}}},

@@ -50,6 +50,8 @@ var credentialPurposes = []CredentialPurpose{
 	{Name: "dns01", Keys: []string{"token"}, Appliance: true},
 	// One ACME account's key is no other cluster's, so there is none for every cluster.
 	{Name: eabPurpose, Keys: []string{eabKey}},
+	// The password of a cluster's BGP sessions, the same for every router.
+	{Name: bgpPurpose, Keys: []string{passwordKey}},
 	{Name: "gitops", Keys: []string{"username", "password"}},
 	{Name: "oidc-client", Keys: []string{"clientSecret"}},
 	// What the monitoring add-on sends alerts and samples with. The controller copies each into the

@@ -311,6 +311,16 @@ Each cluster's API address, and the management cluster's, is a virtual IP that o
 - Keep it in the same subnet as the nodes.
 - Check it is free before creating the cluster, for example with `ping` or `arping` from a machine on the same network.
 
+### A Service has an `EXTERNAL-IP` that nobody answers for
+
+The load balancer assigned the address, but nothing on the network answers for it. In layer 2 (ARP), a switch with dynamic ARP inspection or port security drops the nodes' gratuitous ARP for addresses it has not learnt. The same switch can break the API address.
+
+- Check from a machine on the same network: `arping <address>` gets no reply.
+- Allow the addresses on the switch's ARP inspection or port security, or switch the cluster to BGP ([BGP](clusters.md#bgp)).
+- In BGP mode, look at the sessions. In the workload cluster, `kubectl -n metallb-system get bgppeers` lists the routers, and the `frr-k8s` pods' logs show a session that is not established.
+- A router refuses the session when it does not expect the node's address and the cluster's AS number, or when it already has a session from the same address.
+- With a password, every router needs the same one. A cluster that never builds its nodes may wait for it. The Cluster shows a `NoBGPPassword` event, and the load balancer's options take the password.
+
 ### Nodes not initialised
 
 Nodes keep the taint `node.cloudprovider.kubernetes.io/uninitialized`, and pods stay pending. The Proxmox VE cloud controller manager initialises new nodes once it reaches the Proxmox VE API.
