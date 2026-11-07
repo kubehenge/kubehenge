@@ -3417,14 +3417,16 @@ if [ "${distribution}" = talos ]; then
         *" to ${talos_to} at "*) ;;
         *) fail "kubehenge.dev/talos-upgraded records '${talos_last}', not an upgrade to ${talos_to}" ;;
     esac
-    # A node is cordoned only while it is upgraded, which a poll can miss; its kubelet tells of it
-    # too.
-    not_schedulable=$(wl get events -A --field-selector reason=NodeNotSchedulable -o json |
-        jq -r --arg s "${talos_since}" '[.items[] | select((.lastTimestamp // .eventTime // "") >= $s) | .involvedObject.name] | unique | join(" ")')
+    # A node is cordoned only for the seconds before its reboot, too short for a poll or its kubelet
+    # to see on a node with few pods. The controller's TalosDrained event is the lasting record.
+    talos_events=$(kubectl -n "${ns}" get events -o json |
+        jq -r --arg s "${talos_since}" '.items[] | select((.lastTimestamp // .eventTime // "") >= $s) | select(.reason == "TalosDrained" or .reason == "TalosDrain") | "\(.reason) \(.message)"')
+    talos_undrained=$(printf '%s\n' "${talos_events}" | sed -n 's/^TalosDrain //p')
+    [ -z "${talos_undrained}" ] || fail "a node rebooted without its pods moved: ${talos_undrained}"
     for talos_node in $(wl get nodes -o jsonpath='{.items[*].metadata.name}'); do
-        case " ${talos_cordoned} ${not_schedulable} " in
-            *" ${talos_node} "*) ;;
-            *) fail "node ${talos_node} was upgraded without being drained" ;;
+        case "${talos_events}" in
+            *"TalosDrained node ${talos_node} drained"*) ;;
+            *) fail "node ${talos_node} was upgraded without being drained (seen cordoned: ${talos_cordoned})" ;;
         esac
     done
     cordoned=$(wl get nodes -o json | jq -r '[.items[] | select(.spec.unschedulable == true) | .metadata.name] | join(" ")')
