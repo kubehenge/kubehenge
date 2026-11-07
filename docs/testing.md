@@ -255,6 +255,8 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 
 A machine whose KVM lacks pause-loop exiting hands its test to a fresh one, up to three times. There, guests that outnumber its CPUs starve each other whatever their sizes. The checks that nothing restarts would only measure the machine. A test still on such a machine at the fourth try runs there with restarts reported, not failed (`KUBEHENGE_E2E_RESTARTS=report`).
 
+A try whose runner GitHub stops or loses never runs its last step. The next try then runs the test again on a fresh machine. The lane's log names each lost runner. A test that fails ends its lane at once (`test/e2e/ci/lane.sh`).
+
 ### The Actions cache
 
 The repository's cache holds 10 GB. Past that, GitHub evicts the entries read least recently. Only runs on main save, and main keeps each family's newest entry alone (`scripts/cache-prune.sh`, run by `cache.yml` and `e2e-image.yml`). A closed pull request's entries are deleted, and so are those a dispatch saved on its branch.
