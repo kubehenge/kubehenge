@@ -61,6 +61,8 @@ const (
 	templateVersionsInterval = 30 * time.Second
 	// haRulesInterval is how soon an HA rule made in Proxmox VE is offered to cluster creators.
 	haRulesInterval = 30 * time.Second
+	// proxmoxReachInterval is how often the controller asks whether the Proxmox VE API answers it.
+	proxmoxReachInterval = time.Minute
 	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
 	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
 	certificateWatchInterval = 5 * time.Minute
@@ -288,7 +290,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err != nil {
 		return err
 	}
-	ctrl.SetLogger(logger)
+	setControllerLogger(logger)
 	scheme, err := controllerScheme()
 	if err != nil {
 		return err
@@ -698,6 +700,16 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	}
 	if err := mgr.Add(rules); err != nil {
 		return fmt.Errorf("the HA rules offered: %w", err)
+	}
+	reach := &provisioner.ProxmoxReach{
+		Reader:    mgr.GetAPIReader(),
+		Client:    mgr.GetClient(),
+		Namespace: o.r.ClassNamespace,
+		Proxmox:   cloud.Client,
+		Interval:  proxmoxReachInterval,
+	}
+	if err := mgr.Add(reach); err != nil {
+		return fmt.Errorf("the Proxmox VE reachability check: %w", err)
 	}
 	return o.addHA(mgr, cloud.Client)
 }

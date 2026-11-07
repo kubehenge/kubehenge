@@ -42,6 +42,7 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 
 - **The management cluster** needs one free address per node (one, or three for high availability) and one for its Kubernetes API's virtual IP. All are in one subnet on one bridge, with a gateway and DNS servers.
   - Its VMs can run on several Proxmox VE nodes. Each of those needs that bridge, in the same layer-2 network.
+  - The bridge can be an SDN VNet. Cluster API's token gets `PVESDNUser` on `/sdn/zones/<zone>/<vnet>`, or on `/sdn/zones/localnetwork/<bridge>` for a node's bridge.
   - The appliance reaches its nodes on ports 50000 (Talos API) and 6443 (Kubernetes API).
 - **Each cluster** needs a range of free addresses for its nodes. Its control plane's virtual IP is one more, in the same subnet but outside the range.
   - Leave spare addresses in the range, because an upgrade or a node replacement creates the new node before it removes the old one.
@@ -56,6 +57,7 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 | The node running the installer | GitHub, for Kubehenge's release and OpenTofu. `download.proxmox.com`, for the container template, unless a storage holds it already. The installer downloads through the datacenter's HTTP proxy, where one is set. |
 | The appliance | GitHub, for the release index and upgrades. While it applies the management cluster: the OpenTofu registry, `quay.io` (cert-manager's chart) and the Talos Image Factory. While it makes VM templates: the Talos Image Factory (`factory.talos.dev`), the node OSes' image mirrors for their signed checksums (`repo.almalinux.org`, `dl.rockylinux.org`), and the package repositories' signing keys (`pkgs.k8s.io`, `rpm.rancher.io`). |
 | The Proxmox VE nodes | the Talos Image Factory and the node OSes' image mirrors, which Proxmox VE downloads disk images from |
+| The management cluster's nodes, for time | NTP servers on UDP 123: Talos's default public ones, or the hosts set under Time servers in the setup's Network step. |
 | The management cluster's nodes | Container registries and the Cluster API providers' release files. RKE2's and k3s's release channels, for automatic upgrades, and their releases' checksum files and install scripts on GitHub, read once per release. The add-on chart repositories: `ghcr.io` (the Proxmox VE cloud controller manager and CSI plugin), `helm.cilium.io`, `docs.tigera.io`, `kubernetes-sigs.github.io` (Headlamp), `releases.rancher.com` and `charts.jetstack.io`. |
 | Clusters' nodes | Container registries. On RKE2 and k3s, GitHub (`github.com` and `raw.githubusercontent.com`), for the release and its images, which a node installs when it boots. |
 | The VM that prepares a template | Its node OS's package mirrors and `quay.io` (for the image builder's tool image, by digest). For RKE2 and k3s, `rpm.rancher.io` (their SELinux policies). For kubeadm, `pkgs.k8s.io`, the node OS's EPEL mirror (containerd), `registry.k8s.io`, GitHub (for cosign) and Sigstore's `tuf-repo-cdn.sigstore.dev`, to check the images' signatures. |
@@ -327,8 +329,8 @@ The one exception is automatic upgrades of the management cluster, off by defaul
 
 | Field | What it is |
 | --- | --- |
-| Bridge | Bridge the management cluster's VMs attach to. |
-| VLAN tag | Optional, 1 to 4094. |
+| Bridge | Bridge the management cluster's VMs attach to. A node's bridge, or an SDN VNet listed with its zone. |
+| VLAN tag | Optional, 1 to 4094. Refused on a VNet of a VLAN zone, which tags its traffic already. A VLAN-aware VNet takes one. |
 | Node addresses | One IPv4 address, or three for high availability, each with its prefix length: `192.0.2.11/24`. All in one network, the gateway's, and none of them the network's own or broadcast address. |
 | API address | The virtual IP of the management cluster's Kubernetes API. An unused IPv4 address in the nodes' network, neither a node address nor the gateway. It moves to a healthy node when one fails. |
 | Gateway | The nodes' default gateway, an IPv4 address. |
@@ -600,7 +602,7 @@ tofu output -raw talosconfig > talosconfig
 | `proxmox_nodes` | required | The nodes the management cluster's VMs run on, taken in turn, such as `["pve1", "pve2", "pve3"]`. Each needs the bridge and both storages below. A VM given another node is migrated there. |
 | `image_datastore` | `local` | Storage the Talos image is downloaded to, on each node. It must allow `import`. |
 | `vm_datastore` | `local-lvm` | Storage for the management cluster's disks. |
-| `bridge`, `vlan_id` | `vmbr0`, none | Bridge and VLAN tag of the management cluster's VMs. |
+| `bridge`, `vlan_id` | `vmbr0`, none | Bridge and VLAN tag of the management cluster's VMs. The bridge takes `zone/vnet` too. |
 | `cluster_name` | `kubehenge` | The management cluster's name, a DNS label of at most 32 characters, also the prefix of its VMs' names and of the users, roles and group the module creates. |
 | `node_addresses` | required | One, three or five addresses with prefix length, such as `["192.0.2.11/24"]`. |
 | `api_address` | required | The Kubernetes API's virtual IP, in the nodes' subnet and unused. |
@@ -614,7 +616,7 @@ tofu output -raw talosconfig > talosconfig
 | `template_pool` | `kubehenge-templates` | Pool of the VM templates. |
 | `management_pool` | `kubehenge-management` | Pool of the management cluster's own VMs, out of Cluster API's reach. |
 | `workload_datastores` | `["local-lvm"]` | Storages clusters may use. |
-| `workload_bridges` | `["vmbr0"]` | Bridges clusters may attach to, with any VLAN on them. |
+| `workload_bridges` | `["vmbr0"]` | Bridges clusters may attach to, with any VLAN on them. A node's bridge is its name. An SDN VNet is `zone/vnet`, such as `evpn1/web`. |
 | `bootstrap_datastore` | `local` | Storage for cloud-init ISOs. Cluster API gets full control of it. |
 | `proxy` | `{}` | The HTTP(S) proxy for downloads: `url`, `no_proxy` (comma-separated, with the Proxmox VE host, the nodes' network and the pod and service ranges) and `ca_bundle` (PEM). Sensitive. |
 | `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name. Each takes endpoint URLs tried in order before the registry itself. A mirror of `factory.talos.dev`, `ghcr.io` or `registry.k8s.io` must serve the images' cosign signatures too. The nodes require them on Sidero's and Kubernetes' images and on the Talos providers'. |
@@ -647,7 +649,7 @@ tofu output -raw talosconfig > talosconfig
 | `node` | the first of `proxmox_nodes` | The node the builds run on. |
 | `storage` | the first of `workload_datastores` | The template disks' storage. |
 | `import_datastore`, `iso_datastore` | `image_datastore`, `bootstrap_datastore` | Storages for the downloaded image and the cloud-init ISO. |
-| `bridge`, `vlan` | the first of `workload_bridges`, `0` (none) | Where the VM that prepares an image attaches. |
+| `bridge`, `vlan` | the first of `workload_bridges`, `0` (none) | Where the VM that prepares an image attaches. The bridge takes `zone/vnet` too. |
 | `address`, `gateway`, `dns` | DHCP | A static address with prefix, gateway and DNS servers for that VM. |
 | `creator_builds` | `false` | Lets those who may create clusters have a missing template built. |
 

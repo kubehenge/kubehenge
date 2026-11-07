@@ -47,6 +47,17 @@ resource "proxmox_user_token" "cluster_api" {
 }
 
 locals {
+  # A bridge reference is a node's bridge by name (zone localnetwork) or an SDN VNet as zone/vnet.
+  # Proxmox VE checks SDN.Use on /sdn/zones/<zone>/<vnet>, and a node's bridge names no "/".
+  bridge_parts = { for b in distinct(concat(var.workload_bridges, compact([var.template_refresh.bridge, var.bridge]))) : b => split("/", b) }
+  bridges = { for b, p in local.bridge_parts : b => {
+    zone = length(p) == 2 ? p[0] : "localnetwork"
+    name = p[length(p) - 1]
+    acl  = "/sdn/zones/${length(p) == 2 ? p[0] : "localnetwork"}/${p[length(p) - 1]}"
+  } }
+}
+
+locals {
   cluster_api_acls = concat(
     [
       { path = "/", role = proxmox_virtual_environment_role.audit.role_id, propagate = false },
@@ -58,7 +69,7 @@ locals {
       { path = "/storage/${var.bootstrap_datastore}", role = "PVEDatastoreAdmin", propagate = false },
     ],
     [for s in var.workload_datastores : { path = "/storage/${s}", role = proxmox_virtual_environment_role.allocate_space.role_id, propagate = false }],
-    [for b in var.workload_bridges : { path = "/sdn/zones/localnetwork/${b}", role = "PVESDNUser", propagate = true }],
+    [for b in var.workload_bridges : { path = local.bridges[b].acl, role = "PVESDNUser", propagate = true }],
   )
 }
 
@@ -350,7 +361,7 @@ locals {
       { path = "/nodes", role = proxmox_virtual_environment_role.audit.role_id, propagate = true },
       { path = "/nodes/${local.template_builder.node}", role = proxmox_virtual_environment_role.template_builder_network[0].role_id, propagate = false },
       { path = "/pool/${proxmox_virtual_environment_pool.templates.pool_id}", role = proxmox_virtual_environment_role.template_builder_vms[0].role_id, propagate = true },
-      { path = "/sdn/zones/localnetwork/${local.template_builder.bridge}", role = "PVESDNUser", propagate = true },
+      { path = local.bridges[local.template_builder.bridge].acl, role = "PVESDNUser", propagate = true },
     ],
     [for s in distinct([local.template_builder.import, local.template_builder.iso]) : { path = "/storage/${s}", role = proxmox_virtual_environment_role.template_builder_files[0].role_id, propagate = false }],
     # The template disks' storage, also when it is one of those two: Datastore.Allocate there does
@@ -427,10 +438,11 @@ resource "proxmox_virtual_environment_vm" "node" {
   }
 
   network_device {
-    bridge      = var.bridge
-    vlan_id     = var.vlan_id
-    model       = "virtio"
-    mac_address = local.nodes[count.index].mac
+    bridge  = local.bridges[var.bridge].name
+    vlan_id = var.vlan_id
+    model   = "virtio"
+    # No mac_address: Proxmox VE assigns a unique one, and the provider keeps what the VM has. The
+    # Talos link alias selects the NIC by it.
   }
 
   # Talos reads its address from the NoCloud drive, so the nodes need no DHCP.

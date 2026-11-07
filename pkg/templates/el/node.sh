@@ -36,10 +36,9 @@ if [ -f "${files}/proxy/ca.crt" ]; then
 fi
 
 # curl, awk and tar for the installs of RKE2, k3s and kubeadm's images; NetworkManager, the only
-# network renderer cloud-init has on EL; br_netfilter, which every distribution's pod network
-# needs, is only in the kernel's extra modules, which must be of the image's own kernel.
-kernel=$(rpm -q --queryformat '%{VERSION}-%{RELEASE}\n' kernel-core | tail -n 1)
-packages="cloud-init qemu-guest-agent NetworkManager container-selinux curl gawk tar kernel-modules-extra-${kernel}"
+# network renderer cloud-init has on EL. The kernel's extra modules come with the kernel, in the
+# compose (manifest.yaml).
+packages="cloud-init qemu-guest-agent NetworkManager container-selinux curl gawk tar"
 case "${distribution}" in
     kubeadm)
         version=${kubernetes#v}

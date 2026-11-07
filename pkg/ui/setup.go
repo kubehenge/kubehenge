@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -269,6 +270,15 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 		privileges = append(slices.Clone(privileges), restorePrivilege)
 	}
 	if !s.require(w, r, u, "/", privileges...) {
+		return
+	}
+	findings, err := s.setupPreflight(r.Context(), u, &req.Settings)
+	if err != nil {
+		s.writeSetupError(w, r, err)
+		return
+	}
+	if len(findings.Errors) > 0 {
+		writeError(w, http.StatusUnprocessableEntity, strings.Join(findings.Errors, " "))
 		return
 	}
 	// The run needs the whole of a ticket's life, so it gets a new one rather than the session's.

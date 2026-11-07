@@ -166,7 +166,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err != nil {
 		return err
 	}
-	ctrl.SetLogger(logger)
+	setControllerLogger(logger)
 
 	if o.a.Dir == "" {
 		cfg, cfgErr := ctrl.GetConfig()

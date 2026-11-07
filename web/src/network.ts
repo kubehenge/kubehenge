@@ -1,6 +1,8 @@
 // Checks of IPv4 addresses and networks the forms share, so the cluster wizard and the setup page
 // refuse the same things the server does.
 
+import type { Bridge } from "./types";
+
 export const ipv4 = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/u;
 export const cidr = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\/(?:3[0-2]|[12]?\d)$/u;
 
@@ -26,6 +28,18 @@ export const maxVLAN = 4094;
 
 /** isVLAN tells whether text is a VLAN tag. */
 export const isVLAN = (v: string): boolean => whole(Number(v), 1, maxVLAN);
+
+/** bridgeRef is how the settings name a bridge: a VNet as zone/vnet, a node's bridge by its name. */
+export const bridgeRef = (b: Pick<Bridge, "bridge" | "zone">): string =>
+  b.zone === undefined || b.zone === "" ? b.bridge : `${b.zone}/${b.bridge}`;
+
+/** bridgeLabel is a bridge as listed: a node's bridge with its comment, a VNet with its alias and zone. */
+export function bridgeLabel(b: Pick<Bridge, "bridge" | "zone" | "alias" | "comment">): string {
+  const vnet = b.zone !== undefined && b.zone !== "";
+  const note = vnet ? b.alias : b.comment;
+  const named = note === undefined || note === "" ? b.bridge : `${b.bridge} (${note})`;
+  return vnet ? `${named}, zone ${b.zone}` : named;
+}
 
 /** toInt reads a dotted IPv4 address as a number. Undefined when it is none. */
 export function toInt(address: string): number | undefined {

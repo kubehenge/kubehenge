@@ -115,7 +115,8 @@ func (s *Server) bridgeNetwork(ctx context.Context, u user, node, bridge string)
 	if err != nil {
 		return netip.Prefix{}, nil, fmt.Errorf("reading the bridges of %s: %w", node, err)
 	}
-	for _, b := range bridges {
+	for i := range bridges {
+		b := &bridges[i]
 		own, ok := ownAddress(b.CIDR)
 		if b.Bridge != bridge || !ok {
 			continue

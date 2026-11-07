@@ -143,6 +143,18 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 	})
 }
 
+// Check validates settings as Apply would, against the running management cluster's too, without
+// starting a run.
+func (a *Appliance) Check(settings *Settings) error {
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	if was := a.SavedSettings(); was != nil && a.Ready() {
+		return settings.KeepsFixed(was)
+	}
+	return nil
+}
+
 // ReleasesHA tells whether an apply of next switches Proxmox VE HA off, or finishes switching it
 // off after a run that did not get through. The HA token goes with it, so what the
 // controller left in HA has to be removed with the user's session once the run is through, and

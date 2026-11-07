@@ -7,10 +7,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+// waitForInterrupt marks that it is applying, then writes its "state" once interrupted.
+func waitForInterrupt(dir string) int {
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, os.Interrupt)
+	if err := os.WriteFile(filepath.Join(dir, "..", "applying"), nil, 0o600); err != nil {
+		return 3
+	}
+	select {
+	case <-interrupted:
+		if err := os.WriteFile(filepath.Join(dir, "..", "state-flushed"), nil, 0o600); err != nil {
+			return 3
+		}
+		return 1
+	case <-time.After(30 * time.Second):
+		return 4
+	}
+}
 
 func main() {
 	if len(os.Args) < 3 || !strings.HasPrefix(os.Args[1], "-chdir=") {
@@ -46,6 +65,17 @@ func run(dir string, args []string) int {
 			fmt.Println(strings.Repeat("x", 5<<20))
 			fmt.Println(`{"@level":"error","@message":"Error: no such node","type":"diagnostic"}`)
 			return 1
+		}
+		if strings.Contains(string(vars), `"twofail"`) {
+			fmt.Println(`{"@level":"error","@message":"Error: pool","type":"diagnostic","diagnostic":{"summary":"Unable to create pool","detail":"pool kubehenge exists"}}`)
+			fmt.Println(`{"@level":"warning","@message":"Warning: x","type":"diagnostic","diagnostic":{"summary":"Careful","detail":"not an error"}}`)
+			fmt.Println(`{"@level":"error","@message":"Error: image","type":"diagnostic","diagnostic":{"summary":"Unable to download","detail":"storage ceph lacks import"}}`)
+			return 1
+		}
+		// An "interrupt" apply stands for a long one: it writes its state only when interrupted, as
+		// OpenTofu does.
+		if strings.Contains(string(vars), `"interrupt"`) {
+			return waitForInterrupt(dir)
 		}
 		if strings.Contains(string(vars), `"fail"`) {
 			fmt.Println(`{"@level":"error","@message":"Error: no such node","type":"diagnostic","diagnostic":{"summary":"Error","detail":"node fail does not exist"}}`)

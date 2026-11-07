@@ -10,7 +10,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // managementHealthTimeout keeps the Administration page from waiting on a management cluster
@@ -24,6 +27,8 @@ type managementHealthView struct {
 	Error       string                 `json:"error,omitempty"`
 	Nodes       []managementNode       `json:"nodes,omitempty"`
 	Controllers []managementController `json:"controllers,omitempty"`
+	// Proxmox tells whether the controller reaches the Proxmox VE API from inside the cluster.
+	Proxmox *proxmoxReachView `json:"proxmox,omitempty"`
 }
 
 type managementNode struct {
@@ -58,7 +63,37 @@ func (s *Server) managementHealth(w http.ResponseWriter, r *http.Request, u user
 		s.Log.Warn("reading the management cluster's health", "error", err)
 		v = managementHealthView{Error: err.Error()}
 	}
+	if v.Answers {
+		v.Proxmox = s.proxmoxReach(ctx, kube)
+	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// proxmoxReachView is whether the controller reaches the Proxmox VE API from inside the management
+// cluster, as of its last ask.
+type proxmoxReachView struct {
+	OK      bool      `json:"ok"`
+	Error   string    `json:"error,omitempty"`
+	Checked time.Time `json:"checked"`
+}
+
+// proxmoxReach reads the controller's record of its last ask. It is nil where there is none yet, as
+// right after an apply, or where it cannot be read.
+func (s *Server) proxmoxReach(ctx context.Context, kube client.Client) *proxmoxReachView {
+	cm := &corev1.ConfigMap{}
+	err := kube.Get(ctx, client.ObjectKey{Namespace: s.ClassNamespace, Name: provisioner.ProxmoxReachName}, cm)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			s.Log.WarnContext(ctx, "reading whether the controller reaches Proxmox VE", "error", err)
+		}
+		return nil
+	}
+	r, err := provisioner.ParseReachability(cm)
+	if err != nil {
+		s.Log.WarnContext(ctx, "reading whether the controller reaches Proxmox VE", "error", err)
+		return nil
+	}
+	return &proxmoxReachView{OK: r.OK, Error: r.Error, Checked: r.Checked}
 }
 
 func readManagementHealth(ctx context.Context, kube client.Client) (managementHealthView, error) {
