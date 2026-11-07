@@ -270,18 +270,42 @@ func lineReach(s *Sites, line []string) ([]string, []TemplateSite, bool) {
 // cpuNeed is the x86-64 level the cluster's nodes need of its hosts: the one its templates' own cpu
 // setting presents when they set one, else fallback, the node OS's.
 func cpuNeed(s *Sites, c *clusterv1.Cluster, fallback int) int {
-	need, set := 0, false
+	if need, _, set := templateCPU(s, c); set {
+		return need
+	}
+	return fallback
+}
+
+// templateCPU is the highest x86-64 level the cpu settings of the cluster's newest templates
+// present, with the setting that presents it. set is false where none of them sets one.
+func templateCPU(s *Sites, c *clusterv1.Cluster) (need int, cpu string, set bool) {
 	for _, line := range templateLines(c) {
 		for _, t := range newest(s, line) {
-			if level, ok := templates.SettingLevel(t.CPU); ok {
-				need, set = max(need, level), true
+			if level, ok := templates.SettingLevel(t.CPU); ok && (!set || level > need) {
+				need, cpu, set = level, templates.SettingModel(t.CPU), true
 			}
 		}
 	}
+	return need, cpu, set
+}
+
+// needsOnSites are the cluster's needs with the cpu setting of its newest templates where they set
+// one: their clones keep it, so it rules over the tags and the node OS. The CPU type is named only
+// where it asks more than the node OS or Talos does.
+func needsOnSites(s *Sites, c *clusterv1.Cluster, needs templateNeeds) (templateNeeds, error) {
+	level, cpu, set := templateCPU(s, c)
 	if !set {
-		return fallback
+		return needs, nil
 	}
-	return need
+	own, err := clusterCPULevel(c)
+	if err != nil {
+		return needs, err
+	}
+	needs.Level, needs.CPUType = level, ""
+	if level > own {
+		needs.CPUType = cpu
+	}
+	return needs, nil
 }
 
 func storageRefusal(s *Sites, c *clusterv1.Cluster, names []string) error {

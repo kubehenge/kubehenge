@@ -268,6 +268,18 @@ On a worker of a single core, the least kubeadm, k3s and Talos allow, Kyverno an
 
 Kubehenge refuses a cluster short of that room when it is created and when an add-on is switched on or its nodes change. The interface raises the machines to it as add-ons are chosen and shows the add-ons' totals on the Add-ons step.
 
+#### etcd storage
+
+etcd syncs its write-ahead log to disk before it acknowledges a write. Every change to the cluster waits for the disk under the control planes. etcd's documentation asks for a 99th percentile of that sync under 10 ms. Above it, heartbeats and API requests time out.
+
+- Put the control planes on local SSD or NVMe storage. It syncs in well under 5 ms.
+- Ceph and NFS are often slower, since each write crosses the network first. Ceph waits for its replicas, and NFS for the server's own sync.
+- Both share disks and network with every other VM, so their latency swings with the load. Ceph on SSD or NVMe can keep up. Spinning disks cannot.
+
+Every 5 minutes Kubehenge reads each etcd member's sync times. On Talos it reads them from port 2379 of each control-plane node, with a certificate of the cluster's etcd CA. The management cluster's controller must reach that port. When a member's 99th percentile is above 25 ms, the cluster's Health shows **etcd disk slow**. `kubectl describe cluster` shows the `EtcdDiskSlow` condition.
+
+The figure covers the member's whole life, so it clears slowly once the disk is fast again. A member with under 100 syncs is not judged.
+
 ### Add-ons
 
 Each add-on the class offers is a card with the memory its pods take by the class's figures. It opens on its settings once chosen. Under the cards is the least memory and cores each node that carries them needs.

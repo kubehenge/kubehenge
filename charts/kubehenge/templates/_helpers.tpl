@@ -51,7 +51,7 @@ template:
     full: true
     templateSelector:
       matchTags: {{ toJson .tags }}
-      matchPolicy: exact
+      matchPolicy: uniqueSubset
     {{- if .serviceJoins }}
     checks:
       skipCloudInitStatus: true

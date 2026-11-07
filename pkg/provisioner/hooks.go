@@ -273,6 +273,7 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 	reads := h.reads()
 	for _, check := range []func() error{
 		func() error { return h.checkNodeOS(ctx, reads, cluster) },
+		func() error { return h.checkNUMA(ctx, reads, cluster, class) },
 		func() error { return h.checkTemplateNode(cluster, class) },
 		func() error { return h.checkPlacement(ctx, reads, cluster) },
 		func() error { return checkStorageListed(cluster, class) },

@@ -11,6 +11,7 @@ import (
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -33,6 +34,76 @@ type Node struct {
 // Nodes tells which Proxmox VE nodes are online; *Proxmox is the real one.
 type Nodes interface {
 	OnlineNodes(ctx context.Context) ([]Node, error)
+	// TemplateTags are the tags of each Kubehenge template, the tags that record its hardware
+	// included.
+	TemplateTags(ctx context.Context) ([][]string, error)
+}
+
+// TemplateTags lists the tags of the Kubehenge templates the controller's token sees in the
+// cluster's resources.
+func (p *Proxmox) TemplateTags(ctx context.Context) ([][]string, error) {
+	cluster, err := p.Client.Cluster(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the Proxmox VE cluster: %w", err)
+	}
+	resources, err := cluster.Resources(ctx, "vm")
+	if err != nil {
+		return nil, fmt.Errorf("listing the cluster's VMs: %w", err)
+	}
+	var out [][]string
+	for _, r := range resources {
+		if r.Type != qemuType || r.Template != 1 {
+			continue
+		}
+		if tags := templates.ParseAllTags(r.Tags); slices.Contains(tags, "kubehenge") {
+			out = append(out, tags)
+		}
+	}
+	return out, nil
+}
+
+// templateNeeds is what a cluster's templates ask of the Proxmox VE nodes and of its machines.
+type templateNeeds struct {
+	// Level is the x86-64 microarchitecture level the nodes must reach.
+	Level int
+	// CPUType names the CPU type behind Level when a template's own raised it above the node OS's.
+	CPUType string
+	// NUMA is set when a template gives its clones a NUMA topology.
+	NUMA bool
+}
+
+// clusterNeeds are what the cluster's node OS or Talos needs, raised by the hardware of the
+// templates its machines can be cloned from: those carrying its distribution's tag and, for a
+// node OS, the node OS's, FIPS mode's only where the node OS runs in it.
+func clusterNeeds(c *clusterv1.Cluster, templateTags [][]string) (templateNeeds, error) {
+	level, err := clusterCPULevel(c)
+	if err != nil {
+		return templateNeeds{}, err
+	}
+	needs := templateNeeds{Level: level}
+	line := []string{string(distributionOf(c))}
+	fips := false
+	if !isTalos(c) {
+		o, err := ClusterNodeOS(c)
+		if err != nil {
+			return templateNeeds{}, err
+		}
+		line = append(line, o.Tags()...)
+		fips = o.FIPS
+	}
+	for _, tags := range templateTags {
+		if fips == slices.Contains(tags, templates.FIPSTag) && !slices.ContainsFunc(line, func(t string) bool { return !slices.Contains(tags, t) }) {
+			hw, recorded := templates.HardwareOf(tags)
+			if !recorded {
+				continue
+			}
+			if l := templates.CPUTypeLevel(hw.CPUType); l > needs.Level {
+				needs.Level, needs.CPUType = l, hw.CPUType
+			}
+			needs.NUMA = needs.NUMA || hw.NUMA
+		}
+	}
+	return needs, nil
 }
 
 // OnlineNodes lists the nodes Proxmox VE reports online, sorted by name. A node's CPU is read once
@@ -207,38 +278,48 @@ func checkFIPS(c *clusterv1.Cluster) error {
 // to judge by, and the cluster waits for its nodes as any other does. A Talos cluster has no node
 // OS: Talos is its own.
 func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.Cluster) error {
-	if isTalos(c) {
-		return nil
-	}
-	o, err := ClusterNodeOS(c)
-	if err != nil {
-		return err
-	}
-	if _, _, err = templates.Available(o); err != nil {
-		return err //nolint:wrapcheck // says all a person needs
-	}
-	if o.FIPS {
-		if err = checkFIPS(c); err != nil {
+	var o templates.NodeOS
+	if !isTalos(c) {
+		var err error
+		if o, err = ClusterNodeOS(c); err != nil {
 			return err
+		}
+		if _, _, err = templates.Available(o); err != nil {
+			return err //nolint:wrapcheck // says all a person needs
+		}
+		if o.FIPS {
+			if err = checkFIPS(c); err != nil {
+				return err
+			}
 		}
 	}
 	if h.Nodes == nil {
 		return nil
 	}
+	needs, err := reads.templateNeeds(ctx, c)
+	if err != nil {
+		return err
+	}
 	online, sites, err := reads.allowedOnline(ctx, c)
 	if err != nil {
 		return err
 	}
-	need := templates.CPULevel(o)
 	if sites != nil {
-		need = cpuNeed(sites, c, need)
+		if needs, err = needsOnSites(sites, c, needs); err != nil {
+			return err
+		}
 	}
-	if need <= 1 || len(online) == 0 || len(nodesFor(online, need)) > 0 {
+	// Talos's own level is no reason to refuse: only a template's CPU type above it is.
+	if needs.Level <= 1 || (isTalos(c) && needs.CPUType == "") || len(online) == 0 || len(nodesFor(online, needs.Level)) > 0 {
 		return nil
 	}
 	names := make([]string, len(online))
 	for i, n := range online {
 		names[i] = n.Name
+	}
+	if needs.CPUType != "" {
+		return fmt.Errorf("the templates of %s use CPU type %s, which no allowed node (%s) offers. Build them with another CPU type",
+			strings.Join(distributionTags(c, o), " on "), needs.CPUType, strings.Join(names, ", "))
 	}
 	f, r, _ := templates.ReleaseOf(o)
 	return fmt.Errorf("%s %s needs CPU type %s, which no allowed node (%s) offers. Choose another node OS",
@@ -249,9 +330,27 @@ func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.C
 // per call, its failure included, so every check that needs it shares one look and one time budget.
 // A check that needs another read of Proxmox VE adds a memoised method here.
 type pveReads struct {
-	h      *Hooks
-	online memo[[]Node]
-	sites  memo[*Sites]
+	h            *Hooks
+	online       memo[[]Node]
+	sites        memo[*Sites]
+	templateTags memo[[][]string]
+}
+
+// templateNeeds are clusterNeeds with the templates Proxmox VE lists now. Where it cannot list them
+// the node OS's own need stands, and the failure is logged: a cluster is never held up for a
+// listing.
+func (r *pveReads) templateNeeds(ctx context.Context, c *clusterv1.Cluster) (templateNeeds, error) {
+	tags, _ := r.templateTags.get(func() ([][]string, error) {
+		if r.h.Nodes == nil {
+			return nil, nil
+		}
+		tags, err := r.h.Nodes.TemplateTags(ctx)
+		if err != nil {
+			ctrl.LoggerFrom(ctx).Error(err, "reading the templates' hardware", "cluster", client.ObjectKeyFromObject(c))
+		}
+		return tags, nil
+	})
+	return clusterNeeds(c, tags)
 }
 
 // memo is one read, made on first use.
@@ -345,4 +444,43 @@ func (h *Hooks) checkPlacement(ctx context.Context, r *pveReads, c *clusterv1.Cl
 		return err
 	}
 	return sites.Refusal(c, online)
+}
+
+// distributionTags names a cluster's template line for a person: its distribution, then its node OS
+// where it has one.
+func distributionTags(c *clusterv1.Cluster, o templates.NodeOS) []string {
+	if isTalos(c) {
+		return []string{"Talos"}
+	}
+	f, r, _ := templates.ReleaseOf(o)
+	return []string{strings.ToUpper(string(distributionOf(c))), f.Title() + " " + r.Name}
+}
+
+// checkNUMA refuses a cluster whose templates give the guest a NUMA topology but whose machines
+// have fewer cores than that is worth, on the control plane or in any machine deployment.
+func (h *Hooks) checkNUMA(ctx context.Context, reads *pveReads, c *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
+	if h.Nodes == nil || class == nil {
+		return nil
+	}
+	needs, err := reads.templateNeeds(ctx, c)
+	if err != nil || !needs.NUMA {
+		return err
+	}
+	topology := c.Spec.Topology
+	if cores, _, err := nodeSize(c, class, "controlPlaneMachine", topology.ControlPlane.Variables.Overrides); err != nil {
+		return err
+	} else if cores < templates.NUMAMinCores {
+		return fmt.Errorf("the templates use NUMA, which needs at least %d cores per machine, and the control plane has %d", templates.NUMAMinCores, cores)
+	}
+	for i := range topology.Workers.MachineDeployments {
+		md := &topology.Workers.MachineDeployments[i]
+		cores, _, err := nodeSize(c, class, "workerMachine", md.Variables.Overrides)
+		if err != nil {
+			return err
+		}
+		if cores < templates.NUMAMinCores {
+			return fmt.Errorf("the templates use NUMA, which needs at least %d cores per machine, and worker pool %s has %d", templates.NUMAMinCores, md.Name, cores)
+		}
+	}
+	return nil
 }

@@ -163,8 +163,8 @@ func TestCPULevels(t *testing.T) {
 		}
 	}
 	for cpu, want := range map[string]int{"x86-64-v2-AES": 2, "x86-64-v3": 3, "x86-64-v4": 4, "host": 1, "kvm64": 1, "x86-64-v30": 1} {
-		if got := cpuTypeLevel(cpu); got != want {
-			t.Errorf("cpuTypeLevel(%s) = %d, want %d", cpu, got, want)
+		if got := x86LevelOf(cpu); got != want {
+			t.Errorf("x86LevelOf(%s) = %d, want %d", cpu, got, want)
 		}
 	}
 	if CPULevel(DefaultNodeOS) != 2 || CPULevel(rocky10) != 3 || CPULevel(NodeOS{Family: "plan9"}) != 1 {

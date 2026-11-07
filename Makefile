@@ -15,7 +15,7 @@ KO_FLAGS ?=
 # Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
 
-.PHONY: build web changelog gateway-api capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
+.PHONY: build web changelog gateway-api capmox-crds capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
 .PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -44,6 +44,21 @@ $(GATEWAY_API):
 	mv $@.part $@
 
 gateway-api: $(GATEWAY_API)
+
+# The Proxmox VE provider's CustomResourceDefinitions, which the chart's test validates the rendered
+# ProxmoxMachineTemplate against. The release and SHA-256 are the integration tier's pin, so
+# Renovate moves one place.
+CAPMOX_TAG := $(shell sed -n 's/^CAPMOX=//p' test/integration/assets.sh)
+CAPMOX_SHA256 := $(shell sed -n 's/^CAPMOX_SHA256=//p' test/integration/assets.sh)
+CAPMOX_CRDS := test/crds/capmox-$(CAPMOX_TAG).yaml
+$(CAPMOX_CRDS):
+	curl -fsSL --proto '=https' --retry 8 --retry-all-errors -o $@.part \
+		https://github.com/ionos-cloud/cluster-api-provider-proxmox/releases/download/$(CAPMOX_TAG)/infrastructure-components.yaml
+	echo '$(CAPMOX_SHA256)  $@.part' | sha256sum -c --quiet - || { rm -f $@.part; exit 1; }
+	rm -f test/crds/capmox-*.yaml
+	mv $@.part $@
+
+capmox-crds: $(CAPMOX_CRDS)
 
 # The Cluster API operator's chart, which the management-cluster module installs from beside it and
 # so the appliance's archive carries: the archive of the release management-cluster/versions.tf
@@ -313,7 +328,7 @@ unit: unit-go unit-web unit-tofu unit-shell
 
 # KUBEHENGE_REQUIRE_ALLOY turns a missing alloy (scripts/tools.sh) from a skip into a failure, so the
 # generated Alloy configurations are always validated here.
-unit-go: web gateway-api
+unit-go: web gateway-api capmox-crds
 	KUBEHENGE_REQUIRE_ALLOY=1 go test -race ./...
 
 unit-web: web/node_modules/.package-lock.json

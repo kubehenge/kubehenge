@@ -76,6 +76,9 @@ const (
 	// etcdWatchInterval is how often every control plane's etcd members are looked at. A host
 	// reboot waits on a record at most provisioner.EtcdHealthStale old.
 	etcdWatchInterval = 30 * time.Second
+	// etcdLatencyInterval is how often each control plane's etcd members are asked how long their
+	// write-ahead log syncs take. The figure covers the member's whole life, so it moves slowly.
+	etcdLatencyInterval = 5 * time.Minute
 	// templateRequestsInterval is how soon a build asked for in the interface starts.
 	templateRequestsInterval = 15 * time.Second
 	// talosUpgradeInterval is how soon a Talos node's upgrade starts after the one before, or after
@@ -919,6 +922,14 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 	}
 	if err := mgr.Add(etcd); err != nil {
 		return fmt.Errorf("the etcd watch: %w", err)
+	}
+	etcdLatency := &provisioner.EtcdLatencyWatch{
+		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, Events: mgr.GetEventRecorder("kubehenge"),
+		Etcd:     &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos},
+		Interval: etcdLatencyInterval,
+	}
+	if err := mgr.Add(etcdLatency); err != nil {
+		return fmt.Errorf("the etcd latency watch: %w", err)
 	}
 	return nil
 }

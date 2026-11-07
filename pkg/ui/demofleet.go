@@ -123,6 +123,8 @@ type demoCluster struct {
 	Crashing string `json:"crashing"`
 	// LackingMemory is the message of a NodesLackMemory condition: no node has room for the cluster.
 	LackingMemory string `json:"lackingMemory"`
+	// EtcdFsyncMs, when set, is the 99th percentile of its etcd members' write-ahead log syncs.
+	EtcdFsyncMs int `json:"etcdFsyncMs"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
 	// AddonChanges wait for the cluster's upgrade window.
@@ -659,6 +661,18 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		})
 		c.Status.ControlPlane.ReadyReplicas, c.Status.ControlPlane.AvailableReplicas = &lost, new(int32)
 	}
+	if d.EtcdFsyncMs > 0 {
+		members := make([]provisioner.MemberFsync, 0, d.ControlPlanes)
+		for i := range d.ControlPlanes {
+			members = append(members, provisioner.MemberFsync{
+				Member: fmt.Sprintf("etcd-%s-control-plane-%d", d.Name, i+1), P99: time.Duration(d.EtcdFsyncMs) * time.Millisecond, Syncs: demoFsyncs,
+			})
+		}
+		if cond := provisioner.EtcdLatencyConditionOf(members); cond != nil {
+			cond.Type, cond.LastTransitionTime = provisioner.EtcdLatencyCondition, since
+			c.Status.Conditions = append(c.Status.Conditions, *cond)
+		}
+	}
 	return c
 }
 
@@ -675,6 +689,9 @@ func (f *demoFleet) waitForWindow(c *clusterv1.Cluster, changes []provisioner.Ad
 		Message: "Add-on changes wait for the upgrade window, which opens " + opens.Format(time.RFC3339), LastTransitionTime: metav1.NewTime(f.now.Add(-2 * time.Hour)),
 	})
 }
+
+// demoFsyncs is how many write-ahead log syncs the demo's slow etcd members report.
+const demoFsyncs = 48000
 
 // demoCondition is a condition that holds, as an unstructured object carries it.
 func demoCondition(kind, reason string, at time.Time) map[string]any {

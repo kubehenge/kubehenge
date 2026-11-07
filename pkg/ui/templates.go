@@ -44,6 +44,18 @@ type templateView struct {
 	// NodeOS is the operating system its machines run, such as AlmaLinux 10. A Talos template has
 	// none.
 	NodeOS string `json:"nodeOS,omitempty"`
+	// Hardware is what its clones carry over from it. A template made before Kubehenge recorded
+	// it has none.
+	Hardware *hardwareView `json:"hardware,omitempty"`
+}
+
+// hardwareView is a template's recorded hardware, which the build dialog sets.
+type hardwareView struct {
+	CPUType  string `json:"cpuType"`
+	SSD      bool   `json:"ssd"`
+	Discard  bool   `json:"discard"`
+	IOThread bool   `json:"ioThread"`
+	NUMA     bool   `json:"numa"`
 }
 
 // downTemplateView is a template of the pool on a node that is down, which Proxmox VE cannot read
@@ -135,6 +147,9 @@ func (s *Server) templates(ctx context.Context, t *pve.Ticket) ([]templateView, 
 		v := templateView{VMID: m.VMID, Node: m.Node, Name: m.Name, Tags: templates.ParseTags(m.Tags), Line: m.Name}
 		if o, ok := templates.NodeOSOf(v.Tags); ok {
 			v.NodeOS = nodeOSTitle(o)
+		}
+		if hw, ok := templates.HardwareOf(templates.ParseAllTags(m.Tags)); ok {
+			v.Hardware = &hardwareView{CPUType: hw.CPUType, SSD: hw.SSD, Discard: hw.Discard, IOThread: hw.IOThread, NUMA: hw.NUMA}
 		}
 		if at, built := templates.BuildOf(v.Tags); built {
 			v.Build, v.Built = templates.BuildTag(at), &at
@@ -263,6 +278,13 @@ type templateRequest struct {
 	BuildAddress  string   `json:"buildAddress,omitempty"`
 	BuildGateway  string   `json:"buildGateway,omitempty"`
 	BuildDNS      []string `json:"buildDNS,omitempty"`
+	// CPUType and the options that follow are the hardware the clones keep. Unset, they are the
+	// newest build's, else the default.
+	CPUType  string `json:"cpuType,omitempty"`
+	SSD      *bool  `json:"ssd,omitempty"`
+	Discard  *bool  `json:"discard,omitempty"`
+	IOThread *bool  `json:"ioThread,omitempty"`
+	NUMA     *bool  `json:"numa,omitempty"`
 }
 
 var proxmoxName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -310,6 +332,9 @@ func (req *templateRequest) builder() (templates.Builder, templates.Template, er
 	if problem != "" {
 		problems = append(problems, problem)
 	}
+	if err := templates.ValidateCPUType(req.CPUType); err != nil {
+		problems = append(problems, "CPU type: "+err.Error())
+	}
 	if len(problems) > 0 {
 		slices.Sort(problems)
 		return templates.Builder{}, templates.Template{}, errors.New(strings.Join(problems, ". "))
@@ -321,6 +346,7 @@ func (req *templateRequest) builder() (templates.Builder, templates.Template, er
 	b := templates.Builder{
 		Node: req.Node, Storage: req.Storage, ImportStorage: req.ImportStorage, ISOStorage: req.ISOStorage,
 		Pool: templatePool, Bridge: req.Bridge, VLAN: req.VLAN, Network: network,
+		Hardware: templates.HardwareChoice{CPUType: req.CPUType, SSD: req.SSD, Discard: req.Discard, IOThread: req.IOThread, NUMA: req.NUMA},
 	}
 	return b, t, nil
 }

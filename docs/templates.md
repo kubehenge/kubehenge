@@ -121,11 +121,38 @@ A build records its kernel and a hash of its packages in the template's descript
 
 Such a build is kept out of the builds clusters move to, and the Administration page marks it "Older than the previous build". The controller asks for another build an hour later, up to 3 times. After the third, the build stays out until a newer one arrives. A build from before this check is never older.
 
-### CPU type of clones
+### Hardware of clones
 
-Clones keep the template's CPU type. A new build takes that of the newest build of its line. A line's first build takes the least its node OS runs on, unless `--cpu-type` names another.
+Clones keep the template's CPU type and the options of its disk. A new build takes those of the newest build of its line, so the weekly build changes nothing. A line's first build takes the defaults unless the command says otherwise.
 
-That type lets a VM migrate between nodes of different CPUs. It hides the CPU's own model, so the node's kernel runs the Meltdown and MDS mitigations, which cost most on Intel hosts. `--cpu-type host` shows the clones the node's own CPU, at the cost of migrating only between nodes with the same one.
+| Option | Flag | Default |
+| --- | --- | --- |
+| CPU type | `--cpu-type` | the least its node OS runs on, `x86-64-v2-AES` for most |
+| SSD emulation | `--ssd` | on |
+| Discard | `--discard` | on |
+| IO thread | `--iothread` | off |
+| NUMA | `--numa` | off |
+
+The options are booleans: `--iothread` switches one on, `--ssd=false` switches one off. The Build template dialog has them under **Hardware**, each as **Keep newest build's**, **On** or **Off**.
+
+- **CPU type** is `host`, a Proxmox VE model such as `Haswell`, or `custom-` and a lower case name. Any other is refused.
+- **Discard** passes the guest's trims on to the storage, which gives back thin-provisioned space. It needs a storage that supports it.
+- **IO thread** serves the disk from a thread of its own. It sets the disk controller to `virtio-scsi-single`, the one with a thread per disk.
+- **NUMA** gives the guest a NUMA topology. Its machines then need at least 2 cores each. Kubehenge refuses a cluster with fewer, whether it is created in the interface, with kubectl or with the CLI.
+
+The default CPU type lets a VM migrate between nodes of different CPUs. It hides the CPU's own model, so the node's kernel runs the Meltdown and MDS mitigations, which cost most on Intel hosts. `--cpu-type host` shows the clones the node's own CPU. Then they migrate only between nodes with the same one.
+
+#### Where it is recorded
+
+Each template records its hardware in tags that start with `hw-`, such as `hw-cpu-x86-64-v2-aes` and `hw-ssd`. They are no part of its line. A cluster selects its template by the other tags, so the hardware never changes which one it gets.
+
+The Templates view and `kubehenge template list` show the hardware. A template without these tags was made before Kubehenge recorded it.
+
+A cluster is placed only on the Proxmox VE nodes whose CPU reaches the level of its templates' CPU type. It is refused when no allowed node does. A model such as `Haswell` counts as the level its CPU needs. `host` and custom models count as none.
+
+### Not available yet
+
+GPUs, PCI passthrough, extra disks and huge pages cannot be set. Cluster API's Proxmox VE provider has no fields for them, so a VM edited by hand in Proxmox VE loses the change when its node is replaced.
 
 ## The weekly build
 

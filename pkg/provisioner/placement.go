@@ -102,6 +102,11 @@ func (p *Placer) placeAll(ctx context.Context) {
 	if u, ok := p.Nodes.(skippingNodes); ok {
 		skipped = u.Unreadable()
 	}
+	// Without the templates' hardware a cluster is placed by its node OS alone.
+	templateTags, err := p.Nodes.TemplateTags(ctx)
+	if err != nil {
+		log.Error(err, "reading the templates' hardware")
+	}
 	clusters := &clusterv1.ClusterList{}
 	if err := p.Client.List(ctx, clusters, client.UnsafeDisableDeepCopy); err != nil {
 		log.Error(err, "listing clusters")
@@ -113,11 +118,12 @@ func (p *Placer) placeAll(ctx context.Context) {
 			continue
 		}
 		p.markSkipped(ctx, c, skipped)
-		level, err := clusterCPULevel(c)
+		needs, err := clusterNeeds(c, templateTags)
 		if err != nil {
 			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
 			continue
 		}
+		level := needs.Level
 		chosen, storage, err := placementVariables(c)
 		if err != nil {
 			log.Error(err, "reading the cluster's nodes and storage", "cluster", client.ObjectKeyFromObject(c))
@@ -307,10 +313,11 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster, cho
 	if h.Nodes == nil {
 		return nil, "", nil
 	}
-	level, err := clusterCPULevel(cluster)
+	needs, err := h.reads().templateNeeds(ctx, cluster)
 	if err != nil {
 		return nil, "", err
 	}
+	level := needs.Level
 	online, err := h.Nodes.OnlineNodes(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("reading the Proxmox VE nodes: %w", err)

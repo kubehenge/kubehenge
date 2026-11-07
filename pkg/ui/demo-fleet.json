@@ -94,7 +94,8 @@
         "apiServerArgs": [{ "name": "request-timeout", "value": "30s" }],
         "auditPolicy": { "configMap": "payments-audit-policy" },
         "auditWebhook": { "secret": "payments-siem", "key": "kubeconfig" }
-      }
+      },
+      "etcdFsyncMs": 41
     },
     {
       "name": "edge",

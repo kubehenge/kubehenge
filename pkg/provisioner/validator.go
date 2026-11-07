@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -87,6 +88,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	reads := v.Hooks.reads()
 	errs = append(errs, v.validateNodeNIC(pveCtx, old, c)...)
 	errs = append(errs, v.validateNodeOS(pveCtx, reads, old, c)...)
+	errs = append(errs, v.validateNUMA(pveCtx, reads, old, c, class)...)
 	errs = append(errs, v.validatePlacement(pveCtx, reads, old, c, class)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
@@ -206,6 +208,26 @@ func (v *ClusterValidator) validatePlacement(ctx context.Context, reads *pveRead
 		errs = append(errs, field.Forbidden(variables.Key(allowedNodesVariable), err.Error()))
 	}
 	return errs
+}
+
+// validateNUMA checks the machines' cores against the templates' NUMA when a cluster is created and
+// when what sizes its machines or picks their templates changes.
+func (v *ClusterValidator) validateNUMA(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	if old != nil && !machinesChanged(old, c) {
+		return nil
+	}
+	if err := v.Hooks.checkNUMA(ctx, reads, c, class); err != nil {
+		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology"), err.Error())}
+	}
+	return nil
+}
+
+// machinesChanged tells whether the update changes what sizes the machines or which templates they
+// are cloned from.
+func machinesChanged(old, c *clusterv1.Cluster) bool {
+	return variableChanged(old, c, "controlPlaneMachine") || variableChanged(old, c, "workerMachine") ||
+		variableChanged(old, c, NodeOSVariable) || !reflect.DeepEqual(old.Spec.Topology.ControlPlane.Variables, c.Spec.Topology.ControlPlane.Variables) ||
+		!reflect.DeepEqual(old.Spec.Topology.Workers, c.Spec.Topology.Workers)
 }
 
 // validateGrants holds the privileges a cluster asks for beyond its pool to what the management
