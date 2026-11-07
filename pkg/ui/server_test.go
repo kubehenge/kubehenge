@@ -75,6 +75,11 @@ type fakeAccounts struct {
 	// viaPool are privileges a user holds on a path only through a pool's members, which Proxmox VE
 	// lists for the path but which reach nothing below it.
 	viaPool map[string]map[string][]string
+	// nextID is the datacenter's next-id option and vmids the IDs in use. nextIDForbidden has the
+	// option refuse a user without Sys.Audit on /.
+	nextID          pve.NextID
+	vmids           []int
+	nextIDForbidden bool
 }
 
 func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
@@ -218,6 +223,21 @@ func (f *fakeAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, err
 
 func (*fakeAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]string, error) {
 	return map[string]string{"pve1": "10.0.0.5"}, nil
+}
+
+func (f *fakeAccounts) NextID(context.Context, *pve.Ticket) (pve.NextID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nextIDForbidden {
+		return pve.NextID{}, pve.ErrForbidden
+	}
+	return f.nextID, nil
+}
+
+func (f *fakeAccounts) VMIDs(context.Context, *pve.Ticket) ([]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.vmids, nil
 }
 
 // NodeAffinityRules answers those with Sys.Audit on / with a rule keeping to pve2, one keeping off

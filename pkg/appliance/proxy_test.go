@@ -253,7 +253,7 @@ func TestOpenTofuGetsTheSettingsProxy(t *testing.T) {
 	ca := certificatePEM(t)
 	s.Proxy = passwordProxy()
 	s.Proxy.CABundle = ca
-	if err := a.writeConfig(s); err != nil {
+	if err := a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
 		t.Fatal(err)
 	}
 	env, err := a.env("a passphrase of 16+ chars", nil)

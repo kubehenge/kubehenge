@@ -226,6 +226,26 @@ variable "node_disk_gb" {
   default     = 32
 }
 
+variable "vm_id_range" {
+  description = "The range the control-plane VMs' IDs are drawn from at random: start is the lowest ID and end is one past the highest, as the provider draws them. Set it inside the datacenter's next-id range (Datacenter, Options) when administrators reserve ID bands. The VMs keep the IDs they have when it changes."
+  type = object({
+    start = number
+    end   = number
+  })
+  default = {
+    start = 10000
+    end   = 99999
+  }
+
+  validation {
+    condition = (
+      floor(var.vm_id_range.start) == var.vm_id_range.start && floor(var.vm_id_range.end) == var.vm_id_range.end &&
+      var.vm_id_range.start >= 100 && var.vm_id_range.start < var.vm_id_range.end && var.vm_id_range.end <= 1000000000
+    )
+    error_message = "vm_id_range must be whole numbers with start below end, start at least 100 and end at most 1000000000, since Proxmox VE's VM IDs run from 100 to 999999999."
+  }
+}
+
 variable "cpu_type" {
   description = "QEMU CPU type of the nodes. Talos needs at least x86-64-v2."
   type        = string

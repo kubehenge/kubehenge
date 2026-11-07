@@ -1008,7 +1008,7 @@ func TestTimeServersReachTheModule(t *testing.T) {
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.writeConfig(s); err != nil {
+	if err := a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json"))
@@ -1020,7 +1020,7 @@ func TestTimeServersReachTheModule(t *testing.T) {
 		t.Fatalf("root module: %s, %v", main, err)
 	}
 	s.TimeServers = nil
-	if err = a.writeConfig(s); err != nil {
+	if err = a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ = os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); !strings.Contains(string(raw), `"timeServers": []`) {
@@ -1046,14 +1046,14 @@ func TestMTUReachesTheModule(t *testing.T) {
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.writeConfig(s); err != nil {
+	if err := a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
 		t.Fatal(err)
 	}
 	if raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); err != nil || !strings.Contains(string(raw), `"mtu": null`) {
 		t.Errorf("an unset MTU must reach the module as null: %s, %v", raw, err)
 	}
 	s.MTU = 1450
-	if err := a.writeConfig(s); err != nil {
+	if err := a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
 		t.Fatal(err)
 	}
 	if raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); err != nil || !strings.Contains(string(raw), `"mtu": 1450`) {

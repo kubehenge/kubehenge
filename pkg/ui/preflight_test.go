@@ -114,6 +114,44 @@ func TestSetupWarningsDoNotStopTheRun(t *testing.T) {
 	}
 }
 
+func TestSetupCheckRefusesAFullNextIDBand(t *testing.T) {
+	t.Parallel()
+	h, b := preflightHarness(t)
+	h.accounts.nextID = pve.NextID{Lower: 500, Upper: 502}
+	h.accounts.vmids = []int{500, 501}
+	f := checkFindings(t, b)
+	mentions(t, f.Errors, "VM IDs 500 to 501", "0 IDs free", "Widen next-id under Datacenter, Options")
+	rec := b.do("POST", "/api/setup", preflightApply)
+	expect(t, rec, http.StatusUnprocessableEntity)
+	if h.server.Appliance.Current() != nil {
+		t.Error("a run started although the VM ID band is full")
+	}
+}
+
+func TestSetupCheckFallsBackWhenNextIDIsForbidden(t *testing.T) {
+	t.Parallel()
+	h, b := preflightHarness(t)
+	h.accounts.nextIDForbidden = true
+	h.accounts.vmids = []int{10000}
+	if f := checkFindings(t, b); len(f.Errors) != 0 {
+		t.Errorf("findings = %+v, want the default range to pass", f)
+	}
+}
+
+func mentions(t *testing.T, messages []string, parts ...string) {
+	t.Helper()
+	for _, m := range messages {
+		ok := true
+		for _, p := range parts {
+			ok = ok && strings.Contains(m, p)
+		}
+		if ok {
+			return
+		}
+	}
+	t.Errorf("no message holds all of %q in %q", parts, messages)
+}
+
 func TestSetupCheckReportsSettingsThatAreWrong(t *testing.T) {
 	t.Parallel()
 	_, b := preflightHarness(t)

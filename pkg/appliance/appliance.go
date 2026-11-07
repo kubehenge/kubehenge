@@ -62,6 +62,9 @@ type Appliance struct {
 	// ManagementClient reaches the management cluster with its admin kubeconfig, for the lease each
 	// apply claims. Nil makes a client of the kubeconfig.
 	ManagementClient func(admin []byte) (kubernetes.Interface, error)
+	// NextID reads the datacenter's next-id option as the ticket's user, for the range the
+	// management VMs' IDs are drawn from. Nil keeps the default range.
+	NextID func(ctx context.Context, t *pve.Ticket) (pve.NextID, error)
 	// Talos reaches the management cluster's nodes for its etcd backups. OpenStore opens their
 	// target, provisioner.OpenTarget when nil.
 	Talos     TalosAccess
@@ -138,7 +141,7 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 		return err
 	}
 	return a.start(ticket, "apply", func(ctx context.Context, j *Job) error {
-		kubeconfig, err := a.run(ctx, j, &s, passphrase, ticketAuth(ticket))
+		kubeconfig, err := a.run(ctx, j, &s, passphrase, ticket)
 		if err != nil {
 			return err
 		}

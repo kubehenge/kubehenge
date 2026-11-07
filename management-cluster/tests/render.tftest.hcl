@@ -54,6 +54,20 @@ variables {
   controller_image = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 }
 
+# A mocked provider keeps no computed value (vm_id) between runs, so these tests cannot show that a
+# changed range leaves a VM alone. That holds because the range is provider configuration and
+# vm_id is computed and unset in the module.
+run "vm_id_range_is_accepted" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 1500
+      end   = 2000
+    }
+  }
+}
+
 run "nodes" {
   command = apply
 
@@ -124,6 +138,58 @@ run "nodes" {
     )
     error_message = "three nodes need three chained Talos node modules, each draining before an upgrade"
   }
+}
+
+run "vm_id_range_refuses_start_at_end" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 2000
+      end   = 2000
+    }
+  }
+
+  expect_failures = [var.vm_id_range]
+}
+
+run "vm_id_range_refuses_ids_below_100" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 99
+      end   = 2000
+    }
+  }
+
+  expect_failures = [var.vm_id_range]
+}
+
+run "vm_id_range_refuses_ids_past_the_last_vm_id" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 1000
+      end   = 1000000001
+    }
+  }
+
+  expect_failures = [var.vm_id_range]
+}
+
+run "vm_id_range_refuses_fractions" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 1000.5
+      end   = 2000
+    }
+  }
+
+  expect_failures = [var.vm_id_range]
 }
 
 run "cluster_api_token_is_least_privilege" {
