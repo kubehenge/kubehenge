@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -38,28 +39,35 @@ type releasePinRequest struct {
 	Script string `json:"script,omitempty"`
 }
 
-// managementReader reads from the management cluster once the appliance has made it.
-type managementReader struct{ s *Server }
+// ManagementReader reads from the management cluster once the appliance has made it, and finds
+// nothing before.
+type ManagementReader struct{ s *Server }
 
-// ManagementReader reads the management cluster, and finds nothing before it exists.
-//
-//nolint:ireturn // callers need only the reader, and the adapter is private
-func (s *Server) ManagementReader() client.Reader { return managementReader{s} }
+// ManagementReader is the interface's reader of the management cluster.
+func (s *Server) ManagementReader() ManagementReader { return ManagementReader{s} }
 
-func (m managementReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+// Get implements client.Reader.
+func (m ManagementReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 	kube := m.s.currentKube()
 	if kube == nil {
-		return apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, key.Name) //nolint:wrapcheck // the status error is the answer
+		return fmt.Errorf("no management cluster yet: %w", apierrors.NewNotFound(schema.GroupResource{Resource: "configmaps"}, key.Name))
 	}
-	return kube.Get(ctx, key, obj, opts...) //nolint:wrapcheck // the caller names what it read
+	if err := kube.Get(ctx, key, obj, opts...); err != nil {
+		return fmt.Errorf("reading %s: %w", key, err)
+	}
+	return nil
 }
 
-func (m managementReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+// List implements client.Reader.
+func (m ManagementReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
 	kube := m.s.currentKube()
 	if kube == nil {
 		return nil
 	}
-	return kube.List(ctx, list, opts...) //nolint:wrapcheck // the caller names what it read
+	if err := kube.List(ctx, list, opts...); err != nil {
+		return fmt.Errorf("listing: %w", err)
+	}
+	return nil
 }
 
 // pinsReady checks the user may look after the management cluster and that it exists, and returns
