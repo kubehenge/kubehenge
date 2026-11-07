@@ -747,6 +747,8 @@ describe("create", () => {
     haGroups: true,
     controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 },
     workerMachine: { cores: 4, memoryMiB: 8192, diskGiB: 40 },
+    workerNodes: { labels: [], taints: [] },
+    nodeCustomisation: newForm().nodeCustomisation,
     cni: "cilium",
     headlamp: true,
     headlampHostname: "",

@@ -108,6 +108,8 @@ spec:
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -131,6 +133,7 @@ spec:
           pattern: "^v1\\.[0-9]+\\.[0-9]+$"
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesPatches" "talos" | nindent 4 }}
     # The control planes hold the endpoint with Talos's own virtual IP, elected through etcd, on the
     # VM's one network link.
     - name: talos-control-plane
@@ -185,6 +188,8 @@ spec:
             - op: add
               path: /spec/template/spec/controlPlaneConfig/controlplane/strategicPatches/-
               value: {{ dict "apiVersion" "v1alpha1" "kind" "KubeFlannelCNIConfig" "kubeNetworkPoliciesEnabled" true | toJson | quote }}
+    # Last, so that Kubehenge's own settings come first.
+    {{- include "kubehenge.nodeCustomisationPatches" "talos" | nindent 4 }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate

@@ -31,6 +31,9 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionClusterAPI, what, cond.Message, cond.LastTransitionTime.Time)
 	}
+	if cond := trueCondition(c, provisioner.NodeCustomisationCondition); cond != nil {
+		a.add(severityWarning, sectionClusterAPI, "Node customisation misses a reference", cond.Message, cond.LastTransitionTime.Time)
+	}
 	if cond := trueCondition(c, provisioner.CertificatesCondition); cond != nil {
 		if cond.Reason == provisioner.CertificatesRenewing {
 			a.add(severityProgress, sectionNodes, "Renewing certificates", provisioner.CertificatesHead(cond.Message), cond.LastTransitionTime.Time)

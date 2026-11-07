@@ -8,7 +8,9 @@ import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./C
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
+import { nodeCustomisationOf, nodeCustomisationText } from "./node-customisation";
 import { choosable, cpuNote, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
+import { NodeCustomisationDialog } from "./NodeCustomisation";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import {
   PlacementDialog,
@@ -20,9 +22,9 @@ import {
   useHAGroupsOffered,
   useHAOffered,
 } from "./Placement";
-import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
+import { PodSecurityFields, cisInfo, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
 import { TalosDialog, talosOf } from "./Talos";
-import type { ChangeRequest, Cluster, NodeOSChoice, OIDCProvider } from "./types";
+import type { ChangeRequest, Cluster, NodeOSChoice, OIDCProvider, PodSecurityCheck } from "./types";
 import {
   Dialog,
   ErrorBox,
@@ -56,6 +58,7 @@ export type OptionAction =
   | "monitoring"
   | "logs"
   | "podSecurity"
+  | "cis"
   | "clusterMesh"
   | "loadBalancer"
   | "rancher"
@@ -63,6 +66,7 @@ export type OptionAction =
   | "upgrades"
   | "certificates"
   | "talos"
+  | "nodeCustomisation"
   | "oidc";
 
 /** A setting the Options view lists, and the action of the dialog that changes it. */
@@ -114,6 +118,9 @@ export function OptionDialog({
     case "podSecurity": {
       return <PodSecurityDialog cluster={c} onClose={onClose} />;
     }
+    case "cis": {
+      return <CISDialog cluster={c} onClose={onClose} />;
+    }
     case "clusterMesh": {
       return <ClusterMeshDialog cluster={c} onClose={onClose} />;
     }
@@ -140,6 +147,9 @@ export function OptionDialog({
     }
     case "talos": {
       return <TalosDialog cluster={c} onClose={onClose} />;
+    }
+    case "nodeCustomisation": {
+      return <NodeCustomisationDialog cluster={c} onClose={onClose} />;
     }
     case "oidc": {
       break;
@@ -291,7 +301,14 @@ export function optionRows<A extends string = never>(
       action: "loadBalancer",
       name: "the load balancer",
     },
-    { label: "CIS hardening", value: cisText(cis), group: "Security" },
+    { label: "CIS hardening", value: cisText(cis), group: "Security", action: "cis", name: "CIS hardening" },
+    {
+      label: "Node customisation",
+      value: nodeCustomisationText(nodeCustomisationOf(c.variables["nodeCustomisation"])),
+      group: "Nodes",
+      action: "nodeCustomisation",
+      name: "node customisation",
+    },
     {
       label: "Placement",
       value: placeText(placeOf(texts(c.variables["allowedNodes"]))),
@@ -694,6 +711,119 @@ function OIDCDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => 
     >
       <p className="muted">Saving replaces the control-plane nodes, one at a time.</p>
       <OIDCProviders initial={value} fixed={!c.allowed.kubeconfig} onChange={setValue} />
+      <ErrorBox message={error} />
+    </Dialog>
+  );
+}
+
+const shownPods = 10;
+
+// usePodSecurityCheck reads which running pods the restricted level would refuse. Undefined while it reads.
+function usePodSecurityCheck(c: Cluster, wanted: boolean): { check?: PodSecurityCheck; error?: string } {
+  const [result, setResult] = useState<{ check?: PodSecurityCheck; error?: string }>({});
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      if (!wanted) {
+        return;
+      }
+      try {
+        const check = await api.podSecurityCheck(c.namespace, c.name);
+        if (current) {
+          setResult({ check });
+        }
+      } catch (err) {
+        if (current) {
+          setResult({ error: errorMessage(err) });
+        }
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, [c.namespace, c.name, wanted]);
+  return result;
+}
+
+function PodSecurityCheckResult({ check }: { check: PodSecurityCheck }): JSX.Element {
+  if (check.skipped !== undefined && check.skipped !== "") {
+    return <p className="muted">{check.skipped}</p>;
+  }
+  const more = check.refused.length - shownPods;
+  return (
+    <div className="pod-check">
+      <p className="muted">
+        {check.truncated ? `${check.checked} pods checked, more exist` : `${check.checked} pods checked`}
+      </p>
+      {check.refused.length === 0 ? (
+        <p>No running pod would be refused.</p>
+      ) : (
+        <>
+          <p>{`Refused at the restricted level: ${check.refused.length}`}</p>
+          <ul>
+            {check.refused.slice(0, shownPods).map((p) => (
+              <li key={`${p.namespace}/${p.name}`}>
+                <span className="id">{`${p.namespace}/${p.name}`}</span>
+                <div className="hint">{p.reasons}</div>
+              </li>
+            ))}
+          </ul>
+          {more > 0 && <p className="muted">{`and ${more} more`}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CISDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const cis = c.variables["cis"] === true;
+  const [on, setOn] = useState(cis);
+  const { check, error: checkError } = usePodSecurityCheck(c, !cis);
+  const { busy, error, send } = useChange(c, onClose);
+  return (
+    <Dialog
+      title="Edit CIS hardening"
+      onClose={onClose}
+      onSubmit={() => {
+        void send({ variables: { cis: true } });
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={busy || cis || !on}>
+            Switch on
+          </button>
+        </>
+      }
+    >
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={cis}
+          aria-describedby="cis-dialog-note"
+          onChange={(e) => setOn(e.target.checked)}
+        />{" "}
+        CIS hardening
+      </label>
+      <Info about="CIS hardening">{cisInfo}</Info>
+      {cis ? (
+        <p className="muted" id="cis-dialog-note">
+          Cannot be switched off. Pod Security Admission, seccomp and RKE2's network policies stay until a rebuild.
+        </p>
+      ) : (
+        <>
+          <p className="muted" id="cis-dialog-note">
+            Switching this on replaces every node, one at a time, and enforces the restricted level.
+          </p>
+          {check === undefined && checkError === undefined && <p className="muted">Checking pods…</p>}
+          {check !== undefined && <PodSecurityCheckResult check={check} />}
+          <ErrorBox message={checkError} />
+        </>
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );

@@ -297,6 +297,38 @@ The cloud controller manager logs `failed to get HA group for the node` with `40
 
 Either the cluster switched it off, or an administrator switched off **HA group labels** for every cluster in the setup ([install-settings.md](install-settings.md#ha-group-labels)). With it on again, the messages stop within a few minutes. If they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
 
+### A node's clock is off
+
+The Health page warns `clock is off by` when a ready node's lease, stamped by its own clock, differs from the controller's by over 30 seconds. Tokens and certificates then fail, with `certificate has expired or is not yet valid`.
+
+- On a kubeadm, RKE2 or k3s node, look at `chronyc tracking` and `chronyc sources` (a debug shell, or the guest agent). A network that blocks UDP port 123 to the public pools leaves chrony without a source. Allow it, or point the node at an internal time server.
+- Older templates did not guarantee a time daemon. Build the node image again and let the cluster replace its nodes ([templates.md](templates.md#the-weekly-build)).
+- Check the Proxmox VE hosts' own time. A VM starts from its host's clock.
+
+### Labels and taints vanish from a node
+
+A label or taint put on a node by hand goes when its node is replaced, by a node image refresh, an upgrade, a resize or a health check. Set them on the pool instead ([clusters.md](clusters.md#labels-and-taints)). The Health page names a worker whose taints differ from its pool's.
+
+A label in `kubernetes.io` or `k8s.io` is refused with `The kubelet refuses to set labels in kubernetes.io and k8s.io`. Use another domain, or `node.kubernetes.io/` or `kubelet.kubernetes.io/`.
+
+### CIS hardening cannot be switched off
+
+The class refuses `cis` from true to false: `CIS hardening cannot be switched off once it is on`. Pod Security Admission, seccomp and RKE2's network policies stay until the cluster is rebuilt. Pods that the `restricted` level refuses start only in a namespace labelled for a lower level ([clusters.md](clusters.md#add-ons)).
+
+### Node customisation is refused
+
+The webhook refuses `nodeCustomisation` with one message per problem, and kubectl, the interface and the CLI show it.
+
+- `<path> is a path Kubehenge keeps`: Kubehenge writes under `/etc/kubernetes`, `/etc/kubehenge`, `/etc/rancher`, `/var/lib/rancher` and `/var/lib/kubelet`. Use another directory, such as `/etc/audit`.
+- `<name> is an argument Kubehenge sets`: the identity, security and CIS arguments stay Kubehenge's. The audit policy and webhook have their own fields, and with either set the audit log rotation arguments may be set.
+- `Talos has no shell`: Talos takes no `commands`. Put the work in a file or a Talos extension.
+- `Talos reads no Secret` or `no ConfigMap`: Talos takes file content and the audit policy inline. Its audit webhook cannot be set here.
+- `Talos writes machine files under /var and /etc/cri/conf.d only`: move the file there.
+- `Secret <name> is not in namespace <ns>`: create the Secret beside the Cluster. A Secret in another namespace is not read.
+- `Secret <name> has no key <key>` and `ConfigMap <name> has no key policy.yaml`: add the key, or name the one that exists.
+- `the audit policy has no rules` or `has to be a Policy of audit.k8s.io/v1`: the API server would not start with it.
+- A bad `permissions`, a path with `..` or a double slash, or both `content` and `secret`: the class schema refuses these.
+
 ### A cluster waits before any VM exists
 
 The cluster's conditions say it is waiting for its Proxmox VE pool, user and token. Kubehenge's controller has not finished creating them. Its log says why, often a privilege missing from the controller's token after Proxmox VE objects were changed by hand. Applying the management cluster again puts the module's users, roles and ACLs back.

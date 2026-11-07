@@ -37,7 +37,22 @@ import {
 import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
+import {
+  noNodeCustomisation,
+  nodeCustomisationProblem,
+  nodeCustomisationText,
+  nodeCustomisationVariable,
+  type NodeCustomisation,
+} from "./node-customisation";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
+import {
+  hasNodeSettings,
+  noNodeSettings,
+  nodeSettingsProblem,
+  nodeSettingsText,
+  nodesVariable,
+  type NodeSettings,
+} from "./node-settings";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
 import {
@@ -79,6 +94,8 @@ import {
   sole,
 } from "./ui";
 import { quantity, record, text, texts } from "./values";
+
+export { nodeCustomisationOf } from "./node-customisation";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
 export type Step = (typeof steps)[number];
@@ -140,6 +157,10 @@ export interface Form {
   haGroups: boolean;
   controlPlaneMachine: Machine;
   workerMachine: Machine;
+  /** The labels and taints every worker gets, for a class that has the workerNodes variable. */
+  workerNodes: NodeSettings;
+  /** The files, commands, flags and audit settings of every node, for a class that has the variable. */
+  nodeCustomisation: NodeCustomisation;
   cni: string;
   headlamp: boolean;
   headlampHostname: string;
@@ -608,6 +629,8 @@ export const newForm = (): Form => ({
   haGroups: true,
   controlPlaneMachine: machineDefaults(undefined),
   workerMachine: machineDefaults(undefined),
+  workerNodes: noNodeSettings,
+  nodeCustomisation: noNodeCustomisation,
   cni: "",
   headlamp: false,
   headlampHostname: "",
@@ -692,6 +715,7 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
       ? f.controlPlaneMachine
       : machineDefaults(variable(c, "controlPlaneMachine")),
     workerMachine: kept("workerMachine") ? f.workerMachine : machineDefaults(variable(c, "workerMachine")),
+    workerNodes: variable(c, "workerNodes") ? f.workerNodes : noNodeSettings,
     workerAutoscale: f.workerAutoscale && variable(c, "autoscaler") !== undefined,
     oidc: kept("oidc") ? f.oidc : oidcProviders(variable(c, "oidc")?.default),
   };
@@ -795,6 +819,14 @@ function distributionVariables(form: Form): Record<string, unknown> {
   return variables;
 }
 
+// workerNodesVariable is the labels and taints the form gives the workers, where the class has them
+// and there are workers.
+function workerNodesVariable(form: Form, defined: ReadonlySet<string>): Record<string, unknown> {
+  return defined.has("workerNodes") && mostWorkers(form) > 0 && hasNodeSettings(form.workerNodes)
+    ? { workerNodes: nodesVariable(form.workerNodes) }
+    : {};
+}
+
 // request turns the form into the API's request, with only the variables the class defines.
 export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
@@ -834,7 +866,11 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (!form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: false };
   }
-  Object.assign(variables, distributionVariables(form));
+  Object.assign(variables, distributionVariables(form), workerNodesVariable(form, defined));
+  const customised = nodeCustomisationVariable(form.nodeCustomisation, c.distribution === "talos");
+  if (Object.keys(customised).length > 0) {
+    variables["nodeCustomisation"] = customised;
+  }
   const lb = loadBalancerVariable({ implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) });
   if (lb) {
     variables["loadBalancer"] = lb;
@@ -956,11 +992,14 @@ export function summary(
   rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
   if (mostWorkers(form) > 0) {
     rows.push(["Worker machines", machine(form.workerMachine)]);
+    if (defined.has("workerNodes")) {
+      rows.push(["Worker labels and taints", nodeSettingsText(form.workerNodes)]);
+    }
   }
   if (defined.has("cni")) {
     rows.push(["Pod network", cniName(form.cni) || "Not chosen"]);
   }
-  rows.push(...addOnRows(form, defined));
+  rows.push(...customisationRows(form, defined), ...addOnRows(form, defined));
   if (defined.has("upgrades")) {
     const upgrades = newUpgrades(form.upgradeMode, browserZone());
     rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
@@ -971,6 +1010,9 @@ export function summary(
   }
   return rows;
 }
+
+const customisationRows = (form: Form, defined: Set<string>): [string, string][] =>
+  defined.has("nodeCustomisation") ? [["Node customisation", nodeCustomisationText(form.nodeCustomisation)]] : [];
 
 // addOnRows sums up the add-ons and the hardening the class offers.
 function addOnRows(form: Form, defined: Set<string>): [string, string][] {
@@ -1053,6 +1095,8 @@ export type FieldKey =
   | "placement"
   | "controlPlaneMachine"
   | "workerMachine"
+  | "workerNodes"
+  | "nodeCustomisation"
   | "cni"
   | "rancherHostname"
   | "headlampHostname"
@@ -1248,6 +1292,16 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
     } else if (!whole(m.diskGiB, min.diskGiB)) {
       p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}`;
     }
+  }
+  const nodes = variable(c, "workerNodes") && mostWorkers(form) > 0 ? nodeSettingsProblem(form.workerNodes) : undefined;
+  if (nodes !== undefined) {
+    p.workerNodes = nodes;
+  }
+  const customised = variable(c, "nodeCustomisation")
+    ? nodeCustomisationProblem(form.nodeCustomisation, c?.distribution === "talos")
+    : undefined;
+  if (customised !== undefined) {
+    p.nodeCustomisation = customised;
   }
   return p;
 }

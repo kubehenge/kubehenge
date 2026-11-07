@@ -115,6 +115,16 @@ const signedIn: Record<string, Route> = {
   "GET /api/clusters": { body: [cluster("web")] },
   "GET /api/fleet/health": { body: [] },
   "GET /api/runs": { body: [] },
+  "GET /api/clusters/default/web/pod-security-check": {
+    body: {
+      checked: 14,
+      truncated: false,
+      refused: [{ namespace: "apps", name: "api-0", reasons: "privileged containers; host namespaces" }],
+    },
+  },
+  "GET /api/clusters/default/bk/pod-security-check": {
+    body: { checked: 0, truncated: false, refused: [], skipped: "No pod is running" },
+  },
   "DELETE /api/session": { status: 204 },
 };
 
@@ -156,6 +166,7 @@ const kubeadmClass = {
     { name: "monitoring", required: false, schema: object },
     { name: "podSecurity", required: false, schema: object },
     { name: "cis", required: false, schema: { type: "boolean", default: false } },
+    { name: "workerNodes", required: false, schema: object },
     { name: "rancher", required: false, schema: object },
     { name: "oidc", required: false, schema: { type: "array" } },
   ],
@@ -274,7 +285,16 @@ const db = cluster("db", {
   controlPlane: { desired: 3, ready: 2, available: 2, upToDate: 2 },
   workers: { desired: 2, ready: 1, available: 1, upToDate: 1 },
   workerPools: [
-    { name: "a", class: "default-worker", replicas: 1, machine: { cores: 4, memoryMiB: 8192, diskGiB: 50 } },
+    {
+      name: "a",
+      class: "default-worker",
+      replicas: 1,
+      machine: { cores: 4, memoryMiB: 8192, diskGiB: 50 },
+      nodes: {
+        labels: [{ key: "team", value: "a" }],
+        taints: [{ key: "dedicated", value: "db", effect: "NoSchedule" }],
+      },
+    },
     { name: "b", class: "default-worker", replicas: 1, autoscaling: { min: 1, max: 3 } },
   ],
   headlamp: "https://192.0.2.30:4466/",
@@ -843,6 +863,25 @@ const cases: Case[] = [
     },
   },
   {
+    name: "node customisation",
+    path: "/clusters/default/web/options",
+    routes: detail,
+    ready: loaded,
+    walk: async (check, user) => {
+      await user.click(await screen.findByRole("button", { name: "Edit node customisation" }));
+      const dialog = within(screen.getByRole("dialog", { name: "Edit node customisation" }));
+      await user.click(dialog.getByRole("button", { name: "Add file" }));
+      await user.click(dialog.getByRole("button", { name: "Add command" }));
+      await user.click(
+        within(dialog.getByRole("group", { name: "Kubelet flags" })).getByRole("button", { name: "Add flag" }),
+      );
+      await user.selectOptions(dialog.getByLabelText("File 1 source"), "secret");
+      await check("Node customisation rows");
+      await user.click(dialog.getByRole("button", { name: "Save" }));
+      await check("Node customisation problems");
+    },
+  },
+  {
     name: "options with etcd snapshots and backups",
     path: "/clusters/default/bk/options",
     routes: bkRoutes,
@@ -1058,6 +1097,14 @@ const cases: Case[] = [
       await check("Network");
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Machines");
+      await user.click(screen.getByRole("button", { name: "Add label" }));
+      await user.click(screen.getByRole("button", { name: "Add taint" }));
+      await user.type(within(screen.getByRole("group", { name: "Label 1" })).getByLabelText("Key"), "k8s.io/x");
+      await check("Machines with labels and taints");
+      await user.click(screen.getByRole("button", { name: "Next" }));
+      await check("Machines with problems");
+      await user.click(screen.getByRole("button", { name: "Remove label 1" }));
+      await user.click(screen.getByRole("button", { name: "Remove taint 1" }));
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Add-ons");
       await user.click(screen.getByRole("button", { name: "Next" }));
@@ -1136,6 +1183,8 @@ const dialogsExpected = [
   /^Add pool to /u,
   /^Resize .*control plane$/u,
   /^Resize pool /u,
+  /^Edit pool .* nodes$/u,
+  /^Edit CIS hardening$/u,
   /^Delete pool /u,
   /^Boot log of /u,
   /^Reboot /u,
@@ -1145,6 +1194,7 @@ const dialogsExpected = [
   /^Edit placement$/u,
   /^Edit load balancer$/u,
   /^Edit pod security$/u,
+  /^Edit node customisation$/u,
   /^Edit identity providers$/u,
   /^Edit Headlamp$/u,
   /^Edit monitoring$/u,

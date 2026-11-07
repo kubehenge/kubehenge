@@ -173,6 +173,9 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if err = r.ensureEncryption(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err = r.ensureNodeCustomisation(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
+	}
 	addons, rancherRefused, err := r.addons(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err

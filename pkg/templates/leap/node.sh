@@ -21,7 +21,8 @@ for repo in "${files}"/repos/*.repo; do
     install -m 0644 "${repo}" "/etc/zypp/repos.d/kubehenge-$(basename "${repo}")"
 done
 
-packages="container-selinux curl gawk tar"
+# chrony, since the image does not promise a time daemon.
+packages="chrony container-selinux curl gawk tar"
 case "${distribution}" in
     kubeadm)
         version=${kubernetes#v}
@@ -58,8 +59,8 @@ install -m 0644 "${files}/node/kubehenge-boot-log.service" "${files}/node/kubehe
 # A clone's first boot, with its new machine ID, applies the presets again, which enable only the
 # services they name.
 mkdir -p /usr/lib/systemd/system-preset
-printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
-systemctl preset qemu-guest-agent kubehenge-boot-log.timer
+printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\nenable chronyd.service\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
+systemctl preset qemu-guest-agent kubehenge-boot-log.timer chronyd
 
 # A node takes its updates as a new build of its template, which its cluster rolls out, and never
 # reboots on its own.

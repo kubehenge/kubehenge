@@ -79,22 +79,7 @@ decide what it may do, as they do for a user signed in to the interface.`,
 	}
 	o.namespaceFlag(kubeconfig.Flags())
 
-	var file string
-	create := &cobra.Command{
-		Use:   "create -f FILE",
-		Short: "Create a cluster from the interface's create request, in JSON or YAML",
-		Long: `Create a cluster from the interface's create request, in JSON or YAML.
-
-The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
-workerReplicas, variables, and namespace where the interface has more than one. It is checked as
-the wizard's request is.`,
-		Args: noArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return o.create(cmd.Context(), cmd.OutOrStdout(), file)
-		},
-	}
-	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
-	_ = create.MarkFlagRequired("filename")
+	create := o.createCommand()
 
 	var controlPlanes int32
 	var workers []string
@@ -133,7 +118,7 @@ the wizard's request is.`,
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
 	o.namespaceFlag(deleteCmd.Flags())
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, deleteCmd, o.machineCommand())
+	cmd.AddCommand(list, get, kubeconfig, create, scale, deleteCmd, o.poolCommand(), o.updateCommand(), o.machineCommand())
 	return cmd
 }
 
@@ -273,7 +258,7 @@ func (o *clusterOptions) raw(ctx context.Context, out io.Writer, method, name, t
 	return nil
 }
 
-func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string) error {
+func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string, custom *nodeCustomFlags) error {
 	var raw []byte
 	var err error
 	if file == "-" {
@@ -287,6 +272,15 @@ func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string)
 	req, err := yaml.YAMLToJSON(raw)
 	if err != nil {
 		return fmt.Errorf("the create request is neither JSON nor YAML: %w", err)
+	}
+	if custom.any() {
+		value, valueErr := custom.value()
+		if valueErr != nil {
+			return valueErr
+		}
+		if req, err = mergeNodeCustomisation(req, value); err != nil {
+			return err
+		}
 	}
 	body, err := o.call(ctx, http.MethodPost, "/api/clusters", json.RawMessage(req))
 	if err != nil {

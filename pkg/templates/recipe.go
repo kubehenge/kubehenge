@@ -185,6 +185,13 @@ func bakeUserData(files map[string]string, build []string) (string, error) {
 // so that the end of a bake that ran out of time tells a step that hung from one that only crawled.
 const timestamped = `while IFS= read -r line || [ -n "$line" ]; do printf '%s %s\n' "$(date -u +%H:%M:%S)" "$line"; done`
 
+// timeDaemon is the unit of the time daemon every non-Talos node image holds, chrony, which both
+// families package under this name. Talos keeps its own.
+const (
+	timeDaemon     = "chronyd"
+	timeDaemonUnit = timeDaemon + ".service"
+)
+
 // iptablesCheck finds iptables for the CNI's portmap plugin, which runs it from the node's PATH, on
 // the nftables the kernel has.
 const iptablesCheck = "iptables --version | grep -q nf_tables"
@@ -204,6 +211,12 @@ func nodeChecks(b Bake) [][]string {
 		preset("enable qemu-guest-agent.service"),
 		preset("enable " + bootLogUnit),
 		active(bootLogUnit),
+		// Tokens, certificates and OpenID sign-ins trust the node's clock, which only a time daemon
+		// keeps: the VM's host corrects it on resume and migration alone. Whether chronyd answers is
+		// asked of the daemon itself, since the unit can be active with its socket closed.
+		preset("enable " + timeDaemonUnit),
+		active(timeDaemon),
+		{"sh", "-c", "chronyc tracking > /dev/null"},
 		// The copy as of now, rather than up to a quarter of a minute old, for the bake to read
 		// through the guest agent (checkBootLog).
 		{systemctl, "start", "kubehenge-boot-log.service"},
