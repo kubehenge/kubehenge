@@ -34,8 +34,9 @@ function TokenProblems({ tokens }: { tokens: TokenProblem[] }): JSX.Element | nu
   return (
     <ul className="health-short" aria-label="Proxmox VE tokens">
       {tokens.map((t) => (
-        <li key={`token/${t.name}`}>
-          <Status state="error" text={t.problem} /> {t.message}
+        <li key={`token/${t.name}`} className="token-problem">
+          <Status state="error" text={t.problem} />
+          <span>{t.message}</span>
         </li>
       ))}
     </ul>

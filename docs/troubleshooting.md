@@ -564,6 +564,16 @@ A machine being deleted keeps its VM until Cluster API's Proxmox VE provider des
 - Kubehenge does not destroy the VM. Its configuration stays in `/etc/pve/nodes/<node>/qemu-server/` until you remove it.
 - To retire a dead node at once, run `pvecm delnode <node>` on a live one.
 
+A machine that has been deleting for 20 minutes gets the condition `MachineDeletionStalled`, with the reason in its message. The reason is an offline node, a node in maintenance, a VM that is not listed, or a VM capmox does not destroy though its node answers.
+
+To release such a machine without waiting for its node, forget it. Its VM stays in Proxmox VE, so remove it there if it is still listed.
+
+- Interface: **Forget…** in the machine's actions, for those who may download the admin kubeconfig.
+- CLI: `kubehenge cluster machine forget CLUSTER MACHINE --yes`.
+- kubectl: `kubectl annotate machine MACHINE kubehenge.dev/forget-machine=MACHINE`. The value must be the machine's own name.
+
+All three set the same annotation, and the controller applies one rule. It refuses a request in the first 20 minutes of the deletion, and while the VM runs on a node that answers. The refusal is in the annotation `kubehenge.dev/forget-refused` and in an event on the Cluster. A forgotten machine also leaves the ProxmoxCluster's node locations.
+
 #### Storage unavailable
 
 **Storage unavailable** in **Health** and the condition `StorageUnavailable` mean the cluster's `storage` is not available on a node that runs one of its VMs. The message names the nodes. Check `pvesm status` on them and bring the storage back.

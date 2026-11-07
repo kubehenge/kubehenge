@@ -167,9 +167,9 @@ func (o *clusterOptions) machineCommand() *cobra.Command {
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if !a.undoable && !yes {
 					if a.forget {
-							return errors.New("forget leaves the machine's VM in Proxmox VE to be removed by hand: add --yes")
-						}
-						return fmt.Errorf("%s deletes the machine's VM and disks: add --yes", a.use)
+						return errors.New("forget leaves the machine's VM in Proxmox VE to be removed by hand: add --yes")
+					}
+					return fmt.Errorf("%s deletes the machine's VM and disks: add --yes", a.use)
 				}
 				path, err := o.clusterPath(cmd.Context(), args[0])
 				if err != nil {

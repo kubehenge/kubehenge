@@ -367,6 +367,7 @@ spec:
             {{- end }}
             - {{ printf "--pod-security-exempt=%s" (toJson .Values.podSecurityExempt) | quote }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
+            - {{ printf "--token-places=%s" (toJson (dict "templatePool" .Values.templateRefresh.pool "storages" .Values.clusters.storages "builder" (dict "node" .Values.templateRefresh.node "storage" .Values.templateRefresh.storage "import" .Values.templateRefresh.importStorage "iso" .Values.templateRefresh.isoStorage))) | quote }}
             {{- if .Values.interface.offerHARules }}
             - --offer-ha-rules
             {{- end }}

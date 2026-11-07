@@ -209,9 +209,9 @@ func TestForgettingIsRefusedWhereReleasingCouldHarm(t *testing.T) {
 		value string
 		want  string
 	}{
-		"too soon":       {func(f *vmFixture) { f.nodes([]string{"pve2"}) }, time.Minute, heldSecond, "only"},
-		"wrong name":     {func(f *vmFixture) { f.nodes([]string{"pve2"}) }, DeletionStallAfter, "web-cp-0", "not the machine"},
-		"VM still runs":  {func(f *vmFixture) { f.nodes(nil) }, DeletionStallAfter, heldSecond, "Stop it first"},
+		"too soon":      {func(f *vmFixture) { f.nodes([]string{"pve2"}) }, time.Minute, heldSecond, "only"},
+		"wrong name":    {func(f *vmFixture) { f.nodes([]string{"pve2"}) }, DeletionStallAfter, "web-cp-0", "not the machine"},
+		"VM still runs": {func(f *vmFixture) { f.nodes(nil) }, DeletionStallAfter, heldSecond, "Stop it first"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -101,6 +101,16 @@ type tokenFixture struct {
 	reach  *ProxmoxReach
 }
 
+// testPlaces are the places of an install with one clusters' storage, a template builder on pve1
+// and the other defaults.
+func testPlaces() Places {
+	return Places{
+		WorkloadPool: testPool, TemplatePool: "kubehenge-templates", ClusterGroup: "kubehenge-clusters",
+		Storages: []string{"local-lvm"}, BootLogs: true,
+		Builder: BuilderPlaces{Node: "pve1", Storage: "local-lvm", Import: "local", ISO: "local"},
+	}
+}
+
 func clientFor(t *testing.T, srv *httptest.Server, token string) *proxmox.Client {
 	t.Helper()
 	id, secret, _ := strings.Cut(token, "=")
@@ -130,20 +140,21 @@ func newTokenFixture(t *testing.T) *tokenFixture {
 	provider.Data["PROXMOX_"+"SECRET"] = []byte("m")
 	builder := &corev1.Secret{ObjectMeta: objectMeta("kubehenge-system", "kubehenge-template-builder"), Data: map[string][]byte{"token": []byte(builderTk)}}
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(creds, provider, builder, web).WithStatusSubresource(&clusterv1.Cluster{}).Build()
-	pve.set(controllerTk, grantsFor(ControllerNeeds(testPool)))
-	pve.set(haTk, grantsFor([]Need{{"/", "Sys.Audit"}, {"/", "Sys.Console"}}))
-	pve.set(restoreTk, grantsFor([]Need{{"/pool/" + testPool, "VM.Audit"}, {"/pool/" + testPool, "VM.GuestAgent.Unrestricted"}}))
-	pve.set(capmoxTk, grantsFor(CapmoxNeeds(testPool)))
-	pve.set(builderTk, grantsFor(TemplateBuilderNeeds()))
-	pve.set(clusterTk, grantsFor(ClusterNeeds(names.Pool)))
+	places := testPlaces()
+	pve.set(controllerTk, grantsFor(ControllerNeeds(&places)))
+	pve.set(haTk, grantsFor(HANeeds()))
+	pve.set(restoreTk, grantsFor(RestoreNeeds(&places)))
+	pve.set(capmoxTk, grantsFor(CapmoxNeeds(&places)))
+	pve.set(builderTk, grantsFor(TemplateBuilderNeeds(&places)))
+	pve.set(clusterTk, grantsFor(ClusterNeeds(names.Pool, &places)))
 	probes := &TokenProbes{
-		Reader: kube, Client: kube, ClassNamespace: "kubehenge-system", WorkloadPool: testPool,
+		Reader: kube, Client: kube, ClassNamespace: "kubehenge-system", Places: places,
 		Controller: clientFor(t, srv, controllerTk),
 		HA:         jobRunner{clientFor(t, srv, haTk), ServeHARequest},
 		Restore:    jobRunner{clientFor(t, srv, restoreTk), ServeGuestRequest},
 		Secrets: []SecretProbe{
-			{Name: "Cluster API provider", Namespace: "proxmox-infrastructure-system", From: "capmox-variables", Needs: CapmoxNeeds(testPool)},
-			{Name: "Template builder", Namespace: "kubehenge-system", From: "kubehenge-template-builder", Needs: TemplateBuilderNeeds()},
+			{Name: "Cluster API provider", Namespace: "proxmox-infrastructure-system", From: "capmox-variables", Needs: CapmoxNeeds(&places)},
+			{Name: "Template builder", Namespace: "kubehenge-system", From: "kubehenge-template-builder", Needs: TemplateBuilderNeeds(&places)},
 		},
 		Connect: func(token string) (*proxmox.Client, error) { return clientFor(t, srv, token), nil },
 	}
@@ -181,17 +192,24 @@ func TestATokenWithoutAPrivilegeNamesItAndItsPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	places := testPlaces()
 	for name, tc := range map[string]struct {
 		token, grantee string
 		needs          []Need
 		drop           Need
 	}{
-		"controller":       {controllerTk, "Controller", ControllerNeeds(testPool), Need{"/access/realm/pve", "Realm.AllocateUser"}},
-		"HA":               {haTk, "Proxmox VE HA", []Need{{"/", "Sys.Audit"}, {"/", "Sys.Console"}}, Need{"/", "Sys.Console"}},
-		"restore":          {restoreTk, "etcd restore", []Need{{"/pool/" + testPool, "VM.Audit"}, {"/pool/" + testPool, "VM.GuestAgent.Unrestricted"}}, Need{"/pool/" + testPool, "VM.GuestAgent.Unrestricted"}},
-		"capmox":           {capmoxTk, "Cluster API provider", CapmoxNeeds(testPool), Need{"/pool/" + testPool, "VM.Clone"}},
-		"template builder": {builderTk, "Template builder", TemplateBuilderNeeds(), Need{"/", "Sys.Audit"}},
-		"cluster":          {clusterTk, "Cluster team-a/web", ClusterNeeds(web.Pool), Need{"/pool/" + web.Pool, "VM.Config.Disk"}},
+		"controller":                    {controllerTk, "Controller", ControllerNeeds(&places), Need{"/access/realm/pve", "Realm.AllocateUser"}},
+		"controller on the group":       {controllerTk, "Controller", ControllerNeeds(&places), Need{"/access/groups/kubehenge-clusters", "User.Modify"}},
+		"controller on a storage":       {controllerTk, "Controller", ControllerNeeds(&places), Need{"/storage/local-lvm", "Datastore.AllocateSpace"}},
+		"controller on the templates":   {controllerTk, "Controller", ControllerNeeds(&places), Need{"/pool/kubehenge-templates", "VM.Audit"}},
+		"HA":                            {haTk, "Proxmox VE HA", HANeeds(), Need{"/", "Sys.Console"}},
+		"restore":                       {restoreTk, "etcd restore", RestoreNeeds(&places), Need{"/pool/" + testPool, "VM.GuestAgent.Unrestricted"}},
+		"capmox":                        {capmoxTk, "Cluster API provider", CapmoxNeeds(&places), Need{"/pool/" + testPool, "VM.Clone"}},
+		"template builder":              {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/", "Sys.Audit"}},
+		"template builder on its pool":  {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/pool/kubehenge-templates", "VM.PowerMgmt"}},
+		"template builder on its node":  {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/nodes/pve1", "Sys.AccessNetwork"}},
+		"template builder on a storage": {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/storage/local", "Datastore.AllocateTemplate"}},
+		"cluster":                       {clusterTk, "Cluster team-a/web", ClusterNeeds(web.Pool, &places), Need{"/pool/" + web.Pool, "VM.Config.Disk"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -236,7 +254,8 @@ func TestACertificateFromAnotherCAIsSaidToBeUntrusted(t *testing.T) {
 	t.Cleanup(srv.Close)
 	// The client trusts no CA the server's certificate chains to, as one holding the old CA.
 	c := proxmox.NewClient(srv.URL+"/api2/json", proxmox.WithAPIToken("controller@pve!controller", "c"))
-	s := TokenProbe{Name: "Controller", Needs: ControllerNeeds(testPool), Ask: AskPermissions(c)}.Check(t.Context())
+	places := testPlaces()
+	s := TokenProbe{Name: "Controller", Needs: ControllerNeeds(&places), Ask: AskPermissions(c)}.Check(t.Context())
 	if s.OK || s.Problem != TokenCertificate || !strings.Contains(s.Message(), "certificate") {
 		t.Fatalf("state %+v", s)
 	}
@@ -255,12 +274,13 @@ func TestTheTokensOutcomeIsRecordedAndClearsOnRecovery(t *testing.T) {
 	t.Parallel()
 	f := newTokenFixture(t)
 	names, _ := NamesFor(testPool, "team-a", "web")
+	places := testPlaces()
 	ctx := t.Context()
 	noon := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
 	f.reach.Now = func() time.Time { return noon }
 	// A privilege of the controller and of the cluster's token are removed.
-	f.pve.set(controllerTk, grantsFor(ControllerNeeds(testPool)[:1]))
-	f.pve.set(clusterTk, grantsFor(ClusterNeeds(names.Pool)[:1]))
+	f.pve.set(controllerTk, grantsFor(ControllerNeeds(&places)[:1]))
+	f.pve.set(clusterTk, grantsFor(ClusterNeeds(names.Pool, &places)[:1]))
 	f.reach.testTokens(ctx, noon)
 	if err := f.reach.publish(ctx); err != nil {
 		t.Fatal(err)
@@ -292,8 +312,8 @@ func TestTheTokensOutcomeIsRecordedAndClearsOnRecovery(t *testing.T) {
 	if cond == nil || cond.Reason != TokenPrivileges || !strings.Contains(cond.Message, "VM.Config.Disk") {
 		t.Fatalf("the cluster's condition is %+v", cond)
 	}
-	f.pve.set(controllerTk, grantsFor(ControllerNeeds(testPool)))
-	f.pve.set(clusterTk, grantsFor(ClusterNeeds(names.Pool)))
+	f.pve.set(controllerTk, grantsFor(ControllerNeeds(&places)))
+	f.pve.set(clusterTk, grantsFor(ClusterNeeds(names.Pool, &places)))
 	f.reach.testTokens(ctx, noon.Add(TokenCheckInterval))
 	if err := f.reach.publish(ctx); err != nil {
 		t.Fatal(err)
