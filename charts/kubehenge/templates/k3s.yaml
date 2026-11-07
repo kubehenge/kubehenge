@@ -374,6 +374,26 @@ spec:
             {{- end }}
         {{- end }}
     {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "k3s") | nindent 4 }}
+    {{- include "kubehenge.nodeIPPatch" (dict "distribution" "k3s" "root" .) | nindent 4 }}
+    # flannel masquerades the pods' IPv4 traffic leaving the cluster on its own, their IPv6 only
+    # when told, and the pods' IPv6 range is a private one.
+    - name: k3s-flannel-ipv6
+      enabledIf: {{ printf "{{ if eq .cni \"flannel\" }}%s{{ end }}" (include "kubehenge.hasFamilyTest" "IPv6") | quote }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              value:
+                path: /etc/rancher/k3s/config.yaml.d/50-kubehenge-flannel-ipv6.yaml
+                owner: root:root
+                permissions: "0600"
+                content: |
+                  flannel-ipv6-masq: true
     # Last, so that Kubehenge's own settings come first.
     {{- include "kubehenge.nodeCustomisationPatches" "k3s" | nindent 4 }}
 ---

@@ -107,17 +107,47 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
   schema:
     openAPIV3Schema:
       type: string
-      format: ipv4
       description: >-
-        Virtual IP address of the Kubernetes API. It moves between the control-plane nodes, so it is
-        an unused address on the nodes' network and outside the range in network.addresses.
+        Virtual IP address of the Kubernetes API, of the cluster's first address family. It moves
+        between the control-plane nodes, so it is an unused address on the nodes' network and
+        outside the node addresses.
+      x-kubernetes-validations:
+        - rule: isIP(self)
+          message: The control-plane endpoint is an IPv4 or IPv6 address.
 - name: network
   required: true
   schema:
     openAPIV3Schema:
       type: object
-      required: [bridge, addresses, prefix, gateway, dnsServers]
+      required: [bridge, dnsServers]
+      {{- /* ipFamilies has a default, which Cluster API sets before it validates; the rules read a
+      missing one as that default, IPv4 alone. */}}
+      x-kubernetes-validations:
+        - rule: "!(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || (has(self.addresses) && has(self.prefix) && has(self.gateway))"
+          message: IPv4 needs addresses, prefix and gateway.
+        - rule: "(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || !(has(self.addresses) || has(self.prefix) || has(self.gateway))"
+          message: addresses, prefix and gateway are IPv4 settings. Add IPv4 to ipFamilies or remove them.
+        - rule: "!(has(self.ipFamilies) && 'IPv6' in self.ipFamilies) || has(self.ipv6)"
+          message: IPv6 needs ipv6 with addresses, prefix and gateway.
+        - rule: "(has(self.ipFamilies) && 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+          message: ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.
       properties:
+        ipFamilies:
+          type: array
+          minItems: 1
+          maxItems: 2
+          default: [IPv4]
+          description: >-
+            The address families of the nodes, pods and services, the first one primary: [IPv4],
+            [IPv6], or both for dual-stack. Fixed once the cluster exists.
+          items:
+            type: string
+            enum: [IPv4, IPv6]
+          x-kubernetes-validations:
+            - rule: self.size() < 2 || self[0] != self[1]
+              message: Each address family once.
+            - rule: self == oldSelf
+              message: The address families are chosen when the cluster is created.
         bridge:
           type: string
           minLength: 1
@@ -145,7 +175,7 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
         addresses:
           type: array
           minItems: 1
-          description: Addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.
+          description: IPv4 addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.
           items:
             type: string
             minLength: 1
@@ -153,15 +183,44 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
           type: integer
           minimum: 1
           maximum: 32
+          description: Prefix length of the nodes' IPv4 network.
         gateway:
           type: string
           format: ipv4
+          description: IPv4 gateway of the nodes' network.
+        ipv6:
+          type: object
+          required: [addresses, prefix, gateway]
+          description: The nodes' IPv6 network, for a cluster whose ipFamilies hold IPv6.
+          properties:
+            addresses:
+              type: array
+              minItems: 1
+              description: IPv6 addresses the nodes take theirs from, as ranges (2001:db8::10-2001:db8::20), networks in CIDR notation or single addresses.
+              items:
+                type: string
+                minLength: 1
+            prefix:
+              type: integer
+              minimum: 1
+              maximum: 128
+              description: Prefix length of the nodes' IPv6 network, usually 64.
+            gateway:
+              type: string
+              format: ipv6
+              description: IPv6 gateway of the nodes' network.
         dnsServers:
           type: array
           minItems: 1
+          description: >-
+            DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster
+            names at least one of each.
           items:
             type: string
             minLength: 1
+            x-kubernetes-validations:
+              - rule: isIP(self)
+                message: A DNS server is an IPv4 or IPv6 address.
         searchDomains:
           type: array
           # glibc's resolver reads six.
@@ -907,8 +966,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           enum: [l2, bgp]
           default: l2
           description: >-
-            l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the
-            nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and
+            l2 answers ARP, or NDP for IPv6, for the addresses on the nodes' network, so the switch
+            has to accept the nodes' gratuitous ARP and unsolicited neighbour advertisements. bgp announces them to routers instead, for routed ranges and
             switches that drop such ARP, and also announces the control-plane endpoint through
             kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and
             the routers have to accept a session from every node.
@@ -934,8 +993,10 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
                 properties:
                   address:
                     type: string
-                    format: ipv4
-                    description: The router's IPv4 address.
+                    description: The router's address.
+                    x-kubernetes-validations:
+                      - rule: isIP(self)
+                        message: A router's address is an IPv4 or IPv6 address.
                   asn:
                     type: integer
                     format: int64
@@ -949,13 +1010,23 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
               description: >-
                 Sign every session with the password in the cluster's bgp credential, which the
                 routers have to be set to expect. The password is kept in a Secret, never here.
+            routerID:
+              type: string
+              description: >-
+                The BGP router id every node gives the routers, a dotted 32-bit id such as
+                10.0.0.1. Each node takes its own IPv4 address when this is unset. Required on
+                IPv6-only clusters, whose nodes have none.
+              x-kubernetes-validations:
+                - rule: "isIP(self) && ip(self).family() == 4 && self != '0.0.0.0'"
+                  message: A router id is a dotted 32-bit id other than 0.0.0.0, such as 10.0.0.1.
           required: [asn, peers]
         addresses:
           type: array
           minItems: 1
           description: >-
-            Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in
-            CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in
+            Addresses the Services take theirs from, of the cluster's families, as ranges
+            (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses. A Service asking
+            for both families needs a range of each. In mode l2 unused addresses on the nodes' network, in
             bgp any routed ones, apart from network.addresses, the control-plane endpoint, the
             gateway, the network's own and broadcast addresses and other clusters' addresses
             there. Services outside a changed range take new addresses from it.
@@ -1552,6 +1623,77 @@ Proxmox VE HA take it from there. Applied before the distribution starts with sy
     kernel.keys.root_maxbytes=25000000
 {{- end -}}
 
+{{/*
+A patch's enabledIf for a cluster whose network.ipFamilies hold the family given ("IPv4" or "IPv6"),
+or lack it. A cluster that names no families has IPv4 alone, the variable's default.
+*/}}
+{{- define "kubehenge.hasFamily" -}}
+{{ include "kubehenge.hasFamilyTest" . | quote }}
+{{- end -}}
+
+{{- define "kubehenge.hasFamilyTest" -}}
+{{ printf "{{ with .network }}{{ if has %q (.ipFamilies | default (list \"IPv4\")) }}true{{ end }}{{ end }}" . }}
+{{- end -}}
+
+{{- define "kubehenge.lacksFamily" -}}
+{{ printf "{{ with .network }}{{ if not (has %q (.ipFamilies | default (list \"IPv4\"))) }}true{{ end }}{{ end }}" . | quote }}
+{{- end -}}
+
+{{/*
+Gives a kubeadm, RKE2 or k3s node of a cluster with IPv6 its node IPs, one of each of the cluster's
+families in their order (files/node-ip.sh). The kubelet registers the first as the node's primary
+address, which has to be of the same family as the Services' primary range. Call with
+"distribution" (kubeadm, rke2 or k3s). kubeadm's nodes run the script whatever their families, and
+take IPv4 alone without the list of families.
+*/}}
+{{- define "kubehenge.nodeIPPatch" -}}
+{{- $targets := dict
+  "kubeadm" (dict "controlPlane" "KubeadmControlPlaneTemplate" "worker" "KubeadmConfigTemplate" "spec" "/spec/template/spec/kubeadmConfigSpec" "commands" "preKubeadmCommands")
+  "rke2" (dict "controlPlane" "RKE2ControlPlaneTemplate" "worker" "RKE2ConfigTemplate" "spec" "/spec/template/spec" "commands" "preRKE2Commands")
+  "k3s" (dict "controlPlane" "KThreesControlPlaneTemplate" "worker" "KThreesConfigTemplate" "spec" "/spec/template/spec/kthreesConfigSpec" "commands" "preK3sCommands") -}}
+{{- $target := get $targets .distribution -}}
+{{- $api := dict "controlPlane" "controlplane.cluster.x-k8s.io/v1beta2" "worker" "bootstrap.cluster.x-k8s.io/v1beta2" -}}
+{{- $selector := dict "controlPlane" (dict "controlPlane" true) "worker" (dict "machineDeploymentClass" (dict "names" (list "worker"))) -}}
+- name: {{ .distribution }}-node-ip
+  enabledIf: {{ include "kubehenge.hasFamily" "IPv6" }}
+  definitions:
+    {{- range $role := list "controlPlane" "worker" }}
+    {{- $spec := ternary $target.spec "/spec/template/spec" (eq $role "controlPlane") }}
+    - selector:
+        apiVersion: {{ get $api $role }}
+        kind: {{ get $target $role }}
+        matchResources:
+          {{- toYaml (get $selector $role) | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: {{ $spec }}/files/-
+          valueFrom:
+            template: |
+              path: /etc/kubehenge/ip-families
+              owner: root:root
+              permissions: "0644"
+              content: {{ `{{ join " " .network.ipFamilies | quote }}` }}
+        {{- if ne $.distribution "kubeadm" }}
+        - op: add
+          path: {{ $spec }}/files/-
+          value:
+            {{- include "kubehenge.nodeIPFile" $.root | nindent 12 }}
+        - op: add
+          path: {{ $spec }}/{{ $target.commands }}/-
+          value: /etc/kubehenge/node-ip.sh {{ $.distribution }}
+        {{- end }}
+    {{- end }}
+{{- end -}}
+
+{{/* The script that sets a node's IPs (kubehenge.nodeIPPatch). Call with the root context. */}}
+{{- define "kubehenge.nodeIPFile" -}}
+path: /etc/kubehenge/node-ip.sh
+owner: root:root
+permissions: "0700"
+content: |
+  {{- .Files.Get "files/node-ip.sh" | nindent 2 }}
+{{- end -}}
+
 {{- define "kubehenge.searchDomainsEnabled" -}}
 {{ "{{ with .network }}{{ if .searchDomains }}true{{ end }}{{ end }}" | quote }}
 {{- end -}}
@@ -1594,7 +1736,7 @@ carry nothing a shell would read.
                 set -eu
                 nmcli -t -f UUID,DEVICE,TYPE connection show --active | while IFS=: read -r uuid device type; do
                   [ "$type" = 802-3-ethernet ] || continue
-                  nmcli connection modify "$uuid" ipv4.dns-search "{{ `{{ join " " .network.searchDomains }}` }}"
+                  nmcli connection modify "$uuid"{{ `{{ range (.network.ipFamilies | default (list "IPv4")) }} {{ lower . }}.dns-search "{{ join " " $.network.searchDomains }}"{{ end }}` }}
                   nmcli device reapply "$device"
                 done
         - op: add
@@ -2202,6 +2344,20 @@ Call with the root context.
           valueFrom:
             variable: controlPlaneEndpoint
         - op: replace
+          path: /spec/template/spec/dnsServers
+          valueFrom:
+            variable: network.dnsServers
+{{- /* capmox gives every node an address from each family's pool it is given. */}}
+- name: proxmox-ipv4
+  enabledIf: {{ include "kubehenge.hasFamily" "IPv4" }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+      jsonPatches:
+        - op: replace
           path: /spec/template/spec/ipv4Config/addresses
           valueFrom:
             variable: network.addresses
@@ -2213,10 +2369,30 @@ Call with the root context.
           path: /spec/template/spec/ipv4Config/gateway
           valueFrom:
             variable: network.gateway
-        - op: replace
-          path: /spec/template/spec/dnsServers
+- name: proxmox-ipv6
+  enabledIf: {{ include "kubehenge.hasFamily" "IPv6" }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+      jsonPatches:
+        - op: add
+          path: /spec/template/spec/ipv6Config
           valueFrom:
-            variable: network.dnsServers
+            variable: network.ipv6
+- name: proxmox-no-ipv4
+  enabledIf: {{ include "kubehenge.lacksFamily" "IPv4" }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+      jsonPatches:
+        - op: remove
+          path: /spec/template/spec/ipv4Config
 # The controller names the nodes capmox may use, the allowed ones that are online: capmox clones
 # onto the template's node when given none, and places no VM while a node it is given is down. On
 # RKE2 and k3s it also has every node install its release from files checked against the checksums
@@ -2429,13 +2605,21 @@ content: |
           - name: bgp_enable
             value: "true"
           - name: bgp_routerid
+            {{- `{{ with .bgp.routerID }}` }}
+            value: {{ "{{ . | quote }}" }}
+            {{- `{{ else }}{{ $first := "IPv4" }}{{ with $.network }}{{ with .ipFamilies }}{{ $first = index . 0 }}{{ end }}{{ end }}{{ if eq $first "IPv6" }}` }}
+            # A router id is a dotted 32-bit id: node-ip.sh writes the node's IPv4 address in here.
+            value: kubehenge-node-ipv4
+            {{- `{{ else }}` }}
             valueFrom:
               fieldRef:
                 fieldPath: status.hostIP
+            {{- `{{ end }}{{ end }}` }}
           - name: bgp_as
             value: "{{ `{{ int64 .bgp.asn }}` }}"
           - name: bgp_peers
-            value: "{{ `{{ range $i, $p := .bgp.peers }}{{ if $i }},{{ end }}{{ $p.address }}:{{ int64 $p.asn }}::false{{ end }}` }}"
+            {{- /* kube-vip reads an IPv6 router in brackets, its address holding the separator. */}}
+            value: "{{ `{{ range $i, $p := .bgp.peers }}{{ if $i }},{{ end }}{{ if contains ":" $p.address }}[{{ $p.address }}]{{ else }}{{ $p.address }}{{ end }}:{{ int64 $p.asn }}::false{{ end }}` }}"
           {{- `{{ end }}{{ end }}` }}
           - name: cp_enable
             value: "true"

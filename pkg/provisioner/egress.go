@@ -73,10 +73,13 @@ func hasCredentials(address string) bool {
 
 // egressAlways are the exceptions of every cluster besides its pod and service ranges: its own
 // services, which a proxy outside the cluster could not reach.
-var egressAlways = []string{"localhost", loopback, ".svc", ".cluster.local"}
+var egressAlways = []string{"localhost", loopback, loopbackIPv6, ".svc", ".cluster.local"}
 
-// loopback is a node's or a pod's own IPv4 address.
-const loopback = "127.0.0.1"
+// loopback and loopbackIPv6 are a node's or a pod's own address in each family.
+const (
+	loopback     = "127.0.0.1"
+	loopbackIPv6 = "::1"
+)
 
 // resolve is the proxy a cluster's add-ons go through, and why a default is left out, or "". The
 // cluster's variable wins: its own address, or none. Without one the management side's is the

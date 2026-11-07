@@ -98,6 +98,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 		errs = append(errs, v.validateRancher(ctx, old, c, class)...)
 	}
 	errs = append(errs, validateClusterMesh(old, c)...)
+	errs = append(errs, validateFamilies(old, c)...)
 	errs = append(errs, validateRanges(old, c, class)...)
 	errs = append(errs, validateTimeServers(c)...)
 	if err := checkLogs(c); err != nil {
@@ -120,7 +121,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 		errs = append(errs, field.Invalid(topology.Child("variables").Key(etcdSnapshotsVariable), etcdSnapshotsVariable, err.Error()))
 	}
 	if err := checkNodeAddresses(old, c); err != nil {
-		errs = append(errs, field.Forbidden(topology.Child("variables").Key("network"), err.Error()))
+		errs = append(errs, field.Forbidden(topology.Child("variables").Key(networkVariable), err.Error()))
 	}
 	if err := checkTalos(old, c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(TalosVersionVariable), err.Error()))
@@ -130,7 +131,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	}
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkAddresses(ctx, c); err != nil {
-			errs = append(errs, field.Forbidden(topology.Child("variables").Key("network"), err.Error()))
+			errs = append(errs, field.Forbidden(topology.Child("variables").Key(networkVariable), err.Error()))
 		}
 	}
 	errs = append(errs, v.validateGrants(ctx, old, c, class)...)
@@ -145,7 +146,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 // validateRanges holds a new cluster's pod and service ranges to checkRanges. Unset, the network is
 // the class's schema's to refuse.
 func validateRanges(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
-	if _, set, _ := optionalVariable[nodeNetwork](c, "network"); old != nil || !set {
+	if _, set, _ := optionalVariable[nodeNetwork](c, networkVariable); old != nil || !set {
 		return nil
 	}
 	if err := checkRanges(c, class); err != nil {
@@ -199,7 +200,7 @@ func (v *ClusterValidator) validatePlacement(ctx context.Context, reads *pveRead
 			errs = append(errs, field.Forbidden(variables.Key("storage"), err.Error()))
 		}
 	}
-	if old != nil && !slices.ContainsFunc([]string{"storage", allowedNodesVariable, NodeOSVariable, "network"}, func(name string) bool { return variableChanged(old, c, name) }) {
+	if old != nil && !slices.ContainsFunc([]string{"storage", allowedNodesVariable, NodeOSVariable, networkVariable}, func(name string) bool { return variableChanged(old, c, name) }) {
 		return errs
 	}
 	if err := admitOnReadFailure(ctx, v.Hooks.checkPlacement(ctx, reads, c)); err != nil {

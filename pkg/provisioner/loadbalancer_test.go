@@ -50,7 +50,10 @@ func onAt(addresses string) string {
 
 func TestParseAddresses(t *testing.T) {
 	t.Parallel()
-	spans, err := parseAddresses([]string{"10.0.0.10-10.0.0.20", " 10.0.1.7/30 ", "10.0.2.1", "10.0.3.4 - 10.0.3.4"})
+	spans, err := parseAddresses([]string{
+		"10.0.0.10-10.0.0.20", " 10.0.1.7/30 ", "10.0.2.1", "10.0.3.4 - 10.0.3.4",
+		"2001:db8::10-2001:db8::20", "2001:db8:1::5/126", "2001:db8:2::/64", "fd00::1",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,10 +61,14 @@ func TestParseAddresses(t *testing.T) {
 	for i, s := range spans {
 		got[i] = s.String()
 	}
-	if want := []string{"10.0.0.10-10.0.0.20", "10.0.1.4-10.0.1.7", "10.0.2.1", "10.0.3.4"}; !slices.Equal(got, want) {
+	want := []string{
+		"10.0.0.10-10.0.0.20", "10.0.1.4-10.0.1.7", "10.0.2.1", "10.0.3.4",
+		"2001:db8::10-2001:db8::20", "2001:db8:1::4-2001:db8:1::7", "2001:db8:2::-2001:db8:2:0:ffff:ffff:ffff:ffff", "fd00::1",
+	}
+	if !slices.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
-	for _, bad := range []string{"10.0.0.20-10.0.0.10", "fd00::1", "fd00::/64", "10.0.0.1-fd00::1", "10.0.0", "10.0.0.0/33", ""} {
+	for _, bad := range []string{"10.0.0.20-10.0.0.10", "2001:db8::20-2001:db8::10", "10.0.0.1-fd00::1", "fe80::1%eth0", "10.0.0", "10.0.0.0/33", "fd00::/129", ""} {
 		if _, err := parseAddresses([]string{bad}); err == nil {
 			t.Errorf("%q: no error", bad)
 		}
@@ -828,8 +835,8 @@ func TestCheckBGP(t *testing.T) {
 		"AS number zero":                   {cluster: web(bgpOf("0", peer)), want: "ASN 0 is outside 1 to 4294967295"},
 		"router AS number zero":            {cluster: web(bgpOf("65001", peerOf("10.0.0.1", "0"))), want: "router 10.0.0.1: ASN 0 is outside 1 to 4294967295"},
 		"AS number past 32 bits":           {cluster: web(bgpOf("4294967296", peer)), want: "loadBalancer"},
-		"router that is no address":        {cluster: web(bgpOf("65001", peerOf("router.example", "64512"))), want: `router "router.example" is not an IPv4 address`},
-		"IPv6 router":                      {cluster: web(bgpOf("65001", peerOf("fd00::1", "64512"))), want: "is not an IPv4 address"},
+		"router that is no address":        {cluster: web(bgpOf("65001", peerOf("router.example", "64512"))), want: `router "router.example" is not an IP address`},
+		"IPv6 router of an IPv4 cluster":   {cluster: web(bgpOf("65001", peerOf("fd00::1", "64512"))), want: "router fd00::1 is IPv6, which the cluster's nodes do not have"},
 		"router listed twice":              {cluster: web(bgpOf("65001", peer, peerOf("10.0.0.1", "64513"))), want: "router 10.0.0.1 is listed twice"},
 		"router inside the pool":           {cluster: web(strings.Replace(bgpOf("65001", peerOf("198.51.100.3", "64512")), "198.51.100.0/28", "198.51.100.0/24", 1)), want: "router 198.51.100.3 is an address the cluster announces"},
 		"router that is the endpoint":      {cluster: web(bgpOf("65001", peerOf("10.0.0.5", "64512"))), want: "router 10.0.0.5 is an address the cluster announces"},

@@ -220,6 +220,7 @@ spec:
                   streamingConnectionIdleTimeout: 5m
         {{- end }}
     {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "kubeadm") | nindent 4 }}
+    {{- include "kubehenge.nodeIPPatch" (dict "distribution" "kubeadm" "root" .) | nindent 4 }}
     # Last, so that Kubehenge's own settings come first.
     {{- include "kubehenge.nodeCustomisationPatches" "kubeadm" | nindent 4 }}
 ---
@@ -340,23 +341,12 @@ extraVolumes:
 {{- end -}}
 
 {{/*
-The kubelet's node IP. With an external cloud provider the kubelet sets no node addresses of its
-own; the Proxmox VE cloud controller manager takes them from the IP the kubelet was given, and
-without one the API server can reach no kubelet (logs, exec, and kubeadm's etcd checks fail).
-RKE2 and k3s pass the address of the default route's interface; kubeadm leaves it to the node, so
-it is found the same way before kubeadm runs. 192.0.2.1 is a documentation address: the route
-lookup sends nothing.
+The kubelet's node IPs. RKE2 and k3s pass the address of the default route's interface where the
+cluster is IPv4 alone; kubeadm leaves it to the node, so it is found the same way before kubeadm
+runs, without it kubeadm's etcd checks fail too (files/node-ip.sh).
 */}}
 {{- define "kubehenge.kubeadmNodeIPFile" -}}
-- path: /etc/kubehenge/node-ip.sh
-  owner: root:root
-  permissions: "0700"
-  content: |
-    #!/bin/sh
-    set -eu
-    ip=$(ip -4 -o route get 192.0.2.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')
-    [ -n "$ip" ]
-    printf 'KUBELET_EXTRA_ARGS=--node-ip=%s\n' "$ip" > /etc/sysconfig/kubelet
+- {{- include "kubehenge.nodeIPFile" . | nindent 2 }}
 {{- end -}}
 
 {{- define "kubehenge.kubeadmControlPlaneSpec" -}}
@@ -436,7 +426,7 @@ template:
       preKubeadmCommands:
         - {{ include "kubehenge.clockCommand" . }}
         - sysctl --system
-        - /etc/kubehenge/node-ip.sh
+        - /etc/kubehenge/node-ip.sh kubeadm
         - /etc/kubehenge/serving-certs.sh
         - /etc/kubehenge/kube-vip-credentials.sh init
       postKubeadmCommands:
@@ -466,7 +456,7 @@ template:
     preKubeadmCommands:
       - {{ include "kubehenge.clockCommand" . }}
       - sysctl --system
-      - /etc/kubehenge/node-ip.sh
+      - /etc/kubehenge/node-ip.sh kubeadm
     postKubeadmCommands:
       {{- include "kubehenge.kubeletFileModes" . | nindent 6 }}
 {{- end -}}

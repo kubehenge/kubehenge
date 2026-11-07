@@ -53,18 +53,24 @@ func kubeVipHostKubeconfig(d templates.Distribution) string {
 
 // KubeVipStaticPod is the manifest of kube-vip on a control-plane node, announcing the endpoint
 // over BGP to the routers, each session signed with the password. It is the one the ClusterClasses
-// write inline, apart from the password, which cannot go into a ClusterClass.
-func KubeVipStaticPod(image, hostKubeconfig, endpoint string, bgp *BGP, password string) ([]byte, error) {
+// write inline, apart from the password, which cannot go into a ClusterClass. families are the
+// cluster's address families, the primary first.
+func KubeVipStaticPod(image, hostKubeconfig, endpoint string, bgp *BGP, families []string, password string) ([]byte, error) {
 	peers := make([]string, 0, len(bgp.Peers))
 	for _, p := range bgp.Peers {
-		peers = append(peers, p.Address+":"+strconv.FormatUint(uint64(p.ASN), 10)+":"+password+":false")
+		address := p.Address
+		// kube-vip reads an IPv6 router in brackets, its address holding the separator.
+		if strings.Contains(address, ":") {
+			address = "[" + address + "]"
+		}
+		peers = append(peers, address+":"+strconv.FormatUint(uint64(p.ASN), 10)+":"+password+":false")
 	}
 	env := []corev1.EnvVar{
 		{Name: "address", Value: endpoint},
 		{Name: "port", Value: "6443"},
 		{Name: "vip_arp", Value: falseText},
 		{Name: "bgp_enable", Value: trueText},
-		{Name: "bgp_routerid", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}},
+		kubeVipRouterID(bgp, families),
 		{Name: "bgp_as", Value: strconv.FormatUint(uint64(bgp.ASN), 10)},
 		{Name: "bgp_peers", Value: strings.Join(peers, ",")},
 		{Name: "cp_enable", Value: trueText},
@@ -82,7 +88,7 @@ func KubeVipStaticPod(image, hostKubeconfig, endpoint string, bgp *BGP, password
 		APIVersion: "v1", Kind: "Pod", Name: "kube-vip", Namespace: metav1.NamespaceSystem,
 		Spec: corev1.PodSpec{
 			HostNetwork: true,
-			HostAliases: []corev1.HostAlias{{IP: loopback, Hostnames: []string{"kubernetes"}}},
+			HostAliases: []corev1.HostAlias{{IP: loopback, Hostnames: []string{kubernetesName}}},
 			SecurityContext: &corev1.PodSecurityContext{
 				SELinuxOptions: &corev1.SELinuxOptions{Type: "spc_t", Level: "s0"},
 			},
@@ -104,6 +110,22 @@ func KubeVipStaticPod(image, hostKubeconfig, endpoint string, bgp *BGP, password
 		return nil, fmt.Errorf("writing kube-vip's manifest: %w", err)
 	}
 	return out, nil
+}
+
+// kubeVipNodeIPv4 is where node-ip.sh writes the node's IPv4 address into kube-vip's manifest.
+const kubeVipNodeIPv4 = "kubehenge-node-ipv4"
+
+// kubeVipRouterID is kube-vip's BGP router id: the cluster's own, else the node's address where it
+// is IPv4, else the node's IPv4 address, which node-ip.sh writes into the manifest on the node.
+func kubeVipRouterID(bgp *BGP, families []string) corev1.EnvVar {
+	const name = "bgp_routerid"
+	switch {
+	case bgp.RouterID != "":
+		return corev1.EnvVar{Name: name, Value: bgp.RouterID}
+	case len(families) > 0 && families[0] == familyIPv6:
+		return corev1.EnvVar{Name: name, Value: kubeVipNodeIPv4}
+	}
+	return corev1.EnvVar{Name: name, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"}}}
 }
 
 // bgpState tells whether a cluster's BGP sessions carry a password and whether it is there to use.
@@ -176,7 +198,7 @@ func (r *Reconciler) writeKubeVipSecret(ctx context.Context, cluster *clusterv1.
 	if err != nil {
 		return err
 	}
-	manifest, err := KubeVipStaticPod(kubeVipImage(r.Charts.KubeVipImage), kubeVipHostKubeconfig(distributionOf(cluster)), endpoint, lb.BGP, password)
+	manifest, err := KubeVipStaticPod(kubeVipImage(r.Charts.KubeVipImage), kubeVipHostKubeconfig(distributionOf(cluster)), endpoint, lb.BGP, clusterFamilies(cluster), password)
 	if err != nil {
 		return err
 	}

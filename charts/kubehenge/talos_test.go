@@ -53,6 +53,8 @@ type jsonPatch struct {
 
 type patchValueFrom struct {
 	Template string `json:"template"`
+	// Variable is a variable's dotted path, such as network.ipv6.
+	Variable string `json:"variable"`
 }
 
 type renderedDocument struct {

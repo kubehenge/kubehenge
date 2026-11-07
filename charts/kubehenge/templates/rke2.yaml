@@ -272,6 +272,7 @@ spec:
             {{- end }}
         {{- end }}
     {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "rke2") | nindent 4 }}
+    {{- include "kubehenge.nodeIPPatch" (dict "distribution" "rke2" "root" .) | nindent 4 }}
     # Last, so that Kubehenge's own settings come first.
     {{- include "kubehenge.nodeCustomisationPatches" "rke2" | nindent 4 }}
 ---

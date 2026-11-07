@@ -53,7 +53,7 @@ func TestKubeVipStaticPodSignsEverySession(t *testing.T) {
 		d, host := tc.d, tc.host
 		t.Run(string(d), func(t *testing.T) {
 			t.Parallel()
-			out, err := KubeVipStaticPod(kubeVipImage(testCharts.KubeVipImage), kubeVipHostKubeconfig(d), "10.0.0.5", bgp, bgpTestSecret)
+			out, err := KubeVipStaticPod(kubeVipImage(testCharts.KubeVipImage), kubeVipHostKubeconfig(d), "10.0.0.5", bgp, nil, bgpTestSecret)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,6 +76,50 @@ func TestKubeVipStaticPodSignsEverySession(t *testing.T) {
 			}
 			if kubeadm := d == templates.Kubeadm; kubeadm != strings.Contains(string(out), "path: /etc/kubernetes/admin.conf") {
 				t.Errorf("the line kube-vip-credentials.sh rewrites is missing or on the wrong distribution:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestKubeVipRouterIDOfEachFamily(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		families       []string
+		routerID       string
+		value, fromRef string
+	}{
+		"IPv4":                   {families: []string{familyIPv4}, fromRef: "status.hostIP"},
+		"dual-stack, IPv4 first": {families: []string{familyIPv4, familyIPv6}, fromRef: "status.hostIP"},
+		"dual-stack, IPv6 first": {families: []string{familyIPv6, familyIPv4}, value: kubeVipNodeIPv4},
+		"IPv6 only, set id":      {families: []string{familyIPv6}, routerID: "10.255.0.1", value: "10.255.0.1"},
+		"IPv4, set id":           {families: []string{familyIPv4}, routerID: "10.255.0.1", value: "10.255.0.1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			bgp := &BGP{ASN: 65001, RouterID: tc.routerID, Peers: []BGPPeer{{Address: "2001:db8::1", ASN: 64512}}}
+			out, err := KubeVipStaticPod(kubeVipImage(testCharts.KubeVipImage), kubeVipAdminConf, "2001:db8::5", bgp, tc.families, bgpTestSecret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pod corev1.Pod
+			if err := yaml.UnmarshalStrict(out, &pod); err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range pod.Spec.Containers[0].Env {
+				switch e.Name {
+				case "bgp_routerid":
+					ref := ""
+					if e.ValueFrom != nil {
+						ref = e.ValueFrom.FieldRef.FieldPath
+					}
+					if e.Value != tc.value || ref != tc.fromRef {
+						t.Errorf("router id %q from %q, want %q from %q", e.Value, ref, tc.value, tc.fromRef)
+					}
+				case "bgp_peers":
+					if want := "[2001:db8::1]:64512:" + bgpTestSecret + ":false"; e.Value != want {
+						t.Errorf("bgp_peers %q, want %q", e.Value, want)
+					}
+				}
 			}
 		})
 	}
