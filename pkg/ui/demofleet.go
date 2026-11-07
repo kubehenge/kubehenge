@@ -92,6 +92,8 @@ type demoCluster struct {
 	AddOns  []string `json:"addOns"`
 	// Crashing names a workload whose pod restarts again and again, with an alert firing for it.
 	Crashing string `json:"crashing"`
+	// LackingMemory is the message of a NodesLackMemory condition: no node has room for the cluster.
+	LackingMemory string `json:"lackingMemory"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
 	// Paused is a cluster whose reconciling is paused.
@@ -319,6 +321,12 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
 			Type: n.Type, Status: metav1.ConditionTrue, Reason: n.Reason, Message: n.Message,
 			LastTransitionTime: metav1.NewTime(f.now.Add(-time.Duration(n.AgoHours) * time.Hour)),
+		})
+	}
+	if d.LackingMemory != "" {
+		c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
+			Type: provisioner.NodesLackMemoryCondition, Status: metav1.ConditionTrue, Reason: "NoRoom",
+			Message: d.LackingMemory, LastTransitionTime: metav1.NewTime(f.now.Add(-25 * time.Minute)),
 		})
 	}
 	return c

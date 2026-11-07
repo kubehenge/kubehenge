@@ -41,7 +41,9 @@ func templateSiteOf(t *testing.T, c *clusterv1.Cluster, node, cpu string, storag
 	return TemplateSite{Name: "kubehenge-rke2-build", Node: node, Tags: tags, Storages: storages, CPU: cpu, Built: at}
 }
 
-func threeNodes() []Node { return []Node{{"pve1", 3}, {"pve2", 3}, {"pve3", 3}} }
+func threeNodes() []Node {
+	return []Node{{Name: "pve1", CPULevel: 3}, {Name: "pve2", CPULevel: 3}, {Name: "pve3", CPULevel: 3}}
+}
 
 func TestSitesKeepAClusterToTheNodesThatCanCloneItsTemplate(t *testing.T) {
 	t.Parallel()
@@ -96,7 +98,7 @@ func TestSitesIntersectPlacementWithTheClusterStorage(t *testing.T) {
 	if got := s.Hosts(c, threeNodes(), 2); !slices.Equal(got, []string{"pve2"}) {
 		t.Errorf("Hosts = %v, want only pve2, where the storage is available", got)
 	}
-	err := s.Refusal(c, []Node{{"pve1", 3}, {"pve3", 3}})
+	err := s.Refusal(c, []Node{{Name: "pve1", CPULevel: 3}, {Name: "pve3", CPULevel: 3}})
 	if err == nil || !strings.Contains(err.Error(), "storage nvme is available only on pve2, not on the nodes this cluster may use (pve1, pve3)") {
 		t.Errorf("Refusal = %v, want the storage named with the nodes", err)
 	}
@@ -112,7 +114,7 @@ func TestSitesIntersectPlacementWithTheClusterStorage(t *testing.T) {
 func TestSitesTakeTheCPULevelFromTheTemplate(t *testing.T) {
 	t.Parallel()
 	c := cluster()
-	online := []Node{{"pve1", 2}, {"pve2", 3}, {"pve3", 4}}
+	online := []Node{{Name: "pve1", CPULevel: 2}, {Name: "pve2", CPULevel: 3}, {Name: "pve3", CPULevel: 4}}
 	for _, tc := range []struct {
 		cpu  string
 		want []string
@@ -353,7 +355,7 @@ func TestOnlineNodesSkipsANodeWhoseStatusCannotBeRead(t *testing.T) {
 	t.Cleanup(srv.Close)
 	p := &Proxmox{Client: proxmox.NewClient(srv.URL + "/api2/json")}
 	online, err := p.OnlineNodes(t.Context())
-	if err != nil || !slices.Equal(online, []Node{{"pve1", 3}}) {
+	if err != nil || !slices.Equal(online, []Node{{Name: "pve1", CPULevel: 3}}) {
 		t.Fatalf("OnlineNodes = %v, %v; want pve1 alone and no error", online, err)
 	}
 	if got := p.Unreadable(); !slices.Equal(got, []string{"pve2"}) {

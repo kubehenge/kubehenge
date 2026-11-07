@@ -348,6 +348,8 @@ const negativePolarity = new Set([
   "StorageNearlyFull",
   "TemplateNodeDown",
   "NodeImageHeld",
+  "NodesSkipped",
+  "NodesLackMemory",
 ]);
 
 // abnormal tells whether a condition is worth a look.

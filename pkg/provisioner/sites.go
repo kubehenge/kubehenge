@@ -3,11 +3,13 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -36,6 +38,12 @@ type TemplateSite struct {
 type Sites struct {
 	Storages  map[string]StorageSite
 	Templates []TemplateSite
+	// Bridges are the bridges and Open vSwitch bridges of each node whose network could be read.
+	Bridges map[string][]string
+	// VNets give the zone of each SDN VNet the token sees, and ZoneNodes the nodes each zone is
+	// applied on, for the zones the token sees.
+	VNets     map[string]string
+	ZoneNodes map[string][]string
 }
 
 // SiteSource looks at the storages and templates; *Proxmox is the real one.
@@ -70,18 +78,80 @@ func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
 			Name: r.Name, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Built: at,
 		})
 	}
+	p.readNetworks(ctx, s)
 	return s, nil
 }
 
+// readNetworks reads the bridges of every online node and the SDN zones and VNets. What the token
+// cannot read stays unknown, and an unknown is never a reason to leave a node out.
+func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
+	log := ctrl.LoggerFrom(ctx)
+	var nodes []pveNode
+	if err := p.Client.Get(ctx, "/nodes", &nodes); err != nil {
+		log.Error(err, "listing the nodes for their bridges")
+		return
+	}
+	s.Bridges = map[string][]string{}
+	for _, n := range nodes {
+		if n.Status != nodeOnline {
+			continue
+		}
+		var ifaces []struct {
+			Iface string `json:"iface"`
+		}
+		if err := p.Client.Get(ctx, "/nodes/"+n.Node+"/network?type=any_bridge", &ifaces); err != nil {
+			log.Error(err, "reading a node's bridges", "node", n.Node)
+			continue
+		}
+		bridges := make([]string, len(ifaces))
+		for i, iface := range ifaces {
+			bridges[i] = iface.Iface
+		}
+		s.Bridges[n.Node] = bridges
+	}
+	var vnets []struct {
+		VNet string `json:"vnet"`
+		Zone string `json:"zone"`
+	}
+	if err := p.Client.Get(ctx, "/cluster/sdn/vnets", &vnets); err != nil {
+		log.V(1).Info("reading the SDN VNets", "error", err.Error())
+		return
+	}
+	s.VNets = map[string]string{}
+	for _, v := range vnets {
+		s.VNets[v.VNet] = v.Zone
+	}
+	var zones []struct {
+		SDN    string `json:"sdn"`
+		Node   string `json:"node"`
+		Status string `json:"status"`
+	}
+	if err := p.Client.Get(ctx, "/cluster/resources?type=sdn", &zones); err != nil {
+		log.V(1).Info("reading where the SDN zones are applied", "error", err.Error())
+		return
+	}
+	s.ZoneNodes = map[string][]string{}
+	for _, z := range zones {
+		applied := s.ZoneNodes[z.SDN]
+		if z.Status == "ok" {
+			applied = append(applied, z.Node)
+		}
+		s.ZoneNodes[z.SDN] = applied
+	}
+}
+
 // Hosts are the names of the online nodes that can run the cluster's VMs: whose CPU reaches the
-// level its templates run at, where its storage is available, and from which its templates can be
-// cloned.
+// level its templates run at, where its storage is available and its bridge exists, and from which
+// its templates can be cloned.
 func (s *Sites) Hosts(c *clusterv1.Cluster, online []Node, fallbackLevel int) []string {
 	hosts := nodesFor(online, cpuNeed(s, c, fallbackLevel))
 	if storage, _, err := optionalVariable[string](c, "storage"); err == nil && storage != "" {
 		if site, ok := s.Storages[storage]; ok {
 			hosts = slices.DeleteFunc(hosts, func(n string) bool { return !slices.Contains(site.Active, n) })
 		}
+	}
+	if bridge := clusterBridge(c); bridge != "" {
+		hosts = slices.DeleteFunc(hosts, func(n string) bool { return !s.hasBridge(bridge, n) })
 	}
 	for _, line := range templateLines(c) {
 		if reach, _, constrained := lineReach(s, line); constrained {
@@ -102,6 +172,9 @@ func (s *Sites) Refusal(c *clusterv1.Cluster, allowed []Node) error {
 		names[i] = n.Name
 	}
 	if err := storageRefusal(s, c, names); err != nil {
+		return err
+	}
+	if err := bridgeRefusal(s, c, names); err != nil {
 		return err
 	}
 	for _, line := range templateLines(c) {
@@ -228,6 +301,64 @@ func storageRefusal(s *Sites, c *clusterv1.Cluster, names []string) error {
 	}
 	return fmt.Errorf("storage %s is available only on %s, not on the nodes this cluster may use (%s). Choose another storage or allow one of those nodes",
 		storage, strings.Join(site.Active, ", "), strings.Join(names, ", "))
+}
+
+// clusterBridge is the bridge or VNet the cluster's VMs attach to, or "".
+func clusterBridge(c *clusterv1.Cluster) string {
+	network, _, err := optionalVariable[nodeNetwork](c, "network")
+	if err != nil {
+		return ""
+	}
+	return network.Bridge
+}
+
+// hasBridge tells whether a VM attached to the bridge or VNet can run on the node. Only what is
+// known counts against a node: one whose network could not be read, a VNet or zone the token does
+// not see, and a name found on no node at all (which cannot be told from a VNet the token does not
+// see) leave the node in.
+func (s *Sites) hasBridge(bridge, node string) bool {
+	if zone, isVNet := s.VNets[bridge]; isVNet {
+		applied, known := s.ZoneNodes[zone]
+		return !known || slices.Contains(applied, node)
+	}
+	list, read := s.Bridges[node]
+	if !read || slices.Contains(list, bridge) {
+		return true
+	}
+	return !slices.ContainsFunc(slices.Collect(maps.Values(s.Bridges)), func(other []string) bool { return slices.Contains(other, bridge) })
+}
+
+// bridgeNodes are the nodes the bridge or VNet is known to be on, sorted.
+func (s *Sites) bridgeNodes(bridge string) []string {
+	var nodes []string
+	if zone, isVNet := s.VNets[bridge]; isVNet {
+		nodes = slices.Clone(s.ZoneNodes[zone])
+	} else {
+		for node, list := range s.Bridges {
+			if slices.Contains(list, bridge) {
+				nodes = append(nodes, node)
+			}
+		}
+	}
+	slices.Sort(nodes)
+	return nodes
+}
+
+func bridgeRefusal(s *Sites, c *clusterv1.Cluster, names []string) error {
+	bridge := clusterBridge(c)
+	if bridge == "" || slices.ContainsFunc(names, func(n string) bool { return s.hasBridge(bridge, n) }) {
+		return nil
+	}
+	kind, fix := "bridge", "Create it on one of them"
+	if _, isVNet := s.VNets[bridge]; isVNet {
+		kind, fix = "VNet", "Apply its zone to one of them"
+	}
+	on := "no node"
+	if nodes := s.bridgeNodes(bridge); len(nodes) > 0 {
+		on = strings.Join(nodes, ", ")
+	}
+	return fmt.Errorf("%s %s is on %s, not on the nodes this cluster may use (%s). %s or allow a node that has it",
+		kind, bridge, on, strings.Join(names, ", "), fix)
 }
 
 func templateRefusal(s *Sites, t *TemplateSite, names []string) error {

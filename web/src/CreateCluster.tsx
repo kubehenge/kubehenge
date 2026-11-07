@@ -5,6 +5,7 @@ import { api, bridgesOf, dnsOf } from "./api";
 import { clusterPath } from "./cluster-paths";
 import {
   bridgeMtuProblems,
+  bridgeNodeProblems,
   classBridges,
   classStorages,
   createRoom,
@@ -243,6 +244,10 @@ export function CreateCluster({
   const byField = {
     ...fieldProblems(step, form, cls),
     ...bridgeMtuProblems(step, form, bridgeOptions),
+    ...bridgeNodeProblems(step, form, {
+      bridgesByNode,
+      online: nodes.filter((x) => x.online).map((x) => x.node),
+    }),
     ...csiProblems(step, form, csi),
     ...snapshotsProblems(step, form, snapshots),
   };

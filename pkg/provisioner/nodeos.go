@@ -20,6 +20,10 @@ import (
 type Node struct {
 	Name     string
 	CPULevel int
+	// FreeMiB is the memory Proxmox VE reports free on the node (its total less what is used), and
+	// MemoryKnown tells whether it reported any. Without it the node is judged by its CPU alone.
+	FreeMiB     int64
+	MemoryKnown bool
 }
 
 // Nodes tells which Proxmox VE nodes are online; *Proxmox is the real one.
@@ -48,7 +52,11 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 			skipped = append(skipped, n.Node)
 			continue
 		}
-		online = append(online, Node{Name: n.Node, CPULevel: level})
+		node := Node{Name: n.Node, CPULevel: level}
+		if n.MaxMem > 0 {
+			node.FreeMiB, node.MemoryKnown = max(0, n.MaxMem-n.Mem)/bytesPerMiB, true
+		}
+		online = append(online, node)
 	}
 	slices.SortFunc(online, func(a, b Node) int { return strings.Compare(a.Name, b.Name) })
 	slices.Sort(skipped)
