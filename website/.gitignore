@@ -1,6 +1,8 @@
 # Copied in by prepare.js.
 /docs/
 /public/logo.svg
+# The page dates live on the published site, never in git.
+/pages.json
 /.vitepress/cache/
 /.vitepress/dist/
 # Lighthouse CI's runs and reports, from `make website-check`.

@@ -55,7 +55,8 @@ func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	held := map[string]pve.Privileges{}
 	views := make([]storageView, 0, len(storages))
-	for _, st := range storages {
+	for i := range storages {
+		st := storages[i]
 		privs, seen := held[st.Storage]
 		if !seen {
 			var err error
