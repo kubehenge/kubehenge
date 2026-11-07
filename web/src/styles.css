@@ -1987,6 +1987,11 @@ fieldset.choices .check {
   white-space: pre-wrap;
 }
 
+/* A long message keeps a readable width, and its scrolling box scrolls sideways instead. */
+.grid td.message {
+  min-width: 16rem;
+}
+
 .fleet-controls {
   display: flex;
   flex-wrap: wrap;

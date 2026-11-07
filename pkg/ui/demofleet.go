@@ -94,6 +94,23 @@ type demoCluster struct {
 	Crashing string `json:"crashing"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
+	// TalosHold is a Talos upgrade of the first control-plane node that a disruption budget holds.
+	TalosHold *demoTalosHold `json:"talosHold"`
+}
+
+type demoTalosHold struct {
+	// To is the release the node upgrades to.
+	To           string `json:"to"`
+	SinceMinutes int    `json:"sinceMinutes"`
+	// Pod is "namespace/name" and Budget the disruption budget that keeps it.
+	Pod    string `json:"pod"`
+	Budget string `json:"budget"`
+}
+
+// held is the text the cluster page shows for the hold, as the controller words it.
+func (h *demoTalosHold) held(node string) string {
+	return fmt.Sprintf("Draining %s: Pod %s: cannot evict pod as it would violate the pod's disruption budget. The disruption budget %s needs 2 healthy pods and has 2 currently",
+		node, h.Pod, h.Budget)
 }
 
 type demoUpgrade struct {
@@ -218,6 +235,15 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 		})
 		*vmid++
 	}
+	if h := d.TalosHold; h != nil {
+		f.objects = append(f.objects, &corev1.Event{
+			Namespace: c.Namespace, Name: d.Name + ".talos-drain-blocked",
+			InvolvedObject: corev1.ObjectReference{Kind: "Cluster", Namespace: c.Namespace, Name: c.Name},
+			Type:           corev1.EventTypeWarning, Reason: "TalosDrainBlocked",
+			Message:       fmt.Sprintf("node %s is held while it drains: %s", machines[0].Name, strings.TrimPrefix(h.held(machines[0].Name), "Draining "+machines[0].Name+": ")),
+			LastTimestamp: metav1.NewTime(f.now.Add(-time.Duration(h.SinceMinutes-1) * time.Minute)),
+		})
+	}
 	f.workloads[server] = f.workload(d, machines)
 	return nil
 }
@@ -282,6 +308,12 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		raw, _ := json.Marshal(changeRecord{By: demoUser, At: started, Settings: u.Change}) //nolint:errchkjson // strings and a time
 		c.Annotations[changeAnnotation] = string(raw)
 		c.Generation++
+	}
+	if h := d.TalosHold; h != nil {
+		node := fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, 0))
+		since := f.now.Add(-time.Duration(h.SinceMinutes) * time.Minute).UTC().Format(time.RFC3339)
+		c.Annotations[provisioner.TalosUpgradingAnnotation] = fmt.Sprintf("%s to %s since %s", node, h.To, since)
+		c.Annotations[provisioner.TalosWaitingAnnotation] = h.held(node)
 	}
 	c.Status = clusterv1.ClusterStatus{
 		Phase:              string(clusterv1.ClusterPhaseProvisioned),
