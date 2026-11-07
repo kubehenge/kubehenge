@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -240,7 +241,23 @@ type talosRig struct {
 	kube    client.Client
 	talos   *fakeTalos
 	drainer *fakeDrainer
+	events  *events.FakeRecorder
 	now     time.Time
+}
+
+// drainEvents are the TalosDrained and TalosDrain events recorded so far.
+func (r *talosRig) drainEvents() []string {
+	var got []string
+	for {
+		select {
+		case e := <-r.events.Events:
+			if strings.Contains(e, " TalosDrain") {
+				got = append(got, e)
+			}
+		default:
+			return got
+		}
+	}
 }
 
 func newTalosRig(t *testing.T, objects ...client.Object) *talosRig {
@@ -253,11 +270,11 @@ func newTalosRig(t *testing.T, objects ...client.Object) *talosRig {
 	}
 	secret := &corev1.Secret{Namespace: "clusters", Name: TalosconfigSecret("web"), Data: map[string][]byte{TalosconfigKey: []byte("talosconfig of web")}}
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objects, secret)...).Build()
-	r := &talosRig{kube: kube, talos: &fakeTalos{}, drainer: &fakeDrainer{}, now: day(10)}
+	r := &talosRig{kube: kube, talos: &fakeTalos{}, drainer: &fakeDrainer{}, now: day(10), events: events.NewFakeRecorder(50)}
 	r.u = &TalosUpgrader{
 		Client: kube, Reader: kube, ClassNamespace: "kubehenge-system",
 		Images: fakeTalosImages{"v1.13.9", "v1.13.12", "v1.14.4"}, Dial: r.talos.dial, Nodes: r.drainer,
-		Now: func() time.Time { return r.now }, MachineCheck: 10 * time.Millisecond,
+		Now: func() time.Time { return r.now }, MachineCheck: 10 * time.Millisecond, Events: r.events,
 	}
 	return r
 }
@@ -302,6 +319,9 @@ func TestTalosUpgraderUpgradesOneNodeAtATimeControlPlaneFirst(t *testing.T) {
 	if r.talos.installed["192.0.2.10"] != "factory.talos.dev/nocloud-installer/abc:v1.14.4" || len(r.talos.installed) != 1 ||
 		!slices.Equal(r.talos.rebooted, []string{"192.0.2.10"}) || !slices.Equal(r.drainer.drained, []string{"web-cp-0"}) {
 		t.Fatalf("installed %v, rebooted %v, drained %v", r.talos.installed, r.talos.rebooted, r.drainer.drained)
+	}
+	if got := r.drainEvents(); len(got) != 1 || got[0] != "Normal TalosDrained node web-cp-0 drained before its reboot" {
+		t.Fatalf("drain events %q", got)
 	}
 	// Until the node is back on the release, nothing else starts.
 	r.now = r.now.Add(time.Minute)
