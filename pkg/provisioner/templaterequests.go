@@ -37,6 +37,10 @@ const (
 
 	// RefreshRequest asks for a refresh of every line now, as the schedule would.
 	RefreshRequest = "refresh"
+
+	// OlderRequestPrefix starts the key of a request, by the controller, to build a line once more
+	// because its newest build has an older kernel than the build before: older.<line>.
+	OlderRequestPrefix = "older."
 )
 
 // The keys of TemplateRefreshName's ConfigMap. The chart writes the schedule's, the refresh its
@@ -261,6 +265,14 @@ func requestedJob(cron *batchv1.CronJob, requests map[string]string, now time.Ti
 		if key == RefreshRequest {
 			full = true
 			triggers = append(triggers, "Build now by "+req.By)
+			continue
+		}
+		if line, again := strings.CutPrefix(key, OlderRequestPrefix); again {
+			if _, err := ParseRequestLine(line); err != nil {
+				return nil, fmt.Errorf("template request %s: %w", key, err)
+			}
+			triggers = append(triggers, line+" again, its kernel being older ("+req.By+")")
+			extra = append(extra, "--again="+line)
 			continue
 		}
 		if _, err := ParseRequestLine(key); err != nil {

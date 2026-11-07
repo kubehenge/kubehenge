@@ -20,57 +20,62 @@ const (
 )
 
 // olderRefresh is a refresh of the RKE2 line with one good build, whose next builds install kernels.
-func olderRefresh(t *testing.T, kernels ...string) (*TemplateRefresh, *fakePool, *[]time.Duration, *[]string) {
+func olderRefresh(t *testing.T, kernels ...string) (*TemplateRefresh, *fakePool, *[]string) {
 	t.Helper()
 	pool := &fakePool{kernels: map[string][]string{rke2Line: kernels}}
 	pool.add(t, &templates.Request{Distribution: templates.RKE2}, day(1))
 	pool.record(pool.list[0].VMID, kernelGood)
-	var waits []time.Duration
 	var log []string
 	r := &TemplateRefresh{
 		Kube: refreshKube(t), Pool: pool, ClassNamespace: "kubehenge-system", Keep: DefaultBuildsKept, Soak: DefaultNodeImageSoak,
-		Now:         func() time.Time { return day(8) },
-		MissingOnly: false,
-		Log:         func(format string, args ...any) { log = append(log, format) },
-		Wait:        func(_ context.Context, d time.Duration) error { waits = append(waits, d); return nil },
+		Now: func() time.Time { return day(8) },
+		Log: func(format string, args ...any) { log = append(log, format) },
 	}
-	return r, pool, &waits, &log
+	return r, pool, &log
 }
 
-func TestTemplateRefreshMakesABuildWithAnOlderKernelAgainAnHourLater(t *testing.T) {
+func TestTemplateRefreshNeverWaitsForABuildWithAnOlderKernel(t *testing.T) {
 	t.Parallel()
-	r, pool, waits, _ := olderRefresh(t, kernelOlder, kernelOlder, kernelNewer)
+	r, pool, log := olderRefresh(t, kernelOlder, kernelNewer)
 	if err := r.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(pool.built) != 3 || !slices.Equal(*waits, []time.Duration{time.Hour, time.Hour}) {
-		t.Errorf("built %v after waiting %v", pool.built, *waits)
+	// One build, kept as the newest of the line, with the controller asked for the next.
+	if len(pool.built) != 1 || len(pool.deleted) != 0 || len(pool.list) != 2 {
+		t.Errorf("built %v, deleted %v, left %d templates", pool.built, pool.deleted, len(pool.list))
 	}
-	// The two older builds are gone, and the newer one stays beside the first.
-	if len(pool.deleted) != 2 || len(pool.list) != 2 {
-		t.Errorf("deleted %v, left %d templates", pool.deleted, len(pool.list))
-	}
-	if got := pool.facts[pool.list[1].VMID].Kernel; got != kernelNewer {
-		t.Errorf("the build kept installs %s", got)
+	if !slices.ContainsFunc(*log, func(l string) bool { return strings.Contains(l, "has an older kernel") }) {
+		t.Errorf("the log says nothing of the older build: %v", *log)
 	}
 }
 
-func TestTemplateRefreshKeepsAnOlderBuildOutAfterThreeTries(t *testing.T) {
+func TestTemplateRefreshBuildsALineAgainWhenAsked(t *testing.T) {
 	t.Parallel()
-	r, pool, waits, log := olderRefresh(t, kernelOlder, kernelOlder, kernelOlder, kernelOlder)
-	if err := r.Run(context.Background()); err != nil {
-		t.Fatal(err)
+	again := []templates.Request{{Distribution: templates.RKE2}}
+	for name, missingOnly := range map[string]bool{"a full run": false, "only the lines asked for": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r, pool, _ := olderRefresh(t, kernelNewer)
+			r.MissingOnly, r.Again = missingOnly, again
+			if err := r.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(pool.built) != 1 {
+				t.Errorf("built %v, want the one line once", pool.built)
+			}
+		})
 	}
-	if len(pool.built) != 4 || len(*waits) != 3 {
-		t.Errorf("built %d times after %d waits, want 4 and 3", len(pool.built), len(*waits))
-	}
-	// The last build is kept, newest of the line, for the interface to show as older.
-	if len(pool.list) != 2 || pool.facts[pool.list[1].VMID].Kernel != kernelOlder {
-		t.Errorf("templates left: %v", pool.list)
-	}
-	if !slices.ContainsFunc(*log, func(l string) bool { return strings.Contains(l, "still has an older kernel") }) {
-		t.Errorf("the log says nothing of the build kept out: %v", *log)
-	}
+	t.Run("not asked", func(t *testing.T) {
+		t.Parallel()
+		r, pool, _ := olderRefresh(t, kernelNewer)
+		r.MissingOnly = true
+		if err := r.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(pool.built) != 0 {
+			t.Errorf("built %v, want none", pool.built)
+		}
+	})
 }
 
 func TestTemplateRefreshMovesOnFromAnEqualOrNewerKernel(t *testing.T) {
@@ -78,12 +83,12 @@ func TestTemplateRefreshMovesOnFromAnEqualOrNewerKernel(t *testing.T) {
 	for name, kernel := range map[string]string{"equal": kernelGood, "newer": kernelNewer} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			r, pool, waits, _ := olderRefresh(t, kernel)
+			r, pool, log := olderRefresh(t, kernel)
 			if err := r.Run(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			if len(pool.built) != 1 || len(*waits) != 0 {
-				t.Errorf("built %v after waiting %v", pool.built, *waits)
+			if len(pool.built) != 1 || slices.ContainsFunc(*log, func(l string) bool { return strings.Contains(l, "has an older kernel") }) {
+				t.Errorf("built %v, log %v", pool.built, *log)
 			}
 		})
 	}

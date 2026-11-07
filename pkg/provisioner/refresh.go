@@ -32,10 +32,12 @@ type TemplatePool interface {
 const DefaultBuildsKept = 2
 
 const (
-	// olderRetries is how many times a build whose kernel is older than the previous build's is
-	// made again, in case its mirror was one sync behind. olderRetryAfter is the wait before each.
-	olderRetries    = 3
-	olderRetryAfter = time.Hour
+	// OlderRetries is how many times a line whose newest build has a kernel older than the previous
+	// build's is built again, in case its mirror was one sync behind. OlderRetryAfter is the wait
+	// before each. The controller starts each as a run of its own (TemplateVersions), so no run
+	// sleeps for it.
+	OlderRetries    = 3
+	OlderRetryAfter = time.Hour
 )
 
 // leftoverAge is how old a VM a build left must be before a refresh removes it: longer than a build
@@ -65,8 +67,9 @@ type TemplateRefresh struct {
 	// Patches reads the newest release of a Kubernetes minor version. Set, a run also builds the
 	// kubeadm templates of those releases (patchRequests). Nil switches that off.
 	Patches func(ctx context.Context, minor int) (string, bool, error)
-	// Wait pauses between the rounds that make older builds again. Nil waits on the clock.
-	Wait func(ctx context.Context, d time.Duration) error
+	// Again are lines to build once more though they have builds, because the newest has an older
+	// kernel than the build before. With MissingOnly, those are built too.
+	Again []templates.Request
 }
 
 // madeBuild is a build a run made, and whether its kernel is older than the previous build's.
@@ -99,83 +102,19 @@ func (r *TemplateRefresh) Run(ctx context.Context) error {
 	if r.Planned != nil {
 		r.Planned(lines)
 	}
-	var older []madeBuild
 	for i := range lines {
 		made, err := r.build(ctx, &lines[i])
 		if err != nil {
 			r.logf("building %s failed: %v", lines[i].LineName, err)
 			errs = append(errs, fmt.Errorf("building %s: %w", lines[i].LineName, err))
 		} else if made.older {
-			older = append(older, made)
+			r.logf("%s (VM %d) has an older kernel than the build before. No cluster moves to it, and the controller asks for another build in %s (up to %d times)", made.line.LineName, made.vmid, OlderRetryAfter, OlderRetries)
 		}
 	}
-	errs = append(errs, r.buildOlderAgain(ctx, older)...)
 	if err := r.collect(ctx, clusters, talos); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
-}
-
-// buildOlderAgain makes the builds whose kernel is older than the previous build's again, an hour
-// apart and up to olderRetries times. The older build is deleted first, as it is no use to a cluster.
-// One still older after the last try stays, and clusters never move to it.
-func (r *TemplateRefresh) buildOlderAgain(ctx context.Context, older []madeBuild) []error {
-	var errs []error
-	for round := 1; round <= olderRetries && len(older) > 0; round++ {
-		r.logf("%d build(s) have an older kernel than the build before; making them again in %s (try %d of %d)", len(older), olderRetryAfter, round, olderRetries)
-		if err := r.wait(ctx, olderRetryAfter); err != nil {
-			return append(errs, err)
-		}
-		var still []madeBuild
-		for _, previous := range older {
-			if err := r.discard(ctx, previous.vmid); err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			made, err := r.build(ctx, previous.line)
-			if err != nil {
-				r.logf("building %s failed: %v", previous.line.LineName, err)
-				errs = append(errs, fmt.Errorf("building %s: %w", previous.line.LineName, err))
-			} else if made.older {
-				still = append(still, made)
-			}
-		}
-		older = still
-	}
-	for _, m := range older {
-		r.logf("%s (VM %d) still has an older kernel than the build before; it is kept, and no cluster moves to it", m.line.LineName, m.vmid)
-	}
-	return errs
-}
-
-func (r *TemplateRefresh) wait(ctx context.Context, d time.Duration) error {
-	if r.Wait != nil {
-		return r.Wait(ctx, d)
-	}
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("waiting to build again: %w", ctx.Err())
-	case <-time.After(d):
-		return nil
-	}
-}
-
-// discard deletes the template made as VM vmid.
-func (r *TemplateRefresh) discard(ctx context.Context, vmid int) error {
-	list, err := r.Pool.List(ctx)
-	if err != nil {
-		return fmt.Errorf("listing the templates: %w", err)
-	}
-	for _, res := range list {
-		if res.VMID == uint64(vmid) { //nolint:gosec // a VM ID Proxmox VE handed out is positive
-			r.logf("deleting %s (VM %d), whose kernel is older than the build before", res.Name, vmid)
-			if err := r.Pool.DeleteBuild(ctx, res); err != nil {
-				return fmt.Errorf("deleting %s: %w", res.Name, err)
-			}
-			return nil
-		}
-	}
-	return nil
 }
 
 // olderOf tells whether the build made as VM vmid has a kernel older than the previous build of its
@@ -373,6 +312,11 @@ func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, talos []string, p
 	}
 	for _, req := range slices.Concat(r.Missing, patches) {
 		if err := add(req, true); err != nil {
+			return nil, err
+		}
+	}
+	for _, req := range r.Again {
+		if err := add(req, false); err != nil {
 			return nil, err
 		}
 	}

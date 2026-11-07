@@ -49,6 +49,7 @@ type templateRefreshOptions struct {
 	soak           time.Duration
 	missing        []string
 	missingOnly    bool
+	again          []string
 	kubeadmPatches bool
 	markers        string
 	trigger        string
@@ -88,7 +89,8 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 	f.StringArrayVar(&o.missing, "missing", nil, "a template to build if it has no build yet, such as rke2-almalinux-10 or kubeadm-v1.37.1-almalinux-10 (repeatable)")
 	f.BoolVar(&o.kubeadmPatches, "kubeadm-patches", true, "also build the kubeadm template of the newest patch release of each Kubernetes minor version a kubeadm cluster runs, and of the next minor version")
 	f.StringVar(&o.markers, "release-markers", provisioner.KubernetesReleaseMarkers, "where Kubernetes names its newest releases, as stable-1.<minor>.txt")
-	f.BoolVar(&o.missingOnly, "missing-only", false, "build only the --missing templates, and only those without a build")
+	f.StringArrayVar(&o.again, "again", nil, "a template to build once more though it has builds, as the controller asks when its newest build has an older kernel than the one before (repeatable)")
+	f.BoolVar(&o.missingOnly, "missing-only", false, "build only the --missing and --again templates, and only the --missing ones without a build")
 	f.StringVar(&o.trigger, "trigger", "", "what started the run, shown with its status")
 	f.StringVar(&o.tokenSecret, "token-secret", "", "the Secret KUBEHENGE_PROXMOX_TOKEN comes from, named in the run's status when it is missing")
 	return cmd
@@ -108,6 +110,14 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 			return fmt.Errorf("--missing: %w", err)
 		}
 		missing = append(missing, req)
+	}
+	var again []templates.Request
+	for _, key := range o.again {
+		req, err := provisioner.ParseRequestLine(key)
+		if err != nil {
+			return fmt.Errorf("--again: %w", err)
+		}
+		again = append(again, req)
 	}
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
@@ -146,6 +156,7 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 		Now:            time.Now,
 		Log:            status.logf,
 		Missing:        missing,
+		Again:          again,
 		MissingOnly:    o.missingOnly,
 		Planned: func(lines []templates.Template) {
 			names := make([]string, len(lines))
