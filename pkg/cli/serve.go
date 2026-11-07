@@ -153,9 +153,11 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	s.Accounts, s.Assets, s.ProxmoxURL = accounts, ui.Frontend(), conn.URL
 	s.Releases = &provisioner.ChannelServer{
-		HTTP: &http.Client{Timeout: releaseChannelTimeout}, URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
+		HTTP: savedProxyClient(o.a.Dir, conn.URL, releaseChannelTimeout), URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
 	}
-	s.TalosReleases = templates.DefaultSources().TalosReleases
+	sources := templates.DefaultSources()
+	sources.HTTP = savedProxyClient(o.a.Dir, conn.URL, sources.HTTP.Timeout)
+	s.TalosReleases = sources.TalosReleases
 	if s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
 		return err
 	}
@@ -295,13 +297,14 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		if connErr != nil {
 			return 0, fmt.Errorf("connecting to Proxmox VE as %s: %w", t.Username, connErr)
 		}
-		b.Client, b.Sources = session, templates.DefaultSources()
+		b.Client, b.Sources, b.Proxy = session, templates.DefaultSources(), savedGuestProxy(a)
+		b.Sources.HTTP = savedProxyClient(a.Dir, pveConfig.URL, b.Sources.HTTP.Timeout)
 		return b.Create(ctx, tpl)
 	}
 	s.Upgrades = &ui.Upgrades{
 		Spool:        appliance.Spool(o.updateSpool),
 		Index:        o.releaseIndex,
-		HTTP:         &http.Client{Timeout: time.Minute},
+		HTTP:         savedProxyClient(a.Dir, pveConfig.URL, time.Minute),
 		SettingsPath: filepath.Join(a.Dir, "upgrades.json"),
 		Now:          time.Now,
 		Current:      release.Version,

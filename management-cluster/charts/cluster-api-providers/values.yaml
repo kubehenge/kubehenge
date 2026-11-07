@@ -10,6 +10,13 @@ namespaces: []
 providers: []
 secrets: {}
 
+# The Secret in the release namespace that holds the management side's proxy (HTTP_PROXY,
+# HTTPS_PROXY and NO_PROXY, and ca.crt when ca is true), which the hooks' downloads go through.
+# Empty, they go direct.
+proxy:
+  secret: ""
+  ca: false
+
 # Kubehenge's controller image by digest, whose `kubehenge manifests` and `kubehenge wait` the
 # release's hooks run.
 image: ""

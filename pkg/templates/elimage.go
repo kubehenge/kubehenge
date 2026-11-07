@@ -100,7 +100,7 @@ func (f *elFamily) recipe(b Bake, keys map[string]string) (Recipe, error) {
 	image := &NodeImageBoot{UserData: "#cloud-config\n{}\n", Checks: nodeChecks(b)}
 	if b.Distribution == Kubeadm {
 		// The images go into containerd's store in /var, which only a booted node has.
-		image.UserData = fmt.Sprintf("#cloud-config\nruncmd:\n  - [%s, %s]\n", imagesPath, b.KubernetesVersion)
+		image.UserData = pullUserData(b.Proxy, b.KubernetesVersion)
 	}
 	return Recipe{
 		UserData:       userData,

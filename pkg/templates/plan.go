@@ -88,6 +88,9 @@ type Bake struct {
 	// KubernetesVersion, for kubeadm, preinstalls kubeadm, the kubelet and containerd at that
 	// version.
 	KubernetesVersion string
+	// Proxy is what the builder's guests download through. It is no part of the template's
+	// identity, so Plan never sets it.
+	Proxy *GuestProxy
 }
 
 var (

@@ -23,4 +23,28 @@ containers:
       readOnlyRootFilesystem: true
       capabilities:
         drop: [ALL]
+    {{- with $root.Values.proxy.secret }}
+    envFrom:
+      - secretRef:
+          name: {{ . }}
+    {{- end }}
+    {{- if and $root.Values.proxy.secret $root.Values.proxy.ca }}
+    env:
+      # Go reads this file beside the system's certificate directories.
+      - name: SSL_CERT_FILE
+        value: /etc/kubehenge/proxy/ca.crt
+    volumeMounts:
+      - name: proxy-ca
+        mountPath: /etc/kubehenge/proxy
+        readOnly: true
+    {{- end }}
+{{- if and $root.Values.proxy.secret $root.Values.proxy.ca }}
+volumes:
+  - name: proxy-ca
+    secret:
+      secretName: {{ $root.Values.proxy.secret }}
+      items:
+        - key: ca.crt
+          path: ca.crt
+{{- end }}
 {{- end -}}

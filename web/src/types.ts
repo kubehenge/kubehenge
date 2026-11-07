@@ -667,6 +667,20 @@ export interface ManagementSettings {
   workloadBridges: string[];
   bootstrapDatastore: string;
   registryMirrors?: Record<string, string[]>;
+  /**
+   * The proxy downloads go through. The address has no credentials. The server never sends the
+   * password, only passwordSet. Sent back, an empty password keeps the saved one and clearPassword
+   * removes it.
+   */
+  proxy?: {
+    url: string;
+    user?: string;
+    password?: string;
+    passwordSet?: boolean;
+    clearPassword?: boolean;
+    noProxy?: string[];
+    caBundle?: string;
+  };
   controllerImage?: string;
   podSubnets?: string[];
   serviceSubnets?: string[];
