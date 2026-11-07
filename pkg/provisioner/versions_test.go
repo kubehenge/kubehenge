@@ -36,7 +36,7 @@ func (f *versionedPVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var data any
 	switch {
 	case path == "/nodes":
-		var list []map[string]any
+		list := make([]map[string]any, 0, len(f.versions))
 		for n := range f.versions {
 			list = append(list, map[string]any{"node": n, "status": "online"})
 		}
@@ -44,7 +44,7 @@ func (f *versionedPVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/cluster/resources" && r.URL.Query().Get("type") == "storage":
 		data = []any{}
 	case path == "/cluster/resources":
-		var vms []map[string]any
+		vms := make([]map[string]any, 0, len(f.vmNets))
 		id := 100
 		for n := range f.vmNets {
 			id++
@@ -69,7 +69,9 @@ func (f *versionedPVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"message":"unexpected `+path+`"}`, http.StatusNotFound)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	if err := json.NewEncoder(w).Encode(map[string]any{"data": data}); err != nil {
+		panic(err)
+	}
 }
 
 func newVersionedPVE(t *testing.T, versions map[string]string) (*versionedPVE, *Proxmox) {
@@ -142,7 +144,7 @@ func TestOnlineNodesCarryTheirVersions(t *testing.T) {
 }
 
 func nodesOf(majors map[string]int) []Node {
-	var out []Node
+	out := make([]Node, 0, len(majors))
 	for name, major := range majors {
 		out = append(out, Node{Name: name, CPULevel: 3, Major: major})
 	}

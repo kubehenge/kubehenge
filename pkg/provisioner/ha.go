@@ -140,11 +140,11 @@ const haGroupsError = "ha groups have not been migrated yet"
 // haRulesRetry is how soon a waiting rule is tried again.
 const haRulesRetry = 5 * time.Minute
 
-// rules writes the cluster's HA rules, or none while they cannot take effect, and keeps
+// writeHARules writes the cluster's HA rules, or none while they cannot take effect, and keeps
 // HARulesPendingCondition to match. It tells whether they wait.
-func (r *HAReconciler) rules(ctx context.Context, cluster *clusterv1.Cluster, pool string, s *haState, members, allowed []string, takesPart bool) (bool, error) {
+func writeHARules(ctx context.Context, r *HAReconciler, cluster *clusterv1.Cluster, pool string, s *haState, members, allowed []string, takesPart bool) (bool, error) {
 	var cond *metav1.Condition
-	switch mixed := takesPart && r.mixed(ctx); {
+	switch mixed := takesPart && haVersionsMixed(ctx, r); {
 	case mixed:
 		cond = &metav1.Condition{
 			Status: metav1.ConditionTrue, Reason: haMixedVersions,
@@ -173,9 +173,9 @@ func (r *HAReconciler) rules(ctx context.Context, cluster *clusterv1.Cluster, po
 	return cond != nil, nil
 }
 
-// mixed tells whether the Proxmox VE nodes run different major versions. A read that fails says no:
-// Proxmox VE's own refusal is the next check.
-func (r *HAReconciler) mixed(ctx context.Context) bool {
+// haVersionsMixed tells whether the Proxmox VE nodes run different major versions. A read that fails
+// says no: Proxmox VE's own refusal is the next check.
+func haVersionsMixed(ctx context.Context, r *HAReconciler) bool {
 	mixed, err := mixedPVE(ctx, r.Proxmox, &r.versions)
 	if err != nil {
 		ctrl.LoggerFrom(ctx).Error(err, "reading the Proxmox VE versions")
@@ -272,7 +272,7 @@ func (r *HAReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 		return ctrl.Result{}, err
 	}
 	if r.HA != nil {
-		pending, err := r.rules(ctx, cluster, names.Pool, s, members, allowed, takesPart)
+		pending, err := writeHARules(ctx, r, cluster, names.Pool, s, members, allowed, takesPart)
 		if err != nil {
 			return ctrl.Result{}, err
 		}

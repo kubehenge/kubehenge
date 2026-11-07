@@ -36,7 +36,11 @@ func (u *upgradingPVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reply := func(code int, body any) {
 		if code == http.StatusInternalServerError {
 			// Proxmox VE sends an error's message as the status line's reason.
-			conn, buf, err := w.(http.Hijacker).Hijack()
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				panic("the test server cannot hijack")
+			}
+			conn, buf, err := hijacker.Hijack()
 			if err != nil {
 				panic(err)
 			}
@@ -46,11 +50,13 @@ func (u *upgradingPVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(code)
-		_ = json.NewEncoder(w).Encode(body)
+		if err := json.NewEncoder(w).Encode(body); err != nil {
+			panic(err)
+		}
 	}
 	switch {
 	case path == "/nodes":
-		list := []map[string]string{}
+		list := make([]map[string]string, 0, len(versions))
 		for n := range versions {
 			list = append(list, map[string]string{"node": n, "status": "online"})
 		}

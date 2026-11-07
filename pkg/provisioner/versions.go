@@ -137,7 +137,7 @@ type VersionGroup struct {
 // versionNote is ProxmoxVersionsAnnotation's value: empty while one major version runs.
 func versionNote(online []Node) string {
 	groups := versionGroups(online)
-	if len(groups) < 2 {
+	if len(groups) <= 1 {
 		return ""
 	}
 	var parts []string

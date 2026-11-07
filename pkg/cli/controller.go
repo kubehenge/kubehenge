@@ -743,8 +743,15 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	if err := addHooks(extensions, scheme, hooks); err != nil {
 		return err
 	}
-	placer := &provisioner.Placer{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Nodes: cloud, Sites: cloud, Interval: placementInterval,
-		Events: mgr.GetEventRecorder("kubehenge"), WorkloadPool: o.r.WorkloadPool}
+	placer := &provisioner.Placer{
+		Client:         mgr.GetClient(),
+		ClassNamespace: o.r.ClassNamespace,
+		Nodes:          cloud,
+		Sites:          cloud,
+		Interval:       placementInterval,
+		Events:         mgr.GetEventRecorder("kubehenge"),
+		WorkloadPool:   o.r.WorkloadPool,
+	}
 	if err := mgr.Add(placer); err != nil {
 		return fmt.Errorf("the placer: %w", err)
 	}

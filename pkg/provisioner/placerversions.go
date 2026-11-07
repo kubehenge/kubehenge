@@ -89,7 +89,7 @@ func mtuNote(mtus map[string]int) string {
 	for _, m := range mtus {
 		distinct[m] = true
 	}
-	if len(distinct) < 2 {
+	if len(distinct) <= 1 {
 		return ""
 	}
 	nodes := make([]string, 0, len(mtus))
@@ -143,26 +143,6 @@ func (p *Proxmox) NodeMTUs(ctx context.Context, pool string, online []Node) (map
 		major[n.Name] = n.Major
 	}
 	bridges := map[string]int{}
-	bridgeMTU := func(node, bridge string) int {
-		key := node + "/" + bridge
-		if m, ok := bridges[key]; ok {
-			return m
-		}
-		var ifaces []struct {
-			Iface string    `json:"iface"`
-			MTU   pveNumber `json:"mtu"`
-		}
-		m := defaultBridgeMTU
-		if err := p.Client.Get(ctx, "/nodes/"+url.PathEscape(node)+"/network?type=any_bridge", &ifaces); err == nil {
-			for _, i := range ifaces {
-				if i.Iface == bridge {
-					m = cmp.Or(int(i.MTU), defaultBridgeMTU)
-				}
-			}
-		}
-		bridges[key] = m
-		return m
-	}
 	out := map[string]int{}
 	for _, vm := range vms {
 		if vm.Pool != pool || vm.Type != "qemu" || vm.Template != 0 {
@@ -173,21 +153,16 @@ func (p *Proxmox) NodeMTUs(ctx context.Context, pool string, online []Node) (map
 		if err := p.Client.Get(ctx, path, &config); err != nil {
 			continue
 		}
-		net0, _ := config["net0"].(string)
-		bridge, set := "", 0
-		for part := range strings.SplitSeq(net0, ",") {
-			switch key, value, _ := strings.Cut(part, "="); key {
-			case "bridge":
-				bridge = value
-			case "mtu":
-				set, _ = strconv.Atoi(value)
-			}
+		net0, ok := config["net0"].(string)
+		if !ok {
+			continue
 		}
+		bridge, set := net0Settings(net0)
 		mtu := set
 		if mtu <= 1 {
 			mtu = defaultBridgeMTU
-			if set == 1 || major[vm.Node] >= 9 {
-				mtu = bridgeMTU(vm.Node, bridge)
+			if set == 1 || major[vm.Node] >= newestBridgeMTUMajor {
+				mtu = p.cachedBridgeMTU(ctx, bridges, vm.Node, bridge)
 			}
 		}
 		if have, ok := out[vm.Node]; !ok || mtu < have {
@@ -195,4 +170,44 @@ func (p *Proxmox) NodeMTUs(ctx context.Context, pool string, online []Node) (map
 		}
 	}
 	return out, nil
+}
+
+// newestBridgeMTUMajor is the first Proxmox VE major version whose unset interface MTU follows the
+// bridge's.
+const newestBridgeMTUMajor = 9
+
+// net0Settings reads the bridge and the mtu setting (0 when unset) of a VM's first interface.
+func net0Settings(net0 string) (string, int) {
+	bridge, set := "", 0
+	for part := range strings.SplitSeq(net0, ",") {
+		switch key, value, _ := strings.Cut(part, "="); key {
+		case "bridge":
+			bridge = value
+		case "mtu":
+			set, _ = strconv.Atoi(value)
+		}
+	}
+	return bridge, set
+}
+
+// cachedBridgeMTU is the bridge's MTU on the node, read once per call into known.
+func (p *Proxmox) cachedBridgeMTU(ctx context.Context, known map[string]int, node, bridge string) int {
+	key := node + "/" + bridge
+	if m, ok := known[key]; ok {
+		return m
+	}
+	var ifaces []struct {
+		Iface string    `json:"iface"`
+		MTU   pveNumber `json:"mtu"`
+	}
+	m := defaultBridgeMTU
+	if err := p.Client.Get(ctx, "/nodes/"+url.PathEscape(node)+"/network?type=any_bridge", &ifaces); err == nil {
+		for _, i := range ifaces {
+			if i.Iface == bridge {
+				m = cmp.Or(int(i.MTU), defaultBridgeMTU)
+			}
+		}
+	}
+	known[key] = m
+	return m
 }
