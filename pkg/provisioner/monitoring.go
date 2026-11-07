@@ -73,7 +73,9 @@ const (
 	alertmanagerStorage = "1Gi"
 
 	// appName is the label the proxies' pods are selected by.
-	appName           = "app.kubernetes.io/name"
+	appName = "app.kubernetes.io/name"
+	// appComponent is the label that tells a chart's pods of one release apart.
+	appComponent      = "app.kubernetes.io/component"
 	certManagerAPI    = "cert-manager.io/v1"
 	clusterIssuerKind = "ClusterIssuer"
 	// keyBits is the size of every metrics key, ECDSA's P-256.

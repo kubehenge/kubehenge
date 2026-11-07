@@ -824,7 +824,8 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 		return fmt.Errorf("the certificate watch: %w", err)
 	}
 	vms := &provisioner.VMWatch{
-		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Events: mgr.GetEventRecorder("kubehenge"),
+		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, WorkloadPool: o.r.WorkloadPool,
+		Proxmox: c, Workloads: remotes, Events: mgr.GetEventRecorder("kubehenge"),
 		Interval: vmWatchInterval,
 	}
 	if err := mgr.Add(vms); err != nil {

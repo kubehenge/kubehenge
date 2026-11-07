@@ -293,7 +293,7 @@ func lokiManifests(logs Logs) []any {
 		&networkingv1.NetworkPolicy{
 			APIVersion: networkingv1.SchemeGroupVersion.String(), Kind: "NetworkPolicy", Name: lokiRelease, Namespace: logsNamespace,
 			Spec: networkingv1.NetworkPolicySpec{
-				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{appName: lokiRelease, "app.kubernetes.io/component": "single-binary"}},
+				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{appName: lokiRelease, appComponent: "single-binary"}},
 				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 				Ingress: []networkingv1.NetworkPolicyIngressRule{{
 					From: []networkingv1.NetworkPolicyPeer{

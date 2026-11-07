@@ -29,13 +29,48 @@ func (f fakeProxmox) Get(_ context.Context, path string, v any) error {
 	return json.Unmarshal([]byte(raw), v)
 }
 
+// editingProxmox is fakeProxmox that takes VM configuration changes: a "name" renames the VM in the
+// resource list, unless putErr is set.
+type editingProxmox struct {
+	fakeProxmox
+
+	f      *vmFixture
+	puts   []string
+	putErr error
+}
+
+func (e *editingProxmox) Put(_ context.Context, path string, params, _ any) error {
+	e.puts = append(e.puts, fmt.Sprintf("%s %v", path, params))
+	if e.putErr != nil {
+		return e.putErr
+	}
+	parts := strings.Split(path, "/")
+	var vmid int64
+	if _, err := fmt.Sscan(parts[len(parts)-2], &vmid); err != nil {
+		return err
+	}
+	changes, ok := params.(map[string]any)
+	if !ok {
+		return fmt.Errorf("unexpected parameters %v", params)
+	}
+	e.f.names[vmid] = fmt.Sprint(changes["name"])
+	e.f.render()
+	return nil
+}
+
 type vmFixture struct {
 	t      *testing.T
 	pve    fakeProxmox
+	edit   *editingProxmox
 	kube   client.Client
 	events *events.FakeRecorder
 	watch  *VMWatch
 	now    time.Time
+	states map[int64]string
+	// names, pools and nodes are what the resource list says of each VM.
+	names map[int64]string
+	pools map[int64]string
+	nodes map[int64]string
 }
 
 // newVMFixture is web on local-lvm with three joined control planes, VMs 101 to 103 on pve1 to
@@ -62,8 +97,17 @@ func newVMFixture(t *testing.T) *vmFixture {
 		objs = append(objs, m, pm)
 	}
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&clusterv1.Cluster{}).Build()
-	f := &vmFixture{t: t, pve: fakeProxmox{}, kube: kube, events: events.NewFakeRecorder(20), now: certNow}
-	f.watch = &VMWatch{Client: kube, ClassNamespace: "kubehenge-system", Proxmox: f.pve, Events: f.events, Now: func() time.Time { return f.now }}
+	f := &vmFixture{
+		t: t, pve: fakeProxmox{}, kube: kube, events: events.NewFakeRecorder(20), now: certNow,
+		names: map[int64]string{101: "web-cp-0", 102: "web-cp-1", 103: "web-cp-2", 104: "web-cp-3"},
+		pools: map[int64]string{101: webPool, 102: webPool, 103: webPool, 104: webPool},
+		nodes: map[int64]string{101: "pve1", 102: "pve2", 103: "pve3", 104: "pve1"},
+	}
+	f.edit = &editingProxmox{fakeProxmox: f.pve, f: f}
+	f.watch = &VMWatch{
+		Client: kube, ClassNamespace: "kubehenge-system", WorkloadPool: "kubehenge", Proxmox: f.edit, Events: f.events,
+		Now: func() time.Time { return f.now },
+	}
 	f.vms(map[int64]string{101: "running", 102: "running", 103: "running", 104: "running"})
 	f.storages(`[{"storage":"local-lvm","node":"pve1","status":"available","disk":10737418240,"maxdisk":107374182400}]`)
 	return f
@@ -72,11 +116,16 @@ func newVMFixture(t *testing.T) *vmFixture {
 // vms sets each VM's status in the resource list, which for a started VM is QEMU's state
 // ("running", "paused", "io-error"), with an optional lock after a colon.
 func (f *vmFixture) vms(states map[int64]string) {
-	nodes := map[int64]string{101: "pve1", 102: "pve2", 103: "pve3", 104: "pve1"}
-	guests := make([]string, 0, len(states)+1)
-	for vmid, entry := range states {
+	f.states = states
+	f.render()
+}
+
+func (f *vmFixture) render() {
+	guests := make([]string, 0, len(f.states)+1)
+	for vmid, entry := range f.states {
 		status, lock, _ := strings.Cut(entry, ":")
-		guests = append(guests, fmt.Sprintf(`{"vmid":%d,"node":%q,"type":"qemu","status":%q,"lock":%q}`, vmid, nodes[vmid], status, lock))
+		guests = append(guests, fmt.Sprintf(`{"vmid":%d,"name":%q,"pool":%q,"node":%q,"type":"qemu","status":%q,"lock":%q}`,
+			vmid, f.names[vmid], f.pools[vmid], f.nodes[vmid], status, lock))
 	}
 	guests = append(guests, `{"vmid":200,"node":"pve1","type":"lxc","status":"stopped"}`)
 	f.pve["/cluster/resources?type=vm"] = "[" + strings.Join(guests, ",") + "]"

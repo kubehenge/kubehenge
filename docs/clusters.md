@@ -772,6 +772,20 @@ It also refuses another cluster on a storage a cluster holds it on. Switching it
 
 A refusal can come up after the cluster switched it on, such as a template built on its storage later. The cluster then goes back to the earlier release. `kubectl describe cluster` shows a `DatastoreAllocateRefused` event saying why.
 
+### A worker moved to another Proxmox VE node
+
+The cloud controller manager sets a node's `topology.kubernetes.io/zone` label to its VM's Proxmox VE node once, when the node starts. On storage local to each node, new volumes are created in that zone.
+
+When a VM moves, the controller follows within about 15 seconds:
+
+1. It sets the node's zone label to the VM's new Proxmox VE node.
+2. It restarts the CSI plugin's node pod on that node, so that the plugin reports the new zone to the kubelet.
+3. It records a `NodeZoneUpdated` event on the Cluster. A failure records `NodeZoneNotUpdated` and is retried at the next look.
+
+Volumes made before the move stay on the old node's storage.
+
+The same look renames a VM back to its machine's name when someone renames it in Proxmox VE, and records `VMRenamedBack`. A refused rename records `VMRenameFailed` and is retried.
+
 ## Back up and restore
 
 A cluster with backups on runs Velero, which backs up on the cluster's schedule to its target, under `<prefix>/<namespace>.<name>/velero` in the target's bucket. Each backup holds the cluster's resources and the files of every volume its pods mount, emptyDir volumes aside. It covers every namespace but `kube-system`, `kube-public`, `kube-node-lease`, Velero's and the add-ons'. Kubehenge installs those again itself. `kube-system` holds the cluster's Proxmox VE token, which no backup carries.
