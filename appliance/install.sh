@@ -4,8 +4,9 @@
 #
 # Run as root in the node's shell:
 #
-#   sh install.sh [--ctid <id>] [--storage <storage>] [--template-storage <storage>] [--bridge <bridge>] [--ip dhcp|<address/prefix>]
-#                 [--gateway <address>] [--dns <address>,...] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
+#   sh install.sh [--ctid <id>] [--storage <storage>] [--template-storage <storage>] [--bridge <bridge>] [--ip dhcp|none|<address/prefix>]
+#                 [--gateway <address>] [--ip6 auto|dhcp|<address/prefix>] [--gateway6 <address>] [--dns <address>,...]
+#                 [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
 #                 [--hostname <name>] [--name <DNS name>] [--cert <file> --key <file>] [--release <file> --sha256 <hex>]
 #                 [--pve-entry | --no-pve-entry] [--trusted-proxy <address or CIDR>]...
 #   sh install.sh --upgrade --ctid <id> [--release <file> --sha256 <hex>] [--proxmox-url <URL>] [--proxmox-ca <file> | --proxmox-insecure]
@@ -101,9 +102,9 @@ older() {
     [ "${first}" = "$1" ]
 }
 
-# appliance_ip: the appliance container's IPv4 address: the one its configuration on this node gives
+# appliance_ip4: the appliance container's IPv4 address: the one its configuration on this node gives
 # it, else the one DHCP gave it, as the container reports it.
-appliance_ip() {
+appliance_ip4() {
     configured=$(pct config "${ctid}" | sed -n 's/^net0: \(.*,\)\{0,1\}ip=\([0-9.]*\)\/.*/\2/p')
     if [ -n "${configured}" ]; then
         printf '%s\n' "${configured}"
@@ -112,20 +113,61 @@ appliance_ip() {
     pct exec "${ctid}" -- sh -c "ip -4 -o addr show dev eth0 | sed -n 's/.* inet \([0-9.]*\).*/\1/p'" 2> /dev/null | head -n 1
 }
 
+# appliance_ip6: the container's global IPv6 address: the one its configuration gives it, else the
+# one SLAAC or DHCPv6 gave it, as the container reports it. Temporary and deprecated addresses are
+# no address to reach it by.
+appliance_ip6() {
+    configured=$(pct config "${ctid}" | sed -n 's/^net0: \(.*,\)\{0,1\}ip6=\([0-9A-Fa-f:]*\)\/.*/\2/p')
+    if [ -n "${configured}" ]; then
+        printf '%s\n' "${configured}"
+        return
+    fi
+    pct exec "${ctid}" -- sh -c "ip -6 -o addr show dev eth0 scope global | grep -v -e temporary -e deprecated -e tentative | sed -n 's/.* inet6 \([0-9A-Fa-f:]*\)\/.*/\1/p'" 2> /dev/null | head -n 1
+}
+
+# appliance_ip: the address the appliance is reached by: its IPv4 address, else its IPv6 one.
+appliance_ip() {
+    primary=$(appliance_ip4)
+    if [ -n "${primary}" ]; then
+        printf '%s\n' "${primary}"
+        return
+    fi
+    appliance_ip6
+}
+
+# appliance_addresses: every address of the container, IPv4 first, one a line, for the certificate.
+appliance_addresses() {
+    appliance_ip4
+    appliance_ip6
+}
+
+# url_host <host>: the host as a URL carries it, an IPv6 address in brackets.
+url_host() {
+    case "$1" in
+        *:*) printf '[%s]' "$1" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # container_hostname: the host name of the appliance container.
 container_hostname() {
     pct config "${ctid}" | sed -n 's/^hostname: //p'
 }
 
-# make_certificate <host name> <address> [<DNS name>]: a certificate and key for the appliance in
+# make_certificate <host name> <addresses> [<DNS name>]: a certificate and key for the appliance in
 # $work, signed by this cluster's CA, so that browsers trusting Proxmox VE's certificates trust
-# Kubehenge's too. The CA's key stays on this node. 825 days is the longest validity browsers accept
+# Kubehenge's too. The addresses are one or more, IPv4 or IPv6, split by white space, each one in
+# the certificate. The CA's key stays on this node. 825 days is the longest validity browsers accept
 # from a private CA, so the hour the certificate starts back takes one day off its end. That hour
 # keeps a browser whose clock is a few minutes behind this node's from refusing it as not yet valid.
 # OpenSSL 3.4 added -not_before, and Proxmox VE 9's Debian 13 has 3.5.
 make_certificate() {
     start=$(date -u -d '1 hour ago' +%Y%m%d%H%M%SZ)
-    printf 'subjectAltName = DNS:%s, IP:%s%s\nextendedKeyUsage = serverAuth\n' "$1" "$2" "${3:+, DNS:$3}" > "${work}/san.cnf"
+    san_ips=''
+    for san_ip in $2; do
+        san_ips=${san_ips:+${san_ips}, }IP:${san_ip}
+    done
+    printf 'subjectAltName = DNS:%s, %s%s\nextendedKeyUsage = serverAuth\n' "$1" "${san_ips}" "${3:+, DNS:$3}" > "${work}/san.cnf"
     openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=${3:-$1}" \
         -keyout "${work}/tls.key" -out "${work}/tls.csr" 2> /dev/null
     if [ -r /etc/pve/priv/pve-root-ca.key ]; then
@@ -145,6 +187,7 @@ own_certificate() {
     key_public_key=$(openssl pkey -in "${key_file}" -pubout 2> /dev/null | sha256sum)
     [ "${cert_public_key}" = "${key_public_key}" ] || fail "${key_file} is not the key of ${cert_file}"
     case "$1" in
+        *:*) check=-checkip ;;
         *[!0-9.]*) check=-checkhost ;;
         *) check=-checkip ;;
     esac
@@ -183,6 +226,8 @@ public_name() {
     fi
     host=$(pct exec "${ctid}" -- sed -n 's|^KUBEHENGE_PUBLIC_URL=https://||p' /etc/kubehenge/appliance.env 2> /dev/null | head -n 1)
     case "${host}" in
+        # An IPv6 address.
+        \[*) return ;;
         *[!0-9.]*) ;;
         # An address, or nothing: no name.
         *) return ;;
@@ -191,7 +236,12 @@ public_name() {
         *[!0-9A-Za-z.-]*) return ;;
         *) ;;
     esac
-    if getent ahostsv4 "${host}" 2> /dev/null | awk '{ print $1 }' | grep -qxF "$2"; then
+    resolves=ahostsv4
+    case "$2" in
+        *:*) resolves=ahostsv6 ;;
+        *) ;;
+    esac
+    if getent "${resolves}" "${host}" 2> /dev/null | awk '{ print $1 }' | grep -qxF "$2"; then
         printf '%s' "${host}"
     else
         echo "kubehenge: leaving ${host} out of the certificate: this node's DNS does not resolve it to $2; give it with --name to keep it" >&2
@@ -202,6 +252,7 @@ public_name() {
 # appliance, and points the interface and Headlamp at the address users reach them by. Both read
 # them when they start.
 install_certificate() {
+    url_host_of_public=$(url_host "$1")
     pct push "${ctid}" "${work}/tls.crt" /etc/kubehenge/tls.crt --perms 0644
     pct push "${ctid}" "${work}/tls.key" /etc/kubehenge/tls.key --perms 0600
     # shellcheck disable=SC2016 # expanded by the container's shell
@@ -212,7 +263,7 @@ install_certificate() {
         { grep -v "^KUBEHENGE_PUBLIC_URL=" "$env" || true; echo "KUBEHENGE_PUBLIC_URL=https://$1"; } > "$env.new"
         chmod 0644 "$env.new" && mv "$env.new" "$env"
         echo "HEADLAMP_CONFIG_OIDC_CALLBACK_URL=https://$1:8443/oidc-callback" > /etc/kubehenge/headlamp.env
-    ' sh "$1"
+    ' sh "${url_host_of_public}"
 }
 
 # update_pve_entry <URL>: points this node's Kubernetes entry at the appliance's address when it
@@ -251,18 +302,61 @@ ask() {
     printf '%s' "${answer}"
 }
 
-# certificate_names <certificate>: the names and IPv4 addresses its subject alternative names
-# give, in its order, one a line as "dns <name>" or "ip <address>".
+# certificate_names <certificate>: the names and addresses its subject alternative names give, in its
+# order, one a line as "dns <name>" or "ip <address>". OpenSSL prints an IPv6 address in full and in
+# capitals, so it is written here as the kernel and the resolver write it: lower case, with its
+# longest run of zero groups as "::".
 certificate_names() {
     openssl x509 -in "$1" -noout -ext subjectAltName 2> /dev/null | tr ',' '\n' |
-        sed -n -e 's/^ *IP Address:\([0-9][0-9.]*\) *$/ip \1/p' -e 's/^ *DNS:\([^ ]*\) *$/dns \1/p'
+        sed -n -e 's/^ *IP Address:\([0-9A-Fa-f:.][0-9A-Fa-f:.]*\) *$/ip \1/p' -e 's/^ *DNS:\([^ ]*\) *$/dns \1/p' |
+        awk '
+            function canonical(a, p, left, right, nl, nr, i, j, n, g, best, run, out) {
+                a = tolower(a)
+                p = index(a, "::")
+                if (p) {
+                    nl = split(substr(a, 1, p - 1), left, ":")
+                    nr = split(substr(a, p + 2), right, ":")
+                } else {
+                    nl = split(a, left, ":")
+                    nr = 0
+                }
+                n = 0
+                for (i = 1; i <= nl; i++) g[++n] = left[i]
+                if (p) for (i = 1; i <= 8 - nl - nr; i++) g[++n] = "0"
+                for (i = 1; i <= nr; i++) g[++n] = right[i]
+                for (i = 1; i <= n; i++) {
+                    sub(/^0+/, "", g[i])
+                    if (g[i] == "") g[i] = "0"
+                }
+                best = 0
+                run = 0
+                i = 1
+                while (i <= n) {
+                    if (g[i] != "0") { i++; continue }
+                    for (j = i; j <= n && g[j] == "0"; j++) { }
+                    if (j - i > run) { best = i; run = j - i }
+                    i = j
+                }
+                out = ""
+                if (run < 2) {
+                    for (i = 1; i <= n; i++) out = out (i > 1 ? ":" : "") g[i]
+                    return out
+                }
+                for (i = 1; i < best; i++) out = out (i > 1 ? ":" : "") g[i]
+                out = out "::"
+                for (i = best + run; i <= n; i++) out = out (i > best + run ? ":" : "") g[i]
+                return out
+            }
+            $1 == "ip" && $2 ~ /:/ { print "ip", canonical($2); next }
+            { print }'
 }
 
-# cluster_addresses: "<address> <node>" a line for each IPv4 address this node knows of this
-# Proxmox VE cluster's nodes: its own, and each other node's cluster address and those its name
-# resolves to. A node in no cluster is a cluster of one.
+# cluster_addresses: "<address> <node>" a line for each IPv4 and global IPv6 address this node knows
+# of this Proxmox VE cluster's nodes: its own, and each other node's cluster address and those its
+# name resolves to. A node in no cluster is a cluster of one.
 cluster_addresses() {
     ip -4 -o addr show | sed -n 's/.* inet \([0-9.]*\).*/\1/p' | sed "s/\$/ ${node}/"
+    ip -6 -o addr show scope global | grep -v -e temporary -e deprecated -e tentative | sed -n 's/.* inet6 \([0-9A-Fa-f:]*\)\/.*/\1/p' | sed "s/\$/ ${node}/"
     pvesh get /cluster/status --output-format json 2> /dev/null | tr '{' '\n' |
         grep '"type" *: *"node"' | grep -v '"local" *: *1' | while read -r member; do
         member_name=$(printf '%s' "${member}" | sed -n 's/.*"name" *: *"\([^"]*\)".*/\1/p')
@@ -270,6 +364,8 @@ cluster_addresses() {
         [ -n "${member_name}" ] || continue
         [ -z "${member_ip}" ] || echo "${member_ip} ${member_name}"
         getent ahostsv4 "${member_name}" 2> /dev/null | awk -v node="${member_name}" '{ print $1, node }'
+        # The resolver lists an IPv4 address as an IPv4-mapped one, which is no address of its own.
+        getent ahostsv6 "${member_name}" 2> /dev/null | awk -v node="${member_name}" '$1 !~ /^::ffff:/ { print $1, node }'
     done
 }
 
@@ -281,7 +377,10 @@ address_node() {
 # name_nodes <name>: the nodes of $members the name resolves to, one a line, "-" standing for an
 # address that is none of theirs; nothing when it does not resolve.
 name_nodes() {
-    getent ahostsv4 "$1" 2> /dev/null | awk '{ print $1 }' | sort -u | while read -r address; do
+    {
+        getent ahostsv4 "$1" 2> /dev/null || true
+        getent ahostsv6 "$1" 2> /dev/null || true
+    } | awk '$1 !~ /^::ffff:/ { print $1 }' | sort -u | while read -r address; do
         owner=$(address_node "${address}")
         echo "${owner:--}"
     done | sort -u
@@ -744,6 +843,10 @@ install -d -o root -g kubehenge -m 0770 "$R/var/lib/kubehenge-update/requests"
 install -d -o kubehenge -g kubehenge -m 0700 "$R/var/lib/kubehenge-keys"
 grep -q "^KUBEHENGE_APPLIANCE_VMID=" "$env" || echo "KUBEHENGE_APPLIANCE_VMID=$ctid" >> "$env"
 ip=$(ip -4 -o addr show dev eth0 | sed -n "s/.* inet \([0-9.]*\).*/\1/p" | head -n 1)
+if [ -z "$ip" ]; then
+    ip6=$(ip -6 -o addr show dev eth0 scope global | grep -v -e temporary -e deprecated -e tentative | sed -n "s/.* inet6 \([0-9A-Fa-f:]*\)\/.*/\1/p" | head -n 1)
+    [ -z "$ip6" ] || ip="[$ip6]"
+fi
 grep -q "^KUBEHENGE_PUBLIC_URL=" "$env" || echo "KUBEHENGE_PUBLIC_URL=https://$ip" >> "$env"
 if [ -n "$insecure" ]; then
     { grep -v "^KUBEHENGE_PROXMOX_INSECURE=" "$env" || true; [ "$insecure" = false ] || echo "KUBEHENGE_PROXMOX_INSECURE=true"; } > "$env.new"
@@ -835,7 +938,12 @@ security_updates() {
 # list. The container is on this node's network, so the datacenter's or the environment's proxy
 # never sees the request, which it could not route to a private address.
 appliance_realms() {
-    curl -s --noproxy '*' --cacert "$3" --resolve "$1:443:$2" -o /dev/null -w '%{http_code}' "https://$1/api/realms" || true
+    resolved_to=$(url_host "$2")
+    case "$1" in
+        # An IPv6 address in the URL needs no name resolved.
+        *:*) curl -s --noproxy '*' --cacert "$3" -o /dev/null -w '%{http_code}' "https://[$1]/api/realms" || true ;;
+        *) curl -s --noproxy '*' --cacert "$3" --resolve "$1:443:${resolved_to}" -o /dev/null -w '%{http_code}' "https://$1/api/realms" || true ;;
+    esac
 }
 
 # fetch <url> <file> <SHA-256 or SHA-512> <what it is> [<protocols>]: downloads and checks a file, with
@@ -947,6 +1055,35 @@ is_ipv4_cidr() {
     in_range "${1#*/}" 1 32
 }
 
+# is_ipv6 <address>: whether it is an IPv6 address in colon-hex form: eight groups of up to four
+# hex digits, or fewer with one "::" for the groups left out. No zone and no dotted IPv4 tail.
+is_ipv6() {
+    awk -v address="$1" 'BEGIN {
+        if (address !~ /^[0-9A-Fa-f:]+$/ || address !~ /:/ || address ~ /:::/) exit 1
+        gaps = gsub(/::/, "::", address)
+        if (gaps > 1 || address ~ /^:[^:]/ || address ~ /[^:]:$/) exit 1
+        count = split(address, group, ":")
+        named = 0
+        for (i = 1; i <= count; i++) {
+            if (length(group[i]) > 4) exit 1
+            if (group[i] != "") named++
+        }
+        if (gaps == 1) exit (named <= 7 ? 0 : 1)
+        exit (named == 8 && count == 8 ? 0 : 1)
+    }'
+}
+
+# is_ipv6_cidr <address/prefix>: whether it is an IPv6 address with a prefix length of 1 to 128.
+is_ipv6_cidr() {
+    case "$1" in
+        */*) ;;
+        *) return 1 ;;
+    esac
+    # shellcheck disable=SC2310 # is_ipv6 is a predicate; its status is the answer.
+    is_ipv6 "${1%/*}" || return 1
+    in_range "${1#*/}" 1 128
+}
+
 # is_proxy_range <address[/prefix]>: whether it is an IPv4 or IPv6 address, with a prefix length
 # that fits it when given.
 is_proxy_range() {
@@ -978,10 +1115,22 @@ in_range() {
     [ "${#1}" -le 6 ] && [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
 }
 
-# container_net: the container's net0 setting, from $bridge, $vlan, $mtu, $ip and $gateway.
+# container_net: the container's net0 setting, from $bridge, $vlan, $mtu, $ip, $gateway, $ip6 and
+# $gateway6. A gateway goes with a static address only. Without --ip6 there is no IPv6 setting, and
+# --ip none leaves the IPv4 one out.
 container_net() {
-    printf 'name=eth0,bridge=%s%s%s,ip=%s' "${bridge}" "${vlan:+,tag=${vlan}}" "${mtu:+,mtu=${mtu}}" "${ip}"
-    [ "${ip}" = dhcp ] || printf '%s' "${gateway:+,gw=${gateway}}"
+    printf 'name=eth0,bridge=%s%s%s' "${bridge}" "${vlan:+,tag=${vlan}}" "${mtu:+,mtu=${mtu}}"
+    if [ "${ip}" != none ]; then
+        printf ',ip=%s' "${ip}"
+        [ "${ip}" = dhcp ] || printf '%s' "${gateway:+,gw=${gateway}}"
+    fi
+    if [ -n "${ip6:-}" ]; then
+        printf ',ip6=%s' "${ip6}"
+        case "${ip6}" in
+            auto | dhcp) ;;
+            *) printf '%s' "${gateway6:+,gw6=${gateway6}}" ;;
+        esac
+    fi
 }
 
 # node_bridges: the bridges, Open vSwitch bridges and SDN VNets a container on this node can attach
@@ -1135,9 +1284,18 @@ require_resolvable_api_host() {
     fail "the container cannot resolve any host the Proxmox VE API could be reached at (tried ${tried}). Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns"
 }
 
-# container_gateway: the default gateway the container has, or nothing.
+# container_gateway: the default gateway the container has, its IPv4 one else its IPv6 one, or
+# nothing. A link-local IPv6 gateway carries the interface, which ping needs to reach it.
 container_gateway() {
-    pct exec "${ctid}" -- sh -c "ip -4 route show default | sed -n 's/^default via \([0-9.]*\).*/\1/p' | head -n 1" 2> /dev/null | head -n 1
+    # shellcheck disable=SC2016 # expanded by the container's shell
+    pct exec "${ctid}" -- sh -c '
+        gw=$(ip -4 route show default | sed -n "s/^default via \([0-9.]*\).*/\1/p" | head -n 1)
+        [ -n "${gw}" ] || gw=$(ip -6 route show default | sed -n "s/^default via \([0-9A-Fa-f:]*\).*/\1/p" | head -n 1)
+        case "${gw}" in
+            fe80:*) gw=${gw}%eth0 ;;
+            *) ;;
+        esac
+        printf "%s\n" "${gw}"' 2> /dev/null | head -n 1
 }
 
 # check_container_gateway: stops unless the container's gateway answers a ping. A container without
@@ -1151,7 +1309,14 @@ check_container_gateway() {
     pct exec "${ctid}" -- sh -c 'command -v ping > /dev/null || exit 127; ping -c 1 -W 3 "$1" > /dev/null' sh "${container_gw}" > /dev/null 2>&1 || ping_rc=$?
     case "${ping_rc}" in
         0 | 127) ;;
-        *) fail "container ${ctid} at ${ctip} cannot reach its gateway ${container_gw}. Check that --vlan matches the network of the address, and that --gateway is on it" ;;
+        *)
+            gateway_option=--gateway
+            case "${container_gw}" in
+                *:*) gateway_option=--gateway6 ;;
+                *) ;;
+            esac
+            fail "container ${ctid} at ${ctip} cannot reach its gateway ${container_gw}. Check that --vlan matches the network of the address, and that ${gateway_option} is on it"
+            ;;
     esac
 }
 
@@ -1212,8 +1377,10 @@ Options:
   --bridge <bridge>           a bridge, Open vSwitch bridge or SDN VNet the container attaches to; default the bridge of the node's default route, else vmbr0
   --vlan <tag>                the VLAN tag of the container's network, 1 to 4094; default none
   --mtu <bytes>               the MTU of the container's network, 576 to 65535; default the bridge's
-  --ip dhcp|<address/prefix>  the container's IPv4 address, such as 192.0.2.40/24; default dhcp
+  --ip dhcp|none|<address/prefix> the container's IPv4 address, such as 192.0.2.40/24, or none on an IPv6-only network; default dhcp
   --gateway <address>         the default gateway, an IPv4 address, with a static --ip
+  --ip6 auto|dhcp|<address/prefix> the container's IPv6 address, such as 2001:db8::40/64: auto takes one from the router's advertisements; default none
+  --gateway6 <address>        the default IPv6 gateway, with a static --ip6
   --dns <address>,...         the name servers the container asks; default this node's
   --hostname <name>           the container's host name, also in its certificate; default kubehenge
   --name <DNS name>           a DNS name people reach the appliance by, put into its certificate
@@ -1236,7 +1403,7 @@ More: https://kubehenge.dev/docs/install
 EOF
 }
 
-ctid='' storage='' template_storage='' bridge='' vlan='' mtu='' tofu_archive='' ip=dhcp gateway='' dns='' proxmox_url='' proxmox_ca='' proxmox_insecure='' hostname=kubehenge
+ctid='' storage='' template_storage='' bridge='' vlan='' mtu='' tofu_archive='' ip=dhcp gateway='' ip6='' gateway6='' dns='' proxmox_url='' proxmox_ca='' proxmox_insecure='' hostname=kubehenge
 release='' release_sha='' upgrade='' pve_entry='' certificate='' name='' no_name='' cert_file='' key_file='' trusted_proxy='' no_trusted_proxy=''
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -1279,7 +1446,7 @@ while [ $# -gt 0 ]; do
             shift
             continue
             ;;
-        --name | --cert | --key | --ctid | --storage | --template-storage | --bridge | --vlan | --mtu | --ip | --gateway | --dns | --proxmox-url | --proxmox-ca | --hostname | --release | --sha256 | --tofu | --trusted-proxy)
+        --name | --cert | --key | --ctid | --storage | --template-storage | --bridge | --vlan | --mtu | --ip | --gateway | --ip6 | --gateway6 | --dns | --proxmox-url | --proxmox-ca | --hostname | --release | --sha256 | --tofu | --trusted-proxy)
             [ $# -ge 2 ] || fail "$1 needs a value"
             ;;
         *) ;;
@@ -1297,6 +1464,8 @@ while [ $# -gt 0 ]; do
         --tofu) tofu_archive=$2 ;;
         --ip) ip=$2 ;;
         --gateway) gateway=$2 ;;
+        --ip6) ip6=$2 ;;
+        --gateway6) gateway6=$2 ;;
         --dns) dns=$2 ;;
         --proxmox-url) proxmox_url=$2 ;;
         --proxmox-ca) proxmox_ca=$2 ;;
@@ -1348,12 +1517,27 @@ if [ -n "${no_trusted_proxy}" ]; then
     trusted_proxy=none
 fi
 # shellcheck disable=SC2310 # is_ipv4_cidr is a predicate; its status is the answer.
-if [ "${ip}" != dhcp ] && ! is_ipv4_cidr "${ip}"; then
-    fail "--ip is dhcp or an IPv4 address with its prefix length, such as 192.0.2.5/24"
+if [ "${ip}" != dhcp ] && [ "${ip}" != none ] && ! is_ipv4_cidr "${ip}"; then
+    fail "--ip is dhcp or an IPv4 address with its prefix length, such as 192.0.2.5/24, or none on an IPv6-only network"
 fi
 # shellcheck disable=SC2310 # is_ipv4 is a predicate; its status is the answer.
 if [ -n "${gateway}" ] && ! is_ipv4 "${gateway}"; then
     fail "--gateway is an IPv4 address, such as 192.0.2.1"
+fi
+# shellcheck disable=SC2310 # is_ipv6_cidr is a predicate; its status is the answer.
+if [ -n "${ip6}" ] && [ "${ip6}" != auto ] && [ "${ip6}" != dhcp ] && ! is_ipv6_cidr "${ip6}"; then
+    fail "--ip6 is auto, dhcp or an IPv6 address with its prefix length, such as 2001:db8::5/64"
+fi
+# shellcheck disable=SC2310 # is_ipv6 is a predicate; its status is the answer.
+if [ -n "${gateway6}" ] && ! is_ipv6 "${gateway6}"; then
+    fail "--gateway6 is an IPv6 address, such as 2001:db8::1"
+fi
+if [ "${ip}" = none ]; then
+    [ -n "${ip6}" ] || fail "--ip none needs --ip6, as the container needs an address"
+    [ -z "${gateway}" ] || fail "--gateway goes with a static --ip"
+fi
+if [ -n "${gateway6}" ] && { [ -z "${ip6}" ] || [ "${ip6}" = auto ] || [ "${ip6}" = dhcp ]; }; then
+    fail "--gateway6 goes with a static --ip6"
 fi
 # shellcheck disable=SC2310 # in_range is a predicate; its status is the answer.
 if [ -n "${vlan}" ] && ! in_range "${vlan}" 1 4094; then
@@ -1385,7 +1569,7 @@ if [ -n "${certificate}" ]; then
     # shellcheck disable=SC2016 # expanded when the trap runs.
     install_traps 'rm -rf "$work"'
     ctip=$(appliance_ip)
-    [ -n "${ctip}" ] || fail "container ${ctid} has no IPv4 address"
+    [ -n "${ctip}" ] || fail "container ${ctid} has no IPv4 or IPv6 address"
     if [ -z "${name}${no_name}" ]; then
         pct exec "${ctid}" -- cat /etc/kubehenge/tls.crt > "${work}/current.crt" 2> /dev/null || true
         name=$(public_name "${work}/current.crt" "${ctip}")
@@ -1395,7 +1579,8 @@ if [ -n "${certificate}" ]; then
         own_certificate "${public}"
     else
         ct_hostname=$(container_hostname)
-        make_certificate "${ct_hostname}" "${ctip}" "${name}"
+        ctaddrs=$(appliance_addresses)
+        make_certificate "${ct_hostname}" "${ctaddrs}" "${name}"
     fi
     step "certificate for ${public}"
     install_certificate "${public}"
@@ -1405,8 +1590,9 @@ if [ -n "${certificate}" ]; then
     pct exec "${ctid}" -- flock -n -E 75 /var/lib/kubehenge sh -c 'systemctl restart kubehenge.service && systemctl stop kubehenge-headlamp.service' || rc=$?
     [ "${rc}" -ne 75 ] || fail "the certificate is in place but the interface is busy applying or removing the management cluster; run this again once that has finished"
     [ "${rc}" -eq 0 ] || fail "restarting the interface failed; see: pct exec ${ctid} -- journalctl -u kubehenge"
-    update_pve_entry "https://${public}"
-    printf '\nKubehenge in container %s: https://%s/\n' "${ctid}" "${public}"
+    public_url=$(url_host "${public}")
+    update_pve_entry "https://${public_url}"
+    printf '\nKubehenge in container %s: https://%s/\n' "${ctid}" "${public_url}"
     certificate_report
     exit 0
 fi
@@ -1590,10 +1776,11 @@ if [ -n "${upgrade}" ]; then
         if made_here "${work}/current.crt"; then
             step "renewing the certificate, valid until ${valid_until}"
             ctip=$(appliance_ip)
-            [ -n "${ctip}" ] || fail "container ${ctid} has no IPv4 address"
+            [ -n "${ctip}" ] || fail "container ${ctid} has no IPv4 or IPv6 address"
             name=$(public_name "${work}/current.crt" "${ctip}")
             ct_hostname=$(container_hostname)
-            make_certificate "${ct_hostname}" "${ctip}" "${name}"
+            ctaddrs=$(appliance_addresses)
+            make_certificate "${ct_hostname}" "${ctaddrs}" "${name}"
             install_certificate "${name:-${ctip}}"
         else
             echo "kubehenge: the appliance's own certificate is valid until ${valid_until}; install a new one with: sh install.sh --certificate --ctid ${ctid} --cert <file> --key <file>" >&2
@@ -1634,6 +1821,8 @@ if [ -z "${proxmox_url}" ]; then
     served=/etc/pve/local/pveproxy-ssl.pem
     [ -f "${served}" ] || served=/etc/pve/local/pve-ssl.pem
     pveip=$(ip -4 -o addr show dev "${bridge}" | sed -n 's/.* inet \([0-9.]*\).*/\1/p' | head -n 1)
+    # A node on an IPv6-only network has the bridge's IPv6 address instead.
+    [ -n "${pveip}" ] || pveip=$(ip -6 -o addr show dev "${bridge}" scope global | grep -v -e temporary -e deprecated -e tentative | sed -n 's/.* inet6 \([0-9A-Fa-f:]*\)\/.*/\1/p' | head -n 1)
     fqdn=$(hostname -f 2> /dev/null | tr '[:upper:]' '[:lower:]')
     members=$(cluster_addresses | grep -v '^127\.' | sort -u)
     api=$(choose_api_host "${served}" "${pveip}" "${fqdn}")
@@ -1641,7 +1830,7 @@ if [ -z "${proxmox_url}" ]; then
         named=$(certificate_names "${served}" | cut -d ' ' -f 2 | paste -sd , - | sed 's/,/, /g')
         fail "Proxmox VE's certificate (${served}) is valid for no name or address of this cluster's nodes, only for ${named:-none}; give the URL the appliance and the clusters reach the API at, by a name or address the certificate is valid for, with --proxmox-url"
     fi
-    proxmox_url=https://${api}:8006
+    proxmox_url=https://$(url_host "${api}"):8006
     api_hosts=$(ordered_api_hosts "${api}" "${served}" "${pveip}" "${fqdn}")
 else
     api_endpoint
@@ -1699,10 +1888,19 @@ pct start "${ctid}"
 for _ in $(seq 1 60); do
     # shellcheck disable=SC2310 # the container may not answer yet; an empty address is tried again.
     ctip=$(appliance_ip || true)
-    [ -n "${ctip}" ] && break
+    # With an IPv6 setting, the IPv6 address is waited for too, as the certificate must name it.
+    # shellcheck disable=SC2310 # the container may not have it yet; an empty address is tried again.
+    [ -n "${ctip}" ] && { [ -z "${ip6}" ] || [ -n "$(appliance_ip6 || true)" ]; } && break
     sleep 2
 done
-[ -n "${ctip}" ] || fail "container ${ctid} got no IPv4 address. Check that --vlan is the right one and that a DHCP server answers on it, or give --ip and --gateway"
+if [ -z "${ctip}" ]; then
+    if [ "${ip}" = none ]; then
+        fail "container ${ctid} got no IPv6 address. Check that --vlan is the right one and that the router advertises a prefix or a DHCPv6 server answers on it, or give --ip6 and --gateway6"
+    fi
+    fail "container ${ctid} got no IPv4 address. Check that --vlan is the right one and that a DHCP server answers on it, or give --ip and --gateway"
+fi
+# shellcheck disable=SC2310 # the container may have no IPv6 address; its absence is the answer.
+[ -z "${ip6}" ] || [ -n "$(appliance_ip6 || true)" ] || echo "kubehenge: container ${ctid} has no IPv6 address yet, so its certificate names its IPv4 address only. Check --ip6, then run: sh install.sh --certificate --ctid ${ctid}" >&2
 ok "running, at ${ctip}"
 public=${name:-${ctip}}
 check_container_gateway
@@ -1713,7 +1911,7 @@ reachable=$(require_resolvable_api_host "${api_hosts}")
 first_host=$(printf '%s\n' "${api_hosts}" | head -n 1)
 if [ "${reachable}" != "${first_host}" ]; then
     echo "kubehenge: the container cannot resolve ${first_host}, so the appliance and the clusters reach the Proxmox VE API at ${reachable}" >&2
-    proxmox_url=https://${reachable}:8006
+    proxmox_url=https://$(url_host "${reachable}"):8006
 fi
 check_container_api_port "${reachable}"
 
@@ -1723,7 +1921,8 @@ if [ -n "${cert_file}" ]; then
     ok "it matches its key and is valid for ${public}"
 else
     step "certificate for ${public}, signed by this cluster's CA"
-    make_certificate "${hostname}" "${ctip}" "${name}"
+    ctaddrs=$(appliance_addresses)
+    make_certificate "${hostname}" "${ctaddrs}" "${name}"
     ok "made"
 fi
 
@@ -1734,11 +1933,12 @@ pct exec "${ctid}" -- sh -c "${swap}"
 pct push "${ctid}" "${work}/tls.crt" /etc/kubehenge/tls.crt --perms 0644
 pct push "${ctid}" "${work}/tls.key" /etc/kubehenge/tls.key --perms 0600
 
-printf 'KUBEHENGE_PROXMOX_URL=%s\nKUBEHENGE_PUBLIC_URL=https://%s\nKUBEHENGE_APPLIANCE_VMID=%s\n' "${proxmox_url}" "${public}" "${ctid}" > "${work}/appliance.env"
+public_url=$(url_host "${public}")
+printf 'KUBEHENGE_PROXMOX_URL=%s\nKUBEHENGE_PUBLIC_URL=https://%s\nKUBEHENGE_APPLIANCE_VMID=%s\n' "${proxmox_url}" "${public_url}" "${ctid}" > "${work}/appliance.env"
 [ -z "${proxmox_insecure}" ] || echo 'KUBEHENGE_PROXMOX_INSECURE=true' >> "${work}/appliance.env"
 [ -z "${trusted_proxy}" ] || echo "KUBEHENGE_TRUSTED_PROXIES=${trusted_proxy}" >> "${work}/appliance.env"
 pct push "${ctid}" "${work}/appliance.env" /etc/kubehenge/appliance.env --perms 0644
-printf 'HEADLAMP_CONFIG_OIDC_CALLBACK_URL=https://%s:8443/oidc-callback\n' "${public}" > "${work}/headlamp.env"
+printf 'HEADLAMP_CONFIG_OIDC_CALLBACK_URL=https://%s:8443/oidc-callback\n' "${public_url}" > "${work}/headlamp.env"
 pct push "${ctid}" "${work}/headlamp.env" /etc/kubehenge/headlamp.env --perms 0644
 ok "software, certificate and settings in place"
 
@@ -1788,12 +1988,12 @@ pct set "${ctid}" --protection 1
 
 if [ "${pve_entry}" = yes ]; then
     step "Kubernetes entry in this node's Proxmox VE interface"
-    if ! sh "${work}/kubehenge/share/kubehenge/pve-entry/install.sh" --url "https://${public}"; then
+    if ! sh "${work}/kubehenge/share/kubehenge/pve-entry/install.sh" --url "https://${public_url}"; then
         echo "kubehenge: the appliance is installed, but adding the entry to this node's Proxmox VE interface failed; see above" >&2
     fi
 fi
 
-printf '\nKubehenge is running in container %s: https://%s/\n' "${ctid}" "${public}"
+printf '\nKubehenge is running in container %s: https://%s/\n' "${ctid}" "${public_url}"
 certificate_report
 [ -z "${name}" ] || printf 'Point %s at %s in your DNS.\n' "${name}" "${ctip}"
 printf 'Sign in with a Proxmox VE administrator to create the management cluster.\n'

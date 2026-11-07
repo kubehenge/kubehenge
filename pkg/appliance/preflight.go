@@ -98,7 +98,7 @@ type moduleObjects struct{ pools, roles, users, groups []string }
 // vmsOn counts the management VMs each node gets: the nodes are taken in turn.
 func (s *Settings) vmsOn() map[string]int {
 	counts := map[string]int{}
-	for i := range s.NodeAddresses {
+	for i := range s.NodeCount() {
 		if len(s.Nodes) > 0 {
 			counts[s.Nodes[i%len(s.Nodes)]]++
 		}
@@ -197,7 +197,7 @@ func (s *Settings) checkDiskSpace(inv *Inventory, f *Findings) {
 		count := vms[node]
 		where := " on " + node
 		if st.Shared {
-			count = len(s.NodeAddresses)
+			count = s.NodeCount()
 			where = ", shared by every node,"
 		}
 		if need := int64(count) * vmDiskGiB * gib; st.Avail < need {
@@ -341,9 +341,10 @@ func (s *Settings) checkMemory(inv *Inventory, f *Findings) {
 }
 
 func (s *Settings) checkAddressesFree(inv *Inventory, f *Findings) {
-	addrs := make([]string, 1, 1+len(s.NodeAddresses))
+	nodes := slices.Concat(s.NodeAddresses, s.NodeAddressesIPv6)
+	addrs := make([]string, 1, 1+len(nodes))
 	addrs[0] = s.APIAddress
-	for _, a := range s.NodeAddresses {
+	for _, a := range nodes {
 		ip, _, _ := strings.Cut(a, "/")
 		addrs = append(addrs, ip)
 	}
@@ -360,7 +361,7 @@ func (s *Settings) checkVMIDs(inv *Inventory, f *Findings) {
 	if inv.UsedVMIDs == nil {
 		return
 	}
-	need := len(s.NodeAddresses)
+	need := s.NodeCount()
 	r := ChooseVMIDRange(inv.NextID, need)
 	if free := r.Free(inv.UsedVMIDs); free < need {
 		f.Errors = append(f.Errors, fmt.Sprintf("VM IDs %d to %d, the range Proxmox VE offers new VMs from, have %s free, and the management cluster needs %d. Widen next-id under Datacenter, Options.", r.Start, r.End-1, plural(max(free, 0), "ID"), need))
@@ -390,7 +391,7 @@ func (s *Settings) checkNamesFree(inv *Inventory, f *Findings) {
 // warnPlacement warns of what works but weakens the cluster: VMs sharing a node, and an API address
 // that is one node's, which every cluster then depends on.
 func (s *Settings) warnPlacement(inv *Inventory, f *Findings) {
-	if n := len(s.NodeAddresses); n > 1 && len(s.Nodes) < n {
+	if n := s.NodeCount(); n > 1 && len(s.Nodes) < n {
 		f.Warnings = append(f.Warnings, fmt.Sprintf("%s share %s. One node failing then takes more than one etcd member down. Choose %s to survive a node failure.", plural(n, "management VM"), plural(len(s.Nodes), "Proxmox VE node"), plural(n, "node")))
 	}
 	u, err := url.Parse(inv.ProxmoxURL)

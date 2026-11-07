@@ -1935,3 +1935,268 @@ run "the_link_alias_selects_the_one_virtio_nic" {
     error_message = "the alias matches exactly one link only while each node has one virtio NIC"
   }
 }
+
+# IPv6 and dual-stack. The IPv4 runs above hold the unchanged default.
+run "dual_stack_ipv4_first" {
+  command = apply
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+  }
+
+  assert {
+    condition = alltrue([
+      for i, c in [for vm in proxmox_virtual_environment_vm.node : vm.initialization[0].ip_config[0]] : # spellchecker:disable-line
+      length(c.ipv4) == 1 && length(c.ipv6) == 1 &&
+      c.ipv4[0].address == "192.0.2.${11 + i}/24" &&
+      c.ipv4[0].gateway == "192.0.2.1" &&
+      c.ipv6[0].address == "2001:db8:1::${11 + i}/64" &&
+      c.ipv6[0].gateway == "2001:db8:1::1"
+    ])
+    error_message = "each VM takes node i's address and the gateway of both families"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if try(yamldecode(d).kind == "KubeNetworkConfig", false)
+      ] == [{
+        apiVersion     = "v1alpha1"
+        kind           = "KubeNetworkConfig"
+        podSubnets     = ["10.244.0.0/16", "fd5e:4b1c:9a20::/56"]
+        serviceSubnets = ["10.96.0.0/12", "fd5e:4b1c:9a21::/112"]
+    }]
+    error_message = "the pod and service ranges are one per family, in ip_families order"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if can(yamldecode(d).machine.kubelet)
+      ] == [{
+        machine = { kubelet = { nodeIP = { validSubnets = ["192.0.2.0/24", "2001:db8:1::/64"] } } }
+        cluster = { etcd = { advertisedSubnets = ["192.0.2.0/24"] } }
+    }]
+    error_message = "the kubelet picks its addresses from both node networks, primary first, and etcd advertises the primary one"
+  }
+
+  assert {
+    condition     = output.api_endpoint == "https://192.0.2.10:6443"
+    error_message = "an IPv4-first cluster's endpoint is the IPv4 virtual IP"
+  }
+}
+
+run "dual_stack_ipv6_first" {
+  command = apply
+
+  variables {
+    ip_families         = ["IPv6", "IPv4"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    api_address         = "2001:db8:1::10"
+    dns_servers         = ["2001:db8:1::53", "192.0.2.1"]
+  }
+
+  assert {
+    condition = alltrue([
+      for i, c in [for vm in proxmox_virtual_environment_vm.node : vm.initialization[0].ip_config[0]] : # spellchecker:disable-line
+      length(c.ipv4) == 1 && length(c.ipv6) == 1 &&
+      c.ipv4[0].address == "192.0.2.${11 + i}/24" &&
+      c.ipv6[0].address == "2001:db8:1::${11 + i}/64"
+    ])
+    error_message = "each VM takes node i's address of both families"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if try(yamldecode(d).kind == "KubeNetworkConfig", false)
+      ] == [{
+        apiVersion     = "v1alpha1"
+        kind           = "KubeNetworkConfig"
+        podSubnets     = ["fd5e:4b1c:9a20::/56", "10.244.0.0/16"]
+        serviceSubnets = ["fd5e:4b1c:9a21::/112", "10.96.0.0/12"]
+    }]
+    error_message = "the ranges follow ip_families order, IPv6 first"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if can(yamldecode(d).machine.kubelet)
+      ] == [{
+        machine = { kubelet = { nodeIP = { validSubnets = ["2001:db8:1::/64", "192.0.2.0/24"] } } }
+        cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } }
+    }]
+    error_message = "the kubelet picks the IPv6 address first, and etcd advertises the IPv6 network"
+  }
+
+  assert {
+    condition     = output.api_endpoint == "https://[2001:db8:1::10]:6443"
+    error_message = "an IPv6 virtual IP is bracketed in the API endpoint"
+  }
+}
+
+run "ipv6_only" {
+  command = apply
+
+  variables {
+    ip_families         = ["IPv6"]
+    node_addresses      = []
+    gateway             = null
+    node_addresses_ipv6 = ["2001:db8:1::11/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    api_address         = "2001:db8:1::10"
+    dns_servers         = ["2001:db8:1::53"]
+  }
+
+  assert {
+    condition = alltrue([
+      for c in [for vm in proxmox_virtual_environment_vm.node : vm.initialization[0].ip_config[0]] : # spellchecker:disable-line
+      length(c.ipv4) == 0 && length(c.ipv6) == 1 &&
+      c.ipv6[0].address == "2001:db8:1::11/64" &&
+      c.ipv6[0].gateway == "2001:db8:1::1"
+    ])
+    error_message = "an IPv6-only VM gets an ipv6 block and no ipv4 block"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if try(yamldecode(d).kind == "KubeNetworkConfig", false)
+      ] == [{
+        apiVersion     = "v1alpha1"
+        kind           = "KubeNetworkConfig"
+        podSubnets     = ["fd5e:4b1c:9a20::/56"]
+        serviceSubnets = ["fd5e:4b1c:9a21::/112"]
+    }]
+    error_message = "an IPv6-only cluster takes the IPv6 default ranges"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if can(yamldecode(d).machine.kubelet)
+      ] == [{
+        machine = { kubelet = { nodeIP = { validSubnets = ["2001:db8:1::/64"] } } }
+        cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } }
+    }]
+    error_message = "the kubelet and etcd use the IPv6 node network"
+  }
+
+  assert {
+    condition     = output.api_endpoint == "https://[2001:db8:1::10]:6443"
+    error_message = "an IPv6 virtual IP is bracketed in the API endpoint"
+  }
+}
+
+run "ipv4_config_has_no_ipv6_patch" {
+  command = apply
+
+  assert {
+    condition     = !anytrue([for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : can(yamldecode(d).machine.kubelet)])
+    error_message = "an IPv4-only cluster's Talos config carries no kubelet or etcd address settings"
+  }
+
+  assert {
+    condition = alltrue([
+      for c in [for vm in proxmox_virtual_environment_vm.node : vm.initialization[0].ip_config[0]] : # spellchecker:disable-line
+      length(c.ipv4) == 1 && length(c.ipv6) == 0
+    ])
+    error_message = "an IPv4-only VM gets no ipv6 block"
+  }
+}
+
+run "rejects_an_ipv6_address_in_node_addresses" {
+  command = plan
+
+  variables {
+    node_addresses = ["2001:db8:1::11/64"]
+  }
+
+  expect_failures = [var.node_addresses]
+}
+
+run "rejects_subnets_in_the_wrong_family_order" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+    pod_subnets         = ["fd5e:4b1c:9a20::/56", "10.244.0.0/16"]
+  }
+
+  expect_failures = [var.pod_subnets]
+}
+
+run "rejects_dual_stack_without_an_ipv6_gateway" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+  }
+
+  expect_failures = [var.gateway_ipv6]
+}
+
+run "rejects_dual_stack_without_an_ipv6_dns_server" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+  }
+
+  expect_failures = [var.dns_servers]
+}
+
+run "rejects_an_ipv6_pod_range_longer_than_63" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv6"]
+    node_addresses      = []
+    gateway             = null
+    node_addresses_ipv6 = ["2001:db8:1::11/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    api_address         = "2001:db8:1::10"
+    dns_servers         = ["2001:db8:1::53"]
+    pod_subnets         = ["fd5e:4b1c:9a20::/64"]
+  }
+
+  expect_failures = [var.pod_subnets]
+}
+
+run "rejects_an_ipv6_pod_range_over_the_node_network" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+    pod_subnets         = ["10.244.0.0/16", "2001:db8:1::/56"]
+  }
+
+  expect_failures = [proxmox_virtual_environment_vm.node]
+}
+
+run "accepts_an_ipv6_range_beside_the_node_network" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+    pod_subnets         = ["10.244.0.0/16", "2001:db8:2::/56"]
+  }
+}

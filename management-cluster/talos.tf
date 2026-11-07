@@ -93,8 +93,8 @@ data "talos_machine_configuration" "node" {
       yamlencode({
         apiVersion     = "v1alpha1"
         kind           = "KubeNetworkConfig"
-        podSubnets     = var.pod_subnets
-        serviceSubnets = var.service_subnets
+        podSubnets     = local.pod_subnets
+        serviceSubnets = local.service_subnets
       }),
       # Flannel enforces no NetworkPolicy by itself; Talos runs kube-network-policies beside it,
       # which does, with kube-proxy left as it is.
@@ -166,6 +166,13 @@ data "talos_machine_configuration" "node" {
         apiVersion    = "v1alpha1"
         kind          = "ResolverConfig"
         searchDomains = { domains = var.search_domains }
+      })],
+      # With IPv6 the kubelet registers one address per family, primary first, picked from the
+      # nodes' networks so the VIP is never taken. etcd advertises a node address of the primary
+      # family, never the VIP or an address of the other family.
+      !local.has_ipv6 ? [] : [yamlencode({
+        machine = { kubelet = { nodeIP = { validSubnets = flatten(local.node_networks) } } }
+        cluster = { etcd = { advertisedSubnets = local.node_networks[0] } }
       })],
     )),
   ]

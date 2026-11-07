@@ -1,34 +1,56 @@
 locals {
-  nodes = [for i, address in var.node_addresses : {
+  has_ipv4     = contains(var.ip_families, "IPv4")
+  has_ipv6     = contains(var.ip_families, "IPv6")
+  primary_ipv6 = var.ip_families[0] == "IPv6"
+
+  # The primary family's addresses give the node count and the address Talos is reached on.
+  primary_addresses = local.primary_ipv6 ? var.node_addresses_ipv6 : var.node_addresses
+  nodes = [for i, address in local.primary_addresses : {
     name         = format("%s-cp-%d", var.cluster_name, i)
     proxmox_node = var.proxmox_nodes[i % length(var.proxmox_nodes)]
     address      = address
+    address_ipv4 = local.has_ipv4 ? try(var.node_addresses[i], null) : null
+    address_ipv6 = local.has_ipv6 ? try(var.node_addresses_ipv6[i], null) : null
     ip           = split("/", address)[0]
   }]
-  node_ips     = [for n in local.nodes : n.ip]
-  api_endpoint = "https://${var.api_address}:6443"
+  node_ips = [for n in local.nodes : n.ip]
+  # An IPv6 literal is bracketed in a URL.
+  api_endpoint = "https://${strcontains(var.api_address, ":") ? "[${var.api_address}]" : var.api_address}:6443"
+
+  # The nodes' network of each family, in ip_families order.
+  node_networks = [for f in var.ip_families : distinct([for a in(f == "IPv6" ? var.node_addresses_ipv6 : var.node_addresses) : cidrsubnet(a, 0, 0)])]
 
   kube = ephemeral.talos_cluster_kubeconfig.this.kubernetes_client_configuration
 
+  default_pod_subnets     = { IPv4 = "10.244.0.0/16", IPv6 = "fd5e:4b1c:9a20::/56" }
+  default_service_subnets = { IPv4 = "10.96.0.0/12", IPv6 = "fd5e:4b1c:9a21::/112" }
+  pod_subnets             = var.pod_subnets == null ? [for f in var.ip_families : local.default_pod_subnets[f]] : var.pod_subnets
+  service_subnets         = var.service_subnets == null ? [for f in var.ip_families : local.default_service_subnets[f]] : var.service_subnets
+
   # Talos drops node addresses that fall inside the pod or service ranges, which leaves a node
   # without an address, so overlaps are refused before anything is created.
-  cluster_ranges = concat(var.pod_subnets, var.service_subnets)
+  cluster_ranges = concat(local.pod_subnets, local.service_subnets)
   host_ranges = distinct(concat(
-    [for a in var.node_addresses : cidrsubnet(a, 0, 0)],
-    ["${var.api_address}/32", "${var.gateway}/32"],
+    [for a in concat(var.node_addresses, var.node_addresses_ipv6) : cidrsubnet(a, 0, 0)],
+    [for h in compact([var.api_address, var.gateway, var.gateway_ipv6]) : "${h}/${strcontains(h, ":") ? 128 : 32}"],
   ))
-  # First and last address of each range, as numbers.
-  range_bounds = {
+  range_info = {
     for c in distinct(concat(local.cluster_ranges, local.host_ranges)) :
-    c => [for h in [0, -1] : sum([for i, octet in split(".", cidrhost(c, h)) : tonumber(octet) * pow(256, 3 - i)])]
+    c => { v6 = strcontains(c, ":"), ip = split("/", c)[0], bits = tonumber(split("/", c)[1]) }
   }
-  address_overlaps = flatten([
+  # OpenTofu has no 128-bit arithmetic. Two networks of one family overlap when both, cut to the
+  # shorter prefix length, are the same network.
+  range_pairs = flatten([
     for i, c in local.cluster_ranges : [
       for o in concat(local.host_ranges, slice(local.cluster_ranges, i + 1, length(local.cluster_ranges))) :
-      "${c} overlaps ${o}"
-      if local.range_bounds[c][0] <= local.range_bounds[o][1] && local.range_bounds[o][0] <= local.range_bounds[c][1]
+      { c = c, o = o, bits = min(local.range_info[c].bits, local.range_info[o].bits) }
     ]
   ])
+  address_overlaps = [
+    for p in local.range_pairs : "${p.c} overlaps ${p.o}"
+    if local.range_info[p.c].v6 == local.range_info[p.o].v6 &&
+    cidrsubnet("${local.range_info[p.c].ip}/${p.bits}", 0, 0) == cidrsubnet("${local.range_info[p.o].ip}/${p.bits}", 0, 0)
+  ]
 }
 
 provider "proxmox" {

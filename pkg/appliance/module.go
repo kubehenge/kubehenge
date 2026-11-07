@@ -41,9 +41,12 @@ module "management" {
   bridge                 = var.settings.bridge
   vlan_id                = try(var.settings.vlan, null)
   mtu                    = try(var.settings.mtu, null)
+  ip_families            = try(var.settings.ipFamilies, ["IPv4"])
   node_addresses         = var.settings.nodeAddresses
+  node_addresses_ipv6    = try(var.settings.nodeAddressesIPv6, [])
   api_address            = var.settings.apiAddress
   gateway                = var.settings.gateway
+  gateway_ipv6           = try(var.settings.gatewayIPv6, null)
   dns_servers            = var.settings.dnsServers
   search_domains         = var.settings.searchDomains
   time_servers           = var.settings.timeServers
@@ -95,7 +98,7 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		return nil, fmt.Errorf("preparing the module's working directory: %w", err)
 	}
-	ids, err := a.vmIDRange(ctx, ticket, len(s.NodeAddresses))
+	ids, err := a.vmIDRange(ctx, ticket, s.NodeCount())
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +185,7 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 	if err != nil {
 		return err
 	}
-	vars := map[string]any{"settings": map[string]any{
+	values := map[string]any{
 		"proxmox_endpoint":       a.ProxmoxURL,
 		"proxmox_ca_certificate": a.ProxmoxCA,
 		"proxmox_insecure":       a.ProxmoxInsecure,
@@ -192,9 +195,9 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 		"bridge":                 s.Bridge,
 		"vlan":                   s.VLAN,
 		"mtu":                    nilIfZero(s.MTU),
-		"nodeAddresses":          s.NodeAddresses,
+		"nodeAddresses":          append([]string{}, s.NodeAddresses...),
 		"apiAddress":             s.APIAddress,
-		"gateway":                s.Gateway,
+		"gateway":                nilIfEmpty(s.Gateway),
 		"dnsServers":             s.DNSServers,
 		"searchDomains":          append([]string{}, s.SearchDomains...),
 		"timeServers":            append([]string{}, s.TimeServers...),
@@ -223,8 +226,15 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 		"proxy":                    moduleProxy(s, a.ProxmoxURL),
 		// The module takes no null for a list.
 		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
-	}}
-	raw, err := json.MarshalIndent(vars, "", "  ")
+	}
+	if s.HasIPv6() {
+		// An IPv4 cluster leaves these out, so its variables stay as they were and the module's
+		// defaults apply.
+		values["ipFamilies"] = s.Families()
+		values["nodeAddressesIPv6"] = append([]string{}, s.NodeAddressesIPv6...)
+		values["gatewayIPv6"] = nilIfEmpty(s.GatewayIPv6)
+	}
+	raw, err := json.MarshalIndent(map[string]any{"settings": values}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding the module's variables: %w", err)
 	}

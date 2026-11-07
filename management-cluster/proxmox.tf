@@ -453,9 +453,20 @@ resource "proxmox_virtual_environment_vm" "node" {
     datastore_id = var.vm_datastore
 
     ip_config {
-      ipv4 {
-        address = local.nodes[count.index].address
-        gateway = var.gateway
+      dynamic "ipv4" {
+        for_each = local.has_ipv4 ? [local.nodes[count.index].address_ipv4] : []
+        content {
+          address = ipv4.value
+          gateway = var.gateway
+        }
+      }
+
+      dynamic "ipv6" {
+        for_each = local.has_ipv6 ? [local.nodes[count.index].address_ipv6] : []
+        content {
+          address = ipv6.value
+          gateway = var.gateway_ipv6
+        }
       }
     }
 

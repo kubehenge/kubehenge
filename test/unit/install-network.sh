@@ -139,6 +139,59 @@ expect "an address with a prefix" yes yes_or_no is_ipv4_cidr 192.0.2.1/24
 expect "an IPv6 prefix" no yes_or_no is_ipv4_cidr 2001:db8::1/64
 expect "a prefix of 0" no yes_or_no is_ipv4_cidr 192.0.2.1/0
 
+# An IPv6 address or network, and the setting that carries it.
+expect "an IPv6 address, full" yes yes_or_no is_ipv6 2001:0db8:0000:0000:0000:0000:0000:0001
+expect "an IPv6 address, compressed" yes yes_or_no is_ipv6 2001:db8::1
+expect "an IPv6 address, compressed at the start" yes yes_or_no is_ipv6 ::1
+expect "an IPv6 address, compressed at the end" yes yes_or_no is_ipv6 fd00:1::
+expect "the unspecified IPv6 address" yes yes_or_no is_ipv6 ::
+expect "an IPv6 address in capitals" yes yes_or_no is_ipv6 FD00:AB::1
+expect "an IPv6 address with seven groups and a gap" yes yes_or_no is_ipv6 1:2:3:4:5:6:7::
+expect "an IPv4 address is no IPv6 one" no yes_or_no is_ipv6 192.0.2.1
+expect "an IPv6 address with two gaps" no yes_or_no is_ipv6 2001::db8::1
+expect "an IPv6 address with three colons" no yes_or_no is_ipv6 2001:::1
+expect "an IPv6 address with nine groups" no yes_or_no is_ipv6 1:2:3:4:5:6:7:8:9
+expect "an IPv6 address with too few groups and no gap" no yes_or_no is_ipv6 1:2:3:4:5:6:7
+expect "an IPv6 address with eight groups and a gap" no yes_or_no is_ipv6 1:2:3:4:5:6:7:8::
+expect "an IPv6 group of five digits" no yes_or_no is_ipv6 2001:db80a::1
+expect "an IPv6 group that is no hex" no yes_or_no is_ipv6 2001:dbg::1
+expect "an IPv6 address starting with one colon" no yes_or_no is_ipv6 :2001:db8::1
+expect "an IPv6 address ending with one colon" no yes_or_no is_ipv6 2001:db8::1:
+expect "an IPv6 address with a zone" no yes_or_no is_ipv6 fe80::1%eth0
+expect "an IPv6 address with an IPv4 tail" no yes_or_no is_ipv6 ::ffff:192.0.2.1
+expect "a name is no IPv6 address" no yes_or_no is_ipv6 pve.example.org
+expect "nothing is no IPv6 address" no yes_or_no is_ipv6 ""
+expect "an IPv6 address with a prefix" yes yes_or_no is_ipv6_cidr 2001:db8::5/64
+expect "an IPv6 prefix of 128" yes yes_or_no is_ipv6_cidr 2001:db8::5/128
+expect "an IPv6 prefix over 128" no yes_or_no is_ipv6_cidr 2001:db8::5/129
+expect "an IPv6 prefix of 0" no yes_or_no is_ipv6_cidr 2001:db8::5/0
+expect "an IPv6 address without a prefix" no yes_or_no is_ipv6_cidr 2001:db8::5
+expect "an IPv4 address as an IPv6 network" no yes_or_no is_ipv6_cidr 192.0.2.1/24
+expect "an IPv6 address in a URL" "[2001:db8::5]" url_host 2001:db8::5
+expect "an IPv4 address in a URL" 192.0.2.5 url_host 192.0.2.5
+expect "a name in a URL" pve.example.org url_host pve.example.org
+
+bridge=vmbr0 vlan='' mtu='' ip=dhcp gateway='' ip6=auto gateway6=2001:db8::1
+expect "IPv4 by DHCP and IPv6 by router advertisement" "name=eth0,bridge=vmbr0,ip=dhcp,ip6=auto" container_net
+ip6=dhcp
+expect "IPv6 by DHCPv6, a gateway ignored" "name=eth0,bridge=vmbr0,ip=dhcp,ip6=dhcp" container_net
+ip6=2001:db8::40/64
+expect "a static IPv6 address with its gateway" "name=eth0,bridge=vmbr0,ip=dhcp,ip6=2001:db8::40/64,gw6=2001:db8::1" container_net
+gateway6=''
+expect "a static IPv6 address without a gateway" "name=eth0,bridge=vmbr0,ip=dhcp,ip6=2001:db8::40/64" container_net
+ip=none gateway6=2001:db8::1 vlan=20 mtu=1400
+expect "IPv6 alone leaves the IPv4 setting out" "name=eth0,bridge=vmbr0,tag=20,mtu=1400,ip6=2001:db8::40/64,gw6=2001:db8::1" container_net
+ip=none ip6=auto
+expect "IPv6 alone by router advertisement" "name=eth0,bridge=vmbr0,tag=20,mtu=1400,ip6=auto" container_net
+ip=192.0.2.40/24 gateway=192.0.2.1 ip6=2001:db8::40/64 gateway6=2001:db8::1 vlan='' mtu=''
+expect "both families static" "name=eth0,bridge=vmbr0,ip=192.0.2.40/24,gw=192.0.2.1,ip6=2001:db8::40/64,gw6=2001:db8::1" container_net
+ip6='' gateway6=2001:db8::1
+expect "an IPv6 gateway without an IPv6 address is left out" "name=eth0,bridge=vmbr0,ip=192.0.2.40/24,gw=192.0.2.1" container_net
+ip=dhcp gateway=''
+expect "an IPv4 run without the IPv6 options is net0 as before" "name=eth0,bridge=vmbr0,ip=dhcp" container_net
+unset ip6 gateway6
+expect "and with the options unset altogether" "name=eth0,bridge=vmbr0,ip=dhcp" container_net
+
 # The reverse proxies the interface trusts.
 expect "a proxy range: an IPv4 address" yes yes_or_no is_proxy_range 192.0.2.10
 expect "a proxy range: an IPv4 CIDR" yes yes_or_no is_proxy_range 10.0.0.0/8
@@ -219,6 +272,14 @@ expect "a template without ping" "" check_container_gateway
 rm "${root}/noping"
 : > "${root}/gateway"
 expect "no gateway: nothing to ping" "" check_container_gateway
+ctip=2001:db8::40
+printf '2001:db8::1\n' > "${root}/gateway"
+: > "${root}/pinging"
+expect "an IPv6 gateway that does not answer" "kubehenge: container 105 at 2001:db8::40 cannot reach its gateway 2001:db8::1. Check that --vlan matches the network of the address, and that --gateway6 is on it" check_container_gateway
+printf '2001:db8::1\n' > "${root}/pinging"
+expect "an IPv6 gateway that answers" "" check_container_gateway
+ctip=192.0.2.40
+: > "${root}/gateway"
 
 proxmox_url=https://192.0.2.11:8006
 printf '192.0.2.11:8006\n' > "${root}/open"
