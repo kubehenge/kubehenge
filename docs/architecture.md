@@ -145,7 +145,7 @@ Kubehenge's controller replaces the other nodes 60 days before their certificate
 
 It rolls a workers' pool through the topology's `rollout.after`. It rolls k3s's control plane through its own `rolloutAfter`, which the topology does not set for it. An RKE2 control plane of three or more is replaced one machine at a time by its health check (`cluster.x-k8s.io/remediate-machine`). RKE2's control-plane provider has no field to ask for a roll.
 
-It sets the condition `CertificatesExpiring` on the Cluster while anything runs out within 60 days. It watches the kubeconfig and talosconfig kept for each cluster as well. Talos renews its nodes' certificates itself.
+It sets the condition `CertificatesExpiring` on the Cluster while anything runs out within 60 days. A paused cluster gets it with the reason `Paused` and no replacement. It watches the kubeconfig and talosconfig kept for each cluster as well. Talos renews its nodes' certificates itself.
 
 ### VM health
 

@@ -379,6 +379,18 @@ export function RetryIn({ next, onRetry }: { next: () => number; onRetry: () => 
   );
 }
 
+const isoDate = /\d{4}-\d{2}-\d{2}/gu;
+
+/**
+ * localDates writes the dates in text from the server, which keeps them as 2026-10-13 (UTC days),
+ * as the rest of the interface writes a date.
+ */
+export function localDates(text: string): string {
+  return text.replaceAll(isoDate, (day) =>
+    new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC" }),
+  );
+}
+
 export function age(iso: string, now = Date.now()): string {
   const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / msPerSecond));
   if (s < secondsPerMinute) {

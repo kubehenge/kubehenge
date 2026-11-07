@@ -27,6 +27,8 @@ type Workload struct {
 	// Alerts answers what fires in the monitoring add-on's Alertmanager and is neither silenced nor
 	// inhibited, as its API's JSON.
 	Alerts func(ctx context.Context) ([]byte, error)
+	// Metrics opens the API server's /metrics, for the deprecated APIs in use. It may be nil.
+	Metrics provisioner.MetricsSource
 	// Close lets go of its idle connections. It may be nil.
 	Close func()
 }
@@ -80,7 +82,8 @@ func connectWorkload(server string, ca []byte, token string) (*Workload, error) 
 			}
 			return body, nil
 		},
-		Close: hc.CloseIdleConnections,
+		Metrics: provisioner.KubeMetrics(kube),
+		Close:   hc.CloseIdleConnections,
 	}, nil
 }
 
