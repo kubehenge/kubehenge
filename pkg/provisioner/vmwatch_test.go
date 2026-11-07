@@ -97,7 +97,7 @@ func newVMFixture(t *testing.T) *vmFixture {
 		pm.SetLabels(map[string]string{clusterv1.ClusterNameLabel: "web"})
 		objs = append(objs, m, pm)
 	}
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&clusterv1.Cluster{}, &clusterv1.Machine{}, proxmoxClusterObject()).Build()
 	f := &vmFixture{
 		t: t, pve: fakeProxmox{}, kube: kube, events: events.NewFakeRecorder(20), now: certNow,
 		names:   map[int64]string{101: "web-cp-0", 102: "web-cp-1", 103: "web-cp-2", 104: "web-cp-3"},
@@ -157,7 +157,7 @@ func (f *vmFixture) setNodeReady(name string, status metav1.ConditionStatus) {
 	f.t.Helper()
 	m := f.machine(name)
 	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{Type: clusterv1.MachineNodeReadyCondition, Status: status, Reason: "Test"})
-	if err := f.kube.Update(context.Background(), m); err != nil {
+	if err := f.kube.Status().Update(context.Background(), m); err != nil {
 		f.t.Fatal(err)
 	}
 }

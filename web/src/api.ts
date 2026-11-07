@@ -415,6 +415,8 @@ export interface Api {
   cordonMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** uncordonMachine lets pods onto a machine's node again. */
   uncordonMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** forgetMachine asks Kubehenge to let go of a machine that cannot finish deleting. Its VM stays in Proxmox VE. */
+  forgetMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** rebootMachine has Proxmox VE shut a machine's VM down and start it again. */
   rebootMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** supportBundle is a cluster's .tar.gz of its objects, events and the logs naming them. */
@@ -566,6 +568,8 @@ export const api: Api = {
     act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/cordon`),
   rebootMachine: (ns, name, machine) =>
     act("POST", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/reboot`),
+  forgetMachine: (ns, name, machine) =>
+    act("PUT", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/forgotten`, { confirm: machine }),
   supportBundle: (ns, name) => download("GET", `${clusterPath(ns, name)}/support-bundle`),
   bootLog: (ns, name, machine) =>
     request("GET", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/boot-log`),

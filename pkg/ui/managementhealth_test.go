@@ -102,6 +102,25 @@ func TestManagementHealthSaysWhenHostMaintenanceIsNotVisible(t *testing.T) {
 	}
 }
 
+const failingTokenReach = `{"ok":true,"checked":"2026-01-02T12:00:00Z","tokens":[` +
+	`{"name":"Controller","ok":false,"problem":"Privileges","missing":[{"path":"/access/realm/pve","privilege":"Realm.AllocateUser"}]},` +
+	`{"name":"Template builder","ok":true}]}`
+
+func reachMap(raw string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{Namespace: "kubehenge-system", Name: "kubehenge-proxmox-reach", Data: map[string]string{"reach": raw}}
+}
+
+func TestManagementHealthNamesEachTokenThatFailsItsTest(t *testing.T) {
+	t.Parallel()
+	got := readHealth(t, newHarness(t, reachMap(failingTokenReach)), "admin@pve", http.StatusOK)
+	if got.Proxmox == nil || len(got.Proxmox.Tokens) != 1 {
+		t.Fatalf("health %+v, want only the failing token", got.Proxmox)
+	}
+	if tk := got.Proxmox.Tokens[0]; tk.Name != "Controller" || tk.Problem != "Privileges" || !strings.Contains(tk.Message, "Realm.AllocateUser on /access/realm/pve") {
+		t.Fatalf("token %+v", tk)
+	}
+}
+
 func TestManagementHealthIsForThoseWhoMaySetUp(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

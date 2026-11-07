@@ -71,6 +71,43 @@ func TestMachinesAreMarkedForReplacementAndKept(t *testing.T) {
 	}
 }
 
+func TestAStuckMachineIsForgottenOnAnAdministratorsWord(t *testing.T) {
+	t.Parallel()
+	stuck := clusterMachine("one", "one-cp-1")
+	stuck.Finalizers = []string{clusterv1.MachineFinalizer}
+	stuck.DeletionTimestamp = &metav1.Time{Time: time.Now().Add(-time.Hour)}
+	healthy := clusterMachine("one", "one-cp-2")
+	h := newHarness(t, cluster("default", "one"), stuck, healthy)
+	const path = "/api/clusters/default/one/machines/one-cp-1/forgotten"
+	annotations := func(name string) map[string]string {
+		t.Helper()
+		got := &clusterv1.Machine{}
+		if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Annotations
+	}
+
+	viewer := h.browser()
+	viewer.signIn("viewer@pve")
+	expect(t, viewer.do("PUT", path, `{"confirm":"one-cp-1"}`), http.StatusForbidden)
+
+	dev := h.browser()
+	dev.signIn("dev@pve")
+	expect(t, dev.do("PUT", path, `{"confirm":"another"}`), http.StatusUnprocessableEntity)
+	expect(t, dev.do("PUT", "/api/clusters/default/one/machines/one-cp-2/forgotten", `{"confirm":"one-cp-2"}`), http.StatusConflict)
+	if _, asked := annotations("one-cp-1")[provisioner.ForgetAnnotation]; asked {
+		t.Fatal("a refused request marked the machine")
+	}
+	expect(t, dev.do("PUT", path, `{"confirm":"one-cp-1"}`), http.StatusAccepted)
+	if got := annotations("one-cp-1")[provisioner.ForgetAnnotation]; got != "one-cp-1" {
+		t.Errorf("annotation %q, want the machine's name", got)
+	}
+	if _, asked := annotations("one-cp-2")[provisioner.ForgetAnnotation]; asked {
+		t.Error("another machine is marked")
+	}
+}
+
 func TestAWorkerIsDeletedAndItsPoolShrinks(t *testing.T) {
 	t.Parallel()
 	worker := clusterMachine("one", "one-md-0-a")

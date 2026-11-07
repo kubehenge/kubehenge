@@ -219,7 +219,7 @@ func (p *auditPod) end() {
 // auditFollower keeps one stream on each API server's log and what it has read of them. The
 // streams change it, so mu guards it.
 type auditFollower struct {
-	mu sync.Mutex
+	mu changeMutex
 	// start is where the first stream of a pod starts.
 	start time.Time
 	// pods are the positions in the logs, by pod name.
@@ -378,6 +378,8 @@ func (s *Server) keepStreaming(ctx context.Context, f *auditFollower, open audit
 	done := make(chan struct{})
 	p.stop, p.done, p.heard, p.finished, p.open = stop, done, s.now(), false, false
 	f.streams.Go(func() {
+		// Runs after done is closed, to wake whoever waits for the stream to end.
+		defer f.mu.wake()
 		defer close(done)
 		defer stop()
 		s.streamPod(streamCtx, f, open, name, p)

@@ -345,6 +345,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.replaceMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.keepMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}", s.managed(s.deleteMachine))
+	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/forgotten", s.managed(s.forgetMachine))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.cordonMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.uncordonMachine))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/reboot", s.managed(s.rebootMachine))

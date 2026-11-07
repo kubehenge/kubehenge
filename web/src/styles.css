@@ -1458,6 +1458,16 @@ h4.subsection {
   list-style: none;
 }
 
+.token-problem {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.token-problem > .status {
+  flex: none;
+}
+
 .object-view > .danger-zone {
   border-color: var(--danger);
 }

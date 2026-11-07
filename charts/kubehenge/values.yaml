@@ -139,6 +139,10 @@ proxmox:
   # Secret in the release namespace with the controller's API token (key token, as
   # user@realm!name=secret) and the CA that signed the API's certificate (key ca.crt).
   secret: kubehenge-proxmox
+  # <namespace>/<name> of the Secret with Cluster API's Proxmox VE provider token (keys
+  # PROXMOX_TOKEN and PROXMOX_SECRET). The controller tests it for the privileges it needs. Empty,
+  # it is not tested.
+  capmoxSecret: ""
   # Group each cluster's Proxmox VE user joins, holding the storage and node rights clusters share.
   clusterGroup: kubehenge-clusters
   # Role each cluster's user gets on its own pool.

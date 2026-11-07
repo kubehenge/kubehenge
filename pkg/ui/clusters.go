@@ -366,6 +366,10 @@ type machineView struct {
 	HeldUntil time.Time `json:"heldUntil,omitzero"`
 	Addresses []string  `json:"addresses,omitempty"`
 	Created   time.Time `json:"created"`
+	// Stalled says why a machine that has been deleting for long cannot finish. Forgetting asks
+	// Kubehenge to let go of it without destroying its VM, and ForgetRefused is why the last ask failed.
+	Stalled       string `json:"stalled,omitempty"`
+	ForgetRefused string `json:"forgetRefused,omitempty"`
 	// Console opens the VM's console in Proxmox VE's web interface, for a user who may use it.
 	Console string `json:"console,omitempty"`
 	// Reboot tells whether the user may reboot the machine's VM.

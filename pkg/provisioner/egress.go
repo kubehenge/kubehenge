@@ -98,9 +98,10 @@ func (e Egress) resolve(cluster *clusterv1.Cluster, v *EgressProxy) (egressEnv, 
 }
 
 // unique drops repeats and keeps the order, so that the same settings always give the same values.
-func unique(list []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(list))
+// It also drops a Need listed twice, as when a builder's storages are one.
+func unique[T comparable](list []T) []T {
+	seen := map[T]bool{}
+	out := make([]T, 0, len(list))
 	for _, item := range list {
 		if !seen[item] {
 			seen[item] = true

@@ -211,15 +211,26 @@ type machineAction struct {
 	use, short, method, tail, done string
 	// undoable is false for an action that takes the machine's VM and disks, which asks for --yes.
 	undoable bool
+	// forget is set for the action that lets go of a machine being deleted. Its request names the machine.
+	forget bool
 }
 
 var machineActions = []machineAction{
-	{"replace", "Delete the machine's VM and disks and have a new one made in its place", http.MethodPut, "/replacement", "replacing", false},
-	{"keep", "Cancel a replacement that has not started", http.MethodDelete, "/replacement", "kept", true},
-	{"delete", "Drain and delete a worker, its pool shrinking by one", http.MethodDelete, "", "deleting", false},
-	{"cordon", "Keep new pods off the machine's node", http.MethodPut, "/cordon", "cordoned", true},
-	{"uncordon", "Let pods onto the machine's node again", http.MethodDelete, "/cordon", "uncordoned", true},
-	{"reboot", "Shut the machine's VM down and start it again, which needs VM.PowerMgmt", http.MethodPost, "/reboot", "rebooting", true},
+	{"replace", "Delete the machine's VM and disks and have a new one made in its place", http.MethodPut, "/replacement", "replacing", false, false},
+	{"keep", "Cancel a replacement that has not started", http.MethodDelete, "/replacement", "kept", true, false},
+	{"delete", "Drain and delete a worker, its pool shrinking by one", http.MethodDelete, "", "deleting", false, false},
+	{"cordon", "Keep new pods off the machine's node", http.MethodPut, "/cordon", "cordoned", true, false},
+	{"uncordon", "Let pods onto the machine's node again", http.MethodDelete, "/cordon", "uncordoned", true, false},
+	{"reboot", "Shut the machine's VM down and start it again, which needs VM.PowerMgmt", http.MethodPost, "/reboot", "rebooting", true, false},
+	{"forget", "Let go of a machine stuck deleting without destroying its VM, which needs Sys.Modify", http.MethodPut, "/forgotten", "asked to be forgotten", false, true},
+}
+
+// forgetBody names the machine in the request that asks to forget it, and is empty for the others.
+func forgetBody(a *machineAction, machine string) any {
+	if !a.forget {
+		return nil
+	}
+	return map[string]string{"confirm": machine}
 }
 
 func (o *clusterOptions) machineCommand() *cobra.Command {
@@ -233,20 +244,25 @@ func (o *clusterOptions) machineCommand() *cobra.Command {
 			Args:  argsSay(cobra.ExactArgs(2), "give the cluster's name and the machine's"),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if !a.undoable && !yes {
+					if a.forget {
+						return errors.New("forget leaves the machine's VM in Proxmox VE to be removed by hand: add --yes")
+					}
 					return fmt.Errorf("%s deletes the machine's VM and disks: add --yes", a.use)
 				}
 				path, err := o.clusterPath(cmd.Context(), args[0])
 				if err != nil {
 					return err
 				}
-				if _, err := o.call(cmd.Context(), a.method, path+"/machines/"+url.PathEscape(args[1])+a.tail, nil); err != nil {
+				if _, err := o.call(cmd.Context(), a.method, path+"/machines/"+url.PathEscape(args[1])+a.tail, forgetBody(&a, args[1])); err != nil {
 					return err
 				}
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "machine %s %s\n", args[1], a.done)
 				return nil
 			},
 		}
-		if !a.undoable {
+		if a.forget {
+			sub.Flags().BoolVar(&yes, "yes", false, "confirm that the machine's VM may stay in Proxmox VE unmanaged")
+		} else if !a.undoable {
 			sub.Flags().BoolVar(&yes, "yes", false, "confirm that "+a.use+" may take the machine's VM and disks")
 		}
 		cmd.AddCommand(sub)

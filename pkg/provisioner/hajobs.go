@@ -79,6 +79,9 @@ var errNotKubehenges = errors.New("not one of Kubehenge's HA objects")
 // ServeHARequest makes one HA write with the HA token, and only to Kubehenge's own HA resources and
 // rules, those whose comment HAComment wrote: the token could do much else.
 func ServeHARequest(ctx context.Context, ha *proxmox.Client, raw []byte) (string, error) {
+	if out, ok, err := servePermissions(ctx, ha, raw); ok {
+		return out, err
+	}
 	var req HARequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return "", fmt.Errorf("the request: %w", err)

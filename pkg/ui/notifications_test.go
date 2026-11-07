@@ -130,6 +130,36 @@ func TestAClusterProblemIsToldOnceItHasStoodAndAgainWhenItClears(t *testing.T) {
 	}
 }
 
+func TestAFailingProxmoxTokenIsToldWithItsPrivilegeAndPathAndResolved(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, reachMap(failingTokenReach))
+	target := newHook(t)
+	notifyTarget(t, h, notify.PurposeWebhook, map[string]string{"url": target.URL})
+	ctx := t.Context()
+	h.server.notifyOnce(ctx)
+	h.clock = h.clock.Add(notifyHold)
+	h.server.notifyOnce(ctx)
+	got := target.taken()
+	if len(got) != 1 || got[0].Title != "Controller token cannot use Proxmox VE" || got[0].Severity != notify.Error ||
+		!strings.Contains(got[0].Text, "Realm.AllocateUser on /access/realm/pve") {
+		t.Fatalf("told %+v, want the controller token with its missing privilege", got)
+	}
+	cm := reachMap(`{"ok":true,"checked":"2026-01-02T12:05:00Z","tokens":[{"name":"Controller","ok":true}]}`)
+	live := &corev1.ConfigMap{}
+	if err := h.kube.Get(ctx, client.ObjectKeyFromObject(cm), live); err != nil {
+		t.Fatal(err)
+	}
+	live.Data = cm.Data
+	if err := h.kube.Update(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	h.clock = h.clock.Add(time.Minute)
+	h.server.notifyOnce(ctx)
+	if got := titles(target.taken()); len(got) != 1 || got[0] != "resolved Resolved: Controller token cannot use Proxmox VE" {
+		t.Fatalf("told %v, want it resolved", got)
+	}
+}
+
 func TestATestNotificationGoesToEveryTargetAndSaysHowEachWent(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

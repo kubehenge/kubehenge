@@ -44,9 +44,49 @@ type activityEntry struct {
 	Details map[string]string `json:"details,omitempty"`
 }
 
+// changeMutex is a mutex whose Unlock tells whoever waits on next that the state it guards may have
+// changed, so that a wait ends on the change and not on a clock. release unlocks without telling,
+// for a reader.
+type changeMutex struct {
+	sync.Mutex
+
+	changed chan struct{}
+}
+
+// Unlock unlocks and wakes the waiters.
+func (m *changeMutex) Unlock() {
+	m.signal()
+	m.Mutex.Unlock()
+}
+
+// wake tells the waiters that something changed that the lock does not guard.
+func (m *changeMutex) wake() {
+	m.Lock()
+	m.signal()
+	m.release()
+}
+
+// signal closes the channel the waiters hold. The caller holds the lock.
+func (m *changeMutex) signal() {
+	if m.changed != nil {
+		close(m.changed)
+		m.changed = nil
+	}
+}
+
+func (m *changeMutex) release() { m.Mutex.Unlock() }
+
+// next is the channel the next Unlock closes. The caller holds the lock.
+func (m *changeMutex) next() <-chan struct{} {
+	if m.changed == nil {
+		m.changed = make(chan struct{})
+	}
+	return m.changed
+}
+
 // activityLog keeps the entries, in a file when there is a folder for one.
 type activityLog struct {
-	mu   sync.Mutex
+	mu   changeMutex
 	path string
 	size int64
 	// maxBytes is activityMaxBytes, smaller in tests.
@@ -156,7 +196,7 @@ func (l *activityLog) since(from time.Time, limit int, keep func(*activityEntry)
 	} else {
 		all, err = l.readFile()
 	}
-	l.mu.Unlock()
+	l.mu.release()
 	if err != nil {
 		return nil, err
 	}
