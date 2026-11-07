@@ -100,6 +100,31 @@ func TestPinningRefusesABadVersionAndAMissingChecksumFile(t *testing.T) {
 	expect(t, a.do("POST", "/api/release-pins", stale), http.StatusConflict)
 }
 
+func TestAReleaseAClusterRunsStaysPinned(t *testing.T) {
+	t.Parallel()
+	running := cluster("default", "one")
+	running.Spec.Topology.Version = pinnedK3s
+	h := newHarness(t, running)
+	srv := releaseServer(t)
+	h.server.PinChecks = &provisioner.ReleaseChecksums{HTTP: srv.Client(), GitHub: srv.URL, Raw: srv.URL}
+	a := h.browser()
+	a.signIn("admin@pve")
+	rec := a.do("POST", "/api/release-pins/check", `{"version":"`+pinnedK3s+`"}`)
+	expect(t, rec, http.StatusOK)
+	var shown releasePinView
+	if err := json.Unmarshal(rec.Body.Bytes(), &shown); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, a.do("POST", "/api/release-pins", `{"version":"`+pinnedK3s+`","file":"`+shown.File+`","script":"`+shown.Script+`"}`), http.StatusCreated)
+	rec = a.do("GET", "/api/release-pins", "")
+	expect(t, rec, http.StatusOK)
+	var listed releasePinsView
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil || len(listed.Pins) != 1 || listed.Pins[0].InUse != "default/one" {
+		t.Fatalf("pins listed: %s", rec.Body)
+	}
+	expect(t, a.do("DELETE", "/api/release-pins/"+strings.ReplaceAll(pinnedK3s, "+", "%2B"), ""), http.StatusConflict)
+}
+
 func TestOnlyAdministratorsChangeReleasePins(t *testing.T) {
 	t.Parallel()
 	h, _ := pinHarness(t)

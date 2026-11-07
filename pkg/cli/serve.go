@@ -218,9 +218,11 @@ func (o *serveOptions) runDemo(ctx context.Context) error {
 		clock = func() time.Time { return at }
 	}
 	o.s.Assets = ui.Frontend()
-	if err = ui.SetUpDemo(&o.s, clock); err != nil {
+	cleanup, err := ui.SetUpDemo(&o.s, clock)
+	if err != nil {
 		return fmt.Errorf("--demo: %w", err)
 	}
+	defer cleanup()
 	return o.serve(ctx)
 }
 

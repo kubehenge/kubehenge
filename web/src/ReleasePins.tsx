@@ -31,7 +31,7 @@ export function ReleasePins(): JSX.Element {
       <ErrorBox message={error} />
       {data && data.pins.length === 0 && <p>No releases pinned</p>}
       {data && data.pins.length > 0 && (
-        <table className="grid">
+        <table className="grid stack">
           <thead>
             <tr>
               <th>Release</th>
@@ -48,7 +48,7 @@ export function ReleasePins(): JSX.Element {
                   {p.version}
                   {filled(p.inUse) && <div className="muted">In use by {p.inUse}</div>}
                 </td>
-                <td>
+                <td data-label="Pinned by">
                   {p.by ?? "Unknown"}
                   {filled(p.at) && <div className="muted">{new Date(p.at).toLocaleDateString()}</div>}
                 </td>

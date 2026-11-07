@@ -63,7 +63,7 @@ function TemplatesBox(): JSX.Element {
       <ErrorBox message={error} />
       {data && data.templates.length === 0 && <p>No templates yet</p>}
       {data && data.templates.length > 0 && (
-        <table className="grid">
+        <table className="grid stack">
           <thead>
             <tr>
               <th>Template</th>
@@ -82,8 +82,8 @@ function TemplatesBox(): JSX.Element {
                 <td>
                   {t.line} <span className="muted">({t.vmid})</span>
                 </td>
-                <td>{t.nodeOS ?? "Talos Linux"}</td>
-                <td>
+                <td data-label="Node OS">{t.nodeOS ?? "Talos Linux"}</td>
+                <td data-label="Build">
                   {t.built === undefined ? (
                     <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
                   ) : (
@@ -91,16 +91,15 @@ function TemplatesBox(): JSX.Element {
                       {new Date(t.built).toLocaleString()}
                       {t.newest === true && <span className="muted"> (newest)</span>}
                       {t.older === true && (
-                        <>
-                          {" "}
+                        <div>
                           <Status state="warning" text="Older than the previous build" />
-                        </>
+                        </div>
                       )}
                     </>
                   )}
                 </td>
-                <td>{t.node}</td>
-                <td>{t.inUse ?? "None"}</td>
+                <td data-label="Node">{t.node}</td>
+                <td data-label="Used by">{t.inUse ?? "None"}</td>
                 <td className="row-action">
                   <button
                     type="button"

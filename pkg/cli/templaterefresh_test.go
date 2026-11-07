@@ -405,6 +405,20 @@ func writeKubeconfig(t *testing.T, server string) {
 	t.Setenv("KUBECONFIG", path)
 }
 
+func TestTheKubeadmPatchesSettingSwitchesThePatchBuildsOff(t *testing.T) {
+	t.Parallel()
+	cmd := newTemplateRefreshCommand(&pve.Config{})
+	if f := cmd.Flags().Lookup("kubeadm-patches"); f == nil || f.DefValue != "true" {
+		t.Fatalf("--kubeadm-patches is %+v, want a flag that defaults to on", f)
+	}
+	if (&templateRefreshOptions{kubeadmPatches: true}).patches() == nil {
+		t.Error("the patch builds are off though the setting is on")
+	}
+	if (&templateRefreshOptions{kubeadmPatches: false}).patches() != nil {
+		t.Error("the patch builds are on though the setting is off")
+	}
+}
+
 func TestTheRefreshChecksItsFlagsFirst(t *testing.T) {
 	// No configuration at all, so that nothing reaches a cluster this machine's own kubeconfig names.
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))

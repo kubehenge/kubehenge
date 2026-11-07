@@ -122,6 +122,31 @@
     }
   ],
   "kubeadmTemplates": ["v1.37.1", "v1.36.5", "v1.35.9"],
+  "management": {
+    "nodes": ["pve1", "pve2", "pve3"],
+    "imageDatastore": "local-lvm",
+    "vmDatastore": "local-lvm",
+    "bridge": "vmbr0",
+    "nodeAddresses": ["10.20.1.11/24", "10.20.1.12/24", "10.20.1.13/24"],
+    "apiAddress": "10.20.1.10",
+    "gateway": "10.20.1.1",
+    "dnsServers": ["10.20.0.53"],
+    "workloadDatastores": ["local-lvm"],
+    "workloadBridges": ["vmbr0"],
+    "bootstrapDatastore": "local-lvm",
+    "templateRefresh": { "enabled": true, "weekday": "Sun", "time": "01:00", "timeZone": "UTC", "kubeadmPatches": true }
+  },
+  "templateBuilds": [
+    { "distribution": "rke2", "builds": [{ "agoDays": 1, "older": true }, { "agoDays": 8 }, { "agoDays": 15 }] },
+    { "distribution": "k3s", "builds": [{ "agoDays": 8 }, { "agoDays": 15 }] },
+    { "distribution": "kubeadm", "kubernetesVersion": "v1.37.1", "builds": [{ "agoDays": 8 }] },
+    { "distribution": "kubeadm", "kubernetesVersion": "v1.36.5", "builds": [{ "agoDays": 8 }, { "agoDays": 15 }] },
+    { "distribution": "talos" }
+  ],
+  "releasePins": [
+    { "version": "v1.36.5+rke2r1", "by": "admin@pve", "agoDays": 18 },
+    { "version": "v1.37.2+rke2r1", "by": "dana@pve", "agoDays": 2 }
+  ],
   "activity": [
     { "agoMinutes": 8820, "user": "dana@pve", "what": "created cluster", "cluster": "staging", "details": { "class": "kubehenge-rke2" } },
     { "agoMinutes": 7320, "user": "admin@pve", "what": "changed cluster", "cluster": "payments" },

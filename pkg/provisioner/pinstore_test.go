@@ -89,14 +89,35 @@ func TestPinStoreRemovesAPinOnlyWhileNoClusterRunsIt(t *testing.T) {
 
 func TestReleaseChecksumsDigestsRefuseABadVersionAndAMissingChecksumFile(t *testing.T) {
 	t.Parallel()
-	r, f := newReleaseChecksums(t)
+	r, _ := newReleaseChecksums(t)
 	if _, err := r.Digests(context.Background(), "1.36.6"); !errors.Is(err, ErrNotARelease) {
 		t.Errorf("a bad version gave %v", err)
 	}
 	if _, err := r.Digests(context.Background(), "v1.99.9+rke2r1"); !errors.Is(err, errUnlisted) {
 		t.Errorf("a release without a checksum file gave %v", err)
 	}
-	_ = f
+}
+
+// The patch hook installs a release only an administrator pinned, with the digests they pinned.
+func TestThePatchHookReadsThePinsAnAdministratorAdded(t *testing.T) {
+	t.Parallel()
+	pin := ReleasePin{File: strings.Repeat("a", 64), Script: strings.Repeat("b", 64)}
+	store := pinStore(t)
+	r := &ReleaseChecksums{Pins: ReleasePins{}, Store: store}
+	item := releaseItem(t, "RKE2ControlPlaneTemplate", pinnedLater, pinnedLater)
+	if _, err := r.patch(t.Context(), item, cluster()); err == nil || !strings.Contains(err.Error(), "pins no rke2 release "+pinnedLater) {
+		t.Fatalf("a release nobody pinned gave %v", err)
+	}
+	if err := store.Add(t.Context(), pinnedLater, pin, "admin", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	patch, err := r.patch(t.Context(), item, cluster())
+	if err != nil {
+		t.Fatalf("the release an administrator pinned: %v", err)
+	}
+	if !strings.Contains(string(patch), pin.File+" "+pin.Script) {
+		t.Errorf("the patch does not carry the pinned digests: %s", patch)
+	}
 }
 
 func TestChannelsAndTheValidatorAdmitAReleaseAnAdministratorPinned(t *testing.T) {
