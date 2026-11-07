@@ -1,0 +1,2 @@
+- The `nodeCustomisation` variable adds files, boot commands, kubelet and control-plane arguments, an audit policy and an audit webhook to the nodes of every distribution. Set it in the create wizard's **Advanced** section, in **Options**, with `kubehenge cluster create` and `cluster update` flags, or with kubectl.
+- A changed Secret or ConfigMap that `nodeCustomisation` names replaces the nodes it reaches. The plan and Activity say which one changed.
