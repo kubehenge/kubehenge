@@ -61,6 +61,9 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | DNS servers | IPv4 addresses, one per line or separated by commas. |
 | Load balancer | What gives Services of type `LoadBalancer` their addresses, [below](#load-balancer). |
 | Load-balancer addresses | With a load balancer: the addresses it hands out, as ranges, networks or single addresses. |
+| Announce with | With MetalLB: layer 2 (ARP) or BGP, [below](#bgp). |
+| Cluster AS number, Routers | With BGP: the cluster's AS number, and each router's address and AS number. |
+| Use a BGP password | With BGP: one TCP-MD5 password for every router. |
 | Pod network | The CNI, [below](#pod-network). |
 | Pod range, Service range | Optional, under **Pod and service ranges**. |
 
@@ -83,12 +86,31 @@ Without one, kubeadm and RKE2 clusters give Services of type `LoadBalancer` no a
 
 With one, each such Service takes an address of its own from the load-balancer addresses. One node at a time answers for it on the nodes' network. When that node fails, another takes over. Choose:
 
-- **MetalLB** (recommended), in layer 2 mode, in the `metallb-system` namespace.
-- **kube-vip**, in `kube-system`, with kube-vip's cloud provider handing out the addresses.
+- **MetalLB** (recommended), in the `metallb-system` namespace. It announces in layer 2 (ARP) or over BGP.
+- **kube-vip**, in `kube-system`, with kube-vip's cloud provider handing out the addresses. It announces in layer 2 only.
 
-The addresses must be unused and on the nodes' network. They must differ from the node addresses, the API address, the gateway and the network's own and broadcast addresses. Kubehenge refuses a clash with these, or with another cluster's addresses on the same bridge and VLAN. It checks when the cluster is created and whenever its addresses change.
+In layer 2, the addresses must be unused and on the nodes' network. They must differ from the node addresses, the API address, the gateway and the network's own and broadcast addresses. Kubehenge refuses a clash with these, or with another cluster's addresses on the same bridge and VLAN. It checks when the cluster is created and whenever its addresses change.
 
 On k3s, a load balancer switches servicelb off. The load balancer can be switched, or changed to other addresses, later ([below](#change-settings)). Services whose addresses are outside the new range then take new ones from it. A switch from MetalLB to kube-vip hands every Service its address afresh.
+
+##### Layer 2 and switches that inspect ARP
+
+Layer 2 needs the switch to accept the nodes' gratuitous ARP for the load-balancer addresses and for the API address. A switch with dynamic ARP inspection or port security drops it. The Service then shows an `EXTERNAL-IP` that nobody answers for. Allow the addresses on the switch, or use BGP.
+
+##### BGP
+
+The `bgp` mode announces the load-balancer addresses and the API address to your routers instead of answering ARP. The addresses may then lie in a routed range outside the nodes' network. The gateway, the node addresses, the API address and other clusters' addresses are still refused.
+
+- **Cluster AS number** and **Routers**: the cluster's AS number and each router's address and AS number. AS numbers run from 1 to 4294967295. Routers are IPv4.
+- **Services:** MetalLB announces them from the workers, through its frr-k8s backend. A cluster needs at least one worker while the load balancer is on.
+- **The API address:** kube-vip on the control planes announces it. The control plane that leads announces it, and another takes over when it fails. This works on kubeadm, RKE2 and k3s. Talos has no BGP option for its virtual IP.
+- **The routers** must accept a session from every node's own address, with the cluster's AS number. The control planes peer for the API address and the workers for the Services.
+- **Separate sessions:** MetalLB's peers skip the control planes. A node would otherwise open two sessions to one router from one address, which most routers refuse.
+- **Password:** *Use a BGP password* protects every session with TCP-MD5, one password for all routers, without spaces, colons or commas. The cluster waits until you enter it.
+- **Where the password lives:** the cluster's `bgp` credential. Two Secrets copy it, one beside the cluster for kube-vip and one in the workload cluster for MetalLB. It is in no ClusterClass or chart value.
+- **Not supported:** ports other than 179, since kube-vip's peer list has no port.
+
+Switching between the modes removes the advertisement and peers of the old mode.
 
 #### Pod network
 
@@ -587,7 +609,7 @@ The add-ons and sign-in:
 - **Cluster Mesh**, on a cluster that runs Cilium: join or leave, and choose the peers.
   - Each listed peer shows whether it is linked, and why not. A peer you cannot see shows only that it is not linked, or does not exist.
   - Peers come and go without restarting anything. Joining or leaving upgrades Cilium and restarts its agents.
-- **Load balancer:** choose MetalLB, kube-vip or none, and change its addresses.
+- **Load balancer:** choose MetalLB, kube-vip or none, change its addresses, and switch MetalLB between layer 2 and BGP.
   - Switching uninstalls the one before. Switched off, the cluster keeps the addresses for when it is switched on again.
 - **GitOps:** switch it on or off, and choose the engine, the repository, how it is read and how the web interface signs in.
   - The dialog shows the deploy key, with a button to copy it, and the fingerprints of the server's host keys. It also stores a token or client secret.
@@ -1147,7 +1169,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s and Talos: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
 | `nodeOS` | no | kubeadm, RKE2 and k3s: `family` and `release`, a node OS Kubehenge builds templates of ([templates.md](templates.md#node-oses)). Default AlmaLinux 10. Changing it replaces every node ([above](#change-settings)). |
 | `cis` | no | Harden the cluster to the CIS Kubernetes Benchmark ([above](#add-ons)). Default false. The class refuses a change once the cluster exists. |
-| `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)). `enabled` (default false). `implementation`, `metallb` (default) or `kube-vip`. `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network, needed while `enabled`. |
+| `loadBalancer` | no | Addresses for Services of type `LoadBalancer` ([above](#load-balancer)). `enabled` (default false). `implementation`, `metallb` (default) or `kube-vip`. `addresses`, a list of ranges, networks in CIDR notation or single addresses on the nodes' network (any routed ones with `mode: bgp`), needed while `enabled`. `mode`, `l2` (default) or `bgp` ([above](#bgp)). `bgp`, needed with `mode: bgp`: `asn` and `peers`, a list of routers with `address` and `asn`, and `authenticated` (default false) to sign the sessions with the password in the cluster's `bgp` credential. |
 | `headlamp` | no | `enabled` (default false). `hostname`, to serve it through the cluster's ingress controller. `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname`. When unset, one from the certificates add-on while it is on, else the ingress controller's default certificate. `access`, `token` (default) or `view`, read-only without sign-in ([above](#add-ons)). |
 | `monitoring` | no | `enabled` (default false), which installs cert-manager too ([above](#add-ons)). `hostname`, to serve Grafana through the cluster's ingress controller. `tlsSecret`, a Secret in the `monitoring` namespace with the certificate for `hostname`. When unset, as for `headlamp`. |
 | `logs` | no | Loki and Grafana Alloy, which need `monitoring` ([above](#add-ons)). `enabled` (default false). `collector`, `node` (default) or `api`. `retentionDays` (1 to 366, default 7). `sizeGiB`, Loki's volume (1 to 1024, default 10), which only grows. |

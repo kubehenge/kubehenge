@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,11 +43,47 @@ const (
 	pointToPointBits = 31
 )
 
+// The modes a cluster's load balancer announces addresses in: ARP on the nodes' network, or BGP to
+// routers.
+const (
+	modeL2  = "l2"
+	modeBGP = "bgp"
+	// maxASN is the largest 4-byte autonomous system number.
+	maxASN = 1<<32 - 1
+	// metalLBPoolName names the pool and its advertisement. Peers carry it as a prefix, which marks
+	// the objects Kubehenge owns among any a person adds beside them.
+	metalLBPoolName = "kubehenge"
+	// controlPlaneLabel keeps MetalLB's sessions off control-plane nodes, where kube-vip already holds
+	// one for the control-plane address from the same node address.
+	controlPlaneLabel = "node-role.kubernetes.io/control-plane"
+)
+
 // LoadBalancer is a cluster's loadBalancer variable.
 type LoadBalancer struct {
 	Enabled        bool     `json:"enabled"`
 	Implementation string   `json:"implementation"`
+	Mode           string   `json:"mode"`
 	Addresses      []string `json:"addresses"`
+	BGP            *BGP     `json:"bgp"`
+}
+
+// BGP is the routers a cluster announces its addresses to, and the autonomous system it does so from.
+type BGP struct {
+	ASN   uint32    `json:"asn"`
+	Peers []BGPPeer `json:"peers"`
+	// Authenticated signs every session with the password in the cluster's bgp credential.
+	Authenticated bool `json:"authenticated"`
+}
+
+// BGPPeer is a router every node peers with.
+type BGPPeer struct {
+	Address string `json:"address"`
+	ASN     uint32 `json:"asn"`
+}
+
+// bgp reports whether the cluster announces its addresses over BGP.
+func (l LoadBalancer) bgp() bool {
+	return l.Mode == modeBGP
 }
 
 // implementation is the load balancer chosen, MetalLB unless it is kube-vip.
@@ -70,7 +108,7 @@ func loadBalancerCharts(charts *Charts, lb LoadBalancer) ([]chartProxy, error) {
 		return nil, fmt.Errorf("loadBalancer.addresses: %w", err)
 	}
 	if lb.implementation() == metalLB {
-		return []chartProxy{{"load-balancer", metalLB, metalLBNamespace, charts.MetalLB, metalLBValues()}}, nil
+		return []chartProxy{{"load-balancer", metalLB, metalLBNamespace, charts.MetalLB, metalLBValues(lb)}}, nil
 	}
 	ranges := make([]string, 0, len(spans))
 	for _, s := range spans {
@@ -97,16 +135,56 @@ func withImage(values map[string]any, image Image) map[string]any {
 	return values
 }
 
-// metalLBValues run MetalLB's layer 2 mode only, without frr-k8s, the BGP backend its chart
-// deploys by default as a privileged DaemonSet on the host's network. Its speakers answer from
-// every node, the control planes too, which kubeadm labels as excluded from load balancers: a
-// cluster without workers has no other nodes to answer from.
-func metalLBValues() map[string]any {
-	return map[string]any{
+// metalLBValues run MetalLB in layer 2 mode without frr-k8s, the BGP backend its chart deploys by
+// default as a privileged DaemonSet on the host's network, and with it in BGP mode, the backend its
+// chart recommends since FRR in the speaker is deprecated. Its speakers answer from every node, the
+// control planes too, which kubeadm labels as excluded from load balancers: a cluster without
+// workers has no other nodes to answer from in layer 2.
+func metalLBValues(lb LoadBalancer) map[string]any {
+	values := map[string]any{
 		"speaker":    map[string]any{"ignoreExcludeLB": true, "resources": reserved(cpu10m, memory64Mi)},
 		"controller": map[string]any{"resources": reserved(cpu10m, memory64Mi)},
-		"frrk8s":     map[string]any{"enabled": false},
+		"frrk8s":     map[string]any{"enabled": lb.bgp()},
 	}
+	if lb.bgp() {
+		values["frr-k8s"] = map[string]any{"frrk8s": map[string]any{
+			"resources":  frrK8sRequests.controller.values(),
+			"frr":        map[string]any{"resources": frrK8sRequests.frr.values()},
+			"reloader":   map[string]any{"resources": frrK8sRequests.reloader.values()},
+			"frrMetrics": map[string]any{"resources": frrK8sRequests.metrics.values()},
+			"frrStatus":  map[string]any{"resources": frrK8sRequests.status.values()},
+		}}
+	}
+	return values
+}
+
+// containerRequest is what a container asks the scheduler for.
+type containerRequest struct{ millicores, mebibytes int }
+
+func (r containerRequest) values() map[string]any {
+	return reserved(strconv.Itoa(r.millicores)+"m", strconv.Itoa(r.mebibytes)+"Mi")
+}
+
+// frrK8sRequests are the requests of the containers of frr-k8s, which MetalLB's chart deploys in BGP
+// mode and which asks for nothing by itself: its pods would get the least CPU weight a node gives,
+// and miss the keepalives that hold the sessions on a busy node. The controller's request is also
+// that of the status cleaner, which the chart gives the same value. The node-wide DaemonSet runs
+// the controller, frr, the reloader and the two exporters on every node.
+var frrK8sRequests = struct{ controller, frr, reloader, metrics, status containerRequest }{
+	controller: containerRequest{10, 32}, frr: containerRequest{10, 64}, reloader: containerRequest{5, 16},
+	metrics: containerRequest{5, 16}, status: containerRequest{5, 16},
+}
+
+// BGPBackendRequests is what frr-k8s adds to the load balancer's pooled add-on figures in BGP mode,
+// in millicores and MiB: one node's share of the DaemonSet and the status cleaner that runs once.
+func BGPBackendRequests() (int, int) {
+	r := frrK8sRequests
+	cpu, memory := 0, 0
+	for _, c := range []containerRequest{r.controller, r.frr, r.reloader, r.metrics, r.status, r.controller} {
+		cpu += c.millicores
+		memory += c.mebibytes
+	}
+	return cpu, memory
 }
 
 // kubeVipValues run kube-vip on every node for the Services only, each Service's address held by
@@ -123,24 +201,65 @@ func kubeVipValues() map[string]any {
 	}
 }
 
-// metalLBPool is the address pool MetalLB hands out and announces, and its announcement in layer 2.
-func metalLBPool(spans []addressSpan) []*unstructured.Unstructured {
+// MetalLB's kinds that announce the pool, and the group version each is served at.
+const (
+	metalLBGroup     = "metallb.io"
+	l2Advertisement  = "L2Advertisement"
+	bgpAdvertisement = "BGPAdvertisement"
+	bgpPeerKind      = "BGPPeer"
+	// The versions MetalLB's kinds are served at. BGPPeer alone is at the second.
+	metalLBv1 = "v1beta1"
+	metalLBv2 = "v1beta2"
+)
+
+// metalLBAnnouncers are the kinds of what announces the pool, with their versions. Only one mode's
+// are kept.
+var metalLBAnnouncers = map[string]string{l2Advertisement: metalLBv1, bgpAdvertisement: metalLBv1, bgpPeerKind: metalLBv2}
+
+// peerName names the BGPPeer of a router.
+func peerName(address string) string {
+	return metalLBPoolName + "-peer-" + strings.NewReplacer(".", "-", ":", "-").Replace(address)
+}
+
+// metalLBPool is the address pool MetalLB hands out and announces, and its announcement: in layer 2
+// one advertisement, in BGP an advertisement and a peer for each router. The sessions come from the
+// workers only, as the control planes' kube-vip holds the control-plane address from the same node
+// addresses to the same routers, which most routers refuse twice.
+func metalLBPool(spans []addressSpan, lb LoadBalancer) []*unstructured.Unstructured {
 	addresses := make([]any, 0, len(spans))
 	for _, s := range spans {
 		addresses = append(addresses, s.first.String()+"-"+s.last.String())
 	}
-	const name = "kubehenge"
-	resources := []map[string]any{
-		{"kind": "IPAddressPool", "spec": map[string]any{"addresses": addresses}},
-		{"kind": "L2Advertisement", "spec": map[string]any{"ipAddressPools": []any{name}}},
+	const name = metalLBPoolName
+	objects := []*unstructured.Unstructured{metalLBObject("IPAddressPool", metalLBv1, name, map[string]any{"addresses": addresses})}
+	if !lb.bgp() {
+		return append(objects, metalLBObject(l2Advertisement, metalLBv1, name, map[string]any{"ipAddressPools": []any{name}}))
 	}
-	objects := make([]*unstructured.Unstructured, 0, len(resources))
-	for _, r := range resources {
-		r[apiVersionKey] = "metallb.io/v1beta1"
-		r["metadata"] = map[string]any{"name": name, "namespace": metalLBNamespace}
-		objects = append(objects, &unstructured.Unstructured{Object: r})
+	objects = append(objects, metalLBObject(bgpAdvertisement, metalLBv1, name, map[string]any{"ipAddressPools": []any{name}}))
+	if lb.BGP == nil {
+		return objects
+	}
+	for _, p := range lb.BGP.Peers {
+		spec := map[string]any{
+			"myASN": int64(lb.BGP.ASN), "peerASN": int64(p.ASN), "peerAddress": p.Address,
+			"nodeSelectors": []any{map[string]any{matchExpressionsKey: []any{map[string]any{
+				"key": controlPlaneLabel, "operator": "DoesNotExist",
+			}}}},
+		}
+		if lb.BGP.Authenticated {
+			spec["passwordSecret"] = map[string]any{"name": bgpPeerSecret, "namespace": metalLBNamespace}
+		}
+		objects = append(objects, metalLBObject(bgpPeerKind, metalLBv2, peerName(p.Address), spec))
 	}
 	return objects
+}
+
+func metalLBObject(kind, version, name string, spec map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"kind": kind, apiVersionKey: metalLBGroup + "/" + version,
+		"metadata": map[string]any{"name": name, "namespace": metalLBNamespace},
+		"spec":     spec,
+	}}
 }
 
 // reconcileLoadBalancer does in the workload cluster what its load balancer needs there. It applies
@@ -166,7 +285,7 @@ func (r *Reconciler) reconcileLoadBalancer(ctx context.Context, cluster *cluster
 	}
 	waiting := false
 	if lb.implementation() == metalLB {
-		if waiting, err = applyMetalLBPool(ctx, workload.client, spans); err != nil {
+		if waiting, err = r.applyMetalLB(ctx, cluster, workload.client, spans, lb); err != nil {
 			r.Remotes.forget(cluster)
 			return false, err
 		}
@@ -184,10 +303,31 @@ func (r *Reconciler) reconcileLoadBalancer(ctx context.Context, cluster *cluster
 	return waiting, nil
 }
 
-// applyMetalLBPool applies MetalLB's address pool, and reports whether it waits for MetalLB's CRDs
+// applyMetalLB keeps the password of MetalLB's sessions in the cluster and applies its pool. It
+// holds the peers back, which name the password, until the credential has one to give.
+func (r *Reconciler) applyMetalLB(ctx context.Context, cluster *clusterv1.Cluster, workload client.Client, spans []addressSpan, lb LoadBalancer) (bool, error) {
+	p, err := r.bgpPassword(ctx, cluster, lb)
+	if err != nil || p.state == bgpWaiting {
+		return p.state == bgpWaiting, err
+	}
+	var waiting bool
+	if p.state == bgpSigned {
+		waiting, err = applyBGPPeerSecret(ctx, workload, p.password)
+	} else {
+		err = deleteBGPPeerSecret(ctx, workload)
+	}
+	if err != nil || waiting {
+		return waiting, err
+	}
+	return applyMetalLBPool(ctx, workload, spans, lb)
+}
+
+// applyMetalLBPool applies MetalLB's address pool and what announces it, takes away what announced
+// it in the other mode or to routers since removed, and reports whether it waits for MetalLB's CRDs
 // or for its webhook, which checks the pool, to answer.
-func applyMetalLBPool(ctx context.Context, workload client.Client, spans []addressSpan) (bool, error) {
-	for _, o := range metalLBPool(spans) {
+func applyMetalLBPool(ctx context.Context, workload client.Client, spans []addressSpan, lb LoadBalancer) (bool, error) {
+	objects := metalLBPool(spans, lb)
+	for _, o := range objects {
 		err := workload.Apply(ctx, client.ApplyConfigurationFromUnstructured(o), client.FieldOwner(fieldOwner), client.ForceOwnership)
 		if meta.IsNoMatchError(err) || apierrors.IsInternalError(err) {
 			return true, nil
@@ -196,7 +336,34 @@ func applyMetalLBPool(ctx context.Context, workload client.Client, spans []addre
 			return false, fmt.Errorf("applying MetalLB's %s: %w", o.GetKind(), err)
 		}
 	}
-	return false, nil
+	return false, pruneMetalLB(ctx, workload, objects)
+}
+
+// pruneMetalLB deletes the advertisements and peers Kubehenge made that the cluster's mode no
+// longer has, and so stops the announcements before the new ones can be told from the old.
+func pruneMetalLB(ctx context.Context, workload client.Client, keep []*unstructured.Unstructured) error {
+	for kind, version := range metalLBAnnouncers {
+		list := &unstructured.UnstructuredList{}
+		list.SetGroupVersionKind(schema.GroupVersionKind{Group: metalLBGroup, Version: version, Kind: kind + "List"})
+		if err := workload.List(ctx, list, client.InNamespace(metalLBNamespace)); err != nil {
+			if meta.IsNoMatchError(err) {
+				continue
+			}
+			return fmt.Errorf("listing MetalLB's %ss: %w", kind, err)
+		}
+		for i := range list.Items {
+			o := &list.Items[i]
+			if !strings.HasPrefix(o.GetName(), metalLBPoolName) || slices.ContainsFunc(keep, func(k *unstructured.Unstructured) bool {
+				return k.GetKind() == kind && k.GetName() == o.GetName()
+			}) {
+				continue
+			}
+			if err := workload.Delete(ctx, o); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("deleting MetalLB's %s %s: %w", kind, o.GetName(), err)
+			}
+		}
+	}
+	return nil
 }
 
 // Where kube-vip's cloud provider records a Service's address: it labels the Services it hands
@@ -389,7 +556,10 @@ func lastAddress(p netip.Prefix) netip.Addr {
 // clusterAddresses are the addresses a cluster takes on its nodes' network.
 type clusterAddresses struct {
 	// segment is the network's bridge and VLAN. Clusters on different ones share no addresses.
-	segment  string
+	segment string
+	// routed is set when the cluster announces its addresses over BGP, so that the control-plane
+	// endpoint and the load-balancer addresses may lie outside the nodes' network.
+	routed   bool
 	nodes    netip.Prefix
 	gateway  netip.Addr
 	machines []addressSpan
@@ -424,6 +594,7 @@ func addressesOf(cluster *clusterv1.Cluster) (clusterAddresses, error) {
 	if err != nil {
 		return a, err
 	}
+	a.routed = lb.bgp()
 	if lb.Enabled {
 		if a.services, err = parseAddresses(lb.Addresses); err != nil {
 			return a, unreadable{fmt.Errorf("loadBalancer.addresses: %w", err)}
@@ -481,14 +652,14 @@ func (a *clusterAddresses) problems() []string {
 			problems = append(problems, fmt.Sprintf("control-plane endpoint %s is inside node addresses %s", a.endpoint, m))
 		}
 	}
-	if !a.nodes.Contains(a.endpoint.first) {
+	if !a.routed && !a.nodes.Contains(a.endpoint.first) {
 		problems = append(problems, fmt.Sprintf("control-plane endpoint %s is outside the network %s", a.endpoint, a.nodes))
 	}
 	if a.endpoint.first == a.gateway {
 		problems = append(problems, fmt.Sprintf("control-plane endpoint %s is the gateway", a.endpoint))
 	}
 	for i, s := range a.services {
-		if !a.nodes.Contains(s.first) || !a.nodes.Contains(s.last) {
+		if !a.routed && (!a.nodes.Contains(s.first) || !a.nodes.Contains(s.last)) {
 			problems = append(problems, fmt.Sprintf("load-balancer addresses %s are outside the network %s", s, a.nodes))
 		}
 		problems = append(problems, a.taken(s)...)
@@ -609,6 +780,76 @@ func (h *Hooks) checkAddresses(ctx context.Context, cluster *clusterv1.Cluster) 
 		return fmt.Errorf("listing the clusters: %w", err)
 	}
 	return checkAddresses(cluster, clusters.Items)
+}
+
+// checkBGP holds a cluster that announces its addresses over BGP to what that can do. Its
+// control-plane address is announced by kube-vip as a static pod, which Talos has no place for: it
+// holds its virtual IP with its own layer 2 election and has no BGP option. MetalLB peers from the
+// workers only, so a cluster of control planes alone would have no session for its Services.
+func checkBGP(c *clusterv1.Cluster) error {
+	lb, _, err := optionalVariable[LoadBalancer](c, loadBalancerVariable)
+	if err != nil || !lb.bgp() {
+		return err
+	}
+	var problems []string
+	if isTalos(c) {
+		problems = append(problems, "BGP is not available on Talos clusters: Talos holds the control-plane address with its own layer 2 election and has no BGP option")
+	}
+	if lb.Enabled && lb.implementation() == kubeVip {
+		problems = append(problems, "BGP needs MetalLB: kube-vip's load balancer answers by ARP only")
+	}
+	if lb.Enabled && len(c.Spec.Topology.Workers.MachineDeployments) == 0 {
+		problems = append(problems, "BGP load balancing needs worker nodes: MetalLB peers from workers only, as kube-vip already holds the control-plane address from the control planes' addresses to the same routers")
+	}
+	problems = append(problems, bgpSettingProblems(c, &lb)...)
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, ", "))
+	}
+	return nil
+}
+
+// bgpSettingProblems are where the autonomous systems and routers a cluster's BGP names are no use.
+func bgpSettingProblems(c *clusterv1.Cluster, lb *LoadBalancer) []string {
+	if lb.BGP == nil {
+		return []string{"BGP needs bgp settings: the cluster's ASN and at least one router"}
+	}
+	var problems []string
+	if lb.BGP.ASN == 0 {
+		problems = append(problems, fmt.Sprintf("the cluster's ASN 0 is outside 1 to %d", uint32(maxASN)))
+	}
+	if len(lb.BGP.Peers) == 0 {
+		problems = append(problems, "BGP needs at least one router to peer with")
+	}
+	endpoint, _ := variable[string](c, "controlPlaneEndpoint")
+	pool, _ := parseAddresses(lb.Addresses)
+	seen := map[netip.Addr]bool{}
+	for _, p := range lb.BGP.Peers {
+		a, err := netip.ParseAddr(strings.TrimSpace(p.Address))
+		if err != nil || !a.Is4() {
+			problems = append(problems, fmt.Sprintf("router %q is not an IPv4 address", p.Address))
+			continue
+		}
+		announced := func(a netip.Addr) bool { return endpoint == a.String() || (lb.Enabled && inSpans(pool, a.String())) }
+		problems = append(problems, peerProblems(a, p.ASN, seen, announced)...)
+		seen[a] = true
+	}
+	return problems
+}
+
+// peerProblems are where a router's AS number is unusable, or its address is listed before or is
+// one the cluster announces, which a router cannot also be reached at.
+func peerProblems(a netip.Addr, asn uint32, seen map[netip.Addr]bool, announced func(netip.Addr) bool) []string {
+	var problems []string
+	if asn == 0 {
+		problems = append(problems, fmt.Sprintf("router %s: ASN 0 is outside 1 to %d", a, uint32(maxASN)))
+	}
+	if seen[a] {
+		problems = append(problems, fmt.Sprintf("router %s is listed twice", a))
+	}
+	if announced(a) {
+		problems = append(problems, fmt.Sprintf("router %s is an address the cluster announces", a))
+	}
+	return problems
 }
 
 // k3sServiceLB is the label k3s's servicelb puts on the DaemonSets that answer for Services.

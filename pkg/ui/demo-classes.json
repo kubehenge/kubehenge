@@ -5,8 +5,8 @@
     "metadata": {
       "annotations": {
         "kubehenge.dev/addon-control-plane-memory": "{\"monitoring\":616,\"backups\":24,\"kyverno\":520,\"istio\":504,\"rancher\":512,\"argocd\":360}",
-        "kubehenge.dev/addon-cpu": "{\"headlamp\":10,\"monitoring\":300,\"logs\":75,\"backups\":70,\"kyverno\":500,\"istio\":400,\"clusterMesh\":30,\"loadBalancer\":60,\"certManager\":30,\"rancher\":120,\"rancherAgent\":30,\"argocd\":90,\"flux\":50}",
-        "kubehenge.dev/addon-memory": "{\"headlamp\":64,\"monitoring\":1536,\"logs\":512,\"backups\":384,\"kyverno\":640,\"istio\":384,\"clusterMesh\":128,\"loadBalancer\":128,\"certManager\":192,\"rancher\":2048,\"rancherAgent\":512,\"argocd\":512,\"flux\":384}",
+        "kubehenge.dev/addon-cpu": "{\"headlamp\":10,\"monitoring\":300,\"logs\":75,\"backups\":70,\"kyverno\":500,\"istio\":400,\"clusterMesh\":30,\"loadBalancer\":60,\"loadBalancerBGP\":45,\"certManager\":30,\"rancher\":120,\"rancherAgent\":30,\"argocd\":90,\"flux\":50}",
+        "kubehenge.dev/addon-memory": "{\"headlamp\":64,\"monitoring\":1536,\"logs\":512,\"backups\":384,\"kyverno\":640,\"istio\":384,\"clusterMesh\":128,\"loadBalancer\":128,\"loadBalancerBGP\":176,\"certManager\":192,\"rancher\":2048,\"rancherAgent\":512,\"argocd\":512,\"flux\":384}",
         "kubehenge.dev/backup-targets": "[]",
         "kubehenge.dev/cni": "cilium,calico",
         "kubehenge.dev/cni-container-forwarding": "true",
@@ -549,16 +549,65 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network. One node at a time answers for each address, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
+              "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network or, in mode bgp, a routed one. One node at a time answers for each address in mode l2, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
               "properties": {
                 "addresses": {
-                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: unused addresses on the nodes' network, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
+                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
                   },
                   "minItems": 1,
                   "type": "array"
+                },
+                "bgp": {
+                  "description": "The cluster's autonomous system and the routers every node peers with, for mode bgp.",
+                  "properties": {
+                    "asn": {
+                      "description": "The cluster's own autonomous system number.",
+                      "format": "int64",
+                      "maximum": 4294967295,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "authenticated": {
+                      "default": false,
+                      "description": "Sign every session with the password in the cluster's bgp credential, which the routers have to be set to expect. The password is kept in a Secret, never here.",
+                      "type": "boolean"
+                    },
+                    "peers": {
+                      "description": "Routers that accept a session from every node: the control planes for the control-plane endpoint, the workers for the Services.",
+                      "items": {
+                        "properties": {
+                          "address": {
+                            "description": "The router's IPv4 address.",
+                            "format": "ipv4",
+                            "type": "string"
+                          },
+                          "asn": {
+                            "description": "The router's autonomous system number.",
+                            "format": "int64",
+                            "maximum": 4294967295,
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "address",
+                          "asn"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "asn",
+                    "peers"
+                  ],
+                  "type": "object"
                 },
                 "enabled": {
                   "default": false,
@@ -572,6 +621,15 @@
                     "kube-vip"
                   ],
                   "type": "string"
+                },
+                "mode": {
+                  "default": "l2",
+                  "description": "l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
+                  "enum": [
+                    "l2",
+                    "bgp"
+                  ],
+                  "type": "string"
                 }
               },
               "type": "object",
@@ -579,6 +637,10 @@
                 {
                   "message": "A load balancer needs addresses.",
                   "rule": "!self.enabled || has(self.addresses)"
+                },
+                {
+                  "message": "Mode bgp needs the bgp settings.",
+                  "rule": "self.mode != 'bgp' || has(self.bgp)"
                 }
               ]
             }
@@ -1323,8 +1385,8 @@
     "metadata": {
       "annotations": {
         "kubehenge.dev/addon-control-plane-memory": "{\"headlamp\":8,\"monitoring\":32,\"logs\":56,\"backups\":184,\"kyverno\":552,\"istio\":288,\"certManager\":48,\"rancher\":512,\"argocd\":432}",
-        "kubehenge.dev/addon-cpu": "{\"headlamp\":10,\"monitoring\":300,\"logs\":75,\"backups\":70,\"kyverno\":500,\"istio\":400,\"clusterMesh\":30,\"loadBalancer\":60,\"certManager\":30,\"rancher\":120,\"rancherAgent\":30,\"argocd\":90,\"flux\":50}",
-        "kubehenge.dev/addon-memory": "{\"headlamp\":64,\"monitoring\":1536,\"logs\":512,\"backups\":384,\"kyverno\":640,\"istio\":384,\"clusterMesh\":128,\"loadBalancer\":128,\"certManager\":192,\"rancher\":2048,\"rancherAgent\":512,\"argocd\":512,\"flux\":384}",
+        "kubehenge.dev/addon-cpu": "{\"headlamp\":10,\"monitoring\":300,\"logs\":75,\"backups\":70,\"kyverno\":500,\"istio\":400,\"clusterMesh\":30,\"loadBalancer\":60,\"loadBalancerBGP\":45,\"certManager\":30,\"rancher\":120,\"rancherAgent\":30,\"argocd\":90,\"flux\":50}",
+        "kubehenge.dev/addon-memory": "{\"headlamp\":64,\"monitoring\":1536,\"logs\":512,\"backups\":384,\"kyverno\":640,\"istio\":384,\"clusterMesh\":128,\"loadBalancer\":128,\"loadBalancerBGP\":176,\"certManager\":192,\"rancher\":2048,\"rancherAgent\":512,\"argocd\":512,\"flux\":384}",
         "kubehenge.dev/backup-targets": "[]",
         "kubehenge.dev/cni": "cilium,calico",
         "kubehenge.dev/cni-control-plane-memory": "{\"calico\":1424}",
@@ -1866,16 +1928,65 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network. One node at a time answers for each address, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
+              "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network or, in mode bgp, a routed one. One node at a time answers for each address in mode l2, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
               "properties": {
                 "addresses": {
-                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: unused addresses on the nodes' network, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
+                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
                   },
                   "minItems": 1,
                   "type": "array"
+                },
+                "bgp": {
+                  "description": "The cluster's autonomous system and the routers every node peers with, for mode bgp.",
+                  "properties": {
+                    "asn": {
+                      "description": "The cluster's own autonomous system number.",
+                      "format": "int64",
+                      "maximum": 4294967295,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "authenticated": {
+                      "default": false,
+                      "description": "Sign every session with the password in the cluster's bgp credential, which the routers have to be set to expect. The password is kept in a Secret, never here.",
+                      "type": "boolean"
+                    },
+                    "peers": {
+                      "description": "Routers that accept a session from every node: the control planes for the control-plane endpoint, the workers for the Services.",
+                      "items": {
+                        "properties": {
+                          "address": {
+                            "description": "The router's IPv4 address.",
+                            "format": "ipv4",
+                            "type": "string"
+                          },
+                          "asn": {
+                            "description": "The router's autonomous system number.",
+                            "format": "int64",
+                            "maximum": 4294967295,
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "address",
+                          "asn"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "asn",
+                    "peers"
+                  ],
+                  "type": "object"
                 },
                 "enabled": {
                   "default": false,
@@ -1889,6 +2000,15 @@
                     "kube-vip"
                   ],
                   "type": "string"
+                },
+                "mode": {
+                  "default": "l2",
+                  "description": "l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
+                  "enum": [
+                    "l2",
+                    "bgp"
+                  ],
+                  "type": "string"
                 }
               },
               "type": "object",
@@ -1896,6 +2016,10 @@
                 {
                   "message": "A load balancer needs addresses.",
                   "rule": "!self.enabled || has(self.addresses)"
+                },
+                {
+                  "message": "Mode bgp needs the bgp settings.",
+                  "rule": "self.mode != 'bgp' || has(self.bgp)"
                 }
               ]
             }
@@ -2638,8 +2762,8 @@
     "metadata": {
       "annotations": {
         "kubehenge.dev/addon-control-plane-memory": "{\"headlamp\":8,\"monitoring\":32,\"logs\":56,\"backups\":184,\"kyverno\":552,\"istio\":288,\"certManager\":48,\"rancher\":512,\"argocd\":432}",
-        "kubehenge.dev/addon-cpu": "{\"headlamp\":10,\"monitoring\":300,\"logs\":75,\"backups\":70,\"kyverno\":500,\"istio\":400,\"clusterMesh\":30,\"loadBalancer\":60,\"certManager\":30,\"rancher\":120,\"rancherAgent\":30,\"argocd\":90,\"flux\":50}",
-        "kubehenge.dev/addon-memory": "{\"headlamp\":64,\"monitoring\":1536,\"logs\":512,\"backups\":384,\"kyverno\":640,\"istio\":384,\"clusterMesh\":128,\"loadBalancer\":128,\"certManager\":192,\"rancher\":2048,\"rancherAgent\":512,\"argocd\":512,\"flux\":384}",
+        "kubehenge.dev/addon-cpu": "{\"headlamp\":10,\"monitoring\":300,\"logs\":75,\"backups\":70,\"kyverno\":500,\"istio\":400,\"clusterMesh\":30,\"loadBalancer\":60,\"loadBalancerBGP\":45,\"certManager\":30,\"rancher\":120,\"rancherAgent\":30,\"argocd\":90,\"flux\":50}",
+        "kubehenge.dev/addon-memory": "{\"headlamp\":64,\"monitoring\":1536,\"logs\":512,\"backups\":384,\"kyverno\":640,\"istio\":384,\"clusterMesh\":128,\"loadBalancer\":128,\"loadBalancerBGP\":176,\"certManager\":192,\"rancher\":2048,\"rancherAgent\":512,\"argocd\":512,\"flux\":384}",
         "kubehenge.dev/backup-targets": "[]",
         "kubehenge.dev/cni-control-plane-memory": "{\"cilium\":504,\"calico\":144}",
         "kubehenge.dev/control-plane-sizes": "[{\"workers\":0,\"cores\":2,\"memoryMiB\":4096},{\"workers\":226,\"cores\":4,\"memoryMiB\":8192},{\"workers\":451,\"cores\":8,\"memoryMiB\":16384},{\"workers\":1301,\"cores\":16,\"memoryMiB\":32768}]",
@@ -3180,16 +3304,65 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network. One node at a time answers for each address, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
+              "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network or, in mode bgp, a routed one. One node at a time answers for each address in mode l2, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
               "properties": {
                 "addresses": {
-                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: unused addresses on the nodes' network, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
+                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
                   },
                   "minItems": 1,
                   "type": "array"
+                },
+                "bgp": {
+                  "description": "The cluster's autonomous system and the routers every node peers with, for mode bgp.",
+                  "properties": {
+                    "asn": {
+                      "description": "The cluster's own autonomous system number.",
+                      "format": "int64",
+                      "maximum": 4294967295,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "authenticated": {
+                      "default": false,
+                      "description": "Sign every session with the password in the cluster's bgp credential, which the routers have to be set to expect. The password is kept in a Secret, never here.",
+                      "type": "boolean"
+                    },
+                    "peers": {
+                      "description": "Routers that accept a session from every node: the control planes for the control-plane endpoint, the workers for the Services.",
+                      "items": {
+                        "properties": {
+                          "address": {
+                            "description": "The router's IPv4 address.",
+                            "format": "ipv4",
+                            "type": "string"
+                          },
+                          "asn": {
+                            "description": "The router's autonomous system number.",
+                            "format": "int64",
+                            "maximum": 4294967295,
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "address",
+                          "asn"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "asn",
+                    "peers"
+                  ],
+                  "type": "object"
                 },
                 "enabled": {
                   "default": false,
@@ -3203,6 +3376,15 @@
                     "kube-vip"
                   ],
                   "type": "string"
+                },
+                "mode": {
+                  "default": "l2",
+                  "description": "l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
+                  "enum": [
+                    "l2",
+                    "bgp"
+                  ],
+                  "type": "string"
                 }
               },
               "type": "object",
@@ -3210,6 +3392,10 @@
                 {
                   "message": "A load balancer needs addresses.",
                   "rule": "!self.enabled || has(self.addresses)"
+                },
+                {
+                  "message": "Mode bgp needs the bgp settings.",
+                  "rule": "self.mode != 'bgp' || has(self.bgp)"
                 }
               ]
             }
@@ -3954,8 +4140,8 @@
     "metadata": {
       "annotations": {
         "kubehenge.dev/addon-control-plane-memory": "{\"headlamp\":8,\"monitoring\":32,\"logs\":56,\"backups\":184,\"kyverno\":552,\"istio\":288,\"certManager\":48,\"rancher\":512,\"argocd\":432}",
-        "kubehenge.dev/addon-cpu": "{\"headlamp\":10,\"monitoring\":300,\"logs\":75,\"backups\":70,\"kyverno\":500,\"istio\":400,\"clusterMesh\":30,\"loadBalancer\":60,\"certManager\":30,\"rancher\":120,\"rancherAgent\":30,\"argocd\":90,\"flux\":50}",
-        "kubehenge.dev/addon-memory": "{\"headlamp\":64,\"monitoring\":1536,\"logs\":512,\"backups\":384,\"kyverno\":640,\"istio\":384,\"clusterMesh\":128,\"loadBalancer\":128,\"certManager\":192,\"rancher\":2048,\"rancherAgent\":512,\"argocd\":512,\"flux\":384}",
+        "kubehenge.dev/addon-cpu": "{\"headlamp\":10,\"monitoring\":300,\"logs\":75,\"backups\":70,\"kyverno\":500,\"istio\":400,\"clusterMesh\":30,\"loadBalancer\":60,\"loadBalancerBGP\":45,\"certManager\":30,\"rancher\":120,\"rancherAgent\":30,\"argocd\":90,\"flux\":50}",
+        "kubehenge.dev/addon-memory": "{\"headlamp\":64,\"monitoring\":1536,\"logs\":512,\"backups\":384,\"kyverno\":640,\"istio\":384,\"clusterMesh\":128,\"loadBalancer\":128,\"loadBalancerBGP\":176,\"certManager\":192,\"rancher\":2048,\"rancherAgent\":512,\"argocd\":512,\"flux\":384}",
         "kubehenge.dev/backup-targets": "[]",
         "kubehenge.dev/cni": "cilium,calico",
         "kubehenge.dev/cni-control-plane-memory": "{\"cilium\":520,\"calico\":384}",
@@ -4497,16 +4683,65 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network. One node at a time answers for each address, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
+              "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network or, in mode bgp, a routed one. One node at a time answers for each address in mode l2, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
               "properties": {
                 "addresses": {
-                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: unused addresses on the nodes' network, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
+                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
                   },
                   "minItems": 1,
                   "type": "array"
+                },
+                "bgp": {
+                  "description": "The cluster's autonomous system and the routers every node peers with, for mode bgp.",
+                  "properties": {
+                    "asn": {
+                      "description": "The cluster's own autonomous system number.",
+                      "format": "int64",
+                      "maximum": 4294967295,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "authenticated": {
+                      "default": false,
+                      "description": "Sign every session with the password in the cluster's bgp credential, which the routers have to be set to expect. The password is kept in a Secret, never here.",
+                      "type": "boolean"
+                    },
+                    "peers": {
+                      "description": "Routers that accept a session from every node: the control planes for the control-plane endpoint, the workers for the Services.",
+                      "items": {
+                        "properties": {
+                          "address": {
+                            "description": "The router's IPv4 address.",
+                            "format": "ipv4",
+                            "type": "string"
+                          },
+                          "asn": {
+                            "description": "The router's autonomous system number.",
+                            "format": "int64",
+                            "maximum": 4294967295,
+                            "minimum": 1,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "address",
+                          "asn"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "asn",
+                    "peers"
+                  ],
+                  "type": "object"
                 },
                 "enabled": {
                   "default": false,
@@ -4520,6 +4755,15 @@
                     "kube-vip"
                   ],
                   "type": "string"
+                },
+                "mode": {
+                  "default": "l2",
+                  "description": "l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
+                  "enum": [
+                    "l2",
+                    "bgp"
+                  ],
+                  "type": "string"
                 }
               },
               "type": "object",
@@ -4527,6 +4771,10 @@
                 {
                   "message": "A load balancer needs addresses.",
                   "rule": "!self.enabled || has(self.addresses)"
+                },
+                {
+                  "message": "Mode bgp needs the bgp settings.",
+                  "rule": "self.mode != 'bgp' || has(self.bgp)"
                 }
               ]
             }

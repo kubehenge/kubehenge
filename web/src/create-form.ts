@@ -34,7 +34,17 @@ import {
   type GitOpsChoice,
   type GitOpsField,
 } from "./GitOps";
-import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
+import {
+  loadBalancerFrom,
+  loadBalancerProblems,
+  loadBalancerText,
+  loadBalancerVariable,
+  bgpOffered,
+  type Implementation,
+  type LoadBalancer,
+  type LoadBalancerValue,
+  type Mode,
+} from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
 import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
@@ -130,6 +140,12 @@ export interface Form {
   dnsServers: string;
   loadBalancer: Implementation;
   loadBalancerAddresses: string;
+  loadBalancerMode: Mode;
+  loadBalancerAsn: string;
+  loadBalancerPeers: string;
+  loadBalancerAuthenticated: boolean;
+  /** Typed here and stored as the cluster's bgp credential once it exists. Never copied from another cluster. */
+  loadBalancerPassword: string;
   pods: string;
   services: string;
   storage: string;
@@ -598,6 +614,11 @@ export const newForm = (): Form => ({
   dnsServers: "",
   loadBalancer: "",
   loadBalancerAddresses: "",
+  loadBalancerMode: "l2",
+  loadBalancerAsn: "",
+  loadBalancerPeers: "",
+  loadBalancerAuthenticated: false,
+  loadBalancerPassword: "",
   pods: "",
   services: "",
   storage: "",
@@ -779,6 +800,22 @@ export function pendingCredentials(form: Form, c: ClusterClass): PendingCredenti
       forget: { dns01Token: "" },
     });
   }
+  const lb = formLoadBalancer(form, c.distribution);
+  if (
+    variable(c, "loadBalancer") &&
+    lb.implementation !== "" &&
+    lb.mode === "bgp" &&
+    lb.authenticated &&
+    filled(form.loadBalancerPassword)
+  ) {
+    pending.push({
+      purpose: "bgp",
+      values: { password: form.loadBalancerPassword },
+      label: "BGP password",
+      section: "Load balancer",
+      forget: { loadBalancerPassword: "" },
+    });
+  }
   return pending;
 }
 
@@ -835,7 +872,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     variables["ccm"] = { haGroups: false };
   }
   Object.assign(variables, distributionVariables(form));
-  const lb = loadBalancerVariable({ implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) });
+  const lb = loadBalancerVariable(formLoadBalancer(form, c.distribution));
   if (lb) {
     variables["loadBalancer"] = lb;
   }
@@ -872,6 +909,19 @@ const gib = (mib: number): string => (mib % mibPerGiB === 0 ? `${mib / mibPerGiB
 const machine = (m: Machine): string =>
   `${m.cores} ${m.cores === 1 ? "core" : "cores"}, ${gib(m.memoryMiB)} memory, ${m.diskGiB} GiB disk`;
 
+/** formLoadBalancerValue is what the load-balancer fields show of the form. */
+export const formLoadBalancerValue = (form: Form): LoadBalancerValue => ({
+  implementation: form.loadBalancer,
+  addresses: form.loadBalancerAddresses,
+  mode: form.loadBalancerMode,
+  asn: form.loadBalancerAsn,
+  peers: form.loadBalancerPeers,
+  authenticated: form.loadBalancerAuthenticated,
+});
+
+const formLoadBalancer = (form: Form, distribution: string | undefined): LoadBalancer =>
+  loadBalancerFrom(formLoadBalancerValue(form), distribution);
+
 function rancherChoice(form: Form): string {
   if (form.rancherInstall) {
     return `Installed at ${form.rancherHostname}`;
@@ -901,6 +951,20 @@ function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string
   return rows;
 }
 
+// loadBalancerRows are the summary's rows for the load balancer: its choice, and for a BGP password
+// whether it is stored once the cluster exists.
+function loadBalancerRows(form: Form, c: ClusterClass): [string, string][] {
+  const lb = formLoadBalancer(form, c.distribution);
+  const rows: [string, string][] = [["Load balancer", loadBalancerText(lb, c.distribution)]];
+  if (lb.implementation !== "" && lb.mode === "bgp" && lb.authenticated) {
+    rows.push([
+      "BGP password",
+      filled(form.loadBalancerPassword) ? "Stored once created" : "None yet: the cluster waits",
+    ]);
+  }
+  return rows;
+}
+
 // summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(
@@ -925,13 +989,7 @@ export function summary(
     ["DNS servers", list(form.dnsServers).join(", ")],
   ];
   if (defined.has("loadBalancer")) {
-    rows.push([
-      "Load balancer",
-      loadBalancerText(
-        { implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) },
-        c.distribution,
-      ),
-    ]);
+    rows.push(...loadBalancerRows(form, c));
   }
   rows.push(
     ["Pod range", form.pods || "Automatic"],
@@ -1045,6 +1103,9 @@ export type FieldKey =
   | "gateway"
   | "dnsServers"
   | "loadBalancerAddresses"
+  | "loadBalancerAsn"
+  | "loadBalancerPeers"
+  | "loadBalancerPassword"
   | "pods"
   | "services"
   | "storage"
@@ -1140,7 +1201,7 @@ export function addonsProblem(form: Form, c: ClusterClass | undefined): string |
     : undefined;
 }
 
-function addressProblems(form: Form): Problems {
+function addressProblems(form: Form, routed: boolean): Problems {
   const p: Problems = {};
   const entries = list(form.addresses);
   const { count, bad } = addressCount(entries, form.gateway, form.prefix);
@@ -1156,10 +1217,59 @@ function addressProblems(form: Form): Problems {
     p.endpoint = "Enter an IPv4 address";
   } else if (inList(form.endpoint, entries)) {
     p.endpoint = "Use an address outside the node addresses";
-  } else if (addressCount([form.endpoint], form.gateway, form.prefix).bad !== undefined) {
+  } else if (!routed && addressCount([form.endpoint], form.gateway, form.prefix).bad !== undefined) {
     p.endpoint = "Use an address on the gateway's network";
   }
   return p;
+}
+
+/** balancerProblems holds the load balancer's fields to the nodes' network, or in BGP to the routers. */
+function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const lb = loadBalancerProblems(formLoadBalancerValue(form), c?.distribution, {
+    gateway: form.gateway,
+    prefix: form.prefix,
+    addresses: list(form.addresses),
+    endpoint: form.endpoint,
+  });
+  const p: Problems = {};
+  if (lb.addresses !== undefined) {
+    p.loadBalancerAddresses = lb.addresses;
+  }
+  if (lb.asn !== undefined) {
+    p.loadBalancerAsn = lb.asn;
+  }
+  if (lb.peers !== undefined) {
+    p.loadBalancerPeers = lb.peers;
+  }
+  if (form.loadBalancerAuthenticated && /[\s:,]/u.test(form.loadBalancerPassword)) {
+    p.loadBalancerPassword = "No spaces, colons or commas";
+  }
+  return p;
+}
+
+/** setLoadBalancer sets the form fields behind the load-balancer fields that a patch holds. */
+export function setLoadBalancer(
+  set: <K extends keyof Form>(k: K, v: Form[K]) => void,
+  patch: Partial<LoadBalancerValue>,
+): void {
+  if (patch.implementation !== undefined) {
+    set("loadBalancer", patch.implementation);
+  }
+  if (patch.addresses !== undefined) {
+    set("loadBalancerAddresses", patch.addresses);
+  }
+  if (patch.mode !== undefined) {
+    set("loadBalancerMode", patch.mode);
+  }
+  if (patch.asn !== undefined) {
+    set("loadBalancerAsn", patch.asn);
+  }
+  if (patch.peers !== undefined) {
+    set("loadBalancerPeers", patch.peers);
+  }
+  if (patch.authenticated !== undefined) {
+    set("loadBalancerAuthenticated", patch.authenticated);
+  }
 }
 
 function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
@@ -1176,24 +1286,17 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (!ipv4.test(form.gateway)) {
     p.gateway = "Enter an IPv4 address";
   }
-  Object.assign(p, addressProblems(form));
+  const lbValue = formLoadBalancerValue(form);
+  Object.assign(
+    p,
+    addressProblems(form, lbValue.mode === "bgp" && bgpOffered(c?.distribution, lbValue.implementation)),
+  );
   if (list(form.dnsServers).length === 0) {
     p.dnsServers = "Enter at least one DNS server";
   } else if (list(form.dnsServers).some((d) => !ipv4.test(d))) {
     p.dnsServers = "DNS servers must be IPv4 addresses";
   }
-  const lb =
-    form.loadBalancer === ""
-      ? undefined
-      : addressesProblem(list(form.loadBalancerAddresses), {
-          gateway: form.gateway,
-          prefix: form.prefix,
-          addresses: list(form.addresses),
-          endpoint: form.endpoint,
-        });
-  if (lb !== undefined) {
-    p.loadBalancerAddresses = lb;
-  }
+  Object.assign(p, balancerProblems(form, c));
   for (const [key, v] of [
     ["pods", form.pods],
     ["services", form.services],

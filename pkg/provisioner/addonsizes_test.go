@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -9,7 +10,7 @@ import (
 )
 
 // addonCPUFigures are the chart's figures for the add-ons' CPU.
-const addonCPUFigures = `{"headlamp":10,"monitoring":300,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":30,"loadBalancer":60,"certManager":30,"rancher":120,"rancherAgent":30,"argocd":90,"flux":50}`
+const addonCPUFigures = `{"headlamp":10,"monitoring":300,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":30,"loadBalancer":60,"loadBalancerBGP":45,"certManager":30,"rancher":120,"rancherAgent":30,"argocd":90,"flux":50}`
 
 // addonClass is the RKE2 class of hooksFor with figures for its add-ons' memory and CPU and its
 // nodes' own, the CPU as the chart gives it.
@@ -268,6 +269,40 @@ func TestWorkersCountWhatEachClusterRunsOnce(t *testing.T) {
 	class.Annotations[NodeCPUAnnotation] = `{"controlPlane":1605,"worker":775,"workers":5000}`
 	if err := checkRoomFor(addonCPU, nil, withAddons(sized("", new(int32(1))), map[string]string{"rancher": `{"register":false}`}), class); err != nil {
 		t.Errorf("no add-on on, more run once than the worker has: %v", err)
+	}
+}
+
+// frr-k8s runs beside the load balancer in BGP mode, so the same workers have less room left.
+func TestBGPModeAddsFRRK8sToTheLoadBalancersFigures(t *testing.T) {
+	t.Parallel()
+	class := addonClass()
+	class.Annotations[AddonMemoryAnnotation] = `{"loadBalancer":128,"loadBalancerBGP":176}`
+	class.Annotations[AddonCPUAnnotation] = `{"loadBalancer":60,"loadBalancerBGP":45}`
+	// A worker of 900 MiB leaves 260 MiB for add-ons: room for the load balancer's 128, not for the 304 it takes with frr-k8s.
+	small := `{"cores":3,"memoryMiB":900}`
+	layer2 := workerMemory(withAddons(sized("", new(int32(1))), map[string]string{"loadBalancer": onAt(`"10.0.0.100-10.0.0.120"`)}), small)
+	routed := workerMemory(withAddons(sized("", new(int32(1))), map[string]string{
+		"loadBalancer": bgpOf("65001", peerOf("10.0.0.1", "64512")),
+	}), small)
+	if err := checkAddonRoom(nil, layer2, class); err != nil {
+		t.Errorf("layer 2: %v", err)
+	}
+	err := checkAddonRoom(nil, routed, class)
+	if err == nil || !strings.Contains(err.Error(), "(the load balancer, frr-k8s for BGP) need 304 MiB of memory on workers, which have 260 MiB") {
+		t.Errorf("BGP: %v", err)
+	}
+	// The same on CPU: a worker whose own pods request 1900m of 2 cores has 100m left, room for the load balancer's 60m, not for the 105m it takes with frr-k8s.
+	class.Annotations[NodeCPUAnnotation] = `{"worker":775}`
+	cpu := func(cores int) *clusterv1.Cluster {
+		return workerMemory(withAddons(sized("", new(int32(1))), map[string]string{"loadBalancer": bgpOf("65001", peerOf("10.0.0.1", "64512"))}),
+			fmt.Sprintf(`{"cores":%d,"memoryMiB":8192}`, cores))
+	}
+	if err := checkRoomFor(addonCPU, nil, cpu(2), class); err != nil {
+		t.Errorf("2 cores: %v", err)
+	}
+	class.Annotations[NodeCPUAnnotation] = `{"worker":1900}`
+	if err := checkRoomFor(addonCPU, nil, cpu(2), class); err == nil || !strings.Contains(err.Error(), "need 105 millicores of CPU on workers, which have 100 millicores") {
+		t.Errorf("2 cores with the worker's own 1900m: %v", err)
 	}
 }
 

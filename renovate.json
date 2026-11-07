@@ -137,10 +137,10 @@
       "enabled": false
     },
     {
-      "description": "MetalLB's chart names the FRR it is tested with, whose image Kubehenge pins beside MetalLB's.",
+      "description": "MetalLB's chart carries the frr-k8s subchart and names the FRR it is tested with, whose images Kubehenge pins beside MetalLB's.",
       "matchDepNames": ["quay.io/metallb/speaker"],
       "prBodyNotes": [
-        "Set `addons.metallb.values.speaker.frr.image.tag` in `charts/kubehenge/values.yaml` to the FRR tag the new chart's `values.yaml` names (`speaker.frr.image.tag`), with its digest."
+        "Set `addons.metallb.values.frr-k8s.frrk8s.image.tag` and `addons.metallb.values.frr-k8s.frrk8s.frr.image.tag` in `charts/kubehenge/values.yaml` to the tags the new chart's frr-k8s subchart names (`appVersion` and `frrk8s.frr.image.tag` in `charts/frr-k8s`), each with its digest."
       ]
     },
     {
