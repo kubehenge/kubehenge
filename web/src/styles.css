@@ -2394,9 +2394,10 @@ fieldset.choices legend {
   border-radius: 6px;
 
   color: var(--error);
-  white-space: pre-wrap;
+
   /* A path in a server's refusal has no space to break at on a narrow screen. */
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 
   background: color-mix(in srgb, var(--error) 7%, var(--surface));
 }
