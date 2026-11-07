@@ -194,6 +194,19 @@ func TestSpecsAreSealedToTheExtraRecipientsAndOpenOffline(t *testing.T) {
 	}
 }
 
+func distinctKeys(t *testing.T, n int) []string {
+	t.Helper()
+	keys := make([]string, n)
+	for i := range keys {
+		id, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys[i] = id.Recipient().String()
+	}
+	return keys
+}
+
 func TestSpecRecipientsAreValidated(t *testing.T) {
 	t.Parallel()
 	id, err := age.GenerateX25519Identity()
@@ -206,7 +219,7 @@ func TestSpecRecipientsAreValidated(t *testing.T) {
 		"not a key":       {"age1nonsense"},
 		"empty":           {""},
 		"a duplicate":     {good, good},
-		"too many":        slices.Repeat([]string{good}, maxSpecRecipients+1),
+		"too many":        distinctKeys(t, maxSpecRecipients+1),
 		"an ssh key":      {"ssh-ed25519 AAAA"},
 		"surrounding gap": {" " + good},
 	} {
