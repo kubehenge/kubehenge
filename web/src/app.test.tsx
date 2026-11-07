@@ -492,7 +492,9 @@ describe("clusters", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Upgrade anyway" }));
     await expect(screen.findByText(/Accepted/u)).resolves.toBeInTheDocument();
-    expect(calls.some((c) => c.key.startsWith("POST /api/clusters/default/web/upgrade-checks/accept"))).toBeTruthy();
+    expect(calls.filter((c) => c.key.startsWith("POST /api/clusters/default/web/upgrade-checks/accept"))).toHaveLength(
+      1,
+    );
   });
 
   it("upgrades a cluster on a minor version too old for new clusters to the next one", async () => {

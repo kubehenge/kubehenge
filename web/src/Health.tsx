@@ -325,7 +325,13 @@ function AcceptUpgrade({
   };
   return (
     <>
-      <button type="button" disabled={busy} onClick={() => void accept()}>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          void accept();
+        }}
+      >
         Upgrade anyway
       </button>
       {filled(error) && <div className="hint">{error}</div>}
