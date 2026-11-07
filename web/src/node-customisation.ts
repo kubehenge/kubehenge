@@ -321,3 +321,81 @@ export function nodeCustomisationText(v: NodeCustomisation): string {
   ];
   return parts.length > 0 ? parts.join(", ") : "None";
 }
+
+// A short, stable tag of a text, so that an edit of a file's content shows in a plan without the text.
+function tag(s: string): string {
+  let h = fnvOffset;
+  for (const ch of s) {
+    h = Math.imul(h ^ (ch.codePointAt(0) ?? 0), fnvPrime);
+  }
+  return (h >>> 0).toString(hexRadix).padStart(tagWidth, "0");
+}
+
+// The 32-bit FNV-1a offset and prime.
+const fnvOffset = 2_166_136_261;
+const fnvPrime = 16_777_619;
+const hexRadix = 16;
+const tagWidth = 8;
+
+const flagKinds: Record<ArgList, string> = {
+  kubeletArgs: "Kubelet flag",
+  apiServerArgs: "API server flag",
+  controllerManagerArgs: "Controller manager flag",
+  schedulerArgs: "Scheduler flag",
+};
+
+/** Each item of a customisation by what identifies it, with the line that says what it holds. */
+function nodeItems(v: NodeCustomisation): Map<string, string> {
+  const items = new Map<string, string>();
+  for (const f of v.files) {
+    const from = f.source === "secret" ? `Secret ${f.secretName}/${f.secretKey}` : `text #${tag(f.content)}`;
+    items.set(`file ${f.path}`, `File ${f.path}: ${from}, ${f.permissions}, ${roleNames[f.roles].toLowerCase()}`);
+  }
+  for (const c of v.commands) {
+    items.set(`command ${c.run}`, `Command ${c.run}: ${roleNames[c.roles].toLowerCase()}`);
+  }
+  for (const list of argLists) {
+    for (const a of v[list]) {
+      items.set(`${list} ${a.name}`, `${flagKinds[list]} ${a.name}=${a.value}`);
+    }
+  }
+  if (v.auditConfigMap !== "") {
+    items.set("policy", `Audit policy: ConfigMap ${v.auditConfigMap}`);
+  } else if (v.inlinePolicy !== undefined) {
+    items.set("policy", `Audit policy: text #${tag(JSON.stringify(v.inlinePolicy))}`);
+  }
+  if (v.webhookSecret !== "") {
+    items.set(
+      "webhook",
+      `Audit webhook: Secret ${v.webhookSecret}/${v.webhookKey === "" ? "kubeconfig" : v.webhookKey}`,
+    );
+  }
+  return items;
+}
+
+/**
+ * nodeCustomisationChanges says, one line per item, what a change of the customisation adds,
+ * removes or alters. The two lists are as long as each other, so that line n of one pairs with
+ * line n of the other, and a missing side reads as a dash.
+ */
+export function nodeCustomisationChanges(
+  was: NodeCustomisation,
+  now: NodeCustomisation,
+): { was: string[]; now: string[] } {
+  const before = nodeItems(was);
+  const after = nodeItems(now);
+  const out: { was: string[]; now: string[] } = { was: [], now: [] };
+  for (const [key, line] of before) {
+    if (after.get(key) !== line) {
+      out.was.push(line);
+      out.now.push(after.get(key) ?? "–");
+    }
+  }
+  for (const [key, line] of after) {
+    if (!before.has(key)) {
+      out.was.push("–");
+      out.now.push(line);
+    }
+  }
+  return out;
+}

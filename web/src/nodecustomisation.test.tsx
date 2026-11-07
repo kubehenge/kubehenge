@@ -8,12 +8,14 @@ import { MachinesStep, type StepProps } from "./CreateSteps";
 import { applyStaged, fakeServer } from "./fake-server";
 import {
   newFile,
+  nodeCustomisationChanges,
   noNodeCustomisation,
   nodeCustomisationOf,
   nodeCustomisationText,
   nodeCustomisationVariable,
   type NodeCustomisation,
 } from "./node-customisation";
+import { planRows } from "./Staging";
 import type { ClusterClass } from "./types";
 
 const k3s: ClusterClass = {
@@ -133,6 +135,29 @@ describe("the nodes' files, commands and flags in the wizard", () => {
   it("read back what the variable holds", () => {
     expect(nodeCustomisationOf(nodeCustomisationVariable(filled, false))).toStrictEqual(filled);
     expect(nodeCustomisationOf("not an object")).toStrictEqual(noNodeCustomisation);
+  });
+
+  it("name in a plan what changed, one line per item, side by side", () => {
+    const next = structuredClone(filled);
+    next.files.splice(1);
+    for (const f of next.files) {
+      f.content = "-w /etc/shadow";
+    }
+    next.kubeletArgs.push({ name: "max-pods", value: "200" });
+    const changed = nodeCustomisationChanges(filled, next);
+    expect(changed.was).toHaveLength(changed.now.length);
+    expect(changed.was).toStrictEqual([
+      expect.stringMatching(/^File \/etc\/audit\/rules\.d\/50-x\.rules: text #\w{8}, 0640, control plane$/u),
+      "File /etc/token: Secret creds/token, 0644, all nodes",
+      "–",
+    ]);
+    expect(changed.now).toStrictEqual([
+      expect.stringMatching(/^File \/etc\/audit\/rules\.d\/50-x\.rules: text #\w{8}, 0640, control plane$/u),
+      "–",
+      "Kubelet flag max-pods=200",
+    ]);
+    expect(changed.was[0]).not.toBe(changed.now[0]);
+    expect(nodeCustomisationChanges(filled, filled)).toStrictEqual({ was: [], now: [] });
   });
 
   it("show in the summary, only for a class that has them", () => {
@@ -295,6 +320,24 @@ const cluster = {
 };
 
 const path = "/api/clusters/clusters/web";
+
+describe("the plan of a change to the node customisation", () => {
+  it("has a row for each item that changes, and the effect on the first", () => {
+    const was = { ...cluster, variables: { oidc: [], nodeCustomisation: nodeCustomisationVariable(filled, false) } };
+    const next = structuredClone(filled);
+    next.files.splice(1);
+    next.kubeletArgs.push({ name: "max-pods", value: "200" });
+    const after = {
+      ...was,
+      variables: { ...was.variables, nodeCustomisation: nodeCustomisationVariable(next, false) },
+    };
+    const rows = planRows(was, after, [{ setting: "nodeCustomisation", effect: "all" }]);
+    expect(rows.map((r) => [r.label, r.now, r.after, r.effect])).toStrictEqual([
+      ["Node customisation", "File /etc/token: Secret creds/token, 0644, all nodes", "–", "all"],
+      ["", "–", "Kubelet flag max-pods=200", undefined],
+    ]);
+  });
+});
 
 async function dialogOf(
   shown: object,

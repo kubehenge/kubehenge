@@ -237,9 +237,6 @@ function FileRow({
           </select>
         </Field>
         <RolesSelect value={file.roles} onChange={(roles) => update({ roles })} />
-        <button type="button" aria-label={`Remove file ${index + 1}`} onClick={onRemove}>
-          Remove
-        </button>
       </div>
       <FileSource
         file={file}
@@ -251,6 +248,9 @@ function FileRow({
         touch={() => rows.touch(key)}
       />
       <Problem id={id} message={failed} />
+      <button type="button" aria-label={`Remove file ${index + 1}`} onClick={onRemove}>
+        Remove
+      </button>
     </fieldset>
   );
 }

@@ -3080,7 +3080,7 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
 }
 
 .node-row.file-row {
-  grid-template-columns: minmax(0, 1fr) 6.5em 9em 5.5rem;
+  grid-template-columns: minmax(0, 1fr) 6.5em 9em;
 }
 
 .node-row.command-row {
