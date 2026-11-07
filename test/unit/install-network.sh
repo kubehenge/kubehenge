@@ -139,6 +139,20 @@ expect "an address with a prefix" yes yes_or_no is_ipv4_cidr 192.0.2.1/24
 expect "an IPv6 prefix" no yes_or_no is_ipv4_cidr 2001:db8::1/64
 expect "a prefix of 0" no yes_or_no is_ipv4_cidr 192.0.2.1/0
 
+# The reverse proxies the interface trusts.
+expect "a proxy range: an IPv4 address" yes yes_or_no is_proxy_range 192.0.2.10
+expect "a proxy range: an IPv4 CIDR" yes yes_or_no is_proxy_range 10.0.0.0/8
+expect "a proxy range: an IPv6 address" yes yes_or_no is_proxy_range 2001:db8::1
+expect "a proxy range: an IPv6 CIDR" yes yes_or_no is_proxy_range 2001:db8::/32
+expect "a proxy range: an IPv4-mapped address" yes yes_or_no is_proxy_range ::ffff:192.0.2.9
+expect "a proxy range: an IPv4 prefix over 32" no yes_or_no is_proxy_range 10.0.0.0/33
+expect "a proxy range: an IPv6 prefix of 128" yes yes_or_no is_proxy_range 2001:db8::1/128
+expect "a proxy range: an IPv6 prefix over 128" no yes_or_no is_proxy_range 2001:db8::/129
+expect "a proxy range: an octet over 255" no yes_or_no is_proxy_range 10.0.0.300
+expect "a proxy range: a name" no yes_or_no is_proxy_range proxy.example.org
+expect "a proxy range: a prefix that is no number" no yes_or_no is_proxy_range 10.0.0.0/x
+expect "a proxy range: nothing" no yes_or_no is_proxy_range ""
+
 # The appliances of the cluster.
 cat > "${root}/resources" << 'EOF'
 [{"type":"qemu","vmid":100,"node":"pve1","tags":"kubehenge"},{"type":"lxc","vmid":101,"node":"pve1","tags":"notkubehenge"},{"cpu":0,"id":"lxc/105","maxdisk":1,"node":"pve2","status":"running","tags":"a;kubehenge","type":"lxc","vmid":105},{"type":"lxc","vmid":106,"node":"pve3","tags":"kubehenge-test;x"},{"type":"lxc","vmid":107,"node":"pve3"}]

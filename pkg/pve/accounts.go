@@ -197,10 +197,10 @@ func (a *Accounts) OpenIDLogin(ctx context.Context, code, state, redirect string
 
 // Renew exchanges a ticket for a new one. Proxmox VE neither asks the realm nor a second factor
 // again, so only a disabled or expired user stops it. How long a session lasts is the caller's to
-// limit.
+// limit. An API token has no ticket to exchange, so Proxmox VE is asked whether it still takes it.
 func (a *Accounts) Renew(ctx context.Context, t *Ticket) (*Ticket, error) {
 	if t.Token != "" {
-		return t, nil
+		return a.TokenUser(ctx, t.Token)
 	}
 	now := time.Now()
 	res, err := a.postTicket(ctx, t.Username, t.Ticket, "")

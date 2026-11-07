@@ -10,7 +10,13 @@ import (
 
 func get(t *testing.T, h *harness, path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequestWithContext(t.Context(), "GET", "https://kubehenge.example"+path, nil)
+	return getAt(t, h, "kubehenge.example", path, cookies...)
+}
+
+// getAt is get by the name the browser reached the interface at.
+func getAt(t *testing.T, h *harness, host, path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "https://"+host+path, nil)
 	req.RemoteAddr = "192.0.2.10:50000"
 	for _, c := range cookies {
 		req.Header.Add("Cookie", c.Name+"="+c.Value)
@@ -106,9 +112,46 @@ func TestOpenIDUsesThePublicURL(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	h.server.PublicURL = "https://k8s.example.org/"
-	rec := get(t, h, "/api/openid/start?realm=sso")
+	rec := getAt(t, h, "k8s.example.org", "/api/openid/start?realm=sso")
 	loc, _ := url.Parse(rec.Header().Get("Location"))
 	if loc.Query().Get("redirect_uri") != "https://k8s.example.org/api/openid/callback" {
 		t.Fatalf("redirect URL %q", loc.Query().Get("redirect_uri"))
+	}
+}
+
+// The identity provider returns to the public address, and the state cookie is host-only, so a
+// sign-in started under another name would come back to a host without its cookie. The start
+// moves the browser to the public address first, whatever Host it names.
+func TestOpenIDFromAnotherNameStartsAtThePublicURL(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.server.PublicURL = "https://kubehenge.example"
+	for _, host := range []string{"192.0.2.40", "kubehenge", "kubehenge.example:8443", "evil.example"} {
+		rec := getAt(t, h, host, "/api/openid/start?realm=sso")
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://kubehenge.example/api/openid/start?moved=1&realm=sso" || cookie(rec, openIDCookie) != nil {
+			t.Errorf("from %s: %d %s, cookie %v", host, rec.Code, rec.Header().Get("Location"), cookie(rec, openIDCookie))
+		}
+	}
+
+	// The public name itself, in any case and with its default port, starts the sign-in.
+	for _, host := range []string{"kubehenge.example", "KubeHenge.Example", "kubehenge.example:443"} {
+		rec := getAt(t, h, host, "/api/openid/start?realm=sso")
+		if loc := rec.Header().Get("Location"); !strings.HasPrefix(loc, "https://idp.example") || cookie(rec, openIDCookie) == nil {
+			t.Errorf("from %s: %d %s", host, rec.Code, loc)
+		}
+	}
+
+	// A public address with a port is compared with it.
+	h.server.PublicURL = "https://kubehenge.example:8443"
+	rec := getAt(t, h, "kubehenge.example", "/api/openid/start?realm=sso")
+	if rec.Header().Get("Location") != "https://kubehenge.example:8443/api/openid/start?moved=1&realm=sso" {
+		t.Errorf("without the port: %s", rec.Header().Get("Location"))
+	}
+
+	// A proxy that rewrites the Host header cannot make the browser go round: a start that was
+	// moved once goes on whatever Host it arrives with.
+	rec = getAt(t, h, "192.0.2.40", "/api/openid/start?moved=1&realm=sso")
+	if loc := rec.Header().Get("Location"); !strings.HasPrefix(loc, "https://idp.example") {
+		t.Errorf("a start already moved: %s", loc)
 	}
 }

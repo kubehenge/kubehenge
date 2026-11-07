@@ -772,14 +772,17 @@ It is where Kubehenge starts and what looks after it:
 
 - **Sign-in through the Proxmox VE API**, with no second user directory. Every Proxmox VE realm works, PAM, Proxmox VE users, LDAP, Active Directory and OpenID Connect included.
   - A second factor (TOTP, Yubico OTP or recovery keys) is passed on to Proxmox VE as its own sign-in page would.
-  - A WebAuthn key is bound to Proxmox VE's own address, so its users sign in through an OpenID realm or another factor.
+  - A WebAuthn key is bound to Proxmox VE's own address, so its users sign in with an API token (`POST /api/session/token`). That makes a normal session with the same limits.
+  - A token session ends at its next renewal once Proxmox VE stops taking the token. Its privileges are the token's, which privilege separation cuts down to its user's.
   - An OpenID realm sends the browser to its identity provider, which returns it to the interface. The return goes to `/api/openid/callback` under `--public-url`, to be registered with the provider.
   - Without a public URL OpenID sign-in is refused, since the address the browser sends is the client's to choose.
+  - The state cookie is host-only, so a sign-in started under another name first redirects to the same path under `--public-url`, where the provider returns.
   - Proxmox VE checks the code, and the interface accepts the return only in the browser that started it.
 - **Sessions.** The Proxmox VE ticket stays on the server, in memory only.
   - The browser holds a random session ID in a `__Host-` cookie (Secure, HttpOnly, SameSite=Strict). Every change also carries a per-session CSRF token.
   - Proxmox VE renews a ticket without asking the realm or the second factor again. A session therefore ends after a fixed time (eight hours by default) however active it is.
   - Failed sign-ins are limited per user at an address and per address, never per user alone. Nobody can lock an administrator out from elsewhere.
+  - The address is the connection's peer. From a peer listed in `--trusted-proxy` it is the right-most `X-Forwarded-For` entry that is not listed, since only the entries a trusted proxy appended can be believed.
   - The frontend loads no inline script or style, and the Content-Security-Policy allows none.
 - **Permissions follow Proxmox VE's, by pool.** Each cluster has its own pool under the workload pool.
   - Seeing a cluster needs `VM.Audit` on its pool. Creating one needs `VM.Allocate` on the workload pool.

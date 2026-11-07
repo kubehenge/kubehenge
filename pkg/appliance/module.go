@@ -231,8 +231,12 @@ func (a *Appliance) writeConfig(s *Settings) error {
 	return writeFileAtomic(filepath.Join(dir, "settings.json"), settings)
 }
 
-// ticketAuth has the module's Proxmox VE provider act with a user's session.
+// ticketAuth has the module's Proxmox VE provider act with a user's session, or with the API token
+// that signed the user in, which has no ticket.
 func ticketAuth(t *pve.Ticket) []string {
+	if t.Token != "" {
+		return tokenAuth(t.Token)
+	}
 	return []string{"PROXMOX_VE_AUTH_TICKET=" + t.Ticket, "PROXMOX_VE_CSRF_PREVENTION_TOKEN=" + t.CSRF}
 }
 
