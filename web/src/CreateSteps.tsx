@@ -666,6 +666,31 @@ export function NetworkStep({
           <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
         )}
       </Field>
+      {variable(cls, "network")?.properties?.["mtu"] === undefined ? null : (
+        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.mtu}
+              onChange={(e) => set("mtu", e.target.value.trim())}
+              placeholder="1500"
+            />
+          )}
+        </Field>
+      )}
+      {variable(cls, "network")?.properties?.["queues"] === undefined ? null : (
+        <Field label="Queues" hint="Optional" error={shown("queues")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.queues}
+              onChange={(e) => set("queues", e.target.value.trim())}
+            />
+          )}
+        </Field>
+      )}
       <Field
         label="API address"
         hint={endpointInUse ?? "A free address outside the node addresses"}

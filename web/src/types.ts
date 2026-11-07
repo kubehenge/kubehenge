@@ -628,6 +628,8 @@ export interface Bridge {
   /** The node's own IPv4 address on the bridge, like 192.0.2.5/24, and its gateway, where it has them. */
   cidr?: string;
   gateway?: string;
+  /** The bridge's MTU where a node lists one: the nodes' interface MTU cannot exceed it. */
+  mtu?: number;
   /** The SDN zone of a VNet, which a node's own bridge lacks. */
   zone?: string;
   /** The VNet's display name. */

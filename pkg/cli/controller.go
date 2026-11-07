@@ -340,6 +340,7 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		RancherKubernetes: rancherMinors,
 		Nodes:             cloud,
 		Sites:             cloud,
+		Bridges:           cloud,
 		DatastoreAllocate: o.r.DatastoreAllocate,
 		SysAuditGroup:     o.r.SysAuditGroup,
 		VolumeSnapshots:   o.r.VolumeSnapshots,

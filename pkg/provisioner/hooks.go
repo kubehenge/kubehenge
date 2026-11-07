@@ -80,6 +80,9 @@ type Hooks struct {
 	Sites SiteSource
 	// AdmissionBudget bounds admission's reads of Proxmox VE. Zero means 2 s.
 	AdmissionBudget time.Duration
+	// Bridges is asked for a bridge's MTU, which the validator holds a cluster's interface MTU to.
+	// Nil, no bridge is looked at.
+	Bridges BridgeMTUs
 	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
 	// and the validator refuses a release it does not pin.
 	Releases *ReleaseChecksums

@@ -4,6 +4,7 @@ import { AddOnsStep } from "./AddOnsStep";
 import { api, bridgesOf, dnsOf } from "./api";
 import { clusterPath } from "./cluster-paths";
 import {
+  bridgeMtuProblems,
   classBridges,
   classStorages,
   createRoom,
@@ -241,6 +242,7 @@ export function CreateCluster({
   const following = steps[index + 1];
   const byField = {
     ...fieldProblems(step, form, cls),
+    ...bridgeMtuProblems(step, form, bridgeOptions),
     ...csiProblems(step, form, csi),
     ...snapshotsProblems(step, form, snapshots),
   };

@@ -124,6 +124,19 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
           type: integer
           minimum: 1
           maximum: 4094
+        mtu:
+          type: integer
+          minimum: 1280
+          maximum: 65520
+          description: >-
+            MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN
+            underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own,
+            and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.
+        queues:
+          type: integer
+          minimum: 1
+          maximum: 64
+          description: Queues of the Proxmox VE network interface, one per vCPU at most. Unset, it has one.
         addresses:
           type: array
           minItems: 1
@@ -1475,13 +1488,7 @@ Call with the root context.
           path: /spec/template/spec/network
           valueFrom:
             template: |
-              networkDevices:
-                - name: net0
-                  model: virtio
-                  bridge: {{ "{{ .network.bridge | quote }}" }}
-                  {{- "{{ if .network.vlan }}" | nindent 18 }}
-                  vlan: {{ "{{ .network.vlan }}" }}
-                  {{- "{{ end }}" | nindent 18 }}
+              {{- .Files.Get "files/proxmox-network.tpl" | nindent 14 }}
 - name: proxmox-storage
   definitions:
     - selector:
