@@ -5,14 +5,61 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/yaml"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
+
+func customised(value string) *clusterv1.Cluster {
+	c := cluster("default", "one")
+	c.Spec.Topology.Variables = []clusterv1.ClusterVariable{{Name: provisioner.NodeCustomisationVariable, Value: apiextensionsv1.JSON{Raw: []byte(value)}}}
+	return c
+}
+
+// The plan says that a referenced Secret or ConfigMap also replaces the nodes, and only then.
+func TestPlanSaysWhyNodesRollOnReferencedContent(t *testing.T) {
+	t.Parallel()
+	changes := []plannedChange{{Setting: provisioner.NodeCustomisationVariable, Effect: effectAll}}
+	rolls := func(roles ...string) string { return provisioner.NodeCustomisationRolls(roles) }
+	if got := planWarnings(customised(`{"auditWebhook":{"secret":"siem"}}`), changes); !slices.Contains(got, rolls("controlPlane")) {
+		t.Errorf("a Secret: %v", got)
+	}
+	if got := planWarnings(customised(`{"auditPolicy":{"configMap":"p"}}`), changes); !slices.Contains(got, rolls("controlPlane")) {
+		t.Errorf("a ConfigMap: %v", got)
+	}
+	workers := `{"files":[{"path":"/etc/x","roles":["worker"],"secret":{"name":"s","key":"k"}}]}`
+	if got := planWarnings(customised(workers), changes); !slices.Contains(got, rolls("worker")) || slices.Contains(got, rolls("controlPlane")) {
+		t.Errorf("a worker file: %v", got)
+	}
+	if got := planWarnings(customised(`{"files":[{"path":"/etc/x","content":"x"}]}`), changes); slices.ContainsFunc(got, func(w string) bool { return strings.Contains(w, "also replaced") }) {
+		t.Errorf("inline files: %v", got)
+	}
+	one := customised(`{"auditWebhook":{"secret":"siem"}}`)
+	one.Spec.Topology.ControlPlane.Replicas = new(int32(1))
+	cp := []plannedChange{{Setting: provisioner.NodeCustomisationVariable, Effect: effectControlPlane}}
+	if got := planWarnings(one, cp); len(got) != 2 {
+		t.Errorf("one control plane: %v", got)
+	}
+}
+
+// Health shows a reference that is missing.
+func TestHealthShowsAMissingNodeCustomisationReference(t *testing.T) {
+	t.Parallel()
+	c := customised(`{}`)
+	c.Status.Conditions = []metav1.Condition{{Type: provisioner.NodeCustomisationCondition, Status: metav1.ConditionTrue, Reason: provisioner.NodeCustomisationMissing, Message: "Secret siem is not in namespace default"}}
+	var a attention
+	watchAttention(c, &a)
+	if len(a) != 1 || a[0].What != "Node customisation misses a reference" || a[0].Message != "Secret siem is not in namespace default" {
+		t.Errorf("attention %+v", a)
+	}
+}
 
 // The chart's classes reach every node with nodeCustomisation, so a change to it replaces them
 // all, which the plan says.

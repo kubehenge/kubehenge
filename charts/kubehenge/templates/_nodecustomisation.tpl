@@ -160,6 +160,22 @@ items:
               default: kubeconfig
               maxLength: 253
               pattern: "^[-._a-zA-Z0-9]+$"
+- name: nodeCustomisationRevision
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Set by Kubehenge's controller to a digest, per role, of the Secrets and the ConfigMap that
+        nodeCustomisation names for that role. A new digest replaces that role's nodes, so that a
+        rotated secret or a changed audit policy reaches them. Do not set it.
+      properties:
+        controlPlane:
+          type: string
+          maxLength: 64
+        worker:
+          type: string
+          maxLength: 64
 {{- end -}}
 
 {{/*
@@ -249,6 +265,18 @@ The patches that give the nodes of a distribution (kubeadm, rke2, k3s or talos) 
           valueFrom:
             template: {{ printf `{{ (index .nodeCustomisation.commands %d).run | toJson }}` $i | quote }}
 {{- end }}
+{{- end }}
+{{- range $role := $roles }}
+{{- $target := get $t $role }}
+- name: {{ $dist }}-node-revision-{{ $role }}
+  enabledIf: {{ printf `{{ with .nodeCustomisationRevision }}{{ if .%s }}true{{ end }}{{ end }}` $role | quote }}
+  definitions:
+    - {{- include "kubehenge.nodeSelector" (dict "api" $target.api "kind" $target.kind "role" $role) | nindent 6 }}
+      jsonPatches:
+        - op: add
+          path: {{ $target.base }}/files/-
+          valueFrom:
+            template: {{ printf `{{ dict "path" "/etc/kubehenge/customisation-revision" "owner" "root:root" "permissions" "0644" "content" .nodeCustomisationRevision.%s | toJson }}` $role | quote }}
 {{- end }}
 {{- if eq $dist "kubeadm" }}
 {{- include "kubehenge.kubeadmNodePatches" (dict "t" $t "max" $max) }}

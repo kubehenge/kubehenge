@@ -235,6 +235,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .nodeCustomisationRevision }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisationRevision"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .oidc }}"
                   }
                 }
@@ -2042,6 +2070,26 @@
           }
         },
         {
+          "name": "nodeCustomisationRevision",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Set by Kubehenge's controller to a digest, per role, of the Secrets and the ConfigMap that nodeCustomisation names for that role. A new digest replaces that role's nodes, so that a rotated secret or a changed audit policy reaches them. Do not set it.",
+              "properties": {
+                "controlPlane": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "worker": {
+                  "maxLength": 64,
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": false,
           "schema": {
@@ -2218,6 +2266,34 @@
             }
           ],
           "name": "reach-nodeCustomisation"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .nodeCustomisationRevision }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisationRevision"
         },
         {
           "definitions": [
@@ -4034,6 +4110,26 @@
           }
         },
         {
+          "name": "nodeCustomisationRevision",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Set by Kubehenge's controller to a digest, per role, of the Secrets and the ConfigMap that nodeCustomisation names for that role. A new digest replaces that role's nodes, so that a rotated secret or a changed audit policy reaches them. Do not set it.",
+              "properties": {
+                "controlPlane": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "worker": {
+                  "maxLength": 64,
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": true,
           "schema": {
@@ -4253,6 +4349,34 @@
             }
           ],
           "name": "reach-nodeCustomisation"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .nodeCustomisationRevision }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeCustomisationRevision"
         },
         {
           "definitions": [
@@ -6062,6 +6186,26 @@
                       "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
                     }
                   ]
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "nodeCustomisationRevision",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Set by Kubehenge's controller to a digest, per role, of the Secrets and the ConfigMap that nodeCustomisation names for that role. A new digest replaces that role's nodes, so that a rotated secret or a changed audit policy reaches them. Do not set it.",
+              "properties": {
+                "controlPlane": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "worker": {
+                  "maxLength": 64,
+                  "type": "string"
                 }
               },
               "type": "object"
@@ -8035,6 +8179,26 @@
                       "rule": "self.all(a, self.exists_one(b, a.name == b.name))"
                     }
                   ]
+                }
+              },
+              "type": "object"
+            }
+          }
+        },
+        {
+          "name": "nodeCustomisationRevision",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Set by Kubehenge's controller to a digest, per role, of the Secrets and the ConfigMap that nodeCustomisation names for that role. A new digest replaces that role's nodes, so that a rotated secret or a changed audit policy reaches them. Do not set it.",
+              "properties": {
+                "controlPlane": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "worker": {
+                  "maxLength": 64,
+                  "type": "string"
                 }
               },
               "type": "object"

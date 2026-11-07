@@ -537,7 +537,17 @@ The `nodeCustomisation` variable adds files, boot commands, arguments and audit 
 
 Secrets and the ConfigMap sit in the cluster's namespace and have to exist when the cluster is saved. No secret value goes into the variable. Put a certificate or key in a Secret and name it in `secret`. Kubehenge copies a ConfigMap policy into the Secret `<cluster>-audit-policy` for the nodes to read.
 
-Nodes read a Secret once, as they bootstrap. A new value in a Secret or ConfigMap reaches new nodes only after the variable changes. Give the new value a new name.
+### Changed Secrets and ConfigMaps
+
+A change replaces nodes instead of editing them in place. Nodes are immutable images, and the API server reads these files only at start.
+
+Kubehenge's controller keeps a digest of every Secret and ConfigMap the variable names, per role, in `nodeCustomisationRevision`, which only it sets. A changed source replaces only the nodes that read it, one at a time. The audit webhook's Secret and the audit policy reach control planes. A file reaches the roles in its `roles`, and worker pools roll together.
+
+An event on the Cluster, shown in **Activity**, names the source and the roles. For example: "the audit webhook's Secret siem changed: control planes are replaced one at a time."
+
+A name that points at nothing leaves the nodes as they are. Health says which Secret or ConfigMap is missing. A Secret that Talos cannot read is not accepted there.
+
+### Per distribution
 
 Each distribution takes what it can carry. Anything else is refused when the cluster is saved.
 
@@ -549,7 +559,9 @@ Each distribution takes what it can carry. Anything else is refused when the clu
 | `auditPolicy` | a file at the policy's path | the same | `policy` only |
 | `auditWebhook` | a file and `audit-webhook-config-file` | the same | refused, Talos reads no Secret |
 
-Examples, as `spec.topology.variables` of a Cluster:
+### Examples
+
+As `spec.topology.variables` of a Cluster:
 
 ```yaml
 # kubeadm: audit events to a SIEM, an auditd rule, a boot command.
@@ -580,7 +592,9 @@ Examples, as `spec.topology.variables` of a Cluster:
     files: [{path: /var/company/syslog.conf, content: "target=siem.example.org"}]
 ```
 
-In the interface the **Advanced** section of the create wizard and the node customisation row under **Options** hold the same fields. With the command line:
+### In the interface and the CLI
+
+The **Advanced** section of the create wizard and the node customisation row under **Options** hold the same fields. With the command line:
 
 ```sh
 kubehenge cluster update prod \
@@ -590,7 +604,7 @@ kubehenge cluster update prod \
   --audit-policy-configmap company-audit --audit-webhook-secret siem-webhook/kubeconfig
 ```
 
-Changing the variable replaces every node it reaches, one at a time. The plan says so, as it does for other changes that replace nodes. A change to `files`, the arguments or the audit settings reaches both roles unless its `roles` limit it.
+Changing the variable replaces every node it reaches, one at a time. The plan says so, and adds a warning when the variable names a Secret or ConfigMap. A change to `files`, the arguments or the audit settings reaches both roles unless its `roles` limit it.
 
 ## Node image refresh
 

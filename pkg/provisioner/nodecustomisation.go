@@ -332,7 +332,7 @@ func checkNodeReferences(ctx context.Context, r client.Reader, namespace string,
 	if w := n.AuditWebhook; w != nil {
 		key := w.Key
 		if key == "" {
-			key = "kubeconfig"
+			key = IdentityKubeconfigKey
 		}
 		secret(base.Child("auditWebhook", "secret"), w.Secret, key)
 	}
@@ -401,7 +401,7 @@ func auditPolicySecretName(cluster *clusterv1.Cluster) string {
 
 // ensureAuditPolicy mirrors the ConfigMap that holds the cluster's audit policy into the Secret
 // its bootstrap templates read, and keeps it in step. A node reads the Secret once, as it
-// bootstraps, so a changed policy reaches the nodes with the next change of the variable.
+// bootstraps. A changed policy replaces the nodes through nodeCustomisationRevision.
 func (r *Reconciler) ensureAuditPolicy(ctx context.Context, cluster *clusterv1.Cluster) error {
 	n, _, err := optionalVariable[NodeCustomisation](cluster, NodeCustomisationVariable)
 	if err != nil || n.AuditPolicy == nil || n.AuditPolicy.ConfigMap == "" || distributionOf(cluster) == templates.Talos {
