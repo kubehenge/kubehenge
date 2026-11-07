@@ -115,11 +115,12 @@ type Release struct {
 	// CPUType is the QEMU CPU type the release needs at the least; "" means DefaultCPUType.
 	CPUType string
 	Mode    BuildMode
+	// FIPS says templates of the release are also built in FIPS mode. It sits beside Mode, so
+	// the two bytes share one word and Release stays small enough to pass by value.
+	FIPS bool
 	// Unreleased, when set, says why no template of the release can be built yet: the family is
 	// complete, but its publisher has not released it.
 	Unreleased string
-	// FIPS says templates of the release are also built in FIPS mode.
-	FIPS bool
 }
 
 // Family is an operating system family Kubehenge builds node templates of. Everything that differs
@@ -264,15 +265,15 @@ func NodeOSes() []NodeOSInfo {
 
 // AvailableNodeOSes are the node OSes templates can be made of, as one word each.
 func AvailableNodeOSes() []string {
-	return availableNodeOSes(func(NodeOS) bool { return true })
+	return nodeOSesWhere(func(NodeOS) bool { return true })
 }
 
 // FIPSNodeOSes are the node OSes templates can be made of in FIPS mode, as one word each.
 func FIPSNodeOSes() []string {
-	return availableNodeOSes(func(o NodeOS) bool { return o.FIPS })
+	return nodeOSesWhere(func(o NodeOS) bool { return o.FIPS })
 }
 
-func availableNodeOSes(keep func(NodeOS) bool) []string {
+func nodeOSesWhere(keep func(NodeOS) bool) []string {
 	var out []string
 	for _, o := range NodeOSes() {
 		if o.Unreleased == "" && keep(o.NodeOS) {
