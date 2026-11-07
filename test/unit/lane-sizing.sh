@@ -74,6 +74,11 @@ synthetic=$(worker_memory_for "${class}" '["a"]' false)
 expect "requests set the size" 1504 "${synthetic}"
 synthetic=$(worker_memory_for "${class}" '["a"]' true)
 expect "the fixtures add to the requests" 1712 "${synthetic}"
+# The balloon's floor is what the worker and the add-ons use, and the fixtures' requests.
+synthetic=$(worker_need_for "${class}" '["a"]' false)
+expect "a worker's need is its use and the add-ons'" 200 "${synthetic}"
+synthetic=$(worker_need_for "${class}" '["a"]' true)
+expect "the fixtures add to the need" 408 "${synthetic}"
 
 # The pods the sizing counts are the pods the script creates: a new fixture pod has to be listed in
 # common.sh as running during the GitOps steps or not, or this fails.

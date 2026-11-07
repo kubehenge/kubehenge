@@ -29,15 +29,31 @@ word_count() {
 # shellcheck disable=SC2086 # one pod per word.
 gitops_agnhost_pods=$(word_count ${gitops_fixture_pods})
 
+# worker_fixtures <gitops: true|false> sets worker_memory_fixtures to what the test's own pods
+# request on a worker, in MiB: with GitOps, Gitea and the agnhost pods the steps leave running.
+worker_fixtures() {
+    worker_memory_fixtures=0
+    if [ "$1" = true ]; then
+        worker_memory_fixtures=$((gitea_request_mib + gitops_agnhost_pods * agnhost_request_mib))
+    fi
+}
+
+# worker_need_for <class JSON> <add-ons JSON array> <gitops: true|false>: what a worker uses itself
+# with those add-ons on and the test's own pods, by Kubehenge's figures, in MiB.
+worker_need_for() {
+    worker_fixtures "$3"
+    printf '%s' "$1" | jq -r --argjson on "$2" --argjson fixtures "${worker_memory_fixtures}" '
+        (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
+        | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
+        | $node.worker + ([$on[] | $addon[.]] | add) + $fixtures'
+}
+
 # worker_memory_for <class JSON> <add-ons JSON array> <gitops: true|false>: the least memory in MiB
 # a worker may have for a class with those add-ons on. It is the largest of the class's own minimum,
 # what a worker and the add-ons use, and what the scheduler needs for the requests of a worker's own
 # pods, the add-ons' pods and, with GitOps, the test's own pods, to a multiple of 8.
 worker_memory_for() {
-    worker_memory_fixtures=0
-    if [ "$3" = true ]; then
-        worker_memory_fixtures=$((gitea_request_mib + gitops_agnhost_pods * agnhost_request_mib))
-    fi
+    worker_fixtures "$3"
     printf '%s' "$1" | jq -r --argjson on "$2" --argjson fixtures "${worker_memory_fixtures}" '
         (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
         | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node

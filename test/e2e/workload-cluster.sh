@@ -120,6 +120,8 @@ ETCD_SHA256=5dfa9cc3b3ce3b4b491fbcc2057d3daa166bcc6676f743fcd20f8e5760cb9775
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
+# shellcheck source=ci/room.sh
+. "$(dirname "$0")/ci/room.sh"
 # shellcheck source=cis-benchmark.sh
 . "$(dirname "$0")/cis-benchmark.sh"
 # shellcheck source=backups.sh
@@ -472,7 +474,9 @@ if on argocd; then
     sized_gitops=true
 fi
 # Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they
-# are seen to fit in it (worker_memory_for, common.sh).
+# are seen to fit in it (worker_memory_for, common.sh). worker_need is what a worker uses itself,
+# which the balloon below keeps.
+worker_need=$(worker_need_for "${class_json}" "${sized_for}" "${sized_gitops}")
 worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(worker_memory_for "${class_json}" "${sized_for}" "${sized_gitops}")}
 # Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
 # request, the GitOps engine that asks for more of the two.
@@ -484,15 +488,27 @@ worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r
     | max')}
 # The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
 # it uses itself with those add-ons and its CNI, whichever is more.
-control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --arg cni "${KUBEHENGE_E2E_CNI:-}" '
+control_plane_need=$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --arg cni "${KUBEHENGE_E2E_CNI:-}" '
     (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
     | (.metadata.annotations["kubehenge.dev/cni-control-plane-memory"] // "{}" | fromjson) as $cnis
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
-    | [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
+    | $node.controlPlane + ([$on[] | $grows[.] // 0] | add) + ($cnis[$cni] // 0)')
+control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson need "${control_plane_need}" '
+    [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
         (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.controlPlane + ([$on[] | $grows[.] // 0] | add) + ($cnis[$cni] // 0)]
+        $need]
     | max')}
 echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the control plane with ${control_plane_memory} MiB"
+# KUBEHENGE_E2E_BALLOON_FILE: where the recorder (ci/guests.sh) finds the least memory each node's
+# balloon may take it down to. The nodes keep the sizes above, the class's own least, and give
+# memory back only while the runner is short of it: down to what Kubehenge's figures say they need.
+# A node's name starts with the cluster's, and a worker's goes on with -md-.
+if [ -n "${KUBEHENGE_E2E_BALLOON_FILE:-}" ]; then
+    balloon_floor "${worker_need}" "${worker_memory}"
+    worker_floor=${floor}
+    balloon_floor "${control_plane_need}" "${control_plane_memory}"
+    printf '%s-md-* %s\n%s-* %s\n' "${name}" "${worker_floor}" "${name}" "${floor}" > "${KUBEHENGE_E2E_BALLOON_FILE}"
+fi
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
@@ -3255,7 +3271,7 @@ spec:
             httpGet: {path: /api/healthz, port: http}
           # A pod without requests is best-effort, and Talos's OOM controller kills those first when the
           # 2 GiB worker fills up as the add-ons install. Gitea holds about 100 MiB and peaks near
-          # 135 MiB, and the worker is sized for this request (fixture_memory).
+          # 135 MiB, and the worker is sized for this request (worker_memory_for, common.sh).
           resources:
             requests: {cpu: 100m, memory: ${gitea_request_mib}Mi}
             limits: {memory: 512Mi}

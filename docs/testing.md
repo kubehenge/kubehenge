@@ -303,6 +303,20 @@ A guest keeps all the memory it was given, mostly page cache. While the machine 
 
 The management node's balloon gives memory back instead. Its minimum is 3584 MiB (`KUBEHENGE_E2E_MANAGEMENT_MEMORY_MIN`). It gives back at most 512 MiB. Proxmox VE inflates the balloon towards it once the machine passes 80 % memory use.
 
+The nodes of `rke2-etcd` and `rke2-machines` have balloons too. Their sizes stay at 4096 MiB, the least RKE2 documents. Their minimums are the memory Kubehenge's figures say a node needs, plus the 192 MiB the guest's kernel keeps:
+
+| Node | Size (MiB) | Balloon minimum (MiB) |
+| --- | --- | --- |
+| Management node | 4096 | 3584 |
+| Control plane | 4096 | 3312 |
+| Worker | 4096 | 1536 |
+
+`balloon_tests` in `test/e2e/ci/room.sh` names the tests. The workload test works the minimums out and the recorder sets them on each VM (`guests.sh`).
+
+With a control plane replaced, the four VMs held 16604 MiB with QEMU's overhead, and the least memory available was 100 to 300 MiB. A control plane used 2440 MiB of its 3908 MiB and a worker 576 MiB. At the minimums the VMs hold 11964 MiB.
+
+`test/unit/runner-room.sh` checks that each such test's VMs at their minimums leave 512 MiB. That is the runner's memory less the VMs and less what its own processes and kernel keep. `room.sh` holds all three figures.
+
 The add-on tests use up to 2752 MB on the node. At a minimum of 3072 MiB the node saw only 2874 MB. Its page cache thrashed, and every controller lost its lease.
 
 ### How much the guests may take
