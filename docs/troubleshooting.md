@@ -246,6 +246,18 @@ The interface refuses a cluster whose template the controller does not find in t
 
 `kubehenge template list` shows what the template pool holds, with each template's tags. `kubehenge template list --pool ''` lists every pool's templates, including one made elsewhere ([templates.md](templates.md)).
 
+### Template on a node that is down
+
+Cluster API's Proxmox VE provider clones every VM through its template's node. While that node is down, scaling, rolling updates and replacements stay at cloning, with a 595 from Proxmox VE in the machine's message.
+
+Kubehenge says so first. The Templates list on the Administration page names each such template (`Template <name> is on node <node>, which is down.`) and lists the others.
+
+- A new cluster whose machines would clone from such a template is refused with the same sentence.
+- An existing cluster has the condition `TemplateNodeDown`, shown under **Nodes** as **Template node down**. It goes when the node is back.
+- A node image refresh does not move a cluster onto a build on a down node. The cluster has the condition `NodeImageHeld` (**Node image refresh held**) until the node is back.
+- Start the node, or on shared storage move the VM to a node that is up with `mv /etc/pve/nodes/<node>/qemu-server/<vmid>.conf /etc/pve/nodes/<other node>/qemu-server/`.
+- Never copy the template to a second node. Two templates with the same tags make Cluster API fail with `found 2 VM templates`.
+
 ### Template build fails
 
 The error and the run's log are on the Administration page ([where to look](#the-appliance)). `kubehenge template create` prints them. A failed run removes the VM it made, unless `--keep-on-failure` kept it.

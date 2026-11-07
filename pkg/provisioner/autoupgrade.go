@@ -388,6 +388,8 @@ type poolTemplates struct {
 	builds NodeImageBuilds
 	// talos are the Talos releases of the Talos templates, newest first.
 	talos []string
+	// down are the VMs of the pool on a node that is down.
+	down []DownTemplate
 }
 
 // talosVersionOf is the Talos release a Talos template's tags name: exactly a release's tags, as
@@ -433,6 +435,9 @@ func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, e
 	for _, r := range inv.Templates {
 		seen.add(templates.ParseTags(r.Tags))
 	}
+	for _, r := range inv.Down {
+		seen.addDown(r)
+	}
 	seen.sort()
 	return seen, nil
 }
@@ -458,6 +463,31 @@ func (p *poolTemplates) add(tags []string) {
 	if v, ok := kubeadmVersionOf(tags); ok && !slices.Contains(p.kubeadm[os], v) {
 		p.kubeadm[os] = append(p.kubeadm[os], v)
 	}
+}
+
+// addDown records a VM on a down node. Its build stays among the builds, so that the build a
+// cluster's node image time picks does not move to another while the node is down. What the
+// template offers a new cluster is left out, since it cannot be cloned from.
+func (p *poolTemplates) addDown(r *proxmox.ClusterResource) {
+	tags := templates.NormaliseTags(templates.ParseTags(r.Tags))
+	vmid, _ := templateVMID(r)
+	p.down = append(p.down, DownTemplate{Name: r.Name, VMID: vmid, Node: r.Node, Tags: tags})
+	at, built := templates.BuildOf(tags)
+	os, known := templates.NodeOSOf(tags)
+	if _, _, err := templates.ReleaseOf(os); !built || !known || err != nil {
+		return
+	}
+	line := templates.LineKey(tags)
+	p.builds[line] = append(p.builds[line], at)
+}
+
+// templateVMID reads a VM ID from the cluster's resource list, where it is unsigned.
+func templateVMID(r *proxmox.ClusterResource) (int, error) {
+	const largest = 999999999 // Proxmox VE's own upper bound
+	if r.VMID > largest {
+		return 0, fmt.Errorf("VM ID %d is outside Proxmox VE's range", r.VMID)
+	}
+	return int(r.VMID), nil
 }
 
 // sort puts the versions and releases newest first, the node OSes by name and the builds oldest
@@ -687,6 +717,9 @@ func (u *Upgrader) refresh(ctx context.Context, c *clusterv1.Cluster) error {
 			return err
 		}
 	}
+	if err = u.markNodeImageHeld(ctx, c, w.blocked); err != nil {
+		return err
+	}
 	from, to := w.from, w.to
 	if to.IsZero() {
 		return u.hold(ctx, c, "")
@@ -709,7 +742,7 @@ func (u *Upgrader) refresh(ctx context.Context, c *clusterv1.Cluster) error {
 	if c.Annotations == nil {
 		c.Annotations = map[string]string{}
 	}
-	c.Annotations[NodeImageAnnotation] = now.Format(time.RFC3339)
+	c.Annotations[NodeImageAnnotation] = w.at.Format(time.RFC3339)
 	c.Annotations[NodeImageRefreshedAnnotation] = fmt.Sprintf("%s to %s at %s", templates.BuildTag(from), templates.BuildTag(to), now.Format(time.RFC3339))
 	delete(c.Annotations, NodeImageHeldAnnotation)
 	if err := u.Client.Patch(ctx, c, base); err != nil {
@@ -793,12 +826,17 @@ func newestTalosPatch(current string, releases []string) string {
 // would move to (to); zero times when none waits.
 type waiting struct {
 	from, to time.Time
+	// at is the node image time that has the machines clone from to.
+	at time.Time
+	// blocked is the template on a down node that the move would have gone to, when no move is
+	// possible for that reason alone.
+	blocked DownTemplate
 }
 
 // waitingBuild is the build that waits for a cluster's nodes. A ClusterClass the controller has
 // not recorded builds on yet offers none.
 func (u *Upgrader) waitingBuild(ctx context.Context, c *clusterv1.Cluster, now time.Time) (waiting, error) {
-	builds, err := ClassBuilds(ctx, u.Client, c)
+	builds, down, err := classBuildsAndDown(ctx, u.Client, c)
 	if errors.Is(err, errNoBuildsRecorded) {
 		return waiting{}, nil
 	}
@@ -813,13 +851,18 @@ func (u *Upgrader) waitingBuild(ctx context.Context, c *clusterv1.Cluster, now t
 	if err != nil {
 		return waiting{}, err
 	}
+	var held waiting
 	for _, line := range lines {
-		if next, ok := builds.Waiting(line, t, now, u.Soak); ok {
-			from, _ := builds.Pick(line, t, u.Soak)
-			return waiting{from: from, to: next}, nil
+		move, moves := nextBuild(builds, down, line, t, now, u.Soak)
+		switch {
+		case moves:
+			move.at = refreshTime(builds, line, move.to, now, u.Soak)
+			return move, nil
+		case move.blocked.Node != "" && held.blocked.Node == "":
+			held.blocked = move.blocked
 		}
 	}
-	return waiting{}, nil
+	return held, nil
 }
 
 // hold records on the cluster which build it is held from and until when, or with "" that it is
@@ -849,15 +892,32 @@ var errNoBuildsRecorded = errors.New("no template builds recorded yet")
 
 // ClassBuilds reads the builds of the template lines recorded on a cluster's ClusterClass.
 func ClassBuilds(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (NodeImageBuilds, error) {
+	builds, _, err := classBuildsAndDown(ctx, r, c)
+	return builds, err
+}
+
+// classBuildsAndDown reads the builds recorded on a cluster's ClusterClass and the templates it
+// records as being on a down node.
+func classBuildsAndDown(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (NodeImageBuilds, []DownTemplate, error) {
 	ref := c.Spec.Topology.ClassRef
 	ns := cmpOr(ref.Namespace, c.Namespace)
 	class := &clusterv1.ClusterClass{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, class); err != nil {
-		return nil, fmt.Errorf("reading ClusterClass %s/%s: %w", ns, ref.Name, err)
+		return nil, nil, fmt.Errorf("reading ClusterClass %s/%s: %w", ns, ref.Name, err)
 	}
+	builds, err := recordedBuilds(class)
+	if err != nil {
+		return nil, nil, err
+	}
+	down, err := ClassTemplatesDown(class)
+	return builds, down, err
+}
+
+// recordedBuilds reads the builds recorded on a ClusterClass.
+func recordedBuilds(class *clusterv1.ClusterClass) (NodeImageBuilds, error) {
 	recorded, ok := class.Annotations[NodeImageBuildsAnnotation]
 	if !ok {
-		return nil, fmt.Errorf("ClusterClass %s/%s: %w", ns, ref.Name, errNoBuildsRecorded)
+		return nil, fmt.Errorf("ClusterClass %s/%s: %w", class.Namespace, class.Name, errNoBuildsRecorded)
 	}
 	return ParseNodeImageBuilds(recorded)
 }

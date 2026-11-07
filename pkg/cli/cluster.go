@@ -213,10 +213,21 @@ type listedCondition struct {
 
 // status is the cluster's phase, and the reason its upgrade is held where it is.
 func (c *listedCluster) status() string {
-	for _, cond := range c.Conditions {
-		if cond.Type == provisioner.UpgradeHeldCondition && cond.Status == "True" {
-			return fmt.Sprintf("%s, upgrade held (%s)", c.Phase, cond.Reason)
+	held := func(kind string) *listedCondition {
+		for i := range c.Conditions {
+			if c.Conditions[i].Type == kind && c.Conditions[i].Status == "True" {
+				return &c.Conditions[i]
+			}
 		}
+		return nil
+	}
+	switch {
+	case held(provisioner.UpgradeHeldCondition) != nil:
+		return fmt.Sprintf("%s, upgrade held (%s)", c.Phase, held(provisioner.UpgradeHeldCondition).Reason)
+	case held(provisioner.NodeImageHeldCondition) != nil:
+		return fmt.Sprintf("%s, node image refresh held (%s)", c.Phase, held(provisioner.NodeImageHeldCondition).Reason)
+	case held(provisioner.TemplateNodeDownCondition) != nil:
+		return c.Phase + ", template node down"
 	}
 	return c.Phase
 }
