@@ -91,7 +91,7 @@ The same with a static address:
 sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 ```
 
-`install.sh` carries the version of its release and the checksums of the release archive, the OpenTofu release and the container template it installs. It checks each download against them before using it. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
+`install.sh` carries the version of its release and the checksums of the release archive, the OpenTofu release and the container template it installs. It checks each download against them before using it. Once Proxmox's mirror drops that template, it takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
 
 ### Options
 

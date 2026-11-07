@@ -70,6 +70,7 @@ type Appliance struct {
 	job         *Job
 	templateJob *Job
 	takingEtcd  bool
+	stopping    bool
 }
 
 // ErrPassphrase is a state the passphrase does not open.
@@ -292,6 +293,30 @@ func (a *Appliance) LoadLast() {
 	}
 }
 
+// Stop refuses new jobs and interrupts the running ones with ErrServiceStopped, which lets
+// OpenTofu write its state. It waits until they have recorded their outcome, or ctx ends.
+func (a *Appliance) Stop(ctx context.Context) error {
+	a.mu.Lock()
+	a.stopping = true
+	var running []*Job
+	for _, j := range []*Job{a.job, a.templateJob} {
+		if j.running() && j.stop != nil {
+			j.stop(ErrServiceStopped)
+			running = append(running, j)
+		}
+	}
+	a.mu.Unlock()
+	for _, j := range running {
+		a.Log.Info("waiting for the run under way to end", "kind", j.Kind)
+		select {
+		case <-j.done:
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for the %s run to end: %w", j.Kind, ctx.Err())
+		}
+	}
+	return nil
+}
+
 // stateOutput reads one output of the encrypted state with the passphrase, outside any run.
 func (a *Appliance) stateOutput(ctx context.Context, passphrase, name string) (string, error) {
 	if err := ValidPassphrase(passphrase); err != nil {
@@ -322,6 +347,8 @@ func (a *Appliance) haReleasePath() string { return filepath.Join(a.workdir(), "
 // running is Idle with a.mu held.
 func (a *Appliance) running() error {
 	switch {
+	case a.stopping:
+		return ErrStopping
 	case a.job.running():
 		return ErrBusy
 	case a.templateJob.running():
@@ -372,12 +399,15 @@ func (a *Appliance) startIn(slot **Job, by runner, what string, request any, run
 	case err != nil:
 		return err
 	}
-	j := &Job{User: by.user, Automatic: by.automatic, Kind: what, Started: time.Now(), State: StateRunning, Request: asked}
+	j := &Job{User: by.user, Automatic: by.automatic, Kind: what, Started: time.Now(), State: StateRunning, Request: asked, done: make(chan struct{})}
 	*slot = j
 	a.saveLog(slot, &JobView{User: j.User, Automatic: j.Automatic, Kind: what, Started: j.Started, State: StateRunning, Request: asked, Log: []string{}})
 	ctx, cancel := context.WithDeadline(context.Background(), by.until)
+	ctx, j.stop = context.WithCancelCause(ctx)
 	go func() {
+		defer close(j.done)
 		defer cancel()
+		defer j.stop(nil)
 		err := run(ctx, j)
 		state, errText := StateSucceeded, ""
 		if err != nil {

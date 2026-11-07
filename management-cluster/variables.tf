@@ -28,7 +28,7 @@ variable "proxmox_insecure" {
 }
 
 variable "proxmox_nodes" {
-  description = "Proxmox VE nodes the management cluster's VMs run on, taken in turn: the first VM on the first node, the second on the second, and so on. Three nodes for three VMs keep the management cluster running when one node fails. Each node needs the bridge, vm_datastore and image_datastore."
+  description = "Proxmox VE nodes the management cluster's VMs run on, taken in turn: the first VM on the first node, the second on the second, and so on. Three nodes for three VMs keep the management cluster running when one node fails. Each node needs the bridge, vm_datastore and image_datastore. Once the VMs exist, a change of the list migrates each VM whose turn falls on another node."
   type        = list(string)
 
   validation {

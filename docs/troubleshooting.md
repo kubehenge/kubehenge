@@ -217,7 +217,8 @@ The Administration page (or the setup page) shows the error and the run's log. F
 - **Addresses:** the node addresses and the API address must be free, in one subnet, and reachable from the appliance on ports 50000 and 6443.
 - **Internet access** from the appliance, the Proxmox VE node and the new nodes ([install.md](install.md#internet-access)), or registry mirrors for the nodes.
 - **Pod and service ranges** that overlap the nodes' network are refused. Set others under Advanced.
-- **Time:** a run has to finish within two hours, the life of the Proxmox VE ticket it acts on.
+- **Time:** a run has to finish within two hours, the life of the Proxmox VE ticket it acts on. A run cut off there keeps what it made, so apply again.
+- **"context deadline exceeded"** for a `helm_release`: the release's pods did not get ready in time. Under "What the management cluster's pods wait for", the log names each pod and why, such as too little memory on the nodes.
 - **"The management cluster is being applied or removed"** or **"the appliance is being upgraded":** wait for that to finish.
 - **A wrong passphrase:** an apply cannot read the state. Repair access and removal answer "the passphrase does not open the management cluster's state".
   - It has to be the one given when the management cluster was created.
@@ -462,6 +463,12 @@ Each Proxmox VE HA write and each step of an etcd restore runs in a Job of its o
 - **"token Job … ended without a result: …":** the pod never ran its request, for the reason after the colon. `DeadlineExceeded` means it was not scheduled or did not start in time. `kubectl -n kubehenge-system get events` says why, often an image that could not be pulled.
 - **"starting Job …: … only a Job made exactly from PodTemplate …":** the Job did not match its template, as happens while an upgrade of the chart replaces it. The controller tries HA writes again with the new one. Ask for a restore again.
 - **"not one of Kubehenge's HA objects":** a write was refused. The HA resource or rule it was for, or a resource a rule names, no longer carries the comment `Kubehenge cluster …`. Someone changed it in Proxmox VE. Put the comment back, or remove the object and let the controller make it again.
+
+### Maintenance mode that never finishes
+
+With Proxmox VE HA on, a cluster's negative resource affinity keeps its control-plane VMs on separate nodes. When every other node already runs one, the VM on a node in maintenance has nowhere to go. `ha-manager status` then shows it still started on that node.
+
+Shut that VM down in Proxmox VE before the node goes down. Start it again once the node is back. The other control planes keep etcd and the API running meanwhile.
 
 ### Talos upgrades
 
