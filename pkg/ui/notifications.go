@@ -437,7 +437,8 @@ func (s *Server) clusterProblems(c *clusterv1.Cluster, v *healthView) ([]notify.
 			Cluster: key, Link: link, At: since,
 		})
 	}
-	for _, a := range v.Attention {
+	for i := range v.Attention {
+		a := &v.Attention[i]
 		if a.Severity != severityError && a.Severity != severityWarning {
 			continue
 		}

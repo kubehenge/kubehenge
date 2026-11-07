@@ -184,20 +184,7 @@ func parseDeprecatedUse(r io.Reader, targetMinor int) ([]RemovedAPI, bool, error
 			}
 			continue
 		}
-		line, ok := strings.CutPrefix(text, deprecatedAPIsMetric)
-		if !ok {
-			continue
-		}
-		set, value, ok := metricLine(line)
-		if !ok || strings.TrimSpace(value) != "1" {
-			continue
-		}
-		minor, ok := removedMinor(set["removed_release"])
-		if !ok || minor > targetMinor {
-			continue
-		}
-		api := RemovedAPI{API: apiName(set), RemovedIn: set["removed_release"], Requests: -1}
-		if !slices.ContainsFunc(out, func(o RemovedAPI) bool { return o.API == api.API && o.RemovedIn == api.RemovedIn }) {
+		if api, ok := gaugedAPI(text, targetMinor); ok && !slices.ContainsFunc(out, func(o RemovedAPI) bool { return o.API == api.API && o.RemovedIn == api.RemovedIn }) {
 			out = append(out, api)
 		}
 	}
@@ -218,6 +205,24 @@ func parseDeprecatedUse(r io.Reader, targetMinor int) ([]RemovedAPI, bool, error
 		return strings.Compare(a.API, b.API)
 	})
 	return out, counted, nil
+}
+
+// gaugedAPI is the API a line of apiserver_requested_deprecated_apis names when it is set and a
+// release at or below targetMinor removes it.
+func gaugedAPI(text string, targetMinor int) (RemovedAPI, bool) {
+	line, ok := strings.CutPrefix(text, deprecatedAPIsMetric)
+	if !ok {
+		return RemovedAPI{}, false
+	}
+	set, value, ok := metricLine(line)
+	if !ok || strings.TrimSpace(value) != "1" {
+		return RemovedAPI{}, false
+	}
+	minor, ok := removedMinor(set["removed_release"])
+	if !ok || minor > targetMinor {
+		return RemovedAPI{}, false
+	}
+	return RemovedAPI{API: apiName(set), RemovedIn: set["removed_release"], Requests: -1}, true
 }
 
 // metricLine splits a metrics line, past its name, into its labels and its value.
