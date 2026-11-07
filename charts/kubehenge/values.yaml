@@ -117,6 +117,19 @@ controllerLogs:
   level: info
   development: false
 
+# The HTTP(S) proxy the controller and the template builds download through. secret names a Secret
+# in the release namespace with HTTP_PROXY, HTTPS_PROXY and NO_PROXY, and with ca.crt when ca is
+# true, for a proxy that re-signs TLS. Empty, they go direct.
+proxy:
+  secret: ""
+  ca: false
+
+# Mirrors of the chart repositories, by repository host, such as ghcr.io. Every chart a cluster
+# installs is fetched from the mirror of its host, which serves the same charts under the same
+# digests: an oci:// address for a host that serves OCI charts, an http(s):// one for a chart
+# repository.
+chartMirrors: {}
+
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.
   url: ""

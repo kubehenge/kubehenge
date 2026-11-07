@@ -1,0 +1,3 @@
+- Chart mirrors serve the Helm charts clusters install, by repository host, with their own certificate authority ([install.md](install.md#mirroring-the-charts)). The Add-on Provider for Helm fetches from them, and `kubehenge charts` lists every chart and digest to copy.
+- Cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher go through a proxy, the management side's by default or one set per cluster (`egressProxy`). The cluster's ranges, `.svc` and `.cluster.local` bypass it.
+- Argo CD and Flux trust a certificate authority for the Git server (`gitops.repository.caBundle`).

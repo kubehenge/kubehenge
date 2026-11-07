@@ -10,6 +10,10 @@ import type { Cluster, ClusterClass } from "./types";
 
 const repo = "https://git.example.org/platform/clusters.git";
 
+const ignore = (): void => {
+  // The choice is not edited.
+};
+
 const choice = (over: Partial<GitOpsChoice>): GitOpsChoice => ({
   ...newGitOps(),
   engine: "argocd",
@@ -69,6 +73,52 @@ describe("the GitOps settings", () => {
     expect(
       gitOpsProblems(choice({ url: ssh, auth: "deployKey", knownHosts: "git.example.org ssh-ed25519 AAAA" })),
     ).toStrictEqual({});
+  });
+
+  it("send the repository's certificate authority only for https and only when set", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(gitOpsVariable(choice({}))).toHaveProperty("repository", { url: repo, revision: "main", path: "." });
+    expect(gitOpsVariable(choice({ caBundle: `  ${pem}\n\n` }))).toHaveProperty("repository", {
+      url: repo,
+      revision: "main",
+      path: ".",
+      caBundle: `${pem}\n`,
+    });
+    const ssh = "ssh://git@git.example.org/a.git";
+    expect(gitOpsVariable(choice({ url: ssh, auth: "deployKey", caBundle: pem }))).toHaveProperty("repository", {
+      url: ssh,
+      revision: "main",
+      path: ".",
+    });
+    const sent = gitOpsVariable(choice({ caBundle: pem }));
+    expect(gitOpsOf(sent).caBundle).toBe(`${pem}\n`);
+  });
+
+  it("hold the repository's certificate authority to a PEM certificate", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(gitOpsProblems(choice({ caBundle: pem }))).toStrictEqual({});
+    expect(gitOpsProblems(choice({ caBundle: "junk" })).caBundle).toBe("Paste one or more PEM certificates");
+    expect(gitOpsProblems(choice({ caBundle: "-----BEGIN PRIVATE KEY-----\nx" })).caBundle).toBe(
+      "Paste certificates only, no private key",
+    );
+    const long = choice({ caBundle: `${pem}\n${"A".repeat(65_536)}` });
+    expect(gitOpsProblems(long).caBundle).toBe("At most 64 KiB");
+    const secret = { auth: "existingSecret", existingSecret: "s", caBundle: pem } as const;
+    expect(gitOpsProblems(choice({ engine: "flux", ...secret }))).toStrictEqual({
+      caBundle: "Flux reads ca.crt from your Secret. Add the certificate there",
+    });
+    expect(gitOpsProblems(choice({ engine: "argocd", ...secret }))).toStrictEqual({});
+    // An ssh:// repository has no use for it, so a leftover is not a problem.
+    const ssh = choice({ url: "ssh://git@git.example.org/a.git", auth: "deployKey", knownHosts: "h k", caBundle: "x" });
+    expect(gitOpsProblems(ssh)).toStrictEqual({});
+  });
+
+  it("show the certificate authority field for https repositories only", () => {
+    const { rerender } = render(<GitOpsFields value={choice({})} onChange={ignore} />);
+    expect(screen.getByLabelText("Certificate authority")).toBeInTheDocument();
+    const ssh = choice({ url: "ssh://git@git.example.org/a.git", auth: "deployKey" });
+    rerender(<GitOpsFields value={ssh} onChange={ignore} />);
+    expect(screen.queryByLabelText("Certificate authority")).not.toBeInTheDocument();
   });
 
   it("give Flux's web interface the stored client secret in place of a public client", async () => {

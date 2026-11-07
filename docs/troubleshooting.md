@@ -499,6 +499,28 @@ kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.t
   - Write them as a `known_hosts` file does, with a line for the URL's host and port (`[host]:port` for a port other than 22).
   - Take them from the forge's published keys, or from `ssh-keygen -F <host>` on a machine that already trusts it.
   - `ssh-keyscan` reads them over the network unchecked, so compare its fingerprints with the forge's before using them.
+- **`x509: certificate signed by unknown authority`** on the Argo CD Application (`ComparisonError`) or the Flux GitRepository: the engine does not trust the repository server's certificate.
+  - Put the authority (PEM) of the server's certificate in the repository's **Certificate authority** (`gitops.repository.caBundle`).
+  - Argo CD reads it from `argocd-tls-certs-cm` under the server's host name, without the port. Flux reads `ca.crt` from the pull Secret.
+  - With Flux and `existingSecret`, `ca.crt` goes into your own Secret, and `caBundle` is refused.
+- **`caBundle: holds no PEM certificate`**, when saving: the text is no certificate. Give the authority's certificate, not its key, as `-----BEGIN CERTIFICATE-----` blocks.
+
+### Add-ons behind a proxy
+
+- **A dial timeout** keeps Certificates `Pending`, Velero's `BackupStorageLocation` `Unavailable` or Argo CD at `ComparisonError`. The add-on has no route out without a proxy.
+  - Check **Proxy** under the cluster's Options. With the default, the management side needs a proxy ([install.md](install.md#behind-a-proxy)).
+  - The controller's log says "add-ons go direct" when the management side's proxy holds a user name or password in its address. Set an own proxy address on the cluster, without credentials.
+  - `kubectl -n <namespace> get pod <pod> -o yaml` shows `HTTPS_PROXY` and `NO_PROXY` when the setting reached the pod.
+- **A host inside the network times out or answers 503 from the proxy**: the proxy was asked for something it cannot reach. Add the host to the cluster's proxy **Exceptions** (`egressProxy.noProxy`).
+- **`x509` errors from an add-on that goes through the proxy**: the proxy re-signs TLS, and the add-ons' pods do not trust its authority. Use a proxy that tunnels, or add the hosts to the exceptions.
+- **`url holds credentials`**, when saving: add-on settings are plain text. Give the proxy's address alone.
+
+### Helm charts that cannot be fetched
+
+- **The cloud controller manager and CSI plugin stay not ready and the nodes keep the `uninitialized` taint.** The Add-on Provider for Helm's log has a dial or `x509` error. The chart repositories are out of reach, and registry mirrors do not cover charts.
+  - Set [chart mirrors](install.md#mirroring-the-charts) for the hosts in the log, and copy the charts `kubehenge charts` lists.
+  - `x509: certificate signed by unknown authority` from a mirror: add the mirror's authority under **Chart mirror certificate**.
+  - `chart … has digest sha256:…, not …`: the mirror holds a re-packed chart. Copy it again with the same digest.
 
 ### Certificates
 

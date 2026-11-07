@@ -64,7 +64,7 @@ release named in the index signed by Kubehenge's release key, and only one newer
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			u.Spool = appliance.Spool(spool)
-			u.HTTP = &http.Client{Timeout: updateTimeout}
+			u.HTTP = savedProxyClient(u.ApplianceDir, "", updateTimeout)
 			return u.Run(cmd.Context())
 		},
 	}

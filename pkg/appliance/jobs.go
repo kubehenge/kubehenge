@@ -3,6 +3,7 @@ package appliance
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,8 +30,25 @@ type Job struct {
 	// Request is what the run was started with, with nothing secret in it, for starting it again.
 	Request json.RawMessage `json:"request,omitempty"`
 
-	mu  sync.Mutex
-	log []string
+	mu     sync.Mutex
+	log    []string
+	hidden *strings.Replacer
+}
+
+// Hide has Add replace each of the secrets in every line from now on, with a mark.
+func (j *Job) Hide(secrets ...string) {
+	var pairs []string
+	for _, s := range secrets {
+		if s != "" {
+			pairs = append(pairs, s, redactedPassword)
+		}
+	}
+	if len(pairs) == 0 {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.hidden = strings.NewReplacer(pairs...)
 }
 
 // Log returns the job's messages so far, an empty list rather than none: it is sent and stored as
@@ -45,6 +63,9 @@ func (j *Job) Log() []string {
 func (j *Job) Add(line string) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.hidden != nil {
+		line = j.hidden.Replace(line)
+	}
 	j.log = append(j.log, line)
 }
 

@@ -1880,6 +1880,14 @@ fieldset.choices .check {
   margin-block-start: 14px;
 }
 
+/* A saved secret's state beside the buttons that change it, in the field's own column. */
+.secret-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 /* Fields keep their own gap below. A closing button needs one from the box's border. */
 .group > button:last-child,
 .group > .actions:last-child {

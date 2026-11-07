@@ -8,6 +8,14 @@
       "description": "Digest of the chart's files, which the management cluster's module passes so that a changed chart upgrades the release whatever its version says.",
       "type": "string"
     },
+    "proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "secret": { "type": "string" },
+        "ca": { "type": "boolean" }
+      }
+    },
     "namespaces": {
       "type": "array",
       "items": { "$ref": "#/$defs/name" },
@@ -54,7 +62,12 @@
         "required": ["namespace", "data"],
         "properties": {
           "namespace": { "$ref": "#/$defs/name" },
-          "data": { "type": "object", "additionalProperties": { "type": "string" } }
+          "data": { "type": "object", "additionalProperties": { "type": "string" } },
+          "encodedData": {
+            "description": "More keys, each value base64-encoded, so that a value passed with --set survives its escaping.",
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
         }
       }
     },

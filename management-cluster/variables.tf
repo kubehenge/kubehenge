@@ -473,3 +473,43 @@ variable "controller_image" {
     error_message = "controller_image is the image by digest, repository@sha256:<digest>."
   }
 }
+
+variable "chart_repositories" {
+  description = "Where clusters install their Helm charts from when the charts' own repositories are out of reach. mirrors maps a repository host (ghcr.io, charts.jetstack.io) to a mirror that serves the same charts under the same digests: an oci:// address for a host that serves OCI charts, an http(s):// one for a host that serves a chart repository. ca_bundle (PEM) is the authority of mirrors the usual authorities do not sign."
+  type = object({
+    mirrors   = optional(map(string), {})
+    ca_bundle = optional(string, "")
+  })
+  default  = {}
+  nullable = false
+
+  validation {
+    condition     = alltrue([for host, url in var.chart_repositories.mirrors : can(regex("^[A-Za-z0-9.-]+(:[0-9]+)?$", host)) && can(regex("^(oci|https?)://[^/?#[:space:]]+(/[^?#[:space:]]*)?$", url)) && !endswith(url, "/")])
+    error_message = "chart_repositories.mirrors maps a host name to an oci://, https:// or http:// address with a host, without a trailing slash."
+  }
+  validation {
+    condition     = var.chart_repositories.ca_bundle == "" || length(var.chart_repositories.mirrors) > 0
+    error_message = "chart_repositories.ca_bundle needs mirrors."
+  }
+}
+
+variable "proxy" {
+  description = "The HTTP(S) proxy every download from the management side goes through: url (with credentials if it needs them), no_proxy (comma-separated hosts, domains and networks that bypass it, which has to name the Proxmox VE API host, the nodes' networks and the pod and service ranges) and ca_bundle (PEM, for a proxy that re-signs TLS). Empty strings go direct."
+  type = object({
+    url       = optional(string, "")
+    no_proxy  = optional(string, "")
+    ca_bundle = optional(string, "")
+  })
+  default   = {}
+  nullable  = false
+  sensitive = true
+
+  validation {
+    condition     = nonsensitive(var.proxy.url == "" || can(regex("^https?://[^/?#]+/?$", var.proxy.url)))
+    error_message = "proxy.url is an http:// or https:// address with a host and no path."
+  }
+  validation {
+    condition     = nonsensitive(var.proxy.url != "" || (var.proxy.no_proxy == "" && var.proxy.ca_bundle == ""))
+    error_message = "proxy.no_proxy and proxy.ca_bundle need proxy.url."
+  }
+}

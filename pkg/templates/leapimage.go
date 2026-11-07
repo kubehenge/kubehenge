@@ -1,6 +1,9 @@
 package templates
 
-import "fmt"
+import (
+	"fmt"
+	"path"
+)
 
 // transactionalDiskGiB is the template's disk in a transactional bake, which runs on it: at least
 // Leap's image's own.
@@ -54,17 +57,28 @@ func leapRecipe(b Bake, keys map[string]string) (Recipe, error) {
 	}
 	var rebootChecks [][]string
 	if b.Distribution == Kubeadm {
-		rebootChecks = append(rebootChecks, []string{imagesPath, b.KubernetesVersion})
+		pull := []string{imagesPath, b.KubernetesVersion}
+		if b.Proxy.Enabled() {
+			// The bake's scripts are still in /var, which a snapshot leaves alone.
+			pull = proxyBuild(pull)
+		}
+		rebootChecks = append(rebootChecks, pull)
+	}
+	// Leap's image has an SSH server, whose host keys the bake's boot made.
+	cleanup := [][]string{{"sh", "-c", "rm -f /etc/ssh/ssh_host_*"}}
+	if b.Proxy.Enabled() {
+		// The scripts hold the proxy's address and password. They stay in /var, which the template
+		// keeps, until the pull after the reboot has used them.
+		cleanup = append(cleanup, []string{"rm", "-rf", path.Join(buildDir, proxyDir)})
 	}
 	return Recipe{
 		UserData:     userData,
 		Checks:       [][]string{builtCheck},
 		Reboot:       true,
 		RebootChecks: append(rebootChecks, nodeChecks(b)...),
-		// Leap's image has an SSH server, whose host keys the bake's boot made.
-		Cleanup: append([][]string{{"sh", "-c", "rm -f /etc/ssh/ssh_host_*"}}, nodeCleanup...),
-		DiskGiB: transactionalDiskGiB,
-		Log:     buildLog,
-		BootLog: true,
+		Cleanup:      append(cleanup, nodeCleanup...),
+		DiskGiB:      transactionalDiskGiB,
+		Log:          buildLog,
+		BootLog:      true,
 	}, nil
 }

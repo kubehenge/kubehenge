@@ -153,6 +153,11 @@ data "talos_machine_configuration" "node" {
         kind       = "TimeSyncConfig"
         ntp        = { servers = var.time_servers }
       })],
+      local.proxy_enabled ? concat(
+        # The proxy for Talos's own services, containerd's image pulls among them.
+        [yamlencode({ machine = { env = local.proxy_talos_env } })],
+        local.proxy_has_ca ? [yamlencode({ apiVersion = "v1alpha1", kind = "TrustedRootsConfig", name = "kubehenge-proxy", certificates = var.proxy.ca_bundle })] : [],
+      ) : [],
     )),
   ]
 }

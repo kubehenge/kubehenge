@@ -78,7 +78,7 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 	if !v.Allowed {
 		return true
 	}
-	v.Job, v.Settings = a.Current(), a.SavedSettings()
+	v.Job, v.Settings = a.Current(), a.SavedSettings().Redacted()
 	v.Resumes = !v.Ready && a.HasState()
 	if v.Ready {
 		v.Upgrade = s.managementUpgrade()
@@ -259,6 +259,8 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	// The interface never had the proxy's password, so it comes back empty unless typed anew.
+	req.Settings.KeepsProxySecret(a.SavedSettings())
 	releasing := a.ReleasesHA(&req.Settings)
 	privileges := setupPrivileges
 	if req.Settings.ProxmoxHA || releasing {

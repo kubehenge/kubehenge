@@ -26,6 +26,15 @@ import {
   type UpgradePolicy,
 } from "./ClusterUpgrades";
 import {
+  egressFields,
+  egressProblems,
+  egressText,
+  egressVariable,
+  newEgress,
+  type EgressChoice,
+  type EgressField,
+} from "./EgressProxy";
+import {
   gitOpsFields,
   gitOpsProblems,
   gitOpsText,
@@ -160,6 +169,7 @@ export interface Form {
   // The DNS provider's credential, stored for the cluster once it is created. Never in the request.
   dns01Token: string;
   gitops: GitOpsChoice;
+  egress: EgressChoice;
   oidc: OIDCProvider[];
   upgradeMode: UpgradeMode;
   backups: boolean;
@@ -626,6 +636,7 @@ export const newForm = (): Form => ({
   certificates: newCertificates(),
   dns01Token: "",
   gitops: newGitOps(),
+  egress: newEgress(),
   oidc: [],
   upgradeMode: "off",
   backups: false,
@@ -744,9 +755,20 @@ function addOnVariables(form: Form, defined: Set<string>): Record<string, unknow
   if (certificates) {
     variables["certificates"] = certificates;
   }
+  return { ...variables, ...reachVariables(form, defined) };
+}
+
+// reachVariables are those of the add-ons that reach beyond the cluster: where it syncs from and
+// the proxy it goes through.
+function reachVariables(form: Form, defined: Set<string>): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
   const gitops = gitOpsVariable(form.gitops);
   if (gitops !== undefined) {
     variables["gitops"] = gitops;
+  }
+  const egress = defined.has("egressProxy") ? egressVariable(form.egress) : undefined;
+  if (egress !== undefined) {
+    variables["egressProxy"] = egress;
   }
   return variables;
 }
@@ -1016,8 +1038,17 @@ function addOnRows(form: Form, defined: Set<string>): [string, string][] {
       ]);
     }
   }
+  return [...rows, ...reachRows(form, defined)];
+}
+
+// reachRows sum up the add-ons that reach beyond the cluster.
+function reachRows(form: Form, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [];
   if (defined.has("gitops")) {
     rows.push(["GitOps", gitOpsText(form.gitops)]);
+  }
+  if (defined.has("egressProxy")) {
+    rows.push(["Egress proxy", egressText(form.egress)]);
   }
   return rows;
 }
@@ -1063,6 +1094,7 @@ export type FieldKey =
   | "backupKey"
   | "certificates"
   | `gitops.${GitOpsField}`
+  | `egress.${EgressField}`
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -1277,6 +1309,15 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
       const problem = g[field];
       if (problem !== undefined) {
         p[`gitops.${field}`] = problem;
+      }
+    }
+  }
+  if (variable(c, "egressProxy") !== undefined) {
+    const e = egressProblems(form.egress);
+    for (const field of egressFields) {
+      const problem = e[field];
+      if (problem !== undefined) {
+        p[`egress.${field}`] = problem;
       }
     }
   }

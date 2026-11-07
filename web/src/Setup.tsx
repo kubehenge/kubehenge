@@ -79,6 +79,22 @@ export interface SetupForm {
   bootstrapDatastore: string;
   // registry=endpoint, one per line.
   mirrors: string;
+  // host=address, one per line, for charts.
+  chartMirrors: string;
+  // PEM certificates of the chart mirrors' authority.
+  chartMirrorCA: string;
+  // The address alone, with no user name or password.
+  proxyURL: string;
+  proxyUser: string;
+  // Typed anew. A saved password never reaches the page.
+  proxyPassword: string;
+  // Whether the server holds a password, and what the form does with it.
+  proxyPasswordSaved: boolean;
+  proxyPasswordAction: "keep" | "replace" | "remove";
+  // Comma or line separated.
+  proxyExceptions: string;
+  // PEM certificates.
+  proxyCA: string;
   podSubnets: string;
   serviceSubnets: string;
   // Kept from the last run. Not edited here.
@@ -182,6 +198,89 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .join("\n");
 }
 
+function parseChartMirrors(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of mirrorLines(text)) {
+    const at = line.indexOf("=");
+    const host = line.slice(0, Math.max(at, 0)).trim();
+    const address = line.slice(at + 1).trim();
+    if (at > 0 && filled(host) && filled(address)) {
+      out[host] = address;
+    }
+  }
+  return out;
+}
+
+function formatChartMirrors(m: Record<string, string> | undefined): string {
+  return Object.entries(m ?? {})
+    .map(([host, address]) => `${host}=${address}`)
+    .join("\n");
+}
+
+// chartRepositories is the chart mirrors the form names, if it names any.
+function chartRepositories(f: SetupForm): ManagementSettings["chartRepositories"] {
+  const mirrors = parseChartMirrors(f.chartMirrors);
+  const hasMirrors = Object.keys(mirrors).length > 0;
+  if (!hasMirrors && !filled(f.chartMirrorCA)) {
+    return undefined;
+  }
+  const out: NonNullable<ManagementSettings["chartRepositories"]> = {};
+  if (hasMirrors) {
+    out.mirrors = mirrors;
+  }
+  if (filled(f.chartMirrorCA)) {
+    out.caBundle = `${f.chartMirrorCA.trim()}\n`;
+  }
+  return out;
+}
+
+// proxySettings is the proxy the form names, if it names an address.
+function proxySettings(f: SetupForm): ManagementSettings["proxy"] {
+  if (!filled(f.proxyURL)) {
+    return undefined;
+  }
+  const proxy: NonNullable<ManagementSettings["proxy"]> = { url: f.proxyURL.trim() };
+  if (filled(f.proxyUser)) {
+    proxy.user = f.proxyUser.trim();
+    if (f.proxyPasswordAction === "remove") {
+      proxy.clearPassword = true;
+    } else if ((f.proxyPasswordAction === "replace" || !f.proxyPasswordSaved) && f.proxyPassword !== "") {
+      proxy.password = f.proxyPassword;
+    }
+  }
+  if (list(f.proxyExceptions).length > 0) {
+    proxy.noProxy = list(f.proxyExceptions);
+  }
+  if (filled(f.proxyCA)) {
+    proxy.caBundle = `${f.proxyCA.trim()}\n`;
+  }
+  return proxy;
+}
+
+/** outboundSettings are the settings for how the management cluster reaches registries, chart mirrors and the internet, and its subnets. */
+function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
+  const s: Partial<ManagementSettings> = {};
+  const mirrors = parseMirrors(f.mirrors);
+  if (Object.keys(mirrors).length > 0) {
+    s.registryMirrors = mirrors;
+  }
+  const charts = chartRepositories(f);
+  if (charts) {
+    s.chartRepositories = charts;
+  }
+  const proxy = proxySettings(f);
+  if (proxy) {
+    s.proxy = proxy;
+  }
+  if (list(f.podSubnets).length > 0) {
+    s.podSubnets = list(f.podSubnets);
+  }
+  if (list(f.serviceSubnets).length > 0) {
+    s.serviceSubnets = list(f.serviceSubnets);
+  }
+  return s;
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -200,16 +299,7 @@ export function settings(f: SetupForm): ManagementSettings {
   if (f.vlan) {
     s.vlan = Number(f.vlan);
   }
-  const mirrors = parseMirrors(f.mirrors);
-  if (Object.keys(mirrors).length > 0) {
-    s.registryMirrors = mirrors;
-  }
-  if (list(f.podSubnets).length > 0) {
-    s.podSubnets = list(f.podSubnets);
-  }
-  if (list(f.serviceSubnets).length > 0) {
-    s.serviceSubnets = list(f.serviceSubnets);
-  }
+  Object.assign(s, outboundSettings(f));
   if (filled(f.controllerImage)) {
     s.controllerImage = f.controllerImage;
   }
@@ -299,6 +389,11 @@ function refreshFields(r: ManagementSettings["templateRefresh"]): RefreshFields 
 }
 
 /** formOf fills the form from saved settings, or with nothing chosen yet. */
+const chartFields = (saved: ManagementSettings): Pick<SetupForm, "chartMirrors" | "chartMirrorCA"> => ({
+  chartMirrors: formatChartMirrors(saved.chartRepositories?.mirrors),
+  chartMirrorCA: saved.chartRepositories?.caBundle ?? "",
+});
+
 export function formOf(saved: ManagementSettings = unsaved): SetupForm {
   return {
     nodes: saved.nodes,
@@ -315,6 +410,14 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     workloadBridges: saved.workloadBridges,
     bootstrapDatastore: saved.bootstrapDatastore,
     mirrors: formatMirrors(saved.registryMirrors),
+    ...chartFields(saved),
+    proxyURL: saved.proxy?.url ?? "",
+    proxyUser: saved.proxy?.user ?? "",
+    proxyPassword: "",
+    proxyPasswordSaved: saved.proxy?.passwordSet === true,
+    proxyPasswordAction: "keep",
+    proxyExceptions: (saved.proxy?.noProxy ?? []).join(", "),
+    proxyCA: saved.proxy?.caBundle ?? "",
     podSubnets: (saved.podSubnets ?? []).join(", "),
     serviceSubnets: (saved.serviceSubnets ?? []).join(", "),
     controllerImage: saved.controllerImage,
@@ -353,6 +456,13 @@ export type SetupField =
   | "clusterOIDC"
   | "backupTargets"
   | "mirrors"
+  | "chartMirrors"
+  | "chartMirrorCA"
+  | "proxyURL"
+  | "proxyUser"
+  | "proxyPassword"
+  | "proxyExceptions"
+  | "proxyCA"
   | "podSubnets"
   | "serviceSubnets"
   | "refreshAddress"
@@ -377,6 +487,13 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "dnsServers",
     "timeServers",
     "mirrors",
+    "chartMirrors",
+    "chartMirrorCA",
+    "proxyURL",
+    "proxyUser",
+    "proxyPassword",
+    "proxyExceptions",
+    "proxyCA",
     "podSubnets",
     "serviceSubnets",
   ],
@@ -387,7 +504,18 @@ const stepFields: Record<SetupStep, SetupField[]> = {
 
 const stepOf = (k: SetupField): SetupStep => setupSteps.find((s) => stepFields[s].includes(k)) ?? "Placement";
 
-const advancedFields: SetupField[] = ["mirrors", "podSubnets", "serviceSubnets"];
+const advancedFields: SetupField[] = [
+  "mirrors",
+  "chartMirrors",
+  "chartMirrorCA",
+  "proxyURL",
+  "proxyUser",
+  "proxyPassword",
+  "proxyExceptions",
+  "proxyCA",
+  "podSubnets",
+  "serviceSubnets",
+];
 
 // preferredDisk is the storage for the management cluster's disks a first run starts from: a shared
 // one, which lets its VMs move between nodes, else the one with the most room.
@@ -529,6 +657,49 @@ function networkProblems(f: SetupForm, was: ManagementSettings | undefined): Set
   return p;
 }
 
+/** proxySummary is the proxy as the review shows it: the address and user, never a password. */
+export function proxySummary(proxy: ManagementSettings["proxy"]): string {
+  if (!proxy) {
+    return "None";
+  }
+  if (!filled(proxy.user)) {
+    return proxy.url;
+  }
+  return `${proxy.url}, user ${proxy.user}${proxy.passwordSet === true || filled(proxy.password) ? ", password set" : ""}`;
+}
+
+// proxyProblems are those of the proxy's address, user, exceptions and certificate authority. The
+// errors never repeat what was typed, which may be a password.
+function proxyProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  if (!filled(f.proxyURL)) {
+    if (list(f.proxyExceptions).length > 0 || filled(f.proxyCA) || filled(f.proxyUser)) {
+      p.proxyURL = "Enter the proxy address.";
+    }
+    return p;
+  }
+  if (f.proxyURL.includes("@")) {
+    p.proxyURL = "Leave the user name and password out. They have fields of their own.";
+  } else if (!/^https?:\/\/[^\s/?#]+\/?$/u.test(f.proxyURL.trim())) {
+    p.proxyURL = "Use an http:// or https:// address without a path.";
+  }
+  if (!filled(f.proxyUser) && f.proxyPassword !== "") {
+    p.proxyUser = "Enter the user name for the password.";
+  }
+  const wrong = list(f.proxyExceptions).find((e) => !/^[\w*.:/[\]-]+$/u.test(e));
+  if (wrong !== undefined) {
+    p.proxyExceptions = `${wrong} is no host, domain, address or network.`;
+  }
+  if (filled(f.proxyCA)) {
+    if (f.proxyCA.includes("PRIVATE KEY")) {
+      p.proxyCA = "Paste certificates only, no private key.";
+    } else if (!f.proxyCA.includes("-----BEGIN CERTIFICATE-----")) {
+      p.proxyCA = "Paste PEM certificates.";
+    }
+  }
+  return p;
+}
+
 // badMirror is the first line of the registry mirrors that is no registry=endpoint.
 function badMirror(mirrors: string): string | undefined {
   return mirrorLines(mirrors).find((line) => {
@@ -540,6 +711,43 @@ function badMirror(mirrors: string): string | undefined {
       !/^https?:\/\/[^\s/]+(?:\/\S*)?$/u.test(endpoint ?? "")
     );
   });
+}
+
+// badChartMirror is the first line of the chart mirrors that is no host=address with an oci://,
+// https:// or http:// address that has no credentials and no trailing slash.
+function badChartMirror(mirrors: string): string | undefined {
+  return mirrorLines(mirrors).find((line) => {
+    const at = line.indexOf("=");
+    if (at < 1) {
+      return true;
+    }
+    const host = line.slice(0, at).trim();
+    const address = line.slice(at + 1).trim();
+    return (
+      !filled(host) ||
+      /[\s/@=]/u.test(host) ||
+      !/^(?:oci|https?):\/\/[^\s/@?#=]+(?:\/[^\s@?#]*[^\s/@?#])?$/u.test(address)
+    );
+  });
+}
+
+// chartMirrorProblems are those of the chart mirrors and their certificate authority.
+function chartMirrorProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  const bad = badChartMirror(f.chartMirrors);
+  if (bad !== undefined) {
+    p.chartMirrors = `${bad} is not in the form host=oci://mirror.example/path.`;
+  }
+  if (filled(f.chartMirrorCA)) {
+    if (f.chartMirrorCA.includes("PRIVATE KEY")) {
+      p.chartMirrorCA = "Paste certificates only, no private key.";
+    } else if (!f.chartMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
+      p.chartMirrorCA = "Paste PEM certificates.";
+    } else if (mirrorLines(f.chartMirrors).length === 0) {
+      p.chartMirrorCA = "Add a chart mirror first.";
+    }
+  }
+  return p;
 }
 
 // offerProblems are those of what the management cluster offers the clusters it makes.
@@ -562,6 +770,7 @@ function offerProblems(f: SetupForm): SetupProblems {
   if (bad !== undefined) {
     p.mirrors = `${bad} is not in the form ghcr.io=https://mirror.example:5000.`;
   }
+  Object.assign(p, chartMirrorProblems(f), proxyProblems(f));
   for (const key of ["podSubnets", "serviceSubnets"] as const) {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
@@ -769,6 +978,11 @@ function headlampRows(s: ManagementSettings): [string, string][] {
   ];
 }
 
+function chartMirrorsSummary(s: ManagementSettings): string {
+  const mirrors = s.chartRepositories?.mirrors;
+  return mirrors ? formatChartMirrors(mirrors).split("\n").join(", ") : "None";
+}
+
 function ManagedSummary({
   status,
   settings: s,
@@ -808,6 +1022,8 @@ function ManagedSummary({
     ],
     ["etcd restores", s.etcdRestore === true ? "Guest agent" : "By hand"],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
+    ["Chart mirrors", chartMirrorsSummary(s)],
+    ["Proxy", proxySummary(s.proxy)],
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Automatic"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Automatic"],
   ];
@@ -1483,6 +1699,72 @@ function EtcdRestoreConfirm({
   );
 }
 
+/**
+ * ProxyPassword takes the proxy's password. A saved one is only shown as set, with a way to replace
+ * or remove it, as the interface's other stored secrets are: it never comes back to the page.
+ */
+function ProxyPassword({ form, set }: FieldsProps): JSX.Element {
+  const action = form.proxyPasswordAction;
+  if (form.proxyPasswordSaved && action !== "replace") {
+    const removing = action === "remove";
+    return (
+      <Field label="Proxy password">
+        {(id) => (
+          <div className="secret-state">
+            <span className="muted">{removing ? "Removed when you apply" : "Set"}</span>
+            {/* The label's own name would hide what the button does, so each button names itself. */}
+            <button
+              id={id}
+              type="button"
+              aria-label={removing ? "Keep proxy password" : "Replace proxy password"}
+              onClick={() => set("proxyPasswordAction", removing ? "keep" : "replace")}
+            >
+              {removing ? "Keep" : "Replace"}
+            </button>
+            {!removing && (
+              <button
+                type="button"
+                aria-label="Remove proxy password"
+                onClick={() => set("proxyPasswordAction", "remove")}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        )}
+      </Field>
+    );
+  }
+  return (
+    <Field label="Proxy password">
+      {(id) => (
+        <div className="secret-state">
+          <input
+            id={id}
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            value={form.proxyPassword}
+            onChange={(e) => set("proxyPassword", e.target.value)}
+          />
+          {form.proxyPasswordSaved && (
+            <button
+              type="button"
+              aria-label="Cancel replacing proxy password"
+              onClick={() => {
+                set("proxyPassword", "");
+                set("proxyPasswordAction", "keep");
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
+    </Field>
+  );
+}
+
 export function AdvancedFields({
   form,
   set,
@@ -1515,6 +1797,51 @@ export function AdvancedFields({
         error={shown("mirrors")}
       >
         {(id) => <textarea id={id} rows={2} value={form.mirrors} onChange={(e) => set("mirrors", e.target.value)} />}
+      </Field>
+      <Field
+        label="Chart mirrors"
+        hint="One per line, like ghcr.io=oci://mirror.example/ghcr"
+        info="Registry mirrors do not reach charts. Use oci:// for OCI charts and https:// for a chart repository, with the same digests."
+        error={shown("chartMirrors")}
+      >
+        {(id) => (
+          <textarea id={id} rows={2} value={form.chartMirrors} onChange={(e) => set("chartMirrors", e.target.value)} />
+        )}
+      </Field>
+      <Field
+        label="Chart mirror certificate"
+        hint="PEM, for a mirror with its own authority"
+        error={shown("chartMirrorCA")}
+      >
+        {(id) => (
+          <textarea
+            id={id}
+            rows={3}
+            value={form.chartMirrorCA}
+            onChange={(e) => set("chartMirrorCA", e.target.value)}
+          />
+        )}
+      </Field>
+      <Field label="Proxy address" hint="Like http://proxy.example:3128" error={shown("proxyURL")}>
+        {(id) => <input id={id} value={form.proxyURL} onChange={(e) => set("proxyURL", e.target.value)} />}
+      </Field>
+      <Field label="Proxy user" hint="Only for a proxy that asks" error={shown("proxyUser")}>
+        {(id) => (
+          <input id={id} autoComplete="off" value={form.proxyUser} onChange={(e) => set("proxyUser", e.target.value)} />
+        )}
+      </Field>
+      <ProxyPassword form={form} set={set} shown={shown} />
+      <Field
+        label="Proxy exceptions"
+        hint="Kubehenge adds Proxmox VE, node networks and cluster ranges."
+        error={shown("proxyExceptions")}
+      >
+        {(id) => (
+          <input id={id} value={form.proxyExceptions} onChange={(e) => set("proxyExceptions", e.target.value)} />
+        )}
+      </Field>
+      <Field label="Proxy certificate" hint="PEM, for a proxy that re-signs TLS" error={shown("proxyCA")}>
+        {(id) => <textarea id={id} rows={3} value={form.proxyCA} onChange={(e) => set("proxyCA", e.target.value)} />}
       </Field>
       <Field label="Pod ranges" hint={rangeHint} error={shown("podSubnets")}>
         {(id) => (

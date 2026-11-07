@@ -172,6 +172,8 @@ type Charts struct {
 	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
 	// Pod Security Admission exempts.
 	PodSecurityExempt PodSecurityExempt
+	// Mirrors serve the charts in place of their repositories.
+	Mirrors ChartMirrors
 }
 
 // Addons are the add-ons a cluster switches on through its variables.
@@ -187,6 +189,10 @@ type Addons struct {
 	LoadBalancer LoadBalancer
 	Certificates Certificates
 	GitOps       GitOps
+	// Egress is the cluster's egressProxy variable. egress is the proxy it comes to, with the
+	// management side's as the default.
+	Egress   EgressProxy
+	viaProxy egressEnv
 	// CIS is the cluster's cis variable, which the add-ons make room for.
 	CIS bool
 	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
@@ -248,6 +254,9 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 		return a, err
 	}
 	if a.GitOps, _, err = optionalVariable[GitOps](cluster, gitopsVariable); err != nil {
+		return a, err
+	}
+	if a.Egress, _, err = optionalVariable[EgressProxy](cluster, egressVariable); err != nil {
 		return a, err
 	}
 	a.Rancher, err = rancherOf(cluster)
@@ -1097,7 +1106,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	if err != nil {
 		return nil, err
 	}
-	return chartProxyObjects(cluster, append(wanted, serving...))
+	return chartProxyObjects(cluster, addons.viaProxy.apply(append(wanted, serving...)), charts.Mirrors)
 }
 
 // servingCharts are those that bring traffic into the cluster and what it runs from Git: on
@@ -1130,8 +1139,9 @@ func servingCharts(cluster *clusterv1.Cluster, charts *Charts, distribution temp
 }
 
 // chartProxyObjects makes the cluster's HelmChartProxies of the charts it wants, in their order,
-// each selecting the cluster alone, with its chart's values beneath its own.
-func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unstructured.Unstructured, error) {
+// each selecting the cluster alone, with its chart's values beneath its own. A chart comes from its
+// repository's mirror where there is one.
+func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy, mirrors ChartMirrors) ([]*unstructured.Unstructured, error) {
 	proxies := make([]*unstructured.Unstructured, 0, len(wanted))
 	for i := range wanted {
 		p := &wanted[i]
@@ -1145,7 +1155,7 @@ func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unst
 		u.SetNamespace(cluster.Namespace)
 		u.Object["spec"] = map[string]any{
 			"clusterSelector": map[string]any{matchLabelsKey: map[string]any{clusterv1.ClusterNameLabel: cluster.Name}},
-			"repoURL":         p.chart.Repository,
+			"repoURL":         mirrors.Repository(p.chart.Repository),
 			"chartName":       p.chart.Name,
 			"version":         p.chart.pinnedVersion(),
 			"releaseName":     p.release,

@@ -27,6 +27,13 @@ point_at_mirrors "${repos}" "${files}/mirrors"
 for key in "${files}"/keys/*.asc; do
     install -m 0644 "${key}" "/etc/pki/rpm-gpg/kubehenge-$(basename "${key}")"
 done
+# The proxy's address comes into this build as podman passes the builder's environment on. Its
+# authority is the builder's own file, which dnf trusts only once it is an anchor here. The
+# anchor goes again with the packages installed, as the image is not one that trusts a proxy.
+if [ -f "${files}/proxy/ca.crt" ]; then
+    install -D -m 0644 "${files}/proxy/ca.crt" /etc/pki/ca-trust/source/anchors/kubehenge-proxy.crt
+    update-ca-trust
+fi
 
 # curl, awk and tar for the installs of RKE2, k3s and kubeadm's images; NetworkManager, the only
 # network renderer cloud-init has on EL. The kernel's extra modules come with the kernel, in the
@@ -52,6 +59,9 @@ dnf -y install --setopt=reposdir="${repos}" --setopt=install_weak_deps=False --s
 dnf clean all
 rm -rf "${repos}"
 rm -f /etc/pki/rpm-gpg/kubehenge-*.asc
+if [ -f "${files}/proxy/down.sh" ]; then
+    sh "${files}/proxy/down.sh"
+fi
 rm -rf /var/cache/* /var/log/* /var/lib/dnf
 
 # guest-exec and the reading of files, which the family's agent refuses by default, and the policy

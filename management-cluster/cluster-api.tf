@@ -17,6 +17,7 @@ locals {
   chart_digests = { for name, dir in {
     kubehenge             = "${path.module}/../charts/kubehenge"
     cluster_api_providers = "${path.module}/charts/cluster-api-providers"
+    proxy                 = "${path.module}/charts/proxy"
     } : name => sha256(join("\n", [
       for f in sort(fileset(dir, "{Chart.yaml,values.yaml,values.schema.json,templates/**,files/**}")) : "${f} ${filesha256("${dir}/${f}")}"
   ])) }
@@ -161,7 +162,7 @@ locals {
     { kind = "IPAMProvider", name = "in-cluster", namespace = "in-cluster-ipam-system", spec = { version = local.versions.ipam_in_cluster, patches = [local.patient_probes] } },
     { kind = "AddonProvider", name = "helm", namespace = "helm-addon-system", spec = {
       version = local.versions.helm_addon
-      patches = [local.patient_probes]
+      patches = concat([local.patient_probes], local.addon_has_ca ? [local.proxy_addon_ca_patch] : [])
       manager = local.patient_leases
     } },
   ]
@@ -232,12 +233,31 @@ locals {
   ) }
   missing_images = sort([for key, image in local.provider_images : key if image == null])
 
+  # Only the Add-on Provider for Helm downloads on its own, the charts clusters ask for. It takes the
+  # proxy from the Secret beside it. The operator's container list has no volumes, so the authority
+  # arrives through a strategic merge patch of the Deployment, which merges the container by name.
+  proxy_addon_ca_dir = "/etc/kubehenge/proxy"
+  proxy_addon_ca_patch = { target = { kind = "Deployment" }, patch = yamlencode({ spec = { template = { spec = {
+    volumes    = [{ name = "proxy-ca", secret = { secretName = local.proxy_addon_secret_name, items = [{ key = "ca.crt", path = "ca.crt" }] } }]
+    containers = [{ name = "manager", volumeMounts = [{ name = "proxy-ca", mountPath = local.proxy_addon_ca_dir, readOnly = true }] }]
+  } } } }) }
+
   # Every Cluster API provider names its controller container "manager".
-  provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => {
+  provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => merge({
     name      = "manager"
     imageUrl  = local.provider_images["${p.kind}/${p.name}"]
     resources = { requests = { cpu = "10m", memory = local.memory_requests["${p.kind}/${p.name}"] } }
-  } }
+    },
+    local.addon_secret_on && p.kind == "AddonProvider" ? {
+      env = concat(
+        local.proxy_enabled ? [for k in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] : {
+          name      = k
+          valueFrom = { secretKeyRef = { name = local.proxy_addon_secret_name, key = k } }
+        }] : [],
+        local.addon_has_ca ? [{ name = "SSL_CERT_FILE", value = "${local.proxy_addon_ca_dir}/ca.crt" }] : [],
+      )
+    } : {},
+  ) }
   # The operator installs each provider from the ConfigMap the providers chart's hook stores its
   # checked files in, not from the release.
   providers = [for p in local.provider_specs : merge(p, {
@@ -291,7 +311,7 @@ resource "helm_release" "cluster_api_operator" {
   wait             = true
   timeout          = 900
 
-  values = [yamlencode({
+  values = [yamlencode(merge({
     image             = { manager = { tag = local.capi_operator.image } }
     watchConfigSecret = true
     # The chart starts a pprof endpoint by default; nothing here profiles the operator.
@@ -302,7 +322,9 @@ resource "helm_release" "cluster_api_operator" {
       renewDeadline = local.patient_leases.leaderElection.renewDeadline
       retryPeriod   = local.patient_leases.leaderElection.retryPeriod
     }
-  })]
+    },
+    local.capi_operator_proxy_values,
+  ))]
 
   lifecycle {
     precondition {
@@ -311,7 +333,7 @@ resource "helm_release" "cluster_api_operator" {
     }
   }
 
-  depends_on = [helm_release.cert_manager]
+  depends_on = [helm_release.cert_manager, helm_release.proxy_operator]
 }
 
 resource "helm_release" "cluster_api_providers" {
@@ -322,7 +344,7 @@ resource "helm_release" "cluster_api_providers" {
   wait      = true
   timeout   = 900
 
-  values = [yamlencode({
+  values = [yamlencode(merge({
     chartDigest = local.chart_digests.cluster_api_providers
     namespaces  = distinct(concat([local.kubehenge_namespace], [for p in local.providers : p.namespace]))
     providers   = local.providers
@@ -343,10 +365,22 @@ resource "helm_release" "cluster_api_providers" {
       local.template_builder.enabled ? { (local.builder_secret.name) = { namespace = local.builder_secret.namespace, data = {} } } : {},
       var.proxmox_ha ? { (local.ha_secret.name) = { namespace = local.ha_secret.namespace, data = {} } } : {},
       var.etcd_restore ? { (local.restore_secret.name) = { namespace = local.restore_secret.namespace, data = {} } } : {},
+      # The controller's and the template builds' pods, and the Add-on Provider for Helm, each in
+      # its own namespace. The operator's is the proxy release's.
+      local.proxy_enabled ? { (local.proxy_secret_name) = { namespace = local.kubehenge_namespace, data = local.proxy_secret_plain } } : {},
+      local.addon_secret_on ? { (local.proxy_addon_secret_name) = { namespace = local.addon_namespace, data = local.addon_secret_plain } } : {},
     )
-  })]
+    },
+    local.proxy_enabled ? { proxy = { secret = local.proxy_secret_name, ca = local.proxy_has_ca } } : {},
+  ))]
 
-  set_sensitive = concat([
+  set_sensitive = concat(local.proxy_enabled ? flatten([for name, ns in local.proxy_secrets : [
+    for k, v in local.proxy_secret_encoded : {
+      name  = "secrets.${name}.encodedData.${k}"
+      value = v
+      type  = "string"
+    }
+    ]]) : [], [
     {
       name  = "secrets.${local.capmox_variables.name}.data.PROXMOX_SECRET"
       value = local.cluster_api_token_secret
@@ -389,12 +423,34 @@ resource "helm_release" "cluster_api_providers" {
   depends_on = [helm_release.cluster_api_operator]
 }
 
+locals {
+  # Whether each repository host the charts come from serves OCI charts, whose digests name manifests,
+  # or a chart repository, whose digests name archives. A mirror serves the same kind.
+  pinned_chart_repositories = distinct([
+    for a in values(yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).addons) : a.repository if try(a.repository, "") != ""
+  ])
+  pinned_chart_hosts = { for host in distinct([for r in local.pinned_chart_repositories : regex("^[a-z]+://([^/]+)", r)[0]]) :
+    host => anytrue([for r in local.pinned_chart_repositories : startswith(r, "oci://") && regex("^[a-z]+://([^/]+)", r)[0] == host])
+  }
+  chart_mirror_problems = concat(
+    [for host in sort(keys(var.chart_repositories.mirrors)) : "no chart comes from ${host}" if !contains(keys(local.pinned_chart_hosts), host)],
+    [for host, url in var.chart_repositories.mirrors : "the mirror of ${host} has to be ${local.pinned_chart_hosts[host] ? "an oci://" : "an http(s)://"} address" if contains(keys(local.pinned_chart_hosts), host) && startswith(url, "oci://") != local.pinned_chart_hosts[host]],
+  )
+}
+
 resource "helm_release" "kubehenge" {
   name      = "kubehenge"
   namespace = local.kubehenge_namespace
   chart     = "${path.module}/../charts/kubehenge"
   wait      = true
   timeout   = 900
+
+  lifecycle {
+    precondition {
+      condition     = length(local.chart_mirror_problems) == 0
+      error_message = "chart_repositories.mirrors: ${join("; ", local.chart_mirror_problems)}. The hosts are ${join(", ", sort(keys(local.pinned_chart_hosts)))}."
+    }
+  }
 
   values = [yamlencode(merge(
     {
@@ -470,6 +526,8 @@ resource "helm_release" "kubehenge" {
       )]
     },
     { image = local.controller_image },
+    local.proxy_enabled ? { proxy = { secret = local.proxy_secret_name, ca = local.proxy_has_ca } } : {},
+    length(var.chart_repositories.mirrors) > 0 ? { chartMirrors = var.chart_repositories.mirrors } : {},
   ))]
 
   depends_on = [helm_release.cluster_api_providers, proxmox_acl.provisioner, proxmox_acl.ha, proxmox_acl.template_builder, proxmox_acl.etcd_restore]

@@ -339,6 +339,9 @@ spec:
             {{- end }}
             {{- end }}
             - {{ printf "--chart-values=%s" (toJson $chartValues) | quote }}
+            {{- range $host, $mirror := .Values.chartMirrors }}
+            - {{ printf "--chart-mirror=%s=%s" $host $mirror | quote }}
+            {{- end }}
             - --calico-images={{ join "," .Values.addons.calico.images }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
             - --rancher-turtles-image={{ .Values.addons.rancher.turtles.image }}
@@ -396,6 +399,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.proxmox.secret }}
                   key: token
+            {{- include "kubehenge.proxyEnv" . | nindent 12 }}
+          {{- include "kubehenge.proxyEnvFrom" . | nindent 10 }}
           ports:
             - name: extension
               containerPort: 9443
@@ -436,6 +441,7 @@ spec:
               readOnly: true
             - name: scratch
               mountPath: /tmp
+            {{- include "kubehenge.proxyMount" . | nindent 12 }}
       volumes:
         # A Talos etcd restore keeps the snapshot it uploads there, as large as etcd's quota
         # (2 GiB by default), and a control plane recovered from a stalled roll the copy of its etcd.
@@ -451,6 +457,7 @@ spec:
         - name: tls
           secret:
             secretName: {{ $tls }}
+        {{- include "kubehenge.proxyVolume" . | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

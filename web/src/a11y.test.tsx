@@ -1152,6 +1152,7 @@ const dialogsExpected = [
   /^Edit Rancher$/u,
   /^Uninstall Rancher$/u,
   /^Edit GitOps$/u,
+  /^Edit egress proxy$/u,
   /^Edit certificates$/u,
   /^Edit automatic upgrades$/u,
   /^Edit autoscaler$/u,
