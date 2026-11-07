@@ -127,7 +127,10 @@ data "talos_machine_configuration" "node" {
         apiVersion = "v1alpha1"
         kind       = "LinkAliasConfig"
         name       = "lan"
-        selector   = { match = "mac(link.permanent_addr) == \"${lower(local.nodes[count.index].mac)}\"" }
+        # The node's one NIC, by its driver, as Talos's own QEMU provisioner selects it. A fixed
+        # alias must match exactly one link. The VM's mac_addresses come from the guest agent and
+        # start with the loopback's, so they cannot name it.
+        selector = { match = "link.driver == \"virtio_net\"" }
       }),
       yamlencode({
         apiVersion = "v1alpha1"
@@ -143,7 +146,14 @@ data "talos_machine_configuration" "node" {
         name       = registry
         endpoints  = [for e in endpoints : { url = e }]
       })
-    ])),
+      ],
+      # Without servers, Talos keeps its default public ones, which a site may block on UDP 123.
+      length(var.time_servers) == 0 ? [] : [yamlencode({
+        apiVersion = "v1alpha1"
+        kind       = "TimeSyncConfig"
+        ntp        = { servers = var.time_servers }
+      })],
+    )),
   ]
 }
 

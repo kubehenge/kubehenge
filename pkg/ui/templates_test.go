@@ -203,6 +203,24 @@ func TestTemplateRequestsAreChecked(t *testing.T) {
 	}
 }
 
+func TestTemplateBuildRefusesAVLANOnAVLANZone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	withTemplates(t, h)
+	h.server.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) {
+		t.Error("a refused request was built")
+		return 0, nil
+	}
+	a := h.browser()
+	a.signIn("admin@pve")
+	body := `{"distribution":"rke2","node":"pve1","storage":"ceph","importStorage":"local","bridge":"corp","vlan":30}`
+	rec := a.do("POST", "/api/templates", body)
+	expect(t, rec, http.StatusUnprocessableEntity)
+	if !strings.Contains(rec.Body.String(), "VNet corp is in a VLAN zone and tags already") {
+		t.Errorf("answer = %s", rec.Body)
+	}
+}
+
 func TestFailedTemplateBuildReported(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

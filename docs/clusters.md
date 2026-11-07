@@ -53,7 +53,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | Field | What it is |
 | --- | --- |
 | Bridge | The bridge the cluster's VMs attach to, one of those chosen for clusters when the management cluster was set up. Bridges you may not use (no `SDN.Use`) are shown but disabled. The wizard chooses the only one left, or else the first a node reaches its gateway through. That node's network on the bridge fills in the prefix length, gateway and DNS servers, and the example API and node addresses. When the management cluster names no bridges and Proxmox VE lists none to you (no `Sys.Audit` on the nodes), type the name in. |
-| VLAN tag | Optional, 1 to 4094. With a tag, the wizard fills in nothing from the bridge's untagged network. |
+| VLAN tag | Optional, 1 to 4094. With a tag, the wizard fills in nothing from the bridge's untagged network. A VNet of a VLAN zone tags its traffic already, so Kubehenge refuses a tag on it. |
 | API address | The control plane's virtual IP: an unused address in the nodes' network, outside the node addresses. |
 | Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds. It counts an autoscaled pool at its most. Leave more for scaling up. |
 | Prefix length | Of the nodes' network. |
@@ -1027,6 +1027,7 @@ The interface checks the signed-in user's Proxmox VE privileges on each cluster'
 | Use the Administration page | the [setup privileges](install.md#who-may-set-it-up) | `/` |
 
 - A node's own bridges are in the zone `localnetwork`, as in `/sdn/zones/localnetwork/vmbr0`.
+- An SDN VNet is in its own zone, as in `/sdn/zones/evpn1/web`. The wizard lists the VNets you hold `SDN.Audit` on.
 - A cluster you may not see is answered as not found.
 - As everywhere in Proxmox VE, a role given on a cluster's own pool replaces, for that pool, what is inherited from the workload pool. It has to hold `VM.Audit` too.
 - Proxmox VE's `PVEAuditor` role holds `VM.Audit`, and `PVEVMAdmin` holds `VM.Audit` and `VM.Allocate`. `Sys.Modify` needs a role of your own.

@@ -86,7 +86,7 @@ The weekly build runs in the management cluster with a user and API token of its
 | the storages of the downloaded images and the cloud-init ISO (Talos image and Cloud-init images in the setup, unless the module names others) | `Datastore.Allocate`, `Datastore.AllocateTemplate`, `Datastore.Audit` | downloading the node OS's cloud image and uploading the ISO, and deleting both afterwards |
 | the template disks' storage, also when it is one of those | `Datastore.AllocateSpace`, `Datastore.Audit` | the templates' disks. `Datastore.Allocate` does not include `Datastore.AllocateSpace` |
 | `/nodes/<node>` the builds run on | `Sys.AccessNetwork`, `Sys.Audit` | Proxmox VE's download of the image |
-| `/sdn/zones/localnetwork/<bridge>` | `PVESDNUser` | attaching the VM that prepares an image |
+| `/sdn/zones/localnetwork/<bridge>`, or `/sdn/zones/<zone>/<vnet>` for a VNet | `PVESDNUser` | attaching the VM that prepares an image |
 | `/`, and `/nodes` propagated | `Sys.Audit` | reading the cluster's resources and the nodes' storages |
 
 It can touch no VM outside the template pool, no cluster's VM and none of the management cluster's, and sees no users. Two gaps remain:

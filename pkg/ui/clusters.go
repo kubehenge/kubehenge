@@ -903,12 +903,21 @@ func (s *Server) mayUseNetwork(w http.ResponseWriter, r *http.Request, u user, c
 		writeError(w, http.StatusUnprocessableEntity, "bridge: choose "+strings.Join(allowed, ", "))
 		return false
 	}
-	zone, err := s.Accounts.Zone(r.Context(), u.ticket, bridge)
+	network, err := s.Accounts.Network(r.Context(), u.ticket, bridge)
 	if err != nil {
 		s.proxmoxError(w, r, err)
 		return false
 	}
-	return s.require(w, r, u, bridgePath(zone, bridge, vlan), privBridge)
+	if vlan != "" && network.TagsTraffic() {
+		writeError(w, http.StatusUnprocessableEntity, vlanOnTaggedNetwork(bridge))
+		return false
+	}
+	return s.require(w, r, u, bridgePath(network.Zone, bridge, vlan), privBridge)
+}
+
+// vlanOnTaggedNetwork is the refusal of a VLAN tag on a VNet whose zone tags its traffic already.
+func vlanOnTaggedNetwork(vnet string) string {
+	return "VNet " + vnet + " is in a VLAN zone and tags already. Leave the VLAN tag empty."
 }
 
 // allowedNodesVariable keeps a cluster's VMs to some of the Proxmox VE nodes.

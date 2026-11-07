@@ -61,7 +61,7 @@ func TestAnExistingPoolWithGuestsOfOthersIsRefused(t *testing.T) {
 
 func TestANewClusterWhoseTagsTheDatacenterRefusesStopsBeforeAnyObject(t *testing.T) {
 	t.Parallel()
-	p := poolServer(t, poolComment, 0, map[string]any{"registered-tags": "volumes"})
+	p := poolServer(t, poolComment, 0, map[string]any{"registered-tags": []string{"volumes"}})
 	_, err := p.Ensure(t.Context(), webNames, Access{}, Credentials{}, func(Credentials) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "registered-tags lists volumes") {
 		t.Errorf("Ensure = %v, want the datacenter option and the tag named", err)
