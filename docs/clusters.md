@@ -167,23 +167,23 @@ Every control plane's API server also holds the add-ons' resource types and obje
 
 The API server runs with a Go memory limit of 40% of its control plane's memory. On k3s the limit is half of it, for the server's whole process. So the API server frees memory as it nears the limit, not at twice what it holds.
 
-The CPU is what the add-ons' pods request as Kubehenge installs them. It counts one node's share of those that run on every node. Kubernetes schedules a pod only onto a node with that much CPU not yet requested, however idle the node is, and leaves it pending otherwise.
+The CPU and the requested memory are what the add-ons' pods request as Kubehenge installs them. They count one node's share of those that run on every node. Kubernetes schedules a pod only onto a node with that much CPU and memory not yet requested, however idle the node is. Otherwise the pod stays pending. A node needs room for both what the pods use and what they request.
 
-| Add-on | Pods' memory | Each control plane, kubeadm, RKE2 and Talos | Each control plane, k3s | Pods' CPU |
-| --- | --- | --- | --- | --- |
-| Headlamp | 64 MiB | 8 MiB | none | 10 millicores |
-| Monitoring | 1536 MiB | 32 MiB | 616 MiB | 300 millicores |
-| Logs | 512 MiB | 56 MiB | none | 75 millicores |
-| Backups | 384 MiB | 184 MiB | 24 MiB | 70 millicores |
-| Kyverno | 640 MiB | 552 MiB | 520 MiB | 500 millicores |
-| Istio | 384 MiB | 288 MiB | 504 MiB | 400 millicores |
-| Cilium Cluster Mesh | 128 MiB | none | none | 30 millicores |
-| Load balancer | 128 MiB | none | none | 60 millicores |
-| GitOps with Argo CD | 512 MiB | 432 MiB | 360 MiB | 90 millicores |
-| GitOps with Flux | 384 MiB | none | none | 50 millicores |
-| cert-manager, with monitoring, Rancher or certificates | 192 MiB | 48 MiB | none | 30 millicores |
-| Rancher | 2048 MiB | 512 MiB | 512 MiB | 120 millicores |
-| Rancher's agent, in every cluster that registers | 512 MiB | none | none | 30 millicores |
+| Add-on | Pods' memory | Pods' requested memory | Each control plane, kubeadm, RKE2 and Talos | Each control plane, k3s | Pods' CPU |
+| --- | --- | --- | --- | --- | --- |
+| Headlamp | 64 MiB | 64 MiB | 8 MiB | none | 10 millicores |
+| Monitoring | 1536 MiB | 752 MiB | 32 MiB | 616 MiB | 300 millicores |
+| Logs | 512 MiB | 464 MiB | 56 MiB | none | 75 millicores |
+| Backups | 384 MiB | 192 MiB | 184 MiB | 24 MiB | 70 millicores |
+| Kyverno | 640 MiB | 448 MiB | 552 MiB | 520 MiB | 500 millicores |
+| Istio | 488 MiB | 484 MiB | 288 MiB | 504 MiB | 400 millicores |
+| Cilium Cluster Mesh | 128 MiB | 128 MiB | none | none | 30 millicores |
+| Load balancer | 128 MiB | 128 MiB | none | none | 60 millicores |
+| GitOps with Argo CD | 512 MiB | 352 MiB | 432 MiB | 360 MiB | 90 millicores |
+| GitOps with Flux | 384 MiB | 320 MiB | none | none | 50 millicores |
+| cert-manager, with monitoring, Rancher or certificates | 192 MiB | 160 MiB | 48 MiB | none | 30 millicores |
+| Rancher | 2048 MiB | 640 MiB | 512 MiB | 512 MiB | 120 millicores |
+| Rancher's agent, in every cluster that registers | 512 MiB | 192 MiB | none | none | 30 millicores |
 
 A worker counts 448 MiB for itself on k3s and 704 MiB on kubeadm, RKE2 and Talos. A control plane counts 1848 MiB on k3s, 2392 MiB on Talos, 3120 MiB on RKE2 and 3376 MiB on kubeadm before any add-on. With every add-on but Rancher it needs 3872 MiB on k3s, 3992 MiB on Talos, 4720 MiB on RKE2 and 4976 MiB on kubeadm. These are above the least of 4096 MiB on RKE2 and kubeadm.
 
@@ -198,13 +198,17 @@ A CNI other than the class's default adds to each control plane. This counts onc
 
 With every add-on but Rancher, a k3s control plane needs 5032 MiB with Cilium and 5680 MiB with Calico.
 
-A single k3s worker with every add-on but Rancher and GitOps needs 4928 MiB. It needs 4544 MiB without backups, 4416 MiB without logs, or 4032 MiB without either. GitOps with Argo CD on top takes each 512 MiB further.
+A single k3s worker with every add-on but Rancher and GitOps needs 5032 MiB. It needs 4648 MiB without backups, 4520 MiB without logs, or 4136 MiB without either. GitOps with Argo CD on top takes each 512 MiB further.
 
 On k3s the default machines hold every add-on but Rancher, logs, backups and GitOps, with the default CNI. On kubeadm (with Cilium), RKE2 and Talos they hold the same without Kyverno. A second worker makes room for logs and backups too.
 
 For CPU a worker counts what its distribution, its CNI and Kubehenge's own pods request there. That is 150 millicores on kubeadm, 350 on k3s, 390 on Talos and 775 on RKE2. Talos keeps 50 of them back for the system. Its flannel asks for 200 with its network policy controller. On RKE2, kube-proxy asks for 250 and canal for 260. Without workers, a control plane counts 1080 millicores on kubeadm, 430 on k3s, 910 on Talos and 1605 on RKE2.
 
 On kubeadm and Talos the workers together count 200 millicores more for CoreDNS's two replicas, since both can sit on one worker.
+
+For requested memory a worker counts what the kernel and the kubelet keep back and what its own pods request. That is 528 MiB on kubeadm, 664 MiB on k3s, 960 MiB on Talos and 1032 MiB on RKE2. Talos keeps 384 MiB back for the system. On kubeadm and Talos the workers together count 140 MiB more for CoreDNS. Without workers, a control plane counts 1128 MiB on k3s, 1232 MiB on kubeadm, 2328 MiB on Talos and 3128 MiB on RKE2.
+
+A Talos worker of 2216 MiB holds Istio, the load balancer, Rancher's agent and Flux by what their pods use. Their requests need a worker of 2224 MiB.
 
 Every add-on but Rancher takes 1595 millicores with Argo CD, or 1555 with Flux. So it fits on one worker of the default 2 cores on kubeadm and k3s. Talos and RKE2 need a third core for it, or a second worker.
 

@@ -10,6 +10,31 @@ pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde33
 # renovate: datasource=docker depName=docker.io/gitea/gitea
 gitea=docker.io/gitea/gitea:28.3.0-rootless@sha256:40c5a68a0463c0940e1ae32626c8300dd0572f3558e390073ad8379ca67c0e1d
 export agnhost pause_image gitea
+# What the test's own pods request, in MiB. The manifests and the worker's sizing both read these.
+# gitops_agnhost_pods is how many agnhost pods the GitOps steps have running beside Gitea.
+agnhost_request_mib=16
+gitea_request_mib=128
+gitops_agnhost_pods=5
+
+# worker_memory_for <class JSON> <add-ons JSON array> <gitops: true|false>: the least memory in MiB
+# a worker may have for a class with those add-ons on. It is the largest of the class's own minimum,
+# what a worker and the add-ons use, and what the scheduler needs for the requests of a worker's own
+# pods, the add-ons' pods and, with GitOps, the test's own pods, to a multiple of 8.
+worker_memory_for() {
+    worker_memory_fixtures=0
+    if [ "$3" = true ]; then
+        worker_memory_fixtures=$((gitea_request_mib + gitops_agnhost_pods * agnhost_request_mib))
+    fi
+    printf '%s' "$1" | jq -r --argjson on "$2" --argjson fixtures "${worker_memory_fixtures}" '
+        (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
+        | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
+        | (.metadata.annotations["kubehenge.dev/addon-memory-requests"] | fromjson) as $requests
+        | (.metadata.annotations["kubehenge.dev/node-memory-requests"] | fromjson) as $requested
+        | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
+            $node.worker + ([$on[] | $addon[.]] | add) + $fixtures,
+            (($requested.worker + ($requested.workers // 0) + ([$on[] | if . == "argocd" then ([$requests.argocd, $requests.flux] | max) else $requests[.] end] | add) + $fixtures) / 8 | ceil) * 8]
+        | max'
+}
 # The S3 store the backup tests write to.
 # renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
 SEAWEEDFS_VERSION=4.52

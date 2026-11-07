@@ -438,7 +438,7 @@ func TestIntegrationClusterValidator(t *testing.T) { //nolint:paralleltest // st
 	oneWorker := &clusterv1.Cluster{Spec: clusterv1.ClusterSpec{Topology: clusterv1.Topology{
 		Workers: clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{{Replicas: new(int32(1))}}},
 	}}}
-	for _, name := range []string{"kubehenge-kubeadm", "kubehenge-k3s", "kubehenge-rke2"} {
+	for _, name := range []string{"kubehenge-kubeadm", "kubehenge-k3s", "kubehenge-rke2", "kubehenge-talos"} {
 		class := &clusterv1.ClusterClass{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: classNamespace, Name: name}, class); err != nil {
 			t.Fatal(err)
@@ -671,34 +671,15 @@ func checkDatastoreAllocateAdmission(ctx context.Context, t *testing.T, c client
 	}
 }
 
-// checkClassAddonRoom holds a class's memory and CPU figures: one for every add-on and every node
-// kind. A worker and control plane sized as the end-to-end tests size them from the figures hold
-// every add-on but Rancher, logs and backups, and a MiB less is refused. A worker with the cores the
-// end-to-end tests give it holds every add-on but Rancher, and a core fewer is refused. The least
+// checkClassAddonRoom holds a class's figures (checkClassFigures). A worker and control plane sized
+// as the end-to-end tests size them from the figures hold every add-on but Rancher, logs and
+// backups, and a MiB less is refused. A worker with
+// the cores the end-to-end tests give it holds every add-on but Rancher, and a core fewer is
+// refused. So does a worker with the memory their requests ask, and a MiB less. The least
 // control plane Rancher runs on without workers, at the memory its figures ask, holds Rancher.
 func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker *clusterv1.Cluster, alone controlPlaneSize) {
 	t.Helper()
-	addons, _, err := classFigures(class, AddonMemoryAnnotation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cpu, _, err := classFigures(class, AddonCPUAnnotation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for key := range addonNames {
-		if addons[key] <= 0 {
-			t.Errorf("%s: no memory figure for %s", class.Name, key)
-		}
-		if cpu[key] <= 0 {
-			t.Errorf("%s: no CPU figure for %s", class.Name, key)
-		}
-	}
-	for _, annotation := range []string{NodeMemoryAnnotation, NodeCPUAnnotation} {
-		if nodes, _, figuresErr := classFigures(class, annotation); figuresErr != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
-			t.Errorf("%s: %s %v, %v", class.Name, annotation, nodes, figuresErr)
-		}
-	}
+	checkClassFigures(t, class)
 	defaults := withAddons(oneWorker.DeepCopy(), everyAddon)
 	room, err := addonRoomOf(addonMemory, defaults, class)
 	if err != nil {
@@ -742,8 +723,12 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 	if err != nil {
 		t.Fatal(err)
 	}
+	cpuNodes, _, err := classFigures(class, NodeCPUAnnotation)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leastCores := leastWorker.Cores
-	cores := max(leastCores, (cpuRoom.Base+cpuRoom.Need+millicores-1)/millicores)
+	cores := max(leastCores, (cpuRoom.Base+cpuRoom.Need+cpuNodes["workers"]+millicores-1)/millicores)
 	withCores := func(n int) *clusterv1.Cluster {
 		return withAddons(all.DeepCopy(), map[string]string{"workerMachine": fmt.Sprintf(`{"cores":%d}`, n)})
 	}
@@ -752,6 +737,24 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 	}
 	if cores > leastCores && checkRoomFor(addonCPU, nil, withCores(cores-1), class) == nil {
 		t.Errorf("%s: every add-on but Rancher on a worker of %d cores, a core short, admitted", class.Name, cores-1)
+	}
+	requestRoom, err := addonRoomOf(addonMemoryRequests, all, class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestNodes, _, err := classFigures(class, NodeMemoryRequestsAnnotation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestMiB := max(least, requestRoom.Base+requestRoom.Need+requestNodes["workers"])
+	withMiB := func(n int) *clusterv1.Cluster {
+		return withAddons(all.DeepCopy(), map[string]string{"workerMachine": fmt.Sprintf(`{"memoryMiB":%d}`, n)})
+	}
+	if err = checkRoomFor(addonMemoryRequests, nil, withMiB(requestMiB), class); err != nil {
+		t.Errorf("%s: every add-on but Rancher on a worker of %d MiB by requests: %v", class.Name, requestMiB, err)
+	}
+	if requestMiB > least && checkRoomFor(addonMemoryRequests, nil, withMiB(requestMiB-1), class) == nil {
+		t.Errorf("%s: every add-on but Rancher on a worker of %d MiB, a MiB short of their requests, admitted", class.Name, requestMiB-1)
 	}
 	rancherOn := map[string]string{"rancher": `{"install":true,"hostname":"rancher.example.org"}`}
 	room, err = addonRoomOf(addonMemory, withAddons(&clusterv1.Cluster{}, rancherOn), class)
@@ -763,6 +766,41 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 	rancher := withAddons(&clusterv1.Cluster{}, rancherOn)
 	if err := checkAddonRoom(nil, rancher, class); err != nil {
 		t.Errorf("%s: Rancher on the least control plane without workers: %v", class.Name, err)
+	}
+}
+
+// checkClassFigures holds a class's memory, requested memory and CPU figures: one for every add-on
+// and every node kind.
+func checkClassFigures(t *testing.T, class *clusterv1.ClusterClass) {
+	t.Helper()
+	figures := map[string]map[string]int{}
+	for _, annotation := range []string{AddonMemoryAnnotation, AddonCPUAnnotation, AddonMemoryRequestsAnnotation} {
+		f, _, err := classFigures(class, annotation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		figures[annotation] = f
+	}
+	addons, cpu, requested := figures[AddonMemoryAnnotation], figures[AddonCPUAnnotation], figures[AddonMemoryRequestsAnnotation]
+	for key := range addonNames {
+		if addons[key] <= 0 {
+			t.Errorf("%s: no memory figure for %s", class.Name, key)
+		}
+		if cpu[key] <= 0 {
+			t.Errorf("%s: no CPU figure for %s", class.Name, key)
+		}
+		if requested[key] <= 0 {
+			t.Errorf("%s: no requested memory figure for %s", class.Name, key)
+		}
+		// A pod is placed by what it requests, so an add-on's memory never counts for less.
+		if addons[key] < requested[key] {
+			t.Errorf("%s: %s's memory figure of %d MiB is below the %d its pods request", class.Name, key, addons[key], requested[key])
+		}
+	}
+	for _, annotation := range []string{NodeMemoryAnnotation, NodeMemoryRequestsAnnotation, NodeCPUAnnotation} {
+		if nodes, _, err := classFigures(class, annotation); err != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {
+			t.Errorf("%s: %s %v, %v", class.Name, annotation, nodes, err)
+		}
 	}
 }
 

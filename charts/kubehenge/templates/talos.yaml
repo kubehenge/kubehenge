@@ -47,6 +47,17 @@ metadata:
     # scheduler's 10m, the CSI controller's 50m and the cloud controller manager's 10m. etcd runs
     # outside Kubernetes.
     kubehenge.dev/node-cpu: '{"controlPlane":910,"worker":390,"workers":200}'
+    {{- include "kubehenge.addonMemoryRequests" . | nindent 4 }}
+    # The memory, in MiB, a node keeps from the add-ons' requests, counted as node-cpu counts CPU. On
+    # a worker the kernel's 104 of a 2240 MiB VM, measured by the end-to-end tests, Talos's 384
+    # reserved for the system and the kubelet's 100 eviction threshold, the CNI's agent (Cilium's 128
+    # with its Envoy's 64, more than flannel's 100 with its network policy controller), kube-proxy's
+    # 50, Traefik's 64 and the CSI plugin's 64. The workers together carry CoreDNS's two replicas at
+    # 70 each. A control plane without workers keeps back the kernel's 198 of 4096 MiB and Talos's
+    # 512, runs all of that and adds the API server's 512, the controller manager's 256 and the
+    # scheduler's 64 (Talos's documented defaults, LAB), the CSI controller's 80, the cloud controller
+    # manager's 32 and Cilium's operator's 64.
+    kubehenge.dev/node-memory-requests: '{"controlPlane":2328,"worker":960,"workers":140}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

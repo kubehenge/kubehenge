@@ -9,8 +9,10 @@ import {
   addonCPU,
   addonCostMiB,
   addonMemory,
+  addonMemoryRequests,
   addonNeedMiB,
   fieldProblems,
+  machineLeast,
   newForm,
   problems,
   request,
@@ -1360,6 +1362,32 @@ describe("create", () => {
       /^A whole number of cores, at least 4 for the add-ons chosen$/u,
     );
     expect(fieldProblems("Machines", heavy, { ...rke2, annotations: {} })).toStrictEqual({});
+  });
+
+  it("gives the nodes that carry the add-ons the memory their pods request", () => {
+    const requested: ClusterClass = {
+      ...rke2,
+      annotations: {
+        ...rke2.annotations,
+        "kubehenge.dev/addon-memory-requests": '{"headlamp":64,"monitoring":752,"istio":484,"rancherAgent":192}',
+        "kubehenge.dev/node-memory-requests": '{"controlPlane":3128,"worker":3600,"workers":140}',
+      },
+    };
+    const least = { cores: 2, memoryMiB: 4096, diskGiB: 40 };
+    const istio: Form = { ...form, workerReplicas: 1, workerMachine: least, istio: true };
+    expect(addonMemoryRequests(istio, requested)).toStrictEqual({
+      names: ["Headlamp", "monitoring", "Istio"],
+      mib: 1300,
+    });
+    // What the pods use fits the class's least worker, what they request does not: the worker keeps
+    // 3600 MiB itself, and carries the 1300 MiB requested with the 140 the cluster runs once.
+    expect(machineLeast(istio, rke2, "workerMachine").memoryMiB).toBe(4096);
+    expect(fieldProblems("Machines", istio, requested)).toStrictEqual({
+      workerMachine: "At least 5040 MiB of memory for the add-ons chosen, in steps of 8",
+    });
+    expect(withRoom(istio, requested).workerMachine).toStrictEqual({ ...least, memoryMiB: 5040 });
+    // Two workers share the requests out.
+    expect(machineLeast({ ...istio, workerReplicas: 2 }, requested, "workerMachine").memoryMiB).toBe(4320);
   });
 
   it("says why the sign-in page is back, what a lost connection means, and who may create", async () => {
