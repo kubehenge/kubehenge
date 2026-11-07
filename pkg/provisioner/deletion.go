@@ -247,6 +247,7 @@ func (r *Reconciler) deletionStatus(cluster *clusterv1.Cluster, objects []*unstr
 		st.MayLeave = append(st.MayLeave, "Rancher registration")
 	}
 	if removeErr != nil {
+		st.MayLeave = append(st.MayLeave, "the volume owner VM with the cluster's volumes")
 		st.Waiting = append(st.Waiting, DeletionWait{
 			Kind: clusterv1.ClusterKind, Name: cluster.Name, Finalizers: []string{Finalizer},
 			Reason: shorten("removing the Proxmox VE objects: "+removeErr.Error(), deletionReasonMax),
@@ -302,8 +303,9 @@ func (r *Reconciler) reportStall(ctx context.Context, cluster *clusterv1.Cluster
 		cond = &metav1.Condition{
 			Status: metav1.ConditionTrue, Reason: "Waiting",
 			Message: fmt.Sprintf("the deletion has waited %s on %s%s."+stallRest+", abandon it with Abandon on the cluster's page or: "+
-				"kubectl --namespace %s annotate cluster %s %s=%s",
-				waited.Truncate(time.Minute), strings.Join(parts, ", "), more, cluster.Namespace, cluster.Name, AbandonAnnotation, cluster.Name),
+				"kubectl --namespace %s annotate cluster %s %s=%s%s",
+				waited.Truncate(time.Minute), strings.Join(parts, ", "), more, cluster.Namespace, cluster.Name, AbandonAnnotation, cluster.Name,
+				abandonLeaves(st.MayLeave)),
 		}
 	}
 	if cond == nil && meta.FindStatusCondition(cluster.Status.Conditions, DeletionStalledCondition) == nil {
@@ -320,6 +322,15 @@ func (r *Reconciler) reportStall(ctx context.Context, cluster *clusterv1.Cluster
 		r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, DeletionStalledCondition, "WatchDeletion", "%s", shorten(cond.Message, watchEventMax))
 	}
 	return nil
+}
+
+// abandonLeaves is the sentence that says what abandoning the deletion leaves behind in Proxmox VE
+// and elsewhere, or nothing when nothing is.
+func abandonLeaves(mayLeave []string) string {
+	if len(mayLeave) == 0 {
+		return ""
+	}
+	return ". Abandoning leaves behind: " + strings.Join(mayLeave, ", ")
 }
 
 // stallRest starts what follows the first sentence of a DeletionStalled condition's message: the way
@@ -396,18 +407,30 @@ func holdsOutside(objects []*unstructured.Unstructured) bool {
 	})
 }
 
+// removeAbandoned removes an abandoned cluster's Proxmox VE objects within abandonRemoveTimeout.
+func (r *Reconciler) removeAbandoned(ctx context.Context, cluster *clusterv1.Cluster) error {
+	names, held, err := r.cloudObjects(ctx, cluster)
+	if err != nil {
+		return err
+	}
+	storage, _, err := optionalVariable[string](cluster, "storage")
+	if err != nil {
+		return err
+	}
+	rctx, cancel := context.WithTimeout(ctx, abandonRemoveTimeout)
+	defer cancel()
+	if err = r.Cloud.Remove(rctx, names, held, storage); err != nil {
+		return fmt.Errorf("removing the Proxmox VE objects: %w", err)
+	}
+	return nil
+}
+
 // releaseAbandoned tries once more to remove an abandoned cluster's Proxmox VE objects, then takes
 // every finalizer off the Cluster, with an event that names everything left behind.
 func (r *Reconciler) releaseAbandoned(ctx context.Context, cluster *clusterv1.Cluster, st *DeletionStatus) error {
 	log := ctrl.LoggerFrom(ctx)
 	if controllerutil.ContainsFinalizer(cluster, Finalizer) {
-		names, held, err := r.cloudObjects(ctx, cluster)
-		if err == nil {
-			rctx, cancel := context.WithTimeout(ctx, abandonRemoveTimeout)
-			err = r.Cloud.Remove(rctx, names, held)
-			cancel()
-		}
-		if err != nil {
+		if err := r.removeAbandoned(ctx, cluster); err != nil {
 			log.Error(err, "removing the abandoned cluster's Proxmox VE objects")
 			if names, nerr := NamesFor(r.WorkloadPool, cluster.Namespace, cluster.Name); nerr == nil {
 				st.LeftBehind = r.leave(cluster, st.LeftBehind, fmt.Sprintf("Pool %s and user %s", names.Pool, names.User))

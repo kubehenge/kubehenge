@@ -184,14 +184,22 @@ func (p *Proxmox) RemoveEmptyVolumeHolders(ctx context.Context, n Names) error {
 // holdsDisks reports whether a VM configuration names any disk, attached or unused.
 func holdsDisks(config map[string]any) bool {
 	for k := range config {
-		rest := strings.TrimLeft(k, "abcdefghijklmnopqrstuvwxyz")
-		if rest == "" || strings.Trim(rest, "0123456789") != "" {
-			continue
-		}
-		switch k[:len(k)-len(rest)] {
-		case "scsi", "virtio", "sata", "ide", "unused", "efidisk", "tpmstate":
+		if isDiskKey(k) {
 			return true
 		}
+	}
+	return false
+}
+
+// isDiskKey reports whether a VM configuration key holds a disk, such as scsi0 or unused12.
+func isDiskKey(k string) bool {
+	rest := strings.TrimLeft(k, "abcdefghijklmnopqrstuvwxyz")
+	if rest == "" || strings.Trim(rest, "0123456789") != "" {
+		return false
+	}
+	switch k[:len(k)-len(rest)] {
+	case "scsi", "virtio", "sata", "ide", "unused", "efidisk", "tpmstate":
+		return true
 	}
 	return false
 }

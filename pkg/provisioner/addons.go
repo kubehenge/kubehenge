@@ -960,11 +960,14 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 		tolerationsKey:            controlPlaneTolerations(),
 		"existingConfigSecretKey": csiConfigKey,
 		"storageClass": []any{map[string]any{
-			"name":          "proxmox",
+			"name":          defaultStorageClass,
 			"storage":       storage,
 			"reclaimPolicy": string(corev1.PersistentVolumeReclaimDelete),
 			"fstype":        "ext4",
-			annotationsKey:  map[string]any{"storageclass.kubernetes.io/is-default-class": strconv.FormatBool(true)},
+			// The chart renders only ssd and cache of the drive's options, so discard travels as an
+			// extra parameter beside ssd.
+			"extraParameters": driveParameters(),
+			annotationsKey:    map[string]any{"storageclass.kubernetes.io/is-default-class": strconv.FormatBool(true)},
 		}},
 	}
 	if addons.VolumeSnapshots {

@@ -54,7 +54,8 @@ type Cloud interface {
 	EnsureVolumeHolders(ctx context.Context, n Names, nodes []string) error
 	// RemoveEmptyVolumeHolders removes the cluster's holder VMs that hold no copy.
 	RemoveEmptyVolumeHolders(ctx context.Context, n Names) error
-	Remove(ctx context.Context, n Names, held Credentials) error
+	// Remove deletes the cluster's objects. storage is the cluster's storage variable, empty when unset.
+	Remove(ctx context.Context, n Names, held Credentials, storage string) error
 }
 
 // Reconciler provisions the Proxmox VE side of Clusters built from Kubehenge's ClusterClasses.
@@ -249,9 +250,13 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 	if err != nil {
 		return false, err
 	}
+	classWaiting, err := r.retireStaleStorageClass(ctx, cluster)
+	if err != nil {
+		return false, err
+	}
 	uploadWaiting, err := r.reconcileEtcdUpload(ctx, cluster)
 	return certificatesWaiting || rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting || gitOpsWaiting ||
-		uploadWaiting, err
+		classWaiting || uploadWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
@@ -359,8 +364,19 @@ func (r *Reconciler) ensureCloud(ctx context.Context, cluster *clusterv1.Cluster
 	if err != nil {
 		return held, err
 	}
+	// Read before Ensure, whose record callback writes the flag as not ready.
+	wasReady, err := r.recordedReady(ctx, cluster)
+	if err != nil {
+		return held, err
+	}
 	record := func(c Credentials) error { return r.keep(ctx, cluster, c, false) }
 	creds, err := r.Cloud.Ensure(ctx, names, access, held, record)
+	// Reported before the error is, as the next try finds the new owner recorded and stays silent.
+	if wasReady && held.VolumeOwner != 0 && creds.VolumeOwner != held.VolumeOwner && r.Events != nil {
+		r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "VolumeOwnerMissing", "CreateVolumeOwner",
+			"volume owner VM %d is gone, so the volumes named vm-%d-* have no owner: restore a VM with that VMID from a backup, or they are lost. A new owner VM %d was created",
+			held.VolumeOwner, held.VolumeOwner, creds.VolumeOwner)
+	}
 	if err != nil {
 		return creds, fmt.Errorf("creating the cluster's Proxmox VE objects: %w", err)
 	}
@@ -414,7 +430,11 @@ func (r *Reconciler) removeProxmox(ctx context.Context, cluster *clusterv1.Clust
 	if err != nil {
 		return false, err
 	}
-	if err := r.Cloud.Remove(ctx, names, held); err != nil {
+	storage, _, err := optionalVariable[string](cluster, "storage")
+	if err != nil {
+		return false, err
+	}
+	if err := r.Cloud.Remove(ctx, names, held, storage); err != nil {
 		return false, fmt.Errorf("removing the cluster's Proxmox VE objects: %w", err)
 	}
 	log.Info("removed the cluster's Proxmox VE objects", "pool", names.Pool)
@@ -646,6 +666,20 @@ func (r *Reconciler) held(ctx context.Context, cluster *clusterv1.Cluster) (Cred
 		return Credentials{}, fmt.Errorf("reading the cluster's credentials: %w", err)
 	}
 	return credentialsFrom(stored)
+}
+
+// recordedReady reports whether the cluster's credentials were marked ready, that is whether all of
+// its objects were once in place.
+func (r *Reconciler) recordedReady(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+	stored := &corev1.Secret{}
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: credentialsSecretName(cluster)}, stored)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading the cluster's credentials: %w", err)
+	}
+	return isReady(stored), nil
 }
 
 // keep stores the cluster's credentials, ready once everything they are for exists.
