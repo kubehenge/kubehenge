@@ -150,6 +150,9 @@ spec:
     - name: data
       image: ${agnhost}
       args: [pause]
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {memory: 128Mi}
       securityContext:
         allowPrivilegeEscalation: false
         capabilities:

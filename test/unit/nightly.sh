@@ -21,7 +21,26 @@ bad() {
 }
 
 seen=$(mktemp)
-trap 'rm -f "${seen}"' EXIT
+scratch=$(mktemp)
+trap 'rm -f "${seen}" "${scratch}"' EXIT
+# slurp <file>: sets slurped to the file's text without its last line end, as $(cat file) reads it.
+slurp() {
+    slurped=''
+    slurp_sep=''
+    while IFS= read -r slurp_line || [ -n "${slurp_line}" ]; do
+        slurped=${slurped}${slurp_sep}${slurp_line}
+        slurp_sep='
+'
+    done < "$1"
+}
+# variant_of <test>: runs variant in this shell, as a command substitution would start a process for
+# it. Sets variant_status to its status and settings to what it printed, the errors included.
+variant_of() {
+    # shellcheck disable=SC2310 # its status is the answer.
+    if variant "$1" > "${scratch}" 2>&1; then variant_status=0; else variant_status=$?; fi
+    slurp "${scratch}"
+    settings=${slurped}
+}
 # bare <lane>: sets bare to the lane's tests without their options.
 strip_options() {
     bare='' rest=$1,
@@ -33,12 +52,13 @@ strip_options() {
 }
 
 # The lists below are read once and matched in the shell, as each process started costs most of
-# this test's time on Windows. Each holds its words between spaces.
-# jq on Windows ends its lines with CR LF.
-lanes=$(sh "${ci}/scope.sh" --all | jq -r '.[]' | tr -d '\r')
-queue=" $(printf '%s' "${lanes}" | tr '\n' ' ') management-cluster-upgrade rancher control-plane-ha two-nodes "
-all_lanes=" $(printf '%s' "${lanes}" | tr '\n,' '  ') "
-node_oses=" $(jq -r '.available[]' "${chart}/files/node-oses.json" | tr -d '\r' | tr '\n' ' ') "
+# this test's time on Windows. Each holds its words between spaces. jq -j prints no line ends,
+# which jq on Windows ends with CR LF.
+lanes_and_parts=$(sh "${ci}/scope.sh" --all | jq -j '(.[] | . + " "), "|", (.[] | gsub(","; " ") + " ")')
+lanes=${lanes_and_parts%%|*}
+queue=" ${lanes} management-cluster-upgrade rancher control-plane-ha two-nodes "
+all_lanes=" ${lanes_and_parts#*|}"
+node_oses=" $(jq -j '.available[] | . + " "' "${chart}/files/node-oses.json")"
 # cnis <distribution>: the CNIs its class offers.
 cnis() {
     awk '/- name: cni$/ { f = 1 } f && /enum:/ { gsub(/.*\[|\].*/, ""); gsub(/,/, " "); print; exit }' "${chart}/templates/$1.yaml"
@@ -50,9 +70,16 @@ cnis_talos=$(cnis talos)
 nights=24
 night=0
 while [ "${night}" -lt "${nights}" ]; do
-    list=$(sh "${ci}/nightly.sh" $((20000 + night)))
-    if printf '%s' "${list}" | jq -e 'type == "array" and length == (unique | length)' > /dev/null; then ok; else bad "night ${night}: not a list of distinct tests: ${list}"; fi
-    tests=" $(printf '%s' "${list}" | jq -r '.[]' | tr -d '\r' | tr '\n' ' ') "
+    sh "${ci}/nightly.sh" $((20000 + night)) > "${scratch}"
+    parsed=$(jq -j 'if type == "array" and length == (unique | length) then "ok " else "bad " end, (if type == "array" then .[] | . + " " else empty end)' "${scratch}")
+    case ${parsed} in
+        'ok '*) ok ;;
+        *)
+            slurp "${scratch}"
+            bad "night ${night}: not a list of distinct tests: ${slurped}"
+            ;;
+    esac
+    tests=" ${parsed#* }"
     for t in ${queue}; do
         case ${tests} in
             *" ${t} "*) ok ;;
@@ -80,7 +107,8 @@ while [ "${night}" -lt "${nights}" ]; do
             *) ok ;;
         esac
         # shellcheck disable=SC2310 # its refusal is the failure reported.
-        if ! settings=$(variant "${name}" 2>&1); then
+        variant_of "${name}"
+        if [ "${variant_status}" -ne 0 ]; then
             bad "${name} does not read: ${settings}"
             continue
         fi
@@ -147,12 +175,18 @@ while [ "${night}" -lt "${nights}" ]; do
 done
 
 # Every other CNI of each class, on every other node OS, hardened and not.
-others=$(jq -r '(.default | "\(.family)-\(.release)") as $d | .available[] | select(. != $d)' "${chart}/files/node-oses.json" | tr -d '\r')
+others=$(jq -j '(.default | "\(.family)-\(.release)") as $d | .available[] | select(. != $d) | . + " "' "${chart}/files/node-oses.json")
+slurp "${seen}"
 seen_lines="
-$(cat "${seen}")
+${slurped}
 "
 for distribution in kubeadm rke2 k3s talos; do
-    enum=$(cnis "${distribution}")
+    case ${distribution} in
+        kubeadm) enum=${cnis_kubeadm} ;;
+        rke2) enum=${cnis_rke2} ;;
+        k3s) enum=${cnis_k3s} ;;
+        *) enum=${cnis_talos} ;;
+    esac
     own=$(awk '/- name: cni$/ { f = 1 } f && /default:/ { print $2; exit } f && /include/ { exit }' "${chart}/templates/${distribution}.yaml")
     oses=${others}
     [ "${distribution}" != talos ] || oses=-
@@ -172,9 +206,9 @@ ${distribution} ${cni} ${os} ${cis}
 done
 
 refused() {
-    # shellcheck disable=SC2310 # its refusal is what is looked for.
-    if out=$(variant "$1" 2>&1); then
-        bad "$1 was read: ${out}"
+    variant_of "$1"
+    if [ "${variant_status}" -eq 0 ]; then
+        bad "$1 was read: ${settings}"
     else
         ok
     fi
@@ -202,8 +236,8 @@ refused management-cluster+management-35x
 refused management-cluster+management-3584+calico
 # reads <name> <settings>: the settings the name carries, one per line.
 reads() {
-    # shellcheck disable=SC2310 # a refusal is reported as the failure.
-    if out=$(variant "$1" 2>&1) && [ "${out}" = "$2" ]; then ok; else bad "$1 reads as '${out}', not '$2'"; fi
+    variant_of "$1"
+    if [ "${variant_status}" -eq 0 ] && [ "${settings}" = "$2" ]; then ok; else bad "$1 reads as '${settings}', not '$2'"; fi
 }
 reads management-cluster-upgrade+management-3584 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=3584'
 reads control-plane-ha+management-5120 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=5120'
@@ -212,9 +246,21 @@ export KUBEHENGE_E2E_MANAGEMENT_MEMORY=4096'
 reads rke2+calico 'export KUBEHENGE_E2E_CNI=calico'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
-if out=$(variant control-plane-ha 2>&1) && [ -z "${out}" ]; then ok; else bad "control-plane-ha carries settings: ${out}"; fi
+variant_of control-plane-ha
+if [ "${variant_status}" -eq 0 ] && [ -z "${settings}" ]; then ok; else bad "control-plane-ha carries settings: ${settings}"; fi
+runs=' '
+while IFS= read -r line; do
+    case ${line} in
+        '    control-plane-ha)'*) runs="${runs}control-plane-ha " ;;
+        '    two-nodes)'*) runs="${runs}two-nodes " ;;
+        *) ;;
+    esac
+done < "${ci}/run.sh"
 for t in control-plane-ha two-nodes; do
-    if grep -q "^    ${t})" "${ci}/run.sh"; then ok; else bad "run.sh does not run ${t}"; fi
+    case ${runs} in
+        *" ${t} "*) ok ;;
+        *) bad "run.sh does not run ${t}" ;;
+    esac
 done
 
 printf 'nightly: %d passed, %d failed\n' "${passes}" "${failures}"

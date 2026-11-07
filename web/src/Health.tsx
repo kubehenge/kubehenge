@@ -33,7 +33,9 @@ import {
   abnormal,
   age,
   bytes,
+  errorMessage,
   filled,
+  localDates,
   sentence,
   usePoll,
   Skeleton,
@@ -297,6 +299,47 @@ function Tiles({ health: h, stale }: { health: ClusterHealth; stale: boolean }):
 
 const podKey = (p: PodRef): string => `${p.namespace}/${p.name}`;
 
+/** AcceptUpgrade lets the automatic upgrade to a version go past what its checks listed. */
+function AcceptUpgrade({
+  cluster,
+  version,
+}: {
+  cluster: { namespace: string; name: string };
+  version: string;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string>();
+  if (done) {
+    return <span className="hint">Accepted for the next automatic upgrade.</span>;
+  }
+  const accept = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await api.acceptUpgrade(cluster.namespace, cluster.name, version);
+      setDone(true);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          void accept();
+        }}
+      >
+        Upgrade anyway
+      </button>
+      {filled(error) && <div className="hint">{error}</div>}
+    </>
+  );
+}
+
 function PodButtons({ pod, actions }: { pod: UnwellPod | undefined; actions: PodActions }): JSX.Element {
   const { logs, headlamp } = actions;
   return (
@@ -361,7 +404,8 @@ function NeedsAttention({
                   ) : (
                     <Link to={fix.to}>{a.what}</Link>
                   )}
-                  {filled(a.message) && <div className="hint message">{a.message}</div>}
+                  {filled(a.message) && <div className="hint message">{localDates(a.message)}</div>}
+                  {filled(a.accept) && <AcceptUpgrade cluster={cluster} version={a.accept} />}
                 </td>
                 <Since at={a.since} />
                 <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions} />

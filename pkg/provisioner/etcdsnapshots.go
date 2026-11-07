@@ -131,12 +131,34 @@ func checkEtcdSnapshots(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass
 	if err := s.valid(); err != nil {
 		return err
 	}
+	if err := checkSharedTarget(old, c, &s); err != nil {
+		return err
+	}
 	if old != nil {
 		if was, werr := EtcdSnapshotsOf(old); werr == nil && was.Enabled && was.Target == s.Target {
 			return nil
 		}
 	}
 	return targetOffered(class, s.Target, "etcd snapshots")
+}
+
+// checkSharedTarget holds etcd snapshots and backups that are both on to one target. Both are
+// written with the one access key the cluster has, which reaches one store. A cluster already on two
+// targets is refused only once it changes either.
+func checkSharedTarget(old, c *clusterv1.Cluster, s *EtcdSnapshots) error {
+	// A backups variable that cannot be read leaves the zero value, and checkBackups reports it.
+	b, _, _ := optionalVariable[Backups](c, backupsVariable)
+	if !b.Enabled || b.Target == "" || b.Target == s.Target {
+		return nil
+	}
+	if old != nil {
+		was, _, berr := optionalVariable[Backups](old, backupsVariable)
+		wasSnapshots, serr := EtcdSnapshotsOf(old)
+		if berr == nil && serr == nil && was.Enabled && was.Target == b.Target && wasSnapshots.Enabled && wasSnapshots.Target == s.Target {
+			return nil
+		}
+	}
+	return fmt.Errorf("etcdSnapshots: use the backups' target %q, not %q: the cluster's one access key reaches one store", b.Target, s.Target)
 }
 
 // EtcdSnapshotPrefix is the folder of a cluster's etcd snapshots in its target, beside its Velero

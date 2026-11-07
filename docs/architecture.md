@@ -74,7 +74,7 @@ Another hook (`kubehenge wait providers`) holds the release until the providers 
 - Every provider Deployment has rolled out.
 - All of that holds for 30 seconds with the same Deployments. Right after an install, the operator can install a provider again from a stale read and recreate its Deployments.
 
-Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.2 with two fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`). That build also keeps each pinned chart once downloaded. A reconcile then reads no chart repository index.
+Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.2 with three fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`). That build also keeps each pinned chart once downloaded. A reconcile then reads no chart repository index.
 
 Both are built reproducibly, so the published images can be rebuilt from their sources and compared ([releasing.md](releasing.md)). A release of each that carries its fixes replaces the build.
 
@@ -145,7 +145,7 @@ Kubehenge's controller replaces the other nodes 60 days before their certificate
 
 It rolls a workers' pool through the topology's `rollout.after`. It rolls k3s's control plane through its own `rolloutAfter`, which the topology does not set for it. An RKE2 control plane of three or more is replaced one machine at a time by its health check (`cluster.x-k8s.io/remediate-machine`). RKE2's control-plane provider has no field to ask for a roll.
 
-It sets the condition `CertificatesExpiring` on the Cluster while anything runs out within 60 days. It watches the kubeconfig and talosconfig kept for each cluster as well. Talos renews its nodes' certificates itself.
+It sets the condition `CertificatesExpiring` on the Cluster while anything runs out within 60 days. A paused cluster gets it with the reason `Paused` and no replacement. It watches the kubeconfig and talosconfig kept for each cluster as well. Talos renews its nodes' certificates itself.
 
 ### VM health
 
