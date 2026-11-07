@@ -764,6 +764,26 @@ describe("clusters", () => {
     );
   });
 
+  it("shows a machine whose node does not report as such", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const silent: Machine = {
+      name: "md-a",
+      role: "worker",
+      phase: "Running",
+      ready: true,
+      created: new Date().toISOString(),
+      notReporting: true,
+    };
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": { body: { ...web, machines: [runningOn("cp-a", "pve1"), silent] } },
+    });
+    render(<App />);
+    const row = await screen.findByRole("row", { name: /^md-a /u });
+    expect(within(row).getByRole("cell", { name: "Not reporting" })).toBeInTheDocument();
+    expect(within(await screen.findByRole("row", { name: /^cp-a /u })).queryByText("Not reporting")).toBeNull();
+  });
+
   it("replaces a machine after asking, and keeps one marked for replacement", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/machines");
     const routes: Record<string, Route> = {

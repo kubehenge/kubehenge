@@ -131,7 +131,7 @@ func (s *Server) rebootMachine(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusNotFound, "no such cluster")
 		return
 	}
-	vms, err := s.clusterVMs(r, u, pool)
+	vms, err := s.clusterVMs(r, u, c, pool)
 	if errors.Is(err, pve.ErrForbidden) {
 		writeError(w, http.StatusForbidden, missingPrivilege(u, privPoolAudit, pool))
 		return
@@ -140,7 +140,7 @@ func (s *Server) rebootMachine(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	vm, found := vms[m.Spec.InfrastructureRef.Name]
+	vm, found := vms.of(m.Spec.InfrastructureRef.Name)
 	if !found || vm.VMID == 0 || vm.Node == "" {
 		writeError(w, http.StatusConflict, "The machine has no VM in the cluster's pool.")
 		return

@@ -165,7 +165,7 @@ export function Machines({
                   {m.replacing !== true && filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
                 </td>
                 <td className="nowrap">{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
-                <td>{m.proxmoxNode ?? ""}</td>
+                <td>{m.proxmoxNode ?? (m.notReporting === true ? "Not reporting" : "")}</td>
                 <MachineStatusCell machine={m} offline={offline.has(m.proxmoxNode ?? "")} node={node} />
                 <td>{m.version ?? ""}</td>
                 {talos && <td>{m.talos ?? ""}</td>}

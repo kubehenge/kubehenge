@@ -335,6 +335,9 @@ type machineView struct {
 	Console string `json:"console,omitempty"`
 	// Reboot tells whether the user may reboot the machine's VM.
 	Reboot bool `json:"reboot,omitempty"`
+	// NotReporting is set when the machine's VM is not among those Proxmox VE lists with a name,
+	// because its node dropped out of the statistics.
+	NotReporting bool `json:"notReporting,omitempty"`
 }
 
 // view describes a cluster to a user with privs on its pool. The interface changes clusters only in
@@ -637,26 +640,15 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, r, err)
 		return
 	}
-	vms, err := s.clusterVMs(r, u, access.path)
+	vms, err := s.clusterVMs(r, u, c, access.path)
 	if err != nil && !errors.Is(err, pve.ErrForbidden) {
 		s.Log.ErrorContext(r.Context(), "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
 	}
-	console := access.held.Has(privConsole)
-	reboot := access.held.Has(privPower) && u.namespaces.has(c.Namespace)
-	v.Machines = []machineView{}
-	for i := range machines.Items {
-		m := &machines.Items[i]
-		vm := vms[m.Spec.InfrastructureRef.Name]
-		mv := machineOf(m, vm.Node)
-		if console {
-			mv.Console = consoleURL(s.ProxmoxURL, &vm)
-		}
-		mv.Reboot = reboot && vm.VMID != 0
-		if v.Talos != nil {
-			mv.Talos, _ = provisioner.MachineTalos(m)
-		}
-		v.Machines = append(v.Machines, mv)
-	}
+	v.Machines = s.machineViews(machines.Items, vms, machineAccess{
+		console: access.held.Has(privConsole),
+		reboot:  access.held.Has(privPower) && u.namespaces.has(c.Namespace),
+		talos:   v.Talos != nil,
+	})
 	slices.SortFunc(v.Machines, func(a, b machineView) int {
 		switch a.Role {
 		case b.Role:
@@ -670,19 +662,46 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-// clusterVMs maps the names of the cluster's VMs, which the Proxmox VE provider names after their
-// machines' infrastructure, to the VMs, on the nodes they run on now. The machines show without
-// their nodes when Proxmox VE does not tell: they are the page's subject, the nodes an addition.
-func (s *Server) clusterVMs(r *http.Request, u user, poolPath string) (map[string]pve.Member, error) {
+// machineAccess is what the user may do with the machines' VMs.
+type machineAccess struct {
+	console, reboot, talos bool
+}
+
+// machineViews describes the machines, each on the Proxmox VE node its VM runs on now. A machine
+// whose VM Proxmox VE does not tell shows without a node, or as not reporting where a VM is listed
+// that no machine claims: the machines are the page's subject, the nodes an addition.
+func (s *Server) machineViews(machines []clusterv1.Machine, vms *vmSet, can machineAccess) []machineView {
+	found := make([]pve.Member, len(machines))
+	matched := make([]bool, len(machines))
+	for i := range machines {
+		found[i], matched[i] = vms.of(machines[i].Spec.InfrastructureRef.Name)
+	}
+	views := make([]machineView, 0, len(machines))
+	for i := range machines {
+		m := &machines[i]
+		vm := &found[i]
+		mv := machineOf(m, vm.Node)
+		mv.NotReporting = !matched[i] && vms.silent() && m.Status.NodeRef.Name != ""
+		if can.console {
+			mv.Console = consoleURL(s.ProxmoxURL, vm)
+		}
+		mv.Reboot = can.reboot && vm.VMID != 0
+		if can.talos {
+			mv.Talos, _ = provisioner.MachineTalos(m)
+		}
+		views = append(views, mv)
+	}
+	return views
+}
+
+// clusterVMs finds the cluster's VMs, which the Proxmox VE provider names after their machines'
+// infrastructure.
+func (s *Server) clusterVMs(r *http.Request, u user, c *clusterv1.Cluster, poolPath string) (*vmSet, error) {
 	members, err := s.Accounts.PoolMembers(r.Context(), u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
 	if err != nil {
 		return nil, fmt.Errorf("listing a cluster's VMs: %w", err)
 	}
-	vms := make(map[string]pve.Member, len(members))
-	for i := range members {
-		vms[members[i].Name] = members[i]
-	}
-	return vms, nil
+	return s.newVMSet(r.Context(), u.kube, c, members), nil
 }
 
 // consoleURL is where Proxmox VE's web interface at base opens the VM's console, as its own

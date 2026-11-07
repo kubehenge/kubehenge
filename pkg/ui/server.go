@@ -184,6 +184,7 @@ type Server struct {
 	etags        etagCache
 	health       readCache[healthView]
 	veleroRuns   readCache[[]runView]
+	privileges   readCache[*userPrivileges]
 	vmLoads      vmLoadCache
 	workloads    workloadConns
 	changes      changes

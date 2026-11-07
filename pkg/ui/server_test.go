@@ -70,6 +70,11 @@ type fakeAccounts struct {
 	users        map[string]string
 	usersDeleted int
 	rebooted     []int
+	// bridgeList, when set, replaces the default bridges.
+	bridgeList []pve.Bridge
+	// viaPool are privileges a user holds on a path only through a pool's members, which Proxmox VE
+	// lists for the path but which reach nothing below it.
+	viaPool map[string]map[string][]string
 }
 
 func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
@@ -159,6 +164,9 @@ func (f *fakeAccounts) AllPrivileges(_ context.Context, t *pve.Ticket) (map[stri
 	for _, p := range f.acls {
 		paths[p] = true
 	}
+	for p := range f.viaPool[strings.SplitN(t.Username, "!", 2)[0]] {
+		paths[p] = true
+	}
 	all := map[string]pve.Privileges{}
 	for p := range paths {
 		if privs := f.effective(t.Username, p); len(privs) > 0 {
@@ -237,7 +245,10 @@ func (f *fakeAccounts) ReleaseHA(_ context.Context, t *pve.Ticket, prefix string
 	return nil
 }
 
-func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
+func (f *fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
+	if f.bridgeList != nil {
+		return slices.Clone(f.bridgeList), nil
+	}
 	return []pve.Bridge{
 		{Bridge: "vmbr0", Node: node, CIDR: "10.0.0.5/24", Gateway: "10.0.0.1"},
 		{Bridge: "vmbr1", Node: node},
@@ -338,6 +349,9 @@ func (*fakeAccounts) Network(_ context.Context, _ *pve.Ticket, bridge string) (p
 func (f *fakeAccounts) effective(tokenID, aclPath string) pve.Privileges {
 	username, _, _ := strings.Cut(tokenID, "!")
 	privs := grantedOn(f.grants[username], aclPath)
+	for _, granted := range f.viaPool[username][aclPath] {
+		privs[granted] = true
+	}
 	if separated, ok := f.tokenGrants[tokenID]; ok {
 		own := grantedOn(separated, aclPath)
 		for p := range privs {
@@ -380,8 +394,9 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 	}
 	// The kinds the interface reads only as unstructured objects: the add-on releases, and the
 	// control plane of whichever provider, which it finds through the RESTMapper.
-	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{rke2ControlPlane.GroupVersion()})
-	for _, gvk := range []schema.GroupVersionKind{helmReleaseProxyList.GroupVersion().WithKind("HelmReleaseProxy"), rke2ControlPlane} {
+	proxmoxMachine := schema.GroupVersionKind{Group: "infrastructure.cluster.x-k8s.io", Version: "v1alpha2", Kind: "ProxmoxMachine"}
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{rke2ControlPlane.GroupVersion(), proxmoxMachine.GroupVersion()})
+	for _, gvk := range []schema.GroupVersionKind{helmReleaseProxyList.GroupVersion().WithKind("HelmReleaseProxy"), rke2ControlPlane, proxmoxMachine} {
 		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
 		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
 		mapper.Add(gvk, meta.RESTScopeNamespace)
