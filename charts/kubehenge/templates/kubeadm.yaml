@@ -167,15 +167,17 @@ spec:
               controlPlane: true
           jsonPatches:
             - op: add
-              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/etcd/local/extraArgs
+              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/etcd
               valueFrom:
                 template: |
-                  - name: quota-backend-bytes
-                    value: "{{ include "kubehenge.etcdQuotaBytes" . }}"
-                  - name: auto-compaction-mode
-                    value: periodic
-                  - name: auto-compaction-retention
-                    value: 1h
+                  local:
+                    extraArgs:
+                      - name: quota-backend-bytes
+                        value: "{{ include "kubehenge.etcdQuotaBytes" . }}"
+                      - name: auto-compaction-mode
+                        value: periodic
+                      - name: auto-compaction-retention
+                        value: 1h
     # kubeadm applies its patches for a target in the order of their names, this one after the
     # kubelet's own (kubehenge.kubeletConfigFile).
     - name: kubeadm-cis
@@ -345,9 +347,6 @@ template:
         certificatesExpiryDays: 60
     kubeadmConfigSpec:
       clusterConfiguration:
-        # The kubeadm-etcd patch adds etcd's arguments, which needs the parents there.
-        etcd:
-          local: {}
         apiServer:
           extraArgs:
             - name: kubelet-certificate-authority

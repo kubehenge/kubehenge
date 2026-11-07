@@ -127,15 +127,20 @@ func etcdArguments(t *testing.T, file, patch, variables string) []string {
 	rendered := capiTemplate(t, jp.ValueFrom.Template, vars)
 	switch file {
 	case "kubeadm.yaml":
-		if jp.Path != "/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/etcd/local/extraArgs" {
+		// The patch adds etcd whole: the CRD refuses an empty etcd.local in the template to add to.
+		if jp.Path != "/spec/template/spec/kubeadmConfigSpec/clusterConfiguration/etcd" {
 			t.Fatalf("path %s", jp.Path)
 		}
-		var args []kubeadmArg
-		if err := yaml.Unmarshal([]byte(rendered), &args); err != nil {
+		var etcd struct {
+			Local struct {
+				ExtraArgs []kubeadmArg `json:"extraArgs"`
+			} `json:"local"`
+		}
+		if err := yaml.Unmarshal([]byte(rendered), &etcd); err != nil {
 			t.Fatalf("%v:\n%s", err, rendered)
 		}
-		out := make([]string, 0, len(args))
-		for _, a := range args {
+		out := make([]string, 0, len(etcd.Local.ExtraArgs))
+		for _, a := range etcd.Local.ExtraArgs {
 			out = append(out, a.Name+"="+a.Value)
 		}
 		return out
