@@ -784,7 +784,7 @@ Neither key is in the store. So whoever can read the bucket sees the names of th
 
 The Secret outlives the cluster. So a cluster created again under the same name, backing up to the same target, can restore what the one before backed up. Deleting the Secret leaves those backups unreadable for good.
 
-#### The cluster's spec
+### The cluster's spec
 
 After every change, the appliance writes the cluster's spec to `<prefix>/clusters/<namespace>.<name>/cluster.yaml` in the target the management cluster's etcd is backed up to. It is the Cluster as created, and the ConfigMaps and Secrets labelled `kubehenge.dev/cluster-name: <name>`. Secrets keep their keys and lose their values.
 
