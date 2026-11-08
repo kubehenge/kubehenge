@@ -46,7 +46,7 @@ What each release changed is in the [changelog](changelog.md).
 
 - The controller manager's and scheduler's metrics on Talos, from the first Talos release that gives them serving certificates of the cluster CA.
 - openSUSE Leap 16.1 Immutable as a node OS, once openSUSE releases it.
-- The Proxmox VE provider (capmox) as its own release, once one carries the three fixes Kubehenge adds to v0.9.2. A failed clone forgets its VM ID. A VM is confirmed as the machine's before it is destroyed. The destroy purges HA, backup and replication entries.
+- The Proxmox VE provider (capmox) as its own release, once one carries the four fixes Kubehenge adds to v0.9.2 (`capmox_build` in `management-cluster/versions.tf`).
 
 ## Later
 
