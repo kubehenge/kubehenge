@@ -301,6 +301,8 @@ Each is in a Secret of its own beside the controller (`kubehenge-proxmox-ha`, `k
 
 Every Job of a template reads that one Secret. The controller therefore runs a template's requests one at a time.
 
+### What a token Job may do
+
 The Job runs once, for at most its step's time, under a service account without API access. The ValidatingAdmissionPolicy `kubehenge-token-jobs` refuses a Job in the namespace that reaches either Secret by a volume or the environment, unless its pod is exactly its template's.
 
 The HA Job checks each write against Proxmox VE first. It creates HA resources only of VMs with Kubehenge's comment. It creates, changes or removes only rules named and commented as Kubehenge's, over resources that carry its comment. Reads of HA state use the controller's own token, which holds `Sys.Audit` on `/`.
