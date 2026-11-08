@@ -118,7 +118,7 @@ Kubehenge sets both ranges on every cluster it creates. It takes those you give,
 Name Proxmox VE security groups to turn on the firewall of every node's interface. Without groups it stays off.
 
 - **Before.** The datacenter firewall is on (Datacenter, Firewall, Options). Each group exists under Datacenter, Firewall, Security Group, or the controller refuses it.
-- **The Proxmox VE nodes' own firewall.** It lets the API in only from each node's local network and the `management` IPSet. The controller refuses groups that would cut off the appliance or the management cluster, and names the addresses to add to the IPSet, as the setup's pre-flight does.
+- **The Proxmox VE nodes' own firewall.** It lets the API in only from each node's local network and the `management` IPSet. The controller refuses groups that would cut off the appliance or the management cluster. It names the addresses to add to the IPSet, as the setup's pre-flight does.
 - **Names.** Up to 16 groups of 2 to 18 letters, digits, `-` and `_`. The first is a letter.
 - **When.** Each VM's firewall is written before it first starts. Changing the groups replaces every node, one at a time.
 
