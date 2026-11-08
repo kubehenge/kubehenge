@@ -257,6 +257,9 @@ jobs:
           echo $! > "$RUNNER_TEMP/beacon.pid"
       - name: Proxmox VE
         if: env.E2E_RUN == 'true'
+        env:
+          # A cluster with IPv6 first reaches its API over IPv6, which the runner routes only then.
+          KUBEHENGE_E2E_IPV6: ${{ contains(inputs.test, '+ipv6-first') && '1' || '' }}
         run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
       # One nightly job keeps what the others read: the lane of the management cluster's test.
       - name: Keep Proxmox VE's image

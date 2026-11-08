@@ -2,7 +2,7 @@ package provisioner
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -22,7 +22,7 @@ const (
 	DefaultServicesAnnotation = "kubehenge.dev/default-services"
 )
 
-// Candidate ranges, tried after the distribution's own: Kubernetes' and the k3s family's usual
+// Candidate IPv4 ranges, tried after the distribution's own: Kubernetes' and the k3s family's usual
 // ones, then private ranges less often in use for networks. A Cilium cluster, which may join a
 // Cluster Mesh, keeps clear of every other cluster's ranges too, so it can go on to every /16 of
 // 10.0.0.0/8.
@@ -39,40 +39,48 @@ var (
 	}()
 )
 
-type nodeNetwork struct {
-	Bridge  string   `json:"bridge"`
-	VLAN    int      `json:"vlan"`
-	Gateway string   `json:"gateway"`
-	Prefix  int      `json:"prefix"`
-	Addrs   []string `json:"addresses"`
-	NTP     []string `json:"ntp"`
-	// MTU and Queues are the nodes' interface options, nil when unset.
-	MTU    *int `json:"mtu"`
-	Queues *int `json:"queues"`
-}
+// IPv6 ranges, the same for every distribution: unique local addresses (RFC 4193) under a global ID
+// of Kubehenge's own, which a site's own unique local or global addresses do not collide with. Pods
+// take a /56, which gives each of 256 nodes the /64 the controller manager hands out. Services take
+// a /112, the largest k3s accepts. The candidates go on through the /56s
+// and /112s beneath, for a Cilium cluster that keeps clear of every other cluster's ranges.
+const (
+	DefaultPodsIPv6     = "fd5e:4b1c:9a20::/56"
+	DefaultServicesIPv6 = "fd5e:4b1c:9a21::/112"
+	// The limits of an IPv6 range's prefix length. A pod range is at most 16 bits above the nodes'
+	// /64s, as the controller manager allows.
+	minPodBitsIPv6     = 48
+	maxPodBitsIPv6     = 63
+	minServiceBitsIPv6 = 112
+	maxServiceBitsIPv6 = 120
+)
 
-// nodesPrefix is the nodes' network, from the network variable's gateway and prefix length.
-func nodesPrefix(cluster *clusterv1.Cluster) (netip.Prefix, error) {
-	network, err := variable[nodeNetwork](cluster, "network")
-	if err != nil {
-		return netip.Prefix{}, err
-	}
-	gateway, err := netip.ParseAddr(network.Gateway)
-	if err != nil {
-		return netip.Prefix{}, fmt.Errorf("network.gateway: %w", err)
-	}
-	nodes, err := gateway.Prefix(network.Prefix)
-	if err != nil {
-		return netip.Prefix{}, fmt.Errorf("network.prefix: %w", err)
-	}
-	return nodes, nil
-}
+var (
+	podCandidatesIPv6 = func() []string {
+		const blocks = 256
+		c := make([]string, 0, blocks)
+		for i := range blocks {
+			c = append(c, fmt.Sprintf("fd5e:4b1c:9a20:%x00::/56", i))
+		}
+		return c
+	}()
+	serviceCandidatesIPv6 = func() []string {
+		const blocks = 256
+		c := make([]string, 0, blocks)
+		for i := range blocks {
+			c = append(c, fmt.Sprintf("fd5e:4b1c:9a21:%x::/112", i))
+		}
+		return c
+	}()
+)
 
-// checkRanges refuses a cluster whose pod or service ranges are no IPv4 networks, overlap each
-// other, or overlap its nodes' network: packets for the nodes would be routed into the cluster
-// instead, and the cluster fails in ways that are hard to trace back to the ranges.
+// checkRanges refuses a cluster whose pod or service ranges are no networks, are not one of each of
+// its address families in their order, overlap each other, or overlap its nodes' networks: packets
+// for the nodes would be routed into the cluster instead, and the cluster fails in ways that are
+// hard to trace back to the ranges. An IPv6 range has to be of a size the controller manager and
+// the API server take.
 func checkRanges(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
-	nodes, err := nodesPrefix(cluster)
+	subnets, err := nodeSubnets(cluster)
 	if err != nil {
 		return err
 	}
@@ -87,27 +95,84 @@ func checkRanges(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) erro
 		{"service", cluster.Spec.ClusterNetwork.Services.CIDRBlocks, class.Annotations[DefaultServicesAnnotation]},
 	} {
 		blocks := r.blocks
-		if len(blocks) == 0 && r.def != "" {
+		if len(blocks) == 0 && r.def != "" && len(subnets) == 1 && subnets[0].family == familyIPv4 {
 			blocks = []string{r.def}
 		}
-		for _, b := range blocks {
-			p, err := netip.ParsePrefix(b)
-			if err != nil || !p.Addr().Is4() || p != p.Masked() {
-				return fmt.Errorf("%s range: %s is no IPv4 network such as 10.244.0.0/16, without host bits", r.what, b)
-			}
-			if p.Overlaps(nodes) {
-				problems = append(problems, fmt.Sprintf("%s range %s overlaps the nodes' network %s", r.what, p, nodes))
-			}
-			if i := slices.IndexFunc(taken, p.Overlaps); i >= 0 {
-				problems = append(problems, fmt.Sprintf("the %s range %s overlaps the pod range %s", r.what, p, taken[i]))
-			}
+		prefixes, perr := parseRanges(r.what, blocks)
+		if perr != nil {
+			return perr
 		}
-		for _, b := range blocks {
-			taken = append(taken, netip.MustParsePrefix(b))
+		if msg := familyOrderProblem(r.what, prefixes, subnets); msg != "" {
+			return errors.New(msg)
 		}
+		for _, p := range prefixes {
+			problems = append(problems, rangeProblems(r.what, p, subnets, taken)...)
+		}
+		taken = append(taken, prefixes...)
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("%s. Set spec.clusterNetwork to other ranges", strings.Join(problems, ", "))
+	}
+	return nil
+}
+
+// parseRanges reads a cluster's pod or service ranges, each a network without host bits.
+func parseRanges(what string, blocks []string) ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(blocks))
+	for _, b := range blocks {
+		p, err := netip.ParsePrefix(b)
+		if err != nil || p != p.Masked() {
+			return nil, fmt.Errorf("%s range: %s is no network such as 10.244.0.0/16 or %s, without host bits", what, b, DefaultPodsIPv6)
+		}
+		prefixes = append(prefixes, p)
+	}
+	return prefixes, nil
+}
+
+// rangeProblems are where a range is of a size the cluster cannot use, or overlaps the nodes'
+// networks or a pod range taken before it.
+func rangeProblems(what string, p netip.Prefix, subnets []nodeSubnet, taken []netip.Prefix) []string {
+	problems := rangeSizeProblems(what, p)
+	for _, s := range subnets {
+		if p.Overlaps(s.prefix) {
+			problems = append(problems, fmt.Sprintf("%s range %s overlaps the nodes' network %s", what, p, s.prefix))
+		}
+	}
+	if i := slices.IndexFunc(taken, p.Overlaps); i >= 0 {
+		problems = append(problems, fmt.Sprintf("the %s range %s overlaps the pod range %s", what, p, taken[i]))
+	}
+	return problems
+}
+
+// familyOrderProblem says where ranges are not one of each of the nodes' families in their order,
+// which is the order the distributions take the primary family from.
+func familyOrderProblem(what string, ranges []netip.Prefix, subnets []nodeSubnet) string {
+	want := make([]string, 0, len(subnets))
+	for _, s := range subnets {
+		want = append(want, s.family)
+	}
+	got := make([]string, 0, len(ranges))
+	for _, p := range ranges {
+		got = append(got, familyOf(p.Addr()))
+	}
+	if len(ranges) == 0 || slices.Equal(got, want) {
+		return ""
+	}
+	return fmt.Sprintf("the %s ranges are %s, and the cluster's families %s: give one %s range of each family, in that order, in spec.clusterNetwork",
+		what, strings.Join(got, " and "), strings.Join(want, " and "), what)
+}
+
+// rangeSizeProblems are where an IPv6 range is of a size the cluster cannot use.
+func rangeSizeProblems(what string, p netip.Prefix) []string {
+	if p.Addr().Is4() {
+		return nil
+	}
+	lo, hi := minPodBitsIPv6, maxPodBitsIPv6
+	if what == "service" {
+		lo, hi = minServiceBitsIPv6, maxServiceBitsIPv6
+	}
+	if p.Bits() < lo || p.Bits() > hi {
+		return []string{fmt.Sprintf("the IPv6 %s range %s has a prefix length outside /%d to /%d", what, p, lo, hi)}
 	}
 	return nil
 }
@@ -134,7 +199,7 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 	if err != nil || class == nil {
 		return err
 	}
-	nodes, err := nodesPrefix(c)
+	subnets, err := nodeSubnets(c)
 	if err != nil {
 		// Without a network there is nothing to keep clear of. The class's schema refuses it.
 		return nil //nolint:nilerr // refused by the checks of the variables
@@ -145,7 +210,7 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 			return err
 		}
 	}
-	pods, services, err := pickRanges(class, nodes, n.Pods.CIDRBlocks, n.Services.CIDRBlocks, others)
+	pods, services, err := pickRanges(class, subnets, n.Pods.CIDRBlocks, n.Services.CIDRBlocks, others)
 	if err != nil {
 		return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, //nolint:wrapcheck // made here, not passed on
 			field.ErrorList{field.Invalid(field.NewPath("spec", "clusterNetwork"), n, err.Error())})
@@ -156,18 +221,7 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 
 // runsCiliumOf tells whether a cluster runs Cilium, by its cni variable or else its class's default.
 func runsCiliumOf(c *clusterv1.Cluster, class *clusterv1.ClusterClass) bool {
-	cni, set, err := optionalVariable[string](c, "cni")
-	if err != nil {
-		return false
-	}
-	if !set {
-		i := slices.IndexFunc(class.Spec.Variables, func(v clusterv1.ClusterClassVariable) bool { return v.Name == "cni" })
-		if i < 0 || class.Spec.Variables[i].Schema.OpenAPIV3Schema.Default == nil ||
-			json.Unmarshal(class.Spec.Variables[i].Schema.OpenAPIV3Schema.Default.Raw, &cni) != nil {
-			return false
-		}
-	}
-	return cni == cniCilium
+	return cniOf(c, class) == cniCilium
 }
 
 // otherRanges are the pod and service ranges of the other clusters, which a cluster that may join a
@@ -213,52 +267,73 @@ func parsePrefixes(ranges []string) []netip.Prefix {
 	return out
 }
 
-// pickRanges returns a new cluster's pod and service ranges: those asked for, or else the
-// distribution's own when they are clear of the nodes' network, or else the first clear candidates.
-// With others, the ranges it is not asked for also keep its pods apart from the other clusters'
-// pods and services, and its services from their pods.
-func pickRanges(class *clusterv1.ClusterClass, nodes netip.Prefix, pods, services []string, others *otherRanges) ([]string, []string, error) {
-	// checkRanges holds those asked for to the nodes' network and each other.
-	r := &rangePicker{nodes: nodes, taken: slices.Concat([]netip.Prefix{nodes}, parsePrefixes(pods), parsePrefixes(services))}
-	podTries, serviceTries := podCandidates, serviceCandidates
+// pickRanges returns a new cluster's pod and service ranges, one of each of its families in their
+// order: those asked for, or else the distribution's own IPv4 ones and Kubehenge's IPv6 ones when
+// they are clear of the nodes' networks, or else the first clear candidates. With others, the ranges
+// it is not asked for also keep its pods apart from the other clusters' pods and services, and its
+// services from their pods.
+func pickRanges(class *clusterv1.ClusterClass, subnets []nodeSubnet, pods, services []string, others *otherRanges) ([]string, []string, error) {
+	// checkRanges holds those asked for to the nodes' networks and each other.
+	r := &rangePicker{taken: slices.Concat(parsePrefixes(pods), parsePrefixes(services))}
+	for _, s := range subnets {
+		r.nodes = append(r.nodes, s.prefix)
+	}
+	r.taken = append(r.taken, r.nodes...)
 	var podsAvoid, servicesAvoid []netip.Prefix
 	if others != nil {
-		podTries, serviceTries = append(slices.Clone(podTries), meshCandidates...), append(slices.Clone(serviceTries), meshCandidates...)
 		podsAvoid, servicesAvoid = slices.Concat(others.pods, others.services), others.pods
 	}
-	outPods, err := r.pick("pod", pods, class.Annotations[DefaultPodsAnnotation], podTries, podsAvoid)
-	if err != nil {
-		return nil, nil, err
-	}
-	outServices, err := r.pick("service", services, class.Annotations[DefaultServicesAnnotation], serviceTries, servicesAvoid)
-	if err != nil {
-		return nil, nil, err
+	outPods, outServices := pods, services
+	for _, s := range subnets {
+		podTries, serviceTries := podCandidatesIPv6, serviceCandidatesIPv6
+		podDefault, serviceDefault := DefaultPodsIPv6, DefaultServicesIPv6
+		if s.family == familyIPv4 {
+			podTries, serviceTries = podCandidates, serviceCandidates
+			if others != nil {
+				podTries, serviceTries = append(slices.Clone(podTries), meshCandidates...), append(slices.Clone(serviceTries), meshCandidates...)
+			}
+			podDefault, serviceDefault = class.Annotations[DefaultPodsAnnotation], class.Annotations[DefaultServicesAnnotation]
+		}
+		if len(pods) == 0 {
+			p, err := r.pick("pod", s.family, podDefault, podTries, podsAvoid)
+			if err != nil {
+				return nil, nil, err
+			}
+			outPods = append(outPods, p)
+		}
+		if len(services) == 0 {
+			p, err := r.pick("service", s.family, serviceDefault, serviceTries, servicesAvoid)
+			if err != nil {
+				return nil, nil, err
+			}
+			outServices = append(outServices, p)
+		}
 	}
 	return outPods, outServices, nil
 }
 
-// rangePicker hands out ranges that overlap neither the nodes' network nor one handed out before.
+// rangePicker hands out ranges that overlap neither the nodes' networks nor one handed out before.
 type rangePicker struct {
-	nodes netip.Prefix
+	nodes []netip.Prefix
 	taken []netip.Prefix
 }
 
-// pick returns the ranges asked for, or else the first one of def and candidates clear of those
-// taken and of avoid.
-func (r *rangePicker) pick(what string, asked []string, def string, candidates []string, avoid []netip.Prefix) ([]string, error) {
-	if len(asked) > 0 {
-		return asked, nil
-	}
+// pick returns the first one of def and candidates clear of those taken and of avoid.
+func (r *rangePicker) pick(what, family, def string, candidates []string, avoid []netip.Prefix) (string, error) {
 	for _, c := range append([]string{def}, candidates...) {
 		p, err := netip.ParsePrefix(c)
 		if err != nil || slices.ContainsFunc(r.taken, p.Overlaps) || slices.ContainsFunc(avoid, p.Overlaps) {
 			continue
 		}
 		r.taken = append(r.taken, p)
-		return []string{c}, nil
+		return c, nil
+	}
+	nodes := make([]string, 0, len(r.nodes))
+	for _, n := range r.nodes {
+		nodes = append(nodes, n.String())
 	}
 	if len(avoid) > 0 {
-		return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network %s or another cluster's ranges; choose one", what, r.nodes)
+		return "", fmt.Errorf("every %s %s range Kubehenge tries overlaps the nodes' networks %s or another cluster's ranges; choose one", family, what, strings.Join(nodes, ", "))
 	}
-	return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network %s; choose one", what, r.nodes)
+	return "", fmt.Errorf("every %s %s range Kubehenge tries overlaps the nodes' networks %s; choose one", family, what, strings.Join(nodes, ", "))
 }

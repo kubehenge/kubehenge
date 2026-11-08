@@ -273,6 +273,7 @@ spec:
             {{- end }}
         {{- end }}
     {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "rke2") | nindent 4 }}
+    {{- include "kubehenge.nodeIPPatch" (dict "distribution" "rke2" "root" .) | nindent 4 }}
     # RKE2 installs from its RPM repository on an EL node. A mirror of its releases has it install the
     # release's tarball from there instead.
     {{- include "kubehenge.nodeSitePatches" (dict "root" . "distribution" "rke2" "pods" "10.42.0.0/16" "services" "10.43.0.0/16" "artifacts" "RKE2's releases" "export" `{{ printf "export INSTALL_RKE2_METHOD=tar INSTALL_RKE2_ARTIFACT_URL=%s" (dig "distributionMirror" "" . | squote) | toJson }}`) | nindent 4 }}

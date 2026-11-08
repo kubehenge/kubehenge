@@ -31,9 +31,9 @@ Then [create clusters](clusters.md).
 
 ### Network and addresses
 
-Addresses are IPv4. Kubehenge gives every node of every cluster a static address, with no DHCP server needed.
+Kubehenge gives every node of every cluster a static address, with no DHCP server needed. Each cluster, the management cluster too, is IPv4, IPv6 or dual-stack ([clusters.md](clusters.md#ipv6-and-dual-stack)).
 
-- **The appliance** takes one address on a bridge, by DHCP or static (`--ip`).
+- **The appliance** takes an IPv4 address, an IPv6 address or both on a bridge, each by DHCP or static (`--ip`, `--ip6`). IPv6 also takes one from the router's advertisements (`--ip6 auto`).
   - Its certificate and the redirect URLs registered with identity providers contain it. Give it an address that does not change (a static `--ip` or a DHCP reservation), or a DNS name with `--name`.
   - After a change, [renew the certificate](#the-appliances-certificate).
 - **The Proxmox VE API** is reached on port 8006, at a name or address its certificate is valid for ([below](#the-proxmox-ve-api)). The appliance, the management cluster's nodes and every cluster's nodes must reach it.
@@ -64,6 +64,8 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 | The VM that prepares a template | Its node OS's package mirrors and `quay.io` (for the image builder's tool image, by digest). For RKE2 and k3s, `rpm.rancher.io` (their SELinux policies). For kubeadm, `pkgs.k8s.io`, the node OS's EPEL mirror (containerd), `registry.k8s.io`, GitHub (for cosign) and Sigstore's `tuf-repo-cdn.sigstore.dev`, to check the images' signatures. |
 
 The management cluster's nodes can pull images through registry mirrors instead ([setup](#network), Advanced). Registry mirrors cover images only. The Add-on Provider for Helm fetches every chart from its own repository, the cloud controller manager and CSI plugin included. A site without access to those hosts also needs [chart mirrors](#mirroring-the-charts).
+
+GitHub and several other hosts above have no IPv6 address. An IPv6-only network reaches them through NAT64 with DNS64, or through registry and chart mirrors.
 
 ### Mirroring the charts
 
@@ -148,8 +150,10 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 | `--bridge <bridge>` | the bridge of the node's default route, else `vmbr0` | A bridge, Open vSwitch bridge or SDN VNet of the node, which the container attaches to. The installer stops before it downloads anything if there is none of that name. |
 | `--vlan <tag>` | none | The VLAN tag of the container's network, 1 to 4094. |
 | `--mtu <bytes>` | the bridge's | The MTU of the container's network, 576 to 65535. |
-| `--ip dhcp` or `--ip <address>/<prefix>` | `dhcp` | The container's IPv4 address, such as `192.0.2.40/24`. |
+| `--ip dhcp`, `--ip none` or `--ip <address>/<prefix>` | `dhcp` | The container's IPv4 address, such as `192.0.2.40/24`. `none` leaves IPv4 out, on an IPv6-only network, and needs `--ip6`. |
 | `--gateway <address>` | none | The default gateway, an IPv4 address, with a static `--ip`. |
+| `--ip6 auto`, `--ip6 dhcp` or `--ip6 <address>/<prefix>` | none | The container's IPv6 address, such as `2001:db8::40/64`. `auto` takes one from the router's advertisements. |
+| `--gateway6 <address>` | none | The default IPv6 gateway, with a static `--ip6`. It may be link-local, such as `fe80::1`. |
 | `--dns <address>,...` | this node's name servers | The name servers the container asks, such as `192.0.2.53,192.0.2.54`. Required where the node's `/etc/resolv.conf` names only loopback addresses, which the container cannot reach. |
 | `--hostname <name>` | `kubehenge` | The container's host name, also written into its certificate. |
 | `--name <DNS name>` | none | A DNS name, such as `kubehenge.example.org`, that people reach the appliance by instead of its address. It goes into the certificate and into the redirect URLs for identity providers. Point it at the appliance's address in your DNS. |
@@ -170,7 +174,7 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 1. Checks that it runs as root on a Proxmox VE 9 node with quorum, that the cluster has no appliance yet and that the bridge exists. It asks which storage to use where several fit and whether to add the interface entry, unless options answered already.
 2. Downloads Kubehenge's release archive and OpenTofu, and checks both against the checksums it carries.
 3. Chooses the Proxmox VE API's address and CA ([below](#the-proxmox-ve-api)), and asks on the terminal where it needs your word. It checks that the API's certificate is valid for that address.
-4. Uses the container template where a storage holds it, or downloads it and checks it against its checksum. Then it creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its IPv4 address.
+4. Uses the container template where a storage holds it, or downloads it and checks it against its checksum. Then it creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its addresses.
    - If the container cannot resolve the API's name, it takes the next name or address the certificate covers.
 5. Makes a certificate for the container's host name, address and `--name`, or checks the one given with `--cert`.
    - A made certificate is signed by the Proxmox VE cluster's CA, whose key never leaves the node. It is self-signed when the node cannot read that key.
@@ -388,14 +392,15 @@ The one exception is automatic upgrades of the management cluster, off by defaul
 | --- | --- |
 | Bridge | Bridge the management cluster's VMs attach to. A node's bridge, or an SDN VNet listed with its zone. |
 | VLAN tag | Optional, 1 to 4094. Refused on a VNet of a VLAN zone, which tags its traffic already. A VLAN-aware VNet takes one. |
-| Node addresses | One IPv4 address, or three for high availability, each with its prefix length: `192.0.2.11/24`. All in one network, the gateway's, and none of them the network's own or broadcast address. |
-| API address | The virtual IP of the management cluster's Kubernetes API. An unused IPv4 address in the nodes' network, neither a node address nor the gateway. It moves to a healthy node when one fails. |
-| Gateway | The nodes' default gateway, an IPv4 address. |
-| DNS servers | IP addresses, one per line or separated by commas. |
+| Address families | IPv4, IPv6, or both, the first one primary. Fixed once the management cluster exists. |
+| Node addresses | One address, or three for high availability, each with its prefix length: `192.0.2.11/24` or `2001:db8::11/64`. All in one network, the gateway's, and none of them the network's own address or an IPv4 broadcast address. With both families, the page asks for IPv4 and IPv6 node addresses. It takes as many of each. Each node takes the one at its place in both lists. |
+| API address | The virtual IP of the management cluster's Kubernetes API. An unused address of the primary family in the nodes' network, neither a node address nor the gateway. It moves to a healthy node when one fails. |
+| Gateway | The nodes' default gateway, one per family with both. An IPv6 one may be link-local. |
+| DNS servers | Addresses of the cluster's families, one per line or separated by commas. A dual-stack cluster needs one of each. |
 | Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. They cover images, not charts. |
 | Advanced: Chart mirrors, Chart mirror certificate | `host=address`, one per line, such as `ghcr.io=oci://registry.example.org/ghcr`. Clusters fetch that host's charts from the address, and trust the certificate authority (PEM) for it. See [Mirroring the charts](#mirroring-the-charts). |
 | Advanced: Proxy address, Proxy user, Proxy password, Proxy exceptions, Proxy certificate | The proxy every download goes through. The address has no credentials, so write `http://proxy.example:3128` and put the user and password in their fields. A saved password shows as set, and the page can replace or remove it but never shows it. See [Behind a proxy](#behind-a-proxy). |
-| Advanced: Pod ranges, Service ranges | The management cluster's own. When empty, `10.244.0.0/16` and `10.96.0.0/12`. Where those overlap the nodes' network, the API address or the gateway, the first clear one of a few other private ranges. |
+| Advanced: Pod ranges, Service ranges | The management cluster's own, one per family. When empty, `10.244.0.0/16` and `10.96.0.0/12`, and `fd5e:4b1c:9a20::/56` and `fd5e:4b1c:9a21::/112` for IPv6. Where those overlap the nodes' network, the API address or the gateway, the first clear one of a few other private ranges. |
 
 #### Clusters
 
@@ -717,10 +722,12 @@ tofu output -raw talosconfig > talosconfig
 | `vm_datastore` | `local-lvm` | Storage for the management cluster's disks. |
 | `bridge`, `vlan_id` | `vmbr0`, none | Bridge and VLAN tag of the management cluster's VMs. The bridge takes `zone/vnet` too. |
 | `cluster_name` | `kubehenge` | The management cluster's name, a DNS label of at most 32 characters, also the prefix of its VMs' names and of the users, roles and group the module creates. |
-| `node_addresses` | required | One, three or five addresses with prefix length, such as `["192.0.2.11/24"]`. |
-| `api_address` | required | The Kubernetes API's virtual IP, in the nodes' subnet and unused. |
-| `gateway`, `dns_servers` | required | The nodes' gateway and DNS servers. |
-| `pod_subnets`, `service_subnets` | `["10.244.0.0/16"]`, `["10.96.0.0/12"]` | The management cluster's own ranges. The plan refuses ranges that overlap the nodes' network. |
+| `ip_families` | `["IPv4"]` | `["IPv4"]`, `["IPv6"]`, or both in either order. The first is the primary family. |
+| `node_addresses` | required | One, three or five IPv4 addresses with prefix length, such as `["192.0.2.11/24"]`. `[]` on an IPv6-only cluster. |
+| `node_addresses_ipv6` | `[]` | The IPv6 ones, such as `["2001:db8::11/64"]`. A dual-stack cluster gives as many as `node_addresses`. |
+| `api_address` | required | The Kubernetes API's virtual IP, of the primary family, in the nodes' subnet and unused. |
+| `gateway`, `gateway_ipv6`, `dns_servers` | as the families need | The nodes' gateway of each family and their DNS servers, one of each family on a dual-stack cluster. |
+| `pod_subnets`, `service_subnets` | `["10.244.0.0/16"]`, `["10.96.0.0/12"]` | The management cluster's own ranges, one per family in `ip_families` order. The plan refuses ranges that overlap the nodes' network. |
 | `node_cores`, `node_memory_mb`, `node_disk_gb` | `4`, `4096`, `32` | Size of each node. |
 | `node_cpu_units` | `200` | Proxmox VE CPU weight of each node, from 1 to 10000. Proxmox VE's default is 100. When the host's CPUs are contended, the nodes get twice a default VM's share. A change reaches running nodes at once, without a reboot. |
 | `node_memory_min_mb` | none | Least memory Proxmox VE's ballooning takes each node down to while its host is above 80 % memory use. From 2048 up to `node_memory_mb`. |

@@ -31,11 +31,18 @@ type Settings struct {
 	VLAN           *int     `json:"vlan,omitempty"`
 	// MTU is the management VMs' network interface MTU, for a network that carries less than 1500
 	// or more. 0 or empty keeps the bridge's.
-	MTU           int      `json:"mtu,omitempty"`
-	NodeAddresses []string `json:"nodeAddresses"`
-	APIAddress    string   `json:"apiAddress"`
-	Gateway       string   `json:"gateway"`
-	DNSServers    []string `json:"dnsServers"`
+	MTU int `json:"mtu,omitempty"`
+	// IPFamilies are the cluster's address families, "IPv4" and "IPv6", the first being the primary
+	// one. Empty means IPv4 alone.
+	IPFamilies []string `json:"ipFamilies,omitempty"`
+	// NodeAddresses and Gateway are the IPv4 ones, set when the cluster has IPv4. NodeAddressesIPv6
+	// and GatewayIPv6 are the IPv6 ones, set when it has IPv6.
+	NodeAddresses     []string `json:"nodeAddresses"`
+	NodeAddressesIPv6 []string `json:"nodeAddressesIPv6,omitempty"`
+	APIAddress        string   `json:"apiAddress"`
+	Gateway           string   `json:"gateway"`
+	GatewayIPv6       string   `json:"gatewayIPv6,omitempty"`
+	DNSServers        []string `json:"dnsServers"`
 	// SearchDomains are appended to a name without dots, on the management cluster's nodes and in
 	// the clusters' network variable.
 	SearchDomains []string `json:"searchDomains,omitempty"`
@@ -209,12 +216,12 @@ func (r *TemplateRefresh) checkNetwork(p *problems) {
 		return
 	}
 	address, err := netip.ParsePrefix(r.Address)
-	if err != nil || !address.Addr().Is4() {
-		p.addf("Template build address: an IPv4 address with prefix, such as 192.0.2.50/24")
+	if err != nil || address.Addr().Is4In6() {
+		p.addf("Template build address: an IPv4 address with prefix, such as 192.0.2.50/24, or an IPv6 one such as 2001:db8::50/64")
 		return
 	}
 	gateway, err := netip.ParseAddr(r.Gateway)
-	if err != nil || !address.Contains(gateway) {
+	if err != nil || !gatewayReaches(address, gateway) {
 		p.addf("Template build gateway: an address in %s", address.Masked())
 	}
 	for _, d := range r.DNS {
@@ -364,32 +371,100 @@ type subnets struct {
 	pods, services []string
 }
 
-// Candidate ranges, Kubernetes' and Flannel's usual ones first.
-var (
-	podCandidates     = []string{"10.244.0.0/16", "172.21.0.0/16", "10.201.0.0/16"}
-	serviceCandidates = []string{"10.96.0.0/12", "172.20.0.0/16", "10.200.0.0/16"}
+// The address families a cluster has. The first of IPFamilies is the primary one.
+const (
+	familyIPv4 = "IPv4"
+	familyIPv6 = "IPv6"
 )
+
+// Candidate ranges by family, Kubernetes' and Flannel's usual ones first for IPv4. The first IPv6
+// ones are the module's defaults. An IPv6 pod range is /48 to /63, since each node takes a /64 of
+// it and kube-controller-manager allows 16 bits between the two. A service range is /108 to /120.
+var (
+	podCandidates = map[string][]string{
+		familyIPv4: {"10.244.0.0/16", "172.21.0.0/16", "10.201.0.0/16"},
+		familyIPv6: {"fd5e:4b1c:9a20::/56", "fd5e:4b1c:9a30::/56", "fd5e:4b1c:9a40::/56"},
+	}
+	serviceCandidates = map[string][]string{
+		familyIPv4: {"10.96.0.0/12", "172.20.0.0/16", "10.200.0.0/16"},
+		familyIPv6: {"fd5e:4b1c:9a21::/112", "fd5e:4b1c:9a31::/112", "fd5e:4b1c:9a41::/112"},
+	}
+)
+
+// maxFamilies is IPv4 and IPv6 together.
+const maxFamilies = 2
+
+const (
+	minIPv6PodBits, maxIPv6PodBits         = 48, 63
+	minIPv6ServiceBits, maxIPv6ServiceBits = 108, 120
+)
+
+// Families are the cluster's address families, the primary one first. Settings that name none are
+// IPv4 alone.
+func (s *Settings) Families() []string {
+	if len(s.IPFamilies) == 0 {
+		return []string{familyIPv4}
+	}
+	return s.IPFamilies
+}
+
+// HasIPv6 tells that the cluster has an IPv6 family, alone or beside IPv4.
+func (s *Settings) HasIPv6() bool { return slices.Contains(s.Families(), familyIPv6) }
+
+// NodeCount is the number of management nodes, which the primary family's addresses give.
+func (s *Settings) NodeCount() int { return len(s.addressesOf(s.Families()[0])) }
+
+// inFamily tells whether an address belongs to the family. An IPv4-mapped IPv6 address is neither.
+func inFamily(a netip.Addr, family string) bool {
+	if a.Zone() != "" {
+		return false
+	}
+	if family == familyIPv6 {
+		return a.Is6() && !a.Is4In6()
+	}
+	return a.Is4()
+}
+
+// gatewayReaches tells whether a gateway is on the network of an address with prefix. An IPv6
+// gateway is often a link-local address, which no prefix holds.
+func gatewayReaches(address netip.Prefix, gateway netip.Addr) bool {
+	return address.Contains(gateway) || (address.Addr().Is6() && gateway.Is6() && gateway.IsLinkLocalUnicast())
+}
+
+// familyNet is what the checks learned of one family's addresses.
+type familyNet struct {
+	family  string
+	gateway netip.Addr
+	network netip.Prefix
+	nodes   map[netip.Addr]bool
+}
 
 // Validate checks what the module would otherwise only refuse after starting, or what would leave
 // the management cluster unreachable. The messages name the setup page's fields.
 func (s *Settings) Validate() error {
 	var p problems
+	families := s.checkFamilies(&p)
 	s.checkNodes(&p)
 	s.checkPlacement(&p)
-	gateway, err := netip.ParseAddr(s.Gateway)
-	if err != nil || !gateway.Is4() {
-		p.addf("Gateway: an IPv4 address")
+	nets := make([]familyNet, 0, len(families))
+	for _, family := range families {
+		nets = append(nets, s.checkFamilyAddresses(&p, family))
 	}
-	network, nodes := s.checkNodeAddresses(&p, gateway)
-	s.checkAPIAddress(&p, gateway, network, nodes)
-	s.checkServers(&p)
-	s.checkSubnets(&p)
+	if len(nets) > 0 {
+		s.checkAPIAddress(&p, &nets[0])
+	}
+	if len(nets) == maxFamilies && len(s.NodeAddresses) != len(s.NodeAddressesIPv6) {
+		label, _ := familyLabels(families[1], len(families))
+		p.addf("%s: as many as the %s ones, node i taking the i-th of each", label, families[0])
+	}
+	s.checkServers(&p, families)
+	s.checkSubnets(&p, families)
 	s.checkMirrors(&p)
 	s.ChartRepositories.check(&p)
-	if err = ValidOIDC(s.ClusterOIDC); err != nil {
+	if err := ValidOIDC(s.ClusterOIDC); err != nil {
 		p.addf("Identity providers: %s", err)
 	}
-	if err = ValidBackupTargets(s.BackupTargets); err != nil {
+	if err := ValidBackupTargets(s.BackupTargets); err != nil {
 		p.addf("Backup targets: %s", err)
 	}
 	if s.TemplateRefresh != nil {
@@ -397,11 +472,10 @@ func (s *Settings) Validate() error {
 	}
 	s.checkNamespaces(&p)
 	checkProxySetting(s.Proxy, &p)
-	err = p.err()
-	if err != nil {
+	if err := p.err(); err != nil {
 		return err
 	}
-	_, err = s.ranges()
+	_, err := s.ranges()
 	return err
 }
 
@@ -412,8 +486,18 @@ func (s *Settings) Validate() error {
 // they are, since running nodes and pods depend on them.
 func (s *Settings) KeepsFixed(was *Settings) error {
 	var p problems
-	if len(s.NodeAddresses) < len(was.NodeAddresses) || !slices.Equal(s.NodeAddresses[:len(was.NodeAddresses)], was.NodeAddresses) {
-		p.addf("Node addresses: the nodes there are keep theirs (%s), and more can only be added after them", strings.Join(was.NodeAddresses, ", "))
+	if !slices.Equal(s.Families(), was.Families()) {
+		p.addf("Address families: stay %s once the management cluster exists", strings.Join(was.Families(), ", "))
+	}
+	shown := len(was.Families())
+	for _, f := range [...]string{familyIPv4, familyIPv6} {
+		label, gateway := familyLabels(f, shown)
+		if changesAddresses(s.addressesOf(f), was.addressesOf(f)) {
+			p.addf("%s: the nodes there are keep theirs (%s), and more can only be added after them", label, strings.Join(was.addressesOf(f), ", "))
+		}
+		if s.gatewayOf(f) != was.gatewayOf(f) {
+			p.addf("%s: stays %s once the management cluster exists", gateway, was.gatewayOf(f))
+		}
 	}
 	// The VMs take the nodes in turn, so adding, removing or reordering one moves running etcd VMs
 	// to other nodes.
@@ -422,7 +506,6 @@ func (s *Settings) KeepsFixed(was *Settings) error {
 	}
 	for _, f := range [...]struct{ label, now, then string }{
 		{"API address", s.APIAddress, was.APIAddress},
-		{"Gateway", s.Gateway, was.Gateway},
 		{"VM disks", s.VMDatastore, was.VMDatastore},
 	} {
 		if f.now != f.then {
@@ -442,8 +525,23 @@ func (s *Settings) KeepsFixed(was *Settings) error {
 	return p.err()
 }
 
+// addressesOf are the node addresses of one family, and gatewayOf its gateway.
+func (s *Settings) addressesOf(family string) []string {
+	if family == familyIPv6 {
+		return s.NodeAddressesIPv6
+	}
+	return s.NodeAddresses
+}
+
+func (s *Settings) gatewayOf(family string) string {
+	if family == familyIPv6 {
+		return s.GatewayIPv6
+	}
+	return s.Gateway
+}
+
 func (s *Settings) checkNodes(p *problems) {
-	if len(s.Nodes) == 0 || len(s.Nodes) > len(s.NodeAddresses) {
+	if len(s.Nodes) == 0 || len(s.Nodes) > s.NodeCount() {
 		p.addf("Proxmox VE nodes: at least one, and no more than there are node addresses")
 	}
 	seen := map[string]bool{}
@@ -476,56 +574,121 @@ func (s *Settings) checkPlacement(p *problems) {
 	}
 }
 
-// checkNodeAddresses checks the nodes' addresses against the gateway and each other, and returns
-// the network they share and the addresses themselves.
-func (s *Settings) checkNodeAddresses(p *problems, gateway netip.Addr) (netip.Prefix, map[netip.Addr]bool) {
-	if n := len(s.NodeAddresses); n != 1 && n != 3 {
-		p.addf("Node addresses: one, or three for high availability")
+// checkFamilies checks the address families and returns them, or nil when they are wrong.
+func (s *Settings) checkFamilies(p *problems) []string {
+	families := s.Families()
+	valid := len(families) <= maxFamilies && len(slices.Compact(slices.Sorted(slices.Values(families)))) == len(families) &&
+		!slices.ContainsFunc(families, func(f string) bool { return f != familyIPv4 && f != familyIPv6 })
+	if !valid {
+		p.addf("Address families: IPv4, IPv6, or both with the primary one first")
+		return nil
 	}
-	var network netip.Prefix
-	nodes := map[netip.Addr]bool{}
-	for _, a := range s.NodeAddresses {
-		prefix, err := netip.ParsePrefix(a)
-		switch {
-		case err != nil || !prefix.Addr().Is4() || prefix.Bits() == 0:
-			p.addf("Node addresses: %s is no IPv4 address with its prefix length, such as 192.0.2.11/24", a)
+	for _, f := range [...]string{familyIPv4, familyIPv6} {
+		if slices.Contains(families, f) {
 			continue
-		case prefix.Bits() < 31 && (prefix.Addr() == prefix.Masked().Addr() || prefix.Addr() == lastAddr(prefix)):
-			p.addf("Node addresses: %s is its network's own or broadcast address", a)
-		case nodes[prefix.Addr()]:
-			p.addf("Node addresses: %s is listed twice", a)
-		case gateway.IsValid() && !prefix.Contains(gateway):
-			p.addf("Node addresses: %s is outside the gateway's network", a)
-		case network.IsValid() && prefix.Masked() != network:
-			p.addf("Node addresses: %s is in another network than %s", a, network)
 		}
-		nodes[prefix.Addr()] = true
-		if !network.IsValid() {
-			network = prefix.Masked()
+		// A family the cluster lacks has no field on the page, so its own name says which is meant.
+		label, gateway := familyLabels(f, maxFamilies)
+		if len(s.addressesOf(f)) > 0 {
+			p.addf("%s: leave empty, the cluster has no %s", label, f)
+		}
+		if s.gatewayOf(f) != "" {
+			p.addf("%s: leave empty, the cluster has no %s", gateway, f)
 		}
 	}
-	return network, nodes
+	return families
 }
 
-func (s *Settings) checkAPIAddress(p *problems, gateway netip.Addr, network netip.Prefix, nodes map[netip.Addr]bool) {
+// familyLabels are the names of a family's node addresses and gateway on the setup page, which
+// shows that many families. With both shown, each names its family.
+func familyLabels(family string, shown int) (string, string) {
+	if shown > 1 {
+		return family + " node addresses", family + " gateway"
+	}
+	return "Node addresses", "Gateway"
+}
+
+// checkFamilyAddresses checks the nodes' addresses of one family against its gateway and each other,
+// and returns what the API address is checked against.
+func (s *Settings) checkFamilyAddresses(p *problems, family string) familyNet {
+	label, gatewayLabel := familyLabels(family, len(s.Families()))
+	example := "192.0.2.11/24"
+	if family == familyIPv6 {
+		example = "2001:db8::11/64"
+	}
+	gateway, err := netip.ParseAddr(s.gatewayOf(family))
+	if err != nil || !inFamily(gateway, family) {
+		p.addf("%s: an %s address", gatewayLabel, family)
+		gateway = netip.Addr{}
+	}
+	out := familyNet{family: family, gateway: gateway, nodes: map[netip.Addr]bool{}}
+	addresses := s.addressesOf(family)
+	if n := len(addresses); n != 1 && n != 3 {
+		p.addf("%s: one, or three for high availability", label)
+	}
+	for _, a := range addresses {
+		prefix, err := netip.ParsePrefix(a)
+		own := prefix.Addr() == prefix.Masked().Addr()
+		switch {
+		case err != nil || !inFamily(prefix.Addr(), family) || prefix.Bits() == 0:
+			p.addf("%s: %s is no %s address with its prefix length, such as %s", label, a, family, example)
+			continue
+		case family == familyIPv4 && prefix.Bits() < 31 && (own || prefix.Addr() == lastAddr(prefix)):
+			p.addf("%s: %s is its network's own or broadcast address", label, a)
+		case family == familyIPv6 && prefix.Bits() < 127 && own:
+			p.addf("%s: %s is its network's own address", label, a)
+		case out.nodes[prefix.Addr()]:
+			p.addf("%s: %s is listed twice", label, a)
+		case gateway.IsValid() && !gatewayReaches(prefix, gateway):
+			p.addf("%s: %s is outside the gateway's network", label, a)
+		case out.network.IsValid() && prefix.Masked() != out.network:
+			p.addf("%s: %s is in another network than %s", label, a, out.network)
+		}
+		out.nodes[prefix.Addr()] = true
+		if !out.network.IsValid() {
+			out.network = prefix.Masked()
+		}
+	}
+	return out
+}
+
+// changesAddresses tells whether a node's address was changed, or a node taken away. Nodes added
+// after the existing ones are fine.
+func changesAddresses(now, was []string) bool {
+	return len(now) < len(was) || !slices.Equal(now[:len(was)], was)
+}
+
+// checkAPIAddress checks the API address against the primary family's network.
+func (s *Settings) checkAPIAddress(p *problems, primary *familyNet) {
 	switch api, err := netip.ParseAddr(s.APIAddress); {
-	case err != nil || !api.Is4():
-		p.addf("API address: an IPv4 address")
-	case nodes[api] || api == gateway:
+	case err != nil || !inFamily(api, primary.family):
+		p.addf("API address: an %s address", primary.family)
+	case primary.nodes[api] || api == primary.gateway:
 		p.addf("API address: unused, neither a node address nor the gateway")
-	case network.IsValid() && !network.Contains(api):
-		p.addf("API address: inside the nodes' network, %s", network)
+	case primary.network.IsValid() && !primary.network.Contains(api):
+		p.addf("API address: inside the nodes' network, %s", primary.network)
 	}
 }
 
 // checkServers checks the name servers and what clusters may use.
-func (s *Settings) checkServers(p *problems) {
+func (s *Settings) checkServers(p *problems, families []string) {
 	if len(s.DNSServers) == 0 {
 		p.addf("DNS servers: at least one")
 	}
 	for _, d := range s.DNSServers {
-		if _, err := netip.ParseAddr(d); err != nil {
+		a, err := netip.ParseAddr(d)
+		switch {
+		case err != nil || a.Zone() != "":
 			p.addf("DNS servers: %s is no IP address", d)
+		case families != nil && !slices.ContainsFunc(families, func(f string) bool { return inFamily(a, f) }):
+			p.addf("DNS servers: %s is of an address family the cluster does not have", d)
+		}
+	}
+	if len(families) == maxFamilies {
+		for _, f := range families {
+			if !slices.ContainsFunc(s.DNSServers, func(d string) bool { a, err := netip.ParseAddr(d); return err == nil && inFamily(a, f) }) {
+				p.addf("DNS servers: at least one %s address, as the cluster has both families", f)
+			}
 		}
 	}
 	if len(s.WorkloadDatastores) == 0 || len(s.WorkloadBridges) == 0 {
@@ -576,17 +739,85 @@ func (s *Settings) checkTimeServers(p *problems) {
 	}
 }
 
-func (s *Settings) checkSubnets(p *problems) {
-	for _, f := range [...]struct {
-		label  string
-		ranges []string
-	}{{"Pod ranges", s.PodSubnets}, {"Service ranges", s.ServiceSubnets}} {
-		for _, r := range f.ranges {
-			if prefix, err := netip.ParsePrefix(r); err != nil || prefix != prefix.Masked() {
-				p.addf("%s: %s is no network such as 10.244.0.0/16, without host bits", f.label, r)
+// checkSubnets checks the ranges the administrator set: one per family in the families' order, each
+// a network without host bits, an IPv6 one of a length Kubernetes accepts, and none overlapping the
+// nodes' networks, the API address, the gateways or each other.
+func (s *Settings) checkSubnets(p *problems, families []string) {
+	sets := [...]rangeSet{
+		{"Pod ranges", s.PodSubnets, minIPv6PodBits, maxIPv6PodBits},
+		{"Service ranges", s.ServiceSubnets, minIPv6ServiceBits, maxIPv6ServiceBits},
+	}
+	valid := true
+	for i := range sets {
+		valid = sets[i].check(p, families) && valid
+	}
+	if !valid {
+		return
+	}
+	reserved, err := s.reserved()
+	if err != nil {
+		return
+	}
+	for _, r := range sets[0].ranges {
+		prefix := netip.MustParsePrefix(r)
+		for _, other := range s.ServiceSubnets {
+			if prefix.Overlaps(netip.MustParsePrefix(other)) {
+				p.addf("%s: %s overlaps the service range %s", sets[0].label, r, other)
 			}
 		}
 	}
+	for i := range sets {
+		for _, r := range sets[i].ranges {
+			prefix := netip.MustParsePrefix(r)
+			for _, t := range reserved {
+				if prefix.Overlaps(t.prefix) {
+					p.addf("%s: %s overlaps %s, which Talos would drop node addresses in", sets[i].label, r, t.what)
+				}
+			}
+		}
+	}
+}
+
+// rangeSet is the pod or the service ranges the administrator set, with the lengths an IPv6 range
+// of its kind may have.
+type rangeSet struct {
+	label            string
+	ranges           []string
+	minBits, maxBits int
+}
+
+// check adds what is wrong with the set's ranges and tells whether there was nothing.
+func (r *rangeSet) check(p *problems, families []string) bool {
+	if len(r.ranges) == 0 {
+		return true
+	}
+	valid := true
+	if families != nil && len(r.ranges) != len(families) {
+		p.addf("%s: one per address family, in this order: %s", r.label, strings.Join(families, ", "))
+		valid = false
+	}
+	for i, c := range r.ranges {
+		family, example := familyIPv4, "10.244.0.0/16"
+		if i < len(families) {
+			family = families[i]
+		}
+		if family == familyIPv6 {
+			example = "fd5e:4b1c:9a20::/56"
+		}
+		prefix, err := netip.ParsePrefix(c)
+		switch {
+		case err != nil || prefix != prefix.Masked():
+			p.addf("%s: %s is no network such as %s, without host bits", r.label, c, example)
+		case i < len(families) && !inFamily(prefix.Addr(), family):
+			p.addf("%s: %s is no %s network, and the ranges come one per family in this order: %s", r.label, c, family, strings.Join(families, ", "))
+		case prefix.Addr().Is6() && (prefix.Bits() < r.minBits || prefix.Bits() > r.maxBits):
+			p.addf("%s: %s is /%d, and an IPv6 range is /%d to /%d", r.label, c, prefix.Bits(), r.minBits, r.maxBits)
+		default:
+			continue
+		}
+		valid = false
+	}
+	return valid
 }
 
 func (s *Settings) checkMirrors(p *problems) {
@@ -616,33 +847,32 @@ func (s *Settings) checkNamespaces(p *problems) {
 // neither the nodes' networks, the API address, the gateway nor each other. Talos drops a node
 // address inside them, which leaves the node unreachable.
 func (s *Settings) ranges() (subnets, error) {
-	var taken []netip.Prefix
-	for _, a := range s.NodeAddresses {
-		prefix, err := netip.ParsePrefix(a)
-		if err != nil {
-			return subnets{}, fmt.Errorf("nodeAddresses: %s: %w", a, err)
-		}
-		taken = append(taken, prefix.Masked())
+	reserved, err := s.reserved()
+	if err != nil {
+		return subnets{}, err
 	}
-	for _, a := range []string{s.APIAddress, s.Gateway} {
-		ip, err := netip.ParseAddr(a)
-		if err != nil {
-			return subnets{}, fmt.Errorf("%s is not an IP address", a)
-		}
-		taken = append(taken, netip.PrefixFrom(ip, ip.BitLen()))
+	taken := make([]netip.Prefix, 0, len(reserved))
+	for _, r := range reserved {
+		taken = append(taken, r.prefix)
 	}
-	pick := func(set, candidates []string, what string) ([]string, error) {
+	pick := func(set []string, candidates map[string][]string, what string) ([]string, error) {
 		if len(set) > 0 {
 			return set, nil
 		}
-		for _, c := range candidates {
-			prefix := netip.MustParsePrefix(c)
-			if !slices.ContainsFunc(taken, prefix.Overlaps) {
-				taken = append(taken, prefix)
-				return []string{c}, nil
+		var out []string
+	families:
+		for _, family := range s.Families() {
+			for _, c := range candidates[family] {
+				prefix := netip.MustParsePrefix(c)
+				if !slices.ContainsFunc(taken, prefix.Overlaps) {
+					taken = append(taken, prefix)
+					out = append(out, c)
+					continue families
+				}
 			}
+			return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network; set the %s ranges under Advanced", what, what)
 		}
-		return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network; set the %s ranges under Advanced", what, what)
+		return out, nil
 	}
 	pods, err := pick(s.PodSubnets, podCandidates, "pod")
 	if err != nil {
@@ -655,7 +885,34 @@ func (s *Settings) ranges() (subnets, error) {
 	return subnets{pods: pods, services: services}, nil
 }
 
-// lastAddr is a prefix's last address, its broadcast address in IPv4.
+// reserved are the networks and addresses a pod or service range must stay clear of: the nodes'
+// networks, the API address and the gateways. Talos drops a node address inside such a range.
+func (s *Settings) reserved() ([]place, error) {
+	var out []place
+	for _, family := range s.Families() {
+		for _, a := range s.addressesOf(family) {
+			prefix, err := netip.ParsePrefix(a)
+			if err != nil {
+				return nil, fmt.Errorf("node address %s: %w", a, err)
+			}
+			out = append(out, place{prefix.Masked(), fmt.Sprintf("the nodes' network %s", prefix.Masked())})
+		}
+	}
+	hosts := []struct{ what, address string }{{"the API address", s.APIAddress}}
+	for _, family := range s.Families() {
+		hosts = append(hosts, struct{ what, address string }{"the gateway", s.gatewayOf(family)})
+	}
+	for _, h := range hosts {
+		ip, err := netip.ParseAddr(h.address)
+		if err != nil {
+			return nil, fmt.Errorf("%s is not an IP address", h.address)
+		}
+		out = append(out, place{netip.PrefixFrom(ip, ip.BitLen()), fmt.Sprintf("%s %s", h.what, ip)})
+	}
+	return out, nil
+}
+
+// lastAddr is an IPv4 prefix's last address, its broadcast address.
 func lastAddr(p netip.Prefix) netip.Addr {
 	b := p.Masked().Addr().As4()
 	hostBits := p.Addr().BitLen() - p.Bits()

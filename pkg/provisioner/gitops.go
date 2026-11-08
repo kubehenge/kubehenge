@@ -477,7 +477,7 @@ func bootstrapObject(g *GitOps, fluxVersion string) *unstructured.Unstructured {
 				// pins them and every Flux image they name, rather than polling a moving tag.
 				"distribution": map[string]any{"version": fluxVersion, "registry": "ghcr.io/fluxcd"},
 				"components":   []any{"source-controller", "kustomize-controller", "helm-controller", "notification-controller"},
-				"cluster":      map[string]any{"type": "kubernetes", "size": "small", "networkPolicy": true, "multitenant": false, "domain": "cluster.local"},
+				"cluster":      map[string]any{"type": kubernetesName, "size": "small", "networkPolicy": true, "multitenant": false, "domain": "cluster.local"},
 				"kustomize":    map[string]any{"patches": []any{map[string]any{"target": map[string]any{"kind": deploymentKind}, "patch": fluxRequestsPatch}}},
 				"sync":         sync,
 			},

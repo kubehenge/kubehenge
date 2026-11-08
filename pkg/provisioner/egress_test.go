@@ -56,9 +56,9 @@ func TestEgressResolvesFromTheClusterThenTheManagementSide(t *testing.T) {
 		skipped bool
 	}{
 		"nothing anywhere":     {url: ""},
-		"the management side":  {egress: management, url: "http://proxy.example.org:3128", noProxy: "10.244.0.0/16,10.96.0.0/16,localhost,127.0.0.1,.svc,.cluster.local,pve.example.org,.corp.example"},
-		"its own address":      {egress: management, set: EgressProxy{URL: "http://other.example.org:8080", NoProxy: []string{"s3.internal"}}, url: "http://other.example.org:8080", noProxy: "10.244.0.0/16,10.96.0.0/16,localhost,127.0.0.1,.svc,.cluster.local,s3.internal"},
-		"more exceptions":      {egress: management, set: EgressProxy{NoProxy: []string{"s3.internal", ".svc"}}, url: "http://proxy.example.org:3128", noProxy: "10.244.0.0/16,10.96.0.0/16,localhost,127.0.0.1,.svc,.cluster.local,pve.example.org,.corp.example,s3.internal"},
+		"the management side":  {egress: management, url: "http://proxy.example.org:3128", noProxy: "10.244.0.0/16,10.96.0.0/16,localhost,127.0.0.1,::1,.svc,.cluster.local,pve.example.org,.corp.example"},
+		"its own address":      {egress: management, set: EgressProxy{URL: "http://other.example.org:8080", NoProxy: []string{"s3.internal"}}, url: "http://other.example.org:8080", noProxy: "10.244.0.0/16,10.96.0.0/16,localhost,127.0.0.1,::1,.svc,.cluster.local,s3.internal"},
+		"more exceptions":      {egress: management, set: EgressProxy{NoProxy: []string{"s3.internal", ".svc"}}, url: "http://proxy.example.org:3128", noProxy: "10.244.0.0/16,10.96.0.0/16,localhost,127.0.0.1,::1,.svc,.cluster.local,pve.example.org,.corp.example,s3.internal"},
 		"going direct":         {egress: management, set: EgressProxy{Disabled: true}, url: ""},
 		"credentials in a URL": {egress: Egress{URL: "http://user:hunter2@proxy.example.org:3128"}, url: "", skipped: true}, //nolint:gosec // a fake address
 	} {
@@ -78,7 +78,7 @@ func TestEgressResolvesFromTheClusterThenTheManagementSide(t *testing.T) {
 func TestEgressReachesEveryAddonThatLeavesTheCluster(t *testing.T) {
 	t.Parallel()
 	egress, _ := Egress{URL: "http://proxy.example.org:3128", NoProxy: []string{"pve.example.org"}}.resolve(clusterWithRanges(), &EgressProxy{})
-	const wantNoProxy = "10.244.0.0/16,10.96.0.0/16,localhost,127.0.0.1,.svc,.cluster.local,pve.example.org"
+	const wantNoProxy = "10.244.0.0/16,10.96.0.0/16,localhost,127.0.0.1,::1,.svc,.cluster.local,pve.example.org"
 	addons := &Addons{
 		Headlamp:     Headlamp{Enabled: true},
 		Rancher:      Rancher{Install: true, Hostname: "rancher.example.org"},

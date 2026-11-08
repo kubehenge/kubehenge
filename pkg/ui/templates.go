@@ -362,8 +362,8 @@ func buildNetwork(address, gateway string, dns []string) (*templates.Network, st
 	}
 	n := &templates.Network{}
 	var err error
-	if n.Address, err = netip.ParsePrefix(address); err != nil || !n.Address.Addr().Is4() {
-		return nil, "Address: an IPv4 address with prefix length, like 192.0.2.50/24"
+	if n.Address, err = netip.ParsePrefix(address); err != nil || n.Address.Addr().Is4In6() || n.Address.Addr().Zone() != "" {
+		return nil, "Address: an IPv4 or IPv6 address with prefix length, like 192.0.2.50/24 or 2001:db8::50/64"
 	}
 	if n.Gateway, err = netip.ParseAddr(gateway); err != nil || !n.Address.Contains(n.Gateway) {
 		return nil, "Gateway: an address in the same network"

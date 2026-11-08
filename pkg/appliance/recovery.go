@@ -440,7 +440,7 @@ func (a *Appliance) applyVMs(ctx context.Context, j *Job, r *recreation) error {
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		return fmt.Errorf("preparing the module's working directory: %w", err)
 	}
-	ids, err := a.vmIDRange(ctx, r.ticket, len(r.settings.NodeAddresses))
+	ids, err := a.vmIDRange(ctx, r.ticket, r.settings)
 	if err != nil {
 		return err
 	}

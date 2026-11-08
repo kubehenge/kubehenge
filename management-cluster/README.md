@@ -74,10 +74,14 @@ The Talos disk image the VMs boot from is downloaded from the Image Factory over
   - Put a ticket and its CSRF token from `POST /access/ticket` in `PROXMOX_VE_AUTH_TICKET` and `PROXMOX_VE_CSRF_PREVENTION_TOKEN`, as Kubehenge's appliance does.
   - The apply must finish within the ticket's two hours.
 - **The Proxmox VE CA certificate,** `/etc/pve/pve-root-ca.pem` on any node unless you replaced the API's certificate. The machine running Terraform/OpenTofu must trust it too (in its system trust store), since the Proxmox VE provider verifies the API's certificate.
-- **Free addresses** for the nodes and the API's virtual IP, all in one subnet on the bridge.
+- **Free addresses** for the nodes and the API's virtual IP, all in one subnet per family on the bridge.
+  - `ip_families` defaults to `["IPv4"]`. `["IPv6"]` is IPv6-only, and `["IPv4", "IPv6"]` or `["IPv6", "IPv4"]` is dual-stack with the first family primary.
+  - `node_addresses` and `gateway` are the IPv4 ones, needed when `ip_families` holds IPv4. `node_addresses_ipv6` and `gateway_ipv6` are the IPv6 ones, needed when it holds IPv6.
+  - A dual-stack cluster gives both lists the same length, and node i takes element i of each.
+  - `api_address` is an address of the primary family, and `dns_servers` holds at least one address of each family.
 - **Pod and service ranges that the network does not use.** The defaults are Kubernetes' own.
-  - Pods use 10.244.0.0/16, services 10.96.0.0/12 (10.96.0.0 to 10.111.255.255).
-  - If the nodes' subnet is inside either, set `pod_subnets` or `service_subnets`. The plan refuses overlapping ranges, since Talos ignores node addresses inside them.
+  - Pods use 10.244.0.0/16, services 10.96.0.0/12 (10.96.0.0 to 10.111.255.255). IPv6 pods use fd5e:4b1c:9a20::/56 and services fd5e:4b1c:9a21::/112.
+  - If the nodes' subnet is inside either, set `pod_subnets` or `service_subnets`, one range per family in `ip_families` order. An IPv6 pod range is /48 to /63 and an IPv6 service range /108 to /120. The plan refuses overlapping ranges, since Talos ignores node addresses inside them.
 - **Network access.** The machine running Terraform/OpenTofu reaches the nodes on ports 50000 (Talos API) and 6443 (Kubernetes API). The nodes reach the internet for images and provider manifests.
 
 ## Apply

@@ -735,6 +735,9 @@ export interface Bridge {
   /** The node's own IPv4 address on the bridge, like 192.0.2.5/24, and its gateway, where it has them. */
   cidr?: string;
   gateway?: string;
+  /** The same for IPv6, like 2001:db8::5/64. */
+  cidr6?: string;
+  gateway6?: string;
   /** The bridge's MTU where a node lists one: the nodes' interface MTU cannot exceed it. */
   mtu?: number;
   /** The SDN zone of a VNet, which a node's own bridge lacks. */
@@ -753,6 +756,10 @@ export interface FreeAddresses {
   network?: string;
   endpoint?: string;
   addresses?: string;
+  /** The same for the bridge's IPv6 network, with an IPv6 family asked for. */
+  network6?: string;
+  endpoint6?: string;
+  addresses6?: string;
   answering: string[];
 }
 
@@ -776,9 +783,15 @@ export interface ManagementSettings {
   vlan?: number;
   /** The management VMs' interface MTU. Absent: the bridge's. */
   mtu?: number;
+  /** The address families, the primary one first. Absent: IPv4 alone. */
+  ipFamilies?: string[];
+  /** The IPv4 node addresses and gateway, empty without IPv4. */
   nodeAddresses: string[];
   apiAddress: string;
   gateway: string;
+  /** The IPv6 node addresses and gateway, set with IPv6. */
+  nodeAddressesIPv6?: string[];
+  gatewayIPv6?: string;
   dnsServers: string[];
   /** Domains appended to a name without dots, on the nodes and in the clusters' network. */
   searchDomains?: string[];

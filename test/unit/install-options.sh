@@ -113,6 +113,29 @@ says "a flag option needs none" "unknown option --nope" --nope
     says "an octet over 255" "--ip is dhcp or an IPv4 address" --ip 192.0.2.256/24 ${release}
     says "an IPv6 gateway" "--gateway is an IPv4 address" --ip 192.0.2.5/24 --gateway 2001:db8::1 ${release}
     does_not_say "a good static address" "--ip is dhcp or" --ip 192.0.2.5/24 --gateway 192.0.2.1 ${release}
+    does_not_say "no IPv6 option" "--ip6" ${release}
+    says "an --ip that is a word" "or none on an IPv6-only network" --ip static ${release}
+    says "--ip none without IPv6" "--ip none needs --ip6, as the container needs an address" --ip none ${release}
+    says "--ip none with an IPv4 gateway" "--gateway goes with a static --ip" --ip none --ip6 auto --gateway 192.0.2.1 ${release}
+    does_not_say "--ip none with a static IPv6 address" "--ip" --ip none --ip6 2001:db8::5/64 --gateway6 2001:db8::1 ${release}
+    does_not_say "--ip none with router advertisement" "--ip" --ip none --ip6 auto ${release}
+    says "an IPv4 address as --ip6" "--ip6 is auto, dhcp or an IPv6 address with its prefix length" --ip6 192.0.2.5/24 ${release}
+    says "an IPv6 address without a prefix as --ip6" "--ip6 is auto, dhcp or an IPv6 address with its prefix length" --ip6 2001:db8::5 ${release}
+    says "an IPv6 prefix over 128" "--ip6 is auto, dhcp or an IPv6 address" --ip6 2001:db8::5/129 ${release}
+    says "a word as --ip6" "--ip6 is auto, dhcp or an IPv6 address" --ip6 static ${release}
+    says "an IPv4 gateway as --gateway6" "--gateway6 is an IPv6 address" --ip6 2001:db8::5/64 --gateway6 192.0.2.1 ${release}
+    says "--gateway6 with no --ip6" "--gateway6 goes with a static --ip6" --gateway6 2001:db8::1 ${release}
+    says "--gateway6 with --ip6 auto" "--gateway6 goes with a static --ip6" --ip6 auto --gateway6 2001:db8::1 ${release}
+    says "--gateway6 with --ip6 dhcp" "--gateway6 goes with a static --ip6" --ip6 dhcp --gateway6 2001:db8::1 ${release}
+    says "--ip6 without its value" "--ip6 needs a value" --ip6
+    says "--gateway6 without its value" "--gateway6 needs a value" --gateway6
+    does_not_say "a static IPv6 address with its gateway" "--ip6" --ip6 2001:db8::5/64 --gateway6 2001:db8::1 ${release}
+    does_not_say "an IPv6 address by router advertisement" "--ip6" --ip6 auto ${release}
+    does_not_say "an IPv6 address by DHCPv6" "--ip6" --ip6 dhcp ${release}
+    does_not_say "both families static" "--ip" --ip 192.0.2.5/24 --gateway 192.0.2.1 --ip6 2001:db8::5/64 --gateway6 2001:db8::1 ${release}
+    says "the help lists the IPv6 options" "--ip6 auto|dhcp|<address/prefix>" --help
+    says "the help names none for --ip" "--ip dhcp|none|<address/prefix>" --help
+    says "the help lists --gateway6" "--gateway6 <address>" --help
     says "a VLAN tag of 0" "--vlan is a VLAN tag from 1 to 4094" --vlan 0 ${release}
     says "a VLAN tag over 4094" "--vlan is a VLAN tag from 1 to 4094" --vlan 4095 ${release}
     says "a VLAN tag that is no number" "--vlan is a VLAN tag" --vlan x ${release}

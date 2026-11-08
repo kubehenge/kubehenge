@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
@@ -107,7 +108,10 @@ func (s *Server) readBridges(ctx context.Context, u user, inv *appliance.Invento
 		}
 		inv.Bridges[n.Node] = bridges
 		for i := range bridges {
-			if own, ok := ownAddress(bridges[i].CIDR); ok {
+			if own, ok := ownAddress(bridges[i].CIDR, true); ok {
+				inv.NodeAddresses[n.Node] = append(inv.NodeAddresses[n.Node], own.Addr())
+			}
+			if own, ok := ownAddress(bridges[i].CIDR6, false); ok {
 				inv.NodeAddresses[n.Node] = append(inv.NodeAddresses[n.Node], own.Addr())
 			}
 		}
@@ -139,9 +143,9 @@ func (s *Server) readNetworks(ctx context.Context, u user, settings *appliance.S
 // setupAddresses are the addresses the management cluster takes: its nodes' and its API's.
 func setupAddresses(settings *appliance.Settings) []netip.Addr {
 	var out []netip.Addr
-	for _, text := range append([]string{settings.APIAddress}, settings.NodeAddresses...) {
+	for _, text := range slices.Concat([]string{settings.APIAddress}, settings.NodeAddresses, settings.NodeAddressesIPv6) {
 		host, _, _ := strings.Cut(text, "/")
-		if ip, err := netip.ParseAddr(host); err == nil && ip.Is4() {
+		if ip, err := netip.ParseAddr(host); err == nil && !ip.Is4In6() && ip.Zone() == "" {
 			out = append(out, ip)
 		}
 	}

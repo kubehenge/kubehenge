@@ -1,4 +1,4 @@
-import { newForm, nodeCustomisationOf, type Form, type Machine } from "./create-form";
+import { networkFieldsOf, newForm, nodeCustomisationOf, type Form, type Machine } from "./create-form";
 import { graceOf, graceVariable } from "./HostOutage";
 import { loadBalancerOf } from "./LoadBalancer";
 import { nodeOSKey } from "./node-os";
@@ -34,8 +34,12 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "vlan",
   "mtu",
   "queues",
+  "families",
   "prefix",
   "gateway",
+  // The IPv6 gateway is left out: one the other cluster has is taken all the same, and where it
+  // has none the bridge's fills it.
+  "prefix6",
   "dnsServers",
   "searchDomains",
   "ntpServers",
@@ -43,6 +47,7 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "loadBalancerMode",
   "loadBalancerAsn",
   "loadBalancerPeers",
+  "loadBalancerRouterID",
   "loadBalancerAuthenticated",
   "storage",
   "place",
@@ -80,26 +85,6 @@ function machineOf(v: unknown, fallback: Machine): Machine {
   };
 }
 
-type NetworkFields = Pick<
-  Form,
-  "bridge" | "vlan" | "mtu" | "queues" | "prefix" | "gateway" | "dnsServers" | "searchDomains" | "ntpServers"
->;
-
-function networkFrom(v: unknown, base: Form): NetworkFields {
-  const network = record(v);
-  return {
-    bridge: text(network["bridge"]) ?? "",
-    vlan: quantity(network["vlan"])?.toString() ?? "",
-    mtu: quantity(network["mtu"])?.toString() ?? "",
-    queues: quantity(network["queues"])?.toString() ?? "",
-    prefix: quantity(network["prefix"]) ?? base.prefix,
-    gateway: text(network["gateway"]) ?? "",
-    dnsServers: (texts(network["dnsServers"]) ?? []).join(", "),
-    searchDomains: (texts(network["searchDomains"]) ?? []).join(", "),
-    ntpServers: (texts(network["ntp"]) ?? []).join(", "),
-  };
-}
-
 /** startDefault is the cluster a new one starts from unless another is chosen: the newest that works, else the newest. */
 export function startDefault(clusters: Cluster[]): Cluster | undefined {
   const starts = startable(clusters);
@@ -129,11 +114,12 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     workerMax: autoscaling?.max ?? base.workerMax,
     controlPlaneTimeouts: entryOf(c.controlPlaneTimeouts ?? {}),
     workerTimeouts: entryOf(c.workerPools[0]?.timeouts ?? {}),
-    ...networkFrom(v["network"], base),
+    ...networkFieldsOf(v["network"], base),
     loadBalancer: lb.implementation,
     loadBalancerMode: lb.mode,
     loadBalancerAsn: lb.asn,
     loadBalancerPeers: lb.peers,
+    loadBalancerRouterID: lb.routerID,
     loadBalancerAuthenticated: lb.authenticated,
     storage: text(v["storage"]) ?? "",
     place: placeOf(texts(v["allowedNodes"])),

@@ -15,6 +15,7 @@ import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBala
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { labelsOf, labelsText } from "./namespace-labels";
 import { NamespaceLabelsDialog } from "./NamespaceLabels";
+import { choiceOf, familyLabels } from "./network";
 import { nodeCustomisationOf, nodeCustomisationText } from "./node-customisation";
 import { choosable, cpuNote, findNodeOS, fipsCNI, nodeOSKey, nodeOSRef } from "./node-os";
 import { NodeCustomisationDialog } from "./NodeCustomisation";
@@ -289,6 +290,11 @@ export function optionRows<A extends string = never>(
   const rows: OptionRow<OptionAction | A>[] = [
     ...nodeOSRows(c),
     ...talos,
+    {
+      label: "Address families",
+      value: familyLabels[choiceOf(record(c.variables["network"])["ipFamilies"])],
+      group: "Network",
+    },
     { label: "Pod network", value: clusterCNI(text(c.variables["cni"]), c.distribution), group: "Network" },
     {
       label: "Load balancer",

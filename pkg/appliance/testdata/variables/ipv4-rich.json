@@ -1,0 +1,74 @@
+{
+  "settings": {
+    "apiAddress": "10.0.0.10",
+    "apiAuditLog": false,
+    "backupTargets": [],
+    "bootstrapDatastore": "local",
+    "bridge": "vmbr0",
+    "chartRepositories": {
+      "ca_bundle": "",
+      "mirrors": {}
+    },
+    "clusterDatastoreAllocate": false,
+    "clusterOIDC": [],
+    "clusterSysAudit": true,
+    "controllerImage": null,
+    "dnsServers": [
+      "10.0.0.1"
+    ],
+    "etcdRestore": false,
+    "extraClusterNamespaces": [],
+    "gateway": "10.0.0.1",
+    "headlampActions": false,
+    "headlampSignIn": false,
+    "imageDatastore": "local",
+    "mtu": 1450,
+    "nodeAddresses": [
+      "10.0.0.11/24",
+      "10.0.0.12/24",
+      "10.0.0.13/24"
+    ],
+    "nodeBootLogs": true,
+    "nodes": [
+      "pve1",
+      "pve2",
+      "pve3"
+    ],
+    "offerHARules": false,
+    "podSubnets": [
+      "10.50.0.0/16"
+    ],
+    "proxmoxHA": false,
+    "proxmox_ca_certificate": "-----BEGIN CERTIFICATE-----\n",
+    "proxmox_endpoint": "https://pve.example:8006",
+    "proxmox_insecure": false,
+    "proxy": {
+      "ca_bundle": "",
+      "no_proxy": "",
+      "url": ""
+    },
+    "registryMirrors": {},
+    "searchDomains": [
+      "corp.example"
+    ],
+    "serviceSubnets": [
+      "10.60.0.0/16"
+    ],
+    "templateRefresh": {},
+    "timeServers": [
+      "ntp.example.org"
+    ],
+    "vlan": null,
+    "vmDatastore": "local-lvm",
+    "vmIdRange": {
+      "start": 10000,
+      "end": 99999
+    },
+    "workloadBridges": [
+      "vmbr0"
+    ],
+    "workloadDatastores": [
+      "local-lvm"
+    ]
+  }
+}

@@ -133,13 +133,21 @@ function runsAddons(c: Cluster): boolean {
 /** addressRoom is how many node addresses the cluster's network gives, unknown where it does not read. */
 export function addressRoom(c: Cluster): number | undefined {
   const n = record(c.variables["network"]);
-  const entries = texts(n["addresses"]) ?? [];
-  const prefix = quantity(n["prefix"]);
-  if (entries.length === 0 || prefix === undefined) {
-    return undefined;
-  }
-  const { count, bad } = addressCount(entries, text(n["gateway"]) ?? "", prefix);
-  return bad === undefined ? count : undefined;
+  const v6 = record(n["ipv6"]);
+  // Each node takes one address of every family, so the family with the fewest addresses decides.
+  const rooms = (
+    [
+      [texts(n["addresses"]) ?? [], text(n["gateway"]) ?? "", quantity(n["prefix"])],
+      [texts(v6["addresses"]) ?? [], text(v6["gateway"]) ?? "", quantity(v6["prefix"])],
+    ] as const
+  )
+    .filter(([entries]) => entries.length > 0)
+    .map(([entries, gateway, prefix]) => {
+      const counted = prefix === undefined ? undefined : addressCount(entries, gateway, prefix);
+      return counted?.bad === undefined ? counted?.count : undefined;
+    });
+  const known = rooms.filter((r) => r !== undefined);
+  return known.length === 0 || known.length < rooms.length ? undefined : Math.min(...known);
 }
 
 /** A pool's problem in the Scale dialog, on its fewest (or its fixed number) or its most. */

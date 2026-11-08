@@ -64,11 +64,40 @@ func TestRunReadsTheRangeWithTheTicket(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			a := &Appliance{NextID: c.read}
-			got, err := a.vmIDRange(context.Background(), token, 3)
+			s := settings("pve1")
+			s.NodeAddresses = []string{"10.0.0.11/24", "10.0.0.12/24", "10.0.0.13/24"}
+			got, err := a.vmIDRange(context.Background(), token, s)
 			if got != c.want || (err != nil) != c.wantErr {
 				t.Errorf("vmIDRange = %+v, %v, want %+v (error %v)", got, err, c.want, c.wantErr)
 			}
 		})
+	}
+}
+
+// A pool whose upper half has room for one node but not three is used whole, whichever family
+// numbers the nodes, so that recreating an IPv6-only management cluster sizes its range as applying
+// it does.
+func TestVMIDRangeCountsTheNodesOfTheirFamily(t *testing.T) {
+	t.Parallel()
+	pool := func(context.Context, *pve.Ticket) (pve.NextID, error) {
+		return pve.NextID{Lower: 1000, Upper: 1050}, nil
+	}
+	a := &Appliance{NextID: pool}
+	three := []string{"fd00:1::11/64", "fd00:1::12/64", "fd00:1::13/64"}
+	ipv6 := ipv6Settings()
+	ipv6.NodeAddressesIPv6 = three
+	dual := dualSettings("IPv6", "IPv4")
+	dual.NodeAddressesIPv6 = three
+	dual.NodeAddresses = []string{"10.0.0.11/24", "10.0.0.12/24", "10.0.0.13/24"}
+	for name, s := range map[string]*Settings{"IPv6 only": ipv6, "dual-stack": dual} {
+		got, err := a.vmIDRange(context.Background(), nil, s)
+		if err != nil || got != (VMIDRange{1000, 1050}) {
+			t.Errorf("%s: vmIDRange = %+v, %v, want the whole pool for three nodes", name, got, err)
+		}
+	}
+	one := ipv6Settings()
+	if got, _ := a.vmIDRange(context.Background(), nil, one); got != (VMIDRange{1025, 1050}) {
+		t.Errorf("one IPv6 node: %+v, want the upper half", got)
 	}
 }
 

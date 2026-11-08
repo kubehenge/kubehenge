@@ -207,7 +207,7 @@ func (s *Settings) NoProxyList(proxmoxURL string) []string {
 	if u, err := url.Parse(proxmoxURL); err == nil && u.Hostname() != "" {
 		list = append(list, u.Hostname())
 	}
-	for _, a := range s.NodeAddresses {
+	for _, a := range slices.Concat(s.NodeAddresses, s.NodeAddressesIPv6) {
 		if prefix, err := netip.ParsePrefix(a); err == nil {
 			list = append(list, prefix.Masked().String())
 		}

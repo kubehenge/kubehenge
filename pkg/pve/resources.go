@@ -71,6 +71,9 @@ type Bridge struct {
 	// CIDR and Gateway are the node's own IPv4 address on the bridge and its gateway, where it has them.
 	CIDR    string `json:"cidr,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
+	// CIDR6 and Gateway6 are the same for IPv6.
+	CIDR6    string `json:"cidr6,omitempty"`
+	Gateway6 string `json:"gateway6,omitempty"`
 	// MTU is the bridge's, 1500 where Proxmox VE lists none: a node's interface on it takes no more.
 	// A VNet has its zone's, and 0 where the zone sets none or the user may not read it.
 	MTU int `json:"mtu,omitempty"`
@@ -370,6 +373,8 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 		Comments  string `json:"comments"`
 		CIDR      string `json:"cidr"`
 		Gateway   string `json:"gateway"`
+		CIDR6     string `json:"cidr6"`
+		Gateway6  string `json:"gateway6"`
 		MTU       number `json:"mtu"`
 	}
 	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/network?type=any_bridge", &res); err != nil {
@@ -379,7 +384,7 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 	for _, r := range res {
 		bridges = append(bridges, Bridge{
 			Bridge: r.Iface, Node: node, VLANAware: r.VLANAware != 0, Comment: strings.TrimSpace(r.Comments),
-			CIDR: r.CIDR, Gateway: r.Gateway, MTU: cmp.Or(int(r.MTU), defaultBridgeMTU),
+			CIDR: r.CIDR, Gateway: r.Gateway, CIDR6: r.CIDR6, Gateway6: r.Gateway6, MTU: cmp.Or(int(r.MTU), defaultBridgeMTU),
 		})
 	}
 	return append(bridges, a.vnets(ctx, t, node)...), nil

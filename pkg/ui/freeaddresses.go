@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"maps"
 	"net/http"
@@ -17,9 +16,8 @@ import (
 const (
 	// The search for a new cluster's addresses starts this far into the bridge's network, past the
 	// addresses networks often keep for routers, switches and servers. On a network of no more than
-	// smallNetwork addresses it starts at the first.
-	freeStart    = 20
-	smallNetwork = 64
+	// 64 addresses it starts at the first.
+	freeStart = 20
 	// The probes come from the management cluster, so a user may not have the interface scan a
 	// whole network: a suggestion probes at most probeMost addresses, probeWindow at once, and a
 	// check at most checkMost of those typed.
@@ -27,27 +25,69 @@ const (
 	probeWindow = 32
 	checkMost   = 64
 	nodesMost   = 64
-	// pointToPoint is the prefix length from which a network has no network or broadcast address.
-	pointToPoint = 31
+	// pointToPoint is the prefix length from which a network has no network or broadcast address,
+	// and pointToPointIPv6 the one from which an IPv6 network has no subnet-router anycast address.
+	pointToPoint     = 31
+	pointToPointIPv6 = 127
+	// smallHostBits is the host bits of the smallest network the search starts past freeStart in.
+	smallHostBits = 7
+	byteBits      = 8
+)
+
+// The names of the address families in a request, as the cluster's ipFamilies variable has them.
+const (
+	familyNameIPv4 = "IPv4"
+	familyNameIPv6 = "IPv6"
 )
 
 type freeRequest struct {
 	VLAN int `json:"vlan"`
 	// Nodes is how many node addresses the cluster needs. With none, only Check is probed.
 	Nodes int `json:"nodes"`
-	// Check are addresses, ranges or networks typed. Those on the bridge's network are probed.
+	// Check are addresses, ranges or networks typed. Those on the bridge's networks are probed.
 	Check []string `json:"check"`
+	// Families are the address families to search, "IPv4" and "IPv6". Empty means IPv4.
+	Families []string `json:"families"`
 }
 
 // freeView is a run of free addresses on a bridge's network for a new cluster, the first for its
 // control-plane endpoint and the rest for its nodes, and the addresses checked that a host answers
 // on. Network is empty where the node reports no network on the bridge or the cluster takes a VLAN
-// of it: then nothing is probed.
+// of it: then nothing is probed. The IPv6 fields are the same for the bridge's IPv6 network.
 type freeView struct {
-	Network   string   `json:"network,omitempty"`
-	Endpoint  string   `json:"endpoint,omitempty"`
-	Addresses string   `json:"addresses,omitempty"`
-	Answering []string `json:"answering"`
+	Network    string   `json:"network,omitempty"`
+	Endpoint   string   `json:"endpoint,omitempty"`
+	Addresses  string   `json:"addresses,omitempty"`
+	Network6   string   `json:"network6,omitempty"`
+	Endpoint6  string   `json:"endpoint6,omitempty"`
+	Addresses6 string   `json:"addresses6,omitempty"`
+	Answering  []string `json:"answering"`
+}
+
+// bridgeFamily is a node's network on a bridge in one address family, and the addresses on it
+// spoken for.
+type bridgeFamily struct {
+	network  netip.Prefix
+	reserved [][2]netip.Addr
+}
+
+// wantedFamilies tells which families a request asks for. An unknown name is an error.
+func wantedFamilies(names []string) (bool, bool, error) {
+	if len(names) == 0 {
+		return true, false, nil
+	}
+	var want4, want6 bool
+	for _, n := range names {
+		switch n {
+		case familyNameIPv4:
+			want4 = true
+		case familyNameIPv6:
+			want6 = true
+		default:
+			return false, false, fmt.Errorf("families: %q is neither %s nor %s", n, familyNameIPv4, familyNameIPv6)
+		}
+	}
+	return want4, want6, nil
 }
 
 // freeAddresses suggests addresses for a new cluster on a bridge that no other cluster holds and no
@@ -62,6 +102,11 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("nodes: 0 to %d", nodesMost))
 		return
 	}
+	want4, want6, err := wantedFamilies(req.Families)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	ctx := r.Context()
 	may, err := s.placesClusters(ctx, u)
 	if err != nil {
@@ -74,66 +119,108 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	bridge := r.PathValue("bridge")
 	view := freeView{Answering: []string{}}
-	network, reserved, err := s.bridgeNetwork(ctx, u, r.PathValue("node"), bridge)
+	v4, v6, err := s.bridgeNetworks(ctx, u, r.PathValue("node"), bridge)
 	if err != nil {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	if !network.IsValid() || req.VLAN != 0 {
+	if !want4 {
+		v4 = bridgeFamily{}
+	}
+	if !want6 {
+		v6 = bridgeFamily{}
+	}
+	if (!v4.network.IsValid() && !v6.network.IsValid()) || req.VLAN != 0 {
 		writeJSON(w, http.StatusOK, view)
 		return
 	}
-	view.Network = network.String()
 	taken, err := s.takenAddresses(ctx, bridge, req.VLAN)
 	if err != nil {
 		s.Log.Error("reading the clusters' addresses", "error", err)
 		writeError(w, http.StatusInternalServerError, "could not read the other clusters' addresses")
 		return
 	}
-	answering := s.probe(ctx, checked(req.Check, network))
+	var check []netip.Addr
+	for _, f := range []bridgeFamily{v4, v6} {
+		if f.network.IsValid() {
+			check = append(check, checked(req.Check, f.network)...)
+		}
+	}
+	answering := s.probe(ctx, check)
 	for _, a := range slices.SortedFunc(maps.Keys(answering), netip.Addr.Compare) {
 		view.Answering = append(view.Answering, a.String())
 	}
-	if req.Nodes == 0 {
-		writeJSON(w, http.StatusOK, view)
-		return
+	if v4.network.IsValid() {
+		view.Network = v4.network.String()
+		view.Endpoint, view.Addresses = s.suggest(ctx, v4, taken, req.Nodes)
 	}
-	if run := s.freeRun(ctx, network, append(taken, reserved...), req.Nodes+1); run != nil {
-		view.Endpoint = run[0].String()
-		view.Addresses = run[1].String()
-		if last := run[len(run)-1]; last != run[1] {
-			view.Addresses += "-" + last.String()
-		}
+	if v6.network.IsValid() {
+		view.Network6 = v6.network.String()
+		view.Endpoint6, view.Addresses6 = s.suggest(ctx, v6, taken, req.Nodes)
 	}
 	writeJSON(w, http.StatusOK, view)
 }
 
-// bridgeNetwork is the network a node reports on a bridge, and the addresses on it spoken for: the
-// node's own and the gateway's. It is no network where the node has no address there.
-func (s *Server) bridgeNetwork(ctx context.Context, u user, node, bridge string) (netip.Prefix, [][2]netip.Addr, error) {
-	bridges, err := s.Accounts.Bridges(ctx, u.ticket, node)
-	if err != nil {
-		return netip.Prefix{}, nil, fmt.Errorf("reading the bridges of %s: %w", node, err)
+// suggest is a free endpoint and a free run of node addresses on a family's network, empty where
+// none is wanted or none is free.
+func (s *Server) suggest(ctx context.Context, f bridgeFamily, taken [][2]netip.Addr, nodes int) (string, string) {
+	if nodes == 0 {
+		return "", ""
 	}
-	for i := range bridges {
-		b := &bridges[i]
-		own, ok := ownAddress(b.CIDR)
-		if b.Bridge != bridge || !ok {
-			continue
-		}
-		reserved := [][2]netip.Addr{{own.Addr(), own.Addr()}}
-		if gw, err := netip.ParseAddr(b.Gateway); err == nil {
-			reserved = append(reserved, [2]netip.Addr{gw, gw})
-		}
-		return own.Masked(), reserved, nil
+	run := s.freeRun(ctx, f.network, append(slices.Clone(taken), f.reserved...), nodes+1)
+	if run == nil {
+		return "", ""
 	}
-	return netip.Prefix{}, nil, nil
+	addresses := run[1].String()
+	if last := run[len(run)-1]; last != run[1] {
+		addresses += "-" + last.String()
+	}
+	return run[0].String(), addresses
 }
 
-// ownAddress is a node's IPv4 address on a bridge with its prefix length, like 192.0.2.5/24.
-func ownAddress(cidr string) (netip.Prefix, bool) {
+// bridgeNetworks are the networks a node reports on a bridge, IPv4 and IPv6, and the addresses on
+// them spoken for: the node's own and the gateway's. A family is no network where the node has no
+// address there.
+func (s *Server) bridgeNetworks(ctx context.Context, u user, node, bridge string) (bridgeFamily, bridgeFamily, error) {
+	bridges, err := s.Accounts.Bridges(ctx, u.ticket, node)
+	if err != nil {
+		return bridgeFamily{}, bridgeFamily{}, fmt.Errorf("reading the bridges of %s: %w", node, err)
+	}
+	var v4, v6 bridgeFamily
+	for i := range bridges {
+		b := &bridges[i]
+		if b.Bridge != bridge {
+			continue
+		}
+		if f, ok := familyOn(b.CIDR, b.Gateway, true); ok && !v4.network.IsValid() {
+			v4 = f
+		}
+		if f, ok := familyOn(b.CIDR6, b.Gateway6, false); ok && !v6.network.IsValid() {
+			v6 = f
+		}
+	}
+	return v4, v6, nil
+}
+
+// familyOn is a node's network of one family on a bridge from its own address with the prefix
+// length and its gateway.
+func familyOn(cidr, gateway string, is4 bool) (bridgeFamily, bool) {
+	own, ok := ownAddress(cidr, is4)
+	if !ok {
+		return bridgeFamily{}, false
+	}
+	reserved := [][2]netip.Addr{{own.Addr(), own.Addr()}}
+	if gw, err := netip.ParseAddr(gateway); err == nil {
+		reserved = append(reserved, [2]netip.Addr{gw, gw})
+	}
+	return bridgeFamily{network: own.Masked(), reserved: reserved}, true
+}
+
+// ownAddress is a node's address of one family on a bridge with its prefix length, like
+// 192.0.2.5/24 or 2001:db8::5/64.
+func ownAddress(cidr string, is4 bool) (netip.Prefix, bool) {
 	p, err := netip.ParsePrefix(cidr)
-	return p, err == nil && p.Addr().Is4()
+	return p, err == nil && p.Addr().Is4() == is4 && !p.Addr().Is4In6()
 }
 
 // takenAddresses are the addresses Kubehenge's clusters hold on a bridge and VLAN. They are read
@@ -156,8 +243,8 @@ func (s *Server) takenAddresses(ctx context.Context, bridge string, vlan int) ([
 func (s *Server) freeRun(ctx context.Context, network netip.Prefix, taken [][2]netip.Addr, n int) []netip.Addr {
 	first, last := hosts(network)
 	start := first
-	if addrInt(last)-addrInt(network.Addr()) >= smallNetwork {
-		start = intAddr(addrInt(network.Addr()) + freeStart)
+	if network.Addr().BitLen()-network.Bits() >= smallHostBits {
+		start = advance(network.Addr(), freeStart)
 	}
 	var candidates []netip.Addr
 	for a := start; a.IsValid() && a.Compare(last) <= 0 && len(candidates) < probeMost; a = a.Next() {
@@ -212,25 +299,34 @@ func checked(entries []string, network netip.Prefix) []netip.Addr {
 }
 
 // hosts are the first and last address of a network a host may take: all but its network and
-// broadcast address, where it has them.
+// broadcast address in IPv4, and all but the subnet-router anycast address in IPv6.
 func hosts(network netip.Prefix) (netip.Addr, netip.Addr) {
-	first := network.Addr()
-	last := intAddr(addrInt(first) | (uint32(1)<<(first.BitLen()-network.Bits()) - 1))
-	if network.Bits() < pointToPoint {
+	first, last := network.Addr(), lastAddr(network)
+	switch {
+	case network.Addr().Is4() && network.Bits() < pointToPoint:
 		return first.Next(), last.Prev()
+	case network.Addr().Is6() && network.Bits() < pointToPointIPv6:
+		return first.Next(), last
 	}
 	return first, last
 }
 
-func addrInt(a netip.Addr) uint32 {
-	b := a.As4()
-	return binary.BigEndian.Uint32(b[:])
+// lastAddr is the last address of a network: its host bits all set.
+func lastAddr(p netip.Prefix) netip.Addr {
+	b := p.Masked().Addr().AsSlice()
+	for i := p.Bits(); i < len(b)*byteBits; i++ {
+		b[i/byteBits] |= 1 << (byteBits - 1 - i%byteBits)
+	}
+	a, _ := netip.AddrFromSlice(b)
+	return a
 }
 
-func intAddr(v uint32) netip.Addr {
-	var b [4]byte
-	binary.BigEndian.PutUint32(b[:], v)
-	return netip.AddrFrom4(b)
+// advance is the address n past a.
+func advance(a netip.Addr, n int) netip.Addr {
+	for ; n > 0 && a.IsValid(); n-- {
+		a = a.Next()
+	}
+	return a
 }
 
 // probe tells which of the addresses a host answers on.

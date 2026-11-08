@@ -57,18 +57,20 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | VLAN tag | Optional, 1 to 4094. With a tag, the wizard fills in nothing from the bridge's untagged network. A VNet of a VLAN zone tags its traffic already, so Kubehenge refuses a tag on it. |
 | MTU | Optional, 1280 to 65520, [below](#interface-mtu-and-queues). |
 | Queues | Optional, 1 to 64. The queues of the VMs' virtio interface, which spread its traffic over several vCPUs. Unset, it has one. |
-| API address | The control plane's virtual IP: an unused address in the nodes' network, outside the node addresses. |
+| Address families | IPv4, IPv6, or both for dual-stack, the first one primary. Fixed for the cluster's life, [below](#ipv6-and-dual-stack). |
+| API address | The control plane's virtual IP: an unused address in the nodes' network of the primary family, outside the node addresses. |
 | Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds. It counts an autoscaled pool at its most. Leave more for scaling up. |
 | Prefix length | Of the nodes' network. |
 | Gateway | The nodes' default gateway. |
-| DNS servers | IPv4 addresses, one per line or separated by commas. |
+| IPv4 and IPv6 fields | With both families, the three fields above come once per family and name it, such as "IPv6 gateway". IPv6 ranges look like `2001:db8::21-2001:db8::29`. |
+| DNS servers | Addresses of the cluster's families, one per line or separated by commas. A dual-stack cluster needs one of each family. |
 | Time servers | Up to 8 NTP host names or IP addresses, separated by commas. Empty keeps the node image's public servers. The nodes reach them on UDP 123, and a node that cannot sync is reported on the health page ([troubleshooting](troubleshooting.md#a-nodes-clock-is-off)). |
 | Registry mirrors | Per registry, up to 4 mirror addresses and an optional authority, [below](#sites-with-limited-access). |
 | Trusted CAs | PEM certificates the nodes trust besides their OS's own, [below](#sites-with-limited-access). |
 | Load balancer | What gives Services of type `LoadBalancer` their addresses, [below](#load-balancer). |
 | Load-balancer addresses | With a load balancer: the addresses it hands out, as ranges, networks or single addresses. |
 | Announce with | With MetalLB: layer 2 (ARP) or BGP, [below](#bgp). |
-| Cluster AS number, Routers | With BGP: the cluster's AS number, and each router's address and AS number. |
+| Cluster AS number, Routers, Router ID | With BGP: the cluster's AS number, each router's address and AS number, and the router id. |
 | Use a BGP password | With BGP: one TCP-MD5 password for every router. |
 | Pod network | The CNI, [below](#pod-network). |
 | Pod range, Service range | Optional, under **Pod and service ranges**. |
@@ -100,6 +102,20 @@ The nodes' network is the gateway with the prefix length. Pod and service ranges
 
 Kubehenge sets both ranges on every cluster it creates. It takes those you give, and refuses them if they overlap. Otherwise it takes the distribution's own, when they are clear of the nodes' network (`10.244.0.0/16` and `10.96.0.0/12` for kubeadm and Talos, `10.42.0.0/16` and `10.43.0.0/16` for RKE2 and k3s). Otherwise it takes the first of a few private ranges that are clear.
 
+#### IPv6 and dual-stack
+
+A cluster has IPv4, IPv6, or both. Every distribution and CNI runs each of them.
+
+- **The primary family** comes first. The API address, the Services' first range and each node's first address are of it.
+- **Pod and service ranges** come one per family, in the same order. An IPv6 pod range is a /48 to /63, a Service range a /112 to /120.
+- **Default IPv6 ranges** are `fd5e:4b1c:9a20::/56` for pods and `fd5e:4b1c:9a21::/112` for Services. Where they clash with the nodes' network, the first clear range after them is taken.
+- **Node addresses** come from each family's range. A node's kubelet is given its address of each family, the primary first.
+- **Load balancers** hand out addresses of the cluster's families. A Service that asks for both families needs a range of each.
+- **Fixed.** The families cannot change once the cluster exists, as Kubernetes cannot change them on a running cluster.
+- **Cluster Mesh** links clusters whose nodes reach each other over the same family: IPv4 where both have it, else IPv6.
+
+An IPv6-only network has to reach what the nodes and add-ons download, much of which has no IPv6 address (GitHub among them). That takes NAT64 with DNS64 on the network, or mirrors. The management cluster can pull through [registry mirrors and chart mirrors](install.md#mirroring-the-charts). The cluster's own nodes need NAT64 and DNS64, since RKE2 and k3s fetch their release from GitHub as a node boots.
+
 #### Load balancer
 
 Without one, kubeadm and RKE2 clusters give Services of type `LoadBalancer` no address. On k3s, its own servicelb answers for each on every node's address, on any port but 80 and 443, which the ingress controller holds.
@@ -109,19 +125,21 @@ With one, each such Service takes an address of its own from the load-balancer a
 - **MetalLB** (recommended), in the `metallb-system` namespace. It announces in layer 2 (ARP) or over BGP.
 - **kube-vip**, in `kube-system`, with kube-vip's cloud provider handing out the addresses. It announces in layer 2 only.
 
-In layer 2, the addresses must be unused and on the nodes' network. They must differ from the node addresses, the API address, the gateway and the network's own and broadcast addresses. Kubehenge refuses a clash with these, or with another cluster's addresses on the same bridge and VLAN. It checks when the cluster is created and whenever its addresses change.
+In layer 2, the addresses must be unused and on the nodes' network. They must differ from the node addresses, the API address, the gateway and the network's own and broadcast addresses (on IPv6, its first address). Kubehenge refuses a clash with these, or with another cluster's addresses on the same bridge and VLAN. It checks when the cluster is created and whenever its addresses change.
 
 On k3s, a load balancer switches servicelb off. The load balancer can be switched, or changed to other addresses, later ([below](#change-settings)). Services whose addresses are outside the new range then take new ones from it. A switch from MetalLB to kube-vip hands every Service its address afresh.
 
 ##### Layer 2 and switches that inspect ARP
 
-Layer 2 needs the switch to accept the nodes' gratuitous ARP for the load-balancer addresses and for the API address. A switch with dynamic ARP inspection or port security drops it. The Service then shows an `EXTERNAL-IP` that nobody answers for. Allow the addresses on the switch, or use BGP.
+Layer 2 needs the switch to accept the nodes' gratuitous ARP for the load-balancer addresses and for the API address. For IPv6 addresses, that is their unsolicited neighbour advertisements. A switch with dynamic ARP inspection or port security drops it. The Service then shows an `EXTERNAL-IP` that nobody answers for. Allow the addresses on the switch, or use BGP.
 
 ##### BGP
 
 The `bgp` mode announces the load-balancer addresses and the API address to your routers instead of answering ARP. The addresses may then lie in a routed range outside the nodes' network. The gateway, the node addresses, the API address and other clusters' addresses are still refused.
 
-- **Cluster AS number** and **Routers**: the cluster's AS number and each router's address and AS number. AS numbers run from 1 to 4294967295. Routers are IPv4.
+- **Cluster AS number** and **Routers**: the cluster's AS number and each router's address and AS number. AS numbers run from 1 to 4294967295. Routers are addresses of the cluster's families.
+- **Router ID:** a dotted 32-bit id such as `10.0.0.1`. Left empty, each node gives its own IPv4 address.
+- **Router ID on IPv6 only:** required, as the nodes have no IPv4 address. Every node gives the same id, which the routers have to accept from several peers.
 - **Services:** MetalLB announces them from the workers, through its frr-k8s backend. A cluster needs at least one worker while the load balancer is on.
 - **The API address:** kube-vip on the control planes announces it. The control plane that leads announces it, and another takes over when it fails. This works on kubeadm, RKE2 and k3s. Talos has no BGP option for its virtual IP.
 - **The routers** must accept a session from every node's own address, with the cluster's AS number. The control planes peer for the API address and the workers for the Services.

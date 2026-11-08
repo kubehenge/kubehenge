@@ -52,11 +52,11 @@ func ValidHostName(s string) bool {
 // validateTimeServers holds the time servers of the network variable to TimeServerProblem, to
 // MaxTimeServers and to being listed once each. Unset, the nodes keep their image's own servers.
 func validateTimeServers(c *clusterv1.Cluster) field.ErrorList {
-	network, set, err := optionalVariable[nodeNetwork](c, "network")
+	network, set, err := optionalVariable[nodeNetwork](c, networkVariable)
 	if err != nil || !set {
 		return nil
 	}
-	path := field.NewPath("spec", "topology", "variables").Key("network")
+	path := field.NewPath("spec", "topology", "variables").Key(networkVariable)
 	if problem := timeServersProblem(network.NTP); problem != nil {
 		return field.ErrorList{field.Invalid(path, "ntp", problem.Error())}
 	}

@@ -334,7 +334,7 @@ func storageRefusal(s *Sites, c *clusterv1.Cluster, names []string) error {
 
 // clusterBridge is the bridge or VNet the cluster's VMs attach to, or "".
 func clusterBridge(c *clusterv1.Cluster) string {
-	network, _, err := optionalVariable[nodeNetwork](c, "network")
+	network, _, err := optionalVariable[nodeNetwork](c, networkVariable)
 	if err != nil {
 		return ""
 	}

@@ -283,7 +283,10 @@ test/e2e/ci/up.sh /tmp/e2e          # Proxmox VE in a container, a registry besi
 test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, appliance-upgrade, kubeadm, k3s, talos, rke2-etcd, rke2-machines, k3s-etcd, k3s-machines, kubeadm-addons-a, kubeadm-addons-b, kubeadm-addons-c, rke2-addons-a, rke2-addons-b, rke2-addons-c, rke2-addons-d, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, talos-addons-c, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
 test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or an add-on part with its CNI, node OS or no CIS hardening
 test/e2e/ci/run.sh /tmp/e2e management-cluster-upgrade+management-3584   # any test but the appliance, its management node at 3584 MiB
+test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+dual-stack   # IPv4 and IPv6, IPv4 first, or +ipv6-first (up.sh then needs KUBEHENGE_E2E_IPV6=1)
 ```
+
+The `dual-stack` and `ipv6-first` options run on dispatch only, such as `kubeadm+calico+dual-stack`. The nightly rotation leaves them out.
 
 The control plane of three servers stays on k3s. Three k3s servers at the class's least of 4096 MiB fit beside a worker and the management cluster. RKE2's and kubeadm's need bigger workers too. A minor upgrade of three servers needs a fourth beside them while each is replaced, which the machine's memory does not hold.
 

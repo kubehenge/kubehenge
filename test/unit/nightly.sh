@@ -236,6 +236,9 @@ refused management-cluster+management-0
 refused management-cluster+management-035
 refused management-cluster+management-35x
 refused management-cluster+management-3584+calico
+refused appliance+dual-stack
+refused management-cluster+ipv6-first
+refused control-plane-ha+dual-stack
 # reads <name> <settings>: the settings the name carries, one per line.
 reads() {
     variant_of "$1"
@@ -246,6 +249,10 @@ reads control-plane-ha+management-5120 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=5
 reads kubeadm-addons-a+calico+management-4096 'export KUBEHENGE_E2E_CNI=calico
 export KUBEHENGE_E2E_MANAGEMENT_MEMORY=4096'
 reads rke2+calico 'export KUBEHENGE_E2E_CNI=calico'
+reads kubeadm+calico+dual-stack 'export KUBEHENGE_E2E_CNI=calico
+export KUBEHENGE_E2E_IP_FAMILIES=IPv4,IPv6'
+reads rke2-etcd+cilium+ipv6-first 'export KUBEHENGE_E2E_CNI=cilium
+export KUBEHENGE_E2E_IP_FAMILIES=IPv6,IPv4'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
 variant_of control-plane-ha

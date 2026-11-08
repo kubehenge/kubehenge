@@ -143,7 +143,7 @@ func TestEveryNodeTakesTheSiteSettings(t *testing.T) {
 				"HTTPS_PROXY='http://secure.example.org:3129'\n",
 				"https_proxy='http://secure.example.org:3129'\n",
 				// The cluster's own ranges, node network and API address join the user's exceptions, once.
-				"NO_PROXY='localhost,127.0.0.1,.svc,.cluster.local,192.0.2.10,192.0.2.1/24,172.16.0.0/16,172.17.0.0/16,.corp.example.org,10.10.0.0/16'\n",
+				"NO_PROXY='localhost,127.0.0.1,::1,.svc,.cluster.local,192.0.2.10,192.0.2.1/24,172.16.0.0/16,172.17.0.0/16,.corp.example.org,10.10.0.0/16'\n",
 			} {
 				if !strings.Contains(script, want) {
 					t.Errorf("script lacks %q:\n%s", want, script)
@@ -277,10 +277,42 @@ func TestNoProxyHoldsTheClustersOwnRangesOrTheDistributionsDefaults(t *testing.T
 			`{"pods": ["172.16.0.0/16", "172.16.0.0/16"], "services": ["172.17.0.0/16"]}`: "172.16.0.0/16,172.17.0.0/16",
 		} {
 			script, _ := siteScript(t, &c, siteVariables(t, builtin, nil))
-			line := "NO_PROXY='localhost,127.0.0.1,.svc,.cluster.local,192.0.2.10,192.0.2.1/24," + want + ",.corp.example.org,10.10.0.0/16'\n"
+			line := "NO_PROXY='localhost,127.0.0.1,::1,.svc,.cluster.local,192.0.2.10,192.0.2.1/24," + want + ",.corp.example.org,10.10.0.0/16'\n"
 			if !strings.Contains(script, line) {
 				t.Errorf("%s with %s: script lacks %q:\n%s", c.distribution, builtin, line, script)
 			}
+		}
+	}
+}
+
+// A node's proxy leaves out the node network of each of the cluster's address families, and no
+// IPv4 network where the cluster has none.
+func TestNoProxyHoldsEveryFamilysNodeNetwork(t *testing.T) {
+	t.Parallel()
+	const (
+		ipv6     = `"ipv6": {"addresses": ["2001:db8::20-2001:db8::30"], "prefix": 64, "gateway": "2001:db8::1"}`
+		ranges   = `{"pods": ["fd5e:4b1c:9a20::/56"], "services": ["fd5e:4b1c:9a21::/112"]}`
+		dual     = `{"pods": ["172.16.0.0/16", "fd5e:4b1c:9a20::/56"], "services": ["172.17.0.0/16", "fd5e:4b1c:9a21::/112"]}`
+		prologue = "NO_PROXY='localhost,127.0.0.1,::1,.svc,.cluster.local,192.0.2.10,"
+		epilogue = ",.corp.example.org,10.10.0.0/16'\n"
+	)
+	for name, c := range map[string]struct{ network, builtin, want string }{
+		"IPv6 only": {
+			`{"ipFamilies": ["IPv6"], "bridge": "vmbr0", ` + ipv6 + `}`, ranges,
+			"2001:db8::1/64,fd5e:4b1c:9a20::/56,fd5e:4b1c:9a21::/112",
+		},
+		"dual-stack": {
+			`{"ipFamilies": ["IPv4", "IPv6"], "bridge": "vmbr0", "gateway": "192.0.2.1", "prefix": 24, "addresses": ["192.0.2.20-192.0.2.30"], ` + ipv6 + `}`, dual,
+			"192.0.2.1/24,2001:db8::1/64,172.16.0.0/16,fd5e:4b1c:9a20::/56,172.17.0.0/16,fd5e:4b1c:9a21::/112",
+		},
+	} {
+		var network map[string]any
+		if err := json.Unmarshal([]byte(c.network), &network); err != nil {
+			t.Fatal(err)
+		}
+		script, _ := siteScript(t, &siteCases[0], siteVariables(t, c.builtin, map[string]any{"network": network}))
+		if line := prologue + c.want + epilogue; !strings.Contains(script, line) {
+			t.Errorf("%s: script lacks %q:\n%s", name, line, script)
 		}
 	}
 }
@@ -295,7 +327,7 @@ func TestTalosNodesTakeTheSiteSettings(t *testing.T) {
 		for _, want := range []string{
 			`"HTTP_PROXY":"http://proxy.example.org:3128"`,
 			`"HTTPS_PROXY":"http://secure.example.org:3129"`,
-			`"NO_PROXY":"localhost,127.0.0.1,.svc,.cluster.local,192.0.2.10,192.0.2.1/24,172.16.0.0/16,172.17.0.0/16,.corp.example.org,10.10.0.0/16"`,
+			`"NO_PROXY":"localhost,127.0.0.1,::1,.svc,.cluster.local,192.0.2.10,192.0.2.1/24,172.16.0.0/16,172.17.0.0/16,.corp.example.org,10.10.0.0/16"`,
 		} {
 			if !strings.Contains(env, want) {
 				t.Errorf("%s: machine.env %s lacks %s", kind, env, want)

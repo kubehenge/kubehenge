@@ -46,6 +46,12 @@
 # outnumber its CPUs starve each other, whatever their sizes.
 # KUBEHENGE_E2E_NODE_OS is the nodes' operating system as one word, such as rocky-10, whose
 # template has to exist; unset, the class's default applies. Talos nodes run Talos and take none.
+# KUBEHENGE_E2E_IP_FAMILIES, IPv4,IPv6 or IPv6,IPv4 (the first is primary), makes the cluster
+# dual-stack and adds the checks that nodes, pods, Services and load balancers hold both. It needs
+# KUBEHENGE_E2E_IPV6_PREFIX, KUBEHENGE_E2E_IPV6_GATEWAY, KUBEHENGE_E2E_IPV6_DNS,
+# KUBEHENGE_E2E_IPV6_ENDPOINT (the control plane's virtual IP when IPv6 is first),
+# KUBEHENGE_E2E_IPV6_ADDRESSES and KUBEHENGE_E2E_IPV6_LOAD_BALANCER_ADDRESSES, on the nodes' network
+# like their IPv4 counterparts. With IPv6 first, the machine running this test reaches that network.
 # KUBEHENGE_E2E_CIS=false creates the cluster without CIS hardening, the class's default, and leaves
 # the benchmark out; by default the cluster is hardened and its nodes checked against it.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
@@ -437,6 +443,40 @@ network_spec=$(cluster_network)
 addresses=$(json_list "${KUBEHENGE_E2E_ADDRESSES}")
 dns_servers=$(json_list "${KUBEHENGE_E2E_DNS}")
 load_balancer_addresses=$(json_list "${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}")
+# The control plane's virtual IP is of the primary family. Steps that reach it by name or over HTTP
+# read endpoint, endpoint_record (the DNS record type), endpoint_family and endpoint_host (as a URL
+# or curl --resolve takes it).
+endpoint=${KUBEHENGE_E2E_ENDPOINT}
+endpoint_record=A
+endpoint_family=IPv4
+endpoint_host=${endpoint}
+ip_families=${KUBEHENGE_E2E_IP_FAMILIES:-}
+load_balancer_both=${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}
+network_families=
+case ${ip_families} in
+    '') ;;
+    IPv4,IPv6 | IPv6,IPv4)
+        : "${KUBEHENGE_E2E_IPV6_PREFIX:?}" "${KUBEHENGE_E2E_IPV6_GATEWAY:?}" "${KUBEHENGE_E2E_IPV6_DNS:?}"
+        : "${KUBEHENGE_E2E_IPV6_ENDPOINT:?}" "${KUBEHENGE_E2E_IPV6_ADDRESSES:?}" "${KUBEHENGE_E2E_IPV6_LOAD_BALANCER_ADDRESSES:?}"
+        dns_both="${KUBEHENGE_E2E_DNS},${KUBEHENGE_E2E_IPV6_DNS}"
+        load_balancer_both="${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES},${KUBEHENGE_E2E_IPV6_LOAD_BALANCER_ADDRESSES}"
+        if [ "${ip_families%%,*}" = IPv6 ]; then
+            endpoint=${KUBEHENGE_E2E_IPV6_ENDPOINT}
+            endpoint_record=AAAA
+            endpoint_family=IPv6
+            endpoint_host="[${endpoint}]"
+            dns_both="${KUBEHENGE_E2E_IPV6_DNS},${KUBEHENGE_E2E_DNS}"
+            load_balancer_both="${KUBEHENGE_E2E_IPV6_LOAD_BALANCER_ADDRESSES},${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}"
+        fi
+        dns_servers=$(json_list "${dns_both}")
+        load_balancer_addresses=$(json_list "${load_balancer_both}")
+        families_list=$(json_list "${ip_families}")
+        ipv6_addresses=$(json_list "${KUBEHENGE_E2E_IPV6_ADDRESSES}")
+        network_families=$(printf '          ipFamilies: %s\n          ipv6:\n            addresses: %s\n            prefix: %s\n            gateway: "%s"' \
+            "${families_list}" "${ipv6_addresses}" "${KUBEHENGE_E2E_IPV6_PREFIX}" "${KUBEHENGE_E2E_IPV6_GATEWAY}")
+        ;;
+    *) fail "KUBEHENGE_E2E_IP_FAMILIES is IPv4,IPv6 or IPv6,IPv4, not ${ip_families}" ;;
+esac
 cni_variable=
 if [ -n "${KUBEHENGE_E2E_CNI:-}" ]; then
     cni_variable=$(printf '      - name: cni\n        value: %s\n' "${KUBEHENGE_E2E_CNI}")
@@ -531,7 +571,7 @@ ${network_spec}
           replicas: 1
     variables:
       - name: controlPlaneEndpoint
-        value: ${KUBEHENGE_E2E_ENDPOINT}
+        value: "${endpoint}"
       - name: network
         value:
           bridge: ${KUBEHENGE_E2E_BRIDGE}
@@ -539,6 +579,7 @@ ${network_spec}
           prefix: ${KUBEHENGE_E2E_PREFIX}
           gateway: ${KUBEHENGE_E2E_GATEWAY}
           dnsServers: ${dns_servers}
+${network_families}
       - name: storage
         value: ${KUBEHENGE_E2E_STORAGE}
       # From the start: on k3s, switching it on later replaces the control planes.
@@ -1070,7 +1111,9 @@ wl -n e2e-ingress wait --for=condition=Ready pod/web --timeout=5m
 # served <address> [host name]: whether the address serves the web pod at the host name, e2e.test
 # unless given; netexec answers /hostname with its pod's name.
 served() {
-    served_answer=$(curl -sS --max-time 5 -H "Host: ${2:-e2e.test}" "http://$1/hostname" 2> /dev/null) || return 1
+    served_host=$1
+    case ${served_host} in *:*) served_host="[${served_host}]" ;; *) ;; esac
+    served_answer=$(curl -sS --max-time 5 -H "Host: ${2:-e2e.test}" "http://${served_host}/hostname" 2> /dev/null) || return 1
     [ "${served_answer}" = web ]
 }
 # The Gateway API's objects, as <kind>/<name>: its CRDs and the admission policy beside them.
@@ -1196,10 +1239,21 @@ gateway_api_chart_holds() {
 }
 gateway_programmed() {
     wl -n kube-system get gateway traefik-gateway -o json 2> /dev/null |
-        jq -e --arg ip "${KUBEHENGE_E2E_ENDPOINT}" 'any(.status.conditions[]?; .type == "Programmed" and .status == "True") and any(.status.addresses[]?; .value == $ip)' > /dev/null
+        jq -e --arg ip "${endpoint}" 'any(.status.conditions[]?; .type == "Programmed" and .status == "True") and any(.status.addresses[]?; .value == $ip)' > /dev/null
 }
 node_addresses=$(wl get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
-for address in ${KUBEHENGE_E2E_ENDPOINT} ${node_addresses}; do
+if [ -n "${ip_families}" ]; then
+    # Traefik serves the primary family on the nodes, so the other family's address is left out.
+    primary_addresses=
+    for address in ${node_addresses}; do
+        case ${address} in
+            *:*) [ "${endpoint_family}" = IPv6 ] && primary_addresses="${primary_addresses} ${address}" ;;
+            *) [ "${endpoint_family}" = IPv4 ] && primary_addresses="${primary_addresses} ${address}" ;;
+        esac
+    done
+    node_addresses=${primary_addresses}
+fi
+for address in ${endpoint} ${node_addresses}; do
     until_true 300 "${address} serves the host name" served "${address}"
 done
 
@@ -1223,7 +1277,7 @@ spec:
           port: 80
 EOF
 wl -n e2e-ingress wait --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True httproute/web --timeout=2m
-until_true 300 "the API address serves the route" served "${KUBEHENGE_E2E_ENDPOINT}" gateway.e2e.test
+until_true 300 "the API address serves the route" served "${endpoint}" gateway.e2e.test
 wl delete namespace e2e-ingress --wait=false
 
 step "a Service of type LoadBalancer answers on an address from the cluster's range, with ${load_balancer}"
@@ -1242,21 +1296,104 @@ a = ipaddress.ip_address(sys.argv[2])
 def holds(e):
     if "-" in e:
         first, last = (ipaddress.ip_address(x.strip()) for x in e.split("-"))
-        return first <= a <= last
+        return first.version == a.version and first <= a <= last
     return a in ipaddress.ip_network(e.strip(), strict=False)
 sys.exit(0 if any(holds(e) for e in sys.argv[1].split(",")) else 1)' "$@"; }
 # shellcheck disable=SC2310 # the answer is the status.
-in_range "${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}" "${lb_ip}" ||
-    fail "the Service's ${lb_ip} is not from ${KUBEHENGE_E2E_LOAD_BALANCER_ADDRESSES}"
+in_range "${load_balancer_both}" "${lb_ip}" ||
+    fail "the Service's ${lb_ip} is not from ${load_balancer_both}"
 # netexec answers /hostname with its pod's name.
 answers() {
-    answer=$(curl -sS --max-time 5 "http://$1:8080/hostname" 2> /dev/null) || return 1
+    answers_host=$1
+    case ${answers_host} in *:*) answers_host="[${answers_host}]" ;; *) ;; esac
+    answer=$(curl -sS --max-time 5 "http://${answers_host}:8080/hostname" 2> /dev/null) || return 1
     [ "${answer}" = web ]
 }
 until_true 300 "${lb_ip} answers for the Service" answers "${lb_ip}"
 if [ "${distribution}" = k3s ]; then
     servicelb=$(wl -n kube-system get daemonsets -l svccontroller.k3s.cattle.io/svcname -o name)
     [ -z "${servicelb}" ] || fail "k3s's servicelb runs beside the load balancer: ${servicelb}"
+fi
+
+if [ -n "${ip_families}" ]; then
+    step "dual stack, ${ip_families} first: nodes, ranges, pods, Services and load balancers hold both families"
+    # jq filters over a list of addresses or ranges that give its families: in list order, in order
+    # of first appearance, and sorted.
+    family_list='map(if contains(":") then "IPv6" else "IPv4" end) | join(",")'
+    # shellcheck disable=SC2016 # $f is jq's variable.
+    family_order='map(if contains(":") then "IPv6" else "IPv4" end) | reduce .[] as $f ([]; if index($f) then . else . + [$f] end) | join(",")'
+    family_set='map(if contains(":") then "IPv6" else "IPv4" end) | sort | join(",")'
+    # The cloud controller manager sets a node's addresses, so they may follow its first reading.
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+    dual_nodes() {
+        dual_bad=$(wl get nodes -o json | jq -r --arg f "${ip_families}" \
+            '[.items[] | select(([.status.addresses[] | select(.type == "InternalIP") | .address] | '"${family_order}"') != $f) | .metadata.name] | join(" ")') || return 1
+        seen="nodes whose InternalIPs are not ${ip_families}: ${dual_bad}"
+        [ -z "${dual_bad}" ]
+    }
+    until_true 300 "every node has an InternalIP of each family, ${ip_families} first" dual_nodes
+    dual_ranges() {
+        dual_bad=$(kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r --arg f "${ip_families}" \
+            '[.spec.clusterNetwork | ((.pods.cidrBlocks // []), (.services.cidrBlocks // [])) | '"${family_list}"' | select(. != $f)] | join(" ")') || return 1
+        seen="ranges not ${ip_families}: ${dual_bad}"
+        [ -z "${dual_bad}" ]
+    }
+    until_true 120 "the Cluster's pod and service ranges hold one of each family, ${ip_families} first" dual_ranges
+    new_namespace wl e2e-dual
+    agnhost_pod e2e-dual web netexec --http-port=8080
+    agnhost_pod e2e-dual client pause
+    wl -n e2e-dual wait --for=condition=Ready pod/web pod/client --timeout=5m
+    wl -n e2e-dual apply -f - << 'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+spec:
+  ipFamilyPolicy: RequireDualStack
+  selector:
+    run: web
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-lb
+spec:
+  type: LoadBalancer
+  ipFamilyPolicy: RequireDualStack
+  selector:
+    run: web
+  ports:
+    - port: 8080
+      targetPort: 8080
+EOF
+    # dual_has <kind/name> <jq list of addresses> <jq family filter> <families>: whether the filter
+    # gives the families for the object's addresses.
+    # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+    dual_has() {
+        dual_found=$(wl -n e2e-dual get "$1" -o json | jq -r "$2 | ${3}") || return 1
+        seen="${dual_found}"
+        [ "${dual_found}" = "$4" ]
+    }
+    until_true 120 "the pod has an address of each family, ${ip_families} first" \
+        dual_has pod/web '[.status.podIPs[]?.ip]' "${family_list}" "${ip_families}"
+    until_true 120 "the Service has a ClusterIP of each family, ${ip_families} first" \
+        dual_has service/web '[.spec.clusterIPs[]?]' "${family_list}" "${ip_families}"
+    # The load balancer implementation may list the families in either order.
+    until_true 600 "the LoadBalancer Service has an external address of each family" \
+        dual_has service/web-lb '[.status.loadBalancer.ingress[]?.ip]' "${family_set}" IPv4,IPv6
+    for dual_ip in $(wl -n e2e-dual get service web-lb -o jsonpath='{.status.loadBalancer.ingress[*].ip}'); do
+        # shellcheck disable=SC2310 # the answer is the status.
+        in_range "${load_balancer_both}" "${dual_ip}" || fail "the Service's ${dual_ip} is not from ${load_balancer_both}"
+    done
+    dual_reaches() { wl -n e2e-dual exec client -- /agnhost connect "$1:8080" --timeout=3s > /dev/null 2>&1; }
+    for dual_ip in $(wl -n e2e-dual get service web -o jsonpath='{.spec.clusterIPs[*]}'); do
+        case ${dual_ip} in *:*) dual_target="[${dual_ip}]" ;; *) dual_target=${dual_ip} ;; esac
+        until_true 120 "a pod reaches the Service's ClusterIP ${dual_ip}" dual_reaches "${dual_target}"
+    done
+    wl delete namespace e2e-dual --wait=false
 fi
 
 owned() {
@@ -2803,7 +2940,7 @@ EOF
         # https_answers <CA file> <host name> <path> <pattern>: whether the API address answers the path at
         # the host name over HTTPS, with a certificate the CA vouches for, matching the pattern.
         https_answers() {
-            https_answer=$(curl -sS --fail --max-time 5 --cacert "$1" --resolve "$2:443:${KUBEHENGE_E2E_ENDPOINT}" "https://$2$3" 2> /dev/null) || return 1
+            https_answer=$(curl -sS --fail --max-time 5 --cacert "$1" --resolve "$2:443:${endpoint_host}" "https://$2$3" 2> /dev/null) || return 1
             printf '%s' "${https_answer}" | grep -qiE "$4"
         }
         until_true 300 "an Ingress served over HTTPS with the default certificate" https_answers "${work}/ingress-ca.crt" web.e2e.test /hostname '^web$'
@@ -2898,8 +3035,8 @@ EOF
 @ IN SOA ns hostmaster 1 60 60 600 60
 @ IN NS ns
 ns IN A ${dns_ip}
-${http01_host}. IN A ${KUBEHENGE_E2E_ENDPOINT}
-${http01_headlamp}. IN A ${KUBEHENGE_E2E_ENDPOINT}
+${http01_host}. IN ${endpoint_record} ${endpoint}
+${http01_headlamp}. IN ${endpoint_record} ${endpoint}
 EOF
         wl -n e2e-acme create secret generic dns --from-file="${work}/dns"
         openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=pebble \
@@ -3165,21 +3302,21 @@ metadata:
   labels:
     kubernetes.io/service-name: ${http01_service}
     endpointslice.kubernetes.io/managed-by: e2e.kubehenge.dev
-addressType: IPv4
+addressType: ${endpoint_family}
 ports:
   - name: http
     port: 80
     protocol: TCP
 endpoints:
-  - addresses: [${KUBEHENGE_E2E_ENDPOINT}]
+  - addresses: ["${endpoint}"]
 EOF
         done
         # http01_resolved <name>: whether the cluster's DNS and BIND both give the name the API address.
         # shellcheck disable=SC2310 # polled with set -e off, so a failed query is only a retry.
         http01_resolved() {
-            http01_cluster=$(wl -n e2e-acme exec client -- dig +short "$1" A 2>&1) &&
-                http01_bind=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" "$1" A 2>&1) &&
-                [ "${http01_cluster}" = "${KUBEHENGE_E2E_ENDPOINT}" ] && [ "${http01_bind}" = "${KUBEHENGE_E2E_ENDPOINT}" ]
+            http01_cluster=$(wl -n e2e-acme exec client -- dig +short "$1" "${endpoint_record}" 2>&1) &&
+                http01_bind=$(wl -n e2e-acme exec client -- dig +short "@${dns_ip}" "$1" "${endpoint_record}" 2>&1) &&
+                [ "${http01_cluster}" = "${endpoint}" ] && [ "${http01_bind}" = "${endpoint}" ]
         }
         until_true 60 "${http01_host} resolved to the API address" http01_resolved "${http01_host}"
         until_true 60 "${http01_headlamp} resolved to the API address" http01_resolved "${http01_headlamp}"

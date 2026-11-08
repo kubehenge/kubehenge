@@ -174,6 +174,44 @@ func TestSignedBGPSessionsTakeTheirKubeVipFromASecret(t *testing.T) {
 	}
 }
 
+// kube-vip's router id is a dotted 32-bit id: the cluster's own, else the node's address where it
+// is IPv4, else the node's IPv4 address, which node-ip.sh writes over the placeholder.
+func TestKubeVipRouterIDFollowsTheFamilies(t *testing.T) {
+	t.Parallel()
+	variables := func(families []any, routerID string) map[string]any {
+		bgp := map[string]any{"asn": float64(65001), "peers": []any{map[string]any{"address": "2001:db8::1", "asn": float64(65000)}}}
+		if routerID != "" {
+			bgp["routerID"] = routerID
+		}
+		return map[string]any{
+			"controlPlaneEndpoint": "2001:db8::5",
+			"network":              map[string]any{"ipFamilies": families},
+			"loadBalancer":         map[string]any{"enabled": true, "mode": "bgp", "bgp": bgp},
+		}
+	}
+	for _, file := range []string{"kubeadm.yaml", "rke2.yaml", "k3s.yaml"} {
+		t.Run(file, func(t *testing.T) {
+			t.Parallel()
+			for name, tc := range map[string]struct {
+				variables      map[string]any
+				value, fromRef string
+			}{
+				"IPv4 first":        {variables: variables([]any{"IPv4", "IPv6"}, ""), fromRef: "status.hostIP"},
+				"IPv6 first":        {variables: variables([]any{"IPv6", "IPv4"}, ""), value: "kubehenge-node-ipv4"},
+				"IPv6 only, set id": {variables: variables([]any{"IPv6"}, "10.255.0.1"), value: "10.255.0.1"},
+			} {
+				env := kubeVipEnv(t, file, tc.variables)
+				if got := env["bgp_routerid"]; got.Value != tc.value || got.ValueFrom.FieldRef.FieldPath != tc.fromRef {
+					t.Errorf("%s: router id %+v, want %q from %q", name, got, tc.value, tc.fromRef)
+				}
+				if got := env["bgp_peers"].Value; got != "[2001:db8::1]:65000::false" {
+					t.Errorf("%s: bgp_peers %q", name, got)
+				}
+			}
+		})
+	}
+}
+
 func TestControlPlaneAddressIsAnnouncedOverBGPOnEveryDistribution(t *testing.T) {
 	t.Parallel()
 	bgp := map[string]any{

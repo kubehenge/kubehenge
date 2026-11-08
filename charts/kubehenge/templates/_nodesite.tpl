@@ -77,13 +77,17 @@ pattern: '^(-----BEGIN CERTIFICATE-----\n([A-Za-z0-9+/=]+\n)+-----END CERTIFICAT
 {{/*
 A Cluster API template that sets $noProxy, the exceptions of the proxy on a node (call with "pods" and
 "services", the distribution's own ranges, for a Cluster that sets none): the cluster's pod, service
-and node networks, its API address, its own names and the exceptions the cluster lists.
+and node networks in each of its address families, its API address, its own names and the
+exceptions the cluster lists.
 */}}
 {{- define "kubehenge.nodeNoProxy" -}}
 {{ printf "{{ $pods := list %q }}{{ $services := list %q }}" .pods .services }}
 {{ `{{ with (dig "builtin" "cluster" "network" "pods" (list) .) }}{{ $pods = . }}{{ end }}
 {{ with (dig "builtin" "cluster" "network" "services" (list) .) }}{{ $services = . }}{{ end }}
-{{ $noProxy := concat (list "localhost" "127.0.0.1" ".svc" ".cluster.local" (dig "controlPlaneEndpoint" "" .) (printf "%s/%d" (dig "network" "gateway" "" .) (int (dig "network" "prefix" 24 .)))) $pods $services (dig "egressProxy" "noProxy" (list) .) | uniq | join "," }}` }}
+{{ $nodes := list }}
+{{ with (dig "network" "gateway" "" .) }}{{ $nodes = append $nodes (printf "%s/%d" . (int (dig "network" "prefix" 24 $))) }}{{ end }}
+{{ with (dig "network" "ipv6" "gateway" "" .) }}{{ $nodes = append $nodes (printf "%s/%d" . (int (dig "network" "ipv6" "prefix" 64 $))) }}{{ end }}
+{{ $noProxy := concat (list "localhost" "127.0.0.1" "::1" ".svc" ".cluster.local" (dig "controlPlaneEndpoint" "" .)) $nodes $pods $services (dig "egressProxy" "noProxy" (list) .) | uniq | join "," }}` }}
 {{- end -}}
 
 {{/* The boot script of a kubeadm, RKE2 or k3s node, as the file Cluster API writes (call with the distribution and its ranges). */}}

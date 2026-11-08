@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,6 +72,8 @@ type BGP struct {
 	Peers []BGPPeer `json:"peers"`
 	// Authenticated signs every session with the password in the cluster's bgp credential.
 	Authenticated bool `json:"authenticated"`
+	// RouterID is the BGP router id every node gives, "" for each node's own IPv4 address.
+	RouterID string `json:"routerID,omitempty"`
 }
 
 // BGPPeer is a router every node peers with.
@@ -248,6 +249,10 @@ func metalLBPool(spans []addressSpan, lb LoadBalancer) []*unstructured.Unstructu
 		}
 		if lb.BGP.Authenticated {
 			spec["passwordSecret"] = map[string]any{"name": bgpPeerSecret, "namespace": metalLBNamespace}
+		}
+		// Without one, FRR takes the node's highest IPv4 address.
+		if lb.BGP.RouterID != "" {
+			spec["routerID"] = lb.BGP.RouterID
 		}
 		objects = append(objects, metalLBObject(bgpPeerKind, metalLBv2, peerName(p.Address), spec))
 	}
@@ -493,7 +498,7 @@ func allInSpans(spans []addressSpan, addresses string) bool {
 	return true
 }
 
-// addressSpan is a run of IPv4 addresses, first to last.
+// addressSpan is a run of addresses of one family, first to last.
 type addressSpan struct{ first, last netip.Addr }
 
 func (s addressSpan) String() string {
@@ -521,47 +526,41 @@ func parseAddresses(entries []string) ([]addressSpan, error) {
 	return spans, nil
 }
 
+// parseSpan reads a range, a network or a single address, of either family. A range's two ends
+// are of one family.
 func parseSpan(e string) (addressSpan, error) {
 	if from, to, ok := strings.Cut(e, "-"); ok {
 		first, err1 := netip.ParseAddr(strings.TrimSpace(from))
 		last, err2 := netip.ParseAddr(strings.TrimSpace(to))
-		if err1 != nil || err2 != nil || !first.Is4() || !last.Is4() || last.Less(first) {
-			return addressSpan{}, fmt.Errorf("%q is not a range of IPv4 addresses, first to last", e)
+		if err1 != nil || err2 != nil || first.Is4() != last.Is4() || last.Less(first) || first.Zone() != "" || last.Zone() != "" {
+			return addressSpan{}, fmt.Errorf("%q is not a range of addresses of one family, first to last", e)
 		}
 		return addressSpan{first, last}, nil
 	}
 	if strings.Contains(e, "/") {
 		p, err := netip.ParsePrefix(e)
-		if err != nil || !p.Addr().Is4() {
-			return addressSpan{}, fmt.Errorf("%q is not an IPv4 network", e)
+		if err != nil {
+			return addressSpan{}, fmt.Errorf("%q is not a network", e)
 		}
 		p = p.Masked()
 		return addressSpan{p.Addr(), lastAddress(p)}, nil
 	}
 	a, err := netip.ParseAddr(e)
-	if err != nil || !a.Is4() {
-		return addressSpan{}, fmt.Errorf("%q is not an IPv4 address", e)
+	if err != nil || a.Zone() != "" {
+		return addressSpan{}, fmt.Errorf("%q is not an address", e)
 	}
 	return addressSpan{a, a}, nil
 }
 
-// lastAddress is a network's last address.
-func lastAddress(p netip.Prefix) netip.Addr {
-	b := p.Addr().As4()
-	v := binary.BigEndian.Uint32(b[:]) | (uint32(1)<<(p.Addr().BitLen()-p.Bits()) - 1)
-	binary.BigEndian.PutUint32(b[:], v)
-	return netip.AddrFrom4(b)
-}
-
-// clusterAddresses are the addresses a cluster takes on its nodes' network.
+// clusterAddresses are the addresses a cluster takes on its nodes' networks.
 type clusterAddresses struct {
 	// segment is the network's bridge and VLAN. Clusters on different ones share no addresses.
 	segment string
 	// routed is set when the cluster announces its addresses over BGP, so that the control-plane
 	// endpoint and the load-balancer addresses may lie outside the nodes' network.
-	routed   bool
-	nodes    netip.Prefix
-	gateway  netip.Addr
+	routed bool
+	// subnets are the nodes' networks of each of the cluster's families, the primary first.
+	subnets  []nodeSubnet
 	machines []addressSpan
 	endpoint addressSpan
 	services []addressSpan
@@ -569,19 +568,20 @@ type clusterAddresses struct {
 
 func addressesOf(cluster *clusterv1.Cluster) (clusterAddresses, error) {
 	var a clusterAddresses
-	network, err := variable[nodeNetwork](cluster, "network")
+	network, err := variable[nodeNetwork](cluster, networkVariable)
 	if err != nil {
 		return a, err
 	}
 	a.segment = fmt.Sprintf("%s/%d", network.Bridge, network.VLAN)
-	if a.gateway, err = netip.ParseAddr(network.Gateway); err != nil {
-		return a, fmt.Errorf("network.gateway: %w", err)
+	if a.subnets, err = network.subnets(); err != nil {
+		return a, err
 	}
-	if a.nodes, err = a.gateway.Prefix(network.Prefix); err != nil {
-		return a, fmt.Errorf("network.prefix: %w", err)
-	}
-	if a.machines, err = parseAddresses(network.Addrs); err != nil {
-		return a, unreadable{fmt.Errorf("network.addresses: %w", err)}
+	for _, s := range a.subnets {
+		machines, perr := parseAddresses(network.of(s.family).Addrs)
+		if perr != nil {
+			return a, unreadable{fmt.Errorf("%s.addresses: %w", familyPath(s.family), perr)}
+		}
+		a.machines = append(a.machines, machines...)
 	}
 	endpoint, err := variable[string](cluster, "controlPlaneEndpoint")
 	if err != nil {
@@ -641,28 +641,44 @@ func checkAddresses(cluster *clusterv1.Cluster, others []clusterv1.Cluster) erro
 	return nil
 }
 
-// problems are where the cluster's addresses clash with its own network.
+// problems are where the cluster's addresses clash with its own networks.
 func (a *clusterAddresses) problems() []string {
 	var problems []string
 	for _, m := range a.machines {
-		if !a.nodes.Contains(m.first) || !a.nodes.Contains(m.last) {
-			problems = append(problems, fmt.Sprintf("node addresses %s are outside the network %s", m, a.nodes))
+		if n, ok := subnetOf(a.subnets, m.first); ok && (!n.prefix.Contains(m.first) || !n.prefix.Contains(m.last)) {
+			problems = append(problems, fmt.Sprintf("node addresses %s are outside the network %s", m, n.prefix))
 		}
 		if m.overlaps(a.endpoint) {
 			problems = append(problems, fmt.Sprintf("control-plane endpoint %s is inside node addresses %s", a.endpoint, m))
 		}
 	}
-	if !a.routed && !a.nodes.Contains(a.endpoint.first) {
-		problems = append(problems, fmt.Sprintf("control-plane endpoint %s is outside the network %s", a.endpoint, a.nodes))
-	}
-	if a.endpoint.first == a.gateway {
+	primary := a.subnets[0]
+	switch {
+	case familyOf(a.endpoint.first) != primary.family:
+		problems = append(problems, fmt.Sprintf("control-plane endpoint %s is %s, and the cluster's first family is %s. Give it a %s address",
+			a.endpoint, familyOf(a.endpoint.first), primary.family, primary.family))
+	case !a.routed && !primary.prefix.Contains(a.endpoint.first):
+		problems = append(problems, fmt.Sprintf("control-plane endpoint %s is outside the network %s", a.endpoint, primary.prefix))
+	case a.endpoint.first == primary.gateway:
 		problems = append(problems, fmt.Sprintf("control-plane endpoint %s is the gateway", a.endpoint))
 	}
+	return append(problems, a.serviceProblems()...)
+}
+
+// serviceProblems are where the load-balancer addresses clash with the cluster's networks or with
+// each other.
+func (a *clusterAddresses) serviceProblems() []string {
+	var problems []string
 	for i, s := range a.services {
-		if !a.routed && (!a.nodes.Contains(s.first) || !a.nodes.Contains(s.last)) {
-			problems = append(problems, fmt.Sprintf("load-balancer addresses %s are outside the network %s", s, a.nodes))
+		n, ok := subnetOf(a.subnets, s.first)
+		if !ok {
+			problems = append(problems, fmt.Sprintf("load-balancer addresses %s are %s, which the cluster's nodes do not have", s, familyOf(s.first)))
+			continue
 		}
-		problems = append(problems, a.taken(s)...)
+		if !a.routed && (!n.prefix.Contains(s.first) || !n.prefix.Contains(s.last)) {
+			problems = append(problems, fmt.Sprintf("load-balancer addresses %s are outside the network %s", s, n.prefix))
+		}
+		problems = append(problems, a.taken(s, n)...)
 		for _, t := range a.services[i+1:] {
 			if s.overlaps(t) {
 				problems = append(problems, fmt.Sprintf("load-balancer addresses %s and %s overlap", s, t))
@@ -672,20 +688,22 @@ func (a *clusterAddresses) problems() []string {
 	return problems
 }
 
-// taken are where load-balancer addresses hold one the cluster's network has for something else.
-func (a *clusterAddresses) taken(s addressSpan) []string {
+// taken are where load-balancer addresses hold one the cluster's network of their family has for
+// something else.
+func (a *clusterAddresses) taken(s addressSpan, n nodeSubnet) []string {
 	var problems []string
-	if s.overlaps(addressSpan{a.gateway, a.gateway}) {
-		problems = append(problems, fmt.Sprintf("load-balancer addresses %s include the gateway %s", s, a.gateway))
+	if s.overlaps(addressSpan{n.gateway, n.gateway}) {
+		problems = append(problems, fmt.Sprintf("load-balancer addresses %s include the gateway %s", s, n.gateway))
 	}
-	// Hosts on the network take its first and last address for the network and its broadcast,
-	// so a Service given one would never be answered. A /31 or /32 has neither.
-	if a.nodes.Bits() < pointToPointBits {
-		for _, reserved := range []netip.Addr{a.nodes.Masked().Addr(), lastAddress(a.nodes)} {
-			if s.overlaps(addressSpan{reserved, reserved}) {
-				problems = append(problems, fmt.Sprintf("load-balancer addresses %s include the network or broadcast address %s", s, reserved))
-			}
+	for _, reserved := range reservedAddresses(n.prefix) {
+		if !s.overlaps(addressSpan{reserved, reserved}) {
+			continue
 		}
+		what := "the network or broadcast address"
+		if n.family == familyIPv6 {
+			what = "the network's subnet-router anycast address"
+		}
+		problems = append(problems, fmt.Sprintf("load-balancer addresses %s include %s %s", s, what, reserved))
 	}
 	if s.overlaps(a.endpoint) {
 		problems = append(problems, fmt.Sprintf("load-balancer addresses %s include the control-plane endpoint %s", s, a.endpoint))
@@ -763,7 +781,7 @@ func addressesChanged(old, c *clusterv1.Cluster) bool {
 	if old == nil {
 		return true
 	}
-	for _, name := range []string{"network", "controlPlaneEndpoint", loadBalancerVariable} {
+	for _, name := range []string{networkVariable, "controlPlaneEndpoint", loadBalancerVariable} {
 		was, _, err1 := optionalVariable[json.RawMessage](old, name)
 		is, _, err2 := optionalVariable[json.RawMessage](c, name)
 		if err1 != nil || err2 != nil || !bytes.Equal(was, is) {
@@ -822,12 +840,23 @@ func bgpSettingProblems(c *clusterv1.Cluster, lb *LoadBalancer) []string {
 	}
 	endpoint, _ := variable[string](c, "controlPlaneEndpoint")
 	pool, _ := parseAddresses(lb.Addresses)
+	families := clusterFamilies(c)
+	if id := lb.BGP.RouterID; id != "" {
+		if a, err := netip.ParseAddr(id); err != nil || !a.Is4() || a.IsUnspecified() {
+			problems = append(problems, fmt.Sprintf("router id %q is not a dotted 32-bit id other than 0.0.0.0, such as 10.0.0.1", id))
+		}
+	} else if !slices.Contains(families, familyIPv4) {
+		problems = append(problems, "BGP on an IPv6-only cluster needs bgp.routerID: a router id is a dotted 32-bit id, and the nodes have no IPv4 address to take theirs from. Set one, such as 10.0.0.1")
+	}
 	seen := map[netip.Addr]bool{}
 	for _, p := range lb.BGP.Peers {
 		a, err := netip.ParseAddr(strings.TrimSpace(p.Address))
-		if err != nil || !a.Is4() {
-			problems = append(problems, fmt.Sprintf("router %q is not an IPv4 address", p.Address))
+		if err != nil || a.Zone() != "" {
+			problems = append(problems, fmt.Sprintf("router %q is not an IP address", p.Address))
 			continue
+		}
+		if !slices.Contains(families, familyOf(a)) {
+			problems = append(problems, fmt.Sprintf("router %s is %s, which the cluster's nodes do not have", a, familyOf(a)))
 		}
 		announced := func(a netip.Addr) bool { return endpoint == a.String() || (lb.Enabled && inSpans(pool, a.String())) }
 		problems = append(problems, peerProblems(a, p.ASN, seen, announced)...)

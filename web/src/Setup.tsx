@@ -4,24 +4,35 @@ import { api, bridgesOf, dnsOf } from "./api";
 import { backupKeys } from "./Backups";
 import { BackupTargets, cleanTargets, targetProblems, targetSummary } from "./BackupTargets";
 import { CredentialField } from "./CredentialField";
+import { FamiliesField } from "./Families";
 import { ImportBox, TakeOver } from "./ManagementRecovery";
 import {
   bridgeLabel,
   bridgeRef,
-  cidr,
+  choiceOf,
+  familiesOf,
+  familyFieldLabel,
+  familyLabels,
+  familyNames,
+  familyOf,
+  gatewayReaches,
+  hasFamily,
   isIP,
   isMTU,
   isVLAN,
   maxMTU,
   minMTU,
   list,
-  maskOf,
   networkOf,
-  pointToPoint,
+  parseAddress,
+  parseCidr,
   rangeProblem,
+  reservedAddresses,
   sameNetwork,
   searchDomainsProblem,
-  toInt,
+  type Address,
+  type Family,
+  type FamilyChoice,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
 import type {
@@ -77,9 +88,13 @@ export interface SetupForm {
   vlan: string;
   // Empty: the bridge's.
   mtu: string;
+  families: FamilyChoice;
+  // One per line. The IPv4 ones and gateway count only with IPv4, the IPv6 ones only with IPv6.
   nodeAddresses: string;
+  nodeAddresses6: string;
   apiAddress: string;
   gateway: string;
+  gateway6: string;
   dnsServers: string;
   searchDomains: string;
   timeServers: string;
@@ -324,15 +339,28 @@ function optionalLists(f: SetupForm): Pick<ManagementSettings, "searchDomains" |
   };
 }
 
+// familySettings are each family's node addresses and gateway, the IPv4 ones empty without IPv4.
+// The families are named where they are not IPv4 alone.
+function familySettings(
+  f: SetupForm,
+): Pick<ManagementSettings, "ipFamilies" | "nodeAddresses" | "gateway" | "nodeAddressesIPv6" | "gatewayIPv6"> {
+  const v4 = hasFamily(f.families, "IPv4");
+  return {
+    ...(f.families === "ipv4" ? {} : { ipFamilies: familyNames(f.families) }),
+    nodeAddresses: v4 ? list(f.nodeAddresses) : [],
+    gateway: v4 ? f.gateway : "",
+    ...(hasFamily(f.families, "IPv6") ? { nodeAddressesIPv6: list(f.nodeAddresses6), gatewayIPv6: f.gateway6 } : {}),
+  };
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
     imageDatastore: f.imageDatastore,
     vmDatastore: f.vmDatastore,
     bridge: f.bridge,
-    nodeAddresses: list(f.nodeAddresses),
+    ...familySettings(f),
     apiAddress: f.apiAddress,
-    gateway: f.gateway,
     dnsServers: list(f.dnsServers),
     ...optionalLists(f),
     workloadDatastores: f.workloadDatastores,
@@ -455,9 +483,12 @@ const joined = (values: string[] | undefined): string => (values ?? []).join(", 
 
 const networkFields = (
   saved: ManagementSettings,
-): Pick<SetupForm, "vlan" | "mtu" | "searchDomains" | "timeServers"> => ({
+): Pick<SetupForm, "vlan" | "mtu" | "families" | "nodeAddresses6" | "gateway6" | "searchDomains" | "timeServers"> => ({
   vlan: positive(saved.vlan),
   mtu: positive(saved.mtu),
+  families: choiceOf(saved.ipFamilies),
+  nodeAddresses6: (saved.nodeAddressesIPv6 ?? []).join("\n"),
+  gateway6: saved.gatewayIPv6 ?? "",
   searchDomains: joined(saved.searchDomains),
   timeServers: joined(saved.timeServers),
 });
@@ -531,8 +562,10 @@ export type SetupField =
   | "vlan"
   | "mtu"
   | "nodeAddresses"
+  | "nodeAddresses6"
   | "apiAddress"
   | "gateway"
+  | "gateway6"
   | "dnsServers"
   | "searchDomains"
   | "timeServers"
@@ -569,8 +602,10 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "vlan",
     "mtu",
     "nodeAddresses",
+    "nodeAddresses6",
     "apiAddress",
     "gateway",
+    "gateway6",
     "dnsServers",
     "searchDomains",
     "timeServers",
@@ -620,41 +655,69 @@ const uplink = (bridges: Bridge[]): Bridge | undefined =>
 
 const orElse = (value: string, otherwise: string): string => (value === "" ? otherwise : value);
 
-// nodeNetwork checks the node addresses against each other and the gateway, as the appliance
-// does: one network, the gateway in it, no address taken twice. It returns the network or the
-// problem.
-function nodeNetwork(
-  addresses: string[],
-  gateway: number | undefined,
-): { ip: number; bits: number; taken: number[] } | string {
+// The fields and words of each family's node network.
+const familyFields: Record<
+  Family,
+  {
+    addresses: "nodeAddresses" | "nodeAddresses6";
+    gateway: "gateway" | "gateway6";
+    saved: "nodeAddresses" | "nodeAddressesIPv6";
+    example: string;
+    reserved: string;
+  }
+> = {
+  IPv4: {
+    addresses: "nodeAddresses",
+    gateway: "gateway",
+    saved: "nodeAddresses",
+    example: "192.0.2.11/24",
+    reserved: "a network or broadcast address",
+  },
+  IPv6: {
+    addresses: "nodeAddresses6",
+    gateway: "gateway6",
+    saved: "nodeAddressesIPv6",
+    example: "2001:db8::11/64",
+    reserved: "its network's own address",
+  },
+};
+
+interface NodeNetwork {
+  ip: Address;
+  bits: number;
+  taken: bigint[];
+}
+
+// nodeNetwork checks one family's node addresses against each other and the gateway, as the
+// appliance does: one network, the gateway in it, no address taken twice. It returns the network
+// or the problem.
+function nodeNetwork(addresses: string[], gateway: Address | undefined, family: Family): NodeNetwork | string {
   const wrongCount = "Enter 1 or 3 addresses.";
   if (addresses.length !== 1 && addresses.length !== highAvailability) {
     return wrongCount;
   }
-  const taken: number[] = [];
-  let first: { ip: number; bits: number } | undefined;
+  const taken: bigint[] = [];
+  let first: { ip: Address; bits: number } | undefined;
   for (const a of addresses) {
-    const [base, bits] = a.split("/");
-    const n = Number(bits);
-    const ip = toInt(base ?? "");
-    if (!cidr.test(a) || ip === undefined || n === 0) {
-      return `${a} is not in the form 192.0.2.11/24.`;
+    const parsed = parseCidr(a);
+    if (parsed === undefined || parsed.bits === 0 || parsed.address.family !== family) {
+      return `${a} is not in the form ${familyFields[family].example}.`;
     }
-    const net = (ip & maskOf(n)) >>> 0;
-    if (n < pointToPoint && (ip === net || ip === (net | ~maskOf(n)) >>> 0)) {
-      return `${a} is a network or broadcast address.`;
+    const { address: ip, bits: n } = parsed;
+    if (reservedAddresses(ip, n).includes(ip.value)) {
+      return `${a} is ${familyFields[family].reserved}.`;
     }
-    if (taken.includes(ip)) {
+    if (taken.includes(ip.value)) {
       return `${a} is listed twice.`;
     }
-    if (gateway !== undefined && !sameNetwork(ip, gateway, n)) {
+    if (gateway !== undefined && !gatewayReaches(ip, n, gateway)) {
       return `${a} is outside the gateway's network.`;
     }
     if (first && (first.bits !== n || !sameNetwork(ip, first.ip, n))) {
       return `Put ${a} in the same network as ${addresses[0]}.`;
     }
     first ??= { ip, bits: n };
-    taken.push(ip);
+    taken.push(ip.value);
   }
   return first ? { ...first, taken } : wrongCount;
 }
@@ -686,7 +749,7 @@ type SetupProblems = Partial<Record<SetupField, string>>;
 // placementProblems are those of where the management cluster's VMs go.
 function placementProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
-  const addresses = list(f.nodeAddresses);
+  const addresses = primaryAddresses(f);
   if (f.nodes.length === 0) {
     p.nodes = "Choose at least one Proxmox VE node.";
   } else if (addresses.length > 0 && f.nodes.length > addresses.length) {
@@ -713,34 +776,99 @@ function placementProblems(f: SetupForm): SetupProblems {
   return p;
 }
 
-// networkProblems are those of the management cluster's addresses.
-function networkProblems(f: SetupForm, was: ManagementSettings | undefined): SetupProblems {
+// primaryAddresses are the node addresses of the primary family, one per node.
+const primaryAddresses = (f: SetupForm): string[] =>
+  list(f[familyFields[familiesOf(f.families)[0] ?? "IPv4"].addresses]);
+
+// What a family's node network gives the API address check: its gateway and network, where valid.
+interface FamilyNetwork {
+  family: Family;
+  gateway: Address | undefined;
+  network: NodeNetwork | undefined;
+}
+
+// familyNetwork checks one family's node addresses and gateway. A management cluster that exists
+// (was) keeps its nodes' addresses, as the appliance insists.
+function familyNetwork(
+  f: SetupForm,
+  family: Family,
+  was: ManagementSettings | undefined,
+): { problems: SetupProblems; net: FamilyNetwork } {
+  const keys = familyFields[family];
   const p: SetupProblems = {};
-  const addresses = list(f.nodeAddresses);
-  const gateway = toInt(f.gateway);
+  const addresses = list(f[keys.addresses]);
+  const typed = parseAddress(f[keys.gateway]);
+  const gateway = typed?.family === family ? typed : undefined;
   if (gateway === undefined) {
-    p.gateway = "Enter an IPv4 address.";
+    p[keys.gateway] = `Enter an ${family} address.`;
   }
-  const network = nodeNetwork(addresses, gateway);
+  const network = nodeNetwork(addresses, gateway, family);
   if (typeof network === "string") {
-    p.nodeAddresses = network;
+    p[keys.addresses] = network;
   }
-  if (was && was.nodeAddresses.some((a, i) => addresses[i] !== a)) {
-    p.nodeAddresses = `Keep ${was.nodeAddresses.join(", ")} first and add new addresses after.`;
+  const kept = was?.[keys.saved] ?? [];
+  if (kept.some((a, i) => addresses[i] !== a)) {
+    p[keys.addresses] = `Keep ${kept.join(", ")} first and add new addresses after.`;
   }
-  const apiIP = toInt(f.apiAddress);
-  if (apiIP === undefined) {
-    p.apiAddress = "Enter an IPv4 address.";
-  } else if (apiIP === gateway || (typeof network !== "string" && network.taken.includes(apiIP))) {
-    p.apiAddress = "Use an unused address, not a node's or the gateway's.";
-  } else if (typeof network !== "string" && !sameNetwork(apiIP, network.ip, network.bits)) {
-    p.apiAddress = "Use an address in the nodes' network.";
+  return { problems: p, net: { family, gateway, network: typeof network === "string" ? undefined : network } };
+}
+
+// apiAddressProblem holds the API address to the primary family's network.
+function apiAddressProblem(apiAddress: string, primary: FamilyNetwork): string | undefined {
+  const ip = parseAddress(apiAddress);
+  if (ip?.family !== primary.family) {
+    return `Enter an ${primary.family} address.`;
   }
-  const dns = list(f.dnsServers);
-  if (dns.length === 0) {
-    p.dnsServers = "Enter at least one DNS server.";
-  } else if (dns.some((d) => !isIP(d))) {
-    p.dnsServers = "Enter IP addresses only.";
+  if (ip.value === primary.gateway?.value || primary.network?.taken.includes(ip.value) === true) {
+    return "Use an unused address, not a node's or the gateway's.";
+  }
+  if (primary.network !== undefined && !sameNetwork(ip, primary.network.ip, primary.network.bits)) {
+    return "Use an address in the nodes' network.";
+  }
+  return undefined;
+}
+
+// dnsProblem holds the DNS servers to the families: each of one of them, and one of each.
+function dnsProblem(servers: string[], families: readonly Family[]): string | undefined {
+  if (servers.length === 0) {
+    return "Enter at least one DNS server.";
+  }
+  const got = servers.map((d) => familyOf(d));
+  if (got.includes(undefined)) {
+    return "Enter IP addresses only.";
+  }
+  const [only] = families;
+  if (families.length === 1 && got.some((g) => g !== only)) {
+    return `Enter ${only} addresses only.`;
+  }
+  const lacking = families.find((family) => !got.includes(family));
+  return lacking === undefined ? undefined : `Add an ${lacking} DNS server too.`;
+}
+
+// networkProblems are those of the management cluster's addresses, for each of its families.
+function networkProblems(f: SetupForm, was: ManagementSettings | undefined): SetupProblems {
+  const families = familiesOf(f.families);
+  const checked = families.map((family) => familyNetwork(f, family, was));
+  const p: SetupProblems = {};
+  for (const c of checked) {
+    Object.assign(p, c.problems);
+  }
+  const [primary] = checked;
+  const apiProblem = primary === undefined ? undefined : apiAddressProblem(f.apiAddress, primary.net);
+  if (apiProblem !== undefined) {
+    p.apiAddress = apiProblem;
+  }
+  // Node i takes the i-th address of each family.
+  if (
+    families.length > 1 &&
+    p.nodeAddresses6 === undefined &&
+    list(f.nodeAddresses6).length !== list(f.nodeAddresses).length
+  ) {
+    p.nodeAddresses6 = "Enter as many IPv6 as IPv4 addresses.";
+  }
+  const dns = dnsProblem(list(f.dnsServers), families);
+  if (dns !== undefined) {
+    p.dnsServers = dns;
   }
   const domains = searchDomainsProblem(list(f.searchDomains));
   if (domains !== undefined) {
@@ -903,14 +1031,13 @@ function refreshProblems(f: SetupForm): SetupProblems {
     }
     return p;
   }
-  const [base = "", bits] = f.refreshAddress.split("/");
-  const ip = toInt(base);
-  if (!cidr.test(f.refreshAddress) || ip === undefined) {
-    p.refreshAddress = "Enter an address like 192.0.2.50/24.";
+  const build = parseCidr(f.refreshAddress);
+  if (build === undefined) {
+    p.refreshAddress = "Enter an address like 192.0.2.50/24 or 2001:db8::50/64.";
     return p;
   }
-  const gateway = toInt(f.refreshGateway);
-  if (gateway === undefined || !sameNetwork(ip, gateway, Number(bits))) {
+  const gateway = parseAddress(f.refreshGateway);
+  if (gateway === undefined || !gatewayReaches(build.address, build.bits, gateway)) {
     p.refreshGateway = "Enter a gateway in the build address's network.";
   }
   if (dns.some((d) => !isIP(d))) {
@@ -1117,9 +1244,7 @@ function ManagedSummary({
     ["Talos image", s.imageDatastore],
     ["Cloud-init images", s.bootstrapDatastore],
     ["Bridge", s.vlan !== undefined && s.vlan > 0 ? `${s.bridge}, VLAN ${s.vlan}` : s.bridge],
-    ["Node addresses", s.nodeAddresses.join(", ")],
-    ["API address", s.apiAddress],
-    ["Gateway", s.gateway],
+    ...addressRows(s),
     ["DNS servers", s.dnsServers.join(", ")],
     ["Search domains", searchDomainsOf(s)],
     ["Time servers", timeServersOf(s)],
@@ -1329,6 +1454,26 @@ function choiceNote(nodes: string[], shared: boolean, allNodes: number): string 
 }
 
 const fixedHint = "Fixed after creation";
+
+/**
+ * addressRows are the address families, where not IPv4 alone, and each family's node addresses and
+ * gateway around the API address.
+ */
+export function addressRows(s: ManagementSettings): [string, string][] {
+  const families = choiceOf(s.ipFamilies);
+  const v4 = hasFamily(families, "IPv4");
+  const v6 = hasFamily(families, "IPv6");
+  const label = (plain: string, family: Family): string => familyFieldLabel(plain, family, familiesOf(families).length);
+  const rows: [string, string | undefined][] = [
+    ["Address families", families === "ipv4" ? undefined : familyLabels[families]],
+    [label("Node addresses", "IPv4"), v4 ? s.nodeAddresses.join(", ") : undefined],
+    [label("Node addresses", "IPv6"), v6 ? (s.nodeAddressesIPv6 ?? []).join(", ") : undefined],
+    ["API address", s.apiAddress],
+    [label("Gateway", "IPv4"), v4 ? s.gateway : undefined],
+    [label("Gateway", "IPv6"), v6 ? s.gatewayIPv6 : undefined],
+  ];
+  return rows.filter((r): r is [string, string] => r[1] !== undefined);
+}
 
 // keepOffered keeps a choice once the choices are known only if it is among them.
 const keepOffered = (value: string, choices: string[], ready: boolean): string =>
@@ -2160,7 +2305,7 @@ function SetupWizard({
 
   const fixed = manage && status.ready ? status.settings : undefined;
   const found: Found = { storages, bridgesByNode, dnsByNode, fixed };
-  const { effective, offers, nodeNetwork: network } = withDefaults(form, touched, found);
+  const { effective, offers, nodeNetworks } = withDefaults(form, touched, found);
   const toggle: Toggle = (k, v, on) => {
     setForm((f) => {
       const now = k === "nodes" ? f.nodes : effective[k];
@@ -2249,7 +2394,7 @@ function SetupWizard({
     toggle,
     fixed,
     offers,
-    nodeNetwork: network,
+    nodeNetworks,
     clusterStorages,
     clusterBridges,
     attempted: attempted.size > 0,
@@ -2491,7 +2636,7 @@ function withDefaults(
   form: SetupForm,
   touched: ReadonlySet<string>,
   found: Found,
-): { effective: SetupForm; offers: Offers; nodeNetwork: string | undefined } {
+): { effective: SetupForm; offers: Offers; nodeNetworks: Record<Family, string | undefined> } {
   const { fixed } = found;
   const all = found.storages ?? [];
   const known = found.storages !== undefined;
@@ -2515,7 +2660,7 @@ function withDefaults(
   const uplinkBridge = uplink(home);
   const bridge = keepOffered(orElse(form.bridge, uplinkBridge ? bridgeRef(uplinkBridge) : ""), bridges, bridgesKnown);
   const onBridge = home.find((b) => bridgeRef(b) === bridge);
-  const detect = (k: "gateway" | "dnsServers" | "searchDomains", value: string): string =>
+  const detect = (k: "gateway" | "gateway6" | "dnsServers" | "searchDomains", value: string): string =>
     form[k] === "" && !touched.has(k) ? value : form[k];
   const untouchedNone = (k: "workloadDatastores" | "workloadBridges", value: string): string[] =>
     form[k].length === 0 && !touched.has(k) && value !== "" ? [value] : form[k];
@@ -2527,7 +2672,8 @@ function withDefaults(
       bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
       bridge,
       gateway: detect("gateway", onBridge?.gateway ?? ""),
-      dnsServers: detect("dnsServers", (found.dnsByNode[first]?.servers ?? []).join(", ")),
+      gateway6: detect("gateway6", onBridge?.gateway6 ?? ""),
+      dnsServers: detect("dnsServers", ownFamilies(found.dnsByNode[first]?.servers ?? [], form.families).join(", ")),
       searchDomains: detect("searchDomains", found.dnsByNode[first]?.search ?? ""),
       workloadDatastores: untouchedNone("workloadDatastores", vmDatastore),
       workloadBridges: untouchedNone("workloadBridges", bridge),
@@ -2535,9 +2681,16 @@ function withDefaults(
       refreshBridge: offeredRefreshBridge(form),
     },
     offers,
-    nodeNetwork: onBridge?.cidr === undefined ? undefined : networkOf(onBridge.cidr),
+    nodeNetworks: {
+      IPv4: onBridge?.cidr === undefined ? undefined : networkOf(onBridge.cidr),
+      IPv6: onBridge?.cidr6 === undefined ? undefined : networkOf(onBridge.cidr6),
+    },
   };
 }
+
+// ownFamilies are the servers of the families chosen, those a node lists of another left out.
+const ownFamilies = (servers: string[], families: FamilyChoice): string[] =>
+  servers.filter((s) => familiesOf(families).includes(familyOf(s) ?? "IPv4"));
 
 // clusterChoices are the storages and bridges clusters may be offered, any node's, each with where
 // it is. One chosen before that is no longer found stays, said to be gone.
@@ -2595,7 +2748,7 @@ function setupFields({
   toggle: Toggle;
   fixed: ManagementSettings | undefined;
   offers: Offers;
-  nodeNetwork: string | undefined;
+  nodeNetworks: Record<Family, string | undefined>;
   clusterStorages: Offered[];
   clusterBridges: Offered[];
   attempted: boolean;
@@ -2703,20 +2856,27 @@ function setupFields({
             />
           )}
         </Field>
-        <Field
-          label="Node addresses"
-          hint={nodeAddressHint(fixed !== undefined, more.nodeNetwork)}
-          error={shown("nodeAddresses")}
-        >
-          {(id) => (
-            <textarea
-              id={id}
-              rows={3}
-              value={form.nodeAddresses}
-              onChange={(e) => set("nodeAddresses", e.target.value)}
-            />
-          )}
-        </Field>
+        <FamiliesField
+          value={form.families}
+          hint={fixedHint}
+          fixed={fixed !== undefined}
+          onChoose={(choice) => {
+            set("families", choice);
+          }}
+        />
+        {familiesOf(form.families).map((family, _, shownFamilies) => (
+          <FamilyAddressFields
+            key={family}
+            family={family}
+            shownFamilies={shownFamilies.length}
+            form={form}
+            effective={effective}
+            set={set}
+            shown={shown}
+            fixed={fixed !== undefined}
+            network={more.nodeNetworks[family]}
+          />
+        ))}
         <Field
           label="API address"
           hint={fixed ? fixedHint : "A free address in the nodes' network"}
@@ -2728,16 +2888,6 @@ function setupFields({
               readOnly={fixed !== undefined}
               value={form.apiAddress}
               onChange={(e) => set("apiAddress", e.target.value.trim())}
-            />
-          )}
-        </Field>
-        <Field label="Gateway" hint={fixed ? fixedHint : undefined} error={shown("gateway")}>
-          {(id) => (
-            <input
-              id={id}
-              readOnly={fixed !== undefined}
-              value={effective.gateway}
-              onChange={(e) => set("gateway", e.target.value.trim())}
             />
           )}
         </Field>
@@ -2822,9 +2972,62 @@ function setupFields({
 
 // nodeAddressHint says how many node addresses to give, and in which network where the bridge's is
 // known.
-function nodeAddressHint(fixed: boolean, network: string | undefined): string {
+function nodeAddressHint(fixed: boolean, family: Family, network: string | undefined): string {
   if (fixed) {
     return "Add 2 addresses after the first to grow to 3";
   }
-  return network === undefined ? "1 or 3, like 192.0.2.11/24" : `1 or 3 in ${network}`;
+  return network === undefined ? `1 or 3, like ${familyFields[family].example}` : `1 or 3 in ${network}`;
+}
+
+// FamilyAddressFields are one family's node addresses and gateway. Their labels name the family
+// where both families show.
+function FamilyAddressFields({
+  family,
+  shownFamilies,
+  form,
+  effective,
+  set,
+  shown,
+  fixed,
+  network,
+}: FieldsProps & {
+  family: Family;
+  shownFamilies: number;
+  effective: SetupForm;
+  fixed: boolean;
+  network: string | undefined;
+}): JSX.Element {
+  const keys = familyFields[family];
+  return (
+    <>
+      <Field
+        label={familyFieldLabel("Node addresses", family, shownFamilies)}
+        hint={nodeAddressHint(fixed, family, network)}
+        error={shown(keys.addresses)}
+      >
+        {(id) => (
+          <textarea
+            id={id}
+            rows={3}
+            value={form[keys.addresses]}
+            onChange={(e) => set(keys.addresses, e.target.value)}
+          />
+        )}
+      </Field>
+      <Field
+        label={familyFieldLabel("Gateway", family, shownFamilies)}
+        hint={fixed ? fixedHint : undefined}
+        error={shown(keys.gateway)}
+      >
+        {(id) => (
+          <input
+            id={id}
+            readOnly={fixed}
+            value={effective[keys.gateway]}
+            onChange={(e) => set(keys.gateway, e.target.value.trim())}
+          />
+        )}
+      </Field>
+    </>
+  );
 }
