@@ -30,10 +30,13 @@ type fakeManagement struct {
 
 func (f fakeManagement) Addresses(context.Context) ([]string, error) { return f.addresses, f.err }
 
-func localReach(local string) *pve.APIReach {
-	own := netip.MustParsePrefix(local)
+// localReach is a datacenter whose one node, 10.0.0.5, has 10.0.0.0/24 as its local network.
+func localReach() *pve.APIReach {
+	own := netip.MustParsePrefix("10.0.0.5/24")
 	return &pve.APIReach{Nodes: []pve.NodeReach{{Node: "pve1", Address: own.Addr(), Interfaces: []netip.Prefix{own.Masked()}}}}
 }
+
+const cutRefusal = "cut off 10.3.0.4, 2001:db8::4. Add 10.3.0.4, 2001:db8::4 to the datacenter firewall's IPSet management."
 
 func TestValidatorRefusesSecurityGroupsThatCutTheManagementSideOffTheAPI(t *testing.T) {
 	t.Parallel()
@@ -44,18 +47,17 @@ func TestValidatorRefusesSecurityGroupsThatCutTheManagementSideOffTheAPI(t *test
 		management fakeManagement
 		refusal    string
 	}{
-		{"on the node's network", localReach("10.0.0.5/24"), true, fakeManagement{addresses: []string{"10.0.0.20", "10.0.0.21"}}, ""},
-		{"outside it", localReach("10.0.0.5/24"), true, fakeManagement{addresses: []string{"10.0.0.20", "10.3.0.4", "2001:db8::4"}},
-			"cut off 10.3.0.4, 2001:db8::4. Add 10.3.0.4, 2001:db8::4 to the datacenter firewall's IPSet management."},
+		{"on the node's network", localReach(), true, fakeManagement{addresses: []string{"10.0.0.20", "10.0.0.21"}}, ""},
+		{"outside it", localReach(), true, fakeManagement{addresses: []string{"10.0.0.20", "10.3.0.4", "2001:db8::4"}}, cutRefusal},
 		{"in the IPSet management", func() *pve.APIReach {
-			r := localReach("10.0.0.5/24")
+			r := localReach()
 			r.Management = []pve.IPSetEntry{{CIDR: "10.3.0.0/24"}}
 			return r
 		}(), true, fakeManagement{addresses: []string{"10.3.0.4"}}, ""},
 		{"unreadable firewall", nil, false, fakeManagement{addresses: []string{"10.3.0.4"}}, ""},
 		{"unreadable local network", &pve.APIReach{Nodes: []pve.NodeReach{{Node: "pve1"}}}, true, fakeManagement{addresses: []string{"10.3.0.4"}}, ""},
-		{"no management addresses", localReach("10.0.0.5/24"), true, fakeManagement{}, ""},
-		{"unreadable addresses", localReach("10.0.0.5/24"), true, fakeManagement{addresses: []string{"10.3.0.4"}, err: errors.New("down")}, ""},
+		{"no management addresses", localReach(), true, fakeManagement{}, ""},
+		{"unreadable addresses", localReach(), true, fakeManagement{addresses: []string{"10.3.0.4"}, err: errors.New("down")}, ""},
 	} {
 		hooks, _ := hooksFor(t)
 		hooks.SecurityGroups = &fakeSecurityGroups{groups: []string{"k8s"}, readable: true}
@@ -75,7 +77,7 @@ func TestValidatorRefusesSecurityGroupsThatCutTheManagementSideOffTheAPI(t *test
 func TestValidatorReadsTheFirewallOnlyForAClusterWithSecurityGroups(t *testing.T) {
 	t.Parallel()
 	hooks, _ := hooksFor(t)
-	reach := &fakeAPIReach{reach: localReach("10.0.0.5/24"), ok: true}
+	reach := &fakeAPIReach{reach: localReach(), ok: true}
 	hooks.SecurityGroups = &fakeSecurityGroups{groups: []string{"k8s"}, readable: true}
 	hooks.APIReach = reach
 	hooks.Management = fakeManagement{addresses: []string{"10.3.0.4"}}
@@ -92,7 +94,7 @@ func TestValidatorKeepsTheFirewallCheckOnAnUnrelatedEdit(t *testing.T) {
 	t.Parallel()
 	hooks, _ := hooksFor(t)
 	hooks.SecurityGroups = &fakeSecurityGroups{groups: []string{"k8s"}, readable: true}
-	reach := &fakeAPIReach{reach: localReach("10.0.0.5/24"), ok: true}
+	reach := &fakeAPIReach{reach: localReach(), ok: true}
 	hooks.APIReach = reach
 	hooks.Management = fakeManagement{addresses: []string{"10.3.0.4"}}
 	v := &ClusterValidator{Hooks: hooks}
@@ -103,6 +105,6 @@ func TestValidatorKeepsTheFirewallCheckOnAnUnrelatedEdit(t *testing.T) {
 		t.Errorf("refused an unrelated edit: %v", err)
 	}
 	if reach.asked != 0 {
-		t.Errorf("read the firewall for an edit that leaves the groups alone")
+		t.Error("read the firewall for an edit that leaves the groups alone")
 	}
 }

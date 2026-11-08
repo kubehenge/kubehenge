@@ -134,31 +134,38 @@ func (r *APIReach) readNodes(ctx context.Context, get Getter) {
 		}
 	}
 	for _, n := range nodes {
-		escaped := url.PathEscape(n.Node)
-		var options struct {
-			Enable *flag `json:"enable"`
+		if reach, on := r.readNode(ctx, get, n.Node, addresses[n.Node]); on {
+			r.Nodes = append(r.Nodes, reach)
 		}
-		// A node without the option has its firewall on.
-		if err := get(ctx, "/nodes/"+escaped+"/firewall/options", &options); err == nil && options.Enable != nil && !*options.Enable {
-			continue
-		}
-		reach := NodeReach{Node: n.Node, Address: addresses[n.Node]}
-		var ifaces []struct {
-			CIDR  string `json:"cidr"`
-			CIDR6 string `json:"cidr6"`
-		}
-		if err := get(ctx, "/nodes/"+escaped+"/network", &ifaces); err != nil {
-			r.Unread = append(r.Unread, "the interfaces of node "+n.Node)
-		}
-		for _, i := range ifaces {
-			for _, text := range [...]string{i.CIDR, i.CIDR6} {
-				if p, err := netip.ParsePrefix(text); err == nil {
-					reach.Interfaces = append(reach.Interfaces, p.Masked())
-				}
+	}
+}
+
+// readNode reads one node's interfaces, and says whether its firewall is on.
+func (r *APIReach) readNode(ctx context.Context, get Getter, name string, address netip.Addr) (NodeReach, bool) {
+	escaped := url.PathEscape(name)
+	var options struct {
+		Enable *flag `json:"enable"`
+	}
+	// A node without the option has its firewall on.
+	if err := get(ctx, "/nodes/"+escaped+"/firewall/options", &options); err == nil && options.Enable != nil && !*options.Enable {
+		return NodeReach{}, false
+	}
+	reach := NodeReach{Node: name, Address: address}
+	var ifaces []struct {
+		CIDR  string `json:"cidr"`
+		CIDR6 string `json:"cidr6"`
+	}
+	if err := get(ctx, "/nodes/"+escaped+"/network", &ifaces); err != nil {
+		r.Unread = append(r.Unread, "the interfaces of node "+name)
+	}
+	for _, i := range ifaces {
+		for _, text := range [...]string{i.CIDR, i.CIDR6} {
+			if p, err := netip.ParsePrefix(text); err == nil {
+				reach.Interfaces = append(reach.Interfaces, p.Masked())
 			}
 		}
-		r.Nodes = append(r.Nodes, reach)
 	}
+	return reach, true
 }
 
 // Cut tells which of addrs the firewalls refuse on the API port. An address is let in by a node's
@@ -173,19 +180,7 @@ func (r *APIReach) Cut(addrs []netip.Addr) Reach {
 		if in {
 			continue
 		}
-		cut, allLocal := false, true
-		for i := range r.Nodes {
-			n := &r.Nodes[i]
-			local, known := r.local(n, a)
-			switch {
-			case local:
-			case known:
-				cut, allLocal = true, false
-			default:
-				allLocal = false
-				unsure["the local network of node "+n.Node] = true
-			}
-		}
+		cut, allLocal := r.nodesLocal(a, unsure)
 		if allLocal {
 			continue
 		}
@@ -210,8 +205,27 @@ func (r *APIReach) Cut(addrs []netip.Addr) Reach {
 	return out
 }
 
+// nodesLocal tells whether some node's local network is known to leave a out, and whether every
+// node's holds it. A node whose local network is not known goes into unsure.
+func (r *APIReach) nodesLocal(a netip.Addr, unsure map[string]bool) (bool, bool) {
+	cut, allLocal := false, true
+	for i := range r.Nodes {
+		n := &r.Nodes[i]
+		local, known := r.local(n, a)
+		switch {
+		case local:
+		case known:
+			cut, allLocal = true, false
+		default:
+			allLocal = false
+			unsure["the local network of node "+n.Node] = true
+		}
+	}
+	return cut, allLocal
+}
+
 // local tells whether node n's local network holds a, and whether that is known.
-func (r *APIReach) local(n *NodeReach, a netip.Addr) (inside, known bool) {
+func (r *APIReach) local(n *NodeReach, a netip.Addr) (bool, bool) {
 	if r.LocalNetwork != "" {
 		p, ok := parseSource(r.LocalNetwork)
 		return ok && p.Contains(a), ok
@@ -239,8 +253,8 @@ func (r *APIReach) local(n *NodeReach, a netip.Addr) (inside, known bool) {
 
 // inManagement tells whether the IPSet management holds a. unresolved names an entry that names an
 // alias that is not there, which could hold a.
-func (r *APIReach) inManagement(a netip.Addr) (in bool, unresolved string) {
-	matched, excluded := false, false
+func (r *APIReach) inManagement(a netip.Addr) (bool, string) {
+	matched, excluded, unresolved := false, false, ""
 	for _, e := range r.Management {
 		p, ok := parseSource(e.CIDR)
 		if !ok {
@@ -258,7 +272,7 @@ func (r *APIReach) inManagement(a netip.Addr) (in bool, unresolved string) {
 			matched = true
 		}
 	}
-	in = matched && !excluded
+	in := matched && !excluded
 	if in || excluded {
 		unresolved = ""
 	}

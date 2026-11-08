@@ -40,6 +40,7 @@ import (
 type Accounts interface {
 	SignIns
 	Resources
+	Firewalls
 	Guests
 	VMIDPool
 	Removals
@@ -73,9 +74,13 @@ type Resources interface {
 	DNS(ctx context.Context, t *pve.Ticket, node string) (pve.NodeDNS, error)
 	AccessNames(ctx context.Context, t *pve.Ticket) (pve.Names, error)
 	NodeAddresses(ctx context.Context, t *pve.Ticket) (map[string]string, error)
-	APIReach(ctx context.Context, t *pve.Ticket) (*pve.APIReach, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
 	Network(ctx context.Context, t *pve.Ticket, bridge string) (pve.Network, error)
+}
+
+// Firewalls are the Proxmox VE firewalls a signed-in user may read.
+type Firewalls interface {
+	APIReach(ctx context.Context, t *pve.Ticket) (*pve.APIReach, error)
 }
 
 // Guests are the VMs a signed-in user sees in Proxmox VE, and how they run.
