@@ -193,6 +193,8 @@ until both_online; do
     fi
     sleep 3
 done
+# Each node chooses its firewall in its own host.fw, as up.sh does for pve.
+on pve2 pvesh set /nodes/pve2/firewall/options --nftables 1
 on pve pvesm add dir shared --path /var/lib/vz/shared --shared 1 --content images,import,iso,snippets
 
 cat >> "${work}/env" << EOF

@@ -18,10 +18,5 @@ iface vmbr0 inet static
 	bridge-fd 0
 	post-up sysctl -qw net.ipv4.ip_forward=1
 	post-up iptables-nft -t nat -C POSTROUTING -s 172.20.99.0/24 -o eth0 -j MASQUERADE 2>/dev/null || iptables-nft -t nat -A POSTROUTING -s 172.20.99.0/24 -o eth0 -j MASQUERADE
-	# A NIC with firewall=1 sits behind an fwbr bridge. Without a conntrack zone of its own the
-	# firewall blocks the outbound connections the NAT should take (Proxmox VE's Network
-	# Configuration guide, "Masquerading (NAT) with iptables").
-	post-up iptables-nft -t raw -C PREROUTING -i fwbr+ -j CT --zone 1 2>/dev/null || iptables-nft -t raw -I PREROUTING -i fwbr+ -j CT --zone 1
-	post-down iptables-nft -t raw -D PREROUTING -i fwbr+ -j CT --zone 1 2>/dev/null || true
 
 source /etc/network/interfaces.d/*

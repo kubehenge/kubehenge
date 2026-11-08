@@ -75,6 +75,10 @@ until pve systemctl is-active --quiet pveproxy.service && pve pvesh get /version
     fi
     sleep 3
 done
+# The firewall on nftables (proxmox-firewall), set before any VM starts, since a running guest moves
+# to it only once it restarts. pve-firewall cannot load the legacy iptables tables on runner kernels
+# and applies no rule. The nftables backend makes no fwbr bridges, so the NAT needs no conntrack zone.
+pve pvesh set /nodes/pve/firewall/options --nftables 1
 # Proxmox VE copies a volume through SSH to the node it goes to, this one too, so it must reach
 # itself as it does then: as root, with its own key, checking only the host key `pvecm updatecerts`
 # wrote under its name when it started.
