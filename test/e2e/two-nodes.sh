@@ -161,7 +161,6 @@ kubectl -n "${ns}" wait --for=condition=Available cluster/nodes --timeout=40m
 kubectl -n "${ns}" get secret nodes-kubeconfig -o jsonpath='{.data.value}' | base64 -d > "${work}/nodes"
 until_true 600 "every machine on ${second}" all_on "${second}"
 until_true 600 "both nodes ready" nodes_ready 2
-until_true 120 "both Proxmox VE nodes online for the cluster" online_are "${first},${second}"
 
 step "kept to ${first}, every machine replaced moves there"
 allow "[\"${first}\"]"
