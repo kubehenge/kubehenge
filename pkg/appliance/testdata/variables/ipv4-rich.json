@@ -48,6 +48,10 @@
       "url": ""
     },
     "registryMirrors": {},
+    "releaseMirror": {
+      "ca_bundle": "",
+      "url": ""
+    },
     "searchDomains": [
       "corp.example"
     ],

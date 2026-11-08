@@ -192,7 +192,8 @@ func classifyTokenError(err error) string {
 	switch {
 	case errors.As(err, &unknown) || errors.As(err, &invalid) || errors.As(err, &host) || strings.Contains(text, "x509:"):
 		return TokenCertificate
-	case errors.Is(err, proxmox.ErrNotAuthorized) || strings.Contains(text, "401") || strings.Contains(text, "authentication failure"):
+	case errors.Is(err, proxmox.ErrNotAuthorized) || strings.Contains(text, proxmox.ErrNotAuthorized.Error()) ||
+		strings.Contains(text, "authentication failure"):
 		return TokenRefused
 	}
 	return TokenUnreachable

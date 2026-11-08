@@ -44,6 +44,10 @@
       "url": ""
     },
     "registryMirrors": {},
+    "releaseMirror": {
+      "ca_bundle": "",
+      "url": ""
+    },
     "searchDomains": [],
     "serviceSubnets": [
       "10.96.0.0/12"

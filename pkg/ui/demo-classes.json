@@ -464,6 +464,7 @@
                 "dnsServers": {
                   "description": "DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster names at least one of each.",
                   "items": {
+                    "maxLength": 45,
                     "minLength": 1,
                     "type": "string",
                     "x-kubernetes-validations": [
@@ -473,6 +474,7 @@
                       }
                     ]
                   },
+                  "maxItems": 6,
                   "minItems": 1,
                   "type": "array"
                 },
@@ -491,6 +493,7 @@
                       "IPv4",
                       "IPv6"
                     ],
+                    "maxLength": 4,
                     "type": "string"
                   },
                   "maxItems": 2,
@@ -500,10 +503,6 @@
                     {
                       "message": "Each address family once.",
                       "rule": "self.size() \u003c 2 || self[0] != self[1]"
-                    },
-                    {
-                      "message": "The address families are chosen when the cluster is created.",
-                      "rule": "self == oldSelf"
                     }
                   ]
                 },
@@ -603,6 +602,10 @@
                 {
                   "message": "ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.",
                   "rule": "(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+                },
+                {
+                  "message": "The address families are chosen when the cluster is created.",
+                  "rule": "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
                 }
               ]
             }
@@ -3326,6 +3329,7 @@
                 "dnsServers": {
                   "description": "DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster names at least one of each.",
                   "items": {
+                    "maxLength": 45,
                     "minLength": 1,
                     "type": "string",
                     "x-kubernetes-validations": [
@@ -3335,6 +3339,7 @@
                       }
                     ]
                   },
+                  "maxItems": 6,
                   "minItems": 1,
                   "type": "array"
                 },
@@ -3353,6 +3358,7 @@
                       "IPv4",
                       "IPv6"
                     ],
+                    "maxLength": 4,
                     "type": "string"
                   },
                   "maxItems": 2,
@@ -3362,10 +3368,6 @@
                     {
                       "message": "Each address family once.",
                       "rule": "self.size() \u003c 2 || self[0] != self[1]"
-                    },
-                    {
-                      "message": "The address families are chosen when the cluster is created.",
-                      "rule": "self == oldSelf"
                     }
                   ]
                 },
@@ -3465,6 +3467,10 @@
                 {
                   "message": "ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.",
                   "rule": "(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+                },
+                {
+                  "message": "The address families are chosen when the cluster is created.",
+                  "rule": "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
                 }
               ]
             }
@@ -6197,6 +6203,7 @@
                 "dnsServers": {
                   "description": "DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster names at least one of each.",
                   "items": {
+                    "maxLength": 45,
                     "minLength": 1,
                     "type": "string",
                     "x-kubernetes-validations": [
@@ -6206,6 +6213,7 @@
                       }
                     ]
                   },
+                  "maxItems": 6,
                   "minItems": 1,
                   "type": "array"
                 },
@@ -6224,6 +6232,7 @@
                       "IPv4",
                       "IPv6"
                     ],
+                    "maxLength": 4,
                     "type": "string"
                   },
                   "maxItems": 2,
@@ -6233,10 +6242,6 @@
                     {
                       "message": "Each address family once.",
                       "rule": "self.size() \u003c 2 || self[0] != self[1]"
-                    },
-                    {
-                      "message": "The address families are chosen when the cluster is created.",
-                      "rule": "self == oldSelf"
                     }
                   ]
                 },
@@ -6336,6 +6341,10 @@
                 {
                   "message": "ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.",
                   "rule": "(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+                },
+                {
+                  "message": "The address families are chosen when the cluster is created.",
+                  "rule": "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
                 }
               ]
             }
@@ -9022,6 +9031,7 @@
                 "dnsServers": {
                   "description": "DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster names at least one of each.",
                   "items": {
+                    "maxLength": 45,
                     "minLength": 1,
                     "type": "string",
                     "x-kubernetes-validations": [
@@ -9031,6 +9041,7 @@
                       }
                     ]
                   },
+                  "maxItems": 6,
                   "minItems": 1,
                   "type": "array"
                 },
@@ -9049,6 +9060,7 @@
                       "IPv4",
                       "IPv6"
                     ],
+                    "maxLength": 4,
                     "type": "string"
                   },
                   "maxItems": 2,
@@ -9058,10 +9070,6 @@
                     {
                       "message": "Each address family once.",
                       "rule": "self.size() \u003c 2 || self[0] != self[1]"
-                    },
-                    {
-                      "message": "The address families are chosen when the cluster is created.",
-                      "rule": "self == oldSelf"
                     }
                   ]
                 },
@@ -9161,6 +9169,10 @@
                 {
                   "message": "ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.",
                   "rule": "(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+                },
+                {
+                  "message": "The address families are chosen when the cluster is created.",
+                  "rule": "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
                 }
               ]
             }
