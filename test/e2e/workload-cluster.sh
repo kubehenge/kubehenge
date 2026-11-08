@@ -2367,6 +2367,8 @@ EOF
         wl -n logging rollout status statefulset/loki --timeout=10m
         until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
         wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
+        # The events collector is a release of its own, which can land after the node collector's.
+        until_true 600 "Alloy's events collector installed" sh -c "KUBECONFIG=${work}/workload kubectl -n logging get deployment/alloy >/dev/null 2>&1"
         wl -n logging rollout status deployment/alloy --timeout=10m
         # Grafana reads Loki with its client certificate once its Deployment mounts it, which replaces its pod.
         grafana_deployment=deployment/kube-prometheus-stack-grafana

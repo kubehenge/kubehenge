@@ -334,8 +334,9 @@ case "${test}" in
             headlampActions: true, apiAuditLog: true
         }' > "${work}/appliance-settings.json"
         pve=kubehenge-e2e-pve
-        docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'
+        docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test /root/kubehenge/scripts'
         docker cp "${repo}/test/e2e" "${pve}:/root/kubehenge/test/e2e"
+        docker cp "${repo}/scripts/fetch.sh" "${pve}:/root/kubehenge/scripts/fetch.sh"
         docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
         for version in 0.0.1 0.0.2 0.0.3; do
             docker cp "${repo}/dist/kubehenge_${version}_linux_amd64.tar.gz" "${pve}:/root/kubehenge/"
@@ -389,8 +390,9 @@ case "${test}" in
             registryMirrors: {"ghcr.io": ["http://172.21.99.3:5000"]}
         }' > "${work}/appliance-settings.json"
         pve=kubehenge-e2e-pve
-        docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'
+        docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test /root/kubehenge/scripts'
         docker cp "${repo}/test/e2e" "${pve}:/root/kubehenge/test/e2e"
+        docker cp "${repo}/scripts/fetch.sh" "${pve}:/root/kubehenge/scripts/fetch.sh"
         docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
         docker cp "${work}/published/install.sh" "${pve}:/root/kubehenge/published-install.sh"
         docker cp "${work}/published/kubehenge_${published}_linux_amd64.tar.gz" "${pve}:/root/kubehenge/"
