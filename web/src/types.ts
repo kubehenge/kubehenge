@@ -810,6 +810,11 @@ export interface ManagementSettings {
    */
   chartRepositories?: { mirrors?: Record<string, string>; caBundle?: string };
   /**
+   * The mirror RKE2 and k3s nodes download their release from in place of GitHub, on GitHub's
+   * paths. The authority is PEM, for a mirror the usual authorities do not sign.
+   */
+  releaseMirror?: { url?: string; caBundle?: string };
+  /**
    * The proxy downloads go through. The address has no credentials. The server never sends the
    * password, only passwordSet. Sent back, an empty password keeps the saved one and clearPassword
    * removes it.

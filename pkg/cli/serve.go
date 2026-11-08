@@ -191,6 +191,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	s.PinChecks = &provisioner.ReleaseChecksums{
 		HTTP: savedProxyClient(o.a.Dir, conn.URL, pinFetchTimeout), GitHub: pinsSources.github, Raw: pinsSources.raw,
+		Mirror: o.savedReleaseMirror,
 	}
 	sources := templates.DefaultSources()
 	sources.HTTP = savedProxyClient(o.a.Dir, conn.URL, sources.HTTP.Timeout)

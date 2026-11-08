@@ -143,6 +143,8 @@ type controllerOptions struct {
 	fluxOperatorChart string
 	chartValues       string
 	chartMirrors      []string
+	releaseMirror     provisioner.ReleaseMirror
+	releaseMirrorCA   string
 	egressProxy       string
 	egressNoProxy     string
 	podSecurityExempt string
@@ -241,6 +243,8 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringSliceVar(&o.calicoImages, "calico-images", nil, "the images the Tigera operator runs Calico from, all at its release, as <registry>/<repository>:<tag>@sha256:<digest> (comma-separated)")
 	f.StringVar(&o.chartValues, "chart-values", "{}", "Helm values for each chart, beneath Kubehenge's own and naming its images by digest, as a JSON object keyed by the chart flag's name without -chart, such as {\"cert-manager\":{...}}")
 	f.StringArrayVar(&o.chartMirrors, "chart-mirror", nil, "a mirror of a chart repository, as <host>=<address>, such as ghcr.io=oci://registry.example.org/ghcr or charts.jetstack.io=https://charts.example.org/jetstack. It serves the same charts under the same digests (repeatable)")
+	f.StringVar(&o.releaseMirror.URL, "release-mirror", "", "a mirror of the RKE2 and k3s releases, such as https://mirror.example.org/github, which serves them on GitHub's paths beneath it: <mirror>/<repository>/releases/download/<version>/<file> and <mirror>/<repository>/raw/<version>/install.sh. Nodes download from it in place of GitHub, and still install only the pinned files")
+	f.StringVar(&o.releaseMirrorCA, "release-mirror-ca", "", "a PEM file with the authority of a --release-mirror the usual authorities do not sign, which the nodes trust for their download")
 	f.StringVar(&o.egressProxy, "egress-proxy", os.Getenv("HTTPS_PROXY"), "the proxy the add-ons of clusters that set none of their own go through (env HTTPS_PROXY). An address with credentials is not passed on")
 	f.StringVar(&o.egressNoProxy, "egress-no-proxy", os.Getenv("NO_PROXY"), "the exceptions to --egress-proxy, comma-separated (env NO_PROXY)")
 	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
@@ -396,8 +400,9 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		SysAuditGroup:     o.r.SysAuditGroup,
 		VolumeSnapshots:   o.r.VolumeSnapshots,
 		Releases: &provisioner.ReleaseChecksums{
-			Pins:  provisioner.DefaultReleasePins(),
-			Store: &provisioner.PinStore{Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace},
+			Pins:   provisioner.DefaultReleasePins(),
+			Store:  &provisioner.PinStore{Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace},
+			Mirror: func() provisioner.ReleaseMirror { return o.releaseMirror },
 		},
 		Client: mgr.GetClient(),
 		Soak:   o.nodeImageSoak,
@@ -586,6 +591,22 @@ func (o *controllerOptions) parseMirrors() error {
 	}
 	o.r.Charts.Mirrors = mirrors
 	o.r.Egress = provisioner.Egress{URL: o.egressProxy, NoProxy: provisioner.SplitNoProxy(o.egressNoProxy)}
+	return o.parseReleaseMirror()
+}
+
+// parseReleaseMirror reads the release mirror and its authority, refusing either before a node
+// could fail on it.
+func (o *controllerOptions) parseReleaseMirror() error {
+	if o.releaseMirrorCA != "" {
+		ca, err := os.ReadFile(o.releaseMirrorCA)
+		if err != nil {
+			return fmt.Errorf("--release-mirror-ca: %w", err)
+		}
+		o.releaseMirror.CABundle = string(ca)
+	}
+	if err := o.releaseMirror.Check(time.Now()); err != nil {
+		return fmt.Errorf("--release-mirror: %w", err)
+	}
 	return nil
 }
 

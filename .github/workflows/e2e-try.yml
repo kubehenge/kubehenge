@@ -213,6 +213,21 @@ jobs:
           [ -z "$KEY2" ] || [ "$HIT2" = true ] || keep="$keep 2"
           echo "templates to keep: ${keep:- none}"
           echo "KUBEHENGE_E2E_KEEP_TEMPLATES=${keep# }" >> "$GITHUB_ENV"
+      # The RKE2 and k3s releases the lane's guests install, which run.sh serves them as their
+      # release mirror, kept under a key of their pins (test/e2e/ci/releases.sh). run.sh downloads
+      # what the cache lacks, and the nightly run and a dispatch keep it.
+      - name: Release key
+        id: releases
+        if: env.E2E_RUN == 'true'
+        env:
+          TEST: ${{ inputs.test }}
+        run: test/e2e/ci/releases.sh key "$TEST" | tee -a "$GITHUB_OUTPUT"
+      - id: releases-cache
+        if: env.E2E_RUN == 'true' && steps.releases.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/e2e/releases
+          key: ${{ steps.releases.outputs.key }}
       - name: KVM and memory
         if: env.E2E_RUN == 'true'
         run: |
@@ -353,6 +368,21 @@ jobs:
       - name: The runner's room
         if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
         run: test/e2e/ci/guard.sh peaks "$RUNNER_TEMP/guard.txt"
+      - name: Releases to keep
+        id: releases-kept
+        if: >-
+          !cancelled() && steps.releases.outputs.key != ''
+          && steps.releases-cache.outputs.cache-hit != 'true'
+          && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        run: |
+          if [ -e "$RUNNER_TEMP/e2e/releases/.complete" ]; then
+            echo keep=true >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.releases-kept.outputs.keep == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/e2e/releases
+          key: ${{ steps.releases.outputs.key }}
       # run.sh backs up only a template that passed its bake's checks.
       - if: >-
           !cancelled() && contains(format(' {0} ', env.KUBEHENGE_E2E_KEEP_TEMPLATES), ' 1 ')

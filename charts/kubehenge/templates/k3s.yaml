@@ -126,7 +126,7 @@ spec:
     {{- include "kubehenge.etcdVariable" . | nindent 4 }}
     {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
     {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
-    {{- include "kubehenge.nodeSiteVariables" (dict "artifacts" "k3s's releases" "script" "get.k3s.io") | nindent 4 }}
+    {{- include "kubehenge.nodeSiteVariables" (dict) | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -376,7 +376,7 @@ spec:
         {{- end }}
     {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "k3s") | nindent 4 }}
     {{- include "kubehenge.nodeIPPatch" (dict "distribution" "k3s" "root" .) | nindent 4 }}
-    {{- include "kubehenge.nodeSitePatches" (dict "root" . "distribution" "k3s" "pods" "10.42.0.0/16" "services" "10.43.0.0/16" "artifacts" "k3s's releases" "export" `{{ printf "export INSTALL_K3S_ARTIFACT_URL=%s" (dig "distributionMirror" "" . | squote) | toJson }}`) | nindent 4 }}
+    {{- include "kubehenge.nodeSitePatches" (dict "root" . "distribution" "k3s" "pods" "10.42.0.0/16" "services" "10.43.0.0/16") | nindent 4 }}
     # flannel masquerades the pods' IPv4 traffic leaving the cluster on its own, their IPv6 only
     # when told, and the pods' IPv6 range is a private one.
     - name: k3s-flannel-ipv6

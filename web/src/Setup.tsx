@@ -107,6 +107,10 @@ export interface SetupForm {
   chartMirrors: string;
   // PEM certificates of the chart mirrors' authority.
   chartMirrorCA: string;
+  // The address the RKE2 and k3s releases come from in place of GitHub.
+  releaseMirror: string;
+  // PEM certificates of the release mirror's authority.
+  releaseMirrorCA: string;
   // The address alone, with no user name or password.
   proxyURL: string;
   proxyUser: string;
@@ -260,6 +264,21 @@ function formatChartMirrors(m: Record<string, string> | undefined): string {
     .join("\n");
 }
 
+// releaseMirror is the release mirror the form names, if it names one.
+function releaseMirror(f: SetupForm): ManagementSettings["releaseMirror"] {
+  if (!filled(f.releaseMirror) && !filled(f.releaseMirrorCA)) {
+    return undefined;
+  }
+  const out: NonNullable<ManagementSettings["releaseMirror"]> = {};
+  if (filled(f.releaseMirror)) {
+    out.url = f.releaseMirror.trim();
+  }
+  if (filled(f.releaseMirrorCA)) {
+    out.caBundle = `${f.releaseMirrorCA.trim()}\n`;
+  }
+  return out;
+}
+
 // chartRepositories is the chart mirrors the form names, if it names any.
 function chartRepositories(f: SetupForm): ManagementSettings["chartRepositories"] {
   const mirrors = parseChartMirrors(f.chartMirrors);
@@ -310,6 +329,10 @@ function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
   const charts = chartRepositories(f);
   if (charts) {
     s.chartRepositories = charts;
+  }
+  const release = releaseMirror(f);
+  if (release) {
+    s.releaseMirror = release;
   }
   const proxy = proxySettings(f);
   if (proxy) {
@@ -478,6 +501,11 @@ const chartFields = (saved: ManagementSettings): Pick<SetupForm, "chartMirrors" 
   chartMirrorCA: saved.chartRepositories?.caBundle ?? "",
 });
 
+const releaseFields = (saved: ManagementSettings): Pick<SetupForm, "releaseMirror" | "releaseMirrorCA"> => ({
+  releaseMirror: saved.releaseMirror?.url ?? "",
+  releaseMirrorCA: saved.releaseMirror?.caBundle ?? "",
+});
+
 const positive = (n: number | undefined): string => (n !== undefined && n > 0 ? String(n) : "");
 const joined = (values: string[] | undefined): string => (values ?? []).join(", ");
 
@@ -531,6 +559,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     bootstrapDatastore: saved.bootstrapDatastore,
     mirrors: formatMirrors(saved.registryMirrors),
     ...chartFields(saved),
+    ...releaseFields(saved),
     ...proxyFields(saved),
     podSubnets: (saved.podSubnets ?? []).join(", "),
     serviceSubnets: (saved.serviceSubnets ?? []).join(", "),
@@ -576,6 +605,8 @@ export type SetupField =
   | "mirrors"
   | "chartMirrors"
   | "chartMirrorCA"
+  | "releaseMirror"
+  | "releaseMirrorCA"
   | "proxyURL"
   | "proxyUser"
   | "proxyPassword"
@@ -612,6 +643,8 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "mirrors",
     "chartMirrors",
     "chartMirrorCA",
+    "releaseMirror",
+    "releaseMirrorCA",
     "proxyURL",
     "proxyUser",
     "proxyPassword",
@@ -631,6 +664,8 @@ const advancedFields: SetupField[] = [
   "mirrors",
   "chartMirrors",
   "chartMirrorCA",
+  "releaseMirror",
+  "releaseMirrorCA",
   "proxyURL",
   "proxyUser",
   "proxyPassword",
@@ -973,6 +1008,30 @@ function chartMirrorProblems(f: SetupForm): SetupProblems {
   return p;
 }
 
+// releaseMirrorAddress is an http(s):// address that a node's command line carries as it is.
+const releaseMirrorAddress = /^https?:\/\/[A-Za-z0-9._~:[\]-]+(?<path>\/[A-Za-z0-9._~:/[\]-]*[A-Za-z0-9._~:[\]-])?$/u;
+
+// releaseMirrorProblems are those of the release mirror and its certificate authority.
+function releaseMirrorProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  const address = f.releaseMirror.trim();
+  if (address !== "" && !releaseMirrorAddress.test(address)) {
+    p.releaseMirror = "Use an http:// or https:// address with no trailing slash, query or credentials.";
+  }
+  if (filled(f.releaseMirrorCA)) {
+    if (f.releaseMirrorCA.includes("PRIVATE KEY")) {
+      p.releaseMirrorCA = "Paste certificates only, no private key.";
+    } else if (!f.releaseMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
+      p.releaseMirrorCA = "Paste PEM certificates.";
+    } else if (address === "") {
+      p.releaseMirrorCA = "Add a release mirror first.";
+    } else if (!address.startsWith("https://")) {
+      p.releaseMirrorCA = "A certificate needs an https:// mirror.";
+    }
+  }
+  return p;
+}
+
 // offerProblems are those of what the management cluster offers the clusters it makes.
 function offerProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
@@ -993,7 +1052,7 @@ function offerProblems(f: SetupForm): SetupProblems {
   if (bad !== undefined) {
     p.mirrors = `${bad} is not in the form ghcr.io=https://mirror.example:5000.`;
   }
-  Object.assign(p, chartMirrorProblems(f), proxyProblems(f));
+  Object.assign(p, chartMirrorProblems(f), releaseMirrorProblems(f), proxyProblems(f));
   for (const key of ["podSubnets", "serviceSubnets"] as const) {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
@@ -1221,6 +1280,8 @@ function headlampRows(s: ManagementSettings): [string, string][] {
   ];
 }
 
+const releaseMirrorSummary = (s: ManagementSettings): string => s.releaseMirror?.url ?? "GitHub";
+
 function chartMirrorsSummary(s: ManagementSettings): string {
   const mirrors = s.chartRepositories?.mirrors;
   return mirrors ? formatChartMirrors(mirrors).split("\n").join(", ") : "None";
@@ -1265,6 +1326,7 @@ function ManagedSummary({
     ["etcd restores", s.etcdRestore === true ? "Guest agent" : "By hand"],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
     ["Chart mirrors", chartMirrorsSummary(s)],
+    ["Release mirror", releaseMirrorSummary(s)],
     ["Proxy", proxySummary(s.proxy)],
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Automatic"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Automatic"],
@@ -2145,6 +2207,28 @@ export function AdvancedFields({
             rows={3}
             value={form.chartMirrorCA}
             onChange={(e) => set("chartMirrorCA", e.target.value)}
+          />
+        )}
+      </Field>
+      <Field
+        label="Release mirror"
+        hint="Like https://mirror.example/github"
+        info="RKE2 and k3s nodes download their release from it in place of GitHub, on GitHub's paths. They still install only pinned files."
+        error={shown("releaseMirror")}
+      >
+        {(id) => <input id={id} value={form.releaseMirror} onChange={(e) => set("releaseMirror", e.target.value)} />}
+      </Field>
+      <Field
+        label="Release mirror certificate"
+        hint="PEM, for a mirror with its own authority"
+        error={shown("releaseMirrorCA")}
+      >
+        {(id) => (
+          <textarea
+            id={id}
+            rows={3}
+            value={form.releaseMirrorCA}
+            onChange={(e) => set("releaseMirrorCA", e.target.value)}
           />
         )}
       </Field>

@@ -318,6 +318,11 @@ func (t *SavedTransport) current() (http.RoundTripper, error) {
 		// The environment still applies where the appliance's service sets it.
 		transport.Proxy = http.ProxyFromEnvironment
 	}
+	if saved != nil {
+		if err = saved.ReleaseMirror.Mirror().Trust(transport); err != nil {
+			return nil, fmt.Errorf("the saved release mirror: %w", err)
+		}
+	}
 	t.rt = transport
 	if statErr == nil {
 		t.stamp, t.size = info.ModTime(), info.Size()

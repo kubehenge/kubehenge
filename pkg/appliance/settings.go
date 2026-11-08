@@ -58,6 +58,8 @@ type Settings struct {
 	// ChartRepositories are mirrors of the Helm chart repositories, which registry mirrors do not
 	// reach.
 	ChartRepositories *ChartRepositories `json:"chartRepositories,omitempty"`
+	// ReleaseMirror serves the RKE2 and k3s releases in place of GitHub.
+	ReleaseMirror *ReleaseMirror `json:"releaseMirror,omitempty"`
 	// ControllerImage replaces the controller image the chart was released with.
 	ControllerImage string `json:"controllerImage,omitempty"`
 	// PodSubnets and ServiceSubnets are the management cluster's own ranges. When unset, the first
@@ -461,6 +463,7 @@ func (s *Settings) Validate() error {
 	s.checkSubnets(&p, families)
 	s.checkMirrors(&p)
 	s.ChartRepositories.check(&p)
+	s.ReleaseMirror.check(&p, time.Now())
 	if err := ValidOIDC(s.ClusterOIDC); err != nil {
 		p.addf("Identity providers: %s", err)
 	}

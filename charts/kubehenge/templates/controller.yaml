@@ -307,6 +307,11 @@ spec:
     metadata:
       labels:
         {{- toYaml $labels | nindent 8 }}
+      {{- if .Values.releaseMirror.caBundle }}
+      annotations:
+        # The controller reads the authority once, as it starts.
+        kubehenge.dev/release-mirror-ca: {{ .Values.releaseMirror.caBundle | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $name }}
       enableServiceLinks: false
@@ -353,6 +358,12 @@ spec:
             - {{ printf "--chart-values=%s" (toJson $chartValues) | quote }}
             {{- range $host, $mirror := .Values.chartMirrors }}
             - {{ printf "--chart-mirror=%s=%s" $host $mirror | quote }}
+            {{- end }}
+            {{- with .Values.releaseMirror.url }}
+            - {{ printf "--release-mirror=%s" . | quote }}
+            {{- end }}
+            {{- if .Values.releaseMirror.caBundle }}
+            - --release-mirror-ca=/etc/kubehenge/release-mirror/ca.crt
             {{- end }}
             - --calico-images={{ join "," .Values.addons.calico.images }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
@@ -461,6 +472,11 @@ spec:
               readOnly: true
             - name: scratch
               mountPath: /tmp
+            {{- if .Values.releaseMirror.caBundle }}
+            - name: release-mirror
+              mountPath: /etc/kubehenge/release-mirror
+              readOnly: true
+            {{- end }}
             {{- include "kubehenge.proxyMount" . | nindent 12 }}
       volumes:
         # A Talos etcd restore keeps the snapshot it uploads there, as large as etcd's quota
@@ -477,7 +493,24 @@ spec:
         - name: tls
           secret:
             secretName: {{ $tls }}
+        {{- if .Values.releaseMirror.caBundle }}
+        - name: release-mirror
+          configMap:
+            name: kubehenge-release-mirror
+        {{- end }}
         {{- include "kubehenge.proxyVolume" . | nindent 8 }}
+{{- if .Values.releaseMirror.caBundle }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubehenge-release-mirror
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+data:
+  ca.crt: {{ .Values.releaseMirror.caBundle | quote }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service

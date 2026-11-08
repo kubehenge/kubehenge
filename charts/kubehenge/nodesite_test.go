@@ -57,7 +57,6 @@ func siteVariables(t *testing.T, builtin string, extra map[string]any) map[strin
 			{"registry": "*", "endpoints": ["https://harbor.example.org/v2"]},
 			{"registry": "ghcr.io", "endpoints": ["https://mirror.example.org:5000"], "caBundle": `+jsonString(siteCA(t, "mirror"))+`}
 		],
-		"distributionMirror": "https://mirror.example.org/rancher",
 		"trustedCAs": [`+jsonString(siteCA(t, "corp"))+`],
 		"egressProxy": {"url": "http://proxy.example.org:3128", "httpsUrl": "http://secure.example.org:3129", "noProxy": [".corp.example.org", "10.10.0.0/16", "localhost"]}
 	}`)
@@ -72,9 +71,6 @@ func jsonString(s string) string {
 	}
 	return string(b)
 }
-
-// artifactURL is the tail of the installers' own variable names for a release mirror.
-const artifactURL = "ARTIFACT_URL" //nolint:misspell // the installers' spelling
 
 const ownRanges = `{"pods": ["172.16.0.0/16"], "services": ["172.17.0.0/16"]}`
 
@@ -124,13 +120,6 @@ func TestEveryNodeTakesTheSiteSettings(t *testing.T) {
 			}
 			if commands[at+1] != "set -a; . /etc/kubehenge/site/proxy.env; set +a" {
 				t.Errorf("%v: the proxy's environment must be read right after the script", commands)
-			}
-			if c.distribution != "kubeadm" {
-				// Mirrors of the release go before the distribution's installer, which comes after
-				// every one of these commands.
-				if got := commands[at+2]; !strings.Contains(got, artifactURL) {
-					t.Errorf("%v: no export of the release mirror after the proxy", commands)
-				}
 			}
 			for _, want := range []string{
 				"dist=" + c.distribution + "\n",
@@ -214,35 +203,6 @@ func syntax(t *testing.T, script string) {
 	}
 }
 
-func TestOnlyTheReleaseMirrorOfAgentDistributionsExists(t *testing.T) {
-	t.Parallel()
-	vars := siteVariables(t, ownRanges, map[string]any{"distributionMirror": "https://mirror.example.org/rancher"})
-	for file, want := range map[string]string{
-		"rke2.yaml": "export INSTALL_RKE2_METHOD=tar INSTALL_RKE2_" + artifactURL + "='https://mirror.example.org/rancher'",
-		"k3s.yaml":  "export INSTALL_K3S_" + artifactURL + "='https://mirror.example.org/rancher'",
-	} {
-		kind, commands, files := "RKE2ControlPlaneTemplate", "preRKE2Commands", []string{"spec", "template", "spec"}
-		if file == "k3s.yaml" {
-			kind, commands, files = "KThreesControlPlaneTemplate", "preK3sCommands", []string{"spec", "template", "spec", "kthreesConfigSpec"}
-		}
-		spec := asMap(t, field(t, renderClass(t, file).patched(t, kind, vars), files...))
-		if got := commandsOf(t, spec[commands]); !slices.Contains(got, want) {
-			t.Errorf("%s: commands %v lack %q", file, got, want)
-		}
-		// A mirror alone, without a proxy: nothing else is written and no proxy is read.
-		alone := variablesOf(t, `{"distributionMirror": "https://mirror.example.org/rancher"}`)
-		spec = asMap(t, field(t, renderClass(t, file).patched(t, kind, alone), files...))
-		if got := commandsOf(t, spec[commands]); slices.Contains(got, "/etc/kubehenge/node-site.sh || exit 1") || !slices.Contains(got, want) {
-			t.Errorf("%s: a release mirror alone gives commands %v", file, got)
-		}
-	}
-	for _, file := range []string{"kubeadm.yaml", "talos.yaml"} {
-		if _, ok := renderClass(t, file).variables["distributionMirror"]; ok {
-			t.Errorf("%s offers a release mirror, which its nodes have no use for", file)
-		}
-	}
-}
-
 func TestNodesChangeNothingWithoutSiteSettings(t *testing.T) {
 	t.Parallel()
 	for _, c := range siteCases {
@@ -251,7 +211,7 @@ func TestNodesChangeNothingWithoutSiteSettings(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, banned := range []string{"node-site", "kubehenge/site", "registries.yaml", "proxy.env", artifactURL} {
+		for _, banned := range []string{"node-site", "kubehenge/site", "registries.yaml", "proxy.env"} {
 			if strings.Contains(string(raw), banned) {
 				t.Errorf("%s %s: %q without any site setting", c.file, c.kind, banned)
 			}
@@ -414,15 +374,5 @@ func TestEveryClassValidatesTheSiteSettings(t *testing.T) {
 		check("egressProxy", `{"url":"http://user:pw@p.example.org"}`, false, "url")
 		// The exceptions of a cluster without a proxy of its own extend the management side's.
 		check("egressProxy", `{"noProxy":["a.example.org"]}`, true, "")
-		_, offers := class.variables["distributionMirror"]
-		want := file == "rke2.yaml" || file == "k3s.yaml"
-		if offers != want {
-			t.Errorf("%s: release mirror offered = %v", file, offers)
-		}
-		if want {
-			check("distributionMirror", `"https://m.example.org/rancher/rke2/releases/download"`, true, "")
-			check("distributionMirror", `"m.example.org"`, false, "in body")
-			check("distributionMirror", `"https://m.example.org/a b"`, false, "in body")
-		}
 	}
 }
