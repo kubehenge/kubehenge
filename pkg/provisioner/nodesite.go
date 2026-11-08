@@ -66,6 +66,18 @@ func validateNodeSite(c *clusterv1.Cluster, now time.Time) field.ErrorList {
 			errs = append(errs, field.Invalid(path.Index(i), nil, caErr.Error()))
 		}
 	}
+	release, set, err := ClusterReleaseMirror(c)
+	switch {
+	case err != nil:
+		errs = append(errs, field.Invalid(variables.Key(releaseMirrorVariable), nil, err.Error()))
+	case set && release.URL == "":
+		errs = append(errs, field.Required(variables.Key(releaseMirrorVariable).Child("url"), "a release mirror needs its address"))
+	default:
+		// The address stays out of the error, as it may hold a password.
+		if checkErr := release.Check(now); checkErr != nil {
+			errs = append(errs, field.Invalid(variables.Key(releaseMirrorVariable), nil, checkErr.Error()))
+		}
+	}
 	return errs
 }
 

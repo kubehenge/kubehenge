@@ -44,8 +44,17 @@ type ReleaseChecksums struct {
 	GitHub, Raw string
 	API         string
 	// Mirror, when set, is the release mirror nodes download from and the reads go to in place of
-	// GitHub, read again for each patch and read.
+	// GitHub, read again for each patch and read. A cluster's own releaseMirror takes its place for
+	// that cluster's nodes.
 	Mirror func() ReleaseMirror
+}
+
+// DefaultMirror is the management cluster's release mirror, the zero mirror for none.
+func (r *ReleaseChecksums) DefaultMirror() ReleaseMirror {
+	if r == nil {
+		return ReleaseMirror{}
+	}
+	return r.mirror()
 }
 
 func (r *ReleaseChecksums) mirror() ReleaseMirror {
@@ -53,6 +62,15 @@ func (r *ReleaseChecksums) mirror() ReleaseMirror {
 		return ReleaseMirror{}
 	}
 	return r.Mirror()
+}
+
+// mirrorFor is the mirror a cluster's nodes download from: its own, else the management cluster's.
+func (r *ReleaseChecksums) mirrorFor(cluster *clusterv1.Cluster) (ReleaseMirror, error) {
+	own, set, err := ClusterReleaseMirror(cluster)
+	if err != nil || set {
+		return own, err
+	}
+	return r.mirror(), nil
 }
 
 // releaseTemplate is where a bootstrap template of RKE2 or k3s keeps its node's configuration.
@@ -162,7 +180,11 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 	if err != nil {
 		return nil, err //nolint:wrapcheck // names the node OS
 	}
-	ops := r.installOps(tmpl, append([]string{string(release.distribution), version, sums.File, sums.Script}, files...))
+	mirror, err := r.mirrorFor(cluster)
+	if err != nil {
+		return nil, err
+	}
+	ops := installOps(tmpl, mirror, append([]string{string(release.distribution), version, sums.File, sums.Script}, files...))
 	if family.MAC() == templates.SELinux {
 		// Neither bootstrap provider has a field for it, and both distributions read every file in
 		// config.yaml.d. The node's template carries the distribution's policy package.
@@ -182,15 +204,16 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 const rootOwner = "root:root"
 
 // installOps put the release script on a node, with the mirror's authority when it has one, and
-// run it with its arguments from the mirror or GitHub.
-func (r *ReleaseChecksums) installOps(tmpl releaseTemplate, args []string) []map[string]any {
+// run it with its arguments from the mirror or GitHub. The authority is a file of the same
+// bootstrap as the command, so the download never waits on the node's trust store.
+func installOps(tmpl releaseTemplate, mirror ReleaseMirror, args []string) []map[string]any {
 	command := []string{releaseScriptPath}
 	ops := []map[string]any{
 		addOp(tmpl.spec+"/files/-", map[string]any{
 			"path": releaseScriptPath, "owner": rootOwner, "permissions": "0700", "content": releaseScript,
 		}),
 	}
-	if mirror := r.mirror(); mirror.Enabled() {
+	if mirror.Enabled() {
 		command = append(command, "--mirror", mirror.URL)
 		if mirror.CABundle != "" {
 			command = append(command, "--mirror-ca", releaseMirrorCAPath)

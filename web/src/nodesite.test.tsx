@@ -13,6 +13,11 @@ import {
   mirrorsText,
   mirrorsVariable,
   newMirror,
+  newReleaseMirror,
+  releaseMirrorOf,
+  releaseMirrorProblems,
+  releaseMirrorText,
+  releaseMirrorVariable,
   trustedOf,
   trustedText,
   trustedVariable,
@@ -106,6 +111,57 @@ describe("the trusted authorities", () => {
   });
 });
 
+describe("a cluster's own release mirror", () => {
+  const key = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n";
+
+  it("sends the address with a normalised authority, and nothing when empty", () => {
+    expect(releaseMirrorVariable(newReleaseMirror())).toBeUndefined();
+    expect(releaseMirrorVariable({ url: " https://m.example/github ", caBundle: "" })).toStrictEqual({
+      url: "https://m.example/github",
+    });
+    expect(
+      releaseMirrorVariable({ url: "https://m.example", caBundle: `  ${certificate.replaceAll("\n", "\r\n")}` }),
+    ).toStrictEqual({ url: "https://m.example", caBundle: certificate });
+    expect(releaseMirrorOf({ url: "https://m.example", caBundle: certificate })).toStrictEqual({
+      url: "https://m.example",
+      caBundle: certificate,
+    });
+    expect(releaseMirrorOf(undefined)).toStrictEqual(newReleaseMirror());
+  });
+
+  it("names its own address, else the management cluster's or GitHub", () => {
+    expect(releaseMirrorText({ url: "https://site.example", caBundle: "" }, "https://m.example")).toBe(
+      "https://site.example",
+    );
+    expect(releaseMirrorText(newReleaseMirror(), "https://m.example")).toBe("Default: https://m.example");
+    expect(releaseMirrorText(newReleaseMirror(), "")).toBe("Default: GitHub");
+    expect(releaseMirrorText(newReleaseMirror(), undefined)).toBe("Default");
+  });
+
+  it("holds the address and authority to the class's rules", () => {
+    expect(releaseMirrorProblems(newReleaseMirror())).toStrictEqual({});
+    expect(releaseMirrorProblems({ url: "http://10.0.0.5:8944", caBundle: "" })).toStrictEqual({});
+    expect(releaseMirrorProblems({ url: "https://m.example/gh", caBundle: certificate })).toStrictEqual({});
+    for (const url of [
+      "m.example",
+      "ftp://m.example",
+      "https://u:p@m.example",
+      "https://m.example/",
+      "https://m.example?a=b",
+      "https://m'.example",
+    ]) {
+      expect(releaseMirrorProblems({ url, caBundle: "" }).url).toMatch(/^Use an http:\/\/ or https:\/\/ address/u);
+    }
+    expect(releaseMirrorProblems({ url: "https://m.example", caBundle: key }).caBundle).toBe(
+      "Paste PEM certificates only",
+    );
+    expect(releaseMirrorProblems({ url: "http://m.example", caBundle: certificate }).caBundle).toBe(
+      "A certificate needs an https:// mirror",
+    );
+    expect(releaseMirrorProblems({ url: "", caBundle: certificate }).caBundle).toBe("Add a release mirror first");
+  });
+});
+
 describe("the wizard's site settings", () => {
   const cls: ClusterClass = {
     name: "kubehenge-rke2",
@@ -141,6 +197,28 @@ describe("the wizard's site settings", () => {
       trustedCAs: "Paste PEM certificates only",
     });
     expect(fieldProblems("Network", wrong, bare)).not.toHaveProperty("trustedCAs");
+  });
+
+  it("send the release mirror only for a class that offers it", () => {
+    const agent: ClusterClass = {
+      ...cls,
+      variables: [...cls.variables, { name: "releaseMirror", required: false, schema: { type: "object" } }],
+    };
+    const form = { ...newForm(), rancherRegister: false };
+    const set = { ...form, releaseMirror: { url: "https://site.example/gh", caBundle: certificate } };
+    expect(request(form, agent).variables).not.toHaveProperty("releaseMirror");
+    expect(request(set, agent).variables["releaseMirror"]).toStrictEqual({
+      url: "https://site.example/gh",
+      caBundle: certificate,
+    });
+    expect(request(set, cls).variables).not.toHaveProperty("releaseMirror");
+    expect(Object.fromEntries(summary(set, agent))).toMatchObject({ "Release mirror": "https://site.example/gh" });
+    expect(Object.fromEntries(summary(form, agent))).not.toHaveProperty("Release mirror");
+    const wrong = { ...form, releaseMirror: { url: "http://site.example", caBundle: certificate } };
+    expect(fieldProblems("Network", wrong, agent)).toMatchObject({
+      "releaseMirror.caBundle": "A certificate needs an https:// mirror",
+    });
+    expect(fieldProblems("Network", wrong, cls)).not.toHaveProperty("releaseMirror.caBundle");
   });
 });
 
@@ -244,5 +322,81 @@ describe("a cluster's site options", () => {
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { trustedCAs: null },
     });
+  });
+
+  it("show the management cluster's release mirror as the default and save the cluster's own", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const k3s: ClusterClass = {
+      name: "kubehenge-k3s",
+      distribution: "k3s",
+      versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+k3s\d+$` },
+      variables: [{ name: "releaseMirror", required: false, schema: { type: "object" } }],
+      releaseMirror: "https://mirror.example/github",
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/classes": { body: [k3s] },
+      "GET /api/clusters/clusters/web": { body: cluster },
+      "PATCH /api/clusters/clusters/web": { body: cluster },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await expect(
+      screen.findByRole("cell", { name: "Default: https://mirror.example/github" }),
+    ).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit the release mirror" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit release mirror" });
+    await expect(within(dialog).findByText("Default: https://mirror.example/github")).resolves.toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText("Release mirror"), "http://site.example");
+    await user.click(within(dialog).getByLabelText("Release mirror certificate"));
+    await user.paste(certificate);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(within(dialog).getByText("A certificate needs an https:// mirror")).toBeInTheDocument();
+    expect(calls.filter((c) => c.key === "PATCH /api/clusters/clusters/web")).toHaveLength(0);
+    await user.clear(within(dialog).getByLabelText("Release mirror"));
+    await user.type(within(dialog).getByLabelText("Release mirror"), "https://site.example/gh");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { releaseMirror: { url: "https://site.example/gh", caBundle: certificate } },
+    });
+  });
+
+  it("clear a cluster's own release mirror back to the default", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const held = { ...cluster, variables: { releaseMirror: { url: "https://site.example/gh" } } };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: held },
+      "PATCH /api/clusters/clusters/web": { body: held },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await expect(screen.findByRole("cell", { name: "https://site.example/gh" })).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit the release mirror" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit release mirror" });
+    await user.clear(within(dialog).getByLabelText("Release mirror"));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { releaseMirror: null },
+    });
+  });
+
+  it("offer no release mirror on a kubeadm cluster", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const kubeadm = { ...cluster, class: "kubehenge-kubeadm", distribution: "kubeadm", version: "v1.36.5" };
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: kubeadm },
+    });
+    render(<App />);
+
+    await expect(screen.findByRole("button", { name: "Edit the trusted CAs" })).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit the release mirror" })).not.toBeInTheDocument();
   });
 });

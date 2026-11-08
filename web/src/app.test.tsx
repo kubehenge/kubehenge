@@ -1044,6 +1044,7 @@ describe("create", () => {
     ntpServers: "",
     registryMirrors: [],
     trustedCAs: "",
+    releaseMirror: { url: "", caBundle: "" },
     loadBalancer: "",
     loadBalancerAddresses: "",
     loadBalancerMode: "l2",

@@ -2843,6 +2843,40 @@
           }
         },
         {
+          "name": "releaseMirror",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Where the nodes download their release from, in place of the management cluster's release mirror or GitHub. It serves GitHub's paths beneath its address, and the nodes check every file against the same pins.",
+              "properties": {
+                "caBundle": {
+                  "description": "The authority that signed the mirror's certificate, as PEM, for an https:// mirror.",
+                  "maxLength": 65536,
+                  "minLength": 64,
+                  "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                  "type": "string"
+                },
+                "url": {
+                  "description": "An http:// or https:// address without credentials, a query or a trailing slash.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://[A-Za-z0-9._~:\\[\\]-]+(/[A-Za-z0-9._~:/\\[\\]-]*[A-Za-z0-9._~:\\[\\]-])?$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "A release mirror's caBundle is for an https:// mirror.",
+                  "rule": "!has(self.caBundle) || self.url.startsWith('https://')"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": false,
           "schema": {
@@ -8534,6 +8568,40 @@
               },
               "maxItems": 8,
               "type": "array"
+            }
+          }
+        },
+        {
+          "name": "releaseMirror",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Where the nodes download their release from, in place of the management cluster's release mirror or GitHub. It serves GitHub's paths beneath its address, and the nodes check every file against the same pins.",
+              "properties": {
+                "caBundle": {
+                  "description": "The authority that signed the mirror's certificate, as PEM, for an https:// mirror.",
+                  "maxLength": 65536,
+                  "minLength": 64,
+                  "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                  "type": "string"
+                },
+                "url": {
+                  "description": "An http:// or https:// address without credentials, a query or a trailing slash.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://[A-Za-z0-9._~:\\[\\]-]+(/[A-Za-z0-9._~:/\\[\\]-]*[A-Za-z0-9._~:\\[\\]-])?$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "A release mirror's caBundle is for an https:// mirror.",
+                  "rule": "!has(self.caBundle) || self.url.startsWith('https://')"
+                }
+              ]
             }
           }
         },

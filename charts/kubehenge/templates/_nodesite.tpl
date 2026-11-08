@@ -62,6 +62,36 @@ pattern: '^(-----BEGIN CERTIFICATE-----\n([A-Za-z0-9+/=]+\n)+-----END CERTIFICAT
 {{- end -}}
 
 {{/*
+An RKE2 or k3s cluster's own release mirror. The controller's release hook hands it to the nodes'
+download in place of the management cluster's, and the webhook holds the authority to certificates
+valid now.
+*/}}
+{{- define "kubehenge.releaseMirrorVariable" -}}
+- name: releaseMirror
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      required: [url]
+      description: >-
+        Where the nodes download their release from, in place of the management cluster's release
+        mirror or GitHub. It serves GitHub's paths beneath its address, and the nodes check every
+        file against the same pins.
+      properties:
+        url:
+          type: string
+          maxLength: 2048
+          pattern: '^https?://[A-Za-z0-9._~:\[\]-]+(/[A-Za-z0-9._~:/\[\]-]*[A-Za-z0-9._~:\[\]-])?$'
+          description: An http:// or https:// address without credentials, a query or a trailing slash.
+        caBundle:
+          description: The authority that signed the mirror's certificate, as PEM, for an https:// mirror.
+          {{- include "kubehenge.pemSchema" . | nindent 10 }}
+      x-kubernetes-validations:
+        - rule: "!has(self.caBundle) || self.url.startsWith('https://')"
+          message: A release mirror's caBundle is for an https:// mirror.
+{{- end -}}
+
+{{/*
 A Cluster API template that sets $noProxy, the exceptions of the proxy on a node (call with "pods" and
 "services", the distribution's own ranges, for a Cluster that sets none): the cluster's pod, service
 and node networks in each of its address families, its API address, its own names and the

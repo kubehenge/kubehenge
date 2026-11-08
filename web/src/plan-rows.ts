@@ -35,6 +35,7 @@ const settingLabels: Record<string, string[]> = {
   egressProxy: ["Egress proxy"],
   registryMirrors: ["Registry mirrors"],
   trustedCAs: ["Trusted CAs"],
+  releaseMirror: ["Release mirror"],
   gitops: ["GitOps"],
   headlamp: ["Headlamp"],
   istio: ["Istio"],

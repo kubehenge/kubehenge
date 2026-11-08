@@ -86,6 +86,8 @@ export interface ClusterClass {
   /** The waits the class gives a removed machine's node, for the control planes and for the workers. */
   controlPlaneTimeouts?: NodeTimeouts;
   workerTimeouts?: NodeTimeouts;
+  /** The management cluster's release mirror, which the class's nodes take unless a cluster names its own. */
+  releaseMirror?: string;
 }
 
 /**
