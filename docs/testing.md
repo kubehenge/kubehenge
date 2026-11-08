@@ -427,7 +427,7 @@ Every node is at the least Kubehenge allows for what its test switches on. With 
 
 #### Tests above 12 GiB
 
-`kubeadm-addons-a` and `k3s-addons-b` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176, 11968 and 11856 MiB. `two-nodes` runs one of 3584 MiB too. Its two nodes share the runner's memory, and the second rejoins the placement only with 4505 MiB free. The guard's samples show what the management node uses in every run (below).
+`kubeadm-addons-a` and `k3s-addons-b` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176, 11968 and 11856 MiB. `two-nodes` runs one of 3584 MiB too, as both its nodes' guests run at once while its machines move between them. The guard's samples show what the management node uses in every run (below).
 
 These tests outgrow 12 GiB as well. Only the RKE2 ones read back from swap past the guard's line, 570 to 1220 MiB in a minute:
 
@@ -530,4 +530,8 @@ A node whose API does not answer is asked once, and every call is cut off after 
 
 For `two-nodes`, `run.sh` first joins a second node, `pve2`, from the same image to the first in a Proxmox VE cluster (`test/e2e/ci/second-node.sh`). The two VM bridges are joined at layer 2 through a Docker network of their own, the first keeping the gateway and name server. A directory both mount is their shared storage `shared`, which the management cluster and the templates then use.
 
-Remove everything with `docker rm -f kubehenge-e2e-pve kubehenge-e2e-pve2 kubehenge-e2e-registry && docker network rm kubehenge-e2e kubehenge-e2e-vms` (the second node and network only where `two-nodes` ran) and `sudo ip route del 172.20.99.0/24`.
+`pve2` has 6656 MiB of memory of its own, as a second host would. lxcfs on the runner serves it a `/proc/meminfo` with its container's limit as the total. The first node reports the runner's memory, `pve2`'s use included.
+
+A budget of its own for the first node does not fit beside `pve2`'s. The test's last step would need 4096 MiB free on it and 4505 on `pve2`, beside 8 GiB of guests. So the test checks only that `pve2` rejoins the placement.
+
+Remove everything with `docker rm -f kubehenge-e2e-pve kubehenge-e2e-pve2 kubehenge-e2e-registry kubehenge-e2e-lxcfs && docker network rm kubehenge-e2e kubehenge-e2e-vms` (the second node, lxcfs and network only where `two-nodes` ran), `sudo umount <work directory>/lxcfs` where lxcfs ran, and `sudo ip route del 172.20.99.0/24`.

@@ -271,9 +271,8 @@ fi
 
 # The management node's memory is the module's default, but where the test's name gives another.
 # kubeadm-addons-a and k3s-addons-b with Calico and rke2-addons-b with Cilium take 3584 MiB, as
-# with 4096 their guests outgrow 12 GiB (docs/testing.md). two-nodes takes it too. Its two nodes
-# share this machine's memory, and the second rejoins the placement only with a tenth more than the
-# 4 GiB control plane free.
+# with 4096 their guests outgrow 12 GiB (docs/testing.md). two-nodes takes it too: while its
+# machines move from the second node to the first, both nodes' guests run on this machine at once.
 case "${test}+${KUBEHENGE_E2E_CNI:-}" in
     kubeadm-addons-a+calico | k3s-addons-b+calico | rke2-addons-b+cilium | two-nodes+*) : "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:=3584}" ;;
     *) ;;
@@ -334,8 +333,9 @@ case "${test}" in
             headlampActions: true, apiAuditLog: true
         }' > "${work}/appliance-settings.json"
         pve=kubehenge-e2e-pve
-        docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'
+        docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test /root/kubehenge/scripts'
         docker cp "${repo}/test/e2e" "${pve}:/root/kubehenge/test/e2e"
+        docker cp "${repo}/scripts/fetch.sh" "${pve}:/root/kubehenge/scripts/fetch.sh"
         docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
         for version in 0.0.1 0.0.2 0.0.3; do
             docker cp "${repo}/dist/kubehenge_${version}_linux_amd64.tar.gz" "${pve}:/root/kubehenge/"
@@ -389,8 +389,9 @@ case "${test}" in
             registryMirrors: {"ghcr.io": ["http://172.21.99.3:5000"]}
         }' > "${work}/appliance-settings.json"
         pve=kubehenge-e2e-pve
-        docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test'
+        docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test /root/kubehenge/scripts'
         docker cp "${repo}/test/e2e" "${pve}:/root/kubehenge/test/e2e"
+        docker cp "${repo}/scripts/fetch.sh" "${pve}:/root/kubehenge/scripts/fetch.sh"
         docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
         docker cp "${work}/published/install.sh" "${pve}:/root/kubehenge/published-install.sh"
         docker cp "${work}/published/kubehenge_${published}_linux_amd64.tar.gz" "${pve}:/root/kubehenge/"
