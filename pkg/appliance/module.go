@@ -519,6 +519,14 @@ type tofuDiagnostic struct {
 	Address string `json:"address"`
 }
 
+// guestAgentAuditRefused tells whether the Proxmox VE provider's wait for a VM's network addresses
+// from its guest agent met a 403. The module reads no address from it, so the run goes on, and the
+// provider's own wording does not say which privilege is missing.
+func guestAgentAuditRefused(d *tofuDiagnostic) bool {
+	text := d.Summary + " " + d.Detail
+	return strings.Contains(text, "network interfaces from QEMU agent") && strings.Contains(text, "403")
+}
+
 // jsonMessage is the human part of a line of OpenTofu's -json output: its message, or a
 // diagnostic's whole text with the resource it is about. OpenTofu prints an apply's diagnostics
 // only once the apply has ended, so the address is what ties one to the resource that failed.
@@ -528,6 +536,9 @@ func jsonMessage(line string) string {
 		return strings.TrimSpace(line)
 	}
 	if m.Type == "diagnostic" && m.Diagnostic.Detail != "" {
+		if guestAgentAuditRefused(&m.Diagnostic) {
+			return fmt.Sprintf("%s: %s: Proxmox VE refused to list the guest agent's network addresses, since the user lacks VM.GuestAgent.Audit. The setup does not use them.", m.Level, m.Diagnostic.Address)
+		}
 		if m.Diagnostic.Address != "" {
 			return fmt.Sprintf("%s: %s: %s: %s", m.Level, m.Diagnostic.Address, m.Diagnostic.Summary, m.Diagnostic.Detail)
 		}

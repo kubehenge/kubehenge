@@ -392,7 +392,7 @@ The signed-in user needs these privileges on `/`, which the Administrator role h
 
 `Sys.Modify`, `Permissions.Modify`, `User.Modify`, `Group.Allocate`, `Realm.AllocateUser`, `Pool.Allocate`, `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.PowerMgmt`, `VM.Config.CPU`, `VM.Config.Cloudinit`, `VM.Config.Disk`, `VM.Config.HWType`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Options`, `Datastore.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`, `SDN.Audit`, `SDN.Use`, `Sys.AccessNetwork`
 
-Proxmox VE checks the privileges of every call the run makes. Anyone without them sees that Kubehenge is not set up yet.
+Proxmox VE checks the privileges of every call the run makes. Anyone without them sees that Kubehenge is not set up yet. Without `VM.GuestAgent.Audit` the log holds one warning that Proxmox VE refused the management VMs' network addresses. The run does not need them.
 
 The run acts with your own Proxmox VE session, with no administrator token created. The interface renews your ticket and hands it to OpenTofu through its environment only, never storing it. A ticket lasts two hours, and the run has to finish within them.
 
