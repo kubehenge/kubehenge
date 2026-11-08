@@ -268,6 +268,7 @@ The repository's cache holds 10 GB. Past that, GitHub evicts the entries read le
 | `e2e-go-` | `e2e-image.yml` once `go.sum` or `web/package-lock.json` changes, the nightly run | 2.2 GB |
 | `e2e-pve-` | `e2e-image.yml`, the nightly run | 0.4 GB |
 | `e2e-template-` | `e2e-image.yml`, the nightly run, a dispatch | 2.8 GB: 0.4 GB for each of RKE2's and k3s's, 0.8 GB for each of kubeadm's two |
+| `tools-` | The workflows that install tools, on main once `scripts/tools.sh` changes: one entry for each list of tools. Releases, `website.yml`, `fuzz.yml` and `e2e-image.yml` download them instead | under 1 GB |
 | `website-`, `fuzz-` | `website.yml`, `fuzz.yml` | under 0.1 GB |
 
 Together that is about 9 of the 10 GB. A template whose inputs change replaces its entry. One no test needs any more is deleted.

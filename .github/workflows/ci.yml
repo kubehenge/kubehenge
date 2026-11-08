@@ -52,10 +52,22 @@ jobs:
           key: >-
             ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
           restore-keys: ci-
-      - name: Tools
-        run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # The tools by scripts/tools.sh's hash and the list named, downloaded only on a miss. Only
+      # main saves, as above, and no job that publishes restores it.
+      - id: tools
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: >-
+            tools-${{ runner.os }}-${{ runner.arch }}-all-${{ hashFiles('scripts/tools.sh') }}
+      - if: steps.tools.outputs.cache-hit != 'true'
+        run: scripts/tools.sh "$RUNNER_TEMP/bin"
+      - if: steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: make test
         env:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.
@@ -86,10 +98,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Tools
-        run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin" actionlint shellcheck uv
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: tools
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: >-
+            tools-${{ runner.os }}-${{ runner.arch }}-actionlint+shellcheck+uv-${{
+            hashFiles('scripts/tools.sh') }}
+      - if: steps.tools.outputs.cache-hit != 'true'
+        run: scripts/tools.sh "$RUNNER_TEMP/bin" actionlint shellcheck uv
+      - if: steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: make lint-actions ZIZMOR_FLAGS=--format=github
         env:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.

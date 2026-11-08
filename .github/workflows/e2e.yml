@@ -105,10 +105,19 @@ jobs:
           restore-keys: |
             e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
             e2e-go-
-      - name: Tools
-        run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: tools
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: tools-${{ runner.os }}-${{ runner.arch }}-all-${{ hashFiles('scripts/tools.sh') }}
+      - if: steps.tools.outputs.cache-hit != 'true'
+        run: scripts/tools.sh "$RUNNER_TEMP/bin"
+      - if: steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Build
         run: |
           test/e2e/ci/build.sh "$RUNNER_TEMP/build"

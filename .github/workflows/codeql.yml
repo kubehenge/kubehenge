@@ -50,10 +50,26 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Go
+      - id: tools
         if: github.event_name != 'merge_group' && matrix.language == 'go'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: tools-${{ runner.os }}-${{ runner.arch }}-go-${{ hashFiles('scripts/tools.sh') }}
+      - name: Go
+        if: >-
+          github.event_name != 'merge_group' && matrix.language == 'go'
+          && steps.tools.outputs.cache-hit != 'true'
+        run: scripts/tools.sh "$RUNNER_TEMP/bin" go
+      - if: >-
+          github.event_name != 'merge_group' && matrix.language == 'go'
+          && steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - if: github.event_name != 'merge_group' && matrix.language == 'go'
         run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin" go
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           echo GOTOOLCHAIN=local >> "$GITHUB_ENV"
       - if: github.event_name != 'merge_group'
