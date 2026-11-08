@@ -873,11 +873,10 @@ A change replaces every node, one at a time, as a change of the node customisati
 
 ### RKE2 and k3s installs
 
-- RKE2 on an EL node installs from its RPM repository, `rpm.rancher.io`, through the proxy.
-- k3s downloads its release from GitHub through the proxy.
-- Both fetch their install script from `get.rke2.io` or `get.k3s.io`, which the proxy must allow.
-- `distributionMirror` replaces GitHub with an address that holds the releases under `<address>/<version>/`, with the file names GitHub uses.
-- With it, RKE2 installs the release's tarball in place of the RPM.
+- RKE2 and k3s nodes download their release's files and install script as they boot, through the proxy.
+- They come from GitHub: `github.com`, `api.github.com`, `raw.githubusercontent.com` and the hosts its downloads redirect to.
+- A release mirror replaces GitHub for every cluster of the management cluster ([install.md](install.md#mirroring-the-releases)). Nodes reach it through the proxy unless its host is in `noProxy`.
+- A node checks every file against the release's pins, then installs from those files with no further download.
 
 ## Node customisation
 
@@ -2032,7 +2031,6 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `registryMirrors` | no | Up to 16 entries. `registry` is a lower-case host name with an optional port, or `*` for every registry. `endpoints` are 1 to 4 `http://` or `https://` addresses, tried in order. A path has to end in `/v2`. `caBundle` is the PEM authority of the endpoints. |
 | `trustedCAs` | no | Up to 8 PEM bundles of certificates, for the nodes' trust store. |
 | `securityGroups` | no | Up to 16 Proxmox VE security group names, which turn on the firewall of the nodes' interfaces ([above](#firewall)). Changing it replaces every node. |
-| `distributionMirror` | no | RKE2 and k3s only. An `http://` or `https://` address that holds the distribution's releases under `<address>/<version>/`, in place of GitHub. |
 | `gitops` | no | `enabled` (default false). `engine`, `argocd` (default) or `flux`. `repository`, with `url` (`https://` or `ssh://`), `revision` (a branch or full ref, default `main`) and `path` (default `.`) and `caBundle` (PEM, for an `https://` server the usual authorities do not sign, not with Flux and `existingSecret`). `auth`, `none` (default), `deployKey`, `token` or `existingSecret`. `deployKey` works over `ssh://`. The key is in the Secret `<name>-gitops` beside the Cluster, its public half under `identity.pub`. `token` is the cluster's `gitops` credential, `username` and `password`. With `existingSecret`, the field `existingSecret` names the Secret. `knownHosts`, the server's host keys as known_hosts lines, at least one for the URL's host and port. It is required over `ssh://` except for Flux with `existingSecret`. `hostname` and `tlsSecret`, to serve the web interface through the ingress controller. `admins`, the first provider's groups that administer Argo CD. `signIn`, with `clientID` (the provider's own when unset) and `clientSecret`, `none` (default, PKCE), `stored` or `existingSecret`. `stored` is the cluster's `oidc-client` credential, key `clientSecret`. With `existingSecret`, the field `signIn.existingSecret` names the Secret. `ui` (default false), Flux's web interface, which needs `hostname` and a client secret. `ui` and `admins` need an identity provider in `oidc`. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
 | `upgrades` | no | Automatic Kubernetes upgrades. `mode` (`off`, `patch` or `minor`, default `off`) and `window` ([upgrading.md](upgrading.md#automatically-inside-a-window)). `nodeImages` (default true) sets whether the nodes move to new builds of their VM template in the window ([above](#node-image-refresh)). On Talos it sets whether they move to new Talos patch releases ([above](#talos-upgrades)). |

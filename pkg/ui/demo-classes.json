@@ -2843,18 +2843,6 @@
           }
         },
         {
-          "name": "distributionMirror",
-          "required": false,
-          "schema": {
-            "openAPIV3Schema": {
-              "description": "Where the nodes download k3s's releases from in place of GitHub: a mirror of its releases, with the same file names under \u003caddress\u003e/\u003cversion\u003e/. The install script itself still comes from get.k3s.io, through the proxy where there is one.",
-              "maxLength": 512,
-              "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%+=-]+)*/?$",
-              "type": "string"
-            }
-          }
-        },
-        {
           "name": "cni",
           "required": false,
           "schema": {
@@ -8546,18 +8534,6 @@
               },
               "maxItems": 8,
               "type": "array"
-            }
-          }
-        },
-        {
-          "name": "distributionMirror",
-          "required": false,
-          "schema": {
-            "openAPIV3Schema": {
-              "description": "Where the nodes download RKE2's releases from in place of GitHub: a mirror of its releases, with the same file names under \u003caddress\u003e/\u003cversion\u003e/. The install script itself still comes from get.rke2.io, through the proxy where there is one.",
-              "maxLength": 512,
-              "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%+=-]+)*/?$",
-              "type": "string"
             }
           }
         },

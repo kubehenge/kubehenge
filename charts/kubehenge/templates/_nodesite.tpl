@@ -59,19 +59,6 @@ pattern: '^(-----BEGIN CERTIFICATE-----\n([A-Za-z0-9+/=]+\n)+-----END CERTIFICAT
         OS's trust store, which the container runtime and the distribution read.
       items:
         {{- include "kubehenge.pemSchema" . | nindent 8 }}
-{{- if .artifacts }}
-- name: distributionMirror
-  required: false
-  schema:
-    openAPIV3Schema:
-      type: string
-      maxLength: 512
-      pattern: '^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%+=-]+)*/?$'
-      description: >-
-        Where the nodes download {{ .artifacts }} from in place of GitHub: a mirror of its releases, with
-        the same file names under <address>/<version>/. The install script itself still comes from
-        {{ .script }}, through the proxy where there is one.
-{{- end }}
 {{- end -}}
 
 {{/*
@@ -115,8 +102,7 @@ Gives a kubeadm, RKE2 or k3s node its site settings (call with "distribution", "
 "services"). The boot script writes the trust store, the mirrors' configuration and the proxy's
 environment. The proxy's environment is read into the boot's own shell by the next command, so that the
 distribution's installer and the package manager go through the proxy, and the distribution's service
-reads it from its environment file. RKE2 and k3s take a mirror of their releases besides, if the class
-offers one (call with "artifacts" set).
+reads it from its environment file.
 */}}
 {{- define "kubehenge.nodeSitePatches" -}}
 {{- $targets := dict
@@ -162,24 +148,6 @@ offers one (call with "artifacts" set).
           path: {{ $spec }}/{{ $target.commands }}/-
           value: set -a; . /etc/kubehenge/site/proxy.env; set +a
     {{- end }}
-{{- if .artifacts }}
-- name: {{ $.distribution }}-distribution-mirror
-  enabledIf: {{ `{{ if dig "distributionMirror" "" . }}true{{ end }}` | quote }}
-  definitions:
-    {{- range $role := list "controlPlane" "worker" }}
-    {{- $spec := ternary $target.spec "/spec/template/spec" (eq $role "controlPlane") }}
-    - selector:
-        apiVersion: {{ get $api $role }}
-        kind: {{ get $target $role }}
-        matchResources:
-          {{- toYaml (get $selector $role) | nindent 10 }}
-      jsonPatches:
-        - op: add
-          path: {{ $spec }}/{{ $target.commands }}/-
-          valueFrom:
-            template: {{ $.export | quote }}
-    {{- end }}
-{{- end }}
 {{- end -}}
 
 {{/*

@@ -2,4 +2,3 @@
 - The `egressProxy` variable serves the nodes as well as the add-ons and gains `httpsUrl`. The cluster's own networks and API address join its exceptions, and its values take letters, digits and a few separators only.
 - `registryMirrors` lists up to 4 mirror addresses per registry, with an optional authority. Talos, kubeadm, RKE2 and k3s each get their own configuration for them.
 - `trustedCAs` puts PEM certificates into Talos's trusted roots or the node OS's trust store. Kubehenge refuses private keys, expired certificates and text around them.
-- `distributionMirror` makes RKE2 and k3s nodes download their release from a mirror in place of GitHub. RKE2 then installs the tarball in place of its RPM.
