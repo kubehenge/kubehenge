@@ -31,36 +31,50 @@ index 7e48377..652d6a6 100644
  	}
 
  	clusterScope.Logger.V(4).Info("Reconciling ProxmoxCluster delete")
-diff --git a/internal/controller/proxmoxcluster_reconcile_delete_test.go b/internal/controller/proxmoxcluster_reconcile_delete_test.go
-new file mode 100644
-index 0000000..d4b4a74
---- /dev/null
-+++ b/internal/controller/proxmoxcluster_reconcile_delete_test.go
-@@ -0,0 +1,73 @@
-+/*
-+Copyright 2023-2026 IONOS Cloud.
-+
-+SPDX-License-Identifier: Apache-2.0
-+*/
-+
-+package controller
-+
-+import (
+diff --git a/internal/controller/proxmoxcluster_controller_test.go b/internal/controller/proxmoxcluster_controller_test.go
+index 6b669cc..c7c1d46 100644
+--- a/internal/controller/proxmoxcluster_controller_test.go
++++ b/internal/controller/proxmoxcluster_controller_test.go
+@@ -19,15 +19,19 @@ package controller
+ import (
+ 	"context"
+ 	"reflect"
 +	"testing"
-+
+ 	"time"
+
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
 +	"github.com/stretchr/testify/require"
-+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+ 	corev1 "k8s.io/api/core/v1"
+ 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 +	"k8s.io/apimachinery/pkg/runtime"
-+	"k8s.io/apimachinery/pkg/types"
+ 	"k8s.io/apimachinery/pkg/types"
 +	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+ 	"k8s.io/utils/ptr"
+ 	ipamicv1 "sigs.k8s.io/cluster-api-ipam-provider-in-cluster/api/v1alpha2"
+ 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+@@ -35,12 +39,15 @@ import (
+ 	"sigs.k8s.io/cluster-api/util"
+ 	"sigs.k8s.io/cluster-api/util/conditions"
+ 	"sigs.k8s.io/cluster-api/util/patch"
 +	ctrl "sigs.k8s.io/controller-runtime"
-+	"sigs.k8s.io/controller-runtime/pkg/client"
+ 	"sigs.k8s.io/controller-runtime/pkg/client"
+ 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 +	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-+
-+	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
+ 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+ 	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
+ 	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/kubernetes/ipam"
 +	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/proxmox/proxmoxtest"
-+)
+ )
+
+ var (
+@@ -634,3 +641,52 @@ func assertProxmoxClusterIsDeleted(proxmoxCluster *infrav1.ProxmoxCluster) {
+ func cleanup(objs ...client.Object) {
+ 	Expect(testEnv.Cleanup(testEnv.GetContext(), objs...)).To(Succeed())
+ }
 +
 +// A ProxmoxCluster marked for deletion before its Cluster, as `kubectl delete namespace` does, is
 +// not reconciled again by the Cluster watch, which never passes a Cluster that gains a deletion
