@@ -49,6 +49,9 @@ export const isMTU = (v: string): boolean => whole(Number(v), minMTU, maxMTU);
 /** isQueues tells whether text is a number of queues for the nodes' interface. */
 export const isQueues = (v: string): boolean => whole(Number(v), 1, maxQueues);
 
+/** isSecurityGroup tells whether text is a name Proxmox VE takes for a firewall security group. */
+export const isSecurityGroup = (v: string): boolean => /^[A-Za-z][\w-]{1,17}$/u.test(v);
+
 /** bridgeRef is how the settings name a bridge: a VNet as zone/vnet, a node's bridge by its name. */
 export const bridgeRef = (b: Pick<Bridge, "bridge" | "zone">): string =>
   b.zone === undefined || b.zone === "" ? b.bridge : `${b.zone}/${b.bridge}`;

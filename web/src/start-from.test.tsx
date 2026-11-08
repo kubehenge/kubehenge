@@ -38,6 +38,7 @@ const rke2: ClusterClass = {
     "oidc",
     "namespaceLabels",
     "useExisting",
+    "securityGroups",
   ].map((name) => ({ name, required: false, schema: object })),
 };
 
@@ -80,6 +81,7 @@ const chosen: Form = {
   dnsServers: "10.1.0.53, 1.1.1.1",
   searchDomains: "corp.example, example.org",
   ntpServers: "ntp.example.org, 192.0.2.5",
+  securityGroups: "k8s, corp-base",
   loadBalancer: "metallb",
   loadBalancerAddresses: "10.1.0.40-10.1.0.49",
   loadBalancerMode: "bgp",

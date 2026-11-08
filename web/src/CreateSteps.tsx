@@ -20,6 +20,7 @@ import {
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
 import { FamiliesField } from "./Families";
+import { SecurityGroupsField } from "./Firewall";
 import { HostOutageField, graceVariable } from "./HostOutage";
 import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
@@ -722,6 +723,52 @@ function FamilyFields({
   );
 }
 
+/** InterfaceFields are the options of the nodes' interface the class offers. */
+function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element {
+  const network = variable(cls, "network")?.properties;
+  return (
+    <>
+      <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
+        {(id) => (
+          <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
+        )}
+      </Field>
+      {network?.["mtu"] === undefined ? null : (
+        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.mtu}
+              onChange={(e) => set("mtu", e.target.value.trim())}
+              placeholder="1500"
+            />
+          )}
+        </Field>
+      )}
+      {network?.["queues"] === undefined ? null : (
+        <Field label="Queues" hint="Optional" error={shown("queues")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.queues}
+              onChange={(e) => set("queues", e.target.value.trim())}
+            />
+          )}
+        </Field>
+      )}
+      {variable(cls, "securityGroups") === undefined ? null : (
+        <SecurityGroupsField
+          value={form.securityGroups}
+          onChange={(s) => set("securityGroups", s)}
+          error={shown("securityGroups")}
+        />
+      )}
+    </>
+  );
+}
+
 export function NetworkStep({
   form,
   set,
@@ -784,36 +831,7 @@ export function NetworkStep({
           )
         }
       </Field>
-      <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
-        {(id) => (
-          <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
-        )}
-      </Field>
-      {variable(cls, "network")?.properties?.["mtu"] === undefined ? null : (
-        <Field label="MTU" hint="Optional" error={shown("mtu")}>
-          {(id) => (
-            <input
-              id={id}
-              inputMode="numeric"
-              value={form.mtu}
-              onChange={(e) => set("mtu", e.target.value.trim())}
-              placeholder="1500"
-            />
-          )}
-        </Field>
-      )}
-      {variable(cls, "network")?.properties?.["queues"] === undefined ? null : (
-        <Field label="Queues" hint="Optional" error={shown("queues")}>
-          {(id) => (
-            <input
-              id={id}
-              inputMode="numeric"
-              value={form.queues}
-              onChange={(e) => set("queues", e.target.value.trim())}
-            />
-          )}
-        </Field>
-      )}
+      <InterfaceFields form={form} set={set} shown={shown} cls={cls} />
       {offersFamilies && (
         <FamiliesField
           value={form.families}
