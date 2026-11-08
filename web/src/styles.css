@@ -1934,7 +1934,7 @@ fieldset.choices .check {
   white-space: nowrap;
 }
 
-.grid .row-action > button + button {
+.row-action > button:not(:first-child) {
   margin-inline-start: 6px;
 }
 
