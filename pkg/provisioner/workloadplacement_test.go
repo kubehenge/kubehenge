@@ -118,6 +118,15 @@ func TestPlacerKeepsThePlacementWhenNoNodeHasRoom(t *testing.T) {
 	}
 }
 
+func TestNoRoomGivesTheMachinesSizeWithoutRoundingItUp(t *testing.T) {
+	t.Parallel()
+	for mib, want := range map[int64]string{8192: "8 GiB", 1024: "1 GiB", 3321: "3.3 GiB", 3277: "3.3 GiB", 3276: "3.2 GiB", 1025: "1.1 GiB"} {
+		if got := neededGiB(mib); got != want {
+			t.Errorf("neededGiB(%d) = %q, want %q", mib, got, want)
+		}
+	}
+}
+
 func TestPlacerHoldsOnlyTheNodesThatCanStillRunTheCluster(t *testing.T) {
 	t.Parallel()
 	before := "pve1,pve2"
