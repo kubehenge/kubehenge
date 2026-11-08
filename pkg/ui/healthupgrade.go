@@ -24,7 +24,7 @@ func upgradeAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		what := "Proxmox VE " + strings.Join(majors[:len(majors)-1], ", ") + " and " + majors[len(majors)-1] + " nodes in one cluster"
 		a.add(severityWarning, sectionNodes, what,
-			strings.Join(parts, ". ")+". New VMs go to the oldest version's nodes while they have room, and to newer nodes when they have none. A VM started on a newer node cannot move back to an older one.", time.Time{})
+			strings.Join(parts, ". ")+". New VMs prefer the oldest version.", time.Time{})
 	}
 	if sizes := provisioner.ParseNodeMTUs(c.Annotations[provisioner.NodeMTUsAnnotation]); len(sizes) > 1 {
 		parts := make([]string, len(sizes))
