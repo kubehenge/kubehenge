@@ -184,12 +184,11 @@ kubectl -n "${ns}" patch cluster/nodes --type=json -p '[{"op": "replace", "path"
 until_true 2400 "every machine, the new worker too, on ${first}" all_on "${first}"
 until_true 600 "three nodes ready" nodes_ready 3
 
-step "back to one worker, with room again for ${second}"
-# Nodes that share one machine's memory, as in CI, have no room for the control plane with both
-# workers running. With one, both have the room to join the placement.
-kubectl -n "${ns}" patch cluster/nodes --type=json -p '[{"op": "replace", "path": "/spec/topology/workers/machineDeployments/0/replicas", "value": 1}]'
-until_true 1200 "the second worker gone" all_on "${first}"
-until_true 300 "the second worker's VM gone" running_vms 2
+step "down to the control plane, with room again for ${second}"
+# Nodes that share one machine's memory, as in CI, have no room for the control plane while a
+# worker runs: the second node's own services and the guests' growing use take the margin.
+kubectl -n "${ns}" patch cluster/nodes --type=json -p '[{"op": "replace", "path": "/spec/topology/workers/machineDeployments/0/replicas", "value": 0}]'
+until_true 1200 "only the control plane's VM running" running_vms 1
 # Where the two nodes share one machine's memory, the second's own services take up to 450 MiB of
 # it once it is back, so the room is measured with them counted.
 room_mib=$((join_mib + 512))
@@ -197,7 +196,8 @@ until_true 300 "${room_mib} MiB free on ${first}" free_at_least "${first}" "${ro
 
 step "${second} back in the cluster's placement, and the cluster deleted"
 sh -c "${KUBEHENGE_E2E_UP}"
-until_true 600 "${second} back in the cluster's placement" placed_on "${first},${second}"
+until_true 600 "${join_mib} MiB free on ${second} as it reports itself" free_at_least "${second}" "${join_mib}"
+until_true 300 "${second} back in the cluster's placement" placed_on "${first},${second}"
 kubectl -n "${ns}" delete cluster/nodes --wait --timeout=30m
 left=$(pve_get "cluster/resources?type=vm" | jq --arg p "/${ns}." '[.data[] | select(.pool // "" | contains($p))] | length')
 [ "${left}" = 0 ] || fail "VMs of the cluster are still there"
