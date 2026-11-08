@@ -14,8 +14,11 @@ dir=${1:?usage: $0 <directory> [tool...]}
 shift
 only=" $* "
 mkdir -p "${dir}"
+here=$(dirname "$0")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+KUBEHENGE_FETCH_STATE=${work}/releases-down
+export KUBEHENGE_FETCH_STATE
 
 # wanted <name>: whether the caller named this tool, or named none.
 wanted() {
@@ -25,43 +28,12 @@ wanted() {
     esac
 }
 
-# fetch <url>: downloads to ${work}/download. --retry alone leaves out a connection the host resets
-# mid-transfer (curl's exit 92). The caller's checksum makes trying again safe. GitHub's release
-# download address can answer 504 for hours while its API serves the same file. Once the address
-# fails, every later GitHub release asset of the run comes through the API, without its retries.
+# fetch <url>: downloads to ${work}/download through fetch.sh, which retries what a host resets
+# mid-transfer (the caller's checksum makes that safe) and sends every GitHub release asset of the
+# run through the API once the release address has failed. KUBEHENGE_FETCH_STATE ties that switch
+# to this run.
 fetch() {
-    case "$1" in
-        https://github.com/*/*/releases/download/*/*)
-            if [ -z "${releases_down:-}" ]; then
-                curl -fsSL --proto '=https' --retry 2 --retry-all-errors --tlsv1.2 -o "${work}/download" "$1" && return 0
-                releases_down=1
-            fi
-            release_asset "$1"
-            ;;
-        *) curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$1" ;;
-    esac
-}
-
-# release_asset <url>: a GitHub release asset through the API, by its tag and name.
-release_asset() {
-    path=${1#https://github.com/}
-    repository=${path%%/releases/download/*}
-    tag_asset=${path#*/releases/download/}
-    asset_id=$(api "repos/${repository}/releases/tags/${tag_asset%%/*}" |
-        jq -r --arg name "${tag_asset#*/}" '.assets[] | select(.name == $name) | .id')
-    [ -n "${asset_id}" ] || return 1
-    api "repos/${repository}/releases/assets/${asset_id}" -H 'Accept: application/octet-stream' -o "${work}/download"
-}
-
-# api <path> [curl option...]: a GET of GitHub's API, with GITHUB_TOKEN where CI sets it, since the
-# address's limit without one is shared by every job on the runner's address.
-api() {
-    api_path=$1
-    shift
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        set -- -H "Authorization: Bearer ${GITHUB_TOKEN}" "$@"
-    fi
-    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 "$@" "https://api.github.com/${api_path}"
+    "${here}/fetch.sh" "$1" "${work}/download"
 }
 
 # tool <name> <url> <sha256> [member of the archive]
