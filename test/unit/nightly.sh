@@ -116,12 +116,17 @@ while [ "${night}" -lt "${nights}" ]; do
             continue
         fi
         # The settings carry nothing but what was asked for.
-        KUBEHENGE_E2E_CNI='' KUBEHENGE_E2E_NODE_OS='' KUBEHENGE_E2E_CIS=''
+        KUBEHENGE_E2E_CNI='' KUBEHENGE_E2E_NODE_OS='' KUBEHENGE_E2E_CIS='' KUBEHENGE_E2E_RELEASES=''
         eval "${settings}"
         test=${name%%+*}
         test=${test%-addons-?}
         test=${test%-etcd}
         test=${test%-machines}
+        # RKE2's and k3s's rotation downloads from GitHub, the path of a cluster without a mirror.
+        case ${test}:${KUBEHENGE_E2E_RELEASES} in
+            rke2:github | k3s:github | kubeadm: | talos:) ok ;;
+            *) bad "${name} downloads its releases from '${KUBEHENGE_E2E_RELEASES:-the runner}'" ;;
+        esac
         case ${test} in
             kubeadm) enum=${cnis_kubeadm} ;;
             rke2) enum=${cnis_rke2} ;;
@@ -242,6 +247,9 @@ refused management-cluster+management-3584+calico
 refused appliance+dual-stack
 refused management-cluster+ipv6-first
 refused control-plane-ha+dual-stack
+refused kubeadm+github-releases
+refused talos-addons-a+github-releases
+refused two-nodes+github-releases
 # reads <name> <settings>: the settings the name carries, one per line.
 reads() {
     variant_of "$1"
@@ -256,6 +264,9 @@ reads kubeadm+calico+dual-stack 'export KUBEHENGE_E2E_CNI=calico
 export KUBEHENGE_E2E_IP_FAMILIES=IPv4,IPv6'
 reads rke2-etcd+cilium+ipv6-first 'export KUBEHENGE_E2E_CNI=cilium
 export KUBEHENGE_E2E_IP_FAMILIES=IPv6,IPv4'
+reads k3s-addons-b+flannel+github-releases 'export KUBEHENGE_E2E_CNI=flannel
+export KUBEHENGE_E2E_RELEASES=github'
+reads rke2-machines+github-releases 'export KUBEHENGE_E2E_RELEASES=github'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
 variant_of control-plane-ha

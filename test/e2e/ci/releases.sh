@@ -1,7 +1,9 @@
 #!/bin/sh
 # The RKE2 and k3s releases the guests of an end-to-end lane install, downloaded once on the runner
 # and served to them as their release mirror (pkg/provisioner/release.sh), so that no guest
-# downloads from GitHub. The Actions cache keeps them under a key of their pins:
+# downloads from GitHub. A lane with a github-releases test is left without one, so that the
+# nightly run proves the download from GitHub as well. The Actions cache keeps them under a key of
+# their pins:
 #
 #   test/e2e/ci/releases.sh key <lane>           # key=<cache key>, nothing for a lane that needs none
 #   test/e2e/ci/releases.sh fetch <dir> <lane>   # what <dir> lacks, from GitHub, then checks it all
@@ -32,8 +34,15 @@ pinned() {
     }
 }
 
-# groups <lane>: the distributions the lane's tests install, one a line, RKE2's with its CNI.
+# groups <lane>: the distributions the lane's tests install, one a line, RKE2's with its CNI. None
+# when one test takes github-releases, since every test in a lane shares its management cluster's mirror.
 groups() {
+    for lane_test in $(printf '%s' "$1" | tr , ' '); do
+        case $(variant "${lane_test}") in
+            *KUBEHENGE_E2E_RELEASES=github*) return 0 ;;
+            *) ;;
+        esac
+    done
     for lane_test in $(printf '%s' "$1" | tr , ' '); do
         exports=$(variant "${lane_test}")
         cni=$(

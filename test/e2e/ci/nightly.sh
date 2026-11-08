@@ -121,6 +121,12 @@ for distribution in kubeadm rke2 k3s talos; do
         name=${name}+${picked}
     fi
     [ $((n / count % 2)) = 1 ] || name=${name}+cis-off
+    # Every other lane downloads RKE2 and k3s from the runner's mirror. These download from GitHub,
+    # as a cluster without a mirror does.
+    case ${distribution} in
+        rke2 | k3s) name=${name}+github-releases ;;
+        *) ;;
+    esac
     # The same options on each of its parts, in the same lanes as the merge queue's: a part that
     # shares one runs the test it shares it with after it, as there.
     for lane in ${lanes}; do

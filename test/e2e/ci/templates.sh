@@ -153,7 +153,8 @@ made() {
         *" ${made_slot} "*) ;;
         *) return 0 ;;
     esac
-    made_id=$(printf '%s\n' "${made_out}" | sed -n 's/^template .* is VM \([0-9][0-9]*\)$/\1/p' | tail -n 1)
+    # The builder adds the VM's hardware after the ID: "template <tags> is VM 100 (host, SSD, discard)".
+    made_id=$(printf '%s\n' "${made_out}" | sed -n 's/^template .* is VM \([0-9][0-9]*\)\( (.*)\)\{0,1\}$/\1/p' | tail -n 1)
     [ -n "${made_id}" ] || {
         echo "no VM ID for template $* to keep" >&2
         return 1
