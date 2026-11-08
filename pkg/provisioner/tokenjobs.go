@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
@@ -56,7 +57,11 @@ const (
 // the PodTemplate Template, whose pod alone mounts the token, and to which the API server holds
 // every Job the controller makes that mounts it. The request reaches the Job in the Secret
 // <Template>-input, so that nothing it carries shows in the Job or its pod, and the result comes
-// back as the pod's termination message. One request of a template runs at a time.
+// back as the pod's termination message.
+//
+// Requests of one template run one at a time, whichever TokenJob runs them. Every pod of the
+// template mounts that one Secret, since the API server holds it to the PodTemplate, so a second
+// request at once would replace the first's before its pod reads it.
 type TokenJob struct {
 	Client    client.Client
 	Reader    client.Reader
@@ -87,6 +92,12 @@ func (j *TokenJob) Run(ctx context.Context, request any, timeout time.Duration) 
 	if err = j.Reader.Get(ctx, client.ObjectKey{Namespace: j.Namespace, Name: j.Template}, tmpl); err != nil {
 		return "", fmt.Errorf("reading PodTemplate %s: %w", j.Template, err)
 	}
+	release, err := j.takeTurn(ctx)
+	if err != nil {
+		return "", err
+	}
+	// Released only after cleanUp, so the next request's Secret is written once this Job is gone.
+	defer release()
 	name := j.Template + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if err = j.putInput(ctx, name, raw); err != nil {
 		return "", err
@@ -157,6 +168,31 @@ func TokenJobFrom(tmpl *corev1.PodTemplate, name string, timeout time.Duration) 
 	}
 	job.Spec.Template.Labels = labels
 	return job
+}
+
+// tokenJobTurns holds, for each template's input Secret, the turn of the one request using it.
+var tokenJobTurns = struct {
+	sync.Mutex
+
+	of map[client.ObjectKey]chan struct{}
+}{of: map[client.ObjectKey]chan struct{}{}}
+
+// takeTurn waits until no other request of the template runs, and returns what ends this one's turn.
+func (j *TokenJob) takeTurn(ctx context.Context) (func(), error) {
+	key := client.ObjectKey{Namespace: j.Namespace, Name: InputSecret(j.Template)}
+	tokenJobTurns.Lock()
+	turn, ok := tokenJobTurns.of[key]
+	if !ok {
+		turn = make(chan struct{}, 1)
+		tokenJobTurns.of[key] = turn
+	}
+	tokenJobTurns.Unlock()
+	select {
+	case turn <- struct{}{}:
+		return func() { <-turn }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("waiting for the other request of %s: %w", j.Template, ctx.Err())
+	}
 }
 
 // putInput leaves the request for the Job. It replaces what an earlier one left.

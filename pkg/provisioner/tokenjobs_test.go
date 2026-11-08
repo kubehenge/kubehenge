@@ -3,9 +3,11 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -156,6 +158,116 @@ func TestTokenJobReplacesARequestLeftBehind(t *testing.T) {
 	if _, err := r.Run(t.Context(), GuestRequest{VMID: 101, Script: "true\n", Timeout: time.Minute}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestTokenJobsOfOneTemplateRunTheirRequestsApart runs a restore's step on VM 101 and the restore
+// token's test at once, each through a TokenJob of its own as the controller builds them. Every pod
+// of the template mounts the one input Secret, so each must still read only its own request.
+func TestTokenJobsOfOneTemplateRunTheirRequestsApart(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, batchv1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tmpl := &corev1.PodTemplate{Namespace: "kubehenge-system", Name: GuestJobTemplate}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tmpl).WithStatusSubresource(&batchv1.Job{}, &corev1.Pod{}).Build()
+	ctx, cancel := context.WithCancel(t.Context())
+	served, dir := make(chan error, 1), t.TempDir()
+	go func() { served <- servePods(ctx, kube, dir) }()
+	restore := &JobGuests{Jobs: &TokenJob{Client: kube, Reader: kube, Namespace: "kubehenge-system", Template: GuestJobTemplate, Poll: 5 * time.Millisecond}}
+	probe := &TokenJob{Client: kube, Reader: kube, Namespace: "kubehenge-system", Template: GuestJobTemplate, Poll: 5 * time.Millisecond}
+	var stopped string
+	var stopErr, probeErr error
+	var held Permissions
+	var wg sync.WaitGroup
+	wg.Go(func() { stopped, stopErr = restore.Run(t.Context(), 101, "systemctl stop k3s\n", time.Minute) })
+	wg.Go(func() { held, probeErr = AskThroughJob(probe)(t.Context(), []string{"/pool/workloads"}) })
+	wg.Wait()
+	cancel()
+	if err := <-served; err != nil {
+		t.Fatal(err)
+	}
+	if stopErr != nil || stopped != "VM 101 ran systemctl stop k3s\n" {
+		t.Errorf("the restore's step got %q, %v", stopped, stopErr)
+	}
+	if probeErr != nil || held["/pool/workloads"]["VM.GuestAgent.Unrestricted"] != 1 {
+		t.Errorf("the token's test got %v, %v", held, probeErr)
+	}
+}
+
+// servePods runs each token Job's pod as the kubelet would: it mounts the input Secret as it is
+// when the pod starts and answers through ServeTokenJob. A pod starts once a second Job is there,
+// or a while after its own, so that two requests at once overlap as they do on a busy node.
+func servePods(ctx context.Context, kube client.Client, dir string) error {
+	started := map[string]time.Time{}
+	for ctx.Err() == nil {
+		time.Sleep(5 * time.Millisecond)
+		var jobs batchv1.JobList
+		if err := kube.List(ctx, &jobs); err != nil {
+			continue
+		}
+		for i := range jobs.Items {
+			job := &jobs.Items[i]
+			if len(job.Status.Conditions) > 0 {
+				continue
+			}
+			if _, ok := started[job.Name]; !ok {
+				started[job.Name] = time.Now()
+			}
+			if len(jobs.Items) < 2 && time.Since(started[job.Name]) < 300*time.Millisecond {
+				continue
+			}
+			if err := servePod(ctx, kube, job, filepath.Join(dir, job.Name)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func servePod(ctx context.Context, kube client.Client, job *batchv1.Job, dir string) error {
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return err
+	}
+	input := &corev1.Secret{}
+	if err := kube.Get(ctx, client.ObjectKey{Namespace: job.Namespace, Name: InputSecret(GuestJobTemplate)}, input); err == nil {
+		for key, value := range input.Data {
+			if err := os.WriteFile(filepath.Join(dir, key), value, 0o600); err != nil {
+				return err
+			}
+		}
+	}
+	result := filepath.Join(dir, "result")
+	err := ServeTokenJob(ctx, dir, job.Name, result, func(_ context.Context, raw []byte) (string, error) {
+		var asked PermissionsRequest
+		if json.Unmarshal(raw, &asked) == nil && len(asked.PermissionsOf) > 0 {
+			return `{"/pool/workloads":{"VM.GuestAgent.Unrestricted":1}}`, nil
+		}
+		var req GuestRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("VM %d ran %s", req.VMID, req.Script), nil
+	})
+	if err != nil {
+		return err
+	}
+	message, err := os.ReadFile(result) //nolint:gosec // the test's own file
+	if err != nil {
+		return err
+	}
+	pod := &corev1.Pod{Namespace: job.Namespace, Name: job.Name + "-pod", Labels: map[string]string{batchv1.JobNameLabel: job.Name}}
+	if err = kube.Create(ctx, pod); err != nil {
+		return err
+	}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "job", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Message: string(message)}}}}
+	if err = kube.Status().Update(ctx, pod); err != nil {
+		return err
+	}
+	job.Status.Conditions = append(job.Status.Conditions, batchv1.JobCondition{Type: batchv1.JobComplete, Status: corev1.ConditionTrue})
+	return kube.Status().Update(ctx, job)
 }
 
 func TestServeTokenJobAnswersOnlyItsOwnRequest(t *testing.T) {
