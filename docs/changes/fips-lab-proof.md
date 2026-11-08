@@ -1,1 +1,1 @@
-- FIPS mode is proven on Rocky Linux 10 with RKE2 and Canal, in a cluster run end to end with every node in FIPS mode. AlmaLinux 10's template is proven, but no cluster has run on it yet ([templates.md](templates.md#fips-mode)).
+- FIPS mode stays unsupported until every part of the workload cluster test passes on a node OS. On Rocky Linux 10 with RKE2 and Canal, `etcd` passed and `machines` failed at its last step. The add-on parts have not run ([templates.md](templates.md#fips-mode)).
