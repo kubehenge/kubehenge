@@ -37,8 +37,7 @@ GATEWAY_API_TAG := v1.7.0
 GATEWAY_API_SHA256 := 4e2602c4cbe1afbc394d86f4ac6522e1a5263b01133bba1e40a6d1a549e753a1
 GATEWAY_API := pkg/provisioner/gatewayapi/standard-install-$(GATEWAY_API_TAG).yaml
 $(GATEWAY_API):
-	curl -fsSL --proto '=https' --retry 8 --retry-all-errors -o $@.part \
-		https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_TAG)/standard-install.yaml
+	scripts/fetch.sh https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_TAG)/standard-install.yaml $@.part
 	echo '$(GATEWAY_API_SHA256)  $@.part' | sha256sum -c --quiet - || { rm -f $@.part; exit 1; }
 	rm -f pkg/provisioner/gatewayapi/standard-install-*.yaml
 	mv $@.part $@
@@ -53,8 +52,7 @@ CAPI_OPERATOR_TAG := $(shell sed -n 's/^ *chart *= *"\(v[^"@]*\)"$$/\1/p' manage
 CAPI_OPERATOR_SHA256 := $(shell sed -n 's/^ *chart_sha256 *= *"\([0-9a-f]*\)"$$/\1/p' management-cluster/versions.tf)
 CAPI_OPERATOR_CHART := management-cluster/charts/cluster-api-operator-$(CAPI_OPERATOR_TAG:v%=%).tgz
 $(CAPI_OPERATOR_CHART):
-	curl -fsSL --proto '=https' --retry 8 --retry-all-errors -o $@.part \
-		https://github.com/kubernetes-sigs/cluster-api-operator/releases/download/$(CAPI_OPERATOR_TAG)/$(notdir $@)
+	scripts/fetch.sh https://github.com/kubernetes-sigs/cluster-api-operator/releases/download/$(CAPI_OPERATOR_TAG)/$(notdir $@) $@.part
 	echo '$(CAPI_OPERATOR_SHA256)  $@.part' | sha256sum -c --quiet - || { rm -f $@.part; exit 1; }
 	rm -f management-cluster/charts/cluster-api-operator-*.tgz
 	mv $@.part $@
@@ -135,8 +133,7 @@ dist: web gateway-api capi-operator-chart
 		sed -i 's|^image: ""$$|image: "$(CONTROLLER_IMAGE)"|' dist/stage/share/kubehenge/charts/kubehenge/values.yaml && \
 		grep -qxF 'image: "$(CONTROLLER_IMAGE)"' dist/stage/share/kubehenge/charts/kubehenge/values.yaml; \
 	fi
-	test -f $(HEADLAMP_TARBALL) || curl -fsSL --proto '=https' --retry 8 --retry-all-errors -o $(HEADLAMP_TARBALL) \
-		https://github.com/kubernetes-sigs/headlamp/releases/download/$(HEADLAMP_TAG)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
+	test -f $(HEADLAMP_TARBALL) || scripts/fetch.sh https://github.com/kubernetes-sigs/headlamp/releases/download/$(HEADLAMP_TAG)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz $(HEADLAMP_TARBALL)
 	echo '$(HEADLAMP_SHA256)  $(HEADLAMP_TARBALL)' | sha256sum -c --quiet - || { rm -f $(HEADLAMP_TARBALL); exit 1; }
 	# Of the plugins Headlamp ships, the Helm app catalog and the Prometheus charts, which the interface
 	# serves while the shared Headlamp offers its actions; the plugin catalog would install any plugin.

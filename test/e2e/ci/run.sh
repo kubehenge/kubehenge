@@ -366,8 +366,8 @@ case "${test}" in
         published=${tag#v}
         mkdir "${work}/published"
         for asset in install.sh "kubehenge_${published}_linux_amd64.tar.gz" "kubehenge_${published}_SHA256SUMS"; do
-            curl -sSfL --proto '=https' --retry 8 --retry-all-errors -o "${work}/published/${asset}" \
-                "https://github.com/kubehenge/kubehenge/releases/download/${tag}/${asset}"
+            "${repo}/scripts/fetch.sh" "https://github.com/kubehenge/kubehenge/releases/download/${tag}/${asset}" \
+                "${work}/published/${asset}"
         done
         (cd "${work}/published" && sha256sum -c --strict "kubehenge_${published}_SHA256SUMS") || {
             echo "the published release does not have the sums its SHA256SUMS names" >&2

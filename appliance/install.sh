@@ -841,17 +841,42 @@ appliance_realms() {
 # fetch <url> <file> <SHA-256 or SHA-512> <what it is> [<protocols>]: downloads and checks a file, with
 # a progress bar on a terminal. Any failed transfer is tried again, a connection reset mid-way
 # included, which --retry alone leaves out. HTTPS only, unless the protocols say otherwise.
+# GitHub's release download address can answer 504 for hours while its API serves the same file, so
+# once that address fails, this and every later release asset of the run comes through the API, by
+# its tag and name, over the same proxy. The API's limit without a token is 60 requests an hour per
+# address, which is why the address is tried first.
+releases_down=
 fetch() {
     progress=-s
     [ ! -t 2 ] || progress=--progress-bar
     ok "downloading $4"
-    # shellcheck disable=SC2086 # the unquoted expansion is two words on purpose, the URL one of them.
-    rc=0
-    http=$(curl -fSL ${download_proxy:+--proxy "${download_proxy}"} "${progress}" --proto "${5:-=https}" --retry 8 --retry-all-errors --tlsv1.2 -w '%{http_code}' -o "$2" "$1") || rc=$?
+    github=
+    retries=8
+    case "$1" in
+        https://github.com/*/*/releases/download/*/*)
+            github=1
+            retries=2
+            ;;
+        *) ;;
+    esac
+    rc=0 http=''
+    if [ -n "${github}" ] && [ -n "${releases_down}" ]; then
+        rc=${releases_down}
+    else
+        # shellcheck disable=SC2086 # the unquoted expansion is two words on purpose, the URL one of them.
+        http=$(curl -fSL ${download_proxy:+--proxy "${download_proxy}"} "${progress}" --proto "${5:-=https}" --retry "${retries}" --retry-all-errors --tlsv1.2 -w '%{http_code}' -o "$2" "$1") || rc=$?
+    fi
+    if [ "${rc}" -ne 0 ] && [ -n "${github}" ]; then
+        releases_down=${rc}
+        # shellcheck disable=SC2310 # its failure is the message below.
+        if release_asset "$1" "$2" "${progress}"; then rc=0; fi
+    fi
     if [ "${rc}" -ne 0 ]; then
         # 000 is curl's word for no HTTP answer at all.
         [ "${http}" != 000 ] || http=''
-        fail "could not download $1 (curl exit ${rc}${http:+, HTTP status ${http}})"
+        also=''
+        [ -z "${github}" ] || also=", nor through GitHub's API"
+        fail "could not download $1 (curl exit ${rc}${http:+, HTTP status ${http}})${also}"
     fi
     case "${#3}" in
         128) sum=sha512sum ;;
@@ -859,6 +884,26 @@ fetch() {
     esac
     echo "$3  $2" | "${sum}" -c --quiet - || fail "$1 does not match its checksum"
     ok "$4: checksum verified"
+}
+
+# release_asset <release download url> <file> <progress option>: a GitHub release asset through the
+# API. GITHUB_TOKEN is sent when set.
+release_asset() {
+    asset_path=${1#https://github.com/}
+    asset_tag_name=${asset_path#*/releases/download/}
+    asset_api="https://api.github.com/repos/${asset_path%%/releases/download/*}/releases"
+    # shellcheck disable=SC2086 # the unquoted expansions are two words on purpose, the URL one of them.
+    curl -fsSL ${download_proxy:+--proxy "${download_proxy}"} ${GITHUB_TOKEN:+--header "Authorization: Bearer ${GITHUB_TOKEN}"} --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 \
+        -o "$2.release" "${asset_api}/tags/${asset_tag_name%%/*}" || return 1
+    # The pretty-printed answer lists each asset's "url" before its "name".
+    asset_id=$(asset="${asset_tag_name#*/}" awk '
+        /releases\/assets\/[0-9]+"/ { id = $0; sub(/.*releases\/assets\//, "", id); sub(/".*/, "", id) }
+        $1 == "\"name\":" && $2 == "\"" ENVIRON["asset"] "\"," { print id; exit }' "$2.release")
+    rm -f "$2.release"
+    [ -n "${asset_id}" ] || return 1
+    # shellcheck disable=SC2086 # as above.
+    curl -fSL ${download_proxy:+--proxy "${download_proxy}"} ${GITHUB_TOKEN:+--header "Authorization: Bearer ${GITHUB_TOKEN}"} "$3" --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 \
+        --header 'Accept: application/octet-stream' -o "$2" "${asset_api}/assets/${asset_id}"
 }
 
 # template_gone: whether Proxmox's mirror answers 404 for the pinned template. Any other answer,

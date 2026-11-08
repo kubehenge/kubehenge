@@ -281,8 +281,8 @@ flux_state() {
 
 # seaweedfs <directory>: downloads SeaweedFS's weed into the directory, checked by its SHA-256.
 seaweedfs() {
-    curl -sS --fail -L --proto '=https' --retry 8 --retry-all-errors -o "$1/seaweedfs.tar.gz" \
-        "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz"
+    "$(dirname "$0")/../../scripts/fetch.sh" \
+        "https://github.com/seaweedfs/seaweedfs/releases/download/${SEAWEEDFS_VERSION}/linux_amd64.tar.gz" "$1/seaweedfs.tar.gz"
     printf '%s  %s\n' "${SEAWEEDFS_SHA256}" "$1/seaweedfs.tar.gz" | sha256sum -c - > /dev/null ||
         fail "SeaweedFS's download does not have its SHA-256"
     tar -xzf "$1/seaweedfs.tar.gz" -C "$1" weed

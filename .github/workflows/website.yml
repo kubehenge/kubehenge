@@ -10,6 +10,7 @@ on:
       - website/**
       - web/src/logo.svg
       - scripts/tools.sh
+      - scripts/fetch.sh
       - scripts/changelog.sh
       - .github/workflows/website.yml
   push:
@@ -19,6 +20,7 @@ on:
       - website/**
       - web/src/logo.svg
       - scripts/tools.sh
+      - scripts/fetch.sh
       - scripts/changelog.sh
       - .github/workflows/website.yml
   # An index runs out two weeks after it is signed (pkg/release); a weekly run leaves a week to

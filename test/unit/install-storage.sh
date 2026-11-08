@@ -182,6 +182,47 @@ expect_in "a missing file: exit 22 and 404" "could not download https://example.
 expect_in "a proxy refusing: 407" "(curl exit 22, HTTP status 407)" failed_download 22 407
 expect_in "no HTTP answer: the exit code alone" "could not download https://example.org/x (curl exit 28)" failed_download 28 000
 
+# GitHub's release address failing sends that file, and every later release asset, through the API.
+mkdir "${root}/apibin"
+cat > "${root}/apibin/curl" << 'EOF'
+#!/bin/sh
+out=''
+while [ $# -gt 1 ]; do
+    if [ "$1" = -o ]; then out=$2; fi
+    shift
+done
+printf '%s\n' "$1" >> "${STUB_LOG}"
+case "$1" in
+    https://github.com/*) exit 22 ;;
+    https://api.github.com/repos/o/r/releases/tags/v1) printf '{\n "assets": [\n {\n "url": "https://api.github.com/repos/o/r/releases/assets/5",\n "id": 5,\n "name": "tool",\n' > "${out}" ;;
+    https://api.github.com/repos/o/r/releases/assets/5) cp "${STUB_SOURCE}" "${out}" ;;
+    *) exit 22 ;;
+esac
+EOF
+chmod +x "${root}/apibin/curl"
+two_assets() {
+    releases_down=
+    fetch "https://github.com/o/r/releases/download/v1/tool" "${root}/got" "${sha256}" "the tool"
+    fetch "https://github.com/o/r/releases/download/v1/tool" "${root}/got" "${sha256}" "the tool again"
+    grep -c '^https://github.com/' "${root}/api.log" || true
+}
+through_api() {
+    : > "${root}/api.log"
+    (PATH=${root}/apibin:${PATH} STUB_LOG=${root}/api.log STUB_SOURCE=${root}/source two_assets) 2>&1
+}
+expect_in "a failing release address: the API's file passes the checksum" "the tool again: checksum verified" through_api
+expect_in "a failing release address: tried once for the run" "
+1" through_api
+asset_missing() {
+    releases_down=
+    fetch "https://github.com/o/r/releases/download/v1/nothing" "${root}/got" "${sha256}" "the file"
+}
+asset_missing_api() {
+    : > "${root}/api.log"
+    (PATH=${root}/apibin:${PATH} STUB_LOG=${root}/api.log STUB_SOURCE=${root}/source asset_missing) 2>&1
+}
+expect_in "an asset the release lacks: the download fails" "nor through GitHub's API" asset_missing_api
+
 # A file the administrator gave is checked like a download.
 local_copy() { (local_archive "${root}/source" "$1" "${root}/copy" "the archive") 2>&1; }
 expect_in "a local archive that matches" "the archive: checksum verified" local_copy "${sha256}"

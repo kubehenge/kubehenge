@@ -281,6 +281,7 @@ jobs:
         timeout-minutes: 140
         env:
           TEST: ${{ inputs.test }}
+          GITHUB_TOKEN: ${{ github.token }}
         # The test's output goes into the artifacts too: a runner lost after the job's steps never
         # uploads the job's log, while the artifacts are already up.
         shell: bash

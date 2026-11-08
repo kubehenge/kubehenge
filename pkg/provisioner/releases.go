@@ -38,8 +38,11 @@ type ReleaseChecksums struct {
 	Store *PinStore
 	// HTTP, GitHub and Raw read a release's checksum file and install script when it is pinned:
 	// https://github.com and https://raw.githubusercontent.com, unless a test serves its own.
+	// API is where the checksum file comes from when GitHub's download address fails: GitHub's own
+	// API for https://github.com, nothing for another GitHub unless set.
 	HTTP        *http.Client
 	GitHub, Raw string
+	API         string
 }
 
 // releaseTemplate is where a bootstrap template of RKE2 or k3s keeps its node's configuration.
@@ -84,7 +87,19 @@ func rke2CNIImages(cni string) string { return "rke2-images-" + cni + ".linux-am
 const (
 	maxChecksumFile  = 1 << 16
 	maxInstallScript = 1 << 20
+	// A release lists each of its files with its uploader and links, and RKE2's has a hundred.
+	maxReleaseListing = 1 << 22
 )
+
+// releaseListing is the part of GitHub's answer for a release that names its files.
+type releaseListing struct {
+	Assets []releaseAsset `json:"assets"`
+}
+
+type releaseAsset struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
 
 // patch has an RKE2 or k3s node install its release from checked files, through its bootstrap
 // provider's air-gapped install. It is nil for any other template.
@@ -193,7 +208,7 @@ type releaseSums struct{ File, Script string }
 // read hashes the release's checksum file and install script as they are now, for pinning them,
 // and checks the file lists everything a node of the release may install.
 func (r *ReleaseChecksums) read(ctx context.Context, release *distributionRelease, version string) (releaseSums, error) {
-	file, err := r.fetch(ctx, r.GitHub+"/"+release.repository+"/releases/download/"+version+"/sha256sum-amd64.txt", maxChecksumFile)
+	file, err := r.fetchAsset(ctx, release.repository, version, "sha256sum-amd64.txt", maxChecksumFile)
 	if err != nil {
 		return releaseSums{}, err
 	}
@@ -223,10 +238,60 @@ func (r *ReleaseChecksums) read(ctx context.Context, release *distributionReleas
 	return releaseSums{File: hexSHA256(file), Script: hexSHA256(script)}, nil
 }
 
+// api is where the GitHub API answers: the real one for the real GitHub, nowhere for an address a
+// test serves, unless the test names its own.
+func (r *ReleaseChecksums) api() string {
+	if r.API != "" {
+		return r.API
+	}
+	if r.GitHub == "https://github.com" {
+		return "https://api.github.com"
+	}
+	return ""
+}
+
+// fetchAsset reads a file of a release from GitHub's download address. That address can answer 504
+// for hours while the API serves the same file, so a failure other than "not there" tries the API,
+// by the release's tag and the file's name. The API's limit without a token is 60 requests an
+// hour per address, which is why the download address comes first.
+func (r *ReleaseChecksums) fetchAsset(ctx context.Context, repository, version, name string, limit int64) ([]byte, error) {
+	body, err := r.fetch(ctx, r.GitHub+"/"+repository+"/releases/download/"+version+"/"+name, limit)
+	api := r.api()
+	if err == nil || errors.Is(err, errUnlisted) || api == "" || ctx.Err() != nil {
+		return body, err
+	}
+	base := api + "/repos/" + repository + "/releases"
+	listed, apiErr := r.get(ctx, base+"/tags/"+version, "", maxReleaseListing)
+	if apiErr != nil {
+		return nil, fmt.Errorf("%w, and through GitHub's API: %w", err, apiErr)
+	}
+	var release releaseListing
+	if apiErr = json.Unmarshal(listed, &release); apiErr != nil {
+		return nil, fmt.Errorf("%w, and through GitHub's API: reading the release %s: %w", err, version, apiErr)
+	}
+	for _, asset := range release.Assets {
+		if asset.Name == name {
+			body, apiErr = r.get(ctx, fmt.Sprintf("%s/assets/%d", base, asset.ID), "application/octet-stream", limit)
+			if apiErr != nil {
+				return nil, fmt.Errorf("%w, and through GitHub's API: %w", err, apiErr)
+			}
+			return body, nil
+		}
+	}
+	return nil, fmt.Errorf("%w, and through GitHub's API: %w: %s has no asset %s", err, errUnlisted, version, name)
+}
+
 func (r *ReleaseChecksums) fetch(ctx context.Context, url string, limit int64) ([]byte, error) {
+	return r.get(ctx, url, "", limit)
+}
+
+func (r *ReleaseChecksums) get(ctx context.Context, url, accept string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", url, err)
+	}
+	if accept != "" {
+		req.Header.Set("Accept", accept)
 	}
 	resp, err := r.HTTP.Do(req)
 	if err != nil {

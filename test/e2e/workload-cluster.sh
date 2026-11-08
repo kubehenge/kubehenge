@@ -1820,8 +1820,8 @@ if [ "${restores_etcd}" = true ]; then
     taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
     [ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
     [ "${sum}" = "${record_sum}" ] || fail "the snapshot's record in the store holds SHA-256 ${record_sum}, not the snapshot's ${sum}"
-    curl -sS --fail -L --proto '=https' --retry 8 --retry-all-errors -o "${work}/etcd.tar.gz" \
-        "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
+    "$(dirname "$0")/../../scripts/fetch.sh" \
+        "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz" "${work}/etcd.tar.gz"
     printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
         fail "etcd's download does not have its SHA-256"
     tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
