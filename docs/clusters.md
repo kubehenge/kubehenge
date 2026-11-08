@@ -57,6 +57,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | VLAN tag | Optional, 1 to 4094. With a tag, the wizard fills in nothing from the bridge's untagged network. A VNet of a VLAN zone tags its traffic already, so Kubehenge refuses a tag on it. |
 | MTU | Optional, 1280 to 65520, [below](#interface-mtu-and-queues). |
 | Queues | Optional, 1 to 64. The queues of the VMs' virtio interface, which spread its traffic over several vCPUs. Unset, it has one. |
+| Firewall security groups | Optional. Proxmox VE security groups that turn on the firewall of every node's interface, [below](#firewall). |
 | Address families | IPv4, IPv6, or both for dual-stack, the first one primary. Fixed for the cluster's life, [below](#ipv6-and-dual-stack). |
 | API address | The control plane's virtual IP: an unused address in the nodes' network of the primary family, outside the node addresses. |
 | Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds. It counts an autoscaled pool at its most. Leave more for scaling up. |
@@ -87,8 +88,6 @@ Kubehenge sets it on the VM's Proxmox VE interface and on the node's own, throug
 - **Unset.** On Proxmox VE 9 the VM's interface inherits the bridge's MTU, as a node's interface then does. A VM that kept running since Proxmox VE 8 has 1500 until it restarts. Set the MTU to give every VM the same size.
 - **Differing sizes.** The Health page lists a cluster whose VMs have different MTUs on different nodes. Large packets can then be lost between them.
 
-The VM firewall cannot be set per cluster. The Proxmox VE provider has no setting for the interface's firewall flag.
-
 Where a node reports the bridge's network, the wizard fills in the API address and the node addresses. It takes a free run from the network's 20th address on, clear of:
 
 - the gateway, the node and every other cluster's addresses on the bridge
@@ -101,6 +100,16 @@ The interface's pod pings without privileges through the `net.ipv4.ping_group_ra
 The nodes' network is the gateway with the prefix length. Pod and service ranges must stay clear of it and of each other, or traffic for the nodes would be routed into the cluster.
 
 Kubehenge sets both ranges on every cluster it creates. It takes those you give, and refuses them if they overlap. Otherwise it takes the distribution's own, when they are clear of the nodes' network (`10.244.0.0/16` and `10.96.0.0/12` for kubeadm and Talos, `10.42.0.0/16` and `10.43.0.0/16` for RKE2 and k3s). Otherwise it takes the first of a few private ranges that are clear.
+
+#### Firewall
+
+Name Proxmox VE security groups to turn on the firewall of every node's interface. Without groups it stays off.
+
+- **Before.** The datacenter firewall is on (Datacenter, Firewall, Options). Each group exists under Datacenter, Firewall, Security Group, or the controller refuses it.
+- **Names.** Up to 16 groups of 2 to 18 letters, digits, `-` and `_`. The first is a letter.
+- **Accepted on its own.** All traffic from the cluster's API address, node addresses and pod ranges, and from the management cluster's nodes. That covers etcd, the kubelet and the pod network on any port.
+- **Accepted only through the groups.** Everything else inbound: `kubectl` and `talosctl` from your machines, ingress, NodePorts, load-balancer addresses, SSH and Cluster Mesh peers.
+- **When.** Each VM's firewall is written before it first starts. Changing the groups replaces every node, one at a time.
 
 #### IPv6 and dual-stack
 
@@ -834,6 +843,7 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 | Network | Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
 | Network | Load balancer | always | See the list below. |
 | Network | Cluster Mesh | on a cluster that runs Cilium | See the list below. |
+| Network | Firewall security groups | always | Replaces every node, one at a time. No groups turns the firewall off ([Firewall](#firewall)). |
 | Storage | CSI plugin | where the management cluster lets clusters choose its newest release, or while the cluster runs it | [Persistent volumes](#persistent-volumes). |
 | Storage | Volume snapshots | where the management cluster lets clusters take them, or while they are on | [Volume snapshots](#volume-snapshots). |
 | Add-ons | Headlamp, Monitoring, Logs, Certificates, Istio, Rancher, GitOps | always | See the list below. |
@@ -1677,6 +1687,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `egressProxy` | no | The proxy of the nodes and of the add-ons that reach beyond the cluster ([below](#sites-with-limited-access)). `url` is an `http://` or `https://` address with a host and no path or credentials. `httpsUrl` is the proxy for `https://` addresses where it differs, and comes with `url`. `noProxy` lists up to 64 hosts, domains and networks that bypass it, beside the cluster's own ranges. `disabled: true` sends the add-ons direct and excludes `url`. Unset, the add-ons take the management side's proxy and the nodes go direct. |
 | `registryMirrors` | no | Up to 16 entries. `registry` is a lower-case host name with an optional port, or `*` for every registry. `endpoints` are 1 to 4 `http://` or `https://` addresses, tried in order. A path has to end in `/v2`. `caBundle` is the PEM authority of the endpoints. |
 | `trustedCAs` | no | Up to 8 PEM bundles of certificates, for the nodes' trust store. |
+| `securityGroups` | no | Up to 16 Proxmox VE security group names, which turn on the firewall of the nodes' interfaces ([above](#firewall)). Changing it replaces every node. |
 | `distributionMirror` | no | RKE2 and k3s only. An `http://` or `https://` address that holds the distribution's releases under `<address>/<version>/`, in place of GitHub. |
 | `gitops` | no | `enabled` (default false). `engine`, `argocd` (default) or `flux`. `repository`, with `url` (`https://` or `ssh://`), `revision` (a branch or full ref, default `main`) and `path` (default `.`) and `caBundle` (PEM, for an `https://` server the usual authorities do not sign, not with Flux and `existingSecret`). `auth`, `none` (default), `deployKey`, `token` or `existingSecret`. `deployKey` works over `ssh://`. The key is in the Secret `<name>-gitops` beside the Cluster, its public half under `identity.pub`. `token` is the cluster's `gitops` credential, `username` and `password`. With `existingSecret`, the field `existingSecret` names the Secret. `knownHosts`, the server's host keys as known_hosts lines, at least one for the URL's host and port. It is required over `ssh://` except for Flux with `existingSecret`. `hostname` and `tlsSecret`, to serve the web interface through the ingress controller. `admins`, the first provider's groups that administer Argo CD. `signIn`, with `clientID` (the provider's own when unset) and `clientSecret`, `none` (default, PKCE), `stored` or `existingSecret`. `stored` is the cluster's `oidc-client` credential, key `clientSecret`. With `existingSecret`, the field `signIn.existingSecret` names the Secret. `ui` (default false), Flux's web interface, which needs `hostname` and a client secret. `ui` and `admins` need an identity provider in `oidc`. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
