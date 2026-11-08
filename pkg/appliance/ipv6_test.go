@@ -388,6 +388,17 @@ func TestIPv6ReachesTheModule(t *testing.T) {
 	}
 }
 
+func TestRangesClearOfABridgesIPv6Network(t *testing.T) {
+	t.Parallel()
+	s := ipv6Settings()
+	s.PodSubnets, s.ServiceSubnets = []string{"fd00:2::/56"}, []string{"fd00:3::/112"}
+	inv := healthy()
+	inv.Bridges["pve1"][0].CIDR6, inv.Bridges["pve1"][0].Gateway6 = "fd00:2:0:5::5/64", "fd00:3::1"
+	f := s.Preflight(inv, false)
+	mentions(t, f.Warnings, "The pod range fd00:2::/56 overlaps the network fd00:2:0:5::/64 on bridge vmbr0 of node pve1")
+	mentions(t, f.Warnings, "The service range fd00:3::/112 overlaps the gateway fd00:3::1 of bridge vmbr0 on node pve1")
+}
+
 func TestIPv6AddressesAreChecked(t *testing.T) {
 	t.Parallel()
 	s := dualSettings("IPv4", "IPv6")

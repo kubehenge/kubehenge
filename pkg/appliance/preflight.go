@@ -450,11 +450,13 @@ func networkPlaces(inv *Inventory) []place {
 	for _, node := range slices.Sorted(maps.Keys(inv.Bridges)) {
 		for i := range inv.Bridges[node] {
 			b := &inv.Bridges[node][i]
-			if p, err := netip.ParsePrefix(b.CIDR); err == nil {
-				places = append(places, place{p.Masked(), fmt.Sprintf("the network %s on bridge %s of node %s", p.Masked(), b.Bridge, node)})
-			}
-			if g, err := netip.ParseAddr(b.Gateway); err == nil {
-				places = append(places, place{netip.PrefixFrom(g, g.BitLen()), fmt.Sprintf("the gateway %s of bridge %s on node %s", g, b.Bridge, node)})
+			for _, net := range [...][2]string{{b.CIDR, b.Gateway}, {b.CIDR6, b.Gateway6}} {
+				if p, err := netip.ParsePrefix(net[0]); err == nil {
+					places = append(places, place{p.Masked(), fmt.Sprintf("the network %s on bridge %s of node %s", p.Masked(), b.Bridge, node)})
+				}
+				if g, err := netip.ParseAddr(net[1]); err == nil {
+					places = append(places, place{netip.PrefixFrom(g, g.BitLen()), fmt.Sprintf("the gateway %s of bridge %s on node %s", g, b.Bridge, node)})
+				}
 			}
 		}
 	}

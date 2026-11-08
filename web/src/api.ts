@@ -476,7 +476,7 @@ export interface Api {
   freeAddresses: (
     node: string,
     bridge: string,
-    req: { vlan: number; nodes: number; check: string[] },
+    req: { vlan: number; nodes: number; check: string[]; families?: string[] },
   ) => Promise<FreeAddresses>;
   haRules: () => Promise<HARules>;
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 
@@ -150,6 +151,35 @@ func mentions(t *testing.T, messages []string, parts ...string) {
 		}
 	}
 	t.Errorf("no message holds all of %q in %q", parts, messages)
+}
+
+// An IPv6 management cluster is checked against its bridge's IPv6 network and the hosts answering
+// on IPv6, as an IPv4 one is.
+func TestSetupCheckOfAnIPv6Bridge(t *testing.T) {
+	t.Parallel()
+	h, b := preflightHarness(t)
+	h.accounts.bridgeList = dualStackBridges()
+	taken := netip.MustParseAddr("2001:db8:0:2::12")
+	h.server.Probe = (&answeringOn{hosts: map[netip.Addr]bool{taken: true}}).probe
+	// The management VMs take a network of their own on the bridge, beside the node's 2001:db8:0:1::/64.
+	settings := `{"settings":{"nodes":["pve1"],"imageDatastore":"local","vmDatastore":"local-lvm","bridge":"vmbr0",
+"ipFamilies":["IPv6"],"nodeAddresses":[],"nodeAddressesIPv6":["2001:db8:0:2::11/64","2001:db8:0:2::12/64","2001:db8:0:2::13/64"],
+"apiAddress":"2001:db8:0:2::10","gatewayIPv6":"2001:db8:0:2::1","dnsServers":["2001:db8:0:2::53"],
+"podSubnets":["2001:db8::/63"],"workloadDatastores":["local-lvm"],"workloadBridges":["vmbr0"],"bootstrapDatastore":"local"}}`
+	f := checkSettings(t, b, settings)
+	mentions(t, f.Errors, "Address 2001:db8:0:2::12 answers")
+	if len(f.Errors) != 1 {
+		t.Errorf("errors = %q, want the one address that answers", f.Errors)
+	}
+	mentions(t, f.Warnings, "The pod range 2001:db8::/63 overlaps the network 2001:db8:0:1::/64 on bridge vmbr0 of node pve1")
+	mentions(t, f.Warnings, "the address 2001:db8:0:1::5 of node pve1")
+	if !slices.Equal(f.PodRanges, []string{"2001:db8::/63"}) || !slices.Equal(f.ServiceRanges, []string{"fd5e:4b1c:9a21::/112"}) {
+		t.Errorf("ranges = %v and %v", f.PodRanges, f.ServiceRanges)
+	}
+	// An IPv4 cluster on the same dual-stack bridge passes.
+	if f := checkFindings(t, b); len(f.Errors) != 0 {
+		t.Errorf("an IPv4 cluster on a dual-stack bridge: %q", f.Errors)
+	}
 }
 
 func TestSetupCheckReportsSettingsThatAreWrong(t *testing.T) {

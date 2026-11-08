@@ -19,10 +19,20 @@ import {
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
+import { FamiliesField } from "./Families";
 import { HostOutageField, graceVariable } from "./HostOutage";
 import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
-import { addressBits, addressIn, bridgeLabel } from "./network";
+import {
+  addressIn,
+  bitsOf,
+  bridgeLabel,
+  familiesOf,
+  familyNames,
+  networkOf,
+  type Family,
+  type FamilyChoice,
+} from "./network";
 import { baseTitle, choosable, cpuNote, findNodeOS, fipsCNI, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { NodeCustomisationFields } from "./NodeCustomisation";
 import { NodeSettingsFields } from "./NodeSettings";
@@ -354,11 +364,15 @@ export const useClassTalos = (cls: ClusterClass | undefined): TalosReleases | un
 // How long after the network settings last change the wizard probes them.
 const probeAfter = 500;
 
-/** ProbeOn is where addresses are probed: the bridge of a node that reports its network, and the VLAN tag typed. */
+/**
+ * ProbeOn is where addresses are probed: the bridge of a node that reports its network, the VLAN
+ * tag typed, and the address families asked for.
+ */
 export interface ProbeOn {
   node: string | undefined;
   bridge: string;
   vlan: string;
+  families: FamilyChoice;
 }
 
 /**
@@ -370,7 +384,8 @@ export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): F
   const { node, bridge } = on;
   const vlan = filled(on.vlan) ? Number(on.vlan) : 0;
   const checked = check.join("\n");
-  const key = [node, bridge, vlan, nodes, checked].join(" ");
+  const asked = familyNames(on.families).join(",");
+  const key = [node, bridge, vlan, nodes, checked, asked].join(" ");
   const [found, setFound] = useState<{ key: string; free: FreeAddresses }>();
   useEffect(() => {
     let current = true;
@@ -380,6 +395,7 @@ export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): F
           vlan,
           nodes,
           check: checked === "" ? [] : checked.split("\n"),
+          ...(asked === "IPv4" ? {} : { families: asked.split(",") }),
         });
         if (current) {
           setFound({ key, free });
@@ -398,7 +414,7 @@ export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): F
       current = false;
       clearTimeout(timer);
     };
-  }, [node, bridge, vlan, nodes, checked, key]);
+  }, [node, bridge, vlan, nodes, checked, asked, key]);
   return found?.key === key ? found.free : undefined;
 }
 
@@ -635,6 +651,59 @@ const exampleEndpoint = 20;
 const exampleFirst = 21;
 const exampleLast = 29;
 
+// The ranges the controller takes for an IPv6 family when none is asked for.
+const defaultPodsIPv6 = "fd5e:4b1c:9a20::/56";
+const defaultServicesIPv6 = "fd5e:4b1c:9a21::/112";
+
+// FamilyFields are the node addresses, prefix length and gateway of one address family. IPv4 has
+// the plain labels and IPv6 the same with an IPv6 prefix.
+function FamilyFields({
+  family,
+  form,
+  set,
+  shown,
+  inUse: busy,
+  first,
+  last,
+}: StepProps & {
+  family: Family;
+  inUse: JSX.Element | undefined;
+  first: string;
+  last: string;
+}): JSX.Element {
+  const six = family === "IPv6";
+  const [addresses, prefix, gateway] = six
+    ? (["addresses6", "prefix6", "gateway6"] as const)
+    : (["addresses", "prefix", "gateway"] as const);
+  const lead = six ? "IPv6 " : "";
+  return (
+    <>
+      <Field
+        label={six ? "IPv6 node addresses" : "Node addresses"}
+        hint={busy ?? `Ranges like ${first}-${last}, networks or addresses`}
+        error={shown(addresses)}
+      >
+        {(id) => <textarea id={id} rows={3} value={form[addresses]} onChange={(e) => set(addresses, e.target.value)} />}
+      </Field>
+      <Field label={six ? "IPv6 prefix length" : "Prefix length"} error={shown(prefix)}>
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={1}
+            max={bitsOf(family)}
+            value={shownNumber(form[prefix])}
+            onChange={(e) => set(prefix, typedNumber(e.target.value))}
+          />
+        )}
+      </Field>
+      <Field label={`${lead}${six ? "gateway" : "Gateway"}`} error={shown(gateway)}>
+        {(id) => <input id={id} value={form[gateway]} onChange={(e) => set(gateway, e.target.value.trim())} />}
+      </Field>
+    </>
+  );
+}
+
 export function NetworkStep({
   form,
   set,
@@ -642,12 +711,15 @@ export function NetworkStep({
   cls,
   bridgeOptions,
   network,
+  network6,
   checked,
 }: StepProps & {
   cls: ClusterClass | undefined;
   bridgeOptions: Bridge[];
   /** The bridge's network, like 192.0.2.0/24, where a node reports it, else the gateway's. The examples are taken from it. */
   network?: string | undefined;
+  /** The same for IPv6, like 2001:db8::/64. */
+  network6?: string | undefined;
   /** What probing the addresses typed found. */
   checked?: FreeAddresses | undefined;
 }): JSX.Element {
@@ -656,11 +728,11 @@ export function NetworkStep({
   const answering = checked?.answering ?? [];
   const endpointInUse = inUse(answering.filter((a) => a === form.endpoint));
   const nodesInUse = inUse(answering.filter((a) => a !== form.endpoint));
-  const example = (offset: number, otherwise: string): string =>
-    (network === undefined ? undefined : addressIn(network, offset)) ?? otherwise;
-  // Cilium's ranges also keep clear of the other clusters', so the cluster can join a Cluster Mesh.
-  const rangeHint =
-    form.cni === "cilium" ? "Leave empty to choose one clear of other clusters" : "Leave empty to choose a free one";
+  const families = familiesOf(form.families);
+  const examples = exampleNetworks(form, { IPv4: network, IPv6: network6 });
+  const sample = (family: Family, offset: number): string => exampleAddress(family, offset, examples[family]);
+  const [primary = "IPv4"] = families;
+  const offersFamilies = variable(cls, "network")?.properties?.["ipFamilies"] !== undefined;
   return (
     <>
       <Field label="Bridge" error={shown("bridge")}>
@@ -717,6 +789,15 @@ export function NetworkStep({
           )}
         </Field>
       )}
+      {offersFamilies && (
+        <FamiliesField
+          value={form.families}
+          hint="Fixed once the cluster exists"
+          onChoose={(choice) => {
+            set("families", choice);
+          }}
+        />
+      )}
       <Field
         label="API address"
         hint={endpointInUse ?? "A free address outside the node addresses"}
@@ -727,37 +808,22 @@ export function NetworkStep({
             id={id}
             value={form.endpoint}
             onChange={(e) => set("endpoint", e.target.value.trim())}
-            placeholder={example(exampleEndpoint, "10.0.0.20")}
+            placeholder={sample(primary, exampleEndpoint)}
           />
         )}
       </Field>
-      <Field
-        label="Node addresses"
-        hint={
-          nodesInUse ??
-          `Ranges like ${example(exampleFirst, "10.0.0.21")}-${example(exampleLast, "10.0.0.29")}, networks or addresses`
-        }
-        error={shown("addresses")}
-      >
-        {(id) => (
-          <textarea id={id} rows={3} value={form.addresses} onChange={(e) => set("addresses", e.target.value)} />
-        )}
-      </Field>
-      <Field label="Prefix length" error={shown("prefix")}>
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={1}
-            max={addressBits}
-            value={shownNumber(form.prefix)}
-            onChange={(e) => set("prefix", typedNumber(e.target.value))}
-          />
-        )}
-      </Field>
-      <Field label="Gateway" error={shown("gateway")}>
-        {(id) => <input id={id} value={form.gateway} onChange={(e) => set("gateway", e.target.value.trim())} />}
-      </Field>
+      {families.map((family) => (
+        <FamilyFields
+          key={family}
+          family={family}
+          form={form}
+          set={set}
+          shown={shown}
+          inUse={nodesInUse}
+          first={sample(family, exampleFirst)}
+          last={sample(family, exampleLast)}
+        />
+      ))}
       <Field label="DNS servers" error={shown("dnsServers")}>
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
@@ -777,11 +843,13 @@ export function NetworkStep({
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
+          families={form.families}
           value={formLoadBalancerValue(form)}
           errors={{
             addresses: shown("loadBalancerAddresses"),
             asn: shown("loadBalancerAsn"),
             peers: shown("loadBalancerPeers"),
+            routerID: shown("loadBalancerRouterID"),
           }}
           onChange={(patch) => {
             setLoadBalancer(set, patch);
@@ -821,33 +889,67 @@ export function NetworkStep({
           )}
         </Field>
       )}
-      <details
-        className="advanced"
-        open={shown("pods") !== undefined || shown("services") !== undefined ? true : undefined}
-      >
-        <summary>Pod and service ranges</summary>
-        <Field label="Pod range" hint={rangeHint} error={shown("pods")}>
-          {(id) => (
-            <input
-              id={id}
-              value={form.pods}
-              placeholder={cls?.annotations?.["kubehenge.dev/default-pods"]}
-              onChange={(e) => set("pods", e.target.value.trim())}
-            />
-          )}
-        </Field>
-        <Field label="Service range" hint={rangeHint} error={shown("services")}>
-          {(id) => (
-            <input
-              id={id}
-              value={form.services}
-              placeholder={cls?.annotations?.["kubehenge.dev/default-services"]}
-              onChange={(e) => set("services", e.target.value.trim())}
-            />
-          )}
-        </Field>
-      </details>
+      <RangeFields form={form} set={set} shown={shown} cls={cls} />
     </>
+  );
+}
+
+// exampleNetworks are the networks the examples of each family are taken from: the bridge's where a
+// node reports it, else the gateway's.
+const exampleNetworks = (
+  form: Form,
+  bridge: Record<Family, string | undefined>,
+): Record<Family, string | undefined> => ({
+  IPv4: bridge.IPv4 ?? networkOf(`${form.gateway}/${form.prefix}`),
+  IPv6: bridge.IPv6 ?? networkOf(`${form.gateway6}/${form.prefix6}`),
+});
+
+// exampleAddress is the address that many into the example network, else in a documentation network.
+function exampleAddress(family: Family, offset: number, network: string | undefined): string {
+  const fallback = family === "IPv4" ? `10.0.0.${offset}` : `2001:db8::${offset}`;
+  return (network === undefined ? undefined : addressIn(network, offset)) ?? fallback;
+}
+
+// RangeFields are the pod and service ranges, one per family when the cluster has both.
+function RangeFields({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element {
+  const families = familiesOf(form.families);
+  const dual = families.length > 1;
+  // The ranges the class would choose, one per family in order, for the fields to show as examples.
+  const defaultRanges = (annotation: string, v6: string): string | undefined =>
+    families
+      .map((f) => (f === "IPv4" ? cls?.annotations?.[annotation] : v6))
+      .filter((r) => r !== undefined)
+      .join(", ") || undefined;
+  // Cilium's ranges also keep clear of the other clusters', so the cluster can join a Cluster Mesh.
+  const rangeHint =
+    form.cni === "cilium" ? "Leave empty to choose one clear of other clusters" : "Leave empty to choose a free one";
+  return (
+    <details
+      className="advanced"
+      open={shown("pods") !== undefined || shown("services") !== undefined ? true : undefined}
+    >
+      <summary>Pod and service ranges</summary>
+      <Field label={dual ? "Pod ranges" : "Pod range"} hint={rangeHint} error={shown("pods")}>
+        {(id) => (
+          <input
+            id={id}
+            value={form.pods}
+            placeholder={defaultRanges("kubehenge.dev/default-pods", defaultPodsIPv6)}
+            onChange={(e) => set("pods", e.target.value)}
+          />
+        )}
+      </Field>
+      <Field label={dual ? "Service ranges" : "Service range"} hint={rangeHint} error={shown("services")}>
+        {(id) => (
+          <input
+            id={id}
+            value={form.services}
+            placeholder={defaultRanges("kubehenge.dev/default-services", defaultServicesIPv6)}
+            onChange={(e) => set("services", e.target.value)}
+          />
+        )}
+      </Field>
+    </details>
   );
 }
 

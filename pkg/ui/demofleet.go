@@ -1039,7 +1039,7 @@ func (a *demoAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
 }
 
 func (*demoAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
-	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.20.0.2/16", Gateway: "10.20.0.1"}}, nil
+	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.20.0.2/16", Gateway: "10.20.0.1", CIDR6: "fd00:20::2/64", Gateway6: "fd00:20::1"}}, nil
 }
 
 func (*demoAccounts) DNS(context.Context, *pve.Ticket, string) (pve.NodeDNS, error) {
