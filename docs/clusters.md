@@ -177,6 +177,7 @@ A node is left out while it lacks the cluster's storage, template, bridge or VNe
 - **Free memory** is what Proxmox VE reports as unused. Memory that stopped guests are configured with does not count, so an overcommitted node still takes VMs.
 - **Headroom:** placement counts the memory free now, as Proxmox VE does when it starts a VM. Memory configured for stopped VMs is not held back, so a node can run short once they start. Allowed nodes keep clusters on hosts with real headroom.
 - **Rejoining** takes a tenth more free memory than the machine needs. That keeps the placement steady as memory moves.
+- **A node back online** counts with the memory it reports itself. Proxmox VE goes on listing the figures from before it went down until it reports again.
 - **New clusters** are judged the same way before the first look. The create wizard warns, without blocking, when no node it may use has the free memory.
 - **No room anywhere:** the placement stays as it was. The cluster's `NodesLackMemory` condition names the memory needed and the best node's free memory.
 - **Bridge or VNet:** a bridge that exists on none of the nodes the cluster may use is refused when the cluster is created or changed. A VNet counts as present where its zone is applied.

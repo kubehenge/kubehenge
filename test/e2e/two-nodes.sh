@@ -72,6 +72,23 @@ online_are() {
     now=$(online_nodes) || return 1
     [ "${now}" = "$1" ]
 }
+node_online() {
+    # shellcheck disable=SC2310 # polled; no answer is not the node online.
+    nodes=$(pve_get nodes) || return 1
+    printf '%s' "${nodes}" | jq -e --arg n "$1" 'any(.data[]; .node == $n and .status == "online")' > /dev/null
+}
+# placed_on_return: whether the placement is the one the nodes' free memory allows with the second
+# node back. It takes both nodes where one has room for the cluster's largest machine. Where none
+# has, it holds on the first and NodesLackMemory says so. Nodes that share one machine's memory, as
+# in CI, have no room for the 4 GiB control plane once the cluster has grown.
+placed_on_return() {
+    # shellcheck disable=SC2310 # polled; no answer is not the placement looked for.
+    state=$(kubectl -n "${ns}" get cluster/nodes -o json) || return 1
+    printf '%s' "${state}" | jq -e --arg both "${first},${second}" --arg first "${first}" '
+        .metadata.annotations["kubehenge.dev/online-nodes"] as $on
+        | any(.status.conditions[]?; .type == "NodesLackMemory" and .status == "True") as $short
+        | ($on == $both and ($short | not)) or ($on == $first and $short)' > /dev/null
+}
 nodes_ready() {
     # shellcheck disable=SC2310 # polled; no answer is no node ready.
     n=$(workload get nodes -o json | jq '[.items[] | select(any(.status.conditions[]; .type == "Ready" and .status == "True"))] | length') || return 1
@@ -158,7 +175,8 @@ until_true 600 "three nodes ready" nodes_ready 3
 
 step "${second} back, and the cluster deleted"
 sh -c "${KUBEHENGE_E2E_UP}"
-until_true 600 "${second} back in the cluster's placement" online_are "${first},${second}"
+until_true 600 "${second} online in Proxmox VE" node_online "${second}"
+until_true 600 "the placement the nodes' memory allows with ${second} back" placed_on_return
 kubectl -n "${ns}" delete cluster/nodes --wait --timeout=30m
 left=$(pve_get "cluster/resources?type=vm" | jq --arg p "/${ns}." '[.data[] | select(.pool // "" | contains($p))] | length')
 [ "${left}" = 0 ] || fail "VMs of the cluster are still there"

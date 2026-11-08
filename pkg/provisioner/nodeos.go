@@ -36,7 +36,8 @@ type Nodes interface {
 }
 
 // OnlineNodes lists the nodes Proxmox VE reports online, sorted by name. A node's CPU is read once
-// while it stays online: it changes only with the hardware, which takes the node down first.
+// while it stays online: it changes only with the hardware, which takes the node down first. A node
+// back online is judged by the memory it reports itself until the list has its new figures.
 func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 	var nodes []pveNode
 	if err := p.Client.Get(ctx, "/nodes", &nodes); err != nil {
@@ -55,15 +56,19 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 		}
 		// A node that shows online but whose status cannot be read (a reboot, a token without
 		// Sys.Audit on it) would otherwise leave every cluster unplaced.
-		level, err := p.cpuLevel(ctx, n.Node)
+		level, live, err := p.nodeFacts(ctx, n)
 		if err != nil {
 			ctrl.LoggerFrom(ctx).Error(err, "leaving a node out of placement", "node", n.Node)
 			skipped = append(skipped, n.Node)
 			continue
 		}
 		node := Node{Name: n.Node, CPULevel: level, Maintenance: maintenance[n.Node]}
-		if n.MaxMem > 0 {
-			node.FreeMiB, node.MemoryKnown = max(0, n.MaxMem-n.Mem)/bytesPerMiB, true
+		total, used := n.MaxMem, n.Mem
+		if live != nil {
+			total, used = live.Total, live.Used
+		}
+		if total > 0 {
+			node.FreeMiB, node.MemoryKnown = max(0, total-used)/bytesPerMiB, true
 		}
 		for _, s := range storages {
 			if s.Node == n.Node && s.Status != storageAvailable && !slices.Contains(node.InactiveStorages, s.Storage) {
@@ -76,9 +81,9 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 	slices.Sort(skipped)
 	p.mu.Lock()
 	p.skipped = skipped
-	for name := range p.cpuLevels {
+	for name := range p.seen {
 		if !slices.ContainsFunc(online, func(n Node) bool { return n.Name == name }) {
-			delete(p.cpuLevels, name)
+			delete(p.seen, name)
 		}
 	}
 	p.mu.Unlock()
@@ -92,34 +97,59 @@ func (p *Proxmox) Unreadable() []string {
 	return slices.Clone(p.skipped)
 }
 
-// pveNodeStatus is the part of a node's status that names its CPU's features.
+// pveNodeStatus is the part of a node's own status that names its CPU's features and its memory.
 type pveNodeStatus struct {
 	CPUInfo pveCPUInfo `json:"cpuinfo"`
+	Memory  pveMemory  `json:"memory"`
 }
 
 type pveCPUInfo struct {
 	Flags string `json:"flags"`
 }
 
-func (p *Proxmox) cpuLevel(ctx context.Context, node string) (int, error) {
+// pveMemory is a node's memory in bytes, as the node itself reads it.
+type pveMemory struct {
+	Total int64 `json:"total"`
+	Used  int64 `json:"used"`
+}
+
+// seenNode is what is kept of an online node from the look it came online at.
+type seenNode struct {
+	level int
+	// listedUptime is the uptime /nodes showed at that look. Proxmox VE lists a node with the last
+	// figures it sent for five minutes after it stops sending, so a node back online is listed with
+	// the memory it had before it left until it reports again, which moves its uptime.
+	listedUptime int64
+}
+
+// nodeFacts reads what the node list does not say of an online node: its CPU's level, once while
+// it stays online, and its memory while the list may still hold the figures from before it came
+// online. The memory is nil where the list's figures are the node's own or the list has none.
+func (p *Proxmox) nodeFacts(ctx context.Context, n pveNode) (int, *pveMemory, error) {
 	p.mu.Lock()
-	level, ok := p.cpuLevels[node]
+	seen, ok := p.seen[n.Node]
 	p.mu.Unlock()
-	if ok {
-		return level, nil
+	listed := n.MaxMem > 0
+	if ok && (!listed || n.Uptime != seen.listedUptime) {
+		return seen.level, nil, nil
 	}
 	var status pveNodeStatus
-	if err := p.Client.Get(ctx, "/nodes/"+node+"/status", &status); err != nil {
-		return 0, fmt.Errorf("reading node %s's CPU: %w", node, err)
+	if err := p.Client.Get(ctx, "/nodes/"+n.Node+"/status", &status); err != nil {
+		return 0, nil, fmt.Errorf("reading node %s's status: %w", n.Node, err)
 	}
-	level = templates.CPULevelOf(status.CPUInfo.Flags)
-	p.mu.Lock()
-	if p.cpuLevels == nil {
-		p.cpuLevels = map[string]int{}
+	if !ok {
+		seen = seenNode{level: templates.CPULevelOf(status.CPUInfo.Flags), listedUptime: n.Uptime}
+		p.mu.Lock()
+		if p.seen == nil {
+			p.seen = map[string]seenNode{}
+		}
+		p.seen[n.Node] = seen
+		p.mu.Unlock()
 	}
-	p.cpuLevels[node] = level
-	p.mu.Unlock()
-	return level, nil
+	if !listed || status.Memory.Total <= 0 {
+		return seen.level, nil, nil
+	}
+	return seen.level, &status.Memory, nil
 }
 
 // clusterCPULevel is the x86-64 microarchitecture level a cluster's nodes need of the Proxmox VE
