@@ -914,6 +914,29 @@ run "template_refresh_off" {
   }
 }
 
+run "appliance_addresses_join_the_firewall_sources" {
+  command = plan
+
+  variables {
+    appliance_addresses = ["192.0.2.5", "2001:db8::5", "192.0.2.11"]
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).managementAddresses == ["192.0.2.11", "192.0.2.12", "192.0.2.13", "192.0.2.5", "2001:db8::5"]
+    error_message = "every workload cluster's firewall accepts the appliance beside the management cluster's nodes, each address once"
+  }
+}
+
+run "appliance_addresses_refuse_a_prefix_length" {
+  command = plan
+
+  variables {
+    appliance_addresses = ["192.0.2.5/24"]
+  }
+
+  expect_failures = [var.appliance_addresses]
+}
+
 run "extra_cluster_namespaces" {
   command = plan
 

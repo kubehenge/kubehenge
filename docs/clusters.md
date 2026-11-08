@@ -107,7 +107,8 @@ Name Proxmox VE security groups to turn on the firewall of every node's interfac
 
 - **Before.** The datacenter firewall is on (Datacenter, Firewall, Options). Each group exists under Datacenter, Firewall, Security Group, or the controller refuses it.
 - **Names.** Up to 16 groups of 2 to 18 letters, digits, `-` and `_`. The first is a letter.
-- **Accepted on its own.** All traffic from the cluster's API address, node addresses and pod ranges, and from the management cluster's nodes. That covers etcd, the kubelet and the pod network on any port.
+- **Accepted on its own.** All traffic from the cluster's API address, node addresses and pod ranges. That covers etcd, the kubelet and the pod network on any port.
+- **The management side.** All traffic from the management cluster's nodes and the appliance, whose interface and Headlamp reach the API server directly. A new address of either replaces the nodes of every cluster with groups.
 - **Accepted only through the groups.** Everything else inbound: `kubectl` and `talosctl` from your machines, ingress, NodePorts, load-balancer addresses, SSH and Cluster Mesh peers.
 - **When.** Each VM's firewall is written before it first starts. Changing the groups replaces every node, one at a time.
 

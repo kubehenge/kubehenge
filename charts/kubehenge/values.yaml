@@ -234,8 +234,8 @@ kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28
 # cluster (the autoscaler variable's placement workload).
 managementEndpoint: ""
 
-# The management cluster's node addresses, without prefix lengths, as its traffic to workload
-# clusters leaves from them; the management cluster's module sets them. A workload cluster's
+# The addresses, without prefix lengths, that the management cluster's nodes and the appliance
+# reach workload clusters from; the management cluster's module sets them. A workload cluster's
 # firewall (the securityGroups variable) accepts them alongside the cluster's own addresses.
 managementAddresses: []
 

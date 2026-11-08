@@ -129,6 +129,17 @@ variable "node_addresses_ipv6" {
   }
 }
 
+variable "appliance_addresses" {
+  description = "Addresses without prefix length that Kubehenge's appliance reaches the workload clusters' API servers from, for its interface and its Headlamp. A workload cluster with firewall security groups accepts them, as it does the management cluster's nodes. The appliance sets its own."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for a in var.appliance_addresses : can(cidrhost("${a}/${strcontains(a, ":") ? 128 : 32}", 0))])
+    error_message = "appliance_addresses must hold IP addresses without prefix length."
+  }
+}
+
 variable "api_address" {
   description = "Virtual IP of the Kubernetes API, an address of the primary family without prefix length, in that family's node network and used by nothing else. It moves to a healthy control-plane node if one fails."
   type        = string
