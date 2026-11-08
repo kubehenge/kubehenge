@@ -1016,7 +1016,7 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
   const address = f.releaseMirror.trim();
   if (address !== "" && !releaseMirrorAddress.test(address)) {
-    p.releaseMirror = "Give an address like https://mirror.example/github, without a trailing slash.";
+    p.releaseMirror = "Use an http:// or https:// address with no trailing slash, query or credentials.";
   }
   if (filled(f.releaseMirrorCA)) {
     if (f.releaseMirrorCA.includes("PRIVATE KEY")) {
