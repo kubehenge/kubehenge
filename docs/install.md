@@ -42,7 +42,7 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 
 - **The management cluster** needs one free address per node (one, or three for high availability) and one for its Kubernetes API's virtual IP. All are in one subnet on one bridge, with a gateway and DNS servers.
   - Its VMs can run on several Proxmox VE nodes. Each of those needs that bridge, in the same layer-2 network.
-  - The bridge can be an SDN VNet. Cluster API's token gets `PVESDNUser` on `/sdn/zones/<zone>/<vnet>`, or on `/sdn/zones/localnetwork/<bridge>` for a node's bridge.
+  - The bridge can be an SDN VNet. Cluster API's token gets `SDN.Use` (its network role) on `/sdn/zones/<zone>/<vnet>`, or on `/sdn/zones/localnetwork/<bridge>` for a node's bridge.
   - The appliance reaches its nodes on ports 50000 (Talos API) and 6443 (Kubernetes API).
 - **Each cluster** needs a range of free addresses for its nodes. Its control plane's virtual IP is one more, in the same subnet but outside the range.
   - Leave spare addresses in the range, because an upgrade or a node replacement creates the new node before it removes the old one.
@@ -112,6 +112,15 @@ Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Prov
 The appliance, a one-node management cluster and a cluster at the create wizard's defaults (one control plane, one worker) take about 110 GB of disk. They take 10 vCPUs and 15 GiB of memory, beside the appliance's swap. Three management cluster nodes add 8 vCPUs, 8 GiB and 64 GB. Add-ons raise a cluster's machines to what they need ([clusters.md](clusters.md#machines)).
 
 Each node OS template build takes 12 GiB on the template storage. The two newest builds of each stay. While one is made, the VM that prepares it takes 2 vCPUs, up to 4 GiB of memory and 20 GiB of disk more.
+
+### Upgrading Proxmox VE
+
+A Proxmox VE cluster that runs two major versions at once is only a stopover.
+
+- **Finish the upgrade before installing.** The installer checks the node it runs on, and nothing checks the others.
+- **Upgrade the nodes one at a time.** While the major versions differ, new VMs go to the oldest version's nodes that have room, and to newer nodes only when none has. The Health page lists the nodes of each version, and an event warns when a cluster has to use a newer node.
+- **Move VMs from old to new only.** A VM started on a newer node gets a machine version an older node cannot run.
+- **HA rules wait.** Proxmox VE refuses them until every node runs 9. Kubehenge writes none meanwhile and sets the condition `HARulesPending` on the cluster, which the interface and `kubectl describe cluster` show.
 
 ## Install the appliance
 
@@ -213,6 +222,21 @@ The CA the certificate is checked against is, without `--proxmox-ca`:
    - Without a terminal it stops and names the fingerprint.
 
 Where none of them applies, or you do not trust the CA it shows, the installer stops before it creates anything. Then give the CA with `--proxmox-ca`, or check nothing with `--proxmox-insecure`.
+
+### What Cluster API's token may do
+
+Cluster API acts as `kubehenge-cluster-api@pve` with roles the module creates, each holding only what the Proxmox VE provider's calls need. Proxmox VE's built-in roles are not used, since they gain privileges with its releases.
+
+| On | Role | Privileges |
+| --- | --- | --- |
+| the workload pool, propagated | `<name>-cluster-api-vms` | `VM.Allocate`, `VM.Audit`, `VM.PowerMgmt`, `VM.Config.CPU`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Disk`, `VM.Config.CDROM`, `VM.Config.Options`, `VM.GuestAgent.Audit`, `VM.GuestAgent.Unrestricted` |
+| the templates pool | `<name>-cluster-api-templates` | `VM.Clone`, `VM.Audit` |
+| the bootstrap storage | `<name>-cluster-api-bootstrap` | `Datastore.Allocate`, `Datastore.AllocateTemplate`, `Datastore.Audit` |
+| each bridge or VNet, propagated | `<name>-cluster-api-network` | `SDN.Use` |
+| the clusters' storages | `<name>-allocate-space` | `Datastore.AllocateSpace` |
+| `/` and `/nodes` | `<name>-audit` | `Sys.Audit` |
+
+`VM.GuestAgent.Unrestricted` serves kubeadm's cloud-init status check, which runs a command through the guest agent. `Datastore.Allocate` on the bootstrap storage is the only privilege that lets Proxmox VE delete a cloud-init ISO, so give that storage nothing else you need to keep.
 
 ### The appliance's certificate
 

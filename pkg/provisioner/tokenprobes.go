@@ -111,14 +111,19 @@ func ControllerNeeds(p *Places) []Need {
 	return needs
 }
 
-// CapmoxNeeds are what Cluster API's provider holds. Its pool roles are Proxmox VE's own, whose
-// privileges the module does not list, so these are the ones capmox uses.
+// CapmoxNeeds are what Cluster API's provider holds on the pools and the clusters' storages: the
+// privileges its calls need, which the module's cluster_api roles list. Its bootstrap storage and
+// bridges are not named in Places and stay untested.
 func CapmoxNeeds(p *Places) []Need {
 	needs := slices.Concat(
 		needsOn(pathRoot, privSysAudit),
 		needsOn(pathNodes, privSysAudit),
-		needsOn(pathPool+p.WorkloadPool, "VM.Allocate", "VM.Clone", "VM.Config.Disk"),
+		needsOn(pathPool+p.WorkloadPool, "VM.Allocate", privVMAudit, "VM.Config.CDROM", "VM.Config.CPU", "VM.Config.Disk", "VM.Config.Memory",
+			"VM.Config.Network", "VM.Config.Options", "VM.GuestAgent.Audit", "VM.GuestAgent.Unrestricted", "VM.PowerMgmt"),
 	)
+	if p.TemplatePool != "" {
+		needs = append(needs, needsOn(pathPool+p.TemplatePool, privVMAudit, "VM.Clone")...)
+	}
 	for _, s := range p.Storages {
 		needs = append(needs, needsOn(pathStorage+s, privAllocateSpace)...)
 	}

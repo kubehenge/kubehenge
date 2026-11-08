@@ -71,6 +71,8 @@ type Proxmox struct {
 	// siteCache keeps where each template's disks are, so a look at the templates reads one
 	// configuration per new template.
 	siteCache templates.SiteCache
+	// versions are the nodes' Proxmox VE versions as read.
+	versions versionCache
 	// skipped are the online nodes the last OnlineNodes could not read.
 	skipped []string
 	// newHolders are the holder VMs created lately, by pool, which Proxmox VE may not list yet.

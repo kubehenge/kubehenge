@@ -316,13 +316,13 @@ run "cluster_api_token_is_least_privilege" {
     condition = toset(keys(proxmox_acl.cluster_api)) == toset([
       "/ kubehenge-audit",
       "/nodes kubehenge-audit",
-      "/pool/kubehenge PVEVMAdmin",
-      "/pool/kubehenge-templates PVETemplateUser",
-      "/storage/local PVEDatastoreAdmin",
+      "/pool/kubehenge kubehenge-cluster-api-vms",
+      "/pool/kubehenge-templates kubehenge-cluster-api-templates",
+      "/storage/local kubehenge-cluster-api-bootstrap",
       "/storage/local-lvm kubehenge-allocate-space",
       "/storage/ceph kubehenge-allocate-space",
-      "/sdn/zones/localnetwork/vmbr0 PVESDNUser",
-      "/sdn/zones/localnetwork/vmbr1 PVESDNUser",
+      "/sdn/zones/localnetwork/vmbr0 kubehenge-cluster-api-network",
+      "/sdn/zones/localnetwork/vmbr1 kubehenge-cluster-api-network",
     ])
     error_message = "the Cluster API token's ACLs differ from the least-privilege set"
   }
@@ -337,7 +337,7 @@ run "cluster_api_token_is_least_privilege" {
   }
 
   assert {
-    condition     = proxmox_acl.cluster_api["/pool/kubehenge PVEVMAdmin"].propagate && !proxmox_acl.cluster_api["/pool/kubehenge-templates PVETemplateUser"].propagate
+    condition     = proxmox_acl.cluster_api["/pool/kubehenge kubehenge-cluster-api-vms"].propagate && !proxmox_acl.cluster_api["/pool/kubehenge-templates kubehenge-cluster-api-templates"].propagate
     error_message = "the workload pool's ACL must reach the clusters' nested pools; the template pool's has nothing below it to reach"
   }
 
@@ -857,9 +857,9 @@ run "vnets_are_granted_in_their_zones" {
 
   assert {
     condition = toset([for k in keys(proxmox_acl.cluster_api) : k if strcontains(k, "/sdn/")]) == toset([
-      "/sdn/zones/localnetwork/vmbr0 PVESDNUser",
-      "/sdn/zones/evpn1/web PVESDNUser",
-      "/sdn/zones/vlanz/corp PVESDNUser",
+      "/sdn/zones/localnetwork/vmbr0 kubehenge-cluster-api-network",
+      "/sdn/zones/evpn1/web kubehenge-cluster-api-network",
+      "/sdn/zones/vlanz/corp kubehenge-cluster-api-network",
     ])
     error_message = "a VNet is granted in its own zone and a node's bridge in localnetwork, never a VNet under localnetwork"
   }

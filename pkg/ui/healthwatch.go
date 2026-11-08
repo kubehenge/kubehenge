@@ -72,6 +72,7 @@ func vmAttention(c *clusterv1.Cluster, a *attention) {
 		a.add(severity, sectionNodes, vmTitles[cond.Reason], cond.Message, cond.LastTransitionTime.Time)
 	}
 	hostAttention(c, a)
+	upgradeAttention(c, a)
 	if cond := trueCondition(c, provisioner.VMsMissingCondition); cond != nil {
 		a.add(severityError, sectionNodes, "VMs missing", cond.Message, cond.LastTransitionTime.Time)
 	}

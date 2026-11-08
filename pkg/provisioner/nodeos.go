@@ -28,6 +28,10 @@ type Node struct {
 	Maintenance bool
 	// InactiveStorages are the storages that are defined for the node and not available on it.
 	InactiveStorages []string
+	// Version is the node's pve-manager version and Major its major number, 0 where it could not be
+	// read.
+	Version string
+	Major   int
 }
 
 // Nodes tells which Proxmox VE nodes are online; *Proxmox is the real one.
@@ -95,6 +99,7 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 			continue
 		}
 		node := Node{Name: n.Node, CPULevel: level, Maintenance: maintenance[n.Node]}
+		node.Version, node.Major = p.versions.read(ctx, p.Client, n.Node)
 		if n.MaxMem > 0 {
 			node.FreeMiB, node.MemoryKnown = max(0, n.MaxMem-n.Mem)/bytesPerMiB, true
 		}
@@ -107,6 +112,11 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 	}
 	slices.SortFunc(online, func(a, b Node) int { return strings.Compare(a.Name, b.Name) })
 	slices.Sort(skipped)
+	names := make([]string, len(online))
+	for i, n := range online {
+		names[i] = n.Name
+	}
+	p.versions.keep(names)
 	p.mu.Lock()
 	p.skipped = skipped
 	for name := range p.cpuLevels {

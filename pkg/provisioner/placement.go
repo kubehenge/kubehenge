@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -56,6 +57,13 @@ type Placer struct {
 	// Interval is how often the nodes are looked at: a node that goes down is left out of the
 	// clusters' placement within about that long.
 	Interval time.Duration
+	// Events records a placement that has to use newer Proxmox VE nodes while the nodes run
+	// different major versions. Unset, none is.
+	Events events.EventRecorder
+	newer  map[string]bool
+	// WorkloadPool names the clusters' VM pools, for reading the interface sizes of their VMs.
+	// Unset, the sizes are not read.
+	WorkloadPool string
 }
 
 // NodesSkippedCondition on a Cluster says that Placer left Proxmox VE nodes out of its placement
@@ -113,6 +121,8 @@ func (p *Placer) placeAll(ctx context.Context) {
 			continue
 		}
 		p.markSkipped(ctx, c, skipped)
+		p.markVersions(ctx, c, online)
+		p.markMTUs(ctx, c, online)
 		needs, err := needsOf(c, sites)
 		if err != nil {
 			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
@@ -132,8 +142,15 @@ func (p *Placer) placeAll(ctx context.Context) {
 		if sites != nil {
 			hosts = sites.Hosts(c, usable, level)
 		}
-		hosts, short := fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, hosts)
+		hosts, short, newer := preferOldest(online, hosts, func(h []string) ([]string, *roomOn) {
+			return fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, h)
+		})
 		p.markShort(ctx, c, short)
+		if newer {
+			p.sayNewer(c, online)
+		} else {
+			p.clearNewer(c)
+		}
 		p.record(ctx, c, hosts, blocked)
 	}
 }
@@ -332,6 +349,8 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster, cho
 	if sites != nil {
 		hosts = sites.Hosts(cluster, usable, needs.Level)
 	}
-	hosts, _ = fitMemory(ctx, h.Reader, h.ClassNamespace, cluster, usable, hosts)
+	hosts, _, _ = preferOldest(online, hosts, func(list []string) ([]string, *roomOn) {
+		return fitMemory(ctx, h.Reader, h.ClassNamespace, cluster, usable, list)
+	})
 	return hosts, blocked, nil
 }

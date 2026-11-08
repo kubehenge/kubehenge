@@ -45,6 +45,8 @@ type HARules struct {
 	// Interval is how often the rules are read: a rule added, changed or removed in Proxmox VE is
 	// offered so within about that long.
 	Interval time.Duration
+
+	versions versionCache
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -115,6 +117,9 @@ func (h *HARules) publish(ctx context.Context) error {
 // allow none and those the controller keeps for clusters itself, whose nodes are their clusters'
 // own business.
 func (h *HARules) read(ctx context.Context) ([]OfferedRule, error) {
+	if !h.rulesOnDisk(ctx) {
+		return []OfferedRule{}, nil
+	}
 	var entries []pve.HARuleEntry
 	if err := h.Proxmox.Get(ctx, pve.NodeAffinityPath, &entries); err != nil {
 		return nil, fmt.Errorf("listing the HA rules: %w", err)
@@ -141,6 +146,20 @@ func (h *HARules) read(ctx context.Context) ([]OfferedRule, error) {
 	}
 	slices.SortFunc(offered, func(a, b OfferedRule) int { return strings.Compare(a.Rule, b.Rule) })
 	return offered, nil
+}
+
+// rulesOnDisk tells whether what Proxmox VE lists as rules is stored. While HA groups remain, or the
+// nodes run different major versions, the list holds rules converted from the groups in memory that
+// may change name or meaning once the groups migrate, so none is offered.
+func (h *HARules) rulesOnDisk(ctx context.Context) bool {
+	if mixed, err := mixedPVE(ctx, h.Proxmox, &h.versions); err == nil && mixed {
+		return false
+	}
+	var groups []struct {
+		Group string `json:"group"`
+	}
+	// A cluster without the groups endpoint has none to migrate.
+	return h.Proxmox.Get(ctx, "/cluster/ha/groups", &groups) != nil || len(groups) == 0
 }
 
 // ParseOfferedRules reads the rules HARulesName offers.
