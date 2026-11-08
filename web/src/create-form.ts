@@ -126,9 +126,14 @@ import {
   mirrorsProblem,
   mirrorsText,
   mirrorsVariable,
+  newReleaseMirror,
+  releaseMirrorProblems,
+  releaseMirrorText,
+  releaseMirrorVariable,
   trustedText,
   trustedVariable,
   type MirrorRow,
+  type ReleaseMirror,
 } from "./NodeSite";
 import { noTimeouts, timeoutProblems, timeoutsOf, timeoutsSet, type TimeoutEntry } from "./NodeTimeouts";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
@@ -247,6 +252,8 @@ export interface Form {
   registryMirrors: MirrorRow[];
   /** PEM authorities the nodes trust besides their OS's own. */
   trustedCAs: string;
+  /** Where RKE2 and k3s nodes download their release. Empty takes the management cluster's mirror. */
+  releaseMirror: ReleaseMirror;
   loadBalancer: Implementation;
   loadBalancerAddresses: string;
   loadBalancerMode: Mode;
@@ -886,6 +893,7 @@ export const newForm = (): Form => ({
   ntpServers: "",
   registryMirrors: [],
   trustedCAs: "",
+  releaseMirror: newReleaseMirror(),
   loadBalancer: "",
   loadBalancerAddresses: "",
   loadBalancerMode: "l2",
@@ -1110,6 +1118,10 @@ function reachVariables(form: Form, defined: Set<string>): Record<string, unknow
   const trusted = defined.has("trustedCAs") ? trustedVariable(form.trustedCAs) : undefined;
   if (trusted !== undefined) {
     variables["trustedCAs"] = trusted;
+  }
+  const release = defined.has("releaseMirror") ? releaseMirrorVariable(form.releaseMirror) : undefined;
+  if (release !== undefined) {
+    variables["releaseMirror"] = release;
   }
   return { ...variables, ...installVariables(form, defined) };
 }
@@ -1610,6 +1622,9 @@ function reachRows(form: Form, defined: Set<string>): [string, string][] {
   if (defined.has("trustedCAs") && trustedVariable(form.trustedCAs) !== undefined) {
     rows.push(["Trusted CAs", trustedText(form.trustedCAs)]);
   }
+  if (defined.has("releaseMirror") && releaseMirrorVariable(form.releaseMirror) !== undefined) {
+    rows.push(["Release mirror", releaseMirrorText(form.releaseMirror, undefined)]);
+  }
   return [...rows, ...installRows(form, defined)];
 }
 
@@ -1690,6 +1705,8 @@ export type FieldKey =
   | `egress.${EgressField}`
   | "registryMirrors"
   | "trustedCAs"
+  | "releaseMirror.url"
+  | "releaseMirror.caBundle"
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -2140,6 +2157,15 @@ function nodeSiteProblems(form: Form, c: ClusterClass | undefined): Problems {
   const trusted = variable(c, "trustedCAs") === undefined ? undefined : certificateProblem(form.trustedCAs);
   if (trusted !== undefined) {
     p.trustedCAs = trusted;
+  }
+  if (variable(c, "releaseMirror") !== undefined) {
+    const release = releaseMirrorProblems(form.releaseMirror);
+    if (release.url !== undefined) {
+      p["releaseMirror.url"] = release.url;
+    }
+    if (release.caBundle !== undefined) {
+      p["releaseMirror.caBundle"] = release.caBundle;
+    }
   }
   return p;
 }

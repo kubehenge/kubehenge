@@ -95,6 +95,26 @@ until_true() {
     done
 }
 
+# release_mirror_variable: the releaseMirror variable of an RKE2 or k3s Cluster's manifest, as lines
+# under its variables, when the run serves the releases as a cluster's own mirror
+# (KUBEHENGE_E2E_RELEASE_MIRROR, from test/e2e/ci/run.sh). Nothing otherwise.
+release_mirror_variable() {
+    [ -n "${KUBEHENGE_E2E_RELEASE_MIRROR:-}" ] || return 0
+    printf '      - name: releaseMirror\n        value: %s\n' "${KUBEHENGE_E2E_RELEASE_MIRROR}"
+}
+
+# check_release_mirror <namespace> <cluster> <control plane resource>: with a cluster's own release
+# mirror, its control plane downloads from it, with its authority. The management cluster names no
+# mirror in such a run, so this is the only way the nodes reach it.
+check_release_mirror() {
+    [ -n "${KUBEHENGE_E2E_RELEASE_MIRROR:-}" ] || return 0
+    step "the nodes download their release from the cluster's own mirror"
+    own=$(printf '%s' "${KUBEHENGE_E2E_RELEASE_MIRROR}" | jq -r .url)
+    kubectl -n "$1" get "$3" -l "cluster.x-k8s.io/cluster-name=$2" -o json |
+        jq -e --arg m "--mirror ${own} --mirror-ca " '[.. | strings | select(contains($m))] | length > 0' > /dev/null ||
+        fail "the control plane of $2 does not download from its own release mirror ${own}"
+}
+
 # new_namespace <kubectl function> <namespace>: creates the namespace and waits for its default
 # service account. The service account controller adds it just after the namespace, and until then
 # the API server refuses pods there, which a pod created straight away can lose to.

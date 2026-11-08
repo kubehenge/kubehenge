@@ -1,9 +1,10 @@
-import { useState, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 
+import { api } from "./api";
 import { list } from "./network";
 import type { Cluster } from "./types";
 import { Dialog, ErrorBox, Field, useChange } from "./ui";
-import { records, text, texts } from "./values";
+import { record, records, text, texts } from "./values";
 
 /** One registry mirror as the interface edits it: where the nodes pull a registry's images from. */
 export interface MirrorRow {
@@ -185,6 +186,178 @@ export function TrustedCAField({
         <textarea id={id} rows={4} spellCheck={false} value={value} onChange={(ev) => onChange(ev.target.value)} />
       )}
     </Field>
+  );
+}
+
+/** A cluster's own release mirror as the interface edits it. Empty takes the management cluster's. */
+export interface ReleaseMirror {
+  url: string;
+  /** The authority of the mirror's certificate, as PEM. Empty for the usual ones. */
+  caBundle: string;
+}
+
+export const newReleaseMirror = (): ReleaseMirror => ({ url: "", caBundle: "" });
+
+export function releaseMirrorOf(v: unknown): ReleaseMirror {
+  const r = record(v);
+  return { url: text(r["url"]) ?? "", caBundle: text(r["caBundle"]) ?? "" };
+}
+
+/** releaseMirrorVariable is the variable the fields set, or undefined for the management cluster's. */
+export function releaseMirrorVariable(m: ReleaseMirror): Record<string, string> | undefined {
+  if (m.url.trim() === "" && m.caBundle.trim() === "") {
+    return undefined;
+  }
+  const v: Record<string, string> = { url: m.url.trim() };
+  if (m.caBundle.trim() !== "") {
+    v["caBundle"] = pem(m.caBundle);
+  }
+  return v;
+}
+
+// defaultMirror names what an unset mirror falls back to: the management cluster's, or GitHub. Before
+// the classes load it is not known yet.
+function defaultMirror(fallback: string | undefined): string {
+  if (fallback === undefined) {
+    return "Default";
+  }
+  return `Default: ${fallback === "" ? "GitHub" : fallback}`;
+}
+
+/** releaseMirrorText is the mirror a cluster's nodes download from, given the management cluster's. */
+export function releaseMirrorText(m: ReleaseMirror, fallback: string | undefined): string {
+  return m.url.trim() === "" ? defaultMirror(fallback) : m.url.trim();
+}
+
+// releaseMirrorAddress is the class's pattern: http(s), a host, a path, no credentials or query.
+const releaseMirrorAddress = /^https?:\/\/[A-Za-z0-9._~:[\]-]+(?<path>\/[A-Za-z0-9._~:/[\]-]*[A-Za-z0-9._~:[\]-])?$/u;
+
+export interface ReleaseMirrorProblems {
+  url?: string | undefined;
+  caBundle?: string | undefined;
+}
+
+/** releaseMirrorProblems are what is wrong with the fields. The server checks the same, and the dates. */
+export function releaseMirrorProblems(m: ReleaseMirror): ReleaseMirrorProblems {
+  const p: ReleaseMirrorProblems = {};
+  const url = m.url.trim();
+  if (url !== "" && !releaseMirrorAddress.test(url)) {
+    p.url = "Use an http:// or https:// address with no trailing slash, query or credentials";
+  }
+  if (m.caBundle.trim() !== "") {
+    const problem = certificateProblem(m.caBundle);
+    if (problem !== undefined) {
+      p.caBundle = problem;
+    } else if (url === "") {
+      p.caBundle = "Add a release mirror first";
+    } else if (!url.startsWith("https://")) {
+      p.caBundle = "A certificate needs an https:// mirror";
+    }
+  }
+  return p;
+}
+
+/** useReleaseMirrorDefault is the management cluster's release mirror the class's nodes take by default. */
+export function useReleaseMirrorDefault(className: string): string | undefined {
+  const [fallback, setFallback] = useState<string>();
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      try {
+        const classes = await api.classes();
+        if (current) {
+          setFallback(classes.find((x) => x.name === className)?.releaseMirror ?? "");
+        }
+      } catch {
+        // Without the classes the default is not named. The cluster keeps its setting.
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, [className]);
+  return fallback;
+}
+
+/** ReleaseMirrorFields edit the mirror a cluster's nodes download their release from. */
+export function ReleaseMirrorFields({
+  value,
+  onChange,
+  fallback,
+  errors,
+}: {
+  value: ReleaseMirror;
+  onChange: (m: ReleaseMirror) => void;
+  fallback: string | undefined;
+  errors?: ReleaseMirrorProblems | undefined;
+}): JSX.Element {
+  return (
+    <>
+      <Field label="Release mirror" hint={defaultMirror(fallback)} error={errors?.url}>
+        {(id) => (
+          <input
+            id={id}
+            spellCheck={false}
+            value={value.url}
+            onChange={(ev) => onChange({ ...value, url: ev.target.value })}
+          />
+        )}
+      </Field>
+      <Field label="Release mirror certificate" hint="PEM, for an https:// mirror" error={errors?.caBundle}>
+        {(id) => (
+          <textarea
+            id={id}
+            rows={3}
+            spellCheck={false}
+            value={value.caBundle}
+            onChange={(ev) => onChange({ ...value, caBundle: ev.target.value })}
+          />
+        )}
+      </Field>
+    </>
+  );
+}
+
+export function ReleaseMirrorDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const current = releaseMirrorOf(c.variables["releaseMirror"]);
+  const [value, setValue] = useState(current);
+  const [attempted, setAttempted] = useState(false);
+  const fallback = useReleaseMirrorDefault(c.class);
+  const { busy, error, send } = useChange(c, onClose);
+  const found = releaseMirrorProblems(value);
+  const next = releaseMirrorVariable(value);
+  const changed = JSON.stringify(next) !== JSON.stringify(releaseMirrorVariable(current));
+  return (
+    <Dialog
+      title="Edit release mirror"
+      onClose={onClose}
+      onSubmit={() => {
+        if (found.url !== undefined || found.caBundle !== undefined) {
+          setAttempted(true);
+          return;
+        }
+        void send({ variables: { releaseMirror: next ?? null } });
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={busy || !changed}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <ReleaseMirrorFields
+        value={value}
+        onChange={setValue}
+        fallback={fallback}
+        errors={attempted ? found : undefined}
+      />
+      <ErrorBox message={error} />
+    </Dialog>
   );
 }
 

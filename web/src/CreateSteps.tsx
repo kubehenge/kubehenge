@@ -38,7 +38,7 @@ import {
 import { baseTitle, choosable, cpuNote, findNodeOS, fipsCNI, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { NodeCustomisationFields } from "./NodeCustomisation";
 import { NodeSettingsFields } from "./NodeSettings";
-import { MirrorFields, TrustedCAField } from "./NodeSite";
+import { MirrorFields, ReleaseMirrorFields, TrustedCAField } from "./NodeSite";
 import { NodeTimeoutFields } from "./NodeTimeouts";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
@@ -894,6 +894,14 @@ export function NetworkStep({
       )}
       {variable(cls, "trustedCAs") && (
         <TrustedCAField value={form.trustedCAs} onChange={(s) => set("trustedCAs", s)} error={shown("trustedCAs")} />
+      )}
+      {variable(cls, "releaseMirror") && (
+        <ReleaseMirrorFields
+          value={form.releaseMirror}
+          onChange={(m) => set("releaseMirror", m)}
+          fallback={cls === undefined ? undefined : (cls.releaseMirror ?? "")}
+          errors={{ url: shown("releaseMirror.url"), caBundle: shown("releaseMirror.caBundle") }}
+        />
       )}
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields

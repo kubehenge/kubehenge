@@ -110,7 +110,13 @@ type classView struct {
 	// detach and Node deletion when a machine is removed, where a cluster sets none of its own.
 	ControlPlaneTimeouts provisioner.NodeTimeouts `json:"controlPlaneTimeouts"`
 	WorkerTimeouts       provisioner.NodeTimeouts `json:"workerTimeouts"`
+	// ReleaseMirror is the management cluster's release mirror, which the class's nodes download
+	// from unless a cluster names its own. Empty for GitHub, or for a class without the variable.
+	ReleaseMirror string `json:"releaseMirror,omitempty"`
 }
+
+// releaseMirrorVariable is the variable of a cluster's own release mirror.
+const releaseMirrorVariable = "releaseMirror"
 
 // nodeOSChoice is a node OS a cluster may run, and why none can be built on it yet.
 type nodeOSChoice struct {
@@ -186,6 +192,9 @@ func (s *Server) classView(ctx context.Context, c *clusterv1.ClusterClass, dist 
 			continue
 		}
 		v.Variables = append(v.Variables, classVariable{Name: cv.Name, Required: cv.Required != nil && *cv.Required, Schema: schema})
+		if cv.Name == releaseMirrorVariable {
+			v.ReleaseMirror = s.PinChecks.DefaultMirror().URL
+		}
 	}
 	for k, val := range c.Annotations {
 		if strings.HasPrefix(k, "kubehenge.dev/") {

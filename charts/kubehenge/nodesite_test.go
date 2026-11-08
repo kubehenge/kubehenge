@@ -374,5 +374,22 @@ func TestEveryClassValidatesTheSiteSettings(t *testing.T) {
 		check("egressProxy", `{"url":"http://user:pw@p.example.org"}`, false, "url")
 		// The exceptions of a cluster without a proxy of its own extend the management side's.
 		check("egressProxy", `{"noProxy":["a.example.org"]}`, true, "")
+		_, offers := class.variables["releaseMirror"]
+		if agent := file == "rke2.yaml" || file == "k3s.yaml"; offers != agent {
+			t.Errorf("%s: a release mirror of its own offered = %v", file, offers)
+		}
+		if !offers {
+			continue
+		}
+		check("releaseMirror", `{"url":"https://m.example.org/github","caBundle":`+goodJSON+`}`, true, "")
+		check("releaseMirror", `{"url":"http://10.0.0.5:8944"}`, true, "")
+		check("releaseMirror", `{"url":"https://[2001:db8::5]:8944/a/b"}`, true, "")
+		for _, bad := range []string{"m.example.org", "ftp://m.example.org", "https://m.example.org/", "https://user:pw@m.example.org", "https://m.example.org?a=b", "https://m'$(x).example.org", "https:// m.example.org"} {
+			check("releaseMirror", `{"url":`+jsonString(bad)+`}`, false, "url")
+		}
+		check("releaseMirror", `{"caBundle":`+goodJSON+`}`, false, "url")
+		check("releaseMirror", `{"url":"http://m.example.org","caBundle":`+goodJSON+`}`, false, "https:// mirror")
+		check("releaseMirror", `{"url":"https://m.example.org","caBundle":`+jsonString("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")+`}`, false, "caBundle")
+		check("releaseMirror", `{"url":"https://m.example.org","caBundle":`+jsonString(strings.Repeat(good, 65536/len(good)+1))+`}`, false, "caBundle")
 	}
 }

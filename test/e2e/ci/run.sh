@@ -486,8 +486,18 @@ s.serve_forever()' "${work}/releases" 8944 "${mirror}/tls.crt" "${mirror}/tls.ke
             waited=$((waited + 1))
         done
     fi
-    TF_VAR_release_mirror=$(jq -cn --arg u "${mirror_url}" --rawfile ca "${mirror}/ca.crt" '{url: $u, ca_bundle: $ca}')
-    export TF_VAR_release_mirror
+    # The lane of k3s-addons-b gives its clusters the mirror as their own and the management cluster
+    # none, so that a cluster's own mirror is proven as the management cluster's is by the others.
+    case ",${releases_lane}," in
+        *,k3s-addons-b,* | *,k3s-addons-b+*)
+            KUBEHENGE_E2E_RELEASE_MIRROR=$(jq -cn --arg u "${mirror_url}" --rawfile ca "${mirror}/ca.crt" '{url: $u, caBundle: $ca}')
+            export KUBEHENGE_E2E_RELEASE_MIRROR
+            ;;
+        *)
+            TF_VAR_release_mirror=$(jq -cn --arg u "${mirror_url}" --rawfile ca "${mirror}/ca.crt" '{url: $u, ca_bundle: $ca}')
+            export TF_VAR_release_mirror
+            ;;
+    esac
 fi
 
 tofu -chdir="${work}/mgmt" init -input=false -lockfile=readonly > /dev/null

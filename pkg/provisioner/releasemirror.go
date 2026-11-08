@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
 // ReleaseMirror serves the releases of RKE2 and k3s in place of GitHub, on GitHub's own paths:
@@ -25,6 +27,19 @@ type ReleaseMirror struct {
 
 // releaseMirrorCAPath is where a node keeps the mirror's authority for its download.
 const releaseMirrorCAPath = "/etc/kubehenge/release-mirror-ca.pem"
+
+// releaseMirrorVariable is an RKE2 or k3s cluster's own release mirror, which its nodes take in
+// place of the management cluster's.
+const releaseMirrorVariable = "releaseMirror"
+
+// ClusterReleaseMirror is the cluster's own release mirror, and whether it names one.
+func ClusterReleaseMirror(c *clusterv1.Cluster) (ReleaseMirror, bool, error) {
+	v, set, err := optionalVariable[struct {
+		URL      string `json:"url"`
+		CABundle string `json:"caBundle"`
+	}](c, releaseMirrorVariable)
+	return ReleaseMirror{URL: v.URL, CABundle: v.CABundle}, set, err
+}
 
 // releaseMirrorAddress holds a mirror to what a node's command line carries unquoted.
 var releaseMirrorAddress = regexp.MustCompile(`^[A-Za-z0-9._~:/\[\]-]+$`)

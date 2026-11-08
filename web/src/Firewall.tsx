@@ -18,7 +18,7 @@ export function securityGroupsText(s: string): string {
 export function securityGroupsProblem(s: string): string | undefined {
   const groups = list(s);
   if (groups.some((g) => !isSecurityGroup(g))) {
-    return "Names of 2 to 18 letters, digits, - and _, starting with a letter";
+    return "Names of 2 to 18 letters, digits, hyphens and underscores, starting with a letter";
   }
   return new Set(groups).size < groups.length ? "Each group once" : undefined;
 }

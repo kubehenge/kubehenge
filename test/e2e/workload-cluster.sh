@@ -535,6 +535,7 @@ fi
 # Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they
 # are seen to fit in it (worker_memory_for, common.sh). worker_need is what a worker uses itself,
 # which the balloon below keeps.
+release_mirror=$(release_mirror_variable)
 worker_need=$(worker_need_for "${class_json}" "${sized_for}" "${sized_gitops}")
 worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(worker_memory_for "${class_json}" "${sized_for}" "${sized_gitops}")}
 # Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
@@ -610,6 +611,7 @@ ${network_families}
         value: {memoryMiB: ${worker_memory}, cores: ${worker_cores}}
 ${cni_variable}
 ${talos_variable}
+${release_mirror}
       - name: oidc
         value: ${oidc}
       # The strictest level from the start, so that every component Kubehenge installs is seen to
@@ -636,6 +638,11 @@ available_or_failed() {
 }
 until_true 1200 "cluster ${name} available" available_or_failed
 kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' | base64 -d > "${work}/workload"
+case ${distribution} in
+    k3s) check_release_mirror "${ns}" "${name}" kthreescontrolplanes ;;
+    rke2) check_release_mirror "${ns}" "${name}" rke2controlplanes ;;
+    *) ;;
+esac
 
 step "the cluster's own Proxmox VE pool, user and volume owner"
 creds=$(kubectl -n "${ns}" get secret "${name}-proxmox-token" -o json | jq -c '.data | map_values(@base64d)')

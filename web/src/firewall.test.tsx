@@ -78,11 +78,13 @@ describe("a new cluster's firewall security groups", () => {
       );
     }
     for (const bad of ["1k8s", "k", "abcdefghijklmnopqrs", "k8s.nodes", "k8s nodes;x"]) {
-      expect(securityGroupsProblem(bad)).toBe("Names of 2 to 18 letters, digits, - and _, starting with a letter");
+      expect(securityGroupsProblem(bad)).toBe(
+        "Names of 2 to 18 letters, digits, hyphens and underscores, starting with a letter",
+      );
     }
     expect(securityGroupsProblem("k8s, k8s")).toBe("Each group once");
     expect(fieldProblems("Network", { ...filled, securityGroups: "1k8s" }, withGroups)["securityGroups"]).toBe(
-      "Names of 2 to 18 letters, digits, - and _, starting with a letter",
+      "Names of 2 to 18 letters, digits, hyphens and underscores, starting with a letter",
     );
   });
 });

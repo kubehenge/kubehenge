@@ -127,6 +127,7 @@ spec:
     {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
     {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
     {{- include "kubehenge.nodeSiteVariables" (dict) | nindent 4 }}
+    {{- include "kubehenge.releaseMirrorVariable" (dict) | nindent 4 }}
     - name: cni
       required: false
       schema:

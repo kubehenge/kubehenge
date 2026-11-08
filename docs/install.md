@@ -94,15 +94,16 @@ A mirror that no chart uses, or of another kind than its host, is refused. Chart
 
 ### Mirroring the releases
 
-RKE2 and k3s nodes download their release from GitHub as they boot. A release mirror serves those files instead, for every cluster. Set it under Advanced in the setup (Release mirror), or `release_mirror` in the module ([variables](#variables)).
+RKE2 and k3s nodes download their release from GitHub as they boot. A release mirror serves those files instead, for every cluster that names no mirror of its own ([clusters.md](clusters.md#a-clusters-own-release-mirror)). Set it under Advanced in the setup (Release mirror), or `release_mirror` in the module ([variables](#variables)).
 
-- The mirror answers on GitHub's paths beneath its address: `<mirror>/<repository>/releases/download/<version>/<file>` and `<mirror>/<repository>/raw/<version>/install.sh`, such as `https://mirror.example.org/github/k3s-io/k3s/releases/download/v1.36.5+k3s1/k3s`. A generic proxy repository of `https://github.com` serves this layout.
 - A node checks every file against the release's pins before installing anything, so a mirror cannot change what it runs. A file the mirror lacks fails the node's boot with the file and the mirror named.
 - The interface and `kubehenge release pin --mirror` read a release's checksums from the same mirror before pinning it.
 - A mirror whose certificate the usual authorities do not sign needs its authority under Release mirror certificate. The nodes trust it for the download alone.
 - Nodes reach the mirror through the cluster's proxy unless its host is in the proxy's exceptions (`egressProxy.noProxy`).
 
 #### What to copy
+
+The mirror answers on GitHub's paths beneath its address: `<mirror>/<repository>/releases/download/<version>/<file>` and `<mirror>/<repository>/raw/<version>/install.sh`, such as `https://mirror.example.org/github/k3s-io/k3s/releases/download/v1.36.5+k3s1/k3s`. A generic proxy repository of `https://github.com` serves this layout.
 
 Each node takes `sha256sum-amd64.txt` and `install.sh` of its release. RKE2 nodes take `rke2.linux-amd64.tar.gz`, `rke2-images-core.linux-amd64.tar.zst` and `rke2-images-<cni>.linux-amd64.tar.zst` for the cluster's CNI. k3s nodes take `k3s` and `k3s-airgap-images-amd64.tar.zst`.
 
