@@ -26,6 +26,7 @@ import {
   Detail,
   Dialog,
   ErrorBox,
+  Said,
   Status,
   Field,
   distributionName,
@@ -184,7 +185,11 @@ function AttentionStrip({ cluster: c, view }: { cluster: Cluster; view: View }):
   return (
     <section className={`attention-strip attention-strip-${first.severity}`} aria-label="Needs attention">
       <Status state={severityState[first.severity]} text={first.what} />
-      {filled(first.message) && <Detail>{first.message}</Detail>}
+      {filled(first.message) && (
+        <Detail>
+          <Said text={first.message} />
+        </Detail>
+      )}
       {more > 0 && <span className="muted">{more} more</span>}
       {fix !== undefined && (fix.view !== view || filled(first.machine)) && (
         <Link to={fix.to}>{fix.view === "machines" ? "Machine" : "Backups"}</Link>

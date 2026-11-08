@@ -150,6 +150,22 @@ describe("the management cluster's health", () => {
     expect(list).toHaveTextContent("Certificate");
   });
 
+  it("shows a command in a token's message as code", async () => {
+    show({
+      answers: true,
+      nodes: [ready("mgmt-1")],
+      controllers: [],
+      proxmox: {
+        ok: true,
+        checked: "2026-01-02T12:00:00Z",
+        tokens: [{ name: "Controller", problem: "Privileges", message: "Grant it with `pveum acl modify /`." }],
+      },
+    });
+    const code = await screen.findByText("pveum acl modify /");
+    expect(code.tagName).toBe("CODE");
+    expect(screen.getByRole("list", { name: "Proxmox VE tokens" })).not.toHaveTextContent("`");
+  });
+
   it("warns when the token cannot see host maintenance", async () => {
     show({
       answers: true,

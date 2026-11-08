@@ -19,7 +19,7 @@ import {
 import { clusterPath } from "./cluster-paths";
 import { Link } from "./router";
 import type { BackupRun, Cluster, ClusterBackups, RestoreMessages, RestoreResults, RestoreRun } from "./types";
-import { Dialog, ErrorBox, Field, Status, errorMessage, filled, saveFile, sentence } from "./ui";
+import { Dialog, ErrorBox, Field, Status, errorMessage, filled, Said, saveFile, sentence } from "./ui";
 
 /** SpecExport downloads a cluster's spec, which is also kept in the management backups' target. */
 export function SpecExport({ cluster: c }: { cluster: Cluster }): JSX.Element {
@@ -186,7 +186,9 @@ function MessagesTable({ title, messages: m }: { title: string; messages: Restor
             {rows.map((r) => (
               <tr key={r.key}>
                 <td className="message">{r.where}</td>
-                <td className="message">{r.message}</td>
+                <td className="message">
+                  <Said text={r.message} />
+                </td>
               </tr>
             ))}
           </tbody>

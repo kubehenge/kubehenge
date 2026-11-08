@@ -3,7 +3,7 @@ import { useEffect, useState, type JSX } from "react";
 import { api } from "./api";
 import { PlanSteps, restoreState } from "./EtcdSnapshots";
 import type { Cluster, Condition, ControlPlaneRecovery } from "./types";
-import { Dialog, ErrorBox, Field, Status, age, errorMessage, filled, sentence } from "./ui";
+import { Dialog, ErrorBox, Field, Status, age, errorMessage, filled, Said, sentence } from "./ui";
 
 /** The condition Kubehenge's controller sets on a cluster whose only control plane's roll stalled. */
 export const rollStalledCondition = "ControlPlaneRollStalled";
@@ -146,7 +146,9 @@ export function QuorumLost({
       <div className="callout-actions">
         <details className="advanced">
           <summary>Details</summary>
-          <p className="callout-said">{sentence(lost.message ?? "")}</p>
+          <p className="callout-said">
+            <Said text={sentence(lost.message ?? "")} />
+          </p>
           {alive[0] !== undefined && (
             <pre className="restore-command" aria-label="Recover with kubectl">
               {annotateCommand(c, alive[0].name)}
@@ -198,7 +200,11 @@ export function RecoveryState({ cluster: c }: { cluster: Cluster }): JSX.Element
           {new Date(r.finished ?? r.started).toLocaleString()}
           {filled(r.by) && `, by ${r.by}`}
         </span>
-        {r.phase === "Failed" && filled(r.message) && <div className="hint message">{sentence(r.message)}</div>}
+        {r.phase === "Failed" && filled(r.message) && (
+          <div className="hint message">
+            <Said text={sentence(r.message)} />
+          </div>
+        )}
       </dd>
     </dl>
   );

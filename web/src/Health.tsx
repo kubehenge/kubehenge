@@ -37,6 +37,7 @@ import {
   errorMessage,
   filled,
   localDates,
+  Said,
   sentence,
   usePoll,
   Skeleton,
@@ -449,7 +450,11 @@ function NeedsAttention({
                   {fix !== undefined && <Link to={fix.to}>{a.what}</Link>}
                   {fix === undefined && pageSections.has(a.section) && <a href={`#${anchor(a.section)}`}>{a.what}</a>}
                   {fix === undefined && !pageSections.has(a.section) && a.what}
-                  {filled(a.message) && <div className="hint message">{localDates(a.message)}</div>}
+                  {filled(a.message) && (
+                    <div className="hint message">
+                      <Said text={localDates(a.message)} />
+                    </div>
+                  )}
                   {filled(a.command) && (
                     <div>
                       <code>{a.command}</code>
@@ -620,7 +625,11 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
       </td>
       <td data-label="Status">
         <Status state={s.state} text={s.text} />
-        {filled(n.message) && <Detail>{n.message}</Detail>}
+        {filled(n.message) && (
+          <Detail>
+            <Said text={n.message} />
+          </Detail>
+        )}
         {nodeNotes(n).map((x) => (
           <div key={x} className="hint">
             {x}
@@ -720,7 +729,11 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
               <td data-label="Node">{p.node ?? ""}</td>
               <td data-label="Status">
                 <Status state={severityState[p.severity]} text={p.reason} />
-                {filled(p.message) && <Detail>{p.message}</Detail>}
+                {filled(p.message) && (
+                  <Detail>
+                    <Said text={p.message} />
+                  </Detail>
+                )}
               </td>
               <td data-label="Restarts">{p.restarts}</td>
               <Since at={p.since} />
@@ -818,7 +831,11 @@ function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
                 </td>
                 <td data-label="Status">
                   <Status state={s.state} text={s.text} />
-                  {filled(r.message) && <Detail>{r.message}</Detail>}
+                  {filled(r.message) && (
+                    <Detail>
+                      <Said text={r.message} />
+                    </Detail>
+                  )}
                 </td>
                 <td data-label="Revision">{r.revision ?? ""}</td>
                 <Since at={r.since} />
@@ -908,7 +925,11 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
                 <td className="nowrap">{p.name}</td>
                 <td data-label="Status">
                   <Status state={s.state} text={s.text} />
-                  {filled(p.message) && <Detail>{p.message}</Detail>}
+                  {filled(p.message) && (
+                    <Detail>
+                      <Said text={p.message} />
+                    </Detail>
+                  )}
                 </td>
                 <td data-label="Desired">
                   {p.desired}
@@ -971,7 +992,11 @@ function HealthChecks({ checks }: { checks: HealthSection<HealthCheck> }): JSX.E
                 <td className="nowrap">{x.name}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
-                  {filled(x.message) && <Detail>{x.message}</Detail>}
+                  {filled(x.message) && (
+                    <Detail>
+                      <Said text={x.message} />
+                    </Detail>
+                  )}
                 </td>
                 <td>{(x.remediating ?? []).join(", ")}</td>
               </tr>
@@ -1013,7 +1038,9 @@ function ConditionTable({ conditions, empty }: { conditions: Condition[]; empty:
               </td>
               <td>{x.status}</td>
               <td>{x.reason ?? ""}</td>
-              <td className="message">{x.message ?? ""}</td>
+              <td className="message">
+                <Said text={x.message ?? ""} />
+              </td>
               <Since at={x.since} />
             </tr>
           );
@@ -1101,7 +1128,9 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
                 <div className="hint">{e.source === "workload" ? "In the cluster" : "Cluster API"}</div>
               </td>
               <td>{e.object}</td>
-              <td className="message">{e.message}</td>
+              <td className="message">
+                <Said text={e.message} />
+              </td>
               <td className={e.count > 1 ? "count" : "count once"}>{e.count}</td>
             </tr>
           ))}

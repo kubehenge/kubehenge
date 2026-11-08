@@ -2,7 +2,7 @@ import type { JSX } from "react";
 
 import { api } from "./api";
 import type { ManagementHealth, RebootReadiness } from "./types";
-import { Detail, ErrorBox, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
+import { Detail, ErrorBox, Said, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
 
 const managementCache = pollCache<ManagementHealth>();
 const managementKept = { cache: managementCache, key: "" };
@@ -40,7 +40,9 @@ function TokenProblems({ tokens }: { tokens: TokenProblem[] }): JSX.Element | nu
       {tokens.map((t) => (
         <li key={`token/${t.name}`} className="token-problem">
           <Status state="error" text={t.problem} />
-          <span>{t.message}</span>
+          <span>
+            <Said text={t.message} />
+          </span>
         </li>
       ))}
     </ul>
@@ -217,7 +219,12 @@ function AnsweringHealth({
           {nodesDown.map((n) => (
             <li key={`node/${n.name}`}>
               <Status state="error" text="Not ready" /> <span className="mono">{n.name}</span>
-              {n.message !== undefined && <span className="muted"> {n.message}</span>}
+              {n.message !== undefined && (
+                <span className="muted">
+                  {" "}
+                  <Said text={n.message} />
+                </span>
+              )}
             </li>
           ))}
           {controllersShort.map((c) => (

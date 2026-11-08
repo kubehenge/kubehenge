@@ -62,6 +62,7 @@ import {
   passphraseShort,
   pollIdle,
   pollRunning,
+  Said,
   timeZones,
   usePoll,
   weekdayName,
@@ -2660,14 +2661,18 @@ export function PreflightFindings({ findings }: { findings: SetupFindings | unde
       {findings.errors.length > 0 && (
         <ul className="health-short findings findings-errors" role="alert" aria-label="Errors">
           {findings.errors.map((m) => (
-            <li key={m}>{m}</li>
+            <li key={m}>
+              <Said text={m} />
+            </li>
           ))}
         </ul>
       )}
       {findings.warnings.length > 0 && (
         <ul className="health-short findings" aria-label="Warnings">
           {findings.warnings.map((m) => (
-            <li key={m}>{m}</li>
+            <li key={m}>
+              <Said text={m} />
+            </li>
           ))}
         </ul>
       )}
