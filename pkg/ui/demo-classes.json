@@ -104,12 +104,7 @@
                 "apiVersion": "v1",
                 "kind": "Reach",
                 "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
+                  "controlPlane": true
                 }
               }
             }
@@ -2972,12 +2967,7 @@
                 "apiVersion": "v1",
                 "kind": "Reach",
                 "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
+                  "controlPlane": true
                 }
               }
             }
@@ -5825,12 +5815,7 @@
                 "apiVersion": "v1",
                 "kind": "Reach",
                 "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
+                  "controlPlane": true
                 }
               }
             }
@@ -8707,12 +8692,7 @@
                 "apiVersion": "v1",
                 "kind": "Reach",
                 "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
+                  "controlPlane": true
                 }
               }
             }

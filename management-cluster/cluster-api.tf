@@ -458,9 +458,9 @@ resource "helm_release" "kubehenge" {
       workloadPool       = proxmox_virtual_environment_pool.workload.pool_id
       providerNamespaces = local.class_provider_namespaces
       managementEndpoint = local.api_endpoint
-      # A workload cluster's firewall accepts the traffic of the management cluster and the
-      # appliance, which leaves from these addresses.
-      managementAddresses = distinct(concat([for a in concat(var.node_addresses, var.node_addresses_ipv6) : split("/", a)[0]], var.appliance_addresses))
+      # A workload cluster's firewall accepts the management cluster's traffic, which leaves from
+      # the nodes' addresses. The appliance records its own, which change on DHCP renewal.
+      managementAddresses = [for a in concat(var.node_addresses, var.node_addresses_ipv6) : split("/", a)[0]]
       talos               = { imageSignatures = local.image_signatures }
       watch               = { stallMinutes = var.watch.stall_minutes }
       interface = {

@@ -519,7 +519,7 @@ func (a *AutoscalerReconciler) managementToken(ctx context.Context, key client.O
 // recordPlacement records on the autoscaler's account where it now runs, once what ran elsewhere
 // is gone.
 func (a *AutoscalerReconciler) recordPlacement(ctx context.Context, sa *corev1.ServiceAccount, placement string) error {
-	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{autoscalerPlacementAnnotation: placement}}})
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{annotationsKey: map[string]string{autoscalerPlacementAnnotation: placement}}})
 	if err != nil {
 		return fmt.Errorf("recording where the autoscaler runs: %w", err)
 	}

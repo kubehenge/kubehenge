@@ -44,7 +44,6 @@ module "management" {
   ip_families            = try(var.settings.ipFamilies, ["IPv4"])
   node_addresses         = var.settings.nodeAddresses
   node_addresses_ipv6    = try(var.settings.nodeAddressesIPv6, [])
-  appliance_addresses    = try(var.settings.applianceAddresses, [])
   api_address            = var.settings.apiAddress
   gateway                = var.settings.gateway
   gateway_ipv6           = try(var.settings.gatewayIPv6, null)
@@ -186,12 +185,7 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 	if err != nil {
 		return err
 	}
-	own, err := a.addresses()
-	if err != nil {
-		return err
-	}
 	values := map[string]any{
-		"applianceAddresses":     own,
 		"proxmox_endpoint":       a.ProxmoxURL,
 		"proxmox_ca_certificate": a.ProxmoxCA,
 		"proxmox_insecure":       a.ProxmoxInsecure,

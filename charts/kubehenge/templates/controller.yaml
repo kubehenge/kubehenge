@@ -38,7 +38,8 @@ rules:
   - apiGroups: [infrastructure.cluster.x-k8s.io]
     resources: [proxmoxmachines]
     verbs: [get, list, watch, patch]
-  # A machine let go of leaves the ProxmoxCluster's record of where machines run.
+  # A machine let go of leaves the ProxmoxCluster's record of where machines run. A cluster with
+  # security groups gets the firewall sources of the management side on its ProxmoxCluster.
   - apiGroups: [infrastructure.cluster.x-k8s.io]
     resources: [proxmoxclusters]
     verbs: [list]
@@ -367,6 +368,9 @@ spec:
             - --autoscaler-images={{ join "," .Values.autoscaler.images }}
             {{- with .Values.managementEndpoint }}
             - --management-endpoint={{ . }}
+            {{- end }}
+            {{- with .Values.managementAddresses }}
+            - --management-addresses={{ join "," . }}
             {{- end }}
             - {{ printf "--pod-security-exempt=%s" (toJson .Values.podSecurityExempt) | quote }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt

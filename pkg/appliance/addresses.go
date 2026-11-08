@@ -1,10 +1,78 @@
 package appliance
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"slices"
+	"strings"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
+
+// addressesCheckEvery is how often the appliance looks at its own addresses. With the controller's
+// own interval it bounds how long a renewed address waits to reach the clusters' firewalls.
+const addressesCheckEvery = 15 * time.Second
+
+// KeepAddresses records the appliance's own addresses in the management cluster when it starts and
+// whenever one is added, removed or changed, as by a DHCP renewal, until ctx ends. The controller
+// adds them to the sources of every cluster's firewall. The appliance is their one writer.
+func (a *Appliance) KeepAddresses(ctx context.Context) {
+	t := time.NewTicker(addressesCheckEvery)
+	defer t.Stop()
+	for {
+		if err := a.recordAddresses(ctx, nil); err != nil {
+			a.Log.Error("recording the appliance's addresses in the management cluster", "error", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// recordAddresses writes the appliance's addresses into provisioner.ApplianceAddressesName where
+// they differ from what it holds, through kube, or when nil, a client made from the interface's
+// kubeconfig. Without a management cluster there is nothing to write to.
+func (a *Appliance) recordAddresses(ctx context.Context, kube kubernetes.Interface) error {
+	if !a.Ready() {
+		return nil
+	}
+	own, err := a.addresses()
+	if err != nil {
+		return err
+	}
+	if kube == nil {
+		if kube, err = a.interfaceClient(); err != nil {
+			return err
+		}
+	}
+	configMaps := kube.CoreV1().ConfigMaps(interfaceNamespace)
+	held, err := configMaps.Get(ctx, provisioner.ApplianceAddressesName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("reading %s/%s: %w", interfaceNamespace, provisioner.ApplianceAddressesName, err)
+	}
+	want := strings.Join(own, ",")
+	if got, ok := held.Data[provisioner.ApplianceAddressesKey]; ok && got == want {
+		return nil
+	}
+	patch, err := json.Marshal(map[string]any{"data": map[string]string{provisioner.ApplianceAddressesKey: want}})
+	if err != nil {
+		return fmt.Errorf("the appliance's addresses: %w", err)
+	}
+	if _, err := configMaps.Patch(ctx, provisioner.ApplianceAddressesName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("writing %s/%s: %w", interfaceNamespace, provisioner.ApplianceAddressesName, err)
+	}
+	a.Log.Info("recorded the appliance's addresses for the clusters' firewalls", "addresses", want)
+	return nil
+}
 
 // addresses are the appliance's own addresses, which the workload clusters' firewalls accept: its
 // interface and its Headlamp reach their API servers directly.

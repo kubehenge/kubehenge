@@ -63,6 +63,9 @@ const (
 	haRulesInterval = 30 * time.Second
 	// proxmoxReachInterval is how often the controller asks whether the Proxmox VE API answers it.
 	proxmoxReachInterval = time.Minute
+	// firewallSourcesInterval is how soon a new address of the appliance reaches the clusters'
+	// ProxmoxClusters, after the appliance's own check.
+	firewallSourcesInterval = 15 * time.Second
 	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
 	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
 	certificateWatchInterval = 5 * time.Minute
@@ -97,6 +100,7 @@ type controllerOptions struct {
 	// extensionHost is the address the Runtime Extension server listens on. Empty, as in the pod,
 	// is every interface.
 	extensionHost     string
+	managementAddrs   []string
 	certDir           string
 	healthAddr        string
 	metricsAddr       string
@@ -203,6 +207,7 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.StringVar(&o.podSecurityExempt, "pod-security-exempt", "{}", "namespaces exempt from pod security, in Kyverno's policies and the ClusterClasses' Pod Security Admission alike, as a JSON object of lists keyed by what runs there: always, calico, monitoring, logs, backups, istio, metallb, rancher, rancherAgent")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers that only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>. They run only while such a cluster exists (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
+	f.StringSliceVar(&o.managementAddrs, "management-addresses", nil, "the management cluster's node addresses, which the firewall of every cluster with security groups accepts beside the appliance's (comma-separated)")
 	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces whose clusters the appliance's shared Headlamp signs users in to as cluster-admin, if they may download the admin kubeconfig (comma-separated). Empty signs nobody in and removes the identities")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build must be before clusters move to it, as the template refresh's --soak")
@@ -706,6 +711,13 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	gatewayAPI := &provisioner.GatewayAPIReconciler{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes, Bundle: bundle}
 	if err = gatewayAPI.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the Gateway API: %w", err)
+	}
+	firewall := &provisioner.FirewallSources{
+		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace,
+		Management: o.managementAddrs, Interval: firewallSourcesInterval,
+	}
+	if err = mgr.Add(firewall); err != nil {
+		return fmt.Errorf("the firewall sources: %w", err)
 	}
 	if err = o.addAutoscalers(mgr, registrar.Remotes); err != nil {
 		return err

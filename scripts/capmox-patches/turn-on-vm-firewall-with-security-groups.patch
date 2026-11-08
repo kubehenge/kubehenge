@@ -13,7 +13,7 @@ index d275077..51afb19 100644
  	"sigs.k8s.io/controller-runtime/pkg/log"
 +	"sigs.k8s.io/controller-runtime/pkg/predicate"
  	"sigs.k8s.io/controller-runtime/pkg/reconcile"
- 
+
  	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
 @@ -64,9 +66,42 @@ func (r *ProxmoxMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
  			&clusterv1.Machine{},
@@ -26,7 +26,7 @@ index d275077..51afb19 100644
 +		).
  		Complete(r)
  }
- 
+
 +// proxmoxClusterToFirewalledMachines maps a ProxmoxCluster to its machines with security groups,
 +// whose firewall sources follow its node address pools and its annotation.
 +func (r *ProxmoxMachineReconciler) proxmoxClusterToFirewalledMachines(ctx context.Context, o client.Object) []reconcile.Request {
@@ -61,7 +61,7 @@ index d275077..51afb19 100644
 @@ -251,6 +286,11 @@ func (r *ProxmoxMachineReconciler) reconcileNormal(ctx context.Context, machineS
  	})
  	machineScope.Logger.Info("ProxmoxMachine is ready")
- 
+
 +	// A failure leaves the machine ready and is retried, as for a VM whose node is offline.
 +	if err := vmservice.ReconcileFirewallSources(ctx, machineScope); err != nil {
 +		return reconcile.Result{}, errors.Wrap(err, "failed to reconcile the firewall sources")
@@ -69,7 +69,7 @@ index d275077..51afb19 100644
 +
  	return reconcile.Result{}, nil
  }
- 
+
 diff --git a/internal/controller/proxmoxmachine_firewall_test.go b/internal/controller/proxmoxmachine_firewall_test.go
 new file mode 100644
 index 0000000..ff36a65
@@ -468,7 +468,7 @@ index 6b9a7fe..28536d6 100644
 --- a/internal/service/vmservice/utils.go
 +++ b/internal/service/vmservice/utils.go
 @@ -40,8 +40,45 @@ const (
- 
+
  	// DefaultNetworkDeviceIPv6 is the default network device name for ipv6.
  	DefaultNetworkDeviceIPv6 = "net0-inet6"
 +
@@ -477,7 +477,7 @@ index 6b9a7fe..28536d6 100644
 +	// are on. Without it, neither is touched.
 +	firewallGroupsAnnotation = "kubehenge.dev/firewall-groups"
  )
- 
+
 +// annotationList returns the comma-separated entries of an annotation, none when unset.
 +func annotationList(annotations map[string]string, annotation string) []string {
 +	var entries []string
@@ -515,23 +515,23 @@ index 6b9a7fe..28536d6 100644
  func GetInClusterIPPoolRefs(ctx context.Context, machineScope *scope.MachineScope) (struct {
 @@ -162,6 +199,7 @@ func shouldUpdateNetworkDevices(machineScope *scope.MachineScope) bool {
  	}
- 
+
  	nets := machineScope.VirtualMachine.VirtualMachineConfig.Nets
 +	firewall := len(firewallGroups(machineScope)) > 0
- 
+
  	devices := machineScope.ProxmoxMachine.Spec.Network.NetworkDevices
  	for _, v := range devices {
 @@ -183,6 +221,10 @@ func shouldUpdateNetworkDevices(machineScope *scope.MachineScope) bool {
  			return true
  		}
- 
+
 +		if firewall && !extractNetworkFirewall(net) {
 +			return true
 +		}
 +
  		if v.MTU != nil {
  			mtu := extractNetworkMTU(net)
- 
+
 diff --git a/internal/service/vmservice/utils_test.go b/internal/service/vmservice/utils_test.go
 index 50fa1b4..e1255dd 100644
 --- a/internal/service/vmservice/utils_test.go
@@ -539,7 +539,7 @@ index 50fa1b4..e1255dd 100644
 @@ -239,6 +239,56 @@ func TestShouldUpdateNetworkDevices_NoUpdate(t *testing.T) {
  	require.False(t, shouldUpdateNetworkDevices(machineScope))
  }
- 
+
 +// A machine with security groups needs the firewall flag on every interface. Without them, an
 +// interface's flag is left as the template had it.
 +func TestShouldUpdateNetworkDevices_Firewall(t *testing.T) {
@@ -600,7 +600,7 @@ index 6abf2c4..d5212ae 100644
 @@ -387,14 +387,27 @@ func reconcileVirtualMachineConfig(ctx context.Context, machineScope *scope.Mach
  		}
  	}
- 
+
 +	// The firewall's IPSet and rules are in place before the VM first starts. The rules stay with it
 +	// until it is destroyed, and the IPSet follows the cluster.
 +	securityGroups := firewallGroups(machineScope)
@@ -628,7 +628,7 @@ index 6abf2c4..d5212ae 100644
 +			vmOptions = append(vmOptions, proxmox.VirtualMachineOption{Name: string(v.Name), Value: device})
  		}
  	}
- 
+
 diff --git a/internal/service/vmservice/vm_test.go b/internal/service/vmservice/vm_test.go
 index 59e241f..562f0e1 100644
 --- a/internal/service/vmservice/vm_test.go
@@ -636,7 +636,7 @@ index 59e241f..562f0e1 100644
 @@ -804,6 +804,89 @@ func TestReconcileVirtualMachineConfig_ApplyConfig(t *testing.T) {
  	require.EqualValues(t, task.UPID, *machineScope.ProxmoxMachine.Status.TaskRef)
  }
- 
+
 +// A machine with security groups gets its VM's IPSet of the cluster's sources, then its firewall
 +// with the rule accepting that IPSet ahead of those groups, and the firewall flag on every
 +// interface, before the VM first starts.
@@ -722,21 +722,21 @@ index 59e241f..562f0e1 100644
 +
  func TestReconcileVirtualMachineConfigTags(t *testing.T) {
  	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
- 
+
 diff --git a/pkg/proxmox/client.go b/pkg/proxmox/client.go
 index 00d3530..b955526 100644
 --- a/pkg/proxmox/client.go
 +++ b/pkg/proxmox/client.go
 @@ -29,6 +29,9 @@ type Client interface {
- 
+
  	ConfigureVM(ctx context.Context, vm *proxmox.VirtualMachine, options ...VirtualMachineOption) (*proxmox.Task, error)
- 
+
 +	EnableVMFirewall(ctx context.Context, vm *proxmox.VirtualMachine, sources, securityGroups []string) error
 +	SyncVMFirewallIPSet(ctx context.Context, vm *proxmox.VirtualMachine, name string, entries []string) error
 +
  	FindVMResource(ctx context.Context, vmID uint64) (*proxmox.ClusterResource, error)
  	FindVMTemplateByTags(ctx context.Context, templateTags []string, resolutionPolicy string) (string, int32, error)
- 
+
 diff --git a/pkg/proxmox/goproxmox/api_client.go b/pkg/proxmox/goproxmox/api_client.go
 index e719dd2..c989607 100644
 --- a/pkg/proxmox/goproxmox/api_client.go
@@ -752,7 +752,7 @@ index e719dd2..c989607 100644
 @@ -109,6 +110,107 @@ func (c *APIClient) ConfigureVM(ctx context.Context, vm *proxmox.VirtualMachine,
  	return task, nil
  }
- 
+
 +// firewallSourceComment marks the rules EnableVMFirewall adds for a source it accepts.
 +const firewallSourceComment = "kubehenge: the cluster's own traffic"
 +
@@ -862,7 +862,7 @@ index 49ac407..69cf4a7 100644
 --- a/pkg/proxmox/goproxmox/api_client_test.go
 +++ b/pkg/proxmox/goproxmox/api_client_test.go
 @@ -18,9 +18,11 @@ package goproxmox
- 
+
  import (
  	"context"
 +	"encoding/json"
@@ -871,12 +871,12 @@ index 49ac407..69cf4a7 100644
  	"net/url"
 +	"strings"
  	"testing"
- 
+
  	"github.com/go-logr/logr"
 @@ -292,6 +294,159 @@ func TestProxmoxAPIClient_ConfigureVM(t *testing.T) {
  	}
  }
- 
+
 +// The rules go in from the last one, since Proxmox VE puts a new rule first, so the sources come
 +// ahead of the groups. A rule the VM already has is not added again, and the VM's firewall is
 +// turned on after its rules.
@@ -1040,7 +1040,7 @@ index 68ec500..c6bd18b 100644
 @@ -330,6 +330,55 @@ func (_c *MockClient_DeleteVM_Call) RunAndReturn(run func(context.Context, strin
  	return _c
  }
- 
+
 +// EnableVMFirewall provides a mock function with given fields: ctx, vm, sources, securityGroups
 +func (_m *MockClient) EnableVMFirewall(ctx context.Context, vm *go_proxmox.VirtualMachine, sources []string, securityGroups []string) error {
 +	ret := _m.Called(ctx, vm, sources, securityGroups)
@@ -1096,7 +1096,7 @@ index 68ec500..c6bd18b 100644
 @@ -970,6 +1019,55 @@ func (_c *MockClient_StartVM_Call) RunAndReturn(run func(context.Context, *go_pr
  	return _c
  }
- 
+
 +// SyncVMFirewallIPSet provides a mock function with given fields: ctx, vm, name, entries
 +func (_m *MockClient) SyncVMFirewallIPSet(ctx context.Context, vm *go_proxmox.VirtualMachine, name string, entries []string) error {
 +	ret := _m.Called(ctx, vm, name, entries)

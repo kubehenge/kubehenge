@@ -275,7 +275,7 @@ func (r *Reconciler) recordDeletion(ctx context.Context, cluster *clusterv1.Clus
 	if cluster.Annotations[DeletionStatusAnnotation] == string(raw) {
 		return nil
 	}
-	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{DeletionStatusAnnotation: string(raw)}}})
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{annotationsKey: map[string]string{DeletionStatusAnnotation: string(raw)}}})
 	if err != nil {
 		return fmt.Errorf("encoding the deletion's status: %w", err)
 	}

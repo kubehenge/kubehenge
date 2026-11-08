@@ -161,6 +161,24 @@ func (a *Appliance) RenewInterfaceToken(ctx context.Context) {
 	}
 }
 
+// interfaceClient is a client for the management cluster that acts as the interface, from its
+// kubeconfig.
+func (a *Appliance) interfaceClient() (*kubernetes.Clientset, error) {
+	kubeconfig, err := os.ReadFile(a.KubeconfigPath())
+	if err != nil {
+		return nil, fmt.Errorf("the interface's kubeconfig: %w", err)
+	}
+	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("the interface's kubeconfig: %w", err)
+	}
+	kube, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("a client for the management cluster: %w", err)
+	}
+	return kube, nil
+}
+
 // renewTokenWhenDue renews the interface's token when it is due, through kube, or when nil, a
 // client made from the interface's kubeconfig.
 func (a *Appliance) renewTokenWhenDue(ctx context.Context, now time.Time, kube kubernetes.Interface) error {
@@ -171,16 +189,9 @@ func (a *Appliance) renewTokenWhenDue(ctx context.Context, now time.Time, kube k
 		return nil
 	}
 	if kube == nil {
-		kubeconfig, err := os.ReadFile(a.KubeconfigPath())
-		if err != nil {
-			return fmt.Errorf("the interface's kubeconfig: %w", err)
-		}
-		cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
-		if err != nil {
-			return fmt.Errorf("the interface's kubeconfig: %w", err)
-		}
-		if kube, err = kubernetes.NewForConfig(cfg); err != nil {
-			return fmt.Errorf("a client for the management cluster: %w", err)
+		var err error
+		if kube, err = a.interfaceClient(); err != nil {
+			return err
 		}
 	}
 	token, err := requestInterfaceToken(ctx, kube)

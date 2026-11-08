@@ -234,10 +234,10 @@ kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28
 # cluster (the autoscaler variable's placement workload).
 managementEndpoint: ""
 
-# The addresses, without prefix lengths, that the management cluster's nodes and the appliance
-# reach workload clusters from; the management cluster's module sets them. A workload cluster's
-# firewall (the securityGroups variable) accepts them alongside the cluster's own addresses. They
-# reach the nodes through each cluster's ProxmoxCluster, so a change replaces no node.
+# The addresses, without prefix lengths, of the management cluster's nodes; the management
+# cluster's module sets them. A workload cluster's firewall (the securityGroups variable) accepts
+# them and the appliance's alongside the cluster's own addresses. The controller writes them onto
+# each cluster's ProxmoxCluster, so a change replaces no node.
 managementAddresses: []
 
 # What Kubehenge's controller watches for on its own, and how long it gives each before it says

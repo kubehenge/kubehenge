@@ -388,6 +388,7 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	wg.Go(func() { s.Run(ctx) })
 	if o.a.Dir != "" {
 		wg.Go(func() { o.a.RenewInterfaceToken(ctx) })
+		wg.Go(func() { o.a.KeepAddresses(ctx) })
 		wg.Go(func() {
 			<-ctx.Done()
 			stopping, done := context.WithTimeout(context.WithoutCancel(ctx), jobStopTimeout)

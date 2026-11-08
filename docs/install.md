@@ -725,7 +725,6 @@ tofu output -raw talosconfig > talosconfig
 | `ip_families` | `["IPv4"]` | `["IPv4"]`, `["IPv6"]`, or both in either order. The first is the primary family. |
 | `node_addresses` | required | One, three or five IPv4 addresses with prefix length, such as `["192.0.2.11/24"]`. `[]` on an IPv6-only cluster. |
 | `node_addresses_ipv6` | `[]` | The IPv6 ones, such as `["2001:db8::11/64"]`. A dual-stack cluster gives as many as `node_addresses`. |
-| `appliance_addresses` | `[]` | Addresses without prefix length that the appliance reaches the workload clusters from. Their firewalls accept them ([clusters.md](clusters.md#firewall)). The appliance sets its own. |
 | `api_address` | required | The Kubernetes API's virtual IP, of the primary family, in the nodes' subnet and unused. |
 | `gateway`, `gateway_ipv6`, `dns_servers` | as the families need | The nodes' gateway of each family and their DNS servers, one of each family on a dual-stack cluster. |
 | `pod_subnets`, `service_subnets` | `["10.244.0.0/16"]`, `["10.96.0.0/12"]` | The management cluster's own ranges, one per family in `ip_families` order. The plan refuses ranges that overlap the nodes' network. |

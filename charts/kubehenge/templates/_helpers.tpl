@@ -2454,9 +2454,9 @@ Call with the root context.
 # of the groups, at the cluster's own addresses: the control-plane endpoint, the node addresses and
 # the pods (which reach other nodes unencapsulated with Cilium's native routing or Calico's BGP). That
 # keeps every port and protocol a distribution or CNI uses (VXLAN, Geneve, BGP, WireGuard, etcd, the
-# kubelet) open between them without a port list. The ProxmoxCluster's annotation adds the management
-# cluster's nodes and the appliance. capmox follows a change of the ProxmoxCluster on the running VMs,
-# so a new address replaces no node.
+# kubelet) open between them without a port list. The controller's annotation on the ProxmoxCluster
+# adds the management cluster's nodes and the appliance. capmox follows a change of the
+# ProxmoxCluster on the running VMs, so a new address replaces no node.
 - name: proxmox-firewall
   enabledIf: {{ `{{ if .securityGroups }}true{{ end }}` | quote }}
   definitions:
@@ -2474,17 +2474,6 @@ Call with the root context.
             template: |
               annotations:
                 kubehenge.dev/firewall-groups: {{ `{{ join "," .securityGroups | quote }}` }}
-    - selector:
-        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
-        kind: ProxmoxClusterTemplate
-        matchResources:
-          infrastructureCluster: true
-      jsonPatches:
-        - op: add
-          path: /spec/template/metadata
-          value:
-            annotations:
-              kubehenge.dev/firewall-sources: {{ join "," .Values.managementAddresses | quote }}
 - name: proxmox-storage
   definitions:
     - selector:
