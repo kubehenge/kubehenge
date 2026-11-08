@@ -6,9 +6,9 @@
 # control plane's health check has the dead server replaced. The control plane then shrinks back to
 # one server, keeping what was written, and nothing of the cluster is left once it is deleted.
 # Every node's NIC firewall is on throughout, through a security group that lets in SSH and the API
-# alone: the servers join, elect and replace each other behind it, the runner reaches SSH and the
-# API but not the kubelet or a NodePort, a pod reaches a pod on another node, and a change of the
-# firewall's sources reaches the running VMs' IPSets without replacing one.
+# alone: the servers join, elect and replace each other behind it, the runner reaches SSH's port
+# and the API but not the kubelet or a NodePort, a pod reaches a pod on another node, and a change
+# of the firewall's sources reaches the running VMs' IPSets without replacing one.
 #
 #   test/e2e/control-plane-ha.sh
 #
@@ -243,7 +243,9 @@ until_true 120 "every NIC with firewall=1" firewalled_nics
 node_addresses=$(workload get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}')
 node_count=$(echo "${node_addresses}" | wc -l)
 [ "${node_count}" -eq 4 ] || fail "expected four nodes' addresses, have: ${node_addresses}"
-until_true 120 "SSH answers on every node" every_node_is open 22
+# Nodes run no SSH server, so port 22 let in meets the guest's own refusal. The firewall's policy
+# drops what it does not let in, which times out instead.
+until_true 120 "SSH's port let in to every node" every_node_is refused 22
 until_true 120 "the kubelet's port is dropped on every node" every_node_is dropped 10250
 workload create namespace e2e-firewall
 node_names=$(workload get nodes -o jsonpath='{.items[*].metadata.name}')
