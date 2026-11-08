@@ -89,9 +89,13 @@ vip_holder() { workload -n kube-system get lease plndr-cp-lock -o jsonpath='{.sp
 # written <name>: writes a ConfigMap through the virtual IP, which etcd takes only with a quorum.
 written() { workload -n default create configmap "$1" --from-literal=written=true > /dev/null 2>&1; }
 
-# cluster_vms: the node and ID of each VM the cluster's pool holds, one per line.
+# cluster_vms: the node and ID of each node's VM, one per line, as the cluster's ProxmoxMachines
+# record them. Not the pool's VMs: the pool also holds the volume owner VM, which has no NIC, no
+# IPSet and never starts. Fails while a machine has no VM yet.
 cluster_vms() {
-    pve_get "cluster/resources?type=vm" | jq -r --arg p "/${ns}." '.data[] | select(.pool // "" | contains($p)) | "\(.node) \(.vmid)"'
+    kubectl -n "${ns}" get proxmoxmachines -o json | jq -r '.items[] |
+        if .spec.virtualMachineID and .status.proxmoxNode then "\(.status.proxmoxNode) \(.spec.virtualMachineID)"
+        else error("ProxmoxMachine \(.metadata.name) has no VM yet") end'
 }
 # ipset_entries <node> <vmid>: the entries of the VM's kubehenge IPSet, sorted, one per line. A VM
 # without the IPSet has none.
@@ -100,7 +104,7 @@ ipset_entries() { pve_get "nodes/$1/qemu/$2/firewall/ipset/kubehenge" | jq -r '.
 # ipsets_hold <present|absent> <address>: whether every VM's IPSet holds the address, or none does.
 # shellcheck disable=SC2310,SC2312 # polled.
 ipsets_hold() {
-    vm_list=$(cluster_vms)
+    vm_list=$(cluster_vms) || return 1
     [ -n "${vm_list}" ] || return 1
     echo "${vm_list}" | while read -r vm_node vm_id; do
         if ipset_entries "${vm_node}" "${vm_id}" | grep -qxF "$2"; then held=present; else held=absent; fi
@@ -110,7 +114,7 @@ ipsets_hold() {
 # ipsets_agree: whether every VM's IPSet holds the same entries, which one cluster's VMs share.
 # shellcheck disable=SC2310,SC2312 # polled.
 ipsets_agree() {
-    vm_list=$(cluster_vms)
+    vm_list=$(cluster_vms) || return 1
     seen=$(echo "${vm_list}" | while read -r vm_node vm_id; do
         ipset_entries "${vm_node}" "${vm_id}" | tr '\n' ' '
         echo
@@ -120,12 +124,18 @@ ipsets_agree() {
 # firewalled_nics: whether every NIC of every VM has firewall=1.
 # shellcheck disable=SC2310,SC2312 # polled.
 firewalled_nics() {
-    vm_list=$(cluster_vms)
+    vm_list=$(cluster_vms) || return 1
     [ -n "${vm_list}" ] || return 1
-    echo "${vm_list}" | while read -r vm_node vm_id; do
-        pve_get "nodes/${vm_node}/qemu/${vm_id}/config" |
-            jq -e '[.data | to_entries[] | select(.key | test("^net[0-9]+$")) | .value] | length > 0 and all(contains("firewall=1"))' > /dev/null || exit 1
-    done
+    # A here-document keeps the loop in this shell, so that seen reaches until_true's message.
+    while read -r vm_node vm_id; do
+        nics=$(pve_get "nodes/${vm_node}/qemu/${vm_id}/config" |
+            jq -c '[.data | to_entries[] | select(.key | test("^net[0-9]+$")) | "\(.key)=\(.value)"]') || return 1
+        seen="VM ${vm_id} on ${vm_node}: ${nics}"
+        printf '%s' "${nics}" | jq -e 'length > 0 and all(contains("firewall=1"))' > /dev/null || return 1
+    done << EOF
+${vm_list}
+EOF
+    seen=
 }
 # port_state <address> <port>: dropped when the connection times out, as a firewall's drop does,
 # refused when nothing listens, and open when something answers.
