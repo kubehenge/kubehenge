@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 var demoAt = time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
@@ -411,6 +412,25 @@ func TestDemoShowsTemplatesAndPins(t *testing.T) {
 	}
 	if rec := b.do("POST", "/api/release-pins", `{"version":"v1.37.3+rke2r1"}`); rec.Code != http.StatusForbidden {
 		t.Errorf("pinning in the demo: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A Talos cluster's machines report the Talos release their nodes run, so that column is never empty.
+func TestDemoShowsTheTalosReleaseOfTalosMachines(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var detail struct {
+		Machines []machineView `json:"machines"`
+	}
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform", ""), &detail)
+	if len(detail.Machines) == 0 {
+		t.Fatal("platform has no machines")
+	}
+	for _, m := range detail.Machines {
+		if m.Talos != templates.DefaultTalosVersion {
+			t.Errorf("machine %s: Talos %q, want %q", m.Name, m.Talos, templates.DefaultTalosVersion)
+		}
 	}
 }
 

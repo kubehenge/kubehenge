@@ -147,7 +147,7 @@ export function Machines({
       {bootLog !== undefined && <BootLogDialog cluster={c} machine={bootLog} onClose={() => setBootLog(undefined)} />}
       {crowded !== undefined && <p className="warning">{crowded}</p>}
       <ErrorBox message={rowError} />
-      <table className="grid stack">
+      <table className="grid stack-wide">
         <thead>
           <tr>
             {columns.map((h) => (

@@ -641,7 +641,7 @@ function Nodes({ health: h }: { health: ClusterHealth }): JSX.Element {
           <Detail>{h.vms}</Detail>
         </div>
       )}
-      <table className="grid stack">
+      <table className="grid stack-wide">
         <thead>
           <tr>
             <th>Name</th>

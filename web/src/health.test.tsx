@@ -518,7 +518,9 @@ describe("health page", () => {
     render(<HealthView cluster={cluster} />);
 
     await screen.findByRole("row", { name: /^web-cp-a/u });
-    const stacked = screen.getAllByRole("table").filter((t) => t.classList.contains("stack"));
+    const stacked = screen
+      .getAllByRole("table")
+      .filter((t) => ["stack", "stack-wide"].some((c) => t.classList.contains(c)));
     const heads = stacked.map((t) =>
       within(t)
         .getAllByRole("columnheader")

@@ -876,7 +876,7 @@ function BackupsTable({
   return (
     <div className="box scroll">
       <h3>{title}</h3>
-      <table className="grid stack">
+      <table className="grid stack-wide">
         <thead>
           <tr>
             <th>Name</th>

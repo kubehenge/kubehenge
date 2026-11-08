@@ -807,6 +807,10 @@ func (f *demoFleet) machine(d *demoCluster, role string, i int, created time.Tim
 			version = d.Upgrade.From
 		}
 	}
+	var nodeInfo *corev1.NodeSystemInfo
+	if d.Distribution == templates.Talos {
+		nodeInfo = &corev1.NodeSystemInfo{OSImage: "Talos (" + templates.DefaultTalosVersion + ")"}
+	}
 	return &clusterv1.Machine{
 		Namespace: demoNamespace, Name: name, Labels: labels, CreationTimestamp: metav1.NewTime(born),
 		Spec: clusterv1.MachineSpec{
@@ -816,6 +820,7 @@ func (f *demoFleet) machine(d *demoCluster, role string, i int, created time.Tim
 		Status: clusterv1.MachineStatus{
 			Phase:     string(clusterv1.MachinePhaseRunning),
 			NodeRef:   clusterv1.MachineNodeReference{Name: name},
+			NodeInfo:  nodeInfo,
 			Addresses: clusterv1.MachineAddresses{{Type: clusterv1.MachineInternalIP, Address: fmt.Sprintf("10.20.%d.%d", d.Subnet, host)}},
 			Conditions: []metav1.Condition{{
 				Type: clusterv1.MachineReadyCondition, Status: metav1.ConditionTrue, Reason: clusterv1.MachineReadyReason, LastTransitionTime: metav1.NewTime(born.Add(4 * time.Minute)),

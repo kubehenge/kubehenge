@@ -280,6 +280,7 @@ output.notice {
    inside, such as a hidden column heading, scrolls with the table rather than widening the page. */
 .scroll {
   position: relative;
+  container: grid / inline-size;
   overflow-x: auto;
 }
 
@@ -1330,6 +1331,7 @@ h4.subsection {
 }
 
 .box {
+  container: grid / inline-size;
   padding: 14px 16px;
   border-block-end: 1px solid var(--line);
 }
@@ -1875,10 +1877,10 @@ fieldset.choices .check {
   vertical-align: middle;
 }
 
-/* On a phone a row of a stacked grid is a card. The cell without a label heads it, and every other
-   cell is a line with its column's name before it. One action sits beside the heading, several go
-   below the lines. */
-@media (width <= 600px) {
+/* A row of a stacked grid is a card when its box is narrow: always on a phone. The cell without a
+   label heads it, and every other cell is a line with its column's name before it. One action sits
+   beside the heading, several go below the lines. */
+@container grid (width <= 600px) {
   .grid.stack,
   .grid.stack tbody {
     display: block;
@@ -1946,6 +1948,82 @@ fieldset.choices .check {
   }
 
   .grid.stack td.row-action:has(> button:only-of-type) {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    padding: 0;
+  }
+}
+
+/* A grid of many columns stacks while its box is narrower than they need, so no column hides behind a scroll. */
+@container grid (width <= 1000px) {
+  .grid.stack-wide,
+  .grid.stack-wide tbody {
+    display: block;
+  }
+
+  .grid.stack-wide thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .grid.stack-wide tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+
+    padding-block: 10px;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .grid.stack-wide :is(td, th) {
+    position: relative;
+
+    grid-column: 1 / -1;
+
+    min-inline-size: 0;
+    padding: 0 0 0 8.5em;
+    border: none;
+
+    text-align: start;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .grid.stack-wide :is(td, th):not([data-label], .row-action) {
+    grid-column: 1;
+    align-self: center;
+    padding-inline-start: 0;
+    font-weight: 600;
+  }
+
+  .grid.stack-wide :is(td, th):not([data-label], .row-action) .muted {
+    font-weight: 400;
+  }
+
+  .grid.stack-wide td[data-label]::before {
+    content: attr(data-label);
+    position: absolute;
+    inset-inline-start: 0;
+    color: var(--dim);
+  }
+
+  .grid.stack-wide td[data-label]:empty {
+    display: none;
+  }
+
+  .grid.stack-wide td.row-action {
+    inline-size: auto;
+    padding: 6px 0 0;
+  }
+
+  .grid.stack-wide td.row-action:has(> button:only-of-type) {
     grid-column: 2;
     grid-row: 1;
     align-self: center;
