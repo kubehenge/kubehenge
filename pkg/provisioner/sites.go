@@ -215,15 +215,16 @@ func templateLines(c *clusterv1.Cluster) [][]string {
 func newest(s *Sites, line []string) []TemplateSite {
 	key := templates.LineKey(line)
 	var out []TemplateSite
-	for _, t := range s.Templates {
+	for i := range s.Templates {
+		t := &s.Templates[i]
 		if templates.LineKey(t.Tags) != key {
 			continue
 		}
 		switch {
 		case len(out) == 0 || t.Built.After(out[0].Built):
-			out = append(out[:0], t)
+			out = append(out[:0], *t)
 		case t.Built.Equal(out[0].Built):
-			out = append(out, t)
+			out = append(out, *t)
 		}
 	}
 	return out
@@ -273,23 +274,32 @@ func lineReach(s *Sites, line []string) ([]string, []TemplateSite, bool) {
 // cpuNeed is the x86-64 level the cluster's nodes need of its hosts: the one its templates' own cpu
 // setting presents when they set one, else fallback, the node OS's.
 func cpuNeed(s *Sites, c *clusterv1.Cluster, fallback int) int {
-	if need, _, set := templateCPU(s, c); set {
-		return need
+	if cpu, set := templateCPU(s, c); set {
+		return cpu.level
 	}
 	return fallback
 }
 
-// templateCPU is the highest x86-64 level the cpu settings of the cluster's newest templates
-// present, with the setting that presents it. set is false where none of them sets one.
-func templateCPU(s *Sites, c *clusterv1.Cluster) (need int, cpu string, set bool) {
+// templateSetting is a template's cpu setting: the x86-64 level it presents and its model.
+type templateSetting struct {
+	level int
+	model string
+}
+
+// templateCPU is the cpu setting of the cluster's newest templates that presents the highest
+// x86-64 level. It is false where none of them sets one.
+func templateCPU(s *Sites, c *clusterv1.Cluster) (templateSetting, bool) {
+	var best templateSetting
+	set := false
 	for _, line := range templateLines(c) {
-		for _, t := range newest(s, line) {
-			if level, ok := templates.SettingLevel(t.CPU); ok && (!set || level > need) {
-				need, cpu, set = level, templates.SettingModel(t.CPU), true
+		found := newest(s, line)
+		for i := range found {
+			if level, ok := templates.SettingLevel(found[i].CPU); ok && (!set || level > best.level) {
+				best, set = templateSetting{level: level, model: templates.SettingModel(found[i].CPU)}, true
 			}
 		}
 	}
-	return need, cpu, set
+	return best, set
 }
 
 // templateNUMA tells whether a newest template of the cluster's lines gives its clones a NUMA

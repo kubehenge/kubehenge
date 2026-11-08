@@ -212,12 +212,13 @@ func cleanYAML(o any) ([]byte, error) {
 //   - Talos (the bootstrap provider's secrets.go): talos (the secrets bundle, which holds the
 //     Kubernetes, etcd, aggregator and Talos CAs and the service account key) and ca (the
 //     Kubernetes CA derived from it)
-var providerSecretSuffixes = []string{"ca", "cca", etcdCASuffix, "peer-etcd", "proxy", "sa", joinTokenSuffix, "talos"}
+var providerSecretSuffixes = []string{"ca", "cca", etcdCASuffix, "peer-etcd", frontProxyCASuffix, "sa", joinTokenSuffix, "talos"}
 
-// The providers' suffixes that other names in this package spell the same.
+// The providers' suffixes that other names or strings in this package spell the same.
 const (
-	etcdCASuffix    = etcdKey
-	joinTokenSuffix = dns01TokenKey
+	etcdCASuffix       = etcdKey
+	joinTokenSuffix    = dns01TokenKey
+	frontProxyCASuffix = "proxy"
 )
 
 // ClusterSpecSecretNames are the Secrets in a cluster's namespace that a rebuilt cluster cannot do

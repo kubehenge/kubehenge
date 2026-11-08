@@ -138,7 +138,13 @@ export function ManagementHealthCard(): JSX.Element {
   );
 }
 
-function AnsweringHealth({ health: h, reboot }: { health: ManagementHealth; reboot: RebootReadiness | undefined }): JSX.Element {
+function AnsweringHealth({
+  health: h,
+  reboot,
+}: {
+  health: ManagementHealth;
+  reboot: RebootReadiness | undefined;
+}): JSX.Element {
   const nodes = h.nodes ?? [];
   const controllers = h.controllers ?? [];
   const nodesDown = nodes.filter((n) => !n.ready);

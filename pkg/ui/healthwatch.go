@@ -52,6 +52,18 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 	if cond := trueCondition(c, provisioner.EtcdLatencyCondition); cond != nil {
 		a.add(severityWarning, sectionControlPlane, "etcd disk slow", provisioner.EtcdLatencySummary(cond.Message), cond.LastTransitionTime.Time)
 	}
+	vmAttention(c, a)
+	if cond := trueCondition(c, provisioner.StorageCondition); cond != nil {
+		severity, what := severityWarning, "Storage nearly full"
+		if cond.Reason == provisioner.StorageFull {
+			severity, what = severityError, "Storage full"
+		}
+		a.add(severity, sectionVolumes, what, provisioner.StorageSummary(cond.Message), cond.LastTransitionTime.Time)
+	}
+}
+
+// vmAttention adds what the machines' VMs and their Proxmox VE hosts say.
+func vmAttention(c *clusterv1.Cluster, a *attention) {
 	if cond := trueCondition(c, provisioner.VMsCondition); cond != nil {
 		severity := severityWarning
 		if cond.Reason == provisioner.VMsIOError || cond.Reason == provisioner.VMsPanicked {
@@ -62,13 +74,6 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 	hostAttention(c, a)
 	if cond := trueCondition(c, provisioner.VMsMissingCondition); cond != nil {
 		a.add(severityError, sectionNodes, "VMs missing", cond.Message, cond.LastTransitionTime.Time)
-	}
-	if cond := trueCondition(c, provisioner.StorageCondition); cond != nil {
-		severity, what := severityWarning, "Storage nearly full"
-		if cond.Reason == provisioner.StorageFull {
-			severity, what = severityError, "Storage full"
-		}
-		a.add(severity, sectionVolumes, what, provisioner.StorageSummary(cond.Message), cond.LastTransitionTime.Time)
 	}
 }
 

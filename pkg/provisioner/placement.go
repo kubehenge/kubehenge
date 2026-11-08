@@ -113,7 +113,7 @@ func (p *Placer) placeAll(ctx context.Context) {
 			continue
 		}
 		p.markSkipped(ctx, c, skipped)
-		needs, err := clusterNeeds(c, sites)
+		needs, err := needsOf(c, sites)
 		if err != nil {
 			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
 			continue
@@ -322,7 +322,7 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster, cho
 			return nil, "", fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)
 		}
 	}
-	needs, err := clusterNeeds(cluster, sites)
+	needs, err := needsOf(cluster, sites)
 	if err != nil {
 		return nil, "", err
 	}

@@ -35,8 +35,8 @@ func hardwareSite(t *testing.T, c *clusterv1.Cluster, hw templates.Hardware, swa
 	return TemplateSite{Name: "kubehenge-build", Node: "pve1", Tags: tags, CPU: hw.CPUType, Hardware: hw, Built: at}
 }
 
-func sitesWith(templates ...TemplateSite) fakeSites {
-	return fakeSites{sites: &Sites{Templates: templates}}
+func sitesWith(listed ...TemplateSite) fakeSites {
+	return fakeSites{sites: &Sites{Templates: listed}}
 }
 
 func TestClusterNeedsFollowTheTemplatesHardware(t *testing.T) {
@@ -74,7 +74,7 @@ func TestClusterNeedsFollowTheTemplatesHardware(t *testing.T) {
 			if tc.site != nil {
 				s = &Sites{Templates: []TemplateSite{*tc.site}}
 			}
-			got, err := clusterNeeds(tc.c, s)
+			got, err := needsOf(tc.c, s)
 			if err != nil || got != tc.want {
 				t.Errorf("needs %+v, %v; want %+v", got, err, tc.want)
 			}

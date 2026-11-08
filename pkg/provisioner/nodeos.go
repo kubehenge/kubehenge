@@ -45,11 +45,11 @@ type templateNeeds struct {
 	NUMA bool
 }
 
-// clusterNeeds are what the cluster's node OS or Talos needs, or, where Proxmox VE was looked at,
+// needsOf are what the cluster's node OS or Talos needs, or, where Proxmox VE was looked at,
 // what the newest builds of the cluster's template lines ask: their clones keep the template's CPU
 // type, so it rules over the node OS's. The CPU type is named only where it asks more than the node
 // OS or Talos does. Without a look, s is nil and the node OS's own need stands.
-func clusterNeeds(c *clusterv1.Cluster, s *Sites) (templateNeeds, error) {
+func needsOf(c *clusterv1.Cluster, s *Sites) (templateNeeds, error) {
 	level, err := clusterCPULevel(c)
 	if err != nil {
 		return templateNeeds{}, err
@@ -58,10 +58,10 @@ func clusterNeeds(c *clusterv1.Cluster, s *Sites) (templateNeeds, error) {
 	if s == nil {
 		return needs, nil
 	}
-	if need, cpu, set := templateCPU(s, c); set {
-		needs.Level = need
-		if need > level {
-			needs.CPUType = cpu
+	if cpu, set := templateCPU(s, c); set {
+		needs.Level = cpu.level
+		if cpu.level > level {
+			needs.CPUType = cpu.model
 		}
 	}
 	needs.NUMA = templateNUMA(s, c)
@@ -240,20 +240,9 @@ func checkFIPS(c *clusterv1.Cluster) error {
 // to judge by, and the cluster waits for its nodes as any other does. A Talos cluster has no node
 // OS: Talos is its own.
 func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.Cluster) error {
-	var o templates.NodeOS
-	if !isTalos(c) {
-		var err error
-		if o, err = ClusterNodeOS(c); err != nil {
-			return err
-		}
-		if _, _, err = templates.Available(o); err != nil {
-			return err //nolint:wrapcheck // says all a person needs
-		}
-		if o.FIPS {
-			if err = checkFIPS(c); err != nil {
-				return err
-			}
-		}
+	o, err := buildableNodeOS(c)
+	if err != nil {
+		return err
 	}
 	if h.Nodes == nil {
 		return nil
@@ -262,7 +251,7 @@ func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.C
 	if err != nil {
 		return err
 	}
-	needs, err := clusterNeeds(c, sites)
+	needs, err := needsOf(c, sites)
 	if err != nil {
 		return err
 	}
@@ -283,6 +272,25 @@ func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.C
 		f.Title(), r.Name, templates.CPUTypeOf(r), strings.Join(names, ", "))
 }
 
+// buildableNodeOS is the cluster's node OS once Kubehenge builds templates of it and its FIPS
+// choices hold. A Talos cluster has none.
+func buildableNodeOS(c *clusterv1.Cluster) (templates.NodeOS, error) {
+	if isTalos(c) {
+		return templates.NodeOS{}, nil
+	}
+	o, err := ClusterNodeOS(c)
+	if err != nil {
+		return o, err
+	}
+	if _, _, err = templates.Available(o); err != nil {
+		return o, err //nolint:wrapcheck // says all a person needs
+	}
+	if o.FIPS {
+		return o, checkFIPS(c)
+	}
+	return o, nil
+}
+
 // pveReads is what one admission or hook call reads from Proxmox VE. Each read happens at most once
 // per call, its failure included, so every check that needs it shares one look and one time budget.
 // A check that needs another read of Proxmox VE adds a memoised method here.
@@ -292,11 +300,8 @@ type pveReads struct {
 	sites  memo[*Sites]
 }
 
-// lookAtSites is where the storages and templates are, nil when the hooks cannot look.
+// lookAtSites is where the storages and templates are. Callers check that the hooks have Sites.
 func (r *pveReads) lookAtSites(ctx context.Context) (*Sites, error) {
-	if r.h.Sites == nil {
-		return nil, nil
-	}
 	return r.sites.get(func() (*Sites, error) {
 		s, err := r.h.Sites.Sites(ctx)
 		if err != nil {
@@ -344,6 +349,9 @@ func (r *pveReads) allowedOnline(ctx context.Context, c *clusterv1.Cluster) ([]N
 	online := slices.Clone(all)
 	if len(chosen) > 0 {
 		online = slices.DeleteFunc(online, func(n Node) bool { return !slices.Contains(chosen, n.Name) })
+	}
+	if r.h.Sites == nil {
+		return online, nil, nil
 	}
 	sites, err := r.lookAtSites(ctx)
 	if err != nil {
@@ -410,7 +418,7 @@ func (h *Hooks) checkNUMA(ctx context.Context, reads *pveReads, c *clusterv1.Clu
 	if err != nil {
 		return err
 	}
-	needs, err := clusterNeeds(c, sites)
+	needs, err := needsOf(c, sites)
 	if err != nil || !needs.NUMA {
 		return err
 	}
