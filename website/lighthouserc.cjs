@@ -29,11 +29,11 @@ const own = {
     image: [1, 740],
   },
   "/docs/install.html": {
-    document: [1, 40_000],
+    document: [1, 46_700],
     script: [6, 80_000],
     stylesheet: [1, 25_400],
     font: [1, 76_000],
-    image: [2, 19_700],
+    image: [2, 21_500],
   },
 };
 

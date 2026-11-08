@@ -134,8 +134,9 @@ func neededGiB(mib int64) string {
 	if mib%mebibytesPerGibibyte == 0 {
 		return fmt.Sprintf("%d GiB", mib/mebibytesPerGibibyte)
 	}
-	tenths := (mib*10 + mebibytesPerGibibyte - 1) / mebibytesPerGibibyte
-	return fmt.Sprintf("%d.%d GiB", tenths/10, tenths%10)
+	const tenthsPerGiB = 10
+	tenths := (mib*tenthsPerGiB + mebibytesPerGibibyte - 1) / mebibytesPerGibibyte
+	return fmt.Sprintf("%d.%d GiB", tenths/tenthsPerGiB, tenths%tenthsPerGiB)
 }
 
 // markShort records on the cluster that no node had room for it, as room says, and clears the

@@ -287,3 +287,23 @@ func TestClusterSpecIsStoredOnChangeAndRecreatesTheCluster(t *testing.T) {
 		t.Fatalf("recreated %+v", again.Spec.Topology)
 	}
 }
+
+func TestSpecAutoscalingTakesOnlySizesThatFitTheRequest(t *testing.T) {
+	t.Parallel()
+	spec := func(minimum, maximum string) *clusterv1.Cluster {
+		c := &clusterv1.Cluster{}
+		c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{}}
+		c.Spec.Topology.Workers.MachineDeployments[0].Metadata.Annotations = map[string]string{
+			provisioner.AutoscalerMinAnnotation: minimum, provisioner.AutoscalerMaxAnnotation: maximum,
+		}
+		return c
+	}
+	if got := createRequestOf(spec("1", "4")).WorkerAutoscaling; got == nil || got.Min != 1 || got.Max != 4 {
+		t.Errorf("1 to 4 gives %+v", got)
+	}
+	for _, sizes := range [][2]string{{"1", "4294967297"}, {"-2147483649", "4"}, {"1", "many"}, {"", ""}} {
+		if got := createRequestOf(spec(sizes[0], sizes[1])).WorkerAutoscaling; got != nil {
+			t.Errorf("%s to %s gives %+v, want no autoscaling", sizes[0], sizes[1], got)
+		}
+	}
+}

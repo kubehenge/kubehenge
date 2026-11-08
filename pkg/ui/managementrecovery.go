@@ -212,10 +212,10 @@ func createRequestOf(c *clusterv1.Cluster) createRequest {
 		if md.Replicas != nil {
 			req.WorkerReplicas = *md.Replicas
 		}
-		minimum, errMin := strconv.Atoi(md.Metadata.Annotations[provisioner.AutoscalerMinAnnotation])
-		maximum, errMax := strconv.Atoi(md.Metadata.Annotations[provisioner.AutoscalerMaxAnnotation])
+		minimum, errMin := strconv.ParseInt(md.Metadata.Annotations[provisioner.AutoscalerMinAnnotation], 10, 32)
+		maximum, errMax := strconv.ParseInt(md.Metadata.Annotations[provisioner.AutoscalerMaxAnnotation], 10, 32)
 		if errMin == nil && errMax == nil {
-			req.WorkerAutoscaling = &poolAutoscaling{Min: int32(minimum), Max: int32(maximum)} //nolint:gosec // the values are checked by the request
+			req.WorkerAutoscaling = &poolAutoscaling{Min: int32(minimum), Max: int32(maximum)}
 		}
 	}
 	return req
