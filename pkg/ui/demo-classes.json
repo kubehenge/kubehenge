@@ -104,7 +104,12 @@
                 "apiVersion": "v1",
                 "kind": "Reach",
                 "matchResources": {
-                  "controlPlane": true
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
                 }
               }
             }
@@ -309,6 +314,34 @@
             }
           ],
           "name": "reach-podSecurity"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .securityGroups }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-securityGroups"
         },
         {
           "definitions": [
@@ -1964,6 +1997,25 @@
           }
         },
         {
+          "name": "securityGroups",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "items": {
+                "maxLength": 18,
+                "minLength": 2,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          }
+        },
+        {
           "name": "egressProxy",
           "required": false,
           "schema": {
@@ -2920,7 +2972,12 @@
                 "apiVersion": "v1",
                 "kind": "Reach",
                 "matchResources": {
-                  "controlPlane": true
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
                 }
               }
             }
@@ -3102,6 +3159,34 @@
             }
           ],
           "name": "reach-podSecurity"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .securityGroups }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-securityGroups"
         },
         {
           "definitions": [
@@ -4757,6 +4842,25 @@
           }
         },
         {
+          "name": "securityGroups",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "items": {
+                "maxLength": 18,
+                "minLength": 2,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          }
+        },
+        {
           "name": "egressProxy",
           "required": false,
           "schema": {
@@ -5721,7 +5825,12 @@
                 "apiVersion": "v1",
                 "kind": "Reach",
                 "matchResources": {
-                  "controlPlane": true
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
                 }
               }
             }
@@ -5926,6 +6035,34 @@
             }
           ],
           "name": "reach-podSecurity"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .securityGroups }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-securityGroups"
         },
         {
           "definitions": [
@@ -7581,6 +7718,25 @@
           }
         },
         {
+          "name": "securityGroups",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "items": {
+                "maxLength": 18,
+                "minLength": 2,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          }
+        },
+        {
           "name": "egressProxy",
           "required": false,
           "schema": {
@@ -8551,7 +8707,12 @@
                 "apiVersion": "v1",
                 "kind": "Reach",
                 "matchResources": {
-                  "controlPlane": true
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
                 }
               }
             }
@@ -8682,6 +8843,34 @@
             }
           ],
           "name": "reach-podSecurity"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .securityGroups }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-securityGroups"
         },
         {
           "definitions": [
@@ -10333,6 +10522,25 @@
                   "rule": "!has(self.repository) || !has(self.repository.caBundle) || !(has(self.auth) \u0026\u0026 self.auth == 'existingSecret' \u0026\u0026 has(self.engine) \u0026\u0026 self.engine == 'flux')"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "securityGroups",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "items": {
+                "maxLength": 18,
+                "minLength": 2,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
             }
           }
         },

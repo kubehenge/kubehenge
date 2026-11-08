@@ -83,6 +83,9 @@ type Hooks struct {
 	// Bridges is asked for a bridge's MTU, which the validator holds a cluster's interface MTU to.
 	// Nil, no bridge is looked at.
 	Bridges BridgeMTUs
+	// SecurityGroups lists Proxmox VE's security groups, which the validator holds a cluster's
+	// firewall to. Nil, no group is looked up.
+	SecurityGroups SecurityGroups
 	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
 	// and the validator refuses a release it does not pin.
 	Releases *ReleaseChecksums

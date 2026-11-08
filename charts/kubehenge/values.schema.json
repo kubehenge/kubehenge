@@ -191,6 +191,12 @@
       "type": "string",
       "pattern": "^(https://[^\\s/]+)?$"
     },
+    "managementAddresses": {
+      "description": "The management cluster's node addresses, which a workload cluster's firewall accepts.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[0-9A-Fa-f.:]+$" }
+    },
     "watch": {
       "description": "What the controller watches for on its own, and how long it gives each before it reports it.",
       "type": "object",

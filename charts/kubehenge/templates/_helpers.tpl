@@ -1451,6 +1451,24 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           message: Flux's web interface signs in with a client secret.
         - rule: "!has(self.repository) || !has(self.repository.caBundle) || !(has(self.auth) && self.auth == 'existingSecret' && has(self.engine) && self.engine == 'flux')"
           message: Flux reads the authority from ca.crt in your own Secret.
+- name: securityGroups
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: array
+      minItems: 1
+      maxItems: 16
+      uniqueItems: true
+      description: >-
+        Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the
+        firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped,
+        so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A
+        change replaces the nodes.
+      items:
+        type: string
+        minLength: 2
+        maxLength: 18
+        pattern: "^[A-Za-z][A-Za-z0-9_-]+$"
 - name: egressProxy
   required: false
   schema:
@@ -2429,6 +2447,33 @@ Call with the root context.
           valueFrom:
             template: |
               {{- .Files.Get "files/proxmox-network.tpl" | nindent 14 }}
+# Cluster API copies the template's annotations onto each ProxmoxMachine, where Kubehenge's capmox
+# build reads them (scripts/capmox-patches): capmox has no firewall field, and a field of its own
+# would be pruned by the CRDs of capmox's release. Each VM's firewall accepts everything from the
+# cluster's own addresses ahead of the groups: the node addresses, the control-plane endpoint, the
+# pods (which reach other nodes unencapsulated with Cilium's native routing or Calico's BGP), and the
+# management cluster's nodes. One rule per source keeps every port and protocol a distribution or
+# CNI uses (VXLAN, Geneve, BGP, WireGuard, etcd, the kubelet) open between them without a port list.
+{{- $management := list }}
+{{- range .Values.managementAddresses }}{{ $management = append $management (quote .) }}{{ end }}
+- name: proxmox-firewall
+  enabledIf: {{ `{{ if .securityGroups }}true{{ end }}` | quote }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxMachineTemplate
+        matchResources:
+          controlPlane: true
+          machineDeploymentClass:
+            names: [worker]
+      jsonPatches:
+        - op: add
+          path: /spec/template/metadata
+          valueFrom:
+            template: |
+              annotations:
+                kubehenge.dev/firewall-groups: {{ `{{ join "," .securityGroups | quote }}` }}
+                kubehenge.dev/firewall-sources: {{ printf `{{ $s := list .controlPlaneEndpoint %s }}{{ with .network.addresses }}{{ $s = concat $s . }}{{ end }}{{ with .network.ipv6 }}{{ $s = concat $s .addresses }}{{ end }}{{ with .builtin.cluster.network }}{{ with .pods }}{{ $s = concat $s . }}{{ end }}{{ end }}{{ join "," $s | quote }}` (join " " $management) }}
 - name: proxmox-storage
   definitions:
     - selector:

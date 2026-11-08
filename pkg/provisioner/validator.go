@@ -26,7 +26,8 @@ import (
 // alone, volume snapshots where they cannot be taken, Sys.Audit on / where no cluster may hold it,
 // autoscaled pools whose bounds the autoscaler cannot work with or whose nodes would run out of
 // addresses, and a Talos release that does not run the Kubernetes version or that Talos cannot
-// upgrade to from the one before, and an interface MTU or queue count out of bounds, or an MTU above the
+// upgrade to from the one before, a firewall security group Proxmox VE lacks, and an interface MTU
+// or queue count out of bounds, or an MTU above the
 // bridge's. A cluster that already fell short before a change is not held to it for unrelated
 // edits.
 type ClusterValidator struct {
@@ -88,6 +89,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	defer cancel()
 	reads := v.Hooks.reads()
 	errs = append(errs, v.validateNodeNIC(pveCtx, old, c)...)
+	errs = append(errs, v.validateFirewall(pveCtx, old, c)...)
 	errs = append(errs, v.validateNodeOS(pveCtx, reads, old, c)...)
 	errs = append(errs, v.validateNUMA(pveCtx, reads, old, c, class)...)
 	errs = append(errs, v.validatePlacement(pveCtx, reads, old, c, class)...)
