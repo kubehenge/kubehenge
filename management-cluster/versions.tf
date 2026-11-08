@@ -166,9 +166,9 @@ locals {
     "ControlPlaneProvider/talos" = "ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.6.0@sha256:fdd30ae41424e6f36b30c5aa4ab13f46bf159050b365ed2d0194c053523c7bd2"
   }
 
-  # capmox v0.9.2 lacks five fixes, which scripts/capmox-patches adds to the release. A failed clone
-  # forgets its VM ID. Kept while the ID stays free, the machine keeps looking for a VM that was
-  # never made, and never clones again. A clone's VM ID is stored before the clone starts. The
+  # capmox v0.9.2 lacks five fixes and the VM firewall, which scripts/capmox-patches adds to the
+  # release. A failed clone forgets its VM ID. Kept while the ID stays free, the machine keeps
+  # looking for a VM that was never made, and never clones again. A clone's VM ID is stored before the clone starts. The
   # spec and the status are written apart, so a spec write that failed after the clone left its task
   # recorded without its VM ID, and the next reconcile cloned again. A stored ID that no VM holds,
   # after a restart or a refused clone, is dropped for a new one. A deleted machine's VM is destroyed
@@ -180,7 +180,10 @@ locals {
   # saying how to clear it. A ProxmoxCluster marked for deletion before its Cluster, as a namespace
   # delete does, is requeued every 10 seconds until the Cluster is deleted. Upstream returns without
   # a requeue, and the Cluster watch never passes a Cluster that gains its deletion timestamp, so
-  # the deletion waited for the 10-hour resync. The build runs on the release's own manifests.
+  # the deletion waited for the 10-hour resync. A machine annotated with Proxmox VE security groups
+  # gets its VM firewall before the first start: an accepting rule per source of the cluster's own
+  # traffic, the groups, the firewall flag on every interface and the VM's firewall on. Upstream
+  # has no setting for the interface's firewall flag. The build runs on the release's own manifests.
   # scripts/provider-image.sh builds it reproducibly, and a release publishes it only when it comes out with this digest. It applies
   # only while capmox is at `release`.
   capmox_build = {
@@ -191,7 +194,7 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:8fd3c6f43498e890618078ba43589459454f801afbfbf4efa834067c26282196"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:9daa7db7cf93cb2e9366e877190b1dc1d2c20c3b758921e1b1a4ca1ba02c4b9b"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and
