@@ -27,14 +27,23 @@ wanted() {
 
 # fetch <url>: downloads to ${work}/download. --retry alone leaves out a connection the host resets
 # mid-transfer (curl's exit 92). The caller's checksum makes trying again safe. GitHub's release
-# download address can answer 504 for an hour while its API serves the same file, so a GitHub
-# release asset is fetched through the API once its address gives up.
+# download address can answer 504 for hours while its API serves the same file. Once the address
+# fails, every later GitHub release asset of the run comes through the API, without its retries.
 fetch() {
-    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$1" && return 0
     case "$1" in
-        https://github.com/*/*/releases/download/*/*) ;;
-        *) return 1 ;;
+        https://github.com/*/*/releases/download/*/*)
+            if [ -z "${releases_down:-}" ]; then
+                curl -fsSL --proto '=https' --retry 2 --retry-all-errors --tlsv1.2 -o "${work}/download" "$1" && return 0
+                releases_down=1
+            fi
+            release_asset "$1"
+            ;;
+        *) curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$1" ;;
     esac
+}
+
+# release_asset <url>: a GitHub release asset through the API, by its tag and name.
+release_asset() {
     path=${1#https://github.com/}
     repository=${path%%/releases/download/*}
     tag_asset=${path#*/releases/download/}
