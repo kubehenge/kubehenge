@@ -134,7 +134,7 @@ func readNodes(ctx context.Context, r *APIReach, get Getter) {
 		}
 	}
 	for _, n := range nodes {
-		if reach, on := readNode(ctx, r, get, n.Node,addresses[n.Node]); on {
+		if reach, on := readNode(ctx, r, get, n.Node, addresses[n.Node]); on {
 			r.Nodes = append(r.Nodes, reach)
 		}
 	}
