@@ -19,7 +19,7 @@ export agnhost pause_image gitea
 # sized for it. The second is deleted before them.
 gitops_fixture_pods='e2e-lb/web e2e-mesh/server e2e-mesh/client e2e-plain/client e2e-git/client'
 # shellcheck disable=SC2034 # read by test/unit/lane-sizing.sh.
-earlier_fixture_pods='e2e-policy/server e2e-policy/client e2e-health/crasher e2e-ingress/web e2e-certs/web e2e-acme/client'
+earlier_fixture_pods='e2e-policy/server e2e-policy/client e2e-health/crasher e2e-ingress/web e2e-dual/web e2e-dual/client e2e-certs/web e2e-acme/client'
 agnhost_request_mib=16
 gitea_request_mib=128
 # word_count <words...>

@@ -103,7 +103,7 @@ func TestBGPRouterIDIsADottedID(t *testing.T) {
 	}
 }
 
-func TestProxmoxClusterTakesEachFamilysNetwork(t *testing.T) {
+func TestProxmoxClusterTakesTheNetworkOfEachFamily(t *testing.T) {
 	t.Parallel()
 	for _, file := range everyClass {
 		t.Run(file, func(t *testing.T) {
