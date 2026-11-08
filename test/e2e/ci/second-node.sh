@@ -8,7 +8,9 @@
 # ports are added to both bridges, so that VMs on either node share 172.20.99.0/24 with pve its
 # gateway and name server as before. A directory both containers mount at /var/lib/vz/shared is the
 # cluster's storage `shared`, as shared storage is to Proxmox VE: a template there is cloned onto
-# either node. Adds the second node's settings to <work directory>/env.
+# either node. pve2 has memory of its own, as a second host would: its container's limit is the
+# total it reports, and what its container uses, guests included, is its use. pve reports the
+# runner's memory, pve2's use counted. Adds the second node's settings to <work directory>/env.
 set -eu
 
 work=$(readlink -f "${1:?usage: $0 <work directory>}")
@@ -21,13 +23,44 @@ on() {
     docker exec "kubehenge-e2e-${node}" "$@"
 }
 
+# pve2's memory in MiB: the most guests two-nodes.sh puts on it (a 4096 MiB control plane, a 1024 MiB
+# worker and QEMU's 55 MiB each) and 1426 for its own services and a clone's page cache. Without
+# guests, it has about 1.4 GiB more free than the 4505 MiB a node needs to rejoin a placement for
+# that control plane.
+pve2_mib=6656
+
+# Proxmox VE reads a node's memory from /proc/meminfo, which in a container is the runner's. lxcfs,
+# from the same image and run on the runner, serves a container a /proc/meminfo of its cgroup: its
+# limit as the total and the memory its processes use. Its mount reaches the runner through the
+# shared bind of its directory.
+mkdir -p "${work}/lxcfs"
+docker run -d --name kubehenge-e2e-lxcfs --privileged --pid=host --cgroupns=host \
+    --mount "type=bind,source=${work}/lxcfs,target=/var/lib/lxcfs,bind-propagation=rshared" \
+    kubehenge-e2e-pve lxcfs -f /var/lib/lxcfs > /dev/null
+deadline=$(($(date +%s) + 30))
+until [ -r "${work}/lxcfs/proc/meminfo" ]; do
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+        echo "lxcfs did not mount within 30 seconds" >&2
+        docker logs kubehenge-e2e-lxcfs >&2 || true
+        exit 1
+    fi
+    sleep 1
+done
+
 # The shared directory is in pve's own /var/lib/vz, which pve2 mounts again under the same path.
 mkdir -p "${work}/vz/shared" "${work}/vz2"
 # /dev/shm as large as up.sh gives pve's, for corosync.
 docker run -d --name kubehenge-e2e-pve2 --hostname pve2 --privileged --cgroupns=private \
     --network kubehenge-e2e --ip 172.21.99.4 --tmpfs /run --tmpfs /run/lock --shm-size 1g \
+    --memory "${pve2_mib}m" -v "${work}/lxcfs/proc/meminfo:/proc/meminfo" \
     -v /sys/kernel/security:/sys/kernel/security -v "${work}/vz2:/var/lib/vz" \
     -v "${work}/vz/shared:/var/lib/vz/shared" kubehenge-e2e-pve > /dev/null
+total=$(on pve2 cat /proc/meminfo | awk '/^MemTotal:/ { print int($2 / 1024) }')
+[ "${total}" = "${pve2_mib}" ] || {
+    echo "pve2 reports ${total} MiB of memory, not the ${pve2_mib} MiB of its own" >&2
+    exit 1
+}
 
 deadline=$(($(date +%s) + 600))
 # shellcheck disable=SC2310 # on wraps one docker exec, whose status is what the loop polls and reports.
@@ -132,4 +165,4 @@ on pve pvesm add dir shared --path /var/lib/vz/shared --shared 1 --content image
 cat >> "${work}/env" << EOF
 export KUBEHENGE_E2E_NODES=pve,pve2 KUBEHENGE_E2E_SHARED_STORAGE=shared
 EOF
-echo "pve2 joined pve's cluster; storage shared on both"
+echo "pve2 joined pve's cluster; storage shared on both; pve2 has ${pve2_mib} MiB of memory"

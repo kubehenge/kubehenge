@@ -271,9 +271,9 @@ fi
 
 # The management node's memory is the module's default, but where the test's name gives another.
 # kubeadm-addons-a and k3s-addons-b with Calico and rke2-addons-b with Cilium take 3584 MiB, as
-# with 4096 their guests outgrow 12 GiB (docs/testing.md). two-nodes takes it too. Its two nodes
-# share this machine's memory, and the second rejoins the placement only with a tenth more than the
-# 4 GiB control plane free.
+# with 4096 their guests outgrow 12 GiB (docs/testing.md). two-nodes takes it too. Its first node
+# reports this machine's memory, which has to keep room for the 4 GiB control plane beside the
+# management node, the cluster and the second node.
 case "${test}+${KUBEHENGE_E2E_CNI:-}" in
     kubeadm-addons-a+calico | k3s-addons-b+calico | rke2-addons-b+cilium | two-nodes+*) : "${KUBEHENGE_E2E_MANAGEMENT_MEMORY:=3584}" ;;
     *) ;;
