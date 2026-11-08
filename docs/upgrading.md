@@ -34,14 +34,18 @@ Before 1.0.0, a minor release may change behaviour. Read its entry in the [chang
 
 Only Kubehenge's own software is upgraded, never the workload clusters. The management cluster follows only where its own automatic upgrades are on ([below](#automatically-after-kubehenge)).
 
+### The release index
+
+The updater accepts the release index, `https://kubehenge.dev/releases/index.json`, only if one of Kubehenge's release keys signed it and it has not expired.
+
+- The public keys are built into each release and cannot be configured.
+- The index expires two weeks after it was signed and is signed again every week ([releasing.md](releasing.md#the-index-appliances-read)).
+- A mirror of the index and its signatures can be named with `KUBEHENGE_RELEASE_INDEX=<URL>` in the appliance's `/etc/kubehenge/appliance.env`. The same checks apply to it, so a mirror has to copy the index at least weekly.
+
 ### What is installed
 
 The interface writes a request that `kubehenge-update`, a service running as root, carries out:
 
-- It accepts the release index, `https://kubehenge.dev/releases/index.json`, only if one of Kubehenge's release keys signed it and it has not expired.
-  - The public keys are built into each release and cannot be configured.
-  - The index expires two weeks after it was signed and is signed again every week ([releasing.md](releasing.md#the-index-appliances-read)).
-  - A mirror of the index and its signatures can be named with `KUBEHENGE_RELEASE_INDEX=<URL>` in the appliance's `/etc/kubehenge/appliance.env`. The interface and the updater apply the same checks to it, so a mirror has to copy the index at least weekly.
 - It installs only a release named in that index, newer than the installed one, and only an archive matching the checksum in the index. It also installs the OpenTofu release that release names, checked the same way.
 - It swaps the files by rename and restarts the interface. It holds the lock the management cluster's runs take, so an upgrade never cuts a run off and no run starts during an upgrade.
 - It keeps the installed release aside until the new one answers on its own certificate within 2 minutes. The new one must then run 20 seconds without a restart.
@@ -99,6 +103,8 @@ On the Administration page, the **Management cluster** section shows the setting
 
 The same page can move the management cluster to other Proxmox VE nodes or add nodes to it. A VM given another node is migrated there.
 
+#### Duration and failures
+
 Applying again runs with your Proxmox VE session like the first run and takes about as long. The page follows the log. If it fails, the page shows the error and the log. Fix the cause and apply again.
 
 #### When it is behind
@@ -141,6 +147,8 @@ Nobody is signed in when the run starts. Switching it on has the appliance keep 
   - An apply creates users, roles, ACLs, pools and VMs, as the first run does.
   - Switching it on creates the user and its token with your session. Because the token holds `Sys.Console` on `/`, you need it too, besides the [setup privileges](install.md#who-may-set-it-up).
 
+#### Where they are kept
+
 Both are kept sealed (AES-256-GCM) in a file in the appliance's state directory that only the interface's own user and root can read. The key that opens them is made anew each time it is switched on. It is kept on a volume of its own (`/var/lib/kubehenge-keys`), which Proxmox VE's backups of the container leave out (`backup=0`).
 
 An appliance restored from a backup shows the setting as on. Its next automatic run fails saying the key is gone. Switch it off and on again.
@@ -164,22 +172,26 @@ tofu apply
 
 ### By hand
 
-**Upgrade** on a cluster's page offers the newest release of its own minor version, when that is newer than the one running. It also offers the newest of the next minor version. Both come in the distribution's own form (`v1.37.1`, `v1.37.1+rke2r1`, `v1.37.1+k3s1`), from the [same sources](#where-the-versions-come-from) as automatic upgrades.
+**Upgrade** on a cluster's page offers the newest release of its own minor version when that is newer than the one running. It also offers the newest of the next minor version. Both come in the distribution's own form (`v1.37.1`, `v1.37.1+rke2r1`, `v1.37.1+k3s1`). They come from the [same sources](#where-the-versions-come-from) as automatic upgrades.
 
 When there is neither, the version can be typed in. For kubeadm, the dialog asks for a template of a newer version first. The interface refuses skipping a minor version or going back.
 
-Cluster API replaces the control-plane nodes one by one, then the workers. Each new node is created before an old one is removed. With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)). The change prints the same findings as warnings, from what the controller read within the last hour, and goes through either way.
+#### The rollout
 
-The dialog also warns of two things inside the cluster. A warning does not stop the upgrade. `kubehenge cluster upgrade web --version v1.37.1` prints the same list and asks first, and `--yes` skips the question.
+Cluster API replaces the control-plane nodes one by one, then the workers. Each new node is created before an old one is removed. The upgrade shows as a run, with each step and how many nodes it has replaced so far.
 
-- **Removed APIs.** Deprecated APIs that the target version or an earlier one removes and that a client requested in the last 7 days. The controller dates each by its request count every hour, and an API met for the first time counts from then. Without request counts the API server's gauge of every use since it started decides, and the dialog says so.
+![An upgrade under way: the control plane replaced, one of two workers replaced, the cluster yet to settle](images/run.png)
+
+With kubectl, set `spec.topology.version` ([clusters.md](clusters.md#day-two)). The change prints the same findings as warnings, from what the controller read within the last hour, and goes through either way.
+
+#### Warnings before an upgrade
+
+The dialog warns of two things inside the cluster. A warning does not stop the upgrade. `kubehenge cluster upgrade web --version v1.37.1` prints the same list and asks first, and `--yes` skips the question.
+
+- **Removed APIs.** Deprecated APIs that the target version or an earlier one removes and a client requested in the last 7 days, counted hourly from first sight. Without request counts, the API server's gauge of all use since it started decides, and the dialog says so.
 - **Fail-closed webhooks.** Webhooks with `failurePolicy: Fail` (the default) whose Service has under two ready endpoints, or all of them on one node. Kubehenge's own add-ons and URL webhooks are left out.
 
 Kubehenge reads both as the cluster's health identity, which may read `/metrics`, webhook configurations and endpoint slices. What cannot be read shows as **Not checked**.
-
-The upgrade shows as a run, with each step and how many nodes it has replaced so far.
-
-![An upgrade under way: the control plane replaced, one of two workers replaced, the cluster yet to settle](images/run.png)
 
 #### Per distribution
 
@@ -270,9 +282,11 @@ To hold a cluster on its build, switch `nodeImages` off. Deleting a broken build
 
 ### Add-on changes
 
-A new Kubehenge release changes the charts it installs. It also changes the values it gives them. A cluster with an upgrade window gets those changes inside the window and not before. That covers the CNI, the cloud controller manager, the CSI plugin, Traefik, Kyverno and every other add-on.
+A new Kubehenge release changes the charts it installs and the values it gives them. A cluster with an upgrade window gets those changes inside the window and not before. That covers every add-on, from the CNI and the CSI plugin to Traefik and Kyverno.
 
 A cluster has a window once its `upgrades` variable has automatic upgrades or node image refreshes on. A cluster without one gets the changes at once.
+
+#### What applies at once
 
 Three things apply at once, window or not:
 
@@ -280,7 +294,7 @@ Three things apply at once, window or not:
 - an add-on you switch on
 - a change you make to the cluster's own settings. It takes the waiting changes with it.
 
-While changes wait, the cluster has the condition `AddonChangesPending`, and the annotation `kubehenge.dev/addon-changes` lists each add-on with its chart, the version it runs and the version it moves to. The cluster's page and the Upgrade dialog show the same list.
+While changes wait, the cluster has the condition `AddonChangesPending`. The annotation `kubehenge.dev/addon-changes` lists each add-on with its chart, the version it runs and the version it moves to. The cluster's page and the Upgrade dialog show the same list.
 
 A security fix to an add-on waits for the window like a Kubernetes patch does. **Apply now** in the dialog or on the cluster's page, and `kubehenge cluster apply-addon-changes`, apply the waiting changes at once. So does the annotation:
 
@@ -293,15 +307,23 @@ The controller takes the annotation off once it has applied the changes.
 
 ### What holds an upgrade back
 
-- **Removed APIs and fail-closed webhooks.** An automatic upgrade makes the [same checks](#by-hand) and waits when they find something. The Cluster gets the condition `AutoUpgradeSkipped` ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)). Accepting the findings goes past it ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)).
+- **Removed APIs and fail-closed webhooks.** An automatic upgrade makes the [same checks](#by-hand) and waits when they find something. The Cluster gets the condition `AutoUpgradeSkipped`, and accepting the findings goes past it ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)).
 - **Rancher.** The cluster that runs Rancher stays within the Kubernetes versions Rancher's release runs on.
   - An upgrade beyond them, by hand or automatic, waits (the cluster's conditions say why) until a Kubehenge release brings a Rancher that runs there.
 - **A missing kubeadm template.** New kubeadm nodes cannot be created without the template of their version ([troubleshooting.md](troubleshooting.md#template-missing)).
 - **No spare addresses.** Each rollout creates a node before removing one ([troubleshooting.md](troubleshooting.md#node-addresses-run-out)).
-- **A node that will not let go.** A rollout, a node image refresh and the replacement of an unhealthy node each remove a machine. The machine first waits for its node, and three timeouts bound that wait.
-  - **Drain** (60 minutes by default) is how long the node's pods get to leave. After that the machine is removed with the pods a PodDisruptionBudget still protects, and with pods that ignore their stop signal.
-  - **Volume detach** (10 minutes) is how long the node's volumes get to detach. Proxmox VE refuses a detach while a backup or snapshot holds the VM. Once the time runs out the machine is deleted anyway.
-  - **Node removal** (1 minute) is how long the controller retries deleting the node's Node object.
-  - A timeout of 0 keeps waiting for ever, for single-replica workloads that must not go down. The rollout then stays on that machine until the pod or the volume lets go.
-  - Set them per cluster and per pool with **Timeouts…** under **Machines**, with `kubehenge cluster timeouts`, or as `deletion` in the Cluster ([clusters.md](clusters.md#pools)).
-  - Talos nodes upgraded in place use the drain timeout too, before their reboot. At the timeout the node reboots with the pods left, as a removed machine is deleted ([clusters.md](clusters.md#talos-upgrades)).
+- **A node that will not let go.** The machine being removed waits for its node until the [deletion timeouts](#machine-deletion-timeouts) run out.
+
+#### Machine deletion timeouts
+
+A rollout, a node image refresh and the replacement of an unhealthy node each remove a machine. The machine first waits for its node, and three timeouts bound that wait:
+
+- **Drain** (60 minutes by default) is how long the node's pods get to leave. After that the machine is removed with the pods a PodDisruptionBudget still protects, and with pods that ignore their stop signal.
+- **Volume detach** (10 minutes) is how long the node's volumes get to detach, though Proxmox VE refuses while a backup or snapshot holds the VM. Once the time runs out the machine is deleted anyway.
+- **Node removal** (1 minute) is how long the controller retries deleting the node's Node object.
+
+#### Setting the timeouts
+
+A timeout of 0 keeps waiting for ever, for single-replica workloads that must not go down. The rollout then stays on that machine until the pod or the volume lets go.
+
+Set them per cluster and per pool with **Timeouts…** under **Machines**, with `kubehenge cluster timeouts`, or as `deletion` in the Cluster ([clusters.md](clusters.md#pools)). Talos nodes upgraded in place use the drain timeout too, before their reboot. At the timeout the node reboots with the pods left, as a removed machine is deleted ([clusters.md](clusters.md#talos-upgrades)).

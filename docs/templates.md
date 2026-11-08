@@ -25,7 +25,7 @@ A node OS whose CPU type is above `x86-64-v2-AES` stops at boot on an older CPU.
 Every node OS holds only what a node needs:
 
 - Its family's minimal system, cloud-init and the QEMU guest agent.
-- chrony, enabled, as its time daemon, since a VM's host corrects its clock only on resume and migration. The bake checks that `chronyd` is enabled and that `chronyc tracking` answers. Talos keeps its own.
+- chrony, enabled, as its time daemon (Talos keeps its own), because a VM's host corrects its clock only on resume and migration. The bake checks that `chronyd` is enabled and that `chronyc tracking` answers.
 - The SELinux policy packages and the kernel modules a pod network bridges through.
 - For kubeadm, containerd and the kubelet's tools.
 - For RKE2 and k3s, their prerequisites and SELinux policy.
@@ -34,19 +34,25 @@ Every node OS holds only what a node needs:
 
 Nothing on a node updates itself. A new build of its template brings the updates ([below](#the-weekly-build)).
 
-Clones take three settings from the template. They start with their Proxmox VE host (`onboot`). Proxmox VE backup jobs skip their disks (`backup=0`), and the guest agent never freezes them for one. A node holds nothing to keep, and a restored node would bring back a stale etcd member. Back a cluster up with [etcd snapshots](clusters.md#etcd-snapshots) and the backups add-on.
+### Settings clones take
+
+Clones take three settings from the template. They start with their Proxmox VE host (`onboot`). Proxmox VE backup jobs skip their disks (`backup=0`) and the guest agent never freezes them for one. A node holds nothing to keep, and a restored node would bring back a stale etcd member. Back a cluster up with [etcd snapshots](clusters.md#etcd-snapshots) and the backups add-on.
 
 ### SELinux
 
-SELinux enforces on every node, with the targeted policy, never permissive. containerd runs with its SELinux support on, so pods run confined as `container_t`. RKE2 and k3s are started with `selinux: true` and their own policy (`rke2-selinux`, `k3s-selinux`).
+SELinux enforces on every node, with the targeted policy, never permissive. containerd runs with its SELinux support on. Pods therefore run confined as `container_t`. RKE2 and k3s are started with `selinux: true` and their own policy (`rke2-selinux`, `k3s-selinux`).
 
 On kubeadm nodes, kube-vip and the control plane's static pods (etcd, API server, controller manager, scheduler) run as `spc_t` through kubeadm patches. That type, for containers that manage the host, lets them read the node's certificates and keep etcd's data on the host. Every other pod stays confined.
 
 ### FIPS mode
 
-An RKE2 cluster's node OS can run in FIPS mode, as `almalinux-10-fips` or `rocky-10-fips`. Its nodes boot with the kernel argument `fips=1`. Every crypto library takes the `FIPS` policy of `update-crypto-policies`. The build fixes both, so FIPS mode has template lines of its own, tagged `fips`.
+An RKE2 cluster's node OS can run in FIPS mode, as `almalinux-10-fips` or `rocky-10-fips`. Its nodes boot with the kernel argument `fips=1`. Every crypto library takes the `FIPS` policy of `update-crypto-policies`. The build fixes both. FIPS mode therefore has template lines of its own, tagged `fips`.
 
-Each build checks in its own boot that `/proc/sys/crypto/fips_enabled` reads 1 and that the policy is `FIPS`. The workload cluster test has run an RKE2 cluster in FIPS mode on `rocky-10-fips` with Canal. The `etcd` part passed. The `machines` part passed through scaling, the upgrade, the paused, expiring and dead workers and the FIPS checks, then failed at the abandoned deletion. The parts `addons-a`, `addons-b` and `addons-d` have not run in FIPS mode, and no cluster has run on `almalinux-10-fips`. FIPS mode stays unsupported until every part passes.
+Each build checks in its own boot that `/proc/sys/crypto/fips_enabled` reads 1 and that the policy is `FIPS`.
+
+The workload cluster test has run an RKE2 cluster in FIPS mode on `rocky-10-fips` with Canal. The `etcd` part passed. The `machines` part passed through scaling, the upgrade, the paused, expiring and dead workers and the FIPS checks, then failed at the abandoned deletion.
+
+The parts `addons-a`, `addons-b` and `addons-d` have not run in FIPS mode. No cluster has run on `almalinux-10-fips`. FIPS mode stays unsupported until every part passes.
 
 | | FIPS mode |
 | --- | --- |
@@ -99,7 +105,7 @@ That VM reaches the package repositories by DHCP on `--bridge`, or a static addr
 
 ### Reuse and failures
 
-Creating is idempotent. It reuses a template with the same tags in the template pool, and for a node OS template any build of it ([Builds](#builds)). One with those tags in another pool is not reused, since clusters cannot clone from it. `--new-build` makes a new build of a node OS template even when one exists.
+Creating is idempotent. It reuses a template with the same tags in the template pool. For a node OS template, any build of it counts ([Builds](#builds)). One with those tags in another pool is not reused, since clusters cannot clone from it. `--new-build` makes a new build of a node OS template even when one exists.
 
 A failed run removes what it made. `--keep-on-failure` leaves the VM for inspection. A later run refuses to start until it is removed.
 
@@ -119,11 +125,11 @@ Talos templates have no builds. Talos nodes take their updates by upgrading Talo
 
 A build records its kernel and a hash of its packages in the template's description when it ends. The refresh compares each build with the previous one of its line. An older kernel means the mirror was one sync behind.
 
-Such a build is kept out of the builds clusters move to, and the Administration page marks it "Older than the previous build". The controller asks for another build an hour later, up to 3 times. After the third, the build stays out until a newer one arrives. A build from before this check is never older.
+Such a build is kept out of the builds clusters move to. The Administration page marks it "Older than the previous build". The controller asks for another build an hour later, up to 3 times. After the third, the build stays out until a newer one arrives. A build from before this check is never older.
 
 ### Hardware of clones
 
-Clones keep the template's CPU type and the options of its disk. A new build takes those of the newest build of its line, so the weekly build changes nothing. A line's first build takes the defaults unless the command says otherwise.
+Clones keep the template's CPU type and the options of its disk. A new build takes those of the newest build of its line. The weekly build therefore changes nothing. A line's first build takes the defaults unless the command says otherwise.
 
 | Option | Flag | Default |
 | --- | --- | --- |
@@ -135,16 +141,20 @@ Clones keep the template's CPU type and the options of its disk. A new build tak
 
 The options are booleans: `--iothread` switches one on, `--ssd=false` switches one off. The Build template dialog has them under **Hardware**, each as **Keep newest build's**, **On** or **Off**.
 
+#### Option details
+
 - **CPU type** is `host`, a Proxmox VE model such as `Haswell`, or `custom-` and a lower case name. Any other is refused.
 - **Discard** passes the guest's trims on to the storage, which gives back thin-provisioned space. It needs a storage that supports it.
-- **IO thread** serves the disk from a thread of its own. It sets the disk controller to `virtio-scsi-single`, the one with a thread per disk.
-- **NUMA** gives the guest a NUMA topology. Its machines then need at least 2 cores each. Kubehenge refuses a cluster with fewer, whether it is created in the interface, with kubectl or with the CLI.
+- **IO thread** serves the disk from a thread of its own. It sets the disk controller to `virtio-scsi-single`.
+- **NUMA** gives the guest a NUMA topology, so its machines need at least 2 cores each. A cluster with fewer is refused however it is created.
 
-The default CPU type lets a VM migrate between nodes of different CPUs. It hides the CPU's own model, so the node's kernel runs the Meltdown and MDS mitigations, which cost most on Intel hosts. `--cpu-type host` shows the clones the node's own CPU. Then they migrate only between nodes with the same one.
+#### Default CPU type or host
+
+The default CPU type lets a VM migrate between nodes of different CPUs. It hides the CPU's own model. The node's kernel therefore runs the Meltdown and MDS mitigations, which cost most on Intel hosts. `--cpu-type host` shows the clones the node's own CPU. Then they migrate only between nodes with the same one.
 
 #### Where it is recorded
 
-Each template records its hardware in tags that start with `hw-`, such as `hw-cpu-x86-64-v2-aes` and `hw-ssd`. They are no part of its line. A cluster selects its template by the other tags, so the hardware never changes which one it gets.
+Each template records its hardware in tags that start with `hw-`, such as `hw-cpu-x86-64-v2-aes` and `hw-ssd`. They are no part of its line. A cluster selects its template by the other tags. The hardware never changes which one it gets.
 
 The Templates view and `kubehenge template list` show the hardware. A template without these tags was made before Kubehenge recorded it.
 
@@ -152,7 +162,7 @@ A cluster is placed only on the Proxmox VE nodes whose CPU reaches the level of 
 
 ### Not available yet
 
-GPUs, PCI passthrough, extra disks and huge pages cannot be set. Cluster API's Proxmox VE provider has no fields for them, so a VM edited by hand in Proxmox VE loses the change when its node is replaced.
+GPUs, PCI passthrough, extra disks and huge pages cannot be set. Cluster API's Proxmox VE provider has no fields for them. A VM edited by hand loses the change when its node is replaced.
 
 ## The weekly build
 
@@ -162,7 +172,9 @@ While the management cluster's template refresh is on (the default), a CronJob i
 - every RKE2 and k3s template in the template pool, and
 - the kubeadm template of each Kubernetes version and node OS a kubeadm cluster runs.
 
-Then it deletes the builds nothing needs. Of each line it keeps the two newest and any older one that a cluster's machines run or a new machine will clone from. A kubeadm line no cluster runs or can upgrade to keeps only its newest build.
+### Cleanup and failures
+
+The run then deletes the builds nothing needs. Of each line it keeps the two newest and any older one that a cluster's machines run or a new machine will clone from. A kubeadm line no cluster runs or can upgrade to keeps only its newest build.
 
 A build that fails does not stop the others. The next run starts over. The Administration page shows the last run with its log and has Build now.
 
@@ -174,7 +186,7 @@ The run also builds the kubeadm template of the newest patch release of each min
 
 ### The command
 
-The CronJob runs `kubehenge template refresh` with an API token of its own, made for it alone ([install-settings.md](install-settings.md#what-the-template-builds-may-do)). One run at a time holds a Lease, so the schedule, Build now and a cluster creator's request never build at once.
+The CronJob runs `kubehenge template refresh` with an API token of its own, made for it alone ([install-settings.md](install-settings.md#what-the-template-builds-may-do)). One run at a time holds a Lease. The schedule, Build now and a cluster creator's request therefore never build at once.
 
 ```sh
 kubehenge template refresh --node pve1 --storage shared-storage --import-storage local --pool kubehenge-templates
@@ -195,10 +207,17 @@ A cluster creator's request names a Talos template as `talos-v1.14.5`.
 
 ## Requirements
 
+### Storage and nodes
+
 - In a Proxmox VE cluster, templates should go on shared storage, so that clones can start on any node. Without `--storage`, the command takes the shared storage with the most room that allows disk images, and asks for `--storage` when there is none.
   - On storage that is not shared, the command says so. Clusters then run only on the template's node.
-- The storage given with `--import-storage` (`local` by default) must allow the `import` content type. The ISO storage must allow `iso`, and without `--iso-storage` is the first one the token can write to. The build checks the content types, the storage privileges below and the datacenter's tag options before it downloads anything.
-- `--node` takes several nodes separated by commas. The build runs on the first that is online and whose CPU runs the node OS. The chart's `templateRefresh.node` takes a list the same way.
+- The storage given with `--import-storage` (`local` by default) must allow the `import` content type.
+- The ISO storage must allow `iso`. Without `--iso-storage` it is the first one the token can write to.
+- The build checks the content types, the storage privileges and the datacenter's tag options before it downloads anything.
+- `--node` takes several nodes separated by commas, and the chart's `templateRefresh.node` takes a list the same way. The build runs on the first that is online and whose CPU runs the node OS.
+
+### API token
+
 - The API token needs what the weekly build's own token holds ([install-settings.md](install-settings.md#what-the-template-builds-may-do)):
   - On the template pool (`--pool`, `kubehenge-templates` by default), propagated: `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.Config.CDROM`, `VM.Config.CPU`, `VM.Config.Disk`, `VM.Config.HWType`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Options`, `VM.GuestAgent.Unrestricted` and `VM.PowerMgmt`.
   - On the storages of `--import-storage` and `--iso-storage`: `Datastore.Allocate`, `Datastore.AllocateTemplate` and `Datastore.Audit`.
@@ -219,6 +238,6 @@ kubehenge template delete rke2 --build build-202610110100
 
 Both work in the template pool, `--pool` as for create. `--pool ''` covers every pool. Delete takes every build of a node OS template, `--node-os` as for create, or the one `--build` names.
 
-Delete refuses a build a cluster's machines are cloned from, as the Administration page does, and names the clusters. It reads which clusters those are from the management cluster `KUBECONFIG` points at (`--class-namespace` if Kubehenge is not in `kubehenge-system`).
+Delete refuses a build a cluster's machines are cloned from, as the Administration page does. It names the clusters. It reads which clusters those are from the management cluster `KUBECONFIG` points at (`--class-namespace` if Kubehenge is not in `kubehenge-system`).
 
 `--roll-clusters` deletes such a build anyway, for one found broken. The clusters that run it have their nodes replaced at once, outside their upgrade windows, with clones of the build before it. The last build of a template is never deleted while a cluster runs it.

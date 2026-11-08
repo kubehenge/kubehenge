@@ -29,11 +29,11 @@ VMware's vSphere Kubernetes Service is built on Cluster API. Kubehenge is the Pr
 
 ## What it does
 
-- **Create, scale, upgrade and delete clusters** on Proxmox VE VMs, from the interface or with `kubectl apply`. Upgrades replace nodes one at a time, and a node not ready for five minutes is replaced.
-- **A distribution per cluster:** kubeadm (upstream Kubernetes), RKE2, k3s or Talos Linux, with the distribution's own CNI, Cilium or Calico. Talos nodes are upgraded in place through Talos's own API.
-- **Proxmox VE built in:** the Proxmox CSI plugin for persistent volumes, its cloud controller manager for node lifecycle, a virtual IP for the control plane.
-- **Clusters kept apart.** Each cluster gets its own Proxmox VE pool, user and API token. The token, held on its control-plane nodes only, has rights on its own VMs and volumes only.
-- **Upgrades without a shell.** Clusters can upgrade Kubernetes on their own inside an upgrade window you set. Kubehenge upgrades itself to signed releases only, from a button or automatically.
+- **Create, scale, upgrade and delete clusters** on Proxmox VE, from the interface or with `kubectl apply`. Upgrades replace nodes one at a time, as do health checks for nodes not ready for five minutes.
+- **A distribution per cluster:** kubeadm (upstream Kubernetes), RKE2, k3s or Talos Linux, with the distribution's own CNI, Cilium or Calico.
+- **Proxmox VE built in:** the Proxmox CSI plugin for volumes, its cloud controller manager and a control-plane virtual IP.
+- **Clusters kept apart.** Each cluster gets its own Proxmox VE pool, user and API token, with rights on its own VMs and volumes only.
+- **Upgrades without a shell.** Clusters upgrade Kubernetes inside a window you set. Kubehenge upgrades itself to signed releases only, from a button or automatically.
 - **Told when something breaks.** A failed run, a management cluster problem or a cluster's health item reaches a webhook, ntfy or email. Activity lists who did what for 90 days.
 
 ## What runs where
