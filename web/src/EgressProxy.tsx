@@ -12,11 +12,13 @@ export type EgressMode = "management" | "own" | "none";
 export interface EgressChoice {
   mode: EgressMode;
   url: string;
+  /** The proxy for https:// addresses, empty where url serves them. */
+  httpsUrl: string;
   // Separated by commas, spaces or lines.
   noProxy: string;
 }
 
-export const newEgress = (): EgressChoice => ({ mode: "management", url: "", noProxy: "" });
+export const newEgress = (): EgressChoice => ({ mode: "management", url: "", httpsUrl: "", noProxy: "" });
 
 export function egressOf(v: unknown): EgressChoice {
   const r = record(v);
@@ -25,7 +27,7 @@ export function egressOf(v: unknown): EgressChoice {
   }
   const url = text(r["url"]);
   if (filled(url)) {
-    return { mode: "own", url, noProxy: (texts(r["noProxy"]) ?? []).join(", ") };
+    return { mode: "own", url, httpsUrl: text(r["httpsUrl"]) ?? "", noProxy: (texts(r["noProxy"]) ?? []).join(", ") };
   }
   return newEgress();
 }
@@ -39,6 +41,9 @@ export function egressVariable(e: EgressChoice): Record<string, unknown> | undef
     return undefined;
   }
   const v: Record<string, unknown> = { url: e.url.trim() };
+  if (e.httpsUrl.trim() !== "") {
+    v["httpsUrl"] = e.httpsUrl.trim();
+  }
   const exceptions = list(e.noProxy);
   if (exceptions.length > 0) {
     v["noProxy"] = exceptions;
@@ -59,11 +64,13 @@ export function egressText(e: EgressChoice): string {
 }
 
 /** The fields of an egress choice a problem belongs to. */
-export const egressFields = ["url", "noProxy"] as const;
+export const egressFields = ["url", "httpsUrl", "noProxy"] as const;
 export type EgressField = (typeof egressFields)[number];
 
-// The schema's limit on the exceptions.
+// The schema's limit on the exceptions, and the addresses and exceptions it takes.
 const maxExceptions = 64;
+const proxyAddress = /^https?:\/\/(?:[A-Za-z0-9](?:[-A-Za-z0-9.]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(?::[0-9]{1,5})?\/?$/u;
+const exception = /^[A-Za-z0-9._*:/[\]-]+$/u;
 
 /** egressProblems says, by field, what is wrong with a choice. The server checks the same. */
 export function egressProblems(e: EgressChoice): Partial<Record<EgressField, string>> {
@@ -71,11 +78,16 @@ export function egressProblems(e: EgressChoice): Partial<Record<EgressField, str
   if (e.mode !== "own") {
     return p;
   }
-  if (!/^https?:\/\/[^\s/@?#]+\/?$/u.test(e.url.trim())) {
+  if (!proxyAddress.test(e.url.trim())) {
     p.url = "Enter an http:// or https:// address without credentials or path";
+  }
+  if (e.httpsUrl.trim() !== "" && !proxyAddress.test(e.httpsUrl.trim())) {
+    p.httpsUrl = "Enter an http:// or https:// address without credentials or path";
   }
   if (list(e.noProxy).length > maxExceptions) {
     p.noProxy = `At most ${maxExceptions} exceptions`;
+  } else if (!list(e.noProxy).every((x) => exception.test(x))) {
+    p.noProxy = "Use letters, digits, hyphens and . _ * : / [ ] only";
   }
   return p;
 }
@@ -87,7 +99,7 @@ const modes: { value: EgressMode; label: string }[] = [
 ];
 
 const egressInfo =
-  "Cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher use it. Cluster ranges, .svc and .cluster.local always go direct.";
+  "An own proxy serves the nodes and the add-ons that reach beyond the cluster. Cluster ranges always go direct.";
 
 const noProblems: Partial<Record<EgressField, string>> = {};
 
@@ -134,6 +146,16 @@ export function EgressFields({
               />
             )}
           </Field>
+          <Field label="HTTPS proxy address" hint="Only if it differs" error={problems.httpsUrl}>
+            {(id) => (
+              <input
+                id={id}
+                spellCheck={false}
+                value={e.httpsUrl}
+                onChange={(ev) => onChange({ ...e, httpsUrl: ev.target.value })}
+              />
+            )}
+          </Field>
           <Field label="Exceptions" hint="Hosts, domains or networks, one per line" error={problems.noProxy}>
             {(id) => (
               <textarea
@@ -169,6 +191,9 @@ export function EgressDialog({ cluster: c, onClose }: { cluster: Cluster; onClos
       const more = new Set(t);
       if (to.url !== value.url) {
         more.add("url");
+      }
+      if (to.httpsUrl !== value.httpsUrl) {
+        more.add("httpsUrl");
       }
       if (to.noProxy !== value.noProxy) {
         more.add("noProxy");

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -29,6 +30,8 @@ const (
 type EgressProxy struct {
 	// URL is the proxy's address, without credentials, since add-on settings are plain text.
 	URL string `json:"url,omitempty"`
+	// HTTPSURL is the proxy for https:// addresses, where it differs from URL.
+	HTTPSURL string `json:"httpsUrl,omitempty"`
 	// NoProxy are hosts, domains and networks that bypass the proxy, beside the cluster's own pod
 	// and service ranges, which every cluster adds.
 	NoProxy []string `json:"noProxy,omitempty"`
@@ -46,11 +49,21 @@ type Egress struct {
 
 // egressEnv is the proxy one cluster's add-ons go through. The zero value is none.
 type egressEnv struct {
-	url     string
-	noProxy []string
+	url string
+	// httpsURL is the proxy for https:// addresses, or "" where url serves them.
+	httpsURL string
+	noProxy  []string
 }
 
 func (e egressEnv) on() bool { return e.url != "" }
+
+// https is the proxy for https:// addresses.
+func (e egressEnv) https() string {
+	if e.httpsURL != "" {
+		return e.httpsURL
+	}
+	return e.url
+}
 
 func (e egressEnv) exceptions() string { return strings.Join(e.noProxy, ",") }
 
@@ -82,7 +95,7 @@ const loopback = "127.0.0.1"
 // cluster's variable wins: its own address, or none. Without one the management side's is the
 // default, with the exceptions it lists.
 func (e Egress) resolve(cluster *clusterv1.Cluster, v *EgressProxy) (egressEnv, string) {
-	address, extra := v.URL, v.NoProxy
+	address, extra, secure := v.URL, v.NoProxy, v.HTTPSURL
 	switch {
 	case v.Disabled:
 		return egressEnv{}, ""
@@ -97,7 +110,7 @@ func (e Egress) resolve(cluster *clusterv1.Cluster, v *EgressProxy) (egressEnv, 
 	exceptions = append(exceptions, cluster.Spec.ClusterNetwork.Services.CIDRBlocks...)
 	exceptions = append(exceptions, egressAlways...)
 	exceptions = append(exceptions, extra...)
-	return egressEnv{url: address, noProxy: unique(exceptions)}, ""
+	return egressEnv{url: address, httpsURL: secure, noProxy: unique(exceptions)}, ""
 }
 
 // unique drops repeats and keeps the order, so that the same settings always give the same values.
@@ -120,7 +133,10 @@ func (e egressEnv) vars() []any {
 	out := make([]any, 0, 6) //nolint:mnd // three variables in two spellings
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"} {
 		value := e.url
-		if name == "NO_PROXY" {
+		switch name {
+		case "HTTPS_PROXY":
+			value = e.https()
+		case "NO_PROXY":
 			value = e.exceptions()
 		}
 		out = append(out,
@@ -137,7 +153,7 @@ func (e egressEnv) vars() []any {
 // and catalogues. Flux's controllers are patched in its FluxInstance (patchFlux).
 func (e egressEnv) values() map[string]map[string]any {
 	return map[string]map[string]any{
-		certManagerAddon: {"http_proxy": e.url, "https_proxy": e.url, "no_proxy": e.exceptions()},
+		certManagerAddon: {"http_proxy": e.url, "https_proxy": e.https(), "no_proxy": e.exceptions()},
 		veleroRelease: {
 			"configuration": map[string]any{"extraEnvVars": e.vars()},
 			"nodeAgent":     map[string]any{"extraEnvVars": e.vars()},
@@ -195,26 +211,42 @@ func (e egressEnv) patchFlux(instance *unstructured.Unstructured) error {
 // checkEgress holds the egressProxy variable to a proxy address without credentials, and
 // exceptions that name something.
 func checkEgress(v *EgressProxy) error {
-	if v.URL != "" {
-		u, err := url.Parse(v.URL)
+	for _, a := range []struct{ name, address string }{{urlKey, v.URL}, {"httpsUrl", v.HTTPSURL}} {
+		name, address := a.name, a.address
+		if address == "" {
+			continue
+		}
+		u, err := url.Parse(address)
 		switch {
 		case err != nil || (u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS) || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "":
 			// The address is left out of the message: it may hold a password.
-			return errors.New("url is no http:// or https:// address with a host and no path")
+			return fmt.Errorf("%s is no http:// or https:// address with a host and no path", name)
 		case u.User != nil:
-			return errors.New("url holds credentials, which add-on settings would show in plain text. Give the address alone")
+			return fmt.Errorf("%s holds credentials, which add-on settings and node files would show in plain text. Give the address alone", name)
+		case !proxyHost.MatchString(u.Host):
+			return fmt.Errorf("%s has a host with characters other than letters, digits, dots, hyphens, a port or an IPv6 address in brackets", name)
 		}
 	}
-	if v.Disabled && v.URL != "" {
+	if v.HTTPSURL != "" && v.URL == "" {
+		return errors.New("httpsUrl comes with url, for http:// addresses")
+	}
+	if v.Disabled && (v.URL != "" || v.HTTPSURL != "") {
 		return errors.New("disabled and url exclude each other")
 	}
 	if len(v.NoProxy) > maxEgressNoProxy {
 		return fmt.Errorf("noProxy lists %d entries, at most %d", len(v.NoProxy), maxEgressNoProxy)
 	}
 	for _, entry := range v.NoProxy {
-		if entry == "" || strings.ContainsAny(entry, ", \t\r\n") {
-			return fmt.Errorf("noProxy entry %q is empty or holds a comma or a space", entry)
+		if !noProxyEntry.MatchString(entry) {
+			return fmt.Errorf("noProxy entry %q is empty or has characters other than letters, digits and . _ * : / [ ] -", entry)
 		}
 	}
 	return nil
 }
+
+// proxyHost and noProxyEntry hold the values to what the nodes' boot script and environment files
+// read the same way in a shell, in YAML and in systemd. The chart's schema holds the same lines.
+var (
+	proxyHost    = regexp.MustCompile(`^([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?$`)
+	noProxyEntry = regexp.MustCompile(`^[A-Za-z0-9._*:/\[\]-]+$`)
+)

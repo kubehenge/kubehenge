@@ -26,6 +26,7 @@ import { addressBits, addressIn, bridgeLabel } from "./network";
 import { baseTitle, choosable, cpuNote, findNodeOS, fipsCNI, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { NodeCustomisationFields } from "./NodeCustomisation";
 import { NodeSettingsFields } from "./NodeSettings";
+import { MirrorFields, TrustedCAField } from "./NodeSite";
 import { NodeTimeoutFields } from "./NodeTimeouts";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
@@ -774,6 +775,16 @@ export function NetworkStep({
       <Field label="Time servers" hint="Optional, separated by commas" error={shown("ntpServers")}>
         {(id) => <input id={id} value={form.ntpServers} onChange={(e) => set("ntpServers", e.target.value)} />}
       </Field>
+      {variable(cls, "registryMirrors") && (
+        <MirrorFields
+          value={form.registryMirrors}
+          onChange={(rows) => set("registryMirrors", rows)}
+          error={shown("registryMirrors")}
+        />
+      )}
+      {variable(cls, "trustedCAs") && (
+        <TrustedCAField value={form.trustedCAs} onChange={(s) => set("trustedCAs", s)} error={shown("trustedCAs")} />
+      )}
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}

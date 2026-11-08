@@ -1867,27 +1867,33 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has one without credentials in its address. The cluster's pod and service ranges, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
                   "type": "boolean"
+                },
+                "httpsUrl": {
+                  "description": "The proxy for https:// addresses, where it differs from url.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
+                  "type": "string"
                 },
                 "noProxy": {
                   "description": "Hosts, domains and networks that bypass the proxy.",
                   "items": {
                     "maxLength": 253,
                     "minLength": 1,
-                    "pattern": "^[^,\\s]+$",
+                    "pattern": "^[A-Za-z0-9._*:/\\[\\]-]+$",
                     "type": "string"
                   },
                   "maxItems": 64,
                   "type": "array"
                 },
                 "url": {
-                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings are plain text.",
+                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings and node files are plain text. It serves http:// addresses, and https:// ones unless httpsUrl says otherwise.",
                   "maxLength": 2048,
-                  "pattern": "^https?://[^\\s/@?#]+/?$",
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
                   "type": "string"
                 }
               },
@@ -1895,7 +1901,11 @@
               "x-kubernetes-validations": [
                 {
                   "message": "A cluster that goes direct names no proxy.",
-                  "rule": "!has(self.disabled) || !self.disabled || !has(self.url)"
+                  "rule": "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
+                },
+                {
+                  "message": "httpsUrl comes with url, for http:// addresses.",
+                  "rule": "!has(self.httpsUrl) || has(self.url)"
                 }
               ]
             }
@@ -2621,6 +2631,78 @@
                 }
               },
               "type": "object"
+            }
+          }
+        },
+        {
+          "name": "registryMirrors",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
+              "items": {
+                "properties": {
+                  "caBundle": {
+                    "description": "The authority that signed the mirrors' certificates, as PEM.",
+                    "maxLength": 65536,
+                    "minLength": 64,
+                    "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                    "type": "string"
+                  },
+                  "endpoints": {
+                    "items": {
+                      "maxLength": 512,
+                      "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/([A-Za-z0-9._-]+/)*v2)?$",
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "registry": {
+                    "description": "The registry's host name, with its port if it has one, or * for every registry.",
+                    "maxLength": 253,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "registry",
+                  "endpoints"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "trustedCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "distributionMirror",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Where the nodes download k3s's releases from in place of GitHub: a mirror of its releases, with the same file names under \u003caddress\u003e/\u003cversion\u003e/. The install script itself still comes from get.k3s.io, through the proxy where there is one.",
+              "maxLength": 512,
+              "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%+=-]+)*/?$",
+              "type": "string"
             }
           }
         },
@@ -4477,27 +4559,33 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has one without credentials in its address. The cluster's pod and service ranges, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
                   "type": "boolean"
+                },
+                "httpsUrl": {
+                  "description": "The proxy for https:// addresses, where it differs from url.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
+                  "type": "string"
                 },
                 "noProxy": {
                   "description": "Hosts, domains and networks that bypass the proxy.",
                   "items": {
                     "maxLength": 253,
                     "minLength": 1,
-                    "pattern": "^[^,\\s]+$",
+                    "pattern": "^[A-Za-z0-9._*:/\\[\\]-]+$",
                     "type": "string"
                   },
                   "maxItems": 64,
                   "type": "array"
                 },
                 "url": {
-                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings are plain text.",
+                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings and node files are plain text. It serves http:// addresses, and https:// ones unless httpsUrl says otherwise.",
                   "maxLength": 2048,
-                  "pattern": "^https?://[^\\s/@?#]+/?$",
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
                   "type": "string"
                 }
               },
@@ -4505,7 +4593,11 @@
               "x-kubernetes-validations": [
                 {
                   "message": "A cluster that goes direct names no proxy.",
-                  "rule": "!has(self.disabled) || !self.disabled || !has(self.url)"
+                  "rule": "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
+                },
+                {
+                  "message": "httpsUrl comes with url, for http:// addresses.",
+                  "rule": "!has(self.httpsUrl) || has(self.url)"
                 }
               ]
             }
@@ -5231,6 +5323,66 @@
                 }
               },
               "type": "object"
+            }
+          }
+        },
+        {
+          "name": "registryMirrors",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
+              "items": {
+                "properties": {
+                  "caBundle": {
+                    "description": "The authority that signed the mirrors' certificates, as PEM.",
+                    "maxLength": 65536,
+                    "minLength": 64,
+                    "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                    "type": "string"
+                  },
+                  "endpoints": {
+                    "items": {
+                      "maxLength": 512,
+                      "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/([A-Za-z0-9._-]+/)*v2)?$",
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "registry": {
+                    "description": "The registry's host name, with its port if it has one, or * for every registry.",
+                    "maxLength": 253,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "registry",
+                  "endpoints"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "trustedCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
             }
           }
         },
@@ -7130,27 +7282,33 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has one without credentials in its address. The cluster's pod and service ranges, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
                   "type": "boolean"
+                },
+                "httpsUrl": {
+                  "description": "The proxy for https:// addresses, where it differs from url.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
+                  "type": "string"
                 },
                 "noProxy": {
                   "description": "Hosts, domains and networks that bypass the proxy.",
                   "items": {
                     "maxLength": 253,
                     "minLength": 1,
-                    "pattern": "^[^,\\s]+$",
+                    "pattern": "^[A-Za-z0-9._*:/\\[\\]-]+$",
                     "type": "string"
                   },
                   "maxItems": 64,
                   "type": "array"
                 },
                 "url": {
-                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings are plain text.",
+                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings and node files are plain text. It serves http:// addresses, and https:// ones unless httpsUrl says otherwise.",
                   "maxLength": 2048,
-                  "pattern": "^https?://[^\\s/@?#]+/?$",
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
                   "type": "string"
                 }
               },
@@ -7158,7 +7316,11 @@
               "x-kubernetes-validations": [
                 {
                   "message": "A cluster that goes direct names no proxy.",
-                  "rule": "!has(self.disabled) || !self.disabled || !has(self.url)"
+                  "rule": "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
+                },
+                {
+                  "message": "httpsUrl comes with url, for http:// addresses.",
+                  "rule": "!has(self.httpsUrl) || has(self.url)"
                 }
               ]
             }
@@ -7880,6 +8042,78 @@
                 }
               },
               "type": "object"
+            }
+          }
+        },
+        {
+          "name": "registryMirrors",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
+              "items": {
+                "properties": {
+                  "caBundle": {
+                    "description": "The authority that signed the mirrors' certificates, as PEM.",
+                    "maxLength": 65536,
+                    "minLength": 64,
+                    "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                    "type": "string"
+                  },
+                  "endpoints": {
+                    "items": {
+                      "maxLength": 512,
+                      "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/([A-Za-z0-9._-]+/)*v2)?$",
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "registry": {
+                    "description": "The registry's host name, with its port if it has one, or * for every registry.",
+                    "maxLength": 253,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "registry",
+                  "endpoints"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "trustedCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "distributionMirror",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Where the nodes download RKE2's releases from in place of GitHub: a mirror of its releases, with the same file names under \u003caddress\u003e/\u003cversion\u003e/. The install script itself still comes from get.rke2.io, through the proxy where there is one.",
+              "maxLength": 512,
+              "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~%+=-]+)*/?$",
+              "type": "string"
             }
           }
         },
@@ -9703,27 +9937,33 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has one without credentials in its address. The cluster's pod and service ranges, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
                   "type": "boolean"
+                },
+                "httpsUrl": {
+                  "description": "The proxy for https:// addresses, where it differs from url.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
+                  "type": "string"
                 },
                 "noProxy": {
                   "description": "Hosts, domains and networks that bypass the proxy.",
                   "items": {
                     "maxLength": 253,
                     "minLength": 1,
-                    "pattern": "^[^,\\s]+$",
+                    "pattern": "^[A-Za-z0-9._*:/\\[\\]-]+$",
                     "type": "string"
                   },
                   "maxItems": 64,
                   "type": "array"
                 },
                 "url": {
-                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings are plain text.",
+                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings and node files are plain text. It serves http:// addresses, and https:// ones unless httpsUrl says otherwise.",
                   "maxLength": 2048,
-                  "pattern": "^https?://[^\\s/@?#]+/?$",
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
                   "type": "string"
                 }
               },
@@ -9731,7 +9971,11 @@
               "x-kubernetes-validations": [
                 {
                   "message": "A cluster that goes direct names no proxy.",
-                  "rule": "!has(self.disabled) || !self.disabled || !has(self.url)"
+                  "rule": "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
+                },
+                {
+                  "message": "httpsUrl comes with url, for http:// addresses.",
+                  "rule": "!has(self.httpsUrl) || has(self.url)"
                 }
               ]
             }
@@ -10408,6 +10652,66 @@
                 }
               },
               "type": "object"
+            }
+          }
+        },
+        {
+          "name": "registryMirrors",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
+              "items": {
+                "properties": {
+                  "caBundle": {
+                    "description": "The authority that signed the mirrors' certificates, as PEM.",
+                    "maxLength": 65536,
+                    "minLength": 64,
+                    "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                    "type": "string"
+                  },
+                  "endpoints": {
+                    "items": {
+                      "maxLength": 512,
+                      "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/([A-Za-z0-9._-]+/)*v2)?$",
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "registry": {
+                    "description": "The registry's host name, with its port if it has one, or * for every registry.",
+                    "maxLength": 253,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "registry",
+                  "endpoints"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "trustedCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
             }
           }
         },

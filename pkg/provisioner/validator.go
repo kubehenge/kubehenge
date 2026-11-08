@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -114,6 +115,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateMonitoring(c)...)
 	errs = append(errs, validateGitOps(c)...)
 	errs = append(errs, validateEgress(c)...)
+	errs = append(errs, validateNodeSite(c, time.Now())...)
 	errs = append(errs, validateAddonSettings(old, c)...)
 	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
 	errs = append(errs, validateAutoscaling(c)...)

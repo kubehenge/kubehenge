@@ -18,6 +18,7 @@ import { NamespaceLabelsDialog } from "./NamespaceLabels";
 import { nodeCustomisationOf, nodeCustomisationText } from "./node-customisation";
 import { choosable, cpuNote, findNodeOS, fipsCNI, nodeOSKey, nodeOSRef } from "./node-os";
 import { NodeCustomisationDialog } from "./NodeCustomisation";
+import { MirrorsDialog, TrustedCAsDialog, mirrorsOf, mirrorsText, trustedOf, trustedText } from "./NodeSite";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import {
   PlacementDialog,
@@ -72,6 +73,8 @@ export type OptionAction =
   | "rancher"
   | "gitops"
   | "egressProxy"
+  | "registryMirrors"
+  | "trustedCAs"
   | "upgrades"
   | "certificates"
   | "namespaceLabels"
@@ -133,6 +136,8 @@ export function OptionDialog({
     rancher: RancherDialog,
     gitops: GitOpsDialog,
     egressProxy: EgressDialog,
+    registryMirrors: MirrorsDialog,
+    trustedCAs: TrustedCAsDialog,
     upgrades: UpgradesDialog,
     certificates: CertificatesDialog,
     namespaceLabels: NamespaceLabelsDialog,
@@ -418,6 +423,20 @@ export function optionRows<A extends string = never>(
       group: "Network",
       action: "egressProxy",
       name: "the egress proxy",
+    },
+    {
+      label: "Registry mirrors",
+      value: mirrorsText(mirrorsOf(c.variables["registryMirrors"])),
+      group: "Network",
+      action: "registryMirrors",
+      name: "the registry mirrors",
+    },
+    {
+      label: "Trusted CAs",
+      value: trustedText(trustedOf(c.variables["trustedCAs"])),
+      group: "Network",
+      action: "trustedCAs",
+      name: "the trusted CAs",
     },
     {
       label: "Automatic upgrades",

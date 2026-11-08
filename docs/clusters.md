@@ -63,6 +63,8 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | Gateway | The nodes' default gateway. |
 | DNS servers | IPv4 addresses, one per line or separated by commas. |
 | Time servers | Up to 8 NTP host names or IP addresses, separated by commas. Empty keeps the node image's public servers. The nodes reach them on UDP 123, and a node that cannot sync is reported on the health page ([troubleshooting](troubleshooting.md#a-nodes-clock-is-off)). |
+| Registry mirrors | Per registry, up to 4 mirror addresses and an optional authority, [below](#sites-with-limited-access). |
+| Trusted CAs | PEM certificates the nodes trust besides their OS's own, [below](#sites-with-limited-access). |
 | Load balancer | What gives Services of type `LoadBalancer` their addresses, [below](#load-balancer). |
 | Load-balancer addresses | With a load balancer: the addresses it hands out, as ranges, networks or single addresses. |
 | Announce with | With MetalLB: layer 2 (ARP) or BGP, [below](#bgp). |
@@ -629,6 +631,52 @@ A new Kubehenge release also moves the charts of the cluster's add-ons. In a clu
 A cluster with one control plane runs on two etcd members while its control plane is replaced. Its API stops if either does. The plan of such a change warns of it, as kubectl does.
 
 If the new machine is not ready after 20 minutes, the cluster's page says the roll stalled. It says why, and whether the API still answers. It offers **Recover…**, which keeps one control-plane machine and replaces the others ([troubleshooting.md](troubleshooting.md#one-control-plane-its-roll-stalled)).
+
+## Sites with limited access
+
+A network that reaches few hosts needs four settings. Each works on every distribution and node OS.
+
+| Setting | Variable | What the nodes get |
+| --- | --- | --- |
+| Time servers | `network.ntp` | NTP servers, with the hypervisor's clock as the fallback. |
+| Proxy | `egressProxy` | The proxy for the container runtime, the installers of RKE2 and k3s, and the distribution's service. The add-ons use it too. |
+| Registry mirrors | `registryMirrors` | Mirrors that images are pulled from before the registry itself. |
+| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. |
+
+Where each lands on a node:
+
+| | Proxy | Registry mirrors | Trusted CAs |
+| --- | --- | --- | --- |
+| Talos | `machine.env` | `RegistryMirrorConfig`, and a `RegistryTLSConfig` for each mirror host with an authority | `TrustedRootsConfig` |
+| kubeadm | An environment file for the `containerd` service | `/etc/containerd/certs.d/<registry>/hosts.toml` | The trust store |
+| RKE2 | `/etc/default/rke2-server` and `rke2-agent` | `/etc/rancher/rke2/registries.yaml` | The trust store |
+| k3s | `/etc/default/k3s` and `k3s-agent` | `/etc/rancher/k3s/registries.yaml` | The trust store |
+
+The trust store is `update-ca-trust` on the EL family (AlmaLinux and Rocky Linux). A node OS from the SUSE or Debian family uses `update-ca-certificates`.
+
+A change replaces every node, one at a time, as a change of the node customisation does. Each setting is read when a node boots, so nothing reloads in place.
+
+### Proxy and mirrors
+
+- The proxy has no credentials in its address. `httpsUrl` names another proxy for `https://` addresses.
+- `noProxy` always gains the cluster's pod, service and node networks, its API address, `localhost`, `.svc` and `.cluster.local`.
+- Mirrors are tried in order, then the registry itself. `*` stands for every registry.
+- A path in a mirror address has to end in `/v2`. The container runtime uses it as given.
+- Pods pull through the mirrors, since the container runtime does. They do not take the node's proxy.
+
+### Authorities
+
+- An authority is PEM and holds certificates only.
+- Kubehenge refuses a private key, text around the certificates, and a certificate that has expired or is not yet valid.
+- One mirror host has one authority, also where two registries share the host.
+
+### RKE2 and k3s installs
+
+- RKE2 on an EL node installs from its RPM repository, `rpm.rancher.io`, through the proxy.
+- k3s downloads its release from GitHub through the proxy.
+- Both fetch their install script from `get.rke2.io` or `get.k3s.io`, which the proxy must allow.
+- `distributionMirror` replaces GitHub with an address that holds the releases under `<address>/<version>/`, with the file names GitHub uses.
+- With it, RKE2 installs the release's tarball in place of the RPM.
 
 ## Node customisation
 
@@ -1607,7 +1655,10 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `clusterMesh` | no | For a cluster that runs Cilium ([above](#add-ons)). `enabled` (default false). `peers`, the clusters of this namespace to link with, by name. |
 | `certificates` | no | `enabled` (default false). `issuer`, `acme-dns01` (default), `acme-http01`, `ca` or `external`. `domain`, needed with `acme-dns01` and `ca`. `issuerName`, `issuerKind`, `issuerGroup`, with `external` ([above](#an-issuer-you-run)). `acme` holds `email`, `server`, `staging`, `caBundle`, `externalAccountBinding.keyID` ([above](#external-account-binding)). `dns01` holds `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node. `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false uninstalls it ([above](#change-settings)). |
-| `egressProxy` | no | The proxy of the add-ons that reach beyond the cluster. `url` is an `http://` or `https://` address with a host and no path or credentials. `noProxy` lists up to 64 hosts, domains and networks that bypass it, beside the cluster's own ranges, `.svc` and `.cluster.local`. `disabled: true` sends the add-ons direct and excludes `url`. Unset, they take the management side's proxy. |
+| `egressProxy` | no | The proxy of the nodes and of the add-ons that reach beyond the cluster ([below](#sites-with-limited-access)). `url` is an `http://` or `https://` address with a host and no path or credentials. `httpsUrl` is the proxy for `https://` addresses where it differs, and comes with `url`. `noProxy` lists up to 64 hosts, domains and networks that bypass it, beside the cluster's own ranges. `disabled: true` sends the add-ons direct and excludes `url`. Unset, the add-ons take the management side's proxy and the nodes go direct. |
+| `registryMirrors` | no | Up to 16 entries. `registry` is a lower-case host name with an optional port, or `*` for every registry. `endpoints` are 1 to 4 `http://` or `https://` addresses, tried in order. A path has to end in `/v2`. `caBundle` is the PEM authority of the endpoints. |
+| `trustedCAs` | no | Up to 8 PEM bundles of certificates, for the nodes' trust store. |
+| `distributionMirror` | no | RKE2 and k3s only. An `http://` or `https://` address that holds the distribution's releases under `<address>/<version>/`, in place of GitHub. |
 | `gitops` | no | `enabled` (default false). `engine`, `argocd` (default) or `flux`. `repository`, with `url` (`https://` or `ssh://`), `revision` (a branch or full ref, default `main`) and `path` (default `.`) and `caBundle` (PEM, for an `https://` server the usual authorities do not sign, not with Flux and `existingSecret`). `auth`, `none` (default), `deployKey`, `token` or `existingSecret`. `deployKey` works over `ssh://`. The key is in the Secret `<name>-gitops` beside the Cluster, its public half under `identity.pub`. `token` is the cluster's `gitops` credential, `username` and `password`. With `existingSecret`, the field `existingSecret` names the Secret. `knownHosts`, the server's host keys as known_hosts lines, at least one for the URL's host and port. It is required over `ssh://` except for Flux with `existingSecret`. `hostname` and `tlsSecret`, to serve the web interface through the ingress controller. `admins`, the first provider's groups that administer Argo CD. `signIn`, with `clientID` (the provider's own when unset) and `clientSecret`, `none` (default, PKCE), `stored` or `existingSecret`. `stored` is the cluster's `oidc-client` credential, key `clientSecret`. With `existingSecret`, the field `signIn.existingSecret` names the Secret. `ui` (default false), Flux's web interface, which needs `hostname` and a client secret. `ui` and `admins` need an identity provider in `oidc`. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
 | `upgrades` | no | Automatic Kubernetes upgrades. `mode` (`off`, `patch` or `minor`, default `off`) and `window` ([upgrading.md](upgrading.md#automatically-inside-a-window)). `nodeImages` (default true) sets whether the nodes move to new builds of their VM template in the window ([above](#node-image-refresh)). On Talos it sets whether they move to new Talos patch releases ([above](#talos-upgrades)). |

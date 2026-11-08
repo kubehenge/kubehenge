@@ -1387,17 +1387,25 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       type: object
       description: >-
         The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero,
-        Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has
-        one without credentials in its address. The cluster's pod and service ranges, .svc and
+        Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the
+        container runtime, the distribution's installer and its service. Unset, the add-ons take the
+        management side's proxy, if it has one without credentials in its address, and the nodes go
+        direct. The cluster's pod, service and node networks, its API address, .svc and
         .cluster.local always bypass it.
       properties:
         url:
           type: string
           maxLength: 2048
-          pattern: "^https?://[^\\s/@?#]+/?$"
+          pattern: '^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?/?$'
           description: >-
             The proxy's address, as http://host:port, without credentials, since add-on settings
-            are plain text.
+            and node files are plain text. It serves http:// addresses, and https:// ones unless
+            httpsUrl says otherwise.
+        httpsUrl:
+          type: string
+          maxLength: 2048
+          pattern: '^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?/?$'
+          description: The proxy for https:// addresses, where it differs from url.
         noProxy:
           type: array
           maxItems: 64
@@ -1406,13 +1414,15 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             type: string
             minLength: 1
             maxLength: 253
-            pattern: "^[^,\\s]+$"
+            pattern: '^[A-Za-z0-9._*:/\[\]-]+$'
         disabled:
           type: boolean
           description: Go direct, whatever the management side uses.
       x-kubernetes-validations:
-        - rule: "!has(self.disabled) || !self.disabled || !has(self.url)"
+        - rule: "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
           message: A cluster that goes direct names no proxy.
+        - rule: "!has(self.httpsUrl) || has(self.url)"
+          message: httpsUrl comes with url, for http:// addresses.
 {{- end -}}
 
 {{/*

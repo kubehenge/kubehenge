@@ -33,6 +33,8 @@ const settingLabels: Record<string, string[]> = {
   etcd: ["etcd"],
   etcdSnapshots: ["etcd snapshots"],
   egressProxy: ["Egress proxy"],
+  registryMirrors: ["Registry mirrors"],
+  trustedCAs: ["Trusted CAs"],
   gitops: ["GitOps"],
   headlamp: ["Headlamp"],
   istio: ["Istio"],

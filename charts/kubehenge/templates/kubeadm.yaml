@@ -123,6 +123,7 @@ spec:
     {{- include "kubehenge.etcdVariable" . | nindent 4 }}
     {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
     {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeSiteVariables" (dict) | nindent 4 }}
     - name: cni
       required: true
       schema:
@@ -220,6 +221,7 @@ spec:
                   streamingConnectionIdleTimeout: 5m
         {{- end }}
     {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "kubeadm") | nindent 4 }}
+    {{- include "kubehenge.nodeSitePatches" (dict "root" . "distribution" "kubeadm" "pods" "10.244.0.0/16" "services" "10.96.0.0/12") | nindent 4 }}
     # Last, so that Kubehenge's own settings come first.
     {{- include "kubehenge.nodeCustomisationPatches" "kubeadm" | nindent 4 }}
 ---
