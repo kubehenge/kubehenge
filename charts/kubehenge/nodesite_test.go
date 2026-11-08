@@ -287,7 +287,7 @@ func TestNoProxyHoldsTheClustersOwnRangesOrTheDistributionsDefaults(t *testing.T
 
 // A node's proxy leaves out the node network of each of the cluster's address families, and no
 // IPv4 network where the cluster has none.
-func TestNoProxyHoldsEveryFamilysNodeNetwork(t *testing.T) {
+func TestNoProxyHoldsTheNodeNetworkOfEachFamily(t *testing.T) {
 	t.Parallel()
 	const (
 		ipv6     = `"ipv6": {"addresses": ["2001:db8::20-2001:db8::30"], "prefix": 64, "gateway": "2001:db8::1"}`
