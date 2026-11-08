@@ -35,6 +35,7 @@ import {
   type FamilyChoice,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
+import { nodeNote } from "./Placement";
 import type {
   BackupTarget,
   Bridge,
@@ -2851,7 +2852,7 @@ function setupFields({
         <fieldset className="group">
           <legend>Proxmox VE nodes</legend>
           {nodes.map((n) => (
-            <label key={n.node} className="check">
+            <label key={n.node} className="check" title={n.fault}>
               <input
                 type="checkbox"
                 disabled={!n.online && !form.nodes.includes(n.node)}
@@ -2859,7 +2860,7 @@ function setupFields({
                 onChange={(e) => toggle("nodes", n.node, e.target.checked)}
               />{" "}
               {n.node}
-              {!n.online && <span className="muted"> (offline)</span>}
+              {!n.online && <span className="muted">{nodeNote(n)}</span>}
             </label>
           ))}
           <FieldError message={shown("nodes")} />

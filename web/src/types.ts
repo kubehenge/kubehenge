@@ -704,7 +704,10 @@ export interface Storage {
 
 export interface PveNode {
   node: string;
+  /** Whether the node is a cluster member that answers calls forwarded to it. */
   online: boolean;
+  /** Why a member of the cluster does not answer them, such as `HTTP 596: certificate verify failed`. */
+  fault?: string;
   /** Memory in use and in all, in bytes, while the node is online. */
   memory?: number;
   maxMemory?: number;
@@ -1213,6 +1216,8 @@ export interface ManagementHealth {
     ok: boolean;
     error?: string;
     blind?: string;
+    /** The nodes online in the cluster that do not answer calls forwarded to them, each with Proxmox VE's reason. */
+    unreachable?: { node: string; reason: string }[];
     /** The tokens that are refused, cannot verify the API's certificate or lack a privilege. */
     tokens?: { name: string; problem: "Refused" | "Certificate" | "Unreachable" | "Privileges"; message: string }[];
     checked: string;

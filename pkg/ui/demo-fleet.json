@@ -141,6 +141,12 @@
           "reason": "RemovedAPIs",
           "agoHours": 7,
           "message": "The automatic upgrade to v1.37.1+rke2r1 waits. Removed APIs still in use: orders.example.com/v1beta1 invoices (removed in 1.37, last requested 2026-10-12). Choose Upgrade anyway to accept these, or upgrade by hand."
+        },
+        {
+          "type": "NodesSkipped",
+          "reason": "NotReachable",
+          "agoHours": 1,
+          "message": "Not reachable through the cluster: pve3 (HTTP 596: certificate verify failed)"
         }
       ]
     },

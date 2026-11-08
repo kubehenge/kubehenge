@@ -306,6 +306,13 @@ func (f *demoFleet) etcdHealth() ([]client.Object, error) {
 	}), nil
 }
 
+// unreachable is the demo's node that is online in the cluster while calls forwarded to it fail
+// with 596, as after a join that lost its certificate.
+func (f *demoFleet) unreachable() provisioner.NodeFault {
+	nodes := f.data.ProxmoxNodes
+	return provisioner.NodeFault{Node: nodes[len(nodes)-1], Reason: "HTTP 596: certificate verify failed"}
+}
+
 // proxmoxReach is the controller's record of its last test of the Proxmox VE tokens, with two that
 // fail: the controller's, which lost a privilege, and a cluster's, whose API certificate is from a
 // CA it does not know.
@@ -321,7 +328,7 @@ func (f *demoFleet) proxmoxReach() (*corev1.ConfigMap, error) {
 			Problem: provisioner.TokenCertificate, Error: "x509: certificate signed by unknown authority",
 		})
 	}
-	raw, err := json.Marshal(provisioner.Reachability{OK: true, Tokens: tokens, Checked: f.now})
+	raw, err := json.Marshal(provisioner.Reachability{OK: true, Tokens: tokens, Unreachable: []provisioner.NodeFault{f.unreachable()}, Checked: f.now})
 	if err != nil {
 		return nil, fmt.Errorf("the demo's Proxmox VE reachability: %w", err)
 	}
@@ -1160,7 +1167,11 @@ func (a *demoAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
 	nodes := a.fleet.data.ProxmoxNodes
 	list := make([]pve.Node, 0, len(nodes))
 	for i, node := range nodes {
-		list = append(list, pve.Node{Node: node, Online: true, Memory: int64(148+22*i) * demoGiB, MaxMemory: 384 * demoGiB})
+		n := pve.Node{Node: node, Online: true, Memory: int64(148+22*i) * demoGiB, MaxMemory: 384 * demoGiB}
+		if fault := a.fleet.unreachable(); fault.Node == node {
+			n.Online, n.Fault = false, fault.Reason
+		}
+		list = append(list, n)
 	}
 	return list, nil
 }

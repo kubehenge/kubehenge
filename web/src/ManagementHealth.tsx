@@ -23,6 +23,7 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
     h.proxmox?.ok === false ||
     filled(h.proxmox?.blind) ||
     (h.proxmox?.tokens ?? []).length > 0 ||
+    (h.proxmox?.unreachable ?? []).length > 0 ||
     (h.etcd !== undefined && h.etcd.healthy < h.etcd.members);
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
@@ -46,6 +47,28 @@ function TokenProblems({ tokens }: { tokens: TokenProblem[] }): JSX.Element | nu
   );
 }
 
+type NodeFault = NonNullable<NonNullable<ManagementHealth["proxmox"]>["unreachable"]>[number];
+
+// UnreachableNodes lists the nodes that are online in Proxmox VE and do not answer calls forwarded to
+// them, which placement leaves out like a node that is down.
+function UnreachableNodes({ nodes }: { nodes: NodeFault[] }): JSX.Element | null {
+  if (nodes.length === 0) {
+    return null;
+  }
+  return (
+    <ul className="health-short" aria-label="Proxmox VE nodes">
+      {nodes.map((n) => (
+        <li key={`node/${n.node}`} className="token-problem">
+          <Status state="error" text="Not reachable" />
+          <span>
+            {n.node}: {n.reason}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 // ProxmoxNotes says what is wrong with the controller's access to Proxmox VE, beneath the figures.
 function ProxmoxNotes({ proxmox }: { proxmox: ManagementHealth["proxmox"] }): JSX.Element {
   return (
@@ -58,6 +81,7 @@ function ProxmoxNotes({ proxmox }: { proxmox: ManagementHealth["proxmox"] }): JS
       {filled(proxmox?.blind) && (
         <p className="warning">Host maintenance is not visible: the token lacks {proxmox?.blind}</p>
       )}
+      <UnreachableNodes nodes={proxmox?.unreachable ?? []} />
       <TokenProblems tokens={proxmox?.tokens ?? []} />
     </>
   );
