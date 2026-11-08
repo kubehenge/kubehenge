@@ -56,6 +56,8 @@ strip_options() {
 # which jq on Windows ends with CR LF.
 lanes_and_parts=$(sh "${ci}/scope.sh" --all | jq -j '(.[] | . + " "), "|", (.[] | gsub(","; " ") + " ")')
 lanes=${lanes_and_parts%%|*}
+# The dual-stack lane is the nightly run's own, kept out of the rotation's checks below.
+dual_stack=kubeadm+calico+dual-stack
 queue=" ${lanes} management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade "
 all_lanes=" ${lanes_and_parts#*|}"
 node_oses=" $(jq -j '.available[] | . + " "' "${chart}/files/node-oses.json")"
@@ -80,7 +82,7 @@ while [ "${night}" -lt "${nights}" ]; do
             ;;
     esac
     tests=" ${parsed#* }"
-    for t in ${queue}; do
+    for t in ${queue} ${dual_stack}; do
         case ${tests} in
             *" ${t} "*) ok ;;
             *) bad "night ${night} leaves ${t} out" ;;
@@ -97,6 +99,7 @@ while [ "${night}" -lt "${nights}" ]; do
     done
     for lane in ${tests}; do
         case ${lane} in
+            "${dual_stack}") continue ;;
             *+*) ;;
             *) continue ;;
         esac

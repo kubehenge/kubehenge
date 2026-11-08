@@ -31,7 +31,7 @@ Then [create clusters](clusters.md).
 
 ### Network and addresses
 
-Kubehenge gives every node of every cluster a static address, with no DHCP server needed. Each cluster, the management cluster too, is IPv4, IPv6 or dual-stack ([clusters.md](clusters.md#ipv6-and-dual-stack)).
+Kubehenge gives every node of every cluster a static address, with no DHCP server needed. Each cluster, the management cluster too, is IPv4, IPv6 or dual-stack. IPv6 and dual-stack are unsupported until an end-to-end test passes on them ([clusters.md](clusters.md#ipv6-and-dual-stack)).
 
 - **The appliance** takes an IPv4 address, an IPv6 address or both on a bridge, each by DHCP or static (`--ip`, `--ip6`). IPv6 also takes one from the router's advertisements (`--ip6 auto`).
   - Its certificate and the redirect URLs registered with identity providers contain it. Give it an address that does not change (a static `--ip` or a DHCP reservation), or a DNS name with `--name`.

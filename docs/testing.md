@@ -245,6 +245,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - The nightly run's five extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
 - A pull request runs the other tiers and leaves this one to the queue.
 - The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers, a two-node Proxmox VE cluster and the upgrade from the latest published appliance.
+- It runs kubeadm's test on IPv4 and IPv6 too, as `kubeadm+calico+dual-stack`.
 - It runs every part of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
 - It builds Proxmox VE's image afresh and keeps it, with Go's build cache, for the day's runs.
 - One job builds the `kubehenge` binary and the controller's, capmox's and the Add-on Provider for Helm's images once per run (`test/e2e/ci/build.sh`). Each lane's registry serves them under the same digests, and capmox's and the Add-on Provider's are checked against `management-cluster/versions.tf` as in a release.
@@ -286,7 +287,7 @@ test/e2e/ci/run.sh /tmp/e2e management-cluster-upgrade+management-3584   # any t
 test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+dual-stack   # IPv4 and IPv6, IPv4 first, or +ipv6-first (up.sh then needs KUBEHENGE_E2E_IPV6=1)
 ```
 
-The `dual-stack` and `ipv6-first` options run on dispatch only, such as `kubeadm+calico+dual-stack`. The nightly rotation leaves them out.
+The nightly rotation leaves both options out. `ipv6-first` runs on dispatch only.
 
 The control plane of three servers stays on k3s. Three k3s servers at the class's least of 4096 MiB fit beside a worker and the management cluster. RKE2's and kubeadm's need bigger workers too. A minor upgrade of three servers needs a fourth beside them while each is replaced, which the machine's memory does not hold.
 

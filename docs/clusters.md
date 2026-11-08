@@ -104,7 +104,7 @@ Kubehenge sets both ranges on every cluster it creates. It takes those you give,
 
 #### IPv6 and dual-stack
 
-A cluster has IPv4, IPv6, or both. Every distribution and CNI runs each of them.
+A cluster has IPv4, IPv6, or both. No end-to-end test has created an IPv6 or dual-stack cluster yet. Until one passes, IPv6 and dual-stack are unsupported on every distribution and CNI.
 
 - **The primary family** comes first. The API address, the Services' first range and each node's first address are of it.
 - **Pod and service ranges** come one per family, in the same order. An IPv6 pod range is a /48 to /63, a Service range a /112 to /120.
