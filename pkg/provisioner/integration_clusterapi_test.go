@@ -313,8 +313,8 @@ func checkKubectlRanges(ctx context.Context, t *testing.T, c client.Client) {
 	}{
 		"over the nodes":  {[]string{"10.42.0.0/16"}, nil, "overlaps the nodes' network 10.42.0.0/15"},
 		"over each other": {[]string{"172.30.0.0/16"}, []string{"172.30.128.0/17"}, "overlaps the pod range 172.30.0.0/16"},
-		"not a network":   {nil, []string{"172.31.0.1/16"}, "no IPv4 network"},
-		"not IPv4":        {[]string{"fd00::/64"}, []string{"fd01::/108"}, "no IPv4 network"},
+		"not a network":   {nil, []string{"172.31.0.1/16"}, "service range: 172.31.0.1/16 is no network"},
+		"not IPv4":        {[]string{"fd00::/64"}, []string{"fd01::/108"}, "the pod ranges are IPv6, and the cluster's families IPv4"},
 	} {
 		refused := crowded("refused")
 		refused.Spec.ClusterNetwork.Pods.CIDRBlocks, refused.Spec.ClusterNetwork.Services.CIDRBlocks = asked.pods, asked.services
