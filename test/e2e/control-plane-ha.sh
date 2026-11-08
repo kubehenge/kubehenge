@@ -163,7 +163,17 @@ until_true 300 "a write with one etcd member" written ha-single
 # shellcheck disable=SC2310 # its failure is the one reported.
 workload -n default get configmap ha-quorum > /dev/null || fail "the write made with two etcd members is lost"
 
-step "delete the cluster"
+step "delete the cluster, its ProxmoxCluster first, as a namespace delete can"
+proxmox_cluster=$(kubectl -n "${ns}" get cluster/ha -o jsonpath='{.spec.infrastructureRef.name}')
+kubectl -n "${ns}" delete "proxmoxclusters.infrastructure.cluster.x-k8s.io/${proxmox_cluster}" --wait=false
+marked() {
+    marked_at=$(kubectl -n "${ns}" get "proxmoxclusters.infrastructure.cluster.x-k8s.io/${proxmox_cluster}" -o jsonpath='{.metadata.deletionTimestamp}') || return 1
+    [ -n "${marked_at}" ]
+}
+until_true 60 "the ProxmoxCluster marked for deletion" marked
+# capmox has to reconcile that deletion while the Cluster still stands. Unpatched, it never looks
+# again once the Cluster goes, and the delete below runs out of time.
+sleep 15
 kubectl -n "${ns}" delete cluster/ha --wait --timeout=30m
 left=$(vms)
 [ "${left}" = 0 ] || fail "VMs of the cluster are still there"
