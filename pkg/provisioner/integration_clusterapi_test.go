@@ -4,6 +4,7 @@ package provisioner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -530,6 +531,37 @@ func checkRulesOnChanges(ctx context.Context, t *testing.T, c client.Client) {
 	}
 	if err := change(logsAddon, `{"enabled":true,"sizeGiB":40}`); err != nil {
 		t.Errorf("Loki's volume grown: %v", err)
+	}
+	network := func(edit func(map[string]any)) string {
+		t.Helper()
+		var value map[string]any
+		for _, v := range cluster.Spec.Topology.Variables {
+			if v.Name == "network" {
+				if err := json.Unmarshal(v.Value.Raw, &value); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		edit(value)
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	tooManyServers := network(func(v map[string]any) {
+		v["dnsServers"] = []string{"10.9.0.1", "10.9.0.2", "10.9.0.3", "10.9.0.4", "10.9.0.5", "10.9.0.6", "10.9.0.7"}
+	})
+	if err := change("network", tooManyServers); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "must have at most 6 items") {
+		t.Errorf("seven DNS servers: %v", err)
+	}
+	dualStack := network(func(v map[string]any) {
+		v["ipFamilies"] = []string{"IPv4", "IPv6"}
+		v["ipv6"] = map[string]any{"addresses": []string{"2001:db8::10-2001:db8::20"}, "prefix": 64, "gateway": "2001:db8::1"}
+	})
+	if err := change("network", dualStack); !apierrors.IsInvalid(err) ||
+		!strings.Contains(strings.ToLower(err.Error()), "the address families are chosen when the cluster is created") {
+		t.Errorf("a running cluster made dual-stack: %v", err)
 	}
 	if err := change("cni", `"flannel"`); err != nil {
 		t.Errorf("the CNI given as it was: %v", err)

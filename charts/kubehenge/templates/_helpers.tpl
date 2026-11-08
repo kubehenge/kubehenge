@@ -131,6 +131,9 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
           message: IPv6 needs ipv6 with addresses, prefix and gateway.
         - rule: "(has(self.ipFamilies) && 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
           message: ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.
+        {{- /* On the object, as Cluster API refuses oldSelf in a rule on the array itself. */}}
+        - rule: "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
+          message: The address families are chosen when the cluster is created.
       properties:
         ipFamilies:
           type: array
@@ -143,11 +146,10 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
           items:
             type: string
             enum: [IPv4, IPv6]
+            maxLength: 4
           x-kubernetes-validations:
             - rule: self.size() < 2 || self[0] != self[1]
               message: Each address family once.
-            - rule: self == oldSelf
-              message: The address families are chosen when the cluster is created.
         bridge:
           type: string
           minLength: 1
@@ -212,12 +214,16 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
         dnsServers:
           type: array
           minItems: 1
+          maxItems: 6
           description: >-
             DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster
             names at least one of each.
           items:
             type: string
             minLength: 1
+            {{- /* The longest written IPv6 address. Without bounds, the API server's cost estimate
+            of the rule below exceeds its budget and Cluster API refuses the class. */}}
+            maxLength: 45
             x-kubernetes-validations:
               - rule: isIP(self)
                 message: A DNS server is an IPv4 or IPv6 address.

@@ -182,8 +182,8 @@ const signInRefused = "Sign-in failed. Check the user name, password and realm, 
 
 // secondFactorRefused says what a refused second factor can mean. Proxmox VE answers a wrong code,
 // a factor locked after too many tries and a cluster without quorum (which cannot write the
-// factor's state, a used recovery key or a TOTP code's counter) with the same 401. The user has given the right password, so naming them tells
-// no stranger anything.
+// factor's state, a used recovery key or a TOTP code's counter) with the same 401. The user has
+// given the right password, so naming them tells no stranger anything.
 func secondFactorRefused(kind string, c *pve.Challenge) string {
 	switch {
 	case kind == "recovery":

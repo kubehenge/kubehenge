@@ -7,7 +7,7 @@ name: codeql
 # check on every pull request.
 on:
   push:
-    branches: [main]
+    branches: [main, 'batch-*']
   # Every pull request, whatever it targets, so that one stacked on another is checked too.
   pull_request:
   merge_group:
