@@ -20,6 +20,8 @@ pct exec <ctid> -- journalctl -u kubehenge-update
 pct exec <ctid> -- journalctl -u kubehenge-headlamp
 ```
 
+#### The interface's log
+
 The interface logs in JSON, one line per event, and names the user of every change:
 
 - clusters created, changed and deleted
@@ -27,18 +29,18 @@ The interface logs in JSON, one line per event, and names the user of every chan
 - applies and removals of the management cluster
 - upgrades requested
 
-More places to look:
+The "Reference: …" under an error's message is the request's id, also in the `X-Request-Id` header of every response. Find that request's log lines with `pct exec <ctid> -- journalctl -u kubehenge --grep <reference>`.
 
-- **An error's reference.** The "Reference: …" under an error's message is the request's id, also in the `X-Request-Id` header of every response. Find that request's log lines with `pct exec <ctid> -- journalctl -u kubehenge --grep <reference>`.
-- **More in the journal.** Add `KUBEHENGE_LOG_LEVEL=debug` to `/etc/kubehenge/appliance.env` and restart `kubehenge`. `warn` or `error` log less.
-  - `KUBEHENGE_LOG_DEVELOPMENT=true` adds the source file and line to each log line.
-  - Upgrades keep both settings. The flags `--log-level` and `--log-development` of `kubehenge serve` do the same.
+For more in the journal, add `KUBEHENGE_LOG_LEVEL=debug` to `/etc/kubehenge/appliance.env` and restart `kubehenge`. `warn` or `error` log less. `KUBEHENGE_LOG_DEVELOPMENT=true` adds the source file and line to each log line. Upgrades keep both settings. The flags `--log-level` and `--log-development` of `kubehenge serve` do the same.
+
+#### Last runs and health
+
 - **The last run of the management cluster** shows on the Administration page, with its error and log when it failed, also after a restart. The last template build shows under VM templates, kept the same way.
-- **The last weekly template build** shows under Automatic builds on the Administration page, with its log. It comes from the ConfigMap `kubehenge-template-refresh` in the management cluster's `kubehenge-system` namespace.
+- **The last weekly template build** shows under Automatic builds on the Administration page, with its log, from the ConfigMap `kubehenge-template-refresh` in `kubehenge-system`.
   - Each run is a Job of the CronJob of that name. Read the full run with `kubectl -n kubehenge-system logs job/<name>`.
-  - A run that reads "no API token" found no Secret `kubehenge-template-builder` with the builder's token. A management cluster installed from the chart alone, not the module, needs it made, or `templateRefresh.enabled` set to false.
+  - "no API token" means the Secret `kubehenge-template-builder` is missing. A management cluster installed from the chart alone needs it made, or `templateRefresh.enabled` set to false.
 - **The last upgrade** shows on the Administration page, and with `kubehenge appliance upgrades` in the appliance's shell ([upgrading.md](upgrading.md#from-the-appliances-shell)). The updater keeps it in `/var/lib/kubehenge-update/status.json`.
-- **Whether the interface serves.** `pct exec <ctid> -- kubehenge appliance health` runs the check the upgrades use. It passes when the interface answers over HTTPS with the appliance's certificate within 2 minutes, then runs 20 seconds without a restart.
+- **Whether the interface serves.** `pct exec <ctid> -- kubehenge appliance health` runs the upgrades' check. It passes when the interface answers over HTTPS within 2 minutes, then runs 20 seconds without a restart.
 - **For a monitor.** `https://<appliance>/healthz` answers `ok` without a sign-in.
 
 ### The management cluster
@@ -100,15 +102,15 @@ kubectl -n clusters describe cluster prod
 kubectl -n clusters get helmchartproxies,helmreleaseproxies
 ```
 
-The Cluster's conditions, also on the cluster's page, say what holds it up, including what Kubehenge's hooks wait for. Kubehenge's own two show above the cluster page's views. They count towards the fleet's list of what needs you.
+The Cluster's conditions, also on the cluster's page, say what holds it up. Kubehenge's own two also show above the page's views and in the fleet's list of what needs you.
 
 - `KubehengeReady` is `False` with the error the controller last met on the cluster, until a reconcile succeeds.
   - Each error is also a Warning event `ReconcileFailed` on the Cluster, whose count rises on repeats.
-  - A failed Proxmox VE task is named by its UPID, as the node's task log lists it, with the last lines of its log.
+  - A failed Proxmox VE task is named by its UPID, with the last lines of its log.
 - `MachinesStalled` is `True` when a machine is not ready and none has become ready for 20 minutes, with a Warning event of the same name. Its message is the worst problem its Machines and ProxmoxMachines report, such as `VM template not found`.
   - A change or creation in the interface then shows as stalled under **Runs**.
 
-The other objects:
+#### The other objects
 
 - **The Cluster's events** (`kubectl -n clusters describe cluster prod`) record what the controller did, held back or could not do, and why. The cluster's **Health** view lists the warnings among them.
 - **Machines and ProxmoxMachines** say, per node, whether the VM was cloned, started and joined.
@@ -130,34 +132,38 @@ kubectl --kubeconfig prod.kubeconfig get nodes -o wide
 
 ### A node's boot log
 
-When a machine's VM was cloned and started but its node never joined, its boot log says why. **Boot log** on the machine in the cluster's **Machines** view shows it to those with `Sys.Modify` on the cluster's pool. The controller keeps it in the ConfigMap `<cluster>-boot-logs` beside the Cluster, one key per machine. To ask for one with kubectl, add the machine's name to the Cluster's `kubehenge.dev/boot-log-request` annotation. The controller removes the name once the log is written.
+When a machine's VM started but its node never joined, its boot log says why. **Boot log** on the machine in the **Machines** view shows it, to those with `Sys.Modify` on the cluster's pool. With kubectl, add the machine's name to the Cluster's `kubehenge.dev/boot-log-request` annotation. The controller writes the log into the ConfigMap `<cluster>-boot-logs`, one key per machine, and removes the name.
 
 ```sh
 kubectl -n clusters annotate cluster prod kubehenge.dev/boot-log-request=prod-cp-abcde --overwrite
 kubectl -n clusters get configmap prod-boot-logs -o jsonpath='{.data.prod-cp-abcde}'
 ```
 
+#### What the boot log holds
+
 - **kubeadm, RKE2 and k3s.** The log is the end of `/var/log/cloud-init-output.log`, and of the journals of cloud-init, `containerd`, `kubelet`, `rke2-server`, `rke2-agent`, `k3s` and `k3s-agent`, whichever the node has.
-  - The journals come from the copy the node keeps in `/var/log/kubehenge/boot.log` from boot on, a few seconds old at most. A node whose template does not keep it has cloud-init's output alone.
+  - The journals come from the node's copy in `/var/log/kubehenge/boot.log`, a few seconds old at most. Older templates give cloud-init's output alone.
   - The log says so when the VM is off, its guest agent does not answer, or **Nodes' boot logs** is off in the setup (`node_boot_logs`, [details](install-settings.md#nodes-boot-logs)).
 - **Talos.** The log is the kernel messages and the logs of `machined`, `apid`, `kubelet` and, on control planes, `trustd` and `etcd`, read through the node's Talos API.
-  - A node that has no address yet, or never took its configuration, cannot be reached that way. Its VM's console in Proxmox VE shows its boot.
+  - A node without an address or configuration cannot be reached that way. Its VM's console in Proxmox VE shows its boot.
 
 Tokens and passwords in the lines are replaced by `[REDACTED]`.
 
 ### A cluster's support bundle
 
-A support bundle is one `.tar.gz` of a cluster's objects, events and logs, for finding why it is stuck. Look through it yourself or attach it to an issue. **Support bundle** on the cluster's page downloads it, for those with `Sys.Modify` on the cluster's pool. With the management cluster's kubeconfig ([Repair access](#the-management-cluster)), `kubehenge diagnose` writes the same one.
+A support bundle is one `.tar.gz` of a cluster's objects, events and logs, for finding why it is stuck. **Support bundle** on the cluster's page downloads it, for those with `Sys.Modify` on the cluster's pool. With the management cluster's kubeconfig ([Repair access](#the-management-cluster)), `kubehenge diagnose` writes the same one.
 
 ```sh
 KUBECONFIG=management.kubeconfig kubehenge diagnose clusters/prod
 ```
 
-- `objects/` holds the Cluster and every object of Cluster API and its providers that belongs to it, never a Secret. These include machines, their VMs, bootstrap configurations and control plane, IP addresses and add-on releases.
+#### What the bundle holds
+
+- `objects/` holds the Cluster and every object of Cluster API and its providers that belongs to it, never a Secret. That takes in machines, VMs, bootstrap configurations, control plane, IP addresses and add-on releases.
 - `events.yaml` holds their events, oldest first.
 - `boot-logs.yaml` holds the boot logs read for its machines, if any were asked for.
-- `logs/` holds the lines of the recent logs of Kubehenge's controller, capmox and the Add-on Provider for Helm that name one of its objects.
-  - A bundle written on the appliance, as the interface's **Support bundle** is, also holds those of the interface's journal.
+- `logs/` holds the recent log lines of Kubehenge's controller, capmox and the Add-on Provider for Helm that name one of its objects.
+  - A bundle written on the appliance, as the interface's is, also holds the interface journal's.
   - From the node's shell, run `pct exec <ctid> -- env KUBECONFIG=/var/lib/kubehenge/interface.kubeconfig kubehenge diagnose clusters/prod -o /root/prod.tar.gz`.
 - `manifest.txt` says what the bundle holds, and what could not be read and why.
 
@@ -256,11 +262,17 @@ A version lowered through `version_overrides` is refused ("Downgrade is not supp
 
 ### Template missing
 
-The interface refuses a cluster whose template the controller does not find in the template pool. A cluster made with kubectl, or whose template was deleted after it was made, has machines that stay provisioning. The cluster's **Machines** view shows under each what it waits for, such as `VM template not found`. Cluster API's Proxmox VE provider selects a template by its exact set of tags and needs exactly one match.
+The interface refuses a cluster whose template the controller does not find in the template pool. A cluster made with kubectl, or whose template was deleted after it was made, has machines that stay provisioning. The cluster's **Machines** view shows under each what it waits for, such as `VM template not found`.
 
 - RKE2 and k3s need a build of their distribution's template for every node OS the clusters' `nodeOS` names. Build it with **Build template** on the Administration page (Distribution: RKE2 or k3s, with that Node OS), or `kubehenge template create rke2 --node-os <node OS>` (`almalinux-10` unless set).
 - kubeadm needs a build of the template of the cluster's exact Kubernetes version on its node OS, to create the cluster and to upgrade it (`kubehenge template create kubeadm --kubernetes-version <version> --node-os <node OS>`).
-- Talos needs the template of the release in the cluster's `kubehenge.dev/talos-image` annotation (**Build template**, Distribution: Talos, or `kubehenge template create talos --talos-version <release>`). The weekly build keeps the template of every release a cluster boots or is upgraded to, so one missing there was deleted by hand or never made.
+- Talos needs the template of the release in the cluster's `kubehenge.dev/talos-image` annotation (**Build template**, Distribution: Talos, or `kubehenge template create talos --talos-version <release>`).
+  - The weekly build keeps every release a cluster boots or upgrades to. A missing one was deleted by hand or never made.
+
+#### Builds, pool and storage
+
+Cluster API's Proxmox VE provider selects a template by its exact set of tags and needs exactly one match.
+
 - A cluster's machines clone the build its node image time picks ([templates.md](templates.md#how-clusters-find-them)).
   - With that build deleted they take the one before it, or the oldest left. With none left of the line, they take none.
 - The template has to be in the template pool, `kubehenge-templates`, the only one Cluster API may clone from.
@@ -274,7 +286,7 @@ The interface refuses a cluster whose template the controller does not find in t
 
 Cluster API's Proxmox VE provider clones every VM through its template's node. While that node is down, scaling, rolling updates and replacements stay at cloning, with a 595 from Proxmox VE in the machine's message.
 
-Kubehenge says so first. The Templates list on the Administration page names each such template (`Template <name> is on node <node>, which is down.`) and lists the others.
+The Templates list on the Administration page names each such template (`Template <name> is on node <node>, which is down.`).
 
 - A new cluster whose machines would clone from such a template is refused with the same sentence.
 - An existing cluster has the condition `TemplateNodeDown`, shown under **Nodes** as **Template node down**. It goes when the node is back.
@@ -284,7 +296,7 @@ Kubehenge says so first. The Templates list on the Administration page names eac
 
 ### A build is shown as older
 
-**Older than the previous build** on the Administration page means the build installed an older kernel than the previous build of its line, as when a mirror was one sync behind. No cluster moves to it. The controller asks for another build an hour later, 3 times at most. Its log line names the build.
+**Older than the previous build** means the build installed an older kernel than the one before, as from a mirror one sync behind. No cluster moves to it. The controller asks for another build an hour later, 3 times at most. Its log line names the build.
 
 If the mirror stays behind, the build stays out until a newer one arrives. **Build now** makes another. `kubehenge template list` shows the builds. Each template's description holds `kubehenge-build: kernel=… packages=…`.
 
@@ -333,12 +345,12 @@ Each cluster's API address, and the management cluster's, is a virtual IP that o
 
 ### A Service has an `EXTERNAL-IP` that nobody answers for
 
-The load balancer assigned the address. Nothing on the network answers for it. In layer 2 (ARP), a switch with dynamic ARP inspection or port security drops the nodes' gratuitous ARP for addresses it has not learnt. The same switch can break the API address.
+The load balancer assigned the address, but nothing on the network answers for it. In layer 2 (ARP), a switch with dynamic ARP inspection or port security drops the nodes' gratuitous ARP for addresses it has not learnt. The same switch can break the API address.
 
-- From a machine on the same network, `arping <address>` gets no reply.
+- From the same network, `arping <address>` gets no reply.
 - Allow the addresses on the switch's ARP inspection or port security, or switch the cluster to BGP ([BGP](clusters.md#bgp)).
-- In BGP mode, `kubectl -n metallb-system get bgppeers` in the workload cluster lists the routers. The `frr-k8s` pods' logs show a session that is not established.
-- A router refuses the session when it does not expect the node's address and the cluster's AS number, or when it already has a session from the same address.
+- In BGP mode, `kubectl -n metallb-system get bgppeers` lists the routers. The `frr-k8s` pods' logs show a session that is not established.
+- A router refuses the session when it does not expect the node's address and AS number. It also refuses a second session from one address.
 - With a password, every router needs the same one. The load balancer's options take the password.
   - A cluster that never builds its nodes may wait for it, with a `NoBGPPassword` event on the Cluster.
 
@@ -386,7 +398,7 @@ Proxmox VE refuses a ticket whose age on the checking node is under minus 5 minu
 
 ### Labels and taints vanish from a node
 
-A label or taint put on a node by hand goes when its node is replaced, by a node image refresh, an upgrade, a resize or a health check. Set them on the pool instead ([clusters.md](clusters.md#labels-and-taints)). The Health page names a worker whose taints differ from its pool's.
+A label or taint set on a node by hand goes when the node is replaced. That happens on a node image refresh, an upgrade, a resize or a health check. Set them on the pool instead ([clusters.md](clusters.md#labels-and-taints)). The Health page names a worker whose taints differ from its pool's.
 
 A label in `kubernetes.io` or `k8s.io` is refused with `The kubelet refuses to set labels in kubernetes.io and k8s.io`. Use another domain, or `node.kubernetes.io/` or `kubelet.kubernetes.io/`.
 
@@ -415,14 +427,16 @@ The class schema refuses a bad `permissions`, a path with `..` or a double slash
 
 The cluster's conditions say it is waiting for its Proxmox VE pool, user and token. Kubehenge's controller has not finished creating them.
 
-When creating one failed, the message reads `Proxmox VE objects:` followed by the error. The cluster has a `ProxmoxObjectsFailed` Warning Event with the same text. The interface shows it under Health. Often it is a privilege missing from the controller's token after Proxmox VE objects were changed by hand. Applying the management cluster again puts the module's users, roles and ACLs back.
+When creating one failed, the message reads `Proxmox VE objects:` followed by the error, also in a `ProxmoxObjectsFailed` Warning Event and under Health. Often a privilege is missing from the controller's token after Proxmox VE objects were changed by hand. Applying the management cluster again puts the module's users, roles and ACLs back.
 
 - **"pool … already exists with … guest(s) that Kubehenge did not create"** means a pool of the cluster's name holds other VMs. Choose another cluster name, or move those VMs out of the pool.
-- **"the datacenter option user-tag-access refuses …" or "registered-tags lists …"** means the datacenter's **User Tag Access** or **Registered Tags** keep the controller's token from tagging the cluster's volume owner VM. Allow `kubehenge` and `volumes` there.
+- **"the datacenter option user-tag-access refuses …" or "registered-tags lists …"** means the controller's token may not tag the volume owner VM. Allow `kubehenge` and `volumes` in the datacenter's **User Tag Access** and **Registered Tags** options.
+
+#### Placement refused
 
 A Proxmox VE node that shows online but whose status cannot be read is left out of every cluster's placement. Each cluster then has a `NodesSkipped` condition naming the node. It clears once the node answers.
 
-A cluster is refused when its storage or bridge is available on none of the nodes it may use. It is refused too when its template cannot be cloned on any of them. The message names the storage, bridge or template and the fix. A storage outside the management cluster's `workload_datastores` is refused too, because the clusters' tokens hold no rights there.
+A cluster is refused when none of the nodes it may use has its storage or bridge, or can clone its template. The message names the storage, bridge or template and the fix. A storage outside the management cluster's `workload_datastores` is refused too, because the clusters' tokens hold no rights there.
 
 A VNet counts as present on the nodes where its zone is applied. Where Kubehenge's token cannot see the zone, it counts the VNet as present on every node.
 
@@ -435,16 +449,16 @@ The first cluster of a distribution waits while that distribution's Cluster API 
 
 ### A cluster applied with kubectl is refused
 
-Kubehenge checks a Cluster made with kubectl or GitOps by the same rules as the interface, in two places. Each refusal names the rule, in the words the interface uses.
+Kubehenge checks a Cluster made with kubectl or GitOps by the same rules as the interface. Each refusal names the rule, in the words the interface uses.
 
-- **When it is applied**, Kubehenge's validating webhook, `clusters.kubehenge.dev`, refuses a Cluster or a change that breaks a rule it can check from the Cluster and its class alone. Nothing is stored.
+- **When it is applied**, the validating webhook `clusters.kubehenge.dev` refuses a Cluster or change that breaks a rule it can check from the Cluster and class alone.
   - kubectl prints the refusal with the field, such as `spec.topology.variables[backups]`, and the rule. Correct the Cluster and apply it again.
-- **Before its first VM**, Cluster API asks Kubehenge's controller, through its `BeforeClusterCreate` hook. The hook also checks what needs Proxmox VE or the other clusters:
+- **Before its first VM**, Kubehenge's `BeforeClusterCreate` hook checks what needs Proxmox VE or the other clusters:
   - a node OS Kubehenge builds templates of, and a node whose CPU runs it
   - the pod and service ranges, and the load-balancer addresses
   - Rancher, `Datastore.Allocate`, volume snapshots and `Sys.Audit` on `/`
 
-  kubectl accepts the Cluster, which then gets no VMs. Its `TopologyReconciled` condition, on the cluster's page or with `kubectl describe cluster`, is false with a message that ends in `got failure response with message:` and the rule. Correct the Cluster. Cluster API then asks again by itself.
+  kubectl accepts the Cluster, which then gets no VMs. Its `TopologyReconciled` condition is false with a message that ends in `got failure response with message:` and the rule. Correct the Cluster. Cluster API then asks again by itself.
 
 ### Ranges refused
 
@@ -472,42 +486,40 @@ Health shows **etcd disk slow** when an etcd member's write-ahead log syncs have
 
 ### One control plane, its roll stalled
 
-An upgrade or any change to the control planes replaces a cluster's only control plane. Meanwhile etcd runs on two members, each needing the other ([architecture.md](architecture.md#control-plane-rolls)). Nothing in Cluster API recovers a roll that stalls. Kubehenge's controller therefore watches for it.
+An upgrade or any change to the control planes replaces a cluster's only control plane. Meanwhile etcd runs on two members, each needing the other ([architecture.md](architecture.md#control-plane-rolls)).
 
-After 20 minutes without the new machine ready (the module's `watch.stall_minutes`), the Cluster gets the condition `ControlPlaneRollStalled` and a warning event of that name. The cluster's page shows it with **Recover…**. Its **Health** view lists it.
+After 20 minutes without the new machine ready (the module's `watch.stall_minutes`), the Cluster gets the condition `ControlPlaneRollStalled` and a warning event of that name. The cluster's page shows it with **Recover…**, and its **Health** view lists it.
 
 The reason `APIUnreachable` means the API has stopped answering. `SuccessorNotReady` means it still answers. The message names both machines and why the new one is not ready.
 
-To find what holds the new machine up, look at the distribution's service on both control-plane VMs, the old node and its successor:
+Look at the distribution's service on both control-plane VMs:
 
 - k3s: `systemctl status k3s` and `journalctl -u k3s`. RKE2: `systemctl status rke2-server` and `journalctl -u rke2-server`.
 - kubeadm: etcd and the API server are static pods, so use `crictl ps -a`.
 - Talos: `talosctl service etcd`.
 
-Look at the kernel's log for a process killed for memory (`dmesg`). Start whatever stopped, or the VM. Once both members run again, the roll goes on and the condition goes. An event `ControlPlaneRollResumed` says so.
+Look at the kernel's log for a process killed for memory (`dmesg`). Start whatever stopped, or the VM. Once both members run again, the roll goes on and the condition clears, with the event `ControlPlaneRollResumed`.
 
 #### Recovering
 
-If one of the two members cannot come back, use **Recover…**. It asks for the cluster's name and needs `Sys.Modify` on the cluster's pool. It keeps one control-plane machine, by default the one the roll replaces, and replaces the others. When the API still answers, etcd has its majority, and the other machines are only deleted, which removes their etcd members. When it does not answer, the controller takes these steps:
+If a member cannot come back, use **Recover…**. It asks for the cluster's name and needs `Sys.Modify` on the cluster's pool. It keeps one control-plane machine, by default the one the roll replaces, and replaces the others. While the API answers, the others are only deleted. Otherwise:
 
 1. It pauses the cluster and stops the control plane on every machine through the guest agent.
 2. It resets etcd on the one kept to a cluster of one from its own database:
    - RKE2 and k3s: `--cluster-reset`.
-   - kubeadm: `etcdutl snapshot restore` of its own database.
+   - kubeadm: `etcdutl snapshot restore`.
    - Talos: a copy taken through the Talos API before the node's etcd is wiped and bootstrapped from it.
 3. It starts the kept machine's control plane, deletes the other machines and unpauses the cluster.
 
 Whatever only the others held is gone.
 
-The same works through kubectl with `kubectl annotate cluster <name> kubehenge.dev/etcd-restore='{"machine":"<machine to keep>","at":"<now, RFC 3339>"}'`. The status follows in `kubehenge.dev/etcd-restore-status` and the cluster's events (`ControlPlaneRecovered`, `ControlPlaneRecoveryFailed`). A management cluster that does not restore through the guest agent (`etcd_restore`) shows the steps to do it by hand instead.
-
-Three control planes keep a majority through the loss of one, rolls included.
+With kubectl, run `kubectl annotate cluster <name> kubehenge.dev/etcd-restore='{"machine":"<machine to keep>","at":"<now, RFC 3339>"}'`. The status follows in `kubehenge.dev/etcd-restore-status` and the cluster's events (`ControlPlaneRecovered`, `ControlPlaneRecoveryFailed`). Without guest-agent restores (`etcd_restore`), the interface shows the steps to run by hand.
 
 ### Two of three control planes are gone
 
-Two Proxmox VE nodes fail together, or a datastore holding two control planes is lost. The third control plane runs, but etcd has no majority. The API stays silent. Cluster API does not replace a member without a quorum.
+Three control planes keep a majority through the loss of one, rolls included. Two Proxmox VE nodes failing together, or a datastore holding two control planes, is too much. The third control plane runs, but etcd has no majority. The API stays silent. Cluster API does not replace a member without a quorum.
 
-After 10 minutes of silence with fewer than a majority of control-plane machines running, the Cluster gets the condition `ControlPlaneQuorumLost` and a warning event of that name. The cluster's page shows it with **Recover…**. Its **Health** view lists it. The message says how many machines run.
+After 10 minutes of silence with fewer than a majority of control planes running, the Cluster gets `ControlPlaneQuorumLost`, as a condition and a warning event. The cluster's page shows it with **Recover…**. Its **Health** view lists it. The message says how many machines run.
 
 First start what stopped. A host that only reboots brings its members back. The condition ends once the API answers.
 
@@ -526,7 +538,7 @@ The controller resets only a cluster that has `ControlPlaneRollStalled` or `Cont
 
 ### Not enough memory for the add-ons
 
-A message saying "add-ons (…) need … MiB of memory on workers, which have … MiB for them" means the workers lack the memory the named add-ons take ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off.
+"add-ons (…) need … MiB of memory on workers, which have … MiB for them" means the workers lack memory for the named add-ons ([clusters.md](clusters.md#machines)). Give the workers more memory (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off.
 
 Rancher's agent counts in every cluster that registers with Rancher. Set `rancher` to `{register: false}` for a cluster that never will. A message saying "… on control planes without workers …" means the same for the control planes of a cluster without workers.
 
@@ -534,7 +546,7 @@ A cluster that already fell short can still be changed, as for control planes ab
 
 ### Not enough CPU for the add-ons
 
-A message saying "add-ons (…) need … millicores of CPU on workers, which have … millicores for them" means the add-ons' CPU requests do not fit in what the workers' cores leave beside their own pods ([clusters.md](clusters.md#machines)).
+"add-ons (…) need … millicores of CPU on workers, which have … millicores for them" means the workers' cores cannot hold the add-ons' CPU requests ([clusters.md](clusters.md#machines)).
 
 Give the workers more cores (`workerMachine`, or a worker pool's override), add workers, or leave an add-on off. Kyverno and Istio ask for the most. The control-plane form of the message, and a cluster that already fell short, are as for memory above.
 
@@ -560,21 +572,24 @@ Give the workers more cores (`workerMachine`, or a worker pool's override), add 
 ### Rancher
 
 - **"cluster … already runs Rancher. Only one cluster may run it"** means the others register with that one.
-  - The interface refuses a second one when it is created, with "Rancher: cluster … already runs it. Only one cluster may".
+  - The interface refuses a second with "Rancher: cluster … already runs it. Only one cluster may".
   - A second cluster set to install it with kubectl gets no Rancher and a `RancherRefused` event (`kubectl describe cluster <name>`).
 - **"for Rancher, choose Kubernetes 1.x to 1.y, not …"** means the Rancher release Kubehenge installs runs only on those versions.
-  - A new Rancher cluster at another version is created but gets no VMs. Delete it and create it again at a version within the range.
+  - A new Rancher cluster at another version is created but gets no VMs. Create it again within the range.
   - An existing cluster outside the range gets no Rancher, with a `RancherRefused` event.
   - The Rancher cluster's upgrades beyond the range wait for a Kubehenge release with a newer Rancher ([Upgrades held back](#upgrades-held-back)).
-- **"every node needs at least 4 vCPUs for Rancher: …"** means the cluster's control planes or a worker pool with nodes have fewer cores than that. Give them 4 or more (`controlPlaneMachine` and `workerMachine`, or a worker pool's override).
-- **Removing Rancher takes long.** It waits until Rancher has let go of every registered cluster, which needs each of them reachable. The Rancher cluster shows `RemovingRancher` events meanwhile, and everything else about it is still applied.
-- **Clusters do not register.** Rancher's host name must resolve, for people and for every registered cluster, to the Rancher cluster's ingress controller. The ingress controller answers on the cluster's API address and on every node.
+- **"every node needs at least 4 vCPUs for Rancher: …"** means the control planes or a worker pool have fewer cores. Give them 4 or more (`controlPlaneMachine` and `workerMachine`, or a worker pool's override).
+
+#### Registering and leaving
+
+- **Clusters do not register.** Rancher's host name must resolve, for people and every registered cluster, to the Rancher cluster's ingress controller. That answers on the cluster's API address and on every node.
+- **Removing Rancher takes long.** It waits until Rancher has let go of every registered cluster, which needs each of them reachable. Meanwhile the Rancher cluster shows `RemovingRancher` events and applies its other changes.
 - **Rancher's agent stays after a cluster leaves Rancher.** Rancher removes it with a `cattle-cleanup-…` job in the `default` namespace, whose pod does not meet `restricted` ([rancher/rancher#58081](https://github.com/rancher/rancher/issues/58081)).
   - In a cluster that holds `default` to `restricted`, the job shows `FailedCreate` events naming the settings it lacks, and keeps trying.
   - Let it run by holding `default` to `baseline` until the job has finished.
     - With Pod Security Admission, run `kubectl label namespace default pod-security.kubernetes.io/enforce=baseline`, and afterwards `kubectl label namespace default pod-security.kubernetes.io/enforce-`.
     - With Kyverno, set its level to `baseline` under **Pod security** and back afterwards.
-  - A cluster being deleted needs none of this, since its VMs go with the agent.
+  - A cluster being deleted needs none of this.
 
 ### Volume snapshots
 
@@ -597,16 +612,16 @@ The proxy's errors:
 
 #### Copies that take long or fail
 
-- **A large volume's snapshot takes long.** It turns ready once Proxmox VE has finished the copy, however long that takes. The record's `task` names the copy's task in the node's **Task History**.
+- **A large volume's snapshot takes long.** It turns ready once Proxmox VE has finished the copy. The record's `task` names it in the node's **Task History**.
 - **`failed to copy disk` with `pvesm export … | /usr/bin/ssh … pvesm import …` and `exit code 255`** means the node could not reach itself.
-  - Proxmox VE copies a volume by piping it through SSH as root to the node the copy goes to, even the same node.
-  - On the node, `ssh -o UserKnownHostsFile=/etc/pve/nodes/<node>/ssh_known_hosts -o GlobalKnownHostsFile=none -o BatchMode=yes -o HostKeyAlias=<node> root@<node's address> true` shows why. The cause is one of these:
+  - Proxmox VE pipes every copy through SSH as root, even to the same node.
+  - On the node, `ssh -o UserKnownHostsFile=/etc/pve/nodes/<node>/ssh_known_hosts -o GlobalKnownHostsFile=none -o BatchMode=yes -o HostKeyAlias=<node> root@<node's address> true` shows which cause it is:
     - the SSH server is not running
     - `root`'s key is not among the keys it lets in
-    - the node has no SSH host key under its name in that file (when the file is missing, the copy's command has no `UserKnownHostsFile`)
-  - `pvecm updatecerts` puts the keys back where Proxmox VE expects them. The task's log under the node's **Task History** shows the copy's full error.
-- **A large volume's snapshot or restore fails, or holds less than it should.** Proxmox VE copies the volume while the plugin waits up to 4 minutes.
-  - A copy that takes longer can leave a snapshot reported ready before its data is all written ([clusters.md](clusters.md#volume-snapshots)). Delete it and take snapshots of smaller volumes.
+    - the node has no SSH host key under its name in that file
+  - `pvecm updatecerts` puts the keys back where Proxmox VE expects them. The task's log shows the full error.
+- **A large volume's snapshot or restore fails, or holds less than it should.** The plugin waits up to 4 minutes for Proxmox VE's copy.
+  - A longer copy can leave a snapshot reported ready before all its data is written ([clusters.md](clusters.md#volume-snapshots)). Delete it and take snapshots of smaller volumes.
 
 ### The CSI plugin's newest release
 
@@ -658,7 +673,10 @@ Component names are `out_<name>`, with hyphens as underscores. Alloy drops what 
   - An error from the target means the management cluster does not reach its bucket, or the credential is refused there. One from etcd means the cluster's API server or its etcd did not answer.
   - A snapshot cut off is never kept.
 - **`EtcdSnapshotsNotPruned`**, "deleting the oldest etcd snapshots: …", means the snapshot was taken, but the ones beyond the number kept were not deleted. The credential has to be allowed to delete in the target.
-- **`EtcdUploadHeld`** means the distribution's own upload ([clusters.md](clusters.md#the-distributions-own-upload)) has no target, for the reason the event gives, such as a missing target or credential as for backups above. The servers keep their snapshots on their nodes meanwhile.
+- **`EtcdUploadHeld`** means the distribution's own upload ([clusters.md](clusters.md#the-distributions-own-upload)) has no target or credential, as the event says. The servers keep their snapshots on their nodes meanwhile.
+
+#### Failed restores
+
 - **`EtcdRestoreFailed`**, "restore from …: …", means the restore stopped, for the reason that follows, which the **Backups** view shows too.
   - One that failed before etcd was restored started every control plane again as it was. One that failed after finished the restore ([clusters.md](clusters.md#restore-etcd)).
   - "… control-plane nodes left unchanged. Restore by hand as the steps say" means you should follow the steps **Restore…** lists for the snapshot.
@@ -753,7 +771,7 @@ The Cluster has the condition `AddonConflict`. The add-on's HelmChartProxy does 
 
 ### An admission policy denies an add-on
 
-A Helm error such as `admission webhook … denied the request` in an add-on's not-ready message means a policy of the cluster refuses what the add-on creates. It may refuse a namespace without labels, a host path, a host port, a privileged pod or an image from a registry the policy does not allow.
+A Helm error such as `admission webhook … denied the request` in an add-on's not-ready message means a policy refuses what the add-on creates. It may refuse a namespace without labels, a host path, a host port, a privileged pod or an image from an unlisted registry.
 
 [clusters.md](clusters.md#what-the-add-ons-need-from-a-policy) lists each add-on's namespaces, privileges and registries. Exempt the namespaces and name the registries in the policy. If the policy wants labels on namespaces, set `namespaceLabels`, which puts them on the namespaces from before the first pod.
 
@@ -764,19 +782,21 @@ A Helm error such as `admission webhook … denied the request` in an add-on's n
   - "the repository's token, stored as the cluster's gitops credential". Store the user name and token under the cluster's **Options**.
   - For Flux's web interface the message reads "a client secret, which Flux's web interface signs in with" and the like. Syncing goes on meanwhile.
     - Store the client secret under **Options**, or create the Secret the message names.
-- **"knownHosts: Required value"** or **"no host key is for …, the repository's host"**, when saving a cluster, means a repository reached over `ssh://` needs its host's keys in `gitops.knownHosts`.
+
+#### Repository host keys and certificates
+
+- **"knownHosts: Required value"** or **"no host key is for …, the repository's host"** means an `ssh://` repository needs its host's keys in `gitops.knownHosts`.
   - Write them as a `known_hosts` file does, with a line for the URL's host and port (`[host]:port` for a port other than 22).
   - Take them from the forge's published keys, or from `ssh-keygen -F <host>` on a machine that already trusts it.
   - `ssh-keyscan` reads them over the network unchecked. Compare its fingerprints with the forge's before using them.
 - **`x509: certificate signed by unknown authority`** on the Argo CD Application (`ComparisonError`) or the Flux GitRepository means the engine does not trust the repository server's certificate.
   - Put the authority (PEM) of the server's certificate in the repository's **Certificate authority** (`gitops.repository.caBundle`).
-  - Argo CD reads it from `argocd-tls-certs-cm` under the server's host name, without the port. Flux reads `ca.crt` from the pull Secret.
   - With Flux and `existingSecret`, `ca.crt` goes into your own Secret, and `caBundle` is refused.
 - **`caBundle: holds no PEM certificate`**, when saving, means the text is no certificate. Give the authority's certificate, not its key, as `-----BEGIN CERTIFICATE-----` blocks.
 
 ### Add-ons behind a proxy
 
-- **A dial timeout** keeps Certificates `Pending`, Velero's `BackupStorageLocation` `Unavailable` or Argo CD at `ComparisonError`. The add-on has no route out without a proxy.
+- **A dial timeout** keeps Certificates `Pending`, Velero's `BackupStorageLocation` `Unavailable` or Argo CD at `ComparisonError`.
   - Check **Proxy** under the cluster's Options. With the default, the management side needs a proxy ([install.md](install.md#behind-a-proxy)).
   - The controller's log says "add-ons go direct" when the management side's proxy holds a user name or password in its address. Set an own proxy address on the cluster, without credentials.
   - `kubectl -n <namespace> get pod <pod> -o yaml` shows `HTTPS_PROXY` and `NO_PROXY` when the setting reached the pod.
@@ -822,28 +842,32 @@ The condition's reason says where renewal stands:
 
 - **Alerts or samples do not arrive.**
   - A `MonitoringWaiting` event ("monitoring leaves out what needs a credential not stored for the cluster yet: …") names the credentials still missing. Store them under the cluster's **Options**, **Monitoring** ([clusters.md](clusters.md#monitoring-alerts-and-remote-write)).
-  - Without that event, read Alertmanager's log with `kubectl -n monitoring logs alertmanager-kube-prometheus-stack-alertmanager-0`. It names the receiver that failed and the server's answer.
-  - Prometheus's `/targets` page and the `prometheus_remote_storage_` metrics show a remote write that fails.
-- **The Alertmanager pod stays in `ContainerCreating`.** It waits for the Secret `kubehenge-alertmanager` in `monitoring`, which the controller writes once the chart has created the namespace. Prometheus waits the same way for `kubehenge-prometheus`.
+  - Without that event, read Alertmanager's log with `kubectl -n monitoring logs alertmanager-kube-prometheus-stack-alertmanager-0`. It names the failed receiver and the server's answer.
+  - Prometheus's `/targets` page and the `prometheus_remote_storage_` metrics show a failing remote write.
+- **The Alertmanager pod stays in `ContainerCreating`.** It waits for the controller to write the Secret `kubehenge-alertmanager` in `monitoring`. Prometheus waits the same way for `kubehenge-prometheus`.
   - Check `kubectl -n monitoring get secret` and the cluster's events.
-- **A workload's ServiceMonitor or rule is not picked up.** Prometheus reads every one in every namespace. Check that its `namespaceSelector` and its Service's labels and port name match, then look at Prometheus's `/targets` and `/rules` pages.
+- **A workload's ServiceMonitor or rule is not picked up.** Prometheus reads them in every namespace. Check that its `namespaceSelector` and its Service's labels and port name match, then look at Prometheus's `/targets` and `/rules` pages.
 - **The monitoring add-on is not ready after a chart upgrade.** The chart's CRD upgrade job (`kube-prometheus-stack-upgrade` in `monitoring`) applies the new CRDs first.
-  - Read its log with `kubectl -n monitoring logs job/kube-prometheus-stack-upgrade`. It needs to pull its images from `docker.io` and `registry.k8s.io`.
+  - Read its log with `kubectl -n monitoring logs job/kube-prometheus-stack-upgrade`. It pulls its images from `docker.io` and `registry.k8s.io`.
 
 ### VMs that do not run, storage nearly full
 
-Kubehenge's controller looks every 15 seconds at the VMs of every cluster's machines whose node has joined. It also looks at the storage in the cluster's `storage` variable. Both show in the cluster's **Health** view. The fleet lists the cluster under what needs you.
-
-- **`VMsNotRunning`** on the Cluster, with **VM disk error**, **VM crashed**, **VM stopped** or **VM paused**, means a VM has been out of the running state for 3 minutes. The message names each machine, its VM and node, with the worst reason found.
-  - Suspend-mode backups, migrations, reboots and locks for a backup, migration, snapshot or clone do not count.
-  - `IOError` means QEMU paused the VM because a disk write failed, most often on a full storage. Free space, or fix the disk, then resume the VM in Proxmox VE (`qm resume <vmid>`).
-  - `Panicked` means the guest's kernel crashed. Reset the VM (`qm reset <vmid>`), or delete its Machine to have it replaced.
-  - `Stopped` means someone or something stopped the VM. Start it (`qm start <vmid>`), or delete its Machine.
-  - `Paused` means the VM was paused or suspended by hand. Resume it.
-- **`StorageNearlyFull`**, with **Storage nearly full** (reason `NearlyFull`, 85% and more) or **Storage full** (reason `Full`, 95% and more), means the cluster's storage, on a node its VMs run on, has that little space left. Free space, or add capacity.
-  - A thin storage can run out while every disk on it still has room. QEMU then pauses each VM whose write finds none.
+Every 15 seconds the controller checks the VMs of joined machines and the cluster's `storage`. Both show in the cluster's **Health** view and the fleet's list of what needs you.
 
 A warning event of the condition's name records each start and change. `VMsRunning` and `StorageFreed` record the end.
+
+- **`VMsNotRunning`** (**VM disk error**, **VM crashed**, **VM stopped** or **VM paused**) means a VM has not run for 3 minutes. The message names each machine, its VM and node, with the worst reason.
+  - Suspend-mode backups, migrations, reboots and locks for a backup, migration, snapshot or clone do not count.
+  - `IOError` means QEMU paused the VM after a failed disk write, usually on a full storage. Free space, or fix the disk, then resume the VM (`qm resume <vmid>`).
+  - `Panicked` means the guest's kernel crashed. Reset the VM (`qm reset <vmid>`), or delete its Machine.
+  - `Stopped` means the VM was stopped. Start it (`qm start <vmid>`), or delete its Machine.
+  - `Paused` means someone paused or suspended the VM. Resume it.
+
+#### Storage nearly full
+
+- **`StorageNearlyFull`** means the cluster's storage has little space left on a node its VMs run on. Free space, or add capacity.
+  - **Storage nearly full** (reason `NearlyFull`) is 85% and more. **Storage full** (reason `Full`) is 95% and more.
+  - A thin storage can run out while every disk still has room. QEMU then pauses each VM whose write finds none.
 
 #### A VM renamed or moved
 
@@ -879,6 +903,8 @@ A node that reboots or sits in HA maintenance is down longer than the five minut
   - `kubehenge.dev/remediation-hold` says why. `kubehenge.dev/remediation-hold-since` is when it began.
 - `kubehenge cluster get <name>` prints `held` and `heldUntil` for each machine.
 
+#### When the hold ends
+
 The hold ends in three cases:
 
 - The node is back and the machine's Kubernetes node is Ready.
@@ -891,7 +917,7 @@ A skip annotation without Kubehenge's two is yours. Kubehenge leaves it alone.
 
 #### Host maintenance is not visible
 
-**Host maintenance is not visible: the token lacks Sys.Audit on /** on the management cluster's **Health** means Proxmox VE refused the controller's read of the HA manager's status. Without it Kubehenge sees offline hosts but not HA maintenance, so it does not hold replacements for a host in maintenance. It cannot tell a removed host either. Give the controller's token `Sys.Audit` on `/`, which the read-privileges setting grants unless you switched it off.
+**Host maintenance is not visible: the token lacks Sys.Audit on /** on the management cluster's **Health** means the controller cannot read the HA status. Without it Kubehenge sees offline hosts but not HA maintenance, so it does not hold replacements for a host in maintenance. It cannot tell a removed host either. Give the controller's token `Sys.Audit` on `/`, which the read-privileges setting grants unless you switched it off.
 
 Only `maintenance` in the HA manager's `node_status` holds a machine for maintenance. `gone` means the host left the cluster's member list, and it ends the wait. So does a host missing from the cluster's own node list (`/cluster/config/nodes`). `fence` and `unknown` do not, since a fenced or unreachable host reboots and returns.
 
@@ -907,7 +933,7 @@ A machine being deleted keeps its VM until Cluster API's Proxmox VE provider des
 
 #### Forgetting a machine stuck in deletion
 
-A machine that has been deleting for 20 minutes gets the condition `MachineDeletionStalled`, with the reason in its message. The reason is an offline node, a node in maintenance, a VM that is not listed, or a VM capmox does not destroy though its node answers.
+A machine that has been deleting for 20 minutes gets the condition `MachineDeletionStalled`, with the reason in its message. The reason is an offline node, a node in maintenance, an unlisted VM, or a VM capmox leaves though its node answers.
 
 To release such a machine without waiting for its node, forget it. Its VM stays in Proxmox VE, so remove it there if it is still listed.
 
@@ -967,9 +993,11 @@ Abandon a deletion that can never finish, such as one for a cluster whose nodes 
 kubectl -n <namespace> annotate cluster <name> kubehenge.dev/abandon-deletion=<name>
 ```
 
-Kubehenge's controller then has the machines deleted without draining their nodes or waiting for their volumes. It deletes everything of the cluster that is not being deleted yet, and lets Cluster API go on without the BeforeClusterDelete hook. What has not finished five minutes later loses its finalizers, the Cluster's own last. That happens sooner once the cluster has no ProxmoxMachine (a VM) and no ProxmoxCluster left.
+The controller then deletes the machines without draining their nodes or waiting for their volumes. It deletes everything of the cluster that is not being deleted yet, and lets Cluster API go on without the BeforeClusterDelete hook. What has not finished five minutes later loses its finalizers, the Cluster's own last. That happens sooner once the cluster has no ProxmoxMachine (a VM) and no ProxmoxCluster left.
 
-Kubehenge may leave things behind in Proxmox VE, such as a VM on a node that never came back, and the cluster's pool and user. Each is named in its own `LeftBehind` event and in a `DeletionAbandoned` event. The cluster's page lists them while they are still there. A registration in Rancher stays as well. Delete these by hand, a VM once its node is back. The events stay as long as the management cluster keeps events, an hour by default:
+#### What abandoning leaves behind
+
+A VM on a node that never came back, the cluster's pool and its user can stay in Proxmox VE. A registration in Rancher stays as well. Each is named in its own `LeftBehind` event and in a `DeletionAbandoned` event, and the cluster's page lists them while they remain. Delete them by hand, a VM once its node is back. The events last as long as the management cluster keeps events, an hour by default:
 
 ```sh
 kubectl -n <namespace> get events --field-selector reason=LeftBehind
@@ -991,19 +1019,23 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 **Administration, Backups** shows the last snapshot's error, as does `kubehenge appliance etcd-backups` in the appliance's shell. The appliance tries again 15 minutes later. `journalctl -u kubehenge` inside the appliance logs each one.
 
-- **"reaching etcd: … etcd snapshot: …"**, or **"reaching the Talos API of …"**, means no control-plane node answered on its Talos API (port 50000) from the appliance, or etcd did not answer on it.
+- **"reaching etcd: … etcd snapshot: …"** or **"reaching the Talos API of …"** means no control-plane node's Talos API (port 50000), or etcd behind it, answered.
 - **"the snapshots' talosconfig: …"** or a refusal by the Talos API means the talosconfig kept for snapshots expired or no longer matches the management cluster's CA. Apply the management cluster again, which makes a new one, or **Change…** the backups.
 - **"target …: …"** or **"deleting older snapshots: …"** means the target refused the access key, or the key may not delete there. In the second case the snapshot was taken and only the removal of the oldest failed.
 - **"the passphrase does not open the target's key for the management cluster's snapshots"** means the target holds a key stored under another state's passphrase. See [details](install-settings.md#management-cluster-etcd-backups).
-- **A restore fails.** Its run's log on Administration says at which node and step.
-  - "Leaving … out" names a node whose Talos API did not answer, which keeps the etcd from before.
-    - Once it runs, wipe that with `talosctl -n <address> reset --system-labels-to-wipe EPHEMERAL --reboot --graceful=false` and the admin talosconfig (**Appliance**, repair access). It then joins the restored one.
-  - "no control-plane node answers on its Talos API" means you should start the management cluster's VMs in Proxmox VE first. If they are gone, [recreate the management cluster](#the-management-clusters-vms-are-lost).
-  - "snapshot … does not match its checksum" means the object in the target is damaged. Restore another snapshot.
+
+#### A restore of the management cluster fails
+
+Its run's log on Administration says at which node and step.
+
+- "Leaving … out" names a node whose Talos API did not answer, which keeps the etcd from before.
+  - Once it runs, wipe that with `talosctl -n <address> reset --system-labels-to-wipe EPHEMERAL --reboot --graceful=false` and the admin talosconfig (**Appliance**, repair access). It then joins the restored one.
+- "no control-plane node answers on its Talos API" means you should start the management cluster's VMs in Proxmox VE first. If they are gone, [recreate the management cluster](#the-management-clusters-vms-are-lost).
+- "snapshot … does not match its checksum" means the object in the target is damaged. Restore another snapshot.
 
 ### A Proxmox VE token is refused or lacks a privilege
 
-The management cluster's **Health** and your notification targets name each token that fails its test. They give its holder, the problem and any missing privilege with its path. The controller tests these every 10 minutes:
+The management cluster's **Health** and your notification targets name each token that fails its test, with its holder, the problem and any missing privilege. The controller tests these every 10 minutes:
 
 - its own token, and the HA and etcd restore tokens where those are on
 - the tokens of Cluster API's Proxmox VE provider and of the template builder
@@ -1016,7 +1048,7 @@ The problem is one of these:
 - **Unreachable.** The API did not answer, or the Secret with the token cannot be read.
 - **Privileges.** For example `Controller token lacks Realm.AllocateUser on /access/realm/pve.` Give the token's user that privilege on that path, or apply the management cluster again.
 
-The warning clears at the next test after the cause is fixed.
+The warning clears at the next test.
 
 ### The management cluster's VMs are lost
 
@@ -1035,7 +1067,7 @@ Clusters changed since the snapshot go back to then, and the controller [lists w
 
 After a restore of the management cluster, and then daily, the controller compares every cluster with the VMs in its pool.
 
-- **VMs missing** on a cluster's Health means none of its VMs exists in Proxmox VE, as for a cluster created before the snapshot and deleted since. Delete the cluster, or create it again with `kubehenge cluster create --from <spec>` after restoring its VMs.
+- **VMs missing** on a cluster's Health means none of its VMs exists, as for a cluster deleted since the snapshot. Delete the cluster, or create it again with `kubehenge cluster create --from <spec>` after restoring its VMs.
 - **Unowned VMs** on the management cluster's Health means VMs in Kubehenge's pools that no cluster owns, as for a cluster created since the snapshot. Delete them in Proxmox VE when you are sure.
 - The token that lists the VMs must see them. A list with no VM at all is taken as a token that sees nothing, and marks no cluster.
 
