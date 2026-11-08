@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -14,6 +15,19 @@ import (
 // transport's default would ignore the setting.
 func savedProxyClient(applianceDir, proxmoxURL string, timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout, Transport: &appliance.SavedTransport{Dir: applianceDir, ProxmoxURL: proxmoxURL}}
+}
+
+// savedReleaseMirror is the release mirror saved in the appliance's settings, read again for each
+// pin, so that the interface reads releases where the nodes download them.
+func (o *serveOptions) savedReleaseMirror() provisioner.ReleaseMirror {
+	if o.a.Dir == "" {
+		return provisioner.ReleaseMirror{}
+	}
+	saved := o.a.SavedSettings()
+	if saved == nil {
+		return provisioner.ReleaseMirror{}
+	}
+	return saved.ReleaseMirror.Mirror()
 }
 
 // savedGuestProxy is the proxy the appliance's template builds give their guests, nil without one.

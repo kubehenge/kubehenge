@@ -655,6 +655,25 @@ variable "chart_repositories" {
   }
 }
 
+variable "release_mirror" {
+  description = "Where the nodes of RKE2 and k3s clusters download their release in place of GitHub. url serves the releases on GitHub's paths beneath it: <url>/<repository>/releases/download/<version>/<file> and <url>/<repository>/raw/<version>/install.sh. Nodes still install only the pinned files. ca_bundle (PEM) is the authority of a mirror the usual authorities do not sign."
+  type = object({
+    url       = optional(string, "")
+    ca_bundle = optional(string, "")
+  })
+  default  = {}
+  nullable = false
+
+  validation {
+    condition     = var.release_mirror.url == "" || can(regex("^https?://[A-Za-z0-9._~:\\[\\]-]+(/[A-Za-z0-9._~:/\\[\\]-]*[A-Za-z0-9._~:\\[\\]-])?$", var.release_mirror.url))
+    error_message = "release_mirror.url is an http:// or https:// address with a host, without credentials, a query or a trailing slash."
+  }
+  validation {
+    condition     = var.release_mirror.ca_bundle == "" || startswith(var.release_mirror.url, "https://")
+    error_message = "release_mirror.ca_bundle needs an https:// url."
+  }
+}
+
 variable "proxy" {
   description = "The HTTP(S) proxy every download from the management side goes through: url (with credentials if it needs them), no_proxy (comma-separated hosts, domains and networks that bypass it, which has to name the Proxmox VE API host, the nodes' networks and the pod and service ranges) and ca_bundle (PEM, for a proxy that re-signs TLS). Empty strings go direct."
   type = object({

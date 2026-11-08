@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/user"
 	"time"
 
@@ -41,7 +43,7 @@ func pinStoreFor(namespace string) (*provisioner.PinStore, error) {
 }
 
 func newReleasePinCommand() *cobra.Command {
-	var namespace string
+	var namespace, mirror, mirrorCA string
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "pin <version>",
@@ -55,8 +57,9 @@ cluster's API (KUBECONFIG) and a right to change that ConfigMap.`,
 		Args: argsSay(cobra.ExactArgs(1), "give the release, such as v1.36.6+rke2r1"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			version := args[0]
-			checks := &provisioner.ReleaseChecksums{
-				HTTP: &http.Client{Timeout: pinFetchTimeout}, GitHub: pinsSources.github, Raw: pinsSources.raw,
+			checks, err := pinChecks(mirror, mirrorCA)
+			if err != nil {
+				return err
 			}
 			pin, err := checks.Digests(cmd.Context(), version)
 			if err != nil {
@@ -83,7 +86,37 @@ cluster's API (KUBECONFIG) and a right to change that ConfigMap.`,
 	}
 	cmd.Flags().StringVar(&namespace, "namespace", defaultClassNamespace, "namespace of Kubehenge's ClusterClasses")
 	cmd.Flags().BoolVar(&yes, "yes", false, "save the pin after showing the digests")
+	cmd.Flags().StringVar(&mirror, "mirror", "", "the release mirror the nodes download from, read in place of GitHub (the controller's --release-mirror)")
+	cmd.Flags().StringVar(&mirrorCA, "mirror-ca", "", "a PEM file with the authority of a --mirror the usual authorities do not sign")
 	return cmd
+}
+
+// pinChecks reads releases from GitHub, or from the release mirror with its authority, through the
+// proxy the environment names.
+func pinChecks(address, caFile string) (*provisioner.ReleaseChecksums, error) {
+	mirror := provisioner.ReleaseMirror{URL: address}
+	if caFile != "" {
+		ca, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("--mirror-ca: %w", err)
+		}
+		mirror.CABundle = string(ca)
+	}
+	if err := mirror.Check(time.Now()); err != nil {
+		return nil, fmt.Errorf("--mirror: %w", err)
+	}
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("the default HTTP transport is no *http.Transport")
+	}
+	transport := base.Clone()
+	if err := mirror.Trust(transport); err != nil {
+		return nil, fmt.Errorf("--mirror-ca: %w", err)
+	}
+	return &provisioner.ReleaseChecksums{
+		HTTP: &http.Client{Timeout: pinFetchTimeout, Transport: transport}, GitHub: pinsSources.github, Raw: pinsSources.raw,
+		Mirror: func() provisioner.ReleaseMirror { return mirror },
+	}, nil
 }
 
 func newReleaseUnpinCommand() *cobra.Command {

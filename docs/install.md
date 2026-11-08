@@ -68,7 +68,9 @@ Kubehenge gives every node of every cluster a static address, with no DHCP serve
 
 The management cluster's nodes can pull images through registry mirrors instead ([setup](#network), Advanced). Registry mirrors cover images only. The Add-on Provider for Helm fetches every chart from its own repository, the cloud controller manager and CSI plugin included. A site without access to those hosts also needs [chart mirrors](#mirroring-the-charts).
 
-GitHub and several other hosts above have no IPv6 address. An IPv6-only network reaches them through NAT64 with DNS64, or through registry and chart mirrors.
+A site without GitHub also needs a [release mirror](#mirroring-the-releases) for RKE2 and k3s.
+
+GitHub and several other hosts above have no IPv6 address. An IPv6-only network reaches them through NAT64 with DNS64, or through registry, chart and release mirrors.
 
 ### Mirroring the charts
 
@@ -89,6 +91,20 @@ kubehenge charts charts/kubehenge/values.yaml --mirror ghcr.io=oci://registry.ex
 ```
 
 A mirror that no chart uses, or of another kind than its host, is refused. Charts without a mirror are fetched from their repository.
+
+### Mirroring the releases
+
+RKE2 and k3s nodes download their release from GitHub as they boot. A release mirror serves those files instead, for every cluster. Set it under Advanced in the setup (Release mirror), or `release_mirror` in the module ([variables](#variables)).
+
+- The mirror answers on GitHub's paths beneath its address: `<mirror>/<repository>/releases/download/<version>/<file>` and `<mirror>/<repository>/raw/<version>/install.sh`, such as `https://mirror.example.org/github/k3s-io/k3s/releases/download/v1.36.5+k3s1/k3s`. A generic proxy repository of `https://github.com` serves this layout.
+- A node checks every file against the release's pins before installing anything, so a mirror cannot change what it runs. A file the mirror lacks fails the node's boot with the file and the mirror named.
+- The interface and `kubehenge release pin --mirror` read a release's checksums from the same mirror before pinning it.
+- A mirror whose certificate the usual authorities do not sign needs its authority under Release mirror certificate. The nodes trust it for the download alone.
+- Nodes reach the mirror through the cluster's proxy unless its host is in the proxy's exceptions (`egressProxy.noProxy`).
+
+#### What to copy
+
+Each node takes `sha256sum-amd64.txt` and `install.sh` of its release. RKE2 nodes take `rke2.linux-amd64.tar.gz`, `rke2-images-core.linux-amd64.tar.zst` and `rke2-images-<cni>.linux-amd64.tar.zst` for the cluster's CNI. k3s nodes take `k3s` and `k3s-airgap-images-amd64.tar.zst`.
 
 ### Behind a proxy
 
@@ -419,6 +435,7 @@ They also bring the warnings about the [backup](#back-up-the-appliance) and the 
 | DNS servers | Addresses of the cluster's families, one per line or separated by commas. A dual-stack cluster needs one of each. |
 | Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. They cover images, not charts. |
 | Advanced: Chart mirrors, Chart mirror certificate | `host=address`, one per line, such as `ghcr.io=oci://registry.example.org/ghcr`. Clusters fetch that host's charts from the address, and trust the certificate authority (PEM) for it. See [Mirroring the charts](#mirroring-the-charts). |
+| Advanced: Release mirror, Release mirror certificate | An `https://` or `http://` address, such as `https://mirror.example.org/github`. RKE2 and k3s nodes download their release from it in place of GitHub, and trust the certificate authority (PEM) for it. See [Mirroring the releases](#mirroring-the-releases). |
 | Advanced: Proxy address, Proxy user, Proxy password, Proxy exceptions, Proxy certificate | The proxy every download goes through. The address has no credentials, so write `http://proxy.example:3128` and put the user and password in their fields. A saved password shows as set, and the page can replace or remove it but never shows it. See [Behind a proxy](#behind-a-proxy). |
 | Advanced: Pod ranges, Service ranges | The management cluster's own, one per family. When empty, `10.244.0.0/16` and `10.96.0.0/12`, and `fd5e:4b1c:9a20::/56` and `fd5e:4b1c:9a21::/112` for IPv6. Where those overlap the nodes' network, the API address or the gateway, the first clear one of a few other private ranges. |
 
@@ -768,6 +785,7 @@ tofu output -raw talosconfig > talosconfig
 | `bootstrap_datastore` | `local` | Storage for cloud-init ISOs. Cluster API gets full control of it. |
 | `proxy` | `{}` | The HTTP(S) proxy for downloads: `url`, `no_proxy` (comma-separated, with the Proxmox VE host, the nodes' network and the pod and service ranges) and `ca_bundle` (PEM). Sensitive. |
 | `chart_repositories` | `{}` | Mirrors of the Helm chart repositories. `mirrors` maps a repository host to an `oci://` or `http(s)://` address of the same kind as the host. Each mirror serves the same charts under the same digests. `ca_bundle` (PEM) is the authority of mirrors the usual ones do not sign ([details](#mirroring-the-charts)). |
+| `release_mirror` | `{}` | A mirror of the RKE2 and k3s releases on GitHub's paths. `url` is its `http(s)://` address and `ca_bundle` (PEM) the authority of an `https://` mirror the usual ones do not sign ([details](#mirroring-the-releases)). |
 | `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name. Each takes endpoint URLs tried in order before the registry itself. A mirror of `factory.talos.dev`, `ghcr.io` or `registry.k8s.io` must serve the images' cosign signatures too. The nodes require them on Sidero's and Kubernetes' images and on the Talos providers'. |
 | `backup_targets` | `[]` | S3 stores clusters back up to with Velero ([details](install-settings.md#backup-targets)). Up to sixteen, each with `name` and `bucket`. Optional fields are `endpoint` (https, AWS S3 when unset), `region`, `prefix`, `ca_certificate` and `checksums` (default true). Access keys are stored through the interface, or named per cluster with `existingSecret` ([clusters.md](clusters.md#variables)). |
 | `cluster_oidc` | `[]` | OpenID Connect providers every new cluster trusts unless it names its own. Up to eight, each with `issuer_url` (https) and `client_id`. Optional fields are `username_claim`, `username_prefix`, `groups_claim`, `groups_prefix`, `scopes` and `certificate_authority`. |

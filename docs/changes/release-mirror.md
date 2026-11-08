@@ -1,0 +1,2 @@
+- A release mirror serves the RKE2 and k3s releases in place of GitHub ([install.md](install.md#mirroring-the-releases)). Nodes, the interface and `kubehenge release pin --mirror` read from it, and nodes still install only the pinned files.
+- A node whose release download fails names the file and the mirror or GitHub. Files that do not match their pins are refused before anything is installed.

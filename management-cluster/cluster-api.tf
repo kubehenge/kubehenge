@@ -533,6 +533,7 @@ resource "helm_release" "kubehenge" {
     { image = local.controller_image },
     local.proxy_enabled ? { proxy = { secret = local.proxy_secret_name, ca = local.proxy_has_ca } } : {},
     length(var.chart_repositories.mirrors) > 0 ? { chartMirrors = var.chart_repositories.mirrors } : {},
+    var.release_mirror.url != "" ? { releaseMirror = { url = var.release_mirror.url, caBundle = var.release_mirror.ca_bundle } } : {},
   ))]
 
   depends_on = [helm_release.cluster_api_providers, proxmox_acl.provisioner, proxmox_acl.ha, proxmox_acl.template_builder, proxmox_acl.etcd_restore]

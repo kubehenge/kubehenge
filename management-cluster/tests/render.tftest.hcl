@@ -41,6 +41,54 @@ run "chart_mirrors_reach_the_controller_and_the_helm_provider" {
   }
 }
 
+run "no_release_mirror_leaves_releases_on_github" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "releaseMirror")
+    error_message = "without a release mirror the controller is told none"
+  }
+}
+
+run "release_mirror_reaches_the_controller" {
+  command = plan
+
+  variables {
+    release_mirror = {
+      url       = "https://mirror.example.org/github"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).releaseMirror == { url = "https://mirror.example.org/github", caBundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----" }
+    error_message = "the controller is told the release mirror and its authority"
+  }
+}
+
+run "release_mirror_refuses_an_authority_for_plain_http" {
+  command = plan
+
+  variables {
+    release_mirror = {
+      url       = "http://mirror.example.org/github"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    }
+  }
+
+  expect_failures = [var.release_mirror]
+}
+
+run "release_mirror_refuses_a_trailing_slash" {
+  command = plan
+
+  variables {
+    release_mirror = { url = "https://mirror.example.org/" }
+  }
+
+  expect_failures = [var.release_mirror]
+}
+
 run "chart_mirror_authority_joins_the_proxy_authority" {
   command = plan
 

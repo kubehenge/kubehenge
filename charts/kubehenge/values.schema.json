@@ -136,6 +136,15 @@
       "propertyNames": { "pattern": "^[A-Za-z0-9.-]+(:[0-9]+)?$" },
       "additionalProperties": { "type": "string", "pattern": "^(oci|https?)://[^/?#\\s]+(/[^?#\\s]*)?$" }
     },
+    "releaseMirror": {
+      "description": "A mirror of the RKE2 and k3s releases, on GitHub's paths, with the PEM authority of a mirror the usual authorities do not sign.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": { "type": "string", "pattern": "^$|^https?://[A-Za-z0-9._~:\\[\\]-]+(/[A-Za-z0-9._~:/\\[\\]-]*[A-Za-z0-9._~:\\[\\]-])?$" },
+        "caBundle": { "type": "string", "maxLength": 262144 }
+      }
+    },
     "controllerLogs": {
       "description": "How the controller logs, in JSON either way.",
       "type": "object",

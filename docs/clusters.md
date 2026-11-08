@@ -143,7 +143,7 @@ A cluster has IPv4, IPv6, or both. IPv6 and dual-stack are unsupported on every 
 
 ##### IPv6-only networks
 
-Much of what the nodes and add-ons download has no IPv6 address (GitHub among them). An IPv6-only network needs NAT64 with DNS64, or mirrors. The management cluster can pull through [registry mirrors and chart mirrors](install.md#mirroring-the-charts). The cluster's own nodes need NAT64 and DNS64, since RKE2 and k3s fetch their release from GitHub as a node boots.
+Much of what the nodes and add-ons download has no IPv6 address (GitHub among them). An IPv6-only network needs NAT64 with DNS64, or mirrors. The management cluster can pull through [registry mirrors and chart mirrors](install.md#mirroring-the-charts). RKE2 and k3s nodes fetch their release from GitHub as they boot, unless the management cluster sets a [release mirror](install.md#mirroring-the-releases).
 
 #### Load balancer
 

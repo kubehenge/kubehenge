@@ -87,6 +87,15 @@ variable "backup_targets" {
   default = []
 }
 
+# The RKE2 and k3s releases test/e2e/ci/run.sh serves the nodes, so that none downloads from GitHub.
+variable "release_mirror" {
+  type = object({
+    url       = optional(string, "")
+    ca_bundle = optional(string, "")
+  })
+  default = {}
+}
+
 module "management_cluster" {
   # The whole repository, as a published module source would fetch it: the module reads ../charts.
   source = "${var.repository}//management-cluster"
@@ -118,6 +127,7 @@ module "management_cluster" {
   provider_images    = var.provider_images
   provider_manifests = var.provider_manifests
   backup_targets     = var.backup_targets
+  release_mirror     = var.release_mirror
   # test/e2e/workload-cluster.sh restores each cluster's etcd through the guest agent.
   etcd_restore = true
   # The RKE2 and k3s tests hold their upgrade's first new server out long enough to see the roll

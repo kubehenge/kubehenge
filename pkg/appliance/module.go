@@ -55,6 +55,7 @@ module "management" {
   bootstrap_datastore    = var.settings.bootstrapDatastore
   registry_mirrors       = var.settings.registryMirrors
   chart_repositories     = var.settings.chartRepositories
+  release_mirror         = var.settings.releaseMirror
   controller_image       = var.settings.controllerImage
   vm_id_range            = var.settings.vmIdRange
   pod_subnets            = var.settings.podSubnets
@@ -206,6 +207,7 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 		"bootstrapDatastore":     s.BootstrapDatastore,
 		"registryMirrors":        nonNilMirrors(s.RegistryMirrors),
 		"chartRepositories":      moduleChartRepositories(s.ChartRepositories),
+		"releaseMirror":          moduleReleaseMirror(s.ReleaseMirror),
 		"controllerImage":        nilIfEmpty(s.ControllerImage),
 		"vmIdRange":              ids,
 		"podSubnets":             ranges.pods,

@@ -43,6 +43,16 @@ type ReleaseChecksums struct {
 	HTTP        *http.Client
 	GitHub, Raw string
 	API         string
+	// Mirror, when set, is the release mirror nodes download from and the reads go to in place of
+	// GitHub, read again for each patch and read.
+	Mirror func() ReleaseMirror
+}
+
+func (r *ReleaseChecksums) mirror() ReleaseMirror {
+	if r.Mirror == nil {
+		return ReleaseMirror{}
+	}
+	return r.Mirror()
 }
 
 // releaseTemplate is where a bootstrap template of RKE2 or k3s keeps its node's configuration.
@@ -152,14 +162,26 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 	if err != nil {
 		return nil, err //nolint:wrapcheck // names the node OS
 	}
-	command := strings.Join(append([]string{releaseScriptPath, string(release.distribution), version, sums.File, sums.Script}, files...), " ")
+	args := []string{releaseScriptPath}
 	ops := []map[string]any{
 		addOp(tmpl.spec+"/files/-", map[string]any{
 			"path": releaseScriptPath, "owner": "root:root", "permissions": "0700", "content": releaseScript,
 		}),
-		addOp(tmpl.spec+"/"+tmpl.commands+"/-", command),
-		addOp(tmpl.spec+"/agentConfig/airGapped", true),
 	}
+	if mirror := r.mirror(); mirror.Enabled() {
+		args = append(args, "--mirror", mirror.URL)
+		if mirror.CABundle != "" {
+			args = append(args, "--mirror-ca", releaseMirrorCAPath)
+			ops = append(ops, addOp(tmpl.spec+"/files/-", map[string]any{
+				"path": releaseMirrorCAPath, "owner": "root:root", "permissions": "0644", "content": mirror.CABundle,
+			}))
+		}
+	}
+	args = append(args, string(release.distribution), version, sums.File, sums.Script)
+	ops = append(ops,
+		addOp(tmpl.spec+"/"+tmpl.commands+"/-", strings.Join(append(args, files...), " ")),
+		addOp(tmpl.spec+"/agentConfig/airGapped", true),
+	)
 	if family.MAC() == templates.SELinux {
 		// Neither bootstrap provider has a field for it, and both distributions read every file in
 		// config.yaml.d. The node's template carries the distribution's policy package.
@@ -208,7 +230,15 @@ type releaseSums struct{ File, Script string }
 // read hashes the release's checksum file and install script as they are now, for pinning them,
 // and checks the file lists everything a node of the release may install.
 func (r *ReleaseChecksums) read(ctx context.Context, release *distributionRelease, version string) (releaseSums, error) {
-	file, err := r.fetchAsset(ctx, release.repository, version, "sha256sum-amd64.txt", maxChecksumFile)
+	mirror := r.mirror()
+	const sumsName = "sha256sum-amd64.txt"
+	var file []byte
+	var err error
+	if mirror.Enabled() {
+		file, err = r.fetchMirrored(ctx, mirror, mirror.releaseURL(r.GitHub, release.repository, version, sumsName), release, version, sumsName, maxChecksumFile)
+	} else {
+		file, err = r.fetchAsset(ctx, release.repository, version, sumsName, maxChecksumFile)
+	}
 	if err != nil {
 		return releaseSums{}, err
 	}
@@ -231,11 +261,29 @@ func (r *ReleaseChecksums) read(ctx context.Context, release *distributionReleas
 			return releaseSums{}, fmt.Errorf("%w: the checksums of %s list no %s", errUnlisted, version, f)
 		}
 	}
-	script, err := r.fetch(ctx, r.Raw+"/"+release.repository+"/"+version+"/install.sh", maxInstallScript)
+	var script []byte
+	if mirror.Enabled() {
+		script, err = r.fetchMirrored(ctx, mirror, mirror.scriptURL(r.Raw, release.repository, version), release, version, "install.sh", maxInstallScript)
+	} else {
+		script, err = r.fetch(ctx, mirror.scriptURL(r.Raw, release.repository, version), maxInstallScript)
+	}
 	if err != nil {
 		return releaseSums{}, err
 	}
 	return releaseSums{File: hexSHA256(file), Script: hexSHA256(script)}, nil
+}
+
+// fetchMirrored reads a file of a release from the release mirror, which has no API to fall back on.
+func (r *ReleaseChecksums) fetchMirrored(ctx context.Context, mirror ReleaseMirror, url string, release *distributionRelease, version, name string, limit int64) ([]byte, error) {
+	body, err := r.fetch(ctx, url, limit)
+	switch {
+	case err == nil:
+		return body, nil
+	case errors.Is(err, errUnlisted):
+		return nil, fmt.Errorf("the release mirror %s has no %s of %s %s: %w", mirror.URL, name, release.repository, version, err)
+	default:
+		return nil, fmt.Errorf("the release mirror %s: %w", mirror.URL, err)
+	}
 }
 
 // api is where the GitHub API answers: the real one for the real GitHub, nowhere for an address a

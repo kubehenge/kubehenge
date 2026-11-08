@@ -37,6 +37,8 @@ const form: SetupForm = {
   mirrors: "",
   chartMirrors: "",
   chartMirrorCA: "",
+  releaseMirror: "",
+  releaseMirrorCA: "",
   proxyURL: "",
   proxyUser: "",
   proxyPassword: "",
@@ -345,6 +347,43 @@ describe("setup", () => {
       "Paste certificates only, no private key.",
     );
     expect(problems({ chartMirrorCA: pem }).chartMirrorCA).toBe("Add a chart mirror first.");
+  });
+
+  it("sends the release mirror and its authority only when set, and reads them back", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(settings(form)).not.toHaveProperty("releaseMirror");
+    const sent = settings({ ...form, releaseMirror: " https://m.example/github ", releaseMirrorCA: ` ${pem}\n\n` });
+    expect(sent.releaseMirror).toStrictEqual({ url: "https://m.example/github", caBundle: `${pem}\n` });
+    const again = formOf(sent);
+    expect(again.releaseMirror).toBe("https://m.example/github");
+    expect(settings({ ...again, passphrase: "", confirm: "" }).releaseMirror).toStrictEqual(sent.releaseMirror);
+    expect(formOf(settings(form)).releaseMirror).toBe("");
+  });
+
+  it("checks the release mirror and its authority", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    for (const ok of ["https://m.example", "http://10.0.0.1:8080/github", "https://[2001:db8::1]:8443/gh"]) {
+      expect(problems({ releaseMirror: ok })).toStrictEqual({});
+    }
+    const wrong = [
+      "m.example",
+      "ftp://m.example",
+      "https://m.example/",
+      "https://user:pw@m.example",
+      "https://m.example/a b",
+      "https://m.example/?a=b",
+      "https://m.example/a;b",
+    ];
+    const accepted = wrong.filter((address) => problems({ releaseMirror: address }).releaseMirror === undefined);
+    expect(accepted).toStrictEqual([]);
+    expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: pem })).toStrictEqual({});
+    expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: "junk" }).releaseMirrorCA).toBe(
+      "Paste PEM certificates.",
+    );
+    expect(problems({ releaseMirror: "http://m.example", releaseMirrorCA: pem }).releaseMirrorCA).toBe(
+      "A certificate needs an https:// mirror.",
+    );
+    expect(problems({ releaseMirrorCA: pem }).releaseMirrorCA).toBe("Add a release mirror first.");
   });
 
   it("sends a proxy only when it has an address", () => {
