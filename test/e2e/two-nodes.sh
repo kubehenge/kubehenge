@@ -3,8 +3,9 @@
 # cluster on the first: a k3s cluster kept to the second node is cloned there from a template on
 # shared storage and comes up across the nodes' common network; kept to the first, every machine
 # replaced moves there, since a placement holds for the VMs created after it; and with the second node down, Kubehenge leaves it out of the cluster's placement,
-# so that the cluster, let onto every node again, keeps to the one online and grows there. With the
-# second node back, nothing of the cluster is left once it is deleted.
+# so that the cluster, let onto every node again, keeps to the one online and grows there. Shrunk
+# back, with the second node back, it has that node in its placement again, and nothing of the
+# cluster is left once it is deleted.
 #
 #   test/e2e/two-nodes.sh
 #
@@ -72,22 +73,27 @@ online_are() {
     now=$(online_nodes) || return 1
     [ "${now}" = "$1" ]
 }
-node_online() {
-    # shellcheck disable=SC2310 # polled; no answer is not the node online.
-    nodes=$(pve_get nodes) || return 1
-    printf '%s' "${nodes}" | jq -e --arg n "$1" 'any(.data[]; .node == $n and .status == "online")' > /dev/null
-}
-# placed_on_return: whether the placement is the one the nodes' free memory allows with the second
-# node back. It takes both nodes where one has room for the cluster's largest machine. Where none
-# has, it holds on the first and NodesLackMemory says so. Nodes that share one machine's memory, as
-# in CI, have no room for the 4 GiB control plane once the cluster has grown.
-placed_on_return() {
+# placed_on <nodes>: whether the cluster's placement is those nodes, with room on them for its
+# largest machine.
+placed_on() {
     # shellcheck disable=SC2310 # polled; no answer is not the placement looked for.
     state=$(kubectl -n "${ns}" get cluster/nodes -o json) || return 1
-    printf '%s' "${state}" | jq -e --arg both "${first},${second}" --arg first "${first}" '
-        .metadata.annotations["kubehenge.dev/online-nodes"] as $on
-        | any(.status.conditions[]?; .type == "NodesLackMemory" and .status == "True") as $short
-        | ($on == $both and ($short | not)) or ($on == $first and $short)' > /dev/null
+    printf '%s' "${state}" | jq -e --arg on "$1" '.metadata.annotations["kubehenge.dev/online-nodes"] == $on
+        and (any(.status.conditions[]?; .type == "NodesLackMemory" and .status == "True") | not)' > /dev/null
+}
+# running_vms <count>: whether that many of the cluster's VMs run.
+running_vms() {
+    # shellcheck disable=SC2310 # polled; no answer is not the count looked for.
+    vms=$(pve_get "cluster/resources?type=vm") || return 1
+    n=$(printf '%s' "${vms}" | jq --arg p "/${ns}." '[.data[] | select((.pool // "" | contains($p)) and .template != 1 and .status == "running")] | length')
+    [ "${n}" = "$1" ]
+}
+# free_at_least <node> <MiB>: whether Proxmox VE reports that much memory free on the node.
+free_at_least() {
+    # shellcheck disable=SC2310 # polled; no answer is not the memory looked for.
+    nodes=$(pve_get nodes) || return 1
+    printf '%s' "${nodes}" | jq -e --arg n "$1" --argjson mib "$2" \
+        'any(.data[]; .node == $n and .maxmem > 0 and (.maxmem - .mem) / 1048576 >= $mib)' > /dev/null
 }
 nodes_ready() {
     # shellcheck disable=SC2310 # polled; no answer is no node ready.
@@ -100,6 +106,11 @@ allow() {
         jq -c --argjson nodes "$1" '.spec.topology.variables | map(select(.name != "allowedNodes")) + (if $nodes == null then [] else [{name: "allowedNodes", value: $nodes}] end)')
     kubectl -n "${ns}" patch cluster/nodes --type=json -p "[{\"op\": \"replace\", \"path\": \"/spec/topology/variables\", \"value\": ${variables}}]"
 }
+
+# The control plane is the cluster's largest machine. A node joins the placement with a tenth more
+# memory free than that.
+control_plane_mib=4096
+join_mib=$((control_plane_mib + control_plane_mib / 10))
 
 step "a k3s cluster kept to ${second}, cloned there from ${KUBEHENGE_E2E_SHARED_STORAGE}"
 kubectl create namespace "${ns}"
@@ -142,7 +153,7 @@ spec:
       - name: proxmoxHA
         value: false
       - name: controlPlaneMachine
-        value: {cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}, memoryMiB: 4096}
+        value: {cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}, memoryMiB: ${control_plane_mib}}
       - name: workerMachine
         value: {cores: 2, memoryMiB: 1024}
 EOF
@@ -173,10 +184,17 @@ kubectl -n "${ns}" patch cluster/nodes --type=json -p '[{"op": "replace", "path"
 until_true 2400 "every machine, the new worker too, on ${first}" all_on "${first}"
 until_true 600 "three nodes ready" nodes_ready 3
 
-step "${second} back, and the cluster deleted"
+step "back to one worker, with room again for ${second}"
+# Nodes that share one machine's memory, as in CI, have no room for the control plane with both
+# workers running. With one, both have the room to join the placement.
+kubectl -n "${ns}" patch cluster/nodes --type=json -p '[{"op": "replace", "path": "/spec/topology/workers/machineDeployments/0/replicas", "value": 1}]'
+until_true 1200 "the second worker gone" all_on "${first}"
+until_true 300 "the second worker's VM gone" running_vms 2
+until_true 300 "${join_mib} MiB free on ${first}" free_at_least "${first}" "${join_mib}"
+
+step "${second} back in the cluster's placement, and the cluster deleted"
 sh -c "${KUBEHENGE_E2E_UP}"
-until_true 600 "${second} online in Proxmox VE" node_online "${second}"
-until_true 600 "the placement the nodes' memory allows with ${second} back" placed_on_return
+until_true 600 "${second} back in the cluster's placement" placed_on "${first},${second}"
 kubectl -n "${ns}" delete cluster/nodes --wait --timeout=30m
 left=$(pve_get "cluster/resources?type=vm" | jq --arg p "/${ns}." '[.data[] | select(.pool // "" | contains($p))] | length')
 [ "${left}" = 0 ] || fail "VMs of the cluster are still there"
