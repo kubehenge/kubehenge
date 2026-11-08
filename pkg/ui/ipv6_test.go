@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -69,6 +71,115 @@ func TestFreeAddressesByFamily(t *testing.T) {
 				t.Fatalf("free = %+v, want %+v", got, c.want)
 			}
 		})
+	}
+}
+
+// A cluster copied from another may sit on a network other than the bridge's own: its addresses
+// come from the network its gateway and prefix length give.
+func TestFreeAddressesSearchTheFormsNetwork(t *testing.T) {
+	t.Parallel()
+	// The node sits at 10.0.0.6, and the cluster reports another node at 10.0.0.5.
+	nodeAt6 := []pve.Bridge{{Bridge: "vmbr0", Node: "pve1", CIDR: "10.0.0.6/24", Gateway: "10.0.0.1"}}
+	for name, c := range map[string]struct {
+		bridges []pve.Bridge
+		body    string
+		want    freeView
+	}{
+		"a network off the bridge's": {
+			body: `{"nodes":3,"gateway":"10.0.70.1","prefix":24}`,
+			want: freeView{Network: "10.0.70.0/24", Endpoint: "10.0.70.20", Addresses: "10.0.70.21-10.0.70.23"},
+		},
+		"past the gateway and the Proxmox VE nodes": {
+			bridges: nodeAt6,
+			body:    `{"nodes":3,"gateway":"10.0.0.1","prefix":27}`,
+			want:    freeView{Network: "10.0.0.0/27", Endpoint: "10.0.0.7", Addresses: "10.0.0.8-10.0.0.10"},
+		},
+		"an IPv6 network": {
+			body: `{"nodes":2,"families":["IPv6"],"gateway6":"2001:db8:0:7::1","prefix6":64}`,
+			want: freeView{Network6: "2001:db8:0:7::/64", Endpoint6: "2001:db8:0:7::14", Addresses6: "2001:db8:0:7::15-2001:db8:0:7::16"},
+		},
+		"a link-local IPv6 gateway keeps the bridge's": {
+			body: `{"nodes":2,"families":["IPv6"],"gateway6":"fe80::1","prefix6":64}`,
+			want: freeView{Network6: "2001:db8:0:1::/64", Endpoint6: "2001:db8:0:1::14", Addresses6: "2001:db8:0:1::15-2001:db8:0:1::16"},
+		},
+		"both families": {
+			body: `{"nodes":2,"families":["IPv4","IPv6"],"gateway":"10.0.70.1","prefix":24,"gateway6":"2001:db8:0:7::1","prefix6":64}`,
+			want: freeView{
+				Network: "10.0.70.0/24", Endpoint: "10.0.70.20", Addresses: "10.0.70.21-10.0.70.22",
+				Network6: "2001:db8:0:7::/64", Endpoint6: "2001:db8:0:7::14", Addresses6: "2001:db8:0:7::15-2001:db8:0:7::16",
+			},
+		},
+		"a full network": {
+			body: `{"nodes":3,"gateway":"10.0.70.1","prefix":30}`,
+			want: freeView{Network: "10.0.70.0/30", Full: true},
+		},
+		"a full IPv6 network": {
+			body: `{"nodes":3,"families":["IPv6"],"gateway6":"2001:db8:0:7::1","prefix6":126}`,
+			want: freeView{Network6: "2001:db8:0:7::/126", Full6: true},
+		},
+		"no nodes asked for is not full": {
+			body: `{"nodes":0,"check":["10.0.70.9"],"gateway":"10.0.70.1","prefix":30}`,
+			want: freeView{Network: "10.0.70.0/30"},
+		},
+		"a gateway of the other family": {
+			body: `{"nodes":3,"gateway":"2001:db8::1","prefix":24}`,
+		},
+		"a prefix length out of range": {
+			body: `{"nodes":3,"gateway":"10.0.70.1","prefix":33}`,
+		},
+		"no prefix length": {
+			body: `{"nodes":3,"gateway":"10.0.70.1"}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.accounts.bridgeList = dualStackBridges()
+			if c.bridges != nil {
+				h.accounts.bridgeList = c.bridges
+			}
+			h.server.Probe = (&answeringOn{hosts: map[netip.Addr]bool{}}).probe
+			b := h.browser()
+			b.signIn("dev@pve")
+			rec := b.do("POST", "/api/proxmox/nodes/pve1/bridges/vmbr0/free", c.body)
+			expect(t, rec, http.StatusOK)
+			var got freeView
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			got.Answering = nil
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("free = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestFreeAddressesSkipTheManagementVMs(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.accounts.bridgeList = dualStackBridges()
+	h.server.Probe = (&answeringOn{hosts: map[netip.Addr]bool{}}).probe
+	a := &appliance.Appliance{Dir: t.TempDir(), Log: slog.New(slog.DiscardHandler)}
+	saved := `{"apiAddress":"10.0.70.21","nodeAddresses":["10.0.70.22/24"],"nodeAddressesIPv6":["2001:db8:0:7::14/64"]}`
+	if err := os.MkdirAll(filepath.Join(a.Dir, "management"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.Dir, "management", "settings.json"), []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.server.Appliance = a
+	b := h.browser()
+	b.signIn("dev@pve")
+	rec := b.do("POST", "/api/proxmox/nodes/pve1/bridges/vmbr0/free",
+		`{"nodes":2,"families":["IPv4","IPv6"],"gateway":"10.0.70.1","prefix":24,"gateway6":"2001:db8:0:7::1","prefix6":64}`)
+	expect(t, rec, http.StatusOK)
+	var got freeView
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Endpoint != "10.0.70.23" || got.Addresses != "10.0.70.24-10.0.70.25" || got.Endpoint6 != "2001:db8:0:7::15" {
+		t.Fatalf("free = %+v, want a run past the management VMs", got)
 	}
 }
 

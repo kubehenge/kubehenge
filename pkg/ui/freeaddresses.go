@@ -44,23 +44,33 @@ type freeRequest struct {
 	VLAN int `json:"vlan"`
 	// Nodes is how many node addresses the cluster needs. With none, only Check is probed.
 	Nodes int `json:"nodes"`
-	// Check are addresses, ranges or networks typed. Those on the bridge's networks are probed.
+	// Check are addresses, ranges or networks typed. Those on the searched networks are probed.
 	Check []string `json:"check"`
 	// Families are the address families to search, "IPv4" and "IPv6". Empty means IPv4.
 	Families []string `json:"families"`
+	// Gateway and Prefix are the nodes' network the form gives, searched instead of the bridge's.
+	// An empty Gateway leaves the bridge's. Gateway6 and Prefix6 are the same for IPv6.
+	Gateway  string `json:"gateway,omitempty"`
+	Prefix   int    `json:"prefix,omitempty"`
+	Gateway6 string `json:"gateway6,omitempty"`
+	Prefix6  int    `json:"prefix6,omitempty"`
 }
 
-// freeView is a run of free addresses on a bridge's network for a new cluster, the first for its
+// freeView is a run of free addresses on the nodes' network for a new cluster, the first for its
 // control-plane endpoint and the rest for its nodes, and the addresses checked that a host answers
-// on. Network is empty where the node reports no network on the bridge or the cluster takes a VLAN
-// of it: then nothing is probed. The IPv6 fields are the same for the bridge's IPv6 network.
+// on. Network is the one searched, the form's or else the bridge's. It is empty where there is
+// none, the form's gateway is wrong or the cluster takes a VLAN of the bridge: then nothing is
+// probed. Full tells that nodes were asked for and no run is free. The IPv6 fields are the same
+// for IPv6.
 type freeView struct {
 	Network    string   `json:"network,omitempty"`
 	Endpoint   string   `json:"endpoint,omitempty"`
 	Addresses  string   `json:"addresses,omitempty"`
+	Full       bool     `json:"full,omitempty"`
 	Network6   string   `json:"network6,omitempty"`
 	Endpoint6  string   `json:"endpoint6,omitempty"`
 	Addresses6 string   `json:"addresses6,omitempty"`
+	Full6      bool     `json:"full6,omitempty"`
 	Answering  []string `json:"answering"`
 }
 
@@ -124,12 +134,7 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	if !want4 {
-		v4 = bridgeFamily{}
-	}
-	if !want6 {
-		v6 = bridgeFamily{}
-	}
+	v4, v6 = searchedIn(v4, want4, true, req.Gateway, req.Prefix), searchedIn(v6, want6, false, req.Gateway6, req.Prefix6)
 	if (!v4.network.IsValid() && !v6.network.IsValid()) || req.VLAN != 0 {
 		writeJSON(w, http.StatusOK, view)
 		return
@@ -140,6 +145,7 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusInternalServerError, "could not read the other clusters' addresses")
 		return
 	}
+	taken = append(taken, s.knownHosts(ctx, u)...)
 	var check []netip.Addr
 	for _, f := range []bridgeFamily{v4, v6} {
 		if f.network.IsValid() {
@@ -153,10 +159,12 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 	if v4.network.IsValid() {
 		view.Network = v4.network.String()
 		view.Endpoint, view.Addresses = s.suggest(ctx, v4, taken, req.Nodes)
+		view.Full = req.Nodes > 0 && view.Addresses == ""
 	}
 	if v6.network.IsValid() {
 		view.Network6 = v6.network.String()
 		view.Endpoint6, view.Addresses6 = s.suggest(ctx, v6, taken, req.Nodes)
+		view.Full6 = req.Nodes > 0 && view.Addresses6 == ""
 	}
 	writeJSON(w, http.StatusOK, view)
 }
@@ -214,6 +222,54 @@ func familyOn(cidr, gateway string, is4 bool) (bridgeFamily, bool) {
 		reserved = append(reserved, [2]netip.Addr{gw, gw})
 	}
 	return bridgeFamily{network: own.Masked(), reserved: reserved}, true
+}
+
+// searchedIn is the network a family's addresses are searched in: the one the form's gateway and
+// prefix length give, else the bridge's. A link-local IPv6 gateway gives no network, so the
+// bridge's stands. A gateway of the other family or a prefix length out of range gives none, and
+// the form says what is wrong. The bridge's own spoken-for addresses stay spoken for.
+func searchedIn(bridge bridgeFamily, wanted, is4 bool, gateway string, prefix int) bridgeFamily {
+	if !wanted {
+		return bridgeFamily{}
+	}
+	if gateway == "" {
+		return bridge
+	}
+	gw, err := netip.ParseAddr(gateway)
+	if err != nil || gw.Zone() != "" || gw.Is4In6() || gw.Is4() != is4 {
+		return bridgeFamily{}
+	}
+	if gw.Is6() && gw.IsLinkLocalUnicast() {
+		return bridge
+	}
+	network, err := gw.Prefix(prefix)
+	if err != nil || prefix < 1 {
+		return bridgeFamily{}
+	}
+	return bridgeFamily{network: network, reserved: append(slices.Clone(bridge.reserved), [2]netip.Addr{gw, gw})}
+}
+
+// knownHosts are the addresses the Proxmox VE nodes report and the management cluster's VMs take,
+// which no new cluster may take. Nodes whose addresses cannot be read are left to the probe.
+func (s *Server) knownHosts(ctx context.Context, u user) [][2]netip.Addr {
+	var known []netip.Addr
+	if reported, err := s.Accounts.NodeAddresses(ctx, u.ticket); err == nil {
+		for _, text := range reported {
+			if ip, err := netip.ParseAddr(text); err == nil {
+				known = append(known, ip)
+			}
+		}
+	}
+	if s.Appliance != nil {
+		if saved := s.Appliance.SavedSettings(); saved != nil {
+			known = append(known, setupAddresses(saved)...)
+		}
+	}
+	out := make([][2]netip.Addr, 0, len(known))
+	for _, a := range known {
+		out = append(out, [2]netip.Addr{a, a})
+	}
+	return out
 }
 
 // ownAddress is a node's address of one family on a bridge with its prefix length, like

@@ -30,7 +30,7 @@ import {
   familiesOf,
   familyFieldLabel,
   familyNames,
-  networkOf,
+  gatewayNetwork,
   type Family,
   type FamilyChoice,
 } from "./network";
@@ -368,26 +368,31 @@ const probeAfter = 500;
 
 /**
  * ProbeOn is where addresses are probed: the bridge of a node that reports its network, the VLAN
- * tag typed, and the address families asked for.
+ * tag typed, and the address families asked for. The gateway and prefix length of a family give
+ * the network searched, else the bridge's is.
  */
 export interface ProbeOn {
   node: string | undefined;
   bridge: string;
   vlan: string;
   families: FamilyChoice;
+  gateway: string;
+  prefix: number;
+  gateway6: string;
+  prefix6: number;
 }
 
 /**
- * useFreeAddresses asks, a moment after its inputs last change, for free addresses on a bridge's
+ * useFreeAddresses asks, a moment after its inputs last change, for free addresses on the nodes'
  * network: a run for the API and the nodes where nodes is above 0, and which of check a host
  * answers on. It is advice, so where the question fails there is none.
  */
 export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): FreeAddresses | undefined {
-  const { node, bridge } = on;
+  const { node, bridge, gateway, prefix, gateway6, prefix6 } = on;
   const vlan = filled(on.vlan) ? Number(on.vlan) : 0;
   const checked = check.join("\n");
   const asked = familyNames(on.families).join(",");
-  const key = [node, bridge, vlan, nodes, checked, asked].join(" ");
+  const key = [node, bridge, vlan, nodes, checked, asked, gateway, prefix, gateway6, prefix6].join(" ");
   const [found, setFound] = useState<{ key: string; free: FreeAddresses }>();
   useEffect(() => {
     let current = true;
@@ -398,6 +403,8 @@ export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): F
           nodes,
           check: checked === "" ? [] : checked.split("\n"),
           ...(asked === "IPv4" ? {} : { families: asked.split(",") }),
+          ...(filled(gateway) && Number.isInteger(prefix) && { gateway, prefix }),
+          ...(filled(gateway6) && Number.isInteger(prefix6) && { gateway6, prefix6 }),
         });
         if (current) {
           setFound({ key, free });
@@ -416,7 +423,7 @@ export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): F
       current = false;
       clearTimeout(timer);
     };
-  }, [node, bridge, vlan, nodes, checked, asked, key]);
+  }, [node, bridge, vlan, nodes, checked, asked, gateway, prefix, gateway6, prefix6, key]);
   return found?.key === key ? found.free : undefined;
 }
 
@@ -666,12 +673,15 @@ function FamilyFields({
   set,
   shown,
   inUse: busy,
+  full,
   first,
   last,
 }: StepProps & {
   family: Family;
   shownFamilies: number;
   inUse: JSX.Element | undefined;
+  /** The network searched, where it has no free addresses for the cluster. */
+  full: string | undefined;
   first: string;
   last: string;
 }): JSX.Element {
@@ -680,11 +690,15 @@ function FamilyFields({
       ? (["addresses6", "prefix6", "gateway6"] as const)
       : (["addresses", "prefix", "gateway"] as const);
   const label = (plain: string): string => familyFieldLabel(plain, family, shownFamilies);
+  const none =
+    full === undefined || filled(form[addresses]) ? undefined : (
+      <span className="hint-warning">No free addresses found in {full}</span>
+    );
   return (
     <>
       <Field
         label={label("Node addresses")}
-        hint={busy ?? `Ranges like ${first}-${last}, networks or addresses`}
+        hint={busy ?? none ?? `Ranges like ${first}-${last}, networks or addresses`}
         error={shown(addresses)}
       >
         {(id) => <textarea id={id} rows={3} value={form[addresses]} onChange={(e) => set(addresses, e.target.value)} />}
@@ -716,17 +730,24 @@ export function NetworkStep({
   bridgeOptions,
   network,
   network6,
+  free,
   checked,
 }: StepProps & {
   cls: ClusterClass | undefined;
   bridgeOptions: Bridge[];
-  /** The bridge's network, like 192.0.2.0/24, where a node reports it, else the gateway's. The examples are taken from it. */
+  /** The bridge's network, like 192.0.2.0/24, where a node reports it. The examples are taken from it where the gateway gives none. */
   network?: string | undefined;
   /** The same for IPv6, like 2001:db8::/64. */
   network6?: string | undefined;
+  /** The free addresses found for the cluster. */
+  free?: FreeAddresses | undefined;
   /** What probing the addresses typed found. */
   checked?: FreeAddresses | undefined;
 }): JSX.Element {
+  const fullIn = (family: Family): string | undefined => {
+    const [full, searched] = family === "IPv6" ? [free?.full6, free?.network6] : [free?.full, free?.network];
+    return full === true ? searched : undefined;
+  };
   const cni = variable(cls, "cni");
   const fips = chosenNodeOS(form, cls)?.fips === true;
   const answering = checked?.answering ?? [];
@@ -825,6 +846,7 @@ export function NetworkStep({
           set={set}
           shown={shown}
           inUse={nodesInUse}
+          full={fullIn(family)}
           first={sample(family, exampleFirst)}
           last={sample(family, exampleLast)}
         />
@@ -909,14 +931,14 @@ export function NetworkStep({
   );
 }
 
-// exampleNetworks are the networks the examples of each family are taken from: the bridge's where a
-// node reports it, else the gateway's.
+// exampleNetworks are the networks the examples of each family are taken from: the gateway's, the
+// one the free addresses come from, else the bridge's where a node reports it.
 const exampleNetworks = (
   form: Form,
   bridge: Record<Family, string | undefined>,
 ): Record<Family, string | undefined> => ({
-  IPv4: bridge.IPv4 ?? networkOf(`${form.gateway}/${form.prefix}`),
-  IPv6: bridge.IPv6 ?? networkOf(`${form.gateway6}/${form.prefix6}`),
+  IPv4: gatewayNetwork(form.gateway, form.prefix, "IPv4") ?? bridge.IPv4,
+  IPv6: gatewayNetwork(form.gateway6, form.prefix6, "IPv6") ?? bridge.IPv6,
 });
 
 // exampleAddress is the address that many into the example network, else in a documentation network.

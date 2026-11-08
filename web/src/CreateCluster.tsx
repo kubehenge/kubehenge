@@ -229,7 +229,16 @@ export function CreateCluster({
     cls,
     canTrust,
   );
-  const probeOn = { node, bridge, vlan: entered.vlan, families: entered.families };
+  const probeOn = {
+    node,
+    bridge,
+    vlan: entered.vlan,
+    families: entered.families,
+    gateway: chosen.gateway,
+    prefix: chosen.prefix,
+    gateway6: chosen.gateway6,
+    prefix6: chosen.prefix6,
+  };
   const free = useFreeAddresses(probeOn, nodesNeeded(chosen), []);
   const typed = useFreeAddresses(probeOn, 0, addressesOf(entered));
   const form = withFreeAddresses(chosen, free, (k) => touched.has(k));
@@ -388,6 +397,7 @@ export function CreateCluster({
               bridgeOptions={bridgeOptions}
               network={network}
               network6={network6}
+              free={free}
               checked={typed}
             />
           )}

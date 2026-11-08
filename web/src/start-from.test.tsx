@@ -213,6 +213,142 @@ describe("a new cluster started from another", () => {
     );
   });
 
+  it("suggests addresses on the network it took, not the bridge's", async () => {
+    window.history.replaceState(null, "", "/clusters/new");
+    const network = { bridge: "vmbr0", gateway: "10.0.70.1", prefix: 24 };
+    const asked: Record<string, unknown>[] = [];
+    fakeServer({
+      "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
+      "GET /api/classes": () => ({ body: [rke2] }),
+      "GET /api/versions/rke2": () => ({ body: { versions: ["v1.36.5+rke2r1"], stable: "v1.36.5+rke2r1" } }),
+      "GET /api/clusters": () => ({ body: [{ ...web, variables: { network } }] }),
+      "GET /api/proxmox/storages": () => ({ body: [] }),
+      "GET /api/proxmox/nodes": () => ({ body: [{ node: "pve1", online: true }] }),
+      "GET /api/proxmox/nodes/pve1/bridges": () => ({
+        body: [
+          { bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true, cidr: "10.0.0.5/16", gateway: "10.0.0.1" },
+        ],
+      }),
+      "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.0.0.53"], search: "" } }),
+      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": (body) => {
+        const req = body as { nodes: number; gateway?: string; prefix?: number };
+        if (req.nodes > 0) {
+          asked.push(req);
+        }
+        // The server searches the network the gateway and prefix length give.
+        const lan = (req.gateway ?? "10.0.0.1").split(".").slice(0, 3).join(".");
+        if (req.prefix === 30) {
+          return { body: { network: `${lan}.0/30`, full: true, answering: [] } };
+        }
+        return {
+          body: {
+            network: `${lan}.0/${req.prefix ?? 16}`,
+            endpoint: `${lan}.20`,
+            addresses: `${lan}.21-${lan}.23`,
+            answering: [],
+          },
+        };
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(async () => expect(await screen.findByLabelText("Start from")).toHaveValue("default/web"));
+    await user.type(screen.getByLabelText("Name"), "next");
+    await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5+rke2r1"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    const addresses = await screen.findByLabelText("Node addresses");
+    await waitFor(() => expect(addresses).toHaveValue("10.0.70.21-10.0.70.23"));
+    expect(screen.getByLabelText("API address")).toHaveValue("10.0.70.20");
+    expect(asked.at(-1)).toMatchObject({ gateway: "10.0.70.1", prefix: 24 });
+    expect(addresses).toHaveAccessibleDescription("Ranges like 10.0.70.21-10.0.70.29, networks or addresses");
+
+    // The suggestion follows the gateway.
+    const gateway = screen.getByLabelText("Gateway");
+    await user.clear(gateway);
+    await user.type(gateway, "10.0.80.1");
+    await waitFor(() => expect(addresses).toHaveValue("10.0.80.21-10.0.80.23"));
+    expect(screen.getByLabelText("API address")).toHaveValue("10.0.80.20");
+
+    // A full network leaves the fields empty and says so.
+    const prefix = screen.getByLabelText("Prefix length");
+    await user.clear(prefix);
+    await user.type(prefix, "30");
+    await waitFor(() => expect(addresses).toHaveAccessibleDescription("No free addresses found in 10.0.80.0/30"));
+    expect(addresses).toHaveValue("");
+    expect(screen.getByLabelText("API address")).toHaveValue("");
+
+    // Typed addresses replace the message.
+    await user.type(addresses, "10.0.80.2");
+    expect(addresses).toHaveAccessibleDescription(/Ranges like/u);
+    expect(addresses).not.toHaveAccessibleDescription(/No free addresses/u);
+  });
+
+  it("suggests IPv6 addresses on the IPv6 network it took", async () => {
+    window.history.replaceState(null, "", "/clusters/new");
+    const network = { bridge: "vmbr0", ipFamilies: ["IPv6"], ipv6: { gateway: "2001:db8:7::1", prefix: 64 } };
+    const families: ClusterClass = {
+      ...rke2,
+      variables: rke2.variables.map((v) =>
+        v.name === "network" ? { ...v, schema: { type: "object", properties: { ipFamilies: { type: "array" } } } } : v,
+      ),
+    };
+    fakeServer({
+      "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
+      "GET /api/classes": () => ({ body: [families] }),
+      "GET /api/versions/rke2": () => ({ body: { versions: ["v1.36.5+rke2r1"], stable: "v1.36.5+rke2r1" } }),
+      "GET /api/clusters": () => ({ body: [{ ...web, variables: { network } }] }),
+      "GET /api/proxmox/storages": () => ({ body: [] }),
+      "GET /api/proxmox/nodes": () => ({ body: [{ node: "pve1", online: true }] }),
+      "GET /api/proxmox/nodes/pve1/bridges": () => ({
+        body: [
+          {
+            bridge: "vmbr0",
+            node: "pve1",
+            vlanAware: false,
+            usable: true,
+            cidr: "10.0.0.5/16",
+            gateway: "10.0.0.1",
+            cidr6: "2001:db8:1::5/64",
+            gateway6: "2001:db8:1::1",
+          },
+        ],
+      }),
+      "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: [], search: "" } }),
+      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": (body) => {
+        const req = body as { gateway6?: string; prefix6?: number };
+        return req.gateway6 === "2001:db8:7::1" && req.prefix6 === 64
+          ? {
+              body: {
+                network6: "2001:db8:7::/64",
+                endpoint6: "2001:db8:7::14",
+                addresses6: "2001:db8:7::15-2001:db8:7::17",
+                answering: [],
+              },
+            }
+          : {
+              body: {
+                network6: "2001:db8:1::/64",
+                endpoint6: "2001:db8:1::14",
+                addresses6: "2001:db8:1::15",
+                answering: [],
+              },
+            };
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(async () => expect(await screen.findByLabelText("Start from")).toHaveValue("default/web"));
+    await user.type(screen.getByLabelText("Name"), "next");
+    await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5+rke2r1"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    const addresses = await screen.findByLabelText("Node addresses");
+    await waitFor(() => expect(addresses).toHaveValue("2001:db8:7::15-2001:db8:7::17"));
+    expect(screen.getByLabelText("API address")).toHaveValue("2001:db8:7::14");
+    expect(screen.getByLabelText("Gateway")).toHaveValue("2001:db8:7::1");
+  });
+
   it("is not offered before there is a cluster", async () => {
     window.history.replaceState(null, "", "/clusters/new");
     const calls = fakeServer({

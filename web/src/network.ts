@@ -267,6 +267,18 @@ const linkLocalBits = 10;
 export const gatewayReaches = (a: Address, prefix: number, gateway: Address): boolean =>
   sameNetwork(a, gateway, prefix) || (a.family === "IPv6" && sameNetwork(gateway, linkLocal, linkLocalBits));
 
+/**
+ * gatewayNetwork is the nodes' network a gateway of the family and a prefix length give, like
+ * 192.0.2.0/24. A link-local IPv6 gateway gives none, as it lies outside every node network.
+ */
+export function gatewayNetwork(gateway: string, prefix: number, family: Family): string | undefined {
+  const a = parseAddress(gateway);
+  if (a?.family !== family || (family === "IPv6" && sameNetwork(a, linkLocal, linkLocalBits))) {
+    return undefined;
+  }
+  return networkOf(`${gateway}/${prefix}`);
+}
+
 /** spanOf is the first and last address an address entry holds. Undefined when it is none. */
 export function spanOf(entry: string): Span | undefined {
   const [from = "", to, ...rest] = entry.split("-");

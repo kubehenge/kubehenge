@@ -483,11 +483,23 @@ export interface Api {
   bridges: (node: string) => Promise<Bridge[]>;
   /** The DNS servers and search domain a node resolves with. */
   dns: (node: string) => Promise<NodeDNS>;
-  /** Free addresses on a bridge's network for a new cluster's API and nodes, where nodes is above 0, and which of check a host answers on. */
+  /**
+   * Free addresses for a new cluster's API and nodes, where nodes is above 0, and which of check a host answers on.
+   * They are on the network a family's gateway and prefix length give, else on the bridge's.
+   */
   freeAddresses: (
     node: string,
     bridge: string,
-    req: { vlan: number; nodes: number; check: string[]; families?: string[] },
+    req: {
+      vlan: number;
+      nodes: number;
+      check: string[];
+      families?: string[];
+      gateway?: string;
+      prefix?: number;
+      gateway6?: string;
+      prefix6?: number;
+    },
   ) => Promise<FreeAddresses>;
   haRules: () => Promise<HARules>;
 }

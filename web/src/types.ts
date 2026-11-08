@@ -748,18 +748,21 @@ export interface Bridge {
 }
 
 /**
- * FreeAddresses are free addresses on a bridge's network for a new cluster, the endpoint's and a
- * range for its nodes, and which of the addresses checked a host answers on. Network is missing
- * where nothing was probed.
+ * FreeAddresses are free addresses on the nodes' network for a new cluster, the endpoint's and a
+ * range for its nodes, and which of the addresses checked a host answers on. Network is the one
+ * searched. It is missing where nothing was probed.
  */
 export interface FreeAddresses {
   network?: string;
   endpoint?: string;
   addresses?: string;
-  /** The same for the bridge's IPv6 network, with an IPv6 family asked for. */
+  /** Nodes were asked for and the network has no free run for them. */
+  full?: boolean;
+  /** The same for the IPv6 network, with an IPv6 family asked for. */
   network6?: string;
   endpoint6?: string;
   addresses6?: string;
+  full6?: boolean;
   answering: string[];
 }
 
