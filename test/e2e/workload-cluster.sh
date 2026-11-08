@@ -286,6 +286,11 @@ remove_ha_rule() {
     ha_vmid=''
 }
 wl() { KUBECONFIG="${work}/workload" kubectl "$@"; }
+# none_of <kubectl get arguments>: the workload cluster's list is read, and empty.
+none_of() {
+    # shellcheck disable=SC2310 # polled; a failed read is a no.
+    names=$(wl get "$@" -o name) && [ -z "${names}" ]
+}
 json_list() { printf '%s' "$1" | jq -R 'split(",")'; }
 # guest <node> <vmid> <command>: runs a shell command in a VM through its guest agent and prints its
 # output; fails when the command or the agent does. It is polled with set -e off, so each step
@@ -1453,7 +1458,7 @@ EOF
     [ "${owned_volumes}" -ge 1 ] || fail "no volume owned by the volume owner VM ${owner}"
     wl -n default delete pod/e2e pvc/e2e --wait --timeout=5m
     # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
-    until_true 600 "volume deleted" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get pv -o name | wc -l)\" = 0 ]"
+    until_true 600 "volume deleted" none_of pv
     owned_volumes=$(owned)
     [ "${owned_volumes}" = 0 ] || fail "the volume is still on ${KUBEHENGE_E2E_STORAGE}"
 }
@@ -1645,11 +1650,6 @@ if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
             *) return 1 ;;
         esac
     }
-    # none_of <kubectl get arguments>: the list is read, and empty.
-    none_of() {
-        # shellcheck disable=SC2310 # polled; a failed read is a no.
-        names=$(wl get "$@" -o name) && [ -z "${names}" ]
-    }
     snapshot_ready() {
         # shellcheck disable=SC2310 # polled; a failed read is a no.
         ready=$(wl -n default get volumesnapshot e2e -o jsonpath='{.status.readyToUse}') && [ "${ready}" = true ]
@@ -1817,7 +1817,7 @@ EOF
     holds 2 || fail "deleting the snapshot took more than its copy from the holder VMs"
     wl -n default delete pod/e2e-check pod/e2e-clone-check pvc/e2e-restored pvc/e2e-clone pvc/e2e-source --wait --timeout=5m
     # The CSI plugin retries a failed deletion with a back-off of up to five minutes.
-    until_true 600 "the volumes deleted" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get pv -o name | wc -l)\" = 0 ]"
+    until_true 600 "the volumes deleted" none_of pv
     until_true 600 "no volume left on ${KUBEHENGE_E2E_STORAGE}" no_owned_volumes
     until_true 300 "no copy left on the holder VMs" holds 0
     until_true 300 "the copies' records deleted" none_of -n kubehenge-volume-copies configmaps -l kubehenge.dev/volume-copy

@@ -82,7 +82,7 @@ Each provider's probes allow 5 s. Its liveness probe tolerates six misses. The k
 
 Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions:
 
-- **capmox v0.9.2**, with three fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`).
+- **capmox v0.9.2**, with four fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`).
 - **The Add-on Provider for Helm v0.6.4**, with three fixes (`helm_addon_build`):
   - The provider creates a cluster's release once, never twice.
   - It pulls or checks each chart by the digest its version carries.

@@ -166,9 +166,11 @@ locals {
     "ControlPlaneProvider/talos" = "ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.6.0@sha256:fdd30ae41424e6f36b30c5aa4ab13f46bf159050b365ed2d0194c053523c7bd2"
   }
 
-  # capmox v0.9.2 lacks three fixes, which scripts/capmox-patches adds to the release. A failed clone
+  # capmox v0.9.2 lacks four fixes, which scripts/capmox-patches adds to the release. A failed clone
   # forgets its VM ID. Kept while the ID stays free, the machine keeps looking for a VM that was
-  # never made, and never clones again. A deleted machine's VM is destroyed
+  # never made, and never clones again. A clone's VM ID is stored before the clone starts. The
+  # spec and the status are written apart, so a spec write that failed after the clone left its task
+  # recorded without its VM ID, and the next reconcile cloned again. A deleted machine's VM is destroyed
   # only once the VM under its ID is confirmed as the machine's, by SMBIOS UUID once that is
   # recorded as the provider ID and by name before: Proxmox VE hands a freed ID to the next clone,
   # and the delete's next pass would otherwise destroy that clone. A renamed VM is still destroyed.
@@ -185,7 +187,7 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:865c5e1285ab35c3f42bcccfb798bd7e95db631dc95658b9306d6e0b844cf0a4"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:92c302f16f9bd813485e44502157de06289e4f8ccacb3a596591269dd95652c1"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and
