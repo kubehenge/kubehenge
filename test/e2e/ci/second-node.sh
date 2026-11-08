@@ -16,6 +16,7 @@ set -eu
 work=$(readlink -f "${1:?usage: $0 <work directory>}")
 # shellcheck source=/dev/null
 . "${work}/env"
+: "${KUBEHENGE_PROXMOX_URL:?}" "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}"
 
 on() {
     node=$1
@@ -139,13 +140,21 @@ on pve2 test -f /etc/corosync/corosync.conf || {
     on pve journalctl -u pve-cluster -u corosync -u pveproxy -u pvedaemon --no-pager -n 100 >&2 || true
     exit 1
 }
-# Both nodes in the cluster's view, quorate, and pve2's API on its new certificate.
+# pve2's status as every API client reaches it: through pve's proxy, which accepts only the
+# certificate the cluster's files hold for pve2. The join writes pve2's new one there and returns
+# while pve2's proxy may still serve the old one, and pve then answers 596.
+through_pve() {
+    curl -sS --fail --max-time 20 --cacert "${KUBEHENGE_PROXMOX_CA}" \
+        -H "Authorization: PVEAPIToken=${KUBEHENGE_PROXMOX_TOKEN}" \
+        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/pve2/status" > /dev/null
+}
+# Both nodes in the cluster's view, quorate, and pve2's API reached through pve.
 # shellcheck disable=SC2310 # polled; each check that fails is a cluster not there yet.
 both_online() {
     on pve pvesh get /nodes --output-format json 2> /dev/null |
         jq -e '[.[] | select(.status == "online") | .node] | sort == ["pve", "pve2"]' > /dev/null &&
         on pve pvecm status 2> /dev/null | grep -q '^Quorate: *Yes' &&
-        on pve2 pvesh get /version > /dev/null 2>&1
+        through_pve 2> /dev/null
 }
 deadline=$(($(date +%s) + 600))
 # shellcheck disable=SC2310 # both_online is what the loop polls and reports.
@@ -154,8 +163,9 @@ until both_online; do
     if [ "${now}" -ge "${deadline}" ]; then
         echo "pve2 did not join pve's cluster within 10 minutes" >&2
         on pve pvecm status >&2 || true
-        on pve journalctl -u pve-cluster -u corosync --no-pager -n 100 >&2 || true
-        on pve2 journalctl -u pve-cluster -u corosync --no-pager -n 100 >&2 || true
+        through_pve >&2 || true
+        on pve journalctl -u pve-cluster -u corosync -u pveproxy --no-pager -n 100 >&2 || true
+        on pve2 journalctl -u pve-cluster -u corosync -u pveproxy --no-pager -n 100 >&2 || true
         exit 1
     fi
     sleep 3
