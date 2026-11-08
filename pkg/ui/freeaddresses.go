@@ -31,6 +31,7 @@ const (
 	pointToPointIPv6 = 127
 	// smallHostBits is the host bits of the smallest network the search starts past freeStart in.
 	smallHostBits = 7
+	byteBits      = 8
 )
 
 // The names of the address families in a request, as the cluster's ipFamilies variable has them.
@@ -71,10 +72,11 @@ type bridgeFamily struct {
 }
 
 // wantedFamilies tells which families a request asks for. An unknown name is an error.
-func wantedFamilies(names []string) (want4, want6 bool, err error) {
+func wantedFamilies(names []string) (bool, bool, error) {
 	if len(names) == 0 {
 		return true, false, nil
 	}
+	var want4, want6 bool
 	for _, n := range names {
 		switch n {
 		case familyNameIPv4:
@@ -161,7 +163,7 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 
 // suggest is a free endpoint and a free run of node addresses on a family's network, empty where
 // none is wanted or none is free.
-func (s *Server) suggest(ctx context.Context, f bridgeFamily, taken [][2]netip.Addr, nodes int) (endpoint, addresses string) {
+func (s *Server) suggest(ctx context.Context, f bridgeFamily, taken [][2]netip.Addr, nodes int) (string, string) {
 	if nodes == 0 {
 		return "", ""
 	}
@@ -169,7 +171,7 @@ func (s *Server) suggest(ctx context.Context, f bridgeFamily, taken [][2]netip.A
 	if run == nil {
 		return "", ""
 	}
-	addresses = run[1].String()
+	addresses := run[1].String()
 	if last := run[len(run)-1]; last != run[1] {
 		addresses += "-" + last.String()
 	}
@@ -179,11 +181,12 @@ func (s *Server) suggest(ctx context.Context, f bridgeFamily, taken [][2]netip.A
 // bridgeNetworks are the networks a node reports on a bridge, IPv4 and IPv6, and the addresses on
 // them spoken for: the node's own and the gateway's. A family is no network where the node has no
 // address there.
-func (s *Server) bridgeNetworks(ctx context.Context, u user, node, bridge string) (v4, v6 bridgeFamily, err error) {
+func (s *Server) bridgeNetworks(ctx context.Context, u user, node, bridge string) (bridgeFamily, bridgeFamily, error) {
 	bridges, err := s.Accounts.Bridges(ctx, u.ticket, node)
 	if err != nil {
-		return v4, v6, fmt.Errorf("reading the bridges of %s: %w", node, err)
+		return bridgeFamily{}, bridgeFamily{}, fmt.Errorf("reading the bridges of %s: %w", node, err)
 	}
+	var v4, v6 bridgeFamily
 	for i := range bridges {
 		b := &bridges[i]
 		if b.Bridge != bridge {
@@ -311,8 +314,8 @@ func hosts(network netip.Prefix) (netip.Addr, netip.Addr) {
 // lastAddr is the last address of a network: its host bits all set.
 func lastAddr(p netip.Prefix) netip.Addr {
 	b := p.Masked().Addr().AsSlice()
-	for i := p.Bits(); i < len(b)*8; i++ {
-		b[i/8] |= 0x80 >> (i % 8)
+	for i := p.Bits(); i < len(b)*byteBits; i++ {
+		b[i/byteBits] |= 1 << (byteBits - 1 - i%byteBits)
 	}
 	a, _ := netip.AddrFromSlice(b)
 	return a

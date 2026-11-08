@@ -174,7 +174,7 @@ func TestCheckedIPv6StaysOnTheNetwork(t *testing.T) {
 	t.Parallel()
 	network := netip.MustParsePrefix("2001:db8::/64")
 	got := checked([]string{"2001:db7:ffff::1-2001:db8::2", "10.0.0.5", "2001:db9::1", "nonsense"}, network)
-	var text []string
+	text := make([]string, 0, len(got))
 	for _, a := range got {
 		text = append(text, a.String())
 	}
@@ -215,7 +215,7 @@ func TestProbeReachesLoopbackOfEachFamily(t *testing.T) {
 	// address any listener here binds beyond.
 	for _, addr := range []string{"127.0.0.1", "::1"} {
 		a := netip.MustParseAddr(addr)
-		if l, err := net.Listen("tcp", net.JoinHostPort(addr, "0")); err != nil {
+		if l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort(addr, "0")); err != nil {
 			t.Skipf("no %s loopback: %v", addr, err)
 		} else {
 			_ = l.Close()
