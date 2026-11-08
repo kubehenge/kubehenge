@@ -126,7 +126,7 @@ Name Proxmox VE security groups to turn on the firewall of every node's interfac
 
 - **Without a group.** All traffic from the cluster's API address, node addresses and pod ranges. That covers etcd, the kubelet and the pod network on any port.
 - **From the management side.** All traffic from the management cluster's nodes and the appliance. The appliance's interface and Headlamp reach the API server directly.
-- **Only through the groups.** Everything else inbound: `kubectl` and `talosctl` from your machines, ingress, NodePorts, load-balancer addresses, SSH and Cluster Mesh peers.
+- **Only through the groups.** Everything else inbound: `kubectl` and `talosctl` from your machines, ingress, NodePorts, load-balancer addresses and Cluster Mesh peers.
 
 A new address of the nodes, the management cluster or the appliance goes into each running VM's `kubehenge` IPSet. No node is replaced. When the appliance gets a new address by DHCP, the clusters accept it within a minute.
 
