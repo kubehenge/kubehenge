@@ -74,7 +74,9 @@ Another hook (`kubehenge wait providers`) holds the release until the providers 
 - Every provider Deployment has rolled out.
 - All of that holds for 30 seconds with the same Deployments. Right after an install, the operator can install a provider again from a stale read and recreate its Deployments.
 
-Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.2 with three fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). It builds the Add-on Provider for Helm v0.6.4 with a fix that keeps it from creating a cluster's release twice (`helm_addon_build`). That build also keeps each pinned chart once downloaded. A reconcile then reads no chart repository index.
+Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions. Kubehenge's release builds capmox v0.9.2 with three fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`).
+
+It also builds the Add-on Provider for Helm v0.6.4 with three fixes (`helm_addon_build`). The provider creates a cluster's release once, never twice. It pulls or checks each chart by the digest its version carries. It keeps each pinned chart once downloaded, so a reconcile reads no chart repository index.
 
 Both are built reproducibly, so the published images can be rebuilt from their sources and compared ([releasing.md](releasing.md)). A release of each that carries its fixes replaces the build.
 

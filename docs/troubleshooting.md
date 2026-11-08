@@ -116,7 +116,7 @@ The other objects:
 
 ### Inside a cluster
 
-The cluster's **Health** view is the first place to look. Suppose it says Kubehenge's read-only access is not set up or has run out. Then the controller has not reached the cluster's API server. The controller's log names the cluster and the reason, under the controller `workload-identities`.
+The cluster's **Health** view is the first place to look. When it says Kubehenge's read-only access is not set up or has run out, the controller has not reached the cluster's API server. The controller's log names the cluster and the reason, under the controller `workload-identities`.
 
 ![A degraded cluster's Health view: a crash-looping pod, the alert it fires, and each node's load](images/health.png)
 
