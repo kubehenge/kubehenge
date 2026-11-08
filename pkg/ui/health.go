@@ -118,6 +118,8 @@ type attentionView struct {
 	// Accept is the version whose findings the item's Upgrade anyway button accepts for the
 	// automatic upgrade.
 	Accept string `json:"accept,omitempty"`
+	// Docs is the address of the page that says how to fix the item.
+	Docs string `json:"docs,omitempty"`
 }
 
 type podRef struct {

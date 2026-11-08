@@ -275,6 +275,8 @@ export interface Attention {
   machine?: string;
   /** The version whose findings Upgrade anyway accepts, on a skipped automatic upgrade. */
   accept?: string;
+  /** The page that says how to fix the item. */
+  docs?: string;
 }
 
 export interface HealthVM {

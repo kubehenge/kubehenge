@@ -11,6 +11,9 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
+// notReachableDocs is the troubleshooting entry for a node that is online and does not answer.
+const notReachableDocs = "https://kubehenge.dev/troubleshooting#a-node-is-online-but-not-reachable"
+
 // upgradeAttention adds what the controller found of a Proxmox VE upgrade under way, which it
 // records on the Cluster: nodes on different major versions, VMs with different interface sizes
 // and HA rules that wait.
@@ -33,6 +36,13 @@ func upgradeAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severityWarning, sectionNodes, "VMs differ in interface MTU",
 			strings.Join(parts, ", ")+". Set the network's MTU so every node gets the same.", time.Time{})
+	}
+	if cond := trueCondition(c, provisioner.NodesSkippedCondition); cond != nil {
+		*a = append(*a, attentionView{
+			Severity: severityWarning, Section: sectionNodes, What: "Proxmox VE node not reachable",
+			Message: cond.Message + ". Run `pvecm updatecerts --force` on it, then restart pveproxy.",
+			Since:   cond.LastTransitionTime.Time, Docs: notReachableDocs,
+		})
 	}
 	if cond := trueCondition(c, provisioner.HARulesPendingCondition); cond != nil {
 		a.add(severityWarning, sectionNodes, "HA rules wait for the Proxmox VE upgrade", cond.Message, cond.LastTransitionTime.Time)

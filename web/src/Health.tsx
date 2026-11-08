@@ -451,6 +451,13 @@ function NeedsAttention({
                   {fix === undefined && !pageSections.has(a.section) && a.what}
                   {filled(a.message) && <div className="hint message">{localDates(a.message)}</div>}
                   {filled(a.accept) && <AcceptUpgrade cluster={cluster} version={a.accept} />}
+                  {filled(a.docs) && (
+                    <div>
+                      <a href={a.docs} target="_blank" rel="noreferrer">
+                        How to fix
+                      </a>
+                    </div>
+                  )}
                 </td>
                 <Since at={a.since} />
                 <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions} />
