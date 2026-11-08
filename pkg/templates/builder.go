@@ -1223,9 +1223,7 @@ const cloudInitAccount = `echo '/var/log/cloud-init-output.log, its end:'; tail 
 	`echo '/var/log/cloud-init.log, its warnings and errors with the lines after each:'; ` +
 	`grep -E -A 12 '\[(WARNING|ERROR|CRITICAL)\]' /var/log/cloud-init.log | tail -n 80`
 
-// waitAndCheck waits for the guest agent and runs the checks in the guest. On a failure it adds
-// cloud-init's own account and what its modules printed, the bake's log and what still runs, which
-// the exit code does not carry.
+// waitAndCheck waits for the guest agent and runs the checks in the guest, up to the first that fails.
 func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, checks [][]string, log string) error {
 	if err := vm.WaitForAgent(ctx, int(bakeTimeout.Seconds())); err != nil {
 		return fmt.Errorf("the guest agent did not start: %w", err)
@@ -1234,29 +1232,34 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 		return err
 	}
 	for _, check := range checks {
-		err := b.runCheck(ctx, vm, check, log)
-		if err == nil {
-			continue
+		if err := b.runCheck(ctx, vm, check, log); err != nil {
+			return b.explain(ctx, vm, check, log, err)
 		}
-		if check[0] == cloudInit {
-			if out, lerr := b.output(ctx, vm, []string{cloudInit, "status", "--long"}); lerr == nil {
-				err = fmt.Errorf("%w\n%s", err, out)
-			}
-			if out, lerr := b.output(ctx, vm, []string{"sh", "-c", cloudInitAccount}); lerr == nil {
-				err = fmt.Errorf("%w\n%s", err, out)
-			}
-		}
-		if log != "" {
-			if out, lerr := b.output(ctx, vm, []string{"sh", "-c", bakeAccount, "sh", log}); lerr == nil {
-				err = fmt.Errorf("%w\n%s, the first line of each second, then its end:\n%s", err, log, out)
-			}
-			if out, perr := b.output(ctx, vm, []string{"sh", "-c", bakeProcesses}); perr == nil {
-				err = fmt.Errorf("%w\nthe guest's processes, with what each waits on, and its connections:\n%s", err, out)
-			}
-		}
-		return err
 	}
 	return nil
+}
+
+// explain adds to a failed check what its exit code does not carry, read while the VM still runs:
+// for cloud-init's, its own account and what its modules printed, and with a bake log, that log and
+// what still runs.
+func (b *Builder) explain(ctx context.Context, vm *proxmox.VirtualMachine, check []string, log string, err error) error {
+	if check[0] == cloudInit {
+		if out, lerr := b.output(ctx, vm, []string{cloudInit, "status", "--long"}); lerr == nil {
+			err = fmt.Errorf("%w\n%s", err, out)
+		}
+		if out, lerr := b.output(ctx, vm, []string{"sh", "-c", cloudInitAccount}); lerr == nil {
+			err = fmt.Errorf("%w\n%s", err, out)
+		}
+	}
+	if log != "" {
+		if out, lerr := b.output(ctx, vm, []string{"sh", "-c", bakeAccount, "sh", log}); lerr == nil {
+			err = fmt.Errorf("%w\n%s, the first line of each second, then its end:\n%s", err, log, out)
+		}
+		if out, perr := b.output(ctx, vm, []string{"sh", "-c", bakeProcesses}); perr == nil {
+			err = fmt.Errorf("%w\nthe guest's processes, with what each waits on, and its connections:\n%s", err, out)
+		}
+	}
+	return err
 }
 
 // A bake that shows no work for bakeStall has hung, as a package manager waiting on nothing does,
