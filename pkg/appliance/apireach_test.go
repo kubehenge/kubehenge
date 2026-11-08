@@ -130,7 +130,8 @@ func TestRouteToAPIFindsTheSourceTheKernelPicks(t *testing.T) {
 	if got := RouteToAPI(t.Context(), "not a url"); len(got.Endpoints) != 0 {
 		t.Errorf("route = %+v", got)
 	}
-	if ln, err := net.Listen("tcp6", "[::1]:0"); err == nil {
+	// A host without IPv6 loopback cannot show the IPv6 route.
+	if ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp6", "[::1]:0"); err == nil {
 		_ = ln.Close()
 		v6 := RouteToAPI(t.Context(), "https://[::1]:8006")
 		if len(v6.Sources) != 1 || v6.Sources[0] != netip.MustParseAddr("::1") {
