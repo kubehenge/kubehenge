@@ -1,0 +1,112 @@
+Requeue a ProxmoxCluster that is marked for deletion before its Cluster.
+
+reconcileDelete returns without a requeue while the owning Cluster has no deletion timestamp,
+and counts on the Cluster's deletion to trigger it again. The Cluster watch uses
+predicates.ClusterUnpaused, which never passes a Cluster that gains a deletion timestamp, and
+capmox sets no SyncPeriod. So the ProxmoxCluster is next reconciled at controller-runtime's
+resync, up to 10 hours later, and `kubectl delete namespace` (which marks the ProxmoxCluster
+first) hangs until then.
+
+The fix requeues after infrav1.DefaultReconcilerRequeue, the interval capmox already uses for
+the machines-left branch of the same function. It is the narrowest change and the common
+pattern of Cluster API infrastructure providers: the reconciler polls with a fixed RequeueAfter
+while it waits (CAPA requeues its delete after 20s, CAPO after 5s) and does not rely on the
+Cluster watch, which those providers filter with ClusterUnpaused as well. The other candidate,
+a watch that also passes a deleting Cluster, would change the predicate every reconcile path
+shares, and CAPA's own Cluster mapper skips deleting Clusters on purpose.
+
+diff --git a/internal/controller/proxmoxcluster_controller.go b/internal/controller/proxmoxcluster_controller.go
+index 7e48377..652d6a6 100644
+--- a/internal/controller/proxmoxcluster_controller.go
++++ b/internal/controller/proxmoxcluster_controller.go
+@@ -157,8 +157,9 @@ func (r *ProxmoxClusterReconciler) reconcileDelete(ctx context.Context, clusterS
+ 	// We want to prevent deletion unless the owning cluster was flagged for deletion.
+ 	if clusterScope.Cluster.DeletionTimestamp.IsZero() {
+ 		clusterScope.Error(errors.New("deletion was requested but owning cluster wasn't deleted"), "Unable to delete ProxmoxCluster")
+-		// We stop reconciling here. It will be triggered again once the owning cluster was deleted.
+-		return reconcile.Result{}, nil
++		// The Cluster watch filters out a Cluster that gains its deletion timestamp, so nothing
++		// triggers this again until the next resync. Poll until the owning Cluster is deleted.
++		return reconcile.Result{RequeueAfter: infrav1.DefaultReconcilerRequeue}, nil
+ 	}
+
+ 	clusterScope.Logger.V(4).Info("Reconciling ProxmoxCluster delete")
+diff --git a/internal/controller/proxmoxcluster_reconcile_delete_test.go b/internal/controller/proxmoxcluster_reconcile_delete_test.go
+new file mode 100644
+index 0000000..d4b4a74
+--- /dev/null
++++ b/internal/controller/proxmoxcluster_reconcile_delete_test.go
+@@ -0,0 +1,73 @@
++/*
++Copyright 2023-2026 IONOS Cloud.
++
++SPDX-License-Identifier: Apache-2.0
++*/
++
++package controller
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/require"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/apimachinery/pkg/types"
++	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
++	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
++	ctrl "sigs.k8s.io/controller-runtime"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/client/fake"
++
++	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
++	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/proxmox/proxmoxtest"
++)
++
++// A ProxmoxCluster marked for deletion before its Cluster, as `kubectl delete namespace` does, is
++// not reconciled again by the Cluster watch, which never passes a Cluster that gains a deletion
++// timestamp. Only the requeue brings it back.
++func TestReconcileDeleteRequeuesWhileOwningClusterIsNotDeleted(t *testing.T) {
++	scheme := runtime.NewScheme()
++	require.NoError(t, clientgoscheme.AddToScheme(scheme))
++	require.NoError(t, infrav1.AddToScheme(scheme))
++	require.NoError(t, clusterv1.AddToScheme(scheme))
++
++	now := metav1.Now()
++	cluster := &clusterv1.Cluster{
++		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "test-ns", UID: types.UID("1000")},
++	}
++	proxmoxCluster := &infrav1.ProxmoxCluster{
++		ObjectMeta: metav1.ObjectMeta{
++			Name:              "test-cluster",
++			Namespace:         "test-ns",
++			DeletionTimestamp: &now,
++			Finalizers:        []string{infrav1.ClusterFinalizer},
++			OwnerReferences: []metav1.OwnerReference{{
++				APIVersion: clusterv1.GroupVersion.String(),
++				Kind:       "Cluster",
++				Name:       cluster.Name,
++				UID:        cluster.UID,
++			}},
++		},
++	}
++
++	k8s := fake.NewClientBuilder().
++		WithScheme(scheme).
++		WithObjects(cluster, proxmoxCluster).
++		WithStatusSubresource(&infrav1.ProxmoxCluster{}).
++		Build()
++	reconciler := &ProxmoxClusterReconciler{
++		Client:        k8s,
++		Scheme:        scheme,
++		ProxmoxClient: proxmoxtest.NewMockClient(t),
++	}
++
++	result, err := reconciler.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(proxmoxCluster)})
++
++	require.NoError(t, err)
++	require.Equal(t, infrav1.DefaultReconcilerRequeue, result.RequeueAfter)
++
++	var stored infrav1.ProxmoxCluster
++	require.NoError(t, k8s.Get(t.Context(), client.ObjectKeyFromObject(proxmoxCluster), &stored))
++	require.Contains(t, stored.Finalizers, infrav1.ClusterFinalizer, "the finalizer stays until the owning Cluster is deleted")
++}

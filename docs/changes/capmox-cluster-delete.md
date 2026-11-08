@@ -1,0 +1,1 @@
+- Deleting a namespace that holds a cluster no longer hangs for hours. Kubehenge's capmox build checks again every 10 seconds when the ProxmoxCluster is marked for deletion before its Cluster.
