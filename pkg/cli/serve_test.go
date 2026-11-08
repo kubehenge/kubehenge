@@ -101,6 +101,7 @@ func TestServeRefusesWhatItCannotServe(t *testing.T) {
 		{"Proxmox VE over HTTP", func(_ *serveOptions, conn *pve.Config) { conn.URL = "http://127.0.0.1:8006" }, "the Proxmox VE API"},
 		{"an appliance without the CA", func(_ *serveOptions, conn *pve.Config) { conn.CAFile = "" }, "--proxmox-ca is required in the appliance"},
 		{"Headlamp without its upstream", func(o *serveOptions, _ *pve.Config) { o.headlampListen = "127.0.0.1:0" }, "--headlamp-listen needs"},
+		{"a trusted proxy that is a name", func(o *serveOptions, _ *pve.Config) { o.trustedProxies = []string{"proxy.example"} }, `--trusted-proxy: "proxy.example"`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -110,6 +111,28 @@ func TestServeRefusesWhatItCannotServe(t *testing.T) {
 				t.Errorf("run gave %v; want %q", err, c.want)
 			}
 		})
+	}
+}
+
+// --trusted-proxy repeats and takes lists, and KUBEHENGE_TRUSTED_PROXIES gives the default.
+func TestTrustedProxiesComeFromFlagsOrTheEnvironment(t *testing.T) {
+	t.Setenv("KUBEHENGE_TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.7\n2001:db8::/32")
+	flags := func(args ...string) []string {
+		cmd := newServeCommand(&pve.Config{})
+		if err := cmd.Flags().Parse(args); err != nil {
+			t.Fatal(err)
+		}
+		got, err := cmd.Flags().GetStringSlice("trusted-proxy")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := strings.Join(flags(), "|"); got != "10.0.0.0/8|192.0.2.7|2001:db8::/32" {
+		t.Errorf("from the environment: %s", got)
+	}
+	if got := strings.Join(flags("--trusted-proxy", "198.51.100.0/24", "--trusted-proxy=203.0.113.1,203.0.113.2"), "|"); got != "198.51.100.0/24|203.0.113.1|203.0.113.2" {
+		t.Errorf("from the flags: %s", got)
 	}
 }
 

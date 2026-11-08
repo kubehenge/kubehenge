@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,9 +23,18 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
+	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
+)
+
+// The demo's appliance folder is its process's alone.
+const (
+	demoDirMode  = 0o700
+	demoFileMode = 0o600
 )
 
 // demoClassesJSON are the chart's ClusterClasses, cut to what the interface reads.
@@ -38,6 +49,9 @@ const demoHeader = "X-Kubehenge-Demo"
 // demoUser is who the demo signs in whoever opens it.
 const demoUser = "admin@pve"
 
+// demoName is the demo's release, and the password and ticket of its sign-in.
+const demoName = "demo"
+
 // demoSessionMaxAge is how long a demo session lasts unless the server says otherwise, as long as
 // serve's default.
 const demoSessionMaxAge = 8 * time.Hour
@@ -49,11 +63,24 @@ var errDemo = errors.New("the demo changes nothing")
 // SetUpDemo makes s the demo: the interface over a sample fleet held in memory. Every client the
 // handlers use is a fake, so nothing reaches a Proxmox VE host, a management cluster or a workload
 // cluster, and changes are refused. clock is the demo's time, which its sample data is dated
-// against.
-func SetUpDemo(s *Server, clock func() time.Time) error {
+// against. The appliance it sets up keeps its settings in a folder that cleanup removes.
+func SetUpDemo(s *Server, clock func() time.Time) (func(), error) {
 	if s.Appliance != nil || s.Headlamp != nil || s.Upgrades != nil {
-		return errors.New("the demo runs without the appliance, Headlamp or upgrades")
+		return nil, errors.New("the demo runs without the appliance, Headlamp or upgrades")
 	}
+	dir, err := os.MkdirTemp("", "kubehenge-demo-")
+	if err != nil {
+		return nil, fmt.Errorf("the demo's appliance: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	if err := fillDemo(s, clock, dir); err != nil {
+		cleanup()
+		return nil, err
+	}
+	return cleanup, nil
+}
+
+func fillDemo(s *Server, clock func() time.Time, dir string) error {
 	fleet, err := newDemoFleet(clock().UTC())
 	if err != nil {
 		return err
@@ -62,7 +89,14 @@ func SetUpDemo(s *Server, clock func() time.Time) error {
 	if err != nil {
 		return err
 	}
-	s.Kube = fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(fleet.objects...).Build()
+	if err = os.MkdirAll(filepath.Join(dir, "management"), demoDirMode); err != nil {
+		return fmt.Errorf("the demo's appliance: %w", err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "management", "settings.json"), fleet.data.Management, demoFileMode); err != nil {
+		return fmt.Errorf("the demo's appliance: %w", err)
+	}
+	s.Appliance = &appliance.Appliance{Dir: dir, Release: demoName, Now: clock}
+	s.Kube = withDemoWebhook(fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(fleet.objects...).Build())
 	s.Accounts = &demoAccounts{fleet: fleet}
 	s.ConnectWorkload = fleet.connect
 	s.Probe = func(context.Context, []netip.Addr) map[netip.Addr]bool { return map[netip.Addr]bool{} }
@@ -71,9 +105,17 @@ func SetUpDemo(s *Server, clock func() time.Time) error {
 	}
 	s.NewKube = func([]byte) (client.Client, error) { return nil, errDemo }
 	s.NewClientset = nil
-	s.MakeTemplate = nil
+	s.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) {
+		return 0, errDemo
+	}
+	s.PinChecks = &provisioner.ReleaseChecksums{
+		HTTP: &http.Client{Transport: demoChannels{}}, GitHub: "https://github.com", Raw: "https://raw.githubusercontent.com",
+	}
 	s.Releases = &provisioner.ChannelServer{
 		HTTP: &http.Client{Transport: demoChannels{}}, URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
+	}
+	s.TalosClock = func(_ context.Context, _ []byte, address string) (bool, error) {
+		return address != demoUnsyncedAddress, nil
 	}
 	s.TalosReleases = func(context.Context) ([]string, error) {
 		return []string{templates.DefaultTalosVersion}, nil
@@ -86,12 +128,46 @@ func SetUpDemo(s *Server, clock func() time.Time) error {
 	s.clock = clock
 	s.init()
 	for i := range fleet.activity {
-		if err := s.activityLog.add(&fleet.activity[i]); err != nil {
+		if err = s.activityLog.add(&fleet.activity[i]); err != nil {
 			return fmt.Errorf("the demo's activity: %w", err)
 		}
 	}
 	return nil
 }
+
+// withDemoWebhook gives the demo's fake API server the refusals of Kubehenge's admission webhook
+// that need no Proxmox VE host, so that the interface shows the reason a real cluster would give.
+func withDemoWebhook(c client.WithWatch) client.WithWatch {
+	check := func(ctx context.Context, obj client.Object, old *clusterv1.Cluster) error {
+		cluster, ok := obj.(*clusterv1.Cluster)
+		if !ok {
+			return nil
+		}
+		return provisioner.ValidateNodeCustomisation(ctx, c, old, cluster)
+	}
+	return &demoKube{WithWatch: interceptor.NewClient(c, interceptor.Funcs{
+		Create: func(ctx context.Context, kube client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if err := check(ctx, obj, nil); err != nil {
+				return err
+			}
+			return kube.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, kube client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			var old clusterv1.Cluster
+			if err := kube.Get(ctx, client.ObjectKeyFromObject(obj), &old); err != nil {
+				return kube.Update(ctx, obj, opts...)
+			}
+			if err := check(ctx, obj, &old); err != nil {
+				return err
+			}
+			return kube.Update(ctx, obj, opts...)
+		},
+	})}
+}
+
+// demoKube is a pointer type so that the server can compare one client with another, which the
+// interceptor's own value type, holding functions, cannot do.
+type demoKube struct{ client.WithWatch }
 
 // demoScheme knows the kinds the interface reads: Cluster API's typed, the add-ons and the
 // control planes of each distribution as unstructured objects, as a management cluster serves them.
@@ -106,7 +182,13 @@ func demoScheme() (*runtime.Scheme, *meta.DefaultRESTMapper, error) {
 	for _, cp := range demoControlPlanes {
 		kinds = append(kinds, cp)
 	}
-	mapper := meta.NewDefaultRESTMapper(nil)
+	// A lookup by group and kind alone, as the control plane's reference makes, tries only the
+	// mapper's default versions.
+	versions := make([]schema.GroupVersion, 0, len(kinds))
+	for _, gvk := range kinds {
+		versions = append(versions, gvk.GroupVersion())
+	}
+	mapper := meta.NewDefaultRESTMapper(versions)
 	for _, gvk := range kinds {
 		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
 		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
@@ -151,6 +233,8 @@ func demoRead(r *http.Request) bool {
 		return true
 	case r.Method != http.MethodPost:
 		return false
+	case p == "/api/release-pins/check":
+		return true
 	case p == "/api/clusters":
 		return r.URL.Query().Get("dryRun") == "All"
 	case strings.HasPrefix(p, "/api/proxmox/nodes/") && strings.HasSuffix(p, "/free"):
@@ -172,7 +256,7 @@ func (s *Server) demoSignIn(w http.ResponseWriter, r *http.Request) (*http.Reque
 		setSessionCookie(w, d.session.id)
 		return withSession(ctx, r, d.session.id), nil
 	}
-	ticket, _, err := s.Accounts.SignIn(ctx, demoUser, "demo")
+	ticket, _, err := s.Accounts.SignIn(ctx, demoUser, demoName)
 	if err != nil {
 		return r, fmt.Errorf("signing in the demo's administrator: %w", err)
 	}
@@ -199,6 +283,10 @@ func (demoChannels) RoundTrip(r *http.Request) (*http.Response, error) {
 		body, ok = demoChannelList("rke2r1"), true
 	case r.URL.Host == "update.k3s.io":
 		body, ok = demoChannelList("k3s1"), true
+	case r.URL.Host == "github.com" && strings.HasSuffix(r.URL.Path, "/sha256sum-amd64.txt"):
+		body, ok = demoChecksumFile(r.URL.Path), true
+	case r.URL.Host == "raw.githubusercontent.com" && strings.HasSuffix(r.URL.Path, "/install.sh"):
+		body, ok = "#!/bin/sh\n# install.sh of "+r.URL.Path+"\n", true
 	case r.URL.Host == "dl.k8s.io" && strings.HasPrefix(r.URL.Path, "/release/stable-1."):
 		minor := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/release/stable-1."), ".txt")
 		body, ok = "v1."+minor+".2\n", true
@@ -211,6 +299,22 @@ func (demoChannels) RoundTrip(r *http.Request) (*http.Response, error) {
 		StatusCode: status, Status: http.StatusText(status), Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
 		Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), Request: r,
 	}, nil
+}
+
+// demoReleaseFiles are the files an RKE2 or k3s release's checksum file lists that its nodes install.
+var demoReleaseFiles = []string{
+	"rke2.linux-amd64.tar.gz", "rke2-images-core.linux-amd64.tar.zst", "rke2-images-canal.linux-amd64.tar.zst",
+	"rke2-images-calico.linux-amd64.tar.zst", "rke2-images-cilium.linux-amd64.tar.zst",
+	string(templates.K3s), "k3s-airgap-images-amd64.tar.zst",
+}
+
+// demoChecksumFile is the checksum file at path, which lists every file with a SHA-256 of its own.
+func demoChecksumFile(path string) string {
+	var b strings.Builder
+	for _, f := range demoReleaseFiles {
+		b.WriteString(demoDigest(path, f) + "  " + f + "\n")
+	}
+	return b.String()
 }
 
 func demoChannelList(suffix string) string {

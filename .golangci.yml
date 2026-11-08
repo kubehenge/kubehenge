@@ -2,6 +2,9 @@
 version: "2"
 
 run:
+  # The packages analysed at once, each holding its syntax trees and SSA form. The Makefile's
+  # lint-go says what this costs.
+  concurrency: 4
   build-tags:
     - e2e
     - integration

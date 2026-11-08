@@ -7,20 +7,24 @@ import type { Cluster } from "./types";
 import { Dialog, ErrorBox, Field, Info, errorMessage, filled, saveFile, useChange } from "./ui";
 import { flag, oneOf, record, text, texts } from "./values";
 
-export const issuers = ["acme-dns01", "acme-http01", "ca"] as const;
+export const issuers = ["acme-dns01", "acme-http01", "ca", "external"] as const;
 export type Issuer = (typeof issuers)[number];
 
 const issuerOptions: { value: Issuer; label: string }[] = [
-  { value: "acme-dns01", label: "Let's Encrypt, DNS-01 (recommended)" },
-  { value: "acme-http01", label: "Let's Encrypt, HTTP-01" },
+  { value: "acme-dns01", label: "ACME, DNS-01 (recommended)" },
+  { value: "acme-http01", label: "ACME, HTTP-01" },
   { value: "ca", label: "Cluster's own CA" },
+  { value: "external", label: "Issuer you run" },
 ];
 
 const issuerInfo: Record<Issuer, string> = {
   "acme-dns01": "Gives a wildcard certificate, even for clusters the internet can't reach.",
   "acme-http01": "One certificate per Ingress host, no wildcard.",
   ca: "Clients must trust the CA certificate from the cluster page.",
+  external: "Vault, ADCS or any cert-manager issuer already in the cluster. Kubehenge makes none.",
 };
+
+const clusterIssuerKind = "ClusterIssuer";
 
 export const providers = [
   "cloudflare",
@@ -183,6 +187,12 @@ export interface CertificatesForm {
   staging: boolean;
   server: string;
   caBundle: string;
+  // The ACME account's external account binding key ID. The HMAC key is a stored credential.
+  eabKeyID: string;
+  // The issuer you run, with the issuer external.
+  issuerName: string;
+  issuerKind: string;
+  issuerGroup: string;
   provider: Provider;
   source: Source;
   existingSecret: string;
@@ -222,6 +232,10 @@ export function certificatesOf(v: unknown): CertificatesForm {
     staging: flag(acme["staging"]) === true,
     server: text(acme["server"]) ?? "",
     caBundle: text(acme["caBundle"]) ?? "",
+    eabKeyID: text(record(acme["externalAccountBinding"])["keyID"]) ?? "",
+    issuerName: text(r["issuerName"]) ?? "",
+    issuerKind: text(r["issuerKind"]) ?? "",
+    issuerGroup: text(r["issuerGroup"]) ?? "",
     provider: oneOf(providers, provider) ? provider : "cloudflare",
     source,
     existingSecret,
@@ -242,6 +256,12 @@ export const sourceOf = (f: CertificatesForm): Source => (takesSecretOnly(f.prov
 /** needsClusterToken tells whether a choice takes the DNS-01 credential stored for this cluster. */
 export const needsClusterToken = (f: CertificatesForm): boolean =>
   f.enabled && f.issuer === "acme-dns01" && sourceOf(f) === "cluster";
+
+const acmeIssuer = (f: CertificatesForm): boolean => f.issuer === "acme-dns01" || f.issuer === "acme-http01";
+
+/** needsBindingKey tells whether a choice takes the HMAC key of an external account binding stored for this cluster. */
+export const needsBindingKey = (f: CertificatesForm): boolean =>
+  f.enabled && acmeIssuer(f) && filled(f.eabKeyID.trim());
 
 /** sharesCredential tells whether a choice takes the DNS-01 credential stored for every cluster. */
 export const sharesCredential = (f: CertificatesForm): boolean =>
@@ -283,31 +303,56 @@ function settingsOf(f: CertificatesForm): Record<string, string> {
   );
 }
 
+// acmeVariable is the ACME account's settings: the filled ones only.
+function acmeVariable(f: CertificatesForm): Record<string, unknown> {
+  const acme: Record<string, unknown> = {};
+  if (filled(f.email.trim())) {
+    acme["email"] = f.email.trim();
+  }
+  if (filled(f.server.trim())) {
+    acme["server"] = f.server.trim();
+  } else if (f.staging) {
+    acme["staging"] = true;
+  }
+  if (filled(f.caBundle.trim())) {
+    acme["caBundle"] = f.caBundle.trim();
+  }
+  if (filled(f.eabKeyID.trim())) {
+    acme["externalAccountBinding"] = { keyID: f.eabKeyID.trim() };
+  }
+  return acme;
+}
+
+// externalVariable names the issuer you run: the filled settings only.
+function externalVariable(f: CertificatesForm): Record<string, unknown> {
+  const v: Record<string, unknown> = { issuerName: f.issuerName.trim() };
+  if (filled(f.issuerKind.trim())) {
+    v["issuerKind"] = f.issuerKind.trim();
+  }
+  if (filled(f.issuerGroup.trim())) {
+    v["issuerGroup"] = f.issuerGroup.trim();
+  }
+  return v;
+}
+
 /** certificatesVariable is the variable a choice sets. Undefined while it is off. */
 export function certificatesVariable(f: CertificatesForm): Record<string, unknown> | undefined {
   if (!f.enabled) {
     return undefined;
   }
   const v: Record<string, unknown> = { enabled: true, issuer: f.issuer };
+  if (f.issuer === "external") {
+    if (filled(f.domain)) {
+      v["domain"] = f.domain;
+    }
+    return { ...v, ...externalVariable(f) };
+  }
   if (f.issuer !== "acme-http01") {
     v["domain"] = f.domain;
   }
-  if (f.issuer !== "ca") {
-    const acme: Record<string, unknown> = {};
-    if (filled(f.email.trim())) {
-      acme["email"] = f.email.trim();
-    }
-    if (filled(f.server.trim())) {
-      acme["server"] = f.server.trim();
-    } else if (f.staging) {
-      acme["staging"] = true;
-    }
-    if (filled(f.caBundle.trim())) {
-      acme["caBundle"] = f.caBundle.trim();
-    }
-    if (Object.keys(acme).length > 0) {
-      v["acme"] = acme;
-    }
+  const acme = f.issuer === "ca" ? {} : acmeVariable(f);
+  if (Object.keys(acme).length > 0) {
+    v["acme"] = acme;
   }
   if (f.issuer === "acme-dns01") {
     const dns01: Record<string, unknown> = { provider: f.provider };
@@ -337,6 +382,10 @@ export function certificatesText(f: CertificatesForm): string {
     return "Off";
   }
   const names = `for ${f.domain} and *.${f.domain}`;
+  if (f.issuer === "external") {
+    const issuer = `${f.issuerKind.trim() || clusterIssuerKind} ${f.issuerName.trim()}`;
+    return filled(f.domain) ? `${issuer}, ${names}` : issuer;
+  }
   if (f.issuer === "ca") {
     return `Cluster's own CA, ${names}`;
   }
@@ -399,19 +448,169 @@ function dns01Problems(f: CertificatesForm): CertificatesProblems {
   return p;
 }
 
+const kindName = /^[A-Z][A-Za-z0-9]*$/u;
+const ownIssuer = "kubehenge-ingress";
+
+function externalProblems(f: CertificatesForm): CertificatesProblems {
+  const p: CertificatesProblems = {};
+  const name = f.issuerName.trim();
+  if (!secretName.test(name)) {
+    p["issuerName"] = "Use lowercase letters, digits, dashes and dots";
+  } else if (name === ownIssuer) {
+    p["issuerName"] = "That name is Kubehenge's own issuer";
+  }
+  const kind = f.issuerKind.trim();
+  const group = f.issuerGroup.trim();
+  if (filled(kind) && !kindName.test(kind)) {
+    p["issuerKind"] = "Enter a kind such as ClusterIssuer";
+  } else if (kind === "Issuer" && (group === "" || group === "cert-manager.io")) {
+    p["issuerKind"] = "An Issuer serves one namespace. Name a ClusterIssuer";
+  }
+  if (filled(group) && !secretName.test(group)) {
+    p["issuerGroup"] = "Use lowercase letters, digits, dashes and dots";
+  }
+  return p;
+}
+
 /** certificatesProblems says, by field, what is wrong with a choice. Nothing while it is off. */
 export function certificatesProblems(f: CertificatesForm): CertificatesProblems {
   if (!f.enabled) {
     return {};
   }
   const p: CertificatesProblems = {
-    ...(f.issuer === "ca" ? {} : acmeProblems(f)),
+    ...(f.issuer === "ca" || f.issuer === "external" ? {} : acmeProblems(f)),
     ...(f.issuer === "acme-dns01" ? dns01Problems(f) : {}),
+    ...(f.issuer === "external" ? externalProblems(f) : {}),
   };
-  if (f.issuer !== "acme-http01" && !dnsName.test(f.domain)) {
+  const domainOptional = f.issuer === "external" && !filled(f.domain);
+  if (f.issuer !== "acme-http01" && !domainOptional && !dnsName.test(f.domain)) {
     p["domain"] = "Enter a domain name, such as apps.example.com";
   }
   return Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined));
+}
+
+// ExternalIssuerFields names the issuer you run. Its kind and group are for issuers other than a
+// cert-manager ClusterIssuer, such as an ADCS one.
+function ExternalIssuerFields({
+  value: f,
+  error,
+  update,
+}: {
+  value: CertificatesForm;
+  error: (k: string) => string | undefined;
+  update: (k: string, patch: Partial<CertificatesForm>) => void;
+}): JSX.Element {
+  return (
+    <>
+      <Field label="Issuer name" hint="An issuer that exists in the cluster" error={error("issuerName")}>
+        {(id) => (
+          <input
+            id={id}
+            value={f.issuerName}
+            spellCheck={false}
+            onChange={(e) => update("issuerName", { issuerName: e.target.value.trim() })}
+          />
+        )}
+      </Field>
+      <details className="advanced" open={filled(f.issuerKind) || filled(f.issuerGroup) || undefined}>
+        <summary>Other issuer kinds</summary>
+        <Field label="Kind" hint={`Empty means ${clusterIssuerKind}`} error={error("issuerKind")}>
+          {(id) => (
+            <input
+              id={id}
+              value={f.issuerKind}
+              spellCheck={false}
+              onChange={(e) => update("issuerKind", { issuerKind: e.target.value.trim() })}
+            />
+          )}
+        </Field>
+        <Field label="API group" hint="Empty means cert-manager.io" error={error("issuerGroup")}>
+          {(id) => (
+            <input
+              id={id}
+              value={f.issuerGroup}
+              spellCheck={false}
+              onChange={(e) => update("issuerGroup", { issuerGroup: e.target.value.trim() })}
+            />
+          )}
+        </Field>
+      </details>
+    </>
+  );
+}
+
+// AcmeFields are the ACME account's: its contact, and the server when it is not Let's Encrypt, with
+// the CA that vouches for it and the external account binding it may require.
+function AcmeFields({
+  value: f,
+  onChange,
+  error,
+  update,
+  renderBinding,
+}: {
+  value: CertificatesForm;
+  onChange: (f: CertificatesForm) => void;
+  error: (k: string) => string | undefined;
+  update: (k: string, patch: Partial<CertificatesForm>) => void;
+  renderBinding: (label: string, hint: ReactNode) => ReactNode;
+}): JSX.Element {
+  const stagingHint = useId();
+  return (
+    <>
+      <Field label="Contact email" hint="Optional, for account notices" error={error("email")}>
+        {(id) => (
+          <input
+            id={id}
+            type="email"
+            value={f.email}
+            onChange={(e) => update("email", { email: e.target.value.trim() })}
+          />
+        )}
+      </Field>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={f.staging && !filled(f.server)}
+          disabled={filled(f.server)}
+          aria-describedby={stagingHint}
+          onChange={(e) => onChange({ ...f, staging: e.target.checked })}
+        />{" "}
+        Let&apos;s Encrypt staging
+      </label>
+      <p className="hint" id={stagingHint}>
+        Higher rate limits, but browsers don&apos;t trust its certificates
+      </p>
+      <details className="advanced" open={filled(f.server) || filled(f.caBundle) || filled(f.eabKeyID) || undefined}>
+        <summary>Another ACME server</summary>
+        <Field label="ACME server" hint="Directory URL, used instead of Let's Encrypt" error={error("server")}>
+          {(id) => (
+            <input id={id} value={f.server} onChange={(e) => update("server", { server: e.target.value.trim() })} />
+          )}
+        </Field>
+        <Field label="CA certificate" hint="PEM, for a server with a private CA" error={error("caBundle")}>
+          {(id) => (
+            <textarea
+              id={id}
+              rows={3}
+              value={f.caBundle}
+              onChange={(e) => update("caBundle", { caBundle: e.target.value })}
+            />
+          )}
+        </Field>
+        <Field label="Key ID" hint="For a server that requires an external account binding">
+          {(id) => (
+            <input
+              id={id}
+              value={f.eabKeyID}
+              spellCheck={false}
+              onChange={(e) => update("eabKeyID", { eabKeyID: e.target.value.trim() })}
+            />
+          )}
+        </Field>
+        {needsBindingKey(f) && renderBinding("HMAC key", "The key the server gave you with the key ID")}
+      </details>
+    </>
+  );
 }
 
 /**
@@ -427,6 +626,7 @@ export function CertificatesFields({
   mayShare,
   shareRefusal,
   renderCredential,
+  renderBinding,
 }: {
   value: CertificatesForm;
   onChange: (f: CertificatesForm) => void;
@@ -435,9 +635,10 @@ export function CertificatesFields({
   // Why the credential for every cluster cannot be chosen, when it cannot.
   shareRefusal: string;
   renderCredential: (label: string, hint: ReactNode) => ReactNode;
+  // How the external account binding's HMAC key is entered, as the DNS credential is.
+  renderBinding: (label: string, hint: ReactNode) => ReactNode;
 }): JSX.Element {
   const [edited, setEdited] = useState<ReadonlySet<string>>(new Set());
-  const stagingHint = useId();
   const sourceName = useId();
   const sharedHint = useId();
   const refusalHint = useId();
@@ -483,8 +684,17 @@ export function CertificatesFields({
               </select>
             )}
           </Field>
+          {f.issuer === "external" && <ExternalIssuerFields value={f} error={error} update={update} />}
           {f.issuer !== "acme-http01" && (
-            <Field label="Domain" hint="Such as apps.example.com, with its subdomains" error={error("domain")}>
+            <Field
+              label="Domain"
+              hint={
+                f.issuer === "external"
+                  ? "Optional, for a default certificate covering it and its subdomains"
+                  : "Such as apps.example.com, with its subdomains"
+              }
+              error={error("domain")}
+            >
               {(id) => (
                 <input
                   id={id}
@@ -634,54 +844,8 @@ export function CertificatesFields({
               </details>
             </>
           )}
-          {f.issuer !== "ca" && (
-            <>
-              <Field label="Contact email" hint="Optional, for account notices" error={error("email")}>
-                {(id) => (
-                  <input
-                    id={id}
-                    type="email"
-                    value={f.email}
-                    onChange={(e) => update("email", { email: e.target.value.trim() })}
-                  />
-                )}
-              </Field>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={f.staging && !filled(f.server)}
-                  disabled={filled(f.server)}
-                  aria-describedby={stagingHint}
-                  onChange={(e) => onChange({ ...f, staging: e.target.checked })}
-                />{" "}
-                Let&apos;s Encrypt staging
-              </label>
-              <p className="hint" id={stagingHint}>
-                Higher rate limits, but browsers don&apos;t trust its certificates
-              </p>
-              <details className="advanced" open={filled(f.server) || filled(f.caBundle) || undefined}>
-                <summary>Another ACME server</summary>
-                <Field label="ACME server" hint="Directory URL, used instead of Let's Encrypt" error={error("server")}>
-                  {(id) => (
-                    <input
-                      id={id}
-                      value={f.server}
-                      onChange={(e) => update("server", { server: e.target.value.trim() })}
-                    />
-                  )}
-                </Field>
-                <Field label="CA certificate" hint="PEM, for a server with a private CA" error={error("caBundle")}>
-                  {(id) => (
-                    <textarea
-                      id={id}
-                      rows={3}
-                      value={f.caBundle}
-                      onChange={(e) => update("caBundle", { caBundle: e.target.value })}
-                    />
-                  )}
-                </Field>
-              </details>
-            </>
+          {acmeIssuer(f) && (
+            <AcmeFields value={f} onChange={onChange} error={error} update={update} renderBinding={renderBinding} />
           )}
         </>
       )}
@@ -754,6 +918,15 @@ export function CertificatesDialog({ cluster: c, onClose }: { cluster: Cluster; 
             purpose="dns01"
             cluster={{ namespace: c.namespace, name: c.name }}
             keys={[{ key: "token", label }]}
+            hint={hint}
+          />
+        )}
+        renderBinding={(label, hint) => (
+          <CredentialField
+            label={label}
+            purpose="acme-eab"
+            cluster={{ namespace: c.namespace, name: c.name }}
+            keys={[{ key: "hmacKey", label }]}
             hint={hint}
           />
         )}

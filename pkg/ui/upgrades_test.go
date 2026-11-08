@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -300,6 +302,92 @@ func TestSetupTellsAdministratorsAboutBackups(t *testing.T) {
 	}
 }
 
+// A restore to another ID or a clone leaves the installed ID behind. The appliance's MAC finds
+// its guest again, or tells that the user sees none.
+func TestSetupFindsTheApplianceByItsMAC(t *testing.T) {
+	t.Parallel()
+	for mac, want := range map[string]string{"bc:24:11:00:01:50": `"backup":true`, "bc:24:11:00:01:99": ""} {
+		h := newHarness(t)
+		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+		h.server.ApplianceVMID, h.server.ApplianceMACs = 105, []string{mac}
+		a := h.browser()
+		a.signIn("admin@pve")
+		for range 2 {
+			got := a.do("GET", "/api/setup", "").Body.String()
+			if want == "" && (strings.Contains(got, "applianceVMID") || strings.Contains(got, "backup")) ||
+				want != "" && (!strings.Contains(got, `"applianceVMID":150`) || !strings.Contains(got, want)) {
+				t.Errorf("MAC %s: setup = %s", mac, got)
+			}
+		}
+		if h.accounts.applianceLookups != 1 {
+			t.Errorf("MAC %s: looked for the appliance %d times, want once", mac, h.accounts.applianceLookups)
+		}
+	}
+}
+
+// A DHCP lease that changed leaves the certificate for the old address. Reached by a name the
+// certificate is for, the appliance still serves without a warning, so nothing is said.
+func TestSetupTellsAdministratorsWhenTheAddressMoved(t *testing.T) {
+	t.Parallel()
+	old, moved := netip.MustParseAddr("192.0.2.40"), netip.MustParseAddr("192.0.2.41")
+	for _, tc := range []struct {
+		name, host string
+		own        []netip.Addr
+		want       string
+	}{
+		{"moved, reached by its new address", "192.0.2.41", []netip.Addr{moved}, `"addressMoved":{"from":["192.0.2.40"],"to":["192.0.2.41"]}`},
+		{"moved, reached by its name", "kubehenge.example.org:443", []netip.Addr{moved}, ""},
+		{"still there", "192.0.2.40", []netip.Addr{old, moved}, ""},
+	} {
+		h := newHarness(t)
+		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+		h.server.CertificateIPs, h.server.CertificateNames = []netip.Addr{old}, []string{"kubehenge", "kubehenge.example.org"}
+		h.server.OwnAddresses = func() []netip.Addr { return tc.own }
+		a := h.browser()
+		a.signIn("admin@pve")
+		a.host = tc.host
+		got := a.do("GET", "/api/setup", "").Body.String()
+		if tc.want == "" && strings.Contains(got, "addressMoved") || !strings.Contains(got, tc.want) {
+			t.Errorf("%s: setup = %s", tc.name, got)
+		}
+	}
+}
+
+// A root disk fills over the years with OpenTofu's plugins and logs, and an upgrade needs room for
+// three copies of the software. From 80 % in use, administrators are told to grow it.
+func TestSetupTellsAdministratorsWhenTheDiskFillsUp(t *testing.T) {
+	t.Parallel()
+	const mib = 1 << 20
+	for _, tc := range []struct {
+		name       string
+		used, free uint64
+		err        error
+		want       string
+	}{
+		{"nearly full", 7000 * mib, 1192 * mib, nil, `"diskFull":{"usedPercent":86,"freeMiB":1192}`},
+		{"at the mark", 80 * mib, 20 * mib, nil, `"diskFull":{"usedPercent":80,"freeMiB":20}`},
+		{"79.01 %, rounded up as df does", 7901 * mib, 2099 * mib, nil, `"diskFull":{"usedPercent":80,"freeMiB":2099}`},
+		{"78.99 %", 7899 * mib, 2101 * mib, nil, ""},
+		{"room enough", 2000 * mib, 6000 * mib, nil, ""},
+		{"not known", 0, 0, errors.New("statfs: not supported"), ""},
+		{"an empty file system", 0, 0, nil, ""},
+	} {
+		h := newHarness(t)
+		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+		h.server.DiskUse = func() (uint64, uint64, error) { return tc.used, tc.free, tc.err }
+		a := h.browser()
+		a.signIn("admin@pve")
+		got := a.do("GET", "/api/setup", "").Body.String()
+		if tc.want == "" && strings.Contains(got, "diskFull") || !strings.Contains(got, tc.want) {
+			t.Errorf("%s: setup = %s", tc.name, got)
+		}
+		a.signIn("dev@pve")
+		if got := a.do("GET", "/api/setup", "").Body.String(); strings.Contains(got, "diskFull") {
+			t.Errorf("%s: a user who may not set up sees the disk: %s", tc.name, got)
+		}
+	}
+}
+
 func TestSetupTellsAdministratorsWhenTheCertificateRunsOut(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -371,10 +459,7 @@ func TestSetupAndRemovalWaitForTheRunningJob(t *testing.T) {
 	// The build ends, and records itself in the appliance's folder, before the test's folder goes.
 	defer func() {
 		close(built)
-		deadline := time.Now().Add(5 * time.Second)
-		for h.server.Appliance.TemplateJob().State == "running" && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
+		templateBuildEnded(h.server.Appliance)
 	}()
 	rec := a.do("POST", "/api/setup/remove", `{"passphrase":"correct horse battery staple","confirm":"remove"}`)
 	expect(t, rec, http.StatusConflict)

@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,10 +39,8 @@ const TalosUpgradeFailedAnnotation = "kubehenge.dev/talos-upgrade-failed"
 const kindDaemonSet = "DaemonSet"
 
 const (
-	// talosDrainTimeout bounds the eviction of a node's pods before it reboots. A pod a disruption
-	// budget holds past it is stopped by the reboot, as it would be by a power cut: one node is down
-	// at a time, for a minute or two.
-	talosDrainTimeout = 5 * time.Minute
+	// talosWaitInterval is how often a held drain, or the wait for StatefulSets, looks again.
+	talosWaitInterval = 10 * time.Second
 	// talosInstallTimeout bounds pulling the installer and writing it to disk, however steadily
 	// the node reports progress.
 	talosInstallTimeout = 15 * time.Minute
@@ -67,8 +66,13 @@ type TalosImages interface {
 
 // NodeDrainer moves a workload cluster's pods off a node and lets them back.
 type NodeDrainer interface {
-	Drain(ctx context.Context, c *clusterv1.Cluster, node string) error
+	// Drain cordons the node and evicts its pods. It returns ErrDrainTimeout once o.Timeout has run
+	// out with pods left.
+	Drain(ctx context.Context, c *clusterv1.Cluster, node string, o DrainOptions) error
 	Uncordon(ctx context.Context, c *clusterv1.Cluster, node string) error
+	// ShortStatefulSets names each StatefulSet with a ready pod on the node and fewer ready replicas
+	// than it wants.
+	ShortStatefulSets(ctx context.Context, c *clusterv1.Cluster, node string) ([]string, error)
 }
 
 // TalosUpgrader upgrades the nodes of Talos clusters in place to their talosVersion, one node at a
@@ -92,6 +96,9 @@ type TalosUpgrader struct {
 	// MachineCheck is how often a node's machine is checked while the node installs. Zero is
 	// talosMachineCheck.
 	MachineCheck time.Duration
+	// WaitInterval is how often a held drain, or the wait for StatefulSets, looks again. Zero is
+	// talosWaitInterval.
+	WaitInterval time.Duration
 
 	mu   sync.Mutex
 	busy map[types.NamespacedName]bool
@@ -234,6 +241,13 @@ type talosStep struct {
 	address string
 	// machine is the name of the node's Machine.
 	machine string
+	// pool is the worker pool of the node's Machine, empty for a control plane's.
+	pool string
+}
+
+// talosStepOf is the upgrade of the node of machine m, at the progress p.
+func talosStepOf(p *talosProgress, m *clusterv1.Machine) *talosStep {
+	return &talosStep{talosProgress: *p, address: machineAddress(m), machine: m.Name, pool: m.Labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel]}
 }
 
 var talosOSImage = regexp.MustCompile(`^Talos \((v\d+\.\d+\.\d+)\)$`)
@@ -295,7 +309,10 @@ func (u *TalosUpgrader) look(ctx context.Context, c *clusterv1.Cluster) (*talosS
 			return nil, u.fail(ctx, c, &p, err)
 		}
 		p.release = release
-		return &talosStep{talosProgress: p, address: machineAddress(m), machine: m.Name}, nil
+		if wait, err := u.holdForQuorum(ctx, c, machines, m); wait || err != nil {
+			return nil, err
+		}
+		return talosStepOf(&p, m), nil
 	}
 	return nil, nil //nolint:nilnil // every node runs the release
 }
@@ -344,7 +361,10 @@ func (u *TalosUpgrader) follow(ctx context.Context, c *clusterv1.Cluster, machin
 		if u.Now().Before(p.retryAt()) {
 			return nil, nil //nolint:nilnil // the next try waits
 		}
-		return &talosStep{talosProgress: *p, address: machineAddress(m), machine: m.Name}, nil
+		if wait, err := u.holdForQuorum(ctx, c, machines, m); wait || err != nil {
+			return nil, err
+		}
+		return talosStepOf(p, m), nil
 	}
 	running, _ := MachineTalos(m)
 	ready := meta.IsStatusConditionTrue(m.Status.Conditions, clusterv1.MachineNodeReadyCondition)
@@ -370,7 +390,7 @@ func (u *TalosUpgrader) follow(ctx context.Context, c *clusterv1.Cluster, machin
 
 // upgrade writes the release's installer to the node's disk, drains it and reboots it.
 func (u *TalosUpgrader) upgrade(ctx context.Context, c *clusterv1.Cluster, s *talosStep) error {
-	if err := u.annotate(ctx, c, map[string]any{TalosUpgradingAnnotation: s.String()}); err != nil {
+	if err := u.annotate(ctx, c, map[string]any{TalosUpgradingAnnotation: s.String(), TalosWaitingAnnotation: nil}); err != nil {
 		return err
 	}
 	if s.address == "" {
@@ -402,13 +422,13 @@ func (u *TalosUpgrader) upgrade(ctx context.Context, c *clusterv1.Cluster, s *ta
 	case err != nil:
 		return u.retryOrFail(ctx, c, s, err)
 	}
+	// The install can take a quarter of an hour, in which another member may have fallen ill.
+	if wait, err := u.stillHoldsQuorum(ctx, c, s); wait || err != nil {
+		return err
+	}
 	u.eventf(c, corev1.EventTypeNormal, "TalosUpgrading", "node %s installed Talos %s and reboots into it", s.node, s.release)
-	// A drained node is cordoned only for the seconds before its reboot, so the event is the lasting
-	// record that its pods were moved.
-	if err := u.Nodes.Drain(ctx, c, s.node); err != nil {
-		u.eventf(c, corev1.EventTypeWarning, "TalosDrain", "node %s reboots without all its pods moved: %v", s.node, err)
-	} else {
-		u.eventf(c, corev1.EventTypeNormal, "TalosDrained", "node %s drained before its reboot", s.node)
+	if err := u.drainNode(ctx, c, s); err != nil {
+		return err
 	}
 	s.rebooted = u.Now()
 	if err := u.annotate(ctx, c, map[string]any{TalosUpgradingAnnotation: s.String()}); err != nil {
@@ -432,7 +452,7 @@ func (u *TalosUpgrader) whileMachine(ctx context.Context, namespace, name string
 	if name == "" {
 		return wctx, func() { cancel(nil) }
 	}
-	t := time.NewTicker(cmpDuration(u.MachineCheck, talosMachineCheck))
+	t := time.NewTicker(cmp.Or(u.MachineCheck, talosMachineCheck))
 	done := make(chan struct{})
 	go func() {
 		defer t.Stop()
@@ -475,7 +495,7 @@ func (u *TalosUpgrader) abandon(ctx context.Context, c *clusterv1.Cluster, p *ta
 	ctrl.LoggerFrom(ctx).WithName("talos-upgrader").Info("Talos upgrade abandoned, its machine is going",
 		"cluster", client.ObjectKeyFromObject(c), "node", p.node, "release", p.release)
 	u.eventf(c, corev1.EventTypeNormal, "TalosUpgradeAbandoned", "node %s to Talos %s: its machine is being deleted", p.node, p.release)
-	return u.annotate(ctx, c, map[string]any{TalosUpgradingAnnotation: nil})
+	return u.annotate(ctx, c, map[string]any{TalosUpgradingAnnotation: nil, TalosWaitingAnnotation: nil})
 }
 
 // retryOrFail tries a failed install again later when it failed as a network or a busy node may,
@@ -519,6 +539,7 @@ func (u *TalosUpgrader) fail(ctx context.Context, c *clusterv1.Cluster, p *talos
 	u.eventf(c, corev1.EventTypeWarning, "TalosUpgradeFailed", "node %s to Talos %s: %v", p.node, p.release, why)
 	return u.annotate(ctx, c, map[string]any{
 		TalosUpgradingAnnotation:     nil,
+		TalosWaitingAnnotation:       nil,
 		TalosUpgradeFailedAnnotation: fmt.Sprintf("%s to %s at %s: %v", p.node, p.release, u.Now().UTC().Format(time.RFC3339), why),
 	})
 }
@@ -548,11 +569,13 @@ func (u *TalosUpgrader) eventf(c *clusterv1.Cluster, kind, reason, format string
 // controller owns are deleted, as the node's reboot would stop them anyway.
 type RemoteDrainer struct {
 	Remotes *Remotes
-	Timeout time.Duration
+	// RetryDelay is the wait before the pods a disruption budget held are evicted again. Zero is
+	// drainRetryDelay.
+	RetryDelay time.Duration
 }
 
 // Drain implements NodeDrainer.
-func (d *RemoteDrainer) Drain(ctx context.Context, c *clusterv1.Cluster, node string) error {
+func (d *RemoteDrainer) Drain(ctx context.Context, c *clusterv1.Cluster, node string, o DrainOptions) error {
 	h, err := d.helper(ctx, c)
 	if err != nil {
 		return err
@@ -565,10 +588,7 @@ func (d *RemoteDrainer) Drain(ctx context.Context, c *clusterv1.Cluster, node st
 	if err := drain.RunCordonOrUncordon(h, n, true); err != nil {
 		return fmt.Errorf("cordoning node %s: %w", node, err)
 	}
-	if err := drain.RunNodeDrain(h, node); err != nil {
-		return fmt.Errorf("draining node %s: %w", node, err)
-	}
-	return nil
+	return d.evict(h, node, o)
 }
 
 // Uncordon implements NodeDrainer.
@@ -629,14 +649,7 @@ func (d *RemoteDrainer) helper(ctx context.Context, c *clusterv1.Cluster) (*drai
 	}
 	return &drain.Helper{
 		Ctx: ctx, Client: cs, Force: true, IgnoreAllDaemonSets: true, DeleteEmptyDirData: true,
-		GracePeriodSeconds: -1, Timeout: cmpDuration(d.Timeout, talosDrainTimeout),
-		Out: io.Discard, ErrOut: io.Discard,
+		GracePeriodSeconds: -1,
+		Out:                io.Discard, ErrOut: io.Discard,
 	}, nil
-}
-
-func cmpDuration(d, def time.Duration) time.Duration {
-	if d == 0 {
-		return def
-	}
-	return d
 }

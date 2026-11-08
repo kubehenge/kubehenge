@@ -135,6 +135,6 @@ for distribution in kubeadm rke2 k3s talos; do
 done
 
 # shellcheck disable=SC2086 # one test per word
-jq -c '. + $ARGS.positional' --args management-cluster-upgrade rancher control-plane-ha two-nodes ${variants} << EOF
+jq -c '. + $ARGS.positional' --args management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade ${variants} << EOF
 ${lanes_json}
 EOF

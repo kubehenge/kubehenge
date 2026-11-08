@@ -59,15 +59,26 @@ const (
 const (
 	controlPlaneMachineVariable = "controlPlaneMachine"
 	workerMachineVariable       = "workerMachine"
+	// workerNodesVariable holds the labels and taints of the workers, as the cluster's default and
+	// as a pool's own.
+	workerNodesVariable = "workerNodes"
+	// cisVariable hardens the cluster to the CIS benchmark.
+	cisVariable = "cis"
 )
 
 // Variables a cluster may change after creation. The others describe where its VMs live.
 var changeableVariables = map[string]bool{
-	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, csiVariable: true, ccmVariable: true,
-	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true,
+	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, provisioner.HostOutageGraceVariable: true, csiVariable: true, ccmVariable: true,
+	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true, egressVariable: true, "namespaceLabels": true,
+	etcdVariable: true,
 	// A new node OS rolls every node onto its template, as a node image refresh does. A new size
-	// rolls the machines it sizes.
-	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true,
+	// rolls the machines it sizes. New labels or taints roll the workers, and CIS hardening switched
+	// on rolls every node (the class refuses it switched off).
+	provisioner.NodeOSVariable: true, controlPlaneMachineVariable: true, workerMachineVariable: true, workerNodesVariable: true,
+	cisVariable: true,
+	// Files, commands, arguments and audit settings reach the nodes' bootstrap, so a change replaces
+	// every node it reaches.
+	provisioner.NodeCustomisationVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -93,6 +104,10 @@ type classView struct {
 	NoTemplate string `json:"noTemplate,omitempty"`
 	// NodeOSes are the operating systems the class's nodes may run, but for Talos's.
 	NodeOSes []nodeOSChoice `json:"nodeOSes,omitempty"`
+	// ControlPlaneTimeouts and WorkerTimeouts are the waits the class gives a node's drain, volume
+	// detach and Node deletion when a machine is removed, where a cluster sets none of its own.
+	ControlPlaneTimeouts provisioner.NodeTimeouts `json:"controlPlaneTimeouts"`
+	WorkerTimeouts       provisioner.NodeTimeouts `json:"workerTimeouts"`
 }
 
 // nodeOSChoice is a node OS a cluster may run, and why none can be built on it yet.
@@ -103,13 +118,18 @@ type nodeOSChoice struct {
 }
 
 // nodeOSChoices are the node OSes of every family, those not released yet among them, so that the
-// wizard can say why they cannot be chosen.
+// wizard can say why they cannot be chosen. FIPS mode is among them only for a distribution that
+// has it.
 func nodeOSChoices(c *clusterv1.ClusterClass, dist string) []nodeOSChoice {
 	if dist == string(templates.Talos) {
 		return nil
 	}
+	fips := templates.FIPSDistribution(templates.Distribution(dist)) == nil
 	var out []nodeOSChoice
 	for _, info := range templates.NodeOSes() {
+		if info.FIPS && !fips {
+			continue
+		}
 		choice := nodeOSChoice{NodeOSInfo: info}
 		if info.Unreleased == "" {
 			choice.NoTemplate = missingTemplate(c, dist, "", info.NodeOS)
@@ -150,6 +170,7 @@ func (s *Server) classView(ctx context.Context, c *clusterv1.ClusterClass, dist 
 	v := classView{
 		Name: c.Name, Distribution: dist, Variables: []classVariable{}, Versions: &regexpDescription{Pattern: provisioner.VersionFormats[templates.Distribution(dist)].String()},
 		NoTemplate: missingTemplate(c, dist, "", templates.DefaultNodeOS), NodeOSes: nodeOSChoices(c, dist),
+		ControlPlaneTimeouts: classControlPlaneTimeouts(c), WorkerTimeouts: classWorkerTimeouts(c),
 	}
 	for i := range c.Spec.Variables {
 		cv := &c.Spec.Variables[i]
@@ -207,6 +228,9 @@ type clusterView struct {
 	Pool         string                     `json:"pool"`
 	Allowed      allowedView                `json:"allowed"`
 	Machines     []machineView              `json:"machines,omitempty"`
+	// ControlPlaneTimeouts are the control planes' own waits for a removed machine's node, where
+	// they do not take the class's.
+	ControlPlaneTimeouts provisioner.NodeTimeouts `json:"controlPlaneTimeouts"`
 	// ControllerError is the error Kubehenge's controller last met reconciling the cluster, until
 	// a reconcile succeeds, from the Cluster's own condition, which kubectl shows the same.
 	ControllerError string `json:"controllerError,omitempty"`
@@ -225,6 +249,10 @@ type clusterView struct {
 	GitOps *gitOpsView `json:"gitops,omitempty"`
 	// Talos is how a Talos cluster's nodes stand with its Talos release.
 	Talos *talosView `json:"talos,omitempty"`
+	// AddonChanges are the add-on changes that wait for the cluster's upgrade window.
+	AddonChanges *provisioner.AddonChangesStatus `json:"addonChanges,omitempty"`
+	// Etcd is what the controller last read of the cluster's etcd members.
+	Etcd *etcdView `json:"etcd,omitempty"`
 	// Generation counts the changes to the cluster's spec. A change made against it carries it back
 	// (generationHeader).
 	Generation int64 `json:"generation"`
@@ -246,6 +274,11 @@ type talosView struct {
 	Upgrading string `json:"upgrading,omitempty"`
 	Upgraded  string `json:"upgraded,omitempty"`
 	Failed    string `json:"failed,omitempty"`
+	// Waiting says why the next control-plane node waits: its reboot would cost etcd its quorum.
+	Waiting string `json:"waiting,omitempty"`
+	// Held says what holds the node under way before its reboot: pods a disruption budget keeps,
+	// or StatefulSets short of ready replicas.
+	Held string `json:"held,omitempty"`
 }
 
 func talosViewOf(c *clusterv1.Cluster) *talosView {
@@ -256,6 +289,8 @@ func talosViewOf(c *clusterv1.Cluster) *talosView {
 		Upgrading: c.Annotations[provisioner.TalosUpgradingAnnotation],
 		Upgraded:  c.Annotations[provisioner.TalosUpgradedAnnotation],
 		Failed:    c.Annotations[provisioner.TalosUpgradeFailedAnnotation],
+		Waiting:   c.Annotations[provisioner.TalosUpgradeWaitingAnnotation],
+		Held:      c.Annotations[provisioner.TalosWaitingAnnotation],
 	}
 }
 
@@ -299,6 +334,11 @@ type workerPoolView struct {
 	Autoscaling *poolAutoscaling `json:"autoscaling,omitempty"`
 	// Machine is the pool's own size, where it does not take the cluster's workerMachine.
 	Machine json.RawMessage `json:"machine,omitempty"`
+	// Timeouts are the pool's own waits for a removed machine's node, where it does not take the
+	// class's.
+	Timeouts provisioner.NodeTimeouts `json:"timeouts"`
+	// Nodes is the pool's own labels and taints, where it does not take the cluster's workerNodes.
+	Nodes json.RawMessage `json:"nodes,omitempty"`
 }
 
 type allowedView struct {
@@ -328,13 +368,24 @@ type machineView struct {
 	// Waiting is what keeps a machine that is not ready from it, as Cluster API sums it up.
 	Waiting string `json:"waiting,omitempty"`
 	// Replacing is set while the machine is marked for its health check to replace.
-	Replacing bool      `json:"replacing,omitempty"`
+	Replacing bool `json:"replacing,omitempty"`
+	// Held says why Kubehenge keeps Cluster API from replacing the machine for now, such as a
+	// Proxmox VE node that reboots. HeldUntil is when the hold ends whatever the node does.
+	Held      string    `json:"held,omitempty"`
+	HeldUntil time.Time `json:"heldUntil,omitzero"`
 	Addresses []string  `json:"addresses,omitempty"`
 	Created   time.Time `json:"created"`
+	// Stalled says why a machine that has been deleting for long cannot finish. Forgetting asks
+	// Kubehenge to let go of it without destroying its VM, and ForgetRefused is why the last ask failed.
+	Stalled       string `json:"stalled,omitempty"`
+	ForgetRefused string `json:"forgetRefused,omitempty"`
 	// Console opens the VM's console in Proxmox VE's web interface, for a user who may use it.
 	Console string `json:"console,omitempty"`
 	// Reboot tells whether the user may reboot the machine's VM.
 	Reboot bool `json:"reboot,omitempty"`
+	// NotReporting is set when the machine's VM is not among those Proxmox VE lists with a name,
+	// because its node dropped out of the statistics.
+	NotReporting bool `json:"notReporting,omitempty"`
 }
 
 // view describes a cluster to a user with privs on its pool. The interface changes clusters only in
@@ -368,6 +419,8 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 	if dist == string(templates.Talos) {
 		v.Talos = talosViewOf(c)
 	}
+	v.AddonChanges = addonChangesOf(c)
+	v.Etcd = etcdStatusView(c)
 	if e := c.Spec.ControlPlaneEndpoint; e.Host != "" {
 		v.Endpoint = e.Host
 		if e.Port != 0 {
@@ -389,6 +442,7 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		v.Workers = replicas(ws.DesiredReplicas, ws.ReadyReplicas, ws.AvailableReplicas, ws.UpToDateReplicas)
 	}
 	v.WorkerPools = workerPoolsOf(c)
+	v.ControlPlaneTimeouts = provisioner.NodeTimeoutsOf(&c.Spec.Topology.ControlPlane.Deletion)
 	for _, cv := range c.Spec.Topology.Variables {
 		v.Variables[cv.Name] = json.RawMessage(cv.Value.Raw)
 	}
@@ -410,12 +464,15 @@ func workerPoolsOf(c *clusterv1.Cluster) []workerPoolView {
 	pools := make([]workerPoolView, 0, len(c.Spec.Topology.Workers.MachineDeployments))
 	for i := range c.Spec.Topology.Workers.MachineDeployments {
 		md := &c.Spec.Topology.Workers.MachineDeployments[i]
-		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations)}
+		wp := workerPoolView{Name: md.Name, Class: md.Class, Autoscaling: autoscalingOf(md.Metadata.Annotations), Timeouts: provisioner.NodeTimeoutsOfPool(&md.Deletion)}
 		if md.Replicas != nil {
 			wp.Replicas = *md.Replicas
 		}
 		if i := poolOverride(md, workerMachineVariable); i >= 0 {
 			wp.Machine = json.RawMessage(md.Variables.Overrides[i].Value.Raw)
+		}
+		if i := poolOverride(md, workerNodesVariable); i >= 0 {
+			wp.Nodes = json.RawMessage(md.Variables.Overrides[i].Value.Raw)
 		}
 		pools = append(pools, wp)
 	}
@@ -637,26 +694,15 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 		s.kubeError(w, r, err)
 		return
 	}
-	vms, err := s.clusterVMs(r, u, access.path)
+	vms, err := s.clusterVMs(r, u, c, access.path)
 	if err != nil && !errors.Is(err, pve.ErrForbidden) {
 		s.Log.ErrorContext(r.Context(), "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
 	}
-	console := access.held.Has(privConsole)
-	reboot := access.held.Has(privPower) && u.namespaces.has(c.Namespace)
-	v.Machines = []machineView{}
-	for i := range machines.Items {
-		m := &machines.Items[i]
-		vm := vms[m.Spec.InfrastructureRef.Name]
-		mv := machineOf(m, vm.Node)
-		if console {
-			mv.Console = consoleURL(s.ProxmoxURL, &vm)
-		}
-		mv.Reboot = reboot && vm.VMID != 0
-		if v.Talos != nil {
-			mv.Talos, _ = provisioner.MachineTalos(m)
-		}
-		v.Machines = append(v.Machines, mv)
-	}
+	v.Machines = s.machineViews(machines.Items, vms, machineAccess{
+		console: access.held.Has(privConsole),
+		reboot:  access.held.Has(privPower) && u.namespaces.has(c.Namespace),
+		talos:   v.Talos != nil,
+	})
 	slices.SortFunc(v.Machines, func(a, b machineView) int {
 		switch a.Role {
 		case b.Role:
@@ -670,19 +716,46 @@ func (s *Server) getCluster(w http.ResponseWriter, r *http.Request, u user) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-// clusterVMs maps the names of the cluster's VMs, which the Proxmox VE provider names after their
-// machines' infrastructure, to the VMs, on the nodes they run on now. The machines show without
-// their nodes when Proxmox VE does not tell: they are the page's subject, the nodes an addition.
-func (s *Server) clusterVMs(r *http.Request, u user, poolPath string) (map[string]pve.Member, error) {
+// machineAccess is what the user may do with the machines' VMs.
+type machineAccess struct {
+	console, reboot, talos bool
+}
+
+// machineViews describes the machines, each on the Proxmox VE node its VM runs on now. A machine
+// whose VM Proxmox VE does not tell shows without a node, or as not reporting where a VM is listed
+// that no machine claims: the machines are the page's subject, the nodes an addition.
+func (s *Server) machineViews(machines []clusterv1.Machine, vms *vmSet, can machineAccess) []machineView {
+	found := make([]pve.Member, len(machines))
+	matched := make([]bool, len(machines))
+	for i := range machines {
+		found[i], matched[i] = vms.of(machines[i].Spec.InfrastructureRef.Name)
+	}
+	views := make([]machineView, 0, len(machines))
+	for i := range machines {
+		m := &machines[i]
+		vm := &found[i]
+		mv := machineOf(m, vm.Node)
+		mv.NotReporting = !matched[i] && vms.silent() && m.Status.NodeRef.Name != ""
+		if can.console {
+			mv.Console = consoleURL(s.ProxmoxURL, vm)
+		}
+		mv.Reboot = can.reboot && vm.VMID != 0
+		if can.talos {
+			mv.Talos, _ = provisioner.MachineTalos(m)
+		}
+		views = append(views, mv)
+	}
+	return views
+}
+
+// clusterVMs finds the cluster's VMs, which the Proxmox VE provider names after their machines'
+// infrastructure.
+func (s *Server) clusterVMs(r *http.Request, u user, c *clusterv1.Cluster, poolPath string) (*vmSet, error) {
 	members, err := s.Accounts.PoolMembers(r.Context(), u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
 	if err != nil {
 		return nil, fmt.Errorf("listing a cluster's VMs: %w", err)
 	}
-	vms := make(map[string]pve.Member, len(members))
-	for i := range members {
-		vms[members[i].Name] = members[i]
-	}
-	return vms, nil
+	return s.newVMSet(r.Context(), u.kube, c, members), nil
 }
 
 // consoleURL is where Proxmox VE's web interface at base opens the VM's console, as its own
@@ -709,6 +782,10 @@ type createRequest struct {
 	// WorkerAutoscaling has the cluster autoscaler size the worker pool in place of WorkerReplicas.
 	WorkerAutoscaling *poolAutoscaling           `json:"workerAutoscaling,omitempty"`
 	Variables         map[string]json.RawMessage `json:"variables"`
+	// ControlPlaneTimeouts and WorkerTimeouts set the waits for a removed machine's node of the
+	// control planes and of the first worker pool, in place of the class's.
+	ControlPlaneTimeouts *provisioner.NodeTimeouts `json:"controlPlaneTimeouts,omitempty"`
+	WorkerTimeouts       *provisioner.NodeTimeouts `json:"workerTimeouts,omitempty"`
 	// Pods and Services are the cluster's own ranges. Unset, the controller's admission chooses ones
 	// clear of the nodes' network (provisioner.ClusterDefaulter).
 	Pods     []string `json:"pods,omitempty"`
@@ -784,6 +861,11 @@ func (req *createRequest) invalid() string {
 	if a := req.WorkerAutoscaling; a != nil && !a.valid() {
 		return autoscalingCounts
 	}
+	for _, t := range []*provisioner.NodeTimeouts{req.ControlPlaneTimeouts, req.WorkerTimeouts} {
+		if t != nil && t.Problem() != "" {
+			return t.Problem()
+		}
+	}
 	return ""
 }
 
@@ -822,7 +904,7 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 		}
 	} else {
 		var err error
-		if nodeOS, err = requestNodeOS(req.Variables[provisioner.NodeOSVariable]); err != nil {
+		if nodeOS, err = requestNodeOS(req.Variables[provisioner.NodeOSVariable], dist); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return nil, false
 		}
@@ -835,8 +917,8 @@ func (s *Server) createClass(w http.ResponseWriter, r *http.Request, u user, req
 }
 
 // requestNodeOS is the node OS a request's nodeOS variable names, the default where it names none,
-// once Kubehenge builds templates of it.
-func requestNodeOS(raw json.RawMessage) (templates.NodeOS, error) {
+// once Kubehenge builds templates of it for the distribution.
+func requestNodeOS(raw json.RawMessage, dist string) (templates.NodeOS, error) {
 	o := templates.DefaultNodeOS
 	if raw != nil {
 		if err := json.Unmarshal(raw, &o); err != nil {
@@ -845,6 +927,11 @@ func requestNodeOS(raw json.RawMessage) (templates.NodeOS, error) {
 	}
 	if _, _, err := templates.Available(o); err != nil {
 		return o, fmt.Errorf("node OS: %w", err)
+	}
+	if o.FIPS {
+		if err := templates.FIPSDistribution(templates.Distribution(dist)); err != nil {
+			return o, fmt.Errorf("node OS: %w", err)
+		}
 	}
 	return o, nil
 }
@@ -892,7 +979,7 @@ func (s *Server) mayUseStorage(w http.ResponseWriter, r *http.Request, u user, c
 		return true
 	}
 	if allowed := classChoices(class, "storage"); allowed != nil && !slices.Contains(allowed, storage) {
-		writeError(w, http.StatusUnprocessableEntity, "storage: choose "+strings.Join(allowed, ", "))
+		writeError(w, http.StatusUnprocessableEntity, provisioner.StorageNotListed(storage, allowed))
 		return false
 	}
 	return s.require(w, r, u, storagePath(storage), privStorage)
@@ -978,6 +1065,12 @@ func (s *Server) newCluster(u user, req *createRequest) *clusterv1.Cluster {
 	}
 	if req.WorkerAutoscaling != nil {
 		setAutoscaling(&c.Spec.Topology.Workers.MachineDeployments[0], req.WorkerAutoscaling, 0)
+	}
+	if t := req.ControlPlaneTimeouts; t != nil {
+		t.SetOn(&c.Spec.Topology.ControlPlane.Deletion)
+	}
+	if t := req.WorkerTimeouts; t != nil {
+		t.SetOnPool(&c.Spec.Topology.Workers.MachineDeployments[0].Deletion)
 	}
 	for _, name := range slices.Sorted(maps.Keys(req.Variables)) {
 		c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{
@@ -1086,6 +1179,9 @@ type changeRequest struct {
 	// Pools adds, changes and removes worker pools by name.
 	Pools     map[string]*poolChange     `json:"pools"`
 	Variables map[string]json.RawMessage `json:"variables"`
+	// ControlPlaneTimeouts sets the control planes' waits for a removed machine's node. It replaces
+	// all three, and a timeout it leaves out is the class's.
+	ControlPlaneTimeouts *provisioner.NodeTimeouts `json:"controlPlaneTimeouts"`
 }
 
 // changed is a change read and checked, applied to the cluster in memory, with the cluster as it was.
@@ -1152,6 +1248,9 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, r
 	}
 	if msg == "" {
 		msg = applyPools(c, req.Pools)
+	}
+	if msg == "" {
+		msg = applyControlPlaneTimeouts(c, req.ControlPlaneTimeouts)
 	}
 	if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)
@@ -1312,7 +1411,7 @@ func (s *Server) allowNodeOS(w http.ResponseWriter, r *http.Request, u user, c *
 		writeError(w, http.StatusUnprocessableEntity, "node OS: Talos nodes run Talos")
 		return false
 	}
-	nodeOS, err := requestNodeOS(value)
+	nodeOS, err := requestNodeOS(value, dist)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return false
@@ -1465,6 +1564,35 @@ func (s *Server) retryTalosUpgrade(w http.ResponseWriter, r *http.Request, u use
 	}
 	s.Log.InfoContext(r.Context(), "Talos upgrade tried again", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// addonChangesOf reads the add-on changes that wait for the cluster's window, nil when none do.
+func addonChangesOf(c *clusterv1.Cluster) *provisioner.AddonChangesStatus {
+	raw, ok := c.Annotations[provisioner.AddonChangesAnnotation]
+	if !ok {
+		return nil
+	}
+	var status provisioner.AddonChangesStatus
+	if err := json.Unmarshal([]byte(raw), &status); err != nil || len(status.Changes) == 0 {
+		return nil
+	}
+	return &status
+}
+
+// applyAddonChanges asks the controller to apply the add-on changes that wait for the cluster's
+// window now, as a security fix needs.
+func (s *Server) applyAddonChanges(w http.ResponseWriter, r *http.Request, u user) {
+	c, _, ok := s.cluster(w, r, u, privChange)
+	if !ok {
+		return
+	}
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, provisioner.ApplyAddonChangesAnnotation, s.now().UTC().Format(time.RFC3339))
+	if err := u.kube.Patch(r.Context(), c, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		s.kubeError(w, r, err)
+		return
+	}
+	s.Log.InfoContext(r.Context(), "add-on changes applied now", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name)
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // kubeError answers with what the management cluster refused. Validation messages are the user's

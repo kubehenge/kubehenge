@@ -32,6 +32,10 @@ const (
 	// template pool, as JSON: line key to build times, oldest first. The patch that picks a
 	// machine's template reads it, rather than Proxmox VE on every call.
 	NodeImageBuildsAnnotation = "kubehenge.dev/node-image-builds"
+	// NodeImageOlderAnnotation lists, in NodeImageBuildsAnnotation's form, the builds whose kernel is
+	// older than the previous build's. They are left out of NodeImageBuildsAnnotation, so no cluster
+	// moves to one, and the interface shows them as older.
+	NodeImageOlderAnnotation = "kubehenge.dev/node-image-older"
 	// DefaultNodeImageSoak is how long a build waits before clusters are offered it, giving a
 	// build that turns out broken time to be caught before every cluster's window takes it.
 	DefaultNodeImageSoak = 24 * time.Hour

@@ -8,12 +8,15 @@
 # ports are added to both bridges, so that VMs on either node share 172.20.99.0/24 with pve its
 # gateway and name server as before. A directory both containers mount at /var/lib/vz/shared is the
 # cluster's storage `shared`, as shared storage is to Proxmox VE: a template there is cloned onto
-# either node. Adds the second node's settings to <work directory>/env.
+# either node. pve2 has memory of its own, as a second host would: its container's limit is the
+# total it reports, and what its container uses, guests included, is its use. pve reports the
+# runner's memory, pve2's use counted. Adds the second node's settings to <work directory>/env.
 set -eu
 
 work=$(readlink -f "${1:?usage: $0 <work directory>}")
 # shellcheck source=/dev/null
 . "${work}/env"
+: "${KUBEHENGE_PROXMOX_URL:?}" "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}"
 
 on() {
     node=$1
@@ -21,13 +24,44 @@ on() {
     docker exec "kubehenge-e2e-${node}" "$@"
 }
 
+# pve2's memory in MiB: the most guests two-nodes.sh puts on it (a 4096 MiB control plane, a 1024 MiB
+# worker and QEMU's 55 MiB each) and 1426 for its own services and a clone's page cache. Without
+# guests, it has about 1.4 GiB more free than the 4505 MiB a node needs to rejoin a placement for
+# that control plane.
+pve2_mib=6656
+
+# Proxmox VE reads a node's memory from /proc/meminfo, which in a container is the runner's. lxcfs,
+# from the same image and run on the runner, serves a container a /proc/meminfo of its cgroup: its
+# limit as the total and the memory its processes use. Its mount reaches the runner through the
+# shared bind of its directory.
+mkdir -p "${work}/lxcfs"
+docker run -d --name kubehenge-e2e-lxcfs --privileged --pid=host --cgroupns=host \
+    --mount "type=bind,source=${work}/lxcfs,target=/var/lib/lxcfs,bind-propagation=rshared" \
+    kubehenge-e2e-pve lxcfs -f /var/lib/lxcfs > /dev/null
+deadline=$(($(date +%s) + 30))
+until [ -r "${work}/lxcfs/proc/meminfo" ]; do
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+        echo "lxcfs did not mount within 30 seconds" >&2
+        docker logs kubehenge-e2e-lxcfs >&2 || true
+        exit 1
+    fi
+    sleep 1
+done
+
 # The shared directory is in pve's own /var/lib/vz, which pve2 mounts again under the same path.
 mkdir -p "${work}/vz/shared" "${work}/vz2"
 # /dev/shm as large as up.sh gives pve's, for corosync.
 docker run -d --name kubehenge-e2e-pve2 --hostname pve2 --privileged --cgroupns=private \
     --network kubehenge-e2e --ip 172.21.99.4 --tmpfs /run --tmpfs /run/lock --shm-size 1g \
+    --memory "${pve2_mib}m" -v "${work}/lxcfs/proc/meminfo:/proc/meminfo" \
     -v /sys/kernel/security:/sys/kernel/security -v "${work}/vz2:/var/lib/vz" \
     -v "${work}/vz/shared:/var/lib/vz/shared" kubehenge-e2e-pve > /dev/null
+total=$(on pve2 cat /proc/meminfo | awk '/^MemTotal:/ { print int($2 / 1024) }')
+[ "${total}" = "${pve2_mib}" ] || {
+    echo "pve2 reports ${total} MiB of memory, not the ${pve2_mib} MiB of its own" >&2
+    exit 1
+}
 
 deadline=$(($(date +%s) + 600))
 # shellcheck disable=SC2310 # on wraps one docker exec, whose status is what the loop polls and reports.
@@ -106,13 +140,44 @@ on pve2 test -f /etc/corosync/corosync.conf || {
     on pve journalctl -u pve-cluster -u corosync -u pveproxy -u pvedaemon --no-pager -n 100 >&2 || true
     exit 1
 }
-# Both nodes in the cluster's view, quorate, and pve2's API on its new certificate.
+# The join's last step writes pve2's node files (its certificate, its SSH keys) once pve2 is quorate,
+# not once its cluster file system has synced with pve's. Adding pve2 reloads corosync, and a write
+# pve receives while that leaves it without quorum makes its file system leave the cluster's group
+# and rejoin. Where pve2 comes up before pve is back, pve2 writes into a group of its own, and pve's
+# rejoin then replaces those files with pve's, which lack them. So the step runs again once pve2
+# holds pve's files.
+deadline=$(($(date +%s) + 120))
+# shellcheck disable=SC2310 # polled; pve's certificate missing is pve2 not synced with pve yet.
+until on pve2 test -f /etc/pve/nodes/pve/pve-ssl.pem; do
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+        echo "pve2's cluster file system did not sync with pve's within 2 minutes" >&2
+        on pve2 journalctl -u pve-cluster --no-pager -n 100 >&2 || true
+        exit 1
+    fi
+    sleep 2
+done
+# shellcheck disable=SC2310 # a file missing is the step to run again.
+if ! on pve test -f /etc/pve/nodes/pve2/pve-ssl.pem || ! on pve test -f /etc/pve/nodes/pve2/ssh_known_hosts; then
+    echo "the join's node files for pve2 were lost to a resync of pve's cluster file system; writing them again"
+    on pve2 pvecm updatecerts --force
+    on pve2 systemctl reload-or-restart pvedaemon pveproxy
+fi
+# pve2's status as every API client reaches it: through pve's proxy, which accepts only the
+# certificate the cluster's files hold for pve2. The join writes pve2's new one there and returns
+# while pve2's proxy may still serve the old one, and pve then answers 596.
+through_pve() {
+    curl -sS --fail --max-time 20 --cacert "${KUBEHENGE_PROXMOX_CA}" \
+        -H "Authorization: PVEAPIToken=${KUBEHENGE_PROXMOX_TOKEN}" \
+        "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/pve2/status" > /dev/null
+}
+# Both nodes in the cluster's view, quorate, and pve2's API reached through pve.
 # shellcheck disable=SC2310 # polled; each check that fails is a cluster not there yet.
 both_online() {
     on pve pvesh get /nodes --output-format json 2> /dev/null |
         jq -e '[.[] | select(.status == "online") | .node] | sort == ["pve", "pve2"]' > /dev/null &&
         on pve pvecm status 2> /dev/null | grep -q '^Quorate: *Yes' &&
-        on pve2 pvesh get /version > /dev/null 2>&1
+        through_pve 2> /dev/null
 }
 deadline=$(($(date +%s) + 600))
 # shellcheck disable=SC2310 # both_online is what the loop polls and reports.
@@ -121,8 +186,9 @@ until both_online; do
     if [ "${now}" -ge "${deadline}" ]; then
         echo "pve2 did not join pve's cluster within 10 minutes" >&2
         on pve pvecm status >&2 || true
-        on pve journalctl -u pve-cluster -u corosync --no-pager -n 100 >&2 || true
-        on pve2 journalctl -u pve-cluster -u corosync --no-pager -n 100 >&2 || true
+        through_pve >&2 || true
+        on pve journalctl -u pve-cluster -u corosync -u pveproxy --no-pager -n 100 >&2 || true
+        on pve2 journalctl -u pve-cluster -u corosync -u pveproxy --no-pager -n 100 >&2 || true
         exit 1
     fi
     sleep 3
@@ -132,4 +198,4 @@ on pve pvesm add dir shared --path /var/lib/vz/shared --shared 1 --content image
 cat >> "${work}/env" << EOF
 export KUBEHENGE_E2E_NODES=pve,pve2 KUBEHENGE_E2E_SHARED_STORAGE=shared
 EOF
-echo "pve2 joined pve's cluster; storage shared on both"
+echo "pve2 joined pve's cluster; storage shared on both; pve2 has ${pve2_mib} MiB of memory"

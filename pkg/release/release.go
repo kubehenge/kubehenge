@@ -92,7 +92,10 @@ func Parse(index []byte, signatures string, keys []ed25519.PublicKey, now time.T
 		return nil, fmt.Errorf("%w: it carries no expiry", ErrExpired)
 	}
 	if !now.Before(ix.Expires) {
-		return nil, fmt.Errorf("%w on %s; the publishers sign it again every week", ErrExpired, ix.Expires.UTC().Format(time.DateOnly))
+		// The container has no clock of its own, so a node whose clock runs ahead reads as publishers
+		// who stopped signing.
+		return nil, fmt.Errorf("%w on %s. The publishers sign it again every week, and this machine's clock reads %s. Check that clock if it is wrong",
+			ErrExpired, ix.Expires.UTC().Format(time.DateOnly), now.UTC().Format("2006-01-02 15:04 UTC"))
 	}
 	return ix, nil
 }

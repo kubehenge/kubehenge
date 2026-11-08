@@ -27,6 +27,11 @@ template:
       gateway: 192.0.2.254
     dnsServers:
       - 192.0.2.253
+    # capmox otherwise subtracts the configured memory of every guest, stopped ones too, from a
+    # node's total, and places no VM on an overcommitted host. Proxmox VE refuses a start only for
+    # memory really in use, which the Placer checks.
+    schedulerHints:
+      memoryAdjustment: 0
 {{- end -}}
 
 {{/*
@@ -124,6 +129,19 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
           type: integer
           minimum: 1
           maximum: 4094
+        mtu:
+          type: integer
+          minimum: 1280
+          maximum: 65520
+          description: >-
+            MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN
+            underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own,
+            and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.
+        queues:
+          type: integer
+          minimum: 1
+          maximum: 64
+          description: Queues of the Proxmox VE network interface, one per vCPU at most. Unset, it has one.
         addresses:
           type: array
           minItems: 1
@@ -144,6 +162,27 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
           items:
             type: string
             minLength: 1
+        searchDomains:
+          type: array
+          # glibc's resolver reads six.
+          maxItems: 6
+          description: >-
+            Domains the nodes and the pods append to a name without dots, so that "git" finds
+            git.example.com.
+          items:
+            type: string
+            maxLength: 253
+            pattern: '^([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?$'
+        ntp:
+          type: array
+          maxItems: 8
+          description: >-
+            NTP servers the nodes keep their clocks with, as host names or IP addresses, on UDP 123.
+            Unset, the nodes use their image's own public servers (Talos's time.cloudflare.com).
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
 - name: storage
   required: true
   schema:
@@ -163,6 +202,21 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
       items:
         type: string
         minLength: 1
+- name: hostOutageGraceMinutes
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: integer
+      default: 30
+      minimum: 0
+      maximum: 10080
+      description: >-
+        Minutes a machine whose Proxmox VE node is offline or in maintenance, or whose storage is
+        unavailable, is kept from replacement. After that it is replaced. 0 waits for the host for
+        as long as it is away.
+      x-kubernetes-validations:
+        - rule: self == 0 || self >= 5
+          message: The grace is 0, for no ceiling, or at least 5 minutes.
 - name: proxmoxHA
   required: false
   schema:
@@ -240,16 +294,43 @@ end-to-end tests' working sets once every add-on has started, with room to grow.
 Prometheus, Alertmanager, Grafana, node-exporter and the metrics proxies, at 1.5 GiB as Prometheus
 grows while it fills its first two-hour block; Rancher's own pod peaks at about 1.6 GiB as it
 first starts, and with a cluster registered Rancher, Fleet and their controllers hold about 1.2 GiB.
-Istio uses about 100 MiB, but istiod and the ztunnel beside it ask for 384 MiB, which the node they
-share has to have; the clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
-controller and a node's speaker, or kube-vip and its cloud provider. Logs are Loki, which asks for
+Istio uses about 100 MiB, but istiod, the ztunnel and the CNI agent beside them ask for 484 MiB,
+which the node they share has to have. The clustermesh-apiserver uses about 50 MiB. The load balancer is MetalLB's
+controller and a node's speaker, or kube-vip and its cloud provider. In BGP mode frr-k8s adds the
+requests of its controller, frr and exporters, and of the status cleaner (176 MiB). Logs are Loki, which asks for
 256 MiB, the Alloy that reads the events and a node's Alloy. Backups are Velero's server and a
 node's agent, which grow while a backup reads a volume. Argo CD is its application, ApplicationSet
 and repository controllers, its server and Redis; Flux is the operator and Flux's four controllers.
 Kyverno's four controllers, the admission controller twice, hold about 520 MiB.
 */}}
 {{- define "kubehenge.addonMemory" -}}
-kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":640,"istio":384,"clusterMesh":128,"loadBalancer":128,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
+kubehenge.dev/addon-memory: '{"headlamp":64,"monitoring":1536,"logs":512,"backups":384,"kyverno":640,"istio":488,"clusterMesh":128,"loadBalancer":128,"loadBalancerBGP":176,"certManager":192,"rancher":2048,"rancherAgent":512,"argocd":512,"flux":384}'
+{{- end -}}
+
+{{/*
+The memory, in MiB, each add-on's pods request in a cluster, the same for every distribution: what
+its charts ask for at their pinned versions with the values Kubehenge gives them, counting the pods
+that run once and one node's share of those on every node, as the CPU figures count. The scheduler
+places a pod only on a node with that much memory not yet requested, however little its pods use.
+Headlamp asks for 64 MiB. Monitoring is Prometheus's 256 MiB, its operator's 64 MiB, Grafana's
+128 MiB with two sidecars at 32 MiB, Prometheus's and Alertmanager's reloaders at 16 MiB,
+Alertmanager's 32 MiB, kube-state-metrics' 64 MiB, a node's node-exporter at 32 MiB with its 16 MiB
+proxy, and four metrics proxies at 16 MiB, a node's and a control plane's three. Logs are Loki's
+256 MiB with its 16 MiB proxy, the events' Alloy at 64 MiB and a node's at 128 MiB. Backups are
+Velero's 128 MiB and a node's agent at 64 MiB. Kyverno's admission controller asks for 128 MiB
+twice and its other three controllers for 64 MiB each. Istio is istiod's 256 MiB, a node's ztunnel
+at 128 MiB and its CNI agent at the chart's 100 MiB. Cluster Mesh is the clustermesh-apiserver's
+three containers, 128 MiB together. The load balancer is MetalLB's controller and a node's speaker
+at 64 MiB each, more than kube-vip's. cert-manager is its controller and CA injector at 64 MiB and
+its webhook at 32 MiB. Rancher is Rancher's 128 MiB, its webhook's 64 MiB, Turtles' controller at
+the chart's 128 MiB and Fleet's five containers at 64 MiB each. Rancher's agent is the cluster
+agent, Fleet's agent and the webhook at 64 MiB each. Argo CD is its application controller's
+128 MiB, its server, repository server and ApplicationSet controller at 64 MiB each and Redis at
+32 MiB. Flux is its operator and its four controllers at 64 MiB each. In BGP mode frr-k8s adds its
+controller, frr and exporters, and the status cleaner, 176 MiB together.
+*/}}
+{{- define "kubehenge.addonMemoryRequests" -}}
+kubehenge.dev/addon-memory-requests: '{"headlamp":64,"monitoring":752,"logs":464,"backups":192,"kyverno":448,"istio":484,"clusterMesh":128,"loadBalancer":128,"loadBalancerBGP":176,"certManager":160,"rancher":640,"rancherAgent":192,"argocd":352,"flux":320}'
 {{- end -}}
 
 {{/*
@@ -278,7 +359,10 @@ node's agent's 20m. Monitoring is Prometheus's 100m and its operator's 50m, Graf
 two sidecars, Prometheus's and Alertmanager's reloaders, Alertmanager, kube-state-metrics, and a
 node's node-exporter and its proxy at 10m each, and its metrics proxies at 5m each, a node's and a
 control plane's three. The load balancer is kube-vip's cloud provider at 50m and a node's kube-vip
-at 10m, more than MetalLB's controller and a node's speaker at 10m each. Flux is its operator and
+at 10m, more than MetalLB's controller and a node's speaker at 10m each. In BGP mode, MetalLB's
+frr-k8s adds 45m: a node's controller, frr and reloader at 10m, 10m and 5m, its two exporters at 5m
+each, and the status cleaner at 10m (pkg/provisioner's frrK8sRequests, which the pinned chart leaves
+without any). Flux is its operator and
 four controllers at 10m each, Headlamp 10m. cert-manager is its controller, webhook and CA injector
 at 10m each; Argo CD its application controller's 50m and its server, repository server,
 ApplicationSet controller and Redis at 10m each; the clustermesh-apiserver its three containers at
@@ -287,7 +371,7 @@ containers at 10m each; Rancher's agent a node's cluster agent, Fleet's agent an
 10m each. The Cluster API controller Turtles runs and the system upgrade controller ask for none.
 */}}
 {{- define "kubehenge.addonCPU" -}}
-kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":300,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":30,"loadBalancer":60,"certManager":30,"rancher":120,"rancherAgent":30,"argocd":90,"flux":50}'
+kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":300,"logs":75,"backups":70,"kyverno":500,"istio":400,"clusterMesh":30,"loadBalancer":60,"loadBalancerBGP":45,"certManager":30,"rancher":120,"rancherAgent":30,"argocd":90,"flux":50}'
 {{- end -}}
 
 {{/*
@@ -366,6 +450,127 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: >-
             Secret in the monitoring namespace holding the certificate for hostname. When unset, the
             certificates add-on's while it is on, else the ingress controller's own default.
+        alertReceivers:
+          type: array
+          maxItems: 4
+          description: >-
+            Where Alertmanager sends what fires, each type once. Every receiver gets every alert but
+            the Watchdog's. The secret of each is a credential stored for the cluster, never a value
+            here: alerts-email (the password), alerts-webhook (the URL, and a bearer token if the
+            endpoint wants one), alerts-slack and alerts-teams (the webhook URL). A receiver whose
+            credential is not stored waits and sends nothing.
+          x-kubernetes-validations:
+            - rule: "self.all(a, self.filter(b, b.type == a.type).size() == 1)"
+              message: Each receiver type can be given once.
+          items:
+            type: object
+            required: [type]
+            properties:
+              type:
+                type: string
+                enum: [email, webhook, slack, teams]
+                description: >-
+                  email, webhook, slack (Slack and the services that take its webhook format) or
+                  teams (Microsoft Teams and the services that take its Workflows webhook).
+              smarthost:
+                type: string
+                pattern: "^[^\\s:]+:[0-9]{1,5}$"
+                description: The mail server to send through, as host:port. Email only.
+              from:
+                type: string
+                minLength: 3
+                maxLength: 254
+                description: The sender's address. Email only.
+              to:
+                type: array
+                minItems: 1
+                maxItems: 20
+                description: The addresses that get the mail. Email only.
+                items:
+                  type: string
+                  minLength: 3
+                  maxLength: 254
+              username:
+                type: string
+                minLength: 1
+                maxLength: 254
+                description: >-
+                  The user the mail server signs in. Its password is the alerts-email credential.
+                  Without one the server takes the mail without signing in. Email only.
+              requireTLS:
+                type: boolean
+                description: Refuse a mail server that cannot start TLS. On unless set. Email only.
+              channel:
+                type: string
+                minLength: 1
+                maxLength: 80
+                description: The channel to post to, where the webhook's own is not wanted. Slack only.
+            x-kubernetes-validations:
+              - rule: "self.type != 'email' || (has(self.smarthost) && has(self.from) && has(self.to))"
+                message: An email receiver needs smarthost, from and to.
+              - rule: "self.type == 'email' || !(has(self.smarthost) || has(self.from) || has(self.to) || has(self.username) || has(self.requireTLS))"
+                message: Only an email receiver takes smarthost, from, to, username and requireTLS.
+              - rule: "self.type == 'slack' || !has(self.channel)"
+                message: Only a Slack receiver takes a channel.
+        remoteWrite:
+          type: object
+          required: [url]
+          description: >-
+            Another store Prometheus sends every sample to (Prometheus remote write: Mimir, Thanos,
+            VictoriaMetrics, Grafana Cloud and the like). With auth basic or bearer, the secret is the
+            remote-write credential stored for the cluster.
+          properties:
+            url:
+              type: string
+              maxLength: 2048
+              pattern: "^https?://[^/@\\s]+(/\\S*)?$"
+              description: The store's write address, without a user name or password.
+            auth:
+              type: string
+              enum: [none, basic, bearer]
+              default: none
+              description: basic sends username and the credential as the password. bearer sends the credential as a token.
+            username:
+              type: string
+              minLength: 1
+              maxLength: 254
+              description: The user name for basic authentication.
+          x-kubernetes-validations:
+            - rule: "self.auth != 'basic' || has(self.username)"
+              message: Basic authentication needs a username.
+            - rule: "self.auth == 'basic' || !has(self.username)"
+              message: Only basic authentication takes a username.
+        externalAlertmanagers:
+          type: object
+          required: [urls]
+          description: >-
+            Alertmanagers besides the cluster's own that Prometheus sends its alerts to. With auth
+            basic or bearer, the secret is the external-alertmanager credential stored for the cluster.
+          properties:
+            urls:
+              type: array
+              minItems: 1
+              maxItems: 8
+              description: The Alertmanagers' addresses, without a user name or password.
+              items:
+                type: string
+                maxLength: 2048
+                pattern: "^https?://[^/@\\s]+(/\\S*)?$"
+            auth:
+              type: string
+              enum: [none, basic, bearer]
+              default: none
+              description: basic sends username and the credential as the password. bearer sends the credential as a token.
+            username:
+              type: string
+              minLength: 1
+              maxLength: 254
+              description: The user name for basic authentication.
+          x-kubernetes-validations:
+            - rule: "self.auth != 'basic' || has(self.username)"
+              message: Basic authentication needs a username.
+            - rule: "self.auth == 'basic' || !has(self.username)"
+              message: Only basic authentication takes a username.
 - name: logs
   required: false
   schema:
@@ -408,6 +613,52 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           x-kubernetes-validations:
             - rule: self >= oldSelf
               message: Loki's volume only grows.
+        outputs:
+          type: array
+          maxItems: 4
+          description: >-
+            Destinations every log also goes to, beside Loki, which stays on with logs. Each
+            output is a syslog collector, an OTLP/HTTP receiver or another Loki, and takes all
+            streams or some. Its user name and password or token are a credential stored for the
+            cluster under the purpose log-<name>, never a value here.
+          items:
+            type: object
+            required: [name, kind, endpoint]
+            properties:
+              name:
+                type: string
+                minLength: 1
+                maxLength: 20
+                pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                description: Labels the output and its credential, log-<name>.
+              kind:
+                type: string
+                enum: [syslog, otlp, loki]
+              endpoint:
+                type: string
+                minLength: 1
+                maxLength: 2048
+                description: >-
+                  syslog: tcp://, tls:// or udp:// with host and port. otlp: the receiver's
+                  http(s) base URL. loki: the whole push URL. No user, query or fragment.
+              caBundle:
+                type: string
+                maxLength: 16384
+                description: PEM certificates that sign the endpoint's certificate, for a private CA.
+              streams:
+                type: array
+                maxItems: 4
+                description: Some of the logs to send. None sends all.
+                items:
+                  type: string
+                  enum: [containers, events, nodes, audit]
+              auth:
+                type: string
+                enum: [none, basic, bearer]
+                default: none
+                description: >-
+                  basic reads username and password, bearer a token, from the stored credential.
+                  Not for syslog.
 - name: backups
   required: false
   schema:
@@ -563,6 +814,36 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             The level Kyverno's Pod Security Standards policies enforce, in every namespace and
             whatever its labels say, with a policy report of what falls short; off leaves Kyverno
             out of the cluster.
+- name: useExisting
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        Installs the cluster already runs that the add-ons use instead of their own, so that they
+        do not collide with the company's. Chosen when the cluster is created and fixed after.
+      properties:
+        certManager:
+          type: boolean
+          default: false
+          description: >-
+            Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its
+            issuers and certificates in it. Rancher, monitoring and certificates need cert-manager
+            0.15 or newer with its custom resource definitions installed.
+- name: namespaceLabels
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      maxProperties: 20
+      description: >-
+        Labels put on the namespaces the add-ons install into, from before the first pod, so that
+        the cluster's admission policy admits them. A policy that requires labels on namespaces,
+        or sets Pod Security levels by label, reads them. The namespaces are listed in the
+        documentation.
+      additionalProperties:
+        type: string
+        maxLength: 63
 - name: istio
   required: false
   schema:
@@ -605,7 +886,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       type: object
       description: >-
         Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes'
-        network. One node at a time answers for each address, and another takes over when it fails.
+        network or, in mode bgp, a routed one. One node at a time answers for each address in
+        mode l2, and another takes over when it fails.
         Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for
         them on every node's own address.
       properties:
@@ -620,21 +902,71 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             MetalLB, or kube-vip, which also holds the cluster's API address. Switching replaces the
             one with the other; Services keep their addresses where the new one can, and take new
             ones from the range otherwise.
+        mode:
+          type: string
+          enum: [l2, bgp]
+          default: l2
+          description: >-
+            l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the
+            nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and
+            switches that drop such ARP, and also announces the control-plane endpoint through
+            kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and
+            the routers have to accept a session from every node.
+        bgp:
+          type: object
+          description: The cluster's autonomous system and the routers every node peers with, for mode bgp.
+          properties:
+            asn:
+              type: integer
+              format: int64
+              minimum: 1
+              maximum: 4294967295
+              description: The cluster's own autonomous system number.
+            peers:
+              type: array
+              minItems: 1
+              maxItems: 16
+              description: >-
+                Routers that accept a session from every node: the control planes for the
+                control-plane endpoint, the workers for the Services.
+              items:
+                type: object
+                properties:
+                  address:
+                    type: string
+                    format: ipv4
+                    description: The router's IPv4 address.
+                  asn:
+                    type: integer
+                    format: int64
+                    minimum: 1
+                    maximum: 4294967295
+                    description: The router's autonomous system number.
+                required: [address, asn]
+            authenticated:
+              type: boolean
+              default: false
+              description: >-
+                Sign every session with the password in the cluster's bgp credential, which the
+                routers have to be set to expect. The password is kept in a Secret, never here.
+          required: [asn, peers]
         addresses:
           type: array
           minItems: 1
           description: >-
             Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in
-            CIDR notation or single addresses: unused addresses on the nodes' network, apart from
-            network.addresses, the control-plane endpoint, the gateway, the network's own and
-            broadcast addresses and other clusters' addresses there. Services outside a changed
-            range take new addresses from it.
+            CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in
+            bgp any routed ones, apart from network.addresses, the control-plane endpoint, the
+            gateway, the network's own and broadcast addresses and other clusters' addresses
+            there. Services outside a changed range take new addresses from it.
           items:
             type: string
             minLength: 1
       x-kubernetes-validations:
         - rule: "!self.enabled || has(self.addresses)"
           message: A load balancer needs addresses.
+        - rule: "self.mode != 'bgp' || has(self.bgp)"
+          message: Mode bgp needs the bgp settings.
 - name: rancher
   required: false
   schema:
@@ -681,13 +1013,35 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           default: false
         issuer:
           type: string
-          enum: [acme-dns01, acme-http01, ca]
+          enum: [acme-dns01, acme-http01, ca, external]
           default: acme-dns01
           description: >-
             Where certificates come from: an ACME server such as Let's Encrypt, proving the names
             through the DNS provider's API (acme-dns01) or over HTTP on port 80 (acme-http01, which
-            gives no default certificate), or a CA of the cluster's own (ca), whose certificate the
-            interface hands out for clients to trust.
+            gives no default certificate), a CA of the cluster's own (ca), whose certificate the
+            interface hands out for clients to trust, or an issuer you run in the cluster
+            (external), such as Vault's or an existing ClusterIssuer, named by issuerName.
+        issuerName:
+          type: string
+          maxLength: 253
+          pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+          description: >-
+            With the issuer external: the issuer in the workload cluster that signs every
+            certificate. Kubehenge makes none of its own.
+        issuerKind:
+          type: string
+          maxLength: 63
+          pattern: "^[A-Z][A-Za-z0-9]*$"
+          description: >-
+            With the issuer external: the issuer's kind, ClusterIssuer when unset. An Issuer serves
+            one namespace, so it cannot be named here.
+        issuerGroup:
+          type: string
+          maxLength: 253
+          pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+          description: >-
+            With the issuer external: the issuer's API group, cert-manager.io when unset, for an
+            external issuer's own kind.
         domain:
           type: string
           format: hostname
@@ -716,6 +1070,19 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
               description: >-
                 PEM of the CA that signed the ACME server's own certificate, for a server whose
                 certificate the system's CAs do not vouch for.
+            externalAccountBinding:
+              type: object
+              required: [keyID]
+              description: >-
+                For an ACME server that requires an account tied to one its operator made (step-ca
+                with a provisioner key, Sectigo, DigiCert, ZeroSSL, Google Trust Services). The
+                HMAC key is the cluster's acme-eab credential.
+              properties:
+                keyID:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                  description: The key ID the server gave you.
           x-kubernetes-validations:
             - rule: "!has(self.server) || !self.staging"
               message: Staging is Let's Encrypt's own directory; it cannot go with another server.
@@ -844,6 +1211,16 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           message: DNS-01 and the cluster's CA need a domain.
         - rule: "!self.enabled || self.issuer != 'acme-dns01' || (has(self.dns01) && has(self.dns01.provider))"
           message: DNS-01 needs a DNS provider.
+        - rule: "!self.enabled || self.issuer == 'external' || (!has(self.issuerName) && !has(self.issuerKind) && !has(self.issuerGroup))"
+          message: The issuer's name, kind and group go with the issuer external.
+        - rule: "!self.enabled || self.issuer != 'external' || has(self.issuerName)"
+          message: An issuer of your own needs its name.
+        - rule: "!self.enabled || self.issuer != 'external' || (!has(self.acme) && !has(self.dns01))"
+          message: An issuer of your own takes no ACME or DNS-01 settings.
+        - rule: "!self.enabled || self.issuer != 'ca' || !has(self.acme) || !has(self.acme.externalAccountBinding)"
+          message: An external account binding goes with an ACME issuer.
+        - rule: "!self.enabled || !has(self.issuerKind) || self.issuerKind != 'Issuer' || (has(self.issuerGroup) && self.issuerGroup != 'cert-manager.io')"
+          message: An Issuer serves one namespace, so name a ClusterIssuer.
 - name: gitops
   required: false
   schema:
@@ -889,7 +1266,18 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
               description: >-
                 The directory synced, with plain manifests or a kustomization; the repository's
                 root by default.
+            caBundle:
+              type: string
+              maxLength: 65536
+              description: >-
+                The certificate authority, in PEM, of a repository server whose certificate the
+                usual authorities do not sign. Argo CD takes it for the server's host, Flux in its
+                pull Secret as ca.crt.
           x-kubernetes-validations:
+            - rule: "!has(self.caBundle) || self.url.startsWith('https://')"
+              message: A certificate authority is for a repository read over https://.
+            - rule: "!has(self.caBundle) || self.caBundle.contains('-----BEGIN CERTIFICATE-----')"
+              message: The authority is one or more PEM certificates.
             - rule: "!self.url.matches('^https://[^/]*@')"
               message: A token goes into the cluster's gitops credential, not into the URL.
             - rule: "!has(self.path) || !self.path.matches('(^|/)[.][.](/|$)')"
@@ -990,6 +1378,41 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           message: The web interface is Flux's, and needs a hostname.
         - rule: "!has(self.ui) || !self.ui || (has(self.signIn) && has(self.signIn.clientSecret) && self.signIn.clientSecret != 'none')"
           message: Flux's web interface signs in with a client secret.
+        - rule: "!has(self.repository) || !has(self.repository.caBundle) || !(has(self.auth) && self.auth == 'existingSecret' && has(self.engine) && self.engine == 'flux')"
+          message: Flux reads the authority from ca.crt in your own Secret.
+- name: egressProxy
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      description: >-
+        The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero,
+        Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has
+        one without credentials in its address. The cluster's pod and service ranges, .svc and
+        .cluster.local always bypass it.
+      properties:
+        url:
+          type: string
+          maxLength: 2048
+          pattern: "^https?://[^\\s/@?#]+/?$"
+          description: >-
+            The proxy's address, as http://host:port, without credentials, since add-on settings
+            are plain text.
+        noProxy:
+          type: array
+          maxItems: 64
+          description: Hosts, domains and networks that bypass the proxy.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
+            pattern: "^[^,\\s]+$"
+        disabled:
+          type: boolean
+          description: Go direct, whatever the management side uses.
+      x-kubernetes-validations:
+        - rule: "!has(self.disabled) || !self.disabled || !has(self.url)"
+          message: A cluster that goes direct names no proxy.
 {{- end -}}
 
 {{/*
@@ -1129,6 +1552,120 @@ Proxmox VE HA take it from there. Applied before the distribution starts with sy
     kernel.keys.root_maxbytes=25000000
 {{- end -}}
 
+{{- define "kubehenge.searchDomainsEnabled" -}}
+{{ "{{ with .network }}{{ if .searchDomains }}true{{ end }}{{ end }}" | quote }}
+{{- end -}}
+
+{{/*
+Gives a kubeadm, RKE2 or k3s node the cluster's search domains (network.searchDomains), which
+capmox's network configuration has no field for. They go onto the node's NetworkManager connection,
+so that the node and, through the kubelet's resolv.conf, its pods resolve a short name. Call with
+"distribution" (kubeadm, rke2 or k3s). The domains are DNS names by the variable's schema, so they
+carry nothing a shell would read.
+*/}}
+{{- define "kubehenge.searchDomainsPatch" -}}
+{{- $targets := dict
+  "kubeadm" (dict "controlPlane" "KubeadmControlPlaneTemplate" "worker" "KubeadmConfigTemplate" "spec" "/spec/template/spec/kubeadmConfigSpec" "commands" "preKubeadmCommands")
+  "rke2" (dict "controlPlane" "RKE2ControlPlaneTemplate" "worker" "RKE2ConfigTemplate" "spec" "/spec/template/spec" "commands" "preRKE2Commands")
+  "k3s" (dict "controlPlane" "KThreesControlPlaneTemplate" "worker" "KThreesConfigTemplate" "spec" "/spec/template/spec/kthreesConfigSpec" "commands" "preK3sCommands") -}}
+{{- $target := get $targets .distribution -}}
+{{- $api := dict "controlPlane" "controlplane.cluster.x-k8s.io/v1beta2" "worker" "bootstrap.cluster.x-k8s.io/v1beta2" -}}
+{{- $selector := dict "controlPlane" (dict "controlPlane" true) "worker" (dict "machineDeploymentClass" (dict "names" (list "worker"))) -}}
+- name: {{ .distribution }}-search-domains
+  enabledIf: {{ include "kubehenge.searchDomainsEnabled" . }}
+  definitions:
+    {{- range $role := list "controlPlane" "worker" }}
+    {{- $spec := ternary $target.spec "/spec/template/spec" (eq $role "controlPlane") }}
+    - selector:
+        apiVersion: {{ get $api $role }}
+        kind: {{ get $target $role }}
+        matchResources:
+          {{- toYaml (get $selector $role) | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: {{ $spec }}/files/-
+          valueFrom:
+            template: |
+              path: /etc/kubehenge/search-domains.sh
+              owner: root:root
+              permissions: "0700"
+              content: |
+                #!/bin/sh
+                set -eu
+                nmcli -t -f UUID,DEVICE,TYPE connection show --active | while IFS=: read -r uuid device type; do
+                  [ "$type" = 802-3-ethernet ] || continue
+                  nmcli connection modify "$uuid" ipv4.dns-search "{{ `{{ join " " .network.searchDomains }}` }}"
+                  nmcli device reapply "$device"
+                done
+        - op: add
+          path: {{ $spec }}/{{ $target.commands }}/-
+          value: /etc/kubehenge/search-domains.sh
+    {{- end }}
+{{- end -}}
+
+{{/*
+The script every kubeadm, RKE2 and k3s node runs first: the bootstrap goes on only once chrony has set
+the clock (files/wait-clock.sh). The command list's first entry is kubehenge.clockCommand.
+*/}}
+{{- define "kubehenge.clockFile" -}}
+- path: /etc/kubehenge/wait-clock.sh
+  owner: root:root
+  permissions: "0700"
+  content: |
+    {{- .Files.Get "files/wait-clock.sh" | nindent 4 }}
+{{- end -}}
+
+{{/* `|| exit 1` ends the whole cloud-init command script, so that nothing after it runs. */}}
+{{- define "kubehenge.clockCommand" -}}
+/etc/kubehenge/wait-clock.sh || exit 1
+{{- end -}}
+
+{{/*
+The chrony drop-in of a kubeadm, RKE2 or k3s cluster, from the network variable's ntp (call with
+"kubeadm", "rke2" or "k3s"). It steps the clock at start-up whatever the image's chrony.conf says,
+and adds the cluster's servers to the image's own.
+
+It also gives chrony the hypervisor's clock (the ptp_kvm module, loaded at boot) as a source, so that a
+closed network, with UDP 123 blocked and no internal time server, still syncs. The source reports
+stratum 5, which a time server of stratum 1 to 4 beats wherever it answers: the host clock is the
+fallback only. Talos nodes get the same clock as /dev/ptp0 (talos.yaml).
+*/}}
+{{- define "kubehenge.clockPatches" -}}
+{{- $targets := dict
+  "kubeadm" (list
+    (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "KubeadmControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/kubeadmConfigSpec/files/-")
+    (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KubeadmConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-"))
+  "rke2" (list
+    (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "RKE2ControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/files/-")
+    (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "RKE2ConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-"))
+  "k3s" (list
+    (dict "api" "controlplane.cluster.x-k8s.io/v1beta2" "kind" "KThreesControlPlaneTemplate" "match" (dict "controlPlane" true) "path" "/spec/template/spec/kthreesConfigSpec/files/-")
+    (dict "api" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KThreesConfigTemplate" "match" (dict "machineDeploymentClass" (dict "names" (list "worker"))) "path" "/spec/template/spec/files/-")) }}
+{{- $drop := `{{ $c := "makestep 1.0 3\n" }}{{ with .network }}{{ range .ntp }}{{ $c = printf "%sserver %s iburst\n" $c . }}{{ end }}{{ end }}{{ $c = printf "%srefclock PHC /dev/ptp0 poll 2 stratum 5 refid KVM\n" $c }}{{ dict "path" "/etc/chrony.d/50-kubehenge.conf" "owner" "root:root" "permissions" "0644" "content" $c | toJson }}` }}
+- name: {{ . }}-clock
+  definitions:
+    {{- range get $targets . }}
+    - selector:
+        apiVersion: {{ .api }}
+        kind: {{ .kind }}
+        matchResources:
+          {{- toYaml .match | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: {{ .path }}
+          valueFrom:
+            template: {{ $drop | quote }}
+        - op: add
+          path: {{ .path }}
+          value:
+            path: /etc/modules-load.d/50-kubehenge-ptp.conf
+            owner: root:root
+            permissions: "0644"
+            content: |
+              ptp_kvm
+    {{- end }}
+{{- end -}}
+
 {{/*
 The Go memory limit of a control plane's API server, as a Cluster API template over the cluster's
 variables (.share is the percentage of the control plane's memory). Go collects its heap only once
@@ -1241,11 +1778,60 @@ streaming sessions that end when idle. Each class adds its distribution's own on
         runs under the runtime's default seccomp profile unless it asks for another, and exec,
         attach and port-forward sessions end after five idle minutes. RKE2 also runs its own CIS
         profile, under which pods in kube-system, kube-public and default take connections only
-        from their own namespace, DNS and a few of RKE2's own services aside. Fixed once the
-        cluster exists.
+        from their own namespace, DNS and a few of RKE2's own services aside. May be switched on
+        after creation, which replaces every node, and never off again.
       x-kubernetes-validations:
-        - rule: self == oldSelf
-          message: CIS hardening is chosen when the cluster is created and cannot be changed
+        - rule: "!oldSelf || self"
+          message: CIS hardening cannot be switched off once it is on. Pod Security Admission, seccomp and RKE2's network policies stay until the cluster is rebuilt.
+{{- end -}}
+
+{{/*
+etcd's database size limit, and the compaction etcd runs itself beside the API server's. None of
+the distributions sets either, so each runs etcd's own 2 GiB limit, after which etcd refuses every
+write. 8 GiB is the most etcd's documentation suggests.
+*/}}
+{{- define "kubehenge.etcdVariable" -}}
+- name: etcd
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      default: {}
+      description: >-
+        How much the control plane's etcd database may grow before etcd refuses writes. Kubehenge's
+        controller shows the database size, and defragments the members one at a time inside the
+        upgrade window, to give the space back.
+      properties:
+        quotaGiB:
+          type: integer
+          minimum: 2
+          maximum: 8
+          default: 8
+          description: The most one member's database may reach, in GiB. It can be raised, not lowered.
+      x-kubernetes-validations:
+        - rule: "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB >= oldSelf.quotaGiB"
+          message: The etcd limit can be raised, not lowered, since a database above it stops accepting writes
+{{- end -}}
+
+{{/*
+The quota in bytes, as Cluster API renders it from the cluster's variables.
+*/}}
+{{- define "kubehenge.etcdQuotaBytes" -}}
+{{ `{{ printf "%d" (mul (dig "etcd" "quotaGiB" 8 .) 1073741824) }}` }}
+{{- end -}}
+
+{{/*
+The drop-in that gives RKE2's or k3s's etcd the quota and the periodic compaction.
+*/}}
+{{- define "kubehenge.etcdFile" -}}
+path: {{ .path }}
+owner: root:root
+permissions: "0600"
+content: |
+  etcd-arg+:
+    - quota-backend-bytes={{ include "kubehenge.etcdQuotaBytes" . }}
+    - auto-compaction-mode=periodic
+    - auto-compaction-retention=1h
 {{- end -}}
 
 {{- define "kubehenge.cisEnabled" -}}
@@ -1283,8 +1869,177 @@ The kubelet settings cis adds, as kubelet flags.
 {{- end -}}
 
 {{/*
+The labels and taints the nodes of a worker pool register with, set through the kubelet (Talos:
+its node configuration), so that a replaced node comes back with them. Cluster API syncs only the
+labels of its own domains from a MachineDeployment to its nodes, so a plain label such as team=a
+has to go through the kubelet. A pool may carry its own value, which replaces the cluster's.
+Both lists hold a key once: Talos keeps a taint per key.
+The kubelet refuses to set labels in kubernetes.io and k8s.io but for its own namespaces and a few
+standard keys (k8s.io/kubelet/pkg/apis, IsKubeletLabel); the API server's NodeRestriction
+admission refuses the same.
+*/}}
+{{- define "kubehenge.workerNodesVariable" -}}
+{{- $name := "[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?" }}
+{{- $key := printf "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?%s$" $name }}
+{{- $value := printf "^(%s)?$" $name }}
+- name: workerNodes
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      default: {}
+      description: >-
+        Labels and taints the nodes of the worker pools register with, kept when a node is
+        replaced. A worker pool may set its own, which replaces these. Changing them replaces the
+        pool's nodes, one at a time.
+      properties:
+        labels:
+          type: array
+          maxItems: 50
+          x-kubernetes-validations:
+            - rule: self.all(x, self.exists_one(y, x.key == y.key))
+              message: Each label key once.
+          description: Node labels. Each key once.
+          items:
+            type: object
+            required: [key]
+            properties:
+              key:
+                type: string
+                maxLength: 317
+                pattern: {{ $key | quote }}
+              value:
+                type: string
+                default: ""
+                maxLength: 63
+                pattern: {{ $value | quote }}
+            x-kubernetes-validations:
+              - rule: self.key.split('/')[size(self.key.split('/')) - 1].size() <= 63
+                message: A label key's name is at most 63 characters.
+              - rule: "!self.key.contains('/') || self.key.split('/')[0].size() <= 253"
+                message: A label key's prefix is at most 253 characters.
+              - rule: >-
+                  !self.key.contains('/') ||
+                  !(self.key.split('/')[0] in ['kubernetes.io', 'k8s.io'] ||
+                  self.key.split('/')[0].endsWith('.kubernetes.io') ||
+                  self.key.split('/')[0].endsWith('.k8s.io')) ||
+                  self.key in ['kubernetes.io/hostname', 'kubernetes.io/os', 'kubernetes.io/arch',
+                  'beta.kubernetes.io/os', 'beta.kubernetes.io/arch', 'beta.kubernetes.io/instance-type',
+                  'node.kubernetes.io/instance-type', 'topology.kubernetes.io/zone', 'topology.kubernetes.io/region',
+                  'failure-domain.beta.kubernetes.io/zone', 'failure-domain.beta.kubernetes.io/region'] ||
+                  self.key.split('/')[0] in ['kubelet.kubernetes.io', 'node.kubernetes.io'] ||
+                  self.key.split('/')[0].endsWith('.kubelet.kubernetes.io') ||
+                  self.key.split('/')[0].endsWith('.node.kubernetes.io')
+                message: The kubelet refuses to set labels in kubernetes.io and k8s.io, except in kubelet.kubernetes.io and node.kubernetes.io and for its standard keys such as kubernetes.io/os.
+        taints:
+          type: array
+          maxItems: 20
+          x-kubernetes-validations:
+            - rule: self.all(x, self.exists_one(y, x.key == y.key))
+              message: Each taint key once.
+          description: Node taints. Each key once.
+          items:
+            type: object
+            required: [key, effect]
+            properties:
+              key:
+                type: string
+                maxLength: 317
+                pattern: {{ $key | quote }}
+              value:
+                type: string
+                default: ""
+                maxLength: 63
+                pattern: {{ $value | quote }}
+              effect:
+                type: string
+                enum: [NoSchedule, PreferNoSchedule, NoExecute]
+            x-kubernetes-validations:
+              - rule: self.key.split('/')[size(self.key.split('/')) - 1].size() <= 63
+                message: A taint key's name is at most 63 characters.
+              - rule: "!self.key.contains('/') || self.key.split('/')[0].size() <= 253"
+                message: A taint key's prefix is at most 253 characters.
+{{- end -}}
+
+{{/*
+The patches that give the nodes of a worker pool its workerNodes: the kubelet's node-labels and the
+registration taints of the distribution (call with its name, kubeadm, rke2, k3s or talos). A pool's
+own value is among the variables a patch sees for the pool's templates, so the enabledIf holds
+per pool.
+*/}}
+{{- define "kubehenge.workerNodesPatches" -}}
+{{- $labels := `{{ if .workerNodes }}{{ if .workerNodes.labels }}true{{ end }}{{ end }}` }}
+{{- $taints := `{{ if .workerNodes }}{{ if .workerNodes.taints }}true{{ end }}{{ end }}` }}
+{{- $labelList := `{{ $l := list }}{{ range .workerNodes.labels }}{{ $l = append $l (printf "%s=%s" .key (.value | default "")) }}{{ end }}` }}
+{{- $taintList := `{{ $t := list }}{{ range .workerNodes.taints }}{{ $t = append $t (printf "%s=%s:%s" .key (.value | default "") .effect) }}{{ end }}` }}
+{{- $worker := dict "machineDeploymentClass" (dict "names" (list "worker")) }}
+{{- $kinds := dict "kubeadm" "KubeadmConfigTemplate" "rke2" "RKE2ConfigTemplate" "k3s" "KThreesConfigTemplate" "talos" "TalosConfigTemplate" }}
+{{- $api := ternary "bootstrap.cluster.x-k8s.io/v1beta1" "bootstrap.cluster.x-k8s.io/v1beta2" (eq . "talos") }}
+{{- if eq . "talos" }}
+- name: worker-nodes
+  enabledIf: {{ `{{ if .workerNodes }}{{ if or .workerNodes.labels .workerNodes.taints }}true{{ end }}{{ end }}` | quote }}
+  definitions:
+    - selector:
+        apiVersion: {{ $api }}
+        kind: {{ get $kinds . }}
+        matchResources:
+          {{- toYaml $worker | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: /spec/template/spec/strategicPatches/-
+          valueFrom:
+            template: {{ `{{ $l := dict }}{{ range .workerNodes.labels }}{{ $_ := set $l .key (.value | default "") }}{{ end }}{{ $t := dict }}{{ range .workerNodes.taints }}{{ $_ := set $t .key (printf "%s:%s" (.value | default "") .effect) }}{{ end }}{{ dict "apiVersion" "v1alpha1" "kind" "KubeNodeConfig" "labels" $l "taints" $t | toJson | toJson }}` | quote }}
+{{- else }}
+- name: {{ . }}-worker-node-labels
+  enabledIf: {{ $labels | quote }}
+  definitions:
+    - selector:
+        apiVersion: {{ $api }}
+        kind: {{ get $kinds . }}
+        matchResources:
+          {{- toYaml $worker | nindent 10 }}
+      jsonPatches:
+        {{- if eq . "kubeadm" }}
+        - op: add
+          path: /spec/template/spec/joinConfiguration/nodeRegistration/kubeletExtraArgs/-
+          valueFrom:
+            template: |
+              name: node-labels
+              value: "{{ `{{ $l := list }}{{ range .workerNodes.labels }}{{ $l = append $l (printf "%s=%s" .key (.value | default "")) }}{{ end }}{{ join "," $l }}` }}"
+        {{- else }}
+        - op: add
+          path: /spec/template/spec/agentConfig/nodeLabels
+          valueFrom:
+            template: {{ printf "%s{{ toJson $l }}" $labelList | quote }}
+        {{- end }}
+- name: {{ . }}-worker-node-taints
+  enabledIf: {{ $taints | quote }}
+  definitions:
+    - selector:
+        apiVersion: {{ $api }}
+        kind: {{ get $kinds . }}
+        matchResources:
+          {{- toYaml $worker | nindent 10 }}
+      jsonPatches:
+        {{- if eq . "kubeadm" }}
+        - op: add
+          path: /spec/template/spec/joinConfiguration/nodeRegistration/taints
+          valueFrom:
+            template: {{ `{{ toJson .workerNodes.taints }}` | quote }}
+        {{- else }}
+        - op: add
+          path: /spec/template/spec/agentConfig/nodeTaints
+          valueFrom:
+            template: {{ printf "%s{{ toJson $t }}" $taintList | quote }}
+        {{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 The operating system of an RKE2, k3s or kubeadm cluster's nodes. files/node-oses.json lists the node
-OSes Kubehenge builds templates of; a unit test holds it to the families in pkg/templates.
+OSes Kubehenge builds templates of, and those it builds in FIPS mode; a unit test holds it to the
+families in pkg/templates. Given a distribution as noFIPS, the class refuses FIPS mode, as
+pkg/templates.FIPSDistribution does.
 */}}
 {{- define "kubehenge.nodeOSVariable" -}}
 {{- $oses := .Files.Get "files/node-oses.json" | fromJson }}
@@ -1308,9 +2063,21 @@ OSes Kubehenge builds templates of; a unit test holds it to the families in pkg/
         release:
           type: string
           minLength: 1
+        fips:
+          type: boolean
+          description: >-
+            Boot the nodes in FIPS mode, from VM templates of their own: the kernel with fips=1 and
+            every crypto library on the FIPS policy. RKE2 only, whose components are built with a
+            FIPS 140 validated module, and with Canal, its only CNI built so.
       x-kubernetes-validations:
         - rule: "(self.family + '-' + self.release) in {{ toJson $oses.available | replace "\"" "'" }}"
           message: "a release of the family Kubehenge builds templates of: {{ join ", " $oses.available }}"
+        - rule: "!has(self.fips) || !self.fips || (self.family + '-' + self.release + '-fips') in {{ toJson $oses.fips | replace "\"" "'" }}"
+          message: "FIPS mode is built on {{ join ", " $oses.fips }}"
+        {{- with .noFIPS }}
+        - rule: "!has(self.fips) || !self.fips"
+          message: "{{ . }} has no FIPS mode. Choose RKE2 for FIPS mode"
+        {{- end }}
 {{- end -}}
 
 {{/*
@@ -1325,7 +2092,7 @@ reads it.
       type: object
       description: >-
         Upgrade Kubernetes automatically, and move the nodes to new builds of their VM template,
-        inside a maintenance window. Kubehenge's controller takes the newest release the mode
+        inside an upgrade window. Kubehenge's controller takes the newest release the mode
         allows, one minor version at a time and never past the distribution's stable channel, and
         starts only when the cluster is healthy and no rollout is running. A started rollout
         finishes even if the window ends first.
@@ -1475,13 +2242,7 @@ Call with the root context.
           path: /spec/template/spec/network
           valueFrom:
             template: |
-              networkDevices:
-                - name: net0
-                  model: virtio
-                  bridge: {{ "{{ .network.bridge | quote }}" }}
-                  {{- "{{ if .network.vlan }}" | nindent 18 }}
-                  vlan: {{ "{{ .network.vlan }}" }}
-                  {{- "{{ end }}" | nindent 18 }}
+              {{- .Files.Get "files/proxmox-network.tpl" | nindent 14 }}
 - name: proxmox-storage
   definitions:
     - selector:
@@ -1541,6 +2302,23 @@ checks:
 remediation:
   maxInFlight: 1
 {{- end }}
+{{- end -}}
+
+{{/*
+How long a removed machine waits for its node before the deletion goes on without it. Unset, Cluster
+API waits for ever on a disruption budget or a volume that will not detach, and a rollout, a node
+image refresh or a replacement stops there. A cluster overrides each in its topology.
+- Drain: an hour honours a disruption budget as long as GKE does. The pods left are deleted with
+  the machine.
+- Volume detach: 10 minutes outlasts the backup or snapshot lock a VM can hold. The CSI detach
+  fails while it lasts. Cluster API's k3s sample uses 5 minutes.
+- Node deletion: 1 minute for a slow API server. Cluster API's own default is 10 seconds and the
+  k3s sample's 30.
+*/}}
+{{- define "kubehenge.machineDeletion" -}}
+nodeDrainTimeoutSeconds: 3600
+nodeVolumeDetachTimeoutSeconds: 600
+nodeDeletionTimeoutSeconds: 60
 {{- end -}}
 
 {{/*
@@ -1604,9 +2382,18 @@ whichever node leads. Returned as the template of a JSON patch value that adds t
 Call with (dict "root" . "path" <static pod manifest file> "kubeconfig" <admin kubeconfig on the node>).
 */}}
 {{- define "kubehenge.kubeVipFile" -}}
+{{- `{{ $signed := false }}{{ with .loadBalancer }}{{ if eq .mode "bgp" }}{{ $signed = .bgp.authenticated }}{{ end }}{{ end }}` }}
 path: {{ .path }}
 owner: root:root
 permissions: "0600"
+{{- `{{ if $signed }}` }}
+# The routers' password cannot go into a ClusterClass: Kubehenge's controller writes the whole
+# manifest into this Secret, from the cluster's bgp credential.
+contentFrom:
+  secret:
+    name: {{ "{{ .builtin.cluster.name }}" }}-kube-vip
+    key: kube-vip.yaml
+{{- `{{ else }}` }}
 content: |
   apiVersion: v1
   kind: Pod
@@ -1636,7 +2423,20 @@ content: |
           - name: port
             value: "6443"
           - name: vip_arp
+            value: "{{ `{{ with .loadBalancer }}{{ if eq .mode "bgp" }}false{{ else }}true{{ end }}{{ else }}true{{ end }}` }}"
+          {{- `{{ with .loadBalancer }}{{ if eq .mode "bgp" }}` }}
+          # Announced to the routers as a route from the node that leads, from its own address.
+          - name: bgp_enable
             value: "true"
+          - name: bgp_routerid
+            valueFrom:
+              fieldRef:
+                fieldPath: status.hostIP
+          - name: bgp_as
+            value: "{{ `{{ int64 .bgp.asn }}` }}"
+          - name: bgp_peers
+            value: "{{ `{{ range $i, $p := .bgp.peers }}{{ if $i }},{{ end }}{{ $p.address }}:{{ int64 $p.asn }}::false{{ end }}` }}"
+          {{- `{{ end }}{{ end }}` }}
           - name: cp_enable
             value: "true"
           - name: cp_namespace
@@ -1680,4 +2480,47 @@ content: |
         hostPath:
           path: {{ .kubeconfig }}
           type: File
+{{- `{{ end }}` }}
+{{- end -}}
+
+{{/*
+The management side's HTTP(S) proxy, for the pods that download from the internet. The Secret holds
+HTTP_PROXY, HTTPS_PROXY and NO_PROXY (and the lower-case spellings), and ca.crt when the proxy
+re-signs TLS. Go reads SSL_CERT_FILE beside the system's certificate directories, so public hosts
+stay trusted. Call each with the chart's root context.
+*/}}
+{{- define "kubehenge.proxyEnvFrom" -}}
+{{- with .Values.proxy.secret }}
+envFrom:
+  - secretRef:
+      name: {{ . }}
+{{- end }}
+{{- end -}}
+
+{{- define "kubehenge.proxyEnv" -}}
+{{- if and .Values.proxy.secret .Values.proxy.ca }}
+- name: SSL_CERT_FILE
+  value: /etc/kubehenge/proxy/ca.crt
+- name: KUBEHENGE_PROXY_CA_FILE
+  value: /etc/kubehenge/proxy/ca.crt
+{{- end }}
+{{- end -}}
+
+{{- define "kubehenge.proxyMount" -}}
+{{- if and .Values.proxy.secret .Values.proxy.ca }}
+- name: proxy-ca
+  mountPath: /etc/kubehenge/proxy
+  readOnly: true
+{{- end }}
+{{- end -}}
+
+{{- define "kubehenge.proxyVolume" -}}
+{{- if and .Values.proxy.secret .Values.proxy.ca }}
+- name: proxy-ca
+  secret:
+    secretName: {{ .Values.proxy.secret }}
+    items:
+      - key: ca.crt
+        path: ca.crt
+{{- end }}
 {{- end -}}

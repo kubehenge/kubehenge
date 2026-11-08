@@ -83,12 +83,27 @@ export interface ClusterClass {
   noTemplate?: string;
   /** The operating systems the class's nodes may run, in the order to offer them. Absent for Talos. */
   nodeOSes?: NodeOSChoice[];
+  /** The waits the class gives a removed machine's node, for the control planes and for the workers. */
+  controlPlaneTimeouts?: NodeTimeouts;
+  workerTimeouts?: NodeTimeouts;
 }
 
-/** A node OS as a cluster's nodeOS variable names it: a family, such as almalinux, and one of its releases. */
+/**
+ * How long a removed machine waits for its node, in seconds, before the deletion goes on without
+ * it. A timeout that is absent is the class's, and 0 is never.
+ */
+export interface NodeTimeouts {
+  nodeDrainTimeoutSeconds?: number;
+  nodeVolumeDetachTimeoutSeconds?: number;
+  nodeDeletionTimeoutSeconds?: number;
+}
+
+/** A node OS as a cluster's nodeOS variable names it: a family, such as almalinux, one of its releases, and FIPS mode. */
 export interface NodeOSRef {
   family: string;
   release: string;
+  /** Boots the nodes in FIPS mode, from templates of their own. */
+  fips?: boolean;
 }
 
 /** A node OS Kubehenge builds VM templates of. */
@@ -109,6 +124,20 @@ export interface NodeOS extends NodeOSRef {
 export interface NodeOSChoice extends NodeOS {
   /** Why no cluster of the class on it can be built yet: its template is missing. */
   noTemplate?: string;
+}
+
+/** An add-on chart change that waits for the upgrade window. Equal from and to mean new values only. */
+export interface AddonChange {
+  addon: string;
+  chart: string;
+  from: string;
+  to: string;
+}
+
+/** The add-on changes waiting, and when the upgrade window opens (RFC 3339). */
+export interface AddonChanges {
+  opens: string;
+  changes: AddonChange[];
 }
 
 export interface Condition {
@@ -140,6 +169,10 @@ export interface WorkerPool {
   autoscaling?: Autoscaling;
   /** The pool's own size. Unset, it takes the cluster's workerMachine. */
   machine?: MachineSize;
+  /** The pool's own timeouts. Those it lacks are the class's. */
+  timeouts?: NodeTimeouts;
+  /** The pool's own labels and taints, as the workerNodes variable holds them. Unset, it takes the cluster's. */
+  nodes?: unknown;
 }
 
 /** A machine's size, as the controlPlaneMachine and workerMachine variables give it. */
@@ -153,6 +186,32 @@ export interface MachineSize {
 export interface PoolChange {
   replicas?: number;
   machine?: MachineSize | null;
+  /** Replaces all the pool's timeouts. Those left out are the class's. */
+  timeouts?: NodeTimeouts;
+  /** The pool's own labels and taints, or the cluster's with null. */
+  nodes?: NodesVariable | null;
+}
+
+/** The workerNodes variable's value. */
+export interface NodesVariable {
+  labels: { key: string; value: string }[];
+  taints: { key: string; value?: string; effect: string }[];
+}
+
+/** A pod that the restricted Pod Security level would refuse to start. */
+export interface RefusedPod {
+  namespace: string;
+  name: string;
+  reasons: string;
+}
+
+/** The running pods the restricted Pod Security level would refuse. */
+export interface PodSecurityCheck {
+  checked: number;
+  truncated: boolean;
+  refused: RefusedPod[];
+  /** Why nothing was checked. */
+  skipped?: string;
 }
 
 export interface Machine {
@@ -160,6 +219,8 @@ export interface Machine {
   node?: string;
   /** The Proxmox VE node its VM runs on, where the user may see the VM. */
   proxmoxNode?: string;
+  /** Its VM is not among those Proxmox VE lists with a name, because its node dropped out of the statistics. */
+  notReporting?: boolean;
   role: "control-plane" | "worker";
   /** The worker pool a worker belongs to. */
   pool?: string;
@@ -170,6 +231,14 @@ export interface Machine {
   waiting?: string;
   /** Marked for its health check to replace. */
   replacing?: boolean;
+  /** Why replacement is held back for now, such as a Proxmox VE node that reboots. */
+  held?: string;
+  /** When the hold ends whatever the node does. */
+  heldUntil?: string;
+  /** Why a machine that has been deleting for long cannot finish. */
+  stalled?: string;
+  /** Why the last request to forget the machine was refused. */
+  forgetRefused?: string;
   addresses?: string[];
   created: string;
   /** The Talos release its node runs, on a Talos cluster. */
@@ -480,6 +549,8 @@ export interface Cluster {
   controlPlane: Replicas;
   workers: Replicas;
   workerPools: WorkerPool[];
+  /** The control planes' own timeouts. Those absent are the class's. */
+  controlPlaneTimeouts?: NodeTimeouts;
   variables: Record<string, unknown>;
   pool: string;
   allowed: { change: boolean; kubeconfig: boolean };
@@ -496,6 +567,10 @@ export interface Cluster {
   gitops?: GitOpsKeys;
   /** How a Talos cluster's nodes stand with its Talos release. */
   talos?: TalosStatus;
+  /** The add-on chart changes that wait for the upgrade window, while any do. */
+  addonChanges?: AddonChanges;
+  /** The sizes of the etcd databases, once the controller has read them. */
+  etcd?: EtcdSizes;
   /** The last recovery of the control plane from a stalled roll: etcd reset to one machine's own. */
   recovery?: EtcdRestoreStatus;
   /** What the cluster's deletion waits on, while it is being deleted, since deletedAt. */
@@ -525,6 +600,36 @@ export interface TalosStatus {
   upgraded?: string;
   /** The node that failed, as "<node> to <release> at <time>: <why>", which holds the rest. */
   failed?: string;
+  /** Why the next control-plane node waits: its reboot would cost etcd its quorum. */
+  waiting?: string;
+  /** What holds the node under way before its reboot: pods a disruption budget keeps, or StatefulSets short of replicas. */
+  held?: string;
+}
+
+/** One etcd member as the controller last read it. */
+export interface EtcdMember {
+  name: string;
+  leader?: boolean;
+  learner?: boolean;
+  /** The database file's size, and the part of it that holds data, in bytes. */
+  dbSize: number;
+  dbSizeInUse: number;
+  /** The database as a whole percent of the limit, rounded as the warning rounds it. */
+  quotaPercent?: number;
+  alarms?: string[];
+  errors?: string[];
+}
+
+/** What the controller last read of a cluster's etcd members, and its last defragmentation. */
+export interface EtcdSizes {
+  read: string;
+  quotaBytes: number;
+  members: EtcdMember[];
+  error?: string;
+  warning?: string;
+  defrag?: { at: string; members: string[]; error?: string };
+  /** A defragmentation asked for that the controller has not yet run. */
+  requested?: boolean;
 }
 
 /** The Talos releases a cluster can start on, be upgraded to, and have a template made of. */
@@ -543,7 +648,7 @@ export interface TalosReleases {
 
 /** The VM template builds a cluster's nodes are cloned from. */
 export interface NodeImage {
-  /** The nodes move to new builds inside the maintenance window. */
+  /** The nodes move to new builds inside the upgrade window. */
   refreshes: boolean;
   /** The nodes run the newest builds offered by then. */
   since: string;
@@ -628,6 +733,8 @@ export interface Bridge {
   /** The node's own IPv4 address on the bridge, like 192.0.2.5/24, and its gateway, where it has them. */
   cidr?: string;
   gateway?: string;
+  /** The bridge's MTU where a node lists one: the nodes' interface MTU cannot exceed it. */
+  mtu?: number;
   /** The SDN zone of a VNet, which a node's own bridge lacks. */
   zone?: string;
   /** The VNet's display name. */
@@ -652,6 +759,12 @@ export interface CreateCheck {
   manifest: string;
 }
 
+/** NodeDNS is how a Proxmox VE node resolves names: its DNS servers, and its search domain, empty where it has none. */
+export interface NodeDNS {
+  servers: string[];
+  search: string;
+}
+
 export interface ManagementSettings {
   /** Proxmox VE nodes the management cluster's VMs are placed on in turn. */
   nodes: string[];
@@ -659,16 +772,39 @@ export interface ManagementSettings {
   vmDatastore: string;
   bridge: string;
   vlan?: number;
+  /** The management VMs' interface MTU. Absent: the bridge's. */
+  mtu?: number;
   nodeAddresses: string[];
   apiAddress: string;
   gateway: string;
   dnsServers: string[];
+  /** Domains appended to a name without dots, on the nodes and in the clusters' network. */
+  searchDomains?: string[];
   /** NTP servers for the nodes. Unset keeps Talos's default ones. */
   timeServers?: string[];
   workloadDatastores: string[];
   workloadBridges: string[];
   bootstrapDatastore: string;
   registryMirrors?: Record<string, string[]>;
+  /**
+   * Mirrors of the Helm charts by repository host. A mirror serves the same charts under the same
+   * digests. The authority is PEM, for mirrors the usual authorities do not sign.
+   */
+  chartRepositories?: { mirrors?: Record<string, string>; caBundle?: string };
+  /**
+   * The proxy downloads go through. The address has no credentials. The server never sends the
+   * password, only passwordSet. Sent back, an empty password keeps the saved one and clearPassword
+   * removes it.
+   */
+  proxy?: {
+    url: string;
+    user?: string;
+    password?: string;
+    passwordSet?: boolean;
+    clearPassword?: boolean;
+    noProxy?: string[];
+    caBundle?: string;
+  };
   controllerImage?: string;
   podSubnets?: string[];
   serviceSubnets?: string[];
@@ -715,6 +851,8 @@ export interface TemplateRefreshSettings {
   gateway?: string;
   dns?: string[];
   creatorBuilds?: boolean;
+  /** Unset is on. */
+  kubeadmPatches?: boolean;
 }
 
 /** An S3 store clusters back up to, each under a folder of its own beneath the prefix. */
@@ -985,10 +1123,18 @@ export interface Job {
   finished?: string;
   state: "running" | "succeeded" | "failed";
   error?: string;
+  /** Set when the run was refused for a state older than the management cluster's. */
+  stale?: StaleState;
   // Null until the job writes its first line.
   log?: string[] | null;
   /** How many lines the whole log has, when log holds only the last of them. */
   lines?: number;
+}
+
+/** The apply this appliance's state is from, and the one the management cluster is at. */
+export interface StaleState {
+  local: number;
+  cluster: number;
 }
 
 export interface SetupStatus {
@@ -1005,12 +1151,18 @@ export interface SetupStatus {
   credentialsExpire?: string;
   /** The appliance's guest ID in Proxmox VE. For administrators only. */
   applianceVMID?: number;
+  /** The appliance's addresses moved away from those its certificate is for. For administrators only. */
+  addressMoved?: { from: string[]; to: string[] };
+  /** The appliance's disk is at least 80 % full. For administrators only. */
+  diskFull?: { usedPercent: number; freeMiB: number };
   /** The Proxmox VE API's certificate goes unverified (--proxmox-insecure); for administrators only. */
   proxmoxInsecure?: boolean;
   /** An earlier run left its encrypted state, so the setup takes that run's passphrase. */
   resumes?: boolean;
   /** Which release last applied the management cluster, and what applying this one changes. */
   upgrade?: ManagementUpgrade;
+  /** The interface reads every API server's log as it is written. For administrators only. */
+  activityFollows?: boolean;
 }
 
 /** How the management cluster itself is doing. For administrators only. */
@@ -1022,7 +1174,14 @@ export interface ManagementHealth {
   /** Its deployments: Cluster API's providers, Kubehenge's controller and the cluster's own. */
   controllers?: { namespace: string; name: string; ready: number; wanted: number }[];
   /** Whether the controller reaches the Proxmox VE API from inside the cluster. Unset until it has asked. */
-  proxmox?: { ok: boolean; error?: string; checked: string };
+  proxmox?: {
+    ok: boolean;
+    error?: string;
+    blind?: string;
+    /** The tokens that are refused, cannot verify the API's certificate or lack a privilege. */
+    tokens?: { name: string; problem: "Refused" | "Certificate" | "Unreachable" | "Privileges"; message: string }[];
+    checked: string;
+  };
 }
 
 /** What the setup would run into: errors stop it, warnings do not. */
@@ -1059,6 +1218,8 @@ export interface ManagementAutomatic {
   since?: string;
   /** The Proxmox VE user the runs act as. */
   user: string;
+  /** The runs cannot open what was kept, as after a restore, until switched off and on. */
+  keyLost?: boolean;
 }
 
 export type UpgradePolicy = "off" | "patch" | "minor";
@@ -1088,6 +1249,8 @@ export interface VMTemplate {
   built?: string;
   /** The newest build of its template. */
   newest?: boolean;
+  /** Its kernel is older than the previous build's, so no cluster moves to it. */
+  older?: boolean;
   /** The cluster that clones from it, which keeps it from being deleted. */
   inUse?: string;
   /** The operating system its machines run, such as AlmaLinux 10. Absent for a Talos template. */
@@ -1115,14 +1278,42 @@ export interface TemplateRefresh {
   };
 }
 
+/** A template of the pool on a Proxmox VE node that is down, which leaves it out of the list. */
+export interface DownTemplate {
+  vmid: number;
+  node: string;
+  /** Absent where Proxmox VE has no name for a VM on a down node. */
+  name?: string;
+}
+
 export interface Templates {
   templates: VMTemplate[];
+  down?: DownTemplate[];
   /** The last template build. */
   job?: Job;
   /** The weekly build, when it is on. */
   refresh?: TemplateRefresh;
   /** The node OSes templates can be built of, and those not released yet. */
   nodeOSes?: NodeOS[];
+}
+
+/** A release an administrator pinned, or one being checked before it is. */
+export interface ReleasePin {
+  version: string;
+  /** SHA-256 of the release's checksum file. */
+  file: string;
+  /** SHA-256 of its install script. */
+  script: string;
+  by?: string;
+  at?: string;
+  /** A cluster that runs the release, which keeps its pin from being removed. */
+  inUse?: string;
+}
+
+export interface ReleasePins {
+  pins: ReleasePin[];
+  /** Whether this interface can read a release to pin it. */
+  checks: boolean;
 }
 
 /** Whether a cluster creator may have a missing template built, and which builds are under way. */
@@ -1190,6 +1381,9 @@ export interface CreateRequest {
   workerReplicas: number;
   /** Has the cluster autoscaler size the worker pool in place of workerReplicas. */
   workerAutoscaling?: Autoscaling;
+  /** Timeouts for the control planes and for the first worker pool, in place of the class's. */
+  controlPlaneTimeouts?: NodeTimeouts;
+  workerTimeouts?: NodeTimeouts;
   variables: Record<string, unknown>;
   pods?: string[];
   services?: string[];
@@ -1203,6 +1397,8 @@ export interface ChangeRequest {
   autoscaling?: Record<string, Autoscaling | null>;
   /** Adds and changes worker pools by name, or deletes one with null. */
   pools?: Record<string, PoolChange | null>;
+  /** Replaces all the control planes' timeouts. Those left out are the class's. */
+  controlPlaneTimeouts?: NodeTimeouts;
   variables?: Record<string, unknown>;
 }
 

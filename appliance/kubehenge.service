@@ -11,10 +11,16 @@ Group=kubehenge
 # Reads its own journal for clusters' support bundles, the lines that name the cluster.
 SupplementaryGroups=systemd-journal
 # KUBEHENGE_PROXMOX_URL, KUBEHENGE_PUBLIC_URL, KUBEHENGE_APPLIANCE_VMID and, with
-# --proxmox-insecure, KUBEHENGE_PROXMOX_INSECURE, written by the installer; KUBEHENGE_LOG_LEVEL
+# --proxmox-insecure, KUBEHENGE_PROXMOX_INSECURE and, with --trusted-proxy,
+# KUBEHENGE_TRUSTED_PROXIES, written by the installer; KUBEHENGE_LOG_LEVEL
 # (debug, info, warn, error) and KUBEHENGE_LOG_DEVELOPMENT=true, added by hand when the journal
 # should say more, which upgrades keep.
 EnvironmentFile=/etc/kubehenge/appliance.env
+# A restored backup brings the key volume back empty and owned by root, as backups leave it out.
+ExecStartPre=+/usr/bin/install -d -o kubehenge -g kubehenge -m 0700 /var/lib/kubehenge-keys
+# Puts the old release back where a reboot or a kill cut an upgrade off in the middle. Having done
+# so, it fails this start, and the restart below runs on the old release's units.
+ExecStartPre=+/usr/local/bin/kubehenge update --recover --spool /var/lib/kubehenge-update --appliance-dir /var/lib/kubehenge
 ExecStart=/usr/local/bin/kubehenge serve \
     --appliance-dir /var/lib/kubehenge \
     --key-dir /var/lib/kubehenge-keys \
@@ -32,6 +38,10 @@ Restart=on-failure
 StateDirectory=kubehenge-headlamp
 StateDirectoryMode=0755
 RestartSec=5s
+# On stop only the interface gets SIGTERM. It interrupts a running OpenTofu, which then writes its
+# state, and waits for it up to 150 seconds. SIGKILL takes what is left after that.
+KillMode=mixed
+TimeoutStopSec=170s
 
 # Port 443 is the one privilege it keeps.
 AmbientCapabilities=CAP_NET_BIND_SERVICE

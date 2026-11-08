@@ -138,7 +138,7 @@ spec:
               args:
                 - template
                 - refresh
-                - --node={{ required "templateRefresh.node: the Proxmox VE node the weekly template builds run on (or templateRefresh.enabled=false)" .node }}
+                - --node={{ required "templateRefresh.node: the Proxmox VE node the weekly template builds run on (or templateRefresh.enabled=false)" (.node | toStrings | join ",") }}
                 - --storage={{ required "templateRefresh.storage: the storage of the templates' disks (or templateRefresh.enabled=false)" .storage }}
                 - --import-storage={{ required "templateRefresh.importStorage: the storage the cloud images are downloaded to (or templateRefresh.enabled=false)" .importStorage }}
                 {{- with .isoStorage }}
@@ -157,6 +157,7 @@ spec:
                 - --build-dns={{ join "," . }}
                 {{- end }}
                 - --soak={{ .soakHours }}h
+                - --kubeadm-patches={{ .kubeadmPatches }}
                 - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
                 - --proxmox-insecure={{ $.Values.proxmox.insecure }}
                 - --trigger=schedule
@@ -176,6 +177,8 @@ spec:
                       name: {{ .secret }}
                       key: token
                       optional: true
+                {{- include "kubehenge.proxyEnv" $ | nindent 16 }}
+              {{- include "kubehenge.proxyEnvFrom" $ | nindent 14 }}
               resources:
                 requests:
                   cpu: 10m
@@ -194,6 +197,7 @@ spec:
                 # The cloud-init ISO is put together here before it is uploaded.
                 - name: tmp
                   mountPath: /tmp
+                {{- include "kubehenge.proxyMount" $ | nindent 16 }}
           volumes:
             - name: proxmox
               secret:
@@ -204,5 +208,6 @@ spec:
             - name: tmp
               emptyDir:
                 sizeLimit: 64Mi
+            {{- include "kubehenge.proxyVolume" $ | nindent 12 }}
 {{- end }}
 {{- end }}

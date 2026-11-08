@@ -1,12 +1,9 @@
-import { useState, type JSX, type ReactNode } from "react";
+import { useEffect, useState, type JSX, type ReactNode } from "react";
 
 import { api, ApiError, httpPreconditionFailed } from "./api";
-import { autoscalerText } from "./Autoscaling";
-import { backupsRows } from "./Backups";
-import { everything, optionRows, type OptionRow } from "./ClusterOptions";
-import { etcdSnapshotsRows } from "./EtcdSnapshots";
+import { effects, planRows, worstEffect } from "./plan-rows";
 import { StagingContext, useStaging, type Staging } from "./staging-context";
-import type { ChangeRequest, Cluster, Effect, PlannedChange } from "./types";
+import type { ChangeRequest, Cluster, ClusterClass } from "./types";
 import { Dialog, ErrorBox, errorMessage } from "./ui";
 
 // mergedPools is two changes of pools as one: a pool's later change adds to its earlier one, and a
@@ -42,6 +39,10 @@ export function merged(a: ChangeRequest, b: ChangeRequest): ChangeRequest {
   }
   if (a.pools !== undefined || b.pools !== undefined) {
     out.pools = mergedPools(a.pools ?? {}, b.pools ?? {});
+  }
+  const timeouts = b.controlPlaneTimeouts ?? a.controlPlaneTimeouts;
+  if (timeouts !== undefined) {
+    out.controlPlaneTimeouts = timeouts;
   }
   if (a.variables !== undefined || b.variables !== undefined) {
     out.variables = { ...a.variables, ...b.variables };
@@ -113,118 +114,6 @@ export function StagingProvider({
   return <StagingContext value={staging}>{children}</StagingContext>;
 }
 
-// The rows of the page a setting shows in. Most show in one.
-const settingLabels: Record<string, string[]> = {
-  version: ["Kubernetes version"],
-  controlPlaneReplicas: ["Control plane"],
-  workerPools: ["Workers"],
-  pools: ["Worker pools"],
-  controlPlaneMachine: ["Control-plane size"],
-  workerMachine: ["Worker size"],
-  autoscaling: ["Autoscaling"],
-  allowedNodes: ["Placement"],
-  autoscaler: ["Autoscaler"],
-  backups: ["Backups"],
-  ccm: ["HA group labels"],
-  certificates: ["Certificates"],
-  clusterMesh: ["Cluster Mesh"],
-  csi: ["CSI plugin", "Volume snapshots"],
-  etcdSnapshots: ["etcd snapshots"],
-  gitops: ["GitOps"],
-  headlamp: ["Headlamp"],
-  istio: ["Istio"],
-  loadBalancer: ["Load balancer"],
-  logs: ["Logs"],
-  monitoring: ["Monitoring"],
-  nodeOS: ["Node OS"],
-  oidc: ["Identity providers"],
-  podSecurity: ["Pod security"],
-  proxmoxHA: ["Proxmox VE HA"],
-  rancher: ["Rancher"],
-  talosVersion: ["Talos release"],
-  upgrades: ["Automatic upgrades"],
-};
-
-const labelsOf = (setting: string): string[] => settingLabels[setting] ?? [setting];
-
-/** settingLabel is what the page calls a setting. */
-export const settingLabel = (setting: string): string => labelsOf(setting)[0] ?? setting;
-
-const effects: Record<Effect, string> = {
-  none: "Replaces no machine",
-  scales: "Adds or removes machines",
-  "control-plane": "Replaces control planes one by one",
-  workers: "Replaces workers one by one",
-  all: "Replaces every machine one by one",
-};
-
-// The effects from the least to the most a cluster goes through.
-const weight: Effect[] = ["none", "scales", "workers", "control-plane", "all"];
-
-/** worstEffect is what a change does to the machines as a whole: the most any of its settings does. */
-export function worstEffect(changes: PlannedChange[]): Effect {
-  const has = (e: Effect): boolean => changes.some((x) => x.effect === e);
-  if (has("workers") && has("control-plane")) {
-    return "all";
-  }
-  return changes.reduce<Effect>(
-    (worst, x) => (weight.indexOf(x.effect) > weight.indexOf(worst) ? x.effect : worst),
-    "none",
-  );
-}
-
-const workersText = (c: Cluster): string => c.workerPools.map((p) => `${p.name} ${p.replicas}`).join(", ");
-
-function autoscalingText(c: Cluster): string {
-  const scaled = c.workerPools.flatMap((p) =>
-    p.autoscaling ? [`${p.name} ${p.autoscaling.min} to ${p.autoscaling.max}`] : [],
-  );
-  return scaled.length === 0 ? "Off" : scaled.join(", ");
-}
-
-// settingRows are every setting of a cluster a change can set, as the page shows them.
-function settingRows(c: Cluster): Setting[] {
-  return [
-    { label: "Kubernetes version", value: c.version },
-    { label: "Control plane", value: String(c.controlPlane.desired) },
-    { label: "Workers", value: workersText(c) },
-    { label: "Autoscaling", value: autoscalingText(c) },
-    ...optionRows<string>(c, everything, [
-      ...backupsRows(c, true),
-      ...etcdSnapshotsRows(c, true),
-      { label: "Autoscaler", value: autoscalerText(c), group: "Nodes" },
-    ]),
-  ];
-}
-
-type Setting = Pick<OptionRow<string>, "label" | "value">;
-
-/** A row of the plan: a setting as it is and as it would be, and what that does to the machines. */
-interface PlanRow {
-  label: string;
-  now: string;
-  after: string;
-  effect: Effect;
-}
-
-const valueOf = (rows: Setting[], label: string): string => rows.find((r) => r.label === label)?.value ?? "";
-
-/** planRows are the rows of a plan: one per row of the page whose value a change sets anew. */
-export function planRows(before: Cluster, after: Cluster, changes: PlannedChange[]): PlanRow[] {
-  const now = settingRows(before);
-  const then = settingRows(after);
-  return changes.flatMap(({ setting, effect }) => {
-    const rows = labelsOf(setting).map((label) => ({
-      label,
-      now: valueOf(now, label),
-      after: valueOf(then, label),
-      effect,
-    }));
-    const changed = rows.filter((r) => r.now !== r.after);
-    return changed.length > 0 ? changed : rows.slice(0, 1);
-  });
-}
-
 /** StagedBar says what a page has staged and what applying it does, with the plan to review and the way back. */
 export function StagedBar({ cluster: c }: { cluster: Cluster }): JSX.Element | null {
   const staging = useStaging();
@@ -262,6 +151,19 @@ function PlanDialog({
 }): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [cls, setCls] = useState<ClusterClass>();
+  const className = c.class;
+  useEffect(() => {
+    async function load(): Promise<void> {
+      try {
+        const classes = await api.classes();
+        setCls(classes.find((x) => x.name === className));
+      } catch {
+        // Without the class the plan shows the timeouts a cluster sets, and "class default" for the rest.
+      }
+    }
+    void load();
+  }, [className]);
   const { staged } = staging;
   if (staged === undefined) {
     return null;
@@ -304,7 +206,7 @@ function PlanDialog({
         </p>
       ))}
       <div className="scroll">
-        <table className="grid plan">
+        <table className="grid plan stack">
           <thead>
             <tr>
               <th>Setting</th>
@@ -314,12 +216,16 @@ function PlanDialog({
             </tr>
           </thead>
           <tbody>
-            {planRows(c, plan.cluster, plan.changes).map((r) => (
-              <tr key={r.label}>
+            {planRows({ before: c, after: plan.cluster }, plan.changes, cls).map((r, i) => (
+              // The item rows of a setting share its label, so the position tells them apart.
+              // oxlint-disable-next-line react/no-array-index-key
+              <tr key={`${r.label}-${i}`}>
                 <th scope="row">{r.label}</th>
-                <td>{r.now}</td>
-                <td>{r.after}</td>
-                <td className={r.effect === "none" ? "muted" : "plan-replaces"}>{effects[r.effect]}</td>
+                <td data-label="Now">{r.now}</td>
+                <td data-label="After">{r.after}</td>
+                <td data-label="Machines" className={r.effect === "none" ? "muted" : "plan-replaces"}>
+                  {r.effect === undefined ? "" : effects[r.effect]}
+                </td>
               </tr>
             ))}
           </tbody>

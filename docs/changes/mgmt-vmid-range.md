@@ -1,0 +1,1 @@
+- The management cluster's VMs take their random VM IDs from the upper half of Proxmox VE's `next-id` range (Datacenter, Options). The setup stops when that range has no free IDs for them. Without `next-id` they keep 10000 to 99998.

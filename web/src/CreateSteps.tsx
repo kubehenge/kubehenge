@@ -5,7 +5,11 @@ import { WorkerFields } from "./Autoscaling";
 import {
   chosenNodeOS,
   controlPlaneSizes,
+  formLoadBalancerValue,
   machineLeast,
+  memoryNodeWarning,
+  mostWorkers,
+  setLoadBalancer,
   templateMissing,
   variable,
   versionExamples,
@@ -14,10 +18,15 @@ import {
   type Form,
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
-import { LoadBalancerFields } from "./LoadBalancer";
+import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
+import { HostOutageField, graceVariable } from "./HostOutage";
+import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
 import { addressBits, addressIn, bridgeLabel } from "./network";
-import { choosable, cpuNote, findNodeOS, macName, nodeOSKey, nodeOSLabel } from "./node-os";
+import { baseTitle, choosable, cpuNote, findNodeOS, fipsCNI, macName, nodeOSKey, nodeOSLabel } from "./node-os";
+import { NodeCustomisationFields } from "./NodeCustomisation";
+import { NodeSettingsFields } from "./NodeSettings";
+import { NodeTimeoutFields } from "./NodeTimeouts";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
 import { clusterKey } from "./start-from";
@@ -310,6 +319,12 @@ function TemplateAsk({
   );
 }
 
+/** nodeOSInfo says what a node OS holds, and for FIPS mode that the OS is not a validated module of its own. */
+export function nodeOSInfo(os: NodeOSChoice, oses: NodeOSChoice[]): string {
+  const from = `Minimal, from ${baseTitle(os, oses)}'s signed packages, with ${macName(os.mac)} enforcing`;
+  return os.fips === true ? `${from} and FIPS mode on. The OS itself is not CMVP validated.` : `${from}.`;
+}
+
 // NodeOSField chooses what the nodes run, for every distribution but Talos, whose nodes run Talos.
 function NodeOSField({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element | null {
   const oses = cls?.nodeOSes ?? [];
@@ -318,12 +333,7 @@ function NodeOSField({ form, set, shown, cls }: StepProps & { cls: ClusterClass 
     return null;
   }
   return (
-    <Field
-      label="Node OS"
-      error={shown("nodeOS")}
-      hint={cpuNote(os, oses)}
-      info={`Minimal, from ${os.title}'s signed packages, with ${macName(os.mac)} enforcing.`}
-    >
+    <Field label="Node OS" error={shown("nodeOS")} hint={cpuNote(os, oses)} info={nodeOSInfo(os, oses)}>
       {(id) => (
         <select id={id} value={nodeOSKey(os)} onChange={(e) => set("nodeOS", e.target.value)}>
           {oses.map((o) => (
@@ -598,6 +608,21 @@ export function GeneralStep({
         )}
       </Field>
       <WorkerFields form={form} set={set} shown={shown} cls={cls} />
+      <details className="advanced" open={shown("timeouts") === undefined ? undefined : true}>
+        <summary>Node timeouts</summary>
+        <h4 className="subsection">Control planes</h4>
+        <NodeTimeoutFields
+          value={form.controlPlaneTimeouts}
+          onChange={(v) => set("controlPlaneTimeouts", v)}
+          fallback={cls?.controlPlaneTimeouts}
+        />
+        <h4 className="subsection">Workers</h4>
+        <NodeTimeoutFields
+          value={form.workerTimeouts}
+          onChange={(v) => set("workerTimeouts", v)}
+          fallback={cls?.workerTimeouts}
+        />
+      </details>
     </>
   );
 }
@@ -627,6 +652,7 @@ export function NetworkStep({
   checked?: FreeAddresses | undefined;
 }): JSX.Element {
   const cni = variable(cls, "cni");
+  const fips = chosenNodeOS(form, cls)?.fips === true;
   const answering = checked?.answering ?? [];
   const endpointInUse = inUse(answering.filter((a) => a === form.endpoint));
   const nodesInUse = inUse(answering.filter((a) => a !== form.endpoint));
@@ -666,6 +692,31 @@ export function NetworkStep({
           <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
         )}
       </Field>
+      {variable(cls, "network")?.properties?.["mtu"] === undefined ? null : (
+        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.mtu}
+              onChange={(e) => set("mtu", e.target.value.trim())}
+              placeholder="1500"
+            />
+          )}
+        </Field>
+      )}
+      {variable(cls, "network")?.properties?.["queues"] === undefined ? null : (
+        <Field label="Queues" hint="Optional" error={shown("queues")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.queues}
+              onChange={(e) => set("queues", e.target.value.trim())}
+            />
+          )}
+        </Field>
+      )}
       <Field
         label="API address"
         hint={endpointInUse ?? "A free address outside the node addresses"}
@@ -710,14 +761,45 @@ export function NetworkStep({
       <Field label="DNS servers" error={shown("dnsServers")}>
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
+      <Field label="Search domains" error={shown("searchDomains")}>
+        {(id) => (
+          <input
+            id={id}
+            value={form.searchDomains}
+            placeholder="corp.example"
+            onChange={(e) => set("searchDomains", e.target.value)}
+          />
+        )}
+      </Field>
+      <Field label="Time servers" hint="Optional, separated by commas" error={shown("ntpServers")}>
+        {(id) => <input id={id} value={form.ntpServers} onChange={(e) => set("ntpServers", e.target.value)} />}
+      </Field>
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
-          implementation={form.loadBalancer}
-          addresses={form.loadBalancerAddresses}
-          error={shown("loadBalancerAddresses")}
-          onImplementation={(i) => set("loadBalancer", i)}
-          onAddresses={(a) => set("loadBalancerAddresses", a)}
+          value={formLoadBalancerValue(form)}
+          errors={{
+            addresses: shown("loadBalancerAddresses"),
+            asn: shown("loadBalancerAsn"),
+            peers: shown("loadBalancerPeers"),
+          }}
+          onChange={(patch) => {
+            setLoadBalancer(set, patch);
+          }}
+          password={
+            <Field label={passwordLabel} hint={passwordInfo} error={shown("loadBalancerPassword")}>
+              {(id) => (
+                <input
+                  id={id}
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  value={form.loadBalancerPassword}
+                  onChange={(e) => set("loadBalancerPassword", e.target.value)}
+                />
+              )}
+            </Field>
+          }
         />
       )}
       {cni && (
@@ -728,7 +810,7 @@ export function NetworkStep({
                 Choose…
               </option>
               {(cni.enum ?? []).map((v) => (
-                <option key={String(v)} value={String(v)}>
+                <option key={String(v)} value={String(v)} disabled={fips && v !== fipsCNI}>
                   {cniName(String(v))}
                   {v === ownNetworks[cls?.distribution ?? ""]
                     ? ` (${distributionName(cls?.distribution ?? "")}'s own)`
@@ -782,7 +864,13 @@ export function MachinesStep({
   haGroups,
   nodes,
   rules,
+  attempted = false,
+  refusal,
 }: StepProps & {
+  /** Next was pressed on the step: every row's problem shows. */
+  attempted?: boolean;
+  /** The server's refusal of the node customisation, shown with it. */
+  refusal?: string | undefined;
   cls: ClusterClass | undefined;
   usableStorages: Storage[];
   placed: boolean;
@@ -795,7 +883,15 @@ export function MachinesStep({
 }): JSX.Element {
   return (
     <>
-      <Field label="Storage" error={shown("storage")}>
+      <Field
+        label="Storage"
+        error={shown("storage")}
+        hint={
+          usableStorages.some((s) => s.storage === form.storage && !s.shared)
+            ? "Volumes on node-local storage stay on one node."
+            : undefined
+        }
+      >
         {(id) => (
           <select id={id} value={form.storage} onChange={(e) => set("storage", e.target.value)}>
             <option value="" disabled>
@@ -815,8 +911,16 @@ export function MachinesStep({
           value={form.place}
           onChange={(p) => set("place", p)}
           problem={shown("placement")}
+          warning={memoryNodeWarning(form, nodes)}
           nodes={nodes}
           rules={rules}
+        />
+      )}
+      {variable(cls, graceVariable) !== undefined && (
+        <HostOutageField
+          value={form.hostOutageGrace}
+          onChange={(minutes) => set("hostOutageGrace", minutes)}
+          problem={shown("hostOutageGrace")}
         />
       )}
       {haOffered && <HAField checked={form.proxmoxHA} onChange={(on) => set("proxmoxHA", on)} />}
@@ -850,6 +954,51 @@ export function MachinesStep({
         error={shown("workerMachine")}
         onChange={(m) => set("workerMachine", m)}
       />
+      {variable(cls, "etcd") !== undefined && (
+        <details className="advanced" open={shown("etcdQuotaGiB") === undefined ? undefined : true}>
+          <summary>etcd</summary>
+          <Field
+            label="Database limit (GiB)"
+            hint="It can be raised later, never lowered."
+            error={shown("etcdQuotaGiB")}
+          >
+            {(id) => (
+              <input
+                id={id}
+                type="number"
+                min={minEtcdQuotaGiB}
+                max={maxEtcdQuotaGiB}
+                step={1}
+                value={shownNumber(form.etcdQuotaGiB)}
+                onChange={(e) => set("etcdQuotaGiB", typedNumber(e.target.value))}
+              />
+            )}
+          </Field>
+        </details>
+      )}
+      {variable(cls, "workerNodes") !== undefined && mostWorkers(form) > 0 && (
+        <NodeSettingsFields
+          value={form.workerNodes}
+          onChange={(v) => set("workerNodes", v)}
+          showAll={attempted}
+          workers
+        />
+      )}
+      {variable(cls, "nodeCustomisation") !== undefined && (
+        <details
+          className="advanced"
+          open={(attempted && shown("nodeCustomisation") !== undefined) || refusal !== undefined ? true : undefined}
+        >
+          <summary>Advanced</summary>
+          <NodeCustomisationFields
+            value={form.nodeCustomisation}
+            onChange={(v) => set("nodeCustomisation", v)}
+            talos={cls?.distribution === "talos"}
+            showAll={attempted}
+            refusal={refusal}
+          />
+        </details>
+      )}
     </>
   );
 }
@@ -859,10 +1008,7 @@ export function IdentityStep({
   set,
   canTrust,
   showAll,
-}: Omit<StepProps, "shown"> & {
-  canTrust: boolean | undefined;
-  showAll: boolean;
-}): JSX.Element {
+}: Omit<StepProps, "shown"> & { canTrust: boolean | undefined; showAll: boolean }): JSX.Element {
   return (
     <OIDCProviders initial={form.oidc} fixed={canTrust === false} showAll={showAll} onChange={(v) => set("oidc", v)} />
   );

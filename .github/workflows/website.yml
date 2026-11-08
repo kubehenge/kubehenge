@@ -10,6 +10,7 @@ on:
       - website/**
       - web/src/logo.svg
       - scripts/tools.sh
+      - scripts/fetch.sh
       - scripts/changelog.sh
       - .github/workflows/website.yml
   push:
@@ -19,6 +20,7 @@ on:
       - website/**
       - web/src/logo.svg
       - scripts/tools.sh
+      - scripts/fetch.sh
       - scripts/changelog.sh
       - .github/workflows/website.yml
   # An index runs out two weeks after it is signed (pkg/release); a weekly run leaves a week to
@@ -125,6 +127,8 @@ jobs:
           key: website-${{ hashFiles('website/package-lock.json') }}
           restore-keys: website-
       - name: Node
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" node
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -194,6 +198,8 @@ jobs:
           key: website-${{ hashFiles('website/package-lock.json') }}
           restore-keys: website-
       - name: Node
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" node
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

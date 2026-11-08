@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
+import { newAlerting } from "./Alerting";
 import { App } from "./App";
 import { newForm, request, type Form } from "./create-form";
 import { fakeServer, reads } from "./fake-server";
@@ -20,6 +21,7 @@ const rke2: ClusterClass = {
     "controlPlaneMachine",
     "workerMachine",
     "allowedNodes",
+    "hostOutageGraceMinutes",
     "proxmoxHA",
     "csi",
     "ccm",
@@ -33,6 +35,8 @@ const rke2: ClusterClass = {
     "istio",
     "rancher",
     "oidc",
+    "namespaceLabels",
+    "useExisting",
   ].map((name) => ({ name, required: false, schema: object })),
 };
 
@@ -67,14 +71,23 @@ const chosen: Form = {
   endpoint: "10.1.0.20",
   bridge: "vmbr1",
   vlan: "20",
+  mtu: "1450",
+  queues: "2",
   addresses: "10.1.0.21-10.1.0.29",
   prefix: 16,
   gateway: "10.1.0.1",
   dnsServers: "10.1.0.53, 1.1.1.1",
-  loadBalancer: "kube-vip",
+  searchDomains: "corp.example, example.org",
+  ntpServers: "ntp.example.org, 192.0.2.5",
+  loadBalancer: "metallb",
   loadBalancerAddresses: "10.1.0.40-10.1.0.49",
+  loadBalancerMode: "bgp",
+  loadBalancerAsn: "65001",
+  loadBalancerPeers: "10.1.0.1 64512",
+  loadBalancerAuthenticated: true,
   storage: "tank",
   place: { placement: "nodes", haRule: "", nodes: ["pve1", "pve2"] },
+  hostOutageGrace: "90",
   proxmoxHA: false,
   datastoreAllocate: true,
   haGroups: false,
@@ -86,12 +99,28 @@ const chosen: Form = {
   headlampView: true,
   monitoring: true,
   grafanaHostname: "grafana.example",
-  logs: { enabled: true, collector: "api", retentionDays: 14, sizeGiB: 20 },
+  alerting: {
+    ...newAlerting(),
+    email: {
+      on: true,
+      smarthost: "mail.example:587",
+      from: "alerts@example.org",
+      to: "ops@example.org, oncall@example.org",
+      username: "alerts",
+      requireTLS: false,
+    },
+    slack: { on: true, channel: "#ops" },
+    remoteWrite: { on: true, url: "https://mimir.example/push", auth: "basic", username: "tenant" },
+    external: { on: true, urls: "https://am.example\nhttps://am2.example:9093", auth: "bearer", username: "" },
+  },
+  logs: { enabled: true, collector: "api", retentionDays: 14, sizeGiB: 20, outputs: [] },
   podSecurity: { admission: "restricted", kyverno: "restricted" },
   cis: true,
   istio: true,
   rancherRegister: false,
   oidc: [{ issuerURL: "https://id.example", clientID: "kubernetes" }],
+  namespaceLabels: "team=payments\nenv=prod",
+  existingCertManager: true,
 };
 
 const taken = (f: Form): Partial<Form> => Object.fromEntries([...startKeys].map((k) => [k, f[k]]));
@@ -101,6 +130,7 @@ describe("a new cluster started from another", () => {
     const existing = { ...web, variables: request(chosen, rke2).variables };
     const started = fromCluster(existing, { ...newForm(), name: "next" });
     expect(taken(started)).toStrictEqual(taken(chosen));
+    expect(started.ntpServers).toBe("ntp.example.org, 192.0.2.5");
     expect(started).toMatchObject({
       from: "default/web",
       name: "next",

@@ -29,6 +29,8 @@ const (
 
 	// matchLabelsKey is a label selector's key in the objects and values written as maps.
 	matchLabelsKey = "matchLabels"
+	// matchExpressionsKey is a selector term's key for the expressions written as maps.
+	matchExpressionsKey = "matchExpressions"
 
 	kyvernoAdmissionReplicas = 2
 	// kyvernoWorkerPreference is the highest weight a preferred node affinity takes.
@@ -130,7 +132,7 @@ func kyvernoPoliciesProxy(cluster *clusterv1.Cluster) string {
 // workers are enough, they are preferred.
 func kyvernoValues() map[string]any {
 	lease := func() map[string]any { return map[string]any{"leaderElectionRetryPeriod": leaseRetry} }
-	admission := map[string]any{"app.kubernetes.io/component": "admission-controller"}
+	admission := map[string]any{appComponent: "admission-controller"}
 	return map[string]any{
 		"features": map[string]any{
 			"policyExceptions": map[string]any{"enabled": true, "namespace": kyvernoAddon},
@@ -147,7 +149,7 @@ func kyvernoValues() map[string]any {
 			}},
 			"nodeAffinity": map[string]any{"preferredDuringSchedulingIgnoredDuringExecution": []any{map[string]any{
 				"weight": kyvernoWorkerPreference,
-				"preference": map[string]any{"matchExpressions": []any{map[string]any{
+				"preference": map[string]any{matchExpressionsKey: []any{map[string]any{
 					"key": controlPlaneRole, "operator": string(corev1.NodeSelectorOpDoesNotExist),
 				}}},
 			}}},

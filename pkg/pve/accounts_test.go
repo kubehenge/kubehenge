@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -69,13 +70,35 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			// Behind the configurations: 164's VM ID was reused by a VM being built, 165 was removed.
 			{"vmid": 164, "node": "one", "type": "qemu", "name": "kubehenge-old", "template": 1, "tags": "kubehenge;os-rocky-10;rke2", "pool": "kubehenge-templates"},
 			{"vmid": 165, "node": "one", "type": "qemu", "name": "kubehenge-gone", "template": 1, "tags": "k3s;kubehenge;os-rocky-10", "pool": "kubehenge-templates"},
+			// 166's node is down and the view says so. 167's node went down after the view was made,
+			// which only a 595 on its configuration shows. 168 is none of Kubehenge's.
+			{"vmid": 166, "node": "two", "type": "qemu", "status": "unknown", "tags": "kubehenge;talos;talos-v1.14.4", "pool": "kubehenge-templates"},
+			{"vmid": 167, "node": "one", "type": "qemu", "name": "kubehenge-k3s", "template": 1, "tags": "k3s;kubehenge", "pool": "kubehenge-templates"},
+			{"vmid": 168, "node": "two", "type": "qemu", "status": "unknown", "tags": "web", "pool": "kubehenge-templates"},
+			// The appliance restored to 180, a clone of it at 181, and an untagged copy at 182.
+			{"vmid": 180, "node": "one", "type": "lxc", "name": "kubehenge", "tags": "kubehenge"},
+			{"vmid": 181, "node": "two", "type": "lxc", "name": "kubehenge", "tags": "kubehenge;test"},
+			{"vmid": 182, "node": "one", "type": "lxc", "name": "kubehenge"},
 		})
+	})
+	mux.HandleFunc("GET /api2/json/nodes/{node}/lxc/{vmid}/config", func(w http.ResponseWriter, r *http.Request) {
+		macs := map[string]string{"one/180": "BC:24:11:00:00:01", "two/181": "BC:24:11:00:00:02", "one/182": "BC:24:11:00:00:01"}
+		mac, ok := macs[r.PathValue("node")+"/"+r.PathValue("vmid")]
+		if !ok {
+			http.Error(w, "no such container", http.StatusInternalServerError)
+			return
+		}
+		reply(w, map[string]any{"hostname": "kubehenge", "nameserver": "192.0.2.53", "net0": "name=eth0,bridge=vmbr0,hwaddr=" + mac + ",ip=dhcp,type=veth"})
 	})
 	mux.HandleFunc("GET /api2/json/nodes/one/qemu/{vmid}/config", func(w http.ResponseWriter, r *http.Request) {
 		configs := map[string]map[string]any{
 			"160": {"name": "kubehenge-rke2-almalinux-10", "template": 1},
 			"162": {"name": "being-built"},
 			"164": {"name": "being-built-too"},
+		}
+		if r.PathValue("vmid") == "167" {
+			w.WriteHeader(595)
+			return
 		}
 		config, ok := configs[r.PathValue("vmid")]
 		if !ok {
@@ -144,11 +167,23 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 		}
 		reply(w, []map[string]any{
 			{"iface": "vmbr0", "type": "bridge", "cidr": "192.0.2.5/24", "address": "192.0.2.5", "netmask": "24", "gateway": "192.0.2.1", "comments": "uplink\n"},
-			{"iface": "vmbr1", "type": "OVSBridge", "bridge_vlan_aware": 1},
+			{"iface": "vmbr1", "type": "OVSBridge", "bridge_vlan_aware": 1, "mtu": "9000"},
+			{"iface": "vmbr2", "type": "bridge", "mtu": 1450},
 		})
 	})
 	mux.HandleFunc("GET /api2/json/nodes/one/dns", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, map[string]any{"search": "example.org", "dns1": "192.0.2.53", "dns2": "2001:db8::53"})
+	})
+	mux.HandleFunc("GET /api2/json/nodes/two/dns", func(w http.ResponseWriter, _ *http.Request) {
+		reply(w, map[string]any{})
+	})
+	// As Proxmox VE answers: Sys.Audit on the node is needed, which bob lacks.
+	mux.HandleFunc("GET /api2/json/nodes/one/time", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie("PVEAuthCookie"); err != nil || c.Value != "PVE:alice@pve:1" {
+			http.Error(w, "Permission check failed (/nodes/one, Sys.Audit)", http.StatusForbidden)
+			return
+		}
+		reply(w, map[string]any{"timezone": "Europe/Zurich", "time": 1760000000, "localtime": 1760007200})
 	})
 	mux.HandleFunc("GET /api2/json/access/domains", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, []map[string]any{{"realm": "pve", "type": "pve", "default": 1}, {"realm": "pam", "type": "pam"}})
@@ -247,15 +282,60 @@ func TestBackupCovers(t *testing.T) {
 			t.Errorf("BackupCovers(%d) = %v, %v; want %v", vmid, got, err, want)
 		}
 	}
+	// Covered by "all", if it still existed.
+	if got, err := a.BackupCovers(context.Background(), tk, 999); err == nil {
+		t.Errorf("BackupCovers of a guest that is gone = %v, want an error", got)
+	}
+}
+
+func TestApplianceIDByItsMAC(t *testing.T) {
+	t.Parallel()
+	a := fakeTicketAPI(t)
+	tk := &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}
+	for _, tc := range []struct {
+		name string
+		hint int
+		macs []string
+		want int
+	}{
+		{"restored to another ID", 105, []string{"bc:24:11:00:00:01"}, 180},
+		{"the clone, by its own MAC", 105, []string{"02:00:00:00:00:09", "bc:24:11:00:00:02"}, 181},
+		{"the recorded ID among copies with the same MAC", 182, []string{"bc:24:11:00:00:01"}, 182},
+		{"a recorded ID that is another guest", 150, []string{"bc:24:11:00:00:02"}, 181},
+	} {
+		got, err := a.ApplianceID(context.Background(), tk, tc.hint, tc.macs)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: ApplianceID = %d, %v; want %d", tc.name, got, err, tc.want)
+		}
+	}
+	if got, err := a.ApplianceID(context.Background(), tk, 180, []string{"bc:24:11:00:00:99"}); !errors.Is(err, ErrNoAppliance) {
+		t.Errorf("ApplianceID with no MAC of the appliance's = %d, %v; want ErrNoAppliance", got, err)
+	}
 }
 
 func TestTemplatesOfAPoolWithTheirTags(t *testing.T) {
 	t.Parallel()
 	a := fakeTicketAPI(t)
 	got, err := a.Templates(context.Background(), &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}, "kubehenge-templates")
-	want := []Member{{VMID: 160, Node: "one", Type: "qemu", Name: "kubehenge-rke2-almalinux-10", Template: 1, Tags: "kubehenge;os-almalinux-10;rke2"}}
+	want := []Member{
+		{VMID: 160, Node: "one", Type: "qemu", Name: "kubehenge-rke2-almalinux-10", Template: 1, Tags: "kubehenge;os-almalinux-10;rke2"},
+		{VMID: 166, Node: "two", Type: "qemu", Status: StatusUnknown, Tags: "kubehenge;talos;talos-v1.14.4", Down: true},
+		{VMID: 167, Node: "one", Type: "qemu", Name: "kubehenge-k3s", Template: 1, Tags: "k3s;kubehenge", Down: true},
+	}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("Templates = %+v, %v; want %+v", got, err, want)
+	}
+}
+
+func TestNodeUnreachableIsPveproxysAnswerForANodeItCannotReach(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[string]bool{"595 Connection refused": true, "596 Connection timed out": true, "500 boom": false, "503 busy": false} {
+		if got := NodeUnreachable(fmt.Errorf("reading: %w", &APIError{Status: status})); got != want {
+			t.Errorf("NodeUnreachable(%q) = %v, want %v", status, got, want)
+		}
+	}
+	if NodeUnreachable(nil) || NodeUnreachable(errors.New("595 in prose")) {
+		t.Error("NodeUnreachable took a non-API error for a down node")
 	}
 }
 
@@ -291,15 +371,21 @@ func TestBridgesAndDNSOfANode(t *testing.T) {
 	tk := &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}
 	bridges, err := a.Bridges(context.Background(), tk, "one")
 	want := []Bridge{
-		{Bridge: "vmbr0", Node: "one", Comment: "uplink", CIDR: "192.0.2.5/24", Gateway: "192.0.2.1"},
-		{Bridge: "vmbr1", Node: "one", VLANAware: true},
+		{Bridge: "vmbr0", Node: "one", Comment: "uplink", CIDR: "192.0.2.5/24", Gateway: "192.0.2.1", MTU: 1500},
+		{Bridge: "vmbr1", Node: "one", VLANAware: true, MTU: 9000},
+		{Bridge: "vmbr2", Node: "one", MTU: 1450},
 	}
 	if err != nil || !reflect.DeepEqual(bridges, want) {
 		t.Fatalf("Bridges = %+v, %v; want %+v", bridges, err, want)
 	}
 	dns, err := a.DNS(context.Background(), tk, "one")
-	if err != nil || !reflect.DeepEqual(dns, []string{"192.0.2.53", "2001:db8::53"}) {
+	if err != nil || !reflect.DeepEqual(dns, NodeDNS{Servers: []string{"192.0.2.53", "2001:db8::53"}, Search: "example.org"}) {
 		t.Fatalf("DNS = %v, %v", dns, err)
+	}
+	// A node with no search domain answers an empty one, and no servers an empty list.
+	bare, err := a.DNS(context.Background(), tk, "two")
+	if err != nil || !reflect.DeepEqual(bare, NodeDNS{Servers: []string{}}) {
+		t.Fatalf("DNS of a node without a search domain = %v, %v", bare, err)
 	}
 }
 
@@ -414,8 +500,12 @@ func TestAnAPITokenActsInPlaceOfATicket(t *testing.T) {
 	if err := a.remove(t.Context(), ticket, "/cluster/ha/rules/x"); err != nil || removed != 1 {
 		t.Fatalf("remove: %v, %d removed", err, removed)
 	}
-	if renewed, err := a.Renew(t.Context(), ticket); err != nil || renewed != ticket {
+	// Renewing asks Proxmox VE whether it still takes the token, and gives it back.
+	if renewed, err := a.Renew(t.Context(), ticket); err != nil || renewed.Token != token || renewed.Username != ticket.Username {
 		t.Errorf("renewing a token = %v, %v", renewed, err)
+	}
+	if _, err := a.Renew(t.Context(), &Ticket{Username: "alice@pve!ci", Token: "alice@pve!ci=revoked"}); !errors.Is(err, ErrAuthentication) { //nolint:gosec // the fake Proxmox VE's own
+		t.Errorf("renewing a token Proxmox VE no longer takes = %v", err)
 	}
 	for _, bad := range []string{"alice@pve!ci=wrong", "alice@pve=0b6f3c1e", "nonsense"} {
 		if _, err := a.TokenUser(t.Context(), bad); !errors.Is(err, ErrAuthentication) {

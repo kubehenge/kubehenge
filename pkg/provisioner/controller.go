@@ -54,7 +54,8 @@ type Cloud interface {
 	EnsureVolumeHolders(ctx context.Context, n Names, nodes []string) error
 	// RemoveEmptyVolumeHolders removes the cluster's holder VMs that hold no copy.
 	RemoveEmptyVolumeHolders(ctx context.Context, n Names) error
-	Remove(ctx context.Context, n Names, held Credentials) error
+	// Remove deletes the cluster's objects. storage is the cluster's storage variable, empty when unset.
+	Remove(ctx context.Context, n Names, held Credentials, storage string) error
 }
 
 // Reconciler provisions the Proxmox VE side of Clusters built from Kubehenge's ClusterClasses.
@@ -69,6 +70,9 @@ type Reconciler struct {
 	ClassNamespace string
 	Endpoint       Endpoint
 	Charts         Charts
+	// Egress is the management side's proxy, which the add-ons of clusters that set none of their
+	// own go through.
+	Egress Egress
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio
@@ -173,6 +177,9 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if err = r.ensureEncryption(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err = r.ensureNodeCustomisation(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
+	}
 	addons, rancherRefused, err := r.addons(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -188,6 +195,16 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	if err = errors.Join(r.recordAddonChanges(ctx, cluster, &addons), r.recordAddonConflicts(ctx, cluster, addons.conflicts)); err != nil {
+		return ctrl.Result{}, err
+	}
+	bgpHeld, err := r.reconcileKubeVip(ctx, cluster, addons.LoadBalancer)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if bgpHeld {
+		return ctrl.Result{RequeueAfter: waitInterval}, nil
+	}
 	// Marked ready last: BeforeClusterCreate lets the cluster be built once it is.
 	if err = r.keep(ctx, cluster, creds, true); err != nil {
 		return ctrl.Result{}, err
@@ -199,6 +216,9 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	// Nothing the waits are on changes the Cluster, so only a requeue looks again.
 	if addonWaiting || othersWaiting {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
+	}
+	if until, sooner := addons.untilWindow(r.now()); sooner {
+		return ctrl.Result{RequeueAfter: until}, nil
 	}
 	return ctrl.Result{RequeueAfter: resync}, nil
 }
@@ -249,9 +269,17 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 	if err != nil {
 		return false, err
 	}
+	classWaiting, err := r.retireStaleStorageClass(ctx, cluster)
+	if err != nil {
+		return false, err
+	}
+	monitoringWaiting, err := r.reconcileMonitoringSecrets(ctx, cluster, addons)
+	if err != nil {
+		return false, err
+	}
 	uploadWaiting, err := r.reconcileEtcdUpload(ctx, cluster)
 	return certificatesWaiting || rancherWaiting || istioWaiting || snapshotsWaiting || meshWaiting || lbWaiting || gitOpsWaiting ||
-		uploadWaiting, err
+		classWaiting || monitoringWaiting || uploadWaiting, err
 }
 
 // removeRancherWhenFree removes Rancher from a cluster that switched it off, or reports that it
@@ -359,10 +387,21 @@ func (r *Reconciler) ensureCloud(ctx context.Context, cluster *clusterv1.Cluster
 	if err != nil {
 		return held, err
 	}
+	// Read before Ensure, whose record callback writes the flag as not ready.
+	wasReady, err := r.recordedReady(ctx, cluster)
+	if err != nil {
+		return held, err
+	}
 	record := func(c Credentials) error { return r.keep(ctx, cluster, c, false) }
 	creds, err := r.Cloud.Ensure(ctx, names, access, held, record)
+	// Reported before the error is, as the next try finds the new owner recorded and stays silent.
+	if wasReady && held.VolumeOwner != 0 && creds.VolumeOwner != held.VolumeOwner && r.Events != nil {
+		r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "VolumeOwnerMissing", "CreateVolumeOwner",
+			"volume owner VM %d is gone, so the volumes named vm-%d-* have no owner: restore a VM with that VMID from a backup, or they are lost. A new owner VM %d was created",
+			held.VolumeOwner, held.VolumeOwner, creds.VolumeOwner)
+	}
 	if err != nil {
-		return creds, fmt.Errorf("creating the cluster's Proxmox VE objects: %w", err)
+		return creds, &cloudError{err: err}
 	}
 	return creds, nil
 }
@@ -414,7 +453,11 @@ func (r *Reconciler) removeProxmox(ctx context.Context, cluster *clusterv1.Clust
 	if err != nil {
 		return false, err
 	}
-	if err := r.Cloud.Remove(ctx, names, held); err != nil {
+	storage, _, err := optionalVariable[string](cluster, "storage")
+	if err != nil {
+		return false, err
+	}
+	if err := r.Cloud.Remove(ctx, names, held, storage); err != nil {
 		return false, fmt.Errorf("removing the cluster's Proxmox VE objects: %w", err)
 	}
 	log.Info("removed the cluster's Proxmox VE objects", "pool", names.Pool)
@@ -466,6 +509,14 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	if addons.gitOpsFound, err = r.gitOpsState(ctx, cluster, &addons.GitOps); err != nil {
 		return addons, "", err
 	}
+	var skipped string
+	if addons.viaProxy, skipped = r.Egress.resolve(cluster, &addons.Egress); skipped != "" {
+		ctrl.LoggerFrom(ctx).Info("add-ons go direct: " + skipped)
+	}
+	addons.gitOpsFound.egress = addons.viaProxy
+	if addons.monitoringFound, err = r.monitoringCredentials(ctx, cluster, &addons.Monitoring); err != nil {
+		return addons, "", err
+	}
 	return addons, refused, nil
 }
 
@@ -491,6 +542,13 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 	}
 	if err := r.removeProxies(ctx, cluster, off...); err != nil {
 		return false, err
+	}
+	if !addons.logsOn() {
+		// The Secret of the outputs' credentials goes with the Alloys it was for. A cluster that
+		// cannot be reached yet keeps its annotation, so this runs again.
+		if _, err := r.logOutputsWait(ctx, cluster, Logs{}); err != nil {
+			return false, err
+		}
 	}
 	backupsWaiting := false
 	if !addons.Backups.Enabled {
@@ -599,39 +657,93 @@ func resourceSetSecrets(cluster *clusterv1.Cluster, resources *corev1.Secret, cn
 // applyProxies applies the cluster's HelmChartProxies, in order, and reports whether one waits on
 // another or on what it needs in the cluster.
 func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluster, proxies []*unstructured.Unstructured, addons *Addons) (bool, error) {
-	waiting := false
+	gate, err := r.rolloutGate(cluster)
+	if err != nil {
+		return false, err
+	}
+	addons.rollout, addons.pending, addons.conflicts = gate, nil, nil
+	labels := proxyNamespaces(proxies)
+	labelsWait, err := r.applyNamespaceLabels(ctx, cluster, labels, addons.NamespaceLabels)
+	if err != nil {
+		return false, err
+	}
+	waiting := labelsWait
 	for _, p := range proxies {
-		var wait func(context.Context, *clusterv1.Cluster) (bool, error)
-		switch p.GetName() {
-		case kyvernoPoliciesProxy(cluster):
-			wait = r.policiesWait
-		case rancherProxy(cluster):
-			wait = r.rancherConfigWaits
-		case traefikProxy(cluster), certManagerProxy(cluster):
-			wait = gatewayAPIWaits
-		case veleroProxy(cluster):
-			wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
-				return r.backupsWait(ctx, c, &addons.Backups, addons.backupSources)
-			}
-		case snapshotClassProxy(cluster):
-			wait = r.snapshotClassWaits
+		if labelsWait && slices.Contains(labels, specText(p.Object["spec"], "namespace")) {
+			continue
 		}
-		if wait != nil {
-			waits, err := wait(ctx, cluster)
-			if err != nil {
-				return false, err
-			}
-			if waits {
-				waiting = true
-				continue
-			}
-		}
-		desired := p.Object["spec"]
-		if err := applyOwned(ctx, r.Client, cluster, p, func(got *unstructured.Unstructured) { got.Object["spec"] = desired }); err != nil {
+		state, err := r.proxyState(ctx, cluster, p, addons)
+		if err != nil {
 			return false, err
+		}
+		if state == proxyWaits {
+			waiting = true
+		}
+		if state != proxyReady {
+			continue
+		}
+		held, err := r.applyProxy(ctx, cluster, p, &gate)
+		if err != nil {
+			return false, err
+		}
+		if held != nil {
+			addons.pending = append(addons.pending, *held)
 		}
 	}
 	return waiting, nil
+}
+
+// proxyStates are what a proxy does in a reconcile: it is applied, it waits for what its chart needs
+// or for the cluster to answer, or the cluster holds an install of its software already.
+type proxyStates int
+
+const (
+	proxyReady proxyStates = iota
+	proxyWaits
+	proxyConflicts
+)
+
+// proxyState decides what the proxy does. A conflict is recorded in addons.conflicts.
+func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured, addons *Addons) (proxyStates, error) {
+	conflict, err := r.conflictOf(ctx, cluster, p, addons)
+	switch {
+	case err != nil:
+		return proxyReady, err
+	case conflict != "":
+		addons.conflicts = append(addons.conflicts, conflict)
+		return proxyConflicts, nil
+	}
+	waits, err := r.chartWaits(ctx, cluster, p.GetName(), addons)
+	if waits {
+		return proxyWaits, err
+	}
+	return proxyReady, err
+}
+
+// chartWaits reports whether the proxy named waits for what its chart needs first.
+func (r *Reconciler) chartWaits(ctx context.Context, cluster *clusterv1.Cluster, name string, addons *Addons) (bool, error) {
+	var wait func(context.Context, *clusterv1.Cluster) (bool, error)
+	switch name {
+	case kyvernoPoliciesProxy(cluster):
+		wait = r.policiesWait
+	case rancherProxy(cluster):
+		wait = r.rancherConfigWaits
+	case traefikProxy(cluster), certManagerProxy(cluster):
+		wait = gatewayAPIWaits
+	case veleroProxy(cluster):
+		wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
+			return r.backupsWait(ctx, c, &addons.Backups, addons.backupSources)
+		}
+	case alloyProxy(cluster):
+		wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
+			return r.logOutputsWait(ctx, c, addons.Logs)
+		}
+	case snapshotClassProxy(cluster):
+		wait = r.snapshotClassWaits
+	default:
+		return false, nil
+	}
+	return wait(ctx, cluster)
 }
 
 // held reads what was recorded for the cluster. It reads nothing yet, or no longer once a foreground
@@ -646,6 +758,20 @@ func (r *Reconciler) held(ctx context.Context, cluster *clusterv1.Cluster) (Cred
 		return Credentials{}, fmt.Errorf("reading the cluster's credentials: %w", err)
 	}
 	return credentialsFrom(stored)
+}
+
+// recordedReady reports whether the cluster's credentials were marked ready, that is whether all of
+// its objects were once in place.
+func (r *Reconciler) recordedReady(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+	stored := &corev1.Secret{}
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: credentialsSecretName(cluster)}, stored)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading the cluster's credentials: %w", err)
+	}
+	return isReady(stored), nil
 }
 
 // keep stores the cluster's credentials, ready once everything they are for exists.

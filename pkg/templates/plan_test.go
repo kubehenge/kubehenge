@@ -6,7 +6,10 @@ import (
 	"testing"
 )
 
-var rocky10 = NodeOS{Family: rockyName, Release: "10"}
+var (
+	rocky10     = NodeOS{Family: rockyName, Release: "10"}
+	rocky10FIPS = NodeOS{Family: rockyName, Release: "10", FIPS: true}
+)
 
 func TestPlan(t *testing.T) {
 	t.Parallel()
@@ -42,6 +45,26 @@ func TestPlan(t *testing.T) {
 				Tags:  []string{"k3s", "kubehenge", "os-rocky-10"},
 				Image: ImageRef{Kind: NodeOSImage, NodeOS: rocky10},
 				Bake:  &Bake{NodeOS: rocky10, Distribution: K3s},
+			},
+		},
+		{
+			name: "rke2 on Rocky Linux in FIPS mode",
+			req:  Request{Distribution: RKE2, NodeOS: rocky10FIPS},
+			want: Template{
+				Name:  "kubehenge-rke2-rocky-10-fips",
+				Tags:  []string{"fips", "kubehenge", "os-rocky-10", "rke2"},
+				Image: ImageRef{Kind: NodeOSImage, NodeOS: rocky10},
+				Bake:  &Bake{NodeOS: rocky10FIPS, Distribution: RKE2},
+			},
+		},
+		{
+			name: "rke2 in FIPS mode on the default node OS",
+			req:  Request{Distribution: RKE2, NodeOS: NodeOS{FIPS: true}},
+			want: Template{
+				Name:  "kubehenge-rke2-almalinux-10-fips",
+				Tags:  []string{"fips", "kubehenge", "os-almalinux-10", "rke2"},
+				Image: ImageRef{Kind: NodeOSImage, NodeOS: DefaultNodeOS},
+				Bake:  &Bake{NodeOS: NodeOS{Family: almaLinuxName, Release: "10", FIPS: true}, Distribution: RKE2},
 			},
 		},
 		{
@@ -88,6 +111,8 @@ func TestPlanTagSetsAreUnique(t *testing.T) {
 		{Distribution: RKE2},
 		{Distribution: K3s},
 		{Distribution: RKE2, NodeOS: rocky10},
+		{Distribution: RKE2, NodeOS: rocky10FIPS},
+		{Distribution: RKE2, NodeOS: NodeOS{Family: almaLinuxName, Release: "10", FIPS: true}},
 		{Distribution: K3s, NodeOS: rocky10},
 		{Distribution: Kubeadm, KubernetesVersion: "v1.37.1"},
 		{Distribution: Kubeadm, KubernetesVersion: "v1.36.5"},
@@ -123,6 +148,25 @@ func TestPlanRejects(t *testing.T) {
 		if _, err := Plan(&req); err == nil {
 			t.Errorf("Plan(%+v) succeeded, want an error", req)
 		}
+	}
+}
+
+func TestPlanRefusesFIPSModeWhereNoneIs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		req  Request
+		want string
+	}{
+		{Request{Distribution: K3s, NodeOS: rocky10FIPS}, "k3s has no FIPS mode. Choose RKE2 for FIPS mode"},
+		{Request{Distribution: Kubeadm, NodeOS: rocky10FIPS, KubernetesVersion: "v1.37.1"}, "kubeadm has no FIPS mode. Choose RKE2 for FIPS mode"},
+		{Request{Distribution: RKE2, NodeOS: NodeOS{Family: leapName, Release: "16.1", FIPS: true}}, "openSUSE Leap 16.1"},
+	} {
+		if _, err := Plan(&tc.req); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("Plan(%+v) = %v, want %q", tc.req, err, tc.want)
+		}
+	}
+	if err := FIPSDistribution(Talos); err == nil {
+		t.Error("Talos has FIPS mode")
 	}
 }
 

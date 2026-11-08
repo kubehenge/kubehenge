@@ -41,8 +41,15 @@ type Accounts interface {
 	SignIns
 	Resources
 	Guests
+	VMIDPool
 	Removals
 	Upgraders
+}
+
+// VMIDPool is the range Proxmox VE offers new VMs IDs from, and the IDs in use.
+type VMIDPool interface {
+	NextID(ctx context.Context, t *pve.Ticket) (pve.NextID, error)
+	VMIDs(ctx context.Context, t *pve.Ticket) ([]int, error)
 }
 
 // SignIns are the Proxmox VE sign-ins the interface's sessions rest on.
@@ -63,7 +70,7 @@ type Resources interface {
 	Storages(ctx context.Context, t *pve.Ticket) ([]pve.Storage, error)
 	Nodes(ctx context.Context, t *pve.Ticket) ([]pve.Node, error)
 	Bridges(ctx context.Context, t *pve.Ticket, node string) ([]pve.Bridge, error)
-	DNS(ctx context.Context, t *pve.Ticket, node string) ([]string, error)
+	DNS(ctx context.Context, t *pve.Ticket, node string) (pve.NodeDNS, error)
 	AccessNames(ctx context.Context, t *pve.Ticket) (pve.Names, error)
 	NodeAddresses(ctx context.Context, t *pve.Ticket) (map[string]string, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
@@ -76,6 +83,8 @@ type Guests interface {
 	VMLoad(ctx context.Context, t *pve.Ticket, node string, vmid int) ([]pve.LoadPoint, error)
 	Templates(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
 	BackupCovers(ctx context.Context, t *pve.Ticket, vmid int) (bool, error)
+	ApplianceID(ctx context.Context, t *pve.Ticket, hint int, macs []string) (int, error)
+	NodeTime(ctx context.Context, t *pve.Ticket, node string) (time.Time, error)
 }
 
 // Removals are what an administrator's runs remove from Proxmox VE that the management-cluster
@@ -99,12 +108,25 @@ type Server struct {
 	// Appliance is set when the interface runs in Kubehenge's appliance, which creates and looks
 	// after the management cluster.
 	Appliance *appliance.Appliance
-	// ApplianceVMID is the appliance's own guest ID in Proxmox VE, for telling administrators
-	// whether it is backed up. 0 when not known.
+	// ApplianceVMID is the appliance's own guest ID in Proxmox VE as installed, for telling
+	// administrators whether it is backed up. 0 when not known. With ApplianceMACs, the MAC
+	// addresses of its network interfaces, the interface finds the ID again after a restore to
+	// another ID or a clone.
 	ApplianceVMID int
+	ApplianceMACs []string
 	// CertificateExpires is when the certificate the interface serves runs out. Zero when not
 	// known. It is read at start, as the certificate is.
 	CertificateExpires time.Time
+	// CertificateIPs and CertificateNames are the addresses and DNS names the certificate is for.
+	// OwnAddresses gives the addresses the machine has now. Together they tell administrators
+	// when the appliance's address moved away from its certificate's. Nil OwnAddresses tells
+	// nothing.
+	CertificateIPs   []netip.Addr
+	CertificateNames []string
+	OwnAddresses     func() []netip.Addr
+	// DiskUse gives the bytes taken and free on the appliance's disk, for telling administrators
+	// to grow it before an upgrade or an apply runs out of room. Nil tells nothing.
+	DiskUse func() (used, free uint64, err error)
 	// ProxmoxInsecure tells administrators that the appliance and the clusters do not verify the
 	// Proxmox VE API's certificate, as it was installed.
 	ProxmoxInsecure bool
@@ -121,9 +143,15 @@ type Server struct {
 	// controller's automatic upgrades read. Nil leaves their version to be typed in.
 	Releases     provisioner.Releases
 	releaseCache releaseCache
+	// PinChecks reads the checksum file and install script of an RKE2 or k3s release to pin. Nil
+	// leaves pinning to kubehenge release pin and kubectl.
+	PinChecks *provisioner.ReleaseChecksums
 	// TalosReleases lists the Talos releases the Image Factory builds. Nil offers only those the
 	// template pool has.
 	TalosReleases func(ctx context.Context) ([]string, error)
+	// TalosClock asks a Talos node whether its clock is synced, for the Health page. Nil asks the
+	// node's Talos API.
+	TalosClock provisioner.TalosClockProbe
 	// Headlamp is set when a shared Headlamp server runs beside the interface.
 	Headlamp *Headlamp
 	// WorkloadPool is the Proxmox VE pool every cluster's own pool nests under.
@@ -138,6 +166,10 @@ type Server struct {
 	// PublicURL is the address users reach the interface at, such as https://kubehenge.example;
 	// OpenID identity providers send users back to it. Empty means the address the browser used.
 	PublicURL string
+	// TrustedProxies are the reverse proxies and load balancers in front of the interface. From
+	// one of them, the sign-in limits count the client in X-Forwarded-For instead of the proxy.
+	// Empty means every request counts under the address it came from.
+	TrustedProxies []netip.Prefix
 	// SessionMaxAge ends every session this long after sign-in.
 	SessionMaxAge time.Duration
 	// ConnectWorkload reaches a workload cluster's API server with the token of one of Kubehenge's
@@ -156,19 +188,25 @@ type Server struct {
 
 	// prepared guards the set-up Run and the handlers each do on first use, in whichever order the
 	// caller starts them.
-	prepared   sync.Once
-	sessions   *sessions
-	limiter    *limiter
-	tokens     tokenUsers
-	activeKube atomic.Pointer[client.Client]
-	backups    backupCache
-	etags      etagCache
-	health     readCache[healthView]
-	veleroRuns readCache[[]runView]
-	vmLoads    vmLoadCache
-	workloads  workloadConns
-	changes    changes
-	notifier   notifier
+	prepared     sync.Once
+	sessions     *sessions
+	limiter      *limiter
+	tokens       tokenUsers
+	activeKube   atomic.Pointer[client.Client]
+	backups      backupCache
+	applianceIDs readCache[int]
+	etags        etagCache
+	health       readCache[healthView]
+	veleroRuns   readCache[[]runView]
+	privileges   readCache[*userPrivileges]
+	vmLoads      vmLoadCache
+	workloads    workloadConns
+	changes      changes
+	notifier     notifier
+
+	// auditWake wakes the audit follower between its ticks. auditFollower is the one it runs.
+	auditWake     chan struct{}
+	auditFollower atomic.Pointer[auditFollower]
 	// clock is the health page's time. Unset, the system's.
 	clock func() time.Time
 	// demo is set by SetUpDemo: the answers say so and changes are refused.
@@ -213,6 +251,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/realms", s.realms)
 	mux.HandleFunc("POST /api/session", s.signIn)
 	mux.HandleFunc("POST /api/session/second-factor", s.secondFactor)
+	mux.HandleFunc("POST /api/session/token", s.signInWithToken)
 	mux.HandleFunc("GET /api/openid/start", s.openIDStart)
 	mux.HandleFunc("GET /api/openid/callback", s.openIDCallback)
 	mux.HandleFunc("GET /api/session", s.signedIn(s.whoAmI))
@@ -249,9 +288,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("/", s.assets)
 	if s.demo != nil {
-		return withRequestID(securityHeaders(s.demoGuard(mux)))
+		return withRequestID(s.withClientAddress(securityHeaders(s.demoGuard(mux))))
 	}
-	return withRequestID(securityHeaders(mux))
+	return withRequestID(s.withClientAddress(securityHeaders(mux)))
 }
 
 // healthz tells a monitor that the interface answers, unauthenticated. It says nothing more, so it
@@ -269,6 +308,7 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/setup/check", s.signedIn(s.setupCheck))
 	mux.HandleFunc("POST /api/setup/credential", s.signedIn(s.credential))
 	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
+	mux.HandleFunc("POST /api/setup/take-over", s.signedIn(s.takeOver))
 	mux.HandleFunc("GET /api/setup/health", s.signedIn(s.managementHealth))
 	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
 	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))
@@ -285,6 +325,10 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
 	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
 	mux.HandleFunc("POST /api/templates/refresh", s.signedIn(s.refreshNow))
+	mux.HandleFunc("GET /api/release-pins", s.signedIn(s.listPins))
+	mux.HandleFunc("POST /api/release-pins/check", s.signedIn(s.checkPin))
+	mux.HandleFunc("POST /api/release-pins", s.signedIn(s.addPin))
+	mux.HandleFunc("DELETE /api/release-pins/{version}", s.signedIn(s.removePin))
 	mux.HandleFunc("GET /api/template-builds", s.managed(s.templateBuilds))
 	mux.HandleFunc("POST /api/template-builds", s.managed(s.requestTemplateBuild))
 }
@@ -301,13 +345,16 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/machines/{machine}/boot-log", s.managed(s.bootLog))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/boot-log", s.managed(s.askBootLog))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/talos-upgrade-failure", s.managed(s.retryTalosUpgrade))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/addon-changes", s.managed(s.applyAddonChanges))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.replaceMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/replacement", s.managed(s.keepMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}", s.managed(s.deleteMachine))
+	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/forgotten", s.managed(s.forgetMachine))
 	mux.HandleFunc("PUT /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.cordonMachine))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}/machines/{machine}/cordon", s.managed(s.uncordonMachine))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/machines/{machine}/reboot", s.managed(s.rebootMachine))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/health", s.managed(s.clusterHealth))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/pod-security-check", s.managed(s.checkPodSecurity))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/upgrade-checks", s.managed(s.upgradeChecks))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/upgrade-checks/accept", s.managed(s.acknowledgeUpgrade))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/activity", s.managed(s.clusterActivity))
@@ -323,6 +370,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/certificates/ca", s.managed(s.ingressCA))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.etcdSnapshots))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.takeEtcdSnapshot))
+	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-defrag", s.managed(s.defragEtcd))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}", s.managed(s.downloadEtcdSnapshot))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots/{snapshot}/restore-plan", s.managed(s.etcdRestorePlan))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-restores", s.managed(s.restoreEtcd))
@@ -338,6 +386,7 @@ func (s *Server) init() {
 	s.prepared.Do(func() {
 		s.sessions = newSessions(s.Accounts, s.SessionMaxAge)
 		s.limiter = newLimiter(failureWindow)
+		s.auditWake = make(chan struct{}, 1)
 		if s.Kube != nil {
 			s.setKube(s.Kube)
 		}
@@ -353,9 +402,15 @@ func (s *Server) init() {
 	})
 }
 
-// setKube switches the interface to a management cluster.
+// setKube switches the interface to a management cluster. The first one wakes the audit follower,
+// so the API servers' logs are followed from the moment there is a cluster to read them from.
 func (s *Server) setKube(c client.Client) {
-	s.activeKube.Store(&c)
+	if s.activeKube.Swap(&c) == nil {
+		select {
+		case s.auditWake <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (s *Server) currentKube() client.Client {
@@ -601,6 +656,10 @@ func (s *Server) require(w http.ResponseWriter, r *http.Request, u user, aclPath
 	return true
 }
 
+// nodesDisagree is what a refused, freshly issued ticket says: the nodes behind Proxmox VE's address
+// keep clocks over five minutes apart.
+const nodesDisagree = "Proxmox VE nodes disagree about the time. Compare timedatectl on each node and read pvecm status."
+
 // missingPrivilege is what a refusal says when the user lacks priv on aclPath.
 func missingPrivilege(u user, priv, aclPath string) string {
 	return fmt.Sprintf("%s needs %s on %s", u.ticket.Username, priv, aclPath)
@@ -621,6 +680,8 @@ func (s *Server) proxmoxError(w http.ResponseWriter, r *http.Request, err error)
 // signed in. It tells a stranger nothing of Proxmox VE's reasons.
 func (s *Server) anonymousProxmoxError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, pve.ErrNodesDisagree):
+		writeError(w, http.StatusUnauthorized, nodesDisagree)
 	case errors.Is(err, pve.ErrAuthentication):
 		writeError(w, http.StatusUnauthorized, "session expired. Sign in again")
 	case errors.Is(err, pve.ErrForbidden):

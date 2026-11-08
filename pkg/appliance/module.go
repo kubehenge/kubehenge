@@ -20,8 +20,6 @@ import (
 const (
 	lineBuffer = 64 << 10
 	maxLine    = 4 << 20
-	// interruptGrace is how long an interrupted tofu gets to flush its state before it is killed.
-	interruptGrace = 5 * time.Minute
 )
 
 // rootConfig calls the module with the wizard's settings. State encryption comes from
@@ -42,16 +40,20 @@ module "management" {
   vm_datastore           = var.settings.vmDatastore
   bridge                 = var.settings.bridge
   vlan_id                = try(var.settings.vlan, null)
+  mtu                    = try(var.settings.mtu, null)
   node_addresses         = var.settings.nodeAddresses
   api_address            = var.settings.apiAddress
   gateway                = var.settings.gateway
   dns_servers            = var.settings.dnsServers
+  search_domains         = var.settings.searchDomains
   time_servers           = var.settings.timeServers
   workload_datastores    = var.settings.workloadDatastores
   workload_bridges       = var.settings.workloadBridges
   bootstrap_datastore    = var.settings.bootstrapDatastore
   registry_mirrors       = var.settings.registryMirrors
+  chart_repositories     = var.settings.chartRepositories
   controller_image       = var.settings.controllerImage
+  vm_id_range            = var.settings.vmIdRange
   pod_subnets            = var.settings.podSubnets
   service_subnets        = var.settings.serviceSubnets
   cluster_oidc           = var.settings.clusterOIDC
@@ -69,6 +71,7 @@ module "management" {
 
   extra_cluster_namespaces = var.settings.extraClusterNamespaces
   api_audit_log            = var.settings.apiAuditLog
+  proxy                    = var.settings.proxy
 }
 
 output "kubeconfig" {
@@ -86,14 +89,22 @@ output "api_endpoint" {
 }
 `
 
-// run applies the module with the settings, signing in to Proxmox VE as auth says (ticketAuth or
-// tokenAuth), and returns the interface's kubeconfig.
-func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase string, auth []string) ([]byte, error) {
+// run applies the module with the settings, signing in to Proxmox VE as the ticket's user (a
+// session, or an API token), and returns the interface's kubeconfig.
+func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase string, ticket *pve.Ticket) ([]byte, error) {
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		return nil, fmt.Errorf("preparing the module's working directory: %w", err)
 	}
-	if err := a.writeConfig(s); err != nil {
+	ids, err := a.vmIDRange(ctx, ticket, len(s.NodeAddresses))
+	if err != nil {
 		return nil, err
+	}
+	if err = a.writeConfig(s, ids); err != nil {
+		return nil, err
+	}
+	auth := ticketAuth(ticket)
+	if ticket.Token != "" {
+		auth = tokenAuth(ticket.Token)
 	}
 	env, err := a.env(passphrase, auth)
 	if err != nil {
@@ -102,9 +113,13 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err = a.init(ctx, j, env); err != nil {
 		return nil, err
 	}
+	if err = a.claimLease(ctx, j, env); err != nil {
+		return nil, err
+	}
 	j.Add("Applying the management cluster")
 	err = a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json")
 	if err != nil {
+		a.explainWaits(ctx, j, env)
 		return nil, err
 	}
 	admin, err := a.output(ctx, env, "kubeconfig")
@@ -154,7 +169,7 @@ func (a *Appliance) init(ctx context.Context, j *Job, env []string) error {
 	return a.tofu(ctx, j, env, plainLine, "init", "-input=false", "-lockfile=readonly", "-no-color") //nolint:misspell // OpenTofu's flag
 }
 
-func (a *Appliance) writeConfig(s *Settings) error {
+func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 	ranges, err := s.ranges()
 	if err != nil {
 		return err
@@ -176,16 +191,20 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"vmDatastore":            s.VMDatastore,
 		"bridge":                 s.Bridge,
 		"vlan":                   s.VLAN,
+		"mtu":                    nilIfZero(s.MTU),
 		"nodeAddresses":          s.NodeAddresses,
 		"apiAddress":             s.APIAddress,
 		"gateway":                s.Gateway,
 		"dnsServers":             s.DNSServers,
+		"searchDomains":          append([]string{}, s.SearchDomains...),
 		"timeServers":            append([]string{}, s.TimeServers...),
 		"workloadDatastores":     s.WorkloadDatastores,
 		"workloadBridges":        s.WorkloadBridges,
 		"bootstrapDatastore":     s.BootstrapDatastore,
 		"registryMirrors":        nonNilMirrors(s.RegistryMirrors),
+		"chartRepositories":      moduleChartRepositories(s.ChartRepositories),
 		"controllerImage":        nilIfEmpty(s.ControllerImage),
+		"vmIdRange":              ids,
 		"podSubnets":             ranges.pods,
 		"serviceSubnets":         ranges.services,
 		"clusterOIDC":            moduleOIDC(s.ClusterOIDC),
@@ -201,6 +220,7 @@ func (a *Appliance) writeConfig(s *Settings) error {
 		"clusterSysAudit":          s.GivesClusterSysAudit(),
 		"nodeBootLogs":             s.ReadsNodeBootLogs(),
 		"apiAuditLog":              s.APIAuditLog,
+		"proxy":                    moduleProxy(s, a.ProxmoxURL),
 		// The module takes no null for a list.
 		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
 	}}
@@ -231,8 +251,12 @@ func (a *Appliance) writeConfig(s *Settings) error {
 	return writeFileAtomic(filepath.Join(dir, "settings.json"), settings)
 }
 
-// ticketAuth has the module's Proxmox VE provider act with a user's session.
+// ticketAuth has the module's Proxmox VE provider act with a user's session, or with the API token
+// that signed the user in, which has no ticket.
 func ticketAuth(t *pve.Ticket) []string {
+	if t.Token != "" {
+		return tokenAuth(t.Token)
+	}
 	return []string{"PROXMOX_VE_AUTH_TICKET=" + t.Ticket, "PROXMOX_VE_CSRF_PREVENTION_TOKEN=" + t.CSRF}
 }
 
@@ -261,6 +285,19 @@ func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
 		"TF_ENCRYPTION=" + encryption(passphrase),
 	}
 	env = append(env, auth...)
+	// The setting wins over the service's own environment, which only the installer sets.
+	if saved := a.SavedSettings(); saved != nil && saved.Proxy.Enabled() {
+		env = append(env, saved.Proxy.Env(saved.NoProxyList(a.ProxmoxURL))...)
+		if saved.Proxy.CABundle != "" {
+			path := filepath.Join(a.workdir(), "proxy-ca.pem")
+			if err := writeFileAtomic(path, []byte(saved.Proxy.CABundle)); err != nil {
+				return nil, err
+			}
+			// Go reads this file beside the system's certificate directories, so public hosts stay trusted.
+			env = append(env, "SSL_CERT_FILE="+path)
+		}
+		return env, nil
+	}
 	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"} {
 		if v, ok := os.LookupEnv(k); ok {
 			env = append(env, k+"="+v)
@@ -269,15 +306,42 @@ func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
 	return env, nil
 }
 
+// moduleProxy is the module's proxy variable: empty strings for none, which the module reads as no
+// proxy.
+func moduleProxy(s *Settings, proxmoxURL string) map[string]any {
+	out := map[string]any{"url": "", "no_proxy": "", moduleCABundle: ""}
+	if !s.Proxy.Enabled() {
+		return out
+	}
+	out["url"] = s.Proxy.FullURL()
+	out["no_proxy"] = strings.Join(s.NoProxyList(proxmoxURL), ",")
+	out[moduleCABundle] = s.Proxy.CABundle
+	return out
+}
+
+// tofuGrace is how long OpenTofu has between an interrupt and a kill, to finish the operations in
+// flight and write its state. A killed apply loses the objects it made since its last write, and
+// the next run then fails on them as already there.
+const tofuGrace = 5 * time.Minute
+
 // tofu runs one OpenTofu command in the working directory, logging into the job what message makes
-// of each line of its output.
+// of each line of its output. A job with a deadline interrupts it tofuGrace before, so that it
+// stops while the sign-in it runs on still holds, and kills it only at the deadline.
 func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func(line string) string, args ...string) error {
-	cmd := exec.CommandContext(ctx, a.Tofu, append([]string{"-chdir=" + a.workdir()}, args...)...) //nolint:gosec // the binary and arguments are the appliance's own
-	cmd.Env = env
-	// A kill leaves resources made in the last seconds out of the state, so a retry meets them as
-	// "already exists". Interrupted, tofu finishes what it is creating and writes its state first.
+	// OpenTofu echoes a failed request's proxy now and then, and the log goes to the interface.
+	if saved := a.SavedSettings(); saved != nil {
+		j.Hide(saved.Proxy.Secrets()...)
+	}
+	run := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		run, cancel = context.WithDeadline(ctx, deadline.Add(-tofuGrace))
+		defer cancel()
+	}
+	cmd := exec.CommandContext(run, a.Tofu, append([]string{"-chdir=" + a.workdir()}, args...)...) //nolint:gosec // the binary and arguments are the appliance's own
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
-	cmd.WaitDelay = interruptGrace
+	cmd.WaitDelay = tofuGrace
+	cmd.Env = env
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("tofu %s: %w", args[0], err)
@@ -305,10 +369,14 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 	}
 	_, _ = io.Copy(io.Discard, out)
 	err = cmd.Wait()
-	if err != nil {
-		if len(failures) > 0 {
-			return fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; "))
-		}
+	switch {
+	case err != nil && errors.Is(context.Cause(ctx), ErrServiceStopped):
+		return fmt.Errorf("tofu %s: interrupted as %w, so run it again: %w", args[0], ErrServiceStopped, err)
+	case err != nil && run.Err() != nil && ctx.Err() == nil:
+		return fmt.Errorf("tofu %s: interrupted before the Proxmox VE sign-in it runs on expires, so run it again: %w", args[0], err)
+	case err != nil && len(failures) > 0:
+		return fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; "))
+	case err != nil:
 		return fmt.Errorf("tofu %s: %w", args[0], err)
 	}
 	return nil
@@ -338,7 +406,15 @@ func (a *Appliance) output(ctx context.Context, env []string, name string) (stri
 	cmd.Env = env
 	out, err := cmd.Output()
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
-		return "", fmt.Errorf("tofu output %s: %s", name, strings.TrimSpace(string(exit.Stderr)))
+		stderr := strings.TrimSpace(string(exit.Stderr))
+		if saved := a.SavedSettings(); saved != nil {
+			j := &Job{}
+			j.Hide(saved.Proxy.Secrets()...)
+			if j.hidden != nil {
+				stderr = j.hidden.Replace(stderr)
+			}
+		}
+		return "", fmt.Errorf("tofu output %s: %s", name, stderr)
 	}
 	if err != nil {
 		return "", fmt.Errorf("tofu output %s: %w", name, err)
@@ -374,6 +450,13 @@ func nonNilMirrors(m map[string][]string) map[string][]string {
 		return map[string][]string{}
 	}
 	return m
+}
+
+func nilIfZero(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }
 
 func nilIfEmpty(s string) any {

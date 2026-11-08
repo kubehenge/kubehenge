@@ -60,6 +60,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Go
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" go
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

@@ -41,10 +41,12 @@ provider "proxmox" {
   # create is refused for that, the provider retries it and takes the second refusal for a create
   # of its own that went through: it configures and starts the other VM and keeps it in its state,
   # to be destroyed with the node. Random IDs from a range of their own keep the nodes away from
-  # the IDs every other creator is offered.
+  # the IDs every other creator is offered. The range is the caller's, to stay inside the band an
+  # administrator reserved with the datacenter's next-id option. The provider draws from start up
+  # to, not including, end. It is provider configuration, so a VM resource's plan never sees it.
   random_vm_ids      = true
-  random_vm_id_start = 10000
-  random_vm_id_end   = 99999
+  random_vm_id_start = var.vm_id_range.start
+  random_vm_id_end   = var.vm_id_range.end
 }
 
 provider "helm" {

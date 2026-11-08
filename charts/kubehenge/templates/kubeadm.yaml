@@ -43,6 +43,17 @@ metadata:
     # cloud controller manager, kube-vip and Cilium's operator, more with Cilium's agent than
     # Calico's operator, Typha, controllers and API server come to. kube-proxy asks for none.
     kubehenge.dev/node-cpu: '{"controlPlane":1080,"worker":150,"workers":200}'
+    {{- include "kubehenge.addonMemoryRequests" . | nindent 4 }}
+    # The memory, in MiB, a node keeps from the add-ons' requests, counted as node-cpu counts CPU. On
+    # a worker the kernel's 104 of a 2 GiB VM, as Talos's measured, the kubelet's 100 eviction
+    # threshold (kubeadm reserves nothing else), Cilium's agent at 128 with its Envoy's 64, more than
+    # Calico's agent, Traefik's 64 and the CSI plugin's 64. The workers together carry CoreDNS's two
+    # replicas at 70 each. A control plane without workers keeps back the kernel's 198 of 4096 MiB,
+    # runs all of that and adds etcd's 100, the CSI controller's 80, the cloud controller manager's
+    # and kube-vip's 32 each, Cilium's operator's 64, and the 160 by which Calico's agent, operator,
+    # Typha, controllers and API server ask for more than Cilium's. The API server, controller
+    # manager and scheduler ask for no memory.
+    kubehenge.dev/node-memory-requests: '{"controlPlane":1232,"worker":528,"workers":140}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -79,6 +90,8 @@ spec:
       template: {{ "{{ .cluster.name }}-control-plane-{{ .random }}" | quote }}
     healthCheck:
       {{- include "kubehenge.healthCheck" "controlPlane" | nindent 6 }}
+    deletion:
+      {{- include "kubehenge.machineDeletion" . | nindent 6 }}
   workers:
     machineDeployments:
       - class: worker
@@ -96,15 +109,20 @@ spec:
             name: {{ $machineName }}
         healthCheck:
           {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
+        deletion:
+          {{- include "kubehenge.machineDeletion" . | nindent 10 }}
   variables:
     # A control plane's default memory is node-memory's controlPlane with Calico's figure on top.
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "controlPlaneMemoryMiB" 4800 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 2048 "clusters" .Values.clusters "sysAudit" (not (empty .Values.proxmox.sysAuditGroup))) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
-    {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeOSVariable" (dict "Files" .Files "noFIPS" "kubeadm") | nindent 4 }}
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
+    {{- include "kubehenge.etcdVariable" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
     - name: cni
       required: true
       schema:
@@ -115,6 +133,8 @@ spec:
           {{- include "kubehenge.cniFixed" . | nindent 10 }}
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesPatches" "kubeadm" | nindent 4 }}
+    {{- include "kubehenge.clockPatches" "kubeadm" | nindent 4 }}
     - name: kubeadm-control-plane
       definitions:
         - selector:
@@ -157,6 +177,26 @@ spec:
                 template: |
                   - name: GOMEMLIMIT
                     value: {{ include "kubehenge.apiServerMemoryLimit" (dict "share" 40) }}
+    - name: kubeadm-etcd
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KubeadmControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kubeadmConfigSpec/clusterConfiguration/etcd
+              valueFrom:
+                template: |
+                  local:
+                    extraArgs:
+                      - name: quota-backend-bytes
+                        value: "{{ include "kubehenge.etcdQuotaBytes" . }}"
+                      - name: auto-compaction-mode
+                        value: periodic
+                      - name: auto-compaction-retention
+                        value: 1h
     # kubeadm applies its patches for a target in the order of their names, this one after the
     # kubelet's own (kubehenge.kubeletConfigFile).
     - name: kubeadm-cis
@@ -179,6 +219,9 @@ spec:
                   seccompDefault: true
                   streamingConnectionIdleTimeout: 5m
         {{- end }}
+    {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "kubeadm") | nindent 4 }}
+    # Last, so that Kubehenge's own settings come first.
+    {{- include "kubehenge.nodeCustomisationPatches" "kubeadm" | nindent 4 }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate
@@ -388,8 +431,10 @@ template:
         {{- include "kubehenge.kubeletConfigFile" . | nindent 8 }}
         {{- include "kubehenge.kubeadmServingFile" . | nindent 8 }}
         {{- include "kubehenge.sysctlFile" . | nindent 8 }}
+        {{- include "kubehenge.clockFile" . | nindent 8 }}
         {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/kubernetes/audit-policy.yaml") | nindent 8 }}
       preKubeadmCommands:
+        - {{ include "kubehenge.clockCommand" . }}
         - sysctl --system
         - /etc/kubehenge/node-ip.sh
         - /etc/kubehenge/serving-certs.sh
@@ -417,7 +462,9 @@ template:
       {{- include "kubehenge.kubeadmNodeIPFile" . | nindent 6 }}
       {{- include "kubehenge.kubeletConfigFile" . | nindent 6 }}
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.clockFile" . | nindent 6 }}
     preKubeadmCommands:
+      - {{ include "kubehenge.clockCommand" . }}
       - sysctl --system
       - /etc/kubehenge/node-ip.sh
     postKubeadmCommands:

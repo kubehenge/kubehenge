@@ -72,6 +72,13 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		answer(w, http.StatusAccepted, `{}`)
 	}))
+	mux.HandleFunc("POST /api/setup/take-over", f.admin(func(w http.ResponseWriter, r *http.Request) {
+		if f.bodies[r.Method+" "+r.URL.Path]["passphrase"] != "right" {
+			answer(w, http.StatusForbidden, `{"error":"wrong passphrase"}`)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
 	mux.HandleFunc("GET /api/notifications", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, http.StatusOK, `[{"kind":"notify-webhook","at":"2027-03-01T12:00:00Z","title":"web: VM paused"},{"kind":"notify-ntfy"},
 			{"kind":"notify-email","at":"2027-03-01T12:00:00Z","title":"web: VM paused","error":"signing in: 535 bad credentials"}]`)
@@ -265,6 +272,22 @@ func TestApplianceEtcdBackups(t *testing.T) {
 	wantOut := "Restoring\nThe snapshot matches its checksum\netcd runs\nRestored from 20270301T120000Z-v1.37.1.db.age\n"
 	if err != nil || out != wantOut {
 		t.Errorf("restore: %v\n%q\nwant %q", err, out, wantOut)
+	}
+}
+
+// take-over needs --overwrite and the passphrase, and says what the next apply does.
+func TestApplianceTakeOver(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if _, err := run(t, f.args("admin@pve", "take-over", "--passphrase-file", writeTemp(t, "right"))...); err == nil || !strings.Contains(err.Error(), "give --overwrite") {
+		t.Errorf("without --overwrite: %v", err)
+	}
+	if _, err := run(t, f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase" {
+		t.Errorf("wrong passphrase: %v", err)
+	}
+	out, err := run(t, f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "right"))...)
+	if err != nil || out != "Taken over. The next apply brings the management cluster to this state\n" {
+		t.Errorf("take-over: %v\n%q", err, out)
 	}
 }
 

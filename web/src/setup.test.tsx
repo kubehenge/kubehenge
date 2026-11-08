@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { cleanTargets, targetProblems } from "./BackupTargets";
 import { fakeServer, reads, type Route } from "./fake-server";
-import { formOf, settings, setupFieldProblems, setupProblems, type SetupForm } from "./Setup";
+import { formOf, proxySummary, settings, setupFieldProblems, setupProblems, type SetupForm } from "./Setup";
 
 const form: SetupForm = {
   nodes: ["pve1"],
@@ -13,15 +13,26 @@ const form: SetupForm = {
   vmDatastore: "local-lvm",
   bridge: "vmbr0",
   vlan: "",
+  mtu: "",
   nodeAddresses: "192.0.2.11/24",
   apiAddress: "192.0.2.10",
   gateway: "192.0.2.1",
   dnsServers: "192.0.2.1, 1.1.1.1",
+  searchDomains: "",
   timeServers: "",
   workloadDatastores: ["local-lvm"],
   workloadBridges: ["vmbr0"],
   bootstrapDatastore: "local",
   mirrors: "",
+  chartMirrors: "",
+  chartMirrorCA: "",
+  proxyURL: "",
+  proxyUser: "",
+  proxyPassword: "",
+  proxyPasswordSaved: false,
+  proxyPasswordAction: "keep",
+  proxyExceptions: "",
+  proxyCA: "",
   podSubnets: "",
   serviceSubnets: "",
   clusterOIDC: [],
@@ -42,6 +53,7 @@ const form: SetupForm = {
   refreshGateway: "",
   refreshDNS: "",
   creatorBuilds: false,
+  kubeadmPatches: true,
   clusterSysAudit: true,
   nodeBootLogs: true,
   apiAuditLog: false,
@@ -90,7 +102,7 @@ const oneNode = {
       { bridge: "vmbr1", node: "pve1", vlanAware: true, usable: true },
     ],
   },
-  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53", "198.51.100.53"] } },
+  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53", "198.51.100.53"], search: "corp.example" } },
 };
 
 const next = async (user: UserEvent): Promise<void> => user.click(screen.getByRole("button", { name: "Next" }));
@@ -122,6 +134,8 @@ const certificateIn = (days: number): void => {
     "GET /api/clusters": { body: [] },
   });
 };
+
+const problems = (over: Partial<SetupForm>) => setupFieldProblems({ ...form, ...over });
 
 describe("setup", () => {
   it("builds the settings", () => {
@@ -169,7 +183,11 @@ describe("setup", () => {
     expect(formOf(saved)).toMatchObject({
       refreshWeekday: "Wed",
       creatorBuilds: true,
+      kubeadmPatches: true,
     });
+    const off = settings({ ...form, kubeadmPatches: false });
+    expect(off.templateRefresh).toMatchObject({ kubeadmPatches: false });
+    expect(formOf(off)).toMatchObject({ kubeadmPatches: false });
     expect(setupFieldProblems({ ...form, refreshGateway: "192.0.2.1" })).toHaveProperty("refreshAddress");
     expect(setupFieldProblems({ ...form, refreshAddress: "192.0.2.50" })).toHaveProperty("refreshAddress");
     const outside = setupFieldProblems({
@@ -197,6 +215,143 @@ describe("setup", () => {
     });
     expect(s.serviceSubnets).toStrictEqual(["172.20.0.0/16"]);
     expect(s.podSubnets).toBeUndefined();
+  });
+
+  it("sends chart mirrors and their authority only when set", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(settings(form)).not.toHaveProperty("chartRepositories");
+    expect(settings({ ...form, chartMirrors: " \n" })).not.toHaveProperty("chartRepositories");
+    expect(
+      settings({
+        ...form,
+        chartMirrors:
+          "ghcr.io = oci://registry.example.org/ghcr\ncharts.jetstack.io=https://charts.example.org/jetstack\n",
+      }).chartRepositories,
+    ).toStrictEqual({
+      mirrors: {
+        "ghcr.io": "oci://registry.example.org/ghcr",
+        "charts.jetstack.io": "https://charts.example.org/jetstack",
+      },
+    });
+    expect(
+      settings({ ...form, chartMirrors: "ghcr.io=oci://m.example", chartMirrorCA: ` ${pem}\n\n` }).chartRepositories,
+    ).toStrictEqual({ mirrors: { "ghcr.io": "oci://m.example" }, caBundle: `${pem}\n` });
+  });
+
+  it("reads saved chart mirrors back into the form", () => {
+    const saved = {
+      ...settings(form),
+      chartRepositories: {
+        mirrors: { "ghcr.io": "oci://m.example/ghcr", "charts.jetstack.io": "https://m.example/jetstack" },
+        caBundle: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+      },
+    };
+    const again = formOf(saved);
+    expect(again.chartMirrors).toBe("ghcr.io=oci://m.example/ghcr\ncharts.jetstack.io=https://m.example/jetstack");
+    expect(again.chartMirrorCA).toBe(saved.chartRepositories.caBundle);
+    expect(settings({ ...again, passphrase: "", confirm: "" }).chartRepositories).toStrictEqual(
+      saved.chartRepositories,
+    );
+    expect(formOf(settings(form)).chartMirrors).toBe("");
+  });
+
+  it("checks the chart mirrors and their authority", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    const ok = "ghcr.io=oci://registry.example.org/ghcr";
+    expect(problems({ chartMirrors: `${ok}\ncharts.example=http://10.0.0.1:8080` })).toStrictEqual({});
+    expect(problems({ chartMirrors: "ghcr.io oci://m.example" }).chartMirrors).toMatch(
+      /^ghcr.io oci:\/\/m.example is not in the form host=/u,
+    );
+    const wrong = [
+      "ghcr.io=",
+      "=oci://m.example",
+      "ghcr.io=registry.example.org",
+      "ghcr.io=ftp://m.example",
+      "ghcr.io=oci://m.example/",
+      "ghcr.io=https://m.example/jetstack/",
+      "ghcr.io=https://user:pw@m.example",
+      "ghcr.io=oci://m.example/a b",
+      "a/b=oci://m.example",
+    ];
+    const accepted = wrong.filter((line) => problems({ chartMirrors: line }).chartMirrors === undefined);
+    expect(accepted).toStrictEqual([]);
+    expect(problems({ chartMirrors: `${ok}\nbroken` }).chartMirrors).toMatch(/^broken is not/u);
+    expect(problems({ chartMirrors: ok, chartMirrorCA: pem })).toStrictEqual({});
+    expect(problems({ chartMirrors: ok, chartMirrorCA: "junk" }).chartMirrorCA).toBe("Paste PEM certificates.");
+    expect(problems({ chartMirrors: ok, chartMirrorCA: "-----BEGIN PRIVATE KEY-----\nx" }).chartMirrorCA).toBe(
+      "Paste certificates only, no private key.",
+    );
+    expect(problems({ chartMirrorCA: pem }).chartMirrorCA).toBe("Add a chart mirror first.");
+  });
+
+  it("sends a proxy only when it has an address", () => {
+    expect(settings(form)).not.toHaveProperty("proxy");
+    expect(settings({ ...form, proxyExceptions: "a.example.com", proxyCA: "x" })).not.toHaveProperty("proxy");
+    expect(settings({ ...form, proxyURL: " http://proxy.example:3128 " }).proxy).toStrictEqual({
+      url: "http://proxy.example:3128",
+    });
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(
+      settings({ ...form, proxyURL: "https://proxy.example", proxyExceptions: ".corp, 10.0.0.0/8", proxyCA: pem })
+        .proxy,
+    ).toStrictEqual({ url: "https://proxy.example", noProxy: [".corp", "10.0.0.0/8"], caBundle: `${pem}\n` });
+  });
+
+  it("sends the proxy's user and password apart from its address", () => {
+    const base = { ...form, proxyURL: "http://proxy.example:3128", proxyUser: " alice " };
+    expect(settings({ ...base, proxyPassword: "hunter2" }).proxy).toStrictEqual({
+      url: "http://proxy.example:3128",
+      user: "alice",
+      password: "hunter2",
+    });
+    // A password with no user goes nowhere.
+    expect(settings({ ...form, proxyURL: "http://proxy.example:3128", proxyPassword: "hunter2" }).proxy).toStrictEqual({
+      url: "http://proxy.example:3128",
+    });
+    // A saved password never reaches the form, so a form that leaves it alone sends none, which keeps it.
+    const saved = formOf({
+      ...settings(base),
+      proxy: { url: "http://proxy.example:3128", user: "alice", passwordSet: true },
+    });
+    expect(saved).toMatchObject({ proxyUser: "alice", proxyPassword: "", proxyPasswordSaved: true });
+    expect(JSON.stringify(settings(saved).proxy)).not.toContain("password");
+    expect(settings({ ...saved, proxyPasswordAction: "remove" }).proxy).toStrictEqual({
+      url: "http://proxy.example:3128",
+      user: "alice",
+      clearPassword: true,
+    });
+    expect(settings({ ...saved, proxyPasswordAction: "replace", proxyPassword: "new" }).proxy).toMatchObject({
+      password: "new",
+    });
+    expect(proxySummary({ url: "http://proxy.example:3128", user: "alice", passwordSet: true })).toBe(
+      "http://proxy.example:3128, user alice, password set",
+    );
+    expect(proxySummary(undefined)).toBe("None");
+  });
+
+  it("checks the proxy without repeating what was typed", () => {
+    const inside = problems({ proxyURL: "http://alice:hunter2@proxy.example:3128" });
+    expect(inside.proxyURL).toBe("Leave the user name and password out. They have fields of their own.");
+    expect(JSON.stringify(inside)).not.toContain("hunter2");
+    expect(problems({ proxyURL: "http://proxy.example:3128", proxyPassword: "hunter2" }).proxyUser).toBe(
+      "Enter the user name for the password.",
+    );
+    expect(problems({ proxyURL: "http://proxy.example:3128", proxyUser: "alice" })).toStrictEqual({});
+    expect(problems({ proxyUser: "alice" }).proxyURL).toBe("Enter the proxy address.");
+    const bad = problems({ proxyURL: "proxy.example" });
+    expect(bad.proxyURL).toBe("Use an http:// or https:// address without a path.");
+    expect(problems({ proxyURL: "http://proxy.example/pac" }).proxyURL).toMatch(/without a path/u);
+    expect(problems({ proxyExceptions: ".corp" }).proxyURL).toBe("Enter the proxy address.");
+    expect(problems({ proxyURL: "http://p.example", proxyExceptions: "ok.example, bad?" }).proxyExceptions).toBe(
+      "bad? is no host, domain, address or network.",
+    );
+    expect(problems({ proxyURL: "http://p.example", proxyExceptions: ".corp, 10.0.0.0/8, [::1]" })).not.toHaveProperty(
+      "proxyExceptions",
+    );
+    expect(problems({ proxyURL: "http://p.example", proxyCA: "junk" }).proxyCA).toBe("Paste PEM certificates.");
+    expect(problems({ proxyURL: "http://p.example", proxyCA: "-----BEGIN PRIVATE KEY-----\nx" }).proxyCA).toBe(
+      "Paste certificates only, no private key.",
+    );
   });
 
   it("asks for Proxmox VE HA only when it is switched on", () => {
@@ -373,6 +528,7 @@ describe("setup", () => {
 
     // The bridge the node reaches its gateway through, that gateway and the node's DNS servers.
     await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
+    expect(screen.getByLabelText("Search domains")).toHaveValue("corp.example");
     expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0");
     expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1");
     const addresses = screen.getByLabelText("Node addresses");
@@ -423,12 +579,64 @@ describe("setup", () => {
         bridge: "vmbr0",
         gateway: "192.0.2.1",
         dnsServers: ["192.0.2.53", "198.51.100.53"],
+        searchDomains: ["corp.example"],
         workloadDatastores: ["local-lvm", "local"],
         workloadBridges: ["vmbr0"],
         headlampSignIn: true,
         headlampActions: true,
       },
     });
+  });
+
+  it("sends the management VMs' MTU", async () => {
+    const job = { user: "root@pam", started: new Date().toISOString(), state: "running", log: ["Applying"] };
+    const routes: Record<string, Route> = {
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "POST /api/setup": () => {
+        routes["GET /api/setup"] = { body: { appliance: true, ready: false, allowed: true, job } };
+        return { status: 202, body: job };
+      },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
+    await user.type(screen.getByLabelText("Node addresses"), "192.0.2.11/24");
+    await user.type(screen.getByLabelText("API address"), "192.0.2.10");
+    await user.type(screen.getByLabelText("MTU"), "1279");
+    await user.clear(screen.getByLabelText("MTU"));
+    await user.type(screen.getByLabelText("MTU"), "1450");
+    await next(user);
+    await next(user);
+    await next(user);
+    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
+    await user.click(screen.getByRole("button", { name: "Create management cluster" }));
+
+    await screen.findByText("Now: Applying");
+    expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({ settings: { mtu: 1450 } });
+  });
+
+  it("loads the saved MTU, and leaves it empty when none is saved", () => {
+    expect(formOf(settings({ ...form, mtu: "9000" })).mtu).toBe("9000");
+    expect(formOf(settings(form)).mtu).toBe("");
+    expect(formOf().mtu).toBe("");
+    expect(settings(form)).not.toHaveProperty("mtu");
+    expect(settings({ ...form, mtu: "1450" })).toMatchObject({ mtu: 1450 });
+  });
+
+  it("holds the MTU to the bounds the module takes", () => {
+    for (const mtu of ["1279", "65521", "abc", "1450.5"]) {
+      expect(setupFieldProblems({ ...form, mtu }).mtu).toBe("A whole number from 1280 to 65520.");
+    }
+    for (const mtu of ["", "1280", "65520"]) {
+      expect(setupFieldProblems({ ...form, mtu }).mtu).toBeUndefined();
+    }
   });
 
   it("sends the node, bridge and VLAN the template build is given", async () => {
@@ -491,6 +699,44 @@ describe("setup", () => {
     expect(formOf(settings(form))).toMatchObject({ refreshNode: "", refreshBridge: "", refreshVLAN: "" });
     expect(setupFieldProblems({ ...form, refreshVLAN: "4095" })).toHaveProperty("refreshVLAN");
     expect(setupFieldProblems({ ...form, refreshVLAN: "4094" })).not.toHaveProperty("refreshVLAN");
+  });
+
+  it.each([
+    ["a node without a search domain", { servers: ["192.0.2.53"], search: "" }, ""],
+    ["a node with one", { servers: ["192.0.2.53"], search: "corp.example" }, "corp.example"],
+  ])("prefills Search domains from %s", async (_kind, dns, expected) => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/proxmox/nodes/pve1/dns": { body: dns },
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53"));
+    expect(screen.getByLabelText("Search domains")).toHaveValue(expected);
+  });
+
+  it("keeps Search domains as the user left them", async () => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    await next(user);
+    const search = screen.getByLabelText("Search domains");
+    await waitFor(() => expect(search).toHaveValue("corp.example"));
+    await user.clear(search);
+    expect(search).toHaveValue("");
+    await user.type(search, "lab.example");
+    expect(search).toHaveValue("lab.example");
   });
 
   it("lists VNets with their alias and zone and sends the one chosen as zone/vnet", async () => {
@@ -685,6 +931,14 @@ describe("setup", () => {
     expect(problemsOf({ apiAddress: "198.51.100.10" }).apiAddress).toBe("Use an address in the nodes' network.");
     expect(problemsOf({ dnsServers: "dns.example" }).dnsServers).toBe("Enter IP addresses only.");
     expect(problemsOf({ dnsServers: "2001:db8::53" }).dnsServers).toBeUndefined();
+    expect(problemsOf({ searchDomains: "corp.example, example.org" }).searchDomains).toBeUndefined();
+    expect(problemsOf({ searchDomains: "corp example." }).searchDomains).toBe("Enter domain names like corp.example");
+    expect(problemsOf({ searchDomains: "a b c d e f g" }).searchDomains).toBe("At most 6 domains");
+    expect(settings({ ...form, searchDomains: "corp.example example.org" }).searchDomains).toStrictEqual([
+      "corp.example",
+      "example.org",
+    ]);
+    expect(settings(form)).not.toHaveProperty("searchDomains");
     expect(problemsOf({ vlan: "4095" }).vlan).toBe("A whole number from 1 to 4094.");
     expect(problemsOf({ podSubnets: "10.244.0.0/16, 10.245.0.1/16" }).podSubnets).toMatch(
       /^10.245.0.1\/16 is not a network address/u,
@@ -726,6 +980,24 @@ describe("setup", () => {
     expect(alert).toHaveTextContent("wrong passphrase");
   });
 
+  it("offers to take over when a newer state changed the management cluster", async () => {
+    withJob({
+      user: "root@pam",
+      automatic: true,
+      kind: "apply",
+      started: new Date().toISOString(),
+      state: "failed",
+      error: "this appliance's state is from apply 2, and the management cluster is at apply 3",
+      stale: { local: 2, cluster: 3 },
+      log: [],
+    });
+    render(<App />);
+    const alert = await screen.findByText(/A newer state changed the management cluster\./u);
+    expect(alert).toHaveTextContent("This appliance's state is from apply 2.");
+    expect(within(alert).getByRole("button", { name: "Take over…" })).toBeInTheDocument();
+    expect(screen.queryByText(/retries at the next upgrade hour/u)).not.toBeInTheDocument();
+  });
+
   it("warns administrators of a certificate about to run out, and no one long before", async () => {
     certificateIn(10);
     const { unmount } = render(<App />);
@@ -737,6 +1009,44 @@ describe("setup", () => {
     render(<App />);
     await expect(screen.findByRole("link", { name: "Administration" })).resolves.toBeInTheDocument();
     expect(screen.queryByText(/certificate expires on/u)).not.toBeInTheDocument();
+  });
+
+  it("warns administrators that the appliance's address moved away from its certificate's", async () => {
+    fakeServer({
+      ...administrator,
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          applianceVMID: 105,
+          addressMoved: { from: ["192.0.2.40"], to: ["192.0.2.41"] },
+        },
+      },
+      "GET /api/clusters": { body: [] },
+    });
+    render(<App />);
+    const alert = await screen.findByText(/Appliance address moved from 192\.0\.2\.40 to 192\.0\.2\.41\./u);
+    expect(within(alert).getByText("sh install.sh --certificate --ctid 105")).toBeInTheDocument();
+  });
+
+  it("warns administrators that the appliance's disk fills up", async () => {
+    fakeServer({
+      ...administrator,
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          applianceVMID: 105,
+          diskFull: { usedPercent: 86, freeMiB: 1192 },
+        },
+      },
+      "GET /api/clusters": { body: [] },
+    });
+    render(<App />);
+    const alert = await screen.findByText(/Appliance disk 86 % full, 1\.2 GiB free\./u);
+    expect(within(alert).getByText("pct resize 105 rootfs +4G")).toBeInTheDocument();
   });
 
   it("warns administrators that the management cluster's credentials run out", async () => {
@@ -870,6 +1180,115 @@ describe("setup", () => {
     expect(wizard.getByLabelText("VM disks")).toHaveValue("local-lvm");
     await user.click(wizard.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("button", { name: "Apply again…" })).toBeInTheDocument();
+  });
+
+  it("shows a saved proxy password as set, and replaces or removes it without ever holding it", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const saved = {
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+      proxy: { url: "http://proxy.example:3128", user: "alice", passwordSet: true },
+    };
+    const calls = fakeServer({
+      ...administrator,
+      ...administration,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: saved } },
+      "POST /api/setup": {
+        status: 202,
+        body: { user: "root@pam", kind: "apply", started: new Date().toISOString(), state: "running", log: [] },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Management cluster" });
+    expect(screen.getByText("http://proxy.example:3128, user alice, password set")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Edit settings" }));
+    const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    await user.click(wizard.getByText("Advanced"));
+    expect(wizard.getByLabelText("Proxy user")).toHaveValue("alice");
+    expect(wizard.getByLabelText("Proxy password")).not.toHaveAttribute("type", "password");
+    expect(wizard.getByRole("button", { name: "Replace proxy password" })).toBeInTheDocument();
+
+    await user.click(wizard.getByRole("button", { name: "Replace proxy password" }));
+    expect(wizard.getByLabelText("Proxy password")).toHaveAttribute("type", "password");
+    await user.click(wizard.getByRole("button", { name: "Cancel replacing proxy password" }));
+    await user.click(wizard.getByRole("button", { name: "Remove proxy password" }));
+    expect(wizard.getByText("Removed when you apply")).toBeInTheDocument();
+    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.click(wizard.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(calls.find((c) => c.key === "POST /api/setup")).toBeDefined());
+    expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
+      settings: { proxy: { url: "http://proxy.example:3128", user: "alice", clearPassword: true } },
+    });
+  });
+
+  it("loads saved chart mirrors into the form and sends them back", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+    const saved = {
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+      chartRepositories: { mirrors: { "ghcr.io": "oci://registry.example.org/ghcr" }, caBundle: pem },
+    };
+    const calls = fakeServer({
+      ...administrator,
+      ...administration,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: saved } },
+      "POST /api/setup": {
+        status: 202,
+        body: { user: "root@pam", kind: "apply", started: new Date().toISOString(), state: "running", log: [] },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Management cluster" });
+    expect(screen.getByText("ghcr.io=oci://registry.example.org/ghcr")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Edit settings" }));
+    const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    await user.click(wizard.getByText("Advanced"));
+    const mirrors = wizard.getByLabelText("Chart mirrors");
+    expect(mirrors).toHaveValue("ghcr.io=oci://registry.example.org/ghcr");
+    expect(wizard.getByLabelText("Chart mirror certificate")).toHaveValue(pem);
+    await user.type(mirrors, "{Enter}charts.example");
+    await expect(wizard.findByText(/charts.example is not in the form host=/u)).resolves.toBeInTheDocument();
+    await user.type(mirrors, "=https://charts.example.org/jetstack");
+    expect(wizard.queryByText(/is not in the form host=/u)).not.toBeInTheDocument();
+    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.click(wizard.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(calls.find((c) => c.key === "POST /api/setup")).toBeDefined());
+    expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
+      settings: {
+        chartRepositories: {
+          mirrors: {
+            "ghcr.io": "oci://registry.example.org/ghcr",
+            "charts.example": "https://charts.example.org/jetstack",
+          },
+          caBundle: pem,
+        },
+      },
+    });
   });
 
   it("switches restores through the guest agent on only once what they grant is confirmed", async () => {

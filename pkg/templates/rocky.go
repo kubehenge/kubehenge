@@ -34,6 +34,7 @@ func (rocky) Releases() []Release {
 		// Rocky Linux 10 is built for x86-64-v3 and stops at boot on anything less.
 		CPUType: "x86-64-v3",
 		Mode:    ImageMode,
+		FIPS:    true,
 	}}
 }
 
@@ -55,8 +56,8 @@ var rocky10EL = &elFamily{
 		&RepositoryKey{Name: "epel", URL: "https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-10", Fingerprints: []string{EPEL10KeyFingerprint}}),
 }
 
-func (rocky) Keys(_ Release, b Bake) []RepositoryKey { return keysOf(rocky10EL.repositories(b)) }
+func (rocky) Keys(_ Release, b *Bake) []RepositoryKey { return keysOf(rocky10EL.repositories(b)) }
 
-func (rocky) Recipe(_ Release, b Bake, keys map[string]string) (Recipe, error) {
+func (rocky) Recipe(_ Release, b *Bake, keys map[string]string) (Recipe, error) {
 	return rocky10EL.recipe(b, keys)
 }

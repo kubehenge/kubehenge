@@ -112,6 +112,7 @@ func TestFailedTalosUpgradesShowAndAreTriedAgain(t *testing.T) {
 	c.Annotations = map[string]string{
 		provisioner.TalosImageAnnotation:         "v1.14.3",
 		provisioner.TalosUpgradeFailedAnnotation: "one-cp-1: not Ready",
+		provisioner.TalosWaitingAnnotation:       "Draining one-cp-1: Pod apps/db-0: cannot evict pod",
 	}
 	h := newHarness(t, talosClass("v1.14.3", "v1.14.4"), c)
 	viewer := h.browser()
@@ -124,7 +125,8 @@ func TestFailedTalosUpgradesShowAndAreTriedAgain(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
 		t.Fatal(err)
 	}
-	if v.Talos == nil || v.Talos.Version != "v1.14.4" || v.Talos.Image != "v1.14.3" || v.Talos.Failed != "one-cp-1: not Ready" {
+	if v.Talos == nil || v.Talos.Version != "v1.14.4" || v.Talos.Image != "v1.14.3" || v.Talos.Failed != "one-cp-1: not Ready" ||
+		v.Talos.Held != "Draining one-cp-1: Pod apps/db-0: cannot evict pod" {
 		t.Fatalf("Talos view %+v", v.Talos)
 	}
 	expect(t, viewer.do("DELETE", "/api/clusters/default/one/talos-upgrade-failure", ""), http.StatusForbidden)

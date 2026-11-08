@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -48,6 +49,16 @@ func machineOf(m *clusterv1.Machine, proxmoxNode string) machineView {
 			mv.Waiting = owner.Message
 		}
 	}
+	if why, held := m.Annotations[provisioner.HoldAnnotation]; held {
+		mv.Held = why
+		if until, err := time.Parse(time.RFC3339, m.Annotations[provisioner.HoldUntilAnnotation]); err == nil {
+			mv.HeldUntil = until
+		}
+	}
+	if stalled := meta.FindStatusCondition(m.Status.Conditions, provisioner.MachineDeletionStalledCondition); stalled != nil && !m.DeletionTimestamp.IsZero() {
+		mv.Stalled = stalled.Message
+	}
+	mv.ForgetRefused = m.Annotations[provisioner.ForgetRefusedAnnotation]
 	for _, a := range m.Status.Addresses {
 		if a.Type == clusterv1.MachineInternalIP || a.Type == clusterv1.MachineExternalIP {
 			mv.Addresses = append(mv.Addresses, a.Address)
@@ -67,6 +78,39 @@ func (s *Server) replaceMachine(w http.ResponseWriter, r *http.Request, u user) 
 // keepMachine takes the mark back, for a machine Cluster API has not begun to replace.
 func (s *Server) keepMachine(w http.ResponseWriter, r *http.Request, u user) {
 	s.patchMachine(w, r, u, fmt.Appendf(nil, `{"metadata":{"annotations":{%q:null}}}`, clusterv1.RemediateMachineAnnotation))
+}
+
+// forgetRequest confirms by the machine's name which machine to let go of.
+type forgetRequest struct {
+	Confirm string `json:"confirm"`
+}
+
+// forgetMachine asks Kubehenge to let go of a machine that cannot finish deleting, without destroying
+// its VM, as `kubectl annotate machine <name> kubehenge.dev/forget-machine=<name>` does. The controller
+// holds the guard that refuses a machine whose VM still runs on a node that answers.
+func (s *Server) forgetMachine(w http.ResponseWriter, r *http.Request, u user) {
+	c, m, ok := s.clusterMachine(w, r, u, privKubeconfig)
+	if !ok {
+		return
+	}
+	var req forgetRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	switch {
+	case req.Confirm != m.Name:
+		writeError(w, http.StatusUnprocessableEntity, "type the machine's name to confirm")
+		return
+	case m.DeletionTimestamp.IsZero():
+		writeError(w, http.StatusConflict, "The machine is not being deleted.")
+		return
+	}
+	if err := annotate(r.Context(), u.kube, m, map[string]any{provisioner.ForgetAnnotation: m.Name, provisioner.ForgetRefusedAnnotation: nil}); err != nil {
+		s.kubeError(w, r, err)
+		return
+	}
+	s.Log.Info("asked to forget a machine", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "machine", m.Name)
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // cordonMachine keeps new pods off a machine's node, as `kubectl cordon` does.
@@ -131,7 +175,7 @@ func (s *Server) rebootMachine(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusNotFound, "no such cluster")
 		return
 	}
-	vms, err := s.clusterVMs(r, u, pool)
+	vms, err := s.clusterVMs(r, u, c, pool)
 	if errors.Is(err, pve.ErrForbidden) {
 		writeError(w, http.StatusForbidden, missingPrivilege(u, privPoolAudit, pool))
 		return
@@ -140,7 +184,7 @@ func (s *Server) rebootMachine(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	vm, found := vms[m.Spec.InfrastructureRef.Name]
+	vm, found := vms.of(m.Spec.InfrastructureRef.Name)
 	if !found || vm.VMID == 0 || vm.Node == "" {
 		writeError(w, http.StatusConflict, "The machine has no VM in the cluster's pool.")
 		return

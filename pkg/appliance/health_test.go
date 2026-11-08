@@ -106,7 +106,39 @@ func TestServiceCheckTrustsOnlyItsCertificate(t *testing.T) {
 	other.StartTLS()
 	t.Cleanup(other.Close)
 	c.Address = other.Listener.Addr().String()
-	if err := c.Healthy(context.Background()); err == nil || !strings.Contains(err.Error(), "certificate") {
+	if err := c.Healthy(context.Background()); err == nil || !strings.Contains(err.Error(), "serves a certificate other than") {
 		t.Errorf("another server's certificate: %v", err)
+	}
+}
+
+// An expired certificate is still the interface's own, so an upgrade does not roll back over it.
+func TestServiceCheckPassesOnAnExpiredCertificate(t *testing.T) {
+	t.Parallel()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2), DNSNames: []string{"kubehenge"},
+		NotBefore: time.Now().Add(-72 * time.Hour), NotAfter: time.Now().Add(-48 * time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	cert := filepath.Join(t.TempDir(), "tls.crt")
+	if err := os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &ServiceCheck{
+		CertFile: cert, Address: srv.Listener.Addr().String(), Wait: 5 * time.Second, Settle: 10 * time.Millisecond,
+		Restarts: func(context.Context) (int, error) { return 0, nil },
+	}
+	if err := c.Healthy(context.Background()); err != nil {
+		t.Errorf("the interface's own expired certificate: %v", err)
 	}
 }

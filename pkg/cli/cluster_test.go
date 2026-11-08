@@ -49,7 +49,10 @@ func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			 "controlPlane":{"desired":3,"ready":3},"workers":{"desired":2,"ready":1}},
 			{"namespace":"a","name":"twin","phase":"Provisioned","conditions":[
 			 {"type":"UpgradeHeld","status":"True","reason":"RancherKubernetes","message":"for Rancher, choose Kubernetes 1.34 to 1.36, not v1.37.1+k3s1"}]},
-			{"namespace":"b","name":"twin","phase":"Provisioned"}]`)
+			{"namespace":"b","name":"twin","phase":"Provisioned","conditions":[
+			 {"type":"NodeImageHeld","status":"True","reason":"TemplateNodeDown","message":"Build build-202610150000 is on node pve2, which is down"}]},
+			{"namespace":"c","name":"stuck","phase":"Provisioned","conditions":[
+			 {"type":"TemplateNodeDown","status":"True","reason":"NodeDown","message":"Template x is on node pve2, which is down"}]}]`)
 	case "GET /api/clusters/clusters/web":
 		_, _ = io.WriteString(w, `{"namespace":"clusters","name":"web"}`)
 	case "GET /api/clusters/clusters/web/upgrade-checks":
@@ -65,6 +68,9 @@ func (f *fakeClusterAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "GET /api/clusters/clusters/web/kubeconfig":
 		_, _ = io.WriteString(w, "apiVersion: v1\nkind: Config\n")
 	case "PATCH /api/clusters/clusters/web", "DELETE /api/clusters/clusters/web":
+		_, _ = io.WriteString(w, `{}`)
+	case "POST /api/clusters/clusters/web/etcd-defrag":
+		w.WriteHeader(http.StatusAccepted)
 		_, _ = io.WriteString(w, `{}`)
 	case "POST /api/clusters":
 		w.WriteHeader(http.StatusCreated)
@@ -101,7 +107,8 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	}
 	if !strings.Contains(out, "CONTROL PLANES") || !strings.Contains(out, "web") || !strings.Contains(out, "3/3") ||
 		!strings.Contains(out, "1/2") || !strings.Contains(out, "Provisioned, upgrade held (RancherKubernetes)") ||
-		strings.Count(out, "upgrade held") != 1 {
+		strings.Count(out, "upgrade held") != 1 || !strings.Contains(out, "Provisioned, node image refresh held (TemplateNodeDown)") ||
+		!strings.Contains(out, "Provisioned, template node down") {
 		t.Errorf("list =\n%s", out)
 	}
 	if out, err = runCluster(t, srv.URL, token, "get", "web"); err != nil || !strings.Contains(out, `"name": "web"`) {
@@ -111,6 +118,11 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		t.Errorf("kubeconfig = %q, %v", out, err)
 	}
 	if _, err = runCluster(t, srv.URL, token, "scale", "web", "--control-planes", "5", "--workers", "md-0=4"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runCluster(t, srv.URL, token, "timeouts", "web", "--control-planes", "drain=30m,detach=10m,deletion=0",
+		"--pool", "md-0=drain=1h", "--pool", "gpu=detach=90s")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = runCluster(t, srv.URL, token, "delete", "web"); err == nil {
@@ -129,13 +141,14 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		{"cordon", "web", "web-md-0-b"},
 		{"uncordon", "web", "web-md-0-b"},
 		{"reboot", "web", "web-md-0-b"},
+		{"forget", "web", "web-md-0-c", "--yes"},
 	} {
 		if out, err = runCluster(t, srv.URL, token, append([]string{"machine"}, args...)...); err != nil || !strings.HasPrefix(out, "machine "+args[2]+" ") {
 			t.Errorf("machine %v = %q, %v", args, out, err)
 		}
 	}
 	file := filepath.Join(t.TempDir(), "new.yaml")
-	if err = os.WriteFile(file, []byte("name: new\nclass: talos\ncontrolPlaneReplicas: 1\n"), 0o600); err != nil {
+	if err = os.WriteFile(file, []byte("name: new\nclass: talos\ncontrolPlaneReplicas: 1\ncontrolPlaneTimeouts:\n  nodeDrainTimeoutSeconds: 600\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if out, err = runCluster(t, srv.URL, token, "create", "-f", file); err != nil || out != "cluster clusters/new created\n" {
@@ -147,6 +160,7 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	fake.mu.Unlock()
 	want := []string{
 		`PATCH /api/clusters/clusters/web {"controlPlaneReplicas":5,"workerPools":{"md-0":4}}`,
+		`PATCH /api/clusters/clusters/web {"controlPlaneTimeouts":{"nodeDeletionTimeoutSeconds":0,"nodeDrainTimeoutSeconds":1800,"nodeVolumeDetachTimeoutSeconds":600},"pools":{"gpu":{"timeouts":{"nodeVolumeDetachTimeoutSeconds":90}},"md-0":{"timeouts":{"nodeDrainTimeoutSeconds":3600}}}}`,
 		`DELETE /api/clusters/clusters/web {"confirm":"web"}`,
 		"PUT /api/clusters/clusters/web/machines/web-cp-1/replacement",
 		"DELETE /api/clusters/clusters/web/machines/web-cp-1/replacement",
@@ -154,10 +168,119 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		"PUT /api/clusters/clusters/web/machines/web-md-0-b/cordon",
 		"DELETE /api/clusters/clusters/web/machines/web-md-0-b/cordon",
 		"POST /api/clusters/clusters/web/machines/web-md-0-b/reboot",
-		`POST /api/clusters {"class":"talos","controlPlaneReplicas":1,"name":"new"}`,
+		`PUT /api/clusters/clusters/web/machines/web-md-0-c/forgotten {"confirm":"web-md-0-c"}`,
+		"PUT /api/clusters/clusters/web/machines/web-md-0-c/forgotten",
+		`POST /api/clusters {"class":"talos","controlPlaneReplicas":1,"controlPlaneTimeouts":{"nodeDrainTimeoutSeconds":600},"name":"new"}`,
 	}
 	if strings.Join(sent, "\n") != strings.Join(want, "\n") {
 		t.Errorf("sent\n%s\nwant\n%s", strings.Join(sent, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestClusterEtcdCommands(t *testing.T) {
+	t.Parallel()
+	fake := &fakeClusterAPI{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	const token = "dev@pve!ci=secret" //nolint:gosec // the fake interface's own
+
+	if out, err := runCluster(t, srv.URL, token, "etcd", "defrag", "web"); err != nil || out != "cluster web: etcd defragmentation asked for\n" {
+		t.Errorf("defrag = %q, %v", out, err)
+	}
+	if out, err := runCluster(t, srv.URL, token, "etcd", "set", "web", "--quota-gib", "4"); err != nil || out != "cluster web changed\n" {
+		t.Errorf("set = %q, %v", out, err)
+	}
+	fake.mu.Lock()
+	sent := strings.Join(fake.sent, "\n")
+	fake.mu.Unlock()
+	if want := `PATCH /api/clusters/clusters/web {"variables":{"etcd":{"quotaGiB":4}}}`; sent != want {
+		t.Errorf("sent %q, want %q", sent, want)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"etcd", "set", "web", "--quota-gib", "1"}, "--quota-gib is 2 to 8, not 1"},
+		{[]string{"etcd", "set", "web", "--quota-gib", "9"}, "--quota-gib is 2 to 8, not 9"},
+		{[]string{"etcd", "set", "web"}, "quota-gib"},
+		{[]string{"etcd", "defrag"}, "give the cluster's name"},
+	} {
+		if _, err := runCluster(t, srv.URL, token, c.args...); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: error %v, want %q", c.args, err, c.want)
+		}
+	}
+}
+
+// Each flag of update sends its own variable and no other, alone or mixed.
+func TestClusterCommandsSetTheHostOutageGrace(t *testing.T) {
+	t.Parallel()
+	fake := &fakeClusterAPI{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	const token = "dev@pve!ci=secret" //nolint:gosec // the fake interface's own
+	file := filepath.Join(t.TempDir(), "new.yaml")
+	if err := os.WriteFile(file, []byte("name: new\nclass: talos\nvariables:\n  hostOutageGraceMinutes: 10\n  other: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"create", "-f", file, "--host-outage-grace-minutes", "0"},
+		{"update", "web", "--host-outage-grace-minutes", "45"},
+		{"update", "web", "--host-outage-grace-minutes", "0"},
+		{"update", "web", "--label", "team=a", "--taint", "dedicated=db:NoSchedule"},
+		{"update", "web", "--cis", "--host-outage-grace-minutes", "60", "--label", "team=b"},
+	} {
+		if _, err := runCluster(t, srv.URL, token, args...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+	fake.mu.Lock()
+	sent := strings.Join(fake.sent, "\n")
+	fake.mu.Unlock()
+	want := strings.Join([]string{
+		`POST /api/clusters {"class":"talos","name":"new","variables":{"hostOutageGraceMinutes":0,"other":1}}`,
+		`PATCH /api/clusters/clusters/web {"variables":{"hostOutageGraceMinutes":45}}`,
+		`PATCH /api/clusters/clusters/web {"variables":{"hostOutageGraceMinutes":0}}`,
+		`PATCH /api/clusters/clusters/web {"variables":{"workerNodes":{"labels":[{"key":"team","value":"a"}],"taints":[{"effect":"NoSchedule","key":"dedicated","value":"db"}]}}}`,
+		`PATCH /api/clusters/clusters/web {"variables":{"cis":true,"hostOutageGraceMinutes":60,"workerNodes":{"labels":[{"key":"team","value":"b"}],"taints":[]}}}`,
+	}, "\n")
+	if sent != want {
+		t.Errorf("sent\n%s\nwant\n%s", sent, want)
+	}
+
+	// The node customisation flags mix with the others too, on update and on create.
+	for _, args := range [][]string{
+		{"update", "web", "--host-outage-grace-minutes", "30", "--kubelet-arg", "event-qps=50"},
+		{"create", "-f", file, "--host-outage-grace-minutes", "30", "--kubelet-arg", "event-qps=50"},
+	} {
+		fake.mu.Lock()
+		fake.sent = nil
+		fake.mu.Unlock()
+		if _, err := runCluster(t, srv.URL, token, args...); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		fake.mu.Lock()
+		got := strings.Join(fake.sent, "\n")
+		fake.mu.Unlock()
+		if !strings.Contains(got, `"hostOutageGraceMinutes":30`) || !strings.Contains(got, `"nodeCustomisation":{`) ||
+			!strings.Contains(got, "event-qps") || strings.Contains(got, `"cis"`) || strings.Contains(got, `"workerNodes"`) {
+			t.Errorf("%v sent %s, want the wait and the node customisation alone", args, got)
+		}
+	}
+
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"update", "web", "--host-outage-grace-minutes", "3"}, "give 0, or 5 to 10080"},
+		{[]string{"update", "web", "--host-outage-grace-minutes", "10081"}, "give 0, or 5 to 10080"},
+		{[]string{"update", "web"}, "give --cis, --host-outage-grace-minutes, --label, --taint, a node customisation flag"},
+		{[]string{"update", "web", "--cis=false"}, "cannot be switched off"},
+		{[]string{"update", "web", "--taint", "dedicated=db"}, "--taint"},
+		{[]string{"create", "-f", file, "--host-outage-grace-minutes", "4"}, "give 0, or 5 to 10080"},
+	} {
+		if _, err := runCluster(t, srv.URL, token, c.args...); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v: error %v, want %q", c.args, err, c.want)
+		}
 	}
 }
 
@@ -178,6 +301,11 @@ func TestClusterCommandsSayWhatWentWrong(t *testing.T) {
 		{"dev@pve!ci=secret", []string{"scale", "twin", "-n", "b", "--workers", "md-0=1"}, "you need VM.Allocate on pool b (403)"},
 		{"dev@pve!ci=secret", []string{"scale", "web", "--workers", "md-0"}, `--workers "md-0": give POOL=N`},
 		{"dev@pve!ci=secret", []string{"scale", "web"}, "give --control-planes, --workers or both"},
+		{"dev@pve!ci=secret", []string{"timeouts", "web"}, "give --control-planes, --pool or both"},
+		{"dev@pve!ci=secret", []string{"timeouts", "web", "--pool", "md-0"}, `--pool "md-0": give POOL=drain=30m`},
+		{"dev@pve!ci=secret", []string{"timeouts", "web", "--control-planes", "drain=soon"}, `"soon" is not a duration such as 30m`},
+		{"dev@pve!ci=secret", []string{"timeouts", "web", "--control-planes", "wait=5m"}, "give drain, detach or deletion"},
+		{"dev@pve!ci=secret", []string{"timeouts", "web", "--control-planes", "drain=-5m"}, "is not a duration"},
 		{"dev@pve!ci=secret", []string{"list", "-o", "yaml"}, `--output is json or nothing, not "yaml"`},
 	} {
 		_, err := runCluster(t, srv.URL, c.token, c.args...)
@@ -212,7 +340,7 @@ func TestClusterListChecksItsFormatBeforeAsking(t *testing.T) {
 func TestOnlyTheCommandsFindingAClusterTakeANamespace(t *testing.T) {
 	t.Parallel()
 	cmd := newClusterCommand(&pve.Config{})
-	for _, path := range [][]string{{"get"}, {"kubeconfig"}, {"scale"}, {"delete"}, {"machine", "reboot"}} {
+	for _, path := range [][]string{{"get"}, {"kubeconfig"}, {"update"}, {"scale"}, {"delete"}, {"machine", "reboot"}} {
 		if sub, _, err := cmd.Find(path); err != nil || sub.Flag("namespace") == nil {
 			t.Errorf("%q has no --namespace: %v", path, err)
 		}

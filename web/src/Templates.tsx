@@ -2,7 +2,8 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api, bridgesOf } from "./api";
 import { bridgeLabel, isVLAN, list } from "./network";
-import { choosable, cpuNote, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSLabel } from "./node-os";
+import { choosable, cpuNote, defaultNodeOS, findNodeOS, forDistribution, nodeOSKey, nodeOSLabel } from "./node-os";
+import { ReleasePins } from "./ReleasePins";
 import { loadingReleases, offeredReleases, releaseToMake, talosExample, talosRelease, useTalosReleases } from "./Talos";
 import type {
   Bridge,
@@ -21,6 +22,7 @@ import {
   Dialog,
   ErrorBox,
   Field,
+  Status,
   errorMessage,
   filled,
   logLines,
@@ -38,6 +40,15 @@ const kubernetesVersion = /^v1\.\d+\.\d+$/u;
 // Templates lists the VM templates clusters are cloned from and builds them with the signed-in
 // administrator's Proxmox VE session.
 export function Templates(): JSX.Element {
+  return (
+    <>
+      <TemplatesBox />
+      <ReleasePins />
+    </>
+  );
+}
+
+function TemplatesBox(): JSX.Element {
   const { data, error, reload } = usePoll(api.templates, (d) =>
     d?.job?.state === "running" || refreshBusy(d?.refresh) ? pollRunning : pollIdle,
   );
@@ -50,55 +61,67 @@ export function Templates(): JSX.Element {
     <div className="box">
       <h3>VM templates</h3>
       <ErrorBox message={error} />
+      {data?.down?.map((d) => (
+        <p className="warning" key={d.vmid}>
+          Template {d.name ?? `VM ${d.vmid}`} is on node {d.node}, which is down.
+        </p>
+      ))}
       {data && data.templates.length === 0 && <p>No templates yet</p>}
       {data && data.templates.length > 0 && (
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>Template</th>
-              <th>Node OS</th>
-              <th>Build</th>
-              <th>Node</th>
-              <th>Used by</th>
-              <th>
-                <span className="visually-hidden">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.templates.map((t) => (
-              <tr key={t.vmid}>
-                <td>
-                  {t.line} <span className="muted">({t.vmid})</span>
-                </td>
-                <td>{t.nodeOS ?? "Talos Linux"}</td>
-                <td>
-                  {t.built === undefined ? (
-                    <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
-                  ) : (
-                    <>
-                      {new Date(t.built).toLocaleString()}
-                      {t.newest === true && <span className="muted"> (newest)</span>}
-                    </>
-                  )}
-                </td>
-                <td>{t.node}</td>
-                <td>{t.inUse ?? "None"}</td>
-                <td className="row-action">
-                  <button
-                    type="button"
-                    disabled={filled(t.inUse) || building}
-                    aria-label={`Delete ${t.name}`}
-                    title={filled(t.inUse) ? `In use by ${t.inUse}` : undefined}
-                    onClick={() => setDeleting(t)}
-                  >
-                    Delete
-                  </button>
-                </td>
+        <div className="scroll">
+          <table className="grid stack">
+            <thead>
+              <tr>
+                <th>Template</th>
+                <th>Node OS</th>
+                <th>Build</th>
+                <th>Node</th>
+                <th>Used by</th>
+                <th>
+                  <span className="visually-hidden">Actions</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.templates.map((t) => (
+                <tr key={t.vmid}>
+                  <td>
+                    {t.line} <span className="muted">({t.vmid})</span>
+                  </td>
+                  <td data-label="Node OS">{t.nodeOS ?? "Talos Linux"}</td>
+                  <td data-label="Build">
+                    {t.built === undefined ? (
+                      <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
+                    ) : (
+                      <>
+                        {new Date(t.built).toLocaleString()}
+                        {t.newest === true && <span className="muted"> (newest)</span>}
+                        {t.older === true && (
+                          <div>
+                            <Status state="warning" text="Older than the previous build" />
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </td>
+                  <td data-label="Node">{t.node}</td>
+                  <td data-label="Used by">{t.inUse ?? "None"}</td>
+                  <td className="row-action">
+                    <button
+                      type="button"
+                      disabled={filled(t.inUse) || building}
+                      aria-label={`Delete ${t.name}`}
+                      title={filled(t.inUse) ? `In use by ${t.inUse}` : undefined}
+                      onClick={() => setDeleting(t)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {job && <BuildJob job={job} />}
       <div className="actions">
@@ -224,7 +247,7 @@ function AutomaticBuilds({
           </>
         )}
         <dt>Rollout</dt>
-        <dd>After {refresh.soakHours} h, in maintenance windows</dd>
+        <dd>After {refresh.soakHours} h, in upgrade windows</dd>
         <dt>Kept</dt>
         <dd>2 newest builds, and any in use</dd>
       </dl>
@@ -391,6 +414,37 @@ function NodeOSField({
   );
 }
 
+const typedOrSole = (typed: string, offered: string[]): string => (filled(typed) ? typed : (sole(offered) ?? ""));
+
+/**
+ * withChoices fills what the user has not picked. A lone choice is taken. The cloud-init storage is
+ * optional, so stays the node's first. The Talos release is the one templates are made of by
+ * default, unless it has one already.
+ */
+function withChoices(
+  entered: BuildForm,
+  o: {
+    osOffered: NodeOS[];
+    usual: NodeOS | undefined;
+    release: string;
+    diskStorages: string[];
+    importStorages: string[];
+    bridges: string[];
+  },
+): BuildForm {
+  return {
+    ...entered,
+    nodeOS:
+      findNodeOS(o.osOffered, entered.nodeOS) === undefined && o.usual !== undefined
+        ? nodeOSKey(o.usual)
+        : entered.nodeOS,
+    talosVersion: filled(entered.talosVersion) ? entered.talosVersion : o.release,
+    storage: typedOrSole(entered.storage, o.diskStorages),
+    importStorage: typedOrSole(entered.importStorage, o.importStorages),
+    bridge: typedOrSole(entered.bridge, o.bridges),
+  };
+}
+
 function BuildDialog({
   nodeOSes,
   onClose,
@@ -472,17 +526,16 @@ function BuildDialog({
   const bridgeLabels = Object.fromEntries(bridges.map((b) => [b.bridge, bridgeLabel(b)]));
   const talos = entered.distribution === "talos";
   const releases = useTalosReleases(talos);
-  // A lone choice is taken until the user picks. The cloud-init storage is optional, so stays the
-  // node's first. The Talos release is the one templates are made of by default, unless it has
-  // one already.
-  const releaseOffered = releases ? releaseToMake(releases) : "";
-  const form: BuildForm = {
-    ...entered,
-    talosVersion: filled(entered.talosVersion) ? entered.talosVersion : releaseOffered,
-    storage: filled(entered.storage) ? entered.storage : (sole(diskStorages) ?? ""),
-    importStorage: filled(entered.importStorage) ? entered.importStorage : (sole(onNode("import")) ?? ""),
-    bridge: filled(entered.bridge) ? entered.bridge : (sole(bridgeNames) ?? ""),
-  };
+  const osOffered = forDistribution(nodeOSes, entered.distribution);
+  const form = withChoices(entered, {
+    osOffered,
+    usual,
+    release: releases ? releaseToMake(releases) : "",
+    diskStorages,
+    importStorages: onNode("import"),
+    bridges: bridgeNames,
+  });
+  const unshared = storages.some((s) => s.storage === form.storage && s.node === form.node && !s.shared);
   const problems = buildProblems(form);
   const shown = (k: keyof BuildForm): string | undefined => (touched.has(k) ? problems[k] : undefined);
   const releaseField = (id: string): JSX.Element => {
@@ -553,7 +606,7 @@ function BuildDialog({
           </select>
         )}
       </Field>
-      {!talos && <NodeOSField nodeOSes={nodeOSes} value={form.nodeOS} onChange={(v) => set("nodeOS", v)} />}
+      {!talos && <NodeOSField nodeOSes={osOffered} value={form.nodeOS} onChange={(v) => set("nodeOS", v)} />}
       {talos && (
         <Field label="Talos release" hint={talosHint(releases)} error={shown("talosVersion")}>
           {releaseField}
@@ -579,7 +632,11 @@ function BuildDialog({
           />
         )}
       </Field>
-      <Field label="Template disk" hint="Shared storage lets clones start on any node" error={shown("storage")}>
+      <Field
+        label="Template disk"
+        hint={unshared ? `Clones start only on ${form.node}` : "Shared storage lets clones start on any node"}
+        error={shown("storage")}
+      >
         {(id) => <Choice id={id} value={form.storage} options={diskStorages} onChoose={(v) => set("storage", v)} />}
       </Field>
       <Field label="Downloaded image" error={shown("importStorage")}>

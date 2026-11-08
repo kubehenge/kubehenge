@@ -25,6 +25,7 @@ A node OS whose CPU type is above `x86-64-v2-AES` stops at boot on an older CPU.
 Every node OS holds only what a node needs:
 
 - Its family's minimal system, cloud-init and the QEMU guest agent.
+- chrony, enabled, as its time daemon, since a VM's host corrects its clock only on resume and migration. The bake checks that `chronyd` is enabled and that `chronyc tracking` answers. Talos keeps its own.
 - The SELinux policy packages and the kernel modules a pod network bridges through.
 - For kubeadm, containerd and the kubelet's tools.
 - For RKE2 and k3s, their prerequisites and SELinux policy.
@@ -41,9 +42,27 @@ SELinux enforces on every node, with the targeted policy, never permissive. cont
 
 On kubeadm nodes, kube-vip and the control plane's static pods (etcd, API server, controller manager, scheduler) run as `spc_t` through kubeadm patches. That type, for containers that manage the host, lets them read the node's certificates and keep etcd's data on the host. Every other pod stays confined.
 
+### FIPS mode
+
+An RKE2 cluster's node OS can run in FIPS mode, as `almalinux-10-fips` or `rocky-10-fips`. Its nodes boot with the kernel argument `fips=1`. Every crypto library takes the `FIPS` policy of `update-crypto-policies`. The build fixes both, so FIPS mode has template lines of its own, tagged `fips`.
+
+Each build checks in its own boot that `/proc/sys/crypto/fips_enabled` reads 1 and that the policy is `FIPS`. No end-to-end test has created a cluster in FIPS mode yet. Until one passes, FIPS mode is unsupported on every node OS and distribution.
+
+| | FIPS mode |
+| --- | --- |
+| AlmaLinux 10 | Template proven: the end-to-end template test builds one and boots a clone in FIPS mode. No cluster tested yet. FIPS mode as the family sets it in image mode. No FIPS 140-3 certificate covers the release's modules |
+| Rocky Linux 10 | Built, not yet proven. Built as AlmaLinux 10. No FIPS 140-3 certificate covers the release's modules |
+| openSUSE Leap 16.1 | Not offered |
+| RKE2 | Built, not yet proven. RKE2 builds every release with BoringCrypto, a FIPS 140 validated module, so the [release pins](architecture.md#release-pins-for-rke2-and-k3s) stay the same. Canal is the only CNI it builds so. A cluster in FIPS mode is refused Calico and Cilium |
+| k3s | Refused: k3s is not built for FIPS mode |
+| kubeadm | Refused: the upstream Kubernetes binaries, containerd and etcd are not built or documented for FIPS mode |
+| Talos | Not offered: Sidero Labs builds Talos for FIPS mode in its Enterprise Image Factory alone |
+
+The parts Kubehenge adds to every cluster run their projects' own builds, which are not FIPS builds. That covers kube-vip, the Proxmox CSI plugin, Traefik and the add-ons.
+
 ### The guest agent
 
-The guest agent runs the commands Proxmox VE sends it (guest-exec) as root unconfined, as a root shell would. Cluster API's Proxmox VE provider asks cloud-init through it whether a node has booted. The controller's etcd restore runs through it. Proxmox VE lets only holders of `VM.GuestAgent.Unrestricted` (or `VM.Monitor`) send them, who could run anything in the VM anyway.
+The guest agent runs the commands Proxmox VE sends it (guest-exec) as root unconfined, as a root shell would. Cluster API's Proxmox VE provider asks cloud-init through it whether a node has booted. The controller's etcd restore runs through it. Proxmox VE lets only holders of `VM.GuestAgent.Unrestricted` send them, who could run anything in the VM anyway.
 
 The agent also hands out the node's boot log to holders of `VM.GuestAgent.FileRead`. The log is cloud-init's output and a copy of its boot's journals (cloud-init, containerd, the kubelet, RKE2 or k3s). A timer writes the copy into `/var/log/kubehenge` every 15 seconds from 5 seconds after boot, the last 200 lines of each. It is readable by root alone.
 
@@ -72,7 +91,7 @@ kubehenge template create k3s --node-os rocky-10 --node pve1 --storage shared-st
 kubehenge template create kubeadm --kubernetes-version v1.36.5 --node pve1
 ```
 
-`--node-os` chooses the node OS, `almalinux-10` unless set. A Talos template takes none.
+`--node-os` chooses the node OS, `almalinux-10` unless set. For RKE2, `almalinux-10-fips` or `rocky-10-fips` builds it in [FIPS mode](#fips-mode). A Talos template takes none.
 
 A node OS template is built by a VM of its own, which boots the family's cloud image. In image mode the VM composes the node image from the family's packages and checks it with `bootc container lint`. It installs the image onto the template's disk, then boots it once on its own. A transactional node OS installs what a node needs as a new snapshot and reboots into it.
 
@@ -86,7 +105,7 @@ A failed run removes what it made. `--keep-on-failure` leaves the VM for inspect
 
 ## How clusters find them
 
-Each template carries a unique set of Proxmox VE tags, such as `kubehenge;talos;talos-v1.14.5` or `kubehenge;os-almalinux-10;rke2`. Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB. Each clone gets the network, size and disk its machine asks for.
+Each template carries a unique set of Proxmox VE tags, such as `kubehenge;talos;talos-v1.14.5`, `kubehenge;os-almalinux-10;rke2` or, in FIPS mode, `fips;kubehenge;os-almalinux-10;rke2`. Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB. Each clone gets the network, size and disk its machine asks for.
 
 ### Builds
 
@@ -95,6 +114,12 @@ A node OS template is a line of builds. Each build is a template of its own, nam
 A cluster's machines clone the newest build of their line made by the cluster's node image time. That time moves only when the nodes are refreshed ([clusters.md](clusters.md#node-image-refresh)). Scaling up or replacing a failed node therefore clones the build the other nodes run.
 
 Talos templates have no builds. Talos nodes take their updates by upgrading Talos.
+
+### Kernel check
+
+A build records its kernel and a hash of its packages in the template's description when it ends. The refresh compares each build with the previous one of its line. An older kernel means the mirror was one sync behind.
+
+Such a build is kept out of the builds clusters move to, and the Administration page marks it "Older than the previous build". The controller asks for another build an hour later, up to 3 times. After the third, the build stays out until a newer one arrives. A build from before this check is never older.
 
 ### CPU type of clones
 
@@ -113,6 +138,12 @@ While the management cluster's template refresh is on (the default), a CronJob i
 Then it deletes the builds nothing needs. Of each line it keeps the two newest and any older one that a cluster's machines run or a new machine will clone from. A kubeadm line no cluster runs or can upgrade to keeps only its newest build.
 
 A build that fails does not stop the others. The next run starts over. The Administration page shows the last run with its log and has Build now.
+
+### Kubeadm patch releases
+
+The run also builds the kubeadm template of the newest patch release of each minor version a kubeadm cluster runs. It does the same for the next minor version. Without one, a kubeadm cluster is offered no patch release. The release is read from `dl.k8s.io/release/stable-1.<minor>.txt`. Such a template is built only while it has no build.
+
+`kubeadm_patches: false` in the `template_refresh` settings, or `--kubeadm-patches=false`, switches this off.
 
 ### The command
 
@@ -137,8 +168,10 @@ A cluster creator's request names a Talos template as `talos-v1.14.5`.
 
 ## Requirements
 
-- In a Proxmox VE cluster, templates should go on shared storage, so that clones can start on any node.
-- The storage given with `--import-storage` (`local` by default) must allow the `import` content type.
+- In a Proxmox VE cluster, templates should go on shared storage, so that clones can start on any node. Without `--storage`, the command takes the shared storage with the most room that allows disk images, and asks for `--storage` when there is none.
+  - On storage that is not shared, the command says so. Clusters then run only on the template's node.
+- The storage given with `--import-storage` (`local` by default) must allow the `import` content type. The ISO storage must allow `iso`, and without `--iso-storage` is the first one the token can write to. The build checks the content types, the storage privileges below and the datacenter's tag options before it downloads anything.
+- `--node` takes several nodes separated by commas. The build runs on the first that is online and whose CPU runs the node OS. The chart's `templateRefresh.node` takes a list the same way.
 - The API token needs what the weekly build's own token holds ([install-settings.md](install-settings.md#what-the-template-builds-may-do)):
   - On the template pool (`--pool`, `kubehenge-templates` by default), propagated: `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.Config.CDROM`, `VM.Config.CPU`, `VM.Config.Disk`, `VM.Config.HWType`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Options`, `VM.GuestAgent.Unrestricted` and `VM.PowerMgmt`.
   - On the storages of `--import-storage` and `--iso-storage`: `Datastore.Allocate`, `Datastore.AllocateTemplate` and `Datastore.Audit`.
@@ -161,4 +194,4 @@ Both work in the template pool, `--pool` as for create. `--pool ''` covers every
 
 Delete refuses a build a cluster's machines are cloned from, as the Administration page does, and names the clusters. It reads which clusters those are from the management cluster `KUBECONFIG` points at (`--class-namespace` if Kubehenge is not in `kubehenge-system`).
 
-`--roll-clusters` deletes such a build anyway, for one found broken. The clusters that run it have their nodes replaced at once, outside their maintenance windows, with clones of the build before it. The last build of a template is never deleted while a cluster runs it.
+`--roll-clusters` deletes such a build anyway, for one found broken. The clusters that run it have their nodes replaced at once, outside their upgrade windows, with clones of the build before it. The last build of a template is never deleted while a cluster runs it.

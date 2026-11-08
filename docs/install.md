@@ -58,11 +58,47 @@ Addresses are IPv4. Kubehenge gives every node of every cluster a static address
 | The appliance | GitHub, for the release index and upgrades. While it applies the management cluster: the OpenTofu registry, `quay.io` (cert-manager's chart) and the Talos Image Factory. While it makes VM templates: the Talos Image Factory (`factory.talos.dev`), the node OSes' image mirrors for their signed checksums (`repo.almalinux.org`, `dl.rockylinux.org`), and the package repositories' signing keys (`pkgs.k8s.io`, `rpm.rancher.io`). |
 | The Proxmox VE nodes | the Talos Image Factory and the node OSes' image mirrors, which Proxmox VE downloads disk images from |
 | The management cluster's nodes, for time | NTP servers on UDP 123: Talos's default public ones, or the hosts set under Time servers in the setup's Network step. |
+| Clusters' nodes, for time | NTP servers on UDP 123: the node image's public pool, or the hosts in the cluster's **Time servers** ([clusters.md](clusters.md#creating-a-cluster)). Talos's default is `time.cloudflare.com`. |
 | The management cluster's nodes | Container registries and the Cluster API providers' release files. RKE2's and k3s's release channels, for automatic upgrades, and their releases' checksum files and install scripts on GitHub, read once per release. The add-on chart repositories: `ghcr.io` (the Proxmox VE cloud controller manager and CSI plugin), `helm.cilium.io`, `docs.tigera.io`, `kubernetes-sigs.github.io` (Headlamp), `releases.rancher.com` and `charts.jetstack.io`. |
 | Clusters' nodes | Container registries. On RKE2 and k3s, GitHub (`github.com` and `raw.githubusercontent.com`), for the release and its images, which a node installs when it boots. |
 | The VM that prepares a template | Its node OS's package mirrors and `quay.io` (for the image builder's tool image, by digest). For RKE2 and k3s, `rpm.rancher.io` (their SELinux policies). For kubeadm, `pkgs.k8s.io`, the node OS's EPEL mirror (containerd), `registry.k8s.io`, GitHub (for cosign) and Sigstore's `tuf-repo-cdn.sigstore.dev`, to check the images' signatures. |
 
-The management cluster's nodes can pull through registry mirrors instead ([setup](#network), Advanced).
+The management cluster's nodes can pull images through registry mirrors instead ([setup](#network), Advanced). Registry mirrors cover images only. The Add-on Provider for Helm fetches every chart from its own repository, the cloud controller manager and CSI plugin included. A site without access to those hosts also needs [chart mirrors](#mirroring-the-charts).
+
+### Mirroring the charts
+
+A chart mirror serves the charts of one repository host from an address you choose. Set one per host under Advanced in the setup (Chart mirrors), or `chart_repositories` in the module ([variables](#variables)).
+
+- A host that serves OCI charts (`ghcr.io`) needs an `oci://` mirror, such as `ghcr.io=oci://registry.example.org/ghcr`. The charts of `oci://ghcr.io/istio/release/charts` are then fetched from `oci://registry.example.org/ghcr/istio/release/charts`.
+- A host that serves a chart repository (`charts.jetstack.io`) needs an `https://` or `http://` one, such as `charts.jetstack.io=https://charts.example.org/jetstack`.
+- The mirror holds the same charts under the same digests, since a re-packed chart is refused. Copy OCI charts with a tool that keeps the digest (`crane copy`, `oras cp` or `skopeo copy`) and chart archives byte for byte.
+- A mirror whose certificate the usual authorities do not sign needs its authority under Chart mirror certificate. The Add-on Provider for Helm trusts it beside the proxy's.
+- The proxy setting reaches the Add-on Provider for Helm too, so a mirror outside the proxy's exceptions is fetched through the proxy.
+
+`kubehenge charts` lists what to copy, each chart as `<repository>/<name>:<version>@sha256:<digest>`. Give it the values file of Kubehenge's chart (`charts/kubehenge/values.yaml` of the release), and `--mirror` to see where each chart then comes from:
+
+```sh
+kubehenge charts charts/kubehenge/values.yaml --mirror ghcr.io=oci://registry.example.org/ghcr
+```
+
+A mirror that no chart uses, or of another kind than its host, is refused. Charts without a mirror are fetched from their repository.
+
+### Behind a proxy
+
+Set the proxy under Advanced in the setup ([setup](#network)), or `proxy` in the module ([variables](#variables)). It takes an address, a user and password if the proxy asks, exceptions and the authority of a proxy that re-signs TLS. The module's `proxy.url` is the one place the credentials sit inside the address.
+
+It reaches OpenTofu, the appliance's downloads, the Talos nodes, the Cluster API operator and providers, the controller and the VM template builds. A build's VM uses it for packages, `curl` and image pulls, and trusts the authority while it builds.
+
+Kubehenge adds these exceptions:
+
+- the Proxmox VE API host
+- the management nodes' network and the build VM's network
+- the management cluster's pod and service ranges
+- `localhost`, `127.0.0.1`, `.svc` and `.cluster.local`
+
+Add the workload clusters' node networks and any internal registry.
+
+Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too. Clusters' own nodes are not covered.
 
 ### Sizes
 
@@ -91,7 +127,7 @@ The same with a static address:
 sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 ```
 
-`install.sh` carries the version of its release and the checksums of the release archive, the OpenTofu release and the container template it installs. It checks each download against them before using it. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
+`install.sh` carries the version of its release and the checksums of the release archive, the OpenTofu release and the container template it installs. It checks each download against them before using it. Once Proxmox's mirror drops that template, it takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
 
 ### Options
 
@@ -112,6 +148,8 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 | `--proxmox-url <URL>` | chosen from the API's certificate ([below](#the-proxmox-ve-api)) | The Proxmox VE API as the appliance and the clusters' VMs reach it, such as `https://pve.example.org:8006`. The API's certificate must be valid for it. The installer stops unless the appliance gets an answer there. |
 | `--proxmox-ca <file>` | found by the installer ([below](#the-ca)) | The CA that signed the API's certificate, such as your organisation's where it replaced Proxmox VE's own. The file may be a whole trust store, and the appliance gets only the certificates the API's rests on. The installer stops before it creates anything unless this CA signed the API's certificate for the URL. |
 | `--proxmox-insecure` | off | Nothing checks the Proxmox VE API's certificate. That covers OpenTofu, Cluster API, Kubehenge's controller, the template builds and every cluster's cloud controller manager and CSI plugin. The Administration page shows that it is on. Not with `--proxmox-ca`. |
+| `--trusted-proxy <address or CIDR>` | none | A reverse proxy in front of the interface, repeatable and also comma-separated ([below](#behind-a-reverse-proxy)). It writes `KUBEHENGE_TRUSTED_PROXIES` into `/etc/kubehenge/appliance.env`. With `--upgrade` it replaces the list. |
+| `--no-trusted-proxy` | | With `--upgrade`, removes the list of trusted proxies. |
 | `--release <file> --sha256 <hex>` | the published release the script names | Installs a release archive from a file instead, checked against the given checksum. OpenTofu is still downloaded unless `--tofu` names it. |
 | `--tofu <file>` | the published OpenTofu release | Installs OpenTofu from a release archive (`tofu_<version>_linux_amd64.tar.gz`) instead of downloading it. It is checked against the checksum in `install.sh`, so the version must be the one the script names. Together with `--release` and a template on a storage, the node needs no internet access. |
 | `--pve-entry` or `--no-pve-entry` | asked | Whether to add a Kubernetes entry to this node's Proxmox VE interface ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
@@ -132,6 +170,8 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
    - It installs Kubehenge, OpenTofu, the management-cluster module, the service units and the shared Headlamp, a single Kubernetes web interface for every cluster.
    - It adds the API's CA to the container's trust store and switches off the template's SSH and mail servers.
    - It starts the interface on ports 443 and 8443 (the shared Headlamp) as an unprivileged user.
+   - It installs Debian's `unattended-upgrades` for daily security updates through the installer's proxy, and only warns where Debian's mirrors are out of reach. `--upgrade` adds it where it is missing.
+   - It sets the container's protection, so Proxmox VE refuses to destroy it until that is taken off.
 7. If you said yes, adds the Kubernetes entry to this node's Proxmox VE interface.
 8. Prints the address and the certificate's fingerprint:
 
@@ -190,7 +230,7 @@ It keeps a name given before unless `--name` gives another, or `--no-name` drops
 
 A renewal keeps a name from a certificate this cluster's CA signed. It keeps any other name only where this node's DNS resolves it to the appliance's address, and otherwise drops it and says so. `--name` keeps it. The address is the one the container's configuration gives it, or with DHCP the one the container reports.
 
-After a new name or address, update the redirect URLs registered for OpenID realms (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).
+After a new name or address, it points this node's Kubernetes entry ([below](#the-proxmox-ve-interface-entry)) at it and prints the command for the other nodes. Update the redirect URLs registered for OpenID realms (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).
 
 ### The Proxmox VE interface entry
 
@@ -254,13 +294,23 @@ Sign in with a Proxmox VE account of any realm: Proxmox VE, PAM, LDAP, Active Di
 
 - **Realm and password.** Choose the realm, or type `user@realm` as the user name.
 - **Second factor.** An account with TOTP, Yubico OTP or recovery keys is asked for one.
-  - WebAuthn keys are bound to Proxmox VE's own address and do not work here. Their users sign in with another factor or an OpenID realm.
-- **OpenID realms** return from the identity provider to `https://<appliance>/api/openid/callback`. Register it as a redirect URL with the provider of the realm's client.
+  - WebAuthn keys are bound to Proxmox VE's own address and do not work here. Their users choose **Use API token** and give a Proxmox VE API token (`user@realm!name` and its secret).
+- **OpenID realms** return from the identity provider to `https://<appliance>/api/openid/callback`. Register it as a redirect URL with the provider of the realm's client. Many providers refuse a bare IP, so install with `--name`.
 - **Sessions** end eight hours after sign-in, however active, or when the interface restarts on an upgrade or a certificate renewal.
 - **Five failed sign-ins** for one user from one address within 15 minutes block that user from that address for the rest of the 15 minutes.
 - **Twenty failed sign-ins** from one address in that time refuse the address, whatever users they name.
 
 Every user sees and changes only what their Proxmox VE privileges allow ([clusters.md](clusters.md#who-may-do-what)).
+
+### Behind a reverse proxy
+
+The interface needs a host name of its own, never a path such as `https://tools.example.org/kubehenge/`, because its pages and API use absolute paths.
+
+- **Ports.** Forward 443 to the appliance's 443. Headlamp is served on port 8443 of the same name, which the interface's Headlamp links use, so forward that port too.
+- **Host.** Pass the `Host` header on unchanged, and set `--public-url` (the installer's `--name`) to the name users type.
+- **Sign-in limits.** The limits count the connection's address, which behind a proxy is the proxy's, so five wrong passwords lock a user out for everyone. List the proxy with `--trusted-proxy`.
+  - From a listed proxy, the client is the right-most `X-Forwarded-For` entry that is not itself listed. The proxy must append to that header, as most do.
+  - Requests from any other address count under their own address, whatever headers they carry.
 
 ## Set up the management cluster
 
@@ -318,7 +368,9 @@ The one exception is automatic upgrades of the management cluster, off by defaul
 | API address | The virtual IP of the management cluster's Kubernetes API. An unused IPv4 address in the nodes' network, neither a node address nor the gateway. It moves to a healthy node when one fails. |
 | Gateway | The nodes' default gateway, an IPv4 address. |
 | DNS servers | IP addresses, one per line or separated by commas. |
-| Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. |
+| Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. They cover images, not charts. |
+| Advanced: Chart mirrors, Chart mirror certificate | `host=address`, one per line, such as `ghcr.io=oci://registry.example.org/ghcr`. Clusters fetch that host's charts from the address, and trust the certificate authority (PEM) for it. See [Mirroring the charts](#mirroring-the-charts). |
+| Advanced: Proxy address, Proxy user, Proxy password, Proxy exceptions, Proxy certificate | The proxy every download goes through. The address has no credentials, so write `http://proxy.example:3128` and put the user and password in their fields. A saved password shows as set, and the page can replace or remove it but never shows it. See [Behind a proxy](#behind-a-proxy). |
 | Advanced: Pod ranges, Service ranges | The management cluster's own. When empty, `10.244.0.0/16` and `10.96.0.0/12`. Where those overlap the nodes' network, the API address or the gateway, the first clear one of a few other private ranges. |
 
 #### Clusters
@@ -329,7 +381,7 @@ The one exception is automatic upgrades of the management cluster, off by defaul
 | Proxmox VE HA | Off by default. When on, Proxmox VE HA keeps each cluster's control-plane VMs on separate nodes and restarts them elsewhere after a node fails. This holds for every cluster on shared storage that does not opt out ([clusters.md](clusters.md#machines)). Read [the details](install-settings.md#proxmox-ve-ha) first. |
 | HA rule placements | Off by default. When on, everyone who may create or change a cluster can place it on the nodes of a Proxmox VE HA node-affinity rule, without `Sys.Audit` on `/` of their own ([clusters.md](clusters.md#machines), [details](install-settings.md#ha-rule-placements)). |
 | CSI plugin | Off by default. When on, clusters may choose the CSI plugin's newest release ([details](install-settings.md#csi-plugin)). |
-| Template refresh | On by default. The node OS VM templates are built again every week with their node OS's updates. Clusters' nodes move to each build in their maintenance windows once it is a day old ([templates.md](templates.md#the-weekly-build), [details](install-settings.md#what-the-template-builds-may-do)). |
+| Template refresh | On by default. The node OS VM templates are built again every week with their node OS's updates. Clusters' nodes move to each build in their upgrade windows once it is a day old ([templates.md](templates.md#the-weekly-build), [details](install-settings.md#what-the-template-builds-may-do)). |
 | Day, Time, Time zone | When the build runs. Sunday at 01:00 UTC unless changed. |
 | Template disks | The storage for clusters the builds go to. The first one by default. |
 | Build address, Build gateway, Build DNS servers | A static address for the VM that prepares an image. Empty, that VM takes DHCP on the first bridge for clusters. |
@@ -344,7 +396,7 @@ The one exception is automatic upgrades of the management cluster, off by defaul
 | Field | What it is |
 | --- | --- |
 | Headlamp sign-in | Off by default, recommended. When on, the shared Headlamp opens each cluster signed in as cluster-admin for those who may download its admin kubeconfig ([clusters.md](clusters.md#open-a-cluster-in-headlamp)). Read [the details](install-settings.md#headlamp-sign-in) first. |
-| Headlamp actions | Off by default. When on, the shared Headlamp offers the Helm app catalog and the Prometheus charts it ships with. Both act with each user's own credentials in the cluster ([clusters.md](clusters.md#open-a-cluster-in-headlamp), [details](install-settings.md#headlamp-actions)). |
+| Headlamp actions | Off by default. When on, the shared Headlamp offers the Helm app catalogue and the Prometheus charts it ships with. Both act with each user's own credentials in the cluster ([clusters.md](clusters.md#open-a-cluster-in-headlamp), [details](install-settings.md#headlamp-actions)). |
 | Identity providers | OpenID Connect providers every new cluster trusts unless it names its own ([clusters.md](clusters.md#signing-in-with-openid-connect)). A change applies to clusters created afterwards. |
 | Backup targets | S3 stores for the clusters' Velero backups and etcd snapshots, for clusters that switch either on ([details](install-settings.md#backup-targets)). A changed target reaches the clusters that back up to it within ten minutes. One taken away leaves their Velero as it is. |
 | etcd restores | Off by default. The interface then shows the steps to restore a cluster's etcd by hand. When on, Kubehenge restores it itself through the VMs' guest agents ([details](install-settings.md#etcd-restores)). |
@@ -440,6 +492,30 @@ The appliance keeps the record in its own folder for 90 days. Changes made with 
 ### Back up the appliance
 
 The appliance holds the only copy of the management cluster's state. Add it to a Proxmox VE backup job (Datacenter, Backup) by its ID, its pool or all guests on its node. Once the management cluster exists, and until a backup job includes the appliance, administrators with `Sys.Audit` on `/` see a warning.
+
+The installer sets the container's protection, so Proxmox VE refuses to destroy it or restore a backup over it. Take it off with `pct set <ctid> --protection 0` first.
+
+Backups leave out the key of automatic upgrades. After a restore, switch automatic upgrades off and on again on the Administration page.
+
+#### Test a backup
+
+Restore it so that it cannot meet the running appliance. Two appliances on one management cluster each apply their own state to it.
+
+```sh
+pct restore <new ctid> <backup> --unique 1
+pct config <new ctid> | grep ^net0
+pct set <new ctid> --onboot 0 --net0 <that net0>,link_down=1
+```
+
+`--unique 1` gives the copy a MAC address of its own, and `link_down=1` keeps it off the network. A `pct clone` keeps the original's address too, and copies the key of automatic upgrades.
+
+#### A state older than the management cluster
+
+Each apply counts a generation up, kept with the appliance's state and in the management cluster. An apply or removal whose state is behind the cluster's is refused before it changes anything. A snapshot rollback, an older backup, a storage replica that took over after a crash or a second appliance leaves the state behind.
+
+The Administration page then offers **Take over…**, with the state passphrase. The next apply brings the management cluster to this state and undoes the newer changes. In the appliance's shell, run `kubehenge appliance take-over --overwrite --passphrase-file <file>`.
+
+While the management cluster does not answer, an administrator's apply goes ahead unchecked and its log says so. An automatic upgrade is refused.
 
 ### Back up the management cluster's etcd
 
@@ -600,6 +676,8 @@ tofu output -raw talosconfig > talosconfig
 | `workload_datastores` | `["local-lvm"]` | Storages clusters may use. |
 | `workload_bridges` | `["vmbr0"]` | Bridges clusters may attach to, with any VLAN on them. A node's bridge is its name. An SDN VNet is `zone/vnet`, such as `evpn1/web`. |
 | `bootstrap_datastore` | `local` | Storage for cloud-init ISOs. Cluster API gets full control of it. |
+| `proxy` | `{}` | The HTTP(S) proxy for downloads: `url`, `no_proxy` (comma-separated, with the Proxmox VE host, the nodes' network and the pod and service ranges) and `ca_bundle` (PEM). Sensitive. |
+| `chart_repositories` | `{}` | Mirrors of the Helm chart repositories. `mirrors` maps a repository host to an `oci://` or `http(s)://` address, of the same kind as the host, serving the same charts under the same digests. `ca_bundle` (PEM) is the authority of mirrors the usual ones do not sign ([details](#mirroring-the-charts)). |
 | `registry_mirrors` | `{}` | Registry mirrors for the management cluster's nodes, by registry name. Each takes endpoint URLs tried in order before the registry itself. A mirror of `factory.talos.dev`, `ghcr.io` or `registry.k8s.io` must serve the images' cosign signatures too. The nodes require them on Sidero's and Kubernetes' images and on the Talos providers'. |
 | `backup_targets` | `[]` | S3 stores clusters back up to with Velero ([details](install-settings.md#backup-targets)). Up to sixteen, each with `name` and `bucket`. Optional fields are `endpoint` (https, AWS S3 when unset), `region`, `prefix`, `ca_certificate` and `checksums` (default true). Access keys are stored through the interface, or named per cluster with `existingSecret` ([clusters.md](clusters.md#variables)). |
 | `cluster_oidc` | `[]` | OpenID Connect providers every new cluster trusts unless it names its own. Up to eight, each with `issuer_url` (https) and `client_id`. Optional fields are `username_claim`, `username_prefix`, `groups_claim`, `groups_prefix`, `scopes` and `certificate_authority`. |
@@ -617,7 +695,7 @@ tofu output -raw talosconfig > talosconfig
 | `extra_cluster_namespaces` | `[]` | Namespaces the interface creates and manages clusters in beside `clusters` ([clusters.md](clusters.md#more-namespaces-for-clusters)). Each is created if missing and kept when taken off the list. `default`, `cert-manager`, `kube-*` and `*-system` are refused. |
 | `etcd_restore` | `false` | Have the controller restore clusters' etcd itself through the VMs' guest agents. It uses a token holding `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool that only a short-lived Job per step holds ([details](install-settings.md#etcd-restores)). Without it, the interface shows the steps to restore by hand. |
 | `headlamp_sign_in` | `false` | Have the appliance's shared Headlamp sign those who may download a cluster's admin kubeconfig in as cluster-admin. It does so through two ServiceAccounts the controller keeps in every cluster of the interface's namespaces ([details](install-settings.md#headlamp-sign-in)). Without the appliance it does nothing but keep those accounts. |
-| `headlamp_actions` | `false` | Have the appliance's shared Headlamp offer the Helm app catalog and the Prometheus charts it ships with. They act with each user's own credentials in the cluster ([details](install-settings.md#headlamp-actions)). Without the appliance it does nothing. |
+| `headlamp_actions` | `false` | Have the appliance's shared Headlamp offer the Helm app catalogue and the Prometheus charts it ships with. They act with each user's own credentials in the cluster ([details](install-settings.md#headlamp-actions)). Without the appliance it does nothing. |
 | `api_audit_log` | `false` | Have the management cluster's API server log each change people make, which the interface's Activity page then lists with its user ([details](install-settings.md#kubectl-changes)). |
 
 #### `template_refresh` fields
@@ -633,6 +711,7 @@ tofu output -raw talosconfig > talosconfig
 | `bridge`, `vlan` | the first of `workload_bridges`, `0` (none) | Where the VM that prepares an image attaches. The bridge takes `zone/vnet` too. |
 | `address`, `gateway`, `dns` | DHCP | A static address with prefix, gateway and DNS servers for that VM. |
 | `creator_builds` | `false` | Lets those who may create clusters have a missing template built. |
+| `kubeadm_patches` | `true` | Also builds the kubeadm template of the newest patch release of each Kubernetes minor version a kubeadm cluster runs, and of the next minor version. |
 
 Outputs: `kubeconfig` and `talosconfig` (sensitive), `api_endpoint`, and `proxmox_objects`, which lists everything the module made on Proxmox VE.
 

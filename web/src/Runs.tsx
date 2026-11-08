@@ -3,8 +3,8 @@ import type { JSX } from "react";
 import { adminPath, type AdminView } from "./admin-views";
 import { clusterPath, type View } from "./cluster-paths";
 import { ranked, useFleet, type Standing } from "./fleet";
+import { settingLabel } from "./plan-rows";
 import { Link } from "./router";
-import { settingLabel } from "./Staging";
 import type { RunInfo } from "./types";
 import { age, filled } from "./ui";
 

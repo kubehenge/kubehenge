@@ -129,6 +129,9 @@ type controllerOptions struct {
 	argoCDChart       string
 	fluxOperatorChart string
 	chartValues       string
+	chartMirrors      []string
+	egressProxy       string
+	egressNoProxy     string
 	podSecurityExempt string
 	calicoImages      []string
 	extensionConfig   string
@@ -137,11 +140,21 @@ type controllerOptions struct {
 	offerHARules      bool
 	nodeImageSoak     time.Duration
 	templateRefresh   bool
-	proxmoxHA         bool
-	etcdRestore       bool
-	autoscaler        provisioner.AutoscalerReconciler
-	autoscalerImages  []string
-	headlampSignIn    []string
+	// probeCapmox and probeBuilder are the Secrets, as <namespace>/<name>, of the tokens of Cluster
+	// API's Proxmox VE provider and the template builder, which the controller tests though it does
+	// not use them.
+	probeCapmox  string
+	probeBuilder string
+	// tokenPlaces is the JSON of the pools, storages and builder places the tokens are tested on, and
+	// places what it decodes to.
+	tokenPlaces      string
+	places           provisioner.Places
+	connect          func(token string) (*proxmox.Client, error)
+	proxmoxHA        bool
+	etcdRestore      bool
+	autoscaler       provisioner.AutoscalerReconciler
+	autoscalerImages []string
+	headlampSignIn   []string
 }
 
 func newControllerCommand(conn *pve.Config) *cobra.Command {
@@ -188,6 +201,9 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.BoolVar(&o.templateRefresh, "template-refresh", false, "start the template refresh CronJob's Job for the builds asked for in the interface")
 	f.BoolVar(&o.proxmoxHA, "proxmox-ha", false, "keep clusters' control-plane VMs on separate nodes with Proxmox VE HA, writing HA through Jobs of the PodTemplate "+provisioner.HAJobTemplate)
 	f.BoolVar(&o.etcdRestore, "etcd-restore", false, "restore clusters' etcd through the VMs' guest agents, through Jobs of the PodTemplate "+provisioner.GuestJobTemplate)
+	f.StringVar(&o.probeCapmox, "test-capmox-token", "", "<namespace>/<name> of the Secret with the token of Cluster API's Proxmox VE provider, to test it for the privileges it needs. Empty, it is not tested")
+	f.StringVar(&o.probeBuilder, "test-template-builder-token", "", "<namespace>/<name> of the Secret with the template builder's token, to test it for the privileges it needs. Empty, it is not tested")
+	f.StringVar(&o.tokenPlaces, "token-places", "{}", `the places the tokens are tested on, as a JSON object: "templatePool", "storages" (the clusters' storages) and "builder" with "node", "storage", "import" and "iso". The workload pool, the clusters' group and boot logs come from their own flags`)
 	f.IntVar(&o.port, "extension-port", defaultExtensionPort, "port of the Runtime Extension server")
 	f.StringVar(&o.extensionConfig, "extension-config", "kubehenge", "ExtensionConfig through which Cluster API calls this controller's hooks")
 	f.StringVar(&o.certDir, "extension-cert-dir", "/etc/kubehenge/tls", "directory with tls.crt and tls.key for the Runtime Extension server")
@@ -210,6 +226,9 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.headlampChart, "headlamp-chart", "", "Headlamp chart, for clusters that switch it on, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringSliceVar(&o.calicoImages, "calico-images", nil, "the images the Tigera operator runs Calico from, all at its release, as <registry>/<repository>:<tag>@sha256:<digest> (comma-separated)")
 	f.StringVar(&o.chartValues, "chart-values", "{}", "Helm values for each chart, beneath Kubehenge's own and naming its images by digest, as a JSON object keyed by the chart flag's name without -chart, such as {\"cert-manager\":{...}}")
+	f.StringArrayVar(&o.chartMirrors, "chart-mirror", nil, "a mirror of a chart repository, as <host>=<address>, such as ghcr.io=oci://registry.example.org/ghcr or charts.jetstack.io=https://charts.example.org/jetstack. It serves the same charts under the same digests (repeatable)")
+	f.StringVar(&o.egressProxy, "egress-proxy", os.Getenv("HTTPS_PROXY"), "the proxy the add-ons of clusters that set none of their own go through (env HTTPS_PROXY). An address with credentials is not passed on")
+	f.StringVar(&o.egressNoProxy, "egress-no-proxy", os.Getenv("NO_PROXY"), "the exceptions to --egress-proxy, comma-separated (env NO_PROXY)")
 	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherChart, "rancher-chart", "", "Rancher chart, for the cluster that installs it, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherKubernetes, "rancher-kubernetes", "", "Kubernetes minor versions the Rancher chart runs on, as <min>-<max>, such as 34-36")
@@ -263,12 +282,29 @@ func (o *controllerOptions) addAutoscalerFlags(f *pflag.FlagSet) {
 	_ = cobra.MarkFlagRequired(f, "autoscaler-images")
 }
 
+// readPlaces decodes --token-places and adds the places the other flags name.
+func (o *controllerOptions) readPlaces() error {
+	if o.tokenPlaces != "" {
+		if err := json.Unmarshal([]byte(o.tokenPlaces), &o.places); err != nil {
+			return fmt.Errorf("--token-places: %w", err)
+		}
+	}
+	o.places.WorkloadPool, o.places.ClusterGroup, o.places.BootLogs = o.r.WorkloadPool, o.settings.Group, o.bootLogs
+	return nil
+}
+
 func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if conn.CAFile == "" {
 		return errors.New("--proxmox-ca is required: workload clusters are given the CA to verify the Proxmox VE API with")
 	}
 	if err := provisioner.ValidWorkloadPool(o.r.WorkloadPool); err != nil {
 		return fmt.Errorf("--workload-pool: %w", err)
+	}
+	if err := o.readPlaces(); err != nil {
+		return err
+	}
+	o.connect = func(token string) (*proxmox.Client, error) {
+		return pve.Connect(pve.Config{URL: conn.URL, Token: token, CAFile: conn.CAFile, Insecure: conn.Insecure})
 	}
 	ca, err := os.ReadFile(conn.CAFile)
 	if err != nil {
@@ -339,11 +375,14 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		Registrar:         registrar,
 		RancherKubernetes: rancherMinors,
 		Nodes:             cloud,
+		Sites:             cloud,
+		Bridges:           cloud,
 		DatastoreAllocate: o.r.DatastoreAllocate,
 		SysAuditGroup:     o.r.SysAuditGroup,
 		VolumeSnapshots:   o.r.VolumeSnapshots,
 		Releases: &provisioner.ReleaseChecksums{
-			Pins: provisioner.DefaultReleasePins(),
+			Pins:  provisioner.DefaultReleasePins(),
+			Store: &provisioner.PinStore{Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace},
 		},
 		Client: mgr.GetClient(),
 		Soak:   o.nodeImageSoak,
@@ -484,6 +523,9 @@ func (o *controllerOptions) parseCharts() error {
 	if len(values) > 0 {
 		return fmt.Errorf("--chart-values: no chart is called %s", strings.Join(slices.Sorted(maps.Keys(values)), ", "))
 	}
+	if err := o.parseMirrors(); err != nil {
+		return err
+	}
 	for _, i := range []struct {
 		flag  string
 		value string
@@ -514,6 +556,21 @@ func (o *controllerOptions) parseCharts() error {
 	if o.autoscaler.Images, err = provisioner.ParseAutoscalerImages(o.autoscalerImages); err != nil {
 		return fmt.Errorf("--autoscaler-images: %w", err)
 	}
+	return nil
+}
+
+// parseMirrors reads the chart mirrors, which have to belong to the charts parsed, and the proxy
+// the add-ons take by default.
+func (o *controllerOptions) parseMirrors() error {
+	mirrors, err := provisioner.ParseChartMirrors(o.chartMirrors)
+	if err == nil {
+		err = mirrors.Check(o.r.Charts.Pinned())
+	}
+	if err != nil {
+		return fmt.Errorf("--chart-mirror: %w", err)
+	}
+	o.r.Charts.Mirrors = mirrors
+	o.r.Egress = provisioner.Egress{URL: o.egressProxy, NoProxy: provisioner.SplitNoProxy(o.egressNoProxy)}
 	return nil
 }
 
@@ -686,7 +743,7 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 	if err := addHooks(extensions, scheme, hooks); err != nil {
 		return err
 	}
-	placer := &provisioner.Placer{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Nodes: cloud, Interval: placementInterval}
+	placer := &provisioner.Placer{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Nodes: cloud, Sites: cloud, Interval: placementInterval}
 	if err := mgr.Add(placer); err != nil {
 		return fmt.Errorf("the placer: %w", err)
 	}
@@ -707,18 +764,25 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 		Namespace: o.r.ClassNamespace,
 		Proxmox:   cloud.Client,
 		Interval:  proxmoxReachInterval,
+		Tokens:    o.tokenProbes(mgr, cloud.Client),
 	}
 	if err := mgr.Add(reach); err != nil {
 		return fmt.Errorf("the Proxmox VE reachability check: %w", err)
 	}
-	return o.addHA(mgr, cloud.Client)
+	return o.addHA(mgr, cloud)
 }
 
 // addUpgrader adds what upgrades clusters automatically in their windows, what upgrades Talos
 // clusters' nodes in place to their Talos release, and what records the templates there are, which
 // the upgraders and the interface go by.
 func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, rancherMinors provisioner.KubernetesMinors, remotes *provisioner.Remotes) error {
-	versions := &provisioner.TemplateVersions{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Interval: templateVersionsInterval}
+	versions := &provisioner.TemplateVersions{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Interval: templateVersionsInterval,
+		Soak: o.nodeImageSoak, Now: time.Now,
+	}
+	if o.templateRefresh {
+		versions.Reader = mgr.GetAPIReader()
+	}
 	if err := mgr.Add(versions); err != nil {
 		return fmt.Errorf("the template versions: %w", err)
 	}
@@ -730,6 +794,7 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 			URLs:    provisioner.DefaultChannelURLs,
 			Proxmox: c,
 			Pins:    provisioner.DefaultReleasePins(),
+			Store:   &provisioner.PinStore{Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace},
 		},
 		RancherKubernetes: rancherMinors,
 		Interval:          o.upgradeInterval,
@@ -738,6 +803,7 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 		Checker:           &provisioner.IdentityChecker{Reader: mgr.GetAPIReader(), Now: time.Now},
 		Events:            mgr.GetEventRecorder("kubehenge"),
 		Now:               time.Now,
+		Informers:         mgr.GetCache(),
 	}
 	if err := mgr.Add(upgrader); err != nil {
 		return fmt.Errorf("the upgrader: %w", err)
@@ -777,16 +843,27 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 // token. Without it every restore of kubeadm, RKE2 and k3s is done by hand.
 func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remotes *provisioner.Remotes) error {
 	targets := &provisioner.ClusterTargets{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget}
+	dialer := &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos}
 	snapshotter := &provisioner.EtcdSnapshotter{
 		Client:         mgr.GetClient(),
 		Reader:         mgr.GetAPIReader(),
 		ClassNamespace: o.r.ClassNamespace,
-		Etcd:           &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos},
+		Etcd:           dialer,
 		Targets:        targets,
 		Events:         mgr.GetEventRecorder("kubehenge"),
 	}
 	if err := snapshotter.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the etcd snapshotter: %w", err)
+	}
+	maintainer := &provisioner.EtcdMaintainer{
+		Client:         mgr.GetClient(),
+		Reader:         mgr.GetAPIReader(),
+		ClassNamespace: o.r.ClassNamespace,
+		Etcd:           dialer,
+		Events:         mgr.GetEventRecorder("kubehenge"),
+	}
+	if err := maintainer.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the etcd maintainer: %w", err)
 	}
 	restorer := &provisioner.EtcdRestorer{
 		Client:         mgr.GetClient(),
@@ -826,7 +903,8 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 		return fmt.Errorf("the certificate watch: %w", err)
 	}
 	vms := &provisioner.VMWatch{
-		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, Proxmox: c, Events: mgr.GetEventRecorder("kubehenge"),
+		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, WorkloadPool: o.r.WorkloadPool,
+		Proxmox: c, Workloads: remotes, Events: mgr.GetEventRecorder("kubehenge"),
 		Interval: vmWatchInterval,
 	}
 	if err := mgr.Add(vms); err != nil {
@@ -856,13 +934,14 @@ func (o *controllerOptions) addBootLogs(mgr manager.Manager, c *proxmox.Client) 
 // addHA adds the reconciler that has Proxmox VE HA keep clusters' control-plane VMs apart, with
 // --proxmox-ha. It writes HA in Jobs that alone hold the HA token. Without it, the reconciler takes
 // back the hooks it set before.
-func (o *controllerOptions) addHA(mgr manager.Manager, c *proxmox.Client) error {
+func (o *controllerOptions) addHA(mgr manager.Manager, cloud *provisioner.Proxmox) error {
 	r := &provisioner.HAReconciler{
 		Client:         mgr.GetClient(),
 		Machines:       mgr.GetCache(),
 		ClassNamespace: o.r.ClassNamespace,
 		WorkloadPool:   o.r.WorkloadPool,
-		Proxmox:        c,
+		Proxmox:        cloud.Client,
+		Nodes:          cloud,
 	}
 	if o.proxmoxHA {
 		r.HA = &provisioner.HAJobs{Jobs: o.tokenJob(mgr, provisioner.HAJobTemplate)}
@@ -871,6 +950,34 @@ func (o *controllerOptions) addHA(mgr manager.Manager, c *proxmox.Client) error 
 		return fmt.Errorf("the Proxmox VE HA reconciler: %w", err)
 	}
 	return nil
+}
+
+// tokenProbes tests the controller's own token and every other token that exists: the HA and restore
+// tokens through their Jobs, Cluster API's and the template builder's from their Secrets, and each
+// cluster's.
+func (o *controllerOptions) tokenProbes(mgr manager.Manager, c *proxmox.Client) *provisioner.TokenProbes {
+	t := &provisioner.TokenProbes{
+		Reader: mgr.GetAPIReader(), Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace,
+		Places: o.places, Controller: c, Connect: o.connect,
+	}
+	if o.proxmoxHA {
+		t.HA = o.tokenJob(mgr, provisioner.HAJobTemplate)
+	}
+	if o.etcdRestore {
+		t.Restore = o.tokenJob(mgr, provisioner.GuestJobTemplate)
+	}
+	for _, s := range []struct {
+		name, ref string
+		needs     []provisioner.Need
+	}{
+		{"Cluster API provider", o.probeCapmox, provisioner.CapmoxNeeds(&o.places)},
+		{"Template builder", o.probeBuilder, provisioner.TemplateBuilderNeeds(&o.places)},
+	} {
+		if namespace, name, ok := strings.Cut(s.ref, "/"); ok {
+			t.Secrets = append(t.Secrets, provisioner.SecretProbe{Name: s.name, Namespace: namespace, From: name, Needs: s.needs})
+		}
+	}
+	return t
 }
 
 // tokenJob runs requests in Jobs of the chart's PodTemplate template, beside the controller.

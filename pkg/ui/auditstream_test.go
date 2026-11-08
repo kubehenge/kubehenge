@@ -314,12 +314,16 @@ func (*apiServerFake) follow(w http.ResponseWriter, r *http.Request, f *fakeFoll
 	}
 }
 
-// waitAuditKept waits until the activity log holds exactly the changes want, sorted, and fails
-// after a few seconds.
+// waitAuditKept waits until the activity log holds exactly the changes want, sorted. It wakes on
+// each entry written, so `go test -timeout` is its only bound.
 func waitAuditKept(t *testing.T, s *Server, want ...string) {
 	t.Helper()
 	var got []string
-	for range 300 {
+	for {
+		// Taken before the read, so an entry written after it still wakes the wait.
+		s.activityLog.mu.Lock()
+		changed := s.activityLog.mu.next()
+		s.activityLog.mu.release()
 		kept, err := s.activityLog.since(auditBase.Add(-time.Hour), 1000, func(*activityEntry) bool { return true })
 		if err != nil {
 			t.Fatal(err)
@@ -332,9 +336,12 @@ func waitAuditKept(t *testing.T, s *Server, want ...string) {
 		if slices.Equal(got, want) {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-changed:
+		case <-t.Context().Done():
+			t.Fatalf("kept %v, want %v", got, want)
+		}
 	}
-	t.Fatalf("kept %v, want %v", got, want)
 }
 
 // A change made a few seconds before the kubelet rotates the API server's log file, and after the

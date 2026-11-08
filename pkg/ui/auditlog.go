@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -192,6 +193,9 @@ type auditPod struct {
 	finished bool
 	// fresh says the stream has brought no line yet.
 	fresh bool
+	// open says the stream is open on the current container's log, so what the API server writes
+	// from now on reaches it.
+	open bool
 }
 
 func (p *auditPod) streaming() bool {
@@ -215,7 +219,7 @@ func (p *auditPod) end() {
 // auditFollower keeps one stream on each API server's log and what it has read of them. The
 // streams change it, so mu guards it.
 type auditFollower struct {
-	mu sync.Mutex
+	mu changeMutex
 	// start is where the first stream of a pod starts.
 	start time.Time
 	// pods are the positions in the logs, by pod name.
@@ -223,6 +227,8 @@ type auditFollower struct {
 	// seen are the audit IDs of the lines kept, so a line read again is not kept twice.
 	seen    map[string]time.Time
 	streams sync.WaitGroup
+	// rounds counts the passes over the API servers, which tell the tests the loop has run.
+	rounds atomic.Int64
 }
 
 func newAuditFollower() *auditFollower {
@@ -244,18 +250,44 @@ func (f *auditFollower) stopAll() {
 func (s *Server) followAuditLog(ctx context.Context, every time.Duration) {
 	f := newAuditFollower()
 	defer f.stopAll()
+	s.auditFollower.Store(f)
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		if err := s.followAuditPods(ctx, f); err != nil {
 			s.Log.WarnContext(ctx, "reading the API server's audit log", "error", err)
 		}
+		f.rounds.Add(1)
+		// The first management cluster wakes the loop at once. The tick is the retry, and finds
+		// API servers that restarted or were replaced.
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-s.auditWake:
 		}
 	}
+}
+
+// followsAuditLog tells whether every API server's log is being followed as it is written.
+func (s *Server) followsAuditLog() bool {
+	f := s.auditFollower.Load()
+	return f != nil && f.attached()
+}
+
+// attached tells whether each API server has a stream open on its current log.
+func (f *auditFollower) attached() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.pods) == 0 {
+		return false
+	}
+	for _, p := range f.pods {
+		if !p.streaming() || !p.open {
+			return false
+		}
+	}
+	return true
 }
 
 // followAuditPods keeps a stream open on each API server's log, from where the last one stopped.
@@ -321,7 +353,9 @@ func (s *Server) keepStreaming(ctx context.Context, f *auditFollower, open audit
 	p := f.pods[name]
 	switch {
 	case p == nil:
-		p = &auditPod{uid: uid, restarts: restarts, from: f.start}
+		// A pod met after its container restarted (the interface started late, or restarted itself) has
+		// the changes made since f.start in the previous container's log too.
+		p = &auditPod{uid: uid, restarts: restarts, from: f.start, previous: restarts > 0}
 		f.pods[name] = p
 	case p.uid != uid:
 		if !p.finished {
@@ -342,8 +376,10 @@ func (s *Server) keepStreaming(ctx context.Context, f *auditFollower, open audit
 	}
 	streamCtx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
-	p.stop, p.done, p.heard, p.finished = stop, done, s.now(), false
+	p.stop, p.done, p.heard, p.finished, p.open = stop, done, s.now(), false, false
 	f.streams.Go(func() {
+		// Runs after done is closed, to wake whoever waits for the stream to end.
+		defer f.mu.wake()
 		defer close(done)
 		defer stop()
 		s.streamPod(streamCtx, f, open, name, p)
@@ -385,7 +421,10 @@ func (s *Server) streamPod(ctx context.Context, f *auditFollower, open auditOpen
 		err := s.readPodLog(ctx, f, open, name, p, from, true)
 		switch {
 		case apierrors.IsBadRequest(err) || apierrors.IsNotFound(err):
-			s.warnLost(ctx, name, last, "the previous container's log is gone")
+			// A pod first met after a restart has read nothing yet, so nothing is known to be lost.
+			if !last.IsZero() {
+				s.warnLost(ctx, name, last, "the previous container's log is gone")
+			}
 		case err != nil:
 			// Read again at the next tick, as the previous log may still be there.
 			s.warnStream(ctx, name, err)
@@ -415,7 +454,7 @@ func (s *Server) readPodLog(ctx context.Context, f *auditFollower, open auditOpe
 	}
 	defer func() { _ = stream.Close() }()
 	f.mu.Lock()
-	p.fresh = true
+	p.fresh, p.open = true, !previous
 	f.mu.Unlock()
 	br := bufio.NewReaderSize(stream, scanStart)
 	for {

@@ -120,6 +120,8 @@ ETCD_SHA256=5dfa9cc3b3ce3b4b491fbcc2057d3daa166bcc6676f743fcd20f8e5760cb9775
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
+# shellcheck source=ci/room.sh
+. "$(dirname "$0")/ci/room.sh"
 # shellcheck source=cis-benchmark.sh
 . "$(dirname "$0")/cis-benchmark.sh"
 # shellcheck source=backups.sh
@@ -195,7 +197,8 @@ cni_state() {
         calico | cilium) ;;
         *) return 0 ;;
     esac
-    kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' 2> /dev/null | base64 -d > "${work}/state" || return 0
+    # shellcheck disable=SC2310 # a cluster whose kubeconfig cannot be read has no state to show.
+    state_kubeconfig || return 0
     printf '\n%s:\n' "${KUBEHENGE_E2E_CNI}"
     if [ "${KUBEHENGE_E2E_CNI}" = calico ]; then
         KUBECONFIG=${work}/state kubectl get tigerastatus -o wide 2>&1 || true
@@ -224,9 +227,18 @@ cni_state() {
     done
     KUBECONFIG=${work}/state kubectl -n headlamp logs deployment/headlamp --tail=30 2>&1 || true
 }
+# state_kubeconfig: the cluster's kubeconfig in ${work}/state for a failed test's state, read from
+# the management cluster, as a test can fail before it wrote its own.
+state_kubeconfig() {
+    kubectl -n "${ns}" get secret "${name}-kubeconfig" -o jsonpath='{.data.value}' 2> /dev/null | base64 -d > "${work}/state"
+}
 cleanup() {
     status=$?
     [ "${status}" -eq 0 ] || cni_state
+    # shellcheck disable=SC2310 # a cluster whose kubeconfig cannot be read has no state to show.
+    if [ "${status}" -ne 0 ] && on argocd && state_kubeconfig; then
+        flux_state "${work}/state"
+    fi
     [ -z "${issuer_pid}" ] || kill "${issuer_pid}" 2> /dev/null || true
     [ -z "${interface_pid}" ] || kill "${interface_pid}" 2> /dev/null || true
     [ -z "${grafana_pid}" ] || kill "${grafana_pid}" 2> /dev/null || true
@@ -453,23 +465,19 @@ class_json=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json)
 # load balancer and Rancher's agent, which registers a cluster by default.
 # shellcheck disable=SC2086 # one add-on per word.
 sized_for=$(jq -cn '$ARGS.positional + ["loadBalancer", "rancherAgent"]' --args ${addons})
-# fixture_memory: what the test's own pods request on the worker at once, which the scheduler keeps
-# for them beside the add-ons' requests. With GitOps that is Gitea's 128 MiB and five agnhost pods at
-# 16 MiB each. The other steps' few agnhost pods fit in the room the add-ons' figures leave.
-fixture_memory=0
+# With GitOps the worker also holds what the test's own pods request, which the scheduler keeps for
+# them beside the add-ons' requests: Gitea and the agnhost pods the steps before it leave running.
+# The other steps' few agnhost pods fit in the room the add-ons' figures leave.
+sized_gitops=false
 # shellcheck disable=SC2310 # on only answers whether the run switches the add-on on.
 if on argocd; then
-    fixture_memory=208
+    sized_gitops=true
 fi
 # Unless set, the worker gets the least Kubehenge lets it have with those add-ons on, so that they
-# are seen to fit in it: its distribution's least, or what a worker uses itself, each add-on's
-# figure and the test's own pods, whichever is more.
-worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --argjson fixtures "${fixture_memory}" '
-    (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
-    | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
-    | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.worker + ([$on[] | $addon[.]] | add) + $fixtures]
-    | max')}
+# are seen to fit in it (worker_memory_for, common.sh). worker_need is what a worker uses itself,
+# which the balloon below keeps.
+worker_need=$(worker_need_for "${class_json}" "${sized_for}" "${sized_gitops}")
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(worker_memory_for "${class_json}" "${sized_for}" "${sized_gitops}")}
 # Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
 # request, the GitOps engine that asks for more of the two.
 worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
@@ -480,15 +488,27 @@ worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r
     | max')}
 # The control plane's memory likewise: the least the class's sizing guide gives it beside one worker, or what
 # it uses itself with those add-ons and its CNI, whichever is more.
-control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --arg cni "${KUBEHENGE_E2E_CNI:-}" '
+control_plane_need=$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" --arg cni "${KUBEHENGE_E2E_CNI:-}" '
     (.metadata.annotations["kubehenge.dev/addon-control-plane-memory"] // "{}" | fromjson) as $grows
     | (.metadata.annotations["kubehenge.dev/cni-control-plane-memory"] // "{}" | fromjson) as $cnis
     | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
-    | [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
+    | $node.controlPlane + ([$on[] | $grows[.] // 0] | add) + ($cnis[$cni] // 0)')
+control_plane_memory=${KUBEHENGE_E2E_CONTROL_PLANE_MEMORY:-$(printf '%s' "${class_json}" | jq -r --argjson need "${control_plane_need}" '
+    [(.metadata.annotations["kubehenge.dev/control-plane-sizes"] | fromjson | map(select(.workers <= 1)) | last | .memoryMiB),
         (.spec.variables[] | select(.name == "controlPlaneMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
-        $node.controlPlane + ([$on[] | $grows[.] // 0] | add) + ($cnis[$cni] // 0)]
+        $need]
     | max')}
 echo "workers with ${worker_memory} MiB of memory and ${worker_cores} cores, the control plane with ${control_plane_memory} MiB"
+# KUBEHENGE_E2E_BALLOON_FILE: where the recorder (ci/guests.sh) finds the least memory each node's
+# balloon may take it down to. The nodes keep the sizes above, the class's own least, and give
+# memory back only while the runner is short of it: down to what Kubehenge's figures say they need.
+# A node's name starts with the cluster's, and a worker's goes on with -md-.
+if [ -n "${KUBEHENGE_E2E_BALLOON_FILE:-}" ]; then
+    balloon_floor "${worker_need}" "${worker_memory}"
+    worker_floor=${floor}
+    balloon_floor "${control_plane_need}" "${control_plane_memory}"
+    printf '%s-md-* %s\n%s-* %s\n' "${name}" "${worker_floor}" "${name}" "${floor}" > "${KUBEHENGE_E2E_BALLOON_FILE}"
+fi
 cat > "${work}/cluster.yaml" << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
@@ -904,7 +924,7 @@ esac
 # Every fixture pod here has a memory request: a pod without one is best-effort, and Talos's OOM
 # controller kills those first on a full worker, which restarts it and fails the lane's restart check.
 agnhost_pod() {
-    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","resources":{"requests":{"cpu":"10m","memory":"16Mi"},"limits":{"memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2")
+    agnhost_overrides=$(printf '{"apiVersion":"v1","spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65532,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"%s","resources":{"requests":{"cpu":"10m","memory":"%sMi"},"limits":{"memory":"128Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' "$2" "${agnhost_request_mib}")
     agnhost_namespace=$1 agnhost_name=$2
     shift 2
     wl -n "${agnhost_namespace}" run "${agnhost_name}" --image="${agnhost}" --override-type=strategic --overrides="${agnhost_overrides}" -- "$@"
@@ -915,14 +935,14 @@ agnhost_pod() {
 agnhost_deployment() {
     agnhost_namespace=$1 agnhost_name=$2
     shift 2
-    jq -n --arg name "${agnhost_name}" --arg image "${agnhost}" '$ARGS.positional as $args | {
+    jq -n --arg name "${agnhost_name}" --arg image "${agnhost}" --arg request "${agnhost_request_mib}Mi" '$ARGS.positional as $args | {
         apiVersion: "apps/v1", kind: "Deployment", metadata: {name: $name},
         spec: {replicas: 1, selector: {matchLabels: {app: $name}}, template: {
             metadata: {labels: {app: $name}},
             spec: {hostname: $name,
                 securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: "RuntimeDefault"}},
                 containers: [{name: $name, image: $image, args: $args,
-                    resources: {requests: {cpu: "10m", memory: "16Mi"}, limits: {memory: "128Mi"}},
+                    resources: {requests: {cpu: "10m", memory: $request}, limits: {memory: "128Mi"}},
                     securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}}}' --args -- "$@" |
         wl -n "${agnhost_namespace}" apply -f -
 }
@@ -1784,8 +1804,12 @@ if [ "${restores_etcd}" = true ]; then
     snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
     snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
     etcd_prefix=$(target_folder "${name}" etcd)
-    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
-    [ "${keys}" = "${etcd_prefix}/${snapshot_name}" ] || fail "the store's etcd snapshots are not the one taken: ${keys}"
+    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
+    # Each snapshot has a record of its facts and checksum beside it.
+    expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${snapshot_name}.json" | sort)
+    [ "${keys}" = "${expected_keys}" ] ||
+        fail "the store's etcd snapshots are not the one taken with its record: ${keys}"
+    record_sum=$(s3 "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}.json" | jq -r .sha256)
     s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
     header=$(head -c 21 "${work}/snapshot.db.age")
     [ "${header}" = age-encryption.org/v1 ] || fail "the etcd snapshot in the store is not encrypted with age"
@@ -1795,8 +1819,9 @@ if [ "${restores_etcd}" = true ]; then
     sum=$(sha256sum "${work}/snapshot.db" | cut -d ' ' -f 1)
     taken_sum=$(printf '%s' "${snapshot}" | jq -r .sha256)
     [ "${sum}" = "${taken_sum}" ] || fail "the decrypted snapshot does not have the SHA-256 it was taken with"
-    curl -sS --fail -L --proto '=https' --retry 8 --retry-all-errors -o "${work}/etcd.tar.gz" \
-        "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz"
+    [ "${sum}" = "${record_sum}" ] || fail "the snapshot's record in the store holds SHA-256 ${record_sum}, not the snapshot's ${sum}"
+    "$(dirname "$0")/../../scripts/fetch.sh" \
+        "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz" "${work}/etcd.tar.gz"
     printf '%s  %s\n' "${ETCD_SHA256}" "${work}/etcd.tar.gz" | sha256sum -c - > /dev/null ||
         fail "etcd's download does not have its SHA-256"
     tar -xzf "${work}/etcd.tar.gz" -C "${work}" --strip-components=1 "etcd-${ETCD_VERSION}-linux-amd64/etcdutl"
@@ -1869,7 +1894,8 @@ if [ "${restores_etcd}" = true ]; then
     before_name=$(printf '%s' "${restore}" | jq -r '.before // ""')
     [ -n "${before_name}" ] || fail "the restore took no snapshot of etcd as it was first: ${restore}"
     keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
-    expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${before_name}" | sort)
+    expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${snapshot_name}.json" \
+        "${etcd_prefix}" "${before_name}" "${etcd_prefix}" "${before_name}.json" | sort)
     [ "${keys}" = "${expected_keys}" ] ||
         fail "the store's etcd snapshots after the restore are not the one restored and the one of etcd as it was: ${keys}"
     s3 -o "${work}/before.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${before_name}"
@@ -2341,6 +2367,8 @@ EOF
         wl -n logging rollout status statefulset/loki --timeout=10m
         until_true 600 "Alloy installed on the nodes" sh -c "KUBECONFIG=${work}/workload kubectl -n logging-node get daemonset/alloy-node >/dev/null 2>&1"
         wl -n logging-node rollout status daemonset/alloy-node --timeout=10m
+        # The events collector is a release of its own, which can land after the node collector's.
+        until_true 600 "Alloy's events collector installed" sh -c "KUBECONFIG=${work}/workload kubectl -n logging get deployment/alloy >/dev/null 2>&1"
         wl -n logging rollout status deployment/alloy --timeout=10m
         # Grafana reads Loki with its client certificate once its Deployment mounts it, which replaces its pod.
         grafana_deployment=deployment/kube-prometheus-stack-grafana
@@ -2791,6 +2819,10 @@ EOF
         bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
         # renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
         pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
+        # Pebble refuses an account without an external account binding, as ZeroSSL or Sectigo do. Its key
+        # and cert-manager's are base64url without padding.
+        eab_key_id=e2e-eab
+        eab_hmac=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')
         # The HTTP-01 names live in the cluster's own DNS, as Services in e2e-certs whose endpoint is the API
         # address, where Traefik answers on port 80; cert-manager's self-check finds them there, and Pebble
         # in BIND's copy of the same records, so that nothing outside the cluster need resolve them.
@@ -2889,7 +2921,8 @@ data:
   pebble.json: |
     {"pebble": {"listenAddress": "0.0.0.0:14000", "managementListenAddress": "0.0.0.0:15000",
       "certificate": "/tls/tls.crt", "privateKey": "/tls/tls.key", "httpPort": 80, "tlsPort": 443,
-      "ocspResponderURL": "", "externalAccountBindingRequired": false}}
+      "ocspResponderURL": "", "externalAccountBindingRequired": true,
+      "externalAccountMACKeys": {"${eab_key_id}": "${eab_hmac}"}}}
 ---
 apiVersion: v1
 kind: Pod
@@ -3045,10 +3078,29 @@ metadata:
 type: kubehenge.dev/user-credential
 stringData:
   token: "${tsig}"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${name}.acme-eab
+  labels:
+    kubehenge.dev/user-credential: acme-eab
+    kubehenge.dev/credential-cluster: ${name}
+  annotations:
+    kubehenge.dev/credential-set-by: e2e@pve
+    kubehenge.dev/credential-set-at: "${stored_at}"
+  ownerReferences:
+    - apiVersion: cluster.x-k8s.io/v1beta2
+      kind: Cluster
+      name: ${name}
+      uid: ${cluster_uid}
+type: kubehenge.dev/user-credential
+stringData:
+  hmacKey: "${eab_hmac}"
 EOF
         kubectl -n "${ns}" annotate cluster "${name}" --overwrite "kubehenge.dev/credentials-stored-at=${stored_at}"
-        dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
-    acme: {server: $s, caBundle: $ca}, dns01: {provider: "rfc2136", nameservers: [$d], rfc2136: {nameserver: $d, tsigKeyName: "e2e", tsigAlgorithm: "HMACSHA256"}}}')
+        dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" --arg k "${eab_key_id}" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
+    acme: {server: $s, caBundle: $ca, externalAccountBinding: {keyID: $k}}, dns01: {provider: "rfc2136", nameservers: [$d], rfc2136: {nameserver: $d, tsigKeyName: "e2e", tsigAlgorithm: "HMACSHA256"}}}')
         set_variable certificates "${dns01}"
         # One name one level too deep for the default certificate, and one it covers.
         set_variable headlamp '{"enabled":true,"hostname":"headlamp.apps.e2e.test"}'
@@ -3059,6 +3111,18 @@ EOF
                 dns01_token=$(printf '%s' "${dns01_token}" | base64 -d) && [ "${dns01_token}" = "${tsig}" ]
         }
         until_true 300 "the cluster's DNS credential in the workload cluster" dns01_copied
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        eab_copied() {
+            eab_copy=$(wl -n cert-manager get secret kubehenge-acme-eab -o jsonpath='{.data.hmacKey}' 2> /dev/null) &&
+                eab_copy=$(printf '%s' "${eab_copy}" | base64 -d) && [ "${eab_copy}" = "${eab_hmac}" ]
+        }
+        until_true 300 "the cluster's binding key in the workload cluster" eab_copied
+        # shellcheck disable=SC2310 # polled with set -e off, so a failed read is only a retry.
+        issuer_binds() {
+            wl get clusterissuer.cert-manager.io/kubehenge-ingress -o json 2> /dev/null |
+                jq -e --arg k "${eab_key_id}" '.spec.acme.externalAccountBinding == {keyID: $k, keySecretRef: {name: "kubehenge-acme-eab", key: "hmacKey"}}' > /dev/null
+        }
+        until_true 300 "the issuer binds its ACME account with the key ID and the copied key" issuer_binds
         # cert-manager looks for its records only at BIND, which alone knows e2e.test.
         recursive() {
             wl -n cert-manager get deployment cert-manager -o json 2> /dev/null |
@@ -3129,7 +3193,7 @@ EOF
                 [ "${http01_status}" != 000 ]
         }
         until_true 60 "Traefik reached from a pod at ${http01_host} on port 80" http01_reached
-        http01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" '{enabled: true, issuer: "acme-http01", acme: {server: $s, caBundle: $ca}}')
+        http01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg k "${eab_key_id}" '{enabled: true, issuer: "acme-http01", acme: {server: $s, caBundle: $ca, externalAccountBinding: {keyID: $k}}}')
         set_variable certificates "${http01}"
         set_variable headlamp "{\"enabled\":true,\"hostname\":\"${http01_headlamp}\"}"
         set_variable monitoring '{"enabled":true}'
@@ -3215,9 +3279,9 @@ spec:
             httpGet: {path: /api/healthz, port: http}
           # A pod without requests is best-effort, and Talos's OOM controller kills those first when the
           # 2 GiB worker fills up as the add-ons install. Gitea holds about 100 MiB and peaks near
-          # 135 MiB, and the worker is sized for this request (fixture_memory).
+          # 135 MiB, and the worker is sized for this request (worker_memory_for, common.sh).
           resources:
-            requests: {cpu: 100m, memory: 128Mi}
+            requests: {cpu: 100m, memory: ${gitea_request_mib}Mi}
             limits: {memory: 512Mi}
           securityContext:
             allowPrivilegeEscalation: false
@@ -3300,7 +3364,7 @@ EOF
         # Read only, as the interface tells its users to add it.
         git_request=$(jq -cn --arg k "${public_key}" '{title: "kubehenge", key: $k, read_only: true}')
         git_api POST repos/e2e/clusters/keys -d "${git_request}" > /dev/null
-        until_true 600 "Flux installed by its operator" wl -n flux-system wait --for=condition=Ready fluxinstance/flux --timeout=10s
+        until_true 600 "Flux installed by its operator" flux_ready "${work}/workload"
         until_true 600 "Flux syncs the repository" synced one
         push two
         until_true 300 "Flux syncs a new commit" synced two

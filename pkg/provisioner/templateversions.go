@@ -36,8 +36,9 @@ const NodeOSTemplatesAnnotation = "kubehenge.dev/node-os-templates"
 const TalosTemplatesAnnotation = "kubehenge.dev/talos-templates"
 
 // TemplateVersions keeps KubeadmVersionsAnnotation, NodeOSTemplatesAnnotation,
-// TalosTemplatesAnnotation, TemplateStoragesAnnotation, NodeImageBuildsAnnotation and
-// SnapshotStoragesAnnotation current.
+// TalosTemplatesAnnotation, TemplateStoragesAnnotation, NodeImageBuildsAnnotation,
+// TemplatesDownAnnotation and SnapshotStoragesAnnotation current, and TemplateNodeDownCondition
+// on the clusters.
 type TemplateVersions struct {
 	Client         client.Client
 	ClassNamespace string
@@ -45,6 +46,17 @@ type TemplateVersions struct {
 	// Interval is how often the templates are looked at: a template built or deleted is offered or
 	// withdrawn within about that long.
 	Interval time.Duration
+	// Soak is how long a template build waits before clusters are offered it, which decides the
+	// build each cluster clones from.
+	Soak time.Duration
+	// Reader reads past any cache. Set, a line whose newest build has an older kernel than the build
+	// before is asked to be built again (retryOlder). Nil leaves that to nobody, as when the refresh
+	// is off.
+	Reader client.Reader
+	Now    func() time.Time
+
+	// loggedDown is the templates on down nodes the last look logged.
+	loggedDown string
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -98,7 +110,31 @@ func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(
+	down, err := encodeTemplatesDown(seen.down)
+	if err != nil {
+		return err
+	}
+	// A VM on a down node is no failure: it is logged when the set changes, recorded on the classes
+	// for BeforeClusterCreate, and put on the clusters that would clone from it.
+	if now := downTemplates(seen.down); now != p.loggedDown {
+		log := ctrl.LoggerFrom(ctx).WithName("template-versions")
+		if now == "" {
+			log.Info("every template node is online again")
+		} else {
+			log.Info("templates on nodes that are down are left out of the templates on offer", "templates", now)
+		}
+		p.loggedDown = now
+	}
+	older, err := seen.older.Encode()
+	if err != nil {
+		return err
+	}
+	err = errors.Join(
+		p.retryOlder(ctx, &seen),
+		p.annotate(ctx, "kubeadm", TemplatesDownAnnotation, down),
+		p.annotate(ctx, "rke2", TemplatesDownAnnotation, down),
+		p.annotate(ctx, "k3s", TemplatesDownAnnotation, down),
+		p.annotate(ctx, "talos", TemplatesDownAnnotation, down),
 		p.annotate(ctx, "kubeadm", KubeadmVersionsAnnotation, kubeadm),
 		p.annotate(ctx, "rke2", NodeOSTemplatesAnnotation, joinNodeOSes(seen.nodeOSes[templates.RKE2])),
 		p.annotate(ctx, "k3s", NodeOSTemplatesAnnotation, joinNodeOSes(seen.nodeOSes[templates.K3s])),
@@ -110,7 +146,12 @@ func (p *TemplateVersions) publishTemplates(ctx context.Context) error {
 		p.annotate(ctx, "kubeadm", NodeImageBuildsAnnotation, builds),
 		p.annotate(ctx, "rke2", NodeImageBuildsAnnotation, builds),
 		p.annotate(ctx, "k3s", NodeImageBuildsAnnotation, builds),
+		p.annotate(ctx, "kubeadm", NodeImageOlderAnnotation, older),
+		p.annotate(ctx, "rke2", NodeImageOlderAnnotation, older),
+		p.annotate(ctx, "k3s", NodeImageOlderAnnotation, older),
 	)
+	p.markTemplateNodes(ctx, seen.down, seen.builds)
+	return err
 }
 
 // encodeKubeadmVersions writes KubeadmVersionsAnnotation, the same for the same versions.

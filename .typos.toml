@@ -24,13 +24,16 @@ extend-ignore-re = [
   "\\(Unauthorized\\)|\\*Unauthorized\\*",
   # OpenID Connect's discovery field and Prometheus' ServiceMonitor field.
   "authorization_endpoint",
-  "\\[?\"authorization\"(:|\\])",
+  "\\[?\"authorization\"(:|\\]|,)",
+  "credentialsAuthKey += \"authorization\"",
   # Istio's policy kind.
   "AuthorizationPolicy",
   # go-proxmox's error text.
   "not authorized",
   # Cluster API's status field.
   "\"initialization\"|\\binitialization \\{",
+  # The kubelet's reason for a container waiting on the pod's init containers.
+  "\\bPodInitializing\\b",
   # The Talos Image Factory schematic's key.
   "\\bcustomization( =|:)",
   # in-toto's attestation files.

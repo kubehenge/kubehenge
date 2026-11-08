@@ -46,7 +46,12 @@ const (
 	EtcdSnapshotFolder = "etcd"
 
 	// EtcdSnapshotSuffix ends the name of every snapshot: an etcd database encrypted with age.
-	EtcdSnapshotSuffix     = ".db.age"
+	EtcdSnapshotSuffix = ".db.age"
+	// EtcdSnapshotInfoSuffix ends the name of the small object that holds a snapshot's facts and
+	// checksum, beside the snapshot. A bucket with object lock keeps every version of an object, so
+	// the checksum, known only after the upload, cannot be written onto the snapshot itself without
+	// leaving a second locked copy of the whole database.
+	EtcdSnapshotInfoSuffix = ".json"
 	etcdSnapshotTimeLayout = "20060102T150405Z"
 
 	// The defaults of the etcdSnapshots variable, as the chart's schema has them: twice a day, as
@@ -225,6 +230,47 @@ func ValidSnapshotName(name string) bool {
 	return ok
 }
 
+// maxSnapshotInfo bounds what is read of a record, which holds six short values.
+const maxSnapshotInfo = 64 << 10
+
+// readSnapshotInfo reads the facts stored beside a snapshot. A snapshot without them, or with a
+// record that does not read, has none: older snapshots kept their facts on the object itself.
+func readSnapshotInfo(ctx context.Context, store ObjectStore, key string) (map[string]string, error) {
+	r, err := store.Get(ctx, key+EtcdSnapshotInfoSuffix)
+	if errors.Is(err, ErrNoObject) {
+		return nil, nil //nolint:nilnil // no record is a snapshot without facts, not a failure
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the facts of %s: %w", key, err)
+	}
+	defer func() { _ = r.Close() }()
+	var info map[string]string
+	if err := json.NewDecoder(io.LimitReader(r, maxSnapshotInfo)).Decode(&info); err != nil {
+		return nil, nil //nolint:nilnil // a record that does not read leaves the snapshot without facts
+	}
+	return info, nil
+}
+
+// ReadEtcdSnapshot reads one snapshot of a folder with its facts. A name with no snapshot behind it
+// answers ErrNoObject.
+func ReadEtcdSnapshot(ctx context.Context, store ObjectStore, folder, name string) (EtcdSnapshot, error) {
+	key := folder + "/" + name
+	o, err := store.Stat(ctx, key)
+	if err != nil {
+		return EtcdSnapshot{}, fmt.Errorf("reading snapshot %s: %w", name, err)
+	}
+	if info, err := readSnapshotInfo(ctx, store, key); err != nil {
+		return EtcdSnapshot{}, err
+	} else if info != nil {
+		o.Metadata = info
+	}
+	s, ok := snapshotOf(o, folder)
+	if !ok {
+		return EtcdSnapshot{}, fmt.Errorf("%q: %w", name, ErrNoObject)
+	}
+	return s, nil
+}
+
 // ListEtcdSnapshots lists a cluster's snapshots in its folder, newest first.
 func ListEtcdSnapshots(ctx context.Context, store ObjectStore, folder string) ([]EtcdSnapshot, error) {
 	objects, err := store.List(ctx, folder+"/")
@@ -233,9 +279,16 @@ func ListEtcdSnapshots(ctx context.Context, store ObjectStore, folder string) ([
 	}
 	var out []EtcdSnapshot
 	for _, o := range objects {
-		if s, ok := snapshotOf(o, folder); ok {
-			out = append(out, s)
+		if _, ok := snapshotOf(o, folder); !ok {
+			continue
 		}
+		if info, err := readSnapshotInfo(ctx, store, o.Key); err != nil {
+			return nil, err
+		} else if info != nil {
+			o.Metadata = info
+		}
+		s, _ := snapshotOf(o, folder)
+		out = append(out, s)
 	}
 	slices.SortFunc(out, func(a, b EtcdSnapshot) int { return strings.Compare(b.Name, a.Name) })
 	return out, nil
@@ -250,7 +303,8 @@ func PruneEtcdSnapshots(ctx context.Context, store ObjectStore, folder string, k
 	var errs []error
 	removed := 0
 	for i := keep; i < len(snapshots); i++ {
-		if err := store.Remove(ctx, folder+"/"+snapshots[i].Name); err != nil {
+		key := folder + "/" + snapshots[i].Name
+		if err := errors.Join(store.Remove(ctx, key), store.Remove(ctx, key+EtcdSnapshotInfoSuffix)); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -552,8 +606,8 @@ func takeEtcdSnapshot(ctx context.Context, etcd EtcdSource, at time.Time, cluste
 }
 
 // StoreEtcdSnapshot encrypts what etcd sends to recipient into folder, under taken's name, with
-// taken's facts as the object's metadata, and fills in its checksum and sizes. A snapshot that
-// fails part way is removed again.
+// taken's facts and checksum in a record beside it (EtcdSnapshotInfoSuffix), and fills in its
+// checksum and sizes. A snapshot that fails part way is removed again.
 func StoreEtcdSnapshot(ctx context.Context, store ObjectStore, folder string, taken *EtcdSnapshot, stream io.Reader, to age.Recipient) error {
 	taken.Time, _ = time.Parse(etcdSnapshotTimeLayout, taken.Name[:len(etcdSnapshotTimeLayout)])
 	key := folder + "/" + taken.Name
@@ -564,7 +618,7 @@ func StoreEtcdSnapshot(ctx context.Context, store ObjectStore, folder string, ta
 		SnapshotMetaEtcd:         taken.EtcdVersion,
 	}
 	body := seal(stream, to)
-	stored, err := store.Put(ctx, key, body, metadata)
+	stored, err := store.Put(ctx, key, body, nil)
 	if err != nil {
 		body.abort()
 		return fmt.Errorf("taking the snapshot: %w", err)
@@ -579,7 +633,11 @@ func StoreEtcdSnapshot(ctx context.Context, store ObjectStore, folder string, ta
 	// The checksum is known only once the snapshot has been read, after its upload began.
 	metadata[SnapshotMetaSHA256] = sum
 	metadata[SnapshotMetaSize] = strconv.FormatInt(size, 10)
-	if err := store.SetMetadata(ctx, key, metadata); err != nil {
+	record, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("recording the snapshot's checksum: %w", err)
+	}
+	if _, err := store.Put(ctx, key+EtcdSnapshotInfoSuffix, bytes.NewReader(record), nil); err != nil {
 		_ = store.Remove(context.WithoutCancel(ctx), key)
 		return fmt.Errorf("recording the snapshot's checksum: %w", err)
 	}

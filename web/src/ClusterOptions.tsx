@@ -1,14 +1,23 @@
 import { Fragment, useEffect, useId, useState, type JSX } from "react";
 
+import { AlertingFields, alertingOf, alertingText, alertingVariable, type AlertingForm } from "./Alerting";
 import { api } from "./api";
 import { CertificatesDialog, certificatesOf, certificatesText } from "./Certificates";
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
 import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
+import { CredentialField } from "./CredentialField";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
+import { EgressDialog, egressOf, egressText } from "./EgressProxy";
+import { EtcdDialog, etcdQuotaOf, etcdText } from "./EtcdSize";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
+import { HostOutageDialog, graceOf, graceText, graceVariable } from "./HostOutage";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
-import { choosable, cpuNote, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
+import { labelsOf, labelsText } from "./namespace-labels";
+import { NamespaceLabelsDialog } from "./NamespaceLabels";
+import { nodeCustomisationOf, nodeCustomisationText } from "./node-customisation";
+import { choosable, cpuNote, findNodeOS, fipsCNI, nodeOSKey, nodeOSRef } from "./node-os";
+import { NodeCustomisationDialog } from "./NodeCustomisation";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import {
   PlacementDialog,
@@ -20,9 +29,9 @@ import {
   useHAGroupsOffered,
   useHAOffered,
 } from "./Placement";
-import { PodSecurityFields, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
+import { PodSecurityFields, cisInfo, cisText, enforced, podSecurityOf, podSecurityText } from "./PodSecurity";
 import { TalosDialog, talosOf } from "./Talos";
-import type { ChangeRequest, Cluster, NodeOSChoice, OIDCProvider } from "./types";
+import type { ChangeRequest, Cluster, NodeOSChoice, OIDCProvider, PodSecurityCheck } from "./types";
 import {
   Dialog,
   ErrorBox,
@@ -52,17 +61,23 @@ import { flag, record, text, texts } from "./values";
 export type OptionAction =
   | "nodeOS"
   | "placement"
+  | "hostOutage"
   | "headlamp"
   | "monitoring"
   | "logs"
   | "podSecurity"
+  | "cis"
   | "clusterMesh"
   | "loadBalancer"
   | "rancher"
   | "gitops"
+  | "egressProxy"
   | "upgrades"
   | "certificates"
+  | "namespaceLabels"
   | "talos"
+  | "etcd"
+  | "nodeCustomisation"
   | "oidc";
 
 /** A setting the Options view lists, and the action of the dialog that changes it. */
@@ -103,49 +118,34 @@ export function OptionDialog({
   cluster: Cluster;
   onClose: () => void;
 }): JSX.Element {
-  switch (action) {
-    case "headlamp":
-    case "monitoring": {
-      return <HostedAddonDialog cluster={c} addon={action} onClose={onClose} />;
-    }
-    case "logs": {
-      return <LogsDialog cluster={c} onClose={onClose} />;
-    }
-    case "podSecurity": {
-      return <PodSecurityDialog cluster={c} onClose={onClose} />;
-    }
-    case "clusterMesh": {
-      return <ClusterMeshDialog cluster={c} onClose={onClose} />;
-    }
-    case "loadBalancer": {
-      return <LoadBalancerDialog cluster={c} onClose={onClose} />;
-    }
-    case "rancher": {
-      return <RancherDialog cluster={c} onClose={onClose} />;
-    }
-    case "gitops": {
-      return <GitOpsDialog cluster={c} onClose={onClose} />;
-    }
-    case "upgrades": {
-      return <UpgradesDialog cluster={c} onClose={onClose} />;
-    }
-    case "certificates": {
-      return <CertificatesDialog cluster={c} onClose={onClose} />;
-    }
-    case "nodeOS": {
-      return <NodeOSDialog cluster={c} onClose={onClose} />;
-    }
-    case "placement": {
-      return <PlacementDialog cluster={c} onClose={onClose} />;
-    }
-    case "talos": {
-      return <TalosDialog cluster={c} onClose={onClose} />;
-    }
-    case "oidc": {
-      break;
-    }
+  if (action === "headlamp" || action === "monitoring") {
+    return <HostedAddonDialog cluster={c} addon={action} onClose={onClose} />;
   }
-  return <OIDCDialog cluster={c} onClose={onClose} />;
+  const dialogs: Record<
+    Exclude<OptionAction, "headlamp" | "monitoring">,
+    (props: { cluster: Cluster; onClose: () => void }) => JSX.Element
+  > = {
+    logs: LogsDialog,
+    podSecurity: PodSecurityDialog,
+    cis: CISDialog,
+    clusterMesh: ClusterMeshDialog,
+    loadBalancer: LoadBalancerDialog,
+    rancher: RancherDialog,
+    gitops: GitOpsDialog,
+    egressProxy: EgressDialog,
+    upgrades: UpgradesDialog,
+    certificates: CertificatesDialog,
+    namespaceLabels: NamespaceLabelsDialog,
+    nodeOS: NodeOSDialog,
+    placement: PlacementDialog,
+    hostOutage: HostOutageDialog,
+    talos: TalosDialog,
+    etcd: EtcdDialog,
+    nodeCustomisation: NodeCustomisationDialog,
+    oidc: OIDCDialog,
+  };
+  const Chosen = dialogs[action];
+  return <Chosen cluster={c} onClose={onClose} />;
 }
 
 interface HostedValue {
@@ -263,6 +263,7 @@ export function optionRows<A extends string = never>(
 ): OptionRow<OptionAction | A>[] {
   const headlamp = hostedValue(c.variables["headlamp"]);
   const monitoring = hostedValue(c.variables["monitoring"]);
+  const sends = alertingText(alertingOf(c.variables["monitoring"]));
   const rancher = rancherValue(c.variables["rancher"]);
   const upgrades = upgradePolicy(c.variables["upgrades"]);
   const cis = c.variables["cis"] === true;
@@ -291,13 +292,27 @@ export function optionRows<A extends string = never>(
       action: "loadBalancer",
       name: "the load balancer",
     },
-    { label: "CIS hardening", value: cisText(cis), group: "Security" },
+    { label: "CIS hardening", value: cisText(cis), group: "Security", action: "cis", name: "CIS hardening" },
+    {
+      label: "Node customisation",
+      value: nodeCustomisationText(nodeCustomisationOf(c.variables["nodeCustomisation"])),
+      group: "Nodes",
+      action: "nodeCustomisation",
+      name: "node customisation",
+    },
     {
       label: "Placement",
       value: placeText(placeOf(texts(c.variables["allowedNodes"]))),
       group: "Nodes",
       action: "placement",
       name: "placement",
+    },
+    {
+      label: "Host outage wait",
+      value: graceText(graceOf(c.variables[graceVariable])),
+      group: "Nodes",
+      action: "hostOutage",
+      name: "the host outage wait",
     },
   ];
   if (offered.ha) {
@@ -336,7 +351,7 @@ export function optionRows<A extends string = never>(
       label: "Monitoring",
       value:
         monitoring.enabled === true
-          ? `On${filled(monitoring.hostname) ? `, Grafana at ${monitoring.hostname}` : ""}`
+          ? `On${filled(monitoring.hostname) ? `, Grafana at ${monitoring.hostname}` : ""}${sends === "" ? "" : `, sends to ${sends}`}`
           : "Off",
       group: "Add-ons",
       action: "monitoring",
@@ -351,12 +366,24 @@ export function optionRows<A extends string = never>(
       action: "certificates",
       name: "certificates",
     },
+  );
+  if (flag(record(c.variables["useExisting"])["certManager"]) === true) {
+    rows.push({ label: "Existing cert-manager", value: "Yes", group: "Add-ons" });
+  }
+  rows.push(
     {
       label: "Pod security",
       value: podSecurityText(podSecurity),
       group: "Security",
       action: "podSecurity",
       name: "pod security",
+    },
+    {
+      label: "Namespace labels",
+      value: labelsText(labelsOf(c.variables["namespaceLabels"])),
+      group: "Security",
+      action: "namespaceLabels",
+      name: "namespace labels",
     },
     { label: "Istio", value: istioText(istioOn(c)), group: "Add-ons", toggle: istioToggle },
   );
@@ -386,6 +413,13 @@ export function optionRows<A extends string = never>(
       name: "GitOps",
     },
     {
+      label: "Egress proxy",
+      value: egressText(egressOf(c.variables["egressProxy"])),
+      group: "Network",
+      action: "egressProxy",
+      name: "the egress proxy",
+    },
+    {
       label: "Automatic upgrades",
       value: describe(upgrades, refreshesNodes(upgrades), c.distribution),
       group: "Maintenance",
@@ -393,6 +427,15 @@ export function optionRows<A extends string = never>(
       name: "automatic upgrades",
     },
   );
+  if ("etcd" in c.variables) {
+    rows.push({
+      label: "etcd",
+      value: etcdText(etcdQuotaOf(c.variables["etcd"])),
+      group: "Maintenance",
+      action: "etcd",
+      name: "the etcd database limit",
+    });
+  }
   if ("oidc" in c.variables) {
     const hosts = providers(c).map((p) => (URL.canParse(p.issuerURL) ? new URL(p.issuerURL).host : p.issuerURL));
     rows.push({
@@ -565,13 +608,23 @@ function StagedValue({ now, after }: { now: string; after: string | undefined })
   return <span className="staged-value">Staged: {after}</span>;
 }
 
-// A node OS the cluster can move to: released, and with a template of it built.
-const movable = (o: NodeOSChoice): boolean => choosable(o) && !filled(o.noTemplate);
+// fipsOutOfReach says a node OS in FIPS mode needs a pod network the cluster, fixed at creation, does not run.
+const fipsOutOfReach = (o: NodeOSChoice, c: Cluster): boolean => {
+  const { cni } = c.variables;
+  return o.fips === true && typeof cni === "string" && cni !== fipsCNI;
+};
+
+// A node OS the cluster can move to: released, with a template of it built, and in FIPS mode only on Canal.
+const movable = (o: NodeOSChoice, c: Cluster): boolean =>
+  choosable(o) && !filled(o.noTemplate) && !fipsOutOfReach(o, c);
 
 // nodeOSNote says why a node OS cannot be moved to, or else what it asks of the nodes' CPUs.
-function nodeOSNote(o: NodeOSChoice, oses: NodeOSChoice[]): string | undefined {
+function nodeOSNote(o: NodeOSChoice, oses: NodeOSChoice[], c: Cluster): string | undefined {
   if (filled(o.unreleased)) {
     return sentence(o.unreleased);
+  }
+  if (fipsOutOfReach(o, c)) {
+    return "Needs Canal as the pod network";
   }
   return filled(o.noTemplate) ? sentence(o.noTemplate) : cpuNote(o, oses);
 }
@@ -620,7 +673,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
           <button
             type="submit"
             className="primary"
-            disabled={busy || chosen === running || os === undefined || !movable(os)}
+            disabled={busy || chosen === running || os === undefined || !movable(os, c)}
           >
             Save
           </button>
@@ -634,7 +687,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
         <div role="radiogroup" aria-label="Node OS">
           {oses.map((o, i) => {
             const key = nodeOSKey(o);
-            const note = key === running ? undefined : nodeOSNote(o, oses);
+            const note = key === running ? undefined : nodeOSNote(o, oses, c);
             const noteId = `${group}-${i}`;
             return (
               <Fragment key={key}>
@@ -643,7 +696,7 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
                     type="radio"
                     name={group}
                     checked={chosen === key}
-                    disabled={key !== running && !movable(o)}
+                    disabled={key !== running && !movable(o, c)}
                     aria-describedby={note === undefined ? undefined : noteId}
                     onChange={() => setChosen(key)}
                   />{" "}
@@ -694,6 +747,119 @@ function OIDCDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => 
     >
       <p className="muted">Saving replaces the control-plane nodes, one at a time.</p>
       <OIDCProviders initial={value} fixed={!c.allowed.kubeconfig} onChange={setValue} />
+      <ErrorBox message={error} />
+    </Dialog>
+  );
+}
+
+const shownPods = 10;
+
+// usePodSecurityCheck reads which running pods the restricted level would refuse. Undefined while it reads.
+function usePodSecurityCheck(c: Cluster, wanted: boolean): { check?: PodSecurityCheck; error?: string } {
+  const [result, setResult] = useState<{ check?: PodSecurityCheck; error?: string }>({});
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      if (!wanted) {
+        return;
+      }
+      try {
+        const check = await api.podSecurityCheck(c.namespace, c.name);
+        if (current) {
+          setResult({ check });
+        }
+      } catch (err) {
+        if (current) {
+          setResult({ error: errorMessage(err) });
+        }
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, [c.namespace, c.name, wanted]);
+  return result;
+}
+
+function PodSecurityCheckResult({ check }: { check: PodSecurityCheck }): JSX.Element {
+  if (check.skipped !== undefined && check.skipped !== "") {
+    return <p className="muted">{check.skipped}</p>;
+  }
+  const more = check.refused.length - shownPods;
+  return (
+    <div className="pod-check">
+      <p className="muted">
+        {check.truncated ? `${check.checked} pods checked, more exist` : `${check.checked} pods checked`}
+      </p>
+      {check.refused.length === 0 ? (
+        <p>No running pod would be refused.</p>
+      ) : (
+        <>
+          <p>{`Refused at the restricted level: ${check.refused.length}`}</p>
+          <ul>
+            {check.refused.slice(0, shownPods).map((p) => (
+              <li key={`${p.namespace}/${p.name}`}>
+                <span className="id">{`${p.namespace}/${p.name}`}</span>
+                <div className="hint">{p.reasons}</div>
+              </li>
+            ))}
+          </ul>
+          {more > 0 && <p className="muted">{`and ${more} more`}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CISDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const cis = c.variables["cis"] === true;
+  const [on, setOn] = useState(cis);
+  const { check, error: checkError } = usePodSecurityCheck(c, !cis);
+  const { busy, error, send } = useChange(c, onClose);
+  return (
+    <Dialog
+      title="Edit CIS hardening"
+      onClose={onClose}
+      onSubmit={() => {
+        void send({ variables: { cis: true } });
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="primary" disabled={busy || cis || !on}>
+            Switch on
+          </button>
+        </>
+      }
+    >
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={cis}
+          aria-describedby="cis-dialog-note"
+          onChange={(e) => setOn(e.target.checked)}
+        />{" "}
+        CIS hardening
+      </label>
+      <Info about="CIS hardening">{cisInfo}</Info>
+      {cis ? (
+        <p className="muted" id="cis-dialog-note">
+          Cannot be switched off. Pod Security Admission, seccomp and RKE2's network policies stay until a rebuild.
+        </p>
+      ) : (
+        <>
+          <p className="muted" id="cis-dialog-note">
+            Switching this on replaces every node, one at a time, and enforces the restricted level.
+          </p>
+          {check === undefined && checkError === undefined && <p className="muted">Checking pods…</p>}
+          {check !== undefined && <PodSecurityCheckResult check={check} />}
+          <ErrorBox message={checkError} />
+        </>
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -753,6 +919,88 @@ const hostedAddons = {
 
 type HostedAddon = keyof typeof hostedAddons;
 
+interface HostedState {
+  enabled: boolean;
+  hostname: string;
+  view: boolean;
+  alerting: AlertingForm;
+}
+
+// hostedChange is the add-on's variable the dialog saves, and whether it differs from the held one.
+// Settings of an add-on that is off go with it.
+function hostedChange(
+  addon: HostedAddon,
+  current: HostedValue & { alerting: AlertingForm },
+  state: HostedState,
+): { value: Record<string, unknown>; changed: boolean } {
+  const value: Record<string, unknown> = { enabled: state.enabled };
+  if (!state.enabled) {
+    return { value, changed: current.enabled === true };
+  }
+  if (state.hostname) {
+    value["hostname"] = state.hostname;
+    if (filled(current.tlsSecret)) {
+      value["tlsSecret"] = current.tlsSecret;
+    }
+  }
+  if (state.view) {
+    value["access"] = "view";
+  }
+  const alerts = addon === "monitoring" ? alertingVariable(state.alerting) : {};
+  Object.assign(value, alerts);
+  const alertsChanged =
+    JSON.stringify(alerts) !== JSON.stringify(addon === "monitoring" ? alertingVariable(current.alerting) : {});
+  const changed =
+    current.enabled !== true ||
+    state.hostname !== (current.hostname ?? "") ||
+    state.view !== (current.access === "view") ||
+    alertsChanged;
+  return { value, changed };
+}
+
+// MonitoringExtras are the monitoring dialog's alerting settings while it is on. Switched off, it
+// says what stays.
+function MonitoringExtras({
+  cluster: c,
+  switchedOff,
+  withLogs,
+  alerting,
+  onAlerting,
+}: {
+  cluster: Cluster;
+  switchedOff: boolean;
+  withLogs: boolean;
+  alerting: AlertingForm | undefined;
+  onAlerting: (a: AlertingForm) => void;
+}): JSX.Element {
+  return (
+    <>
+      {alerting !== undefined && (
+        <AlertingFields
+          value={alerting}
+          onChange={onAlerting}
+          renderCredential={(purpose, label, keys) => (
+            <CredentialField
+              label={label}
+              purpose={purpose}
+              cluster={{ namespace: c.namespace, name: c.name }}
+              keys={keys}
+            />
+          )}
+        />
+      )}
+      {switchedOff && (
+        <output className="warning notice">
+          {withLogs ? "Logs switch off too. " : ""}
+          {withLogs
+            ? "The volumes of Loki, Prometheus and Alertmanager stay."
+            : "The volumes of Prometheus and Alertmanager stay."}
+        </output>
+      )}
+    </>
+  );
+}
+
 function HostedAddonDialog({
   cluster: c,
   addon,
@@ -768,19 +1016,13 @@ function HostedAddonDialog({
   const [hostname, setHostname] = useState(current.hostname ?? "");
   const [view, setView] = useState(current.access === "view");
   const { busy, error, send } = useChange(c, onClose);
-  const value: HostedValue = { enabled };
-  if (enabled && hostname) {
-    value.hostname = hostname;
-  }
-  if (enabled && hostname && filled(current.tlsSecret)) {
-    value.tlsSecret = current.tlsSecret;
-  }
-  if (enabled && view) {
-    value.access = "view";
-  }
-  const changed =
-    enabled !== (current.enabled === true) ||
-    (enabled && (hostname !== (current.hostname ?? "") || view !== (current.access === "view")));
+  const heldAlerting = alertingOf(c.variables["monitoring"]);
+  const [alerting, setAlerting] = useState(heldAlerting);
+  const { value, changed } = hostedChange(
+    addon,
+    { ...current, alerting: heldAlerting },
+    { enabled, hostname, view, alerting },
+  );
   const viewHint = useId();
   // Logs are read in monitoring's Grafana, so they go with it.
   const heldLogs = record(c.variables["logs"]);
@@ -830,7 +1072,15 @@ function HostedAddonDialog({
           </p>
         </>
       )}
-      {logsGo && <output className="warning notice">Logs switch off too. Loki&apos;s volume stays.</output>}
+      {addon === "monitoring" && (
+        <MonitoringExtras
+          cluster={c}
+          switchedOff={!enabled && current.enabled === true}
+          withLogs={logsGo}
+          alerting={enabled ? alerting : undefined}
+          onAlerting={setAlerting}
+        />
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );

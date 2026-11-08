@@ -2,13 +2,17 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -36,9 +40,11 @@ type demoBrowser struct {
 func newDemo(t *testing.T) (*Server, *demoBrowser) {
 	t.Helper()
 	s := &Server{Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}}}
-	if err := SetUpDemo(s, func() time.Time { return demoAt }); err != nil {
+	cleanup, err := SetUpDemo(s, func() time.Time { return demoAt })
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(cleanup)
 	return s, &demoBrowser{t: t, handler: s.Handler()}
 }
 
@@ -104,7 +110,7 @@ func TestDemoUsesNoRealClient(t *testing.T) {
 	if s.ConnectWorkload == nil || s.OpenStore == nil || s.Probe == nil || s.NewKube == nil || s.TalosReleases == nil {
 		t.Error("a client of the demo is left to its real default")
 	}
-	if s.NewClientset != nil || s.MakeTemplate != nil || s.Appliance != nil || s.Upgrades != nil || s.Headlamp != nil || s.ProxmoxURL != "" {
+	if s.NewClientset != nil || s.Upgrades != nil || s.Headlamp != nil || s.ProxmoxURL != "" {
 		t.Error("the demo reaches past its own fakes")
 	}
 	channels, ok := s.Releases.(*provisioner.ChannelServer)
@@ -133,10 +139,7 @@ var demoAnswers = map[string]int{
 	"/api/health":                                       http.StatusNoContent,
 	"/api/openid/start":                                 http.StatusSeeOther,
 	"/api/openid/callback":                              http.StatusSeeOther,
-	"/api/templates":                                    http.StatusNotFound,
 	"/api/appliance/upgrades":                           http.StatusNotFound,
-	"/api/appliance/etcd-backups":                       http.StatusNotFound,
-	"/api/appliance/etcd-backups/snapshots":             http.StatusNotFound,
 	"/api/credentials/dns":                              http.StatusNotFound,
 	"/api/clusters/clusters/web/credentials/dns":        http.StatusNotFound,
 	"/api/clusters/clusters/web/kubeconfig":             http.StatusConflict,
@@ -197,6 +200,34 @@ func TestDemoAnswersEveryRead(t *testing.T) { //nolint:paralleltest // swaps Go'
 	}
 }
 
+// The demo's Talos cluster has an upgrade a disruption budget holds, with the event in its activity,
+// and no other cluster has either.
+func TestDemoHoldsTheTalosUpgradeOfPlatform(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var clusters []clusterView
+	decodeDemo(t, b.do("GET", "/api/clusters", ""), &clusters)
+	for i := range clusters {
+		c := &clusters[i]
+		held := c.Talos != nil && c.Talos.Held != ""
+		if held != (c.Name == "platform") {
+			t.Errorf("cluster %s: held %v", c.Name, held)
+		}
+	}
+	var platform clusterView
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform", ""), &platform)
+	if platform.Talos == nil || !strings.HasPrefix(platform.Talos.Upgrading, "platform-control-plane-") ||
+		!strings.Contains(platform.Talos.Held, "The disruption budget orders-db needs") {
+		t.Errorf("platform's Talos view %+v", platform.Talos)
+	}
+	var activity activityView
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform/activity", ""), &activity)
+	if !slices.ContainsFunc(activity.Events.Items, func(e eventView) bool { return e.Reason == "TalosDrainBlocked" }) {
+		t.Errorf("platform's events %+v", activity.Events)
+	}
+}
+
 func TestDemoShowsItsFleet(t *testing.T) {
 	t.Parallel()
 	_, b := newDemo(t)
@@ -219,6 +250,15 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	if verdicts["payments"] != "degraded" || verdicts["web"] != "healthy" || verdicts["edge"] != "changing" {
 		t.Errorf("verdicts %v", verdicts)
 	}
+	lacking := false
+	for i := range clusters {
+		for _, cond := range clusters[i].Conditions {
+			lacking = lacking || clusters[i].Name == "ci" && cond.Type == provisioner.NodesLackMemoryCondition && cond.Status == "True"
+		}
+	}
+	if !lacking {
+		t.Error("the demo's ci cluster does not show NodesLackMemory")
+	}
 	var runs []runView
 	decodeDemo(t, b.do("GET", "/api/runs", ""), &runs)
 	found := map[string]string{}
@@ -234,6 +274,169 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/web/backups", ""), &backups)
 	if len(backups.Backups) != 8 {
 		t.Errorf("%d backups of web, want 8", len(backups.Backups))
+	}
+}
+
+// lockedBuffer is a log that handlers write from several goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func TestDemoReadsEveryClustersHealth(t *testing.T) {
+	t.Parallel()
+	logged := &lockedBuffer{}
+	s := &Server{
+		Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}},
+		Log:    slog.New(slog.NewTextHandler(logged, nil)),
+	}
+	cleanup, err := SetUpDemo(s, func() time.Time { return demoAt })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	b := &demoBrowser{t: t, handler: s.Handler()}
+	b.signIn()
+	fleet, err := newDemoFleet(demoAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range fleet.data.Clusters {
+		name := fleet.data.Clusters[i].Name
+		var h healthView
+		decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/"+name+"/health", ""), &h)
+		if h.ControlPlane.Error != "" || len(h.ControlPlane.Conditions) == 0 {
+			t.Errorf("%s: control plane read %q with %d conditions", name, h.ControlPlane.Error, len(h.ControlPlane.Conditions))
+		}
+		for what, failed := range map[string]string{
+			"nodes": h.Nodes.Error, "pods": h.Pods.Error, "volumes": h.Volumes.Error, "add-ons": h.Addons.Error,
+			"pools": h.Pools.Error, "health checks": h.HealthChecks.Error, "events": h.Events.Error,
+		} {
+			if failed != "" {
+				t.Errorf("%s: %s read failed: %s", name, what, failed)
+			}
+		}
+	}
+	if got := logged.String(); strings.Contains(got, "level=ERROR") {
+		t.Errorf("the demo logged errors reading health:\n%s", got)
+	}
+}
+
+// The demo's staging cluster sets labels and a taint on its pool, one node has a taint besides, and the
+// restricted level would refuse its pods.
+func TestDemoShowsPoolLabelsTaintsAndPodChecks(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var h healthView
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/staging/health", ""), &h)
+	var notes []string
+	for _, a := range h.Attention {
+		if strings.Contains(a.What, "taints differ") {
+			notes = append(notes, a.What+" "+a.Message)
+		}
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "pool "+workerPool) || !strings.Contains(notes[0], "maintenance") {
+		t.Errorf("taint notes %q, want one naming the pool and the taint", notes)
+	}
+	var check struct {
+		Checked int               `json:"checked"`
+		Refused []json.RawMessage `json:"refused"`
+	}
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/staging/pod-security-check", ""), &check)
+	if check.Checked == 0 || len(check.Refused) == 0 {
+		t.Errorf("pod check %+v, want pods checked and some refused", check)
+	}
+}
+
+func TestDemoShowsTemplatesAndPins(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+
+	var setup setupView
+	decodeDemo(t, b.do("GET", "/api/setup", ""), &setup)
+	if !setup.Appliance || !setup.Ready || !setup.Allowed || setup.Settings == nil ||
+		setup.Settings.TemplateRefresh == nil || setup.Settings.TemplateRefresh.KubeadmPatches == nil || !*setup.Settings.TemplateRefresh.KubeadmPatches {
+		t.Errorf("the demo's setup is %+v, want an appliance with the kubeadm patch builds on", setup)
+	}
+
+	var list templatesView
+	decodeDemo(t, b.do("GET", "/api/templates", ""), &list)
+	var older []string
+	for _, tpl := range list.Templates {
+		if tpl.Older {
+			older = append(older, tpl.Name)
+		}
+		if tpl.Older && !tpl.Newest {
+			t.Errorf("%s is older but not the line's newest build", tpl.Name)
+		}
+	}
+	if len(older) != 1 || !strings.HasPrefix(older[0], "kubehenge-rke2-") {
+		t.Errorf("builds marked older: %v, want the newest RKE2 build alone", older)
+	}
+	if list.Refresh == nil || list.Refresh.Last == nil || list.Refresh.Last.State != "succeeded" {
+		t.Errorf("the refresh is %+v, want one that ran", list.Refresh)
+	}
+
+	var pins releasePinsView
+	decodeDemo(t, b.do("GET", "/api/release-pins", ""), &pins)
+	inUse := map[string]string{}
+	for _, p := range pins.Pins {
+		inUse[p.Version] = p.InUse
+		if p.By == "" || p.At == nil || p.File == "" || p.Script == "" {
+			t.Errorf("pin %+v lacks who added it, when or a digest", p)
+		}
+	}
+	if len(pins.Pins) != 2 || !pins.Checks || inUse["v1.36.5+rke2r1"] == "" || inUse["v1.37.2+rke2r1"] != "" {
+		t.Errorf("pins %+v, want two with one in use by a cluster", pins)
+	}
+
+	var checked releasePinView
+	decodeDemo(t, b.do("POST", "/api/release-pins/check", `{"version":"v1.37.3+rke2r1"}`), &checked)
+	if len(checked.File) != sha256.Size*2 || len(checked.Script) != sha256.Size*2 {
+		t.Errorf("the check of a release shows %+v, want two digests", checked)
+	}
+	if rec := b.do("POST", "/api/release-pins", `{"version":"v1.37.3+rke2r1"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("pinning in the demo: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestDemoHoldsOneMachinesReplacement(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var detail struct {
+		Machines []machineView `json:"machines"`
+	}
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform", ""), &detail)
+	var held []machineView
+	for _, m := range detail.Machines {
+		if m.Held != "" {
+			held = append(held, m)
+		}
+	}
+	if len(held) != 1 || held[0].Held != "Proxmox VE node pve3 is in maintenance" || held[0].HeldUntil.IsZero() {
+		t.Fatalf("held machines %+v", held)
+	}
+	var health struct {
+		Attention []attentionView `json:"attention"`
+	}
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform/health", ""), &health)
+	if !slices.ContainsFunc(health.Attention, func(a attentionView) bool { return a.What == "Replacement waits" }) {
+		t.Errorf("platform's health: %+v", health.Attention)
 	}
 }
 

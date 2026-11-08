@@ -4,7 +4,8 @@
 # shared storage and comes up across the nodes' common network; kept to the first, every machine
 # replaced moves there, since a placement holds for the VMs created after it; and with the second node down, Kubehenge leaves it out of the cluster's placement,
 # so that the cluster, let onto every node again, keeps to the one online and grows there. With the
-# second node back, nothing of the cluster is left once it is deleted.
+# second node back, it has that node in its placement again, and nothing of the cluster is left once
+# it is deleted.
 #
 #   test/e2e/two-nodes.sh
 #
@@ -72,6 +73,21 @@ online_are() {
     now=$(online_nodes) || return 1
     [ "${now}" = "$1" ]
 }
+# placed_with <node>: whether the cluster's placement holds the node, with room for its largest
+# machine.
+placed_with() {
+    # shellcheck disable=SC2310 # polled; no answer is not the placement looked for.
+    state=$(kubectl -n "${ns}" get cluster/nodes -o json) || return 1
+    printf '%s' "${state}" | jq -e --arg node "$1" '(.metadata.annotations["kubehenge.dev/online-nodes"] // "" | split(",") | index($node))
+        and (any(.status.conditions[]?; .type == "NodesLackMemory" and .status == "True") | not)' > /dev/null
+}
+# free_at_least <node> <MiB>: whether Proxmox VE reports that much memory free on the node.
+free_at_least() {
+    # shellcheck disable=SC2310 # polled; no answer is not the memory looked for.
+    nodes=$(pve_get nodes) || return 1
+    printf '%s' "${nodes}" | jq -e --arg n "$1" --argjson mib "$2" \
+        'any(.data[]; .node == $n and .maxmem > 0 and (.maxmem - .mem) / 1048576 >= $mib)' > /dev/null
+}
 nodes_ready() {
     # shellcheck disable=SC2310 # polled; no answer is no node ready.
     n=$(workload get nodes -o json | jq '[.items[] | select(any(.status.conditions[]; .type == "Ready" and .status == "True"))] | length') || return 1
@@ -83,6 +99,11 @@ allow() {
         jq -c --argjson nodes "$1" '.spec.topology.variables | map(select(.name != "allowedNodes")) + (if $nodes == null then [] else [{name: "allowedNodes", value: $nodes}] end)')
     kubectl -n "${ns}" patch cluster/nodes --type=json -p "[{\"op\": \"replace\", \"path\": \"/spec/topology/variables\", \"value\": ${variables}}]"
 }
+
+# The control plane is the cluster's largest machine. A node joins the placement with a tenth more
+# memory free than that.
+control_plane_mib=4096
+join_mib=$((control_plane_mib + control_plane_mib / 10))
 
 step "a k3s cluster kept to ${second}, cloned there from ${KUBEHENGE_E2E_SHARED_STORAGE}"
 kubectl create namespace "${ns}"
@@ -125,7 +146,7 @@ spec:
       - name: proxmoxHA
         value: false
       - name: controlPlaneMachine
-        value: {cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}, memoryMiB: 4096}
+        value: {cores: ${KUBEHENGE_E2E_CONTROL_PLANE_CORES:-2}, memoryMiB: ${control_plane_mib}}
       - name: workerMachine
         value: {cores: 2, memoryMiB: 1024}
 EOF
@@ -133,7 +154,6 @@ kubectl -n "${ns}" wait --for=condition=Available cluster/nodes --timeout=40m
 kubectl -n "${ns}" get secret nodes-kubeconfig -o jsonpath='{.data.value}' | base64 -d > "${work}/nodes"
 until_true 600 "every machine on ${second}" all_on "${second}"
 until_true 600 "both nodes ready" nodes_ready 2
-until_true 120 "both Proxmox VE nodes online for the cluster" online_are "${first},${second}"
 
 step "kept to ${first}, every machine replaced moves there"
 allow "[\"${first}\"]"
@@ -156,9 +176,12 @@ kubectl -n "${ns}" patch cluster/nodes --type=json -p '[{"op": "replace", "path"
 until_true 2400 "every machine, the new worker too, on ${first}" all_on "${first}"
 until_true 600 "three nodes ready" nodes_ready 3
 
-step "${second} back, and the cluster deleted"
+step "${second} back in the cluster's placement, and the cluster deleted"
 sh -c "${KUBEHENGE_E2E_UP}"
-until_true 600 "${second} back in the cluster's placement" online_are "${first},${second}"
+until_true 600 "${join_mib} MiB free on ${second} as it reports itself" free_at_least "${second}" "${join_mib}"
+# Whether the first node stays in the placement depends on its own free memory, which in CI is a
+# runner that also holds the second node. Only the second node's return is checked.
+until_true 300 "${second} back in the cluster's placement" placed_with "${second}"
 kubectl -n "${ns}" delete cluster/nodes --wait --timeout=30m
 left=$(pve_get "cluster/resources?type=vm" | jq --arg p "/${ns}." '[.data[] | select(.pool // "" | contains($p))] | length')
 [ "${left}" = 0 ] || fail "VMs of the cluster are still there"

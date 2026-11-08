@@ -112,6 +112,46 @@ func TestAuthenticationConfiguration(t *testing.T) {
 	}
 }
 
+func TestProxmoxNetworkDevice(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		network string
+		want    map[string]any
+	}{
+		// Unset, the device is what it was before the options existed.
+		{`{"bridge": "vmbr0"}`, map[string]any{}},
+		{`{"bridge": "vmbr0", "vlan": 30}`, map[string]any{"vlan": float64(30)}},
+		// The guest's interface gets the MTU the Proxmox VE one does.
+		{`{"bridge": "vmbr0", "mtu": 1450}`, map[string]any{"mtu": float64(1450), "linkMtu": float64(1450)}},
+		{`{"bridge": "vmbr0", "mtu": 9000}`, map[string]any{"mtu": float64(9000), "linkMtu": float64(9000)}},
+		{`{"bridge": "vmbr0", "queues": 4}`, map[string]any{"queues": float64(4)}},
+		{
+			`{"bridge": "vmbr0", "vlan": 10, "mtu": 1450, "queues": 2}`,
+			map[string]any{"vlan": float64(10), "mtu": float64(1450), "linkMtu": float64(1450), "queues": float64(2)},
+		},
+	} {
+		var spec struct {
+			NetworkDevices []map[string]any `json:"networkDevices"`
+		}
+		out := renderAfter(t, "", "files/proxmox-network.tpl", `{"network": `+c.network+`}`)
+		if err := yaml.UnmarshalStrict(out, &spec); err != nil {
+			t.Fatalf("%v:\n%s", err, out)
+		}
+		want := map[string]any{"name": "net0", "model": "virtio", "bridge": "vmbr0"}
+		maps.Copy(want, c.want)
+		if len(spec.NetworkDevices) != 1 || !reflect.DeepEqual(spec.NetworkDevices[0], want) {
+			t.Errorf("%s: devices = %v", c.network, spec.NetworkDevices)
+		}
+	}
+	helpers, err := os.ReadFile("templates/_helpers.tpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(helpers, []byte(`.Files.Get "files/proxmox-network.tpl"`)) {
+		t.Error("the Proxmox VE patches do not use files/proxmox-network.tpl")
+	}
+}
+
 func TestAdmissionConfiguration(t *testing.T) {
 	t.Parallel()
 	exempt := []any{"kube-system", "node-exporter"}

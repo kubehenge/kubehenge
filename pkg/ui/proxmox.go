@@ -53,19 +53,21 @@ func (s *Server) storages(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	held := map[string]pve.Privileges{}
+	var paths []string
+	for i := range storages {
+		if p := storagePath(storages[i].Storage); !slices.Contains(paths, p) {
+			paths = append(paths, p)
+		}
+	}
+	asked, err := s.privilegesOn(r.Context(), u, paths)
+	if err != nil {
+		s.proxmoxError(w, r, err)
+		return
+	}
 	views := make([]storageView, 0, len(storages))
 	for i := range storages {
 		st := storages[i]
-		privs, seen := held[st.Storage]
-		if !seen {
-			var err error
-			if privs, err = s.Accounts.Privileges(r.Context(), u.ticket, storagePath(st.Storage)); err != nil {
-				s.proxmoxError(w, r, err)
-				return
-			}
-			held[st.Storage] = privs
-		}
+		privs := asked[slices.Index(paths, storagePath(st.Storage))]
 		usable := privs.Has(privStorage) && slices.Contains(st.Content, "images")
 		views = append(views, storageView{Storage: st, Usable: usable, Allocatable: usable && privs.Has(privDatastoreAllocate)})
 	}
@@ -197,12 +199,12 @@ type bridgeView struct {
 // dns answers with the DNS servers a node resolves with, which the setup offers the management
 // cluster.
 func (s *Server) dns(w http.ResponseWriter, r *http.Request, u user) {
-	servers, err := s.Accounts.DNS(r.Context(), u.ticket, r.PathValue("node"))
+	dns, err := s.Accounts.DNS(r.Context(), u.ticket, r.PathValue("node"))
 	if err != nil {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string][]string{"servers": servers})
+	writeJSON(w, http.StatusOK, dns)
 }
 
 func (s *Server) bridges(w http.ResponseWriter, r *http.Request, u user) {
@@ -211,15 +213,18 @@ func (s *Server) bridges(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, r, err)
 		return
 	}
+	paths := make([]string, len(bridges))
+	for i := range bridges {
+		paths[i] = bridgePath(bridges[i].InZone(), bridges[i].Bridge, "")
+	}
+	asked, err := s.privilegesOn(r.Context(), u, paths)
+	if err != nil {
+		s.proxmoxError(w, r, err)
+		return
+	}
 	views := make([]bridgeView, 0, len(bridges))
 	for i := range bridges {
-		b := &bridges[i]
-		privs, err := s.Accounts.Privileges(r.Context(), u.ticket, bridgePath(b.InZone(), b.Bridge, ""))
-		if err != nil {
-			s.proxmoxError(w, r, err)
-			return
-		}
-		views = append(views, bridgeView{Bridge: *b, Usable: privs.Has(privBridge)})
+		views = append(views, bridgeView{Bridge: bridges[i], Usable: asked[i].Has(privBridge)})
 	}
 	writeJSON(w, http.StatusOK, views)
 }

@@ -6,6 +6,23 @@ import type { Bridge } from "./types";
 export const ipv4 = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/u;
 export const cidr = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\/(?:3[0-2]|[12]?\d)$/u;
 
+// The class's network.searchDomains: a DNS name of labels up to 63 characters, six at most because
+// glibc's resolver reads no more.
+const dnsName = /^(?:[A-Za-z\d](?:[-A-Za-z\d]{0,61}[A-Za-z\d])?\.)*[A-Za-z\d](?:[-A-Za-z\d]{0,61}[A-Za-z\d])?$/u;
+export const maxSearchDomains = 6;
+const maxDNSNameLength = 253;
+
+/** isDNSName tells whether text is a domain name without a trailing dot. */
+export const isDNSName = (s: string): boolean => s.length <= maxDNSNameLength && dnsName.test(s);
+
+/** searchDomainsProblem is what the server's schema would refuse in the search domains entered, if anything. */
+export function searchDomainsProblem(domains: string[]): string | undefined {
+  if (domains.length > maxSearchDomains) {
+    return `At most ${maxSearchDomains} domains`;
+  }
+  return domains.every((d) => isDNSName(d)) ? undefined : "Enter domain names like corp.example";
+}
+
 export const addressBits = 32;
 const octetValues = 256;
 const octets = 4;
@@ -28,6 +45,17 @@ export const maxVLAN = 4094;
 
 /** isVLAN tells whether text is a VLAN tag. */
 export const isVLAN = (v: string): boolean => whole(Number(v), 1, maxVLAN);
+
+// Proxmox VE takes an MTU from 576, but the nodes' IPv6 does not work below 1280.
+export const minMTU = 1280;
+export const maxMTU = 65_520;
+export const maxQueues = 64;
+
+/** isMTU tells whether text is an interface MTU the nodes take. */
+export const isMTU = (v: string): boolean => whole(Number(v), minMTU, maxMTU);
+
+/** isQueues tells whether text is a number of queues for the nodes' interface. */
+export const isQueues = (v: string): boolean => whole(Number(v), 1, maxQueues);
 
 /** bridgeRef is how the settings name a bridge: a VNet as zone/vnet, a node's bridge by its name. */
 export const bridgeRef = (b: Pick<Bridge, "bridge" | "zone">): string =>
@@ -158,6 +186,24 @@ export const inList = (address: string, entries: string[]): boolean =>
 
 /** isIP tells whether a server address is IPv4 or looks like IPv6. */
 export const isIP = (v: string): boolean => ipv4.test(v) || (/^[0-9a-f:.]+$/iu.test(v) && v.includes(":"));
+
+/** maxTimeServers is how many NTP servers a cluster takes. */
+export const maxTimeServers = 8;
+const longestHostName = 253;
+const hostName = /^(?!-)[a-z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-z0-9-]{1,63}(?<!-))*\.?$/iu;
+
+/** timeServersProblem says what is wrong with a list of NTP servers, or nothing. */
+export function timeServersProblem(servers: string[]): string | undefined {
+  if (servers.length > maxTimeServers) {
+    return `Enter at most ${maxTimeServers} time servers`;
+  }
+  const bad = servers.find((s) => !isIP(s) && !(hostName.test(s) && s.length <= longestHostName));
+  if (bad !== undefined) {
+    return `${bad} is not a host name or IP address`;
+  }
+  const twice = servers.find((s, i) => servers.indexOf(s) !== i);
+  return twice === undefined ? undefined : `${twice} is listed twice`;
+}
 
 /** rangeProblem says what is wrong with a pod or service range, if anything. */
 export const rangeProblem = (v: string): string | undefined =>

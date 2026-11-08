@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,10 +18,12 @@ import (
 	"github.com/luthermonson/go-proxmox"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/templates"
@@ -221,6 +224,8 @@ type ChannelServer struct {
 	// Pins, when set, have RKE2's and k3s's channels name the newest release of each minor version
 	// that they pin, and leave out a minor version of which they pin none: a node installs no other.
 	Pins ReleasePins
+	// Store, when set, adds the pins administrators added to Pins.
+	Store *PinStore
 }
 
 // DefaultChannelURLs are the publishers' own. Talos's is where Kubernetes names the newest release
@@ -228,8 +233,12 @@ type ChannelServer struct {
 var DefaultChannelURLs = map[string]string{
 	"rke2":  "https://update.rke2.io/v1-release/channels",
 	"k3s":   "https://update.k3s.io/v1-release/channels",
-	"talos": "https://dl.k8s.io/release",
+	"talos": KubernetesReleaseMarkers,
 }
+
+// KubernetesReleaseMarkers is where Kubernetes names the newest release of each minor version, in
+// stable-1.<minor>.txt.
+const KubernetesReleaseMarkers = "https://dl.k8s.io/release"
 
 // channelList is a release channel server's answer.
 type channelList struct {
@@ -283,17 +292,46 @@ func (s *ChannelServer) Channels(ctx context.Context, distribution string, os te
 	if ch.StableMinor == 0 {
 		return Channels{}, fmt.Errorf("%s names no stable channel", url)
 	}
-	if s.Pins != nil {
-		release := map[string]*distributionRelease{string(templates.RKE2): rke2Release, string(templates.K3s): k3sRelease}[distribution]
-		for m := range ch.Latest {
-			if v, ok := s.Pins.newest(release, m); ok {
-				ch.Latest[m] = v
-			} else {
-				delete(ch.Latest, m)
-			}
-		}
+	if err := s.keepPinned(ctx, distribution, &ch); err != nil {
+		return Channels{}, err
 	}
 	return ch, nil
+}
+
+// NewestPatch is the newest release of Kubernetes minor version 1.<minor> that Kubernetes names in
+// base/stable-1.<minor>.txt, or false for a minor it has not released yet.
+func (s *ChannelServer) NewestPatch(ctx context.Context, base string, minor int) (string, bool, error) {
+	v, found, err := s.markedRelease(ctx, base, minor)
+	if err != nil {
+		return "", false, fmt.Errorf("the newest Kubernetes 1.%d release: %w", minor, err)
+	}
+	return v.Raw, found, nil
+}
+
+// keepPinned leaves in ch the newest pinned release of each minor version, the built-in pins and
+// those an administrator added, and drops a minor version with none.
+func (s *ChannelServer) keepPinned(ctx context.Context, distribution string, ch *Channels) error {
+	if s.Pins == nil {
+		return nil
+	}
+	pins := s.Pins
+	if s.Store != nil {
+		added, err := s.Store.Added(ctx)
+		if err != nil {
+			return err
+		}
+		pins = maps.Clone(s.Pins)
+		maps.Copy(pins, added)
+	}
+	release := map[string]*distributionRelease{string(templates.RKE2): rke2Release, string(templates.K3s): k3sRelease}[distribution]
+	for m := range ch.Latest {
+		if v, ok := pins.newest(release, m); ok {
+			ch.Latest[m] = v
+		} else {
+			delete(ch.Latest, m)
+		}
+	}
+	return nil
 }
 
 // get reads a channel server's answer, and whether there is one at url.
@@ -335,25 +373,33 @@ func (s *ChannelServer) kubernetesChannels(ctx context.Context, base string) (Ch
 	}
 	ch := Channels{Latest: map[int]kubeVersion{}, StableMinor: stable.Minor}
 	for _, m := range minors {
-		url := fmt.Sprintf("%s/stable-1.%d.txt", base, m)
-		raw, found, err := s.get(ctx, url)
+		v, found, err := s.markedRelease(ctx, base, m)
 		if err != nil {
 			return Channels{}, err
 		}
-		if !found {
-			// A minor Talos runs that Kubernetes has not released yet.
-			continue
+		// A minor Talos runs that Kubernetes has not released yet is left out.
+		if found {
+			ch.Latest[m] = v
 		}
-		v, ok := parseKubeVersion(strings.TrimSpace(string(raw)))
-		if !ok || v.Minor != m || v.Build != 0 {
-			return Channels{}, fmt.Errorf("%s names no Kubernetes 1.%d release: %q", url, m, raw)
-		}
-		ch.Latest[m] = v
 	}
 	if _, ok := ch.Latest[ch.StableMinor]; !ok {
 		return Channels{}, fmt.Errorf("%s names no Kubernetes 1.%d release", base, ch.StableMinor)
 	}
 	return ch, nil
+}
+
+// markedRelease is the release base/stable-1.<minor>.txt names.
+func (s *ChannelServer) markedRelease(ctx context.Context, base string, minor int) (kubeVersion, bool, error) {
+	url := fmt.Sprintf("%s/stable-1.%d.txt", base, minor)
+	raw, found, err := s.get(ctx, url)
+	if err != nil || !found {
+		return kubeVersion{}, false, err
+	}
+	v, ok := parseKubeVersion(strings.TrimSpace(string(raw)))
+	if !ok || v.Minor != minor || v.Build != 0 {
+		return kubeVersion{}, false, fmt.Errorf("%s names no Kubernetes 1.%d release: %q", url, minor, raw)
+	}
+	return v, true, nil
 }
 
 var kubeadmTemplateVersion = regexp.MustCompile(`^kubernetes-(v1\.\d+\.\d+)$`)
@@ -384,10 +430,18 @@ type poolTemplates struct {
 	nodeOSes map[templates.Distribution][]templates.NodeOS
 	// storages are those any of Kubehenge's templates have disks on, whatever their OS.
 	storages []string
-	// builds are the builds of each line.
+	// builds are the builds of each line that clusters may move to.
 	builds NodeImageBuilds
+	// older are the builds whose kernel is older than the previous build's, which clusters never
+	// move to.
+	older NodeImageBuilds
+	// facts are what each build recorded, by line and build time, until sort sets the older ones
+	// aside.
+	facts map[string]map[time.Time]templates.BuildFacts
 	// talos are the Talos releases of the Talos templates, newest first.
 	talos []string
+	// down are the VMs of the pool on a node that is down.
+	down []DownTemplate
 }
 
 // talosVersionOf is the Talos release a Talos template's tags name: exactly a release's tags, as
@@ -427,19 +481,27 @@ func listPoolTemplates(ctx context.Context, c *proxmox.Client) (poolTemplates, e
 		return poolTemplates{}, fmt.Errorf("listing the Proxmox VE templates: %w", err)
 	}
 	seen := poolTemplates{
-		storages: inv.Storages, builds: NodeImageBuilds{},
+		storages: inv.Storages, builds: NodeImageBuilds{}, older: NodeImageBuilds{},
+		facts:   map[string]map[time.Time]templates.BuildFacts{},
 		kubeadm: map[templates.NodeOS][]kubeVersion{}, nodeOSes: make(map[templates.Distribution][]templates.NodeOS),
 	}
 	for _, r := range inv.Templates {
-		seen.add(templates.ParseTags(r.Tags))
+		var facts *templates.BuildFacts
+		if f, ok := inv.Facts[r.VMID]; ok {
+			facts = &f
+		}
+		seen.add(templates.ParseTags(r.Tags), facts)
+	}
+	for _, r := range inv.Down {
+		seen.addDown(r)
 	}
 	seen.sort()
 	return seen, nil
 }
 
 // add records what the template of these tags offers: a Talos release, which has no builds, or a
-// build of a node OS line.
-func (p *poolTemplates) add(tags []string) {
+// build of a node OS line, with what it recorded of itself, if anything.
+func (p *poolTemplates) add(tags []string, facts *templates.BuildFacts) {
 	if v, ok := talosVersionOf(tags); ok && !slices.Contains(p.talos, v) {
 		p.talos = append(p.talos, v)
 	}
@@ -450,6 +512,12 @@ func (p *poolTemplates) add(tags []string) {
 	}
 	line := templates.LineKey(tags)
 	p.builds[line] = append(p.builds[line], at)
+	if facts != nil {
+		if p.facts[line] == nil {
+			p.facts[line] = map[time.Time]templates.BuildFacts{}
+		}
+		p.facts[line][at.UTC()] = *facts
+	}
 	for _, d := range []templates.Distribution{templates.RKE2, templates.K3s} {
 		if slices.Contains(tags, string(d)) && !slices.Contains(p.nodeOSes[d], os) {
 			p.nodeOSes[d] = append(p.nodeOSes[d], os)
@@ -458,6 +526,31 @@ func (p *poolTemplates) add(tags []string) {
 	if v, ok := kubeadmVersionOf(tags); ok && !slices.Contains(p.kubeadm[os], v) {
 		p.kubeadm[os] = append(p.kubeadm[os], v)
 	}
+}
+
+// addDown records a VM on a down node. Its build stays among the builds, so that the build a
+// cluster's node image time picks does not move to another while the node is down. What the
+// template offers a new cluster is left out, since it cannot be cloned from.
+func (p *poolTemplates) addDown(r *proxmox.ClusterResource) {
+	tags := templates.NormaliseTags(templates.ParseTags(r.Tags))
+	vmid, _ := templateVMID(r)
+	p.down = append(p.down, DownTemplate{Name: r.Name, VMID: vmid, Node: r.Node, Tags: tags})
+	at, built := templates.BuildOf(tags)
+	os, known := templates.NodeOSOf(tags)
+	if _, _, err := templates.ReleaseOf(os); !built || !known || err != nil {
+		return
+	}
+	line := templates.LineKey(tags)
+	p.builds[line] = append(p.builds[line], at)
+}
+
+// templateVMID reads a VM ID from the cluster's resource list, where it is unsigned.
+func templateVMID(r *proxmox.ClusterResource) (int, error) {
+	const largest = 999999999 // Proxmox VE's own upper bound
+	if r.VMID > largest {
+		return 0, fmt.Errorf("VM ID %d is outside Proxmox VE's range", r.VMID)
+	}
+	return int(r.VMID), nil
 }
 
 // sort puts the versions and releases newest first, the node OSes by name and the builds oldest
@@ -478,8 +571,24 @@ func (p *poolTemplates) sort() {
 		slices.SortFunc(p.nodeOSes[d], func(a, b templates.NodeOS) int { return strings.Compare(a.String(), b.String()) })
 	}
 	slices.SortFunc(p.talos, newerFirst)
-	for line := range p.builds {
-		slices.SortFunc(p.builds[line], time.Time.Compare)
+	for line, builds := range p.builds {
+		slices.SortFunc(builds, time.Time.Compare)
+		recorded := make([]*templates.BuildFacts, len(builds))
+		for i, at := range builds {
+			if f, ok := p.facts[line][at.UTC()]; ok {
+				recorded[i] = &f
+			}
+		}
+		older := templates.OlderBuilds(recorded)
+		accepted := builds[:0:0]
+		for i, at := range builds {
+			if older[i] {
+				p.older[line] = append(p.older[line], at)
+			} else {
+				accepted = append(accepted, at)
+			}
+		}
+		p.builds[line] = accepted
 	}
 }
 
@@ -518,6 +627,9 @@ type Upgrader struct {
 	Events   events.EventRecorder
 	Interval time.Duration
 	Now      func() time.Time
+	// Informers, if set, start a round as soon as a cluster's upgrades change, a cluster settles or
+	// a ClusterClass is offered other builds, rather than at the next Interval.
+	Informers cache.Informers
 
 	// supportAt is when the clusters' minors were last compared with what Kubehenge offers.
 	supportAt time.Time
@@ -528,6 +640,12 @@ func (*Upgrader) NeedLeaderElection() bool { return true }
 
 // Start implements manager.Runnable.
 func (u *Upgrader) Start(ctx context.Context) error {
+	wake := make(chan struct{}, 1)
+	if u.Informers != nil {
+		if err := u.watch(ctx, wake); err != nil {
+			return err
+		}
+	}
 	t := time.NewTicker(u.Interval)
 	defer t.Stop()
 	for {
@@ -536,6 +654,7 @@ func (u *Upgrader) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
+		case <-wake:
 		}
 	}
 }
@@ -591,6 +710,65 @@ func (u *Upgrader) RunOnce(ctx context.Context) {
 		}
 		u.supportAt = u.Now()
 	}
+}
+
+// watch sends on wake when a round could find something to do. A full channel already holds a
+// round to come, so changes in a burst start one.
+func (u *Upgrader) watch(ctx context.Context, wake chan<- struct{}) error {
+	nudge := func() {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
+	for _, w := range []struct {
+		obj     client.Object
+		changed func(before, after client.Object) bool
+	}{
+		{&clusterv1.Cluster{}, func(before, after client.Object) bool {
+			b, ok := before.(*clusterv1.Cluster)
+			a, ok2 := after.(*clusterv1.Cluster)
+			return ok && ok2 && upgradeInputChanged(b, a)
+		}},
+		{&clusterv1.ClusterClass{}, func(before, after client.Object) bool {
+			return before.GetAnnotations()[NodeImageBuildsAnnotation] != after.GetAnnotations()[NodeImageBuildsAnnotation]
+		}},
+	} {
+		informer, err := u.Informers.GetInformer(ctx, w.obj)
+		if err != nil {
+			return fmt.Errorf("watching %T: %w", w.obj, err)
+		}
+		changed := w.changed
+		_, err = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+			UpdateFunc: func(oldObj, newObj any) {
+				before, ok := oldObj.(client.Object)
+				after, ok2 := newObj.(client.Object)
+				if ok && ok2 && changed(before, after) {
+					nudge()
+				}
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("watching %T: %w", w.obj, err)
+		}
+	}
+	return nil
+}
+
+// upgradeInputChanged tells whether a round could decide otherwise for the cluster now: its
+// upgrades variable changed, or it settled. The upgrader's own annotations change neither.
+func upgradeInputChanged(before, after *clusterv1.Cluster) bool {
+	return !settled(before) && settled(after) ||
+		!bytes.Equal(variableValue(before, "upgrades"), variableValue(after, "upgrades"))
+}
+
+func variableValue(c *clusterv1.Cluster, name string) []byte {
+	for _, v := range c.Spec.Topology.Variables {
+		if v.Name == name {
+			return v.Value.Raw
+		}
+	}
+	return nil
 }
 
 // next returns the version a cluster should move to now, or "".
@@ -687,6 +865,9 @@ func (u *Upgrader) refresh(ctx context.Context, c *clusterv1.Cluster) error {
 			return err
 		}
 	}
+	if err = u.markNodeImageHeld(ctx, c, w.blocked); err != nil {
+		return err
+	}
 	from, to := w.from, w.to
 	if to.IsZero() {
 		return u.hold(ctx, c, "")
@@ -709,7 +890,7 @@ func (u *Upgrader) refresh(ctx context.Context, c *clusterv1.Cluster) error {
 	if c.Annotations == nil {
 		c.Annotations = map[string]string{}
 	}
-	c.Annotations[NodeImageAnnotation] = now.Format(time.RFC3339)
+	c.Annotations[NodeImageAnnotation] = w.at.Format(time.RFC3339)
 	c.Annotations[NodeImageRefreshedAnnotation] = fmt.Sprintf("%s to %s at %s", templates.BuildTag(from), templates.BuildTag(to), now.Format(time.RFC3339))
 	delete(c.Annotations, NodeImageHeldAnnotation)
 	if err := u.Client.Patch(ctx, c, base); err != nil {
@@ -793,12 +974,17 @@ func newestTalosPatch(current string, releases []string) string {
 // would move to (to); zero times when none waits.
 type waiting struct {
 	from, to time.Time
+	// at is the node image time that has the machines clone from to.
+	at time.Time
+	// blocked is the template on a down node that the move would have gone to, when no move is
+	// possible for that reason alone.
+	blocked DownTemplate
 }
 
 // waitingBuild is the build that waits for a cluster's nodes. A ClusterClass the controller has
 // not recorded builds on yet offers none.
 func (u *Upgrader) waitingBuild(ctx context.Context, c *clusterv1.Cluster, now time.Time) (waiting, error) {
-	builds, err := ClassBuilds(ctx, u.Client, c)
+	builds, down, err := classBuildsAndDown(ctx, u.Client, c)
 	if errors.Is(err, errNoBuildsRecorded) {
 		return waiting{}, nil
 	}
@@ -813,13 +999,18 @@ func (u *Upgrader) waitingBuild(ctx context.Context, c *clusterv1.Cluster, now t
 	if err != nil {
 		return waiting{}, err
 	}
+	var held waiting
 	for _, line := range lines {
-		if next, ok := builds.Waiting(line, t, now, u.Soak); ok {
-			from, _ := builds.Pick(line, t, u.Soak)
-			return waiting{from: from, to: next}, nil
+		move, moves := nextBuild(builds, down, line, t, now, u.Soak)
+		switch {
+		case moves:
+			move.at = refreshTime(builds, line, move.to, now, u.Soak)
+			return move, nil
+		case move.blocked.Node != "" && held.blocked.Node == "":
+			held.blocked = move.blocked
 		}
 	}
-	return waiting{}, nil
+	return held, nil
 }
 
 // hold records on the cluster which build it is held from and until when, or with "" that it is
@@ -849,15 +1040,48 @@ var errNoBuildsRecorded = errors.New("no template builds recorded yet")
 
 // ClassBuilds reads the builds of the template lines recorded on a cluster's ClusterClass.
 func ClassBuilds(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (NodeImageBuilds, error) {
+	builds, _, err := classBuildsAndDown(ctx, r, c)
+	return builds, err
+}
+
+// classBuildsAndDown reads the builds recorded on a cluster's ClusterClass and the templates it
+// records as being on a down node.
+func classBuildsAndDown(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (NodeImageBuilds, []DownTemplate, error) {
 	ref := c.Spec.Topology.ClassRef
 	ns := cmpOr(ref.Namespace, c.Namespace)
 	class := &clusterv1.ClusterClass{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, class); err != nil {
-		return nil, fmt.Errorf("reading ClusterClass %s/%s: %w", ns, ref.Name, err)
+		return nil, nil, fmt.Errorf("reading ClusterClass %s/%s: %w", ns, ref.Name, err)
 	}
+	builds, err := recordedBuilds(class)
+	if err != nil {
+		return nil, nil, err
+	}
+	down, err := ClassTemplatesDown(class)
+	return builds, down, err
+}
+
+// recordedBuilds reads the builds recorded on a ClusterClass.
+func recordedBuilds(class *clusterv1.ClusterClass) (NodeImageBuilds, error) {
 	recorded, ok := class.Annotations[NodeImageBuildsAnnotation]
 	if !ok {
-		return nil, fmt.Errorf("ClusterClass %s/%s: %w", ns, ref.Name, errNoBuildsRecorded)
+		return nil, fmt.Errorf("ClusterClass %s/%s: %w", class.Namespace, class.Name, errNoBuildsRecorded)
+	}
+	return ParseNodeImageBuilds(recorded)
+}
+
+// OlderBuilds reads the builds with an older kernel than the previous build's, as the controller
+// records them on the RKE2 ClusterClass in namespace. They are the same on every class that has any.
+// None is recorded before the controller has looked at the template pool.
+func OlderBuilds(ctx context.Context, r client.Reader, namespace string) (NodeImageBuilds, error) {
+	class := &clusterv1.ClusterClass{}
+	name := ClassPrefix + string(templates.RKE2)
+	if err := client.IgnoreNotFound(r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, class)); err != nil {
+		return nil, fmt.Errorf("reading ClusterClass %s/%s: %w", namespace, name, err)
+	}
+	recorded, ok := class.Annotations[NodeImageOlderAnnotation]
+	if !ok {
+		return NodeImageBuilds{}, nil
 	}
 	return ParseNodeImageBuilds(recorded)
 }

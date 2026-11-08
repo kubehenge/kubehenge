@@ -405,6 +405,20 @@ func writeKubeconfig(t *testing.T, server string) {
 	t.Setenv("KUBECONFIG", path)
 }
 
+func TestTheKubeadmPatchesSettingSwitchesThePatchBuildsOff(t *testing.T) {
+	t.Parallel()
+	cmd := newTemplateRefreshCommand(&pve.Config{})
+	if f := cmd.Flags().Lookup("kubeadm-patches"); f == nil || f.DefValue != "true" {
+		t.Fatalf("--kubeadm-patches is %+v, want a flag that defaults to on", f)
+	}
+	if (&templateRefreshOptions{kubeadmPatches: true}).patches() == nil {
+		t.Error("the patch builds are off though the setting is on")
+	}
+	if (&templateRefreshOptions{kubeadmPatches: false}).patches() != nil {
+		t.Error("the patch builds are on though the setting is off")
+	}
+}
+
 func TestTheRefreshChecksItsFlagsFirst(t *testing.T) {
 	// No configuration at all, so that nothing reaches a cluster this machine's own kubeconfig names.
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
@@ -417,7 +431,9 @@ func TestTheRefreshChecksItsFlagsFirst(t *testing.T) {
 		{"no class namespace", func(o *templateRefreshOptions) { o.classNamespace = "" }, "--namespace and --class-namespace are required"},
 		{"keeping none", func(o *templateRefreshOptions) { o.keep = 0 }, "--keep must be at least 1"},
 		{"a missing line that is none", func(o *templateRefreshOptions) { o.missing = []string{"windows-11"} }, "--missing:"},
+		{"a FIPS line of k3s", func(o *templateRefreshOptions) { o.missing = []string{"k3s-almalinux-10-fips"} }, "k3s has no FIPS mode"},
 		{"no management cluster", func(*templateRefreshOptions) {}, "the management cluster's API"},
+		{"a FIPS line of RKE2", func(o *templateRefreshOptions) { o.missing = []string{"rke2-rocky-10-fips"} }, "the management cluster's API"},
 	} {
 		o := &templateRefreshOptions{namespace: refreshNamespace, classNamespace: refreshNamespace, keep: 2, missing: []string{"rke2-almalinux-10"}}
 		c.change(o)

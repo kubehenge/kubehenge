@@ -52,9 +52,24 @@ const degraded: ClusterHealth = {
       since: minutesAgo(12),
       pod: { namespace: "shop", name: "api-7d9f" },
     },
-    { severity: "warning", section: "addons", what: "Add-on ingress: pending-install", since: minutesAgo(3) },
-    { severity: "warning", section: "backups", what: "Backups overdue", message: "No backup has completed yet." },
-    { severity: "warning", section: "nodes", what: "Worker web-md-0-a cordoned", machine: "web-md-0-a" },
+    {
+      severity: "warning",
+      section: "addons",
+      what: "Add-on ingress: pending-install",
+      since: minutesAgo(3),
+    },
+    {
+      severity: "warning",
+      section: "backups",
+      what: "Backups overdue",
+      message: "No backup has completed yet.",
+    },
+    {
+      severity: "warning",
+      section: "nodes",
+      what: "Worker web-md-0-a cordoned",
+      machine: "web-md-0-a",
+    },
   ],
   nodes: {
     items: [
@@ -92,7 +107,16 @@ const degraded: ClusterHealth = {
     ],
   },
   pods: { items: [crashing] },
-  volumes: { items: [{ namespace: "shop", name: "data", storageClass: "local", since: minutesAgo(6) }] },
+  volumes: {
+    items: [
+      {
+        namespace: "shop",
+        name: "data",
+        storageClass: "local",
+        since: minutesAgo(6),
+      },
+    ],
+  },
   addons: {
     items: [
       {
@@ -113,12 +137,25 @@ const degraded: ClusterHealth = {
       },
     ],
   },
-  pools: { items: [{ name: "md-0", desired: 1, ready: 1, available: 1, upToDate: 1, rollingOut: false }] },
+  pools: {
+    items: [
+      {
+        name: "md-0",
+        desired: 1,
+        ready: 1,
+        available: 1,
+        upToDate: 1,
+        rollingOut: false,
+      },
+    ],
+  },
   controlPlane: {
     kind: "KubeadmControlPlane",
     conditions: [{ type: "EtcdClusterHealthy", status: "True", since: minutesAgo(80) }],
   },
-  healthChecks: { items: [{ name: "web-md-0", expected: 1, healthy: 1, allowed: true }] },
+  healthChecks: {
+    items: [{ name: "web-md-0", expected: 1, healthy: 1, allowed: true }],
+  },
   events: {
     items: [
       {
@@ -161,8 +198,16 @@ describe("health page", () => {
   it("says what is wrong first, and shows a crashing pod's last run to those who may read logs", async () => {
     const routes: Record<string, Route> = {
       [healthPath]: { body: degraded },
-      [logsPath("api")]: { body: { container: "api", previous: true, lines: ["starting", "panic: no database"] } },
-      [logsPath("sidecar")]: { body: { container: "sidecar", previous: false, lines: [] } },
+      [logsPath("api")]: {
+        body: {
+          container: "api",
+          previous: true,
+          lines: ["starting", "panic: no database"],
+        },
+      },
+      [logsPath("sidecar")]: {
+        body: { container: "sidecar", previous: false, lines: [] },
+      },
     };
     const calls = fakeServer(routes);
     const user = userEvent.setup({ delay: null });
@@ -170,10 +215,11 @@ describe("health page", () => {
 
     await expect(screen.findByText("Degraded")).resolves.toBeInTheDocument();
     const tiles = within(screen.getByRole("list", { name: "At a glance" }));
-    expect(tiles.getByRole("link", { name: /Control plane\s*1 of 1 ready\s*etcd healthy/u })).toHaveAttribute(
-      "href",
-      "#health-nodes",
-    );
+    expect(
+      tiles.getByRole("link", {
+        name: /Control plane\s*1 of 1 ready\s*etcd healthy/u,
+      }),
+    ).toHaveAttribute("href", "#health-nodes");
     expect(tiles.getByRole("link", { name: /Node pressure\s*1 of 2 nodes/u })).toBeInTheDocument();
     expect(tiles.getByRole("link", { name: /Pods not well\s*1/u })).toHaveAttribute("href", "#health-pods");
     expect(tiles.getByRole("link", { name: /Add-ons\s*1 of 2 deployed/u })).toHaveAttribute("href", "#health-addons");
@@ -248,8 +294,18 @@ describe("health page", () => {
           ],
           alerts: {
             items: [
-              { name: "KubeNodeNotReady", severity: "error", summary: "Node is not ready.", since: minutesAgo(10) },
-              { name: "TargetDown", severity: "warning", namespace: "kube-system", since: minutesAgo(30) },
+              {
+                name: "KubeNodeNotReady",
+                severity: "error",
+                summary: "Node is not ready.",
+                since: minutesAgo(10),
+              },
+              {
+                name: "TargetDown",
+                severity: "warning",
+                namespace: "kube-system",
+                since: minutesAgo(30),
+              },
             ],
           },
         },
@@ -257,13 +313,98 @@ describe("health page", () => {
     });
     render(<HealthView cluster={cluster} headlamp={undefined} />);
 
-    const link = await screen.findByRole("link", { name: "Alert KubeNodeNotReady" });
+    const link = await screen.findByRole("link", {
+      name: "Alert KubeNodeNotReady",
+    });
     expect(link).toHaveAttribute("href", "#health-alerts");
     expect(screen.getByRole("heading", { name: "Alerts" })).toBeInTheDocument();
     const target = screen.getByRole("row", { name: /TargetDown/u });
     expect(within(target).getByText("in kube-system")).toBeInTheDocument();
     expect(within(target).getByText("Warning")).toBeInTheDocument();
     expect(within(screen.getByRole("row", { name: /^KubeNodeNotReady/u })).getByText("Critical")).toBeInTheDocument();
+  });
+
+  it("links clock skew and taint drift to the machine's row in the Machines view", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "Clock skew on web-cp-a",
+              machine: "web-cp-a",
+            },
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "Taint drift on web-md-0-a",
+              machine: "web-md-0-a",
+            },
+          ],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    await expect(screen.findByRole("link", { name: "Clock skew on web-cp-a" })).resolves.toHaveAttribute(
+      "href",
+      "/clusters/default/web/machines?machine=web-cp-a",
+    );
+    expect(screen.getByRole("link", { name: "Taint drift on web-md-0-a" })).toHaveAttribute(
+      "href",
+      "/clusters/default/web/machines?machine=web-md-0-a",
+    );
+  });
+
+  it("shows a Talos node whose clock is not synced and a Proxmox VE node whose clock is off", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "Worker web-md-0-a: clock not synced",
+              message: "The node reaches no time server.",
+              machine: "web-md-0-a",
+            },
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "Proxmox VE node pve2 clock is off by 1m35s",
+              message: "The node's clock is ahead of this machine's.",
+            },
+          ],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    await expect(screen.findByRole("link", { name: "Worker web-md-0-a: clock not synced" })).resolves.toHaveAttribute(
+      "href",
+      "/clusters/default/web/machines?machine=web-md-0-a",
+    );
+    expect(screen.getByText("Proxmox VE node pve2 clock is off by 1m35s")).toBeInTheDocument();
+    expect(screen.getByText("The node's clock is ahead of this machine's.")).toBeInTheDocument();
+  });
+
+  it("shows an item of an unknown section without a link", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [{ severity: "warning", section: "mystery", what: "Something odd" }],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    const row = within(await screen.findByRole("row", { name: /Something odd/u }));
+    expect(row.getByText("Something odd")).toBeInTheDocument();
+    expect(row.queryByRole("link", { name: "Something odd" })).not.toBeInTheDocument();
   });
 
   it("shows no alerts section for a cluster without monitoring", async () => {
@@ -281,7 +422,9 @@ describe("health page", () => {
           ...degraded,
           verdict: "unreachable",
           workload: "Its API server does not answer: connection refused",
-          nodes: { items: [machineOnly("web-cp-a", "control-plane"), machineOnly("web-md-0-a", "worker")] },
+          nodes: {
+            items: [machineOnly("web-cp-a", "control-plane"), machineOnly("web-md-0-a", "worker")],
+          },
           pods: { items: [] },
           attention: [],
         },
@@ -291,17 +434,65 @@ describe("health page", () => {
 
     const glance = within(await screen.findByRole("list", { name: "At a glance" }));
     for (const tile of ["Control plane", "Workers", "Node pressure", "Pods not well"]) {
-      expect(glance.getByRole("link", { name: new RegExp(`${tile}\\s*Not read`, "u") })).toBeInTheDocument();
+      expect(
+        glance.getByRole("link", {
+          name: new RegExp(`${tile}\\s*Not read`, "u"),
+        }),
+      ).toBeInTheDocument();
     }
   });
 
-  it("says the autoscaler brings workers to a pool at none, which keeps the control plane to itself", async () => {
-    const atNone = { name: "md-0", desired: 0, ready: 0, available: 0, upToDate: 0, rollingOut: false };
+  it("shows a node's taints as tags under its name, not as lines in its status", async () => {
+    const [cp, worker] = degraded.nodes.items;
     fakeServer({
       [healthPath]: {
         body: {
           ...degraded,
-          nodes: { items: degraded.nodes.items.filter((n) => n.role === "control-plane") },
+          nodes: {
+            items: [
+              {
+                ...cp,
+                taints: ["dedicated:PreferNoSchedule", "node.kubernetes.io/unreachable:NoExecute"],
+              },
+              worker,
+            ],
+          },
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} />);
+
+    const row = within(await screen.findByRole("row", { name: /^web-cp-a/u }));
+    const tags = within(row.getByRole("list", { name: "web-cp-a taints" }));
+    expect(tags.getAllByRole("listitem").map((t) => t.textContent)).toStrictEqual([
+      "dedicated:PreferNoSchedule",
+      "node.kubernetes.io/unreachable:NoExecute",
+    ]);
+    // The tags sit in the name's cell, and the status cell holds no taint text.
+    const cells = row.getAllByRole("cell");
+    expect(cells[0]).toContainElement(row.getByRole("list", { name: "web-cp-a taints" }));
+    expect(cells[1]).not.toHaveTextContent(/taint/iu);
+    expect(screen.queryByText(/^Taint /u)).not.toBeInTheDocument();
+    // A node without taints has no empty list.
+    expect(screen.queryByRole("list", { name: "web-md-0-a taints" })).not.toBeInTheDocument();
+  });
+
+  it("says the autoscaler brings workers to a pool at none, which keeps the control plane to itself", async () => {
+    const atNone = {
+      name: "md-0",
+      desired: 0,
+      ready: 0,
+      available: 0,
+      upToDate: 0,
+      rollingOut: false,
+    };
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          nodes: {
+            items: degraded.nodes.items.filter((n) => n.role === "control-plane"),
+          },
           pools: { items: [{ ...atNone, autoscaling: { min: 0, max: 3 } }] },
         },
       },
@@ -358,7 +549,9 @@ describe("health page", () => {
     await act(() => vi.advanceTimersByTimeAsync(10_000));
     expect(reads(calls, healthPath)).toBe(2);
 
-    routes[healthPath] = { body: { ...degraded, verdict: "healthy", attention: [] } };
+    routes[healthPath] = {
+      body: { ...degraded, verdict: "healthy", attention: [] },
+    };
     await act(() => vi.advanceTimersByTimeAsync(10_000));
     await expect(screen.findByText("Available", { selector: ".verdict *" })).resolves.toBeInTheDocument();
     await act(() => vi.advanceTimersByTimeAsync(20_000));
@@ -369,8 +562,19 @@ describe("health page", () => {
   });
 
   it("gives the verdict the cluster's badge gives, also where only the controller has failed", async () => {
-    fakeServer({ [healthPath]: { body: { ...degraded, verdict: "healthy", attention: [] } } });
-    render(<HealthView cluster={{ ...cluster, controllerError: "Proxmox VE task UPID:pve1 failed: no space" }} />);
+    fakeServer({
+      [healthPath]: {
+        body: { ...degraded, verdict: "healthy", attention: [] },
+      },
+    });
+    render(
+      <HealthView
+        cluster={{
+          ...cluster,
+          controllerError: "Proxmox VE task UPID:pve1 failed: no space",
+        }}
+      />,
+    );
     await expect(screen.findByText("Error", { selector: ".verdict *" })).resolves.toBeInTheDocument();
     expect(screen.queryByText("Available", { selector: ".verdict *" })).not.toBeInTheDocument();
   });
@@ -383,7 +587,10 @@ describe("health page", () => {
     await expect(screen.findByRole("list", { name: "At a glance" })).resolves.not.toHaveClass("tiles-stale");
     expect(screen.queryByText(/^Stale/u)).not.toBeInTheDocument();
 
-    routes[healthPath] = { status: 502, body: { error: "the management cluster does not answer" } };
+    routes[healthPath] = {
+      status: 502,
+      body: { error: "the management cluster does not answer" },
+    };
     await act(() => vi.advanceTimersByTimeAsync(10_000));
     await expect(screen.findByRole("list", { name: "At a glance, stale" })).resolves.toHaveClass("tiles-stale");
     expect(screen.getByText(/^Stale, read at/u)).toHaveClass("hint-warning");

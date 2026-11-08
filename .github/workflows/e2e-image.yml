@@ -88,6 +88,8 @@ jobs:
           restore-keys: e2e-go-
       - name: Tools
         if: steps.kept.outputs.cache-matched-key == ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -126,6 +128,8 @@ jobs:
             e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
             e2e-go-
       - name: Go
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" go
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -175,6 +179,8 @@ jobs:
           zstd -dc "$RUNNER_TEMP/pve-image.tar.zst" | docker load -q
           echo KUBEHENGE_E2E_PVE_BUILT=1 >> "$GITHUB_ENV"
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

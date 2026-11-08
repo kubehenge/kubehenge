@@ -88,6 +88,9 @@ type Bake struct {
 	// KubernetesVersion, for kubeadm, preinstalls kubeadm, the kubelet and containerd at that
 	// version.
 	KubernetesVersion string
+	// Proxy is what the builder's guests download through. It is no part of the template's
+	// identity, so Plan never sets it.
+	Proxy *GuestProxy
 }
 
 var (
@@ -111,17 +114,17 @@ func Plan(req *Request) (Template, error) {
 			ImageRef{Kind: TalosFactory, Version: v}, nil)
 
 	case RKE2, K3s:
-		os, err := checkNodeOS(req.NodeOS)
+		os, err := checkNodeOS(req.Distribution, req.NodeOS)
 		if err != nil {
 			return Template{}, err
 		}
 		// RKE2 and k3s install themselves at boot, but each needs its own SELinux policy, so each
 		// has its own template per node OS.
-		return newTemplate(fmt.Sprintf("kubehenge-%s-%s", req.Distribution, os), []string{kubehengeTag, string(req.Distribution), os.Tag()},
-			ImageRef{Kind: NodeOSImage, NodeOS: os}, &Bake{NodeOS: os, Distribution: req.Distribution})
+		return newTemplate(fmt.Sprintf("kubehenge-%s-%s", req.Distribution, os), append([]string{kubehengeTag, string(req.Distribution)}, os.Tags()...),
+			ImageRef{Kind: NodeOSImage, NodeOS: os.Base()}, &Bake{NodeOS: os, Distribution: req.Distribution})
 
 	case Kubeadm:
-		os, err := checkNodeOS(req.NodeOS)
+		os, err := checkNodeOS(req.Distribution, req.NodeOS)
 		if err != nil {
 			return Template{}, err
 		}
@@ -129,8 +132,8 @@ func Plan(req *Request) (Template, error) {
 		if !versionRE.MatchString(v) {
 			return Template{}, fmt.Errorf("the Kubernetes version %q is not of the form v1.2.3", v)
 		}
-		return newTemplate(fmt.Sprintf("kubehenge-kubeadm-%s-%s", v, os), []string{kubehengeTag, "kubeadm", os.Tag(), kubernetesTagPrefix + v},
-			ImageRef{Kind: NodeOSImage, NodeOS: os}, &Bake{NodeOS: os, Distribution: Kubeadm, KubernetesVersion: v})
+		return newTemplate(fmt.Sprintf("kubehenge-kubeadm-%s-%s", v, os), append([]string{kubehengeTag, "kubeadm", kubernetesTagPrefix + v}, os.Tags()...),
+			ImageRef{Kind: NodeOSImage, NodeOS: os.Base()}, &Bake{NodeOS: os, Distribution: Kubeadm, KubernetesVersion: v})
 	}
 	names := make([]string, len(Distributions))
 	for i, d := range Distributions {
@@ -140,15 +143,46 @@ func Plan(req *Request) (Template, error) {
 }
 
 // checkNodeOS is the node OS a request asks for, DefaultNodeOS when it names none, once it is one
-// templates can be made of.
-func checkNodeOS(o NodeOS) (NodeOS, error) {
-	if o == (NodeOS{}) {
-		o = DefaultNodeOS
+// templates of the distribution can be made of.
+func checkNodeOS(d Distribution, o NodeOS) (NodeOS, error) {
+	if o.Base() == (NodeOS{}) {
+		o = NodeOS{Family: DefaultNodeOS.Family, Release: DefaultNodeOS.Release, FIPS: o.FIPS}
+	}
+	if o.FIPS {
+		if err := FIPSDistribution(d); err != nil {
+			return NodeOS{}, err
+		}
 	}
 	if _, _, err := Available(o); err != nil {
 		return NodeOS{}, err
 	}
 	return o, nil
+}
+
+// FIPSDistributions are the distributions whose nodes may run a node OS in FIPS mode: their own
+// binaries use a FIPS 140 validated module.
+var FIPSDistributions = []Distribution{RKE2}
+
+// FIPSDistribution refuses FIPS mode to a distribution that cannot run in it.
+func FIPSDistribution(d Distribution) error {
+	if slices.Contains(FIPSDistributions, d) {
+		return nil
+	}
+	names := make([]string, len(FIPSDistributions))
+	for i, f := range FIPSDistributions {
+		names[i] = f.Title()
+	}
+	return fmt.Errorf("%s has no FIPS mode. Choose %s for FIPS mode", d.Title(), orList(names))
+}
+
+// Title is the distribution as its project writes it.
+func (d Distribution) Title() string {
+	switch d {
+	case RKE2:
+		return "RKE2"
+	case Talos, K3s, Kubeadm:
+	}
+	return string(d)
 }
 
 func newTemplate(name string, tags []string, image ImageRef, bake *Bake) (Template, error) {

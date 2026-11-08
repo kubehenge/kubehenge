@@ -47,9 +47,18 @@ type fakeAccounts struct {
 	names          pve.Names
 	privilegeCalls int
 	backupChecks   int
-	renewals       int
-	tokenChecks    int
-	now            func() time.Time
+	// applianceLookups counts the searches for the appliance's guest ID.
+	applianceLookups int
+	renewals         int
+	tokenChecks      int
+	// tokenGrants are the privileges of tokens with privilege separation, by token ID and path.
+	// Such a token holds only what its user holds as well. revoked are the token IDs Proxmox VE no
+	// longer takes.
+	tokenGrants map[string]map[string][]string
+	revoked     map[string]bool
+	now         func() time.Time
+	// nodeSkew is how far each Proxmox VE node's clock is from now.
+	nodeSkew map[string]time.Duration
 	// members are every pool's guests. deleted records the VMs deleted.
 	members []pve.Member
 	deleted []int
@@ -63,6 +72,16 @@ type fakeAccounts struct {
 	users        map[string]string
 	usersDeleted int
 	rebooted     []int
+	// bridgeList, when set, replaces the default bridges.
+	bridgeList []pve.Bridge
+	// viaPool are privileges a user holds on a path only through a pool's members, which Proxmox VE
+	// lists for the path but which reach nothing below it.
+	viaPool map[string]map[string][]string
+	// nextID is the datacenter's next-id option and vmids the IDs in use. nextIDForbidden has the
+	// option refuse a user without Sys.Audit on /.
+	nextID          pve.NextID
+	vmids           []int
+	nextIDForbidden bool
 }
 
 func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
@@ -94,7 +113,7 @@ func (f *fakeAccounts) TokenUser(_ context.Context, token string) (*pve.Ticket, 
 	f.tokenChecks++
 	id, secret, _ := strings.Cut(token, "=")
 	username, _, _ := strings.Cut(id, "!")
-	if secret != "secret" || f.passwords[username] == "" {
+	if !strings.Contains(id, "!") || secret != "secret" || f.passwords[username] == "" || f.revoked[id] {
 		return nil, pve.ErrAuthentication
 	}
 	return &pve.Ticket{Username: id, Token: token, Issued: f.now()}, nil
@@ -117,7 +136,10 @@ func (f *fakeAccounts) Answer(_ context.Context, c *pve.Challenge, kind, code st
 	return &pve.Ticket{Username: c.Username, Ticket: "ticket:" + c.Username, Issued: f.now()}, nil
 }
 
-func (f *fakeAccounts) Renew(_ context.Context, t *pve.Ticket) (*pve.Ticket, error) {
+func (f *fakeAccounts) Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket, error) {
+	if t.Token != "" {
+		return f.TokenUser(ctx, t.Token)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.passwords[t.Username] == "" {
@@ -147,6 +169,9 @@ func (f *fakeAccounts) AllPrivileges(_ context.Context, t *pve.Ticket) (map[stri
 		}
 	}
 	for _, p := range f.acls {
+		paths[p] = true
+	}
+	for p := range f.viaPool[strings.SplitN(t.Username, "!", 2)[0]] {
 		paths[p] = true
 	}
 	all := map[string]pve.Privileges{}
@@ -202,6 +227,21 @@ func (*fakeAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]str
 	return map[string]string{"pve1": "10.0.0.5"}, nil
 }
 
+func (f *fakeAccounts) NextID(context.Context, *pve.Ticket) (pve.NextID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nextIDForbidden {
+		return pve.NextID{}, pve.ErrForbidden
+	}
+	return f.nextID, nil
+}
+
+func (f *fakeAccounts) VMIDs(context.Context, *pve.Ticket) ([]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.vmids, nil
+}
+
 // NodeAffinityRules answers those with Sys.Audit on / with a rule keeping to pve2, one keeping off
 // it, and one naming only a node nobody sees.
 func (f *fakeAccounts) NodeAffinityRules(_ context.Context, t *pve.Ticket) ([]pve.HARule, error) {
@@ -227,7 +267,10 @@ func (f *fakeAccounts) ReleaseHA(_ context.Context, t *pve.Ticket, prefix string
 	return nil
 }
 
-func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
+func (f *fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
+	if f.bridgeList != nil {
+		return slices.Clone(f.bridgeList), nil
+	}
 	return []pve.Bridge{
 		{Bridge: "vmbr0", Node: node, CIDR: "10.0.0.5/24", Gateway: "10.0.0.1"},
 		{Bridge: "vmbr1", Node: node},
@@ -236,8 +279,22 @@ func (*fakeAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]p
 	}, nil
 }
 
-func (*fakeAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
-	return []string{"192.0.2.53"}, nil
+func (*fakeAccounts) DNS(_ context.Context, _ *pve.Ticket, node string) (pve.NodeDNS, error) {
+	if node == "pve2" {
+		return pve.NodeDNS{Servers: []string{"192.0.2.54"}}, nil
+	}
+	return pve.NodeDNS{Servers: []string{"192.0.2.53"}, Search: "corp.example"}, nil
+}
+
+// NodeTime answers the time of the fake's clock-skewed nodes, or Proxmox VE's refusal for a user
+// without Sys.Audit on the node.
+func (f *fakeAccounts) NodeTime(_ context.Context, t *pve.Ticket, node string) (time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.effective(t.Username, "/nodes/"+node).Has("Sys.Audit") {
+		return time.Time{}, pve.ErrForbidden
+	}
+	return f.now().Add(f.nodeSkew[node]), nil
 }
 
 // PoolMembers answers as Proxmox VE does, without the tags.
@@ -263,7 +320,7 @@ func (f *fakeAccounts) Templates(context.Context, *pve.Ticket, string) ([]pve.Me
 	f.mu.Lock()
 	var list []pve.Member
 	for i := range f.members {
-		if m := &f.members[i]; m.Template == 1 {
+		if m := &f.members[i]; m.Template == 1 || m.Down {
 			list = append(list, *m)
 		}
 	}
@@ -302,6 +359,17 @@ func (f *fakeAccounts) BackupCovers(_ context.Context, _ *pve.Ticket, vmid int) 
 	return vmid == 150, nil
 }
 
+// ApplianceID knows the appliance as guest 150, with the MAC address bc:24:11:00:01:50.
+func (f *fakeAccounts) ApplianceID(_ context.Context, _ *pve.Ticket, _ int, macs []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.applianceLookups++
+	if slices.Contains(macs, "bc:24:11:00:01:50") {
+		return 150, nil
+	}
+	return 0, pve.ErrNoAppliance
+}
+
 // Network knows two SDN VNets: tenants in the evpn zone and corp in the VLAN zone vlanz.
 // Everything else is a plain bridge.
 func (*fakeAccounts) Network(_ context.Context, _ *pve.Ticket, bridge string) (pve.Network, error) {
@@ -314,10 +382,26 @@ func (*fakeAccounts) Network(_ context.Context, _ *pve.Ticket, bridge string) (p
 	return pve.Network{Zone: pve.LocalZone}, nil
 }
 
-func (f *fakeAccounts) effective(username, aclPath string) pve.Privileges {
-	username, _, _ = strings.Cut(username, "!")
+func (f *fakeAccounts) effective(tokenID, aclPath string) pve.Privileges {
+	username, _, _ := strings.Cut(tokenID, "!")
+	privs := grantedOn(f.grants[username], aclPath)
+	for _, granted := range f.viaPool[username][aclPath] {
+		privs[granted] = true
+	}
+	if separated, ok := f.tokenGrants[tokenID]; ok {
+		own := grantedOn(separated, aclPath)
+		for p := range privs {
+			if !own[p] {
+				delete(privs, p)
+			}
+		}
+	}
+	return privs
+}
+
+func grantedOn(grants map[string][]string, aclPath string) pve.Privileges {
 	privs := pve.Privileges{}
-	for p, granted := range f.grants[username] {
+	for p, granted := range grants {
 		if aclPath == p || strings.HasPrefix(aclPath, p+"/") || p == "/" {
 			for _, g := range granted {
 				privs[g] = true
@@ -346,8 +430,9 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 	}
 	// The kinds the interface reads only as unstructured objects: the add-on releases, and the
 	// control plane of whichever provider, which it finds through the RESTMapper.
-	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{rke2ControlPlane.GroupVersion()})
-	for _, gvk := range []schema.GroupVersionKind{helmReleaseProxyList.GroupVersion().WithKind("HelmReleaseProxy"), rke2ControlPlane} {
+	proxmoxMachine := schema.GroupVersionKind{Group: "infrastructure.cluster.x-k8s.io", Version: "v1alpha2", Kind: "ProxmoxMachine"}
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{rke2ControlPlane.GroupVersion(), proxmoxMachine.GroupVersion()})
+	for _, gvk := range []schema.GroupVersionKind{helmReleaseProxyList.GroupVersion().WithKind("HelmReleaseProxy"), rke2ControlPlane, proxmoxMachine} {
 		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
 		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(gvk.Kind+"List"), &unstructured.UnstructuredList{})
 		mapper.Add(gvk, meta.RESTScopeNamespace)
@@ -407,23 +492,28 @@ func rke2Class() *clusterv1.ClusterClass {
 		Namespace: "kubehenge-system", Name: "kubehenge-rke2", Annotations: map[string]string{
 			"kubehenge.dev/default-pods": "10.42.0.0/16", "kubehenge.dev/default-services": "10.43.0.0/16",
 		},
-		Spec: clusterv1.ClusterClassSpec{Variables: []clusterv1.ClusterClassVariable{
-			{Name: "controlPlaneEndpoint", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string", Format: "ipv4"})},
-			{Name: "network", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "storage", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string"})},
-			{Name: "headlamp", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "rancher", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "csi", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "ccm", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "certificates", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "gitops", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
-			{Name: "nodeOS", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object", Default: &apiextensionsv1.JSON{
-				Raw: []byte(`{"family":"almalinux","release":"10"}`),
-			}})},
-			{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
-				Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
-			}})},
-		}},
+		Spec: clusterv1.ClusterClassSpec{
+			ControlPlane: clusterv1.ControlPlaneClass{Deletion: clusterv1.ControlPlaneClassMachineDeletionSpec{NodeDrainTimeoutSeconds: new(int32(3600))}},
+			Workers: clusterv1.WorkersClass{MachineDeployments: []clusterv1.MachineDeploymentClass{{
+				Class: "worker", Deletion: clusterv1.MachineDeploymentClassMachineDeletionSpec{NodeVolumeDetachTimeoutSeconds: new(int32(600))},
+			}}}, Variables: []clusterv1.ClusterClassVariable{
+				{Name: "controlPlaneEndpoint", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string", Format: "ipv4"})},
+				{Name: "network", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "storage", Required: &required, Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "string"})},
+				{Name: "headlamp", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "rancher", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "csi", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "ccm", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "certificates", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "gitops", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object"})},
+				{Name: "nodeOS", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "object", Default: &apiextensionsv1.JSON{
+					Raw: []byte(`{"family":"almalinux","release":"10"}`),
+				}})},
+				{Name: "oidc", Schema: variableSchema(&clusterv1.JSONSchemaProps{Type: "array", Default: &apiextensionsv1.JSON{
+					Raw: []byte(`[{"issuerURL":"https://sso.example","clientID":"kubernetes"},{"issuerURL":"https://lab.example","clientID":"lab"}]`),
+				}})},
+			},
+		},
 	}
 }
 
@@ -448,8 +538,10 @@ type browser struct {
 	h      *harness
 	cookie string
 	csrf   string
-	// address is where the browser connects from. Unset, 192.0.2.10.
+	// address is where the browser connects from. Unset, 192.0.2.10. host, when set, is the host
+	// it reached the interface by.
 	address string
+	host    string
 	// generation, when set, is sent with each request as the cluster's generation a change was
 	// made against.
 	generation string
@@ -468,6 +560,9 @@ func (b *browser) do(method, path, body string) *httptest.ResponseRecorder {
 	}
 	if b.generation != "" {
 		req.Header.Set(generationHeader, b.generation)
+	}
+	if b.host != "" {
+		req.Host = b.host
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -677,13 +772,8 @@ func TestSlowRenewalHoldsUpNobodyElse(t *testing.T) {
 		h.server.sessions.prune()
 		beside <- nil
 	}()
-	select {
-	case err := <-beside:
-		if err != nil {
-			t.Error(err)
-		}
-	case <-time.After(time.Minute):
-		t.Fatal("requests and pruning waited for another session's renewal")
+	if err := <-beside; err != nil {
+		t.Error(err)
 	}
 	close(slow.release)
 	if code := <-renewing; code != http.StatusOK {
@@ -1139,7 +1229,7 @@ func TestCreateKeepsToWhatClustersMayUse(t *testing.T) {
 	b.signIn("admin@pve")
 	rec := b.do("POST", "/api/clusters", strings.Replace(createBody, `"local-lvm"`, `"tank"`, 1))
 	expect(t, rec, http.StatusUnprocessableEntity)
-	if !strings.Contains(rec.Body.String(), "storage: choose local-lvm") {
+	if !strings.Contains(rec.Body.String(), "storage tank is not in workload_datastores (local-lvm)") {
 		t.Fatalf("refusal = %s", rec.Body)
 	}
 	expect(t, b.do("POST", "/api/clusters", strings.Replace(createBody, `"vmbr0"`, `"vmbr1"`, 1)), http.StatusUnprocessableEntity)
@@ -1319,6 +1409,22 @@ func TestChangeOptsOutOfProxmoxHA(t *testing.T) {
 	}
 	if v := string(variableValue(got, "proxmoxHA")); v != "false" {
 		t.Fatalf("proxmoxHA = %s", v)
+	}
+}
+
+func TestChangeSetsTheHostOutageGrace(t *testing.T) {
+	t.Parallel()
+	c := cluster("default", "one")
+	h := newHarness(t, c)
+	b := h.browser()
+	b.signIn("dev@pve")
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"hostOutageGraceMinutes":45}}`), http.StatusOK)
+	got := &clusterv1.Cluster{}
+	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatal(err)
+	}
+	if v := string(variableValue(got, "hostOutageGraceMinutes")); v != "45" {
+		t.Fatalf("hostOutageGraceMinutes = %s", v)
 	}
 }
 
@@ -1623,8 +1729,13 @@ func TestProxmoxResources(t *testing.T) {
 	}
 	rec = b.do("GET", "/api/proxmox/nodes/pve1/dns", "")
 	expect(t, rec, http.StatusOK)
-	if got := strings.TrimSpace(rec.Body.String()); got != `{"servers":["192.0.2.53"]}` {
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"servers":["192.0.2.53"],"search":"corp.example"}` {
 		t.Fatalf("dns = %s", got)
+	}
+	rec = b.do("GET", "/api/proxmox/nodes/pve2/dns", "")
+	expect(t, rec, http.StatusOK)
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"servers":["192.0.2.54"],"search":""}` {
+		t.Fatalf("dns of a node without a search domain = %s", got)
 	}
 }
 
@@ -1648,6 +1759,36 @@ func TestClasses(t *testing.T) {
 		if (o.Unreleased != "") != (o.Family == "leap") || o.Default != (o.NodeOS == templates.DefaultNodeOS) || o.MAC != templates.SELinux {
 			t.Errorf("node OS %+v", o)
 		}
+	}
+}
+
+func TestNodeOSChoicesOfferFIPSModeToRKE2Alone(t *testing.T) {
+	t.Parallel()
+	class := &clusterv1.ClusterClass{}
+	for dist, want := range map[string][]string{
+		"rke2":    {"almalinux-10", "almalinux-10-fips", "rocky-10", "rocky-10-fips", "leap-16.1"},
+		"k3s":     {"almalinux-10", "rocky-10", "leap-16.1"},
+		"kubeadm": {"almalinux-10", "rocky-10", "leap-16.1"},
+		"talos":   nil,
+	} {
+		var got []string
+		for _, o := range nodeOSChoices(class, dist) {
+			got = append(got, o.String())
+			if o.FIPS && !strings.HasSuffix(o.Title, " FIPS") {
+				t.Errorf("%s: %s is titled %q", dist, o, o.Title)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s offers %v, want %v", dist, got, want)
+		}
+	}
+	for dist, refused := range map[string]bool{"rke2": false, "k3s": true, "kubeadm": true} {
+		if _, err := requestNodeOS(json.RawMessage(`{"family":"almalinux","release":"10","fips":true}`), dist); (err != nil) != refused {
+			t.Errorf("%s in FIPS mode: %v", dist, err)
+		}
+	}
+	if o, err := requestNodeOS(json.RawMessage(`{"family":"rocky","release":"10"}`), "k3s"); err != nil || o.FIPS {
+		t.Errorf("k3s on Rocky Linux: %+v, %v", o, err)
 	}
 }
 

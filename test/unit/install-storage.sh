@@ -182,6 +182,47 @@ expect_in "a missing file: exit 22 and 404" "could not download https://example.
 expect_in "a proxy refusing: 407" "(curl exit 22, HTTP status 407)" failed_download 22 407
 expect_in "no HTTP answer: the exit code alone" "could not download https://example.org/x (curl exit 28)" failed_download 28 000
 
+# GitHub's release address failing sends that file, and every later release asset, through the API.
+mkdir "${root}/apibin"
+cat > "${root}/apibin/curl" << 'EOF'
+#!/bin/sh
+out=''
+while [ $# -gt 1 ]; do
+    if [ "$1" = -o ]; then out=$2; fi
+    shift
+done
+printf '%s\n' "$1" >> "${STUB_LOG}"
+case "$1" in
+    https://github.com/*) exit 22 ;;
+    https://api.github.com/repos/o/r/releases/tags/v1) printf '{\n "assets": [\n {\n "url": "https://api.github.com/repos/o/r/releases/assets/5",\n "id": 5,\n "name": "tool",\n' > "${out}" ;;
+    https://api.github.com/repos/o/r/releases/assets/5) cp "${STUB_SOURCE}" "${out}" ;;
+    *) exit 22 ;;
+esac
+EOF
+chmod +x "${root}/apibin/curl"
+two_assets() {
+    releases_down=
+    fetch "https://github.com/o/r/releases/download/v1/tool" "${root}/got" "${sha256}" "the tool"
+    fetch "https://github.com/o/r/releases/download/v1/tool" "${root}/got" "${sha256}" "the tool again"
+    grep -c '^https://github.com/' "${root}/api.log" || true
+}
+through_api() {
+    : > "${root}/api.log"
+    (PATH=${root}/apibin:${PATH} STUB_LOG=${root}/api.log STUB_SOURCE=${root}/source two_assets) 2>&1
+}
+expect_in "a failing release address: the API's file passes the checksum" "the tool again: checksum verified" through_api
+expect_in "a failing release address: tried once for the run" "
+1" through_api
+asset_missing() {
+    releases_down=
+    fetch "https://github.com/o/r/releases/download/v1/nothing" "${root}/got" "${sha256}" "the file"
+}
+asset_missing_api() {
+    : > "${root}/api.log"
+    (PATH=${root}/apibin:${PATH} STUB_LOG=${root}/api.log STUB_SOURCE=${root}/source asset_missing) 2>&1
+}
+expect_in "an asset the release lacks: the download fails" "nor through GitHub's API" asset_missing_api
+
 # A file the administrator gave is checked like a download.
 local_copy() { (local_archive "${root}/source" "$1" "${root}/copy" "the archive") 2>&1; }
 expect_in "a local archive that matches" "the archive: checksum verified" local_copy "${sha256}"
@@ -192,6 +233,26 @@ space() { (need_space "${root}" "$1" "the thing" "Free some.") 2>&1; }
 expect "enough room: silent" "" space 1
 expect_in "too little room: says what needs how much and what to do" "needs" space 99999999999999
 expect_in "and the fix" "Free some." space 99999999999999
+
+# Free space in the container for an upgrade: three times what is installed, and 64 MiB.
+cat > "${bin}/pct" << EOF
+#!/bin/sh
+case "\$4" in
+    df) printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/loop0 8000000 1000000 %s 13%% /\n' "\$(cat "${root}/room")" ;;
+    du) printf '100000\t/usr/local/share/kubehenge\n200000\t/usr/local/bin/kubehenge\n' ;;
+    *) exit 2 ;;
+esac
+EOF
+chmod +x "${bin}/pct"
+ctid=900
+upgrade_space() { (need_upgrade_space) 2>&1; }
+echo 965536 > "${root}/room"
+expect "room for three times what is installed and 64 MiB: silent" "" upgrade_space
+echo 965535 > "${root}/room"
+expect_in "a KiB less: stops" "the upgrade needs 942 MiB" upgrade_space
+echo 500000 > "${root}/room"
+expect_in "it says how much is free and needed" "container 900 has 488 MiB free and the upgrade needs 942 MiB" upgrade_space
+expect_in "and how to grow the disk" "pct resize 900 rootfs +4G" upgrade_space
 
 if [ "${failures}" -ne 0 ]; then
     echo "install-storage: ${failures} of $((passes + failures)) checks failed"

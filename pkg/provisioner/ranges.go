@@ -45,6 +45,10 @@ type nodeNetwork struct {
 	Gateway string   `json:"gateway"`
 	Prefix  int      `json:"prefix"`
 	Addrs   []string `json:"addresses"`
+	NTP     []string `json:"ntp"`
+	// MTU and Queues are the nodes' interface options, nil when unset.
+	MTU    *int `json:"mtu"`
+	Queues *int `json:"queues"`
 }
 
 // nodesPrefix is the nodes' network, from the network variable's gateway and prefix length.

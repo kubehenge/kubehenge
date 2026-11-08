@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -27,6 +28,9 @@ type fakeNodes struct {
 	levels map[string]int
 	err    error
 	asked  int
+	// maintenance are the nodes in HA maintenance, inactive each node's inactive storages.
+	maintenance []string
+	inactive    map[string][]string
 }
 
 func (f *fakeNodes) OnlineNodes(context.Context) ([]Node, error) {
@@ -40,7 +44,7 @@ func (f *fakeNodes) OnlineNodes(context.Context) ([]Node, error) {
 		if !ok {
 			level = 3
 		}
-		out[i] = Node{Name: n, CPULevel: level}
+		out[i] = Node{Name: n, CPULevel: level, Maintenance: slices.Contains(f.maintenance, n), InactiveStorages: f.inactive[n]}
 	}
 	return out, nil
 }
@@ -190,6 +194,15 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var data any = []any{}
 		switch r.URL.Path {
+		case "/api2/json/cluster/resources":
+			data = []map[string]any{
+				{"storage": "local-lvm", "node": "pve1", "status": "available"},
+				{"storage": "nfs", "node": "pve1", "status": "unknown"},
+				{"storage": "nfs", "node": "pve3", "status": "available"},
+				{"storage": "nfs", "node": "pve2", "status": "unknown"},
+			}
+		case "/api2/json/cluster/ha/status/manager_status":
+			data = map[string]any{"manager_status": map[string]any{"node_status": map[string]string{"pve1": "online", "pve2": "online", "pve3": "maintenance"}}}
 		case "/api2/json/nodes":
 			data = []map[string]any{{"node": "pve3", "status": "online"}, {"node": "pve2", "status": "offline"}, {"node": "pve1", "status": "online"}}
 		case "/api2/json/nodes/pve1/status", "/api2/json/nodes/pve3/status":
@@ -211,7 +224,8 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(online, []Node{{"pve1", 2}, {"pve3", 3}}) {
+		want := []Node{{Name: "pve1", CPULevel: 2, InactiveStorages: []string{"nfs"}}, {Name: "pve3", CPULevel: 3, Maintenance: true}}
+		if !reflect.DeepEqual(online, want) {
 			t.Errorf("online = %v", online)
 		}
 	}
@@ -224,7 +238,7 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 
 func TestNodesForTheNodeOSesCPU(t *testing.T) {
 	t.Parallel()
-	online := []Node{{"pve1", 2}, {"pve2", 3}, {"pve3", 4}}
+	online := []Node{{Name: "pve1", CPULevel: 2}, {Name: "pve2", CPULevel: 3}, {Name: "pve3", CPULevel: 4}}
 	if got := nodesFor(online, templates.CPULevel(templates.DefaultNodeOS)); !slices.Equal(got, []string{"pve1", "pve2", "pve3"}) {
 		t.Errorf("AlmaLinux runs on %v", got)
 	}
@@ -247,7 +261,7 @@ func TestCheckNodeOSLeavesTalosAlone(t *testing.T) {
 	t.Parallel()
 	c := talosCluster("web", "v1.14.4")
 	h := &Hooks{Nodes: &fakeNodes{online: []string{"pve1"}, levels: map[string]int{"pve1": 1}}}
-	if err := h.checkNodeOS(t.Context(), c); err != nil {
+	if err := h.checkNodeOS(t.Context(), h.reads(), c); err != nil {
 		t.Errorf("a Talos cluster refused for its node OS: %v", err)
 	}
 }
@@ -280,7 +294,35 @@ func TestCheckNodeOSRefusesWhatNoAllowedNodeRuns(t *testing.T) {
 			t.Parallel()
 			c := cluster(tc.vars...)
 			h := &Hooks{Nodes: &fakeNodes{online: tc.online, levels: tc.levels}}
-			err := h.checkNodeOS(t.Context(), c)
+			err := h.checkNodeOS(t.Context(), h.reads(), c)
+			if tc.refused == "" && err != nil || tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)) {
+				t.Errorf("checkNodeOS = %v, want a refusal naming %q", err, tc.refused)
+			}
+		})
+	}
+}
+
+func TestCheckNodeOSHoldsFIPSModeToRKE2OnCanal(t *testing.T) {
+	t.Parallel()
+	fips := clusterVariable(t, NodeOSVariable, templates.NodeOS{Family: "almalinux", Release: "10", FIPS: true})
+	for _, tc := range []struct {
+		name, class, refused string
+		vars                 []clusterv1.ClusterVariable
+	}{
+		{"RKE2 on its default CNI", "kubehenge-rke2", "", []clusterv1.ClusterVariable{fips}},
+		{"RKE2 on Canal", "kubehenge-rke2", "", []clusterv1.ClusterVariable{fips, clusterVariable(t, "cni", "canal")}},
+		{"RKE2 on Cilium", "kubehenge-rke2", "FIPS mode needs Canal", []clusterv1.ClusterVariable{fips, clusterVariable(t, "cni", "cilium")}},
+		{"RKE2 on Calico", "kubehenge-rke2", "not calico", []clusterv1.ClusterVariable{fips, clusterVariable(t, "cni", "calico")}},
+		{"RKE2 on Cilium without FIPS mode", "kubehenge-rke2", "", []clusterv1.ClusterVariable{nodeOSVariable(t, "almalinux", "10"), clusterVariable(t, "cni", "cilium")}},
+		{"k3s", "kubehenge-k3s", "k3s has no FIPS mode. Choose RKE2", []clusterv1.ClusterVariable{fips}},
+		{"kubeadm", "kubehenge-kubeadm", "kubeadm has no FIPS mode", []clusterv1.ClusterVariable{fips}},
+		{"Leap, which has no FIPS mode", "kubehenge-rke2", "not released", []clusterv1.ClusterVariable{clusterVariable(t, NodeOSVariable, templates.NodeOS{Family: "leap", Release: "16.1", FIPS: true})}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := cluster(tc.vars...)
+			c.Spec.Topology.ClassRef.Name = tc.class
+			err := (&Hooks{}).checkNodeOS(t.Context(), nil, c)
 			if tc.refused == "" && err != nil || tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused)) {
 				t.Errorf("checkNodeOS = %v, want a refusal naming %q", err, tc.refused)
 			}

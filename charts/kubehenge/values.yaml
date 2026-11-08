@@ -117,6 +117,19 @@ controllerLogs:
   level: info
   development: false
 
+# The HTTP(S) proxy the controller and the template builds download through. secret names a Secret
+# in the release namespace with HTTP_PROXY, HTTPS_PROXY and NO_PROXY, and with ca.crt when ca is
+# true, for a proxy that re-signs TLS. Empty, they go direct.
+proxy:
+  secret: ""
+  ca: false
+
+# Mirrors of the chart repositories, by repository host, such as ghcr.io. Every chart a cluster
+# installs is fetched from the mirror of its host, which serves the same charts under the same
+# digests: an oci:// address for a host that serves OCI charts, an http(s):// one for a chart
+# repository.
+chartMirrors: {}
+
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.
   url: ""
@@ -126,6 +139,10 @@ proxmox:
   # Secret in the release namespace with the controller's API token (key token, as
   # user@realm!name=secret) and the CA that signed the API's certificate (key ca.crt).
   secret: kubehenge-proxmox
+  # <namespace>/<name> of the Secret with Cluster API's Proxmox VE provider token (keys
+  # PROXMOX_TOKEN and PROXMOX_SECRET). The controller tests it for the privileges it needs. Empty,
+  # it is not tested.
+  capmoxSecret: ""
   # Group each cluster's Proxmox VE user joins, holding the storage and node rights clusters share.
   clusterGroup: kubehenge-clusters
   # Role each cluster's user gets on its own pool.
@@ -167,7 +184,7 @@ proxmox:
 
 # Building the node OS VM templates again every week, with the updates each node OS published
 # since, as a CronJob signed in with a token of its own. Clusters move their nodes to a new build
-# inside their maintenance windows (their upgrades variable's nodeImages) once it is soakHours old;
+# inside their upgrade windows (their upgrades variable's nodeImages) once it is soakHours old;
 # of each template the two newest builds stay, and any older one a cluster still clones from.
 templateRefresh:
   # On, as with the module and the appliance. It needs node, storage and importStorage below and the
@@ -184,7 +201,8 @@ templateRefresh:
   secret: kubehenge-template-builder
   # Where the templates are built, as kubehenge template create's flags of the same names: the node,
   # the storage of their disks, the file storage the image is downloaded to (import content), the
-  # storage of the cloud-init ISO while an image is prepared, and the template pool.
+  # storage of the cloud-init ISO while an image is prepared, and the template pool. The node may be
+  # a list: a build runs on the first of them that is online and whose CPU runs the node OS.
   node: ""
   storage: ""
   importStorage: ""
@@ -202,6 +220,9 @@ templateRefresh:
   # Kubernetes version no kubeadm template exists for yet. The builds run here, with the builder's
   # token, one at a time; the interface asks for them and never starts one itself.
   creatorBuilds: false
+  # Whether the weekly build also makes the kubeadm template of the newest patch release of each
+  # Kubernetes minor version a kubeadm cluster runs, and of the next minor version.
+  kubeadmPatches: true
 
 # kube-vip, which holds each cluster's API address on its control planes and, where it is the
 # cluster's load balancer, its Services' addresses.
@@ -329,6 +350,17 @@ addons:
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.1@sha256:f723251bdd90a806b5331b6e9f9287cc2832d3dd9f9479378cdbbddb9856724f
     values:
+      # The job that applies the chart's CRDs on every install and upgrade. The tag carries the
+      # digest, since the chart's own digest keys are not read.
+      crds:
+        upgradeJob:
+          image:
+            busybox:
+              # renovate: datasource=docker depName=docker.io/library/busybox
+              tag: 1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
+            kubectl:
+              # renovate: datasource=docker depName=registry.k8s.io/kubectl
+              tag: v1.37.2@sha256:fe049faa65ae483ac200009a949a68fa4c9985daea12c9cb1195c9c7965301fc
       prometheusOperator:
         image:
           # renovate: datasource=docker depName=quay.io/prometheus-operator/prometheus-operator
@@ -727,11 +759,15 @@ addons:
         image:
           # renovate: datasource=docker depName=quay.io/metallb/speaker
           tag: v0.16.1@sha256:16561e96531e1852d5c229ad7fae6e994dcfa983ff7f4de6b6208b34a4e2ddbc
-        # The FRR this MetalLB release's chart names, so it moves with MetalLB; layer 2 mode leaves
-        # it off.
-        frr:
+      # The frr-k8s and FRR images of this MetalLB release's frr-k8s subchart, so they move with
+      # MetalLB. BGP mode runs them, layer 2 mode leaves frr-k8s off.
+      frr-k8s:
+        frrk8s:
           image:
-            tag: 10.5.3@sha256:37b42d2b340c322edc5f20dc4598373adb6e813e95cc9d4a18f64f9a37c98a4c
+            tag: v0.0.25@sha256:1cb06fb2d5538c9f9b20d3adf00da8d1e6cb0166bc15df8add0d9efe578641a4
+          frr:
+            image:
+              tag: 10.4.3@sha256:8745af1f9bbbc26ab11d99ccdf35e07aa3427a199749bef0cd6bb5132bb130df
   kubeVip:
     repository: https://kube-vip.github.io/helm-charts
     chart: kube-vip

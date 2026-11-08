@@ -1,17 +1,20 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { noAnswer } from "./api";
+import { api, noAnswer } from "./api";
 import { App } from "./App";
 import { ClusterList } from "./ClusterList";
 import {
   addonCPU,
   addonCostMiB,
   addonMemory,
+  addonMemoryRequests,
   addonNeedMiB,
   fieldProblems,
+  machineLeast,
   newForm,
+  pendingCredentials,
   problems,
   request,
   summary,
@@ -272,6 +275,107 @@ describe("sign-in", () => {
     await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
       "Sign-in failed. Check the user name, password and realm, or set up the required second factor.",
     );
+  });
+
+  it("signs in with an API token for a user whose second factor is a security key", async () => {
+    const routes: Record<string, Route> = {
+      "GET /api/session": { status: 401, body: { error: "not signed in" } },
+      "GET /api/realms": { body: [{ realm: "pve", type: "pve", default: true }] },
+      "POST /api/session": {
+        status: 401,
+        body: { error: "security keys work only in Proxmox VE. Sign in with an API token instead" },
+      },
+      "POST /api/session/token": { status: 401, body: { error: "Proxmox VE refused the API token" } },
+      "GET /api/clusters": { body: [web] },
+      "DELETE /api/session": { status: 204 },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User name"), "alice@pve");
+    await user.type(screen.getByLabelText("Password"), "secret");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent("Sign in with an API token instead");
+
+    await user.click(screen.getByRole("button", { name: "Use API token" }));
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Token ID")).toHaveFocus();
+    await user.type(screen.getByLabelText("Token ID"), " alice@pve!ui ");
+    await user.type(screen.getByLabelText("Secret"), "wrong");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent("Proxmox VE refused the API token");
+    expect(screen.getByLabelText("Secret")).toHaveValue("");
+
+    routes["POST /api/session/token"] = { body: { user: "alice@pve!ui", csrf: "t1" } };
+    await user.type(screen.getByLabelText("Secret"), "0b6f3c1e");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await expect(screen.findByRole("link", { name: "web" })).resolves.toBeInTheDocument();
+    expect(calls.findLast((c) => c.key === "POST /api/session/token")?.body).toStrictEqual({
+      id: "alice@pve!ui",
+      secret: "0b6f3c1e",
+    });
+    expect(screen.getByText("alice@pve!ui", { selector: ".user" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(calls.find((c) => c.key === "DELETE /api/session")?.headers.get("X-Kubehenge-CSRF")).toBe("t1");
+    await expect(screen.findByRole("button", { name: "Use API token" })).resolves.toBeInTheDocument();
+  });
+
+  describe("when a second tab replaced the session", () => {
+    const refused = { status: 403, body: { error: "missing or wrong CSRF token" } };
+
+    it("takes up the same user's new CSRF token, so the next try goes through", async () => {
+      const routes: Record<string, Route> = {
+        "GET /api/session": { body: { user: "alice@pve", csrf: "old" } },
+        "GET /api/clusters": { body: [web] },
+        "DELETE /api/session": refused,
+      };
+      const calls = fakeServer(routes);
+      render(<App />);
+      await screen.findByRole("link", { name: "web" });
+
+      routes["GET /api/session"] = { body: { user: "alice@pve", csrf: "new" } };
+      await expect(api.signOut()).rejects.toThrow("The session changed in another tab. Try again.");
+      expect(screen.getByRole("link", { name: "web" })).toBeInTheDocument();
+
+      routes["DELETE /api/session"] = { status: 204 };
+      await api.signOut();
+      const deletes = calls.filter((c) => c.key === "DELETE /api/session");
+      expect(deletes.map((c) => c.headers.get("X-Kubehenge-CSRF"))).toStrictEqual(["old", "new"]);
+    });
+
+    it("returns to sign-in when the other tab signed in as someone else", async () => {
+      const routes: Record<string, Route> = {
+        "GET /api/session": { body: { user: "alice@pve", csrf: "old" } },
+        "GET /api/realms": { body: [{ realm: "pve", type: "pve" }] },
+        "GET /api/clusters": { body: [web] },
+        "DELETE /api/session": refused,
+      };
+      fakeServer(routes);
+      render(<App />);
+      await screen.findByRole("link", { name: "web" });
+
+      routes["GET /api/session"] = { body: { user: "bob@pve", csrf: "bobs" } };
+      await expect(api.signOut()).rejects.toThrow("The session changed in another tab");
+      await expect(screen.findByText("Session ended. Sign in again.")).resolves.toBeInTheDocument();
+    });
+
+    it("returns to sign-in when the session is gone", async () => {
+      const routes: Record<string, Route> = {
+        "GET /api/session": { body: { user: "alice@pve", csrf: "old" } },
+        "GET /api/realms": { body: [{ realm: "pve", type: "pve" }] },
+        "GET /api/clusters": { body: [web] },
+        "DELETE /api/session": refused,
+      };
+      fakeServer(routes);
+      render(<App />);
+      await screen.findByRole("link", { name: "web" });
+
+      routes["GET /api/session"] = { status: 401, body: { error: "not signed in" } };
+      await expect(api.signOut()).rejects.toThrow("The session changed in another tab");
+      await expect(screen.findByText("Session ended. Sign in again.")).resolves.toBeInTheDocument();
+    });
   });
 
   it("offers the realm last signed in with, while Proxmox VE still has it", async () => {
@@ -663,6 +767,26 @@ describe("clusters", () => {
     );
   });
 
+  it("shows a machine whose node does not report as such", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const silent: Machine = {
+      name: "md-a",
+      role: "worker",
+      phase: "Running",
+      ready: true,
+      created: new Date().toISOString(),
+      notReporting: true,
+    };
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": { body: { ...web, machines: [runningOn("cp-a", "pve1"), silent] } },
+    });
+    render(<App />);
+    const row = await screen.findByRole("row", { name: /^md-a /u });
+    expect(within(row).getByRole("cell", { name: "Not reporting" })).toBeInTheDocument();
+    expect(within(await screen.findByRole("row", { name: /^cp-a /u })).queryByText("Not reporting")).toBeNull();
+  });
+
   it("replaces a machine after asking, and keeps one marked for replacement", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/machines");
     const routes: Record<string, Route> = {
@@ -691,6 +815,30 @@ describe("clusters", () => {
     const marked = await screen.findByRole("row", { name: /^cp-a .*Replacing/u });
     await user.click(within(marked).getByRole("button", { name: "Keep cp-a" }));
     await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/cp-a/replacement")).toBe(1));
+  });
+
+  it("says why a machine's replacement is held", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: {
+          ...web,
+          machines: [
+            {
+              ...runningOn("md-a", "pve2", "worker"),
+              held: "Proxmox VE node pve2 is in maintenance",
+              heldUntil: "2027-01-02T14:40:00Z",
+            },
+            runningOn("md-b", "pve1", "worker"),
+          ],
+        },
+      },
+    });
+    render(<App />);
+    const row = await screen.findByRole("row", { name: /^md-a .*Replacement held/u });
+    expect(row).toHaveTextContent("Proxmox VE node pve2 is in maintenance. Replaced after");
+    expect(screen.getByRole("row", { name: /^md-b /u })).not.toHaveTextContent("Replacement held");
   });
 
   it("deletes a worker after asking, and opens a machine's console", async () => {
@@ -757,6 +905,35 @@ describe("clusters", () => {
     await waitFor(() => expect(reads(calls, "POST /api/clusters/default/web/machines/cp-a/reboot")).toBe(1));
   });
 
+  it("offers to forget a machine that cannot finish deleting, only to those who may", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/machines");
+    const stuck = {
+      ...runningOn("cp-a", "pve2"),
+      node: "cp-a",
+      phase: "Deleting",
+      stalled: "Proxmox VE node pve2 is offline, so capmox waits for it to return",
+    };
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": {
+        body: {
+          ...web,
+          allowed: { change: true, kubeconfig: true },
+          machines: [stuck, runningOn("md-a", "pve1", "worker")],
+        },
+      },
+      "PUT /api/clusters/default/web/machines/cp-a/forgotten": { status: 202 },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await expect(screen.findByText(stuck.stalled)).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Forget md-a" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Forget cp-a" }));
+    const dialog = screen.getByRole("dialog", { name: "Forget cp-a" });
+    await user.click(within(dialog).getByRole("button", { name: "Forget" }));
+    await waitFor(() => expect(reads(calls, "PUT /api/clusters/default/web/machines/cp-a/forgotten")).toBe(1));
+  });
+
   it("reads the setup status no more once signed out, even when the last read fails after", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const setup = held();
@@ -790,6 +967,50 @@ const freeOn: Route = (body) => {
   return { body: { network: "10.0.0.0/16", endpoint: "10.0.0.30", addresses: "10.0.0.31-10.0.0.33", answering: [] } };
 };
 
+const bridgeOn = (node: string, bridge: string, n: number): Record<string, Route> => ({
+  [`GET /api/proxmox/nodes/${node}/bridges`]: () => ({
+    body: [{ bridge, node, vlanAware: false, usable: true, cidr: `10.${n}.0.5/16`, gateway: `10.${n}.0.1` }],
+  }),
+  [`POST /api/proxmox/nodes/${node}/bridges/${bridge}/free`]: () => ({
+    body: { network: `10.${n}.0.0/16`, answering: [] },
+  }),
+});
+
+// openNetwork is the wizard's Network step on three nodes whose search domains differ, with the
+// first node's bridge chosen. It returns the Search domains field.
+async function openNetwork(user: UserEvent): Promise<HTMLElement> {
+  window.history.replaceState(null, "", "/clusters/new");
+  fakeServer({
+    "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
+    "GET /api/classes": () => ({ body: [rke2OS] }),
+    "GET /api/proxmox/storages": () => ({ body: [] }),
+    "GET /api/proxmox/nodes": () => ({
+      body: [
+        { node: "pve1", online: true },
+        { node: "pve2", online: true },
+        { node: "pve3", online: true },
+      ],
+    }),
+    ...bridgeOn("pve1", "vmbr0", 1),
+    ...bridgeOn("pve2", "vmbr1", 2),
+    ...bridgeOn("pve3", "vmbr2", 3),
+    "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.1.0.53"], search: "corp.example" } }),
+    "GET /api/proxmox/nodes/pve2/dns": () => ({ body: { servers: ["10.2.0.53"], search: "other.example" } }),
+    "GET /api/proxmox/nodes/pve3/dns": () => ({ body: { servers: ["10.3.0.53"], search: "" } }),
+  });
+  render(<App />);
+  await user.type(await screen.findByLabelText("Name"), "lab");
+  await waitFor(() => expect(screen.getByRole("option", { name: "RKE2" })).toBeInTheDocument());
+  await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-rke2");
+  await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+rke2r1");
+  await user.click(screen.getByRole("button", { name: "Next" }));
+  await waitFor(() => expect(screen.getByLabelText("Bridge")).toBeInTheDocument());
+  await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr0");
+  const search = screen.getByLabelText("Search domains");
+  await waitFor(() => expect(search).toHaveValue("corp.example"));
+  return search;
+}
+
 describe("create", () => {
   const form: Form = {
     from: "",
@@ -803,34 +1024,51 @@ describe("create", () => {
     workerReplicas: 2,
     workerAutoscale: false,
     workerMax: 3,
+    controlPlaneTimeouts: { drain: "", detach: "", deletion: "" },
+    workerTimeouts: { drain: "", detach: "", deletion: "" },
     endpoint: "10.0.0.20",
     bridge: "vmbr0",
     vlan: "",
+    mtu: "",
+    queues: "",
     addresses: "10.0.0.21-10.0.0.29\n10.0.0.32/28",
     prefix: 24,
     gateway: "10.0.0.1",
     dnsServers: "10.0.0.1, 1.1.1.1",
+    searchDomains: "",
+    ntpServers: "",
     loadBalancer: "",
     loadBalancerAddresses: "",
+    loadBalancerMode: "l2",
+    loadBalancerAsn: "",
+    loadBalancerPeers: "",
+    loadBalancerAuthenticated: false,
+    loadBalancerPassword: "",
     pods: "",
     services: "",
     storage: "local-lvm",
     place: { placement: "any", haRule: "", nodes: [] },
+    hostOutageGrace: "30",
     proxmoxHA: true,
     datastoreAllocate: false,
     volumeSnapshots: false,
     haGroups: true,
     controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 },
     workerMachine: { cores: 4, memoryMiB: 8192, diskGiB: 40 },
+    workerNodes: { labels: [], taints: [] },
+    nodeCustomisation: newForm().nodeCustomisation,
     cni: "cilium",
     headlamp: true,
     headlampHostname: "",
     headlampView: false,
     monitoring: true,
     grafanaHostname: "grafana.example",
-    logs: { enabled: false, collector: "node", retentionDays: 7, sizeGiB: 10 },
+    alerting: newForm().alerting,
+    alertingSecrets: {},
+    logs: { enabled: false, collector: "node", retentionDays: 7, sizeGiB: 10, outputs: [] },
     podSecurity: { admission: "restricted", kyverno: "off" },
     cis: false,
+    etcdQuotaGiB: 8,
     istio: false,
     clusterMesh: false,
     meshPeers: [],
@@ -838,8 +1076,12 @@ describe("create", () => {
     rancherHostname: "",
     rancherRegister: false,
     certificates: newForm().certificates,
+    namespaceLabels: "",
+    existingCertManager: false,
     dns01Token: "",
+    eabKey: "",
     gitops: newForm().gitops,
+    egress: newForm().egress,
     oidc: [],
     upgradeMode: "off",
     backups: false,
@@ -872,6 +1114,14 @@ describe("create", () => {
     const unplaced = { ...rke2, variables: rke2.variables.filter((v) => v.name !== "allowedNodes") };
     expect(request(byRule, unplaced).variables).not.toHaveProperty("allowedNodes");
     expect(problems("Machines", noNodes, unplaced)).toStrictEqual([]);
+  });
+
+  it("sends the time servers of the nodes, and nothing when there are none", () => {
+    const withNtp = { ...form, ntpServers: "ntp1.example.org, 192.0.2.5" };
+    expect(request(withNtp, rke2).variables["network"]).toMatchObject({ ntp: ["ntp1.example.org", "192.0.2.5"] });
+    expect(request(form, rke2).variables["network"]).not.toHaveProperty("ntp");
+    expect(Object.fromEntries(summary(withNtp, rke2))["Time servers"]).toBe("ntp1.example.org, 192.0.2.5");
+    expect(Object.fromEntries(summary(form, rke2))).not.toHaveProperty("Time servers");
   });
 
   it("builds the request from the form", () => {
@@ -915,6 +1165,27 @@ describe("create", () => {
     });
     const unhardened = { ...rke2, variables: rke2.variables.filter((v) => v.name !== "cis") };
     expect(request({ ...defaults, cis: true }, unhardened).variables).not.toHaveProperty("podSecurity");
+  });
+
+  it("sends the search domains only when entered, and refuses what the schema would", () => {
+    expect(request(form, rke2).variables["network"]).not.toHaveProperty("searchDomains");
+    expect(Object.fromEntries(summary(form, rke2))["Search domains"]).toBe("None");
+    const domains = { ...form, searchDomains: "corp.example, Site-1.example\nexample.org" };
+    expect(request(domains, rke2).variables["network"]).toMatchObject({
+      searchDomains: ["corp.example", "Site-1.example", "example.org"],
+    });
+    expect(Object.fromEntries(summary(domains, rke2))["Search domains"]).toBe(
+      "corp.example, Site-1.example, example.org",
+    );
+    expect(problems("Network", domains, rke2)).toStrictEqual([]);
+    for (const bad of ["corp..example", "-corp.example", "corp.example.", "$(reboot).example", "a_b.example"]) {
+      expect(problems("Network", { ...form, searchDomains: bad }, rke2)).toStrictEqual([
+        "Enter domain names like corp.example",
+      ]);
+    }
+    const seven = "a b c d e f g".split(" ").map((x) => `${x}.example`);
+    expect(problems("Network", { ...form, searchDomains: seven.join(" ") }, rke2)).toStrictEqual(["At most 6 domains"]);
+    expect(problems("Network", { ...form, searchDomains: `${"a".repeat(64)}.example` }, rke2)).toHaveLength(1);
   });
 
   it("asks for Headlamp's view access only when chosen", () => {
@@ -1009,7 +1280,10 @@ describe("create", () => {
       annotations: { "kubehenge.dev/addon-memory": '{"monitoring":1536,"logs":512}' },
       variables: [...rke2.variables, { name: "logs", required: false, schema: { type: "object" } }],
     };
-    const logged = { ...form, logs: { enabled: true, collector: "api" as const, retentionDays: 14, sizeGiB: 20 } };
+    const logged = {
+      ...form,
+      logs: { enabled: true, collector: "api" as const, retentionDays: 14, sizeGiB: 20, outputs: [] },
+    };
     expect(request(logged, withLogs).variables["logs"]).toStrictEqual({
       enabled: true,
       collector: "api",
@@ -1093,6 +1367,87 @@ describe("create", () => {
     }
   });
 
+  it("announces over BGP to the routers typed, with a routed pool and API address", () => {
+    const withLB: ClusterClass = {
+      ...rke2,
+      variables: [...rke2.variables, { name: "loadBalancer", required: false, schema: { type: "object" } }],
+    };
+    const bgp = {
+      ...form,
+      endpoint: "198.51.100.200",
+      loadBalancer: "metallb" as const,
+      loadBalancerAddresses: "198.51.100.0/28",
+      loadBalancerMode: "bgp" as const,
+      loadBalancerAsn: "65001",
+      loadBalancerPeers: "10.0.0.1 64512\n10.0.1.1 4294967295",
+    };
+    expect(request(bgp, withLB).variables["loadBalancer"]).toStrictEqual({
+      enabled: true,
+      implementation: "metallb",
+      addresses: ["198.51.100.0/28"],
+      mode: "bgp",
+      bgp: {
+        asn: 65_001,
+        peers: [
+          { address: "10.0.0.1", asn: 64_512 },
+          { address: "10.0.1.1", asn: 4_294_967_295 },
+        ],
+      },
+    });
+    expect(Object.fromEntries(summary(bgp, withLB))).toMatchObject({
+      "Load balancer": "MetalLB, on 198.51.100.0/28, over BGP as AS 65001",
+    });
+    expect(fieldProblems("Network", bgp, withLB)).toStrictEqual({});
+    // The password is stored as the cluster's credential, never sent as a variable.
+    const signed = { ...bgp, loadBalancerAuthenticated: true, loadBalancerPassword: "s3cret" };
+    expect(request(signed, withLB).variables["loadBalancer"]).toMatchObject({ bgp: { authenticated: true } });
+    expect(JSON.stringify(request(signed, withLB))).not.toContain("s3cret");
+    expect(pendingCredentials(signed, withLB)).toMatchObject([{ purpose: "bgp", values: { password: "s3cret" } }]);
+    expect(pendingCredentials({ ...signed, loadBalancerPassword: "" }, withLB)).toStrictEqual([]);
+    expect(pendingCredentials({ ...signed, loadBalancerAuthenticated: false }, withLB)).toStrictEqual([]);
+    expect(pendingCredentials({ ...signed, loadBalancerMode: "l2" }, withLB)).toStrictEqual([]);
+    expect(Object.fromEntries(summary(signed, withLB))).toMatchObject({
+      "Load balancer": "MetalLB, on 198.51.100.0/28, over BGP as AS 65001, with a password",
+      "BGP password": "Stored once created",
+    });
+    expect(Object.fromEntries(summary({ ...signed, loadBalancerPassword: "" }, withLB))).toMatchObject({
+      "BGP password": "None yet: the cluster waits",
+    });
+    expect(fieldProblems("Network", { ...signed, loadBalancerPassword: "a:b" }, withLB)).toStrictEqual({
+      loadBalancerPassword: "No spaces, colons or commas",
+    });
+    // Layer 2 holds the pool and the API address to the nodes' network.
+    expect(fieldProblems("Network", { ...bgp, loadBalancerMode: "l2" }, withLB)).toMatchObject({
+      endpoint: "Use an address on the gateway's network",
+      loadBalancerAddresses: "198.51.100.0/28 is not an address, range or network on the gateway's network",
+    });
+    // kube-vip and Talos only answer by ARP, so the mode stays layer 2.
+    expect(request({ ...bgp, loadBalancer: "kube-vip" }, withLB).variables["loadBalancer"]).not.toHaveProperty("mode");
+    expect(request(bgp, { ...withLB, distribution: "talos" }).variables["loadBalancer"]).not.toHaveProperty("bgp");
+
+    for (const [patch, expected] of [
+      [{ loadBalancerAsn: "" }, { loadBalancerAsn: "Enter a number from 1 to 4294967295" }],
+      [{ loadBalancerAsn: "0" }, { loadBalancerAsn: "Enter a number from 1 to 4294967295" }],
+      [{ loadBalancerAsn: "4294967296" }, { loadBalancerAsn: "Enter a number from 1 to 4294967295" }],
+      [{ loadBalancerPeers: "" }, { loadBalancerPeers: "Enter at least one router" }],
+      [
+        { loadBalancerPeers: "10.0.0.1" },
+        { loadBalancerPeers: "Each line needs an IPv4 address and an AS number from 1 to 4294967295" },
+      ],
+      [
+        { loadBalancerPeers: "10.0.0.1 0" },
+        { loadBalancerPeers: "Each line needs an IPv4 address and an AS number from 1 to 4294967295" },
+      ],
+      [
+        { loadBalancerPeers: "router 64512" },
+        { loadBalancerPeers: "Each line needs an IPv4 address and an AS number from 1 to 4294967295" },
+      ],
+      [{ loadBalancerPeers: "10.0.0.1 64512\n10.0.0.1 64513" }, { loadBalancerPeers: "A router is listed twice" }],
+    ] as const) {
+      expect(fieldProblems("Network", { ...bgp, ...patch }, withLB)).toStrictEqual(expected);
+    }
+  });
+
   it("starts automatic upgrades with a window in the browser's time zone", () => {
     const withUpgrades = {
       ...rke2,
@@ -1121,6 +1476,25 @@ describe("create", () => {
     expect(Object.fromEntries(summary(form, talos))["Automatic upgrades"]).toBe(
       `Talos patch releases, daily 02:00 for 4 h ${zone}`,
     );
+  });
+
+  it("sends the node timeouts it is given and refuses one out of range", () => {
+    expect(request(form, rke2)).not.toHaveProperty("controlPlaneTimeouts");
+    expect(request(form, rke2)).not.toHaveProperty("workerTimeouts");
+    const timed = {
+      ...form,
+      controlPlaneTimeouts: { drain: "30", detach: "", deletion: "" },
+      workerTimeouts: { drain: "", detach: "7.5", deletion: "0" },
+    };
+    expect(request(timed, rke2)).toMatchObject({
+      controlPlaneTimeouts: { nodeDrainTimeoutSeconds: 1800 },
+      workerTimeouts: { nodeVolumeDetachTimeoutSeconds: 450, nodeDeletionTimeoutSeconds: 0 },
+    });
+    expect(problems("General", timed, rke2)).toStrictEqual([]);
+    const bad = { ...form, workerTimeouts: { drain: "-1", detach: "", deletion: "" } };
+    expect(fieldProblems("General", bad, rke2)).toStrictEqual({ timeouts: "Check the node timeouts" });
+    const late = { ...form, controlPlaneTimeouts: { drain: "", detach: "1441", deletion: "" } };
+    expect(fieldProblems("General", late, rke2)).toStrictEqual({ timeouts: "Check the node timeouts" });
   });
 
   it("autoscales the workers between the fewest and the most", () => {
@@ -1207,6 +1581,20 @@ describe("create", () => {
       "There is no VM template for RKE2 and k3s yet; an administrator builds it on the Administration page.",
     ]);
     expect(problems("Network", { ...form, endpoint: "10.0.0", vlan: "5000" }, rke2)).toHaveLength(2);
+    for (const [ntpServers, want] of [
+      ["ntp.example.org, 192.0.2.5, 2001:db8::1, pool.ntp.org.", []],
+      ["", []],
+      ["http://ntp.example.org", ["http://ntp.example.org is not a host name or IP address"]],
+      ["ntp.example.org/x", ["ntp.example.org/x is not a host name or IP address"]],
+      ["-bad.example.org", ["-bad.example.org is not a host name or IP address"]],
+      ["ntp.example.org, ntp.example.org", ["ntp.example.org is listed twice"]],
+      [
+        "a.example, b.example, c.example, d.example, e.example, f.example, g.example, h.example, i.example",
+        ["Enter at most 8 time servers"],
+      ],
+    ] as const) {
+      expect(problems("Network", { ...form, ntpServers }, rke2)).toStrictEqual(want);
+    }
     expect(problems("Network", { ...form, pods: "10.244.0.0", services: "10.96.0.0/16" }, rke2)).toStrictEqual([
       "Enter a network like 10.244.0.0/16, without host bits",
     ]);
@@ -1439,6 +1827,32 @@ describe("create", () => {
     expect(fieldProblems("Machines", heavy, { ...rke2, annotations: {} })).toStrictEqual({});
   });
 
+  it("gives the nodes that carry the add-ons the memory their pods request", () => {
+    const requested: ClusterClass = {
+      ...rke2,
+      annotations: {
+        ...rke2.annotations,
+        "kubehenge.dev/addon-memory-requests": '{"headlamp":64,"monitoring":752,"istio":484,"rancherAgent":192}',
+        "kubehenge.dev/node-memory-requests": '{"controlPlane":3128,"worker":3600,"workers":140}',
+      },
+    };
+    const least = { cores: 2, memoryMiB: 4096, diskGiB: 40 };
+    const istio: Form = { ...form, workerReplicas: 1, workerMachine: least, istio: true };
+    expect(addonMemoryRequests(istio, requested)).toStrictEqual({
+      names: ["Headlamp", "monitoring", "Istio"],
+      mib: 1300,
+    });
+    // What the pods use fits the class's least worker, what they request does not: the worker keeps
+    // 3600 MiB itself, and carries the 1300 MiB requested with the 140 the cluster runs once.
+    expect(machineLeast(istio, rke2, "workerMachine").memoryMiB).toBe(4096);
+    expect(fieldProblems("Machines", istio, requested)).toStrictEqual({
+      workerMachine: "At least 5040 MiB of memory for the add-ons chosen, in steps of 8",
+    });
+    expect(withRoom(istio, requested).workerMachine).toStrictEqual({ ...least, memoryMiB: 5040 });
+    // Two workers share the requests out.
+    expect(machineLeast({ ...istio, workerReplicas: 2 }, requested, "workerMachine").memoryMiB).toBe(4320);
+  });
+
   it("says why the sign-in page is back, what a lost connection means, and who may create", async () => {
     window.history.replaceState(null, "", "/");
     const routes: Record<string, Route> = {
@@ -1489,6 +1903,39 @@ describe("create", () => {
     expect(name).not.toHaveAttribute("aria-invalid");
   });
 
+  describe("search domains from the node", () => {
+    it("keeps what the user typed, or cleared, when another bridge's node answers differently", async () => {
+      const user = userEvent.setup({ delay: null });
+      const search = await openNetwork(user);
+
+      await user.clear(search);
+      await user.type(search, "lab.example");
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr1");
+      await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("10.2.0.1"));
+      expect(search).toHaveValue("lab.example");
+
+      await user.clear(search);
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr0");
+      await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("10.1.0.1"));
+      expect(search).toHaveValue("");
+    });
+
+    it("follows the node while untouched, and leaves the field empty for a node without a search domain", async () => {
+      const user = userEvent.setup({ delay: null });
+      const search = await openNetwork(user);
+
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr1");
+      await waitFor(() => expect(search).toHaveValue("other.example"));
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr2");
+      await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("10.3.0.1"));
+      expect(search).toHaveValue("");
+      await user.type(search, "lab.example");
+      await user.selectOptions(screen.getByLabelText("Bridge"), "vmbr1");
+      await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("10.2.0.1"));
+      expect(search).toHaveValue("lab.example");
+    });
+  });
+
   it("walks through the wizard and creates the cluster", async () => {
     window.history.replaceState(null, "", "/clusters/new");
     const calls = fakeServer({
@@ -1519,7 +1966,7 @@ describe("create", () => {
           { bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true, cidr: "10.0.0.5/16", gateway: "10.0.0.1" },
         ],
       }),
-      "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.0.0.53"] } }),
+      "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.0.0.53"], search: "corp.example" } }),
       "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": freeOn,
       "GET /api/proxmox/ha-rules": () => ({
         body: {
@@ -1547,6 +1994,7 @@ describe("create", () => {
     await waitFor(() => expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0"));
     // The bridge's network gives the prefix length, gateway and DNS servers, and the examples.
     await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("10.0.0.53"));
+    expect(screen.getByLabelText("Search domains")).toHaveValue("corp.example");
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
     expect(screen.getByLabelText("Prefix length")).toHaveValue(16);
     expect(screen.getByLabelText("API address")).toHaveAttribute("placeholder", "10.0.0.20");
@@ -1694,6 +2142,7 @@ describe("create", () => {
     await user.type(screen.getByLabelText("Node addresses"), "10.0.0.21-10.0.0.29");
     await user.type(screen.getByLabelText("Gateway"), "10.0.0.1");
     await user.type(screen.getByLabelText("DNS servers"), "10.0.0.1");
+    await user.type(screen.getByLabelText("Time servers"), "ntp.example.org");
     await user.selectOptions(screen.getByLabelText("Pod network"), "cilium");
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.clear(workerCores());
@@ -1704,6 +2153,7 @@ describe("create", () => {
     await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+k3s1");
     await user.click(screen.getByRole("button", { name: "Network" }));
     expect(screen.getByLabelText("Pod network")).toHaveValue("cilium");
+    expect(screen.getByLabelText("Time servers")).toHaveValue("ntp.example.org");
     await user.click(screen.getByRole("button", { name: "Machines" }));
     expect(workerCores()).toHaveValue(6);
 

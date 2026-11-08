@@ -26,8 +26,10 @@ import type {
   ManagementBackups,
   ManagementSettings,
   ManagementSnapshots,
+  NodeDNS,
   NotificationSent,
   PodLogs,
+  PodSecurityCheck,
   Plan,
   UpgradeChecks,
   PveNode,
@@ -42,6 +44,8 @@ import type {
   SetupStatus,
   Storage,
   StoredCredential,
+  ReleasePin,
+  ReleasePins,
   TalosReleases,
   TemplateBuildRequest,
   TemplateBuilds,
@@ -69,9 +73,16 @@ export class ApiError extends Error {
 export const referenceMark = "\nReference: ";
 
 const httpUnauthorised = 401;
+const httpForbidden = 403;
 
-// The session's CSRF token, which every change has to carry in a header.
+// The session's CSRF token, which every change has to carry in a header, and its user.
 let csrf = "";
+let sessionUser = "";
+
+// What the server answers a change that carries another session's CSRF token, as a tab does after
+// a sign-in in a second tab replaced the session.
+const csrfRefused = "missing or wrong CSRF token";
+const sessionChanged = "The session changed in another tab. Try again.";
 
 // Called when the server no longer knows the session, so the interface returns to sign-in and can
 // say why.
@@ -231,6 +242,10 @@ async function send(method: string, path: string, { body, headers: extra = {}, s
     if (res.status === httpUnauthorised && !path.startsWith("/api/session")) {
       onSignedOut?.();
     }
+    if (res.status === httpForbidden && message === csrfRefused) {
+      await followSession();
+      throw new ApiError(res.status, sessionChanged, requestId);
+    }
     throw new ApiError(res.status, message || res.statusText, requestId);
   }
   return res;
@@ -282,7 +297,24 @@ async function download(method: string, path: string, body?: unknown): Promise<B
 
 function remember(s: Session): Session {
   ({ csrf } = s);
+  sessionUser = s.user;
   return s;
+}
+
+// followSession takes up the session a change was refused under. The same user's new session
+// gives its CSRF token, so the next try goes through. Another user's, or none, returns to sign-in,
+// since the page shows the first user's clusters.
+async function followSession(): Promise<void> {
+  const was = sessionUser;
+  try {
+    if (remember(await request<Session>("GET", "/api/session")).user !== was) {
+      onSignedOut?.();
+    }
+  } catch (err) {
+    if (err instanceof ApiError && err.status === httpUnauthorised) {
+      onSignedOut?.();
+    }
+  }
 }
 
 const clusterPath = (ns: string, name: string): string =>
@@ -305,6 +337,7 @@ export interface Api {
   realms: () => Promise<Realm[]>;
   session: () => Promise<Session>;
   signIn: (username: string, realm: string, password: string) => Promise<Session>;
+  signInWithToken: (id: string, secret: string) => Promise<Session>;
   secondFactor: (kind: string, code: string) => Promise<Session>;
   signOut: () => Promise<void>;
 
@@ -330,7 +363,11 @@ export interface Api {
   backupLog: (ns: string, name: string, backup: string) => Promise<VeleroLog>;
   restoreLog: (ns: string, name: string, restore: string) => Promise<VeleroLog>;
   etcdSnapshots: (ns: string, name: string) => Promise<ClusterEtcdSnapshots>;
+  /** podSecurityCheck lists the running pods the restricted Pod Security level would refuse. */
+  podSecurityCheck: (ns: string, name: string) => Promise<PodSecurityCheck>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
+  /** defragmentEtcd asks the controller to defragment every etcd member at once. */
+  defragmentEtcd: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
   /**
    * restoreEtcd asks the controller to take the cluster's etcd back to a snapshot. confirm is the
@@ -366,6 +403,8 @@ export interface Api {
   talosconfig: (ns: string, name: string) => Promise<Blob>;
   /** retryTalosUpgrade takes back the failed node upgrade that holds a Talos cluster's others. */
   retryTalosUpgrade: (ns: string, name: string) => Promise<void>;
+  /** applyAddonChanges applies the add-on chart changes that wait for the upgrade window now. */
+  applyAddonChanges: (ns: string, name: string) => Promise<void>;
   /** replaceMachine marks a machine for its cluster's health check to replace. */
   replaceMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** keepMachine takes that mark back. */
@@ -376,6 +415,8 @@ export interface Api {
   cordonMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** uncordonMachine lets pods onto a machine's node again. */
   uncordonMachine: (ns: string, name: string, machine: string) => Promise<void>;
+  /** forgetMachine asks Kubehenge to let go of a machine that cannot finish deleting. Its VM stays in Proxmox VE. */
+  forgetMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** rebootMachine has Proxmox VE shut a machine's VM down and start it again. */
   rebootMachine: (ns: string, name: string, machine: string) => Promise<void>;
   /** supportBundle is a cluster's .tar.gz of its objects, events and the logs naming them. */
@@ -391,6 +432,7 @@ export interface Api {
   testNotifications: () => Promise<NotificationSent[]>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string) => Promise<Job>;
+  takeOverManagement: (passphrase: string) => Promise<void>;
   managementHealth: () => Promise<ManagementHealth>;
   managementBackups: () => Promise<ManagementBackups>;
   configureManagementBackups: (req: ManagementBackupRequest) => Promise<ManagementBackups>;
@@ -409,6 +451,12 @@ export interface Api {
   deleteTemplate: (vmid: number) => Promise<void>;
   /** Has the weekly template build run now. */
   refreshTemplates: () => Promise<TemplateRefresh>;
+  releasePins: () => Promise<ReleasePins>;
+  /** Reads a release's checksum file and install script, to show their digests. */
+  checkReleasePin: (version: string) => Promise<ReleasePin>;
+  /** Pins a release once it still has the digests shown. */
+  addReleasePin: (pin: ReleasePin) => Promise<ReleasePin>;
+  removeReleasePin: (version: string) => Promise<void>;
   templateBuilds: () => Promise<TemplateBuilds>;
   /** Asks for a missing template, for one who may create clusters. */
   requestTemplateBuild: (req: TemplateBuildRequest) => Promise<void>;
@@ -422,8 +470,8 @@ export interface Api {
   storages: () => Promise<Storage[]>;
   nodes: () => Promise<PveNode[]>;
   bridges: (node: string) => Promise<Bridge[]>;
-  /** The DNS servers a node resolves with. */
-  dns: (node: string) => Promise<{ servers: string[] }>;
+  /** The DNS servers and search domain a node resolves with. */
+  dns: (node: string) => Promise<NodeDNS>;
   /** Free addresses on a bridge's network for a new cluster's API and nodes, where nodes is above 0, and which of check a host answers on. */
   freeAddresses: (
     node: string,
@@ -440,11 +488,16 @@ export const api: Api = {
     clearPollCaches();
     return remember(await request("POST", "/api/session", { username, realm, password }));
   },
+  signInWithToken: async (id, secret) => {
+    clearPollCaches();
+    return remember(await request("POST", "/api/session/token", { id, secret }));
+  },
   secondFactor: async (kind, code) => remember(await request("POST", "/api/session/second-factor", { kind, code })),
   signOut: async () => {
     clearPollCaches();
     await act("DELETE", "/api/session");
     csrf = "";
+    sessionUser = "";
   },
 
   classes: () => request("GET", "/api/classes"),
@@ -468,7 +521,9 @@ export const api: Api = {
   restoreLog: (ns, name, restore) =>
     request("GET", `${clusterPath(ns, name)}/restores/${encodeURIComponent(restore)}/log`),
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
+  podSecurityCheck: (ns, name) => request("GET", `${clusterPath(ns, name)}/pod-security-check`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
+  defragmentEtcd: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-defrag`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
   restoreEtcd: (ns, name, req) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, req),
   controlPlaneRecovery: (ns, name, machine) =>
@@ -500,6 +555,7 @@ export const api: Api = {
   kubeconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/kubeconfig`),
   talosconfig: (ns, name) => download("GET", `${clusterPath(ns, name)}/talosconfig`),
   retryTalosUpgrade: (ns, name) => act("DELETE", `${clusterPath(ns, name)}/talos-upgrade-failure`),
+  applyAddonChanges: (ns, name) => act("POST", `${clusterPath(ns, name)}/addon-changes`),
   replaceMachine: (ns, name, machine) =>
     act("PUT", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/replacement`),
   keepMachine: (ns, name, machine) =>
@@ -512,6 +568,8 @@ export const api: Api = {
     act("DELETE", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/cordon`),
   rebootMachine: (ns, name, machine) =>
     act("POST", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/reboot`),
+  forgetMachine: (ns, name, machine) =>
+    act("PUT", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/forgotten`, { confirm: machine }),
   supportBundle: (ns, name) => download("GET", `${clusterPath(ns, name)}/support-bundle`),
   bootLog: (ns, name, machine) =>
     request("GET", `${clusterPath(ns, name)}/machines/${encodeURIComponent(machine)}/boot-log`),
@@ -525,6 +583,7 @@ export const api: Api = {
   testNotifications: () => request("POST", "/api/notifications/test"),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
+  takeOverManagement: (passphrase) => act("POST", "/api/setup/take-over", { passphrase }),
   managementHealth: () => request("GET", "/api/setup/health"),
   managementBackups: () => request("GET", "/api/appliance/etcd-backups"),
   configureManagementBackups: (req) => request("PUT", "/api/appliance/etcd-backups", req),
@@ -545,6 +604,11 @@ export const api: Api = {
   createTemplate: (req) => request("POST", "/api/templates", req),
   deleteTemplate: (vmid) => act("DELETE", `/api/templates/${vmid}`),
   refreshTemplates: () => request("POST", "/api/templates/refresh"),
+  releasePins: () => request("GET", "/api/release-pins"),
+  checkReleasePin: (version) => request("POST", "/api/release-pins/check", { version }),
+  addReleasePin: (pin) =>
+    request("POST", "/api/release-pins", { version: pin.version, file: pin.file, script: pin.script }),
+  removeReleasePin: (version) => act("DELETE", `/api/release-pins/${encodeURIComponent(version)}`),
   templateBuilds: () => request("GET", "/api/template-builds"),
   requestTemplateBuild: (req) => act("POST", "/api/template-builds", req),
 
@@ -561,13 +625,12 @@ export const api: Api = {
   haRules: () => request("GET", "/api/proxmox/ha-rules"),
 };
 
-/** dnsOf lists the DNS servers a node resolves with. A node whose servers cannot be read offers none. */
-export async function dnsOf(node: string): Promise<string[]> {
+/** dnsOf reads how a node resolves names. A node whose DNS cannot be read offers none. */
+export async function dnsOf(node: string): Promise<NodeDNS> {
   try {
-    const { servers } = await api.dns(node);
-    return servers;
+    return await api.dns(node);
   } catch {
-    return [];
+    return { servers: [], search: "" };
   }
 }
 

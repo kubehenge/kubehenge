@@ -52,6 +52,22 @@ func proxmoxMachineList() *unstructured.UnstructuredList {
 	return l
 }
 
+// ProxmoxMachineVMIDs maps the names of a cluster's ProxmoxMachines to the guest IDs capmox recorded
+// on them. A ProxmoxMachine whose VM does not exist yet is left out.
+func ProxmoxMachineVMIDs(ctx context.Context, c client.Reader, namespace, cluster string) (map[string]int, error) {
+	pms := proxmoxMachineList()
+	if err := c.List(ctx, pms, client.InNamespace(namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: cluster}); err != nil {
+		return nil, fmt.Errorf("listing the cluster's ProxmoxMachines: %w", err)
+	}
+	ids := make(map[string]int, len(pms.Items))
+	for i := range pms.Items {
+		if vmid, found, _ := unstructured.NestedInt64(pms.Items[i].Object, "spec", "virtualMachineID"); found && vmid != 0 {
+			ids[pms.Items[i].GetName()] = int(vmid)
+		}
+	}
+	return ids, nil
+}
+
 // What Proxmox VE's resource list says of whether a VM runs.
 const (
 	guestRunning = "running"
@@ -93,6 +109,9 @@ type HAReconciler struct {
 	WorkloadPool   string
 	// Proxmox reads where the VMs run and the storages, with the controller's own token.
 	Proxmox *proxmox.Client
+	// Nodes tells the online nodes' CPU levels, so that HA never restarts a VM on a node whose CPU
+	// its node OS stops on. Nil leaves the CPU out.
+	Nodes Nodes
 	// HA writes HA resources and rules with the token that holds Sys.Console on /: HAJobs in the
 	// controller. Without it the reconciler only takes back the hooks it set, once capmox knows
 	// where each VM is.
@@ -244,7 +263,8 @@ func (r *HAReconciler) read(ctx context.Context) (*haState, error) {
 }
 
 // placement tells whether the cluster's control-plane VMs take part in HA, and the nodes HA may
-// move them to when that is fewer than all: those the cluster may use that have its storage.
+// move them to when that is fewer than all: those the cluster may use that have its storage and a
+// CPU its node OS runs on.
 func (r *HAReconciler) placement(ctx context.Context, cluster *clusterv1.Cluster, s *haState) (bool, []string, error) {
 	if r.HA == nil || !cluster.DeletionTimestamp.IsZero() {
 		return false, nil, nil
@@ -273,17 +293,44 @@ func (r *HAReconciler) placement(ctx context.Context, cluster *clusterv1.Cluster
 	if err != nil {
 		return false, nil, err
 	}
-	return true, haNodes(s.nodes, chosen, list[i].Nodes), nil
+	below, err := r.nodesBelow(ctx, cluster)
+	if err != nil {
+		return false, nil, err
+	}
+	return true, haNodes(s.nodes, chosen, list[i].Nodes, below), nil
+}
+
+// nodesBelow are the online nodes whose CPU does not reach the level the cluster's node OS needs.
+// A node that is down is not among them: its CPU is unknown until it is back, and the rule follows.
+func (r *HAReconciler) nodesBelow(ctx context.Context, cluster *clusterv1.Cluster) ([]string, error) {
+	if r.Nodes == nil {
+		return nil, nil
+	}
+	level, err := clusterCPULevel(cluster)
+	if err != nil {
+		return nil, err
+	}
+	online, err := r.Nodes.OnlineNodes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading the Proxmox VE nodes: %w", err)
+	}
+	var below []string
+	for _, n := range online {
+		if n.CPULevel < level {
+			below = append(below, n.Name)
+		}
+	}
+	return below, nil
 }
 
 // haNodes are the nodes HA may run the cluster's VMs on, or nil for every node it knows.
-func haNodes(known, chosen []string, storageNodes string) []string {
+func haNodes(known, chosen []string, storageNodes string, below []string) []string {
 	var limited []string
 	if storageNodes != "" {
 		limited = strings.Split(storageNodes, ",")
 	}
 	nodes := slices.DeleteFunc(slices.Clone(known), func(n string) bool {
-		return len(chosen) > 0 && !slices.Contains(chosen, n) || limited != nil && !slices.Contains(limited, n)
+		return len(chosen) > 0 && !slices.Contains(chosen, n) || limited != nil && !slices.Contains(limited, n) || slices.Contains(below, n)
 	})
 	if len(nodes) == 0 || len(nodes) == len(known) {
 		return nil

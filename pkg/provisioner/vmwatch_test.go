@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,13 +30,48 @@ func (f fakeProxmox) Get(_ context.Context, path string, v any) error {
 	return json.Unmarshal([]byte(raw), v)
 }
 
+// editingProxmox is fakeProxmox that takes VM configuration changes: a "name" renames the VM in the
+// resource list, unless putErr is set.
+type editingProxmox struct {
+	fakeProxmox
+
+	f      *vmFixture
+	puts   []string
+	putErr error
+}
+
+func (e *editingProxmox) Put(_ context.Context, path string, params, _ any) error {
+	e.puts = append(e.puts, fmt.Sprintf("%s %v", path, params))
+	if e.putErr != nil {
+		return e.putErr
+	}
+	parts := strings.Split(path, "/")
+	var vmid int64
+	if _, err := fmt.Sscan(parts[len(parts)-2], &vmid); err != nil {
+		return err
+	}
+	changes, ok := params.(map[string]any)
+	if !ok {
+		return fmt.Errorf("unexpected parameters %v", params)
+	}
+	e.f.names[vmid] = fmt.Sprint(changes["name"])
+	e.f.render()
+	return nil
+}
+
 type vmFixture struct {
 	t      *testing.T
 	pve    fakeProxmox
+	edit   *editingProxmox
 	kube   client.Client
 	events *events.FakeRecorder
 	watch  *VMWatch
 	now    time.Time
+	states map[int64]string
+	// names, pools and vmNodes are what the resource list says of each VM.
+	names   map[int64]string
+	pools   map[int64]string
+	vmNodes map[int64]string
 }
 
 // newVMFixture is web on local-lvm with three joined control planes, VMs 101 to 103 on pve1 to
@@ -61,22 +97,97 @@ func newVMFixture(t *testing.T) *vmFixture {
 		pm.SetLabels(map[string]string{clusterv1.ClusterNameLabel: "web"})
 		objs = append(objs, m, pm)
 	}
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&clusterv1.Cluster{}).Build()
-	f := &vmFixture{t: t, pve: fakeProxmox{}, kube: kube, events: events.NewFakeRecorder(20), now: certNow}
-	f.watch = &VMWatch{Client: kube, ClassNamespace: "kubehenge-system", Proxmox: f.pve, Events: f.events, Now: func() time.Time { return f.now }}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&clusterv1.Cluster{}, &clusterv1.Machine{}, proxmoxClusterObject()).Build()
+	f := &vmFixture{
+		t: t, pve: fakeProxmox{}, kube: kube, events: events.NewFakeRecorder(20), now: certNow,
+		names:   map[int64]string{101: "web-cp-0", 102: "web-cp-1", 103: "web-cp-2", 104: "web-cp-3"},
+		pools:   map[int64]string{101: webPool, 102: webPool, 103: webPool, 104: webPool},
+		vmNodes: map[int64]string{101: "pve1", 102: "pve2", 103: "pve3", 104: "pve1"},
+	}
+	f.edit = &editingProxmox{fakeProxmox: f.pve, f: f}
+	f.watch = &VMWatch{
+		Client: kube, ClassNamespace: "kubehenge-system", WorkloadPool: "kubehenge", Proxmox: f.edit, Events: f.events,
+		Now: func() time.Time { return f.now },
+	}
 	f.vms(map[int64]string{101: "running", 102: "running", 103: "running", 104: "running"})
 	f.storages(`[{"storage":"local-lvm","node":"pve1","status":"available","disk":10737418240,"maxdisk":107374182400}]`)
+	f.nodes(nil)
 	return f
+}
+
+// nodes sets which of pve1 to pve4 are offline in the resource list and which the HA manager has in
+// maintenance. No VM of web runs on pve4.
+func (f *vmFixture) nodes(offline []string, maintenance ...string) {
+	names := []string{"pve1", "pve2", "pve3", "pve4"}
+	listed, states := make([]string, 0, len(names)), make([]string, 0, len(names))
+	for _, n := range names {
+		status, ha := "online", "online"
+		if slices.Contains(offline, n) {
+			status, ha = "offline", "unknown"
+		}
+		if slices.Contains(maintenance, n) {
+			ha = "maintenance"
+		}
+		listed = append(listed, fmt.Sprintf(`{"node":%q,"type":"node","status":%q}`, n, status))
+		states = append(states, fmt.Sprintf("%q:%q", n, ha))
+	}
+	f.pve["/cluster/resources?type=node"] = "[" + strings.Join(listed, ",") + "]"
+	f.pve["/cluster/ha/status/manager_status"] = `{"manager_status":{"node_status":{` + strings.Join(states, ",") + `}}}`
+}
+
+// machine reads one of web's machines.
+func (f *vmFixture) machine(name string) *clusterv1.Machine {
+	f.t.Helper()
+	m := &clusterv1.Machine{}
+	if err := f.kube.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: name}, m); err != nil {
+		f.t.Fatal(err)
+	}
+	return m
+}
+
+// nodeReady has the Kubernetes node of one of web's machines Ready, and nodeNotReady not.
+func (f *vmFixture) nodeReady(name string) { f.t.Helper(); f.setNodeReady(name, metav1.ConditionTrue) }
+
+func (f *vmFixture) nodeNotReady() {
+	f.t.Helper()
+	f.setNodeReady(heldSecond, metav1.ConditionFalse)
+}
+
+func (f *vmFixture) setNodeReady(name string, status metav1.ConditionStatus) {
+	f.t.Helper()
+	m := f.machine(name)
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{Type: clusterv1.MachineNodeReadyCondition, Status: status, Reason: "Test"})
+	if err := f.kube.Status().Update(context.Background(), m); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// held tells whether Cluster API is kept from replacing the machine, with Kubehenge's own record
+// of it.
+func (f *vmFixture) held(name string) bool {
+	f.t.Helper()
+	a := f.machine(name).Annotations
+	_, skip := a[clusterv1.MachineSkipRemediationAnnotation]
+	_, why := a[HoldAnnotation]
+	if skip != why {
+		f.t.Fatalf("%s: skip-remediation %v but Kubehenge's record %v", name, skip, why)
+	}
+	return skip
 }
 
 // vms sets each VM's status in the resource list, which for a started VM is QEMU's state
 // ("running", "paused", "io-error"), with an optional lock after a colon.
 func (f *vmFixture) vms(states map[int64]string) {
-	nodes := map[int64]string{101: "pve1", 102: "pve2", 103: "pve3", 104: "pve1"}
-	guests := make([]string, 0, len(states)+1)
-	for vmid, entry := range states {
+	f.states = states
+	f.render()
+}
+
+func (f *vmFixture) render() {
+	guests := make([]string, 0, len(f.states)+1)
+	for vmid, entry := range f.states {
 		status, lock, _ := strings.Cut(entry, ":")
-		guests = append(guests, fmt.Sprintf(`{"vmid":%d,"node":%q,"type":"qemu","status":%q,"lock":%q}`, vmid, nodes[vmid], status, lock))
+		guests = append(guests, fmt.Sprintf(`{"vmid":%d,"name":%q,"pool":%q,"node":%q,"type":"qemu","status":%q,"lock":%q}`,
+			vmid, f.names[vmid], f.pools[vmid], f.vmNodes[vmid], status, lock))
 	}
 	guests = append(guests, `{"vmid":200,"node":"pve1","type":"lxc","status":"stopped"}`)
 	f.pve["/cluster/resources?type=vm"] = "[" + strings.Join(guests, ",") + "]"
@@ -206,7 +317,7 @@ func TestStorageNearlyFull(t *testing.T) {
 		{"storage":"local-lvm","node":"pve1","status":"available","disk":96636764160,"maxdisk":107374182400},
 		{"storage":"local-lvm","node":"pve2","status":"available","disk":10737418240,"maxdisk":107374182400},
 		{"storage":"local-lvm","node":"pve9","status":"available","disk":107374182400,"maxdisk":107374182400},
-		{"storage":"local-lvm","node":"pve3","status":"unknown","disk":0,"maxdisk":0},
+		{"storage":"local-lvm","node":"pve3","status":"available","disk":0,"maxdisk":0},
 		{"storage":"ceph","node":"pve1","status":"available","shared":1,"disk":107374182400,"maxdisk":107374182400}
 	]`)
 	cond := f.look(time.Minute, StorageCondition)

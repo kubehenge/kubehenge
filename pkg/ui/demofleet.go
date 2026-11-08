@@ -2,7 +2,9 @@ package ui
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed" // the demo's sample fleet
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -68,7 +71,32 @@ type demoData struct {
 	BackupTargets    json.RawMessage            `json:"backupTargets"`
 	Clusters         []demoCluster              `json:"clusters"`
 	KubeadmTemplates []string                   `json:"kubeadmTemplates"`
-	Activity         []demoActivityLine         `json:"activity"`
+	// Management are the appliance's saved settings, as its settings.json holds them.
+	Management     json.RawMessage    `json:"management"`
+	TemplateBuilds []demoTemplateLine `json:"templateBuilds"`
+	ReleasePins    []demoPin          `json:"releasePins"`
+	Activity       []demoActivityLine `json:"activity"`
+}
+
+// demoTemplateLine is a template line of the demo's template pool.
+type demoTemplateLine struct {
+	Distribution      templates.Distribution `json:"distribution"`
+	KubernetesVersion string                 `json:"kubernetesVersion"`
+	// Builds are the line's builds. A line without any is a single template, as Talos has.
+	Builds []demoBuild `json:"builds"`
+}
+
+type demoBuild struct {
+	AgoDays int `json:"agoDays"`
+	// Older says its kernel is older than the previous build's.
+	Older bool `json:"older"`
+}
+
+// demoPin is a release an administrator pinned.
+type demoPin struct {
+	Version string `json:"version"`
+	By      string `json:"by"`
+	AgoDays int    `json:"agoDays"`
 }
 
 // demoAddOnData is an add-on: the chart it installs and the cluster variable that switches it on.
@@ -92,12 +120,44 @@ type demoCluster struct {
 	AddOns  []string `json:"addOns"`
 	// Crashing names a workload whose pod restarts again and again, with an alert firing for it.
 	Crashing string `json:"crashing"`
+	// LackingMemory is the message of a NodesLackMemory condition: no node has room for the cluster.
+	LackingMemory string `json:"lackingMemory"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
+	// AddonChanges wait for the cluster's upgrade window.
+	AddonChanges []provisioner.AddonChange `json:"addonChanges"`
+	// WorkerNodes is the cluster's workerNodes variable: the labels and taints its workers carry.
+	WorkerNodes json.RawMessage `json:"workerNodes"`
+	// NodeCustomisation is the cluster's nodeCustomisation variable.
+	NodeCustomisation json.RawMessage `json:"nodeCustomisation"`
+	// DriftTaint is a taint key put by hand on the last worker, which the pool does not set.
+	DriftTaint string `json:"driftTaint"`
+	// Held is set on a cluster whose last machine sits on a Proxmox VE node in maintenance, so that
+	// its replacement is held.
+	Held bool `json:"held"`
+	// Unsynced is set on a Talos cluster whose last worker has not synced its clock.
+	Unsynced bool `json:"unsynced"`
 	// Paused is a cluster whose reconciling is paused.
 	Paused bool `json:"paused"`
 	// Conditions are what Kubehenge's controller has noted on the cluster.
 	Conditions []demoNote `json:"conditions"`
+	// TalosHold is a Talos upgrade of the first control-plane node that a disruption budget holds.
+	TalosHold *demoTalosHold `json:"talosHold"`
+}
+
+type demoTalosHold struct {
+	// To is the release the node upgrades to.
+	To           string `json:"to"`
+	SinceMinutes int    `json:"sinceMinutes"`
+	// Pod is "namespace/name" and Budget the disruption budget that keeps it.
+	Pod    string `json:"pod"`
+	Budget string `json:"budget"`
+}
+
+// held is the text the cluster page shows for the hold, as the controller words it.
+func (h *demoTalosHold) held(node string) string {
+	return fmt.Sprintf("Draining %s: Pod %s: cannot evict pod as it would violate the pod's disruption budget. The disruption budget %s needs 2 healthy pods and has 2 currently",
+		node, h.Pod, h.Budget)
 }
 
 // demoNote is a condition on a demo cluster that holds, set AgoHours before the demo's now.
@@ -107,6 +167,10 @@ type demoNote struct {
 	Message  string `json:"message"`
 	AgoHours int    `json:"agoHours"`
 }
+
+// demoUnsyncedAddress is the address of the node whose clock the demo's Talos API reports as not
+// synced.
+const demoUnsyncedAddress = "192.0.2.250"
 
 type demoUpgrade struct {
 	From   string          `json:"from"`
@@ -131,6 +195,10 @@ type demoFleet struct {
 	// members are each cluster pool's guests, by pool.
 	members  map[string][]pve.Member
 	activity []activityEntry
+	// templates are the VM templates of the template pool. builds and older are their builds as the
+	// ClusterClasses record them.
+	templates     []pve.Member
+	builds, older provisioner.NodeImageBuilds
 }
 
 func newDemoFleet(now time.Time) (*demoFleet, error) {
@@ -138,17 +206,26 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 	if err := json.Unmarshal(demoFleetJSON, &f.data); err != nil {
 		return nil, fmt.Errorf("the demo's fleet: %w", err)
 	}
+	if err := f.templateLines(); err != nil {
+		return nil, err
+	}
 	classes, err := f.classes()
 	if err != nil {
 		return nil, err
 	}
 	f.objects = append(f.objects, classes...)
+	f.objects = append(f.objects, f.settingsObjects()...)
 	vmid := 101
 	for i := range f.data.Clusters {
 		if err := f.add(&f.data.Clusters[i], &vmid); err != nil {
 			return nil, err
 		}
 	}
+	reach, reachErr := f.proxmoxReach()
+	if reachErr != nil {
+		return nil, reachErr
+	}
+	f.objects = append(f.objects, reach)
 	for _, l := range f.data.Activity {
 		e := activityEntry{At: now.Add(-time.Duration(l.AgoMinutes) * time.Minute), User: l.User, What: l.What, Details: l.Details}
 		if l.Cluster != "" {
@@ -157,6 +234,31 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 		f.activity = append(f.activity, e)
 	}
 	return f, nil
+}
+
+// proxmoxReach is the controller's record of its last test of the Proxmox VE tokens, with two that
+// fail: the controller's, which lost a privilege, and a cluster's, whose API certificate is from a
+// CA it does not know.
+func (f *demoFleet) proxmoxReach() (*corev1.ConfigMap, error) {
+	tokens := []provisioner.TokenState{
+		{Name: "Controller", Problem: provisioner.TokenPrivileges, Missing: []provisioner.Need{{Path: "/access/realm/pve", Privilege: provisioner.PrivRealmAllocateUser}}},
+		{Name: "Template builder", OK: true},
+	}
+	if len(f.data.Clusters) > 0 {
+		name := f.data.Clusters[0].Name
+		tokens = append(tokens, provisioner.TokenState{
+			Name: "Cluster " + demoNamespace + "/" + name, Cluster: demoNamespace + "/" + name,
+			Problem: provisioner.TokenCertificate, Error: "x509: certificate signed by unknown authority",
+		})
+	}
+	raw, err := json.Marshal(provisioner.Reachability{OK: true, Tokens: tokens, Checked: f.now})
+	if err != nil {
+		return nil, fmt.Errorf("the demo's Proxmox VE reachability: %w", err)
+	}
+	return &corev1.ConfigMap{
+		Namespace: demoClassNamespace, Name: provisioner.ProxmoxReachName,
+		Data: map[string]string{provisioner.ProxmoxReachKey: string(raw)},
+	}, nil
 }
 
 // classes are the chart's ClusterClasses, with the templates, snapshot storages and backup
@@ -172,8 +274,16 @@ func (f *demoFleet) classes() ([]client.Object, error) {
 		return nil, fmt.Errorf("the demo's kubeadm templates: %w", err)
 	}
 	var storage string
-	if err := json.Unmarshal(f.data.Settings["storage"], &storage); err != nil {
+	if err = json.Unmarshal(f.data.Settings["storage"], &storage); err != nil {
 		return nil, fmt.Errorf("the demo's storage: %w", err)
+	}
+	builds, err := f.builds.Encode()
+	if err != nil {
+		return nil, fmt.Errorf("the demo's template builds: %w", err)
+	}
+	older, err := f.older.Encode()
+	if err != nil {
+		return nil, fmt.Errorf("the demo's older template builds: %w", err)
 	}
 	objects := make([]client.Object, 0, len(classes))
 	for i := range classes {
@@ -181,16 +291,99 @@ func (f *demoFleet) classes() ([]client.Object, error) {
 		switch templates.Distribution(strings.TrimPrefix(c.Name, provisioner.ClassPrefix)) {
 		case templates.Kubeadm:
 			c.Annotations[provisioner.KubeadmVersionsAnnotation] = string(kubeadm)
+			c.Annotations[provisioner.NodeImageBuildsAnnotation], c.Annotations[provisioner.NodeImageOlderAnnotation] = builds, older
 		case templates.Talos:
 			c.Annotations[provisioner.TalosTemplatesAnnotation] = templates.DefaultTalosVersion
-		case templates.RKE2, templates.K3s:
+		case templates.RKE2:
+			fips := templates.DefaultNodeOS
+			fips.FIPS = true
+			c.Annotations[provisioner.NodeOSTemplatesAnnotation] = nodeOS + "," + fips.String()
+			c.Annotations[provisioner.NodeImageBuildsAnnotation], c.Annotations[provisioner.NodeImageOlderAnnotation] = builds, older
+		case templates.K3s:
 			c.Annotations[provisioner.NodeOSTemplatesAnnotation] = nodeOS
+			c.Annotations[provisioner.NodeImageBuildsAnnotation], c.Annotations[provisioner.NodeImageOlderAnnotation] = builds, older
 		}
 		c.Annotations[provisioner.SnapshotStoragesAnnotation] = storage
 		c.Annotations[provisioner.BackupTargetsAnnotation] = string(f.data.BackupTargets)
 		objects = append(objects, c)
 	}
 	return objects, nil
+}
+
+// demoTemplateVMID is the first guest ID of the demo's templates.
+const demoTemplateVMID = 9000
+
+// templateLines makes the templates of the template pool and the builds the ClusterClasses record.
+func (f *demoFleet) templateLines() error {
+	f.builds, f.older = provisioner.NodeImageBuilds{}, provisioner.NodeImageBuilds{}
+	vmid := demoTemplateVMID
+	add := func(t *templates.Template) {
+		f.templates = append(f.templates, pve.Member{
+			VMID: vmid, Node: f.data.ProxmoxNodes[vmid%len(f.data.ProxmoxNodes)], Type: "qemu", Name: t.Name, Template: 1, Tags: strings.Join(t.Tags, ";"),
+		})
+		vmid++
+	}
+	for _, l := range f.data.TemplateBuilds {
+		line, err := templates.Plan(&templates.Request{Distribution: l.Distribution, KubernetesVersion: l.KubernetesVersion})
+		if err != nil {
+			return fmt.Errorf("the demo's template line %s: %w", l.Distribution, err)
+		}
+		if len(l.Builds) == 0 {
+			add(&line)
+			continue
+		}
+		for _, b := range l.Builds {
+			at := f.now.AddDate(0, 0, -b.AgoDays).Truncate(time.Minute)
+			build, err := line.Build(at)
+			if err != nil {
+				return fmt.Errorf("the demo's template line %s: %w", l.Distribution, err)
+			}
+			add(&build)
+			recorded := f.builds
+			if b.Older {
+				recorded = f.older
+			}
+			key := templates.LineKey(build.Tags)
+			recorded[key] = append(recorded[key], at)
+		}
+	}
+	return nil
+}
+
+// settingsObjects are the ConfigMaps of the management cluster that hold the weekly template build
+// and the release pins administrators added.
+func (f *demoFleet) settingsObjects() []client.Object {
+	now := f.now.UTC()
+	day := now.Truncate(24 * time.Hour)
+	// The weekly build runs on Sundays at 01:00 UTC. The last one finished soon after it started.
+	started := day.AddDate(0, 0, -int(day.Weekday())).Add(time.Hour)
+	if started.After(now) {
+		started = started.AddDate(0, 0, -7)
+	}
+	refresh := &corev1.ConfigMap{Data: map[string]string{
+		provisioner.RefreshWeekday: "Sun", provisioner.RefreshTime: "01:00", provisioner.RefreshTimeZone: time.UTC.String(),
+		provisioner.RefreshSoakHours: "24", provisioner.RefreshCreatorBuilds: "false",
+		provisioner.RefreshState: runSucceeded, provisioner.RefreshTrigger: "schedule",
+		provisioner.RefreshStarted:  started.Format(time.RFC3339),
+		provisioner.RefreshFinished: started.Add(41 * time.Minute).Format(time.RFC3339),
+		provisioner.RefreshLines:    "rke2-almalinux-10, k3s-almalinux-10, kubeadm-v1.37.1-almalinux-10, kubeadm-v1.36.5-almalinux-10",
+	}}
+	refresh.Namespace, refresh.Name = demoClassNamespace, provisioner.TemplateRefreshName
+	var pins strings.Builder
+	for _, p := range f.data.ReleasePins {
+		file, script := demoDigest(p.Version, "checksums"), demoDigest(p.Version, "install.sh")
+		at := now.AddDate(0, 0, -p.AgoDays).Truncate(time.Minute)
+		fmt.Fprintf(&pins, "%s %s %s # added by %s at %s\n", p.Version, file, script, p.By, at.Format(time.RFC3339))
+	}
+	pinned := &corev1.ConfigMap{Data: map[string]string{"pins": pins.String()}}
+	pinned.Namespace, pinned.Name = demoClassNamespace, provisioner.ReleasePinsName
+	return []client.Object{refresh, pinned}
+}
+
+// demoDigest is a stand-in SHA-256 for a release's file.
+func demoDigest(version, file string) string {
+	sum := sha256.Sum256([]byte(version + " " + file))
+	return hex.EncodeToString(sum[:])
 }
 
 // add puts one cluster into the fleet: its Cluster API objects, its VMs and its own API.
@@ -213,11 +406,32 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 	for _, id := range []provisioner.Identity{provisioner.IdentityHealth, provisioner.IdentityLogs, provisioner.IdentityAlerts, provisioner.IdentityBackups} {
 		f.objects = append(f.objects, f.identity(d.Name, id, server))
 	}
+	if d.Distribution == templates.Talos {
+		f.objects = append(f.objects, &corev1.Secret{
+			Namespace: demoNamespace, Name: provisioner.TalosconfigSecret(d.Name),
+			Data: map[string][]byte{provisioner.TalosconfigKey: []byte("demo")},
+		})
+	}
 	for _, a := range d.AddOns {
 		f.objects = append(f.objects, demoAddOn(d, a, f.data.AddOns[a], created))
 	}
+	if d.NodeCustomisation != nil {
+		var n provisioner.NodeCustomisation
+		if err := json.Unmarshal(d.NodeCustomisation, &n); err != nil {
+			return fmt.Errorf("the demo's node customisation of %s: %w", d.Name, err)
+		}
+		f.objects = append(f.objects, demoReferences(&n)...)
+	}
 	nodes := f.data.ProxmoxNodes
 	for i, m := range machines {
+		if d.Held && i == len(machines)-1 {
+			m.Annotations = map[string]string{
+				clusterv1.MachineSkipRemediationAnnotation: "",
+				provisioner.HoldAnnotation:                 "Proxmox VE node " + nodes[i%len(nodes)] + " is in maintenance",
+				provisioner.HoldSinceAnnotation:            f.now.Add(-7 * time.Minute).Format(time.RFC3339),
+				provisioner.HoldUntilAnnotation:            f.now.Add(23 * time.Minute).Format(time.RFC3339),
+			}
+		}
 		f.objects = append(f.objects, m)
 		mem := int64(8) * demoGiB
 		if !isControlPlane(m) {
@@ -230,6 +444,15 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 		})
 		*vmid++
 	}
+	if h := d.TalosHold; h != nil {
+		f.objects = append(f.objects, &corev1.Event{
+			Namespace: c.Namespace, Name: d.Name + ".talos-drain-blocked",
+			InvolvedObject: corev1.ObjectReference{Kind: "Cluster", Namespace: c.Namespace, Name: c.Name},
+			Type:           corev1.EventTypeWarning, Reason: "TalosDrainBlocked",
+			Message:       fmt.Sprintf("node %s is held while it drains: %s", machines[0].Name, strings.TrimPrefix(h.held(machines[0].Name), "Draining "+machines[0].Name+": ")),
+			LastTimestamp: metav1.NewTime(f.now.Add(-time.Duration(h.SinceMinutes-1) * time.Minute)),
+		})
+	}
 	f.workloads[server] = f.workload(d, machines)
 	return nil
 }
@@ -239,18 +462,15 @@ func isControlPlane(m *clusterv1.Machine) bool {
 	return ok
 }
 
-func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluster {
-	cp, workers := d.ControlPlanes, d.Workers
-	pods, services := "10.42.0.0/16", "10.43.0.0/16"
-	if d.Distribution == templates.Kubeadm || d.Distribution == templates.Talos {
-		pods, services = "10.244.0.0/16", "10.96.0.0/12"
-	}
+// clusterVariables are a demo cluster's variables, sorted by name.
+func (f *demoFleet) clusterVariables(d *demoCluster) []clusterv1.ClusterVariable {
 	vars := map[string]json.RawMessage{
 		"controlPlaneEndpoint": json.RawMessage(fmt.Sprintf(`"10.20.%d.10"`, d.Subnet)),
 		"network": json.RawMessage(fmt.Sprintf(
 			`{"bridge":"vmbr0","addresses":["10.20.%[1]d.11-10.20.%[1]d.60"],"prefix":24,"gateway":"10.20.%[1]d.1","dnsServers":["10.20.0.53"]}`, d.Subnet)),
 	}
 	maps.Copy(vars, f.data.Settings)
+	vars[etcdVariable] = json.RawMessage(fmt.Sprintf(`{"quotaGiB":%d}`, provisioner.DefaultEtcdQuotaGiB))
 	if d.Distribution == templates.Talos {
 		vars[provisioner.TalosVersionVariable] = json.RawMessage(`"` + templates.DefaultTalosVersion + `"`)
 	} else {
@@ -258,6 +478,53 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 	}
 	for _, a := range d.AddOns {
 		vars[a] = f.data.AddOns[a].Value
+	}
+	if d.WorkerNodes != nil {
+		vars[workerNodesVariable] = d.WorkerNodes
+	}
+	if d.NodeCustomisation != nil {
+		vars[provisioner.NodeCustomisationVariable] = d.NodeCustomisation
+	}
+	out := make([]clusterv1.ClusterVariable, 0, len(vars))
+	for _, name := range slices.Sorted(maps.Keys(vars)) {
+		out = append(out, clusterv1.ClusterVariable{Name: name, Value: apiextensionsv1.JSON{Raw: vars[name]}})
+	}
+	return out
+}
+
+// heldConditions are a demo cluster's conditions beside the ones every cluster has: a held
+// replacement, those the demo data names and a lack of memory.
+func (f *demoFleet) heldConditions(d *demoCluster) []metav1.Condition {
+	var out []metav1.Condition
+	if d.Held {
+		since := f.now.Add(-7 * time.Minute)
+		out = append(out, metav1.Condition{
+			Type: provisioner.RemediationHeldCondition, Status: metav1.ConditionTrue, Reason: provisioner.HeldNodeMaintenance, LastTransitionTime: metav1.NewTime(since),
+			Message: fmt.Sprintf("%s-%s-%s: Proxmox VE node %s is in maintenance, replacement waits until %s",
+				d.Name, workerPool, demoSuffix(d.Name, workerPool, int(d.Workers-1)), f.data.ProxmoxNodes[int(d.ControlPlanes+d.Workers-1)%len(f.data.ProxmoxNodes)],
+				since.Add(30*time.Minute).UTC().Format("15:04 MST")),
+		})
+	}
+	for _, n := range d.Conditions {
+		out = append(out, metav1.Condition{
+			Type: n.Type, Status: metav1.ConditionTrue, Reason: n.Reason, Message: n.Message,
+			LastTransitionTime: metav1.NewTime(f.now.Add(-time.Duration(n.AgoHours) * time.Hour)),
+		})
+	}
+	if d.LackingMemory != "" {
+		out = append(out, metav1.Condition{
+			Type: provisioner.NodesLackMemoryCondition, Status: metav1.ConditionTrue, Reason: "NoRoom",
+			Message: d.LackingMemory, LastTransitionTime: metav1.NewTime(f.now.Add(-25 * time.Minute)),
+		})
+	}
+	return out
+}
+
+func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluster {
+	cp, workers := d.ControlPlanes, d.Workers
+	pods, services := "10.42.0.0/16", "10.43.0.0/16"
+	if d.Distribution == templates.Kubeadm || d.Distribution == templates.Talos {
+		pods, services = "10.244.0.0/16", "10.96.0.0/12"
 	}
 	c := &clusterv1.Cluster{
 		Namespace: demoNamespace, Name: d.Name, UID: types.UID("demo-" + d.Name), Generation: 4,
@@ -273,12 +540,11 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 				Version:      d.Version,
 				ControlPlane: clusterv1.ControlPlaneTopology{Replicas: &cp},
 				Workers:      clusterv1.WorkersTopology{MachineDeployments: []clusterv1.MachineDeploymentTopology{{Class: workerClass, Name: workerPool, Replicas: &workers}}},
+				Variables:    f.clusterVariables(d),
 			},
 		},
 	}
-	for _, name := range slices.Sorted(maps.Keys(vars)) {
-		c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: name, Value: apiextensionsv1.JSON{Raw: vars[name]}})
-	}
+	c.Annotations[provisioner.EtcdStatusAnnotation] = f.etcdStatus(d)
 	since := metav1.NewTime(created.Add(9 * time.Minute))
 	upToDateCP, upToDateWorkers := cp, workers
 	reconciled := metav1.Condition{
@@ -294,6 +560,12 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		raw, _ := json.Marshal(changeRecord{By: demoUser, At: started, Settings: u.Change}) //nolint:errchkjson // strings and a time
 		c.Annotations[changeAnnotation] = string(raw)
 		c.Generation++
+	}
+	if h := d.TalosHold; h != nil {
+		node := fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, 0))
+		since := f.now.Add(-time.Duration(h.SinceMinutes) * time.Minute).UTC().Format(time.RFC3339)
+		c.Annotations[provisioner.TalosUpgradingAnnotation] = fmt.Sprintf("%s to %s since %s", node, h.To, since)
+		c.Annotations[provisioner.TalosWaitingAnnotation] = h.held(node)
 	}
 	c.Status = clusterv1.ClusterStatus{
 		Phase:              string(clusterv1.ClusterPhaseProvisioned),
@@ -312,16 +584,26 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 			DesiredReplicas: &workers, Replicas: &workers, ReadyReplicas: &workers, AvailableReplicas: &workers, UpToDateReplicas: &upToDateWorkers,
 		},
 	}
+	c.Status.Conditions = append(c.Status.Conditions, f.heldConditions(d)...)
 	if d.Paused {
 		c.Spec.Paused = new(true)
 	}
-	for _, n := range d.Conditions {
-		c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
-			Type: n.Type, Status: metav1.ConditionTrue, Reason: n.Reason, Message: n.Message,
-			LastTransitionTime: metav1.NewTime(f.now.Add(-time.Duration(n.AgoHours) * time.Hour)),
-		})
-	}
+	f.waitForWindow(c, d.AddonChanges)
 	return c
+}
+
+// waitForWindow records on the cluster the add-on changes that wait for its next window.
+func (f *demoFleet) waitForWindow(c *clusterv1.Cluster, changes []provisioner.AddonChange) {
+	if len(changes) == 0 {
+		return
+	}
+	opens := f.now.Add(9 * time.Hour).UTC().Truncate(time.Hour)
+	raw, _ := json.Marshal(provisioner.AddonChangesStatus{Opens: opens, Changes: changes}) //nolint:errchkjson // strings and a time
+	c.Annotations[provisioner.AddonChangesAnnotation] = string(raw)
+	c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
+		Type: provisioner.AddonChangesPendingCondition, Status: metav1.ConditionTrue, Reason: provisioner.AddonChangesWaiting,
+		Message: "Add-on changes wait for the upgrade window, which opens " + opens.Format(time.RFC3339), LastTransitionTime: metav1.NewTime(f.now.Add(-2 * time.Hour)),
+	})
 }
 
 // demoCondition is a condition that holds, as an unstructured object carries it.
@@ -369,6 +651,21 @@ func (f *demoFleet) workerPool(d *demoCluster, created time.Time) *clusterv1.Mac
 // machine is a cluster's control-plane node or worker, by role: controlPlaneRole or the worker
 // pool's name. In an upgrade under way the control plane and the first worker are new, the others
 // still on the old version.
+// etcdStatus is what the controller would have read of the cluster's etcd members a few minutes ago:
+// small databases, the first member leading.
+func (f *demoFleet) etcdStatus(d *demoCluster) string {
+	status := provisioner.EtcdStatus{At: f.now.Add(-4 * time.Minute), QuotaBytes: provisioner.DefaultEtcdQuotaGiB * demoGiB}
+	for i := range d.ControlPlanes {
+		size := int64(90+30*i) << 20
+		status.Members = append(status.Members, provisioner.EtcdMember{
+			Name:   fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, int(i))),
+			Leader: i == 0, DBSize: size, DBSizeInUse: size * 3 / 4,
+		})
+	}
+	raw, _ := json.Marshal(status) //nolint:errchkjson // numbers, strings and a time
+	return string(raw)
+}
+
 func (f *demoFleet) machine(d *demoCluster, role string, i int, created time.Time) *clusterv1.Machine {
 	labels := map[string]string{clusterv1.ClusterNameLabel: d.Name}
 	host := 21 + i
@@ -437,6 +734,33 @@ func (f *demoFleet) identity(cluster string, id provisioner.Identity, server str
 	}
 }
 
+// demoReferences are the Secrets and the ConfigMap a cluster's node customisation names, so that a
+// change to it passes the checks that they exist.
+func demoReferences(n *provisioner.NodeCustomisation) []client.Object {
+	secret := func(name, key string) client.Object {
+		return &corev1.Secret{Namespace: demoNamespace, Name: name, Data: map[string][]byte{key: []byte("demo")}}
+	}
+	var out []client.Object
+	for _, f := range n.Files {
+		if f.Secret != nil {
+			out = append(out, secret(f.Secret.Name, f.Secret.Key))
+		}
+	}
+	if w := n.AuditWebhook; w != nil {
+		key := w.Key
+		if key == "" {
+			key = provisioner.IdentityKubeconfigKey
+		}
+		out = append(out, secret(w.Secret, key))
+	}
+	if p := n.AuditPolicy; p != nil && p.ConfigMap != "" {
+		out = append(out, &corev1.ConfigMap{Namespace: demoNamespace, Name: p.ConfigMap, Data: map[string]string{
+			"policy.yaml": "apiVersion: audit.k8s.io/v1\nkind: Policy\nrules:\n  - level: Metadata\n",
+		}})
+	}
+	return out
+}
+
 // demoAddOn is an add-on's release in the cluster, as the Add-on Provider for Helm keeps it.
 func demoAddOn(d *demoCluster, name string, a demoAddOnData, created time.Time) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
@@ -456,8 +780,23 @@ func demoAddOn(d *demoCluster, name string, a demoAddOnData, created time.Time) 
 // workload is a cluster's own API, as its identities see it.
 func (f *demoFleet) workload(d *demoCluster, machines []*clusterv1.Machine) *Workload {
 	objects := make([]runtime.Object, 0, 4*len(machines))
+	var pool provisioner.NodeSettings
+	if d.WorkerNodes != nil {
+		_ = json.Unmarshal(d.WorkerNodes, &pool) // checked in demo-fleet.json by the tests
+	}
 	for i, m := range machines {
-		objects = append(objects, demoNode(m))
+		node := demoNode(m)
+		if d.Unsynced && i == len(machines)-1 {
+			node.Status.Addresses[0].Address = demoUnsyncedAddress
+		}
+		if !isControlPlane(m) {
+			drift := ""
+			if i == len(machines)-1 {
+				drift = d.DriftTaint
+			}
+			setPoolNodes(node, pool, drift)
+		}
+		objects = append(objects, node, demoLease(node.Name, f.now))
 		for j, app := range []string{"api", "frontend", "cache"} {
 			if isControlPlane(m) && j > 0 {
 				break
@@ -521,6 +860,7 @@ func demoNode(m *clusterv1.Machine) *corev1.Node {
 	return &corev1.Node{
 		Name: m.Status.NodeRef.Name, Labels: labels, CreationTimestamp: since,
 		Status: corev1.NodeStatus{
+			Addresses:   []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "192.0.2.10"}},
 			NodeInfo:    corev1.NodeSystemInfo{KubeletVersion: m.Spec.Version},
 			Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse(mem)},
 			Conditions: []corev1.NodeCondition{
@@ -531,6 +871,23 @@ func demoNode(m *clusterv1.Machine) *corev1.Node {
 			},
 		},
 	}
+}
+
+// setPoolNodes gives a worker its pool's labels and taints, and a taint set by hand when drifted.
+func setPoolNodes(node *corev1.Node, pool provisioner.NodeSettings, driftTaint string) {
+	for _, l := range pool.Labels {
+		node.Labels[l.Key] = l.Value
+	}
+	node.Spec.Taints = pool.CoreTaints()
+	if driftTaint != "" {
+		node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{Key: driftTaint, Effect: corev1.TaintEffectNoSchedule})
+	}
+}
+
+// demoLease is a node's lease, renewed as the controller's clock has it.
+func demoLease(node string, now time.Time) *coordinationv1.Lease {
+	renewed := metav1.NewMicroTime(now)
+	return &coordinationv1.Lease{Namespace: corev1.NamespaceNodeLease, Name: node, Spec: coordinationv1.LeaseSpec{RenewTime: &renewed}}
 }
 
 func demoPod(namespace, name, node string, started time.Time, cpu, memory string) *corev1.Pod {
@@ -621,7 +978,7 @@ var demoPrivileges = pve.Privileges{
 
 // demoTicket is issued now, not at the demo's time: sessions end by the real clock.
 func demoTicket(username string) *pve.Ticket {
-	return &pve.Ticket{Username: username, Ticket: "demo", CSRF: "demo", Issued: time.Now()}
+	return &pve.Ticket{Username: username, Ticket: demoName, CSRF: demoName, Issued: time.Now()}
 }
 
 func (*demoAccounts) SignIn(_ context.Context, username, _ string) (*pve.Ticket, *pve.Challenge, error) {
@@ -685,8 +1042,16 @@ func (*demoAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]p
 	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.20.0.2/16", Gateway: "10.20.0.1"}}, nil
 }
 
-func (*demoAccounts) DNS(context.Context, *pve.Ticket, string) ([]string, error) {
-	return []string{"10.20.0.53"}, nil
+func (*demoAccounts) DNS(context.Context, *pve.Ticket, string) (pve.NodeDNS, error) {
+	return pve.NodeDNS{Servers: []string{"10.20.0.53"}, Search: "corp.example"}, nil
+}
+
+// NodeTime is the node's clock, which the demo has the second node run a minute and a half ahead.
+func (a *demoAccounts) NodeTime(_ context.Context, _ *pve.Ticket, node string) (time.Time, error) {
+	if nodes := a.fleet.data.ProxmoxNodes; len(nodes) > 1 && node == nodes[1] {
+		return a.fleet.now.Add(95 * time.Second), nil
+	}
+	return a.fleet.now, nil
 }
 
 func (*demoAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, error) {
@@ -695,6 +1060,14 @@ func (*demoAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, error
 
 func (*demoAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]string, error) {
 	return map[string]string{}, nil
+}
+
+func (*demoAccounts) NextID(context.Context, *pve.Ticket) (pve.NextID, error) {
+	return pve.NextID{}, nil
+}
+
+func (*demoAccounts) VMIDs(context.Context, *pve.Ticket) ([]int, error) {
+	return nil, nil
 }
 
 func (*demoAccounts) NodeAffinityRules(context.Context, *pve.Ticket) ([]pve.HARule, error) {
@@ -721,11 +1094,15 @@ func (a *demoAccounts) VMLoad(_ context.Context, _ *pve.Ticket, _ string, vmid i
 	return points, nil
 }
 
-func (*demoAccounts) Templates(context.Context, *pve.Ticket, string) ([]pve.Member, error) {
-	return nil, nil
+func (a *demoAccounts) Templates(context.Context, *pve.Ticket, string) ([]pve.Member, error) {
+	return a.fleet.templates, nil
 }
 
 func (*demoAccounts) BackupCovers(context.Context, *pve.Ticket, int) (bool, error) { return true, nil }
+
+func (*demoAccounts) ApplianceID(_ context.Context, _ *pve.Ticket, hint int, _ []string) (int, error) {
+	return hint, nil
+}
 
 func (*demoAccounts) DeleteVM(context.Context, *pve.Ticket, string, int) error { return errDemo }
 

@@ -56,7 +56,7 @@ strip_options() {
 # which jq on Windows ends with CR LF.
 lanes_and_parts=$(sh "${ci}/scope.sh" --all | jq -j '(.[] | . + " "), "|", (.[] | gsub(","; " ") + " ")')
 lanes=${lanes_and_parts%%|*}
-queue=" ${lanes} management-cluster-upgrade rancher control-plane-ha two-nodes "
+queue=" ${lanes} management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade "
 all_lanes=" ${lanes_and_parts#*|}"
 node_oses=" $(jq -j '.available[] | . + " "' "${chart}/files/node-oses.json")"
 # cnis <distribution>: the CNIs its class offers.
@@ -87,7 +87,7 @@ while [ "${night}" -lt "${nights}" ]; do
         esac
     done
     # Every lane is one the merge queue runs, its tests without their options, or one of the
-    # nightly run's own four: none runs only at night by accident.
+    # nightly run's own: none runs only at night by accident.
     for lane in ${tests}; do
         strip_options "${lane}"
         case ${queue} in
@@ -229,6 +229,8 @@ refused 'k3s+$(true)'
 refused 'k3s++cilium'
 refused 'k3s+Cilium'
 refused appliance+management-3584
+refused appliance-upgrade+management-3584
+refused appliance-upgrade+calico
 refused management-cluster+management-
 refused management-cluster+management-0
 refused management-cluster+management-035
@@ -253,10 +255,11 @@ while IFS= read -r line; do
     case ${line} in
         '    control-plane-ha)'*) runs="${runs}control-plane-ha " ;;
         '    two-nodes)'*) runs="${runs}two-nodes " ;;
+        '    appliance-upgrade)'*) runs="${runs}appliance-upgrade " ;;
         *) ;;
     esac
 done < "${ci}/run.sh"
-for t in control-plane-ha two-nodes; do
+for t in control-plane-ha two-nodes appliance-upgrade; do
     case ${runs} in
         *" ${t} "*) ok ;;
         *) bad "run.sh does not run ${t}" ;;

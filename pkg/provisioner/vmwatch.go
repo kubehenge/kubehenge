@@ -94,21 +94,42 @@ type proxmoxReader interface {
 	Get(ctx context.Context, path string, v any) error
 }
 
+// proxmoxEditor reads Proxmox VE's API and changes a VM's configuration; *proxmox.Client is one.
+type proxmoxEditor interface {
+	proxmoxReader
+	Put(ctx context.Context, path string, params, out any) error
+}
+
 // VMWatch looks at the VMs of every cluster's machines and the storage each cluster's disks are
 // on, with the controller's own token, and says on the Cluster what does not run and what is
 // nearly full: VMsCondition and StorageCondition, with an event when each starts and ends.
+// It also keeps a VM's name and its node's zone label true to where the VM is (identity.go).
 type VMWatch struct {
 	Client client.Client
 	// Reader reads a cluster past the cache, after a write to it conflicted.
 	Reader         client.Reader
 	ClassNamespace string
-	Proxmox        proxmoxReader
-	Events         events.EventRecorder
-	Interval       time.Duration
-	Now            func() time.Time
+	// WorkloadPool is the pool the clusters' own pools nest under.
+	WorkloadPool string
+	Proxmox      proxmoxEditor
+	// Workloads reaches the workload clusters, to follow a moved VM with its node's zone label.
+	Workloads workloadClients
+	Events    events.EventRecorder
+	Interval  time.Duration
+	Now       func() time.Time
 
 	// seen is when each VM was first found in the state it is in, while that is not running.
 	seen map[int64]vmSeen
+	// zoned is the Proxmox VE node each VM's Kubernetes node was last found labelled with.
+	zoned map[int64]string
+	// restartDue holds the VMs whose zone label changed and whose CSI node plugin has not restarted.
+	restartDue map[int64]bool
+	// reported is the last warning told on a Cluster for each VM and reason, so that a retry that
+	// fails the same way says nothing again.
+	reported map[reportKey]string
+	// haErr is the last failure of reading the HA manager's status, so that a failure that goes on
+	// is logged once.
+	haErr string
 }
 
 type vmSeen struct {
@@ -119,6 +140,8 @@ type vmSeen struct {
 // pveGuest is a VM as Proxmox VE's resource list shows it.
 type pveGuest struct {
 	VMID   int64  `json:"vmid"`
+	Name   string `json:"name"`
+	Pool   string `json:"pool"`
 	Node   string `json:"node"`
 	Type   string `json:"type"`
 	Status string `json:"status"`
@@ -140,6 +163,11 @@ type vmLook struct {
 	guests   map[int64]pveGuest
 	down     map[int64]string
 	storages []pveStorageUse
+	// nodes is each Proxmox VE node's status, and maintenance the nodes the HA manager has emptied.
+	nodes       map[string]string
+	maintenance map[string]bool
+	// gone is the nodes that have left the cluster for good, which no wait can bring back.
+	gone map[string]bool
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -171,12 +199,22 @@ func (w *VMWatch) read(ctx context.Context) (*vmLook, error) {
 	if err := w.Proxmox.Get(ctx, "/cluster/resources?type=storage", &look.storages); err != nil {
 		return nil, fmt.Errorf("listing the storages: %w", err)
 	}
+	var nodes []pveNodeUse
+	if err := w.Proxmox.Get(ctx, "/cluster/resources?type=node", &nodes); err != nil {
+		return nil, fmt.Errorf("listing the nodes: %w", err)
+	}
+	look.nodes = make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		look.nodes[n.Node] = n.Status
+	}
 	for _, g := range guests {
 		if g.Type == qemuType {
 			look.guests[g.VMID] = g
 		}
 	}
+	look.maintenance, look.gone = hostFactsOf(ctx, w.Proxmox, look.guests, &w.haErr)
 	w.settle(look)
+	w.forgetGone(look)
 	return look, nil
 }
 
@@ -192,7 +230,7 @@ func (w *VMWatch) settle(look *vmLook) {
 		}
 	}
 	for vmid, g := range look.guests {
-		reason := vmStateOf(g)
+		reason := vmStateOf(&g)
 		if reason == "" {
 			delete(w.seen, vmid)
 			continue
@@ -212,7 +250,7 @@ func (w *VMWatch) settle(look *vmLook) {
 // through a state on purpose. The resource list gives a started VM's state as QEMU reports it,
 // "paused" or "io-error" rather than "running"; "unknown" is a VM whose node is offline, which
 // Cluster API sees from the node.
-func vmStateOf(g pveGuest) string {
+func vmStateOf(g *pveGuest) string {
 	if slices.Contains(transientLocks, g.Lock) {
 		return ""
 	}
@@ -231,26 +269,47 @@ func vmStateOf(g pveGuest) string {
 }
 
 func (w *VMWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *vmLook) error {
+	// A cluster being deleted is released too, or its deletion would wait on a node that is gone.
+	lostErr := w.settleDeletingMachines(ctx, c, look)
 	if !c.DeletionTimestamp.IsZero() || RestoreInProgress(c) {
-		return nil
+		return lostErr
 	}
 	vms, err := w.clusterVMs(ctx, c)
 	if err != nil {
-		return err
+		return errors.Join(lostErr, err)
 	}
-	vmsErr := w.mark(ctx, c, VMsCondition, vmsCondition(vms, look), "VMsRunning", "every VM of the cluster runs")
-	storage, set, err := optionalVariable[string](c, "storage")
-	if err != nil || !set {
-		return errors.Join(vmsErr, err)
+	vmsErr := errors.Join(
+		lostErr,
+		w.keepIdentity(ctx, c, vms, look),
+		w.mark(ctx, c, VMsCondition, vmsCondition(vms, look), "VMsRunning", "every VM of the cluster runs"),
+	)
+	storage, _, err := optionalVariable[string](c, "storage")
+	ceiling, graceErr := hostOutageGrace(c)
+	if graceErr != nil {
+		return errors.Join(vmsErr, graceErr)
 	}
-	return errors.Join(vmsErr, w.mark(ctx, c, StorageCondition, storageCondition(storage, vms, look), "StorageFreed",
-		fmt.Sprintf("storage %s is below %d%% full", storage, storageWarnPercent)))
+	held, holdErr := w.holdMachines(ctx, vms, storage, look, ceiling)
+	errs := errors.Join(vmsErr, err, holdErr,
+		w.mark(ctx, c, RemediationHeldCondition, held, "RemediationReleased", "replacement of the cluster's machines is no longer held"))
+	if err != nil || storage == "" {
+		return errs
+	}
+	return errors.Join(errs,
+		w.mark(ctx, c, StorageCondition, storageCondition(storage, vms, look), "StorageFreed",
+			fmt.Sprintf("storage %s is below %d%% full", storage, storageWarnPercent)),
+		w.mark(ctx, c, StorageUnavailableCondition, storageUnavailableCondition(storage, vms, look, ceiling), "StorageAvailable",
+			fmt.Sprintf("storage %s is available again", storage)))
 }
 
 // clusterVM is the VM of a machine whose node joined, so that its VM ran once.
 type clusterVM struct {
 	machine string
 	vmid    int64
+	// vmName is the name capmox gave the VM, its ProxmoxMachine's.
+	vmName string
+	// node is the machine's Kubernetes node.
+	node string
+	m    *clusterv1.Machine
 }
 
 // clusterVMs lists the VMs of the cluster's machines that joined and are not being deleted.
@@ -276,7 +335,7 @@ func (w *VMWatch) clusterVMs(ctx context.Context, c *clusterv1.Cluster) ([]clust
 		if !ok || m.Status.NodeRef.Name == "" {
 			continue
 		}
-		vms = append(vms, clusterVM{machine: m.Name, vmid: vmid})
+		vms = append(vms, clusterVM{machine: m.Name, vmid: vmid, vmName: m.Spec.InfrastructureRef.Name, node: m.Status.NodeRef.Name, m: m})
 	}
 	slices.SortFunc(vms, func(a, b clusterVM) int { return int(a.vmid - b.vmid) })
 	return vms, nil

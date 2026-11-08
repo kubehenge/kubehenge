@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -79,23 +80,6 @@ decide what it may do, as they do for a user signed in to the interface.`,
 	}
 	o.namespaceFlag(kubeconfig.Flags())
 
-	var file string
-	create := &cobra.Command{
-		Use:   "create -f FILE",
-		Short: "Create a cluster from the interface's create request, in JSON or YAML",
-		Long: `Create a cluster from the interface's create request, in JSON or YAML.
-
-The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
-workerReplicas, variables, and namespace where the interface has more than one. It is checked as
-the wizard's request is.`,
-		Args: noArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return o.create(cmd.Context(), cmd.OutOrStdout(), file)
-		},
-	}
-	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
-	_ = create.MarkFlagRequired("filename")
-
 	var controlPlanes int32
 	var workers []string
 	scale := &cobra.Command{
@@ -133,7 +117,84 @@ the wizard's request is.`,
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
 	o.namespaceFlag(deleteCmd.Flags())
 
-	cmd.AddCommand(list, get, kubeconfig, create, scale, o.upgradeCommand(), o.acceptUpgradeCommand(), deleteCmd, o.machineCommand())
+	cmd.AddCommand(slices.Concat([]*cobra.Command{
+		list, get, kubeconfig, o.createCommand(), scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd,
+		o.poolCommand(), o.updateCommand(), o.machineCommand(), o.etcdCommand(),
+	}, o.addonCommands())...)
+	return cmd
+}
+
+func (o *clusterOptions) timeoutsCommand() *cobra.Command {
+	var controlPlanes string
+	var pools []string
+	cmd := &cobra.Command{
+		Use:   "timeouts NAME",
+		Short: "Set how long a removed machine waits for its node's drain, volumes and deletion",
+		Long: `Set how long a removed machine waits for its node before its deletion goes on without it.
+
+A value is drain, detach or deletion, set to a duration such as 30m, or to 0 for never. The
+drain is the eviction of the node's pods, and a pod it cannot evict is deleted with the machine. The
+detach is the wait for the node's volumes. The deletion is the removal of the node's Node object.
+A value left out is the cluster class's.`,
+		Example: `  kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h`,
+		Args:    argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req, err := timeoutsRequest(controlPlanes, pools)
+			if err != nil {
+				return err
+			}
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], req)
+		},
+	}
+	cmd.Flags().StringVar(&controlPlanes, "control-planes", "", "the control planes' timeouts as drain=30m,detach=10m,deletion=1m")
+	cmd.Flags().StringArrayVar(&pools, "pool", nil, "a pool's timeouts as POOL=drain=30m,detach=10m, repeated for more pools")
+	o.namespaceFlag(cmd.Flags())
+	return cmd
+}
+
+// etcdQuotaBounds are the etcd variable's quotaGiB limits, as the chart's schema has them.
+const (
+	minEtcdQuotaGiB = 2
+	maxEtcdQuotaGiB = 8
+)
+
+func (o *clusterOptions) etcdCommand() *cobra.Command {
+	cmd := &cobra.Command{Use: "etcd", Short: "Set how large a cluster's etcd database may grow, or defragment it"}
+	o.namespaceFlag(cmd.PersistentFlags())
+	defrag := &cobra.Command{
+		Use:   "defrag NAME",
+		Short: "Defragment every etcd member of the cluster now, followers first, one at a time",
+		Long: `Ask Kubehenge's controller to defragment every etcd member of the cluster at once, whatever the hour
+and the fragmentation. Each member's reads and writes stop while it is defragmented. Without the
+request the controller defragments large, fragmented members inside the cluster's upgrade window.`,
+		Args: argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := o.clusterPath(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if _, err := o.call(cmd.Context(), http.MethodPost, path+"/etcd-defrag", nil); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "cluster %s: etcd defragmentation asked for\n", args[0])
+			return nil
+		},
+	}
+	var quota int
+	set := &cobra.Command{
+		Use:   "set NAME --quota-gib N",
+		Short: "Raise the size one etcd member's database may reach before etcd refuses writes",
+		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if quota < minEtcdQuotaGiB || quota > maxEtcdQuotaGiB {
+				return fmt.Errorf("--quota-gib is %d to %d, not %d", minEtcdQuotaGiB, maxEtcdQuotaGiB, quota)
+			}
+			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{variablesKey: map[string]any{"etcd": map[string]any{"quotaGiB": quota}}})
+		},
+	}
+	set.Flags().IntVar(&quota, "quota-gib", 0, "the most one member's database may reach, in GiB: 2 to 8, never lower than now")
+	_ = set.MarkFlagRequired("quota-gib")
+	cmd.AddCommand(defrag, set)
 	return cmd
 }
 
@@ -150,15 +211,26 @@ type machineAction struct {
 	use, short, method, tail, done string
 	// undoable is false for an action that takes the machine's VM and disks, which asks for --yes.
 	undoable bool
+	// forget is set for the action that lets go of a machine being deleted. Its request names the machine.
+	forget bool
 }
 
 var machineActions = []machineAction{
-	{"replace", "Delete the machine's VM and disks and have a new one made in its place", http.MethodPut, "/replacement", "replacing", false},
-	{"keep", "Cancel a replacement that has not started", http.MethodDelete, "/replacement", "kept", true},
-	{"delete", "Drain and delete a worker, its pool shrinking by one", http.MethodDelete, "", "deleting", false},
-	{"cordon", "Keep new pods off the machine's node", http.MethodPut, "/cordon", "cordoned", true},
-	{"uncordon", "Let pods onto the machine's node again", http.MethodDelete, "/cordon", "uncordoned", true},
-	{"reboot", "Shut the machine's VM down and start it again, which needs VM.PowerMgmt", http.MethodPost, "/reboot", "rebooting", true},
+	{"replace", "Delete the machine's VM and disks and have a new one made in its place", http.MethodPut, "/replacement", "replacing", false, false},
+	{"keep", "Cancel a replacement that has not started", http.MethodDelete, "/replacement", "kept", true, false},
+	{"delete", "Drain and delete a worker, its pool shrinking by one", http.MethodDelete, "", "deleting", false, false},
+	{"cordon", "Keep new pods off the machine's node", http.MethodPut, "/cordon", "cordoned", true, false},
+	{"uncordon", "Let pods onto the machine's node again", http.MethodDelete, "/cordon", "uncordoned", true, false},
+	{"reboot", "Shut the machine's VM down and start it again, which needs VM.PowerMgmt", http.MethodPost, "/reboot", "rebooting", true, false},
+	{"forget", "Let go of a machine stuck deleting without destroying its VM, which needs Sys.Modify", http.MethodPut, "/forgotten", "asked to be forgotten", false, true},
+}
+
+// forgetBody names the machine in the request that asks to forget it, and is empty for the others.
+func forgetBody(a *machineAction, machine string) any {
+	if !a.forget {
+		return nil
+	}
+	return map[string]string{"confirm": machine}
 }
 
 func (o *clusterOptions) machineCommand() *cobra.Command {
@@ -172,20 +244,25 @@ func (o *clusterOptions) machineCommand() *cobra.Command {
 			Args:  argsSay(cobra.ExactArgs(2), "give the cluster's name and the machine's"),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				if !a.undoable && !yes {
+					if a.forget {
+						return errors.New("forget leaves the machine's VM in Proxmox VE to be removed by hand: add --yes")
+					}
 					return fmt.Errorf("%s deletes the machine's VM and disks: add --yes", a.use)
 				}
 				path, err := o.clusterPath(cmd.Context(), args[0])
 				if err != nil {
 					return err
 				}
-				if _, err := o.call(cmd.Context(), a.method, path+"/machines/"+url.PathEscape(args[1])+a.tail, nil); err != nil {
+				if _, err := o.call(cmd.Context(), a.method, path+"/machines/"+url.PathEscape(args[1])+a.tail, forgetBody(&a, args[1])); err != nil {
 					return err
 				}
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "machine %s %s\n", args[1], a.done)
 				return nil
 			},
 		}
-		if !a.undoable {
+		if a.forget {
+			sub.Flags().BoolVar(&yes, "yes", false, "confirm that the machine's VM may stay in Proxmox VE unmanaged")
+		} else if !a.undoable {
 			sub.Flags().BoolVar(&yes, "yes", false, "confirm that "+a.use+" may take the machine's VM and disks")
 		}
 		cmd.AddCommand(sub)
@@ -213,10 +290,21 @@ type listedCondition struct {
 
 // status is the cluster's phase, and the reason its upgrade is held where it is.
 func (c *listedCluster) status() string {
-	for _, cond := range c.Conditions {
-		if cond.Type == provisioner.UpgradeHeldCondition && cond.Status == "True" {
-			return fmt.Sprintf("%s, upgrade held (%s)", c.Phase, cond.Reason)
+	held := func(kind string) *listedCondition {
+		for i := range c.Conditions {
+			if c.Conditions[i].Type == kind && c.Conditions[i].Status == "True" {
+				return &c.Conditions[i]
+			}
 		}
+		return nil
+	}
+	switch {
+	case held(provisioner.UpgradeHeldCondition) != nil:
+		return fmt.Sprintf("%s, upgrade held (%s)", c.Phase, held(provisioner.UpgradeHeldCondition).Reason)
+	case held(provisioner.NodeImageHeldCondition) != nil:
+		return fmt.Sprintf("%s, node image refresh held (%s)", c.Phase, held(provisioner.NodeImageHeldCondition).Reason)
+	case held(provisioner.TemplateNodeDownCondition) != nil:
+		return c.Phase + ", template node down"
 	}
 	return c.Phase
 }
@@ -273,7 +361,7 @@ func (o *clusterOptions) raw(ctx context.Context, out io.Writer, method, name, t
 	return nil
 }
 
-func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string) error {
+func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string, grace *int, custom *nodeCustomFlags) error {
 	var raw []byte
 	var err error
 	if file == "-" {
@@ -287,6 +375,20 @@ func (o *clusterOptions) create(ctx context.Context, out io.Writer, file string)
 	req, err := yaml.YAMLToJSON(raw)
 	if err != nil {
 		return fmt.Errorf("the create request is neither JSON nor YAML: %w", err)
+	}
+	if grace != nil {
+		if req, err = withGrace(req, *grace); err != nil {
+			return err
+		}
+	}
+	if custom.any() {
+		value, valueErr := custom.value()
+		if valueErr != nil {
+			return valueErr
+		}
+		if req, err = mergeNodeCustomisation(req, value); err != nil {
+			return err
+		}
 	}
 	body, err := o.call(ctx, http.MethodPost, "/api/clusters", json.RawMessage(req))
 	if err != nil {
@@ -321,6 +423,144 @@ func scaleRequest(controlPlanes *int32, workers []string) (map[string]any, error
 	}
 	if len(req) == 0 {
 		return nil, errors.New("give --control-planes, --workers or both")
+	}
+	return req, nil
+}
+
+// timeoutKeys are the names timeouts takes, and the field of the interface's request each sets.
+var timeoutKeys = map[string]string{
+	"drain": "nodeDrainTimeoutSeconds", "detach": "nodeVolumeDetachTimeoutSeconds", "deletion": "nodeDeletionTimeoutSeconds",
+}
+
+// timeoutValues reads "drain=30m,detach=10m" as the interface's timeouts in seconds.
+func timeoutValues(spec string) (map[string]int64, error) {
+	out := map[string]int64{}
+	for part := range strings.SplitSeq(spec, ",") {
+		key, value, ok := strings.Cut(part, "=")
+		field := timeoutKeys[key]
+		if !ok || field == "" {
+			return nil, fmt.Errorf("timeouts %q: give drain, detach or deletion as NAME=30m", spec)
+		}
+		d, err := time.ParseDuration(value)
+		if value == "0" {
+			d, err = 0, nil
+		}
+		if err != nil || d < 0 {
+			return nil, fmt.Errorf("timeouts %q: %q is not a duration such as 30m, or 0 for never", spec, value)
+		}
+		out[field] = int64(d / time.Second)
+	}
+	return out, nil
+}
+
+// graceFlag is the flag for the cluster variable hostOutageGraceMinutes. The interface and the
+// webhook check the value too, so a bad one is refused before a request goes out and again there.
+const graceFlag = "host-outage-grace-minutes"
+
+// variablesKey is the field of a request body that holds the cluster's variables.
+const variablesKey = "variables"
+
+// requestVariables are the variables of a request body, an empty set put in when it has none.
+func requestVariables(req map[string]any) map[string]any {
+	vars, ok := req[variablesKey].(map[string]any)
+	if !ok {
+		vars = map[string]any{}
+		req[variablesKey] = vars
+	}
+	return vars
+}
+
+func graceHelp() string {
+	return fmt.Sprintf("minutes to wait for a host that is offline or in maintenance before replacing its machines: 0 waits for the host, otherwise %d to %d (default %d)",
+		provisioner.MinHostOutageGraceMinutes, provisioner.MaxHostOutageGraceMinutes, provisioner.DefaultHostOutageGraceMinutes)
+}
+
+func checkGrace(minutes int) error {
+	if minutes != 0 && (minutes < provisioner.MinHostOutageGraceMinutes || minutes > provisioner.MaxHostOutageGraceMinutes) {
+		return fmt.Errorf("--%s %d: give 0, or %d to %d", graceFlag, minutes,
+			provisioner.MinHostOutageGraceMinutes, provisioner.MaxHostOutageGraceMinutes)
+	}
+	return nil
+}
+
+func (o *clusterOptions) createCommand() *cobra.Command {
+	var file string
+	var grace int
+	custom := &nodeCustomFlags{}
+	create := &cobra.Command{
+		Use:   "create -f FILE",
+		Short: "Create a cluster from the interface's create request, in JSON or YAML",
+		Long: `Create a cluster from the interface's create request, in JSON or YAML.
+
+The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
+workerReplicas, variables, and namespace where the interface has more than one. It is checked as
+the wizard's request is.
+
+--` + graceFlag + ` sets hostOutageGraceMinutes over the file's value.
+
+The --node-*, --kubelet-arg, --apiserver-arg, --controller-manager-arg, --scheduler-arg and --audit-*
+flags set the cluster variable nodeCustomisation. They add to the lists in the file, and replace its
+audit policy and audit webhook.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var set *int
+			if cmd.Flags().Changed(graceFlag) {
+				set = &grace
+			}
+			return o.create(cmd.Context(), cmd.OutOrStdout(), file, set, custom)
+		},
+	}
+	custom.register(create.Flags())
+	create.Flags().StringVarP(&file, "filename", "f", "", "the create request, or - for standard input")
+	create.Flags().IntVar(&grace, graceFlag, 0, graceHelp())
+	_ = create.MarkFlagRequired("filename")
+	return create
+}
+
+// withGrace sets the host outage grace in a create request, over the file's own value.
+func withGrace(request []byte, minutes int) ([]byte, error) {
+	if err := checkGrace(minutes); err != nil {
+		return nil, err
+	}
+	req := map[string]any{}
+	if err := json.Unmarshal(request, &req); err != nil {
+		return nil, fmt.Errorf("the create request is not an object: %w", err)
+	}
+	requestVariables(req)[provisioner.HostOutageGraceVariable] = minutes
+	out, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("writing the create request: %w", err)
+	}
+	return out, nil
+}
+
+// timeoutsRequest is the interface's change for timeouts' flags.
+func timeoutsRequest(controlPlanes string, pools []string) (map[string]any, error) {
+	req := map[string]any{}
+	if controlPlanes != "" {
+		t, err := timeoutValues(controlPlanes)
+		if err != nil {
+			return nil, err
+		}
+		req["controlPlaneTimeouts"] = t
+	}
+	if len(pools) > 0 {
+		changes := map[string]any{}
+		for _, p := range pools {
+			pool, spec, ok := strings.Cut(p, "=")
+			if !ok || pool == "" {
+				return nil, fmt.Errorf("--pool %q: give POOL=drain=30m, such as md-0=drain=30m,detach=10m", p)
+			}
+			t, err := timeoutValues(spec)
+			if err != nil {
+				return nil, err
+			}
+			changes[pool] = map[string]any{"timeouts": t}
+		}
+		req["pools"] = changes
+	}
+	if len(req) == 0 {
+		return nil, errors.New("give --control-planes, --pool or both")
 	}
 	return req, nil
 }

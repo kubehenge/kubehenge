@@ -75,6 +75,14 @@ type Hooks struct {
 	RancherKubernetes KubernetesMinors
 	// Nodes is asked which Proxmox VE nodes are online for a cluster the Placer has not marked yet.
 	Nodes Nodes
+	// Sites is asked where the storages and templates can be used: a cluster whose storage or
+	// templates reach none of its nodes is refused. Nil judges by the nodes alone.
+	Sites SiteSource
+	// AdmissionBudget bounds admission's reads of Proxmox VE. Zero means 2 s.
+	AdmissionBudget time.Duration
+	// Bridges is asked for a bridge's MTU, which the validator holds a cluster's interface MTU to.
+	// Nil, no bridge is looked at.
+	Bridges BridgeMTUs
 	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
 	// and the validator refuses a release it does not pin.
 	Releases *ReleaseChecksums
@@ -181,7 +189,7 @@ func (h *Hooks) BeforeClusterDelete(ctx context.Context, req *runtimehooksv1.Bef
 // BeforeClusterCreate holds a new cluster back until the Reconciler has created its Proxmox VE
 // objects, because capmox would otherwise clone its first VMs into a pool that does not exist yet. It
 // refuses a cluster on a node OS Kubehenge builds no templates of, or one no Proxmox VE node it may
-// use has the CPU for, a cluster whose pod or service range overlaps its nodes' network, load-balancer
+// use has the CPU for, one whose machines would clone from a template on a node that is down, a cluster whose pod or service range overlaps its nodes' network, load-balancer
 // addresses that clash with that network or another cluster's, logs without monitoring, backups
 // Velero cannot take, Datastore.Allocate on a storage that is not the cluster's alone, volume
 // snapshots where they cannot be taken, and Sys.Audit on / where no cluster may hold it.
@@ -239,6 +247,9 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 	case apierrors.IsNotFound(err) || err == nil && !isReady(s):
 		resp.RetryAfterSeconds = 5
 		resp.Message = "waiting for the cluster's Proxmox VE pool, user and token"
+		if failed := cloudFailure(cluster); failed != "" {
+			resp.Message = "Proxmox VE objects: " + failed
+		}
 	case err != nil:
 		ctrl.LoggerFrom(ctx).Error(err, "reading the cluster's Proxmox VE credentials", "cluster", client.ObjectKeyFromObject(cluster))
 		resp.Status = runtimehooksv1.ResponseStatusFailure
@@ -259,8 +270,12 @@ func (h *Hooks) storedCluster(ctx context.Context, sent *clusterv1.Cluster) (*cl
 
 // refusal is the first reason BeforeClusterCreate refuses the cluster for, or nil.
 func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
+	reads := h.reads()
 	for _, check := range []func() error{
-		func() error { return h.checkNodeOS(ctx, cluster) },
+		func() error { return h.checkNodeOS(ctx, reads, cluster) },
+		func() error { return h.checkTemplateNode(cluster, class) },
+		func() error { return h.checkPlacement(ctx, reads, cluster) },
+		func() error { return checkStorageListed(cluster, class) },
 		func() error { return checkRanges(cluster, class) },
 		func() error { return h.checkAddresses(ctx, cluster) },
 		func() error { return h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version) },
@@ -291,7 +306,7 @@ func (h *Hooks) newestNodeImages(ctx context.Context, c *clusterv1.Cluster, vers
 	if h.Client == nil || !RefreshesNodes(c) {
 		return false, nil
 	}
-	builds, err := ClassBuilds(ctx, h.Reader, c)
+	builds, down, err := classBuildsAndDown(ctx, h.Reader, c)
 	if err != nil {
 		return false, err
 	}
@@ -308,10 +323,12 @@ func (h *Hooks) newestNodeImages(ctx context.Context, c *clusterv1.Cluster, vers
 		return false, err
 	}
 	now := h.now()
-	if _, waiting := builds.Waiting(line, t, now, h.Soak); !waiting {
+	// A newer build on a down node is not moved to, since clones of it fail.
+	move, moves := nextBuild(builds, down, line, t, now, h.Soak)
+	if !moves {
 		return false, nil
 	}
-	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, NodeImageAnnotation, now.Format(time.RFC3339))
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, NodeImageAnnotation, refreshTime(builds, line, move.to, now, h.Soak).Format(time.RFC3339))
 	target := &clusterv1.Cluster{}
 	target.Namespace, target.Name = c.Namespace, c.Name
 	if err := h.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil {

@@ -42,7 +42,11 @@ func connect(conn *pve.Config) (*templates.Builder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connecting to Proxmox VE: %w", err)
 	}
-	return &templates.Builder{Client: api, Sources: templates.DefaultSources()}, nil
+	proxy, err := templates.ProxyFromEnvironment()
+	if err != nil {
+		return nil, fmt.Errorf("reading the proxy: %w", err)
+	}
+	return &templates.Builder{Client: api, Sources: templates.DefaultSources(), Proxy: proxy}, nil
 }
 
 // poolFlag is the pool a template command works in. Clusters clone only from the templates in their
@@ -116,7 +120,7 @@ func newTemplateDeleteCommand(conn *pve.Config) *cobra.Command {
 build, or with --build the one build with that tag, as kubehenge template list shows it.
 
 A build that a cluster's machines are cloned from is refused, as in the interface, naming the
-clusters. Deleting it would replace their nodes at once, outside their maintenance windows. Those
+clusters. Deleting it would replace their nodes at once, outside their upgrade windows. Those
 clusters are read from the management cluster KUBECONFIG points at. For a broken build,
 --roll-clusters deletes it anyway and replaces those clusters' nodes now with clones of the build
 before it. The last build of a template is never deleted while a cluster runs it.`,
@@ -134,7 +138,11 @@ before it. The last build of a template is never deleted while a cluster runs it
 			}
 			b.Pool = pool
 			users := func(list []*proxmox.ClusterResource) (map[string][]string, error) {
-				return buildUsers(cmd.Context(), classNamespace, list)
+				facts, ferr := b.Facts(cmd.Context())
+				if ferr != nil {
+					return nil, fmt.Errorf("reading what the builds installed: %w", ferr)
+				}
+				return buildUsers(cmd.Context(), classNamespace, list, facts)
 			}
 			deleted, err := deleteTemplate(cmd, b, &t, build, deleteChecks{users: users, roll: roll})
 			if err != nil {
@@ -154,7 +162,7 @@ before it. The last build of a template is never deleted while a cluster runs it
 	f.StringVar(&req.KubernetesVersion, "kubernetes-version", "", "Kubernetes release (kubeadm)")
 	f.StringVar(&build, "build", "", "the build to delete, such as build-202610181200, else every build")
 	f.StringVar(&classNamespace, "class-namespace", "kubehenge-system", "namespace of Kubehenge's ClusterClasses in the management cluster")
-	f.BoolVar(&roll, "roll-clusters", false, "delete builds that clusters run too, replacing their nodes now with clones of the build before, outside their maintenance windows")
+	f.BoolVar(&roll, "roll-clusters", false, "delete builds that clusters run too, replacing their nodes now with clones of the build before, outside their upgrade windows")
 	poolFlag(cmd, &pool, "pool the template is in, or empty to look in every pool")
 	return cmd
 }
@@ -170,7 +178,7 @@ type deleteChecks struct {
 
 // buildUsers reads who clones from the builds from the management cluster, with the soak its
 // refresh is set to.
-func buildUsers(ctx context.Context, classNamespace string, list []*proxmox.ClusterResource) (map[string][]string, error) {
+func buildUsers(ctx context.Context, classNamespace string, list []*proxmox.ClusterResource, facts map[uint64]templates.BuildFacts) (map[string][]string, error) {
 	cfg, err := ctrl.GetConfig()
 	if err != nil {
 		return nil, fmt.Errorf("finding which clusters run the builds needs the management cluster's API (KUBECONFIG): %w", err)
@@ -198,7 +206,7 @@ func buildUsers(ctx context.Context, classNamespace string, list []*proxmox.Clus
 	case !apierrors.IsNotFound(err):
 		return nil, fmt.Errorf("reading the template refresh's soak: %w", err)
 	}
-	users, err := provisioner.BuildUsers(ctx, kube, classNamespace, list, soak)
+	users, err := provisioner.BuildUsers(ctx, kube, classNamespace, list, facts, soak)
 	if err != nil {
 		return nil, fmt.Errorf("finding which clusters run the builds: %w", err)
 	}
@@ -224,7 +232,7 @@ func refusedBuilds(builds, doomed []templates.Built, checks deleteChecks) ([]str
 		case len(doomed) == len(builds):
 			refused = append(refused, fmt.Sprintf("%s: %s clone from it, and no build of the template would be left for them", b.Resource.Name, strings.Join(who, ", ")))
 		case !checks.roll:
-			refused = append(refused, fmt.Sprintf("%s: %s clone from it. --roll-clusters deletes it and replaces their nodes now, outside their maintenance windows", b.Resource.Name, strings.Join(who, ", ")))
+			refused = append(refused, fmt.Sprintf("%s: %s clone from it. --roll-clusters deletes it and replaces their nodes now, outside their upgrade windows", b.Resource.Name, strings.Join(who, ", ")))
 		}
 	}
 	return refused, nil
@@ -296,9 +304,9 @@ type builderFlags struct {
 
 func (b *builderFlags) add(cmd *cobra.Command) {
 	f := cmd.Flags()
-	f.StringVar(&b.builder.Node, "node", "", "Proxmox VE node to create the template on (required)")
+	f.StringVar(&b.builder.Node, "node", "", "Proxmox VE node to create the template on (required). Several, separated by commas, build on the first that is online and whose CPU runs the node OS")
 	f.StringVar(&b.builder.ImportStorage, "import-storage", "local", "file storage with the import content type, for the downloaded image")
-	f.StringVar(&b.builder.Storage, "storage", "local-lvm", "storage for the template's disk. Shared storage lets clones start on any node")
+	f.StringVar(&b.builder.Storage, "storage", "", "storage for the template's disk (default: the shared storage with the most room that takes disk images). A template on storage that is not shared can be cloned on its own node only")
 	f.StringVar(&b.builder.ISOStorage, "iso-storage", "", "storage for the cloud-init ISO while preparing an image, else the node's first ISO storage")
 	poolFlag(cmd, &b.builder.Pool, "pool the template is put in and looked for in, or empty to look in every pool")
 	f.StringVar(&b.builder.Bridge, "bridge", "vmbr0", "bridge for the VM that prepares an image")
@@ -311,10 +319,21 @@ func (b *builderFlags) add(cmd *cobra.Command) {
 	_ = cmd.MarkFlagRequired("node")
 }
 
+// splitNodes are the nodes a --node value names.
+func splitNodes(value string) []string {
+	var nodes []string
+	for n := range strings.SplitSeq(value, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			nodes = append(nodes, n)
+		}
+	}
+	return nodes
+}
+
 // connect signs the builder in, with its log on the command's standard error.
 func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates.Builder, error) {
 	// Cobra's required check passes --node "", which would reach the API as /nodes//.
-	if strings.TrimSpace(b.builder.Node) == "" {
+	if len(splitNodes(b.builder.Node)) == 0 {
 		return nil, errors.New("--node needs the Proxmox VE node to build on, such as --node pve1")
 	}
 	var err error
@@ -333,6 +352,19 @@ func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates
 	b.builder.Client, b.builder.Sources = c.Client, c.Sources
 	// Progress is best effort. A closed stderr must not fail the build.
 	b.builder.Log = func(format string, a ...any) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...) }
+	nodes := splitNodes(b.builder.Node)
+	if len(nodes) > 1 {
+		b.builder.Candidates = nodes
+	}
+	b.builder.Node = nodes[0]
+	storage, note, err := resolveStorage(cmd.Context(), c.Client, b.builder.Storage, nodes)
+	if err != nil {
+		return nil, err
+	}
+	b.builder.Storage = storage
+	if note != "" {
+		b.builder.Log("%s", note)
+	}
 	return &b.builder, nil
 }
 
@@ -354,7 +386,7 @@ containerd, the kubelet and kubeadm at one Kubernetes version. Every image and p
 against its publisher's signature.
 
 Node OS templates are built again for their updates. Each build is a template of its own, tagged
-with when it was made. Clusters move to a new build inside their maintenance windows. Without
+with when it was made. Clusters move to a new build inside their upgrade windows. Without
 --new-build the newest build is kept when there is one.
 
 A node OS template is made by a VM that boots the node OS's cloud image and builds the node from

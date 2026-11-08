@@ -100,6 +100,14 @@ func TestParseRefusesAnExpiredIndex(t *testing.T) {
 	if _, err := Parse(raw, sig, keys, testNow.Add(Validity-time.Second)); err != nil {
 		t.Fatalf("a second before its expiry: %v", err)
 	}
+	_, err := Parse(raw, sig, keys, testNow.Add(Validity+48*time.Hour))
+	if !errors.Is(err, ErrExpired) {
+		t.Fatalf("two days after its expiry: %v", err)
+	}
+	// A clock that runs ahead looks like publishers who stopped signing, so the error says what it reads.
+	if want := "this machine's clock reads " + testNow.Add(Validity+48*time.Hour).UTC().Format("2006-01-02 15:04 UTC"); !strings.Contains(err.Error(), want) {
+		t.Errorf("the error %q does not say %q", err, want)
+	}
 	if _, err := Parse(raw, sig, keys, testNow.Add(Validity)); !errors.Is(err, ErrExpired) {
 		t.Fatalf("at its expiry: %v", err)
 	}

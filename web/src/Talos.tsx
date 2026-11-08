@@ -202,6 +202,22 @@ export function TalosRows({ talos }: { talos: TalosStatus }): JSX.Element {
           </dd>
         </>
       )}
+      {filled(talos.waiting) && (
+        <>
+          <dt>Upgrade waits</dt>
+          <dd>
+            <Status state="warning" text={talos.waiting} />
+          </dd>
+        </>
+      )}
+      {filled(talos.upgrading) && filled(talos.held) && (
+        <>
+          <dt>Upgrade held by</dt>
+          <dd>
+            <Status state="warning" text={talos.held} />
+          </dd>
+        </>
+      )}
       {filled(talos.upgraded) && (
         <>
           <dt>Last Talos upgrade</dt>

@@ -209,6 +209,27 @@ describe("automatic upgrades of the management cluster", () => {
     ).resolves.toBeInTheDocument();
   });
 
+  it("say when a restore left their key behind", async () => {
+    fakeServer({
+      "GET /api/appliance/upgrades": upgrades(
+        {
+          possible: true,
+          on: true,
+          by: "root@pam",
+          since: "2026-10-22T09:00:00Z",
+          user: "kubehenge-upgrader@pve",
+          keyLost: true,
+        },
+        "patch",
+      ),
+    });
+    render(<ApplianceUpgrades />);
+    await expect(
+      screen.findByText("Its key is gone, as after a restore. Switch off and on again."),
+    ).resolves.toBeInTheDocument();
+    expect(screen.getByLabelText("Management cluster")).toHaveValue("on");
+  });
+
   it("are not offered before there is a management cluster", async () => {
     fakeServer({
       "GET /api/appliance/upgrades": upgrades({ possible: false, on: false, user: "kubehenge-upgrader@pve" }),

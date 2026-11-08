@@ -257,16 +257,9 @@ func podReady(p *corev1.Pod) bool {
 // snapshotThrough opens an etcd client over dial and starts a snapshot. The client goes with the
 // stream when it is closed.
 func snapshotThrough(ctx context.Context, dial func(context.Context) (net.Conn, error), tlsConfig *tls.Config) (*EtcdStream, error) {
-	cli, err := clientv3.New(clientv3.Config{
-		// The dialer goes to the one member it was made for, whatever the address.
-		Endpoints:   []string{net.JoinHostPort(etcdServerName, strconv.Itoa(etcdPort))},
-		TLS:         tlsConfig,
-		DialTimeout: etcdDialTimeout,
-		DialOptions: []grpc.DialOption{grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return dial(ctx) })},
-		Logger:      zap.NewNop(),
-	})
+	cli, err := newEtcdClient(dial, tlsConfig)
 	if err != nil {
-		return nil, fmt.Errorf("reaching etcd: %w", err)
+		return nil, err
 	}
 	// etcd sends no response header with a snapshot, so the revision is read first, from the same
 	// member: the snapshot commits and reads that member's store after it, so it holds at least
@@ -286,6 +279,24 @@ func snapshotThrough(ctx context.Context, dial func(context.Context) (net.Conn, 
 		Version:    resp.Version,
 		Revision:   read.Header.GetRevision(),
 	}, nil
+}
+
+// etcdEndpoint is the one address a client made by newEtcdClient is given, which dial answers.
+var etcdEndpoint = net.JoinHostPort(etcdServerName, strconv.Itoa(etcdPort))
+
+// newEtcdClient opens an etcd client to the one member dial reaches, whatever the address.
+func newEtcdClient(dial func(context.Context) (net.Conn, error), tlsConfig *tls.Config) (*clientv3.Client, error) {
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   []string{etcdEndpoint},
+		TLS:         tlsConfig,
+		DialTimeout: etcdDialTimeout,
+		DialOptions: []grpc.DialOption{grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return dial(ctx) })},
+		Logger:      zap.NewNop(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reaching etcd: %w", err)
+	}
+	return cli, nil
 }
 
 // closing closes something else after its reader.

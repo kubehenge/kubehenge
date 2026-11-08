@@ -31,6 +31,7 @@ func (almaLinux) Releases() []Release {
 		// renovate: datasource=custom.almalinux-cloud-images depName=almalinux-10
 		Build: "10.2-20261012.0",
 		Mode:  ImageMode,
+		FIPS:  true,
 	}}
 }
 
@@ -57,10 +58,10 @@ var almaLinux10EL = &elFamily{
 		}),
 }
 
-func (almaLinux) Keys(_ Release, b Bake) []RepositoryKey {
+func (almaLinux) Keys(_ Release, b *Bake) []RepositoryKey {
 	return keysOf(almaLinux10EL.repositories(b))
 }
 
-func (almaLinux) Recipe(_ Release, b Bake, keys map[string]string) (Recipe, error) {
+func (almaLinux) Recipe(_ Release, b *Bake, keys map[string]string) (Recipe, error) {
 	return almaLinux10EL.recipe(b, keys)
 }

@@ -52,6 +52,8 @@ jobs:
           persist-credentials: false
       - name: Go
         if: github.event_name != 'merge_group' && matrix.language == 'go'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" go
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

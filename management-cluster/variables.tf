@@ -28,7 +28,7 @@ variable "proxmox_insecure" {
 }
 
 variable "proxmox_nodes" {
-  description = "Proxmox VE nodes the management cluster's VMs run on, taken in turn: the first VM on the first node, the second on the second, and so on. Three nodes for three VMs keep the management cluster running when one node fails. Each node needs the bridge, vm_datastore and image_datastore."
+  description = "Proxmox VE nodes the management cluster's VMs run on, taken in turn: the first VM on the first node, the second on the second, and so on. Three nodes for three VMs keep the management cluster running when one node fails. Each node needs the bridge, vm_datastore and image_datastore. Once the VMs exist, a change of the list migrates each VM whose turn falls on another node."
   type        = list(string)
 
   validation {
@@ -64,6 +64,17 @@ variable "vlan_id" {
   description = "VLAN tag for the management cluster's VMs, or null for none."
   type        = number
   default     = null
+}
+
+variable "mtu" {
+  description = "MTU of the management cluster's VMs' network interface, 1280 to 65520, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It cannot exceed the bridge's. Null keeps the bridge's."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.mtu == null ? true : var.mtu >= 1280 && var.mtu <= 65520 && var.mtu == floor(var.mtu)
+    error_message = "mtu is a whole number from 1280 to 65520, or null for the bridge's."
+  }
 }
 
 variable "cluster_name" {
@@ -105,6 +116,20 @@ variable "gateway" {
 variable "dns_servers" {
   description = "DNS servers the nodes use."
   type        = list(string)
+}
+
+variable "search_domains" {
+  description = "Domains the nodes append to a name without dots, as DNS names. Empty derives one from each node's host name, as Talos does."
+  type        = list(string)
+  default     = []
+
+  validation {
+    # glibc's resolver reads six. The pattern is the one of the clusters' network.searchDomains.
+    condition = length(var.search_domains) <= 6 && alltrue([
+      for d in var.search_domains : length(d) <= 253 && can(regex("^([A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9]([-A-Za-z0-9]{0,61}[A-Za-z0-9])?$", d))
+    ])
+    error_message = "search_domains are at most six DNS names, without a trailing dot."
+  }
 }
 
 variable "time_servers" {
@@ -213,6 +238,26 @@ variable "node_disk_gb" {
   description = "System disk size per control-plane node, in GB."
   type        = number
   default     = 32
+}
+
+variable "vm_id_range" {
+  description = "The range the control-plane VMs' IDs are drawn from at random: start is the lowest ID and end is one past the highest, as the provider draws them. Set it inside the datacenter's next-id range (Datacenter, Options) when administrators reserve ID bands. The VMs keep the IDs they have when it changes."
+  type = object({
+    start = number
+    end   = number
+  })
+  default = {
+    start = 10000
+    end   = 99999
+  }
+
+  validation {
+    condition = (
+      floor(var.vm_id_range.start) == var.vm_id_range.start && floor(var.vm_id_range.end) == var.vm_id_range.end &&
+      var.vm_id_range.start >= 100 && var.vm_id_range.start < var.vm_id_range.end && var.vm_id_range.end <= 1000000000
+    )
+    error_message = "vm_id_range must be whole numbers with start below end, start at least 100 and end at most 1000000000, since Proxmox VE's VM IDs run from 100 to 999999999."
+  }
 }
 
 variable "cpu_type" {
@@ -354,7 +399,7 @@ variable "cluster_datastore_allocate" {
 
 variable "template_refresh" {
   description = <<-EOT
-    Build the node OS VM templates again every week, with the updates each node OS published since, and move each cluster's nodes to the new build inside its maintenance window once the build is soak_hours old. The two newest builds of each template stay, and any older one a cluster still clones from. The builds run in the management cluster with an API token of their own, which may create and delete VMs in the template pool, download to import_datastore and write to iso_datastore; it gets full control of those two storages (Proxmox VE deletes a file there only for Datastore.Allocate), so dedicated ones are best. The node defaults to the first of proxmox_nodes, storage to the first of workload_datastores, import_datastore to image_datastore and iso_datastore to bootstrap_datastore. The VM that builds a node image attaches to bridge (default the first of workload_bridges, a VNet written zone/vnet as there) and takes address (with prefix, gateway and dns), or DHCP when address is null. creator_builds lets those who may create clusters have a missing template built, such as for a Kubernetes version no kubeadm template exists for yet.
+    Build the node OS VM templates again every week, with the updates each node OS published since, and move each cluster's nodes to the new build inside its upgrade window once the build is soak_hours old. The two newest builds of each template stay, and any older one a cluster still clones from. The builds run in the management cluster with an API token of their own, which may create and delete VMs in the template pool, download to import_datastore and write to iso_datastore; it gets full control of those two storages (Proxmox VE deletes a file there only for Datastore.Allocate), so dedicated ones are best. The node defaults to the first of proxmox_nodes, storage to the first of workload_datastores, import_datastore to image_datastore and iso_datastore to bootstrap_datastore. The VM that builds a node image attaches to bridge (default the first of workload_bridges, a VNet written zone/vnet as there) and takes address (with prefix, gateway and dns), or DHCP when address is null. creator_builds lets those who may create clusters have a missing template built, such as for a Kubernetes version no kubeadm template exists for yet. kubeadm_patches also builds the kubeadm template of the newest patch release of each Kubernetes minor version a kubeadm cluster runs, and of the next minor version, so that patch releases reach kubeadm clusters; false switches that off.
   EOT
   type = object({
     enabled          = optional(bool, true)
@@ -372,6 +417,7 @@ variable "template_refresh" {
     gateway          = optional(string)
     dns              = optional(list(string), [])
     creator_builds   = optional(bool, false)
+    kubeadm_patches  = optional(bool, true)
   })
   default  = {}
   nullable = false
@@ -471,5 +517,45 @@ variable "controller_image" {
   validation {
     condition     = var.controller_image == null || can(regex("^[^@]+@sha256:[0-9a-f]{64}$", var.controller_image))
     error_message = "controller_image is the image by digest, repository@sha256:<digest>."
+  }
+}
+
+variable "chart_repositories" {
+  description = "Where clusters install their Helm charts from when the charts' own repositories are out of reach. mirrors maps a repository host (ghcr.io, charts.jetstack.io) to a mirror that serves the same charts under the same digests: an oci:// address for a host that serves OCI charts, an http(s):// one for a host that serves a chart repository. ca_bundle (PEM) is the authority of mirrors the usual authorities do not sign."
+  type = object({
+    mirrors   = optional(map(string), {})
+    ca_bundle = optional(string, "")
+  })
+  default  = {}
+  nullable = false
+
+  validation {
+    condition     = alltrue([for host, url in var.chart_repositories.mirrors : can(regex("^[A-Za-z0-9.-]+(:[0-9]+)?$", host)) && can(regex("^(oci|https?)://[^/?#[:space:]]+(/[^?#[:space:]]*)?$", url)) && !endswith(url, "/")])
+    error_message = "chart_repositories.mirrors maps a host name to an oci://, https:// or http:// address with a host, without a trailing slash."
+  }
+  validation {
+    condition     = var.chart_repositories.ca_bundle == "" || length(var.chart_repositories.mirrors) > 0
+    error_message = "chart_repositories.ca_bundle needs mirrors."
+  }
+}
+
+variable "proxy" {
+  description = "The HTTP(S) proxy every download from the management side goes through: url (with credentials if it needs them), no_proxy (comma-separated hosts, domains and networks that bypass it, which has to name the Proxmox VE API host, the nodes' networks and the pod and service ranges) and ca_bundle (PEM, for a proxy that re-signs TLS). Empty strings go direct."
+  type = object({
+    url       = optional(string, "")
+    no_proxy  = optional(string, "")
+    ca_bundle = optional(string, "")
+  })
+  default   = {}
+  nullable  = false
+  sensitive = true
+
+  validation {
+    condition     = nonsensitive(var.proxy.url == "" || can(regex("^https?://[^/?#]+/?$", var.proxy.url)))
+    error_message = "proxy.url is an http:// or https:// address with a host and no path."
+  }
+  validation {
+    condition     = nonsensitive(var.proxy.url != "" || (var.proxy.no_proxy == "" && var.proxy.ca_bundle == ""))
+    error_message = "proxy.no_proxy and proxy.ca_bundle need proxy.url."
   }
 }

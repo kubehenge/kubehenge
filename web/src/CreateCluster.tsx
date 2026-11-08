@@ -4,6 +4,8 @@ import { AddOnsStep } from "./AddOnsStep";
 import { api, bridgesOf, dnsOf } from "./api";
 import { clusterPath } from "./cluster-paths";
 import {
+  bridgeMtuProblems,
+  bridgeNodeProblems,
   classBridges,
   classStorages,
   createRoom,
@@ -45,8 +47,21 @@ import { networkOf } from "./network";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import { clusterKey, fromCluster, startable, startDefault, startKeys } from "./start-from";
-import type { Bridge, Cluster, ClusterClass, PveNode, Storage, Versions } from "./types";
+import type { Bridge, Cluster, ClusterClass, NodeDNS, PveNode, Storage, Versions } from "./types";
 import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
+
+// customisationRefusal is the server's error where it names the node customisation, which then shows with it.
+const customisationRefusal = (error: string | undefined): string | undefined =>
+  error !== undefined && /node customisation|nodeCustomisation/iu.test(error) ? error : undefined;
+
+// checkRefusal is the node customisation's refusal, from a create that failed or from the last check
+// of the form as it stands now.
+const checkRefusal = (
+  error: string | undefined,
+  checked: ReturnType<typeof useCreateCheck>,
+  of: { form: Parameters<typeof request>[0]; cls: Parameters<typeof request>[1] | undefined },
+): string | undefined =>
+  customisationRefusal(error ?? (of.cls ? checked.refusalOf(request(of.form, of.cls)) : undefined));
 
 // versionsKey is where the versions offered are kept: a distribution's, kubeadm's per node OS.
 const versionsKey = (distribution: string, nodeOS: string | undefined): string =>
@@ -71,6 +86,7 @@ const raising = new Set<keyof Form>([
   "rancherRegister",
   "backups",
   "certificates",
+  "existingCertManager",
 ]);
 
 export function CreateCluster({
@@ -84,7 +100,7 @@ export function CreateCluster({
   const [classes, setClasses] = useState<ClusterClass[]>([]);
   const [discarding, setDiscarding] = useState(false);
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
-  const [dnsByNode, setDNSByNode] = useState<Record<string, string[]>>({});
+  const [dnsByNode, setDNSByNode] = useState<Record<string, NodeDNS>>({});
   const [storages, setStorages] = useState<Storage[]>([]);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
@@ -241,6 +257,11 @@ export function CreateCluster({
   const following = steps[index + 1];
   const byField = {
     ...fieldProblems(step, form, cls),
+    ...bridgeMtuProblems(step, form, bridgeOptions),
+    ...bridgeNodeProblems(step, form, {
+      bridgesByNode,
+      online: nodes.filter((x) => x.online).map((x) => x.node),
+    }),
     ...csiProblems(step, form, csi),
     ...snapshotsProblems(step, form, snapshots),
   };
@@ -382,6 +403,8 @@ export function CreateCluster({
               haGroups={haGroups}
               nodes={nodes}
               rules={rules}
+              attempted={attempted.has(step)}
+              refusal={checkRefusal(error, checked, { form, cls })}
             />
           )}
           {step === "Add-ons" && (

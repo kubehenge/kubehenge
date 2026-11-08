@@ -34,6 +34,10 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionClusterAPI, what, cond.Message, cond.LastTransitionTime.Time)
 	}
+	templateAttention(c, a)
+	if cond := trueCondition(c, provisioner.NodeCustomisationCondition); cond != nil {
+		a.add(severityWarning, sectionClusterAPI, "Node customisation misses a reference", cond.Message, cond.LastTransitionTime.Time)
+	}
 	versionAttention(c, a)
 	if cond := trueCondition(c, provisioner.CertificatesCondition); cond != nil {
 		if cond.Reason == provisioner.CertificatesRenewing {
@@ -49,12 +53,34 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionNodes, vmTitles[cond.Reason], cond.Message, cond.LastTransitionTime.Time)
 	}
+	hostAttention(c, a)
 	if cond := trueCondition(c, provisioner.StorageCondition); cond != nil {
 		severity, what := severityWarning, "Storage nearly full"
 		if cond.Reason == provisioner.StorageFull {
 			severity, what = severityError, "Storage full"
 		}
 		a.add(severity, sectionVolumes, what, provisioner.StorageSummary(cond.Message), cond.LastTransitionTime.Time)
+	}
+}
+
+// templateAttention adds what a template on a down node means for the cluster.
+func templateAttention(c *clusterv1.Cluster, a *attention) {
+	if cond := trueCondition(c, provisioner.TemplateNodeDownCondition); cond != nil {
+		a.add(severityWarning, sectionNodes, "Template node down", cond.Message, cond.LastTransitionTime.Time)
+	}
+	if cond := trueCondition(c, provisioner.NodeImageHeldCondition); cond != nil {
+		a.add(severityWarning, sectionNodes, "Node image refresh held", cond.Message, cond.LastTransitionTime.Time)
+	}
+}
+
+// hostAttention adds what the Proxmox VE hosts and storage under the cluster do to it: machines
+// whose replacement waits for a host, and storage that is gone.
+func hostAttention(c *clusterv1.Cluster, a *attention) {
+	if cond := trueCondition(c, provisioner.RemediationHeldCondition); cond != nil {
+		a.add(severityWarning, sectionNodes, "Replacement waits", cond.Message, cond.LastTransitionTime.Time)
+	}
+	if cond := trueCondition(c, provisioner.StorageUnavailableCondition); cond != nil {
+		a.add(severityError, sectionVolumes, "Storage unavailable", provisioner.MessageHead(cond.Message), cond.LastTransitionTime.Time)
 	}
 }
 

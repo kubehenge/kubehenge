@@ -3,16 +3,20 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,6 +45,10 @@ const (
 	interfaceRequestTimeout = 5 * time.Minute
 	// shutdownTimeout is how long requests under way may take to finish on shutdown.
 	shutdownTimeout = 10 * time.Second
+	// jobStopTimeout is how long an interrupted run has to write its state on shutdown. It stays
+	// under kubehenge.service's TimeoutStopSec, which stays under the 180 seconds Proxmox VE gives
+	// a container to shut down for a migration.
+	jobStopTimeout = 150 * time.Second
 
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 2 * time.Minute
@@ -62,6 +70,8 @@ type serveOptions struct {
 	demoTime     string
 	// listenChanged tells whether --listen was given, which the demo's own default yields to.
 	listenChanged bool
+
+	trustedProxies []string
 
 	headlampListen     string
 	headlampUpstream   string
@@ -98,6 +108,9 @@ The interface acts in the management cluster with its own kubeconfig.`,
 	f.DurationVar(&s.SessionMaxAge, "session-max-age", defaultSessionMaxAge, "how long a sign-in lasts, however active the user")
 	f.StringVar(&s.PublicURL, "public-url", os.Getenv("KUBEHENGE_PUBLIC_URL"),
 		"address users reach the interface at, such as https://kubehenge.example. OpenID sign-in needs it, for identity providers to send users back (env KUBEHENGE_PUBLIC_URL)")
+	f.StringSliceVar(&o.trustedProxies, "trusted-proxy", trustedProxiesDefault(),
+		"address or CIDR range of a reverse proxy in front of the interface, repeatable. From one, the sign-in limits count the client in X-Forwarded-For, "+
+			"so one person's failures no longer lock out everyone behind the proxy. Without it forwarding headers are ignored (env KUBEHENGE_TRUSTED_PROXIES, comma-separated)")
 	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state in this directory and setting it up from the interface. "+
 		"Without it, the management cluster is the one in KUBECONFIG")
 	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume the appliance's backups leave out. It holds the key that seals what automatic upgrades of the management cluster keep. Empty, those upgrades cannot be switched on")
@@ -120,8 +133,25 @@ The interface acts in the management cluster with its own kubeconfig.`,
 // machine it runs on.
 const demoListen = "127.0.0.1:8443"
 
+// trustedProxiesDefault is the list KUBEHENGE_TRUSTED_PROXIES holds, split at commas and spaces.
+func trustedProxiesDefault() []string {
+	return strings.FieldsFunc(os.Getenv("KUBEHENGE_TRUSTED_PROXIES"), func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+}
+
+func (o *serveOptions) parseTrustedProxies() error {
+	proxies, err := ui.ParseTrustedProxies(o.trustedProxies)
+	if err != nil {
+		return fmt.Errorf("--trusted-proxy: %w", err)
+	}
+	o.s.TrustedProxies = proxies
+	return nil
+}
+
 func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	s := &o.s
+	if err := o.parseTrustedProxies(); err != nil {
+		return err
+	}
 	if o.demo {
 		return o.runDemo(ctx)
 	}
@@ -136,6 +166,9 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 		return fmt.Errorf("--tls-cert and --tls-key: %w", err)
 	}
 	s.CertificateExpires = pair.Leaf.NotAfter
+	if o.a.Dir != "" {
+		knowTheAppliance(s, pair.Leaf, o.a.Dir)
+	}
 	accounts, err := pve.NewAccounts(*conn)
 	if err != nil {
 		return fmt.Errorf("the Proxmox VE API: %w", err)
@@ -153,9 +186,15 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	s.Accounts, s.Assets, s.ProxmoxURL = accounts, ui.Frontend(), conn.URL
 	s.Releases = &provisioner.ChannelServer{
-		HTTP: &http.Client{Timeout: releaseChannelTimeout}, URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
+		HTTP: savedProxyClient(o.a.Dir, conn.URL, releaseChannelTimeout), URLs: provisioner.DefaultChannelURLs, Pins: provisioner.DefaultReleasePins(),
+		Store: &provisioner.PinStore{Reader: s.ManagementReader(), Namespace: s.ClassNamespace},
 	}
-	s.TalosReleases = templates.DefaultSources().TalosReleases
+	s.PinChecks = &provisioner.ReleaseChecksums{
+		HTTP: savedProxyClient(o.a.Dir, conn.URL, pinFetchTimeout), GitHub: pinsSources.github, Raw: pinsSources.raw,
+	}
+	sources := templates.DefaultSources()
+	sources.HTTP = savedProxyClient(o.a.Dir, conn.URL, sources.HTTP.Timeout)
+	s.TalosReleases = sources.TalosReleases
 	if s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
 		return err
 	}
@@ -214,9 +253,11 @@ func (o *serveOptions) runDemo(ctx context.Context) error {
 		clock = func() time.Time { return at }
 	}
 	o.s.Assets = ui.Frontend()
-	if err = ui.SetUpDemo(&o.s, clock); err != nil {
+	cleanup, err := ui.SetUpDemo(&o.s, clock)
+	if err != nil {
 		return fmt.Errorf("--demo: %w", err)
 	}
+	defer cleanup()
 	return o.serve(ctx)
 }
 
@@ -265,6 +306,9 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxInsecure, a.Log, a.Release = conn.URL, string(ca), conn.Insecure, s.Log, release.Version
 	s.ProxmoxInsecure = conn.Insecure
 	a.InterfaceKubeconfig = appliance.InterfaceKubeconfig
+	if s.Accounts != nil {
+		a.NextID = s.Accounts.NextID
+	}
 	a.Talos = &provisioner.ManagementTalos{}
 	a.LoadLast()
 	if a.Ready() {
@@ -295,13 +339,14 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		if connErr != nil {
 			return 0, fmt.Errorf("connecting to Proxmox VE as %s: %w", t.Username, connErr)
 		}
-		b.Client, b.Sources = session, templates.DefaultSources()
+		b.Client, b.Sources, b.Proxy = session, templates.DefaultSources(), savedGuestProxy(a)
+		b.Sources.HTTP = savedProxyClient(a.Dir, pveConfig.URL, b.Sources.HTTP.Timeout)
 		return b.Create(ctx, tpl)
 	}
 	s.Upgrades = &ui.Upgrades{
 		Spool:        appliance.Spool(o.updateSpool),
 		Index:        o.releaseIndex,
-		HTTP:         &http.Client{Timeout: time.Minute},
+		HTTP:         savedProxyClient(a.Dir, pveConfig.URL, time.Minute),
 		SettingsPath: filepath.Join(a.Dir, "upgrades.json"),
 		Now:          time.Now,
 		Current:      release.Version,
@@ -343,6 +388,14 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	wg.Go(func() { s.Run(ctx) })
 	if o.a.Dir != "" {
 		wg.Go(func() { o.a.RenewInterfaceToken(ctx) })
+		wg.Go(func() {
+			<-ctx.Done()
+			stopping, done := context.WithTimeout(context.WithoutCancel(ctx), jobStopTimeout)
+			defer done()
+			if err := o.a.Stop(stopping); err != nil {
+				s.Log.Error("stopping with a run under way", "error", err)
+			}
+		})
 	}
 	servers := []*http.Server{newServer(o.listen, s.Handler(), interfaceRequestTimeout)}
 	if s.Headlamp != nil {
@@ -415,4 +468,50 @@ func listenPort(addr string) (int, error) {
 func applianceVMIDDefault() int {
 	id, _ := strconv.Atoi(os.Getenv("KUBEHENGE_APPLIANCE_VMID"))
 	return id
+}
+
+// knowTheAppliance tells the interface the appliance's MAC and IP addresses and those its
+// certificate is for, by which it finds its guest in Proxmox VE and notices an address it lost. It
+// also reads the use of the disk holding the appliance's state in dir.
+func knowTheAppliance(s *ui.Server, cert *x509.Certificate, dir string) {
+	s.DiskUse = func() (uint64, uint64, error) { return appliance.DiskUse(dir) }
+	s.ApplianceMACs, s.OwnAddresses = ownMACs(), ownAddresses
+	s.CertificateNames = cert.DNSNames
+	for _, ip := range cert.IPAddresses {
+		if addr, ok := netip.AddrFromSlice(ip); ok {
+			s.CertificateIPs = append(s.CertificateIPs, addr.Unmap())
+		}
+	}
+}
+
+// ownAddresses are the addresses of this machine others may reach it at: neither loopback nor
+// link-local.
+func ownAddresses() []netip.Addr {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var own []netip.Addr
+	for _, a := range addrs {
+		if p, err := netip.ParsePrefix(a.String()); err == nil && p.Addr().IsGlobalUnicast() {
+			own = append(own, p.Addr().Unmap())
+		}
+	}
+	return own
+}
+
+// ownMACs are the MAC addresses of this machine's network interfaces, by which the appliance finds
+// its own guest in Proxmox VE.
+func ownMACs() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var macs []string
+	for _, i := range ifaces {
+		if i.Flags&net.FlagLoopback == 0 && len(i.HardwareAddr) > 0 {
+			macs = append(macs, i.HardwareAddr.String())
+		}
+	}
+	return macs
 }

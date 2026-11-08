@@ -77,10 +77,14 @@ func TestIstioInstallsInAmbientMode(t *testing.T) {
 			t.Errorf("%v short of Pod Security's restricted level: %v", path, istiod)
 		}
 	}
-	// The addon-memory figure for Istio counts on what these two ask for.
+	// Istio's memory figures count on what these two ask for, and on the CNI agent's chart default
+	// of 100 MiB, which no value here overrides.
 	if lookup[string](t, istiod, "pilot", "resources", "requests", "memory") != "256Mi" ||
 		lookup[string](t, values["web-ztunnel"], "resources", "requests", "memory") != "128Mi" {
 		t.Errorf("istiod or ztunnel asks for other than the figure counts: %v %v", istiod, values["web-ztunnel"])
+	}
+	if _, ok := values["web-istio-cni"]["resources"]; ok {
+		t.Errorf("istio-cni asks for other than its chart's default, which the figures count: %v", values["web-istio-cni"])
 	}
 	if _, ok := values["web-istio-cni"]["global"]; ok {
 		t.Errorf("istio-cni looks for RKE2's CNI configuration where k3s keeps its own: %v", values["web-istio-cni"])

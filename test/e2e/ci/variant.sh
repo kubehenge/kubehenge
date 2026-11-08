@@ -43,8 +43,8 @@ variant() {
                         ;;
                     *) ;;
                 esac
-                if [ "${variant_test}" = appliance ]; then
-                    echo "the appliance sets its management node up itself, so it takes no ${variant_option}" >&2
+                if [ "${variant_test}" = appliance ] || [ "${variant_test}" = appliance-upgrade ]; then
+                    echo "the appliance sets its management node up itself, so ${variant_test} takes no ${variant_option}" >&2
                     return 2
                 fi
                 printf 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=%s\n' "${variant_option#management-}"

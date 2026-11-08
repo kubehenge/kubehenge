@@ -24,6 +24,8 @@ type Logs struct {
 	Collector     string `json:"collector,omitempty"`
 	RetentionDays int    `json:"retentionDays,omitempty"`
 	SizeGiB       int    `json:"sizeGiB,omitempty"`
+	// Outputs are destinations every log also goes to, beside Loki, which stays on with logs.
+	Outputs []LogOutput `json:"outputs,omitempty"`
 }
 
 const (
@@ -63,6 +65,9 @@ const (
 	lokiReadRole = "kubehenge-loki-read"
 	alloyRole    = "kubehenge-alloy"
 
+	// Alloy's stability levels, by the flag that admits components of that level and above.
+	stabilityPublicPreview = "public-preview"
+
 	// The Alloy image's own unprivileged user, for the Alloy that needs nothing of the host.
 	alloyImageUser = 473
 	// alloyNodeStorage keeps how far each node's Alloy has read, so that a restart sends nothing twice.
@@ -100,8 +105,14 @@ func (a *Addons) logsOn() bool {
 // Loki and its clients take their certificates from.
 func checkLogs(cluster *clusterv1.Cluster) error {
 	a, err := addonsOf(cluster)
-	if err != nil || !a.Logs.Enabled || a.Monitoring.Enabled {
+	if err != nil || !a.Logs.Enabled {
 		return err
+	}
+	if err = validateLogOutputs(a.Logs.Outputs); err != nil {
+		return err
+	}
+	if a.Monitoring.Enabled {
+		return nil
 	}
 	return errors.New("logs need monitoring. Switch monitoring on, or logs off")
 }
@@ -129,10 +140,10 @@ func logsOff(cluster *clusterv1.Cluster, addons *Addons) []string {
 func logsCharts(charts *Charts, distribution templates.Distribution, logs Logs) []chartProxy {
 	out := []chartProxy{
 		{lokiRelease, lokiRelease, logsNamespace, charts.Loki, lokiValues(charts.KubeRBACProxy, logs)},
-		{alloyRelease, alloyRelease, logsNamespace, charts.Alloy, alloyValues(charts.AlloyImage, logs.collector())},
+		{alloyRelease, alloyRelease, logsNamespace, charts.Alloy, alloyValues(charts.AlloyImage, logs.collector(), logs.Outputs)},
 	}
 	if logs.collector() == collectorNode {
-		out = append(out, chartProxy{alloyNodeRelease, alloyNodeRelease, logsNodeNamespace, charts.Alloy, alloyNodeValues(charts.AlloyImage, distribution)})
+		out = append(out, chartProxy{alloyNodeRelease, alloyNodeRelease, logsNodeNamespace, charts.Alloy, alloyNodeValues(charts.AlloyImage, distribution, logs.Outputs)})
 	}
 	return out
 }
@@ -146,7 +157,6 @@ func logsCharts(charts *Charts, distribution templates.Distribution, logs Logs) 
 // paths by unauthenticated.
 func lokiValues(proxy Image, logs Logs) map[string]any {
 	const (
-		loopback = "127.0.0.1"
 		grpcPort = "9095"
 	)
 	off := map[string]any{"enabled": false}
@@ -293,7 +303,7 @@ func lokiManifests(logs Logs) []any {
 		&networkingv1.NetworkPolicy{
 			APIVersion: networkingv1.SchemeGroupVersion.String(), Kind: "NetworkPolicy", Name: lokiRelease, Namespace: logsNamespace,
 			Spec: networkingv1.NetworkPolicySpec{
-				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{appName: lokiRelease, "app.kubernetes.io/component": "single-binary"}},
+				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{appName: lokiRelease, appComponent: "single-binary"}},
 				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 				Ingress: []networkingv1.NetworkPolicyIngressRule{{
 					From: []networkingv1.NetworkPolicyPeer{
@@ -343,7 +353,7 @@ const alloyWrite = `loki.write "loki" {
 // alloyEvents reads the cluster's events, which outlive no hour in the API.
 const alloyEvents = `loki.source.kubernetes_events "events" {
   job_name   = "events"
-  forward_to = [loki.write.loki.receiver]
+  forward_to = [@events]
 }
 `
 
@@ -379,7 +389,7 @@ discovery.relabel "pods" {
 
 loki.source.kubernetes "pods" {
   targets    = discovery.relabel.pods.output
-  forward_to = [loki.write.loki.receiver]
+  forward_to = [@containers]
 }
 `
 
@@ -422,7 +432,7 @@ loki.process "pods" {
   stage.label_drop {
     values = ["filename"]
   }
-  forward_to = [loki.write.loki.receiver]
+  forward_to = [@containers]
 }
 
 local.file_match "audit" {
@@ -447,7 +457,7 @@ loki.process "audit" {
   stage.label_drop {
     values = ["filename"]
   }
-  forward_to = [loki.write.loki.receiver]
+  forward_to = [@audit]
 }
 `
 
@@ -505,7 +515,7 @@ loki.process "talos" {
   stage.output {
     source = "msg"
   }
-  forward_to = [loki.write.loki.receiver]
+  forward_to = [@nodes]
 }
 `
 
@@ -522,7 +532,7 @@ loki.source.journal "journal" {
   path          = "/var/log/journal"
   labels        = {"job" = "journal", "node" = sys.env("K8S_NODE_NAME")}
   relabel_rules = loki.relabel.journal.rules
-  forward_to    = [loki.write.loki.receiver]
+  forward_to    = [@nodes]
 }
 `
 
@@ -552,7 +562,7 @@ func alloyCommon(image Image, config, namespace string, objects ...any) (map[str
 	alloy := map[string]any{
 		// The chart renders the content as a Helm template, which would empty Alloy's own templates.
 		"configMap":            map[string]any{"content": strings.ReplaceAll(config, "{{", `{{"{{"}}`)},
-		"listenAddr":           "127.0.0.1",
+		"listenAddr":           loopback,
 		"enableHttpServerPort": false,
 		"enableReporting":      false,
 	}
@@ -590,7 +600,7 @@ func clientVolume() (corev1.Volume, corev1.VolumeMount) {
 // alloyValues run the Alloy in Loki's namespace, unprivileged and without anything of the host:
 // one replica that reads the cluster's events, and with the api collector every pod's log too,
 // with only the rights to read those.
-func alloyValues(image Image, collector string) map[string]any {
+func alloyValues(image Image, collector string, outputs []LogOutput) map[string]any {
 	config := alloyEvents + "\n" + alloyWrite
 	rules := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"events"}, Verbs: []string{"get", "list", "watch"}}}
 	if collector == collectorAPI {
@@ -600,7 +610,7 @@ func alloyValues(image Image, collector string) map[string]any {
 			rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get"}},
 		)
 	}
-	values, alloy := alloyCommon(image, config, logsNamespace,
+	values, alloy := alloyCommon(image, routed(config, outputs), logsNamespace,
 		&rbacv1.ClusterRole{APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: "ClusterRole", Name: alloyRole, Rules: rules},
 		&rbacv1.ClusterRoleBinding{
 			APIVersion: rbacv1.SchemeGroupVersion.String(), Kind: "ClusterRoleBinding", Name: alloyRole,
@@ -621,12 +631,16 @@ func alloyValues(image Image, collector string) map[string]any {
 		requestsKey: map[string]any{cpuKey: "10m", memoryKey: "64Mi"},
 		"limits":    map[string]any{memoryKey: "256Mi"},
 	}
-	alloy["mounts"] = map[string]any{"extra": []any{corev1.VolumeMount{Name: "storage", MountPath: "/tmp/alloy"}, clientMount}}
+	outputVolumes, outputMounts := outputVolume(outputs)
+	alloy["mounts"] = map[string]any{"extra": append([]any{corev1.VolumeMount{Name: "storage", MountPath: "/tmp/alloy"}, clientMount}, outputMounts...)}
 	values[controllerKey] = map[string]any{
 		"type": "deployment", "replicas": 1,
-		"volumes": map[string]any{"extra": []any{
+		"volumes": map[string]any{"extra": append([]any{
 			corev1.Volume{Name: "storage", EmptyDir: &corev1.EmptyDirVolumeSource{}}, client,
-		}},
+		}, outputVolumes...)},
+	}
+	if usesSyslog(outputs) {
+		alloy["stabilityLevel"] = stabilityPublicPreview
 	}
 	return values
 }
@@ -636,7 +650,7 @@ func alloyValues(image Image, collector string) map[string]any {
 // those, which root owns, but with no capability but Talos's one, so it reads nothing else root's
 // alone, and mounts each read-only. It writes only where it keeps how far it has read. It needs nothing of the
 // API, so it gets no token. On workers, which have no audit log, its directory is an empty one.
-func alloyNodeValues(image Image, distribution templates.Distribution) map[string]any {
+func alloyNodeValues(image Image, distribution templates.Distribution, outputs []LogOutput) map[string]any {
 	audit, auditFile := auditLog(distribution)
 	config := strings.Replace(alloyNodePods, "AUDIT_LOG", audit+"/"+auditFile, 1)
 	journal := distribution != templates.Talos
@@ -647,7 +661,10 @@ func alloyNodeValues(image Image, distribution templates.Distribution) map[strin
 		config += "\n" + strings.Replace(alloyTalos, "TALOS_LOGS_PORT", strconv.Itoa(talosLogsPort), 1)
 		objects = append(objects, talosLogsPolicy())
 	}
-	values, alloy := alloyCommon(image, config+"\n"+alloyWrite, logsNodeNamespace, objects...)
+	values, alloy := alloyCommon(image, routed(config+"\n"+alloyWrite, outputs), logsNodeNamespace, objects...)
+	if usesSyslog(outputs) {
+		alloy["stabilityLevel"] = stabilityPublicPreview
+	}
 	if !journal {
 		// Talos dials the port on an address of its node's own, which the CNI's portmap plugin
 		// carries to the pod on that node. otelcol.receiver.tcplog is still experimental in Alloy.
@@ -696,6 +713,9 @@ func alloyNodeValues(image Image, distribution templates.Distribution) map[strin
 		mounts = append(mounts, corev1.VolumeMount{Name: "journal", MountPath: "/var/log/journal", ReadOnly: true})
 		volumes = append(volumes, host("journal", "/var/log/journal", corev1.HostPathDirectory))
 	}
+	outputVolumes, outputMounts := outputVolume(outputs)
+	mounts = append(mounts, outputMounts...)
+	volumes = append(volumes, outputVolumes...)
 	alloy["mounts"] = map[string]any{"extra": mounts}
 	values[controllerKey] = map[string]any{
 		"type":         "daemonset",

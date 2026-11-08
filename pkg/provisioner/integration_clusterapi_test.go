@@ -121,20 +121,7 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 		integration.WaitReconciled(t, c, classNamespace, class)
 	}
 
-	// The CNI and CIS hardening it runs are the defaults it was made with, which stay.
-	for name, value := range map[string]string{"cni": `"cilium"`, "cis": `true`} {
-		got := &clusterv1.Cluster{}
-		if err := c.Get(ctx, client.ObjectKeyFromObject(early), got); err != nil {
-			t.Fatal(err)
-		}
-		if storedVariable(got, name) != "" {
-			t.Fatalf("%s was stored before Cluster API passed the class", name)
-		}
-		withAddons(got, map[string]string{name: value})
-		if err := c.Update(ctx, got); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "cannot be changed") {
-			t.Errorf("%s set to %s on a cluster made with its default: %v", name, value, err)
-		}
-	}
+	checkUnstoredDefaults(ctx, t, c, early)
 
 	net := 10
 	for class := range classVersions {
@@ -190,6 +177,50 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 	}
 
 	checkRulesOnChanges(ctx, t, c)
+	checkFIPSRules(ctx, t, c)
+}
+
+// checkFIPSRules has the API server take FIPS mode on RKE2 alone, as pkg/templates.FIPSDistribution
+// does, and on the releases built in it.
+func checkFIPSRules(ctx context.Context, t *testing.T, c client.Client) {
+	t.Helper()
+	fips := map[string]string{NodeOSVariable: `{"family":"rocky","release":"10","fips":true}`}
+	for class, refused := range map[string]string{
+		"kubehenge-rke2":    "",
+		"kubehenge-k3s":     "k3s has no FIPS mode. Choose RKE2 for FIPS mode",
+		"kubehenge-kubeadm": "kubeadm has no FIPS mode. Choose RKE2 for FIPS mode",
+	} {
+		cluster := clusterOf(class, "fips", 2, roomy)
+		withAddons(cluster, fips)
+		err := c.Create(ctx, cluster, client.DryRunAll)
+		if refused == "" && err != nil || refused != "" && (!apierrors.IsInvalid(err) || !strings.Contains(err.Error(), refused)) {
+			t.Errorf("%s in FIPS mode: %v, want refused %q", class, err, refused)
+		}
+	}
+}
+
+// checkUnstoredDefaults holds the rules on a cluster made before Cluster API passed its class, whose
+// defaults were never stored. The CNI it runs stays. CIS hardening, off by default, may still be
+// switched on. That change goes last, as Cluster API then stores every default.
+func checkUnstoredDefaults(ctx context.Context, t *testing.T, c client.Client, early *clusterv1.Cluster) {
+	t.Helper()
+	for _, v := range []struct{ name, value string }{{"cni", `"cilium"`}, {"cis", `true`}} {
+		got := &clusterv1.Cluster{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(early), got); err != nil {
+			t.Fatal(err)
+		}
+		if storedVariable(got, v.name) != "" {
+			t.Fatalf("%s was stored before Cluster API passed the class", v.name)
+		}
+		withAddons(got, map[string]string{v.name: v.value})
+		err := c.Update(ctx, got)
+		switch {
+		case v.name == "cis" && err != nil:
+			t.Errorf("CIS hardening switched on, on a cluster made with its default: %v", err)
+		case v.name != "cis" && (!apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "cannot be changed")):
+			t.Errorf("%s set to %s on a cluster made with its default: %v", v.name, v.value, err)
+		}
+	}
 }
 
 // checkDefaultsWithEachCNI has the API server admit a cluster of the class's defaults with each CNI
@@ -460,8 +491,9 @@ var celRules = []celRule{
 	},
 }
 
-// checkRulesOnChanges holds the rules on changes to a cluster: the CNI and CIS hardening stay as
-// created, also where Cluster API filled them in from their defaults, and Loki's volume only grows.
+// checkRulesOnChanges holds the rules on changes to a cluster: the CNI stays as created, also where
+// Cluster API filled it in from its default, CIS hardening once on stays on, and Loki's volume only
+// grows.
 func checkRulesOnChanges(ctx context.Context, t *testing.T, c client.Client) {
 	t.Helper()
 	cluster := clusterOf("kubehenge-k3s", "changes", 3, roomy)
@@ -484,9 +516,12 @@ func checkRulesOnChanges(ctx context.Context, t *testing.T, c client.Client) {
 		t.Fatalf("the cluster has no %s", name)
 		return nil
 	}
+	if err := change("cis", `true`); err != nil {
+		t.Errorf("CIS hardening switched on: %v", err)
+	}
 	for _, tc := range []struct{ name, value, message string }{
 		{"cni", `"cilium"`, "the CNI is chosen when the cluster is created and cannot be changed"},
-		{"cis", `true`, "CIS hardening is chosen when the cluster is created and cannot be changed"},
+		{"cis", `false`, "CIS hardening cannot be switched off once it is on"},
 		{logsAddon, `{"enabled":true,"sizeGiB":10}`, "Loki's volume only grows."},
 	} {
 		if err := change(tc.name, tc.value); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), tc.message) {

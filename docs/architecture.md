@@ -153,7 +153,16 @@ Cluster API sees a node's VM only through the node. A VM paused by hand, or by Q
 
 Kubehenge's controller therefore reads Proxmox VE's resource list every 15 seconds. Its token holds `VM.Audit` on the workload pool and `Datastore.Audit` on the clusters' storages. For a started VM, that list gives the state QEMU reports, such as paused or a disk error.
 
-The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). It changes nothing. Resuming, starting or replacing a VM is the administrator's call.
+The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
+
+For the VMs in a cluster's own pool, the same look sets back two things the cloud controller manager and the CSI plugin go by:
+
+- **The VM's name.** The controller renames it back to its machine's, with `VM.Config.Options`. A VM whose name does not start with its node's name makes the cloud controller manager report the instance gone, and Kubernetes deletes the Node once it is not ready.
+- **The node's zone label.** `topology.kubernetes.io/zone` follows the Proxmox VE node a moved VM runs on. The controller sets it through the cluster's kubeconfig and restarts the CSI plugin's node pod on that node ([clusters.md](clusters.md#a-worker-moved-to-another-proxmox-ve-node)).
+
+The same look reads the nodes and the HA manager's status (`/cluster/ha/status/manager_status`). A machine whose VM sits on a node that is offline or in maintenance gets Cluster API's `cluster.x-k8s.io/skip-remediation` annotation. So does one on a node where the cluster's storage is unavailable. The Cluster gets `RemediationHeld` ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)).
+
+The hold ends when the node is back and the machine's node is Ready, or after the cluster's `hostOutageGraceMinutes` (30 by default, 0 for no ceiling), which each machine's `remediation-hold-until` records. The placer leaves such nodes out of `kubehenge.dev/online-nodes`. Cluster API's patch of the cluster is refused while no node is left.
 
 ## Each cluster's own corner of Proxmox VE
 
@@ -288,7 +297,11 @@ The controller writes the rules with a token of its own, since only `Sys.Console
 
 The HA token amounts to a root shell on every Proxmox VE node, the restore token to one in every cluster's VMs. The controller holds neither.
 
-Each is in a Secret of its own beside the controller (`kubehenge-proxmox-ha`, `kubehenge-proxmox-restore`). Only a Job made from the chart's PodTemplate (`kubehenge-proxmox-ha`, `kubehenge-guest-agent`) mounts it. For each HA write or restore step, the controller leaves the request in the Secret `<template>-input`. It then starts a Job from the template. It reads the result from its pod's termination message and deletes both.
+Each is in a Secret of its own beside the controller (`kubehenge-proxmox-ha`, `kubehenge-proxmox-restore`). Only a Job made from the chart's PodTemplate (`kubehenge-proxmox-ha`, `kubehenge-guest-agent`) mounts it. For each HA write, restore step or token test, the controller leaves the request in the Secret `<template>-input`. It then starts a Job from the template. It reads the result from its pod's termination message and deletes both.
+
+Every Job of a template reads that one Secret. The controller therefore runs a template's requests one at a time.
+
+### What a token Job may do
 
 The Job runs once, for at most its step's time, under a service account without API access. The ValidatingAdmissionPolicy `kubehenge-token-jobs` refuses a Job in the namespace that reaches either Secret by a volume or the environment, unless its pod is exactly its template's.
 
@@ -333,7 +346,8 @@ A node OS template is a line of builds, each tagged with when it was made. Every
   - `GeneratePatches` selects the newest build of each line made by then that is past the soak time (24 hours by default, `--node-image-soak`).
   - The same cluster therefore gets the same build on every reconcile, scale-up and repair until the time moves.
 - **The time moves** in two places.
-  - Every five minutes the upgrader sets it to now for each cluster settled inside its maintenance window with a newer build soaked. It skips a cluster whose `upgrades.nodeImages` is false.
+  - The upgrader sets it to now for each cluster settled inside its upgrade window with a newer build soaked. It skips a cluster whose `upgrades.nodeImages` is false.
+  - It looks every five minutes, and at once when a cluster's `upgrades` change, a cluster settles or a ClusterClass is offered new builds.
   - The `BeforeClusterUpgrade` hook sets it too, so that any Kubernetes upgrade takes the newest builds with it.
   - Outside the window, the upgrader records the hold, the build that waits and when the window opens in the annotation `kubehenge.dev/node-image-held`. The interface shows it.
 - **The refresh** holds a Lease so that one run builds at a time. It builds each line, then deletes all but its two newest builds.
@@ -358,7 +372,10 @@ It deletes the rest.
   - A new machine boots that release and is then upgraded like the others. Changing `talosVersion` therefore never rolls the cluster.
 - **The in-place upgrade.** The controller upgrades a node that runs another release than `talosVersion` through the Talos API with the cluster's talosconfig. It goes one node at a time, control planes first.
   - It has Talos install the release's installer to the inactive partition.
-  - It drains the node for five minutes at most, then reboots it, with a warning event when pods did not all leave. It uncordons the node once it is Ready on the new release.
+  - It waits while a StatefulSet with a ready pod on the node is short of replicas, then drains the node and reboots it.
+  - Each wait is bounded by the node's `nodeDrainTimeoutSeconds`: the control plane's or the pool's, else the class's, else 60 minutes.
+  - At the timeout it reboots the node with a `TalosDrain` warning event, as Cluster API deletes a Machine whose drain timeout ran out. What holds the node is recorded in `kubehenge.dev/talos-waiting`.
+  - It uncordons the node once it is Ready on the new release.
   - It deletes the DaemonSets' pods the node's kubelet rejected while it shut down. Otherwise they would keep their DaemonSets reading not ready for up to 15 minutes.
   - Talos moves a minor version at a time, so a jump of two goes through the newest release of the minor in between.
   - Progress and the last upgrade are recorded on the Cluster (`kubehenge.dev/talos-upgrading`, `kubehenge.dev/talos-upgraded`) for the interface.
@@ -368,7 +385,7 @@ It deletes the rest.
   - The controller upgrades nothing more in the cluster until an operator removes the record (**Try again** on the cluster's page).
   - A stalled install (no word for three minutes) or an unreachable or busy node is retried after one, two and four minutes. Nothing on the node changes before the reboot.
   - A node whose machine Cluster API deletes mid-upgrade, as when the cluster scales down onto it, has its upgrade dropped, not failed. A machine being deleted is never picked.
-- **Automatic patch upgrades.** Where the cluster's `upgrades.nodeImages` is on, the upgrader moves `talosVersion` to its minor version's newest patch release, inside the maintenance window. Talos releases get no soak time. A new minor version is always an operator's choice.
+- **Automatic patch upgrades.** Where the cluster's `upgrades.nodeImages` is on, the upgrader moves `talosVersion` to its minor version's newest patch release, inside the upgrade window. Talos releases get no soak time. A new minor version is always an operator's choice.
 
 ## Add-ons
 
@@ -431,6 +448,12 @@ Prometheus keeps ten days of metrics on a 20 GiB volume from the cluster's defau
 ### Logs add-on
 
 Logs (`logs: {enabled: true, collector: node|api, retentionDays: 7, sizeGiB: 10}`) need monitoring, whose Grafana reads them. The validating webhook and the interface refuse them without it, and refuse switching monitoring off under them.
+
+`logs.outputs` adds up to four destinations beside Loki, which always runs with logs. Each source's `forward_to` lists Loki and every output that takes its stream.
+
+Syslog and OTLP outputs pass through `otelcol.receiver.loki`. Loki outputs are another `loki.write`.
+
+An output's credential is a stored credential with the purpose `log-<name>`. The controller copies it as an optional Secret into both Alloy namespaces. It records on the Cluster what it wrote, and reaches the workload cluster only when that changes. The configuration reads the files with `local.file`, so no secret is in the chart values.
 
 Loki runs as one binary in the `logging` namespace, with its chunks and index on a volume from the cluster's default storage class. The volume only grows and is kept when logs are switched off. Loki deletes logs after `retentionDays`. Nothing deletes them by size, so `sizeGiB` has to hold the days kept.
 
@@ -514,16 +537,17 @@ etcd snapshots (`etcdSnapshots: {enabled: true, target: …}`) are taken by Kube
 - **Streaming.** etcd's snapshot stream goes straight into an S3 multipart upload in parts of 8 MiB.
   - It is encrypted on the way with age to the cluster's identity. A database of any size therefore takes the same few buffers in the controller.
   - etcd ends the stream with the SHA-256 of what it sent, which the controller checks before keeping the object. One cut off is deleted.
-  - The object's metadata then gets the database's SHA-256 and size, with the Kubernetes version, distribution and etcd revision. The controller reads that revision from the member just before the snapshot begins, since the stream carries none.
+  - A JSON object beside it (`<snapshot>.json`) then holds the database's SHA-256 and size, the Kubernetes version, the distribution and the etcd revision. The snapshot itself is never rewritten, as object lock would keep a second copy of the whole database.
+  - The controller reads the revision from the member just before the snapshot begins, since the stream carries none.
   - One snapshot runs at a time across clusters, each cluster up to 10 minutes after the scheduled time, at a delay of its own.
   - A failure is retried after 15 minutes, with a `Warning` event and the reason in the cluster's condition `EtcdSnapshotSucceeded`.
-  - After each snapshot, all but the newest `keep` are deleted.
+  - After each snapshot, all but the newest `keep` are deleted, each with its JSON object.
 - **Restoring.** A restore is asked for with the annotation `kubehenge.dev/etcd-restore` on the Cluster.
   - The interface sets it for those with `Sys.Modify` on the cluster's pool. The restore is recorded step by step in `kubehenge.dev/etcd-restore-status`.
   - While it runs, Cluster API is paused and the controller changes nothing else of the cluster, scheduled snapshots included.
   - Before it stops or wipes any of etcd, the restore snapshots etcd as it is into the same target. Its status names that snapshot, which can undo a restore from the wrong one.
   - A cluster whose etcd does not answer, often the reason it is restored, is restored without one. The status says why.
-  - The snapshot's SHA-256 comes from the store's metadata. It must be 64 lower-case hexadecimal digits, since it goes into commands run as root.
+  - The snapshot's SHA-256 comes from its JSON object. It must be 64 lower-case hexadecimal digits, since it goes into commands run as root.
   - The steps run as root scripts through the QEMU guest agent, with the restore token ([install-settings.md](install-settings.md#etcd-restores)) only. Each step runs in a Job ([tokens](#tokens-kept-out-of-the-controller)).
   - The controller decrypts the snapshot and stores it encrypted again as `openssl enc -aes-256-ctr -pbkdf2` reads it, with a random password for that restore.
   - RKE2's and k3s's restore keeps the snapshot's revision. For them the controller moves it on in a checked copy first, as etcdutl's `--bump-revision 1000000000 --mark-compacted` does.
@@ -573,7 +597,8 @@ A peer added or taken away changes those objects only, so nothing restarts. Swit
 
 Certificates (`certificates: {enabled: true, issuer: …, domain: …}`) installs cert-manager with its Gateway API support on. Like Traefik, it is held back until the cluster has the Gateway API. Kubehenge's controller writes the rest into the workload cluster with its admin kubeconfig once cert-manager answers:
 
-- **The issuer** is the ClusterIssuer `kubehenge-ingress`, either ACME or a CA.
+- **The issuer** is the ClusterIssuer `kubehenge-ingress`, either ACME or a CA. With the issuer `external` there is none, and every certificate and cert-manager's default issuer name the one the owner gave.
+  - An ACME account with an external account binding reads its HMAC key from the Secret `kubehenge-acme-eab` in `cert-manager`, copied from the cluster's `acme-eab` credential like the DNS-01 one. Without that credential the issuer is left out.
   - ACME is Let's Encrypt's or another server, answering DNS-01 through one of cert-manager's DNS providers, or HTTP-01 through an HTTPRoute on Traefik's Gateway.
   - cert-manager's default issuer is set to it, so an Ingress annotated `kubernetes.io/tls-acme: "true"` gets its certificate there.
 - **The default certificate**, with DNS-01 or the CA, is the Certificate `kubehenge-ingress` in `kube-system` for `domain` and `*.domain`, ECDSA P-256.
@@ -677,7 +702,7 @@ The security baseline of every cluster is the part of the [CIS Kubernetes Benchm
 
 ### CIS hardening
 
-CIS hardening (`cis: true`), chosen when a cluster is created and fixed after, adds what costs workloads something:
+CIS hardening (`cis: true`), which can be switched on after creation and never off, adds what costs workloads something:
 
 - Pod Security Admission enforces `restricted`, whatever `podSecurity` says. The exempt namespaces stay exempt.
 - Every container that sets no seccomp profile of its own runs under the container runtime's default.
@@ -772,14 +797,17 @@ It is where Kubehenge starts and what looks after it:
 
 - **Sign-in through the Proxmox VE API**, with no second user directory. Every Proxmox VE realm works, PAM, Proxmox VE users, LDAP, Active Directory and OpenID Connect included.
   - A second factor (TOTP, Yubico OTP or recovery keys) is passed on to Proxmox VE as its own sign-in page would.
-  - A WebAuthn key is bound to Proxmox VE's own address, so its users sign in through an OpenID realm or another factor.
+  - A WebAuthn key is bound to Proxmox VE's own address, so its users sign in with an API token (`POST /api/session/token`). That makes a normal session with the same limits.
+  - A token session ends at its next renewal once Proxmox VE stops taking the token. Its privileges are the token's, which privilege separation cuts down to its user's.
   - An OpenID realm sends the browser to its identity provider, which returns it to the interface. The return goes to `/api/openid/callback` under `--public-url`, to be registered with the provider.
   - Without a public URL OpenID sign-in is refused, since the address the browser sends is the client's to choose.
+  - The state cookie is host-only, so a sign-in started under another name first redirects to the same path under `--public-url`, where the provider returns.
   - Proxmox VE checks the code, and the interface accepts the return only in the browser that started it.
 - **Sessions.** The Proxmox VE ticket stays on the server, in memory only.
   - The browser holds a random session ID in a `__Host-` cookie (Secure, HttpOnly, SameSite=Strict). Every change also carries a per-session CSRF token.
   - Proxmox VE renews a ticket without asking the realm or the second factor again. A session therefore ends after a fixed time (eight hours by default) however active it is.
   - Failed sign-ins are limited per user at an address and per address, never per user alone. Nobody can lock an administrator out from elsewhere.
+  - The address is the connection's peer. From a peer listed in `--trusted-proxy` it is the right-most `X-Forwarded-For` entry that is not listed, since only the entries a trusted proxy appended can be believed.
   - The frontend loads no inline script or style, and the Content-Security-Policy allows none.
 - **Permissions follow Proxmox VE's, by pool.** Each cluster has its own pool under the workload pool.
   - Seeing a cluster needs `VM.Audit` on its pool. Creating one needs `VM.Allocate` on the workload pool.
@@ -811,6 +839,7 @@ It is where Kubehenge starts and what looks after it:
   - a DNS provider's API token for DNS-01 certificates
   - a private Git repository's token
   - an identity provider's client secret
+  - the monitoring add-on's alert receivers, remote write target and external Alertmanagers (purposes `alerts-email`, `alerts-webhook`, `alerts-slack`, `alerts-teams`, `remote-write`, `external-alertmanager`). The controller copies them into the Secrets `kubehenge-alertmanager` and `kubehenge-prometheus` of the `monitoring` namespace, which the pods read as files, never into the chart's values.
   - The interface stores each in a Secret `<cluster>.<purpose>` of the type `kubehenge.dev/user-credential`, owned by the Cluster.
   - The Secret is labelled with its purpose (`kubehenge.dev/user-credential`) and its cluster (`kubehenge.dev/credential-cluster`).
   - **Who may set one:** storing, replacing or removing a cluster's credential needs `Sys.Modify` on its pool. A credential reaches as far into what the cluster runs as the admin kubeconfig does.
@@ -854,7 +883,7 @@ It is where Kubehenge starts and what looks after it:
     - its control plane and HelmReleaseProxies
     - the events of its namespace
   - **From inside the cluster:** for clusters in the interface's namespaces, as two of the interface's identities in the workload cluster's `kube-system`.
-    - `kubehenge-health` may get and list nodes, pods, events and PersistentVolumeClaims and read `/readyz`. `kubehenge-health-logs` may only read pods' logs.
+    - `kubehenge-health` may get and list nodes, pods, events and PersistentVolumeClaims and read `/readyz` and the nodes' Leases in `kube-node-lease` alone. `kubehenge-health-logs` may only read pods' logs.
     - With monitoring on, `kubehenge-alerts` in `monitoring` may only GET through the API server's proxy to Alertmanager's port. It cannot set a silence, which is a POST.
     - Once their tokens run out, the page says since when its view is stale.
   - **Cordons:** `kubehenge-nodes`, a third identity there, may get and patch nodes, for those with `VM.Allocate` on the cluster's pool.
@@ -1046,20 +1075,32 @@ For Talos it never goes to a release the cluster's Talos release does not run, a
 
 An upgrade starts only inside the window (days of the week or of the month, a start time and length in a named time zone). It starts only while the cluster is available with no rollout running, and not beyond the Kubernetes versions an installed Rancher runs on. A rollout that has started finishes even if the window closes. The last automatic upgrade is recorded on the Cluster as `kubehenge.dev/auto-upgraded`.
 
+The same window gates the controller's changes to a cluster's add-ons. Each HelmChartProxy records the release stamp (the controller's build and pins) and the settings stamp (the cluster's variables but `upgrades`) its spec was made for. A spec that differs from the stored one with a new release stamp and an unchanged settings stamp waits while the window is closed. Any other change applies at once: a new proxy, a change of the cluster's variables, a spec the same release made. A Cluster without a window has none held. The Cluster's annotation `kubehenge.dev/addon-changes` and condition `AddonChangesPending` record what waits, and the annotation `kubehenge.dev/apply-addon-changes` asks for it now.
+
+Before it first installs cert-manager, Kyverno or monitoring, the controller asks the workload cluster for the custom resource definitions of that software. It leaves the add-on out when one exists that its release does not own, and records the condition `AddonConflict`. `useExisting.certManager` leaves cert-manager's chart out, and the issuers and certificates are made in the existing install. The controller puts `namespaceLabels` on the namespaces of the proxies before it applies them, and creates a missing namespace with them.
+
 ## Networking
 
 - **Node addresses** come from IP pools managed in the management cluster. No DHCP is needed on the Proxmox VE bridge.
-- **The control plane** of each cluster gets a virtual IP that moves between control-plane nodes.
+- **The control plane** of each cluster gets a virtual IP that moves between control-plane nodes. It is held by ARP, or over BGP where the cluster's load balancer is in BGP mode.
 - **Services of type `LoadBalancer`** get addresses from the cluster's `loadBalancer` range, if it has one:
-  - MetalLB in layer 2 mode, without its BGP backend.
+  - MetalLB in layer 2 mode without its BGP backend, or in BGP mode with frr-k8s, the backend its chart recommends. The FRR mode inside the speaker is deprecated and not used.
     - Kubehenge's controller applies the address pool the chart has no place for, again whenever MetalLB returns. The CRDs take the pool with them when MetalLB goes.
+    - It applies an `L2Advertisement` in layer 2. In BGP mode it applies a `BGPAdvertisement` and a `BGPPeer` for each router, and deletes the objects of the other mode and peers no longer listed.
+    - Two BGP speakers on one node would open two sessions from one address to the same router, which most routers refuse. kube-vip holds the API address on the control planes, so the `BGPPeer` objects select nodes without the control-plane label. MetalLB peers from workers only.
+    - A cluster without workers therefore has no node for MetalLB's sessions, and the webhook refuses BGP with the load balancer on.
+    - The API address is announced by kube-vip's static pod on the control planes, with `vip_arp` off and BGP on. The webhook refuses BGP on Talos, whose virtual IP is its own election with no BGP option.
+    - kube-vip could run there as a `KubeStaticPodConfig`, announcing from every control plane with its health check of the local API server. It needs a kubeconfig, and Talos has no `admin.conf`. Whether the controller manager's kubeconfig under `/system/secrets/kubernetes/` carries the rights kube-vip needs, and whether the API server's `/livez` answers it, is unproven. Until a Talos node shows both, the refusal stays.
+    - In BGP mode MetalLB's frr-k8s asks for 45m CPU and 176 MiB, which the class's `loadBalancerBGP` figures count. The pinned chart sets no requests for it, so Kubehenge sets them.
+    - With `bgp.authenticated`, the controller writes kube-vip's manifest, password included, into the Secret `<cluster>-kube-vip`. The ClusterClasses write the file from it with `contentFrom.secret`, which all three bootstrap providers support.
+    - MetalLB's peers name `passwordSecret`, a Secret in `metallb-system` kept from the same credential.
   - kube-vip as a DaemonSet that answers only for Services, one lease per Service so that their addresses spread over the nodes. kube-vip's cloud provider hands them out.
   - MetalLB's speakers answer from the control planes too, which kubeadm labels as excluded from load balancers. A cluster without workers therefore still has nodes to answer from.
   - On k3s the class switches servicelb off. The controller deletes the DaemonSets servicelb left, which k3s cleans up only while its own cloud controller runs.
   - Every k3s node allows the two forwarding settings servicelb's pods need, which k3s allows only where servicelb is on.
   - Switching the load balancer off turns servicelb back on, and the control planes roll for it. Its pods then run on the old servers too.
-  - Cilium's own L2 announcements are not used, since they need Cilium in place of kube-proxy.
-  - Kubehenge's admission webhook and BeforeClusterCreate hook refuse addresses outside the nodes' network.
+  - Cilium's own L2 announcements and BGP control plane are not used. The L2 announcements need Cilium in place of kube-proxy.
+  - Kubehenge's admission webhook and BeforeClusterCreate hook refuse addresses outside the nodes' network in layer 2. In BGP mode they let routed addresses and API address through, and refuse an invalid AS number or router, a router that is also an announced address, kube-vip as the load balancer and Talos.
     - They also refuse the gateway, the network's own or broadcast address, and the API and node addresses. Other clusters' addresses on the same bridge and VLAN are refused too.
   - kube-vip's cloud provider never takes back an address it has recorded on a Service, and MetalLB keeps one as requested.
     - The controller therefore frees a Service of an address outside the range, which no longer holds it against other clusters. The load balancer gives the Service a new one.

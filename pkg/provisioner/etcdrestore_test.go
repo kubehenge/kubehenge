@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -72,15 +73,20 @@ func stepOf(script string) string {
 
 // fakeGuests runs nothing and records what it was asked to run where. fail decides which runs fail.
 type fakeGuests struct {
-	mu   sync.Mutex
-	off  map[int64]bool
-	ran  []string
-	fail func(vmid int64, step string) error
+	mu  sync.Mutex
+	off map[int64]bool
+	// destroyed are VMs that Proxmox VE no longer lists.
+	destroyed map[int64]bool
+	ran       []string
+	fail      func(vmid int64, step string) error
 	// seen checks a script as it runs.
 	seen func(vmid int64, step, script string)
 }
 
 func (g *fakeGuests) Running(_ context.Context, vmid int64) (bool, error) {
+	if g.destroyed[vmid] {
+		return false, fmt.Errorf("VM %d %w", vmid, ErrVMNotListed)
+	}
 	return !g.off[vmid], nil
 }
 
@@ -209,9 +215,29 @@ func (f *restoreFixture) putSnapshot(name, identity, version string) {
 		SnapshotMetaSHA256: sum, SnapshotMetaSize: strconv.FormatInt(size, 10),
 		SnapshotMetaDistribution: string(distributionOf(f.cluster())), SnapshotMetaKubernetes: version,
 	}
-	if err = f.store.SetMetadata(context.Background(), snapshotFolder+"/"+name, metadata); err != nil {
+	f.putInfo(snapshotFolder+"/"+name, metadata)
+}
+
+// putInfo writes the record beside a snapshot, as the snapshotter does.
+func (f *restoreFixture) putInfo(key string, metadata map[string]string) {
+	f.t.Helper()
+	record, err := json.Marshal(metadata)
+	if err != nil {
 		f.t.Fatal(err)
 	}
+	if _, err = f.store.Put(context.Background(), key+EtcdSnapshotInfoSuffix, bytes.NewReader(record), nil); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// info reads the record beside a snapshot.
+func (f *restoreFixture) info(key string) map[string]string {
+	f.t.Helper()
+	var metadata map[string]string
+	if err := json.Unmarshal(f.store.objects[key+EtcdSnapshotInfoSuffix].data, &metadata); err != nil {
+		f.t.Fatal(err)
+	}
+	return metadata
 }
 
 func (f *restoreFixture) reconcile() {
@@ -715,6 +741,70 @@ func TestEtcdRestorerRefuses(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A control-plane VM that no longer exists holds no etcd either: the restore goes on with the
+// members that remain and says which were missing.
+func TestEtcdRestorerGoesOnWithoutVMsThatNoLongerExist(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		destroyed []int64
+		missing   []string
+	}{
+		"one of three": {[]int64{103}, []string{"web-cp-2"}},
+		"two of three": {[]int64{102, 103}, []string{"web-cp-1", "web-cp-2"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newRestoreFixture(t, nil)
+			f.guests.destroyed = map[int64]bool{}
+			for _, vmid := range tc.destroyed {
+				f.guests.destroyed[vmid] = true
+			}
+			f.reconcile()
+			for _, r := range f.guests.runs() {
+				if vmid, _, _ := strings.Cut(r, " "); f.guests.destroyed[mustVMID(t, vmid)] {
+					t.Errorf("ran %s on a VM that no longer exists", r)
+				}
+			}
+			st := f.status()
+			if st.Phase != RestoreSucceeded || st.Machine != "web-cp-0" {
+				t.Fatalf("status %+v", st)
+			}
+			slices.Sort(st.Missing)
+			if !slices.Equal(st.Missing, tc.missing) {
+				t.Errorf("missing %v, want %v", st.Missing, tc.missing)
+			}
+			for _, m := range tc.missing {
+				if !slices.Contains(st.Replaced, m) || !strings.Contains(st.Message, m) {
+					t.Errorf("%s is not replaced, or the message does not name it: %+v", m, st)
+				}
+			}
+		})
+	}
+}
+
+func TestEtcdRestorerSaysWhenNoControlPlaneVMExists(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	f.guests.destroyed = map[int64]bool{101: true, 102: true, 103: true}
+	f.reconcile()
+	st := f.status()
+	if st.Phase != RestoreFailed || !strings.Contains(st.Message, "no control-plane VM of the cluster exists") || strings.Contains(st.Message, "VM 101") {
+		t.Errorf("status %+v", st)
+	}
+	if got := f.deleting(); len(got) != 0 {
+		t.Errorf("deleting %v", got)
+	}
+}
+
+func mustVMID(t *testing.T, s string) int64 {
+	t.Helper()
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // A control-plane VM that is off runs no etcd to stop: it is replaced with the others.

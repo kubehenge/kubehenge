@@ -32,8 +32,9 @@ The frontend's packages are installed again only when `web/package-lock.json` ch
 | `make e2e-control-plane-ha` | A k3s cluster's control plane grows from one server to three, each a ready etcd member. The server holding the cluster's virtual IP is stopped, and another takes the address within the lease. The API there takes writes on two of three etcd members. The control plane's health check then replaces the dead server and removes its VM. The control plane shrinks back to one server and keeps what was written. Delete, check nothing is left. | a running management cluster (`KUBECONFIG`), the k3s template, six node addresses. Settings in `test/e2e/control-plane-ha.sh`. |
 | `make e2e-two-nodes` | On a Proxmox VE cluster of two nodes sharing a storage. A k3s cluster kept to the second node (`allowedNodes`) is cloned there from a template on the shared storage. It comes up across the nodes' network. Kept to the first and rolled out, every machine replaced moves there. With the second node out of the Proxmox VE cluster, Kubehenge leaves it out of the cluster's placement within seconds. The cluster, let onto every node again, keeps to the first and grows there. With the second node back, delete, check nothing is left. | a running management cluster (`KUBECONFIG`) on the first node, the k3s template on the shared storage, commands that take the second node out and back. Settings in `test/e2e/two-nodes.sh`. |
 | `make e2e-interface` | Make the web interface's kubeconfig as the appliance does after setting the management cluster up, and check its rights. It sees clusters, machines and Kubehenge's ClusterClasses everywhere. It reads (without changing) the MachineDeployments, MachineHealthChecks, control planes, add-on releases and events the health page shows. It creates, changes and deletes clusters and reads Secrets only in its own namespaces, and does nothing else. | a running management cluster with an admin kubeconfig in `KUBECONFIG`, its API in `KUBEHENGE_E2E_API_ENDPOINT`. `KUBEHENGE_E2E_NAMESPACE` adds one of the module's `extra_cluster_namespaces` to the check. |
-| `make e2e-node-image-refresh` | A one-node k3s cluster runs the only build of k3s's template on the default node OS. A run of the weekly template build, asked for as the interface's Build now asks, makes a new build. It hands out its boot log through its guest agent. While the maintenance window is closed, the controller holds the cluster on its old build (`kubehenge.dev/node-image-held`). Once it opens, the node is replaced by a clone of the new build. A second run makes a third build and deletes the first, which nothing runs any more. Changing the node OS to Rocky Linux 10 replaces the node with a clone of that template on an `x86-64-v3` CPU type. It runs with SELinux enforcing and nothing denied. The controller reads its boot log (cloud-init's output and the journals of cloud-init and k3s) through its guest agent on request. Nothing is left. | a running management cluster (`KUBECONFIG`) with its template refresh on and no soak (`template_refresh.soak_hours = 0`). k3s's templates on the default node OS and on Rocky Linux 10. CI makes the Rocky Linux one only after the two runs, which then build none of their own. Settings in `test/e2e/node-image-refresh.sh`. |
+| `make e2e-node-image-refresh` | A one-node k3s cluster runs the only build of k3s's template on the default node OS. A run of the weekly template build, asked for as the interface's Build now asks, makes a new build. It hands out its boot log through its guest agent. While the upgrade window is closed, the controller holds the cluster on its old build (`kubehenge.dev/node-image-held`). Once it opens, the node is replaced by a clone of the new build. A second run makes a third build and deletes the first, which nothing runs any more. Changing the node OS to Rocky Linux 10 replaces the node with a clone of that template on an `x86-64-v3` CPU type. It runs with SELinux enforcing and nothing denied. The controller reads its boot log (cloud-init's output and the journals of cloud-init and k3s) through its guest agent on request. Nothing is left. | a running management cluster (`KUBECONFIG`) with its template refresh on and no soak (`template_refresh.soak_hours = 0`). k3s's templates on the default node OS and on Rocky Linux 10. CI makes the Rocky Linux one only after the two runs, which then build none of their own. Settings in `test/e2e/node-image-refresh.sh`. |
 | `make e2e-appliance RELEASE=<archive> NEWER=<archive> NEWEST=<archive> SETTINGS=<file>` | The appliance's install, upgrades and removal ([steps](#the-appliance-test)). | root on a Proxmox VE node, jq, curl and openssl. SeaweedFS, which it downloads. Three archives from `make dist` with rising `VERSION`s, built with `RELEASE_PUBLIC_KEYS` set to the public key of a key made with `kubehenge release keygen`, whose file `KUBEHENGE_E2E_RELEASE_KEY` names. The management cluster's settings as a JSON file, as the interface's setup sends them. Settings in `KUBEHENGE_E2E_*` (`test/e2e/appliance.sh`). |
+| `make e2e-appliance-upgrade PUBLISHED_INSTALL=<install.sh> PUBLISHED=<archive> RELEASE=<archive> SETTINGS=<file>` | The upgrade a user makes: the latest published release installed, then the tree under test on top of it ([steps](#the-appliance-upgrade-test)). | root on a Proxmox VE node, jq and curl. The published release's `install.sh` and archive. An archive from `make dist` whose `VERSION` is above the published one. The management cluster's settings as the published release's interface takes them. `KUBEHENGE_E2E_CONTROLLER_IMAGE` names the controller image of the tree under test. Settings in `KUBEHENGE_E2E_*` (`test/e2e/appliance-upgrade.sh`). |
 | `make e2e-volumes` | As Kubehenge's controller, create a cluster's pool, user, token and volume owner VM. Make volumes as the CSI plugin does on every node's local storage. Delete one through the owner VM with the cluster's token, the owner moving to the volume's node. Remove the cluster and check every volume, the owner, the pool and the user are gone. | a Proxmox VE host with the management cluster's Proxmox VE objects (the controller's token). Settings in `KUBEHENGE_PROXMOX_*` and `KUBEHENGE_E2E_*` (`pkg/provisioner/e2e_test.go`). Two or more nodes to check the move. |
 | `make e2e-management-cluster DIR=<dir>` | Apply the management cluster and check every provider is ready. Check that NetworkPolicies let a pod reach the controller only on its webhook and metrics ports, and a token Job only Proxmox VE's API. Check that Cluster API's and the template build's API tokens hold no more than they need. Destroy and check nothing is left. | a Proxmox VE host, kubectl, jq, curl. `<dir>` is a root configuration applying `management-cluster/`, with `TF_VAR_proxmox_api_token` set. |
 | `make e2e-management-cluster-upgrade DIR=<dir>` | Create the management cluster one step behind on Talos, Kubernetes, Cluster API and `capmox`, and upgrade it in place to the tested set. Check the same VMs run the new versions, then destroy. | as above, with `<dir>` passing `version_overrides` through |
@@ -80,13 +81,25 @@ The frontend's packages are installed again only when `web/package-lock.json` ch
 15. Remove the management cluster from the interface, refused unconfirmed or with a wrong passphrase. Its automatic upgrades' user goes with it and its etcd backups are switched off.
 16. Remove the appliance and check that Proxmox VE is left exactly as it was.
 
+### The appliance upgrade test
+
+`make e2e-appliance-upgrade` takes these steps. The nightly run alone runs it, and `test/e2e/ci/run.sh` gets the published release itself.
+
+1. Install the latest published release with the `install.sh` published beside it, and check that the appliance runs that version. The lane reads the release's tag when it starts and checks the downloads against the release's `SHA256SUMS`.
+2. Set the management cluster up from that release's interface, with settings it accepts.
+3. Record the ID, SMBIOS UUID and network cards' MAC addresses of every management cluster VM.
+4. Upgrade the appliance with `install.sh --upgrade` to the tree under test, built as the published version's next patch. The interface finds the management cluster again and says it is behind, applied by the published version and carrying the new one. An older release is refused.
+5. Upgrade the management cluster from the interface. It is no longer behind.
+6. Check that the same VM IDs hold the same UUIDs and MAC addresses, and that every node and every Cluster API provider is ready.
+7. Remove the management cluster from the interface and the appliance, and check that Proxmox VE is left exactly as it was.
+
 ### Memory and CPU figures
 
 The workload and Rancher tests print each node's and namespace's memory and the CPU requested of what each node offers. They print it before the add-ons and with every add-on on. The workload test also prints the control plane's memory after each add-on.
 
 The classes' memory figures come from these prints. They cover the add-ons, what a CNI other than the class's own adds to a control plane, and the nodes (`kubehenge.dev/addon-memory`, `kubehenge.dev/addon-control-plane-memory`, `kubehenge.dev/cni-control-plane-memory` and `kubehenge.dev/node-memory`, [clusters.md](clusters.md#machines)). The workload test gives its control plane and worker the least the figures let them have. A figure a new add-on or release outgrows is raised in `charts/kubehenge/templates`.
 
-The CPU figures (`kubehenge.dev/addon-cpu` and `kubehenge.dev/node-cpu`) are the requests of the pinned charts and distributions as Kubehenge configures them, and move with them. A figure that falls behind shows in the requests the tests print. The test's worker, given the fewest cores the figures allow, then leaves a pod pending.
+The CPU and requested memory figures are the requests of the pinned charts and distributions as Kubehenge configures them, and move with them. They are `kubehenge.dev/addon-cpu`, `kubehenge.dev/node-cpu`, `kubehenge.dev/addon-memory-requests` and `kubehenge.dev/node-memory-requests`. A figure that falls behind shows in the requests the tests print. The test's worker, given the least the figures allow, then leaves a pod pending.
 
 ### The workload cluster test
 
@@ -229,9 +242,9 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - The web interface and the appliance's commands pick the appliance test. The interface's Go code adds the k3s machines part.
 - One distribution's ClusterClass picks its own tests and those that install the chart.
 - Every test a rule names must be in the list of `nightly.sh`.
-- The nightly run's four extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
+- The nightly run's five extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
 - A pull request runs the other tiers and leaves this one to the queue.
-- The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers and a two-node Proxmox VE cluster.
+- The nightly run (`test/e2e/ci/nightly.sh`) runs every test. It adds the management cluster's upgrade, Rancher, a control plane of three servers, a two-node Proxmox VE cluster and the upgrade from the latest published appliance.
 - It runs every part of each workload distribution's test once more on another CNI of its class and another node OS. That run goes without CIS hardening every other night, and the combination moves on so every one comes in turn.
 - It builds Proxmox VE's image afresh and keeps it, with Go's build cache, for the day's runs.
 - One job builds the `kubehenge` binary and the controller's, capmox's and the Add-on Provider for Helm's images once per run (`test/e2e/ci/build.sh`). Each lane's registry serves them under the same digests, and capmox's and the Add-on Provider's are checked against `management-cluster/versions.tf` as in a release.
@@ -241,6 +254,8 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - A dispatch of the workflow names the tests to run, or runs that night's set. With `fresh` it bakes every template from the mirrors, as the nightly run does.
 
 A machine whose KVM lacks pause-loop exiting hands its test to a fresh one, up to three times. There, guests that outnumber its CPUs starve each other whatever their sizes. The checks that nothing restarts would only measure the machine. A test still on such a machine at the fourth try runs there with restarts reported, not failed (`KUBEHENGE_E2E_RESTARTS=report`).
+
+A try whose runner GitHub stops or loses never runs its last step. The next try then runs the test again on a fresh machine. The lane's log names each lost runner. A test that fails ends its lane at once (`test/e2e/ci/lane.sh`).
 
 ### The Actions cache
 
@@ -265,7 +280,7 @@ Any Linux machine with Docker, `/dev/kvm` and about 16 GB of free memory can do 
 ```sh
 scripts/tools.sh ~/.local/kubehenge-tools && export PATH=~/.local/kubehenge-tools:$PATH
 test/e2e/ci/up.sh /tmp/e2e          # Proxmox VE in a container, a registry beside it
-test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, kubeadm, k3s, talos, rke2-etcd, rke2-machines, k3s-etcd, k3s-machines, kubeadm-addons-a, kubeadm-addons-b, kubeadm-addons-c, rke2-addons-a, rke2-addons-b, rke2-addons-c, rke2-addons-d, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, talos-addons-c, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
+test/e2e/ci/run.sh /tmp/e2e rke2    # or management-cluster, management-cluster-upgrade, appliance, appliance-upgrade, kubeadm, k3s, talos, rke2-etcd, rke2-machines, k3s-etcd, k3s-machines, kubeadm-addons-a, kubeadm-addons-b, kubeadm-addons-c, rke2-addons-a, rke2-addons-b, rke2-addons-c, rke2-addons-d, k3s-addons-a, k3s-addons-b, talos-addons-a, talos-addons-b, talos-addons-c, rancher, cluster-mesh, node-image-refresh, autoscaler, control-plane-ha, two-nodes
 test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test or an add-on part with its CNI, node OS or no CIS hardening
 test/e2e/ci/run.sh /tmp/e2e management-cluster-upgrade+management-3584   # any test but the appliance, its management node at 3584 MiB
 ```
@@ -288,6 +303,20 @@ A guest keeps all the memory it was given, mostly page cache. While the machine 
 
 The management node's balloon gives memory back instead. Its minimum is 3584 MiB (`KUBEHENGE_E2E_MANAGEMENT_MEMORY_MIN`). It gives back at most 512 MiB. Proxmox VE inflates the balloon towards it once the machine passes 80 % memory use.
 
+The nodes of `rke2-etcd` and `rke2-machines` have balloons too. Their sizes stay at 4096 MiB, the least RKE2 documents. Their minimums are the memory Kubehenge's figures say a node needs, plus the 192 MiB the guest's kernel keeps:
+
+| Node | Size (MiB) | Balloon minimum (MiB) |
+| --- | --- | --- |
+| Management node | 4096 | 3584 |
+| Control plane | 4096 | 3312 |
+| Worker | 4096 | 1536 |
+
+`balloon_tests` in `test/e2e/ci/room.sh` names the tests. The workload test works the minimums out and the recorder sets them on each VM (`guests.sh`).
+
+With a control plane replaced, the four VMs held 16604 MiB with QEMU's overhead, and the least memory available was 100 to 300 MiB. A control plane used 2440 MiB of its 3908 MiB and a worker 576 MiB. At the minimums the VMs hold 11964 MiB.
+
+`test/unit/runner-room.sh` checks that each such test's VMs at their minimums leave 512 MiB. That is the runner's memory less the VMs and less what its own processes and kernel keep. `room.sh` holds all three figures.
+
 The add-on tests use up to 2752 MB on the node. At a minimum of 3072 MiB the node saw only 2874 MB. Its page cache thrashed, and every controller lost its lease.
 
 ### How much the guests may take
@@ -306,24 +335,24 @@ Swap does not count as room for the guests. Cold pages of the runner's own proce
 
 #### Each test's guests
 
-Every node is at the least Kubehenge allows for what its test switches on. With GitOps the worker also holds the 208 MiB its Git server and test pods request. The management node has the module's default 4 GiB. A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). The guests of each add-on part together, per CNI, in MiB:
+Every node is at the least Kubehenge allows for what its test switches on. With GitOps the worker also holds the memory its Git server and test pods request, 208 MiB (`gitea_request_mib`, `gitops_agnhost_pods` and `agnhost_request_mib` in `common.sh`). A worker is sized for the larger of what its pods use and what they request. The management node has the module's default 4 GiB. A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). The guests of each add-on part together, per CNI, in MiB:
 
 | Test | Worker | Default CNI | Cilium | Calico |
 | --- | --- | --- | --- | --- |
 | `kubeadm-addons-a` | 3648 | 11840 | (default) | 12688 |
 | `kubeadm-addons-b` | 2368 | 10576 | (default) | 12000 |
-| `kubeadm-addons-c` | 2448 | 10640 | (default) | 12064 |
+| `kubeadm-addons-c` | 2552 | 10744 | (default) | 12168 |
 | `rke2-addons-a` | 4096 | 12288 | 12288 | 12288 |
 | `rke2-addons-b` | 4096 | 12288 | 12368 | 12288 |
 | `rke2-addons-c` | 4096 | 12288 | 12288 | 12288 |
 | `rke2-addons-d` | 4096 | 12288 | 12288 | 12288 |
 | `k3s-addons-a` | 3392 | 11584 | 11584 | 11760 |
-| `k3s-addons-b` | 3216 | 11408 | 11728 | 12376 |
+| `k3s-addons-b` | 3320 | 11512 | 11832 | 12480 |
 | `talos-addons-a` | 3648 | 11840 | 11840 | 11840 |
 | `talos-addons-b` | 2368 | 10560 | 10560 | 10560 |
-| `talos-addons-c` | 2448 | 10640 | 10640 | 10640 |
+| `talos-addons-c` | 2552 | 10744 | 10744 | 10744 |
 
-`kubeadm-addons-a` and `k3s-addons-b` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176, 11864 and 11856 MiB. The guard's samples show what the management node uses in every run (below).
+`kubeadm-addons-a` and `k3s-addons-b` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176, 11968 and 11856 MiB. `two-nodes` runs one of 3584 MiB too, as both its nodes' guests run at once while its machines move between them. The guard's samples show what the management node uses in every run (below).
 
 These tests outgrow 12 GiB as well. Only the RKE2 ones read back from swap past the guard's line, 570 to 1220 MiB in a minute:
 
@@ -412,4 +441,8 @@ A node whose API does not answer is asked once, and every call is cut off after 
 
 For `two-nodes`, `run.sh` first joins a second node, `pve2`, from the same image to the first in a Proxmox VE cluster (`test/e2e/ci/second-node.sh`). The two VM bridges are joined at layer 2 through a Docker network of their own, the first keeping the gateway and name server. A directory both mount is their shared storage `shared`, which the management cluster and the templates then use.
 
-Remove everything with `docker rm -f kubehenge-e2e-pve kubehenge-e2e-pve2 kubehenge-e2e-registry && docker network rm kubehenge-e2e kubehenge-e2e-vms` (the second node and network only where `two-nodes` ran) and `sudo ip route del 172.20.99.0/24`.
+`pve2` has 6656 MiB of memory of its own, as a second host would. lxcfs on the runner serves it a `/proc/meminfo` with its container's limit as the total. The first node reports the runner's memory, `pve2`'s use included.
+
+A budget of its own for the first node does not fit beside `pve2`'s. The test's last step would need 4096 MiB free on it and 4505 on `pve2`, beside 8 GiB of guests. So the test checks only that `pve2` rejoins the placement.
+
+Remove everything with `docker rm -f kubehenge-e2e-pve kubehenge-e2e-pve2 kubehenge-e2e-registry kubehenge-e2e-lxcfs && docker network rm kubehenge-e2e kubehenge-e2e-vms` (the second node, lxcfs and network only where `two-nodes` ran), `sudo umount <work directory>/lxcfs` where lxcfs ran, and `sudo ip route del 172.20.99.0/24`.

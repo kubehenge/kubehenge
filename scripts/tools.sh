@@ -14,8 +14,11 @@ dir=${1:?usage: $0 <directory> [tool...]}
 shift
 only=" $* "
 mkdir -p "${dir}"
+here=$(dirname "$0")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+KUBEHENGE_FETCH_STATE=${work}/releases-down
+export KUBEHENGE_FETCH_STATE
 
 # wanted <name>: whether the caller named this tool, or named none.
 wanted() {
@@ -25,14 +28,20 @@ wanted() {
     esac
 }
 
+# fetch <url>: downloads to ${work}/download through fetch.sh, which retries what a host resets
+# mid-transfer (the caller's checksum makes that safe) and sends every GitHub release asset of the
+# run through the API once the release address has failed. KUBEHENGE_FETCH_STATE ties that switch
+# to this run.
+fetch() {
+    "${here}/fetch.sh" "$1" "${work}/download"
+}
+
 # tool <name> <url> <sha256> [member of the archive]
 tool() {
     # shellcheck disable=SC2310 # wanted only matches a word, nothing in it can fail.
     wanted "$1" || return 0
-    # --retry alone leaves out a connection the host resets mid-transfer (curl's exit 92); the
-    # checksum makes trying again safe. Eight tries back off over about four minutes, which outlasts
-    # the spells of 504s GitHub's release downloads give; five gave up after half a minute.
-    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
+    # shellcheck disable=SC2310 # its failure is the message below.
+    fetch "$2" || {
         echo "tools: could not download $2" >&2
         exit 1
     }
@@ -56,7 +65,8 @@ release() {
 tree() {
     # shellcheck disable=SC2310
     wanted "$1" || return 0
-    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
+    # shellcheck disable=SC2310 # its failure is the message below.
+    fetch "$2" || {
         echo "tools: could not download $2" >&2
         exit 1
     }
@@ -153,6 +163,13 @@ release hadolint hadolint/hadolint "${HADOLINT}" hadolint-linux-x86_64 "${HADOLI
 TYPOS=v1.52.0
 TYPOS_SHA256=6155d4114f9a0f5b8f6d4fda96266c9d5f6add71df80da7f684ee5e72eb14588
 release typos crate-ci/typos "${TYPOS}" "typos-${TYPOS}-x86_64-unknown-linux-musl.tar.gz" "${TYPOS_SHA256}" ./typos
+
+# `alloy validate` proves that the Alloy configurations the controller generates parse, and that
+# their components and arguments exist. It is the release the charts run: TestAlloyToolIsTheChartsRelease holds the two together.
+# renovate: datasource=github-release-attachments depName=grafana/alloy
+ALLOY=v1.21.3
+ALLOY_SHA256=50d23af2d0f98c00beac6ce9a365693e60f87fb76b6cad6fe1d161e80588af6d
+release alloy grafana/alloy "${ALLOY}" alloy-linux-amd64.zip "${ALLOY_SHA256}" alloy-linux-amd64.zip
 
 # The nightly link check runs it (make links).
 # renovate: datasource=github-release-attachments depName=lycheeverse/lychee

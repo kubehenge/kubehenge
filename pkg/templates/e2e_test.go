@@ -80,14 +80,21 @@ func TestTemplatesEndToEnd(t *testing.T) {
 	b := e2eBuilder(t)
 	kubernetes := env(t, "KUBEHENGE_E2E_KUBERNETES_VERSION", "v1.37.1")
 	nodeOSes := AvailableNodeOSes()
-	requests := append(make([]Request, 0, 1+len(nodeOSes)), Request{Distribution: Talos})
+	requests := append(make([]Request, 0, 2+len(nodeOSes)), Request{Distribution: Talos})
 	for _, o := range nodeOSes {
 		nodeOS, err := ParseNodeOS(o)
 		if err != nil {
 			t.Fatal(err)
 		}
-		requests = append(requests, Request{Distribution: Kubeadm, NodeOS: nodeOS, KubernetesVersion: kubernetes})
+		if !nodeOS.FIPS {
+			requests = append(requests, Request{Distribution: Kubeadm, NodeOS: nodeOS, KubernetesVersion: kubernetes})
+		}
 	}
+	// FIPS mode, on RKE2 alone, proven on the default node OS: its clone boots with the kernel in
+	// FIPS mode and the policy set.
+	fips := DefaultNodeOS
+	fips.FIPS = true
+	requests = append(requests, Request{Distribution: RKE2, NodeOS: fips})
 	for _, req := range requests {
 		name := string(req.Distribution)
 		if req.Distribution != Talos {
@@ -132,7 +139,7 @@ func TestTemplatesEndToEnd(t *testing.T) {
 			}
 
 			if tmpl.Bake != nil {
-				bootClone(t, b, vmid, *tmpl.Bake)
+				bootClone(t, b, vmid, tmpl.Bake)
 			}
 		})
 	}
@@ -178,7 +185,7 @@ func assertTemplateShape(t *testing.T, b *Builder, vmid int, tmpl *Template) {
 // bootClone does what Cluster API's Proxmox VE provider does with a template and checks the clone
 // from inside: cloud-init runs afresh and finishes without warnings, and the clone is not a copy of
 // the bake VM's identity.
-func bootClone(t *testing.T, b *Builder, template int, bake Bake) {
+func bootClone(t *testing.T, b *Builder, template int, bake *Bake) {
 	t.Helper()
 	ctx := context.Background()
 	node, err := b.Client.Node(ctx, b.Node)

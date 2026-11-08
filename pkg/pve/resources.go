@@ -1,7 +1,9 @@
 package pve
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -69,6 +71,9 @@ type Bridge struct {
 	// CIDR and Gateway are the node's own IPv4 address on the bridge and its gateway, where it has them.
 	CIDR    string `json:"cidr,omitempty"`
 	Gateway string `json:"gateway,omitempty"`
+	// MTU is the bridge's, 1500 where Proxmox VE lists none: a node's interface on it takes no more.
+	// A VNet has its zone's, and 0 where the zone sets none or the user may not read it.
+	MTU int `json:"mtu,omitempty"`
 	// Zone is the SDN zone of a VNet. A node's own bridge has none and sits in LocalZone.
 	Zone string `json:"zone,omitempty"`
 	// ZoneType is the type of the VNet's zone: simple, vlan, qinq, vxlan or evpn. Empty where the
@@ -127,6 +132,21 @@ func (f *flag) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// defaultBridgeMTU is what a Linux bridge has where Proxmox VE lists no MTU.
+const defaultBridgeMTU = 1500
+
+// number reads a number Proxmox VE sends as a string or as a number.
+type number int
+
+func (n *number) UnmarshalJSON(raw []byte) error {
+	v, err := strconv.Atoi(strings.Trim(string(raw), `"`))
+	if err != nil {
+		return fmt.Errorf("reading %s as a number: %w", raw, err)
+	}
+	*n = number(v)
+	return nil
+}
+
 // HARule is an enabled node-affinity rule of Proxmox VE's HA: the nodes its resources keep to, or
 // for a negative rule keep off.
 type HARule struct {
@@ -150,15 +170,33 @@ type Member struct {
 	// Tags are separated by semicolons, as Proxmox VE stores them. Templates reads them, PoolMembers
 	// cannot.
 	Tags string `json:"tags"`
-	// Status is running or stopped. CPU is the share of its cores in use, from 0 to 1. Memory is in
-	// bytes, uptime in seconds. Proxmox VE lists them with a pool's members, from its nodes' last
-	// broadcast.
+	// Status is running or stopped, or StatusUnknown while its node is not online. CPU is the share
+	// of its cores in use, from 0 to 1. Memory is in bytes, uptime in seconds. Proxmox VE lists them
+	// with a pool's members, from its nodes' last broadcast.
 	Status string  `json:"status"`
 	CPU    float64 `json:"cpu"`
 	Cores  float64 `json:"maxcpu"`
 	Memory int64   `json:"mem"`
 	MaxMem int64   `json:"maxmem"`
 	Uptime int64   `json:"uptime"`
+	// Down is set by Templates on a member whose node is not online. Its configuration cannot be
+	// read then, so its name and whether it is a template may be missing.
+	Down bool `json:"-"`
+}
+
+// StatusUnknown is the status the cluster's resource view gives a VM whose node is not online.
+const StatusUnknown = "unknown"
+
+// NodeUnreachable tells whether err is pveproxy's answer when it cannot reach the node a call is
+// forwarded to: 595 for a refused or lost connection, 596 for a failed handshake. It answers so
+// for a node that went down after the resource view last showed it online.
+func NodeUnreachable(err error) bool {
+	apiErr, ok := errors.AsType[*APIError](err)
+	return ok && (strings.HasPrefix(apiErr.Status, "595") || strings.HasPrefix(apiErr.Status, "596"))
+}
+
+func hasTag(tags, tag string) bool {
+	return slices.Contains(strings.Split(tags, ";"), tag)
 }
 
 // LoadPoint is a VM's average CPU load over one step of Proxmox VE's round-robin data, the share of
@@ -332,6 +370,7 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 		Comments  string `json:"comments"`
 		CIDR      string `json:"cidr"`
 		Gateway   string `json:"gateway"`
+		MTU       number `json:"mtu"`
 	}
 	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/network?type=any_bridge", &res); err != nil {
 		return nil, err
@@ -340,7 +379,7 @@ func (a *Accounts) Bridges(ctx context.Context, t *Ticket, node string) ([]Bridg
 	for _, r := range res {
 		bridges = append(bridges, Bridge{
 			Bridge: r.Iface, Node: node, VLANAware: r.VLANAware != 0, Comment: strings.TrimSpace(r.Comments),
-			CIDR: r.CIDR, Gateway: r.Gateway,
+			CIDR: r.CIDR, Gateway: r.Gateway, MTU: cmp.Or(int(r.MTU), defaultBridgeMTU),
 		})
 	}
 	return append(bridges, a.vnets(ctx, t, node)...), nil
@@ -362,16 +401,18 @@ func (a *Accounts) vnets(ctx context.Context, t *Ticket, node string) []Bridge {
 		Zone  string `json:"zone"`
 		Type  string `json:"type"`
 		Nodes string `json:"nodes"`
+		MTU   number `json:"mtu"`
 	}
 	// Without the zones every VNet is offered, on the strength of its own zone name.
 	_ = a.get(ctx, t, "/cluster/sdn/zones", &zones)
 	type zoneInfo struct {
 		kind  string
+		mtu   int
 		nodes []string
 	}
 	known := map[string]zoneInfo{}
 	for _, z := range zones {
-		info := zoneInfo{kind: z.Type}
+		info := zoneInfo{kind: z.Type, mtu: int(z.MTU)}
 		for n := range strings.SplitSeq(z.Nodes, ",") {
 			if n = strings.TrimSpace(n); n != "" {
 				info.nodes = append(info.nodes, n)
@@ -386,7 +427,7 @@ func (a *Accounts) vnets(ctx context.Context, t *Ticket, node string) []Bridge {
 			continue
 		}
 		bridges = append(bridges, Bridge{
-			Bridge: v.VNet, Node: node, VLANAware: bool(v.VLANAware), Zone: v.Zone, ZoneType: z.kind,
+			Bridge: v.VNet, Node: node, VLANAware: bool(v.VLANAware), Zone: v.Zone, ZoneType: z.kind, MTU: z.mtu,
 			Alias: strings.TrimSpace(v.Alias),
 		})
 	}
@@ -394,24 +435,42 @@ func (a *Accounts) vnets(ctx context.Context, t *Ticket, node string) []Bridge {
 	return bridges
 }
 
-// DNS lists the DNS servers a node resolves with, in its order. Proxmox VE shows them to users with
-// Sys.Audit on the node.
-func (a *Accounts) DNS(ctx context.Context, t *Ticket, node string) ([]string, error) {
+// NodeDNS is how a node resolves names: its DNS servers in order, and its search domain, which is
+// empty when the node has none.
+type NodeDNS struct {
+	Servers []string `json:"servers"`
+	Search  string   `json:"search"`
+}
+
+// DNS reads a node's resolver settings. Proxmox VE shows them to users with Sys.Audit on the node.
+func (a *Accounts) DNS(ctx context.Context, t *Ticket, node string) (NodeDNS, error) {
 	var res struct {
-		DNS1 string `json:"dns1"`
-		DNS2 string `json:"dns2"`
-		DNS3 string `json:"dns3"`
+		Search string `json:"search"`
+		DNS1   string `json:"dns1"`
+		DNS2   string `json:"dns2"`
+		DNS3   string `json:"dns3"`
 	}
 	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/dns", &res); err != nil {
-		return nil, err
+		return NodeDNS{}, err
 	}
-	servers := []string{}
+	dns := NodeDNS{Servers: []string{}, Search: strings.TrimSpace(res.Search)}
 	for _, s := range []string{res.DNS1, res.DNS2, res.DNS3} {
 		if s = strings.TrimSpace(s); s != "" {
-			servers = append(servers, s)
+			dns.Servers = append(dns.Servers, s)
 		}
 	}
-	return servers, nil
+	return dns, nil
+}
+
+// NodeTime reads a node's clock. Proxmox VE shows it to users with Sys.Audit on the node.
+func (a *Accounts) NodeTime(ctx context.Context, t *Ticket, node string) (time.Time, error) {
+	var res struct {
+		Time int64 `json:"time"`
+	}
+	if err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/time", &res); err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(res.Time, 0), nil
 }
 
 // Names are the IDs of the pools, roles, users and groups the user may see. A listing the user may
@@ -470,6 +529,74 @@ func (a *Accounts) NodeAddresses(ctx context.Context, t *Ticket) (map[string]str
 		}
 	}
 	return addresses, nil
+}
+
+// NextID is the datacenter's range for the free VM ID auto-selection pool (datacenter.cfg, next-id).
+// A bound the datacenter does not set is zero. Lower is inclusive and Upper exclusive, as Proxmox
+// VE's schema has them ("Lower, inclusive boundary" and "Upper, exclusive boundary").
+type NextID struct {
+	Lower int `json:"lower"`
+	Upper int `json:"upper"`
+}
+
+// Proxmox VE's own bounds of the pool when next-id leaves one out.
+const (
+	DefaultNextIDLower = 100
+	DefaultNextIDUpper = 1000000
+)
+
+// NextID reads the datacenter's next-id option. Reading /cluster/options needs Sys.Audit on /, and
+// a user without it gets ErrForbidden.
+func (a *Accounts) NextID(ctx context.Context, t *Ticket) (NextID, error) {
+	var res struct {
+		// Proxmox VE answers a property string as an object, and the raw text where it cannot
+		// parse it.
+		NextID json.RawMessage `json:"next-id"`
+	}
+	if err := a.get(ctx, t, "/cluster/options", &res); err != nil {
+		return NextID{}, err
+	}
+	if len(res.NextID) == 0 {
+		return NextID{}, nil
+	}
+	var object NextID
+	if json.Unmarshal(res.NextID, &object) == nil {
+		return object, nil
+	}
+	var text string
+	if err := json.Unmarshal(res.NextID, &text); err != nil {
+		return NextID{}, fmt.Errorf("proxmox VE GET /cluster/options: next-id: %w", err)
+	}
+	var out NextID
+	for part := range strings.SplitSeq(text, ",") {
+		key, value, _ := strings.Cut(part, "=")
+		n, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "lower":
+			out.Lower = n
+		case "upper":
+			out.Upper = n
+		}
+	}
+	return out, nil
+}
+
+// VMIDs lists the IDs of the VMs and containers the user may see, templates included.
+func (a *Accounts) VMIDs(ctx context.Context, t *Ticket) ([]int, error) {
+	var res []struct {
+		VMID int `json:"vmid"`
+	}
+	if err := a.get(ctx, t, "/cluster/resources?type=vm", &res); err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(res))
+	for _, r := range res {
+		ids = append(ids, r.VMID)
+	}
+	return ids, nil
 }
 
 // Allowed are those of the nodes given that the rule keeps its resources to: its own, or for a
@@ -557,23 +684,76 @@ func (a *Accounts) Network(ctx context.Context, t *Ticket, bridge string) (Netwo
 	return n, nil
 }
 
-// BackupCovers tells whether an enabled backup job of the Proxmox VE cluster includes the guest,
-// by its ID, by all guests, or by its pool. Listing the jobs needs Sys.Audit on /.
-func (a *Accounts) BackupCovers(ctx context.Context, t *Ticket, vmid int) (bool, error) {
-	var guests []struct {
-		VMID int    `json:"vmid"`
-		Node string `json:"node"`
-		Pool string `json:"pool"`
+// ErrNoAppliance is no container the user sees being the appliance.
+var ErrNoAppliance = errors.New("no container visible to this user is the appliance")
+
+// listedGuest is a guest as the cluster's resource list gives it.
+type listedGuest struct {
+	VMID int    `json:"vmid"`
+	Node string `json:"node"`
+	Type string `json:"type"`
+	Tags string `json:"tags"`
+	Pool string `json:"pool"`
+}
+
+// ApplianceID finds the appliance's own guest ID: the container tagged kubehenge, or guest hint,
+// whose network interface has one of the MAC addresses macs. A restore to another ID or a clone
+// leaves the ID the installer recorded behind. A copy restored beside it has the same MAC, so
+// hint is tried first.
+func (a *Accounts) ApplianceID(ctx context.Context, t *Ticket, hint int, macs []string) (int, error) {
+	var guests []listedGuest
+	if err := a.get(ctx, t, "/cluster/resources?type=vm", &guests); err != nil {
+		return 0, err
 	}
+	if i := slices.IndexFunc(guests, func(g listedGuest) bool { return g.VMID == hint }); i > 0 {
+		guests[0], guests[i] = guests[i], guests[0]
+	}
+	var unread error
+	for _, g := range guests {
+		if g.Type != "lxc" || g.VMID != hint && !slices.Contains(strings.Split(g.Tags, ";"), "kubehenge") {
+			continue
+		}
+		var config map[string]any
+		if err := a.get(ctx, t, "/nodes/"+url.PathEscape(g.Node)+"/lxc/"+strconv.Itoa(g.VMID)+"/config", &config); err != nil {
+			unread = err
+			continue
+		}
+		for key, v := range config {
+			if s, ok := v.(string); ok && strings.HasPrefix(key, "net") && hasMAC(s, macs) {
+				return g.VMID, nil
+			}
+		}
+	}
+	if unread != nil {
+		return 0, unread
+	}
+	return 0, ErrNoAppliance
+}
+
+// hasMAC tells whether a container's network interface, as its configuration gives it
+// ("name=eth0,bridge=vmbr0,hwaddr=BC:24:11:2E:5D:6A,ip=dhcp"), has one of the MAC addresses.
+func hasMAC(netConfig string, macs []string) bool {
+	for part := range strings.SplitSeq(netConfig, ",") {
+		if mac, ok := strings.CutPrefix(part, "hwaddr="); ok {
+			return slices.ContainsFunc(macs, func(m string) bool { return strings.EqualFold(m, mac) })
+		}
+	}
+	return false
+}
+
+// BackupCovers tells whether an enabled backup job of the Proxmox VE cluster includes the guest,
+// by its ID, by all guests, or by its pool. Listing the jobs needs Sys.Audit on /. A guest the user
+// does not see is an error: a job of all guests would seem to cover an ID long gone.
+func (a *Accounts) BackupCovers(ctx context.Context, t *Ticket, vmid int) (bool, error) {
+	var guests []listedGuest
 	if err := a.get(ctx, t, "/cluster/resources?type=vm", &guests); err != nil {
 		return false, err
 	}
-	node, pool := "", ""
-	for _, g := range guests {
-		if g.VMID == vmid {
-			node, pool = g.Node, g.Pool
-		}
+	i := slices.IndexFunc(guests, func(g listedGuest) bool { return g.VMID == vmid })
+	if i < 0 {
+		return false, fmt.Errorf("guest %d is not among those %s sees", vmid, t.Username)
 	}
+	node, pool := guests[i].Node, guests[i].Pool
 	var jobs []struct {
 		Enabled *int   `json:"enabled"`
 		Node    string `json:"node"`
@@ -607,6 +787,9 @@ func (a *Accounts) BackupCovers(ctx context.Context, t *Ticket, vmid int) (bool,
 // pools and tags afresh, but a VM's name and whether it is a template from the status its node
 // broadcast last, which can be seconds old and can still show a removed VM's under a reused VM ID.
 // Each VM's configuration says it for certain, before anything is done to the VM by its ID.
+//
+// A Kubehenge VM on a node that is not online is listed with Down set instead of failing the list,
+// since no other node can read its configuration.
 func (a *Accounts) Templates(ctx context.Context, t *Ticket, pool string) ([]Member, error) {
 	var guests []struct {
 		Member
@@ -623,21 +806,42 @@ func (a *Accounts) Templates(ctx context.Context, t *Ticket, pool string) ([]Mem
 		if g.Type != "qemu" || g.Pool != pool {
 			continue
 		}
-		var config struct {
-			Name     string `json:"name"`
-			Template int    `json:"template"`
-		}
-		err := a.get(ctx, t, fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(g.Node), g.VMID), &config)
-		if notFound(err) || err == nil && config.Template != 1 {
-			continue
-		}
+		m, ok, err := a.templateMember(ctx, t, &g.Member)
 		if err != nil {
 			return nil, err
 		}
-		g.Name, g.Template = config.Name, config.Template
-		list = append(list, g.Member)
+		if ok {
+			list = append(list, m)
+		}
 	}
 	return list, nil
+}
+
+// templateMember confirms one VM of the pool from its configuration. It is false for a VM that is
+// no template.
+func (a *Accounts) templateMember(ctx context.Context, t *Ticket, g *Member) (Member, bool, error) {
+	down := func() (Member, bool, error) {
+		g.Down = hasTag(g.Tags, "kubehenge")
+		return *g, g.Down, nil
+	}
+	if g.Status == StatusUnknown {
+		return down()
+	}
+	var config struct {
+		Name     string `json:"name"`
+		Template int    `json:"template"`
+	}
+	err := a.get(ctx, t, fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(g.Node), g.VMID), &config)
+	switch {
+	case notFound(err) || err == nil && config.Template != 1:
+		return Member{}, false, nil
+	case NodeUnreachable(err):
+		return down()
+	case err != nil:
+		return Member{}, false, err
+	}
+	g.Name, g.Template = config.Name, config.Template
+	return *g, true, nil
 }
 
 // PoolMembers lists a pool's VMs, without their tags.

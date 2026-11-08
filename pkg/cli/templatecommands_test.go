@@ -322,7 +322,7 @@ func TestBuilderFlagsConnect(t *testing.T) {
 	}
 
 	f := &builderFlags{address: "192.0.2.50/24", gateway: "192.0.2.1", dns: []string{"192.0.2.53"}}
-	f.builder.Node = "pve1"
+	f.builder.Node, f.builder.Storage = "pve1", "ceph"
 	cmd, out := command(t.Context())
 	b, err := f.connect(cmd, conn)
 	if err != nil {
@@ -355,11 +355,17 @@ func TestNodeOSFlag(t *testing.T) {
 	if err := f.Value.Set("windows"); err == nil || o.String() != "rocky-10" {
 		t.Errorf("--node-os windows gave %s, %v; want it refused and rocky-10 kept", o, err)
 	}
+	if err := f.Value.Set("almalinux-10-fips"); err != nil || o != (templates.NodeOS{Family: "almalinux", Release: "10", FIPS: true}) {
+		t.Errorf("--node-os almalinux-10-fips gave %+v, %v", o, err)
+	}
+	if !strings.Contains(f.Usage, "rocky-10-fips") {
+		t.Errorf("--node-os does not offer FIPS mode: %s", f.Usage)
+	}
 }
 
 func TestBuildUsersNeedsTheManagementCluster(t *testing.T) {
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
-	if _, err := buildUsers(t.Context(), refreshNamespace, nil); err == nil || !strings.Contains(err.Error(), "needs the management cluster's API (KUBECONFIG)") {
+	if _, err := buildUsers(t.Context(), refreshNamespace, nil, nil); err == nil || !strings.Contains(err.Error(), "needs the management cluster's API (KUBECONFIG)") {
 		t.Errorf("buildUsers gave %v", err)
 	}
 }

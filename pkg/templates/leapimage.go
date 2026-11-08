@@ -1,6 +1,9 @@
 package templates
 
-import "fmt"
+import (
+	"fmt"
+	"path"
+)
 
 // transactionalDiskGiB is the template's disk in a transactional bake, which runs on it: at least
 // Leap's image's own.
@@ -24,7 +27,7 @@ var (
 
 // leapRepositories are what a bake of the distribution adds to Leap's own repositories, which have
 // containerd.
-func leapRepositories(b Bake) []*repository {
+func leapRepositories(b *Bake) []*repository {
 	switch b.Distribution {
 	case RKE2:
 		return []*repository{rke2SELinuxSUSE}
@@ -39,7 +42,7 @@ func leapRepositories(b Bake) []*repository {
 
 // leapRecipe installs what a node needs as a new snapshot of the image's root (leap/build.sh) and
 // reboots into it, where a kubeadm node pulls its control-plane images.
-func leapRecipe(b Bake, keys map[string]string) (Recipe, error) {
+func leapRecipe(b *Bake, keys map[string]string) (Recipe, error) {
 	repos := leapRepositories(b)
 	if repos == nil {
 		return Recipe{}, fmt.Errorf("no node of %s", b.Distribution)
@@ -54,17 +57,28 @@ func leapRecipe(b Bake, keys map[string]string) (Recipe, error) {
 	}
 	var rebootChecks [][]string
 	if b.Distribution == Kubeadm {
-		rebootChecks = append(rebootChecks, []string{imagesPath, b.KubernetesVersion})
+		pull := []string{imagesPath, b.KubernetesVersion}
+		if b.Proxy.Enabled() {
+			// The bake's scripts are still in /var, which a snapshot leaves alone.
+			pull = proxyBuild(pull)
+		}
+		rebootChecks = append(rebootChecks, pull)
+	}
+	// Leap's image has an SSH server, whose host keys the bake's boot made.
+	cleanup := [][]string{{"sh", "-c", "rm -f /etc/ssh/ssh_host_*"}}
+	if b.Proxy.Enabled() {
+		// The scripts hold the proxy's address and password. They stay in /var, which the template
+		// keeps, until the pull after the reboot has used them.
+		cleanup = append(cleanup, []string{"rm", "-rf", path.Join(buildDir, proxyDir)})
 	}
 	return Recipe{
 		UserData:     userData,
 		Checks:       [][]string{builtCheck},
 		Reboot:       true,
 		RebootChecks: append(rebootChecks, nodeChecks(b)...),
-		// Leap's image has an SSH server, whose host keys the bake's boot made.
-		Cleanup: append([][]string{{"sh", "-c", "rm -f /etc/ssh/ssh_host_*"}}, nodeCleanup...),
-		DiskGiB: transactionalDiskGiB,
-		Log:     buildLog,
-		BootLog: true,
+		Cleanup:      append(cleanup, nodeCleanup...),
+		DiskGiB:      transactionalDiskGiB,
+		Log:          buildLog,
+		BootLog:      true,
 	}, nil
 }

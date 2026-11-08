@@ -44,6 +44,11 @@ type Inventory struct {
 	Answering map[netip.Addr]bool
 	// ProxmoxURL is the Proxmox VE API address the management cluster's controllers will use.
 	ProxmoxURL string
+	// NextID is the datacenter's next-id option. Zero means it is unset, or the user may not read it.
+	NextID pve.NextID
+	// UsedVMIDs are the IDs of the VMs and containers the user sees. Nil means they could not be
+	// read.
+	UsedVMIDs map[int]bool
 }
 
 // Findings are what a preflight found. Errors stop the run, warnings do not. Each names the node,
@@ -116,6 +121,7 @@ func (s *Settings) Preflight(inv *Inventory, owned bool) Findings { //nolint:rev
 		s.checkDiskSpace(inv, &f)
 		s.checkAddressesFree(inv, &f)
 		s.checkNamesFree(inv, &f)
+		s.checkVMIDs(inv, &f)
 	}
 	s.warnPlacement(inv, &f)
 	s.warnRanges(inv, &f)
@@ -240,6 +246,22 @@ func (s *Settings) checkBridge(inv *Inventory, f *Findings) {
 	}
 	for _, node := range s.Nodes {
 		checkBridgeOn(inv, f, s.Bridge, node, "choose another bridge")
+		s.checkMTUOn(inv, f, node)
+	}
+}
+
+// checkMTUOn refuses an interface MTU above the management bridge's on the node: its larger frames
+// never pass. A bridge whose MTU Proxmox VE did not say, such as a VNet in a zone without one, passes.
+func (s *Settings) checkMTUOn(inv *Inventory, f *Findings, node string) {
+	if s.MTU == 0 {
+		return
+	}
+	i := slices.IndexFunc(inv.Bridges[node], func(b pve.Bridge) bool { return b.Ref() == s.Bridge })
+	if i < 0 {
+		return
+	}
+	if mtu := inv.Bridges[node][i].MTU; mtu > 0 && s.MTU > mtu {
+		f.Errors = append(f.Errors, fmt.Sprintf("Bridge %s has MTU %d on node %s. Use %d or less, or raise the bridge's MTU.", s.Bridge, mtu, node, mtu))
 	}
 }
 
@@ -329,6 +351,19 @@ func (s *Settings) checkAddressesFree(inv *Inventory, f *Findings) {
 		if ip, err := netip.ParseAddr(a); err == nil && inv.Answering[ip] {
 			f.Errors = append(f.Errors, fmt.Sprintf("Address %s answers to ping or a connection already. Choose an address no host uses.", a))
 		}
+	}
+}
+
+// checkVMIDs checks the range the management VMs' IDs are drawn from still holds a free ID for each
+// of them. A running management cluster keeps the IDs it has, so this is left out for it.
+func (s *Settings) checkVMIDs(inv *Inventory, f *Findings) {
+	if inv.UsedVMIDs == nil {
+		return
+	}
+	need := len(s.NodeAddresses)
+	r := ChooseVMIDRange(inv.NextID, need)
+	if free := r.Free(inv.UsedVMIDs); free < need {
+		f.Errors = append(f.Errors, fmt.Sprintf("VM IDs %d to %d, the range Proxmox VE offers new VMs from, have %s free, and the management cluster needs %d. Widen next-id under Datacenter, Options.", r.Start, r.End-1, plural(max(free, 0), "ID"), need))
 	}
 }
 

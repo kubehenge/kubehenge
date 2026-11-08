@@ -2,6 +2,8 @@ package provisioner
 
 import (
 	"cmp"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -41,6 +43,37 @@ type GitRepository struct {
 	URL      string `json:"url"`
 	Revision string `json:"revision,omitempty"`
 	Path     string `json:"path,omitempty"`
+	// CABundle is the PEM authority of a repository server whose certificate the usual authorities
+	// do not sign.
+	CABundle string `json:"caBundle,omitempty"`
+}
+
+// checkRepositoryCA holds the repository's authority to certificates in PEM, for a repository read
+// over https://, and for Flux not from a Secret of the owner's, which carries its own ca.crt.
+func (g *GitOps) checkRepositoryCA() error {
+	ca := g.Repository.CABundle
+	switch {
+	case !strings.HasPrefix(g.Repository.URL, "https://"):
+		return errors.New("a certificate authority is for a repository read over https://")
+	case g.engine() == flux && g.auth() == gitAuthExisting:
+		return errors.New("for Flux with your own Secret, put the authority in that Secret's ca.crt")
+	case len(ca) > maxRepositoryCA:
+		return fmt.Errorf("at most %d KiB", maxRepositoryCA/kibibyte)
+	case strings.Contains(ca, "PRIVATE KEY"):
+		return errors.New("holds a private key. Give the authority's certificate only")
+	case !x509.NewCertPool().AppendCertsFromPEM([]byte(ca)):
+		return errors.New("holds no PEM certificate")
+	}
+	return nil
+}
+
+// host is the repository server's name, which Argo CD files its certificate under.
+func (r *GitRepository) host() string {
+	u, err := url.Parse(r.URL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // GitOpsSignIn is how the engine's web interface signs people in through the cluster's first
@@ -81,6 +114,11 @@ const (
 	argoCDClientSecret     = "kubehenge-oidc-client" //nolint:gosec // a Secret's name, not a credential
 	fluxWebSecret          = "kubehenge-flux-web"    //nolint:gosec // a Secret's name, not a credential
 	clientSecretKey        = "clientSecret"
+	// gitCAKey holds the repository server's authority in Flux's pull Secret.
+	gitCAKey = "ca.crt"
+	// maxRepositoryCA bounds the authority a cluster gives, as the schema does.
+	kibibyte        = 1024
+	maxRepositoryCA = 64 * kibibyte
 
 	// argoCDLocalURL is where Argo CD's interface is reached without a host name, through
 	// kubectl -n argocd port-forward svc/argocd-server 8080:80.
@@ -227,6 +265,8 @@ type gitOpsState struct {
 	knownHosts   string
 	provider     *oidcProvider
 	clientSecret bool
+	// egress is the proxy Flux's controllers go through.
+	egress egressEnv
 }
 
 // fluxWebOn reports whether Flux's web interface is served: asked for, with a host name, an
@@ -289,22 +329,28 @@ func argoCDValues(certs *Certificates, g *GitOps, state *gitOpsState) (map[strin
 		rbac["policy.csv"] = csv.String()
 	}
 	server := map[string]any{"resources": reserved(cpu10m, memory64Mi)}
+	configs := map[string]any{
+		"cm":     cm,
+		"params": map[string]any{"server.insecure": true},
+		"rbac":   rbac,
+		"ssh":    map[string]any{"extraHosts": state.knownHosts},
+	}
 	values := map[string]any{
-		"crds":          map[string]any{"keep": false},
-		"global":        map[string]any{"networkPolicy": map[string]any{createKey: true}},
-		"dex":           map[string]any{"enabled": false},
-		"notifications": map[string]any{"enabled": false},
-		"configs": map[string]any{
-			"cm":     cm,
-			"params": map[string]any{"server.insecure": true},
-			"rbac":   rbac,
-			"ssh":    map[string]any{"extraHosts": state.knownHosts},
-		},
+		"crds":           map[string]any{"keep": false},
+		"global":         map[string]any{"networkPolicy": map[string]any{createKey: true}},
+		"dex":            map[string]any{"enabled": false},
+		"notifications":  map[string]any{"enabled": false},
+		"configs":        configs,
 		"server":         server,
 		controllerKey:    map[string]any{"resources": reserved("50m", "128Mi")},
 		"repoServer":     map[string]any{"resources": reserved(cpu10m, memory64Mi)},
 		"applicationSet": map[string]any{"resources": reserved(cpu10m, memory64Mi)},
 		"redis":          map[string]any{"resources": reserved(cpu10m, "32Mi")},
+	}
+	if ca := g.Repository.CABundle; ca != "" {
+		// The repository server is verified against argocd-tls-certs-cm, which the chart fills from
+		// here, by host.
+		configs["tls"] = map[string]any{"certificates": map[string]any{g.Repository.host(): ca}}
 	}
 	if g.Hostname != "" {
 		tls, annotations := addonIngress(certs, argoCD, g.Hostname, g.TLSSecret)
@@ -432,7 +478,7 @@ func bootstrapObject(g *GitOps, fluxVersion string) *unstructured.Unstructured {
 				"distribution": map[string]any{"version": fluxVersion, "registry": "ghcr.io/fluxcd"},
 				"components":   []any{"source-controller", "kustomize-controller", "helm-controller", "notification-controller"},
 				"cluster":      map[string]any{"type": "kubernetes", "size": "small", "networkPolicy": true, "multitenant": false, "domain": "cluster.local"},
-				"kustomize":    map[string]any{"patches": []any{map[string]any{"target": map[string]any{"kind": "Deployment"}, "patch": fluxRequestsPatch}}},
+				"kustomize":    map[string]any{"patches": []any{map[string]any{"target": map[string]any{"kind": deploymentKind}, "patch": fluxRequestsPatch}}},
 				"sync":         sync,
 			},
 		}}
@@ -475,13 +521,17 @@ func solverPolicy() *unstructured.Unstructured {
 	}}
 }
 
-// pullSecret is the Secret Flux reads the repository with, or "" for a public one.
+// pullSecret is the Secret Flux reads the repository with, or "" for a public one served with a
+// certificate the usual authorities sign. For a private authority the Secret holds it as ca.crt.
 func (g *GitOps) pullSecret() string {
 	switch g.auth() {
 	case gitAuthKey, gitAuthToken:
 		return fluxPullSecret
 	case gitAuthExisting:
 		return g.ExistingSecret
+	}
+	if g.Repository.CABundle != "" {
+		return fluxPullSecret
 	}
 	return ""
 }

@@ -103,10 +103,19 @@ type fakePVE struct {
 	userMissing bool
 	groups      []string
 	userWrites  []map[string]any
+	// storageList, when set, replaces the cluster's storages. inactive are "<node>/<storage>" pairs
+	// that a node reports as not active, or disabled.
+	storageList []map[string]any
+	inactive    map[string]bool
+	// destroys counts the destroys that were allowed, and protections the writes of the flag.
+	destroys    int
+	protections []string
+	// vmidQuery is the vmid of the request being answered.
+	vmidQuery string
 }
 
 func newFakePVE(at string, volumes map[string][]string) *fakePVE {
-	return &fakePVE{at: at, offline: map[string]bool{}, config: map[string]string{"name": webNames.VolumeOwner}, volumes: volumes, pool: webNames.Pool}
+	return &fakePVE{at: at, offline: map[string]bool{}, config: map[string]string{"name": webNames.VolumeOwner}, volumes: volumes, pool: webNames.Pool, inactive: map[string]bool{}}
 }
 
 // webNames are the names of the cluster team-a/web, whose volume owner the fake holds.
@@ -123,15 +132,14 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.Split(strings.TrimPrefix(r.URL.Path, "/api2/json/"), "/")
 	f.requests = append(f.requests, r.Method+" "+strings.TrimPrefix(r.URL.Path, "/api2/json"))
+	f.vmidQuery = r.URL.Query().Get("vmid")
 	switch {
 	case f.creation(a, r, path, body):
 	case r.URL.Path == "/api2/json/cluster/resources":
 		f.resources(a)
 	case r.URL.Path == "/api2/json/storage":
-		a.reply([]map[string]any{
-			{"storage": "local", "content": "images,iso", "shared": 0},
-			{"storage": "ceph", "content": "images", "shared": 1},
-		})
+		a.reply(f.storages())
+	case f.nodeStorageRoutes(a, path):
 	case r.URL.Path == "/api2/json/nodes":
 		a.reply(f.nodes())
 	case r.URL.Path == "/api2/json/pools":
@@ -148,8 +156,6 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.user(a, r.Method, body)
 	case path[0] == "access":
 		a.reply(nil)
-	case len(path) == 5 && path[2] == "storage" && path[4] == "content":
-		a.reply(f.content(path[1]+"/"+path[3], r.URL.Query().Get("vmid")))
 	case len(path) >= 4 && path[2] == "tasks" && f.hang:
 		a.reply(map[string]any{"status": "running"})
 	case len(path) >= 4 && path[2] == "tasks":
@@ -159,6 +165,50 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// nodeStorageRoutes answers a node's list of storages and the content of one. It reports whether
+// it answered.
+func (f *fakePVE) nodeStorageRoutes(a answer, path []string) bool {
+	switch {
+	case len(path) == 3 && path[0] == "nodes" && path[2] == "storage":
+		a.reply(f.nodeStorages(path[1]))
+	case len(path) == 5 && path[2] == "storage" && path[4] == "content" && f.inactive[path[1]+"/"+path[3]]:
+		a.fail("storage '" + path[3] + "' is not online")
+	case len(path) == 5 && path[2] == "storage" && path[4] == "content":
+		a.reply(f.content(path[1]+"/"+path[3], f.vmidQuery))
+	default:
+		return false
+	}
+	return true
+}
+
+func (f *fakePVE) storages() []map[string]any {
+	if f.storageList != nil {
+		return f.storageList
+	}
+	return []map[string]any{
+		{"storage": "local", "content": "images,iso", "shared": 0},
+		{"storage": "ceph", "content": "images", "shared": 1},
+	}
+}
+
+// nodeStorages answers /nodes/{node}/storage: every storage the node may have, active and enabled
+// unless marked inactive.
+func (f *fakePVE) nodeStorages(node string) []map[string]any {
+	var list []map[string]any
+	for _, s := range f.storages() {
+		name := fmt.Sprint(s["storage"])
+		if nodes, restricted := s["nodes"].(string); restricted && !slices.Contains(splitList(nodes), node) {
+			continue
+		}
+		entry := map[string]any{"storage": name, "active": 1, "enabled": 1}
+		if f.inactive[node+"/"+name] {
+			entry = map[string]any{"storage": name, "active": 0}
+		}
+		list = append(list, entry)
+	}
+	return list
 }
 
 // user answers for the cluster's user as Proxmox VE does: a change replaces its groups unless told
@@ -219,7 +269,7 @@ func (f *fakePVE) pools(a answer, r *http.Request) {
 		a.reply([]map[string]any{{"members": []any{}}})
 		return
 	}
-	a.reply([]map[string]any{{"members": []map[string]any{{"type": "qemu", "vmid": 4242, "name": webNames.VolumeOwner, "node": f.at}}}})
+	a.reply([]map[string]any{{"comment": poolComment, "members": []map[string]any{{"type": "qemu", "vmid": 4242, "name": webNames.VolumeOwner, "node": f.at}}}})
 }
 
 func (f *fakePVE) writeACL(body map[string]any) {
@@ -312,6 +362,11 @@ func (f *fakePVE) vm(a answer, method string, path []string, body map[string]any
 	}
 	switch {
 	case len(path) == 4 && method == http.MethodDelete:
+		if f.config["protection"] == "1" {
+			a.fail("can't remove VM 4242: protection is enabled")
+			return
+		}
+		f.destroys++
 		for key, vols := range f.volumes {
 			if key == f.at+"/local" || key == "*/ceph" {
 				f.volumes[key] = slices.DeleteFunc(vols, func(v string) bool { return strings.Contains(v, "vm-4242-") })
@@ -347,7 +402,14 @@ func (f *fakePVE) migrate(a answer, body map[string]any) {
 
 func (f *fakePVE) writeConfig(a answer, body map[string]any) {
 	f.writes++
+	if v, ok := body["protection"]; ok {
+		f.protections = append(f.protections, fmt.Sprint(v))
+	}
 	if keys, ok := body["delete"].(string); ok {
+		if f.config["protection"] == "1" {
+			a.fail("can't remove unused disk: protection is enabled")
+			return
+		}
 		for k := range strings.SplitSeq(keys, ",") {
 			if !f.free(f.at, f.config[k]) {
 				a.fail("no such volume '" + f.config[k] + "' on node " + f.at)
@@ -411,6 +473,16 @@ type moved struct{ pve *proxmox.Client }
 func (m moved) MoveVolumeOwner(ctx context.Context, vmid int, from, to string) error {
 	p := &Proxmox{Client: m.pve}
 	return p.MoveVolumeOwner(ctx, vmid, from, to)
+}
+
+func (m moved) Protect(ctx context.Context, node string, vmid int) error {
+	p := &Proxmox{Client: m.pve}
+	return p.Protect(ctx, node, vmid)
+}
+
+func (m moved) Unprotect(ctx context.Context, node string, vmid int) error {
+	p := &Proxmox{Client: m.pve}
+	return p.Unprotect(ctx, node, vmid)
 }
 
 func serve(t *testing.T, f *fakePVE) *proxmox.Client {
@@ -568,7 +640,8 @@ func TestRemoveDeletesVolumesOnEveryNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.Remove(context.Background(), n, Credentials{}); err != nil {
+	// The owner's unused disk names local, the cluster's storage variable ceph.
+	if err := p.Remove(context.Background(), n, Credentials{}, "ceph"); err != nil {
 		t.Fatal(err)
 	}
 	if !f.destroyed {
@@ -596,8 +669,9 @@ func TestRemoveWaitsForAnOfflineNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.Remove(context.Background(), n, Credentials{}); err == nil {
-		t.Fatal("removed the cluster while a node with its volumes is offline")
+	err = p.Remove(context.Background(), n, Credentials{}, "local")
+	if err == nil || !strings.Contains(err.Error(), "node b is offline") || !strings.Contains(err.Error(), "storage local") {
+		t.Fatalf("got %v; want a refusal naming node b and its storage local while it is offline", err)
 	}
 	if f.destroyed {
 		t.Error("destroyed the owner VM, which would leave the offline node's volumes without one")
@@ -611,14 +685,14 @@ func TestRemoveWaitsForAnOwnerNotListedYet(t *testing.T) {
 	p := &Proxmox{Client: serve(t, f)}
 	held := Credentials{VolumeOwner: 4242, VolumeOwnerNode: "a"}
 
-	if err := p.Remove(context.Background(), webNames, held); err == nil {
+	if err := p.Remove(context.Background(), webNames, held, "local"); err == nil {
 		t.Fatal("removed the cluster before its owner VM's pool was confirmed")
 	}
 	if f.destroyed {
 		t.Fatal("destroyed an owner VM whose pool was not confirmed")
 	}
 	f.unlisted = false
-	if err := p.Remove(context.Background(), webNames, held); err != nil {
+	if err := p.Remove(context.Background(), webNames, held, "local"); err != nil {
 		t.Fatal(err)
 	}
 	if !f.destroyed {
@@ -818,7 +892,7 @@ func TestOwnerOfTheSameNameInAnotherPoolIsNeverTaken(t *testing.T) {
 	if found, err := p.isVolumeOwner(context.Background(), webNames, 4242, "a", members); err != nil || found.ours {
 		t.Fatalf("through the pool: ours = %v, %v", found.ours, err)
 	}
-	if err := p.Remove(context.Background(), webNames, held); err != nil {
+	if err := p.Remove(context.Background(), webNames, held, ""); err != nil {
 		t.Fatal(err)
 	}
 	if f.destroyed || len(f.volumes["a/local"]) != 1 || f.writes != 0 {
@@ -837,7 +911,7 @@ func TestRemoveLeavesAVMThatTookTheRecordedID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := p.Remove(context.Background(), n, Credentials{VolumeOwner: 4242, VolumeOwnerNode: "a"}); err != nil {
+	if err := p.Remove(context.Background(), n, Credentials{VolumeOwner: 4242, VolumeOwnerNode: "a"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if f.destroyed {

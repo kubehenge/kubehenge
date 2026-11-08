@@ -1,5 +1,6 @@
 import type { JSX, ReactNode } from "react";
 
+import { AlertingFields } from "./Alerting";
 import {
   BackupFieldset,
   BackupSourcesField,
@@ -19,6 +20,7 @@ import {
   type AddonKey,
   addonsProblem,
   backupsChosen,
+  coresText,
   etcdOffered,
   logsChosen,
   machineLeast,
@@ -27,9 +29,12 @@ import {
   variable,
 } from "./create-form";
 import type { StepProps } from "./CreateSteps";
+import type { CredentialKey } from "./CredentialField";
+import { EgressFields, egressFields } from "./EgressProxy";
 import { EtcdSnapshotFieldset, etcdSnapshotsInfo } from "./EtcdSnapshots";
 import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
+import { NamespaceLabelsField } from "./NamespaceLabels";
 import { PodSecurityFields, cisHint, cisInfo } from "./PodSecurity";
 import type { ClusterClass } from "./types";
 import {
@@ -89,7 +94,11 @@ function HeadlampAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Elem
 }
 
 // LogsAddOn keeps logs, offered only beside monitoring, whose Grafana reads them.
-function LogsAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
+function LogsAddOn({
+  form,
+  set,
+  showAll,
+}: Pick<StepProps, "form" | "set"> & { showAll: boolean | undefined }): JSX.Element {
   return (
     <>
       <label className="check">
@@ -111,7 +120,7 @@ function LogsAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element 
       {logsChosen(form) && (
         <fieldset className="group">
           <legend>Logs</legend>
-          <LogsFields value={form.logs} onChange={(l) => set("logs", l)} />
+          <LogsFields value={form.logs} onChange={(l) => set("logs", l)} showAll={showAll} />
         </fieldset>
       )}
     </>
@@ -248,6 +257,9 @@ function EtcdSnapshotsChoice({
 // which Sys.Modify on its pool grants.
 const tokenRefusal = "Needs Sys.Modify on the workload pool";
 
+const existingCertManagerInfo =
+  "Kubehenge installs none and still makes its issuers and certificates in it. Fixed once the cluster exists.";
+
 // CertificatesAddOn sets the certificates up, with the DNS provider's credential typed in here for
 // the new cluster.
 function CertificatesAddOn({
@@ -255,10 +267,28 @@ function CertificatesAddOn({
   set,
   canTrust,
   showAll = false,
-}: Pick<StepProps, "form" | "set"> & { canTrust: boolean | undefined; showAll: boolean | undefined }): JSX.Element {
+  mayUseExisting,
+}: Pick<StepProps, "form" | "set"> & {
+  canTrust: boolean | undefined;
+  showAll: boolean | undefined;
+  mayUseExisting: boolean;
+}): JSX.Element {
   return (
     <fieldset className="group">
       <legend>Certificates</legend>
+      {mayUseExisting && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.existingCertManager}
+              onChange={(e) => set("existingCertManager", e.target.checked)}
+            />{" "}
+            Use existing cert-manager
+          </label>
+          <Info about="Existing cert-manager">{existingCertManagerInfo}</Info>
+        </>
+      )}
       <CertificatesFields
         value={form.certificates}
         onChange={(f) => set("certificates", f)}
@@ -280,6 +310,25 @@ function CertificatesAddOn({
                 disabled={canTrust === false}
                 value={form.dns01Token}
                 onChange={(e) => set("dns01Token", e.target.value)}
+              />
+            )}
+          </Field>
+        )}
+        renderBinding={(label, hint) => (
+          <Field
+            label={label}
+            hint={canTrust === false ? tokenRefusal : hint}
+            info={canTrust === false ? undefined : "Add it later in Options. The cluster waits for it."}
+          >
+            {(id) => (
+              <input
+                id={id}
+                type="password"
+                autoComplete="new-password"
+                spellCheck={false}
+                disabled={canTrust === false}
+                value={form.eabKey}
+                onChange={(e) => set("eabKey", e.target.value)}
               />
             )}
           </Field>
@@ -389,13 +438,60 @@ function AddonRoom({ form, cls }: { form: StepProps["form"]; cls: ClusterClass |
   const names = [...new Set([...used.names, ...requested.names])];
   return (
     <p className="hint" id="addon-room">
-      {`Each ${node} needs at least ${least.memoryMiB} MiB and ${cores} cores`}
+      {`Each ${node} needs at least ${least.memoryMiB} MiB and ${coresText(cores)}`}
       <Info about="add-on resources">{`Add-ons use about ${amounts.join(" and ")}: ${names.join(", ")}.`}</Info>
     </p>
   );
 }
 
-function MonitoringAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
+// PendingSecret takes the values of a credential for the new cluster, stored once it exists.
+function PendingSecret({
+  form,
+  set,
+  purpose,
+  label,
+  keys,
+  canTrust,
+}: Pick<StepProps, "form" | "set"> & {
+  purpose: string;
+  label: string;
+  keys: CredentialKey[];
+  canTrust: boolean | undefined;
+}): JSX.Element {
+  const values = form.alertingSecrets[purpose] ?? {};
+  return (
+    <fieldset className="group">
+      <legend>{label}</legend>
+      {canTrust === false && <p className="hint">{tokenRefusal}</p>}
+      {keys.map((k) => (
+        <Field key={k.key} label={k.label} hint={k.optional === true ? "Optional" : undefined}>
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              disabled={canTrust === false}
+              value={values[k.key] ?? ""}
+              onChange={(e) =>
+                set("alertingSecrets", {
+                  ...form.alertingSecrets,
+                  [purpose]: { ...values, [k.key]: e.target.value },
+                })
+              }
+            />
+          )}
+        </Field>
+      ))}
+    </fieldset>
+  );
+}
+
+function MonitoringAddOn({
+  form,
+  set,
+  canTrust,
+}: Pick<StepProps, "form" | "set"> & { canTrust: boolean | undefined }): JSX.Element {
   return (
     <>
       <label className="check">
@@ -407,15 +503,24 @@ function MonitoringAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.El
         monitoring/kube-prometheus-stack-grafana.
       </Info>
       {form.monitoring && (
-        <Field label="Grafana host name" hint="Optional">
-          {(id) => (
-            <input
-              id={id}
-              value={form.grafanaHostname}
-              onChange={(e) => set("grafanaHostname", e.target.value.trim())}
-            />
-          )}
-        </Field>
+        <>
+          <Field label="Grafana host name" hint="Optional">
+            {(id) => (
+              <input
+                id={id}
+                value={form.grafanaHostname}
+                onChange={(e) => set("grafanaHostname", e.target.value.trim())}
+              />
+            )}
+          </Field>
+          <AlertingFields
+            value={form.alerting}
+            onChange={(a) => set("alerting", a)}
+            renderCredential={(purpose, label, keys) => (
+              <PendingSecret form={form} set={set} purpose={purpose} label={label} keys={keys} canTrust={canTrust} />
+            )}
+          />
+        </>
       )}
     </>
   );
@@ -491,11 +596,11 @@ function AddonCards({
         <HeadlampAddOn form={form} set={set} />
       </AddonCard>
       <AddonCard mib={cost("monitoring")} on={form.monitoring}>
-        <MonitoringAddOn form={form} set={set} />
+        <MonitoringAddOn form={form} set={set} canTrust={canTrust} />
       </AddonCard>
       {variable(cls, "logs") && (
         <AddonCard mib={cost("logs")} on={logsChosen(form)}>
-          <LogsAddOn form={form} set={set} />
+          <LogsAddOn form={form} set={set} showAll={showAll} />
         </AddonCard>
       )}
       {variable(cls, "istio") && (
@@ -530,7 +635,13 @@ function AddonCards({
       )}
       {variable(cls, "certificates") && (
         <AddonCard mib={cost("certManager")} on={form.certificates.enabled}>
-          <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
+          <CertificatesAddOn
+            form={form}
+            set={set}
+            canTrust={canTrust}
+            showAll={showAll}
+            mayUseExisting={variable(cls, "useExisting") !== undefined}
+          />
         </AddonCard>
       )}
       {variable(cls, "gitops") && (
@@ -538,12 +649,21 @@ function AddonCards({
           <GitOpsChoices form={form} set={set} shown={shown} canTrust={canTrust} />
         </AddonCard>
       )}
+      {variable(cls, "egressProxy") && (
+        <AddonCard mib={0} on={form.egress.mode !== "management"}>
+          <EgressFields
+            value={form.egress}
+            onChange={(e) => set("egress", e)}
+            problems={Object.fromEntries(egressFields.map((f) => [f, shown(`egress.${f}`)]))}
+          />
+        </AddonCard>
+      )}
     </div>
   );
 }
 
 export function AddOnsStep(props: AddOnsProps): JSX.Element {
-  const { form, set, cls } = props;
+  const { form, set, cls, shown } = props;
   return (
     <>
       <AddonCards step={props} />
@@ -564,14 +684,23 @@ export function AddOnsStep(props: AddOnsProps): JSX.Element {
           </p>
         </>
       )}
-      {variable(cls, "podSecurity") && (
+      {(variable(cls, "podSecurity") !== undefined || variable(cls, "namespaceLabels") !== undefined) && (
         <fieldset className="group">
           <legend>Pod security</legend>
-          <PodSecurityFields
-            value={form.podSecurity}
-            onChange={(p) => set("podSecurity", p)}
-            cis={form.cis && variable(cls, "cis") !== undefined}
-          />
+          {variable(cls, "podSecurity") && (
+            <PodSecurityFields
+              value={form.podSecurity}
+              onChange={(p) => set("podSecurity", p)}
+              cis={form.cis && variable(cls, "cis") !== undefined}
+            />
+          )}
+          {variable(cls, "namespaceLabels") && (
+            <NamespaceLabelsField
+              value={form.namespaceLabels}
+              onChange={(v) => set("namespaceLabels", v)}
+              error={shown("namespaceLabels")}
+            />
+          )}
         </fieldset>
       )}
       <AddonRoom form={form} cls={cls} />

@@ -9,21 +9,27 @@ import {
   bridgeRef,
   cidr,
   isIP,
+  isMTU,
   isVLAN,
+  maxMTU,
+  minMTU,
   list,
   maskOf,
   networkOf,
   pointToPoint,
   rangeProblem,
   sameNetwork,
+  searchDomainsProblem,
   toInt,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
+import { TakeOver } from "./TakeOver";
 import type {
   BackupTarget,
   Bridge,
   Job,
   ManagementSettings,
+  NodeDNS,
   OIDCProvider,
   PveNode,
   SetupFindings,
@@ -69,16 +75,35 @@ export interface SetupForm {
   vmDatastore: string;
   bridge: string;
   vlan: string;
+  // Empty: the bridge's.
+  mtu: string;
   nodeAddresses: string;
   apiAddress: string;
   gateway: string;
   dnsServers: string;
+  searchDomains: string;
   timeServers: string;
   workloadDatastores: string[];
   workloadBridges: string[];
   bootstrapDatastore: string;
   // registry=endpoint, one per line.
   mirrors: string;
+  // host=address, one per line, for charts.
+  chartMirrors: string;
+  // PEM certificates of the chart mirrors' authority.
+  chartMirrorCA: string;
+  // The address alone, with no user name or password.
+  proxyURL: string;
+  proxyUser: string;
+  // Typed anew. A saved password never reaches the page.
+  proxyPassword: string;
+  // Whether the server holds a password, and what the form does with it.
+  proxyPasswordSaved: boolean;
+  proxyPasswordAction: "keep" | "replace" | "remove";
+  // Comma or line separated.
+  proxyExceptions: string;
+  // PEM certificates.
+  proxyCA: string;
   podSubnets: string;
   serviceSubnets: string;
   // Kept from the last run. Not edited here.
@@ -106,6 +131,7 @@ export interface SetupForm {
   refreshGateway: string;
   refreshDNS: string;
   creatorBuilds: boolean;
+  kubeadmPatches: boolean;
   clusterSysAudit: boolean;
   nodeBootLogs: boolean;
   apiAuditLog: boolean;
@@ -153,6 +179,9 @@ function refreshSettings(f: SetupForm): NonNullable<ManagementSettings["template
   if (f.creatorBuilds) {
     r.creatorBuilds = true;
   }
+  if (!f.kubeadmPatches) {
+    r.kubeadmPatches = false;
+  }
   return r;
 }
 
@@ -197,6 +226,104 @@ function formatMirrors(m: Record<string, string[]> | undefined): string {
     .join("\n");
 }
 
+function parseChartMirrors(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of mirrorLines(text)) {
+    const at = line.indexOf("=");
+    const host = line.slice(0, Math.max(at, 0)).trim();
+    const address = line.slice(at + 1).trim();
+    if (at > 0 && filled(host) && filled(address)) {
+      out[host] = address;
+    }
+  }
+  return out;
+}
+
+function formatChartMirrors(m: Record<string, string> | undefined): string {
+  return Object.entries(m ?? {})
+    .map(([host, address]) => `${host}=${address}`)
+    .join("\n");
+}
+
+// chartRepositories is the chart mirrors the form names, if it names any.
+function chartRepositories(f: SetupForm): ManagementSettings["chartRepositories"] {
+  const mirrors = parseChartMirrors(f.chartMirrors);
+  const hasMirrors = Object.keys(mirrors).length > 0;
+  if (!hasMirrors && !filled(f.chartMirrorCA)) {
+    return undefined;
+  }
+  const out: NonNullable<ManagementSettings["chartRepositories"]> = {};
+  if (hasMirrors) {
+    out.mirrors = mirrors;
+  }
+  if (filled(f.chartMirrorCA)) {
+    out.caBundle = `${f.chartMirrorCA.trim()}\n`;
+  }
+  return out;
+}
+
+// proxySettings is the proxy the form names, if it names an address.
+function proxySettings(f: SetupForm): ManagementSettings["proxy"] {
+  if (!filled(f.proxyURL)) {
+    return undefined;
+  }
+  const proxy: NonNullable<ManagementSettings["proxy"]> = { url: f.proxyURL.trim() };
+  if (filled(f.proxyUser)) {
+    proxy.user = f.proxyUser.trim();
+    if (f.proxyPasswordAction === "remove") {
+      proxy.clearPassword = true;
+    } else if ((f.proxyPasswordAction === "replace" || !f.proxyPasswordSaved) && f.proxyPassword !== "") {
+      proxy.password = f.proxyPassword;
+    }
+  }
+  if (list(f.proxyExceptions).length > 0) {
+    proxy.noProxy = list(f.proxyExceptions);
+  }
+  if (filled(f.proxyCA)) {
+    proxy.caBundle = `${f.proxyCA.trim()}\n`;
+  }
+  return proxy;
+}
+
+/** outboundSettings are the settings for how the management cluster reaches registries, chart mirrors and the internet, and its subnets. */
+function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
+  const s: Partial<ManagementSettings> = {};
+  const mirrors = parseMirrors(f.mirrors);
+  if (Object.keys(mirrors).length > 0) {
+    s.registryMirrors = mirrors;
+  }
+  const charts = chartRepositories(f);
+  if (charts) {
+    s.chartRepositories = charts;
+  }
+  const proxy = proxySettings(f);
+  if (proxy) {
+    s.proxy = proxy;
+  }
+  if (list(f.podSubnets).length > 0) {
+    s.podSubnets = list(f.podSubnets);
+  }
+  if (list(f.serviceSubnets).length > 0) {
+    s.serviceSubnets = list(f.serviceSubnets);
+  }
+  return s;
+}
+
+/** linkSettings holds the optional numbers of the management VMs' interface: set ones only. */
+function linkSettings(f: SetupForm): Pick<ManagementSettings, "vlan" | "mtu"> {
+  return { ...(f.vlan ? { vlan: Number(f.vlan) } : {}), ...(f.mtu ? { mtu: Number(f.mtu) } : {}) };
+}
+
+// The lists the settings leave out when empty, where the module has a default for them.
+function optionalLists(f: SetupForm): Pick<ManagementSettings, "searchDomains" | "timeServers"> {
+  const domains = list(f.searchDomains);
+  const servers = list(f.timeServers);
+  return {
+    ...(domains.length > 0 ? { searchDomains: domains } : {}),
+    ...(servers.length > 0 ? { timeServers: servers } : {}),
+  };
+}
+
 export function settings(f: SetupForm): ManagementSettings {
   const s: ManagementSettings = {
     nodes: f.nodes,
@@ -207,24 +334,13 @@ export function settings(f: SetupForm): ManagementSettings {
     apiAddress: f.apiAddress,
     gateway: f.gateway,
     dnsServers: list(f.dnsServers),
-    ...(list(f.timeServers).length > 0 ? { timeServers: list(f.timeServers) } : {}),
+    ...optionalLists(f),
     workloadDatastores: f.workloadDatastores,
     workloadBridges: f.workloadBridges,
     bootstrapDatastore: f.bootstrapDatastore,
+    ...linkSettings(f),
+    ...outboundSettings(f),
   };
-  if (f.vlan) {
-    s.vlan = Number(f.vlan);
-  }
-  const mirrors = parseMirrors(f.mirrors);
-  if (Object.keys(mirrors).length > 0) {
-    s.registryMirrors = mirrors;
-  }
-  if (list(f.podSubnets).length > 0) {
-    s.podSubnets = list(f.podSubnets);
-  }
-  if (list(f.serviceSubnets).length > 0) {
-    s.serviceSubnets = list(f.serviceSubnets);
-  }
   if (filled(f.controllerImage)) {
     s.controllerImage = f.controllerImage;
   }
@@ -298,6 +414,7 @@ type RefreshFields = Pick<
   | "refreshGateway"
   | "refreshDNS"
   | "creatorBuilds"
+  | "kubeadmPatches"
 >;
 
 // refreshFields fills the refresh's fields. Settings that name no refresh have it on, with every
@@ -314,6 +431,7 @@ function refreshFields(r: ManagementSettings["templateRefresh"]): RefreshFields 
     refreshGateway: r?.gateway ?? "",
     refreshDNS: (r?.dns ?? []).join(", "),
     creatorBuilds: r?.creatorBuilds === true,
+    kubeadmPatches: r?.kubeadmPatches !== false,
   };
 }
 
@@ -327,6 +445,44 @@ function refreshPlacementFields(
   };
 }
 
+const chartFields = (saved: ManagementSettings): Pick<SetupForm, "chartMirrors" | "chartMirrorCA"> => ({
+  chartMirrors: formatChartMirrors(saved.chartRepositories?.mirrors),
+  chartMirrorCA: saved.chartRepositories?.caBundle ?? "",
+});
+
+const positive = (n: number | undefined): string => (n !== undefined && n > 0 ? String(n) : "");
+const joined = (values: string[] | undefined): string => (values ?? []).join(", ");
+
+const networkFields = (
+  saved: ManagementSettings,
+): Pick<SetupForm, "vlan" | "mtu" | "searchDomains" | "timeServers"> => ({
+  vlan: positive(saved.vlan),
+  mtu: positive(saved.mtu),
+  searchDomains: joined(saved.searchDomains),
+  timeServers: joined(saved.timeServers),
+});
+
+const proxyFields = (
+  saved: ManagementSettings,
+): Pick<
+  SetupForm,
+  | "proxyURL"
+  | "proxyUser"
+  | "proxyPassword"
+  | "proxyPasswordSaved"
+  | "proxyPasswordAction"
+  | "proxyExceptions"
+  | "proxyCA"
+> => ({
+  proxyURL: saved.proxy?.url ?? "",
+  proxyUser: saved.proxy?.user ?? "",
+  proxyPassword: "",
+  proxyPasswordSaved: saved.proxy?.passwordSet === true,
+  proxyPasswordAction: "keep",
+  proxyExceptions: joined(saved.proxy?.noProxy),
+  proxyCA: saved.proxy?.caBundle ?? "",
+});
+
 /** formOf fills the form from saved settings, or with nothing chosen yet. */
 export function formOf(saved: ManagementSettings = unsaved): SetupForm {
   return {
@@ -334,16 +490,17 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     imageDatastore: saved.imageDatastore,
     vmDatastore: saved.vmDatastore,
     bridge: saved.bridge,
-    vlan: saved.vlan !== undefined && saved.vlan > 0 ? String(saved.vlan) : "",
     nodeAddresses: saved.nodeAddresses.join("\n"),
     apiAddress: saved.apiAddress,
     gateway: saved.gateway,
     dnsServers: saved.dnsServers.join(", "),
-    timeServers: (saved.timeServers ?? []).join(", "),
+    ...networkFields(saved),
     workloadDatastores: saved.workloadDatastores,
     workloadBridges: saved.workloadBridges,
     bootstrapDatastore: saved.bootstrapDatastore,
     mirrors: formatMirrors(saved.registryMirrors),
+    ...chartFields(saved),
+    ...proxyFields(saved),
     podSubnets: (saved.podSubnets ?? []).join(", "),
     serviceSubnets: (saved.serviceSubnets ?? []).join(", "),
     controllerImage: saved.controllerImage,
@@ -372,16 +529,25 @@ export type SetupField =
   | "vmDatastore"
   | "bridge"
   | "vlan"
+  | "mtu"
   | "nodeAddresses"
   | "apiAddress"
   | "gateway"
   | "dnsServers"
+  | "searchDomains"
   | "timeServers"
   | "workload"
   | "bootstrapDatastore"
   | "clusterOIDC"
   | "backupTargets"
   | "mirrors"
+  | "chartMirrors"
+  | "chartMirrorCA"
+  | "proxyURL"
+  | "proxyUser"
+  | "proxyPassword"
+  | "proxyExceptions"
+  | "proxyCA"
   | "podSubnets"
   | "serviceSubnets"
   | "refreshVLAN"
@@ -401,12 +567,21 @@ const stepFields: Record<SetupStep, SetupField[]> = {
   Network: [
     "bridge",
     "vlan",
+    "mtu",
     "nodeAddresses",
     "apiAddress",
     "gateway",
     "dnsServers",
+    "searchDomains",
     "timeServers",
     "mirrors",
+    "chartMirrors",
+    "chartMirrorCA",
+    "proxyURL",
+    "proxyUser",
+    "proxyPassword",
+    "proxyExceptions",
+    "proxyCA",
     "podSubnets",
     "serviceSubnets",
   ],
@@ -417,7 +592,18 @@ const stepFields: Record<SetupStep, SetupField[]> = {
 
 const stepOf = (k: SetupField): SetupStep => setupSteps.find((s) => stepFields[s].includes(k)) ?? "Placement";
 
-const advancedFields: SetupField[] = ["mirrors", "podSubnets", "serviceSubnets"];
+const advancedFields: SetupField[] = [
+  "mirrors",
+  "chartMirrors",
+  "chartMirrorCA",
+  "proxyURL",
+  "proxyUser",
+  "proxyPassword",
+  "proxyExceptions",
+  "proxyCA",
+  "podSubnets",
+  "serviceSubnets",
+];
 
 // preferredDisk is the storage for the management cluster's disks a first run starts from: a shared
 // one, which lets its VMs move between nodes, else the one with the most room.
@@ -521,6 +707,9 @@ function placementProblems(f: SetupForm): SetupProblems {
   if (f.vlan && !isVLAN(f.vlan)) {
     p.vlan = "A whole number from 1 to 4094.";
   }
+  if (f.mtu && !isMTU(f.mtu)) {
+    p.mtu = `A whole number from ${minMTU} to ${maxMTU}.`;
+  }
   return p;
 }
 
@@ -553,8 +742,55 @@ function networkProblems(f: SetupForm, was: ManagementSettings | undefined): Set
   } else if (dns.some((d) => !isIP(d))) {
     p.dnsServers = "Enter IP addresses only.";
   }
+  const domains = searchDomainsProblem(list(f.searchDomains));
+  if (domains !== undefined) {
+    p.searchDomains = domains;
+  }
   if (list(f.timeServers).some((t) => /[\s/:]/u.test(t) && !isIP(t))) {
     p.timeServers = "Enter host names or IP addresses only.";
+  }
+  return p;
+}
+
+/** proxySummary is the proxy as the review shows it: the address and user, never a password. */
+export function proxySummary(proxy: ManagementSettings["proxy"]): string {
+  if (!proxy) {
+    return "None";
+  }
+  if (!filled(proxy.user)) {
+    return proxy.url;
+  }
+  return `${proxy.url}, user ${proxy.user}${proxy.passwordSet === true || filled(proxy.password) ? ", password set" : ""}`;
+}
+
+// proxyProblems are those of the proxy's address, user, exceptions and certificate authority. The
+// errors never repeat what was typed, which may be a password.
+function proxyProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  if (!filled(f.proxyURL)) {
+    if (list(f.proxyExceptions).length > 0 || filled(f.proxyCA) || filled(f.proxyUser)) {
+      p.proxyURL = "Enter the proxy address.";
+    }
+    return p;
+  }
+  if (f.proxyURL.includes("@")) {
+    p.proxyURL = "Leave the user name and password out. They have fields of their own.";
+  } else if (!/^https?:\/\/[^\s/?#]+\/?$/u.test(f.proxyURL.trim())) {
+    p.proxyURL = "Use an http:// or https:// address without a path.";
+  }
+  if (!filled(f.proxyUser) && f.proxyPassword !== "") {
+    p.proxyUser = "Enter the user name for the password.";
+  }
+  const wrong = list(f.proxyExceptions).find((e) => !/^[\w*.:/[\]-]+$/u.test(e));
+  if (wrong !== undefined) {
+    p.proxyExceptions = `${wrong} is no host, domain, address or network.`;
+  }
+  if (filled(f.proxyCA)) {
+    if (f.proxyCA.includes("PRIVATE KEY")) {
+      p.proxyCA = "Paste certificates only, no private key.";
+    } else if (!f.proxyCA.includes("-----BEGIN CERTIFICATE-----")) {
+      p.proxyCA = "Paste PEM certificates.";
+    }
   }
   return p;
 }
@@ -570,6 +806,43 @@ function badMirror(mirrors: string): string | undefined {
       !/^https?:\/\/[^\s/]+(?:\/\S*)?$/u.test(endpoint ?? "")
     );
   });
+}
+
+// badChartMirror is the first line of the chart mirrors that is no host=address with an oci://,
+// https:// or http:// address that has no credentials and no trailing slash.
+function badChartMirror(mirrors: string): string | undefined {
+  return mirrorLines(mirrors).find((line) => {
+    const at = line.indexOf("=");
+    if (at < 1) {
+      return true;
+    }
+    const host = line.slice(0, at).trim();
+    const address = line.slice(at + 1).trim();
+    return (
+      !filled(host) ||
+      /[\s/@=]/u.test(host) ||
+      !/^(?:oci|https?):\/\/[^\s/@?#=]+(?:\/[^\s@?#]*[^\s/@?#])?$/u.test(address)
+    );
+  });
+}
+
+// chartMirrorProblems are those of the chart mirrors and their certificate authority.
+function chartMirrorProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  const bad = badChartMirror(f.chartMirrors);
+  if (bad !== undefined) {
+    p.chartMirrors = `${bad} is not in the form host=oci://mirror.example/path.`;
+  }
+  if (filled(f.chartMirrorCA)) {
+    if (f.chartMirrorCA.includes("PRIVATE KEY")) {
+      p.chartMirrorCA = "Paste certificates only, no private key.";
+    } else if (!f.chartMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
+      p.chartMirrorCA = "Paste PEM certificates.";
+    } else if (mirrorLines(f.chartMirrors).length === 0) {
+      p.chartMirrorCA = "Add a chart mirror first.";
+    }
+  }
+  return p;
 }
 
 // offerProblems are those of what the management cluster offers the clusters it makes.
@@ -592,6 +865,7 @@ function offerProblems(f: SetupForm): SetupProblems {
   if (bad !== undefined) {
     p.mirrors = `${bad} is not in the form ghcr.io=https://mirror.example:5000.`;
   }
+  Object.assign(p, chartMirrorProblems(f), proxyProblems(f));
   for (const key of ["podSubnets", "serviceSubnets"] as const) {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
@@ -726,7 +1000,7 @@ export function ManagementCluster({
   );
 }
 
-function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
+function LastRun({ status, manage, onTakenOver }: { status: SetupStatus; manage: boolean; onTakenOver: () => void }) {
   const { job } = status;
   if (!job) {
     return null;
@@ -745,7 +1019,13 @@ function LastRun({ status, manage }: { status: SetupStatus; manage: boolean }) {
           Management cluster removed {when} by {job.user}
         </p>
       )}
-      {job.state === "failed" && (
+      {job.state === "failed" && job.stale && (
+        <div className="error" role="alert">
+          A newer state changed the management cluster. This appliance's state is from apply {job.stale.local}.
+          <TakeOver stale={job.stale} onDone={onTakenOver} />
+        </div>
+      )}
+      {job.state === "failed" && !job.stale && (
         <div className="error" role="alert">
           {job.automatic === true
             ? `Automatic upgrade of ${when} failed. It retries at the next upgrade hour.`
@@ -777,6 +1057,9 @@ function refreshSummary(s: ManagementSettings): string {
   if (f.creatorBuilds) {
     parts.push("creators may request builds");
   }
+  if (!f.kubeadmPatches) {
+    parts.push("no kubeadm patch builds");
+  }
   return parts.join(", ");
 }
 
@@ -802,6 +1085,11 @@ function headlampRows(s: ManagementSettings): [string, string][] {
   ];
 }
 
+function chartMirrorsSummary(s: ManagementSettings): string {
+  const mirrors = s.chartRepositories?.mirrors;
+  return mirrors ? formatChartMirrors(mirrors).split("\n").join(", ") : "None";
+}
+
 function ManagedSummary({
   status,
   settings: s,
@@ -824,6 +1112,7 @@ function ManagedSummary({
     ["API address", s.apiAddress],
     ["Gateway", s.gateway],
     ["DNS servers", s.dnsServers.join(", ")],
+    ["Search domains", searchDomainsOf(s)],
     ["Time servers", timeServersOf(s)],
     ["Cluster storages", s.workloadDatastores.join(", ")],
     ["Cluster bridges", s.workloadBridges.join(", ")],
@@ -841,6 +1130,8 @@ function ManagedSummary({
     ],
     ["etcd restores", s.etcdRestore === true ? "Guest agent" : "By hand"],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
+    ["Chart mirrors", chartMirrorsSummary(s)],
+    ["Proxy", proxySummary(s.proxy)],
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Automatic"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Automatic"],
   ];
@@ -851,7 +1142,7 @@ function ManagedSummary({
     <section className="panel">
       <div className="box">
         <h3>Management cluster</h3>
-        <LastRun status={status} manage />
+        <LastRun status={status} manage onTakenOver={onStarted} />
         <dl className="summary">
           {rows.map(([k, v]) => (
             <Fragment key={k}>
@@ -1290,7 +1581,7 @@ function RefreshChoice({ form, set, shown, nodes }: FieldsProps & { nodes: strin
         templates weekly
       </label>
       <Info about="template refresh">
-        Clusters move to a build once it is a day old, in their maintenance window. The two newest builds stay.
+        Clusters move to a build once it is a day old, in their upgrade window. The two newest builds stay.
       </Info>
       {form.refresh && (
         <>
@@ -1422,6 +1713,18 @@ function RefreshChoice({ form, set, shown, nodes }: FieldsProps & { nodes: strin
           <Info about="build requests">
             Cluster creators missing a template can have it built from the create wizard. Off, only administrators build
             templates.
+          </Info>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.kubeadmPatches}
+              onChange={(e) => set("kubeadmPatches", e.target.checked)}
+            />{" "}
+            Build kubeadm patches
+          </label>
+          <Info about="kubeadm patches">
+            Builds the newest patch of each Kubernetes version a kubeadm cluster runs, and of the next version. Off,
+            clusters get only versions you build.
           </Info>
         </>
       )}
@@ -1568,6 +1871,72 @@ function EtcdRestoreConfirm({
   );
 }
 
+/**
+ * ProxyPassword takes the proxy's password. A saved one is only shown as set, with a way to replace
+ * or remove it, as the interface's other stored secrets are: it never comes back to the page.
+ */
+function ProxyPassword({ form, set }: FieldsProps): JSX.Element {
+  const action = form.proxyPasswordAction;
+  if (form.proxyPasswordSaved && action !== "replace") {
+    const removing = action === "remove";
+    return (
+      <Field label="Proxy password">
+        {(id) => (
+          <div className="secret-state">
+            <span className="muted">{removing ? "Removed when you apply" : "Set"}</span>
+            {/* The label's own name would hide what the button does, so each button names itself. */}
+            <button
+              id={id}
+              type="button"
+              aria-label={removing ? "Keep proxy password" : "Replace proxy password"}
+              onClick={() => set("proxyPasswordAction", removing ? "keep" : "replace")}
+            >
+              {removing ? "Keep" : "Replace"}
+            </button>
+            {!removing && (
+              <button
+                type="button"
+                aria-label="Remove proxy password"
+                onClick={() => set("proxyPasswordAction", "remove")}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        )}
+      </Field>
+    );
+  }
+  return (
+    <Field label="Proxy password">
+      {(id) => (
+        <div className="secret-state">
+          <input
+            id={id}
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            value={form.proxyPassword}
+            onChange={(e) => set("proxyPassword", e.target.value)}
+          />
+          {form.proxyPasswordSaved && (
+            <button
+              type="button"
+              aria-label="Cancel replacing proxy password"
+              onClick={() => {
+                set("proxyPassword", "");
+                set("proxyPasswordAction", "keep");
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
+    </Field>
+  );
+}
+
 export function AdvancedFields({
   form,
   set,
@@ -1600,6 +1969,51 @@ export function AdvancedFields({
         error={shown("mirrors")}
       >
         {(id) => <textarea id={id} rows={2} value={form.mirrors} onChange={(e) => set("mirrors", e.target.value)} />}
+      </Field>
+      <Field
+        label="Chart mirrors"
+        hint="One per line, like ghcr.io=oci://mirror.example/ghcr"
+        info="Registry mirrors do not reach charts. Use oci:// for OCI charts and https:// for a chart repository, with the same digests."
+        error={shown("chartMirrors")}
+      >
+        {(id) => (
+          <textarea id={id} rows={2} value={form.chartMirrors} onChange={(e) => set("chartMirrors", e.target.value)} />
+        )}
+      </Field>
+      <Field
+        label="Chart mirror certificate"
+        hint="PEM, for a mirror with its own authority"
+        error={shown("chartMirrorCA")}
+      >
+        {(id) => (
+          <textarea
+            id={id}
+            rows={3}
+            value={form.chartMirrorCA}
+            onChange={(e) => set("chartMirrorCA", e.target.value)}
+          />
+        )}
+      </Field>
+      <Field label="Proxy address" hint="Like http://proxy.example:3128" error={shown("proxyURL")}>
+        {(id) => <input id={id} value={form.proxyURL} onChange={(e) => set("proxyURL", e.target.value)} />}
+      </Field>
+      <Field label="Proxy user" hint="Only for a proxy that asks" error={shown("proxyUser")}>
+        {(id) => (
+          <input id={id} autoComplete="off" value={form.proxyUser} onChange={(e) => set("proxyUser", e.target.value)} />
+        )}
+      </Field>
+      <ProxyPassword form={form} set={set} shown={shown} />
+      <Field
+        label="Proxy exceptions"
+        hint="Kubehenge adds Proxmox VE, node networks and cluster ranges."
+        error={shown("proxyExceptions")}
+      >
+        {(id) => (
+          <input id={id} value={form.proxyExceptions} onChange={(e) => set("proxyExceptions", e.target.value)} />
+        )}
+      </Field>
+      <Field label="Proxy certificate" hint="PEM, for a proxy that re-signs TLS" error={shown("proxyCA")}>
+        {(id) => <textarea id={id} rows={3} value={form.proxyCA} onChange={(e) => set("proxyCA", e.target.value)} />}
       </Field>
       <Field label="Pod ranges" hint={rangeHint} error={shown("podSubnets")}>
         {(id) => (
@@ -1682,7 +2096,7 @@ function SetupWizard({
   const [nodes, setNodes] = useState<PveNode[]>([]);
   const [storages, setStorages] = useState<Storage[]>();
   const [bridgesByNode, setBridgesByNode] = useState<Record<string, Bridge[]>>({});
-  const [dnsByNode, setDNSByNode] = useState<Record<string, string[]>>({});
+  const [dnsByNode, setDNSByNode] = useState<Record<string, NodeDNS>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [form, setForm] = useState<SetupForm>(() => formOf(status.settings));
@@ -1858,7 +2272,7 @@ function SetupWizard({
         }}
       >
         {manage && <h3 id={headingId}>Management cluster</h3>}
-        <LastRun status={status} manage={manage} />
+        <LastRun status={status} manage={manage} onTakenOver={onStarted} />
         {stepped ? (
           <>
             <nav className="wizard-steps" aria-label="Steps">
@@ -1928,6 +2342,7 @@ function SetupWizard({
   );
 }
 
+const searchDomainsOf = (s: ManagementSettings): string => s.searchDomains?.join(", ") ?? "None";
 const timeServersOf = (s: ManagementSettings): string => s.timeServers?.join(", ") ?? "Talos defaults";
 
 // checkDelay waits for typing to stop before Proxmox VE is asked, as the answer probes addresses.
@@ -2042,7 +2457,7 @@ const submitLabel = (manage: boolean, last: boolean): string => {
 interface Found {
   storages: Storage[] | undefined;
   bridgesByNode: Record<string, Bridge[]>;
-  dnsByNode: Record<string, string[]>;
+  dnsByNode: Record<string, NodeDNS>;
   fixed: ManagementSettings | undefined;
 }
 
@@ -2091,7 +2506,7 @@ function withDefaults(
   const uplinkBridge = uplink(home);
   const bridge = keepOffered(orElse(form.bridge, uplinkBridge ? bridgeRef(uplinkBridge) : ""), bridges, bridgesKnown);
   const onBridge = home.find((b) => bridgeRef(b) === bridge);
-  const detect = (k: "gateway" | "dnsServers", value: string): string =>
+  const detect = (k: "gateway" | "dnsServers" | "searchDomains", value: string): string =>
     form[k] === "" && !touched.has(k) ? value : form[k];
   const untouchedNone = (k: "workloadDatastores" | "workloadBridges", value: string): string[] =>
     form[k].length === 0 && !touched.has(k) && value !== "" ? [value] : form[k];
@@ -2103,7 +2518,8 @@ function withDefaults(
       bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
       bridge,
       gateway: detect("gateway", onBridge?.gateway ?? ""),
-      dnsServers: detect("dnsServers", (found.dnsByNode[first] ?? []).join(", ")),
+      dnsServers: detect("dnsServers", (found.dnsByNode[first]?.servers ?? []).join(", ")),
+      searchDomains: detect("searchDomains", found.dnsByNode[first]?.search ?? ""),
       workloadDatastores: untouchedNone("workloadDatastores", vmDatastore),
       workloadBridges: untouchedNone("workloadBridges", bridge),
       refreshStorage: offeredRefreshStorage(form),
@@ -2267,6 +2683,17 @@ function setupFields({
             <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
           )}
         </Field>
+        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.mtu}
+              onChange={(e) => set("mtu", e.target.value.trim())}
+              placeholder="1500"
+            />
+          )}
+        </Field>
         <Field
           label="Node addresses"
           hint={nodeAddressHint(fixed !== undefined, more.nodeNetwork)}
@@ -2307,6 +2734,16 @@ function setupFields({
         </Field>
         <Field label="DNS servers" hint="Separated by commas" error={shown("dnsServers")}>
           {(id) => <input id={id} value={effective.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
+        </Field>
+        <Field label="Search domains" hint="Separated by commas" error={shown("searchDomains")}>
+          {(id) => (
+            <input
+              id={id}
+              value={effective.searchDomains}
+              placeholder="corp.example"
+              onChange={(e) => set("searchDomains", e.target.value)}
+            />
+          )}
         </Field>
         <Field
           label="Time servers"

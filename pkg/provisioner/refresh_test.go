@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -32,10 +33,19 @@ type fakePool struct {
 	fail     map[string]bool
 	// flaky fails a line's builds this many times before one succeeds.
 	flaky map[string]int
+	// facts are what builds recorded of themselves, by VM ID. kernels are the kernels the next
+	// builds of a line install, one per build, as a mirror that catches up serves them.
+	facts   map[uint64]templates.BuildFacts
+	kernels map[string][]string
+	created int
 }
 
 func (p *fakePool) List(context.Context) ([]*proxmox.ClusterResource, error) {
 	return slices.Clone(p.list), nil
+}
+
+func (p *fakePool) Facts(context.Context) (map[uint64]templates.BuildFacts, error) {
+	return maps.Clone(p.facts), nil
 }
 
 func (p *fakePool) Create(_ context.Context, t *templates.Template) (int, error) {
@@ -47,8 +57,14 @@ func (p *fakePool) Create(_ context.Context, t *templates.Template) (int, error)
 		return 0, errors.New("the mirror is being synced")
 	}
 	p.built = append(p.built, t.Name)
-	id := 9100 + len(p.list)
-	p.list = append(p.list, &proxmox.ClusterResource{VMID: uint64(id), Name: t.Name, Tags: strings.Join(t.Tags, ";")})
+	id := 9100 + p.created
+	p.created++
+	vmid := uint64(id) //nolint:gosec // test IDs are small and positive
+	p.list = append(p.list, &proxmox.ClusterResource{VMID: vmid, Name: t.Name, Tags: strings.Join(t.Tags, ";")})
+	if next := p.kernels[t.LineName]; len(next) > 0 {
+		p.record(vmid, next[0])
+		p.kernels[t.LineName] = next[1:]
+	}
 	return id, nil
 }
 
@@ -74,6 +90,14 @@ func (p *fakePool) add(t *testing.T, req *templates.Request, at time.Time) {
 		t.Fatal(err)
 	}
 	p.list = append(p.list, &proxmox.ClusterResource{VMID: uint64(9000 + len(p.list)), Name: build.Name, Tags: strings.Join(build.Tags, ";")})
+}
+
+// record gives the build made as VM vmid a kernel.
+func (p *fakePool) record(vmid uint64, kernel string) {
+	if p.facts == nil {
+		p.facts = map[uint64]templates.BuildFacts{}
+	}
+	p.facts[vmid] = templates.BuildFacts{Kernel: kernel, Packages: strings.Repeat("a", 64)}
 }
 
 func refreshKube(t *testing.T, objects ...client.Object) client.Client {
@@ -164,7 +188,7 @@ func TestBuildUsersNameTheClustersOfEachBuild(t *testing.T) {
 	web, _ := refreshCluster(t, "web", nil)
 	web.Annotations[NodeImageAnnotation] = day(3).Format(time.RFC3339)
 	api := kubeadmCluster("api", "v1.36.5", day(20))
-	users, err := BuildUsers(context.Background(), refreshKube(t, web, api), "kubehenge-system", pool.list, DefaultNodeImageSoak)
+	users, err := BuildUsers(context.Background(), refreshKube(t, web, api), "kubehenge-system", pool.list, nil, DefaultNodeImageSoak)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,6 +16,17 @@ import (
 // tell an unknown user from a wrong password.
 var ErrAuthentication = errors.New("authentication failure")
 
+// ErrNodesDisagree is Proxmox VE refusing a ticket it issued seconds ago. A ticket is accepted when
+// its age on the node that checks it is between minus five minutes and two hours, so the node that
+// checked it runs a clock over five minutes behind the node that signed it. That happens when the
+// address is a name with several records, or a virtual address in front of several nodes. It is an
+// ErrAuthentication as well.
+var ErrNodesDisagree = fmt.Errorf("%w: Proxmox VE nodes disagree about the time", ErrAuthentication)
+
+// freshTicket is how soon after its sign-in a refused ticket reads as the nodes' clocks and not as a
+// session that ended.
+const freshTicket = 10 * time.Second
+
 // ErrForbidden is Proxmox VE refusing a request for want of privileges.
 var ErrForbidden = errors.New("permission denied")
 
@@ -197,10 +208,10 @@ func (a *Accounts) OpenIDLogin(ctx context.Context, code, state, redirect string
 
 // Renew exchanges a ticket for a new one. Proxmox VE neither asks the realm nor a second factor
 // again, so only a disabled or expired user stops it. How long a session lasts is the caller's to
-// limit.
+// limit. An API token has no ticket to exchange, so Proxmox VE is asked whether it still takes it.
 func (a *Accounts) Renew(ctx context.Context, t *Ticket) (*Ticket, error) {
 	if t.Token != "" {
-		return t, nil
+		return a.TokenUser(ctx, t.Token)
 	}
 	now := time.Now()
 	res, err := a.postTicket(ctx, t.Username, t.Ticket, "")
@@ -285,7 +296,11 @@ func (a *Accounts) get(ctx context.Context, t *Ticket, path string, out any) err
 		return err
 	}
 	t.authorise(req)
-	return a.do(req, out)
+	err = a.do(req, out)
+	if t.Token == "" && errors.Is(err, ErrAuthentication) && time.Since(t.Issued) < freshTicket {
+		return ErrNodesDisagree
+	}
+	return err
 }
 
 func (a *Accounts) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {

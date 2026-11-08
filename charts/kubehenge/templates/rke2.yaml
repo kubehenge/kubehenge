@@ -40,6 +40,16 @@ metadata:
     # controller's 50m, and 10m each for the cloud controller manager, kube-vip and the snapshot
     # controller.
     kubehenge.dev/node-cpu: '{"controlPlane":1605,"worker":775}'
+    {{- include "kubehenge.addonMemoryRequests" . | nindent 4 }}
+    # The memory, in MiB, a node keeps from the add-ons' requests, counted as node-cpu counts CPU. On
+    # a worker the kernel's 198 of a 4096 MiB VM, as Talos's measured, the kubelet's 100 eviction
+    # threshold, RKE2's kube-proxy at 128 (RKE2's documented default, LAB), the CNI's agent (canal
+    # asks for none, RKE2's Calico agent for 128), a CoreDNS replica's 128 and its autoscaler's 16,
+    # the metrics server's 200, Traefik's 64 and the CSI plugin's 64. A control plane without workers
+    # adds the API server's 1024, etcd's 512, the controller manager's 256 and the scheduler's 128
+    # (RKE2's documented defaults, LAB), the CSI controller's 80, and 32 each for the cloud
+    # controller manager, kube-vip and the snapshot controller.
+    kubehenge.dev/node-memory-requests: '{"controlPlane":3128,"worker":1032}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -76,6 +86,8 @@ spec:
       template: {{ "{{ .cluster.name }}-control-plane-{{ .random }}" | quote }}
     healthCheck:
       {{- include "kubehenge.healthCheck" "controlPlane" | nindent 6 }}
+    deletion:
+      {{- include "kubehenge.machineDeletion" . | nindent 6 }}
   workers:
     machineDeployments:
       - class: worker
@@ -93,15 +105,20 @@ spec:
             name: {{ $machineName }}
         healthCheck:
           {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
+        deletion:
+          {{- include "kubehenge.machineDeletion" . | nindent 10 }}
   variables:
     {{- /* RKE2's static pods request 2 GiB between them (etcd, API server, controller manager, scheduler, kube-proxy). */}}
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 2 "workerMinMemoryMiB" 4096 "clusters" .Values.clusters "sysAudit" (not (empty .Values.proxmox.sysAuditGroup))) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
-    {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeOSVariable" (dict "Files" .Files) | nindent 4 }}
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
+    {{- include "kubehenge.etcdVariable" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -113,6 +130,8 @@ spec:
           {{- include "kubehenge.cniFixed" . | nindent 10 }}
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesPatches" "rke2" | nindent 4 }}
+    {{- include "kubehenge.clockPatches" "rke2" | nindent 4 }}
     - name: rke2-control-plane
       definitions:
         - selector:
@@ -193,6 +212,19 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.etcdUploadFile" (dict "path" "/etc/rancher/rke2/config.yaml.d/60-kubehenge-etcd-s3.yaml") | nindent 18 }}
+    - name: rke2-etcd
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: RKE2ControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.etcdFile" (dict "path" "/etc/rancher/rke2/config.yaml.d/50-kubehenge-etcd.yaml") | nindent 18 }}
     - name: rke2-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:
@@ -239,6 +271,9 @@ spec:
               value: {{ . }}
             {{- end }}
         {{- end }}
+    {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "rke2") | nindent 4 }}
+    # Last, so that Kubehenge's own settings come first.
+    {{- include "kubehenge.nodeCustomisationPatches" "rke2" | nindent 4 }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate
@@ -263,6 +298,7 @@ spec:
 
 {{- define "kubehenge.rke2AgentConfig" -}}
 preRKE2Commands:
+  - {{ include "kubehenge.clockCommand" . }}
   - sysctl --system
 agentConfig:
   # The kubelet refuses to start on kernel settings other than its own (kubehenge.sysctlFile).
@@ -285,6 +321,7 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict "controlPlane" true) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.clockFile" . | nindent 6 }}
       {{- include "kubehenge.removedServerFile" (dict "distribution" "rke2") | nindent 6 }}
       {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/rke2/audit-policy.yaml") | nindent 6 }}
       # Given a policy, RKE2 audits the API server and keeps a month of the log.
@@ -348,4 +385,5 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.clockFile" . | nindent 6 }}
 {{- end -}}

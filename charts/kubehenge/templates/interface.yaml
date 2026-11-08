@@ -47,6 +47,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   namespaces: {{ toJson $namespaces | quote }}
+  {{- /* Every namespace any cluster exempts from Pod Security Admission, for the check before CIS hardening is switched on. */}}
+  {{- $exempt := list }}
+  {{- range $by, $listed := .Values.podSecurityExempt }}{{ $exempt = concat $exempt $listed }}{{ end }}
+  podSecurityExempt: {{ toJson (uniq $exempt) | quote }}
   {{- if .Values.interface.headlampActions }}
   headlampActions: "true"
   {{- end }}
@@ -299,7 +303,10 @@ spec:
     - expression: >-
         variables.cluster == ''
         ? variables.purpose in ['backup', 'dns01', 'notify-webhook', 'notify-ntfy', 'notify-email']
-        : variables.purpose in ['backup', 'dns01', 'gitops', 'oidc-client']
+        : variables.purpose in ['backup', 'dns01', 'acme-eab', 'bgp', 'gitops', 'oidc-client',
+          'alerts-email', 'alerts-webhook', 'alerts-slack', 'alerts-teams',
+          'remote-write', 'external-alertmanager']
+          || variables.purpose.matches('^log-[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$')
       messageExpression: >-
         'the interface writes and deletes only credentials labelled {{ $credential }} with a purpose it knows, not '
         + (variables.purpose == '' ? 'an unlabelled Secret' : 'one for ' + variables.purpose)

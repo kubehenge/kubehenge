@@ -1,4 +1,12 @@
 import {
+  alertingText,
+  alertingVariable,
+  newAlerting,
+  pendingAlerting,
+  type AlertingForm,
+  type AlertingSecrets,
+} from "./Alerting";
+import {
   backupKeys,
   backupProblems,
   backupsText,
@@ -12,6 +20,7 @@ import {
   certificatesProblems,
   certificatesText,
   certificatesVariable,
+  needsBindingKey,
   needsClusterToken,
   newCertificates,
   tokenLabel,
@@ -25,6 +34,16 @@ import {
   type UpgradeMode,
   type UpgradePolicy,
 } from "./ClusterUpgrades";
+import {
+  egressFields,
+  egressProblems,
+  egressText,
+  egressVariable,
+  newEgress,
+  type EgressChoice,
+  type EgressField,
+} from "./EgressProxy";
+import { defaultEtcdQuotaGiB, etcdText, maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
 import {
   etcdFieldsOf,
   etcdProblems,
@@ -44,10 +63,55 @@ import {
   type GitOpsChoice,
   type GitOpsField,
 } from "./GitOps";
-import { addressesProblem, loadBalancerText, loadBalancerVariable, type Implementation } from "./LoadBalancer";
+import { defaultGrace, graceProblem, graceText, graceVariable } from "./HostOutage";
+import {
+  loadBalancerFrom,
+  loadBalancerProblems,
+  loadBalancerText,
+  loadBalancerVariable,
+  bgpOffered,
+  type Implementation,
+  type LoadBalancer,
+  type LoadBalancerValue,
+  type Mode,
+} from "./LoadBalancer";
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
-import { addressBits, addressCount, inList, ipv4, isVLAN, list, networkOf, rangeProblem, whole } from "./network";
-import { choosable, defaultNodeOS, findNodeOS, nodeOSKey, nodeOSRef } from "./node-os";
+import { labelsText, parseLabels } from "./namespace-labels";
+import {
+  addressBits,
+  addressCount,
+  inList,
+  ipv4,
+  isMTU,
+  isQueues,
+  isVLAN,
+  list,
+  maxMTU,
+  maxQueues,
+  minMTU,
+  networkOf,
+  rangeProblem,
+  searchDomainsProblem,
+  timeServersProblem,
+  whole,
+} from "./network";
+import {
+  noNodeCustomisation,
+  nodeCustomisationProblem,
+  nodeCustomisationText,
+  nodeCustomisationVariable,
+  type NodeCustomisation,
+} from "./node-customisation";
+import { choosable, defaultNodeOS, findNodeOS, fipsCNI, nodeOSKey, nodeOSRef } from "./node-os";
+import {
+  hasNodeSettings,
+  noNodeSettings,
+  nodeSettingsProblem,
+  nodeSettingsText,
+  nodesVariable,
+  type NodeSettings,
+} from "./node-settings";
+import { noTimeouts, timeoutProblems, timeoutsOf, timeoutsSet, type TimeoutEntry } from "./NodeTimeouts";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
 import {
@@ -61,6 +125,7 @@ import {
 import { forRelease, talosRelease } from "./Talos";
 import type {
   Bridge,
+  NodeDNS,
   Cluster,
   ClusterClass,
   CreateRequest,
@@ -89,6 +154,8 @@ import {
   sole,
 } from "./ui";
 import { quantity, record, text, texts } from "./values";
+
+export { nodeCustomisationOf } from "./node-customisation";
 
 export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
 export type Step = (typeof steps)[number];
@@ -131,25 +198,47 @@ export interface Form {
   workerAutoscale: boolean;
   /** The most workers the cluster autoscaler adds, with workerAutoscale. */
   workerMax: number;
+  /** How long a removed machine waits for its node, for the control planes and for the workers. Empty takes the class's. */
+  controlPlaneTimeouts: TimeoutEntry;
+  workerTimeouts: TimeoutEntry;
   endpoint: string;
   bridge: string;
   vlan: string;
+  /** The nodes' interface MTU, empty to leave Proxmox VE's default. */
+  mtu: string;
+  /** The nodes' interface queues, empty for one. */
+  queues: string;
   addresses: string;
   prefix: number;
   gateway: string;
   dnsServers: string;
+  searchDomains: string;
+  /** NTP servers for the nodes. Empty keeps the node image's own. */
+  ntpServers: string;
   loadBalancer: Implementation;
   loadBalancerAddresses: string;
+  loadBalancerMode: Mode;
+  loadBalancerAsn: string;
+  loadBalancerPeers: string;
+  loadBalancerAuthenticated: boolean;
+  /** Typed here and stored as the cluster's bgp credential once it exists. Never copied from another cluster. */
+  loadBalancerPassword: string;
   pods: string;
   services: string;
   storage: string;
   place: Place;
+  /** Minutes machines of an away host wait before replacement, as text. */
+  hostOutageGrace: string;
   proxmoxHA: boolean;
   datastoreAllocate: boolean;
   volumeSnapshots: boolean;
   haGroups: boolean;
   controlPlaneMachine: Machine;
   workerMachine: Machine;
+  /** The labels and taints every worker gets, for a class that has the workerNodes variable. */
+  workerNodes: NodeSettings;
+  /** The files, commands, flags and audit settings of every node, for a class that has the variable. */
+  nodeCustomisation: NodeCustomisation;
   cni: string;
   headlamp: boolean;
   headlampHostname: string;
@@ -157,9 +246,14 @@ export interface Form {
   headlampView: boolean;
   monitoring: boolean;
   grafanaHostname: string;
+  alerting: AlertingForm;
+  // The secrets of the alerting settings, stored for the cluster once it is created. Never in the request.
+  alertingSecrets: AlertingSecrets;
   logs: Logs;
   podSecurity: PodSecurity;
   cis: boolean;
+  /** The most an etcd database may grow to, in GiB. NaN while the field is empty. */
+  etcdQuotaGiB: number;
   istio: boolean;
   clusterMesh: boolean;
   meshPeers: string[];
@@ -167,9 +261,15 @@ export interface Form {
   rancherHostname: string;
   rancherRegister: boolean;
   certificates: CertificatesForm;
+  /** The labels of every namespace Kubehenge makes, one key=value per line. */
+  namespaceLabels: string;
+  /** Whether the cluster's cert-manager is one it already holds. It is fixed once the cluster exists. */
+  existingCertManager: boolean;
   // The DNS provider's credential, stored for the cluster once it is created. Never in the request.
   dns01Token: string;
+  eabKey: string;
   gitops: GitOpsChoice;
+  egress: EgressChoice;
   oidc: OIDCProvider[];
   upgradeMode: UpgradeMode;
   backups: boolean;
@@ -305,6 +405,8 @@ const bytesPerGiB = 1_073_741_824;
 export interface Room {
   memory: number;
   freeMemory?: number | undefined;
+  /** Set where no node the cluster may use has room for its largest machine. */
+  nodeWarning?: string | undefined;
   disk: number;
   freeDisk?: number | undefined;
 }
@@ -326,6 +428,7 @@ export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): R
     freeMemory: known
       ? usable.reduce((sum, n) => sum + Math.max(0, (n.maxMemory ?? 0) - (n.memory ?? 0)), 0)
       : undefined,
+    nodeWarning: memoryNodeWarning(form, nodes),
     disk: (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB,
     freeDisk: disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined,
   };
@@ -349,6 +452,15 @@ export function addonCPU(form: Form, c: ClusterClass | undefined): { names: stri
   return { names, millicores: total };
 }
 
+/**
+ * addonMemoryRequests is the memory, in MiB, the pods of the add-ons a form chooses request by its
+ * class's figures, and which add-ons ask for any, counted as addonMemory counts them.
+ */
+export function addonMemoryRequests(form: Form, c: ClusterClass | undefined): { names: string[]; mib: number } {
+  const { names, total } = addonTotal(form, c, { pods: "kubehenge.dev/addon-memory-requests" });
+  return { names, mib: total };
+}
+
 // addonTotal sums a class's figures by add-on over the add-ons a form chooses: the pods' annotation,
 // and where given the one of what they add to each control plane's own use.
 function addonTotal(
@@ -366,7 +478,8 @@ function addonTotal(
     istio: form.istio,
     clusterMesh: meshChosen(form),
     loadBalancer: form.loadBalancer !== "",
-    certManager: form.monitoring || form.rancherInstall || form.certificates.enabled,
+    certManager:
+      (form.monitoring || form.rancherInstall || form.certificates.enabled) && !usesExistingCertManager(form, c),
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
     backups: form.backups && variable(c, "backups") !== undefined,
@@ -448,6 +561,26 @@ export function addonNeedCores(form: Form, c: ClusterClass | undefined): number 
 }
 
 /**
+ * addonNeedRequestedMiB is the memory each node that carries a form's add-ons needs for what their
+ * pods request, as the controller asks: what such a node keeps from requests itself, by its class,
+ * and its share of the add-ons' requests and of what the workers run once per cluster. Without add-ons
+ * that request memory, or without the class's figures, it is 0.
+ */
+export function addonNeedRequestedMiB(form: Form, c: ClusterClass | undefined): number {
+  const key = form.workerReplicas > 0 ? "workerMachine" : "controlPlaneMachine";
+  const nodes = key === "workerMachine" ? form.workerReplicas : form.controlPlaneReplicas;
+  const { mib } = addonMemoryRequests(form, c);
+  if (mib === 0 || nodes <= 0) {
+    return 0;
+  }
+  const figures = classFigures(c, "kubehenge.dev/node-memory-requests");
+  const own =
+    quantity(figures[key === "workerMachine" ? "worker" : "controlPlane"]) ?? plainLeast(form, c, key).memoryMiB;
+  const once = key === "workerMachine" ? (quantity(figures["workers"]) ?? 0) : 0;
+  return own + Math.ceil((mib + once) / nodes / memoryStepMiB) * memoryStepMiB;
+}
+
+/**
  * controlPlaneNeedMiB is the memory each control plane of a form with workers and add-ons needs, as
  * the controller asks: what it uses itself, by its class, with what the add-ons add to it. Otherwise
  * it is 0.
@@ -472,7 +605,7 @@ export function machineLeast(
     return {
       ...min,
       cores: Math.max(min.cores, addonNeedCores(form, c)),
-      memoryMiB: Math.max(min.memoryMiB, addonNeedMiB(form, c)),
+      memoryMiB: Math.max(min.memoryMiB, addonNeedMiB(form, c), addonNeedRequestedMiB(form, c)),
     };
   }
   if (key === "controlPlaneMachine") {
@@ -553,6 +686,7 @@ export interface BridgeNetwork {
   cidr?: string | undefined;
   gateway?: string | undefined;
   dns: string[];
+  search: string;
 }
 
 /**
@@ -562,7 +696,7 @@ export interface BridgeNetwork {
 export function bridgeNetwork(
   bridge: string,
   bridgesByNode: Record<string, Bridge[]>,
-  dnsByNode: Record<string, string[]>,
+  dnsByNode: Record<string, NodeDNS>,
 ): { net?: BridgeNetwork; network?: string; node?: string } {
   const on = Object.values(bridgesByNode)
     .flat()
@@ -570,7 +704,8 @@ export function bridgeNetwork(
   if (on === undefined) {
     return {};
   }
-  const net = { cidr: on.cidr, gateway: on.gateway, dns: dnsByNode[on.node] ?? [] };
+  const dns = dnsByNode[on.node];
+  const net = { cidr: on.cidr, gateway: on.gateway, dns: dns?.servers ?? [], search: dns?.search ?? "" };
   const network = on.cidr === undefined ? undefined : networkOf(on.cidr);
   return network === undefined ? { net, node: on.node } : { net, network, node: on.node };
 }
@@ -611,6 +746,7 @@ export function withBridgeNetwork(f: Form, net: BridgeNetwork | undefined, touch
     prefix: touched("prefix") || !whole(bits, 1, addressBits) ? f.prefix : bits,
     gateway: f.gateway === "" && !touched("gateway") ? (net.gateway ?? "") : f.gateway,
     dnsServers: f.dnsServers === "" && !touched("dnsServers") ? net.dns.join(", ") : f.dnsServers,
+    searchDomains: f.searchDomains === "" && !touched("searchDomains") ? net.search : f.searchDomains,
   };
 }
 
@@ -627,34 +763,51 @@ export const newForm = (): Form => ({
   workerReplicas: 1,
   workerAutoscale: false,
   workerMax: 3,
+  controlPlaneTimeouts: noTimeouts,
+  workerTimeouts: noTimeouts,
   endpoint: "",
   bridge: "",
   vlan: "",
+  mtu: "",
+  queues: "",
   addresses: "",
   prefix: 24,
   gateway: "",
   dnsServers: "",
+  searchDomains: "",
+  ntpServers: "",
   loadBalancer: "",
   loadBalancerAddresses: "",
+  loadBalancerMode: "l2",
+  loadBalancerAsn: "",
+  loadBalancerPeers: "",
+  loadBalancerAuthenticated: false,
+  loadBalancerPassword: "",
   pods: "",
   services: "",
   storage: "",
   place: anyNode,
+  hostOutageGrace: defaultGrace,
   proxmoxHA: true,
   datastoreAllocate: false,
   volumeSnapshots: false,
   haGroups: true,
   controlPlaneMachine: machineDefaults(undefined),
   workerMachine: machineDefaults(undefined),
+  workerNodes: noNodeSettings,
+  nodeCustomisation: noNodeCustomisation,
   cni: "",
   headlamp: false,
   headlampHostname: "",
   headlampView: false,
   monitoring: false,
   grafanaHostname: "",
+  alerting: newAlerting(),
+  alertingSecrets: {},
   logs: newLogs(),
   podSecurity: podSecurityOf(undefined),
   cis: false,
+  etcdQuotaGiB: defaultEtcdQuotaGiB,
   istio: false,
   clusterMesh: false,
   meshPeers: [],
@@ -662,8 +815,12 @@ export const newForm = (): Form => ({
   rancherHostname: "",
   rancherRegister: true,
   certificates: newCertificates(),
+  namespaceLabels: "",
+  existingCertManager: false,
   dns01Token: "",
+  eabKey: "",
   gitops: newGitOps(),
+  egress: newEgress(),
   oidc: [],
   upgradeMode: "off",
   backups: false,
@@ -732,9 +889,47 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
       ? f.controlPlaneMachine
       : machineDefaults(variable(c, "controlPlaneMachine")),
     workerMachine: kept("workerMachine") ? f.workerMachine : machineDefaults(variable(c, "workerMachine")),
+    workerNodes: variable(c, "workerNodes") ? f.workerNodes : noNodeSettings,
     workerAutoscale: f.workerAutoscale && variable(c, "autoscaler") !== undefined,
     oidc: kept("oidc") ? f.oidc : oidcProviders(variable(c, "oidc")?.default),
   };
+}
+
+// usesExistingCertManager is whether the form ticks the existing cert-manager and the class offers it.
+const usesExistingCertManager = (form: Form, c: ClusterClass | undefined): boolean =>
+  form.existingCertManager && variable(c, "useExisting") !== undefined;
+
+// hardeningVariables are the variables of the cluster's pod security, CIS profile and etcd limit.
+function hardeningVariables(form: Form, defined: Set<string>): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
+  const cis = form.cis && defined.has("cis");
+  const podSecurity = podSecurityVariable(enforced(form.podSecurity, cis));
+  if (podSecurity) {
+    variables["podSecurity"] = podSecurity;
+  }
+  if (cis) {
+    variables["cis"] = true;
+  }
+  if (defined.has("etcd") && form.etcdQuotaGiB !== defaultEtcdQuotaGiB) {
+    variables["etcd"] = { quotaGiB: form.etcdQuotaGiB };
+  }
+  return variables;
+}
+
+// hardeningRows sum up the cluster's CIS profile, pod security and etcd limit, as the class offers them.
+function hardeningRows(form: Form, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [];
+  const cis = form.cis && defined.has("cis");
+  if (defined.has("cis")) {
+    rows.push(["CIS hardening", cisText(cis)]);
+  }
+  if (defined.has("podSecurity")) {
+    rows.push(["Pod security", podSecurityText(enforced(form.podSecurity, cis))]);
+  }
+  if (defined.has("etcd")) {
+    rows.push(["etcd", etcdText(form.etcdQuotaGiB)]);
+  }
+  return rows;
 }
 
 // addOnVariables are the variables of the add-ons and the hardening a form chooses.
@@ -751,21 +946,16 @@ function addOnVariables(form: Form, c: ClusterClass, defined: Set<string>): Reco
     variables["headlamp"] = headlamp;
   }
   if (form.monitoring) {
-    variables["monitoring"] = form.grafanaHostname
-      ? { enabled: true, hostname: form.grafanaHostname }
-      : { enabled: true };
+    variables["monitoring"] = {
+      enabled: true,
+      ...(form.grafanaHostname && { hostname: form.grafanaHostname }),
+      ...alertingVariable(form.alerting),
+    };
   }
   if (logsChosen(form)) {
     variables["logs"] = logsVariable(form.logs);
   }
-  const cis = form.cis && defined.has("cis");
-  const podSecurity = podSecurityVariable(enforced(form.podSecurity, cis));
-  if (podSecurity) {
-    variables["podSecurity"] = podSecurity;
-  }
-  if (cis) {
-    variables["cis"] = true;
-  }
+  Object.assign(variables, hardeningVariables(form, defined));
   if (form.istio && defined.has("istio")) {
     variables["istio"] = { enabled: true };
   }
@@ -787,9 +977,33 @@ function addOnVariables(form: Form, c: ClusterClass, defined: Set<string>): Reco
   if (certificates) {
     variables["certificates"] = certificates;
   }
+  return { ...variables, ...reachVariables(form, defined) };
+}
+
+// reachVariables are those of the add-ons that reach beyond the cluster: where it syncs from and
+// the proxy it goes through.
+function reachVariables(form: Form, defined: Set<string>): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
   const gitops = gitOpsVariable(form.gitops);
   if (gitops !== undefined) {
     variables["gitops"] = gitops;
+  }
+  const egress = defined.has("egressProxy") ? egressVariable(form.egress) : undefined;
+  if (egress !== undefined) {
+    variables["egressProxy"] = egress;
+  }
+  return { ...variables, ...installVariables(form, defined) };
+}
+
+// installVariables are the variables of where the add-ons go and what they find: set only when chosen.
+function installVariables(form: Form, defined: Set<string>): Record<string, unknown> {
+  const variables: Record<string, unknown> = {};
+  const labels = defined.has("namespaceLabels") ? parseLabels(form.namespaceLabels).labels : {};
+  if (Object.keys(labels).length > 0) {
+    variables["namespaceLabels"] = labels;
+  }
+  if (form.existingCertManager && defined.has("useExisting")) {
+    variables["useExisting"] = { certManager: true };
   }
   return variables;
 }
@@ -828,7 +1042,49 @@ export function pendingCredentials(form: Form, c: ClusterClass): PendingCredenti
       forget: { dns01Token: "" },
     });
   }
+  if (variable(c, "certificates") && needsBindingKey(form.certificates) && filled(form.eabKey)) {
+    pending.push({
+      purpose: "acme-eab",
+      values: { hmacKey: form.eabKey },
+      label: "ACME HMAC key",
+      section: "Certificates",
+      forget: { eabKey: "" },
+    });
+  }
+  if (form.monitoring && variable(c, "monitoring")) {
+    for (const p of pendingAlerting(form.alerting, form.alertingSecrets)) {
+      pending.push({
+        ...p,
+        section: "Monitoring",
+        forget: { alertingSecrets: { ...form.alertingSecrets, [p.purpose]: {} } },
+      });
+    }
+  }
+  pending.push(...pendingBGPPassword(form, c));
   return pending;
+}
+
+/** pendingBGPPassword is the BGP sessions' password, when the form's load balancer peers with one. */
+function pendingBGPPassword(form: Form, c: ClusterClass): PendingCredential[] {
+  const lb = formLoadBalancer(form, c.distribution);
+  if (
+    !variable(c, "loadBalancer") ||
+    lb.implementation === "" ||
+    lb.mode !== "bgp" ||
+    !lb.authenticated ||
+    !filled(form.loadBalancerPassword)
+  ) {
+    return [];
+  }
+  return [
+    {
+      purpose: "bgp",
+      values: { password: form.loadBalancerPassword },
+      label: "BGP password",
+      section: "Load balancer",
+      forget: { loadBalancerPassword: "" },
+    },
+  ];
 }
 
 // distributionVariables are what the form chooses of the distribution itself: its pod network and,
@@ -844,27 +1100,57 @@ function distributionVariables(form: Form): Record<string, unknown> {
   return variables;
 }
 
-// request turns the form into the API's request, with only the variables the class defines.
-export function request(form: Form, c: ClusterClass): CreateRequest {
-  const defined = new Set(c.variables.map((v) => v.name));
-  const network: Record<string, unknown> = {
+// interfaceOptions are the nodes' interface settings the user entered: the VLAN tag, MTU and queues.
+function interfaceOptions(form: Form): Record<string, number> {
+  const options: Record<string, number> = {};
+  for (const key of ["vlan", "mtu", "queues"] as const) {
+    if (form[key]) {
+      options[key] = Number(form[key]);
+    }
+  }
+  return options;
+}
+
+// timeoutRequests are the timeouts the form sets, left out where all of a group's are empty.
+function timeoutRequests(form: Form): Pick<CreateRequest, "controlPlaneTimeouts" | "workerTimeouts"> {
+  const controlPlane = timeoutsOf(form.controlPlaneTimeouts);
+  const workers = timeoutsOf(form.workerTimeouts);
+  return {
+    ...(timeoutsSet(controlPlane) && { controlPlaneTimeouts: controlPlane }),
+    ...(timeoutsSet(workers) && { workerTimeouts: workers }),
+  };
+}
+
+// workerNodesVariable is the labels and taints the form gives the workers, where the class has them
+// and there are workers.
+function workerNodesVariable(form: Form, defined: ReadonlySet<string>): Record<string, unknown> {
+  return defined.has("workerNodes") && mostWorkers(form) > 0 && hasNodeSettings(form.workerNodes)
+    ? { workerNodes: nodesVariable(form.workerNodes) }
+    : {};
+}
+
+// The wait is sent only when it differs from the class's default. request drops it if the class lacks it.
+function graceVariables(form: Form): Record<string, unknown> {
+  return form.hostOutageGrace === defaultGrace ? {} : { [graceVariable]: Number(form.hostOutageGrace) };
+}
+
+// networkVariable is the network variable of the form's nodes.
+function networkVariable(form: Form): Record<string, unknown> {
+  return {
     bridge: form.bridge,
     addresses: list(form.addresses),
     prefix: form.prefix,
     gateway: form.gateway,
     dnsServers: list(form.dnsServers),
+    ...interfaceOptions(form),
+    ...(list(form.searchDomains).length > 0 && { searchDomains: list(form.searchDomains) }),
+    ...(list(form.ntpServers).length > 0 && { ntp: list(form.ntpServers) }),
   };
-  if (form.vlan) {
-    network["vlan"] = Number(form.vlan);
-  }
-  const variables: Record<string, unknown> = {
-    controlPlaneEndpoint: form.endpoint,
-    network,
-    storage: form.storage,
-    controlPlaneMachine: form.controlPlaneMachine,
-    workerMachine: form.workerMachine,
-    ...nodeOSVariable(form, c),
-  };
+}
+
+// proxmoxVariables are the variables of where the nodes go on Proxmox VE and how it looks after them.
+function proxmoxVariables(form: Form, defined: ReadonlySet<string>): Record<string, unknown> {
+  const variables: Record<string, unknown> = { ...graceVariables(form) };
   const nodes = allowedNodes(form.place);
   if (nodes !== undefined) {
     variables["allowedNodes"] = nodes;
@@ -883,8 +1169,28 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (!form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: false };
   }
-  Object.assign(variables, distributionVariables(form));
-  const lb = loadBalancerVariable({ implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) });
+  return variables;
+}
+
+// request turns the form into the API's request, with only the variables the class defines.
+export function request(form: Form, c: ClusterClass): CreateRequest {
+  const defined = new Set(c.variables.map((v) => v.name));
+  const variables: Record<string, unknown> = {
+    controlPlaneEndpoint: form.endpoint,
+    network: networkVariable(form),
+    storage: form.storage,
+    controlPlaneMachine: form.controlPlaneMachine,
+    workerMachine: form.workerMachine,
+    ...nodeOSVariable(form, c),
+    ...proxmoxVariables(form, defined),
+    ...distributionVariables(form),
+    ...workerNodesVariable(form, defined),
+  };
+  const customised = nodeCustomisationVariable(form.nodeCustomisation, c.distribution === "talos");
+  if (Object.keys(customised).length > 0) {
+    variables["nodeCustomisation"] = customised;
+  }
+  const lb = loadBalancerVariable(formLoadBalancer(form, c.distribution));
   if (lb) {
     variables["loadBalancer"] = lb;
   }
@@ -904,6 +1210,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     controlPlaneReplicas: form.controlPlaneReplicas,
     workerReplicas: form.workerReplicas,
     variables: Object.fromEntries(Object.entries(variables).filter(([k]) => defined.has(k))),
+    ...timeoutRequests(form),
   };
   if (autoscales(form, c)) {
     req.workerAutoscaling = { min: form.workerReplicas, max: form.workerMax };
@@ -918,8 +1225,22 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
 }
 
 const gib = (mib: number): string => (mib % mibPerGiB === 0 ? `${mib / mibPerGiB} GiB` : `${mib} MiB`);
-const machine = (m: Machine): string =>
-  `${m.cores} ${m.cores === 1 ? "core" : "cores"}, ${gib(m.memoryMiB)} memory, ${m.diskGiB} GiB disk`;
+/** coresText counts cores, with "core" for one. */
+export const coresText = (n: number): string => `${n} ${n === 1 ? "core" : "cores"}`;
+const machine = (m: Machine): string => `${coresText(m.cores)}, ${gib(m.memoryMiB)} memory, ${m.diskGiB} GiB disk`;
+
+/** formLoadBalancerValue is what the load-balancer fields show of the form. */
+export const formLoadBalancerValue = (form: Form): LoadBalancerValue => ({
+  implementation: form.loadBalancer,
+  addresses: form.loadBalancerAddresses,
+  mode: form.loadBalancerMode,
+  asn: form.loadBalancerAsn,
+  peers: form.loadBalancerPeers,
+  authenticated: form.loadBalancerAuthenticated,
+});
+
+const formLoadBalancer = (form: Form, distribution: string | undefined): LoadBalancer =>
+  loadBalancerFrom(formLoadBalancerValue(form), distribution);
 
 function rancherChoice(form: Form): string {
   if (form.rancherInstall) {
@@ -950,45 +1271,50 @@ function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string
   return rows;
 }
 
-// summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
-// VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
-export function summary(
-  form: Form,
-  c: ClusterClass,
-  offered: { ha?: boolean; csi?: boolean; snapshots?: boolean; haGroups?: boolean } = {},
-): [string, string][] {
-  const defined = new Set(c.variables.map((v) => v.name));
-  const rows: [string, string][] = [
-    ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
-    ["Name", form.name],
-    ...releaseRows(form, c, defined),
-    ["Control-plane nodes", String(form.controlPlaneReplicas)],
-    [
-      "Workers",
-      autoscales(form, c) ? `${form.workerReplicas} to ${form.workerMax}, autoscaled` : String(form.workerReplicas),
-    ],
-    ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
-    ["API address", form.endpoint],
-    ["Node addresses", list(form.addresses).join(", ")],
-    ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
-    ["DNS servers", list(form.dnsServers).join(", ")],
-  ];
-  if (defined.has("loadBalancer")) {
+function interfaceRows(form: Form): [string, string][] {
+  const rows: [string, string][] = [];
+  if (form.mtu) {
+    rows.push(["MTU", form.mtu]);
+  }
+  if (form.queues) {
+    rows.push(["Queues", form.queues]);
+  }
+  return rows;
+}
+
+// loadBalancerRows are the summary's rows for the load balancer: its choice, and for a BGP password
+// whether it is stored once the cluster exists.
+function loadBalancerRows(form: Form, c: ClusterClass): [string, string][] {
+  const lb = formLoadBalancer(form, c.distribution);
+  const rows: [string, string][] = [["Load balancer", loadBalancerText(lb, c.distribution)]];
+  if (lb.implementation !== "" && lb.mode === "bgp" && lb.authenticated) {
     rows.push([
-      "Load balancer",
-      loadBalancerText(
-        { implementation: form.loadBalancer, addresses: list(form.loadBalancerAddresses) },
-        c.distribution,
-      ),
+      "BGP password",
+      filled(form.loadBalancerPassword) ? "Stored once created" : "None yet: the cluster waits",
     ]);
   }
-  rows.push(
-    ["Pod range", form.pods || "Automatic"],
-    ["Service range", form.services || "Automatic"],
-    ["Storage", form.storage],
-  );
+  return rows;
+}
+
+const timeServersRow = (form: Form): [string, string][] =>
+  list(form.ntpServers).length > 0 ? [["Time servers", list(form.ntpServers).join(", ")]] : [];
+
+/** SummaryOffered names the settings the Confirm step shows only where they can be chosen. */
+interface SummaryOffered {
+  ha?: boolean;
+  csi?: boolean;
+  snapshots?: boolean;
+  haGroups?: boolean;
+}
+
+// proxmoxRows are the summary's rows of where the nodes go on Proxmox VE and how it looks after them.
+function proxmoxRows(form: Form, defined: ReadonlySet<string>, offered: SummaryOffered): [string, string][] {
+  const rows: [string, string][] = [];
   if (defined.has("allowedNodes")) {
     rows.push(["Placement", placeText(form.place)]);
+  }
+  if (defined.has(graceVariable)) {
+    rows.push(["Host outage wait", graceText(form.hostOutageGrace)]);
   }
   if (offered.ha === true) {
     rows.push(["Proxmox VE HA", haText(form.proxmoxHA)]);
@@ -1002,14 +1328,51 @@ export function summary(
   if (offered.haGroups === true) {
     rows.push(["HA group labels", haGroupsText(form.haGroups)]);
   }
-  rows.push(["Control-plane machines", machine(form.controlPlaneMachine)]);
+  return rows;
+}
+
+// summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
+// VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
+export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {}): [string, string][] {
+  const defined = new Set(c.variables.map((v) => v.name));
+  const rows: [string, string][] = [
+    ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
+    ["Name", form.name],
+    ...releaseRows(form, c, defined),
+    ["Control-plane nodes", String(form.controlPlaneReplicas)],
+    [
+      "Workers",
+      autoscales(form, c) ? `${form.workerReplicas} to ${form.workerMax}, autoscaled` : String(form.workerReplicas),
+    ],
+    ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
+    ...interfaceRows(form),
+    ["API address", form.endpoint],
+    ["Node addresses", list(form.addresses).join(", ")],
+    ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
+    ["DNS servers", list(form.dnsServers).join(", ")],
+    ["Search domains", list(form.searchDomains).join(", ") || "None"],
+    ...timeServersRow(form),
+  ];
+  if (defined.has("loadBalancer")) {
+    rows.push(...loadBalancerRows(form, c));
+  }
+  rows.push(
+    ["Pod range", form.pods || "Automatic"],
+    ["Service range", form.services || "Automatic"],
+    ["Storage", form.storage],
+    ...proxmoxRows(form, defined, offered),
+    ["Control-plane machines", machine(form.controlPlaneMachine)],
+  );
   if (mostWorkers(form) > 0) {
     rows.push(["Worker machines", machine(form.workerMachine)]);
+    if (defined.has("workerNodes")) {
+      rows.push(["Worker labels and taints", nodeSettingsText(form.workerNodes)]);
+    }
   }
   if (defined.has("cni")) {
     rows.push(["Pod network", cniName(form.cni) || "Not chosen"]);
   }
-  rows.push(...addOnRows(form, c, defined));
+  rows.push(...customisationRows(form, defined), ...addOnRows(form, c, defined));
   if (defined.has("upgrades")) {
     const upgrades = newUpgrades(form.upgradeMode, browserZone());
     rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
@@ -1020,6 +1383,32 @@ export function summary(
   }
   return rows;
 }
+
+function monitoringText(form: Form): string {
+  if (!form.monitoring) {
+    return "Off";
+  }
+  const sends = alertingText(form.alerting);
+  return `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}${sends ? `, sends to ${sends}` : ""}`;
+}
+
+const storedOnceCreated = (typed: string): string =>
+  filled(typed) ? "Stored once created" : "None yet: the cluster waits";
+
+// certificatesRows sums up the certificates and whether the credentials they take are held.
+function certificatesRows(form: Form): [string, string][] {
+  const rows: [string, string][] = [["Certificates", certificatesText(form.certificates)]];
+  if (needsClusterToken(form.certificates)) {
+    rows.push([tokenLabel(form.certificates.provider), storedOnceCreated(form.dns01Token)]);
+  }
+  if (needsBindingKey(form.certificates)) {
+    rows.push(["ACME HMAC key", storedOnceCreated(form.eabKey)]);
+  }
+  return rows;
+}
+
+const customisationRows = (form: Form, defined: Set<string>): [string, string][] =>
+  defined.has("nodeCustomisation") ? [["Node customisation", nodeCustomisationText(form.nodeCustomisation)]] : [];
 
 // backupRows sums up the backups and etcd snapshots, each with where its access key comes from.
 function backupRows(form: Form, c: ClusterClass, defined: Set<string>): [string, string][] {
@@ -1042,21 +1431,12 @@ function addOnRows(form: Form, c: ClusterClass, defined: Set<string>): [string, 
     rows.push(["Headlamp", headlampText(form.headlamp, form.headlampHostname, form.headlampView)]);
   }
   if (defined.has("monitoring")) {
-    rows.push([
-      "Monitoring",
-      form.monitoring ? `On${form.grafanaHostname ? `, Grafana at ${form.grafanaHostname}` : ""}` : "Off",
-    ]);
+    rows.push(["Monitoring", monitoringText(form)]);
   }
   if (defined.has("logs")) {
     rows.push(["Logs", logsText({ ...form.logs, enabled: logsChosen(form) })]);
   }
-  const cis = form.cis && defined.has("cis");
-  if (defined.has("cis")) {
-    rows.push(["CIS hardening", cisText(cis)]);
-  }
-  if (defined.has("podSecurity")) {
-    rows.push(["Pod security", podSecurityText(enforced(form.podSecurity, cis))]);
-  }
+  rows.push(...hardeningRows(form, defined));
   if (defined.has("istio")) {
     rows.push(["Istio", istioText(form.istio)]);
   }
@@ -1068,16 +1448,31 @@ function addOnRows(form: Form, c: ClusterClass, defined: Set<string>): [string, 
   }
   rows.push(...backupRows(form, c, defined));
   if (defined.has("certificates")) {
-    rows.push(["Certificates", certificatesText(form.certificates)]);
-    if (needsClusterToken(form.certificates)) {
-      rows.push([
-        tokenLabel(form.certificates.provider),
-        filled(form.dns01Token) ? "Stored once created" : "None yet: the cluster waits",
-      ]);
-    }
+    rows.push(...certificatesRows(form));
   }
+  return [...rows, ...reachRows(form, defined)];
+}
+
+// reachRows sum up the add-ons that reach beyond the cluster.
+function reachRows(form: Form, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [];
   if (defined.has("gitops")) {
     rows.push(["GitOps", gitOpsText(form.gitops)]);
+  }
+  if (defined.has("egressProxy")) {
+    rows.push(["Egress proxy", egressText(form.egress)]);
+  }
+  return [...rows, ...installRows(form, defined)];
+}
+
+// installRows sum up where the add-ons go and what they find.
+function installRows(form: Form, defined: Set<string>): [string, string][] {
+  const rows: [string, string][] = [];
+  if (defined.has("useExisting")) {
+    rows.push(["Existing cert-manager", form.existingCertManager ? "Yes" : "No"]);
+  }
+  if (defined.has("namespaceLabels")) {
+    rows.push(["Namespace labels", labelsText(parseLabels(form.namespaceLabels).labels)]);
   }
   return rows;
 }
@@ -1096,23 +1491,35 @@ export type FieldKey =
   | "controlPlaneReplicas"
   | "workerReplicas"
   | "workerMax"
+  | "timeouts"
+  | "etcdQuotaGiB"
   | "addons"
   | "bridge"
   | "vlan"
+  | "mtu"
+  | "queues"
   | "endpoint"
   | "addresses"
   | "prefix"
   | "gateway"
   | "dnsServers"
+  | "searchDomains"
+  | "ntpServers"
   | "loadBalancerAddresses"
+  | "loadBalancerAsn"
+  | "loadBalancerPeers"
+  | "loadBalancerPassword"
   | "pods"
   | "services"
   | "storage"
   | "datastoreAllocate"
   | "volumeSnapshots"
   | "placement"
+  | "hostOutageGrace"
   | "controlPlaneMachine"
   | "workerMachine"
+  | "workerNodes"
+  | "nodeCustomisation"
   | "cni"
   | "rancherHostname"
   | "headlampHostname"
@@ -1125,7 +1532,9 @@ export type FieldKey =
   | "etcdSchedule"
   | "etcdKeep"
   | "certificates"
+  | "namespaceLabels"
   | `gitops.${GitOpsField}`
+  | `egress.${EgressField}`
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -1180,6 +1589,12 @@ function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
       p.workerMax = `A whole number from ${least} to ${maxWorkers}`;
     }
   }
+  if (
+    Object.keys(timeoutProblems(form.controlPlaneTimeouts)).length > 0 ||
+    Object.keys(timeoutProblems(form.workerTimeouts)).length > 0
+  ) {
+    p.timeouts = "Check the node timeouts";
+  }
   return p;
 }
 
@@ -1203,7 +1618,7 @@ export function addonsProblem(form: Form, c: ClusterClass | undefined): string |
     : undefined;
 }
 
-function addressProblems(form: Form): Problems {
+function addressProblems(form: Form, routed: boolean): Problems {
   const p: Problems = {};
   const entries = list(form.addresses);
   const { count, bad } = addressCount(entries, form.gateway, form.prefix);
@@ -1219,10 +1634,84 @@ function addressProblems(form: Form): Problems {
     p.endpoint = "Enter an IPv4 address";
   } else if (inList(form.endpoint, entries)) {
     p.endpoint = "Use an address outside the node addresses";
-  } else if (addressCount([form.endpoint], form.gateway, form.prefix).bad !== undefined) {
+  } else if (!routed && addressCount([form.endpoint], form.gateway, form.prefix).bad !== undefined) {
     p.endpoint = "Use an address on the gateway's network";
   }
   return p;
+}
+
+function interfaceProblems(form: Form): Problems {
+  const p: Problems = {};
+  if (form.vlan && !isVLAN(form.vlan)) {
+    p.vlan = "A whole number from 1 to 4094";
+  }
+  if (form.mtu && !isMTU(form.mtu)) {
+    p.mtu = `A whole number from ${minMTU} to ${maxMTU}`;
+  }
+  if (form.queues && !isQueues(form.queues)) {
+    p.queues = `A whole number from 1 to ${maxQueues}`;
+  }
+  return p;
+}
+
+/** balancerProblems holds the load balancer's fields to the nodes' network, or in BGP to the routers. */
+function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const lb = loadBalancerProblems(formLoadBalancerValue(form), c?.distribution, {
+    gateway: form.gateway,
+    prefix: form.prefix,
+    addresses: list(form.addresses),
+    endpoint: form.endpoint,
+  });
+  const p: Problems = {};
+  if (lb.addresses !== undefined) {
+    p.loadBalancerAddresses = lb.addresses;
+  }
+  if (lb.asn !== undefined) {
+    p.loadBalancerAsn = lb.asn;
+  }
+  if (lb.peers !== undefined) {
+    p.loadBalancerPeers = lb.peers;
+  }
+  if (form.loadBalancerAuthenticated && /[\s:,]/u.test(form.loadBalancerPassword)) {
+    p.loadBalancerPassword = "No spaces, colons or commas";
+  }
+  return p;
+}
+
+/** setLoadBalancer sets the form fields behind the load-balancer fields that a patch holds. */
+export function setLoadBalancer(
+  set: <K extends keyof Form>(k: K, v: Form[K]) => void,
+  patch: Partial<LoadBalancerValue>,
+): void {
+  if (patch.implementation !== undefined) {
+    set("loadBalancer", patch.implementation);
+  }
+  if (patch.addresses !== undefined) {
+    set("loadBalancerAddresses", patch.addresses);
+  }
+  if (patch.mode !== undefined) {
+    set("loadBalancerMode", patch.mode);
+  }
+  if (patch.asn !== undefined) {
+    set("loadBalancerAsn", patch.asn);
+  }
+  if (patch.peers !== undefined) {
+    set("loadBalancerPeers", patch.peers);
+  }
+  if (patch.authenticated !== undefined) {
+    set("loadBalancerAuthenticated", patch.authenticated);
+  }
+}
+
+// cniProblem refuses a pod network the node OS or the cluster's name cannot run with.
+function cniProblem(form: Form, c: ClusterClass | undefined): string | undefined {
+  if (chosenNodeOS(form, c)?.fips === true && form.cni !== "" && form.cni !== fipsCNI) {
+    return "FIPS mode needs Canal";
+  }
+  if (form.cni === "cilium" && form.name.length > maxCiliumName) {
+    return `Cilium needs a cluster name of ${maxCiliumName} characters or fewer`;
+  }
+  return undefined;
 }
 
 function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
@@ -1230,33 +1719,32 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (!form.bridge) {
     p.bridge = "Choose a bridge";
   }
-  if (form.vlan && !isVLAN(form.vlan)) {
-    p.vlan = "A whole number from 1 to 4094";
-  }
+  Object.assign(p, interfaceProblems(form));
   if (!whole(form.prefix, 1, addressBits)) {
     p.prefix = `A whole number from 1 to ${addressBits}`;
   }
   if (!ipv4.test(form.gateway)) {
     p.gateway = "Enter an IPv4 address";
   }
-  Object.assign(p, addressProblems(form));
+  const lbValue = formLoadBalancerValue(form);
+  Object.assign(
+    p,
+    addressProblems(form, lbValue.mode === "bgp" && bgpOffered(c?.distribution, lbValue.implementation)),
+  );
   if (list(form.dnsServers).length === 0) {
     p.dnsServers = "Enter at least one DNS server";
   } else if (list(form.dnsServers).some((d) => !ipv4.test(d))) {
     p.dnsServers = "DNS servers must be IPv4 addresses";
   }
-  const lb =
-    form.loadBalancer === ""
-      ? undefined
-      : addressesProblem(list(form.loadBalancerAddresses), {
-          gateway: form.gateway,
-          prefix: form.prefix,
-          addresses: list(form.addresses),
-          endpoint: form.endpoint,
-        });
-  if (lb !== undefined) {
-    p.loadBalancerAddresses = lb;
+  const domains = searchDomainsProblem(list(form.searchDomains));
+  if (domains !== undefined) {
+    p.searchDomains = domains;
   }
+  const ntpProblem = timeServersProblem(list(form.ntpServers));
+  if (ntpProblem !== undefined) {
+    p.ntpServers = ntpProblem;
+  }
+  Object.assign(p, balancerProblems(form, c));
   for (const [key, v] of [
     ["pods", form.pods],
     ["services", form.services],
@@ -1268,10 +1756,47 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   if (c?.variables.find((v) => v.name === "cni")?.required === true && !form.cni) {
     p.cni = "Choose a pod network";
-  } else if (form.cni === "cilium" && form.name.length > maxCiliumName) {
-    p.cni = `Cilium needs a cluster name of ${maxCiliumName} characters or fewer`;
+  } else {
+    const cni = cniProblem(form, c);
+    if (cni !== undefined) {
+      p.cni = cni;
+    }
   }
   return p;
+}
+
+// machineProblem holds a machine to its least cores, memory and disk. MachineFields places the
+// message by its cores, memory or disk.
+function machineProblem(
+  form: Form,
+  c: ClusterClass | undefined,
+  key: "controlPlaneMachine" | "workerMachine",
+): string | undefined {
+  const m = form[key];
+  const min = machineLeast(form, c, key);
+  const plain = plainLeast(form, c, key);
+  // The reason a minimum is higher than usual: the add-ons, or control planes that run the
+  // workloads without workers.
+  const why = (raised: boolean): string => {
+    if (raised) {
+      return " for the add-ons chosen";
+    }
+    return key === "controlPlaneMachine" && mostWorkers(form) === 0 ? " without workers" : "";
+  };
+  if (!whole(m.cores, min.cores)) {
+    return `A whole number of cores, at least ${min.cores}${why(min.cores > plain.cores)}`;
+  }
+  if (
+    form.rancherInstall &&
+    m.cores < rancherMinimumCores &&
+    (key === "controlPlaneMachine" || form.workerReplicas > 0)
+  ) {
+    return `Rancher needs at least ${rancherMinimumCores} cores on every node`;
+  }
+  if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
+    return `At least ${min.memoryMiB} MiB of memory${why(min.memoryMiB > plain.memoryMiB)}, in steps of ${memoryStepMiB}`;
+  }
+  return whole(m.diskGiB, min.diskGiB) ? undefined : `A whole number of GiB of disk, at least ${min.diskGiB}`;
 }
 
 function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
@@ -1283,34 +1808,28 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (placement !== undefined) {
     p.placement = placement;
   }
-  for (const [key, m] of [
-    ["controlPlaneMachine", form.controlPlaneMachine],
-    ["workerMachine", form.workerMachine],
-  ] as const) {
-    const min = machineLeast(form, c, key);
-    const plain = plainLeast(form, c, key);
-    // The reason a minimum is higher than usual: the add-ons, or control planes that run the
-    // workloads without workers. MachineFields places the message by its cores, memory or disk.
-    const why = (raised: boolean): string => {
-      if (raised) {
-        return " for the add-ons chosen";
-      }
-      return key === "controlPlaneMachine" && mostWorkers(form) === 0 ? " without workers" : "";
-    };
-    if (!whole(m.cores, min.cores)) {
-      p[key] = `A whole number of cores, at least ${min.cores}${why(min.cores > plain.cores)}`;
-    } else if (
-      form.rancherInstall &&
-      m.cores < rancherMinimumCores &&
-      (key === "controlPlaneMachine" || form.workerReplicas > 0)
-    ) {
-      p[key] = `Rancher needs at least ${rancherMinimumCores} cores on every node`;
-    } else if (!whole(m.memoryMiB, min.memoryMiB) || m.memoryMiB % memoryStepMiB !== 0) {
-      p[key] =
-        `At least ${min.memoryMiB} MiB of memory${why(min.memoryMiB > plain.memoryMiB)}, in steps of ${memoryStepMiB}`;
-    } else if (!whole(m.diskGiB, min.diskGiB)) {
-      p[key] = `A whole number of GiB of disk, at least ${min.diskGiB}`;
+  if (variable(c, "etcd") !== undefined && !whole(form.etcdQuotaGiB, minEtcdQuotaGiB, maxEtcdQuotaGiB)) {
+    p.etcdQuotaGiB = `A whole number from ${minEtcdQuotaGiB} to ${maxEtcdQuotaGiB}`;
+  }
+  const grace = variable(c, graceVariable) ? graceProblem(form.hostOutageGrace) : undefined;
+  if (grace !== undefined) {
+    p.hostOutageGrace = grace;
+  }
+  for (const key of ["controlPlaneMachine", "workerMachine"] as const) {
+    const problem = machineProblem(form, c, key);
+    if (problem !== undefined) {
+      p[key] = problem;
     }
+  }
+  const nodes = variable(c, "workerNodes") && mostWorkers(form) > 0 ? nodeSettingsProblem(form.workerNodes) : undefined;
+  if (nodes !== undefined) {
+    p.workerNodes = nodes;
+  }
+  const customised = variable(c, "nodeCustomisation")
+    ? nodeCustomisationProblem(form.nodeCustomisation, c?.distribution === "talos")
+    : undefined;
+  if (customised !== undefined) {
+    p.nodeCustomisation = customised;
   }
   return p;
 }
@@ -1334,6 +1853,10 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (certificates.length > 0) {
     p.certificates = certificates.join(" ");
   }
+  const labels = variable(c, "namespaceLabels") ? parseLabels(form.namespaceLabels).problem : undefined;
+  if (labels !== undefined) {
+    p.namespaceLabels = labels;
+  }
   if (variable(c, "gitops") !== undefined) {
     const g = gitOpsProblems(form.gitops);
     for (const field of gitOpsFields) {
@@ -1343,7 +1866,29 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
       }
     }
   }
-  return { ...p, ...backupsProblems(form, c), ...etcdSnapshotsProblems(form, c), ...accessKeyProblems(form, c) };
+  return {
+    ...p,
+    ...egressFormProblems(form, c),
+    ...backupsProblems(form, c),
+    ...etcdSnapshotsProblems(form, c),
+    ...accessKeyProblems(form, c),
+  };
+}
+
+// egressFormProblems are what is wrong with the egress proxy the form names, by field.
+function egressFormProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
+  if (variable(c, "egressProxy") === undefined) {
+    return p;
+  }
+  const e = egressProblems(form.egress);
+  for (const field of egressFields) {
+    const problem = e[field];
+    if (problem !== undefined) {
+      p[`egress.${field}`] = problem;
+    }
+  }
+  return p;
 }
 
 // backupsProblems are what keeps the backups the form switches on from being complete.
@@ -1562,12 +2107,74 @@ export function snapshotsProblems(step: Step, form: Form, offer: SnapshotsOffer)
   return { volumeSnapshots: offer.problem };
 }
 
+/** bridgeMtuProblems holds the network step's MTU to the chosen bridge's, where a node lists it. */
+export function bridgeMtuProblems(step: Step, form: Form, bridges: Bridge[]): Problems {
+  if (step !== "Network" || !form.mtu || !isMTU(form.mtu)) {
+    return {};
+  }
+  const mtu = bridges.find((b) => b.bridge === form.bridge)?.mtu;
+  if (mtu === undefined || Number(form.mtu) <= mtu) {
+    return {};
+  }
+  return { mtu: `The bridge has MTU ${mtu}. Use ${mtu} or less` };
+}
+
 /** csiProblems holds the machines step to the CSI plugin's release a new cluster chose. */
 export function csiProblems(step: Step, form: Form, csi: CSIOffer): Problems {
   if (step !== "Machines" || !csi.offered || !form.datastoreAllocate || csi.problem === undefined) {
     return {};
   }
   return { datastoreAllocate: csi.problem };
+}
+
+/**
+ * bridgeNodeProblems holds the network step to a bridge that exists on a node the cluster may use,
+ * as the API server does. A node whose bridges are not listed to the user counts as having it, and
+ * so does a name no node lists, which may be a VNet.
+ */
+export function bridgeNodeProblems(
+  step: Step,
+  form: Form,
+  nodes: { bridgesByNode: Record<string, Bridge[]>; online: string[] },
+): Problems {
+  if (step !== "Network" || !form.bridge) {
+    return {};
+  }
+  const on = (node: string): boolean | undefined => {
+    const known = nodes.bridgesByNode[node];
+    return known === undefined || known.length === 0 ? undefined : known.some((b) => b.bridge === form.bridge);
+  };
+  const allowed = allowedNodes(form.place) ?? nodes.online;
+  const holders = Object.keys(nodes.bridgesByNode).filter((node) => on(node) === true);
+  if (holders.length === 0 || allowed.length === 0 || allowed.some((node) => on(node) !== false)) {
+    return {};
+  }
+  const [only, ...rest] = holders.toReversed();
+  const named = rest.length === 0 ? holders.join("") : `${rest.toReversed().join(", ")} and ${only}`;
+  const allow = rest.length === 0 ? `Allow ${named}` : "Allow one of them";
+  return { bridge: `${form.bridge} is only on ${named}. ${allow} or choose another bridge.` };
+}
+
+/**
+ * memoryNodeWarning warns when no node the cluster may use has the free memory for its largest
+ * machine, as the Placer judges them. The server accepts such a cluster, so this never blocks. A
+ * node whose memory is not reported counts as having it.
+ */
+export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefined {
+  const chosen = allowedNodes(form.place);
+  const candidates = nodes.filter((n) => n.online && (chosen === undefined || chosen.includes(n.node)));
+  const need = Math.max(form.controlPlaneMachine.memoryMiB, form.workerReplicas > 0 ? form.workerMachine.memoryMiB : 0);
+  const [best] = candidates.toSorted((a, b) => freeMiB(b) - freeMiB(a));
+  if (best === undefined || freeMiB(best) >= need) {
+    return undefined;
+  }
+  const needGiB = Math.ceil(need / mibPerGiB);
+  return `No node has ${needGiB} GiB free, the most is ${Math.floor(freeMiB(best) / mibPerGiB)} GiB on ${best.node}. The cluster waits for room.`;
+}
+
+// freeMiB is a node's free memory, unlimited while it reports none.
+function freeMiB(n: PveNode): number {
+  return n.maxMemory === undefined || n.memory === undefined ? Infinity : (n.maxMemory - n.memory) / bytesPerMiB;
 }
 
 // offeredStorages are the storages, once each, that take disks, the user may use and the class

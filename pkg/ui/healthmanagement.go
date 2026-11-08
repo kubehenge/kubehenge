@@ -95,6 +95,10 @@ func readManagement(ctx context.Context, kube client.Client, c *clusterv1.Cluste
 func readControlPlane(ctx context.Context, kube client.Client, c *clusterv1.Cluster) (*unstructured.Unstructured, error) {
 	ref := c.Spec.ControlPlaneRef
 	mapping, err := kube.RESTMapper().RESTMapping(schema.GroupKind{Group: ref.APIGroup, Kind: ref.Kind})
+	if meta.IsNoMatchError(err) {
+		// A provider that is not installed (yet) serves no such object, so there is none to read.
+		return nil, nil //nolint:nilnil // no object is an answer, not a failure
+	}
 	if err != nil {
 		return nil, fmt.Errorf("the API of %s: %w", ref.Kind, err)
 	}
@@ -181,7 +185,7 @@ func machineRole(m *clusterv1.Machine) string {
 }
 
 // nodesSection lists the cluster's machines with their nodes, and the nodes of no machine.
-func nodesSection(m *managementRead, wl *workloadRead, now time.Time, a *attention) section[nodeView] {
+func nodesSection(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now time.Time, a *attention) section[nodeView] {
 	s := section[nodeView]{Items: []nodeView{}}
 	if m.machinesErr != nil {
 		s.Error = problem(m.machinesErr)
@@ -225,6 +229,11 @@ func nodesSection(m *managementRead, wl *workloadRead, now time.Time, a *attenti
 		if s.Items[i].Joined {
 			s.Items[i].leaving = leaving[s.Items[i].Name]
 			nodeAttention(a, &s.Items[i], now)
+			if n := nodes[s.Items[i].Name]; n != nil && !s.Items[i].leaving {
+				taintDriftAttention(a, c, &s.Items[i], n)
+				clockSkewAttention(a, &s.Items[i], wl.leases[n.Name], now)
+				clockSyncAttention(a, &s.Items[i], wl.unsynced)
+			}
 		}
 	}
 	slices.SortFunc(s.Items, func(x, y nodeView) int {

@@ -29,10 +29,16 @@ type Settings struct {
 	VMDatastore    string   `json:"vmDatastore"`
 	Bridge         string   `json:"bridge"`
 	VLAN           *int     `json:"vlan,omitempty"`
-	NodeAddresses  []string `json:"nodeAddresses"`
-	APIAddress     string   `json:"apiAddress"`
-	Gateway        string   `json:"gateway"`
-	DNSServers     []string `json:"dnsServers"`
+	// MTU is the management VMs' network interface MTU, for a network that carries less than 1500
+	// or more. 0 or empty keeps the bridge's.
+	MTU           int      `json:"mtu,omitempty"`
+	NodeAddresses []string `json:"nodeAddresses"`
+	APIAddress    string   `json:"apiAddress"`
+	Gateway       string   `json:"gateway"`
+	DNSServers    []string `json:"dnsServers"`
+	// SearchDomains are appended to a name without dots, on the management cluster's nodes and in
+	// the clusters' network variable.
+	SearchDomains []string `json:"searchDomains,omitempty"`
 	// TimeServers are the NTP servers the nodes keep their clocks with. Empty keeps Talos's default
 	// public ones.
 	TimeServers        []string `json:"timeServers,omitempty"`
@@ -42,6 +48,9 @@ type Settings struct {
 	// RegistryMirrors are endpoints tried before each registry, by registry name, for a site with
 	// a pull-through cache or none of the internet.
 	RegistryMirrors map[string][]string `json:"registryMirrors,omitempty"`
+	// ChartRepositories are mirrors of the Helm chart repositories, which registry mirrors do not
+	// reach.
+	ChartRepositories *ChartRepositories `json:"chartRepositories,omitempty"`
 	// ControllerImage replaces the controller image the chart was released with.
 	ControllerImage string `json:"controllerImage,omitempty"`
 	// PodSubnets and ServiceSubnets are the management cluster's own ranges. When unset, the first
@@ -86,6 +95,28 @@ type Settings struct {
 	// APIAuditLog has the management cluster's API server log the changes people make to its
 	// output, where the interface reads them for its activity page.
 	APIAuditLog bool `json:"apiAuditLog,omitempty"`
+	// Proxy is the HTTP(S) proxy that every download from the management side goes through. Unset,
+	// they go direct.
+	Proxy *Proxy `json:"proxy,omitempty"`
+}
+
+// KeepsProxySecret restores the saved proxy's password where these settings came back with the
+// address the interface showed, password hidden.
+func (s *Settings) KeepsProxySecret(saved *Settings) {
+	if saved != nil {
+		s.Proxy.KeepsSecret(saved.Proxy)
+	}
+}
+
+// Redacted is a copy of the settings that is safe to send to the interface: the proxy's password
+// is hidden.
+func (s *Settings) Redacted() *Settings {
+	if s == nil {
+		return nil
+	}
+	out := *s
+	out.Proxy = s.Proxy.Redacted()
+	return &out
 }
 
 // TemplateRefresh is when and where the node OS VM templates are built again. Empty fields take the
@@ -110,6 +141,10 @@ type TemplateRefresh struct {
 	DNS     []string `json:"dns,omitempty"`
 	// CreatorBuilds lets those who may create clusters have a missing template built.
 	CreatorBuilds bool `json:"creatorBuilds,omitempty"`
+	// KubeadmPatches has the weekly build also make the kubeadm template of the newest patch
+	// release of each Kubernetes minor version a kubeadm cluster runs, and of the next minor
+	// version. Unset, it is on.
+	KubeadmPatches *bool `json:"kubeadmPatches,omitempty"`
 }
 
 // RefreshWeekdays are the days the template refresh may run on, as the module names them.
@@ -153,7 +188,7 @@ func (r *TemplateRefresh) check(p *problems, workloadDatastores []string) {
 	if r.Storage != "" && !slices.Contains(workloadDatastores, r.Storage) {
 		p.addf("Template disks: one of the cluster storages")
 	}
-	if r.Node != "" && !validHostName(r.Node) {
+	if r.Node != "" && !provisioner.ValidHostName(r.Node) {
 		p.addf("Template build node: a Proxmox VE node name")
 	}
 	if r.Bridge != "" && !bridgeRef.MatchString(r.Bridge) {
@@ -199,6 +234,9 @@ func moduleTemplateRefresh(r *TemplateRefresh) map[string]any {
 	}
 	out["enabled"] = r.Enabled
 	out["creator_builds"] = r.CreatorBuilds
+	if r.KubeadmPatches != nil {
+		out["kubeadm_patches"] = *r.KubeadmPatches
+	}
 	for key, value := range map[string]string{
 		"weekday": r.Weekday, "time": r.Time, "time_zone": r.TimeZone, "storage": r.Storage,
 		"address": r.Address, "gateway": r.Gateway,
@@ -239,13 +277,19 @@ const (
 	maxVLAN = 4094
 )
 
+// The MTUs of a node's interface. Proxmox VE takes one from 576, but IPv6 does not work below 1280.
+const (
+	minMTU = 1280
+	maxMTU = 65520
+)
+
 // bridgeRef is a node's bridge by name, or a VNet as zone/vnet.
 var bridgeRef = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // plainHTTPS tells whether s is an https:// URL with a host and without query, fragment or user.
 func plainHTTPS(s string) bool {
 	u, err := url.Parse(s)
-	return err == nil && u.Scheme == "https" && u.Host != "" && u.RawQuery == "" && u.Fragment == "" && u.User == nil
+	return err == nil && u.Scheme == schemeHTTPS && u.Host != "" && u.RawQuery == "" && u.Fragment == "" && u.User == nil
 }
 
 // Validate checks a provider as the API server would on start, where a mistake keeps the control
@@ -341,6 +385,7 @@ func (s *Settings) Validate() error {
 	s.checkServers(&p)
 	s.checkSubnets(&p)
 	s.checkMirrors(&p)
+	s.ChartRepositories.check(&p)
 	if err = ValidOIDC(s.ClusterOIDC); err != nil {
 		p.addf("Identity providers: %s", err)
 	}
@@ -351,6 +396,7 @@ func (s *Settings) Validate() error {
 		s.TemplateRefresh.check(&p, s.WorkloadDatastores)
 	}
 	s.checkNamespaces(&p)
+	checkProxySetting(s.Proxy, &p)
 	err = p.err()
 	if err != nil {
 		return err
@@ -425,6 +471,9 @@ func (s *Settings) checkPlacement(p *problems) {
 	if s.VLAN != nil && (*s.VLAN < minVLAN || *s.VLAN > maxVLAN) {
 		p.addf("VLAN tag: %d to %d", minVLAN, maxVLAN)
 	}
+	if s.MTU != 0 && (s.MTU < minMTU || s.MTU > maxMTU) {
+		p.addf("MTU: %d to %d", minMTU, maxMTU)
+	}
 }
 
 // checkNodeAddresses checks the nodes' addresses against the gateway and each other, and returns
@@ -487,7 +536,29 @@ func (s *Settings) checkServers(p *problems) {
 			p.addf("What clusters may use: %q is no bridge, write a VNet as zone/vnet", b)
 		}
 	}
+	s.checkSearchDomains(p)
 	s.checkTimeServers(p)
+}
+
+// maxSearchDomains is what glibc's resolver reads, and what the clusters' network variable allows.
+const maxSearchDomains = 6
+
+// checkSearchDomains holds the domains to what the clusters' network variable accepts, so the
+// management cluster and the clusters made on it resolve short names alike.
+func (s *Settings) checkSearchDomains(p *problems) {
+	if len(s.SearchDomains) > maxSearchDomains {
+		p.addf("Search domains: at most %d", maxSearchDomains)
+	}
+	seen := map[string]bool{}
+	for _, d := range s.SearchDomains {
+		switch {
+		case seen[d]:
+			p.addf("Search domains: %s is listed twice", d)
+		case !provisioner.ValidHostName(d) || strings.HasSuffix(d, "."):
+			p.addf("Search domains: %q is no domain name", d)
+		}
+		seen[d] = true
+	}
 }
 
 // checkTimeServers checks that each time server is a host name or an address Talos can resolve and
@@ -495,37 +566,14 @@ func (s *Settings) checkServers(p *problems) {
 func (s *Settings) checkTimeServers(p *problems) {
 	seen := map[string]bool{}
 	for _, t := range s.TimeServers {
-		switch ip, err := netip.ParseAddr(t); {
+		switch problem := provisioner.TimeServerProblem(t); {
 		case seen[t]:
 			p.addf("Time servers: %s is listed twice", t)
-		case err == nil && (ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast()):
-			p.addf("Time servers: %s is no address the nodes can reach", t)
-		case err != nil && !validHostName(t):
-			p.addf("Time servers: %s is no host name or IP address", t)
+		case problem != "":
+			p.addf("Time servers: %s", problem)
 		}
 		seen[t] = true
 	}
-}
-
-// validHostName tells whether s is a DNS name: dot-separated labels of letters, digits and hyphens,
-// none starting or ending with a hyphen, at most 253 characters.
-func validHostName(s string) bool {
-	const longestName, longestLabel = 253, 63
-	s = strings.TrimSuffix(s, ".")
-	if s == "" || len(s) > longestName {
-		return false
-	}
-	for label := range strings.SplitSeq(s, ".") {
-		if label == "" || len(label) > longestLabel || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-			return false
-		}
-		for _, r := range label {
-			if r > unicode.MaxASCII || (!unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-') {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func (s *Settings) checkSubnets(p *problems) {
@@ -547,7 +595,7 @@ func (s *Settings) checkMirrors(p *problems) {
 			p.addf("Registry mirrors: %q is no registry host name", registry)
 		}
 		for _, e := range s.RegistryMirrors[registry] {
-			if u, err := url.Parse(e); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			if u, err := url.Parse(e); err != nil || (u.Scheme != schemeHTTPS && u.Scheme != schemeHTTP) || u.Host == "" {
 				p.addf("Registry mirrors: %s is no http:// or https:// URL", e)
 			}
 		}

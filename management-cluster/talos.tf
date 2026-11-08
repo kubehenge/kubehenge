@@ -153,6 +153,20 @@ data "talos_machine_configuration" "node" {
         kind       = "TimeSyncConfig"
         ntp        = { servers = var.time_servers }
       })],
+      local.proxy_enabled ? concat(
+        # The proxy for Talos's own services, containerd's image pulls among them.
+        [yamlencode({ machine = { env = local.proxy_talos_env } })],
+        local.proxy_has_ca ? [yamlencode({ apiVersion = "v1alpha1", kind = "TrustedRootsConfig", name = "kubehenge-proxy", certificates = var.proxy.ca_bundle })] : [],
+      ) : [],
+      # The same MTU as the Proxmox VE interface, on the link by its alias, so it holds whatever
+      # the guest driver negotiates.
+      var.mtu == null ? [] : [yamlencode({ apiVersion = "v1alpha1", kind = "LinkConfig", name = "lan", mtu = var.mtu })],
+      # The nameservers stay the platform's: only search domains are set.
+      length(var.search_domains) == 0 ? [] : [yamlencode({
+        apiVersion    = "v1alpha1"
+        kind          = "ResolverConfig"
+        searchDomains = { domains = var.search_domains }
+      })],
     )),
   ]
 }

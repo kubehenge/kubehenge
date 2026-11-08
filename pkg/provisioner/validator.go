@@ -24,7 +24,8 @@ import (
 // alone, volume snapshots where they cannot be taken, Sys.Audit on / where no cluster may hold it,
 // autoscaled pools whose bounds the autoscaler cannot work with or whose nodes would run out of
 // addresses, and a Talos release that does not run the Kubernetes version or that Talos cannot
-// upgrade to from the one before. A cluster that already fell short before a change is not held to it for unrelated
+// upgrade to from the one before, and an interface MTU or queue count out of bounds, or an MTU above the
+// bridge's. A cluster that already fell short before a change is not held to it for unrelated
 // edits.
 type ClusterValidator struct {
 	Hooks *Hooks
@@ -79,8 +80,14 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	var errs field.ErrorList
 	topology := field.NewPath("spec", "topology")
 	errs = append(errs, validateTopology(old, c)...)
-	errs = append(errs, v.validatePinned(old, c)...)
-	errs = append(errs, v.validateNodeOS(ctx, old, c)...)
+	errs = append(errs, v.validatePinned(ctx, old, c)...)
+	// One budget and one set of reads for every check of Proxmox VE, inside the webhook's timeout.
+	pveCtx, cancel := v.Hooks.admissionContext(ctx)
+	defer cancel()
+	reads := v.Hooks.reads()
+	errs = append(errs, v.validateNodeNIC(pveCtx, old, c)...)
+	errs = append(errs, v.validateNodeOS(pveCtx, reads, old, c)...)
+	errs = append(errs, v.validatePlacement(pveCtx, reads, old, c, class)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
@@ -92,6 +99,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	}
 	errs = append(errs, validateClusterMesh(old, c)...)
 	errs = append(errs, validateRanges(old, c, class)...)
+	errs = append(errs, validateTimeServers(c)...)
 	if err := checkLogs(c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(logsAddon), err.Error()))
 	}
@@ -101,8 +109,13 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 		errs = append(errs, field.Invalid(topology.Child("variables").Key(backupsVariable), backupsVariable, err.Error()))
 	}
 	errs = append(errs, validateCertificates(c)...)
+	errs = append(errs, validateMonitoring(c)...)
 	errs = append(errs, validateGitOps(c)...)
+	errs = append(errs, validateEgress(c)...)
+	errs = append(errs, validateAddonSettings(old, c)...)
+	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
 	errs = append(errs, validateAutoscaling(c)...)
+	errs = append(errs, validateHostOutageGrace(c)...)
 	if err := checkEtcdSnapshots(old, c, class); err != nil {
 		errs = append(errs, field.Invalid(topology.Child("variables").Key(etcdSnapshotsVariable), etcdSnapshotsVariable, err.Error()))
 	}
@@ -111,6 +124,9 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	}
 	if err := checkTalos(old, c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(TalosVersionVariable), err.Error()))
+	}
+	if err := checkBGP(c); err != nil {
+		errs = append(errs, field.Invalid(topology.Child("variables").Key(loadBalancerVariable), loadBalancerVariable, err.Error()))
 	}
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkAddresses(ctx, c); err != nil {
@@ -140,29 +156,56 @@ func validateRanges(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) fi
 
 // validatePinned holds an RKE2 or k3s cluster to a release this Kubehenge pins, when it is created
 // or its version changes. Its nodes could install no other.
-func (v *ClusterValidator) validatePinned(old, c *clusterv1.Cluster) field.ErrorList {
+func (v *ClusterValidator) validatePinned(ctx context.Context, old, c *clusterv1.Cluster) field.ErrorList {
 	version := c.Spec.Topology.Version
 	if v.Hooks.Releases == nil || (old != nil && old.Spec.Topology.Version == version) {
 		return nil
 	}
 	release := distributionReleaseOf(version)
-	if release == nil || v.Hooks.Releases.Pins.pinned(version) {
+	if release == nil {
+		return nil
+	}
+	pins, err := v.Hooks.Releases.pins(ctx)
+	if err != nil {
+		return field.ErrorList{field.InternalError(field.NewPath("spec", "topology", "version"), err)}
+	}
+	if pins.pinned(version) {
 		return nil
 	}
 	return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "version"), version,
-		fmt.Sprintf("%s; the newest it pins of each minor version: %s", unpinnedRelease(release, version), strings.Join(v.Hooks.Releases.Pins.offered(release), ", ")))}
+		fmt.Sprintf("%s; the newest it pins of each minor version: %s", unpinnedRelease(release, version), strings.Join(pins.offered(release), ", ")))}
 }
 
 // validateNodeOS checks the node OS when it changes, and when the nodes the cluster may use do, which
 // may leave none whose CPU runs it.
-func (v *ClusterValidator) validateNodeOS(ctx context.Context, old, c *clusterv1.Cluster) field.ErrorList {
+func (v *ClusterValidator) validateNodeOS(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster) field.ErrorList {
 	if old != nil && !variableChanged(old, c, NodeOSVariable) && !variableChanged(old, c, allowedNodesVariable) {
 		return nil
 	}
-	if err := v.Hooks.checkNodeOS(ctx, c); err != nil {
+	if err := admitOnReadFailure(ctx, v.Hooks.checkNodeOS(ctx, reads, c)); err != nil {
 		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology", "variables").Key(NodeOSVariable), err.Error())}
 	}
 	return nil
+}
+
+// validatePlacement holds a cluster to a storage the management cluster gives rights on, and to
+// storage, bridge and templates that reach some node it may use, when it is created or the storage,
+// the network, the nodes or the node OS change.
+func (v *ClusterValidator) validatePlacement(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	variables := field.NewPath("spec", "topology", "variables")
+	var errs field.ErrorList
+	if old == nil || variableChanged(old, c, "storage") {
+		if err := checkStorageListed(c, class); err != nil {
+			errs = append(errs, field.Forbidden(variables.Key("storage"), err.Error()))
+		}
+	}
+	if old != nil && !slices.ContainsFunc([]string{"storage", allowedNodesVariable, NodeOSVariable, "network"}, func(name string) bool { return variableChanged(old, c, name) }) {
+		return errs
+	}
+	if err := admitOnReadFailure(ctx, v.Hooks.checkPlacement(ctx, reads, c)); err != nil {
+		errs = append(errs, field.Forbidden(variables.Key(allowedNodesVariable), err.Error()))
+	}
+	return errs
 }
 
 // validateGrants holds the privileges a cluster asks for beyond its pool to what the management
@@ -237,6 +280,19 @@ func validateClusterMesh(old, c *clusterv1.Cluster) field.ErrorList {
 	return errs
 }
 
+// validateEgress holds a cluster's egressProxy to checkEgress.
+func validateEgress(c *clusterv1.Cluster) field.ErrorList {
+	path := field.NewPath("spec", "topology", "variables").Key(egressVariable)
+	v, _, err := optionalVariable[EgressProxy](c, egressVariable)
+	if err != nil {
+		return field.ErrorList{field.Invalid(path, nil, err.Error())}
+	}
+	if err := checkEgress(&v); err != nil {
+		return field.ErrorList{field.Invalid(path, nil, err.Error())}
+	}
+	return nil
+}
+
 // validateGitOps holds a cluster's GitOps to the host keys of its repository, which a repository
 // reached over SSH has to give, and to the identity provider its web interface signs in with:
 // Flux's, and Argo CD's administrators, need the cluster's first OIDC provider.
@@ -254,6 +310,11 @@ func validateGitOps(c *clusterv1.Cluster) field.ErrorList {
 	if g.Enabled && g.knownHostsNeeded() && g.KnownHosts == "" {
 		return field.ErrorList{field.Required(path.Child("knownHosts"),
 			"a repository reached over SSH needs its host's keys as known_hosts lines; Kubehenge does not read them from the network")}
+	}
+	if g.Enabled && g.Repository.CABundle != "" {
+		if caErr := g.checkRepositoryCA(); caErr != nil {
+			return field.ErrorList{field.Invalid(path.Child("repository", "caBundle"), nil, caErr.Error())}
+		}
 	}
 	if !g.Enabled || (!g.UI && len(g.Admins) == 0) {
 		return nil

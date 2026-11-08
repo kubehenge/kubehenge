@@ -12,6 +12,7 @@ import (
 	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -28,6 +29,18 @@ func withTemplates(t *testing.T, h *harness) {
 		{VMID: 9004, Node: "pve1", Type: "qemu", Name: "kubehenge-rke2-almalinux-10-build-202610150000", Template: 1, Tags: "build-202610150000;kubehenge;os-almalinux-10;rke2"},
 		{VMID: 9002, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.36.5-almalinux-10-build-202610010000", Template: 1, Tags: "build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;os-almalinux-10"},
 		{VMID: 9003, Node: "pve1", Type: "qemu", Name: "being-built", Template: 0},
+	}
+}
+
+// templateBuildEnded waits until the appliance no longer reports a template build as running. It
+// has no clock of its own: a build records itself on disk first, which a busy machine stretches past
+// any fixed wait, and the test run's timeout ends a build that never ends.
+func templateBuildEnded(a *appliance.Appliance) *appliance.JobView {
+	for {
+		if job := a.TemplateJob(); job == nil || job.State != appliance.StateRunning {
+			return job
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -61,6 +74,71 @@ func TestTemplatesListedWithTheClustersThatNeedThem(t *testing.T) {
 	d := h.browser()
 	d.signIn("dev@pve")
 	expect(t, d.do("GET", "/api/templates", ""), http.StatusForbidden)
+}
+
+// A template on a node that is down is reported beside the list, which still holds the others.
+func TestTemplatesOnADownNodeAreReportedAndFailNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, cluster("default", "one"))
+	withTemplates(t, h)
+	h.accounts.members = append(h.accounts.members,
+		pve.Member{VMID: 9010, Node: "pve2", Type: "qemu", Name: "kubehenge-talos-v1.14.4", Tags: "kubehenge;talos;talos-v1.14.4", Down: true},
+		pve.Member{VMID: 9009, Node: "pve3", Type: "qemu", Tags: "kubehenge", Down: true})
+	h.server.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) { return 0, nil }
+	a := h.browser()
+	a.signIn("admin@pve")
+	rec := a.do("GET", "/api/templates", "")
+	expect(t, rec, http.StatusOK)
+	var got templatesView
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []downTemplateView{{VMID: 9009, Node: "pve3"}, {VMID: 9010, Node: "pve2", Name: "kubehenge-talos-v1.14.4"}}
+	if !slices.Equal(got.Down, want) || len(got.Templates) != 3 {
+		t.Fatalf("down = %+v with %d templates, want %+v with 3", got.Down, len(got.Templates), want)
+	}
+	if rec = a.do("DELETE", "/api/templates/9010", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("deleting a template on a down node gave %d, want 404", rec.Code)
+	}
+}
+
+// A build the controller recorded as older than the previous build is marked on the page, and
+// no cluster is shown cloning from it.
+func TestTemplateWithAnOlderKernelIsMarkedOlder(t *testing.T) {
+	t.Parallel()
+	one := cluster("default", "one")
+	one.Annotations = map[string]string{"kubehenge.dev/node-image": "2026-12-10T00:00:00Z"}
+	h := newHarness(t, one)
+	withTemplates(t, h)
+	class := &clusterv1.ClusterClass{}
+	if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "kubehenge-system", Name: "kubehenge-rke2"}, class); err != nil {
+		t.Fatal(err)
+	}
+	class.Annotations["kubehenge.dev/node-image-older"] = `{"` + templates.LineKey([]string{"kubehenge", "os-almalinux-10", "rke2"}) + `":["2026-10-15T00:00:00Z"]}`
+	if err := h.kube.Update(context.Background(), class); err != nil {
+		t.Fatal(err)
+	}
+	h.server.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) { return 0, nil }
+	a := h.browser()
+	a.signIn("admin@pve")
+	rec := a.do("GET", "/api/templates", "")
+	expect(t, rec, http.StatusOK)
+	var got templatesView
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	older := map[int]bool{}
+	for _, v := range got.Templates {
+		older[v.VMID] = v.Older
+	}
+	if !older[9004] || older[9001] || older[9002] {
+		t.Errorf("older builds = %v, want only 9004", older)
+	}
+	for _, v := range got.Templates {
+		if v.VMID == 9004 && v.InUse != "" {
+			t.Errorf("%s clones from the older build", v.InUse)
+		}
+	}
 }
 
 func TestTemplatesOnlyInAnApplianceWithItsManagementCluster(t *testing.T) {
@@ -98,11 +176,7 @@ func TestTemplateBuiltOnTheAdministratorsSession(t *testing.T) {
 	// One job at a time, of any kind.
 	expect(t, a.do("POST", "/api/templates", body), http.StatusConflict)
 	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for h.server.Appliance.TemplateJob().State == "running" && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	job := h.server.Appliance.TemplateJob()
+	job := templateBuildEnded(h.server.Appliance)
 	if job.State != "succeeded" || !slices.Contains(job.Log, "Downloading the image") || !strings.Contains(strings.Join(job.Log, "\n"), "is VM 9010") {
 		t.Fatalf("job = %+v", job)
 	}
@@ -146,10 +220,7 @@ func TestFinishedTemplateBuildIsListed(t *testing.T) {
 		h.accounts.listed = nil
 		h.accounts.mu.Unlock()
 		close(release)
-		deadline := time.Now().Add(5 * time.Second)
-		for h.server.Appliance.TemplateJob().State == "running" && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
-		}
+		templateBuildEnded(h.server.Appliance)
 	}
 	h.accounts.mu.Unlock()
 	listed := func() templatesView {
@@ -231,11 +302,7 @@ func TestFailedTemplateBuildReported(t *testing.T) {
 	a := h.browser()
 	a.signIn("admin@pve")
 	expect(t, a.do("POST", "/api/templates", `{"distribution":"rke2","node":"pve1","storage":"ceph","importStorage":"local","bridge":"vmbr0"}`), http.StatusAccepted)
-	deadline := time.Now().Add(5 * time.Second)
-	for h.server.Appliance.TemplateJob().State == "running" && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if job := h.server.Appliance.TemplateJob(); job.State != "failed" || !strings.HasSuffix(job.Error, ": no storage local on node pve1") {
+	if job := templateBuildEnded(h.server.Appliance); job.State != "failed" || !strings.HasSuffix(job.Error, ": no storage local on node pve1") {
 		t.Fatalf("job = %+v", job)
 	}
 }

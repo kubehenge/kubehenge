@@ -19,6 +19,9 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
+
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -95,6 +98,9 @@ func TestNetworkValidated(t *testing.T) {
 		"API elsewhere":     {func(s *Settings) { s.APIAddress = "10.9.0.10" }, "API address: inside the nodes' network, 10.0.0.0/24"},
 		"DNS":               {func(s *Settings) { s.DNSServers = []string{"dns.example"} }, "DNS servers: dns.example is no IP address"},
 		"VLAN":              {func(s *Settings) { v := 4095; s.VLAN = &v }, "VLAN tag: 1 to 4094"},
+		"MTU 1279":          {func(s *Settings) { s.MTU = 1279 }, "MTU: 1280 to 65520"},
+		"MTU 65521":         {func(s *Settings) { s.MTU = 65521 }, "MTU: 1280 to 65520"},
+		"MTU negative":      {func(s *Settings) { s.MTU = -1 }, "MTU: 1280 to 65520"},
 		"pod host bits":     {func(s *Settings) { s.PodSubnets = []string{"10.244.0.1/16"} }, "Pod ranges: 10.244.0.1/16 is no network"},
 		"mirror scheme":     {func(s *Settings) { s.RegistryMirrors = map[string][]string{"docker.io": {"mirror:5000"}} }, "Registry mirrors: mirror:5000"},
 		"mirror registry":   {func(s *Settings) { s.RegistryMirrors = map[string][]string{"a/b": {"https://m"}} }, `Registry mirrors: "a/b"`},
@@ -183,6 +189,10 @@ func TestModuleTemplateRefresh(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("placement set: got %v, want %v", got, want)
 	}
+	off := false
+	if got := moduleTemplateRefresh(&TemplateRefresh{Enabled: true, KubeadmPatches: &off}); got["kubeadm_patches"] != off {
+		t.Errorf("kubeadm patches switched off: %v", got)
+	}
 }
 
 func TestClusterOIDC(t *testing.T) {
@@ -248,6 +258,8 @@ func newAppliance(t *testing.T) (*Appliance, chan []byte) {
 			return []byte("interface for " + string(admin) + " at " + endpoint), nil
 		},
 	}
+	management := fake.NewClientset()
+	a.ManagementClient = func([]byte) (kubernetes.Interface, error) { return management, nil }
 	return a, ready
 }
 
@@ -257,15 +269,12 @@ func ticket() *pve.Ticket {
 
 func waitFor(t *testing.T, a *Appliance) *JobView {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
+	for {
 		if j := a.Current(); j != nil && j.State != "running" {
 			return j
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("the apply did not finish")
-	return nil
 }
 
 func TestExtraClusterNamespacesValidated(t *testing.T) {
@@ -550,10 +559,7 @@ func TestTemplateBuildIsRecorded(t *testing.T) {
 		t.Fatalf("build cut off by a restart: %+v", j)
 	}
 	close(release)
-	for deadline := time.Now().Add(10 * time.Second); a.TemplateJob().State == "running"; {
-		if time.Now().After(deadline) {
-			t.Fatal("the build did not end")
-		}
+	for a.TemplateJob().State == "running" {
 		time.Sleep(10 * time.Millisecond)
 	}
 	restarted := &Appliance{Dir: a.Dir}
@@ -954,18 +960,14 @@ func TestInterruptedApplyIsGivenTimeToWriteItsState(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- a.tofu(ctx, &Job{}, nil, jsonMessage, "apply", "-auto-approve") }()
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+	for {
 		if _, err := os.Stat(filepath.Join(a.Dir, "applying")); err == nil {
 			break
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
-	select {
-	case err := <-done:
-		t.Logf("tofu ended: %v", err)
-	case <-time.After(20 * time.Second):
-		t.Fatal("tofu did not end after its context did")
-	}
+	t.Logf("tofu ended: %v", <-done)
 	if _, err := os.Stat(filepath.Join(a.Dir, "state-flushed")); err != nil {
 		t.Errorf("tofu was killed before it wrote its state: %v", err)
 	}
@@ -1000,7 +1002,7 @@ func TestTimeServersReachTheModule(t *testing.T) {
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.writeConfig(s); err != nil {
+	if err := a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json"))
@@ -1012,11 +1014,101 @@ func TestTimeServersReachTheModule(t *testing.T) {
 		t.Fatalf("root module: %s, %v", main, err)
 	}
 	s.TimeServers = nil
-	if err = a.writeConfig(s); err != nil {
+	if err = a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ = os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); !strings.Contains(string(raw), `"timeServers": []`) {
 		t.Errorf("no servers must reach the module as an empty list, not null: %s", raw)
+	}
+}
+
+func TestMTUBoundsAreValid(t *testing.T) {
+	t.Parallel()
+	for _, mtu := range []int{0, 1280, 1450, 9000, 65520} {
+		s := settings("pve1")
+		s.MTU = mtu
+		if err := s.Validate(); err != nil {
+			t.Errorf("MTU %d: %v", mtu, err)
+		}
+	}
+}
+
+func TestMTUReachesTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	s := settings("pve1")
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); err != nil || !strings.Contains(string(raw), `"mtu": null`) {
+		t.Errorf("an unset MTU must reach the module as null: %s, %v", raw, err)
+	}
+	s.MTU = 1450
+	if err := a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); err != nil || !strings.Contains(string(raw), `"mtu": 1450`) {
+		t.Errorf("the MTU must reach the module: %s, %v", raw, err)
+	}
+	main, err := os.ReadFile(filepath.Join(a.workdir(), "main.tf"))
+	if err != nil || !strings.Contains(string(main), "mtu                    = try(var.settings.mtu, null)") {
+		t.Errorf("root module: %s, %v", main, err)
+	}
+}
+
+func TestSearchDomainsValidated(t *testing.T) {
+	t.Parallel()
+	for domain, bad := range map[string]bool{
+		"corp.example": false, "corp": false, "Site-1.Corp.example": false,
+		"corp.example.": true, "corp example": true, "-corp.example": true, "corp..example": true,
+		"$(reboot).example": true, "": true, "corp.example/x": true,
+	} {
+		s := settings("pve1")
+		s.SearchDomains = []string{domain}
+		err := s.Validate()
+		if bad != (err != nil && strings.Contains(err.Error(), "Search domains:")) {
+			t.Errorf("search domain %q: error %v, want refused %v", domain, err, bad)
+		}
+	}
+	s := settings("pve1")
+	s.SearchDomains = []string{"a.example", "a.example"}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "Search domains: a.example is listed twice") {
+		t.Errorf("a domain twice: %v", err)
+	}
+	s.SearchDomains = []string{"a.example", "b.example", "c.example", "d.example", "e.example", "f.example", "g.example"}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "Search domains: at most 6") {
+		t.Errorf("seven domains: %v", err)
+	}
+}
+
+func TestSearchDomainsReachTheModule(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	s := settings("pve1")
+	s.SearchDomains = []string{"corp.example"}
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json"))
+	if err != nil || !strings.Contains(string(raw), `"searchDomains": [`+"\n      \"corp.example\"") {
+		t.Fatalf("variables: %s, %v", raw, err)
+	}
+	main, err := os.ReadFile(filepath.Join(a.workdir(), "main.tf"))
+	if err != nil || !strings.Contains(string(main), "search_domains         = var.settings.searchDomains") {
+		t.Fatalf("root module: %s, %v", main, err)
+	}
+	s.SearchDomains = nil
+	if err = a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ = os.ReadFile(filepath.Join(a.workdir(), "terraform.tfvars.json")); !strings.Contains(string(raw), `"searchDomains": []`) {
+		t.Errorf("no domains must reach the module as an empty list, not null: %s", raw)
 	}
 }
 

@@ -45,15 +45,6 @@ func (s *uiStore) Put(_ context.Context, key string, r io.Reader, metadata map[s
 	return int64(len(b)), nil
 }
 
-func (s *uiStore) SetMetadata(_ context.Context, key string, metadata map[string]string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	o := s.objects[key]
-	o.Metadata = metadata
-	s.objects[key] = o
-	return nil
-}
-
 func (s *uiStore) List(_ context.Context, prefix string) ([]provisioner.StoredObject, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

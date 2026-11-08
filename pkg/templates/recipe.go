@@ -25,6 +25,8 @@ const (
 	imagesPath = "/usr/libexec/kubehenge/images"
 	// nodePreset names the services a node's boot enables.
 	nodePreset = "/usr/lib/systemd/system-preset/80-kubehenge.preset"
+	// fipsMarker, among a bake's files, has the node built in FIPS mode.
+	fipsMarker = "fips"
 )
 
 // The commands a bake runs in the guest more than once.
@@ -108,42 +110,68 @@ func minorSeries(v string) string {
 
 // recipeBuild gathers a bake's files, the family's directory and node/ with the repositories and
 // their keys, and the command that runs the family's build.sh on them.
-func recipeBuild(b Bake, repos []*repository, keys map[string]string, dir string) (map[string]string, []string, error) {
+func recipeBuild(b *Bake, repos []*repository, keys map[string]string, dir string) (map[string]string, []string, error) {
 	if b.Distribution == Kubeadm && !versionRE.MatchString(b.KubernetesVersion) {
 		return nil, nil, fmt.Errorf("the Kubernetes version %q is not of the form v1.2.3", b.KubernetesVersion)
 	}
 	files := map[string]string{}
-	for _, r := range repos {
-		files["repos/"+r.id+".repo"] = r.file()
+	if b.NodeOS.FIPS {
+		files[fipsMarker] = "1\n"
 	}
-	for _, k := range keysOf(repos) {
-		armoured, ok := keys[k.Name]
-		if !ok {
-			return nil, nil, fmt.Errorf("the bake needs the %s key", k.Name)
-		}
-		files["keys/"+k.Name+".asc"] = armoured
+	if err := addRepositoryFiles(files, repos, keys); err != nil {
+		return nil, nil, err
 	}
 	for _, d := range []string{dir, "node"} {
-		err := fs.WalkDir(recipeFiles, d, func(name string, e fs.DirEntry, err error) error {
-			if err != nil || e.IsDir() {
-				return err
-			}
-			content, err := recipeFiles.ReadFile(name)
-			if err != nil {
-				return fmt.Errorf("reading %s: %w", name, err)
-			}
-			files[name] = string(content)
-			return nil
-		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("reading the bake's files: %w", err)
+		if err := addRecipeFiles(files, d); err != nil {
+			return nil, nil, err
 		}
 	}
 	build := []string{"sh", path.Join(buildDir, dir, "build.sh"), string(b.Distribution)}
 	if b.Distribution == Kubeadm {
 		build = append(build, b.KubernetesVersion)
 	}
+	if b.Proxy.Enabled() {
+		if err := checkGuestProxy(b.Proxy); err != nil {
+			return nil, nil, err
+		}
+		maps.Copy(files, proxyFiles(b.Proxy))
+		build = proxyBuild(build)
+	}
 	return files, build, nil
+}
+
+// addRepositoryFiles adds the repositories' definitions and each one's armoured key to files.
+func addRepositoryFiles(files map[string]string, repos []*repository, keys map[string]string) error {
+	for _, r := range repos {
+		files["repos/"+r.id+".repo"] = r.file()
+	}
+	for _, k := range keysOf(repos) {
+		armoured, ok := keys[k.Name]
+		if !ok {
+			return fmt.Errorf("the bake needs the %s key", k.Name)
+		}
+		files["keys/"+k.Name+".asc"] = armoured
+	}
+	return nil
+}
+
+// addRecipeFiles adds every file under dir of the embedded recipe files to files.
+func addRecipeFiles(files map[string]string, dir string) error {
+	err := fs.WalkDir(recipeFiles, dir, func(name string, e fs.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return err
+		}
+		content, err := recipeFiles.ReadFile(name)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", name, err)
+		}
+		files[name] = string(content)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("reading the bake's files: %w", err)
+	}
+	return nil
 }
 
 // enableGuestExec is the first thing the bake's VM does, before cloud-init's other modules: the EL
@@ -185,6 +213,26 @@ func bakeUserData(files map[string]string, build []string) (string, error) {
 // so that the end of a bake that ran out of time tells a step that hung from one that only crawled.
 const timestamped = `while IFS= read -r line || [ -n "$line" ]; do printf '%s %s\n' "$(date -u +%H:%M:%S)" "$line"; done`
 
+// timeDaemon is the unit of the time daemon every non-Talos node image holds, chrony, which both
+// families package under this name. Talos keeps its own.
+const (
+	timeDaemon     = "chronyd"
+	timeDaemonUnit = timeDaemon + ".service"
+)
+
+// chronyDropIns finds chrony reading /etc/chrony.d, where the chart writes a cluster's time servers.
+const chronyDropIns = `grep -Eq '^(include|confdir)[[:space:]]+/etc/chrony\.d' /etc/chrony.conf`
+
+// hostClockLine is the source the chart gives chrony beside a cluster's time servers
+// (kubehenge.clockPatches), the hypervisor's clock. The stratum keeps it behind any server that answers.
+const hostClockLine = "refclock PHC /dev/ptp0 poll 2 stratum 5 refid KVM"
+
+// hostClockCheck proves the hypervisor's clock reaches the node and chrony takes it: ptp_kvm loads, the
+// device exists, and chronyd lists a refclock for the very line the chart writes. The drop-in is the
+// bake's own and goes again, so that the template keeps what the chart writes alone.
+const hostClockCheck = `f=/etc/chrony.d/99-kubehenge-bake.conf; listed() { for _ in 1 2 3 4 5 6 7 8 9 10; do chronyc -n sources 2> /dev/null | grep -q '^#' && return 0; sleep 1; done; return 1; }; ` +
+	`mkdir -p /etc/chrony.d && modprobe ptp_kvm && test -c /dev/ptp0 && echo '` + hostClockLine + `' > "$f" && systemctl restart chronyd && listed; r=$?; rm -f "$f"; systemctl restart chronyd; exit $r`
+
 // iptablesCheck finds iptables for the CNI's portmap plugin, which runs it from the node's PATH, on
 // the nftables the kernel has.
 const iptablesCheck = "iptables --version | grep -q nf_tables"
@@ -195,7 +243,7 @@ const avcDenied = `! journalctl -b -k -o cat --no-pager | grep -qF 'avc:  denied
 // nodeChecks prove a node's boot as a clone's goes: cloud-init finishes without warnings, which
 // Cluster API's Proxmox VE provider counts as a failed boot, the root is read-only, SELinux enforces
 // and denied nothing, and the distribution's parts are in place.
-func nodeChecks(b Bake) [][]string {
+func nodeChecks(b *Bake) [][]string {
 	checks := [][]string{
 		{cloudInit, "status", "--wait"},
 		active("qemu-guest-agent"),
@@ -204,6 +252,16 @@ func nodeChecks(b Bake) [][]string {
 		preset("enable qemu-guest-agent.service"),
 		preset("enable " + bootLogUnit),
 		active(bootLogUnit),
+		// Tokens, certificates and OpenID sign-ins trust the node's clock, which only a time daemon
+		// keeps: the VM's host corrects it on resume and migration alone. Whether chronyd answers is
+		// asked of the daemon itself, since the unit can be active with its socket closed.
+		preset("enable " + timeDaemonUnit),
+		active(timeDaemon),
+		{"sh", "-c", "chronyc tracking > /dev/null"},
+		// A cluster's time servers reach the node as a drop-in there (kubehenge.clockPatches).
+		{"sh", "-c", chronyDropIns},
+		// A closed network has no time server, and the nodes then sync to the hypervisor's clock.
+		{"sh", "-c", hostClockCheck},
 		// The copy as of now, rather than up to a quarter of a minute old, for the bake to read
 		// through the guest agent (checkBootLog).
 		{systemctl, "start", "kubehenge-boot-log.service"},
@@ -257,7 +315,20 @@ func nodeChecks(b Bake) [][]string {
 		}
 	case Talos:
 	}
+	if b.NodeOS.FIPS {
+		checks = append(checks, fipsChecks...)
+	}
 	return append(checks, []string{"sh", "-c", avcDenied})
+}
+
+// fipsChecks prove a node in FIPS mode: the kernel booted with fips=1 and passed its self-tests,
+// the initramfs holds dracut's fips module, which checks the kernel's integrity, every library
+// takes the FIPS policy, and OpenSSL has its FIPS provider.
+var fipsChecks = [][]string{
+	{"sh", "-c", `grep -qw fips=1 /proc/cmdline && test "$(cat /proc/sys/crypto/fips_enabled)" = 1`},
+	{"sh", "-c", `lsinitrd -m "/usr/lib/modules/$(uname -r)/initramfs.img" | grep -qx fips`},
+	{"sh", "-c", `test "$(update-crypto-policies --show)" = FIPS`},
+	{"sh", "-c", "test -e /usr/lib64/ossl-modules/fips.so"},
 }
 
 func active(unit string) []string {

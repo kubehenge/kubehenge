@@ -64,11 +64,12 @@ Remove the management cluster first. Without the appliance its state is gone. Ev
 In the shell of the node the appliance runs on, as root:
 
 ```sh
+pct set <ctid> --protection 0
 pct stop <ctid>
 pct destroy <ctid> --purge
 ```
 
-The appliance is the container tagged `kubehenge`. `--purge` also takes it out of backup jobs, replication jobs and HA.
+The appliance is the container tagged `kubehenge`. The installer protects it, so Proxmox VE refuses to destroy it until `--protection 0`. `--purge` also takes it out of backup jobs, replication jobs and HA.
 
 ## Remove the Proxmox VE interface entry
 

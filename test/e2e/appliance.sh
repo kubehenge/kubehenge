@@ -75,25 +75,6 @@ finish() {
 }
 trap finish EXIT
 
-# request <cookie jar> <curl arguments...>: a request to the appliance; its status goes to
-# $work/status and its body to $work/body.
-request() {
-    jar=$1
-    shift
-    curl -sS --cacert "${ca}" -b "${jar}" -c "${jar}" -o "${work}/body" -w '%{http_code}' "$@" > "${work}/status"
-}
-
-# post <cookie jar> <CSRF token> <URL> <JSON>, and put and delete the same
-post() {
-    request "$1" -H 'Content-Type: application/json' -H "X-Kubehenge-CSRF: $2" -d "$4" "$3"
-}
-put() {
-    request "$1" -X PUT -H 'Content-Type: application/json' -H "X-Kubehenge-CSRF: $2" -d "$4" "$3"
-}
-delete() {
-    request "$1" -X DELETE -H "X-Kubehenge-CSRF: $2" "$3"
-}
-
 # headlamp_post <cookie jar> <URL> <JSON> [curl arguments...]: a request that changes something, as
 # Headlamp's own pages post it, from their origin.
 headlamp_post() {
@@ -112,73 +93,7 @@ upgrader_is() {
     fi
 }
 
-# expect <status> <what> <command...>: runs a request and checks the status it got.
-expect() {
-    want=$1 what=$2
-    shift 2
-    "$@"
-    got=$(cat "${work}/status")
-    [ "${got}" = "${want}" ] || fail_with_body "${what}: ${got} instead of ${want}"
-}
-
-# fail_with_body <message>: fails with the start of the last answer's body.
-fail_with_body() {
-    body=$(head -c 500 "${work}/body")
-    fail "$1: ${body}"
-}
-
-# body_is <jq filter> <message>: checks the last answer's body.
-body_is() {
-    jq -e "$1" "${work}/body" > /dev/null || fail_with_body "$2"
-}
-
-# body_has <message> <jq arguments...>: body_is with a filter that takes arguments.
-body_has() {
-    message=$1
-    shift
-    jq -e "$@" "${work}/body" > /dev/null || fail_with_body "${message}"
-}
-
-# answers: whether the interface is up again, on its certificate.
-answers() {
-    curl -sS -o /dev/null --cacert "${ca}" "${ui}/api/realms" 2> /dev/null
-}
-
-# sign_in <cookie jar> <user>: signs in with the test's password, the session in the jar and its
-# CSRF token in $csrf.
-sign_in() {
-    body=$(jq -n --arg u "$2" --arg p "${password}" '{username: $u, password: $p}')
-    expect 200 "signing in as $2" request "$1" -H 'Content-Type: application/json' -d "${body}" "${ui}/api/session"
-    csrf=$(jq -r .csrf "${work}/body")
-}
-
-# setup_status: the setup's status as the administrator sees it, in $work/body.
-setup_status() {
-    expect 200 "the setup's status" request "${work}/admin.jar" "${ui}/api/setup"
-}
-
-# job_ended: whether the appliance's last job has ended.
-job_ended() {
-    setup_status
-    jq -e '.job.state != "running"' "${work}/body" > /dev/null
-}
-
-# job_was <kind> <state> <ready>: checks how the last job ended and whether the management cluster
-# is ready after it, with the job's log when not as expected.
-job_was() {
-    if ! jq -e --arg k "$1" --arg s "$2" --argjson r "$3" '.job.kind == $k and .job.state == $s and .ready == $r' "${work}/body" > /dev/null; then
-        jq -r '"kind \(.job.kind), state \(.job.state), ready \(.ready): \(.job.error // "")", (.job.log // [] | .[])' "${work}/body" >&2
-        fail "the $1 job did not end $2 with the management cluster ready: $3"
-    fi
-}
-
-# ready_again: whether the interface, after a restart, found the management cluster again.
-ready_again() {
-    setup_status
-    jq -e .ready "${work}/body" > /dev/null
-}
-
-# s3 <curl arguments...>: a request to the S3 store, signed with the test's key.
+# s3<curl arguments...>: a request to the S3 store, signed with the test's key.
 s3() {
     curl -sS --fail --cacert "${work}/s3/ca.crt" --aws-sigv4 aws:amz:us-east-1:s3 --user "${s3_key}:${s3_secret}" "$@"
 }
@@ -216,23 +131,6 @@ headlamp_offers_actions() {
     [ "${got}" = 200 ] && jq -e 'any(.[]; .path == "static-plugins/app-catalog")' "${work}/body" > /dev/null
 }
 
-# upgrade <release>: install.sh --upgrade of the appliance, its exit status in $upgraded and its
-# output in $work/upgrade.log.
-upgrade() {
-    sum=$(sha256sum "$1" | cut -d ' ' -f 1)
-    upgraded=0
-    sh "${install}" --upgrade --ctid "${ctid}" --release "$1" --sha256 "${sum}" < /dev/null > "${work}/upgrade.log" 2>&1 || upgraded=$?
-}
-
-# upgrade_refused <release> <reason>: checks that install.sh --upgrade stops, giving the reason.
-upgrade_refused() {
-    upgrade "$1"
-    if [ "${upgraded}" -eq 0 ] || ! grep -q "$2" "${work}/upgrade.log"; then
-        cat "${work}/upgrade.log" >&2
-        fail "install.sh --upgrade to $1 did not stop with: $2"
-    fi
-}
-
 # upgrade_rolled_back <release> <version installed>: checks that install.sh --upgrade put the
 # release installed back, saying why.
 upgrade_rolled_back() {
@@ -245,17 +143,7 @@ upgrade_rolled_back() {
     runs "$2"
 }
 
-# version_of <release>: the version of a release archive.
-version_of() { tar -xzOf "$1" ./share/kubehenge/VERSION; }
-
-# runs <version>: checks that the appliance runs that release, its interface answering.
-runs() {
-    installed=$(pct exec "${ctid}" -- cat /usr/local/share/kubehenge/VERSION)
-    [ "${installed}" = "$1" ] || fail "the appliance runs ${installed} instead of $1"
-    until_true 120 "the interface to answer" answers
-}
-
-# cli <user> <arguments...>: the kubehenge appliance command in the appliance, signed in as the user
+# cli<user> <arguments...>: the kubehenge appliance command in the appliance, signed in as the user
 # with the test's password, the state passphrase at hand; its output in $work/cli and whether it
 # succeeded in $cli_ok.
 cli() {
@@ -296,15 +184,6 @@ updater_done() {
     upgrade_status && jq -e --arg to "$1" '.status.to == $to and .status.state != "updating"' "${work}/body" > /dev/null
 }
 
-# list <jq filter> <pvesh get arguments...>: an answer of Proxmox VE's API as lines. Through a file
-# rather than a pipe, so that a query that fails stops the test instead of leaving lines out.
-list() {
-    filter=$1
-    shift
-    pvesh get "$@" --output-format json < /dev/null > "${work}/answer"
-    jq -r "${filter}" "${work}/answer"
-}
-
 # remove_ha_rule: takes the test's HA rule, its resource and guest away again, in the order Proxmox
 # VE allows.
 remove_ha_rule() {
@@ -323,27 +202,6 @@ rules_offered() {
     [ "${got}" = 200 ] &&
         jq -e --arg r "${ha_rule}" --arg n "$1" \
             '.readable and .offered and .rules == [{rule: $r, nodes: [$n], allowed: [$n]}]' "${work}/body" > /dev/null
-}
-
-# inventory: what Proxmox VE holds that the appliance or the management cluster could leave behind,
-# a line each. Container templates stay: install.sh keeps the one it downloaded for the next install.
-inventory() {
-    node=$(hostname)
-    list '.[] | select(.active == 1) | .storage' "/nodes/${node}/storage" --enabled 1 > "${work}/storages"
-    {
-        list '.[] | "guest \(.vmid) \(.name // "")"' /cluster/resources --type vm
-        list '.[] | "pool \(.poolid)"' /pools
-        list '.[] | "user \(.userid) \(.tokens // [] | map(.tokenid) | sort | join(","))"' /access/users --full 1
-        list '.[] | "group \(.groupid)"' /access/groups
-        list '.[] | "role \(.roleid)"' /access/roles
-        list '.[] | "acl \(.path) \(.type) \(.ugid) \(.roleid)"' /access/acl
-        list '.[] | "ha resource \(.sid)"' /cluster/ha/resources
-        list '.[] | "ha rule \(.rule)"' /cluster/ha/rules
-        while read -r storage; do
-            list '.[] | select(.content != "vztmpl") | "volume \(.volid)"' "/nodes/${node}/storage/${storage}/content"
-        done < "${work}/storages"
-    } > "${work}/inventory"
-    sort "${work}/inventory"
 }
 
 if pct status "${ctid}" > /dev/null 2>&1; then
@@ -423,16 +281,7 @@ s3 -T "${work}/index.json" -o /dev/null "${releases}/index.json"
 s3 -T "${work}/index.json.sig" -o /dev/null "${releases}/index.json.sig"
 
 step "install the appliance"
-sum=$(sha256sum "${release}" | cut -d ' ' -f 1)
-set -- --ctid "${ctid}" --ip "${address}" --gateway "${KUBEHENGE_E2E_GATEWAY}" --dns "${KUBEHENGE_E2E_DNS}" \
-    --bridge "${KUBEHENGE_E2E_BRIDGE:-vmbr0}" --hostname kubehenge-e2e --release "${release}" --sha256 "${sum}" --no-pve-entry
-[ -z "${KUBEHENGE_E2E_STORAGE:-}" ] || set -- "$@" --storage "${KUBEHENGE_E2E_STORAGE}"
-if ! sh "${install}" "$@" < /dev/null > "${work}/install.log" 2>&1; then
-    cat "${work}/install.log" >&2
-    fail "install.sh failed"
-fi
-grep -qF "Kubehenge is running in container ${ctid}: ${ui}/" "${work}/install.log" ||
-    fail "install.sh did not name the appliance's address"
+install_appliance "${install}" "${release}"
 pct config "${ctid}" > "${work}/config"
 nameservers=$(printf '%s' "${KUBEHENGE_E2E_DNS}" | tr , ' ')
 for want in 'tags: kubehenge' 'unprivileged: 1' "nameserver: ${nameservers}"; do
@@ -497,36 +346,38 @@ pveum acl delete /pool/kubehenge --users "${user}" --roles PVEVMAdmin
 remove_ha_rule
 
 step "a change made with the management cluster's admin kubeconfig, on Activity with its user"
-asked=$(jq -nc --arg p "${passphrase}" '{name: "kubeconfig", passphrase: $p}')
-expect 200 "the management cluster's admin kubeconfig" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/credential" "${asked}"
-cp "${work}/body" "${work}/management.kubeconfig"
-kubeconfig_field() {
-    sed -n "s/^ *$1: *//p" "${work}/management.kubeconfig" | head -n 1
+management_credentials
+audit_create() {
+    created=$(curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
+        -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+        -d "{\"apiVersion\": \"v1\", \"kind\": \"ConfigMap\", \"metadata\": {\"name\": \"$1\"}}" \
+        "${management_api}/api/v1/namespaces/default/configmaps")
+    [ "${created}" = 201 ] || fail "creating a ConfigMap with the admin kubeconfig: ${created} instead of 201"
 }
-kubeconfig_field certificate-authority-data | base64 -d > "${work}/management-ca.crt"
-kubeconfig_field client-certificate-data | base64 -d > "${work}/management.crt"
-kubeconfig_field client-key-data | base64 -d > "${work}/management.key"
-management_api=$(kubeconfig_field server)
-created=$(curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
-    -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-    -d '{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "kubehenge-e2e-audit"}}' \
-    "${management_api}/api/v1/namespaces/default/configmaps")
-[ "${created}" = 201 ] || fail "creating a ConfigMap with the admin kubeconfig: ${created} instead of 201"
-management_get() {
-    curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" "${management_api}$1"
-}
-# How far the reader got and how long the API server's log is: a ConfigMap missing from Activity is
-# either past the reader or never read.
+# How far the reader got, how long each API server's log is, and whether its container restarted:
+# a ConfigMap missing from Activity is either past the reader, in a container's log it never read,
+# or never read.
 audit_report() {
-    echo "-- the Activity check: the API server's log" >&2
+    echo "-- the Activity check: the API servers" >&2
     management_get '/api/v1/namespaces/kube-system/pods?labelSelector=k8s-app%3Dkube-apiserver' > "${work}/apiservers.json"
+    jq -r '.items[] | "\(.metadata.name): \(.status.containerStatuses | map("restarts \(.restartCount), started \(.state.running.startedAt // "not running"), last state \(.lastState | tostring)") | join("; "))"' \
+        "${work}/apiservers.json" >&2
     jq -r '.items[].metadata.name' "${work}/apiservers.json" > "${work}/apiservers.txt"
     while read -r pod; do
-        management_get "/api/v1/namespaces/kube-system/pods/${pod}/log?timestamps=true" > "${work}/apiserver.log"
-        size=$(wc -c < "${work}/apiserver.log")
-        first=$(head -n 1 "${work}/apiserver.log")
-        last=$(tail -n 1 "${work}/apiserver.log")
-        echo "${pod}: ${size} bytes, from ${first%% *} to ${last%% *}" >&2
+        management_get "/api/v1/namespaces/kube-system/pods/${pod}/log?timestamps=true" > "${work}/${pod}.log"
+        management_get "/api/v1/namespaces/kube-system/pods/${pod}/log?timestamps=true&previous=true" > "${work}/${pod}-previous.log"
+        # A refusal is a JSON status with the code. A log is not JSON.
+        code=$(jq -r '.code // empty' "${work}/${pod}-previous.log" 2> /dev/null || true)
+        for log in "${pod}.log" "${pod}-previous.log"; do
+            if [ "${log}" = "${pod}-previous.log" ] && [ -n "${code}" ]; then
+                echo "${pod}: no previous container log (${code})" >&2
+                continue
+            fi
+            size=$(wc -c < "${work}/${log}")
+            first=$(head -n 1 "${work}/${log}")
+            last=$(tail -n 1 "${work}/${log}")
+            echo "${log%.log}: ${size} bytes, from ${first%% *} to ${last%% *}" >&2
+        done
     done < "${work}/apiservers.txt"
 }
 audited() {
@@ -537,8 +388,17 @@ audited() {
     jq -e '.entries | any(.what == "created configmaps kubehenge-e2e-audit" and .details.via == "kubectl or the API"
         and .details.namespace == "default" and .user != "")' "${work}/body" > /dev/null
 }
-# The interface reads the API server's log every minute.
+# The kubelet serves only the current file of a log, so a change made before the interface has
+# its stream open on every API server's log can be rotated away unread. The interface says when
+# it follows them.
+following() {
+    setup_status
+    seen="the interface does not follow the API servers' logs yet"
+    jq -e '.activityFollows' "${work}/body" > /dev/null
+}
 audit_waiting=1
+until_true 300 "the interface to follow the API servers' logs" following
+audit_create kubehenge-e2e-audit
 until_true 300 "the ConfigMap's creation on Activity" audited
 audit_waiting=
 handed="handed out the management cluster's credential"
@@ -757,7 +617,12 @@ expect 200 "the etcd backups after the removal" request "${work}/admin.jar" "${b
 body_is '.settings == null and (.keysStored | not)' "the removed management cluster's etcd backups are still set up"
 
 step "remove the appliance"
+pct config "${ctid}" | grep -qx 'protection: 1' || fail "the installer left the appliance unprotected"
 pct stop "${ctid}"
+if pct destroy "${ctid}" --purge > /dev/null 2>&1; then
+    fail "Proxmox VE destroyed the protected appliance"
+fi
+pct set "${ctid}" --protection 0
 pct destroy "${ctid}" --purge
 
 step "Proxmox VE as it was"

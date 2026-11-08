@@ -1,8 +1,10 @@
 package appliance
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,11 +28,34 @@ type Job struct {
 	// State is running, succeeded or failed.
 	State string `json:"state"`
 	Error string `json:"error,omitempty"`
+	// Stale is set when the run was refused for a state older than the management cluster's.
+	Stale *StaleStateError `json:"stale,omitempty"`
 	// Request is what the run was started with, with nothing secret in it, for starting it again.
 	Request json.RawMessage `json:"request,omitempty"`
 
-	mu  sync.Mutex
-	log []string
+	mu     sync.Mutex
+	log    []string
+	hidden *strings.Replacer
+	// stop interrupts the running job and done is closed once its outcome is recorded. Both are
+	// nil for a job read back from disk.
+	stop context.CancelCauseFunc
+	done chan struct{}
+}
+
+// Hide has Add replace each of the secrets in every line from now on, with a mark.
+func (j *Job) Hide(secrets ...string) {
+	var pairs []string
+	for _, s := range secrets {
+		if s != "" {
+			pairs = append(pairs, s, redactedPassword)
+		}
+	}
+	if len(pairs) == 0 {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.hidden = strings.NewReplacer(pairs...)
 }
 
 // Log returns the job's messages so far, an empty list rather than none: it is sent and stored as
@@ -45,6 +70,9 @@ func (j *Job) Log() []string {
 func (j *Job) Add(line string) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.hidden != nil {
+		line = j.hidden.Replace(line)
+	}
 	j.log = append(j.log, line)
 }
 
@@ -67,7 +95,7 @@ func (j *Job) view() *JobView {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	shown := j.log[max(0, len(j.log)-shownLines):]
-	v := &JobView{User: j.User, Automatic: j.Automatic, Kind: j.Kind, Started: j.Started, Finished: j.Finished, State: j.State, Error: j.Error, Request: j.Request, Log: append([]string{}, shown...)}
+	v := &JobView{User: j.User, Automatic: j.Automatic, Kind: j.Kind, Started: j.Started, Finished: j.Finished, State: j.State, Error: j.Error, Stale: j.Stale, Request: j.Request, Log: append([]string{}, shown...)}
 	if len(shown) < len(j.log) {
 		v.Lines = len(j.log)
 	}
@@ -83,6 +111,9 @@ type JobView struct {
 	Finished  time.Time `json:"finished,omitzero"`
 	State     string    `json:"state"`
 	Error     string    `json:"error,omitempty"`
+	// Stale holds the generations of a run refused for a state older than the management
+	// cluster's, which an administrator may take over.
+	Stale *StaleStateError `json:"stale,omitempty"`
 	// Request is what the run was started with, with nothing secret in it, for starting it again.
 	Request json.RawMessage `json:"request,omitempty"`
 	Log     []string        `json:"log"`
@@ -103,6 +134,12 @@ var ErrUpgrading = errors.New("the appliance is being upgraded; try again once i
 
 // ErrTemplateBusy is a VM template being built, which holds the same lock as runs of the module.
 var ErrTemplateBusy = errors.New("a VM template is being built; try again once that has finished")
+
+// ErrStopping is the appliance's service shutting down, which refuses new jobs.
+var ErrStopping = errors.New("the appliance is stopping; try again once it is back")
+
+// ErrServiceStopped is what a job is interrupted with when the service stops under it.
+var ErrServiceStopped = errors.New("the appliance's service stopped, as for a migration, a backup in stop mode or a reboot")
 
 var errLocked = errors.New("locked")
 

@@ -838,10 +838,15 @@ button.go {
 .status {
   display: inline-flex;
   gap: 6px;
-  align-items: center;
+  align-items: flex-start;
 
   font-size: 14px;
   font-weight: 400;
+}
+
+/* The icon sits on the text's first line, so a message of several lines keeps it at the top. */
+.status::before {
+  margin-block-start: calc((1lh - 12px) / 2);
 }
 
 .status::before,
@@ -1313,6 +1318,82 @@ button.go {
   color: var(--warning);
 }
 
+h4.subsection {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dim);
+}
+
+/* On a phone each row of a stacking table becomes a card: its first cell is the title and every other
+   cell shows its label before its value. */
+@media (width <= 600px) {
+  .grid.stack,
+  .grid.stack tbody {
+    display: block;
+  }
+
+  .grid.stack thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .grid.stack tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+
+    padding: 10px 0;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .grid.stack :is(td, th) {
+    display: block;
+
+    min-inline-size: 0;
+    padding: 0;
+    border: none;
+
+    text-align: start;
+    white-space: normal;
+  }
+
+  .grid.stack :is(td, th):not(.row-action, .pool-name) {
+    grid-column: 1 / -1;
+  }
+
+  .grid.stack tbody th {
+    grid-column: 1 / -1;
+    padding-block-end: 2px;
+  }
+
+  .grid.stack td[data-label]::before {
+    content: attr(data-label) " ";
+    display: inline-block;
+    min-inline-size: 6em;
+    color: var(--dim);
+  }
+
+  .grid.stack .row-action {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    inline-size: auto;
+  }
+
+  .grid.stack .pool-name {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+  }
+}
+
 .object-view {
   min-inline-size: 0;
 }
@@ -1355,6 +1436,11 @@ button.go {
   margin-block-end: 10px;
 }
 
+/* A form under a table sits clear of its last row. */
+.box > .grid + form {
+  margin-block-start: 16px;
+}
+
 .management-health h3 {
   display: flex;
   gap: 10px;
@@ -1375,6 +1461,16 @@ button.go {
 
   overflow-wrap: anywhere;
   list-style: none;
+}
+
+.token-problem {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.token-problem > .status {
+  flex: none;
 }
 
 .object-view > .danger-zone {
@@ -1844,6 +1940,62 @@ fieldset.choices .check {
   vertical-align: middle;
 }
 
+/* On a phone a row of a stacked grid is a card: each cell is a line with its column's name before
+   it, and the first cell, which has none, heads the card. */
+@media (width <= 600px) {
+  .grid.stack :is(table, tbody, tr, td) {
+    display: block;
+  }
+
+  .grid.stack thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .grid.stack tr {
+    padding-block: 10px;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .grid.stack td {
+    position: relative;
+
+    min-inline-size: 0;
+    padding: 2px 0 2px 7em;
+    border: none;
+
+    overflow-wrap: anywhere;
+  }
+
+  .grid.stack td:not([data-label]) {
+    padding-inline-start: 0;
+    font-weight: 600;
+  }
+
+  .grid.stack td:not([data-label]) .muted {
+    font-weight: 400;
+  }
+
+  .grid.stack td[data-label]::before {
+    content: attr(data-label);
+    position: absolute;
+    inset-inline-start: 0;
+    color: var(--dim);
+  }
+
+  .grid.stack td.row-action {
+    inline-size: auto;
+    padding: 8px 0 0;
+    text-align: start;
+  }
+}
+
 .row-menu-toggle svg {
   inline-size: 16px;
   block-size: 16px;
@@ -1890,6 +2042,14 @@ fieldset.choices .check {
   margin-block-start: 14px;
 }
 
+/* A saved secret's state beside the buttons that change it, in the field's own column. */
+.secret-state {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 /* Fields keep their own gap below. A closing button needs one from the box's border. */
 .group > button:last-child,
 .group > .actions:last-child {
@@ -1919,6 +2079,69 @@ fieldset.choices .check {
 .grid .hint.message {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* On a phone each row of an events table is a block: its short cells share the first line and the
+   message takes the full width below. The header stays for screen readers. */
+@media (width <= 600px) {
+  .grid.events,
+  .grid.events tbody {
+    display: block;
+  }
+
+  .grid.events thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .grid.events tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+
+    padding: 10px 0;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .grid.events :is(td, th) {
+    display: block;
+
+    min-inline-size: 0;
+    padding: 0;
+    border: none;
+
+    white-space: normal;
+  }
+
+  .grid.events td.message {
+    flex: 1 0 100%;
+    order: 1;
+  }
+
+  /* The header that named the count is hidden, so the count names itself, and says nothing for one. */
+  .grid.events td.count::before {
+    content: "×";
+  }
+
+  .grid.events td.count.once {
+    display: none;
+  }
+
+  /* The marker moves from the first cell to the row, so it does not touch the text. */
+  .grid.events tr.attention {
+    padding-inline-start: 10px;
+    box-shadow: inset 3px 0 0 var(--warning);
+  }
+
+  .grid.events tr.attention td:first-child {
+    box-shadow: none;
+  }
 }
 
 .fleet-controls {
@@ -2153,6 +2376,73 @@ fieldset.choices .check {
 
   .fleet-table td[data-label]::before {
     content: attr(data-label) " ";
+    color: var(--dim);
+  }
+}
+
+/* No value of an etcd member wraps: on a narrow screen each member is the name over its figures. */
+.etcd-members .etcd-cell {
+  white-space: nowrap;
+}
+
+@media (width < 600px) {
+  .etcd-members :is(table, tbody) {
+    display: block;
+  }
+
+  .etcd-members thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .etcd-members tr {
+    display: grid;
+    grid-template:
+      "name name name" auto
+      "size used state" auto
+      / max-content max-content max-content;
+    gap: 6px 20px;
+
+    padding: 12px 0;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .etcd-members tbody tr:last-child {
+    border-block-end: none;
+  }
+
+  .etcd-members .etcd-cell {
+    display: block;
+    padding: 0;
+    border: none;
+  }
+
+  .etcd-members .etcd-member {
+    grid-area: name;
+  }
+
+  .etcd-members td[data-label="Database"] {
+    grid-area: size;
+  }
+
+  .etcd-members td[data-label="In use"] {
+    grid-area: used;
+  }
+
+  .etcd-members td[data-label="State"] {
+    grid-area: state;
+  }
+
+  .etcd-members td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.85em;
     color: var(--dim);
   }
 }
@@ -2409,6 +2699,9 @@ fieldset.choices legend {
   border-radius: 6px;
 
   color: var(--error);
+
+  /* A path in a server's refusal has no space to break at on a narrow screen. */
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 
   background: color-mix(in srgb, var(--error) 7%, var(--surface));
@@ -2595,13 +2888,15 @@ form.box > *,
 }
 
 /* A box's fields start their controls where the fields around the box do: its label column gives
-   up the box's border and left padding. */
-.group > .field {
+   up the box's border and left padding. An add-on card is such a box. */
+.group > .field,
+.addon-card > .field {
   grid-template-columns: calc(190px - 12px - 1px) 1fr;
 }
 
 @media (width <= 600px) {
-  .group > .field {
+  .group > .field,
+  .addon-card > .field {
     grid-template-columns: 1fr;
   }
 }
@@ -2618,6 +2913,7 @@ form.box > *,
 
   .field,
   .group > .field,
+  .addon-card > .field,
   .summary {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2659,6 +2955,17 @@ form.box > *,
 
 .signin .field {
   grid-template-columns: 100px 1fr;
+}
+
+/* A box's fields inside a disclosure line up with the box's other fields. */
+.group > details.advanced > .field {
+  grid-template-columns: calc(190px - 12px - 1px) 1fr;
+}
+
+@media (width <= 600px) {
+  .group > details.advanced > .field {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .signin .sso {
@@ -3015,11 +3322,16 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
   white-space: nowrap;
 }
 
-/* A VM's use beside its figure: a line for the last hour's CPU, a bar for memory. */
+/* A VM's use beside its figure: a line for the last hour's CPU, a bar for memory. The figure drops
+   under the line or bar before its column outgrows the table. */
 .use {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 2px 8px;
   align-items: center;
+}
+
+.use-figure {
   white-space: nowrap;
 }
 
@@ -3070,4 +3382,168 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
 
 .restore-steps .steps p {
   margin: 10px 0 4px;
+}
+
+/* One label or taint a line: its key, value and effect side by side, its problem under them. */
+.node-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 5.5rem;
+  gap: 8px;
+  align-items: start;
+
+  margin-block-end: 8px;
+}
+
+.node-row.taint-row {
+  grid-template-columns: 1fr 1fr 11em 5.5rem;
+}
+
+.node-row.file-row {
+  grid-template-columns: minmax(0, 1fr) 6.5em 9em;
+}
+
+.node-row.command-row {
+  grid-template-columns: minmax(0, 1fr) 9em 5.5rem;
+}
+
+.node-row.source-row {
+  grid-template-columns: 9em minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.node-row.source-row.text {
+  grid-template-columns: 9em minmax(0, 1fr);
+}
+
+.node-row.wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.node-row.pair {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.node-row.bare input,
+.node-row.bare select,
+.node-row.file-row input,
+.node-row.file-row select,
+.node-row.source-row input,
+.node-row.source-row select,
+.node-row.source-row textarea,
+.node-row.wide input,
+.node-row.pair input {
+  inline-size: 100%;
+  min-inline-size: 0;
+}
+
+.node-row.source-row textarea {
+  font-family: var(--mono);
+}
+
+.custom-file {
+  margin-block-end: 12px;
+}
+
+.node-row .field-error {
+  grid-column: 1 / -1;
+  margin-block-start: -4px;
+}
+
+.node-head {
+  margin-block-end: 2px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+.node-field {
+  min-inline-size: 0;
+}
+
+.node-field-name {
+  display: none;
+}
+
+/* Rows of more than one line keep their field names, as there is no heading line above them. */
+.node-rows.labelled .node-field-name {
+  display: block;
+  margin-block-end: 2px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+.node-rows.labelled .node-row > button {
+  align-self: end;
+}
+
+/* The rows follow the width of their dialog, not the window's. Where the fields no longer fit side
+   by side, each takes the full width under its name and Remove follows, aligned to the row's start. */
+.node-rows {
+  container-type: inline-size;
+}
+
+@container (inline-size < 32rem) {
+  .node-row,
+  .node-row.taint-row,
+  .node-row.file-row,
+  .node-row.command-row,
+  .node-row.source-row,
+  .node-row.source-row.text,
+  .node-row.pair {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  .node-head {
+    display: none;
+  }
+
+  .node-field-name {
+    display: block;
+    margin-block-end: 2px;
+    font-size: 12.5px;
+    color: var(--dim);
+  }
+
+  .node-row.bare > button {
+    justify-self: start;
+  }
+}
+
+.node-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+
+  margin: 4px 0 0;
+  padding: 0;
+
+  list-style: none;
+}
+
+.node-tags li {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+
+  /* Wraps only at the separators BreakableText marks. A tag longer than its whole cell still breaks
+     inside a word as a last resort. */
+  overflow-wrap: break-word;
+  white-space: normal;
+}
+
+.pod-check ul {
+  margin-block: 6px;
+  padding-inline-start: 18px;
+}
+
+.pod-check li {
+  margin-block-end: 4px;
+}
+
+.node-tags .taint {
+  border-color: var(--warning);
 }

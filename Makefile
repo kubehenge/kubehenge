@@ -15,7 +15,7 @@ KO_FLAGS ?=
 # Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
 
-.PHONY: build web changelog gateway-api capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance
+.PHONY: build web changelog gateway-api capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
 .PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -37,8 +37,7 @@ GATEWAY_API_TAG := v1.7.0
 GATEWAY_API_SHA256 := 4e2602c4cbe1afbc394d86f4ac6522e1a5263b01133bba1e40a6d1a549e753a1
 GATEWAY_API := pkg/provisioner/gatewayapi/standard-install-$(GATEWAY_API_TAG).yaml
 $(GATEWAY_API):
-	curl -fsSL --proto '=https' --retry 8 --retry-all-errors -o $@.part \
-		https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_TAG)/standard-install.yaml
+	scripts/fetch.sh https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_TAG)/standard-install.yaml $@.part
 	echo '$(GATEWAY_API_SHA256)  $@.part' | sha256sum -c --quiet - || { rm -f $@.part; exit 1; }
 	rm -f pkg/provisioner/gatewayapi/standard-install-*.yaml
 	mv $@.part $@
@@ -53,8 +52,7 @@ CAPI_OPERATOR_TAG := $(shell sed -n 's/^ *chart *= *"\(v[^"@]*\)"$$/\1/p' manage
 CAPI_OPERATOR_SHA256 := $(shell sed -n 's/^ *chart_sha256 *= *"\([0-9a-f]*\)"$$/\1/p' management-cluster/versions.tf)
 CAPI_OPERATOR_CHART := management-cluster/charts/cluster-api-operator-$(CAPI_OPERATOR_TAG:v%=%).tgz
 $(CAPI_OPERATOR_CHART):
-	curl -fsSL --proto '=https' --retry 8 --retry-all-errors -o $@.part \
-		https://github.com/kubernetes-sigs/cluster-api-operator/releases/download/$(CAPI_OPERATOR_TAG)/$(notdir $@)
+	scripts/fetch.sh https://github.com/kubernetes-sigs/cluster-api-operator/releases/download/$(CAPI_OPERATOR_TAG)/$(notdir $@) $@.part
 	echo '$(CAPI_OPERATOR_SHA256)  $@.part' | sha256sum -c --quiet - || { rm -f $@.part; exit 1; }
 	rm -f management-cluster/charts/cluster-api-operator-*.tgz
 	mv $@.part $@
@@ -135,8 +133,7 @@ dist: web gateway-api capi-operator-chart
 		sed -i 's|^image: ""$$|image: "$(CONTROLLER_IMAGE)"|' dist/stage/share/kubehenge/charts/kubehenge/values.yaml && \
 		grep -qxF 'image: "$(CONTROLLER_IMAGE)"' dist/stage/share/kubehenge/charts/kubehenge/values.yaml; \
 	fi
-	test -f $(HEADLAMP_TARBALL) || curl -fsSL --proto '=https' --retry 8 --retry-all-errors -o $(HEADLAMP_TARBALL) \
-		https://github.com/kubernetes-sigs/headlamp/releases/download/$(HEADLAMP_TAG)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
+	test -f $(HEADLAMP_TARBALL) || scripts/fetch.sh https://github.com/kubernetes-sigs/headlamp/releases/download/$(HEADLAMP_TAG)/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz $(HEADLAMP_TARBALL)
 	echo '$(HEADLAMP_SHA256)  $(HEADLAMP_TARBALL)' | sha256sum -c --quiet - || { rm -f $(HEADLAMP_TARBALL); exit 1; }
 	# Of the plugins Headlamp ships, the Helm app catalog and the Prometheus charts, which the interface
 	# serves while the shared Headlamp offers its actions; the plugin catalog would install any plugin.
@@ -230,11 +227,22 @@ fmt: web/node_modules/.package-lock.json
 # golangci-lint gives up on its per-user lock at the first error from the lock file, even with
 # --allow-serial-runners, and gates in several worktrees at once meet that error. Its cache is safe
 # to share, so they lint side by side instead.
+# A change to a package most others import makes the lint analyse nearly the whole module again.
+# On every core at once that takes 6 GB and the whole machine. Four threads under a soft 2 GiB heap
+# target take about 5 minutes and 4 GB, and an unchanged tree takes seconds from the cache.
+# Even those seconds open every package's cache entries, so inputs that already passed are not
+# linted again: the Go sources, tracked or not, the module, the config and the linter's version.
+LINT_GO := CGO_ENABLED=0 GOMAXPROCS=4 GOMEMLIMIT=2GiB nice -n 10 golangci-lint run --allow-parallel-runners
+LINT_GO_INPUTS := '*.go' go.mod go.sum .golangci.yml
 lint-go: web gateway-api
 	go mod tidy -diff
 	golangci-lint config verify
-	CGO_ENABLED=0 GOOS=linux golangci-lint run --allow-parallel-runners ./...
-	CGO_ENABLED=0 GOOS=windows golangci-lint run --allow-parallel-runners ./...
+	key=$$({ git ls-files -s -- $(LINT_GO_INPUTS); git diff HEAD -- $(LINT_GO_INPUTS); \
+		git ls-files -o --exclude-standard -z -- '*.go' | xargs -0 -r git hash-object; \
+		golangci-lint version; } | sha256sum | cut -c1-16); \
+	if [ -f "dist/lint-go/$$key" ]; then echo "golangci-lint: these inputs passed before"; \
+	else GOOS=linux $(LINT_GO) ./... && GOOS=windows $(LINT_GO) ./... && \
+		mkdir -p dist/lint-go && touch "dist/lint-go/$$key"; fi
 	$(GOVULNCHECK) ./...
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
@@ -300,11 +308,20 @@ lint-docker:
 # configuration against mocked providers, and the shell scripts' own tests.
 unit: unit-go unit-web unit-tofu unit-shell
 
+# KUBEHENGE_REQUIRE_ALLOY turns a missing alloy (scripts/tools.sh) from a skip into a failure, so the
+# generated Alloy configurations are always validated here.
 unit-go: web gateway-api
-	go test -race ./...
+	KUBEHENGE_REQUIRE_ALLOY=1 go test -race ./...
 
 unit-web: web/node_modules/.package-lock.json
 	cd web && npm test
+
+# tofu test starts each of the three providers' plugins about 140 times, one process per run block
+# phase, and Go's plugin client gives each a minute to answer. Beside the race tests of every package
+# the starts queue for a core, so in a whole run it waits for them.
+ifneq ($(filter test unit,$(MAKECMDGOALS)),)
+unit-tofu: | unit-go
+endif
 
 unit-tofu: tofu-init capi-operator-chart
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m test; done
@@ -376,6 +393,11 @@ e2e-interface:
 # of a key made for the test; settings in test/e2e/appliance.sh.
 e2e-appliance:
 	test/e2e/appliance.sh $(RELEASE) $(NEWER) $(NEWEST) $(SETTINGS)
+
+# As root on a Proxmox VE node, with the latest published release's install.sh and archive, and a
+# `make dist` archive of a higher VERSION; settings in test/e2e/appliance-upgrade.sh.
+e2e-appliance-upgrade:
+	test/e2e/appliance-upgrade.sh $(PUBLISHED_INSTALL) $(PUBLISHED) $(RELEASE) $(SETTINGS)
 
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/provisioner/e2e_test.go.
 e2e-volumes:

@@ -1,0 +1,3 @@
+- RKE2 clusters can run their node OS in FIPS mode, `almalinux-10-fips` or `rocky-10-fips`, set as `fips: true` in the `nodeOS` variable. The nodes boot with `fips=1` and the `FIPS` crypto policy, from VM templates of their own.
+- FIPS mode is unsupported until an end-to-end test passes in it ([templates.md](templates.md#fips-mode)).
+- FIPS mode runs on canal alone, RKE2's only CNI built for it. k3s and kubeadm refuse FIPS mode, in the interface, the CLI and kubectl alike.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -217,7 +218,10 @@ func talosConfig(t *testing.T, role machine.Type, patches []string) map[string]m
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = cfg.ValidateAsClient(metalMode{}); err != nil {
+	// Talos checks a PTP device path with filepath.Clean, which turns /dev/ptp0 into \dev\ptp0 on
+	// Windows, so the one finding about it there is no finding about the configuration.
+	if _, err = cfg.ValidateAsClient(metalMode{}); err != nil &&
+		(runtime.GOOS != "windows" || !strings.Contains(err.Error(), "1 error occurred") || strings.Count(err.Error(), "PTP device path") != 1) {
 		t.Fatal(err)
 	}
 	encoded, err := cfg.EncodeString(encoder.WithComments(encoder.CommentsDisabled))
@@ -334,6 +338,9 @@ func TestTalosControlPlaneConfiguration(t *testing.T) {
 				if got := field(t, docs[component], "extraArgs", "authorization-always-allow-paths"); got != "/healthz,/readyz,/livez,/metrics" {
 					t.Errorf("%s paths open on loopback = %v", component, got)
 				}
+			}
+			if got := field(t, docs["v1alpha1"], "cluster", "etcd", "extraArgs", "quota-backend-bytes"); got != "8589934592" {
+				t.Errorf("etcd quota %v", got)
 			}
 			if got := field(t, docs["v1alpha1"], "cluster", "etcd", "extraArgs", "listen-metrics-urls"); got != "http://127.0.0.1:2381" {
 				t.Errorf("etcd metrics on %v", got)

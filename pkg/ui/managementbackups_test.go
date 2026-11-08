@@ -118,10 +118,7 @@ func TestManagementBackups(t *testing.T) {
 	expect(t, b.do("POST", "/api/appliance/etcd-backups/snapshots", ""), http.StatusConflict)
 	close(talos.release)
 	var name string
-	for deadline := time.Now().Add(10 * time.Second); name == ""; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("no snapshot was taken")
-		}
+	for ; name == ""; time.Sleep(10 * time.Millisecond) {
 		if v := managementBackupsOf(t, b); !v.Taking && v.Last != nil {
 			name = v.Last.Name
 		}

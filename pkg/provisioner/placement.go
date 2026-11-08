@@ -9,6 +9,9 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
@@ -21,17 +24,47 @@ import (
 // it the nodes capmox may use.
 const OnlineNodesAnnotation = "kubehenge.dev/online-nodes"
 
+// PlacementBlockedAnnotation is on a Cluster while every Proxmox VE node it could use is in
+// maintenance or has the cluster's storage inactive. It says why, and Cluster API's patch of the
+// cluster is refused with that text until a node can take a VM.
+const PlacementBlockedAnnotation = "kubehenge.dev/placement-blocked"
+
 // allowedNodesVariable is the ClusterClass variable naming the nodes a cluster's VMs keep to.
 const allowedNodesVariable = "allowedNodes"
+
+// storageVariable is the ClusterClass variable naming the storage a cluster's disks are on.
+const storageVariable = "storage"
+
+// placementVariables are the nodes a cluster keeps to, if it chose any, and its storage.
+func placementVariables(c *clusterv1.Cluster) ([]string, string, error) {
+	chosen, _, err := optionalVariable[[]string](c, allowedNodesVariable)
+	if err != nil {
+		return nil, "", err
+	}
+	storage, _, err := optionalVariable[string](c, storageVariable)
+	return chosen, storage, err
+}
 
 // Placer keeps OnlineNodesAnnotation current on every Kubehenge cluster.
 type Placer struct {
 	Client         client.Client
 	ClassNamespace string
 	Nodes          Nodes
+	// Sites, when set, leaves out of a cluster's placement the nodes its storage is not available
+	// on and the nodes its templates cannot be cloned on.
+	Sites SiteSource
 	// Interval is how often the nodes are looked at: a node that goes down is left out of the
 	// clusters' placement within about that long.
 	Interval time.Duration
+}
+
+// NodesSkippedCondition on a Cluster says that Placer left Proxmox VE nodes out of its placement
+// because their status could not be read.
+const NodesSkippedCondition = "NodesSkipped"
+
+// skippingNodes is implemented by a Nodes that skips the nodes it cannot read.
+type skippingNodes interface {
+	Unreadable() []string
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -58,6 +91,17 @@ func (p *Placer) placeAll(ctx context.Context) {
 		log.Error(err, "reading the Proxmox VE nodes")
 		return
 	}
+	var sites *Sites
+	if p.Sites != nil {
+		if sites, err = p.Sites.Sites(ctx); err != nil {
+			log.Error(err, "reading the Proxmox VE storages and templates")
+			return
+		}
+	}
+	var skipped []string
+	if u, ok := p.Nodes.(skippingNodes); ok {
+		skipped = u.Unreadable()
+	}
 	clusters := &clusterv1.ClusterList{}
 	if err := p.Client.List(ctx, clusters, client.UnsafeDisableDeepCopy); err != nil {
 		log.Error(err, "listing clusters")
@@ -68,21 +112,75 @@ func (p *Placer) placeAll(ctx context.Context) {
 		if !Owns(c, p.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
 			continue
 		}
+		p.markSkipped(ctx, c, skipped)
 		level, err := clusterCPULevel(c)
 		if err != nil {
 			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
 			continue
 		}
-		value := strings.Join(nodesFor(online, level), ",")
-		if c.Annotations[OnlineNodesAnnotation] == value {
+		chosen, storage, err := placementVariables(c)
+		if err != nil {
+			log.Error(err, "reading the cluster's nodes and storage", "cluster", client.ObjectKeyFromObject(c))
 			continue
 		}
-		patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, OnlineNodesAnnotation, value)
-		target := &clusterv1.Cluster{}
-		target.Namespace, target.Name = c.Namespace, c.Name
-		if err := p.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil && ctx.Err() == nil {
-			log.Error(err, "recording the online Proxmox VE nodes", "cluster", client.ObjectKeyFromObject(c))
+		// The annotation lists every node the cluster could use, whichever it chose, for the hook to
+		// narrow. Whether a VM has a place at all is judged against the chosen ones.
+		hosts, _ := nodesToPlace(online, level, nil, storage)
+		_, blocked := nodesToPlace(online, level, chosen, storage)
+		usable := placeable(online, storage)
+		if sites != nil {
+			hosts = sites.Hosts(c, usable, level)
 		}
+		hosts, short := fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, hosts)
+		p.markShort(ctx, c, short)
+		p.record(ctx, c, hosts, blocked)
+	}
+}
+
+// record writes on the cluster the nodes its VMs may use, and why none can take a new VM, when
+// they differ from what it holds.
+func (p *Placer) record(ctx context.Context, c *clusterv1.Cluster, hosts []string, blocked string) {
+	log := ctrl.LoggerFrom(ctx).WithName("placer")
+	value := strings.Join(hosts, ",")
+	if c.Annotations[OnlineNodesAnnotation] == value && c.Annotations[PlacementBlockedAnnotation] == blocked {
+		return
+	}
+	var blockedValue *string
+	if blocked != "" {
+		blockedValue = &blocked
+	}
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{annotationsKey: map[string]any{
+		OnlineNodesAnnotation: value, PlacementBlockedAnnotation: blockedValue,
+	}}})
+	if err != nil {
+		log.Error(err, "encoding the online Proxmox VE nodes", "cluster", client.ObjectKeyFromObject(c))
+		return
+	}
+	target := &clusterv1.Cluster{}
+	target.Namespace, target.Name = c.Namespace, c.Name
+	if err := p.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil && ctx.Err() == nil {
+		log.Error(err, "recording the online Proxmox VE nodes", "cluster", client.ObjectKeyFromObject(c))
+	}
+}
+
+// markSkipped records on the cluster the nodes left out of placement for want of a status, and
+// clears the record once they answer.
+func (p *Placer) markSkipped(ctx context.Context, c *clusterv1.Cluster, skipped []string) {
+	var cond *metav1.Condition
+	have := meta.FindStatusCondition(c.Status.Conditions, NodesSkippedCondition)
+	if len(skipped) > 0 {
+		cond = &metav1.Condition{
+			Status: metav1.ConditionTrue, Reason: "StatusUnreadable",
+			Message: fmt.Sprintf("%d Proxmox VE node(s) left out of placement because their status could not be read: %s", len(skipped), strings.Join(skipped, ", ")),
+		}
+		if have != nil && have.Message == cond.Message {
+			return
+		}
+	} else if have == nil {
+		return
+	}
+	if _, err := markCluster(ctx, p.Client, p.Client, client.ObjectKeyFromObject(c), NodesSkippedCondition, cond); err != nil && !apierrors.IsNotFound(err) && ctx.Err() == nil {
+		ctrl.LoggerFrom(ctx).WithName("placer").Error(err, "recording the nodes left out of placement", "cluster", client.ObjectKeyFromObject(c))
 	}
 }
 
@@ -129,7 +227,7 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 		case talosContractPaths[kindOf(item)] != "":
 			patch, err = images.contract(ctx, item)
 		case h.Releases != nil:
-			patch, err = h.Releases.patch(item, cluster)
+			patch, err = h.Releases.patch(ctx, item, cluster)
 		}
 		if err != nil {
 			resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
@@ -173,9 +271,12 @@ func (h *Hooks) requestCluster(ctx context.Context, variables []runtimehooksv1.V
 // placementPatch names the nodes on the cluster's ProxmoxClusterTemplate. It is nil while there
 // are none to name.
 func (h *Hooks) placementPatch(ctx context.Context, cluster *clusterv1.Cluster, chosen []string) ([]byte, error) {
-	online, err := h.onlineNodes(ctx, cluster)
+	online, blocked, err := h.onlineNodes(ctx, cluster, chosen)
 	if err != nil {
 		return nil, err
+	}
+	if blocked != "" {
+		return nil, errors.New(blocked)
 	}
 	nodes := placement(chosen, online)
 	if len(nodes) == 0 {
@@ -195,23 +296,39 @@ func addOp(path string, value any) map[string]any {
 
 // onlineNodes are the nodes recorded on the cluster, or, for a cluster the Placer has not got to
 // yet, such as one being created, those Proxmox VE reports now that run its node OS, or Talos.
-func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster) ([]string, error) {
+func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster, chosen []string) ([]string, string, error) {
 	if value, ok := cluster.Annotations[OnlineNodesAnnotation]; ok {
+		blocked := cluster.Annotations[PlacementBlockedAnnotation]
 		if value == "" {
-			return nil, nil
+			return nil, blocked, nil
 		}
-		return strings.Split(value, ","), nil
+		return strings.Split(value, ","), blocked, nil
 	}
 	if h.Nodes == nil {
-		return nil, nil
+		return nil, "", nil
 	}
 	level, err := clusterCPULevel(cluster)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	online, err := h.Nodes.OnlineNodes(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("reading the Proxmox VE nodes: %w", err)
+		return nil, "", fmt.Errorf("reading the Proxmox VE nodes: %w", err)
 	}
-	return nodesFor(online, level), nil
+	_, storage, err := placementVariables(cluster)
+	if err != nil {
+		return nil, "", err
+	}
+	hosts, _ := nodesToPlace(online, level, nil, storage)
+	_, blocked := nodesToPlace(online, level, chosen, storage)
+	usable := placeable(online, storage)
+	if h.Sites != nil {
+		sites, err := h.Sites.Sites(ctx)
+		if err != nil {
+			return nil, "", fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)
+		}
+		hosts = sites.Hosts(cluster, usable, level)
+	}
+	hosts, _ = fitMemory(ctx, h.Reader, h.ClassNamespace, cluster, usable, hosts)
+	return hosts, blocked, nil
 }

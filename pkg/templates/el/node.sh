@@ -27,11 +27,18 @@ point_at_mirrors "${repos}" "${files}/mirrors"
 for key in "${files}"/keys/*.asc; do
     install -m 0644 "${key}" "/etc/pki/rpm-gpg/kubehenge-$(basename "${key}")"
 done
+# The proxy's address comes into this build as podman passes the builder's environment on. Its
+# authority is the builder's own file, which dnf trusts only once it is an anchor here. The
+# anchor goes again with the packages installed, as the image is not one that trusts a proxy.
+if [ -f "${files}/proxy/ca.crt" ]; then
+    install -D -m 0644 "${files}/proxy/ca.crt" /etc/pki/ca-trust/source/anchors/kubehenge-proxy.crt
+    update-ca-trust
+fi
 
 # curl, awk and tar for the installs of RKE2, k3s and kubeadm's images; NetworkManager, the only
-# network renderer cloud-init has on EL. The kernel's extra modules come with the kernel, in the
-# compose (manifest.yaml).
-packages="cloud-init qemu-guest-agent NetworkManager container-selinux curl gawk tar"
+# network renderer cloud-init has on EL; chrony, since the minimal manifest does not promise a time
+# daemon. The kernel's extra modules come with the kernel, in the compose (manifest.yaml).
+packages="cloud-init qemu-guest-agent NetworkManager chrony container-selinux curl gawk tar"
 case "${distribution}" in
     kubeadm)
         version=${kubernetes#v}
@@ -46,12 +53,25 @@ case "${distribution}" in
         exit 1
         ;;
 esac
+fips=false
+if [ -e "${files}/fips" ]; then
+    fips=true
+    packages="${packages} crypto-policies-scripts"
+fi
 # A slow mirror is left for the next, as in build.sh.
 # shellcheck disable=SC2086 # one word per package
 dnf -y install --setopt=reposdir="${repos}" --setopt=install_weak_deps=False --setopt=minrate=100k ${packages}
 dnf clean all
 rm -rf "${repos}"
+# The chart writes a cluster's time servers and the host clock source into /etc/chrony.d, which the
+# family's chrony.conf does not read.
+grep -Eq '^(include|confdir)[[:space:]]+/etc/chrony\.d' /etc/chrony.conf ||
+    printf '\nconfdir /etc/chrony.d\n' >> /etc/chrony.conf
+mkdir -p /etc/chrony.d
 rm -f /etc/pki/rpm-gpg/kubehenge-*.asc
+if [ -f "${files}/proxy/down.sh" ]; then
+    sh "${files}/proxy/down.sh"
+fi
 rm -rf /var/cache/* /var/log/* /var/lib/dnf
 
 # guest-exec and the reading of files, which the family's agent refuses by default, and the policy
@@ -75,12 +95,19 @@ printf '[install]\nroot-fs-type = "xfs"\n' > /usr/lib/bootc/install/20-kubehenge
 # stall information off unless asked, which the kubelet's pressure metrics read, and which tells a
 # node short of memory, CPU or IO from a slow one.
 printf 'kargs = ["console=tty0", "console=ttyS0,115200n8", "psi=1"]\n' > /usr/lib/bootc/kargs.d/10-kubehenge.toml
+if [ "${fips}" = true ]; then
+    # FIPS mode as the family sets it in image mode: the kernel's argument, which bootc installs with
+    # the image, and the policy every crypto library reads. The image's initramfs has dracut's fips
+    # module, which checks the kernel's integrity at boot.
+    printf 'kargs = ["fips=1"]\n' > /usr/lib/bootc/kargs.d/20-kubehenge-fips.toml
+    update-crypto-policies --no-reload --set FIPS
+fi
 
 # A clone's first boot, with its new machine ID, applies the presets again, and the family's end in
 # disabling every service they do not name.
 mkdir -p /usr/lib/systemd/system-preset
-printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
-systemctl preset qemu-guest-agent kubehenge-boot-log.timer
+printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\nenable chronyd.service\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
+systemctl preset qemu-guest-agent kubehenge-boot-log.timer chronyd
 # A node takes its updates as a new build of its template, which its cluster rolls out; fwupd
 # cannot go, since shim needs it.
 systemctl mask bootc-fetch-apply-updates.timer fwupd-refresh.timer

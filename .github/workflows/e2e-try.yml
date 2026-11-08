@@ -30,6 +30,9 @@ on:
       failed:
         description: The test of the lane that failed, if one did.
         value: ${{ jobs.test.outputs.failed }}
+      ended:
+        description: Whether the try ran its last step, which a try that lost its runner never does.
+        value: ${{ jobs.test.outputs.ended }}
 
 permissions:
   contents: read
@@ -56,6 +59,7 @@ jobs:
     outputs:
       handed-back: ${{ steps.host.outputs.handed-back || steps.load.outputs.handed-back }}
       failed: ${{ steps.failed.outputs.test }}
+      ended: ${{ steps.ended.outputs.ended }}
     steps:
       - name: Host
         id: host
@@ -125,6 +129,8 @@ jobs:
             e2e-go-
       - name: Tools
         if: env.E2E_RUN == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -275,6 +281,7 @@ jobs:
         timeout-minutes: 140
         env:
           TEST: ${{ inputs.test }}
+          GITHUB_TOKEN: ${{ github.token }}
         # The test's output goes into the artifacts too: a runner lost after the job's steps never
         # uploads the job's log, while the artifacts are already up.
         shell: bash
@@ -362,6 +369,10 @@ jobs:
           free -m > "$out/memory.txt"; sudo dmesg | tee "$out/dmesg.txt" >/dev/null || true
           pve() { docker exec kubehenge-e2e-pve "$@"; }
           pve journalctl -b --no-pager > "$out/proxmox-journal.txt" || true
+          # The second node, in the lane that joins one (test/e2e/ci/second-node.sh).
+          pve2_journal="$out/proxmox-journal-pve2.txt"
+          docker exec kubehenge-e2e-pve2 journalctl -b --no-pager > "$pve2_journal" 2>/dev/null ||
+            rm -f "$pve2_journal"
           # Proxmox VE logs its API's requests here, not to the journal.
           pve cat /var/log/pveproxy/access.log > "$out/pveproxy-access.log" || true
           pve qm list > "$out/vms.txt" || true
@@ -548,3 +559,9 @@ jobs:
           name: e2e-${{ inputs.test }}
           path: ${{ runner.temp }}/artifacts
           retention-days: 7
+      # A runner that GitHub stops or loses runs no further step, not even one that always runs, so
+      # this output tells a lost runner from a test that failed (e2e-lane.yml).
+      - name: The try's end
+        id: ended
+        if: always()
+        run: echo ended=true >> "$GITHUB_OUTPUT"

@@ -172,6 +172,8 @@ type Charts struct {
 	// PodSecurityExempt are the namespaces Kyverno's policies leave alone, those the ClusterClasses'
 	// Pod Security Admission exempts.
 	PodSecurityExempt PodSecurityExempt
+	// Mirrors serve the charts in place of their repositories.
+	Mirrors ChartMirrors
 }
 
 // Addons are the add-ons a cluster switches on through its variables.
@@ -187,8 +189,16 @@ type Addons struct {
 	LoadBalancer LoadBalancer
 	Certificates Certificates
 	GitOps       GitOps
+	// Egress is the cluster's egressProxy variable. egress is the proxy it comes to, with the
+	// management side's as the default.
+	Egress   EgressProxy
+	viaProxy egressEnv
 	// CIS is the cluster's cis variable, which the add-ons make room for.
 	CIS bool
+	// UseExisting names the installs of the cluster that the add-ons use instead of their own.
+	UseExisting UseExisting
+	// NamespaceLabels are put on the namespaces the add-ons install into.
+	NamespaceLabels map[string]string
 	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
 	// Datastore.Allocate on its storage, as its csi variable asks.
 	CSINewest bool
@@ -206,6 +216,14 @@ type Addons struct {
 	backupSources []backupSource
 	// gitOpsFound is what the controller found for GitOps before writing the charts' values.
 	gitOpsFound gitOpsState
+	// monitoringFound is the credentials stored for the settings of monitoring that need one.
+	monitoringFound monitoringState
+	// rollout and pending are how the cluster's proxies were gated by its window, and the changes
+	// it held back.
+	rollout rolloutGate
+	pending []AddonChange
+	// conflicts are the add-ons left out because the cluster holds an install of their software.
+	conflicts []string
 	// talosServing is set when every controller manager and scheduler of a Talos cluster serves a
 	// certificate of the cluster CA (talosServesControlPlaneMetrics), so that their metrics are
 	// scraped as on the other distributions.
@@ -250,14 +268,23 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 	if a.GitOps, _, err = optionalVariable[GitOps](cluster, gitopsVariable); err != nil {
 		return a, err
 	}
+	if a.Egress, _, err = optionalVariable[EgressProxy](cluster, egressVariable); err != nil {
+		return a, err
+	}
+	if a.UseExisting, _, err = optionalVariable[UseExisting](cluster, useExistingVariable); err != nil {
+		return a, err
+	}
+	if a.NamespaceLabels, _, err = optionalVariable[map[string]string](cluster, namespaceLabelsVariable); err != nil {
+		return a, err
+	}
 	a.Rancher, err = rancherOf(cluster)
 	return a, err
 }
 
-// certManager reports whether the cluster runs cert-manager, which Rancher, monitoring and the
-// certificates add-on each need.
+// certManager reports whether Kubehenge installs cert-manager, which Rancher, monitoring and the
+// certificates add-on each need, unless the cluster brings its own.
 func (a *Addons) certManager() bool {
-	return a.Rancher.Install || a.Monitoring.Enabled || a.Certificates.on()
+	return !a.UseExisting.CertManager && (a.Rancher.Install || a.Monitoring.Enabled || a.Certificates.on())
 }
 
 // certManagerProxy names the cluster's cert-manager proxy, installed for whichever add-ons need it.
@@ -919,7 +946,7 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 	// The CCM and the CSI plugin's controller are what mount the cluster's Proxmox VE token (the
 	// CSI node plugin needs none); kept to the control-plane nodes, no worker ever holds it.
 	controlPlane := map[string]any{"nodeAffinity": map[string]any{"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
-		"nodeSelectorTerms": []any{map[string]any{"matchExpressions": []any{map[string]any{
+		"nodeSelectorTerms": []any{map[string]any{matchExpressionsKey: []any{map[string]any{
 			"key": controlPlaneRole, "operator": string(corev1.NodeSelectorOpExists),
 		}}}},
 	}}}
@@ -960,11 +987,14 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 		tolerationsKey:            controlPlaneTolerations(),
 		"existingConfigSecretKey": csiConfigKey,
 		"storageClass": []any{map[string]any{
-			"name":          "proxmox",
+			"name":          defaultStorageClass,
 			"storage":       storage,
 			"reclaimPolicy": string(corev1.PersistentVolumeReclaimDelete),
 			"fstype":        "ext4",
-			annotationsKey:  map[string]any{"storageclass.kubernetes.io/is-default-class": strconv.FormatBool(true)},
+			// The chart renders only ssd and cache of the drive's options, so discard travels as an
+			// extra parameter beside ssd.
+			"extraParameters": driveParameters(),
+			annotationsKey:    map[string]any{"storageclass.kubernetes.io/is-default-class": strconv.FormatBool(true)},
 		}},
 	}
 	if addons.VolumeSnapshots {
@@ -1097,7 +1127,7 @@ func helmChartProxies(cluster *clusterv1.Cluster, charts *Charts, distribution t
 	if err != nil {
 		return nil, err
 	}
-	return chartProxyObjects(cluster, append(wanted, serving...))
+	return chartProxyObjects(cluster, addons.viaProxy.apply(append(wanted, serving...)), charts.Mirrors)
 }
 
 // servingCharts are those that bring traffic into the cluster and what it runs from Git: on
@@ -1130,8 +1160,9 @@ func servingCharts(cluster *clusterv1.Cluster, charts *Charts, distribution temp
 }
 
 // chartProxyObjects makes the cluster's HelmChartProxies of the charts it wants, in their order,
-// each selecting the cluster alone, with its chart's values beneath its own.
-func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unstructured.Unstructured, error) {
+// each selecting the cluster alone, with its chart's values beneath its own. A chart comes from its
+// repository's mirror where there is one.
+func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy, mirrors ChartMirrors) ([]*unstructured.Unstructured, error) {
 	proxies := make([]*unstructured.Unstructured, 0, len(wanted))
 	for i := range wanted {
 		p := &wanted[i]
@@ -1145,7 +1176,7 @@ func chartProxyObjects(cluster *clusterv1.Cluster, wanted []chartProxy) ([]*unst
 		u.SetNamespace(cluster.Namespace)
 		u.Object["spec"] = map[string]any{
 			"clusterSelector": map[string]any{matchLabelsKey: map[string]any{clusterv1.ClusterNameLabel: cluster.Name}},
-			"repoURL":         p.chart.Repository,
+			"repoURL":         mirrors.Repository(p.chart.Repository),
 			"chartName":       p.chart.Name,
 			"version":         p.chart.pinnedVersion(),
 			"releaseName":     p.release,

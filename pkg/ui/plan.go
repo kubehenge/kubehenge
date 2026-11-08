@@ -44,13 +44,21 @@ type planView struct {
 
 // planWarnings are the warnings of a change to a cluster as it would be after it.
 func planWarnings(after *clusterv1.Cluster, changes []plannedChange) []string {
+	var out []string
+	if slices.ContainsFunc(changes, func(c plannedChange) bool { return c.Setting == provisioner.NodeCustomisationVariable }) {
+		if n, _, err := provisioner.NodeCustomisationOf(after); err == nil {
+			if roles := n.ReferenceRoles(); len(roles) > 0 {
+				out = append(out, provisioner.NodeCustomisationRolls(roles))
+			}
+		}
+	}
 	if r := after.Spec.Topology.ControlPlane.Replicas; r == nil || *r != 1 {
-		return nil
+		return out
 	}
 	if slices.ContainsFunc(changes, func(c plannedChange) bool { return c.Effect == effectControlPlane || c.Effect == effectAll }) {
-		return []string{provisioner.SingleControlPlaneRoll}
+		out = append(out, provisioner.SingleControlPlaneRoll)
 	}
-	return nil
+	return out
 }
 
 // planCluster checks a change as changeCluster would make it, the API server's admission included,
@@ -105,6 +113,9 @@ func planned(ch *changed, reach map[string]provisioner.MachineReach) []plannedCh
 	}
 	if len(ch.req.Pools) > 0 {
 		out = append(out, plannedChange{Setting: "pools", Effect: poolsEffect(ch.before, ch.req.Pools)})
+	}
+	if ch.req.ControlPlaneTimeouts != nil {
+		out = append(out, plannedChange{Setting: "controlPlaneTimeouts", Effect: effectNone})
 	}
 	if len(ch.req.Autoscaling) > 0 {
 		out = append(out, plannedChange{Setting: "autoscaling", Effect: effectNone})

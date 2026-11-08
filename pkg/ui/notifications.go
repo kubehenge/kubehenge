@@ -367,6 +367,29 @@ func (s *Server) findManagement(ctx context.Context, kube client.Client, namespa
 			})
 		}
 	}
+	found.problems = append(found.problems, s.proxmoxProblems(ctx, kube, link)...)
+}
+
+// proxmoxProblems are the controller's view of the Proxmox VE API: not answering, and each token
+// that is refused or lacks a privilege.
+func (s *Server) proxmoxProblems(ctx context.Context, kube client.Client, link string) []notify.Notice {
+	reach := s.proxmoxReach(ctx, kube)
+	if reach == nil {
+		return nil
+	}
+	var out []notify.Notice
+	if !reach.OK {
+		out = append(out, notify.Notice{
+			Key: "management/proxmox", Severity: notify.Error, Title: "Proxmox VE not reachable", Text: reach.Error, Link: link,
+		})
+	}
+	for _, t := range reach.Tokens {
+		out = append(out, notify.Notice{
+			Key: "management/proxmox/token/" + t.Name, Severity: notify.Error,
+			Title: t.Name + " token cannot use Proxmox VE", Text: t.Message, Link: link,
+		})
+	}
+	return out
 }
 
 // findClusters adds every Kubehenge cluster's problems, as its health page shows them, and its

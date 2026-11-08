@@ -55,9 +55,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: scripts/tools.sh
+          sparse-checkout: |
+            scripts/tools.sh
+            scripts/fetch.sh
           sparse-checkout-cone-mode: false
       - name: cosign
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" cosign
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

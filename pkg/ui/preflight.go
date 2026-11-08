@@ -63,8 +63,30 @@ func (s *Server) inventory(ctx context.Context, u user, settings *appliance.Sett
 	}
 	if !owned {
 		inv.Answering = s.probe(ctx, setupAddresses(settings))
+		if idErr := s.readVMIDs(ctx, u, inv); idErr != nil {
+			return nil, idErr
+		}
 	}
 	return inv, nil
+}
+
+// readVMIDs reads the datacenter's next-id range and the IDs in use. A user who may not read the
+// range gets the default one, as the run does, and the check then sees only the IDs the user sees.
+func (s *Server) readVMIDs(ctx context.Context, u user, inv *appliance.Inventory) error {
+	next, err := s.Accounts.NextID(ctx, u.ticket)
+	if err != nil && !errors.Is(err, pve.ErrForbidden) {
+		return fmt.Errorf("reading the VM ID range under Datacenter, Options: %w", err)
+	}
+	inv.NextID = next
+	ids, err := s.Accounts.VMIDs(ctx, u.ticket)
+	if err != nil {
+		return fmt.Errorf("reading the VM IDs: %w", err)
+	}
+	inv.UsedVMIDs = make(map[int]bool, len(ids))
+	for _, id := range ids {
+		inv.UsedVMIDs[id] = true
+	}
+	return nil
 }
 
 // readBridges fills in each online node's bridges and the addresses it has on them. A node whose

@@ -43,6 +43,10 @@ type fakeTalos struct {
 	// down are the nodes whose API does not answer. fail decides which calls fail.
 	down map[string]bool
 	fail func(address, call string) error
+	// etcd are the members the nodes report by address, where a node reports a healthy voter of its
+	// own otherwise. listed is the member list every node answers with.
+	etcd   map[string]EtcdMember
+	listed []EtcdListed
 }
 
 // call records a restore's call, and fails it as the fake is told to.
@@ -179,18 +183,78 @@ func (n *fakeTalosNode) BootstrapRecovered(context.Context) error {
 	return nil
 }
 
+func (n *fakeTalosNode) EtcdMember(context.Context) (EtcdMember, error) {
+	if err := n.f.call(n.address, "member"); err != nil {
+		return EtcdMember{}, err
+	}
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	if m, ok := n.f.etcd[n.address]; ok {
+		return m, nil
+	}
+	return EtcdMember{ID: fakeMemberID(n.address)}, nil
+}
+
+func (n *fakeTalosNode) EtcdMembers(context.Context) ([]EtcdListed, error) {
+	if err := n.f.call(n.address, "members"); err != nil {
+		return nil, err
+	}
+	n.f.mu.Lock()
+	defer n.f.mu.Unlock()
+	return slices.Clone(n.f.listed), nil
+}
+
+func (n *fakeTalosNode) EtcdDefragment(context.Context) error {
+	return n.f.call(n.address, "defrag")
+}
+
+func (n *fakeTalosNode) EtcdDisarm(context.Context) error {
+	return n.f.call(n.address, "disarm")
+}
+
+// fakeMemberID is the etcd ID the fake gives the member on a node that was told nothing of its own.
+func fakeMemberID(address string) uint64 {
+	var id uint64 = 1
+	for _, b := range []byte(address) {
+		id = id*31 + uint64(b)
+	}
+	return id
+}
+
 func (*fakeTalosNode) Close() error { return nil }
 
+// fakeDrainer records the drains and uncordons it is asked for. A test sets drainFn to act as the
+// drain does, and shortFn to answer which StatefulSets are short on its n-th look.
 type fakeDrainer struct {
 	mu                  sync.Mutex
 	drained, uncordoned []string
+	timeouts            []time.Duration
+	drainFn             func(o DrainOptions) error
+	shortFn             func(look int) []string
+	looks               int
 }
 
-func (d *fakeDrainer) Drain(_ context.Context, _ *clusterv1.Cluster, node string) error {
+func (d *fakeDrainer) Drain(_ context.Context, _ *clusterv1.Cluster, node string, o DrainOptions) error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	d.drained = append(d.drained, node)
+	d.timeouts = append(d.timeouts, o.Timeout)
+	fn := d.drainFn
+	d.mu.Unlock()
+	if fn != nil {
+		return fn(o)
+	}
 	return nil
+}
+
+func (d *fakeDrainer) ShortStatefulSets(context.Context, *clusterv1.Cluster, string) ([]string, error) {
+	d.mu.Lock()
+	d.looks++
+	look, fn := d.looks, d.shortFn
+	d.mu.Unlock()
+	if fn == nil {
+		return nil, nil
+	}
+	return fn(look), nil
 }
 
 func (d *fakeDrainer) Uncordon(_ context.Context, _ *clusterv1.Cluster, node string) error {
@@ -274,7 +338,7 @@ func newTalosRig(t *testing.T, objects ...client.Object) *talosRig {
 	r.u = &TalosUpgrader{
 		Client: kube, Reader: kube, ClassNamespace: "kubehenge-system",
 		Images: fakeTalosImages{"v1.13.9", "v1.13.12", "v1.14.4"}, Dial: r.talos.dial, Nodes: r.drainer,
-		Now: func() time.Time { return r.now }, MachineCheck: 10 * time.Millisecond, Events: r.events,
+		Now: func() time.Time { return r.now }, MachineCheck: 10 * time.Millisecond, WaitInterval: time.Millisecond, Events: r.events,
 	}
 	return r
 }

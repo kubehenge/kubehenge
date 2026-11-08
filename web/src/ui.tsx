@@ -1,5 +1,6 @@
 import {
   Component,
+  Fragment,
   cloneElement,
   isValidElement,
   useCallback,
@@ -276,6 +277,8 @@ export function usePoll<T>(
     interval.current = intervalMs;
     const t = window.setInterval(() => {
       ticked.current = Date.now();
+      // A hidden tab reads nothing until it is shown, and is read at once then. Marking it late
+      // meanwhile would only flash "Stale" at whoever comes back to it.
       if (document.hidden) {
         return;
       }
@@ -338,17 +341,44 @@ const negativePolarity = new Set([
   "ScalingUp",
   "ScalingDown",
   "UpgradeHeld",
+  "AddonConflict",
   "ControlPlaneRollStalled",
   "DeletionStalled",
   "MachinesStalled",
   "CertificatesExpiring",
   "VMsNotRunning",
   "StorageNearlyFull",
+  "TemplateNodeDown",
+  "NodeImageHeld",
+  "NodesSkipped",
+  "NodesLackMemory",
+  "StorageUnavailable",
+  "RemediationHeld",
 ]);
 
 // abnormal tells whether a condition is worth a look.
 export function abnormal(type: string, status: string): boolean {
   return negativePolarity.has(type) ? status === "True" : status !== "True";
+}
+
+/**
+ * BreakableText is a label or taint that may wrap after each `=`, `:` and `/` and nowhere else, so a
+ * narrow cell breaks "dedicated:PreferNoSchedule" at the colon and not in the middle of a word.
+ */
+export function BreakableText({ text }: { text: string }): JSX.Element {
+  const parts = text.split(/(?<=[=:/])/u);
+  return (
+    <>
+      {parts.map((part, i) => (
+        // The parts of a fixed string never reorder.
+        // oxlint-disable-next-line react/no-array-index-key
+        <Fragment key={i}>
+          {part}
+          {i < parts.length - 1 && <wbr />}
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 /** Status shows a state as Proxmox VE does: an icon, then the text. */

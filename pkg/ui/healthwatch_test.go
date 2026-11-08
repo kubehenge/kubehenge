@@ -36,8 +36,9 @@ func TestHealthSaysCertificatesExpire(t *testing.T) {
 func TestHealthSaysVMsStorageAndHeldUpgrades(t *testing.T) {
 	t.Parallel()
 	const (
-		storage = "Storage local-lvm is 96% full on pve1 (96 of 100 GiB). Free space or add capacity."
-		rancher = "for Rancher, choose Kubernetes 1.34 to 1.36, not v1.37.1+k3s1"
+		storage      = "Storage local-lvm is 96% full on pve1 (96 of 100 GiB). Free space or add capacity."
+		rancher      = "for Rancher, choose Kubernetes 1.34 to 1.36, not v1.37.1+k3s1"
+		templateDown = "Template kubehenge-rke2-build-1 is on node pve2, which is down. Start the node, or move the template to a node that is up"
 	)
 	for _, tc := range []struct {
 		condType, reason, message string
@@ -60,6 +61,19 @@ func TestHealthSaysVMsStorageAndHeldUpgrades(t *testing.T) {
 			attentionView{Severity: severityWarning, Section: sectionVolumes, What: "Storage nearly full", Message: storage},
 		},
 		{
+			provisioner.StorageUnavailableCondition, provisioner.StorageUnavailableReason,
+			"Storage nfs is unavailable on pve2. Its machines are not replaced for 30 minutes. Bring the storage back in Proxmox VE.",
+			attentionView{Severity: severityError, Section: sectionVolumes, What: "Storage unavailable", Message: "Storage nfs is unavailable on pve2"},
+		},
+		{
+			provisioner.RemediationHeldCondition, provisioner.HeldNodeMaintenance,
+			"web-md-0-a: Proxmox VE node pve2 is in maintenance, replacement waits until 14:40 UTC",
+			attentionView{
+				Severity: severityWarning, Section: sectionNodes, What: "Replacement waits",
+				Message: "web-md-0-a: Proxmox VE node pve2 is in maintenance, replacement waits until 14:40 UTC",
+			},
+		},
+		{
 			provisioner.UpgradeHeldCondition, provisioner.UpgradeHeldRancherKubernetes, rancher,
 			attentionView{Severity: severityWarning, Section: sectionClusterAPI, What: "Upgrade held for Rancher", Message: rancher},
 		},
@@ -70,6 +84,14 @@ func TestHealthSaysVMsStorageAndHeldUpgrades(t *testing.T) {
 		{
 			provisioner.UpgradeHeldCondition, provisioner.UpgradeHeldTalosUpgrade, "waiting for the Talos upgrade of web-cp-0",
 			attentionView{Severity: severityProgress, Section: sectionClusterAPI, What: "Upgrade waits for Talos", Message: "waiting for the Talos upgrade of web-cp-0"},
+		},
+		{
+			provisioner.NodeImageHeldCondition, provisioner.NodeImageHeldTemplateNodeDown, "Build build-202610150000 is on node pve2, which is down",
+			attentionView{Severity: severityWarning, Section: sectionNodes, What: "Node image refresh held", Message: "Build build-202610150000 is on node pve2, which is down"},
+		},
+		{
+			provisioner.TemplateNodeDownCondition, provisioner.TemplateNodeDownReason, templateDown,
+			attentionView{Severity: severityWarning, Section: sectionNodes, What: "Template node down", Message: templateDown},
 		},
 	} {
 		c := &clusterv1.Cluster{Name: "web", Status: clusterv1.ClusterStatus{Conditions: []metav1.Condition{{

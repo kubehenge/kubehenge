@@ -1,11 +1,11 @@
-import { newForm, type Form, type Machine } from "./create-form";
-import { etcdFieldsOf, etcdSnapshotsOf } from "./EtcdSnapshots";
+import { newForm, nodeCustomisationOf, type Form, type Machine } from "./create-form";
+import { graceOf, graceVariable } from "./HostOutage";
 import { loadBalancerOf } from "./LoadBalancer";
-import { logsOf } from "./Logs";
 import { nodeOSKey } from "./node-os";
-import { oidcProviders } from "./OIDCProviders";
+import { nodesOf } from "./node-settings";
+import { entryOf } from "./NodeTimeouts";
 import { placeOf } from "./Placement";
-import { podSecurityOf } from "./PodSecurity";
+import { featuresOf } from "./start-from-features";
 import type { Cluster } from "./types";
 import { flag, quantity, record, text, texts } from "./values";
 
@@ -28,30 +28,47 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "workerReplicas",
   "workerAutoscale",
   "workerMax",
+  "controlPlaneTimeouts",
+  "workerTimeouts",
   "bridge",
   "vlan",
+  "mtu",
+  "queues",
   "prefix",
   "gateway",
   "dnsServers",
+  "searchDomains",
+  "ntpServers",
   "loadBalancer",
+  "loadBalancerMode",
+  "loadBalancerAsn",
+  "loadBalancerPeers",
+  "loadBalancerAuthenticated",
   "storage",
   "place",
+  "hostOutageGrace",
   "proxmoxHA",
   "haGroups",
   "controlPlaneMachine",
   "workerMachine",
+  "workerNodes",
+  "nodeCustomisation",
   "cni",
   "headlamp",
   "headlampView",
   "monitoring",
+  "alerting",
   "logs",
   "podSecurity",
   "cis",
+  "etcdQuotaGiB",
   "istio",
   "rancherRegister",
   "oidc",
   "etcdSnapshots",
   "etcdFields",
+  "namespaceLabels",
+  "existingCertManager",
 ]);
 
 function machineOf(v: unknown, fallback: Machine): Machine {
@@ -60,6 +77,26 @@ function machineOf(v: unknown, fallback: Machine): Machine {
     cores: quantity(r["cores"]) ?? fallback.cores,
     memoryMiB: quantity(r["memoryMiB"]) ?? fallback.memoryMiB,
     diskGiB: quantity(r["diskGiB"]) ?? fallback.diskGiB,
+  };
+}
+
+type NetworkFields = Pick<
+  Form,
+  "bridge" | "vlan" | "mtu" | "queues" | "prefix" | "gateway" | "dnsServers" | "searchDomains" | "ntpServers"
+>;
+
+function networkFrom(v: unknown, base: Form): NetworkFields {
+  const network = record(v);
+  return {
+    bridge: text(network["bridge"]) ?? "",
+    vlan: quantity(network["vlan"])?.toString() ?? "",
+    mtu: quantity(network["mtu"])?.toString() ?? "",
+    queues: quantity(network["queues"])?.toString() ?? "",
+    prefix: quantity(network["prefix"]) ?? base.prefix,
+    gateway: text(network["gateway"]) ?? "",
+    dnsServers: (texts(network["dnsServers"]) ?? []).join(", "),
+    searchDomains: (texts(network["searchDomains"]) ?? []).join(", "),
+    ntpServers: (texts(network["ntp"]) ?? []).join(", "),
   };
 }
 
@@ -76,12 +113,8 @@ export function startDefault(clusters: Cluster[]): Cluster | undefined {
 export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace" | "className" | "version">): Form {
   const v = c.variables;
   const base = newForm();
-  const network = record(v["network"]);
-  const vlan = quantity(network["vlan"]);
-  const headlamp = record(v["headlamp"]);
+  const lb = loadBalancerOf(v["loadBalancer"]);
   const autoscaling = c.workerPools.find((p) => p.autoscaling !== undefined)?.autoscaling;
-  // A cluster that never had etcd snapshots set leaves a new one at the default.
-  const etcd = v["etcdSnapshots"] === undefined ? undefined : etcdSnapshotsOf(v["etcdSnapshots"]);
   return {
     ...base,
     from: clusterKey(c),
@@ -94,29 +127,23 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     workerReplicas: autoscaling?.min ?? c.workers.desired,
     workerAutoscale: autoscaling !== undefined,
     workerMax: autoscaling?.max ?? base.workerMax,
-    bridge: text(network["bridge"]) ?? "",
-    vlan: vlan === undefined ? "" : String(vlan),
-    prefix: quantity(network["prefix"]) ?? base.prefix,
-    gateway: text(network["gateway"]) ?? "",
-    dnsServers: (texts(network["dnsServers"]) ?? []).join(", "),
-    loadBalancer: loadBalancerOf(v["loadBalancer"]).implementation,
+    controlPlaneTimeouts: entryOf(c.controlPlaneTimeouts ?? {}),
+    workerTimeouts: entryOf(c.workerPools[0]?.timeouts ?? {}),
+    ...networkFrom(v["network"], base),
+    loadBalancer: lb.implementation,
+    loadBalancerMode: lb.mode,
+    loadBalancerAsn: lb.asn,
+    loadBalancerPeers: lb.peers,
+    loadBalancerAuthenticated: lb.authenticated,
     storage: text(v["storage"]) ?? "",
     place: placeOf(texts(v["allowedNodes"])),
+    hostOutageGrace: graceOf(v[graceVariable]),
     proxmoxHA: flag(v["proxmoxHA"]) !== false,
     haGroups: flag(record(v["ccm"])["haGroups"]) !== false,
     controlPlaneMachine: machineOf(v["controlPlaneMachine"], base.controlPlaneMachine),
     workerMachine: machineOf(v["workerMachine"], base.workerMachine),
-    cni: text(v["cni"]) ?? "",
-    headlamp: flag(headlamp["enabled"]) === true,
-    headlampView: text(headlamp["access"]) === "view",
-    monitoring: flag(record(v["monitoring"])["enabled"]) === true,
-    logs: logsOf(v["logs"]),
-    podSecurity: podSecurityOf(v["podSecurity"]),
-    cis: flag(v["cis"]) === true,
-    istio: flag(record(v["istio"])["enabled"]) === true,
-    rancherRegister: flag(record(v["rancher"])["register"]) !== false,
-    oidc: oidcProviders(v["oidc"]),
-    etcdSnapshots: etcd?.enabled ?? base.etcdSnapshots,
-    etcdFields: etcd === undefined ? base.etcdFields : etcdFieldsOf(etcd),
+    workerNodes: nodesOf(v["workerNodes"]),
+    nodeCustomisation: nodeCustomisationOf(v["nodeCustomisation"]),
+    ...featuresOf(v, base),
   };
 }

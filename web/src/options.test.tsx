@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { applyStaged, fakeServer } from "./fake-server";
+import { cisHint } from "./PodSecurity";
 
 const cluster = {
   namespace: "clusters",
@@ -26,7 +27,28 @@ const cluster = {
   machines: [],
 };
 
+async function cisDialog(
+  check: unknown,
+  shown: object = cluster,
+): Promise<{ calls: ReturnType<typeof fakeServer>; dialog: HTMLElement; user: ReturnType<typeof userEvent.setup> }> {
+  window.history.replaceState(null, "", "/clusters/clusters/web/options");
+  const calls = fakeServer({
+    "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+    "GET /api/clusters/clusters/web": { body: shown },
+    "GET /api/clusters/clusters/web/pod-security-check": { body: check },
+    "PATCH /api/clusters/clusters/web": { body: shown },
+  });
+  const user = userEvent.setup({ delay: null });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Edit CIS hardening" }));
+  return { calls, dialog: screen.getByRole("dialog", { name: "Edit CIS hardening" }), user };
+}
+
 describe("a cluster's options", () => {
+  it("tells the wizard's CIS choice can be switched on later and never off", () => {
+    expect(cisHint).toBe("Can be switched on later, not off");
+  });
+
   it("save only a change", async () => {
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
     const calls = fakeServer({
@@ -117,7 +139,6 @@ describe("a cluster's options", () => {
 
     const row = await screen.findByRole("row", { name: /CIS hardening/u });
     expect(row).toHaveTextContent("On");
-    expect(within(row).queryByRole("button")).not.toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Pod security/u })).toHaveTextContent("Restricted, Kyverno baseline");
     await user.click(screen.getByRole("button", { name: "Edit pod security" }));
     const dialog = screen.getByRole("dialog", { name: "Edit pod security" });
@@ -131,6 +152,64 @@ describe("a cluster's options", () => {
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { podSecurity: { admission: "restricted", kyverno: "restricted" } },
     });
+  });
+
+  it("switch CIS hardening on after listing the pods it would refuse", async () => {
+    const refused = Array.from({ length: 12 }, (_, i) => ({
+      namespace: "apps",
+      name: `pod-${i}`,
+      reasons: "privileged containers; host namespaces",
+    }));
+    const { calls, dialog, user } = await cisDialog({ checked: 40, truncated: false, refused });
+    const box = within(dialog).getByLabelText("CIS hardening");
+    expect(box).not.toBeChecked();
+    expect(box).toBeEnabled();
+    expect(
+      within(dialog).getByText(
+        /Switching this on replaces every node, one at a time, and enforces the restricted level/u,
+      ),
+    ).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Switch on" })).toBeDisabled();
+    await expect(within(dialog).findByText("40 pods checked")).resolves.toBeVisible();
+    const items = within(dialog).getAllByRole("listitem");
+    expect(items).toHaveLength(10);
+    expect(items[0]).toHaveTextContent("apps/pod-0privileged containers; host namespaces");
+    expect(within(dialog).getByText("and 2 more")).toBeVisible();
+    await user.click(box);
+    await user.click(within(dialog).getByRole("button", { name: "Switch on" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { cis: true },
+    });
+  });
+
+  it("say when no running pod would be refused", async () => {
+    const { dialog } = await cisDialog({ checked: 12, truncated: true, refused: [] });
+    await expect(within(dialog).findByText("No running pod would be refused.")).resolves.toBeVisible();
+    expect(within(dialog).getByText("12 pods checked, more exist")).toBeVisible();
+    expect(within(dialog).queryByRole("listitem")).not.toBeInTheDocument();
+  });
+
+  it("say why no pod was checked", async () => {
+    const { dialog } = await cisDialog({
+      checked: 0,
+      truncated: false,
+      refused: [],
+      skipped: "The cluster is not reachable",
+    });
+    await expect(within(dialog).findByText("The cluster is not reachable")).resolves.toBeVisible();
+    expect(within(dialog).queryByText("No running pod would be refused.")).not.toBeInTheDocument();
+  });
+
+  it("hold CIS hardening on, explaining that it stays", async () => {
+    const { dialog } = await cisDialog({}, { ...cluster, variables: { ...cluster.variables, cis: true } });
+    const box = within(dialog).getByLabelText("CIS hardening");
+    expect(box).toBeChecked();
+    expect(box).toBeDisabled();
+    expect(box).toHaveAccessibleDescription(/Cannot be switched off/u);
+    expect(within(dialog).getByRole("button", { name: "Switch on" })).toBeDisabled();
+    expect(within(dialog).queryByText(/Checking pods/u)).not.toBeInTheDocument();
   });
 
   it("switch the load balancer, keeping its addresses while it is off", async () => {
@@ -200,6 +279,108 @@ describe("a cluster's options", () => {
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { loadBalancer: { enabled: false, implementation: "kube-vip", addresses: ["10.0.0.100-10.0.0.120"] } },
+    });
+  });
+
+  it("switch the load balancer to BGP and back", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const balanced = {
+      ...cluster,
+      variables: {
+        ...cluster.variables,
+        loadBalancer: { enabled: true, implementation: "metallb", addresses: ["10.0.0.100-10.0.0.120"] },
+      },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: balanced },
+      "PATCH /api/clusters/clusters/web": { body: balanced },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await screen.findByRole("row", { name: /Load balancer/u });
+    await user.click(screen.getByRole("button", { name: "Edit the load balancer" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit load balancer" });
+    const save = within(dialog).getByRole("button", { name: "Save" });
+    expect(within(dialog).queryByLabelText("Routers")).not.toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText("Announce with"), "bgp");
+    // A problem shows only once its field has been touched, and Save waits for it to go.
+    expect(within(dialog).getByLabelText("Routers")).not.toHaveAccessibleDescription(/Enter at least one router/u);
+    expect(save).toBeDisabled();
+    const asn = within(dialog).getByLabelText("Cluster AS number");
+    await user.type(asn, "0");
+    expect(asn).toHaveAccessibleDescription(/Enter a number from 1 to 4294967295/u);
+    await user.clear(asn);
+    await user.type(asn, "65001");
+    const routers = within(dialog).getByLabelText("Routers");
+    await user.type(routers, "10.0.0.1");
+    expect(routers).toHaveAccessibleDescription(/Each line needs an IPv4 address and an AS number/u);
+    await user.type(routers, " 64512");
+    const addresses = within(dialog).getByLabelText("Load-balancer addresses");
+    await user.clear(addresses);
+    await user.type(addresses, "198.51.100.0/28");
+    expect(addresses).not.toHaveAccessibleDescription(/network/u);
+    await user.click(save);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: {
+        loadBalancer: {
+          enabled: true,
+          implementation: "metallb",
+          addresses: ["198.51.100.0/28"],
+          mode: "bgp",
+          bgp: { asn: 65_001, peers: [{ address: "10.0.0.1", asn: 64_512 }] },
+        },
+      },
+    });
+  });
+
+  it("sign the BGP sessions with a password stored as the cluster's credential", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const routed = {
+      ...cluster,
+      variables: {
+        ...cluster.variables,
+        loadBalancer: {
+          enabled: true,
+          implementation: "metallb",
+          addresses: ["198.51.100.0/28"],
+          mode: "bgp",
+          bgp: { asn: 65_001, peers: [{ address: "10.0.0.1", asn: 64_512 }] },
+        },
+      },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: routed },
+      "GET /api/clusters/clusters/web/credentials/bgp": { body: { purpose: "bgp", set: false, canChange: true } },
+      "PUT /api/clusters/clusters/web/credentials/bgp": { body: { purpose: "bgp", set: true, canChange: true } },
+      "PATCH /api/clusters/clusters/web": { body: routed },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await screen.findByRole("row", { name: /Load balancer/u });
+    await user.click(screen.getByRole("button", { name: "Edit the load balancer" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit load balancer" });
+    expect(within(dialog).queryByRole("group", { name: "BGP password" })).not.toBeInTheDocument();
+    await user.click(within(dialog).getByLabelText("Use a BGP password"));
+    await expect(within(dialog).findByRole("group", { name: "BGP password" })).resolves.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: {
+        loadBalancer: {
+          enabled: true,
+          implementation: "metallb",
+          addresses: ["198.51.100.0/28"],
+          mode: "bgp",
+          bgp: { asn: 65_001, peers: [{ address: "10.0.0.1", asn: 64_512 }], authenticated: true },
+        },
+      },
     });
   });
 

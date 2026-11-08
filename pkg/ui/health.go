@@ -340,6 +340,8 @@ func (s *Server) clusterHealth(w http.ResponseWriter, r *http.Request, u user) {
 	v := shared
 	v.Nodes.Items = slices.Clone(shared.Nodes.Items)
 	v.VMs = s.addVMs(r.Context(), u, c, access.path, v.Nodes.Items)
+	v.Attention = slices.Clone(shared.Attention)
+	s.addNodeClocks(r.Context(), u, &v)
 	v.Logs = u.namespaces.has(c.Namespace) && access.held.Has(privKubeconfig) && v.Workload == ""
 	writeJSON(w, http.StatusOK, v)
 }
@@ -364,7 +366,7 @@ func assemble(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now tim
 	v := healthView{
 		Read:         now,
 		Workload:     wl.why(),
-		Nodes:        nodesSection(m, wl, now, &a),
+		Nodes:        nodesSection(c, m, wl, now, &a),
 		Pods:         podsSection(wl, now, &a),
 		Volumes:      volumesSection(wl, now, &a),
 		Addons:       addonsSection(c, m, &a),
@@ -382,6 +384,7 @@ func assemble(c *clusterv1.Cluster, m *managementRead, wl *workloadRead, now tim
 		a = append(a, backupsAttention(wl.veleroSchedule, wl.veleroBackups, now)...)
 	}
 	watchAttention(c, &a)
+	etcdAttention(c, &a)
 	pausedAttention(c, now, &a)
 	v.Attention = a.sorted()
 	v.Verdict = verdict(c, wl.unreachable(), v.Attention)
@@ -415,17 +418,15 @@ func (s *Server) addVMs(ctx context.Context, u user, c *clusterv1.Cluster, poolP
 		s.Log.ErrorContext(ctx, "listing a cluster's VMs", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		return "Proxmox VE did not answer."
 	}
-	byName := make(map[string]*pve.Member, len(members))
-	for i := range members {
-		byName[members[i].Name] = &members[i]
-	}
+	vms := s.newVMSet(ctx, u.kube, c, members)
 	sem := make(chan struct{}, vmLoadAsks)
 	var wg sync.WaitGroup
 	for i := range nodes {
-		m, ok := byName[nodes[i].vmName]
-		if !ok || nodes[i].vmName == "" {
+		found, ok := vms.of(nodes[i].vmName)
+		if !ok {
 			continue
 		}
+		m := &found
 		vm := &vmView{ID: m.VMID, Node: m.Node, Status: m.Status, CPU: m.CPU, Cores: m.Cores, Memory: m.Memory, MaxMem: m.MaxMem, Uptime: m.Uptime}
 		nodes[i].VM = vm
 		if m.Status != "running" {

@@ -23,6 +23,12 @@ type Builder struct {
 	Client  *proxmox.Client
 	Sources *Sources
 	Node    string
+	// Candidates, when set, are the nodes a build may run on. Create uses the first that is online and
+	// whose CPU runs the template's node OS, and sets Node to it.
+	Candidates []string
+	// SiteCache, when set, keeps each template's site between Inventory calls, so a repeated call
+	// reads no template configuration.
+	SiteCache *SiteCache
 	// ImportStorage is a file storage with the `import` content type, where images are downloaded.
 	ImportStorage string
 	// Storage holds the templates' disks. On a Proxmox VE cluster it should be shared, so clones can
@@ -42,6 +48,9 @@ type Builder struct {
 	// build of the template's line, so that a new build does not change what its clones run on, and
 	// DefaultCPUType for a line without one.
 	CPUType string
+	// Proxy is what the bake's guests download through. Nil goes direct, and the bake's
+	// cloud-config is then the same as it is without this field.
+	Proxy *GuestProxy
 
 	// selectableSettle and selectablePoll pace waitSelectable. Zero means selectableSettle and
 	// pve.PollLongest.
@@ -49,6 +58,8 @@ type Builder struct {
 	selectablePoll   time.Duration
 	// execRetry paces waitForExec. Zero means defaultExecRetry.
 	execRetry time.Duration
+	// isoChosen is the ISO storage the pre-flight found a bake can write to, when ISOStorage is empty.
+	isoChosen string
 }
 
 // Network is a static address for a VM being baked. Without it the VM asks DHCP.
@@ -112,6 +123,9 @@ func (b *Builder) Find(ctx context.Context, t *Template) (*proxmox.ClusterResour
 			continue
 		}
 		c, err := b.config(ctx, r)
+		// A candidate on a down node is not skipped: Create would take the template for missing,
+		// build a second one with the same tags, and Cluster API could not choose between the two
+		// once the node is back.
 		if err != nil {
 			return nil, err
 		}
@@ -136,43 +150,134 @@ func (b *Builder) List(ctx context.Context) ([]*proxmox.ClusterResource, error) 
 	return inv.Templates, err
 }
 
+// Facts returns what the builds in the builder's pool recorded of themselves, by VM ID.
+func (b *Builder) Facts(ctx context.Context) (map[uint64]BuildFacts, error) {
+	inv, err := b.Inventory(ctx)
+	return inv.Facts, err
+}
+
 // Inventory is what the builder's pool holds of Kubehenge's templates.
 type Inventory struct {
 	// Templates are sorted by name.
 	Templates []*proxmox.ClusterResource
 	// Storages are those the templates have disks on, sorted.
 	Storages []string
+	// Down are the Kubehenge VMs of the pool whose node is down. They are left out of Templates
+	// and Storages, since nothing can be read from them. They may be builds not yet templates.
+	Down []*proxmox.ClusterResource
+	// Sites say, for each of Templates in the same order, where its disks are and which CPU type it
+	// carries: a clone runs on a node only if the disks are reachable from it.
+	Sites []Site
+	// Facts are what the builds recorded of themselves, by VM ID. A template without any, such as
+	// one made before builds recorded them, has no entry.
+	Facts map[uint64]BuildFacts
 }
 
-// Inventory lists the templates as List does, with the storages their disks are on.
+// Site is where one template's disks are.
+type Site struct {
+	// Storages are the storages of the template's disks, sorted.
+	Storages []string
+	// CPU is the template's QEMU CPU type setting, empty for Proxmox VE's default.
+	CPU string
+}
+
+// NodeDownError is a VM that cannot be read because its node is down.
+type NodeDownError struct {
+	VMID int
+	// Name is empty where the resource view has none for a VM on a down node.
+	Name string
+	Node string
+}
+
+func (e *NodeDownError) Error() string {
+	return fmt.Sprintf("%s is on node %s, which is down", e.What(), e.Node)
+}
+
+// What names the VM: its name, or its VM ID where the name is unknown.
+func (e *NodeDownError) What() string {
+	if e.Name != "" {
+		return e.Name
+	}
+	return fmt.Sprintf("VM %d", e.VMID)
+}
+
+// Inventory lists the templates as List does, with the storages their disks are on. A VM on a down
+// node is reported in Down and does not fail the listing.
 func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 	resources, err := b.vms(ctx)
 	if err != nil {
 		return Inventory{}, err
 	}
-	var inv Inventory
-	for _, r := range resources {
-		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
+	l, err := b.readTemplates(ctx, resources)
+	if err != nil {
+		return Inventory{}, err
+	}
+	unreachable := b.unreachableNodes(ctx, l.cached)
+	for _, t := range l.cached {
+		if unreachable[t.resource.Node] {
+			l.down = append(l.down, t.resource)
 			continue
 		}
-		c, err := b.config(ctx, r)
-		if err != nil {
-			return Inventory{}, err
+		out := *t.resource
+		out.Name, out.Template = t.name, 1
+		l.found = append(l.found, placedTemplate{&out, t.site, t.facts})
+	}
+	return inventoryFrom(l.found, l.down), nil
+}
+
+// inventoryFrom is the inventory of the templates found, sorted by name, and those on down nodes.
+func inventoryFrom(found []placedTemplate, down []*proxmox.ClusterResource) Inventory {
+	slices.SortFunc(found, func(x, y placedTemplate) int { return strings.Compare(x.resource.Name, y.resource.Name) })
+	inv := Inventory{Down: down, Facts: map[uint64]BuildFacts{}}
+	for _, p := range found {
+		inv.Templates = append(inv.Templates, p.resource)
+		inv.Sites = append(inv.Sites, p.site)
+		if p.facts != nil {
+			inv.Facts[p.resource.VMID] = *p.facts
 		}
-		if !bool(c.Template) {
-			continue
-		}
-		inv.Templates = append(inv.Templates, confirmed(r, c))
-		disks := slices.Collect(maps.Values(c.MergeDisks()))
-		for _, disk := range append(disks, c.EFIDisk0, c.TPMState0) {
-			if s := diskStorage(disk); s != "" && !slices.Contains(inv.Storages, s) {
+		for _, s := range p.site.Storages {
+			if !slices.Contains(inv.Storages, s) {
 				inv.Storages = append(inv.Storages, s)
 			}
 		}
 	}
-	slices.SortFunc(inv.Templates, func(x, y *proxmox.ClusterResource) int { return strings.Compare(x.Name, y.Name) })
 	slices.Sort(inv.Storages)
-	return inv, nil
+	return inv
+}
+
+// placedTemplate is a template of the listing with where its disks are and its build facts.
+type placedTemplate struct {
+	resource *proxmox.ClusterResource
+	site     Site
+	facts    *BuildFacts
+}
+
+// cachedTemplate is a template of the listing whose name, site and build facts the SiteCache holds.
+type cachedTemplate struct {
+	cachedSite
+
+	resource *proxmox.ClusterResource
+}
+
+// listing is what a read of the templates finds: those read, those on down nodes, and those whose
+// site the SiteCache holds, not yet known to be reachable.
+type listing struct {
+	found  []placedTemplate
+	down   []*proxmox.ClusterResource
+	cached []cachedTemplate
+}
+
+// siteOf reads where a template's disks are from its configuration.
+func siteOf(c *proxmox.VirtualMachineConfig) Site {
+	site := Site{CPU: c.CPU}
+	disks := slices.Collect(maps.Values(c.MergeDisks()))
+	for _, disk := range append(disks, c.EFIDisk0, c.TPMState0) {
+		if s := diskStorage(disk); s != "" && !slices.Contains(site.Storages, s) {
+			site.Storages = append(site.Storages, s)
+		}
+	}
+	slices.Sort(site.Storages)
+	return site
 }
 
 // diskStorage is the storage of a disk as a VM's configuration names it, storage:volume followed by
@@ -220,8 +325,14 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	case !errors.Is(err, ErrNoTemplate):
 		return 0, err
 	}
+	if err = b.pickNode(ctx, t); err != nil {
+		return 0, err
+	}
 	cpuType, recipe, err := b.prepare(ctx, t)
 	if err != nil {
+		return 0, err
+	}
+	if err = b.checkBuild(ctx, t, recipe); err != nil {
 		return 0, err
 	}
 	image, err := b.Sources.Resolve(ctx, t.Image)
@@ -279,14 +390,24 @@ type Built struct {
 	At       time.Time
 }
 
-// Builds lists the builds of line in the builder's pool, newest first.
+// Builds lists the builds of line in the builder's pool, newest first. A VM of the line on a down
+// node fails it: its build may be the newest, and a build made meanwhile would take its place.
 func (b *Builder) Builds(ctx context.Context, line *Template) ([]Built, error) {
-	list, err := b.List(ctx)
+	inv, err := b.Inventory(ctx)
 	if err != nil {
 		return nil, err
 	}
+	for _, r := range inv.Down {
+		if slices.Equal(LineOf(ParseTags(r.Tags)), line.Tags) {
+			id, idErr := vmID(r)
+			if idErr != nil {
+				return nil, idErr
+			}
+			return nil, &NodeDownError{VMID: id, Name: r.Name, Node: r.Node}
+		}
+	}
 	var out []Built
-	for _, r := range list {
+	for _, r := range inv.Templates {
 		tags := ParseTags(r.Tags)
 		at, built := BuildOf(tags)
 		if built && slices.Equal(LineOf(tags), line.Tags) {
@@ -332,6 +453,10 @@ func (b *Builder) RemoveLeftovers(ctx context.Context, line *Template, olderThan
 			continue
 		}
 		c, err := b.config(ctx, r)
+		if _, down := errors.AsType[*NodeDownError](err); down {
+			b.logf("VM %d on node %s is down; leaving it alone", r.VMID, r.Node)
+			continue
+		}
 		if err != nil {
 			return removed, err
 		}
@@ -376,6 +501,82 @@ func (b *Builder) DeleteBuild(ctx context.Context, r *proxmox.ClusterResource) e
 	return waitTask(ctx, task, err, longTaskTimeout)
 }
 
+// readTemplates reads the site of each of Kubehenge's templates in the pool. A template whose site
+// the SiteCache holds is returned in cached unread, and one on a down node in down.
+func (b *Builder) readTemplates(ctx context.Context, resources proxmox.ClusterResources) (listing, error) {
+	var l listing
+	seen := map[int]bool{}
+	for _, r := range resources {
+		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
+			continue
+		}
+		id, err := vmID(r)
+		if err != nil {
+			return listing{}, err
+		}
+		seen[id] = true
+		// A cached site skips the configuration read, which is where a down node shows, so the
+		// resource view's word that the node is down goes first.
+		if e, ok := b.SiteCache.get(id); ok && r.Status != pve.StatusUnknown {
+			l.cached = append(l.cached, cachedTemplate{e, r})
+			continue
+		}
+		p, err := b.readSite(ctx, id, r)
+		if _, isDown := errors.AsType[*NodeDownError](err); isDown {
+			l.down = append(l.down, r)
+			continue
+		}
+		if err != nil {
+			return listing{}, err
+		}
+		if p != nil {
+			l.found = append(l.found, *p)
+		}
+	}
+	b.SiteCache.keepOnly(seen)
+	return l, nil
+}
+
+// readSite reads a VM's configuration and caches the site and build facts of a template. It returns
+// nil for a VM that is no template.
+func (b *Builder) readSite(ctx context.Context, id int, r *proxmox.ClusterResource) (*placedTemplate, error) {
+	c, err := b.config(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+	if !bool(c.Template) {
+		return nil, nil //nolint:nilnil // a VM that is no template has no site to report
+	}
+	e := cachedSite{name: c.Name, site: siteOf(c)}
+	if facts, ok := ParseBuildFacts(c.Description); ok {
+		e.facts = &facts
+	}
+	b.SiteCache.put(id, e)
+	return &placedTemplate{confirmed(r, c), e.site, e.facts}, nil
+}
+
+// unreachableNodes are the nodes of the cached templates that pveproxy cannot reach. The resource
+// view can still show such a node online, and a cached template's configuration is not read, so
+// one status read of a template per node is what notices it. Any other failure of that read keeps
+// the templates listed, as the configuration read would have been skipped anyway.
+func (b *Builder) unreachableNodes(ctx context.Context, cached []cachedTemplate) map[string]bool {
+	unreachable := map[string]bool{}
+	asked := map[string]bool{}
+	for _, t := range cached {
+		node := t.resource.Node
+		if asked[node] {
+			continue
+		}
+		asked[node] = true
+		var status map[string]any
+		err := b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/status/current", node, t.resource.VMID), &status)
+		if pve.NodeUnreachable(err) {
+			unreachable[node] = true
+		}
+	}
+	return unreachable
+}
+
 // inPool tells whether a VM is in the builder's pool, any VM when it has none. The management
 // cluster's Proxmox VE provider may clone only from its template pool, so a template elsewhere with
 // the same tags neither stands in for one there nor competes with it.
@@ -410,13 +611,23 @@ func confirmed(r *proxmox.ClusterResource, c *proxmox.VirtualMachineConfig) *pro
 
 // config reads a listed VM's configuration, which Proxmox VE keeps current. A VM removed or moved
 // since the listing has an empty one: no name, and no template.
+//
+// A VM whose node is down has no configuration to read, and gives a *NodeDownError. The resource
+// view can say so (status unknown), or only pveproxy does, with a 595 on a node that went down
+// after the view was made.
 func (b *Builder) config(ctx context.Context, r *proxmox.ClusterResource) (*proxmox.VirtualMachineConfig, error) {
 	id, err := vmID(r)
 	if err != nil {
 		return nil, err
 	}
+	if r.Status == pve.StatusUnknown {
+		return nil, &NodeDownError{VMID: id, Name: r.Name, Node: r.Node}
+	}
 	var c proxmox.VirtualMachineConfig
 	err = b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", r.Node, id), &c)
+	if pve.NodeUnreachable(err) {
+		return nil, &NodeDownError{VMID: id, Name: r.Name, Node: r.Node}
+	}
 	if err != nil {
 		// Proxmox VE puts this in the status line of its answer for a missing configuration, and
 		// the status line is all go-proxmox keeps of an error response.
@@ -434,17 +645,21 @@ func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.Vi
 	if err := markBuilding(ctx, vm); err != nil {
 		return err
 	}
+	options := []proxmox.VirtualMachineOption{
+		{Name: "tags", Value: strings.Join(t.Tags, ";")},
+		{Name: "cores", Value: templateCores},
+		{Name: "memory", Value: templateMemoryMB},
+		bootFrom(templateDisk),
+	}
 	if recipe != nil {
-		if err := b.bake(ctx, node, vm, recipe); err != nil {
+		facts, err := b.bake(ctx, node, vm, recipe)
+		if err != nil {
 			return fmt.Errorf("baking %s: %w", t.Name, err)
 		}
+		b.logf("%s installed kernel %s and packages %s", t.Name, facts.Kernel, facts.Packages)
+		options = append(options, proxmox.VirtualMachineOption{Name: "description", Value: facts.Description(templateDescription)})
 	}
-	task, err := vm.Config(ctx,
-		proxmox.VirtualMachineOption{Name: "tags", Value: strings.Join(t.Tags, ";")},
-		proxmox.VirtualMachineOption{Name: "cores", Value: templateCores},
-		proxmox.VirtualMachineOption{Name: "memory", Value: templateMemoryMB},
-		bootFrom(templateDisk),
-	)
+	task, err := vm.Config(ctx, options...)
 	err = waitTask(ctx, task, err, configTimeout)
 	if err != nil {
 		return err
@@ -498,6 +713,10 @@ func (b *Builder) checkNotInProgress(ctx context.Context, t *Template) error {
 			continue
 		}
 		c, err := b.config(ctx, r)
+		if _, down := errors.AsType[*NodeDownError](err); down {
+			b.logf("VM %d on node %s is down; it cannot be checked for a build in progress", r.VMID, r.Node)
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -635,14 +854,16 @@ func (b *Builder) recipe(ctx context.Context, bake *Bake) (*Recipe, error) {
 		return nil, err
 	}
 	keys := map[string]string{}
-	for _, k := range f.Keys(r, *bake) {
+	for _, k := range f.Keys(r, bake) {
 		armoured, kerr := b.Sources.RepositoryKey(ctx, k)
 		if kerr != nil {
 			return nil, kerr
 		}
 		keys[k.Name] = armoured
 	}
-	recipe, err := f.Recipe(r, *bake, keys)
+	withProxy := *bake
+	withProxy.Proxy = b.Proxy
+	recipe, err := f.Recipe(r, &withProxy, keys)
 	if err != nil {
 		return nil, fmt.Errorf("the bake of %s %s: %w", f.Title(), r.Name, err)
 	}
@@ -756,7 +977,7 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 	}
 	options := []proxmox.VirtualMachineOption{
 		{Name: "name", Value: t.Name},
-		{Name: "description", Value: "Kubehenge template, made by `kubehenge template`; Cluster API selects it by its tags."},
+		{Name: "description", Value: templateDescription},
 		{Name: "ostype", Value: "l26"},
 		{Name: "machine", Value: "q35"},
 		{Name: "cpu", Value: cpuType},
@@ -812,54 +1033,76 @@ func bootFrom(disk string) proxmox.VirtualMachineOption {
 	return proxmox.VirtualMachineOption{Name: "boot", Value: "order=" + disk}
 }
 
+// templateDescription is the fixed text of every template's description.
+const templateDescription = "Kubehenge template, made by `kubehenge template`; Cluster API selects it by its tags."
+
 // bake carries out the recipe: the first boot, a reboot into what it installed if the recipe asks,
 // in image mode a boot of the node image on its own disk, then the clean-up that leaves a first
-// boot for every clone.
-func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, recipe *Recipe) error {
+// boot for every clone. It returns what the node installed, read before the clean-up.
+func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, recipe *Recipe) (BuildFacts, error) {
 	isoStorage, err := b.isoStorage(ctx, node)
 	if err != nil {
-		return err
+		return BuildFacts{}, err
 	}
 	defer b.removeSeed(context.WithoutCancel(ctx), node, vm, isoStorage)
-	if err = growDisk(ctx, vm, recipe); err != nil {
+	if err = b.install(ctx, node, vm, isoStorage, recipe); err != nil {
+		return BuildFacts{}, err
+	}
+	facts, err := b.readFacts(ctx, vm)
+	if err != nil {
+		return BuildFacts{}, err
+	}
+	for _, step := range recipe.Cleanup {
+		if err := b.exec(ctx, vm, step, longTaskTimeout); err != nil {
+			return BuildFacts{}, err
+		}
+	}
+	return facts, detach(ctx, vm)
+}
+
+// install runs the recipe's boots and checks, up to a node that is ready for its clean-up.
+func (b *Builder) install(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, isoStorage string, recipe *Recipe) error {
+	if err := growDisk(ctx, vm, recipe); err != nil {
 		return err
 	}
-	if err = b.boot(ctx, node, vm, isoStorage, "bake", recipe.UserData); err != nil {
+	if err := b.boot(ctx, node, vm, isoStorage, "bake", recipe.UserData); err != nil {
 		return err
 	}
 	b.logf("VM %d is building the node; waiting for its guest agent", vm.VMID)
-	if err = b.waitAndCheck(ctx, vm, recipe.Checks, recipe.Log); err != nil {
+	if err := b.waitAndCheck(ctx, vm, recipe.Checks, recipe.Log); err != nil {
 		return err
 	}
 	if recipe.Reboot {
 		b.logf("VM %d boots what it installed", vm.VMID)
-		if err = restart(ctx, vm); err != nil {
+		if err := restart(ctx, vm); err != nil {
 			return err
 		}
-		if err = b.waitAndCheck(ctx, vm, recipe.RebootChecks, recipe.Log); err != nil {
+		if err := b.waitAndCheck(ctx, vm, recipe.RebootChecks, recipe.Log); err != nil {
 			return err
 		}
 	}
 	if recipe.Image != nil {
 		b.logf("VM %d boots the node image it installed", vm.VMID)
-		if err = b.bootNodeImage(ctx, node, vm, isoStorage, recipe.Image); err != nil {
+		if err := b.bootNodeImage(ctx, node, vm, isoStorage, recipe.Image); err != nil {
 			return err
 		}
-		if err = b.waitAndCheck(ctx, vm, recipe.Image.Checks, ""); err != nil {
+		if err := b.waitAndCheck(ctx, vm, recipe.Image.Checks, ""); err != nil {
 			return err
 		}
 	}
 	if recipe.BootLog {
-		if err = b.checkBootLog(ctx, vm); err != nil {
-			return err
-		}
+		return b.checkBootLog(ctx, vm)
 	}
-	for _, step := range recipe.Cleanup {
-		if err := b.exec(ctx, vm, step, longTaskTimeout); err != nil {
-			return err
-		}
+	return nil
+}
+
+// readFacts reads the kernel the node booted and a hash of its packages.
+func (b *Builder) readFacts(ctx context.Context, vm *proxmox.VirtualMachine) (BuildFacts, error) {
+	out, err := b.output(ctx, vm, []string{"sh", "-c", factsCommand})
+	if err != nil {
+		return BuildFacts{}, err
 	}
-	return detach(ctx, vm)
+	return parseFactsOutput(out)
 }
 
 // growDisk gives the disk the bake runs on the room it needs: in image mode the builder's, whose
@@ -940,7 +1183,7 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 		return err
 	}
 	for _, check := range checks {
-		err := b.exec(ctx, vm, check, bakeTimeout)
+		err := b.runCheck(ctx, vm, check, log)
 		if err == nil {
 			continue
 		}
@@ -960,6 +1203,98 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 		return err
 	}
 	return nil
+}
+
+// A bake that shows no work for bakeStall has hung, as a package manager waiting on nothing does,
+// and would otherwise hold its build until bakeTimeout. Work is a new line in its log, a MiB
+// received, 16 MiB written, or half a CPU busy at a reading, whatever the VM's CPU count, as one
+// thread of a long step keeps one CPU busy. A mirror at dnf's least rate (build.sh) still sends
+// 60 MB in that time.
+const (
+	bakeStall         = 10 * time.Minute
+	bakeStallReceived = 1 << 20
+	bakeStallWritten  = 16 << 20
+	bakeStallCores    = 0.5
+)
+
+// bakeWatch is how often a running bake's work is read.
+const bakeWatch = time.Minute
+
+// bakeActivity is what shows a bake at work: its log's size, and the bytes its VM received and
+// wrote and the CPUs it kept busy, as Proxmox VE counts them.
+type bakeActivity struct {
+	log      string
+	received uint64
+	written  uint64
+	cores    float64
+}
+
+// busySince tells whether a shows work since earlier. A counter that went back, as after a
+// restart, counts as work.
+func (a bakeActivity) busySince(earlier bakeActivity) bool {
+	return a.log != earlier.log || a.received-earlier.received >= bakeStallReceived ||
+		a.written-earlier.written >= bakeStallWritten || a.cores >= bakeStallCores
+}
+
+func (b *Builder) activity(ctx context.Context, vm *proxmox.VirtualMachine, log string) (bakeActivity, error) {
+	size, err := b.output(ctx, vm, []string{"stat", "-c", "%s", log})
+	if err != nil {
+		return bakeActivity{}, err
+	}
+	var status struct {
+		NetIn     uint64 `json:"netin"`
+		DiskWrite uint64 `json:"diskwrite"`
+		// CPU is the share of all CPUs in use, so CPU times CPUs is the CPUs kept busy.
+		CPU  float64 `json:"cpu"`
+		CPUs int     `json:"cpus"`
+	}
+	if err := b.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/status/current", vm.Node, vm.VMID), &status); err != nil {
+		return bakeActivity{}, fmt.Errorf("reading the status of VM %d: %w", vm.VMID, err)
+	}
+	cores := status.CPU * float64(max(status.CPUs, 1))
+	return bakeActivity{log: size, received: status.NetIn, written: status.DiskWrite, cores: cores}, nil
+}
+
+// runCheck runs a check of a bake, watched for a stall when the bake keeps a log.
+func (b *Builder) runCheck(ctx context.Context, vm *proxmox.VirtualMachine, check []string, log string) error {
+	if log == "" {
+		return b.exec(ctx, vm, check, bakeTimeout)
+	}
+	return b.execWatched(ctx, vm, check, log)
+}
+
+// execWatched runs a bake's check as exec does, and ends it once the bake has shown no work for
+// bakeStall.
+func (b *Builder) execWatched(ctx context.Context, vm *proxmox.VirtualMachine, command []string, log string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.exec(ctx, vm, command, bakeTimeout) }()
+	tick := time.NewTicker(bakeWatch)
+	defer tick.Stop()
+	var last bakeActivity
+	read := false
+	since := time.Now()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-tick.C:
+		}
+		now, err := b.activity(ctx, vm, log)
+		switch {
+		case err != nil:
+			// A reading that failed shows nothing either way, and bakeTimeout still holds.
+			continue
+		case !read || now.busySince(last):
+			last, read, since = now, true, time.Now()
+		case time.Since(since) >= bakeStall:
+			// The check, cancelled, ends on its own, into done's room.
+			cancel()
+			return fmt.Errorf("running %q: no work for %s: no new line in %s, under 1 MiB received and 16 MiB written, CPUs idle",
+				strings.Join(command, " "), bakeStall, log)
+		}
+	}
 }
 
 // waitForExec waits until the guest agent runs commands. A family's own cloud image answers pings
@@ -1038,6 +1373,9 @@ func (b *Builder) output(ctx context.Context, vm *proxmox.VirtualMachine, comman
 func (b *Builder) isoStorage(ctx context.Context, node *proxmox.Node) (string, error) {
 	if b.ISOStorage != "" {
 		return b.ISOStorage, nil
+	}
+	if b.isoChosen != "" {
+		return b.isoChosen, nil
 	}
 	s, err := node.StorageISO(ctx)
 	if err != nil {

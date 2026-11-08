@@ -16,7 +16,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
+
+// volumeOwnerTags are the tags of a cluster's volume owner VM.
+const volumeOwnerTags = "kubehenge;volumes"
 
 // Settings are the Proxmox VE objects every cluster's share, created with the management cluster.
 type Settings struct {
@@ -62,8 +66,13 @@ type Proxmox struct {
 	// runs.
 	mu     sync.Mutex
 	region string
-	// cpuLevels are the online nodes' x86-64 levels as read.
-	cpuLevels map[string]int
+	// seen are the online nodes as read at the look they came online.
+	seen map[string]seenNode
+	// siteCache keeps where each template's disks are, so a look at the templates reads one
+	// configuration per new template.
+	siteCache templates.SiteCache
+	// skipped are the online nodes the last OnlineNodes could not read.
+	skipped []string
 	// newHolders are the holder VMs created lately, by pool, which Proxmox VE may not list yet.
 	newHolders map[string][]holderVM
 }
@@ -80,6 +89,12 @@ type Access struct {
 // more. held is what an earlier call returned, as far as it was kept. record keeps a chosen VMID
 // before the VM is created, so that a failure after creating it never leads to a second one.
 func (p *Proxmox) Ensure(ctx context.Context, n Names, access Access, held Credentials, record func(Credentials) error) (Credentials, error) {
+	if held.VolumeOwner == 0 {
+		// The volume owner VM is the first VM Kubehenge creates for the cluster, with these tags.
+		if err := templates.CheckTags(ctx, p.Client, strings.Split(volumeOwnerTags, ";")); err != nil {
+			return held, fmt.Errorf("creating the volume owner VM: %w", err)
+		}
+	}
 	members, err := p.ensureAccess(ctx, n, access)
 	if err != nil {
 		return held, err
@@ -99,11 +114,9 @@ func (p *Proxmox) Ensure(ctx context.Context, n Names, access Access, held Crede
 
 // Remove deletes the cluster's objects. The cluster's own VMs must be gone first: the pool is
 // removed only when empty, and the volume owner and the holder VMs take every volume they own with
-// them. held is what was recorded for the cluster, as far as it still exists.
-func (p *Proxmox) Remove(ctx context.Context, n Names, held Credentials) error {
-	if err := p.removeVolumeHolders(ctx, n); err != nil {
-		return err
-	}
+// them. held is what was recorded for the cluster, as far as it still exists. storage is the
+// cluster's storage variable, empty when it has none.
+func (p *Proxmox) Remove(ctx context.Context, n Names, held Credentials, storage string) error {
 	members, found, err := p.poolMembers(ctx, n.Pool)
 	if err != nil {
 		return err
@@ -112,8 +125,16 @@ func (p *Proxmox) Remove(ctx context.Context, n Names, held Credentials) error {
 	if err != nil {
 		return err
 	}
+	// Read before the holders go: their configuration names storages that the owner's may not.
+	used, err := p.usedStorages(ctx, n, storage, owners)
+	if err != nil {
+		return err
+	}
+	if err = p.removeVolumeHolders(ctx, n); err != nil {
+		return err
+	}
 	for vmid, created := range owners {
-		if err := p.removeVolumeOwner(ctx, vmid, created); err != nil {
+		if err := p.removeVolumeOwner(ctx, vmid, created, used); err != nil {
 			return err
 		}
 	}
@@ -141,6 +162,17 @@ func (p *Proxmox) MoveVolumeOwner(ctx context.Context, vmid int, from, to string
 		return fmt.Errorf("migrating: %w", err)
 	}
 	return nil
+}
+
+// Protect turns on the protection flag of a VM. Proxmox VE then refuses to destroy the VM, or to
+// delete a disk of it. Setting and clearing the flag need VM.Config.Options on the VM.
+func (p *Proxmox) Protect(ctx context.Context, node string, vmid int) error {
+	return p.setProtection(ctx, node, vmid, 1)
+}
+
+// Unprotect turns the protection flag of a VM off.
+func (p *Proxmox) Unprotect(ctx context.Context, node string, vmid int) error {
+	return p.setProtection(ctx, node, vmid, 0)
 }
 
 // ensureAccess creates the cluster's pool, with the members it has, and its user with rights on it
@@ -183,12 +215,19 @@ func (p *Proxmox) volumeOwners(ctx context.Context, n Names, held Credentials, m
 }
 
 // removeVolumeOwner destroys a volume owner VM with every volume it owns.
-func (p *Proxmox) removeVolumeOwner(ctx context.Context, vmid int, created string) error {
-	if err := p.removeLocalVolumes(ctx, vmid, created); err != nil {
-		return err
-	}
+func (p *Proxmox) removeVolumeOwner(ctx context.Context, vmid int, created string, used []string) error {
+	// Protection also blocks deleting the unused disks that removing the local volumes goes through.
 	node, err := locate(ctx, p.Client, vmid, created)
 	if err != nil {
+		return err
+	}
+	if err = p.Unprotect(ctx, node, vmid); err != nil {
+		return err
+	}
+	if err = p.removeLocalVolumes(ctx, vmid, created, used); err != nil {
+		return err
+	}
+	if node, err = locate(ctx, p.Client, vmid, created); err != nil {
 		return err
 	}
 	var upid string
@@ -216,49 +255,165 @@ const (
 type pveNode struct {
 	Node   string `json:"node"`
 	Status string `json:"status"`
+	// Mem and MaxMem are the memory in use and the total, in bytes, of an online node.
+	Mem    int64 `json:"mem"`
+	MaxMem int64 `json:"maxmem"`
+	// Uptime is the node's uptime in seconds as of its last report, so it moves with every report.
+	Uptime int64 `json:"uptime"`
 }
 
 // removeLocalVolumes deletes the owner VM's volumes on node-local storages. Destroying the VM
 // deletes those on shared storage and on its own node, but not those on other nodes.
-func (p *Proxmox) removeLocalVolumes(ctx context.Context, vmid int, created string) error {
+//
+// Only the storages the cluster used (used) are looked at, and on each only the nodes where it is
+// defined, enabled and active. An offline node blocks only when it carries one of them, because
+// its volumes are then deleted once it is online. A shared storage is the same on every node, so
+// it is listed on one.
+func (p *Proxmox) removeLocalVolumes(ctx context.Context, vmid int, created string, used []string) error {
+	if len(used) == 0 {
+		return nil
+	}
 	all, err := storages(ctx, p.Client)
 	if err != nil {
 		return err
 	}
-	var local []storageConfig
+	var wanted []storageConfig
 	for _, s := range all {
-		if s.Shared == 0 && slices.Contains(strings.Split(s.Content, ","), "images") {
-			local = append(local, s)
+		if slices.Contains(used, s.Storage) && slices.Contains(strings.Split(s.Content, ","), "images") {
+			wanted = append(wanted, s)
 		}
 	}
-	if len(local) == 0 {
+	if len(wanted) == 0 {
 		return nil
 	}
 	var nodes []pveNode
-	if err := p.Client.Get(ctx, "/nodes", &nodes); err != nil {
+	if err = p.Client.Get(ctx, "/nodes", &nodes); err != nil {
 		return fmt.Errorf("listing nodes: %w", err)
 	}
-	owner := &ownerVM{pve: p.Client, mover: p, vmid: vmid, created: created, discardUnused: true}
-	for _, node := range nodes {
-		for _, s := range local {
-			if s.Nodes != "" && !slices.Contains(strings.Split(s.Nodes, ","), node.Node) {
-				continue
-			}
-			if err := p.removeVolumesOn(ctx, owner, node, s.Storage); err != nil {
-				return err
-			}
+	slices.SortFunc(nodes, func(a, b pveNode) int { return strings.Compare(a.Node, b.Node) })
+	sweep := &volumeSweep{
+		p: p, nodes: nodes, states: map[string]map[string]nodeStorage{},
+		owner: &ownerVM{pve: p.Client, mover: p, vmid: vmid, created: created, discardUnused: true, unprotected: true},
+	}
+	for _, s := range wanted {
+		if err = sweep.storage(ctx, s); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
+// volumeSweep deletes an owner VM's volumes storage by storage, asking each node for its storages
+// once.
+type volumeSweep struct {
+	p      *Proxmox
+	owner  *ownerVM
+	nodes  []pveNode
+	states map[string]map[string]nodeStorage
+}
+
+// storage deletes the owner's volumes on one storage, node by node.
+func (v *volumeSweep) storage(ctx context.Context, s storageConfig) error {
+	for _, node := range v.nodes {
+		if s.Nodes != "" && !slices.Contains(strings.Split(s.Nodes, ","), node.Node) {
+			continue
+		}
+		// A node that has left the Proxmox VE cluster is no longer listed. One that is listed may come
+		// back with the volumes.
+		if node.Status != nodeOnline {
+			if s.Shared != 0 {
+				continue
+			}
+			return fmt.Errorf("node %s is %s and holds storage %s of this cluster: the volumes of owner VM %d on it are deleted once the node is online", node.Node, node.Status, s.Storage, v.owner.vmid)
+		}
+		usable, err := v.usable(ctx, node.Node, s.Storage)
+		if err != nil {
+			return err
+		}
+		if !usable {
+			continue
+		}
+		if err = v.p.removeVolumesOn(ctx, v.owner, node, s.Storage); err != nil {
+			return err
+		}
+		if s.Shared != 0 {
+			return nil
+		}
+	}
+	return nil
+}
+
+// usable reports whether a node has the storage enabled and active.
+func (v *volumeSweep) usable(ctx context.Context, node, storage string) (bool, error) {
+	if _, read := v.states[node]; !read {
+		states, err := v.p.nodeStorages(ctx, node)
+		if err != nil {
+			return false, err
+		}
+		v.states[node] = states
+	}
+	st := v.states[node][storage]
+	return bool(st.Active) && bool(st.Enabled), nil
+}
+
+// nodeStorage is a storage as /nodes/{node}/storage reports it on one node.
+type nodeStorage struct {
+	Storage string  `json:"storage"`
+	Active  pveFlag `json:"active"`
+	Enabled pveFlag `json:"enabled"`
+}
+
+// nodeStorages are the storages a node reports, by name.
+func (p *Proxmox) nodeStorages(ctx context.Context, node string) (map[string]nodeStorage, error) {
+	var list []nodeStorage
+	if err := p.Client.Get(ctx, "/nodes/"+url.PathEscape(node)+"/storage", &list); err != nil {
+		return nil, fmt.Errorf("listing the storages of node %s: %w", node, err)
+	}
+	byName := make(map[string]nodeStorage, len(list))
+	for _, s := range list {
+		byName[s.Storage] = s
+	}
+	return byName, nil
+}
+
+// usedStorages are the storages the cluster's volumes can be on: its storage variable and those
+// named by the disks of its volume owner and holder VMs.
+func (p *Proxmox) usedStorages(ctx context.Context, n Names, storage string, owners map[int]string) ([]string, error) {
+	used := map[string]bool{}
+	if storage != "" {
+		used[storage] = true
+	}
+	vms := make([]holderVM, 0, len(owners))
+	for vmid, node := range owners {
+		vms = append(vms, holderVM{vmid: vmid, node: node})
+	}
+	holders, err := p.volumeHolders(ctx, n)
+	if err != nil {
+		return nil, err
+	}
+	for _, vm := range append(vms, holders...) {
+		var config map[string]any
+		err = p.Client.Get(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(vm.node), vm.vmid), &config)
+		if isMissing(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading VM %d: %w", vm.vmid, err)
+		}
+		for k, v := range config {
+			if !isDiskKey(k) {
+				continue
+			}
+			if storage, _, ok := strings.Cut(fmt.Sprint(v), ":"); ok && storage != "" {
+				used[storage] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(used)), nil
+}
+
 // removeVolumesOn deletes the owner VM's volumes on one node's storage.
 func (p *Proxmox) removeVolumesOn(ctx context.Context, owner *ownerVM, node pveNode, storage string) error {
-	// A node that has left the Proxmox VE cluster is no longer listed. One that is listed may come
-	// back with the volumes.
-	if node.Status != nodeOnline {
-		return fmt.Errorf("node %s is %s; the volumes of owner VM %d on its storage %s are deleted once it is online", node.Node, node.Status, owner.vmid, storage)
-	}
 	var content []struct {
 		VolID string `json:"volid"`
 	}
@@ -284,29 +439,53 @@ type poolMember struct {
 
 // poolMembers lists a pool's VMs, and whether the pool exists.
 func (p *Proxmox) poolMembers(ctx context.Context, pool string) ([]poolMember, bool, error) {
-	var pools []struct {
-		Members []poolMember `json:"members"`
-	}
+	info, err := p.poolDetails(ctx, pool)
+	return info.Members, info.Found, err
+}
+
+// poolInfo is a pool as Proxmox VE lists it.
+type poolInfo struct {
+	Comment string       `json:"comment"`
+	Members []poolMember `json:"members"`
+	// Found is false for a pool that does not exist.
+	Found bool `json:"-"`
+}
+
+// poolDetails reads a pool's VMs and its comment.
+func (p *Proxmox) poolDetails(ctx context.Context, pool string) (poolInfo, error) {
+	var pools []poolInfo
 	err := p.Client.Get(ctx, "/pools?"+url.Values{"poolid": {pool}}.Encode(), &pools)
 	if isMissing(err) {
-		return nil, false, nil
+		return poolInfo{}, nil
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("reading pool %s: %w", pool, err)
+		return poolInfo{}, fmt.Errorf("reading pool %s: %w", pool, err)
 	}
 	if len(pools) == 0 {
-		return nil, false, nil
+		return poolInfo{}, nil
 	}
-	return pools[0].Members, true, nil
+	pools[0].Found = true
+	return pools[0], nil
 }
+
+// poolComment marks a pool as one Kubehenge made for a cluster.
+const poolComment = "Kubernetes cluster created by Kubehenge"
 
 // ensurePool creates the cluster's pool if it is missing, and returns its members.
 func (p *Proxmox) ensurePool(ctx context.Context, pool string) ([]poolMember, error) {
-	members, found, err := p.poolMembers(ctx, pool)
-	if err != nil || found {
-		return members, err
+	info, err := p.poolDetails(ctx, pool)
+	if err != nil {
+		return nil, err
 	}
-	err = p.Client.Post(ctx, "/pools", map[string]any{"poolid": pool, "comment": "Kubernetes cluster created by Kubehenge"}, nil)
+	if info.Found {
+		// A pool Kubehenge made carries its comment. Another with VMs in it would make those VMs
+		// part of the cluster, to be deleted with it.
+		if info.Comment != poolComment && slices.ContainsFunc(info.Members, func(m poolMember) bool { return m.Type == qemuType || m.Type == "lxc" }) {
+			return nil, fmt.Errorf("pool %s already exists with %d guest(s) that Kubehenge did not create. Use another cluster name or move the guests out of the pool", pool, len(info.Members))
+		}
+		return info.Members, nil
+	}
+	err = p.Client.Post(ctx, "/pools", map[string]any{"poolid": pool, "comment": poolComment}, nil)
 	if err != nil && !isExisting(err) {
 		return nil, fmt.Errorf("creating pool %s: %w", pool, err)
 	}
@@ -554,9 +733,33 @@ func (p *Proxmox) createVolumeOwner(ctx context.Context, n Names, c Credentials,
 }
 
 type ownerConfig struct {
-	Name        string `json:"name"`
-	Tags        string `json:"tags"`
-	Description string `json:"description"`
+	Name        string  `json:"name"`
+	Tags        string  `json:"tags"`
+	Description string  `json:"description"`
+	Protection  pveFlag `json:"protection"`
+}
+
+// pveFlag is a flag as Proxmox VE's configuration shows it: 1, "1" or true when on.
+type pveFlag bool
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (f *pveFlag) UnmarshalJSON(data []byte) error {
+	switch strings.Trim(string(data), `"`) {
+	case "1", "true":
+		*f = true
+	default:
+		*f = false
+	}
+	return nil
+}
+
+// setProtection writes the protection flag of a VM. A VM that is gone is not an error.
+func (p *Proxmox) setProtection(ctx context.Context, node string, vmid, value int) error {
+	err := p.Client.Put(ctx, fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(node), vmid), map[string]any{"protection": value}, nil)
+	if err != nil && !isMissing(err) {
+		return fmt.Errorf("setting protection=%d on VM %d: %w", value, vmid, err)
+	}
+	return nil
 }
 
 // isVolumeOwner reports whether VMID vmid is this cluster's volume owner, with the node it is on
@@ -618,11 +821,14 @@ type ownerFound struct {
 // lands in Proxmox VE's task log.
 func (p *Proxmox) describeVolumeOwner(ctx context.Context, node string, vmid int, n Names, current ownerConfig) error {
 	config := map[string]any{}
-	if tags := "kubehenge;volumes"; current.Tags != tags {
+	if tags := volumeOwnerTags; current.Tags != tags {
 		config["tags"] = tags
 	}
-	if description := "Owns the persistent volumes of Kubernetes cluster " + n.Pool + ". Never started; deleting it deletes them."; current.Description != description {
+	if description := "Holds the persistent volumes of Kubernetes cluster " + n.Pool + ". Do not delete this VM: deleting it loses every volume of the cluster. It is never started."; current.Description != description {
 		config["description"] = description
+	}
+	if !current.Protection {
+		config["protection"] = 1
 	}
 	if len(config) == 0 {
 		return nil

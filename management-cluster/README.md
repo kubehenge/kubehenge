@@ -19,7 +19,7 @@ One Terraform/OpenTofu apply creates Kubehenge's management cluster on Proxmox V
 - **A group for the clusters' own users,** allowed to use space on the listed storages and to read the nodes. Each cluster's user, created by the controller, adds rights on its own pool only ([architecture](../docs/architecture.md#each-clusters-own-corner-of-proxmox-ve)).
 - **The Talos disk image,** built by the Talos Image Factory with the QEMU guest agent.
 - **One, three or five VMs,** each a Talos control-plane node, with static addresses and a virtual IP in front of the Kubernetes API.
-  - Their VM IDs are picked at random between 10000 and 99999, away from the lowest free ID. Proxmox VE offers that ID to anything else created at the same moment.
+  - Their VM IDs are picked at random from `vm_id_range`, away from the lowest free ID that Proxmox VE offers to anything else created at the same moment. The default is 10000 up to, not including, 99999, and the appliance sets it from `next-id` ([install settings](../docs/install-settings.md#management-cluster-vm-ids)).
 
 ### Optional users and rights
 
@@ -33,7 +33,7 @@ One Terraform/OpenTofu apply creates Kubehenge's management cluster on Proxmox V
   - It may create, prepare and delete VMs in the template pool and nothing outside it ([install settings](../docs/install-settings.md#what-the-template-builds-may-do)).
   - It may download and upload to the storages it builds with, and so delete any file there. Give it storages of their own with `import_datastore` and `iso_datastore`.
   - It may use its node's network for the download and its bridge.
-  - The chart's CronJob runs `kubehenge template refresh` with it each week. Clusters' nodes move to the new builds in their maintenance windows once they are `soak_hours` old.
+  - The chart's CronJob runs `kubehenge template refresh` with it each week. Clusters' nodes move to the new builds in their upgrade windows once they are `soak_hours` old.
 - **`cluster_sys_audit`**, on by default, adds a group holding `Sys.Audit` on `/`, unpropagated.
   - The controller adds a cluster's user to it for its nodes' HA group labels, unless the cluster switches them off. The controller's token holds `User.Modify` on the group to do so ([clusters](../docs/clusters.md#machines)).
   - The cluster's token can then read the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, the corosync configuration). It sees nothing of its guests, storages or nodes.

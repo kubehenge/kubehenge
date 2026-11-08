@@ -1,0 +1,8 @@
+---
+apiVersion: v2
+name: proxy
+description: >-
+  The Secret that holds a Kubehenge management cluster's HTTP(S) proxy for the Cluster API operator,
+  which runs before any provider exists.
+type: application
+version: 0.1.0

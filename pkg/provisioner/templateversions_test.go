@@ -95,7 +95,7 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	line := "kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultNodeOS.Tag()
+	line := "kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultNodeOS.Tags()[0]
 	if got := builds[line]; len(got) != 2 || !got[0].Before(got[1]) || len(builds) != 7 {
 		t.Errorf("builds recorded %s", raw)
 	}

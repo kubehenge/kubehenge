@@ -156,8 +156,10 @@ resource "proxmox_acl" "clusters_audit" {
 # Kubehenge's controller creates each cluster's pool, user, token, ACL and volume owner VM, and
 # nothing outside the workload pool and the clusters' group. VM.Migrate and VM.Config.Disk move a
 # volume owner VM to the node of a volume on node-local storage and delete the volume through it;
-# VM.Allocate there already lets it destroy the VMs outright. VM.GuestAgent.FileRead reads nodes'
-# boot logs, files only, through the guest agent.
+# VM.Allocate there already lets it destroy the VMs outright. VM.Config.Options renames a VM back to
+# its machine's name when someone renames it, and sets and lifts the owner VM's protection flag,
+# which Proxmox VE requires for deleting a disk of a protected VM or the VM itself.
+# VM.GuestAgent.FileRead reads nodes' boot logs, files only, through the guest agent.
 resource "proxmox_virtual_environment_role" "provisioner_pools" {
   role_id = "${var.cluster_name}-provisioner-pools"
   privileges = concat(
@@ -441,6 +443,7 @@ resource "proxmox_virtual_environment_vm" "node" {
     bridge  = local.bridges[var.bridge].name
     vlan_id = var.vlan_id
     model   = "virtio"
+    mtu     = var.mtu
     # No mac_address: Proxmox VE assigns a unique one, and the provider keeps what the VM has. The
     # Talos link alias selects the NIC by it.
   }

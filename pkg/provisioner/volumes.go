@@ -221,9 +221,12 @@ func parseVolumeHandle(handle string) (volume, error) {
 	return volume{node: parts[1], storage: parts[2], volid: parts[2] + ":" + parts[3], owner: owner}, nil
 }
 
-// Mover moves a volume owner VM between nodes, which a cluster's own token may not.
+// Mover moves a volume owner VM between nodes and turns its protection off and on, which a
+// cluster's own token may not.
 type Mover interface {
 	MoveVolumeOwner(ctx context.Context, vmid int, from, to string) error
+	Protect(ctx context.Context, node string, vmid int) error
+	Unprotect(ctx context.Context, node string, vmid int) error
 }
 
 // ownerVM is a cluster's volume owner VM, reached with the cluster's token while it runs and with
@@ -237,6 +240,8 @@ type ownerVM struct {
 	// discardUnused deletes unused disks before a move instead of refusing it, for when every
 	// volume of the VM goes.
 	discardUnused bool
+	// unprotected is set when the VM's protection is already off, as while it is being removed.
+	unprotected bool
 }
 
 // deleteVolume deletes one of the VM's volumes. Proxmox VE deletes an unused disk on the node its
@@ -258,7 +263,21 @@ func (o *ownerVM) deleteVolume(ctx context.Context, v volume) error {
 			at = v.node
 		}
 	}
-	return deleteThroughOwner(ctx, o.pve, at, o.vmid, v.volid)
+	return o.deleteProtected(ctx, at, v.volid)
+}
+
+// deleteProtected deletes a volume through the VM with its protection lifted, which Proxmox VE
+// requires to delete a disk of a protected VM and which the cluster's token cannot do, and puts
+// the protection back. The controller sets it again on its next look should this fail half-way.
+func (o *ownerVM) deleteProtected(ctx context.Context, node, volid string) error {
+	if o.unprotected || o.mover == nil {
+		return deleteThroughOwner(ctx, o.pve, node, o.vmid, volid)
+	}
+	if err := o.mover.Unprotect(ctx, node, o.vmid); err != nil {
+		return fmt.Errorf("lifting the protection of owner VM %d: %w", o.vmid, err)
+	}
+	deleted := deleteThroughOwner(ctx, o.pve, node, o.vmid, volid)
+	return errors.Join(deleted, o.mover.Protect(ctx, node, o.vmid))
 }
 
 // moveTo moves the VM only while it has no unused disks, which migration would copy to the new

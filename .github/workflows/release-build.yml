@@ -202,6 +202,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" go node uv
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -209,6 +211,7 @@ jobs:
         env:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   # The images, pushed to ghcr.io, and the appliance archive, whose chart runs the controller image
   # by digest, with install.sh and the index to sign.
@@ -231,6 +234,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -241,6 +246,7 @@ jobs:
         id: images
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           KO_DIR: ${{ runner.temp }}/ko
         run: |
           set -eu
@@ -263,6 +269,7 @@ jobs:
         env:
           CONTROLLER: ${{ steps.images.outputs.controller }}
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -eu
           make dist VERSION="$VERSION" CONTROLLER_IMAGE="$CONTROLLER_REPOSITORY@$CONTROLLER"
@@ -350,6 +357,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" go syft
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -399,13 +408,17 @@ jobs:
       CAPMOX: ${{ needs.build.outputs.capmox }}
       HELM_ADDON: ${{ needs.build.outputs.helm-addon }}
     steps:
-      # The one file of the repository this job runs, which installs cosign and checks its digest.
+      # The two files of the repository this job runs, which install cosign and check its digest.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: scripts/tools.sh
+          sparse-checkout: |
+            scripts/tools.sh
+            scripts/fetch.sh
           sparse-checkout-cone-mode: false
       - name: cosign
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" cosign
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

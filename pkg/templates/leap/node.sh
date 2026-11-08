@@ -20,8 +20,16 @@ done
 for repo in "${files}"/repos/*.repo; do
     install -m 0644 "${repo}" "/etc/zypp/repos.d/kubehenge-$(basename "${repo}")"
 done
+# The snapshot began with the running root's /etc, so zypper has the proxy's address from
+# /etc/sysconfig/proxy and the authority as an anchor, but /var and the trust store built from it
+# are the running root's. The authority is trusted here again.
+if [ -f "${files}/proxy/ca.crt" ]; then
+    install -D -m 0644 "${files}/proxy/ca.crt" /etc/pki/trust/anchors/kubehenge-proxy.crt
+    update-ca-certificates
+fi
 
-packages="container-selinux curl gawk tar"
+# chrony, since the image does not promise a time daemon.
+packages="chrony container-selinux curl gawk tar"
 case "${distribution}" in
     kubeadm)
         version=${kubernetes#v}
@@ -58,8 +66,8 @@ install -m 0644 "${files}/node/kubehenge-boot-log.service" "${files}/node/kubehe
 # A clone's first boot, with its new machine ID, applies the presets again, which enable only the
 # services they name.
 mkdir -p /usr/lib/systemd/system-preset
-printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
-systemctl preset qemu-guest-agent kubehenge-boot-log.timer
+printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\nenable chronyd.service\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
+systemctl preset qemu-guest-agent kubehenge-boot-log.timer chronyd
 
 # A node takes its updates as a new build of its template, which its cluster rolls out, and never
 # reboots on its own.
@@ -72,5 +80,10 @@ printf '[Journal]\nStorage=persistent\n' > /usr/lib/systemd/journald.conf.d/50-k
 if [ "${distribution}" = kubeadm ]; then
     sh "${files}/node/kubeadm.sh"
 fi
-# The bake's files came into the snapshot with its /etc.
+# The bake's files came into the snapshot with its /etc, and so did the proxy's address, password
+# and authority, which down.sh takes out of the snapshot that becomes the node's root. The running
+# root's own are taken away by run.sh once the build is over.
+if [ -f "${files}/proxy/down.sh" ]; then
+    sh "${files}/proxy/down.sh"
+fi
 rm -rf "${files}"

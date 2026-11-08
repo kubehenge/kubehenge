@@ -48,6 +48,16 @@ metadata:
     # operator, more with Cilium's agent than Calico's other pods come to. k3s's local path
     # provisioner is off.
     kubehenge.dev/node-cpu: '{"controlPlane":430,"worker":350}'
+    {{- include "kubehenge.addonMemoryRequests" . | nindent 4 }}
+    # The memory, in MiB, a node keeps from the add-ons' requests, counted as node-cpu counts CPU. On
+    # a worker the kernel's 104 of a 2 GiB VM, as Talos's measured, the kubelet's 100 eviction
+    # threshold (its default, LAB, as k3s sets thresholds for disk only), the CNI's agent where one
+    # is chosen (Cilium's 128 with its Envoy's 64), CoreDNS's and the metrics server's 70 each,
+    # Traefik's 64 and the CSI plugin's 64. A control plane without workers keeps back the kernel's
+    # 198 of 4096 MiB, runs all of that and adds the CSI controller's 80, the cloud controller
+    # manager's and kube-vip's 32 each, Cilium's operator's 64, and the 160 by which Calico's agent,
+    # operator, Typha, controllers and API server ask for more than Cilium's.
+    kubehenge.dev/node-memory-requests: '{"controlPlane":1128,"worker":664}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -84,6 +94,8 @@ spec:
       template: {{ "{{ .cluster.name }}-control-plane-{{ .random }}" | quote }}
     healthCheck:
       {{- include "kubehenge.healthCheck" "controlPlane" | nindent 6 }}
+    deletion:
+      {{- include "kubehenge.machineDeletion" . | nindent 6 }}
   workers:
     machineDeployments:
       - class: worker
@@ -101,14 +113,19 @@ spec:
             name: {{ $machineName }}
         healthCheck:
           {{- include "kubehenge.healthCheck" "workers" | nindent 10 }}
+        deletion:
+          {{- include "kubehenge.machineDeletion" . | nindent 10 }}
   variables:
     {{- include "kubehenge.proxmoxVariables" (dict "controlPlaneDiskGiB" 30 "workerDiskGiB" 40 "minDiskGiB" 20 "workerMinCores" 1 "workerMinMemoryMiB" 1024 "clusters" .Values.clusters "sysAudit" (not (empty .Values.proxmox.sysAuditGroup))) | nindent 4 }}
     {{- include "kubehenge.addonVariables" . | nindent 4 }}
     {{- include "kubehenge.upgradeVariables" . | nindent 4 }}
-    {{- include "kubehenge.nodeOSVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeOSVariable" (dict "Files" .Files "noFIPS" "k3s") | nindent 4 }}
     {{- include "kubehenge.autoscalerVariable" . | nindent 4 }}
     {{- include "kubehenge.oidcVariable" . | nindent 4 }}
     {{- include "kubehenge.cisVariable" . | nindent 4 }}
+    {{- include "kubehenge.etcdVariable" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -120,6 +137,8 @@ spec:
           {{- include "kubehenge.cniFixed" . | nindent 10 }}
   patches:
     {{- include "kubehenge.proxmoxPatches" . | nindent 4 }}
+    {{- include "kubehenge.workerNodesPatches" "k3s" | nindent 4 }}
+    {{- include "kubehenge.clockPatches" "k3s" | nindent 4 }}
     - name: k3s-control-plane
       definitions:
         - selector:
@@ -302,6 +321,19 @@ spec:
               valueFrom:
                 template: |
                   {{- include "kubehenge.etcdUploadFile" (dict "path" "/etc/rancher/k3s/config.yaml.d/60-kubehenge-etcd-s3.yaml") | nindent 18 }}
+    - name: k3s-etcd
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KThreesControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kthreesConfigSpec/files/-
+              valueFrom:
+                template: |
+                  {{- include "kubehenge.etcdFile" (dict "path" "/etc/rancher/k3s/config.yaml.d/50-kubehenge-etcd.yaml") | nindent 18 }}
     - name: k3s-oidc
       enabledIf: {{ include "kubehenge.oidcEnabled" . }}
       definitions:
@@ -341,6 +373,9 @@ spec:
               value: {{ . }}
             {{- end }}
         {{- end }}
+    {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "k3s") | nindent 4 }}
+    # Last, so that Kubehenge's own settings come first.
+    {{- include "kubehenge.nodeCustomisationPatches" "k3s" | nindent 4 }}
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
 kind: ProxmoxClusterTemplate
@@ -365,6 +400,7 @@ spec:
 
 {{- define "kubehenge.k3sAgentConfig" -}}
 preK3sCommands:
+  - {{ include "kubehenge.clockCommand" . }}
   - sysctl --system
 agentConfig:
   kubeletArgs:
@@ -389,6 +425,7 @@ template:
       {{- include "kubehenge.k3sAgentConfig" (dict "controlPlane" true) | nindent 6 }}
       files:
         {{- include "kubehenge.sysctlFile" . | nindent 8 }}
+        {{- include "kubehenge.clockFile" . | nindent 8 }}
         {{- include "kubehenge.removedServerFile" (dict "distribution" "k3s") | nindent 8 }}
         {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/k3s/audit-policy.yaml") | nindent 8 }}
         # The k3s provider has no setting for secrets encryption; k3s keeps the key in its
@@ -433,4 +470,5 @@ template:
     {{- include "kubehenge.k3sAgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.clockFile" . | nindent 6 }}
 {{- end -}}

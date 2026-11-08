@@ -1,3 +1,114 @@
+run "no_chart_mirrors_leaves_charts_direct" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "chartMirrors") && !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets), "kubehenge-proxy-addon")
+    error_message = "without chart mirrors the controller is told none and the Add-on Provider for Helm gets no Secret"
+  }
+}
+
+run "chart_mirrors_reach_the_controller_and_the_helm_provider" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      mirrors = {
+        "ghcr.io"            = "oci://registry.example.org/ghcr"
+        "charts.jetstack.io" = "https://charts.example.org/jetstack"
+      }
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).chartMirrors == { "ghcr.io" = "oci://registry.example.org/ghcr", "charts.jetstack.io" = "https://charts.example.org/jetstack" }
+    error_message = "the controller is told every mirror by its repository host"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      length(p.spec.deployment.containers[0].env) == 1 &&
+      p.spec.deployment.containers[0].env[0].name == "SSL_CERT_FILE" &&
+      strcontains(p.spec.patches[1].patch, "\"secretName\": \"kubehenge-proxy-addon\"")
+    )])
+    error_message = "the Add-on Provider for Helm trusts the mirrors' authority from the Secret beside it, with no proxy variables"
+  }
+
+  assert {
+    condition     = strcontains(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data["ca.crt"], "MIIB") && !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data), "NO_PROXY")
+    error_message = "the Secret holds the authority and no proxy setting"
+  }
+}
+
+run "chart_mirror_authority_joins_the_proxy_authority" {
+  command = plan
+
+  variables {
+    proxy = {
+      url       = "https://proxy.example.com"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----"
+    }
+    chart_repositories = {
+      mirrors   = { "ghcr.io" = "oci://registry.example.org/ghcr" }
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIRRORCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition     = strcontains(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data["ca.crt"], "PROXYCA") && strcontains(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data["ca.crt"], "MIRRORCA")
+    error_message = "the Add-on Provider for Helm trusts the proxy's authority and the mirrors' alike"
+  }
+}
+
+run "rejects_a_mirror_that_is_no_address" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      mirrors = { "ghcr.io" = "registry.example.org/ghcr" }
+    }
+  }
+
+  expect_failures = [var.chart_repositories]
+}
+
+run "rejects_a_mirror_of_a_host_no_chart_uses" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      mirrors = { "quay.io" = "oci://registry.example.org/quay" }
+    }
+  }
+
+  expect_failures = [helm_release.kubehenge]
+}
+
+run "rejects_a_mirror_of_the_other_kind" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      mirrors = { "ghcr.io" = "https://charts.example.org/ghcr" }
+    }
+  }
+
+  expect_failures = [helm_release.kubehenge]
+}
+
+run "rejects_a_mirror_authority_without_mirrors" {
+  command = plan
+
+  variables {
+    chart_repositories = {
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    }
+  }
+
+  expect_failures = [var.chart_repositories]
+}
+
 mock_provider "proxmox" {
   mock_resource "proxmox_user_token" {
     defaults = {
@@ -52,6 +163,20 @@ variables {
   workload_bridges       = ["vmbr0", "vmbr1"]
   # A checkout's chart names no controller image; a release's names its own.
   controller_image = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+}
+
+# A mocked provider keeps no computed value (vm_id) between runs, so these tests cannot show that a
+# changed range leaves a VM alone. That holds because the range is provider configuration and
+# vm_id is computed and unset in the module.
+run "vm_id_range_is_accepted" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 1500
+      end   = 2000
+    }
+  }
 }
 
 run "nodes" {
@@ -124,6 +249,58 @@ run "nodes" {
     )
     error_message = "three nodes need three chained Talos node modules, each draining before an upgrade"
   }
+}
+
+run "vm_id_range_refuses_start_at_end" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 2000
+      end   = 2000
+    }
+  }
+
+  expect_failures = [var.vm_id_range]
+}
+
+run "vm_id_range_refuses_ids_below_100" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 99
+      end   = 2000
+    }
+  }
+
+  expect_failures = [var.vm_id_range]
+}
+
+run "vm_id_range_refuses_ids_past_the_last_vm_id" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 1000
+      end   = 1000000001
+    }
+  }
+
+  expect_failures = [var.vm_id_range]
+}
+
+run "vm_id_range_refuses_fractions" {
+  command = plan
+
+  variables {
+    vm_id_range = {
+      start = 1000.5
+      end   = 2000
+    }
+  }
+
+  expect_failures = [var.vm_id_range]
 }
 
 run "cluster_api_token_is_least_privilege" {
@@ -254,6 +431,7 @@ run "controller_and_clusters_are_least_privilege" {
         url          = "https://pve.example.org:8006"
         insecure     = false
         secret       = "kubehenge-proxmox"
+        capmoxSecret = "proxmox-infrastructure-system/capmox-variables"
         clusterGroup = "kubehenge-clusters"
         clusterRole  = "kubehenge-cluster-vms"
         ha           = false
@@ -266,23 +444,24 @@ run "controller_and_clusters_are_least_privilege" {
         sysAuditGroup = "kubehenge-clusters-audit"
       }
       templateRefresh = {
-        enabled       = true
-        weekday       = "Sun"
-        time          = "01:00"
-        timeZone      = "UTC"
-        soakHours     = 24
-        secret        = "kubehenge-template-builder"
-        node          = "pve1"
-        storage       = "local-lvm"
-        importStorage = "local"
-        isoStorage    = "local"
-        pool          = "kubehenge-templates"
-        bridge        = "vmbr0"
-        vlan          = 0
-        address       = ""
-        gateway       = ""
-        dns           = []
-        creatorBuilds = false
+        enabled        = true
+        weekday        = "Sun"
+        time           = "01:00"
+        timeZone       = "UTC"
+        soakHours      = 24
+        secret         = "kubehenge-template-builder"
+        node           = "pve1"
+        storage        = "local-lvm"
+        importStorage  = "local"
+        isoStorage     = "local"
+        pool           = "kubehenge-templates"
+        bridge         = "vmbr0"
+        vlan           = 0
+        address        = ""
+        gateway        = ""
+        dns            = []
+        creatorBuilds  = false
+        kubeadmPatches = true
       }
       clusterOIDC        = []
       backupTargets      = []
@@ -1120,6 +1299,61 @@ run "api_audit_log" {
 
 }
 
+run "mtu" {
+  command = plan
+
+  variables {
+    mtu = 1450
+  }
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].mtu == 1450])
+    error_message = "the management VMs' interface must carry the MTU"
+  }
+
+  assert {
+    condition = anytrue([
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) :
+      try(yamldecode(d).kind == "LinkConfig" && yamldecode(d).name == "lan" && yamldecode(d).mtu == 1450, false)
+    ])
+    error_message = "the node's own link, by its alias, must carry the MTU"
+  }
+}
+
+run "mtu_unset" {
+  command = plan
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].mtu == null])
+    error_message = "without an MTU the interface must keep the bridge's"
+  }
+
+  assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "LinkConfig")
+    error_message = "without an MTU the node's link must not be configured"
+  }
+}
+
+run "mtu_below_ipv6_minimum_is_refused" {
+  command = plan
+
+  variables {
+    mtu = 1279
+  }
+
+  expect_failures = [var.mtu]
+}
+
+run "mtu_above_maximum_is_refused" {
+  command = plan
+
+  variables {
+    mtu = 65521
+  }
+
+  expect_failures = [var.mtu]
+}
+
 run "audit_policy_is_the_workload_clusters" {
   command = plan
 
@@ -1444,6 +1678,143 @@ run "rejects_a_node_twice" {
   expect_failures = [var.proxmox_nodes]
 }
 
+run "no_proxy_leaves_everything_direct" {
+  command = plan
+
+  assert {
+    condition     = length(helm_release.proxy_operator) == 0 && !strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "HTTPS_PROXY") && !strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "TrustedRootsConfig")
+    error_message = "without a proxy the nodes get no proxy environment or trusted root, and there is no proxy release"
+  }
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "proxy") && !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0])), "proxy") && !can(yamldecode(helm_release.cluster_api_operator.values[0]).env)
+    error_message = "without a proxy the controller chart, the providers chart and the operator are told nothing about one"
+  }
+
+  assert {
+    condition     = alltrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : !can(p.spec.deployment.containers[0].env)])
+    error_message = "without a proxy no provider container gets an environment"
+  }
+}
+
+run "proxy_reaches_every_downloader" {
+  command = plan
+
+  variables {
+    proxy = {
+      url       = "http://user:hunter2@proxy.example.com:3128"
+      no_proxy  = "pve.example.org,192.0.2.0/24,10.244.0.0/16"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    }
+  }
+
+  assert {
+    condition = (
+      strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "\"HTTPS_PROXY\": \"http://user:hunter2@proxy.example.com:3128\"") &&
+      strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "\"NO_PROXY\": \"pve.example.org,192.0.2.0/24,10.244.0.0/16\"") &&
+      strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "\"kind\": \"TrustedRootsConfig\"")
+    )
+    error_message = "the Talos nodes get the proxy in their environment and its authority as a trusted root"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).proxy == { secret = "kubehenge-proxy", ca = true }
+    error_message = "the controller chart is told which Secret holds the proxy, and that it has an authority"
+  }
+
+  assert {
+    condition = (
+      [for e in yamldecode(helm_release.cluster_api_operator.values[0]).env.manager : e.name] == ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE"] &&
+      yamldecode(helm_release.cluster_api_operator.values[0]).env.manager[0].valueFrom.secretKeyRef.name == "kubehenge-proxy" &&
+      length(yamldecode(helm_release.cluster_api_operator.values[0]).volumes) == 2 &&
+      length(yamldecode(helm_release.cluster_api_operator.values[0]).volumeMounts.manager) == 2
+    )
+    error_message = "the operator, which fetches every provider's files, takes the proxy from the Secret and mounts the authority beside its webhook certificate"
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.cluster_api_providers.values[0]).proxy == { secret = "kubehenge-proxy", ca = true } &&
+      alltrue([for n in ["kubehenge-proxy", "kubehenge-proxy-addon"] : contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets), n)]) &&
+      anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : p.name == "helm" && p.spec.deployment.containers[0].env[1].valueFrom.secretKeyRef.name == "kubehenge-proxy-addon"])
+    )
+    error_message = "the providers' hook downloads, the controller's namespace and the Add-on Provider for Helm each get the proxy"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      p.spec.deployment.containers[0].env[3].name == "SSL_CERT_FILE" &&
+      p.spec.deployment.containers[0].env[3].value == "/etc/kubehenge/proxy/ca.crt" &&
+      length(p.spec.patches) == 2 &&
+      strcontains(p.spec.patches[1].patch, "\"secretName\": \"kubehenge-proxy-addon\"") &&
+      strcontains(p.spec.patches[1].patch, "\"mountPath\": \"/etc/kubehenge/proxy\"") &&
+      strcontains(p.spec.patches[1].patch, "\"name\": \"proxy-ca\"")
+    )])
+    error_message = "the Add-on Provider for Helm mounts the authority from its Secret and points SSL_CERT_FILE at it"
+  }
+
+  assert {
+    condition = alltrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers :
+    p.name == "helm" || !anytrue([for patch in try(p.spec.patches, []) : strcontains(patch.patch, "proxy-ca")])])
+    error_message = "only the Add-on Provider for Helm downloads on its own, so no other provider mounts the authority"
+  }
+
+  assert {
+    condition = alltrue([
+      for v in [helm_release.cluster_api_providers.values[0], helm_release.cluster_api_operator.values[0], helm_release.kubehenge.values[0], helm_release.proxy_operator[0].values[0]] :
+      !strcontains(v, "hunter2")
+    ])
+    error_message = "the password reaches no Helm values, which the release records and a plan prints"
+  }
+}
+
+run "proxy_without_authority" {
+  command = plan
+
+  variables {
+    proxy = {
+      url = "https://proxy.example.com"
+    }
+  }
+
+  assert {
+    condition     = !strcontains(join("", data.talos_machine_configuration.node[0].config_patches), "TrustedRootsConfig") && yamldecode(helm_release.kubehenge.values[0]).proxy.ca == false && length(yamldecode(helm_release.cluster_api_operator.values[0]).volumes) == 1
+    error_message = "without an authority nothing is trusted or mounted"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" && length(p.spec.patches) == 1 && length(p.spec.deployment.containers[0].env) == 3
+    )])
+    error_message = "without an authority the Add-on Provider for Helm gets no volume and no SSL_CERT_FILE"
+  }
+}
+
+run "rejects_a_proxy_that_is_no_address" {
+  command = plan
+
+  variables {
+    proxy = {
+      url = "proxy.example.com:3128"
+    }
+  }
+
+  expect_failures = [var.proxy]
+}
+
+run "rejects_proxy_exceptions_without_a_proxy" {
+  command = plan
+
+  variables {
+    proxy = {
+      no_proxy = "pve.example.org"
+    }
+  }
+
+  expect_failures = [var.proxy]
+}
+
 run "time_servers_become_time_sync_config" {
   command = apply
 
@@ -1481,6 +1852,55 @@ run "time_servers_refuse_urls" {
   }
 
   expect_failures = [var.time_servers]
+}
+
+run "search_domains_become_resolver_config" {
+  command = apply
+
+  variables {
+    search_domains = ["corp.example", "example.org"]
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if yamldecode(d).kind == "ResolverConfig"
+      ] == [{
+        apiVersion    = "v1alpha1"
+        kind          = "ResolverConfig"
+        searchDomains = { domains = ["corp.example", "example.org"] }
+    }]
+    error_message = "search domains must become one ResolverConfig document, domains in order, without nameservers"
+  }
+}
+
+run "no_search_domains_keep_talos_defaults" {
+  command = apply
+
+  assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "ResolverConfig")
+    error_message = "without search domains the nodes derive theirs from the host name"
+  }
+}
+
+run "search_domains_refuse_bad_names" {
+  command = plan
+
+  variables {
+    search_domains = ["corp example"]
+  }
+
+  expect_failures = [var.search_domains]
+}
+
+run "search_domains_refuse_seven" {
+  command = plan
+
+  variables {
+    search_domains = ["a.example", "b.example", "c.example", "d.example", "e.example", "f.example", "g.example"]
+  }
+
+  expect_failures = [var.search_domains]
 }
 
 run "every_helm_release_that_waits_has_a_long_timeout" {

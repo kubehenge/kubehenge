@@ -48,8 +48,20 @@ type CredentialPurpose struct {
 var credentialPurposes = []CredentialPurpose{
 	{Name: "backup", Keys: []string{"accessKeyID", "secretAccessKey"}, Appliance: true},
 	{Name: "dns01", Keys: []string{"token"}, Appliance: true},
+	// One ACME account's key is no other cluster's, so there is none for every cluster.
+	{Name: eabPurpose, Keys: []string{eabKey}},
+	// The password of a cluster's BGP sessions, the same for every router.
+	{Name: bgpPurpose, Keys: []string{passwordKey}},
 	{Name: "gitops", Keys: []string{"username", "password"}},
 	{Name: "oidc-client", Keys: []string{"clientSecret"}},
+	// What the monitoring add-on sends alerts and samples with. The controller copies each into the
+	// workload cluster's monitoring namespace.
+	{Name: purposeAlertsEmail, Keys: []string{passwordKey}},
+	{Name: purposeAlertsWebhook, Keys: []string{urlKey}, Optional: []string{tokenKey}},
+	{Name: purposeAlertsSlack, Keys: []string{urlKey}},
+	{Name: purposeAlertsTeams, Keys: []string{urlKey}},
+	{Name: purposeRemoteWrite, Keys: []string{secretKey}},
+	{Name: purposeExternalAlertmanager, Keys: []string{secretKey}},
 	// Where the appliance sends what needs a look (pkg/notify).
 	{Name: notify.PurposeWebhook, Keys: []string{urlKey}, Appliance: true, ApplianceOnly: true},
 	{Name: notify.PurposeNtfy, Keys: []string{urlKey}, Optional: []string{"token"}, Appliance: true, ApplianceOnly: true},
@@ -65,7 +77,7 @@ func CredentialPurposes() []CredentialPurpose {
 func CredentialPurposeNamed(name string) (CredentialPurpose, bool) {
 	i := slices.IndexFunc(credentialPurposes, func(p CredentialPurpose) bool { return p.Name == name })
 	if i < 0 {
-		return CredentialPurpose{}, false
+		return logOutputPurpose(name)
 	}
 	return credentialPurposes[i], true
 }
