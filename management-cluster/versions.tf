@@ -196,7 +196,7 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:1e1120cb53110767774678ec453e1b835cfe99bf62d5c79b760ac99280384d69"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:43fb02325db12d0b8bc8689027eadae89b13f1859ffb26ea7405ec2213715273"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and

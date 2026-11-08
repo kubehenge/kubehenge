@@ -597,7 +597,20 @@ diff --git a/internal/service/vmservice/vm.go b/internal/service/vmservice/vm.go
 index 6abf2c4..d5212ae 100644
 --- a/internal/service/vmservice/vm.go
 +++ b/internal/service/vmservice/vm.go
-@@ -387,14 +387,27 @@ func reconcileVirtualMachineConfig(ctx context.Context, machineScope *scope.Mach
+@@ -116,6 +116,12 @@ func ReconcileVM(ctx context.Context, scope *scope.MachineScope) (infrav1.Virtua
+ 		return vm, err
+ 	} // VirtualMachineProvisioned reason is WaitingForClusterAPIMachineAddresses
+
++	// The IPSet follows the cluster from the first start on, not only once the machine is ready: a
++	// VM whose cloud-init does not finish keeps the sources it was cloned with otherwise.
++	if err := ReconcileFirewallSources(ctx, scope); err != nil {
++		return vm, errors.Wrapf(err, "failed to write the firewall sources of VM %s", scope.Name())
++	}
++
+ 	if err := reconcileMachineAddresses(scope); err != nil {
+ 		scope.Logger.V(4).Info("after reconcileMachineAddresses", "machineName", scope.ProxmoxMachine.GetName(), "err", err)
+ 		return vm, err
+@@ -387,14 +393,27 @@ func reconcileVirtualMachineConfig(ctx context.Context, machineScope *scope.Mach
  		}
  	}
 
@@ -633,7 +646,15 @@ diff --git a/internal/service/vmservice/vm_test.go b/internal/service/vmservice/
 index 59e241f..562f0e1 100644
 --- a/internal/service/vmservice/vm_test.go
 +++ b/internal/service/vmservice/vm_test.go
-@@ -804,6 +804,89 @@ func TestReconcileVirtualMachineConfig_ApplyConfig(t *testing.T) {
+@@ -20,6 +20,7 @@ import (
+ 	"context"
+ 	"errors"
+ 	"fmt"
++	"slices"
+ 	"testing"
+
+ 	lutherproxmox "github.com/luthermonson/go-proxmox"
+@@ -804,6 +805,89 @@ func TestReconcileVirtualMachineConfig_ApplyConfig(t *testing.T) {
  	require.EqualValues(t, task.UPID, *machineScope.ProxmoxMachine.Status.TaskRef)
  }
 
@@ -723,6 +744,66 @@ index 59e241f..562f0e1 100644
  func TestReconcileVirtualMachineConfigTags(t *testing.T) {
  	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
 
+@@ -1168,6 +1252,59 @@ func TestReconcileVM_CloudInitRunning(t *testing.T) {
+ 	require.Equal(t, infrav1.VirtualMachineStatePending, result.State)
+ }
+
++// A change of the cluster's firewall sources reaches a VM that has started and is not ready yet,
++// since a VM whose cloud-init never finishes would otherwise keep the IPSet it was cloned with.
++func TestReconcileVM_FirewallSourcesFollowWhileWaitingForCloudInit(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForCloudInitReason)
++	machineScope.SetAnnotation(firewallGroupsAnnotation, "k8s")
++	machineScope.InfraCluster.ProxmoxCluster.SetAnnotations(map[string]string{firewallSourcesAnnotation: "192.0.2.40"})
++	vm := newRunningVM()
++	machineScope.SetVirtualMachineID(int64(vm.VMID))
++	machineScope.ProxmoxMachine.Status.IPAddresses = []infrav1.IPAddressesSpec{{
++		NetName: string(infrav1.DefaultNetworkDevice),
++		IPv4:    []string{"10.10.10.10"},
++	}, {
++		NetName: "default",
++		IPv4:    []string{"10.10.10.10"},
++	}}
++	machineScope.ProxmoxMachine.Status.BootstrapDataProvided = new(true)
++	machineScope.ProxmoxMachine.Status.Initialization.Provisioned = new(true)
++
++	proxmoxClient.EXPECT().GetVM(context.Background(), "node1", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", mock.MatchedBy(func(entries []string) bool {
++		return slices.Contains(entries, "192.0.2.40")
++	})).Return(nil).Once()
++	proxmoxClient.EXPECT().QemuAgentStatus(context.Background(), vm).Return(nil).Once()
++	proxmoxClient.EXPECT().CloudInitStatus(context.Background(), vm).Return(true, nil).Once()
++
++	result, err := ReconcileVM(context.Background(), machineScope)
++	require.NoError(t, err)
++	require.Equal(t, infrav1.VirtualMachineStatePending, result.State)
++}
++
++// An IPSet that cannot be written holds the VM at its state, to be retried.
++func TestReconcileVM_FirewallSourcesFailWhileWaitingForCloudInit(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForCloudInitReason)
++	machineScope.SetAnnotation(firewallGroupsAnnotation, "k8s")
++	vm := newRunningVM()
++	machineScope.SetVirtualMachineID(int64(vm.VMID))
++	machineScope.ProxmoxMachine.Status.IPAddresses = []infrav1.IPAddressesSpec{{
++		NetName: string(infrav1.DefaultNetworkDevice),
++		IPv4:    []string{"10.10.10.10"},
++	}, {
++		NetName: "default",
++		IPv4:    []string{"10.10.10.10"},
++	}}
++	machineScope.ProxmoxMachine.Status.BootstrapDataProvided = new(true)
++	machineScope.ProxmoxMachine.Status.Initialization.Provisioned = new(true)
++
++	proxmoxClient.EXPECT().GetVM(context.Background(), "node1", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", mock.Anything).Return(errors.New("595 no route to host")).Once()
++
++	_, err := ReconcileVM(context.Background(), machineScope)
++	require.ErrorContains(t, err, "failed to write the firewall sources")
++}
++
+ // This test is supposed to test the entire state machine transition.
+ func TestReconcileVM_StateMachine(t *testing.T) {
+ 	machineScope, proxmoxClient, _ := setupReconcilerTest(t)
 diff --git a/pkg/proxmox/client.go b/pkg/proxmox/client.go
 index 00d3530..b955526 100644
 --- a/pkg/proxmox/client.go
