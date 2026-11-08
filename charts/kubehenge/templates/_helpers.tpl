@@ -2447,15 +2447,16 @@ Call with the root context.
           valueFrom:
             template: |
               {{- .Files.Get "files/proxmox-network.tpl" | nindent 14 }}
-# Cluster API copies the template's annotations onto each ProxmoxMachine, where Kubehenge's capmox
-# build reads them (scripts/capmox-patches): capmox has no firewall field, and a field of its own
-# would be pruned by the CRDs of capmox's release. Each VM's firewall accepts everything from the
-# cluster's own addresses ahead of the groups: the node addresses, the control-plane endpoint, the
-# pods (which reach other nodes unencapsulated with Cilium's native routing or Calico's BGP), and the
-# management cluster's nodes. One rule per source keeps every port and protocol a distribution or
-# CNI uses (VXLAN, Geneve, BGP, WireGuard, etcd, the kubelet) open between them without a port list.
-{{- $management := list }}
-{{- range .Values.managementAddresses }}{{ $management = append $management (quote .) }}{{ end }}
+# Cluster API copies the machine template's annotations onto each ProxmoxMachine, where Kubehenge's
+# capmox build reads them (scripts/capmox-patches): capmox has no firewall field, and a field of its
+# own would be pruned by the CRDs of capmox's release. The groups are part of the machine, so a change
+# replaces the nodes. capmox keeps each VM's IPSet, which the firewall accepts everything from ahead
+# of the groups, at the cluster's own addresses: the control-plane endpoint, the node addresses and
+# the pods (which reach other nodes unencapsulated with Cilium's native routing or Calico's BGP). That
+# keeps every port and protocol a distribution or CNI uses (VXLAN, Geneve, BGP, WireGuard, etcd, the
+# kubelet) open between them without a port list. The ProxmoxCluster's annotation adds the management
+# cluster's nodes and the appliance. capmox follows a change of the ProxmoxCluster on the running VMs,
+# so a new address replaces no node.
 - name: proxmox-firewall
   enabledIf: {{ `{{ if .securityGroups }}true{{ end }}` | quote }}
   definitions:
@@ -2473,7 +2474,17 @@ Call with the root context.
             template: |
               annotations:
                 kubehenge.dev/firewall-groups: {{ `{{ join "," .securityGroups | quote }}` }}
-                kubehenge.dev/firewall-sources: {{ printf `{{ $s := list .controlPlaneEndpoint %s }}{{ with .network.addresses }}{{ $s = concat $s . }}{{ end }}{{ with .network.ipv6 }}{{ $s = concat $s .addresses }}{{ end }}{{ with .builtin.cluster.network }}{{ with .pods }}{{ $s = concat $s . }}{{ end }}{{ end }}{{ join "," $s | quote }}` (join " " $management) }}
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+      jsonPatches:
+        - op: add
+          path: /spec/template/metadata
+          value:
+            annotations:
+              kubehenge.dev/firewall-sources: {{ join "," .Values.managementAddresses | quote }}
 - name: proxmox-storage
   definitions:
     - selector:

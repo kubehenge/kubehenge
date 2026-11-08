@@ -1,0 +1,1 @@
+- A new address of the nodes, the management cluster or the appliance reaches the firewall of every running node through its `kubehenge` IPSet. No node is replaced ([clusters.md](clusters.md#firewall)).

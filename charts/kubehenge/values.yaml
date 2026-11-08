@@ -236,7 +236,8 @@ managementEndpoint: ""
 
 # The addresses, without prefix lengths, that the management cluster's nodes and the appliance
 # reach workload clusters from; the management cluster's module sets them. A workload cluster's
-# firewall (the securityGroups variable) accepts them alongside the cluster's own addresses.
+# firewall (the securityGroups variable) accepts them alongside the cluster's own addresses. They
+# reach the nodes through each cluster's ProxmoxCluster, so a change replaces no node.
 managementAddresses: []
 
 # What Kubehenge's controller watches for on its own, and how long it gives each before it says
