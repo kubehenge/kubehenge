@@ -26,16 +26,31 @@ const addressesCheckEvery = 15 * time.Second
 func (a *Appliance) KeepAddresses(ctx context.Context) {
 	t := time.NewTicker(addressesCheckEvery)
 	defer t.Stop()
+	failing := ""
 	for {
-		if err := a.recordAddresses(ctx, nil); err != nil {
-			a.Log.Error("recording the appliance's addresses in the management cluster", "error", err)
-		}
+		failing = a.logAddressesOutcome(failing, a.recordAddresses(ctx, nil))
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
 	}
+}
+
+// logAddressesOutcome logs a failure to record the addresses once, not on every check while the
+// management cluster stays unreachable, and logs the recovery. failing is the error logged last, or
+// empty. It returns the one to pass next time.
+func (a *Appliance) logAddressesOutcome(failing string, err error) string {
+	switch {
+	case err != nil && err.Error() != failing:
+		a.Log.Error("recording the appliance's addresses in the management cluster", "error", err)
+		return err.Error()
+	case err != nil:
+		return failing
+	case failing != "":
+		a.Log.Info("recording the appliance's addresses in the management cluster works again")
+	}
+	return ""
 }
 
 // recordAddresses writes the appliance's addresses into provisioner.ApplianceAddressesName where

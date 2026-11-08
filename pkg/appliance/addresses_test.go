@@ -1,6 +1,7 @@
 package appliance
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"os"
@@ -15,6 +16,27 @@ import (
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
+
+func TestAddressesFailureLoggedOnceUntilItRecovers(t *testing.T) {
+	t.Parallel()
+	var logged strings.Builder
+	a := &Appliance{Log: slog.New(slog.NewTextHandler(&logged, nil))}
+	down := errors.New("connection refused")
+	failing := ""
+	for _, err := range []error{down, down, down, nil, nil, down, errors.New("forbidden"), nil} {
+		failing = a.logAddressesOutcome(failing, err)
+	}
+	lines := strings.Split(strings.TrimSpace(logged.String()), "\n")
+	want := []string{"connection refused", "works again", "connection refused", "forbidden", "works again"}
+	if len(lines) != len(want) {
+		t.Fatalf("logged %d lines, want %d:\n%s", len(lines), len(want), logged.String())
+	}
+	for i, w := range want {
+		if !strings.Contains(lines[i], w) {
+			t.Errorf("line %d = %q, want it to hold %q", i, lines[i], w)
+		}
+	}
+}
 
 func TestSourceAddressesLeaveOutLoopbackAndLinkLocal(t *testing.T) {
 	t.Parallel()
