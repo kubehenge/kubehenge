@@ -20,11 +20,16 @@ import (
 )
 
 // setupPrivileges are what the management-cluster module needs of the user it runs as: it creates
-// pools, users, groups, roles, ACLs, tokens and VMs, and downloads the Talos image. Proxmox VE
-// checks each call again. Asking first saves a half-done run.
+// pools, users, groups, roles, ACLs, tokens and VMs, downloads the Talos image and deletes it on
+// removal. Proxmox VE checks each call again. Asking first saves a half-done run. The list is every
+// privilege a run met a refusal for with a token that held nothing else: a VM's configuration needs
+// the VM.Config.* ones, the image download Sys.AccessNetwork, listing a bridge SDN.Audit, attaching
+// one SDN.Use, reading a pool Pool.Audit and deleting the image Datastore.Allocate.
 var setupPrivileges = []string{
 	"Sys.Modify", "Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate",
-	"VM.Allocate", "Datastore.AllocateSpace", "Datastore.AllocateTemplate",
+	"Pool.Audit", "VM.Allocate", "VM.Audit", "VM.PowerMgmt", "VM.Config.CPU", "VM.Config.Cloudinit", "VM.Config.Disk",
+	"VM.Config.HWType", "VM.Config.Memory", "VM.Config.Network", "VM.Config.Options", "Datastore.Allocate",
+	"Datastore.AllocateSpace", "Datastore.AllocateTemplate", "SDN.Audit", "SDN.Use", "Sys.AccessNetwork",
 }
 
 type setupView struct {

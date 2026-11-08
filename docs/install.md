@@ -390,7 +390,7 @@ For clusters, it offers the same storage and bridge to start with. Administratio
 
 The signed-in user needs these privileges on `/`, which the Administrator role holds:
 
-`Sys.Modify`, `Permissions.Modify`, `User.Modify`, `Group.Allocate`, `Realm.AllocateUser`, `Pool.Allocate`, `VM.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`
+`Sys.Modify`, `Permissions.Modify`, `User.Modify`, `Group.Allocate`, `Realm.AllocateUser`, `Pool.Allocate`, `Pool.Audit`, `VM.Allocate`, `VM.Audit`, `VM.PowerMgmt`, `VM.Config.CPU`, `VM.Config.Cloudinit`, `VM.Config.Disk`, `VM.Config.HWType`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Options`, `Datastore.Allocate`, `Datastore.AllocateSpace`, `Datastore.AllocateTemplate`, `SDN.Audit`, `SDN.Use`, `Sys.AccessNetwork`
 
 Proxmox VE checks the privileges of every call the run makes. Anyone without them sees that Kubehenge is not set up yet.
 

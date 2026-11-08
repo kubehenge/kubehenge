@@ -1098,6 +1098,9 @@ var demoPrivileges = pve.Privileges{
 	"VM.Audit": true, "VM.Allocate": true, "VM.Console": true, "VM.PowerMgmt": true, "Sys.Modify": true, "Sys.Audit": true,
 	"Datastore.AllocateSpace": true, "Datastore.AllocateTemplate": true, "SDN.Use": true, "Permissions.Modify": true,
 	"User.Modify": true, "Group.Allocate": true, "Realm.AllocateUser": true, "Pool.Allocate": true,
+	"Pool.Audit": true, "VM.Config.CPU": true, "VM.Config.Cloudinit": true, "VM.Config.Disk": true, "VM.Config.HWType": true,
+	"VM.Config.Memory": true, "VM.Config.Network": true, "VM.Config.Options": true, "Datastore.Allocate": true,
+	"SDN.Audit": true, "Sys.AccessNetwork": true,
 }
 
 // demoTicket is issued now, not at the demo's time: sessions end by the real clock.
