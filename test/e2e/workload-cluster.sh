@@ -1804,10 +1804,10 @@ if [ "${restores_etcd}" = true ]; then
     snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json | jq -c '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson')
     snapshot_name=$(printf '%s' "${snapshot}" | jq -r .name)
     etcd_prefix=$(target_folder "${name}" etcd)
-    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g')
+    keys=$(s3 "${s3_endpoint}/${bucket}?list-type=2&max-keys=1000&prefix=${etcd_prefix}/" | grep -o '<Key>[^<]*</Key>' | sed 's/<[^>]*>//g' | sort)
     # Each snapshot has a record of its facts and checksum beside it.
     expected_keys=$(printf '%s/%s\n' "${etcd_prefix}" "${snapshot_name}" "${etcd_prefix}" "${snapshot_name}.json" | sort)
-    [ "$(printf '%s\n' "${keys}" | sort)" = "${expected_keys}" ] ||
+    [ "${keys}" = "${expected_keys}" ] ||
         fail "the store's etcd snapshots are not the one taken with its record: ${keys}"
     record_sum=$(s3 "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}.json" | jq -r .sha256)
     s3 -o "${work}/snapshot.db.age" "${s3_endpoint}/${bucket}/${etcd_prefix}/${snapshot_name}"
