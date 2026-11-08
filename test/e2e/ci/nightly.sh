@@ -4,7 +4,7 @@
 #
 #   test/e2e/ci/nightly.sh [day]
 #
-# Every test the merge queue may run (scope.sh --all) and those only the nightly run runs, among them
+# Every test a pull request may run (scope.sh --all) and those only the nightly run runs, among them
 # kubeadm's test on IPv4 and IPv6 (dual-stack). Then every part of each workload distribution's test
 # once more with options (variant.sh): a CNI of its class
 # other than the one its own test runs, a node OS other than the default, and every other night no
@@ -127,7 +127,7 @@ for distribution in kubeadm rke2 k3s talos; do
         rke2 | k3s) name=${name}+github-releases ;;
         *) ;;
     esac
-    # The same options on each of its parts, in the same lanes as the merge queue's: a part that
+    # The same options on each of its parts, in the same lanes as a pull request's: a part that
     # shares one runs the test it shares it with after it, as there.
     for lane in ${lanes}; do
         first=${lane%%,*}

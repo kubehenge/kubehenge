@@ -25,6 +25,7 @@ jobs:
     permissions:
       contents: read # The build reads the tagged source.
       checks: read # Only the gate job uses it, to read the checks the release commit passed.
+      pull-requests: read # Only the gate job uses it, to find the commit's pull request.
       packages: write # Only the build and attest jobs use it, to push the images and signatures.
       id-token: write # Only the attest job uses it, to sign.
       attestations: write # Only the attest job uses it, to store the attestations.

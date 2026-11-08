@@ -2,12 +2,13 @@
 name: e2e image
 
 # What the end-to-end lanes restore instead of building, made on main once its inputs change: a
-# cache saved on main is read by every branch and merge group, so the merge group after the change
-# finds it. Without this, every lane of every run until the nightly run would build it again.
+# cache saved on main is read by every branch and merge group, so the next pull request run after
+# the change finds it. Without this, every lane of every run until the nightly run would build it
+# again.
 # - Proxmox VE's image (test/e2e/pve), under its files' hash. Built in a lane it comes from Proxmox
 #   VE's repository, where one refused connection fails the lane.
 # - Go's and npm's caches, under the hash of go.sum and the frontend's lockfile.
-# - The templates of kubeadm, RKE2 and k3s the merge queue's tests bake, each under a hash of its
+# - The templates of kubeadm, RKE2 and k3s a pull request's tests bake, each under a hash of its
 #   bake's inputs (test/e2e/ci/templates.sh). Only those whose keys the cache lacks are baked.
 on:
   push:
@@ -57,7 +58,7 @@ jobs:
           key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
 
   # Go's and npm's caches of e2e.yml's build job, once go.sum or the frontend's lockfile changes or
-  # the entry was evicted. Saved by the nightly run alone, merge groups found none until then.
+  # the entry was evicted. Saved by the nightly run alone, pull requests found none until then.
   go:
     name: Go's cache
     runs-on: ubuntu-26.04

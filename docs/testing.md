@@ -277,17 +277,18 @@ The sample fleet is in `pkg/ui/demo-fleet.json`. Its ClusterClasses are the char
 
 ## End to end without a Proxmox VE host
 
-CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one lane per machine. A lane is one test, or two short ones run one after the other ([below](#lanes-of-two)). A pull request runs the other tiers and leaves this one to the merge queue.
+CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one lane per machine. A lane is one test, or two short ones run one after the other ([below](#lanes-of-two)). A draft pull request runs only the other tiers. Marking it ready for review starts this one, and each later push reruns it. The `e2e` check stays pending while the pull request is a draft, so auto-merge waits for it.
 
-### What the merge queue runs
+### What a pull request runs
 
-- The queue runs the tests all the changes of a merge group need together (`test/e2e/ci/scope.sh`), on the tree that would land on main. It picks none for documentation alone and all of them for a change it cannot place.
+- A ready pull request runs the tests its changes need (`test/e2e/ci/scope.sh`) on its merge ref. The branch must be up to date with main, so that tree is the one that lands.
+- The script picks none for documentation alone and all of them for a change it cannot place.
 - A path with a rule picks only the tests that run its code. Several paths pick the union.
 - A release pull request changes `Chart.yaml`, which picks every test.
 - The web interface and the appliance's commands pick the appliance test. The interface's Go code adds the k3s machines part.
 - One distribution's ClusterClass picks its own tests and those that install the chart.
 - Every test a rule names must be in the list of `nightly.sh`.
-- The nightly run's five extra tests join a merge group only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
+- The nightly run's five extra tests join a pull request only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
 
 ### The nightly run
 
@@ -310,7 +311,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - The images of capmox and the Add-on Provider are checked against `management-cluster/versions.tf` as in a release.
 - A lane restores its kubeadm, RKE2 and k3s templates from the Actions cache, kept under a hash of each bake's inputs (`test/e2e/ci/templates.sh`).
 - The nightly run bakes every template afresh from the mirrors and keeps those whose inputs changed. Talos's templates are only downloaded.
-- Each push to main builds the image and bakes the templates whose keys the cache lacks (`e2e-image.yml`). The merge group after a change to their inputs finds them.
+- Each push to main builds the image and bakes the templates whose keys the cache lacks (`e2e-image.yml`). The next pull request run after a change to their inputs finds them.
 
 ### Retries and lost runners
 
@@ -446,7 +447,7 @@ The guard names every run whose guests outgrew the memory (below).
 
 #### Lanes of two
 
-The merge queue runs 20 lanes, as many as a run's jobs at once. Three pairs of tests share a lane, the second test after the first (`scope.sh`):
+A pull request runs 20 lanes, as many as a run's jobs at once. Three pairs of tests share a lane, the second test after the first (`scope.sh`):
 
 | Lane | Guests at the peak (MiB) | Time (min) |
 | --- | --- | --- |
@@ -457,7 +458,7 @@ The merge queue runs 20 lanes, as many as a run's jobs at once. Three pairs of t
 - `run.sh` starts the second test only once no workload cluster and no VM of the first is left. A lane's peak is therefore its larger test's, as when each ran alone.
 - The second test keeps the management cluster, its backup targets and the templates the first made. Each test serves the S3 store itself, and the first's store has stopped before the second's starts on the same ports.
 - A failed lane names its failed test in the log, as an error and in the run's summary.
-- A dispatch can name a pair as one test, as in `k3s-etcd,cluster-mesh`. The nightly run gives a pair's first test the night's options and runs the second as in the queue.
+- A dispatch can name a pair as one test, as in `k3s-etcd,cluster-mesh`. The nightly run gives a pair's first test the night's options and runs the second as in a pull request.
 
 ### The guard
 

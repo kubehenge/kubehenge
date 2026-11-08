@@ -304,7 +304,7 @@ lint-actions:
 	$(ZIZMOR) --persona=auditor $(ZIZMOR_FLAGS) .github/workflows/
 
 # What can change without a commit: advisories published for the Go modules and the actions. The
-# release runs this alone, as the merge queue already ran every other check on the commit.
+# release runs this alone, as the pull request already ran every other check on the same tree.
 advisories: web gateway-api
 	$(GOVULNCHECK) ./...
 	$(ZIZMOR) --persona=auditor $(ZIZMOR_FLAGS) .github/workflows/

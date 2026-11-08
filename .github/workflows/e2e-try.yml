@@ -163,9 +163,9 @@ jobs:
           echo "controller image $(cat "$build/controller-digest")"
       # The templates of kubeadm, RKE2 and k3s the test bakes, each kept in the cache under a hash
       # of its bake's inputs (test/e2e/ci/templates.sh). Kept from a nightly run, on main, every
-      # branch and merge group reads them. The nightly run, and a dispatch asked to, bakes every
-      # template afresh from the mirrors and only looks the keys up, keeping a template whose key
-      # the cache lacks.
+      # branch, pull request and merge group reads them. The nightly run, and a dispatch asked to,
+      # bakes every template afresh from the mirrors and only looks the keys up, keeping a template
+      # whose key the cache lacks.
       # Every template is kept under the one path vz/template-1, whatever its slot, as e2e-image.yml
       # bakes it: an entry's version covers its path, and one saved under another path is never
       # found. The second slot's is restored first and moved to vz/template-2.
@@ -195,8 +195,8 @@ jobs:
           path: ${{ runner.temp }}/e2e/vz/template-1
           key: ${{ steps.templates.outputs.key1 }}
           lookup-only: ${{ inputs.fresh }}
-      # Only the nightly run and a dispatch keep templates: a merge group's cache would serve no
-      # other run.
+      # Only the nightly run and a dispatch keep templates: a pull request's or merge group's
+      # cache would serve no other run.
       - name: Templates to keep
         if: >-
           env.E2E_RUN == 'true'
