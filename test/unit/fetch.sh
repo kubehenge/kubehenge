@@ -105,7 +105,7 @@ fresh
 run 1 '' "${tool}" "${root}/out"
 expect_of "the address failing: the API's file" "api tool" cat "${root}/out"
 expect_of "the address failing: one try of the address" 1 calls 'url: https://github.com/'
-expect_of "the address failing: no Authorization header without a token" 0 calls Authorization
+expect_of "the address failing: no Authorization header without a token" 0 calls 'header: Authorization:'
 
 fresh
 run 1 secret "${tool}" "${root}/out"
