@@ -328,6 +328,107 @@ func TestOnlineNodesReportTheMemoryProxmoxVEHasFree(t *testing.T) {
 	}
 }
 
+// returningPVE is a Proxmox VE API with pve1 up throughout and pve2 just back online. Until pve2
+// reports again, /nodes lists it with the uptime and memory it last sent before it went down.
+type returningPVE struct {
+	mu sync.Mutex
+	// listed and own are pve2's free memory in MiB as /nodes lists it and as pve2 reads it itself.
+	// pve1 has pve1Free in both.
+	listed, own, pve1Free int64
+	// uptime is pve2's uptime in its last report.
+	uptime int64
+	// statusReads counts the reads of pve2's own status.
+	statusReads int
+}
+
+func (f *returningPVE) serve(t *testing.T) *Proxmox {
+	t.Helper()
+	const mib, total = int64(1) << 20, int64(16_384)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		var data any = []any{}
+		switch r.URL.Path {
+		case "/api2/json/nodes":
+			data = []map[string]any{
+				{"node": "pve1", "status": "online", "uptime": 5000, "maxmem": total * mib, "mem": (total - f.pve1Free) * mib},
+				{"node": "pve2", "status": "online", "uptime": f.uptime, "maxmem": total * mib, "mem": (total - f.listed) * mib},
+			}
+		case "/api2/json/nodes/pve1/status":
+			data = map[string]any{"cpuinfo": map[string]any{"flags": zen3Flags}, "memory": map[string]any{"total": total * mib, "used": (total - f.pve1Free) * mib}}
+		case "/api2/json/nodes/pve2/status":
+			f.statusReads++
+			data = map[string]any{"cpuinfo": map[string]any{"flags": zen3Flags}, "memory": map[string]any{"total": total * mib, "used": (total - f.own) * mib}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	t.Cleanup(srv.Close)
+	return &Proxmox{Client: proxmox.NewClient(srv.URL + "/api2/json")}
+}
+
+func (f *returningPVE) set(change func(*returningPVE)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	change(f)
+}
+
+func (f *returningPVE) reads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.statusReads
+}
+
+func TestOnlineNodesJudgeANodeBackOnlineByItsOwnMemory(t *testing.T) {
+	t.Parallel()
+	f := &returningPVE{listed: 10_000, own: 3000, pve1Free: 3000, uptime: 700}
+	p := f.serve(t)
+	free := func() int64 {
+		t.Helper()
+		online, err := p.OnlineNodes(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		i := slices.IndexFunc(online, func(n Node) bool { return n.Name == "pve2" })
+		if i < 0 || !online[i].MemoryKnown {
+			t.Fatalf("online = %+v, want pve2 with its memory", online)
+		}
+		return online[i].FreeMiB
+	}
+	if got := free(); got != 3000 {
+		t.Errorf("pve2 back online has %d MiB free, want the 3000 it reports itself, not the 10000 listed from before it left", got)
+	}
+	f.set(func(f *returningPVE) { f.own = 2900 })
+	if got := free(); got != 2900 {
+		t.Errorf("pve2, still listed with its old figures, has %d MiB free, want the 2900 it reports itself", got)
+	}
+	f.set(func(f *returningPVE) { f.uptime, f.listed, f.own = 4, 2800, 1 })
+	reads := f.reads()
+	if got := free(); got != 2800 {
+		t.Errorf("pve2, listed with new figures, has %d MiB free, want the 2800 listed", got)
+	}
+	if f.reads() != reads {
+		t.Error("pve2's status was read again once the list had its new figures")
+	}
+}
+
+func TestPlacerKeepsItsPlacementWhenANodeReturnsListedWithItsOldMemory(t *testing.T) {
+	t.Parallel()
+	// web needs 8192 MiB, and a node joins its placement with 9011 free. pve1, where web runs, has
+	// 8000 free. pve2 left with 10000 free and is back with 8000, the same host memory as pve1.
+	before := "pve1"
+	web := bigWorkers(t, &before)
+	f := &returningPVE{listed: 10_000, own: 8000, pve1Free: 8000, uptime: 700}
+	p, c := placedBy(t, web, f.serve(t))
+	p.placeAll(t.Context())
+	value, cond := lookAt(t, c, web)
+	if value != before {
+		t.Errorf("web records %q, want the placement it had: pve2 has no more room than pve1", value)
+	}
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("%s = %+v, want it true: neither node has room", NodesLackMemoryCondition, cond)
+	}
+}
+
 func TestSitesReadTheBridgesAndTheZonesTheTokenSees(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

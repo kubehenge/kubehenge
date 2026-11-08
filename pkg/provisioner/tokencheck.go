@@ -169,7 +169,8 @@ func (p TokenProbe) Check(ctx context.Context) TokenState {
 		return state
 	}
 	for _, n := range p.Needs {
-		if got[n.Path][n.Privilege] == 0 {
+		// Proxmox VE maps each privilege held to whether it propagates, so a 0 is held too.
+		if _, ok := got[n.Path][n.Privilege]; !ok {
 			state.Missing = append(state.Missing, n)
 		}
 	}

@@ -38,9 +38,11 @@ func (p *pveTokens) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := r.URL.Query().Get("path")
+	// Each privilege maps to whether it propagates. 0, as for a grant that does not propagate, is
+	// held all the same.
 	held := map[string]int{}
 	for _, priv := range grants[path] {
-		held[priv] = 1
+		held[priv] = 0
 	}
 	answer := struct {
 		Data map[string]map[string]int `json:"data"`

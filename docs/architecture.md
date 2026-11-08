@@ -297,7 +297,11 @@ The controller writes the rules with a token of its own, since only `Sys.Console
 
 The HA token amounts to a root shell on every Proxmox VE node, the restore token to one in every cluster's VMs. The controller holds neither.
 
-Each is in a Secret of its own beside the controller (`kubehenge-proxmox-ha`, `kubehenge-proxmox-restore`). Only a Job made from the chart's PodTemplate (`kubehenge-proxmox-ha`, `kubehenge-guest-agent`) mounts it. For each HA write or restore step, the controller leaves the request in the Secret `<template>-input`. It then starts a Job from the template. It reads the result from its pod's termination message and deletes both.
+Each is in a Secret of its own beside the controller (`kubehenge-proxmox-ha`, `kubehenge-proxmox-restore`). Only a Job made from the chart's PodTemplate (`kubehenge-proxmox-ha`, `kubehenge-guest-agent`) mounts it. For each HA write, restore step or token test, the controller leaves the request in the Secret `<template>-input`. It then starts a Job from the template. It reads the result from its pod's termination message and deletes both.
+
+Every Job of a template reads that one Secret. The controller therefore runs a template's requests one at a time.
+
+### What a token Job may do
 
 The Job runs once, for at most its step's time, under a service account without API access. The ValidatingAdmissionPolicy `kubehenge-token-jobs` refuses a Job in the namespace that reaches either Secret by a volume or the environment, unless its pod is exactly its template's.
 

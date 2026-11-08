@@ -34,9 +34,11 @@ func (p *preflightPVE) client(t *testing.T) *proxmox.Client {
 			data = p.guests
 		case "/access/permissions":
 			path := r.URL.Query().Get("path")
+			// Each privilege maps to whether it propagates. 0, as for the storage grants of the
+			// module, which do not propagate, is held all the same.
 			held := map[string]int{}
 			for _, priv := range p.granted[path] {
-				held[priv] = 1
+				held[priv] = 0
 			}
 			data = map[string]any{path: held}
 		default:
@@ -64,7 +66,7 @@ func storageOf(name, content string) map[string]any {
 
 func TestPreflightRefusesStoragesTheBuildCannotUseBeforeDownloading(t *testing.T) {
 	t.Parallel()
-	writable := map[string][]string{"/storage/local": {privAllocateSpace}, "/storage/isos": {privAllocateSpace}}
+	writable := map[string][]string{"/storage/local": {privAllocateTemplate}, "/storage/isos": isoPrivileges}
 	tmpl, err := Plan(&Request{Distribution: RKE2})
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +97,22 @@ func TestPreflightRefusesStoragesTheBuildCannotUseBeforeDownloading(t *testing.T
 			[]map[string]any{storageOf("local", "import,iso"), storageOf("local-lvm", "images")},
 			nil,
 			Builder{},
-			"lacks Datastore.AllocateSpace on /storage/local",
+			"lacks Datastore.AllocateTemplate on /storage/local",
+		},
+		{
+			// AllocateSpace lets a token import from the storage, not download to it.
+			"an import storage the token can only allocate disks on",
+			[]map[string]any{storageOf("local", "import,iso"), storageOf("local-lvm", "images")},
+			map[string][]string{"/storage/local": {"Datastore.AllocateSpace", "Datastore.Audit"}},
+			Builder{},
+			"lacks Datastore.AllocateTemplate on /storage/local",
+		},
+		{
+			"an ISO storage named that the ISO can be written to but not removed from",
+			[]map[string]any{storageOf("local", "import"), storageOf("isos", "iso"), storageOf("local-lvm", "images")},
+			map[string][]string{"/storage/local": {privAllocateTemplate}, "/storage/isos": {privAllocateTemplate}},
+			Builder{ISOStorage: "isos"},
+			"needs Datastore.AllocateTemplate and Datastore.Allocate on /storage/isos",
 		},
 		{
 			"no storage for ISO images",
@@ -116,7 +133,7 @@ func TestPreflightRefusesStoragesTheBuildCannotUseBeforeDownloading(t *testing.T
 			[]map[string]any{storageOf("local", "import"), storageOf("nfs", "iso"), storageOf("local-lvm", "images")},
 			writable,
 			Builder{},
-			"lacks Datastore.AllocateSpace on every storage of node pve1 that takes ISO images (nfs)",
+			"needs Datastore.AllocateTemplate and Datastore.Allocate on a storage of node pve1 that takes ISO images (nfs)",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,7 +154,7 @@ func TestPreflightChoosesTheISOStorageTheTokenCanWrite(t *testing.T) {
 	pve := &preflightPVE{
 		storages: []map[string]any{storageOf("local", "import"), storageOf("nfs", "iso"), storageOf("isos", "iso"), storageOf("local-lvm", "images")},
 		options:  map[string]any{},
-		granted:  map[string][]string{"/storage/local": {privAllocateSpace}, "/storage/isos": {privAllocateSpace}},
+		granted:  map[string][]string{"/storage/local": {privAllocateTemplate}, "/storage/isos": isoPrivileges},
 	}
 	b := &Builder{Client: pve.client(t), Node: "pve1", ImportStorage: "local", Storage: "local-lvm"}
 	tmpl, err := Plan(&Request{Distribution: RKE2})

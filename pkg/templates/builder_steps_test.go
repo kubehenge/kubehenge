@@ -134,7 +134,7 @@ func (h *bakeHost) answer(r *http.Request) (any, string) {
 	case path == "/cluster/options":
 		return map[string]any{}, ""
 	case path == "/access/permissions":
-		granted := map[string]int{privAllocateSpace: 1}
+		granted := map[string]int{privAllocateTemplate: 0, privAllocate: 0}
 		return map[string]any{r.URL.Query().Get("path"): granted}, ""
 	case path == "/nodes/pve1/storage":
 		content := "iso,import"

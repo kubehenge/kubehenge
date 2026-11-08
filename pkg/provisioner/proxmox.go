@@ -66,8 +66,8 @@ type Proxmox struct {
 	// runs.
 	mu     sync.Mutex
 	region string
-	// cpuLevels are the online nodes' x86-64 levels as read.
-	cpuLevels map[string]int
+	// seen are the online nodes as read at the look they came online.
+	seen map[string]seenNode
 	// siteCache keeps where each template's disks are, so a look at the templates reads one
 	// configuration per new template.
 	siteCache templates.SiteCache
@@ -260,6 +260,8 @@ type pveNode struct {
 	// Mem and MaxMem are the memory in use and the total, in bytes, of an online node.
 	Mem    int64 `json:"mem"`
 	MaxMem int64 `json:"maxmem"`
+	// Uptime is the node's uptime in seconds as of its last report, so it moves with every report.
+	Uptime int64 `json:"uptime"`
 }
 
 // removeLocalVolumes deletes the owner VM's volumes on node-local storages. Destroying the VM
