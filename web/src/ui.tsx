@@ -479,7 +479,13 @@ export function Said({ text }: { text: string }): JSX.Element {
     <>
       {parts.map((part, i) => {
         const key = `${i}/${part}`;
-        return i % 2 === 1 ? <code key={key}>{part}</code> : <Fragment key={key}>{part}</Fragment>;
+        return i % 2 === 1 ? (
+          <code key={key} className="said">
+            {part}
+          </code>
+        ) : (
+          <Fragment key={key}>{part}</Fragment>
+        );
       })}
     </>
   );

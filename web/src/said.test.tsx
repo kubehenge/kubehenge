@@ -8,18 +8,20 @@ const shown = (text: string): { html: string; text: string | null } => {
   return { html: container.innerHTML, text: container.textContent };
 };
 
+const code = (text: string): string => `<code class="said">${text}</code>`;
+
 describe("a message the server wrote", () => {
   it("sets one backtick span as code", () => {
-    expect(shown("Run `qm unlock 100` first.").html).toBe("Run <code>qm unlock 100</code> first.");
+    expect(shown("Run `qm unlock 100` first.").html).toBe(`Run ${code("qm unlock 100")} first.`);
   });
 
   it("sets two spans as code and keeps the text between", () => {
-    expect(shown("Use `a` or `b`.").html).toBe("Use <code>a</code> or <code>b</code>.");
+    expect(shown("Use `a` or `b`.").html).toBe(`Use ${code("a")} or ${code("b")}.`);
   });
 
   it("leaves an unpaired backtick as it is", () => {
     expect(shown("It's a `stray one").html).toBe("It's a `stray one");
-    expect(shown("`a` and `b").html).toBe("<code>a</code> and `b");
+    expect(shown("`a` and `b").html).toBe(`${code("a")} and \`b`);
   });
 
   it("shows text without backticks as it is", () => {

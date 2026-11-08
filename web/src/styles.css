@@ -96,6 +96,13 @@ pre,
   font-size: 0.9em;
 }
 
+/* A command moves to the next line whole, so a break never splits it at one of its hyphens, and it
+   wraps inside only when a whole line cannot hold it. */
+code.said {
+  display: inline-block;
+  max-inline-size: 100%;
+}
+
 kbd {
   display: inline-block;
 
