@@ -101,13 +101,7 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 		}
 		node := Node{Name: n.Node, CPULevel: level, Maintenance: maintenance[n.Node]}
 		node.Version, node.Major = p.versions.read(ctx, p.Client, n.Node)
-		total, used := n.MaxMem, n.Mem
-		if live != nil {
-			total, used = live.Total, live.Used
-		}
-		if total > 0 {
-			node.FreeMiB, node.MemoryKnown = max(0, total-used)/bytesPerMiB, true
-		}
+		node.FreeMiB, node.MemoryKnown = freeMiB(n, live)
 		for _, s := range storages {
 			if s.Node == n.Node && s.Status != storageAvailable && !slices.Contains(node.InactiveStorages, s.Storage) {
 				node.InactiveStorages = append(node.InactiveStorages, s.Storage)
@@ -163,6 +157,19 @@ type seenNode struct {
 	// figures it sent for five minutes after it stops sending, so a node back online is listed with
 	// the memory it had before it left until it reports again, which moves its uptime.
 	listedUptime int64
+}
+
+// freeMiB is the node's free memory, from live where the node was read itself, and whether it is
+// known at all.
+func freeMiB(n pveNode, live *pveMemory) (int64, bool) {
+	total, used := n.MaxMem, n.Mem
+	if live != nil {
+		total, used = live.Total, live.Used
+	}
+	if total <= 0 {
+		return 0, false
+	}
+	return max(0, total-used) / bytesPerMiB, true
 }
 
 // nodeFacts reads what the node list does not say of an online node: its CPU's level, once while
