@@ -7,7 +7,7 @@ name: codeql
 # check on every pull request.
 on:
   push:
-    branches: [main, 'batch-*']
+    branches: [main]
   # Every pull request, whatever it targets, so that one stacked on another is checked too.
   pull_request:
   # A query pack that learns a new pattern finds it in code that has not changed since.

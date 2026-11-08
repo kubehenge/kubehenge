@@ -3,9 +3,8 @@ name: ci
 
 on:
   pull_request:
-  # A batch branch gathers work before its one pull request, so every merge into it is checked.
   push:
-    branches: [main, 'batch-*']
+    branches: [main]
 
 permissions:
   contents: read
@@ -21,7 +20,8 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# A draft pull request runs only these fast checks, and e2e.yml waits for it to be ready for review.
+# A draft pull request runs only these fast checks on every push, and e2e.yml waits for it to be
+# ready for review.
 jobs:
   # Lint, unit and integration tiers: Go, the frontend, the OpenTofu module against mocked
   # providers, the Helm charts, the shell scripts, and the chart and controllers against a real API
