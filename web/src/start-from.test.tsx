@@ -5,9 +5,10 @@ import { describe, expect, it } from "vitest";
 import { newAlerting } from "./Alerting";
 import { App } from "./App";
 import { newForm, request, type Form } from "./create-form";
-import { fakeServer, reads } from "./fake-server";
+import { fakeServer, reads, type Route } from "./fake-server";
 import { fromCluster, startDefault, startKeys } from "./start-from";
 import type { Cluster, ClusterClass } from "./types";
+import { quantity, record, text } from "./values";
 
 const object = { type: "object" };
 const rke2: ClusterClass = {
@@ -125,6 +126,50 @@ const chosen: Form = {
 
 const taken = (f: Form): Partial<Form> => Object.fromEntries([...startKeys].map((k) => [k, f[k]]));
 
+// freeOnTheGateway answers as the server does: free addresses on the network the gateway and
+// prefix length give, and none on a /30. It keeps the questions that asked for nodes.
+function freeOnTheGateway(asked: Record<string, unknown>[]): Route {
+  return (body) => {
+    const req = record(body);
+    if ((quantity(req["nodes"]) ?? 0) > 0) {
+      asked.push(req);
+    }
+    const prefix = quantity(req["prefix"]) ?? 16;
+    const lan = (text(req["gateway"]) ?? "10.0.0.1").split(".").slice(0, 3).join(".");
+    if (prefix === 30) {
+      return { body: { network: `${lan}.0/30`, full: true, answering: [] } };
+    }
+    return {
+      body: { network: `${lan}.0/${prefix}`, endpoint: `${lan}.20`, addresses: `${lan}.21-${lan}.23`, answering: [] },
+    };
+  };
+}
+
+// freeOnIPv6 answers on 2001:db8:7::/64 where the IPv6 gateway gives it, else on the bridge's.
+const freeOnIPv6: Route = (body) => {
+  const req = record(body);
+  return text(req["gateway6"]) === "2001:db8:7::1" && quantity(req["prefix6"]) === 64
+    ? {
+        body: {
+          network6: "2001:db8:7::/64",
+          endpoint6: "2001:db8:7::14",
+          addresses6: "2001:db8:7::15-2001:db8:7::17",
+          answering: [],
+        },
+      }
+    : {
+        body: { network6: "2001:db8:1::/64", endpoint6: "2001:db8:1::14", addresses6: "2001:db8:1::15", answering: [] },
+      };
+};
+
+// RKE2's class with a network variable that takes the address families.
+const families: ClusterClass = {
+  ...rke2,
+  variables: rke2.variables.map((v) =>
+    v.name === "network" ? { ...v, schema: { type: "object", properties: { ipFamilies: { type: "array" } } } } : v,
+  ),
+};
+
 describe("a new cluster started from another", () => {
   it("takes all but what each cluster has to itself", () => {
     const existing = { ...web, variables: request(chosen, rke2).variables };
@@ -230,29 +275,12 @@ describe("a new cluster started from another", () => {
         ],
       }),
       "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: ["10.0.0.53"], search: "" } }),
-      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": (body) => {
-        const req = body as { nodes: number; gateway?: string; prefix?: number };
-        if (req.nodes > 0) {
-          asked.push(req);
-        }
-        // The server searches the network the gateway and prefix length give.
-        const lan = (req.gateway ?? "10.0.0.1").split(".").slice(0, 3).join(".");
-        if (req.prefix === 30) {
-          return { body: { network: `${lan}.0/30`, full: true, answering: [] } };
-        }
-        return {
-          body: {
-            network: `${lan}.0/${req.prefix ?? 16}`,
-            endpoint: `${lan}.20`,
-            addresses: `${lan}.21-${lan}.23`,
-            answering: [],
-          },
-        };
-      },
+      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": freeOnTheGateway(asked),
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await waitFor(async () => expect(await screen.findByLabelText("Start from")).toHaveValue("default/web"));
+    const from = await screen.findByLabelText("Start from");
+    await waitFor(() => expect(from).toHaveValue("default/web"));
     await user.type(screen.getByLabelText("Name"), "next");
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5+rke2r1"));
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -287,12 +315,6 @@ describe("a new cluster started from another", () => {
   it("suggests IPv6 addresses on the IPv6 network it took", async () => {
     window.history.replaceState(null, "", "/clusters/new");
     const network = { bridge: "vmbr0", ipFamilies: ["IPv6"], ipv6: { gateway: "2001:db8:7::1", prefix: 64 } };
-    const families: ClusterClass = {
-      ...rke2,
-      variables: rke2.variables.map((v) =>
-        v.name === "network" ? { ...v, schema: { type: "object", properties: { ipFamilies: { type: "array" } } } } : v,
-      ),
-    };
     fakeServer({
       "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
       "GET /api/classes": () => ({ body: [families] }),
@@ -315,30 +337,12 @@ describe("a new cluster started from another", () => {
         ],
       }),
       "GET /api/proxmox/nodes/pve1/dns": () => ({ body: { servers: [], search: "" } }),
-      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": (body) => {
-        const req = body as { gateway6?: string; prefix6?: number };
-        return req.gateway6 === "2001:db8:7::1" && req.prefix6 === 64
-          ? {
-              body: {
-                network6: "2001:db8:7::/64",
-                endpoint6: "2001:db8:7::14",
-                addresses6: "2001:db8:7::15-2001:db8:7::17",
-                answering: [],
-              },
-            }
-          : {
-              body: {
-                network6: "2001:db8:1::/64",
-                endpoint6: "2001:db8:1::14",
-                addresses6: "2001:db8:1::15",
-                answering: [],
-              },
-            };
-      },
+      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": freeOnIPv6,
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await waitFor(async () => expect(await screen.findByLabelText("Start from")).toHaveValue("default/web"));
+    const from = await screen.findByLabelText("Start from");
+    await waitFor(() => expect(from).toHaveValue("default/web"));
     await user.type(screen.getByLabelText("Name"), "next");
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5+rke2r1"));
     await user.click(screen.getByRole("button", { name: "Next" }));

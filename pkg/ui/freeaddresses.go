@@ -112,8 +112,7 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("nodes: 0 to %d", nodesMost))
 		return
 	}
-	want4, want6, err := wantedFamilies(req.Families)
-	if err != nil {
+	if _, _, err := wantedFamilies(req.Families); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -134,7 +133,7 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	v4, v6 = searchedIn(v4, want4, true, req.Gateway, req.Prefix), searchedIn(v6, want6, false, req.Gateway6, req.Prefix6)
+	v4, v6 = req.searched(v4, v6)
 	if (!v4.network.IsValid() && !v6.network.IsValid()) || req.VLAN != 0 {
 		writeJSON(w, http.StatusOK, view)
 		return
@@ -224,19 +223,30 @@ func familyOn(cidr, gateway string, is4 bool) (bridgeFamily, bool) {
 	return bridgeFamily{network: own.Masked(), reserved: reserved}, true
 }
 
+// searched are the networks the request's families are searched in, given the bridge's, and no
+// network for a family it does not ask for. The handler has checked the family names.
+func (req *freeRequest) searched(bridge4, bridge6 bridgeFamily) (bridgeFamily, bridgeFamily) {
+	want4, want6, _ := wantedFamilies(req.Families)
+	var v4, v6 bridgeFamily
+	if want4 {
+		v4 = searchedIn(bridge4, familyNameIPv4, req.Gateway, req.Prefix)
+	}
+	if want6 {
+		v6 = searchedIn(bridge6, familyNameIPv6, req.Gateway6, req.Prefix6)
+	}
+	return v4, v6
+}
+
 // searchedIn is the network a family's addresses are searched in: the one the form's gateway and
 // prefix length give, else the bridge's. A link-local IPv6 gateway gives no network, so the
 // bridge's stands. A gateway of the other family or a prefix length out of range gives none, and
 // the form says what is wrong. The bridge's own spoken-for addresses stay spoken for.
-func searchedIn(bridge bridgeFamily, wanted, is4 bool, gateway string, prefix int) bridgeFamily {
-	if !wanted {
-		return bridgeFamily{}
-	}
+func searchedIn(bridge bridgeFamily, family, gateway string, prefix int) bridgeFamily {
 	if gateway == "" {
 		return bridge
 	}
 	gw, err := netip.ParseAddr(gateway)
-	if err != nil || gw.Zone() != "" || gw.Is4In6() || gw.Is4() != is4 {
+	if err != nil || gw.Zone() != "" || gw.Is4In6() || gw.Is4() != (family == familyNameIPv4) {
 		return bridgeFamily{}
 	}
 	if gw.Is6() && gw.IsLinkLocalUnicast() {
