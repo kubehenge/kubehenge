@@ -52,6 +52,8 @@
 # KUBEHENGE_E2E_IPV6_ENDPOINT (the control plane's virtual IP when IPv6 is first),
 # KUBEHENGE_E2E_IPV6_ADDRESSES and KUBEHENGE_E2E_IPV6_LOAD_BALANCER_ADDRESSES, on the nodes' network
 # like their IPv4 counterparts. With IPv6 first, the machine running this test reaches that network.
+# With -fips after the release (rocky-10-fips, RKE2 on canal alone) the nodes run in FIPS mode, and
+# the test checks each one's kernel, policy and RKE2's BoringCrypto binaries.
 # KUBEHENGE_E2E_CIS=false creates the cluster without CIS hardening, the class's default, and leaves
 # the benchmark out; by default the cluster is hardened and its nodes checked against it.
 # KUBEHENGE_E2E_CNI chooses the CNI (required by kubeadm). KUBEHENGE_E2E_PODS and
@@ -488,6 +490,9 @@ if [ -n "${KUBEHENGE_E2E_CNI:-}" ]; then
 fi
 talos_variable=
 node_os=
+# node_release is the node OS word without its family, and without -fips.
+node_release=
+fips=false
 if [ "${distribution}" = talos ]; then
     # Talos is its own OS: its class has no nodeOS variable.
     [ -z "${KUBEHENGE_E2E_NODE_OS:-}" ] || fail "Talos nodes run Talos, not ${KUBEHENGE_E2E_NODE_OS}"
@@ -500,8 +505,17 @@ else
         jq -r '.spec.variables[] | select(.name == "nodeOS") | .schema.openAPIV3Schema.default | "\(.family)-\(.release)"')
     if [ -n "${KUBEHENGE_E2E_NODE_OS:-}" ]; then
         node_os=${KUBEHENGE_E2E_NODE_OS}
-        cni_variable=$(printf '%s\n      - name: nodeOS\n        value: {family: %s, release: "%s"}\n' "${cni_variable}" "${node_os%%-*}" "${node_os#*-}")
+        # A FIPS node OS is the release with -fips after it, as the CLI names it.
+        case ${node_os} in
+            *-fips) fips=true ;;
+            *) ;;
+        esac
+        node_release=${node_os#*-}
+        node_release=${node_release%-fips}
+        cni_variable=$(printf '%s\n      - name: nodeOS\n        value: {family: %s, release: "%s", fips: %s}\n' "${cni_variable}" "${node_os%%-*}" "${node_release}" "${fips}")
     fi
+    node_release=${node_os#*-}
+    node_release=${node_release%-fips}
     echo "nodes on ${node_os}"
 fi
 oidc=$(jq -cn --arg i "${issuer}" --rawfile ca "${work}/ca.crt" '[{issuerURL: $i, clientID: "kubehenge-e2e", certificateAuthority: $ca}]')
@@ -4012,7 +4026,7 @@ if [ "${distribution}" != talos ]; then
     selinux_check="
         . /etc/os-release
         case \"\${ID} \${VERSION_ID}\" in
-            '${os_id} ${node_os#*-}' | '${os_id} ${node_os#*-}'.*) ;;
+            '${os_id} ${node_release}' | '${os_id} ${node_release}'.*) ;;
             *) echo \"runs \${ID} \${VERSION_ID}\"; exit 1 ;;
         esac
         [ \"\$(getenforce)\" = Enforcing ] || { echo \"SELinux is \$(getenforce)\"; exit 1; }
@@ -4026,6 +4040,33 @@ if [ "${distribution}" != talos ]; then
             fail "${m} does not enforce SELinux on ${node_os}, or something it ran was denied"
         fi
     done
+    if [ "${fips}" = true ]; then
+        step "every node runs in FIPS mode, and RKE2's binaries are its BoringCrypto builds"
+        # RKE2 builds every release with BoringCrypto: its own version output and the binaries it
+        # runs say so. The node checks of the template's build are repeated on the live node.
+        fips_check="
+            grep -qw fips=1 /proc/cmdline || { echo 'the kernel command line has no fips=1'; exit 1; }
+            [ \"\$(cat /proc/sys/crypto/fips_enabled)\" = 1 ] || { echo \"fips_enabled is \$(cat /proc/sys/crypto/fips_enabled)\"; exit 1; }
+            [ \"\$(update-crypto-policies --show)\" = FIPS ] || { echo \"the crypto policy is \$(update-crypto-policies --show)\"; exit 1; }
+            test -e /usr/lib64/ossl-modules/fips.so || { echo 'OpenSSL has no fips.so'; exit 1; }
+            rke2=\$(find /usr/local/bin /opt/rke2 /var/lib/rancher/rke2 -name rke2 -type f 2>/dev/null | head -n 1)
+            [ -n \"\${rke2}\" ] || { echo 'no rke2 binary'; exit 1; }
+            \"\${rke2}\" --version | grep -q 'X:boringcrypto' || { echo \"rke2 reports: \$(\"\${rke2}\" --version | tail -n 1)\"; exit 1; }
+            for b in kubelet containerd; do
+                f=\$(find /var/lib/rancher/rke2 -name \"\${b}\" -type f 2>/dev/null | head -n 1)
+                [ -n \"\${f}\" ] || { echo \"no \${b} binary\"; exit 1; }
+                grep -qa 'X:boringcrypto' \"\${f}\" || { echo \"\${f} is not a BoringCrypto build\"; exit 1; }
+            done
+            echo \"fips=1, fips_enabled 1, policy FIPS, fips.so; \$(\"\${rke2}\" --version | tail -n 1)\""
+        for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
+            # shellcheck disable=SC2310 # its output says why, which the failure reports.
+            if ! out=$(on_machines "${m}" "${fips_check}"); then
+                printf '%s\n' "${out}" >&2
+                fail "${m} does not run in FIPS mode with RKE2's BoringCrypto binaries"
+            fi
+            echo "${m}: ${out}"
+        done
+    fi
 fi
 
 if [ "${replaces_machines}" = true ]; then
