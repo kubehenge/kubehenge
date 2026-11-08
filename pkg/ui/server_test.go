@@ -445,6 +445,8 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 			"admin@pve": {"/": {
 				"VM.Audit", "VM.Allocate", "VM.Console", "VM.PowerMgmt", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use",
 				"Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate", "Datastore.AllocateTemplate", "Sys.Audit",
+				"Pool.Audit", "VM.Config.CPU", "VM.Config.Cloudinit", "VM.Config.Disk", "VM.Config.HWType", "VM.Config.Memory",
+				"VM.Config.Network", "VM.Config.Options", "Datastore.Allocate", "SDN.Audit", "Sys.AccessNetwork",
 			}},
 			"viewer@pve": {"/pool/kubehenge/default.one": {"VM.Audit"}},
 			"dev@pve": {
