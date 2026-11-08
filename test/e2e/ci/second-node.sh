@@ -140,6 +140,29 @@ on pve2 test -f /etc/corosync/corosync.conf || {
     on pve journalctl -u pve-cluster -u corosync -u pveproxy -u pvedaemon --no-pager -n 100 >&2 || true
     exit 1
 }
+# The join's last step writes pve2's node files (its certificate, its SSH keys) once pve2 is quorate,
+# not once its cluster file system has synced with pve's. Adding pve2 reloads corosync, and a write
+# pve receives while that leaves it without quorum makes its file system leave the cluster's group
+# and rejoin. Where pve2 comes up before pve is back, pve2 writes into a group of its own, and pve's
+# rejoin then replaces those files with pve's, which lack them. So the step runs again once pve2
+# holds pve's files.
+deadline=$(($(date +%s) + 120))
+# shellcheck disable=SC2310 # polled; pve's certificate missing is pve2 not synced with pve yet.
+until on pve2 test -f /etc/pve/nodes/pve/pve-ssl.pem; do
+    now=$(date +%s)
+    if [ "${now}" -ge "${deadline}" ]; then
+        echo "pve2's cluster file system did not sync with pve's within 2 minutes" >&2
+        on pve2 journalctl -u pve-cluster --no-pager -n 100 >&2 || true
+        exit 1
+    fi
+    sleep 2
+done
+# shellcheck disable=SC2310 # a file missing is the step to run again.
+if ! on pve test -f /etc/pve/nodes/pve2/pve-ssl.pem || ! on pve test -f /etc/pve/nodes/pve2/ssh_known_hosts; then
+    echo "the join's node files for pve2 were lost to a resync of pve's cluster file system; writing them again"
+    on pve2 pvecm updatecerts --force
+    on pve2 systemctl reload-or-restart pvedaemon pveproxy
+fi
 # pve2's status as every API client reaches it: through pve's proxy, which accepts only the
 # certificate the cluster's files hold for pve2. The join writes pve2's new one there and returns
 # while pve2's proxy may still serve the old one, and pve then answers 596.
