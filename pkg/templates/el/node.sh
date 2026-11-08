@@ -63,6 +63,11 @@ fi
 dnf -y install --setopt=reposdir="${repos}" --setopt=install_weak_deps=False --setopt=minrate=100k ${packages}
 dnf clean all
 rm -rf "${repos}"
+# The chart writes a cluster's time servers and the host clock source into /etc/chrony.d, which the
+# family's chrony.conf does not read.
+grep -Eq '^(include|confdir)[[:space:]]+/etc/chrony\.d' /etc/chrony.conf ||
+    printf '\nconfdir /etc/chrony.d\n' >> /etc/chrony.conf
+mkdir -p /etc/chrony.d
 rm -f /etc/pki/rpm-gpg/kubehenge-*.asc
 if [ -f "${files}/proxy/down.sh" ]; then
     sh "${files}/proxy/down.sh"
