@@ -1325,75 +1325,6 @@ h4.subsection {
   color: var(--dim);
 }
 
-/* On a phone each row of a stacking table becomes a card: its first cell is the title and every other
-   cell shows its label before its value. */
-@media (width <= 600px) {
-  .grid.stack,
-  .grid.stack tbody {
-    display: block;
-  }
-
-  .grid.stack thead {
-    position: absolute;
-
-    overflow: hidden;
-
-    inline-size: 1px;
-    block-size: 1px;
-
-    clip-path: inset(50%);
-  }
-
-  .grid.stack tr {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 4px 12px;
-
-    padding: 10px 0;
-    border-block-end: 1px solid var(--line);
-  }
-
-  .grid.stack :is(td, th) {
-    display: block;
-
-    min-inline-size: 0;
-    padding: 0;
-    border: none;
-
-    text-align: start;
-    white-space: normal;
-  }
-
-  .grid.stack :is(td, th):not(.row-action, .pool-name) {
-    grid-column: 1 / -1;
-  }
-
-  .grid.stack tbody th {
-    grid-column: 1 / -1;
-    padding-block-end: 2px;
-  }
-
-  .grid.stack td[data-label]::before {
-    content: attr(data-label) " ";
-    display: inline-block;
-    min-inline-size: 6em;
-    color: var(--dim);
-  }
-
-  .grid.stack .row-action {
-    grid-column: 2;
-    grid-row: 1;
-    align-self: center;
-    inline-size: auto;
-  }
-
-  .grid.stack .pool-name {
-    grid-column: 1;
-    grid-row: 1;
-    align-self: center;
-  }
-}
-
 .object-view {
   min-inline-size: 0;
 }
@@ -1944,10 +1875,12 @@ fieldset.choices .check {
   vertical-align: middle;
 }
 
-/* On a phone a row of a stacked grid is a card: each cell is a line with its column's name before
-   it, and the first cell, which has none, heads the card. */
+/* On a phone a row of a stacked grid is a card. The cell without a label heads it, and every other
+   cell is a line with its column's name before it. One action sits beside the heading, several go
+   below the lines. */
 @media (width <= 600px) {
-  .grid.stack :is(table, tbody, tr, td) {
+  .grid.stack,
+  .grid.stack tbody {
     display: block;
   }
 
@@ -1963,26 +1896,36 @@ fieldset.choices .check {
   }
 
   .grid.stack tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+
     padding-block: 10px;
     border-block-end: 1px solid var(--line);
   }
 
-  .grid.stack td {
+  .grid.stack :is(td, th) {
     position: relative;
 
+    grid-column: 1 / -1;
+
     min-inline-size: 0;
-    padding: 2px 0 2px 7em;
+    padding: 0 0 0 7em;
     border: none;
 
+    text-align: start;
     overflow-wrap: anywhere;
+    white-space: normal;
   }
 
-  .grid.stack td:not([data-label]) {
+  .grid.stack :is(td, th):not([data-label], .row-action) {
+    grid-column: 1;
+    align-self: center;
     padding-inline-start: 0;
     font-weight: 600;
   }
 
-  .grid.stack td:not([data-label]) .muted {
+  .grid.stack :is(td, th):not([data-label], .row-action) .muted {
     font-weight: 400;
   }
 
@@ -1995,8 +1938,14 @@ fieldset.choices .check {
 
   .grid.stack td.row-action {
     inline-size: auto;
-    padding: 8px 0 0;
-    text-align: start;
+    padding: 6px 0 0;
+  }
+
+  .grid.stack td.row-action:has(> button:only-of-type) {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    padding: 0;
   }
 }
 

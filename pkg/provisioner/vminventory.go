@@ -56,8 +56,12 @@ func ParseUnownedVMs(cm *corev1.ConfigMap) (UnownedVMs, error) {
 	return u, nil
 }
 
-// vmsMissingAdvice is what to do about a cluster whose VMs are gone.
-const vmsMissingAdvice = "Delete the cluster, or restore its VMs in Proxmox VE. Create it again from its exported spec if it should run."
+// VMsMissingMessage is the VMsMissing condition's message for a cluster whose n VMs are all gone,
+// with what to do about it.
+func VMsMissingMessage(n int) string {
+	return fmt.Sprintf("None of the cluster's %d VMs exists in Proxmox VE. "+
+		"Delete the cluster, or restore its VMs in Proxmox VE. Create it again from its exported spec if it should run.", n)
+}
 
 // inventoryGuest is a VM as Proxmox VE's resource list shows it, with the pool it is in.
 type inventoryGuest struct {
@@ -169,7 +173,7 @@ func (v *VMInventory) markMissing(ctx context.Context, c *clusterv1.Cluster, ids
 	if len(ids) > 0 && !slices.ContainsFunc(ids, func(id int64) bool { _, ok := guests[id]; return ok }) {
 		cond = &metav1.Condition{
 			Status: metav1.ConditionTrue, Reason: VMsMissingReason,
-			Message: fmt.Sprintf("None of the cluster's %d VMs exists in Proxmox VE. %s", len(ids), vmsMissingAdvice),
+			Message: VMsMissingMessage(len(ids)),
 		}
 	}
 	w := &VMWatch{Client: v.Client, Reader: v.Reader, Events: v.Events}

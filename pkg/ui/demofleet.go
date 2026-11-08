@@ -657,8 +657,8 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 	}
 	if d.VMsMissing {
 		conditions = append(conditions, metav1.Condition{
-			Type: provisioner.VMsMissingCondition, Status: metav1.ConditionTrue, Reason: "AllVMsGone",
-			Message: "none of the cluster's machines has a VM in its Proxmox VE pool", LastTransitionTime: since,
+			Type: provisioner.VMsMissingCondition, Status: metav1.ConditionTrue, Reason: provisioner.VMsMissingReason,
+			Message: provisioner.VMsMissingMessage(int(d.ControlPlanes + d.Workers)), LastTransitionTime: since,
 		})
 	}
 	c.Status = clusterv1.ClusterStatus{
