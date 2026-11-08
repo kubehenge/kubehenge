@@ -134,6 +134,8 @@ jobs:
           path: ${{ runner.temp }}/bin
           key: tools-${{ runner.os }}-${{ runner.arch }}-all-${{ hashFiles('scripts/tools.sh') }}
       - if: env.E2E_RUN == 'true' && steps.tools.outputs.cache-hit != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/tools.sh "$RUNNER_TEMP/bin"
       - if: >-
           env.E2E_RUN == 'true' && steps.tools.outputs.cache-hit != 'true'

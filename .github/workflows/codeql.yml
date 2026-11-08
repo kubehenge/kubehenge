@@ -60,6 +60,8 @@ jobs:
         if: >-
           github.event_name != 'merge_group' && matrix.language == 'go'
           && steps.tools.outputs.cache-hit != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/tools.sh "$RUNNER_TEMP/bin" go
       - if: >-
           github.event_name != 'merge_group' && matrix.language == 'go'

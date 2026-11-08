@@ -357,7 +357,7 @@ Every node is at the least Kubehenge allows for what its test switches on. With 
 | `talos-addons-b` | 2368 | 10560 | 10560 | 10560 |
 | `talos-addons-c` | 2552 | 10744 | 10744 | 10744 |
 
-`kubeadm-addons-a` and `k3s-addons-b` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176, 11968 and 11856 MiB. The guard's samples show what the management node uses in every run (below).
+`kubeadm-addons-a` and `k3s-addons-b` with Calico and `rke2-addons-b` with Cilium outgrow 12 GiB with that management node. They run one of 3584 MiB (`run.sh`), which brings them to 12176, 11968 and 11856 MiB. `two-nodes` runs one of 3584 MiB too. Its two nodes share the runner's memory, and the second rejoins the placement only with 4505 MiB free. The guard's samples show what the management node uses in every run (below).
 
 These tests outgrow 12 GiB as well. Only the RKE2 ones read back from swap past the guard's line, 570 to 1220 MiB in a minute:
 

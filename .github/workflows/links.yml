@@ -39,6 +39,8 @@ jobs:
             tools-${{ runner.os }}-${{ runner.arch }}-node+lychee-${{
             hashFiles('scripts/tools.sh') }}
       - if: steps.tools.outputs.cache-hit != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: scripts/tools.sh "$RUNNER_TEMP/bin" node lychee
       - if: steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
