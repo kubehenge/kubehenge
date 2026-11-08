@@ -6,9 +6,9 @@
 # control plane's health check has the dead server replaced. The control plane then shrinks back to
 # one server, keeping what was written, and nothing of the cluster is left once it is deleted.
 # Every node's NIC firewall is on throughout, through a security group that lets in SSH and the API
-# alone: the servers join, elect and replace each other behind it, the runner reaches SSH and the
-# API but not the kubelet or a NodePort, a pod reaches a pod on another node, and a change of the
-# firewall's sources reaches the running VMs' IPSets without replacing one.
+# alone: the servers join, elect and replace each other behind it, the runner reaches SSH's port
+# and the API but not the kubelet or a NodePort, a pod reaches a pod on another node, and a change
+# of the firewall's sources reaches the running VMs' IPSets without replacing one.
 #
 #   test/e2e/control-plane-ha.sh
 #
@@ -42,8 +42,13 @@ firewall_before='' group_made=false
 # shellcheck disable=SC2310 # best effort: a failed restore must not hide the run's own status.
 firewall_restore() {
     if [ "${group_made}" = true ]; then
-        # The VMs hold rules that name the group until they are gone, so a run that fails leaves it.
-        pve -X DELETE "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/groups/${group}" > /dev/null 2>&1 || true
+        # Proxmox VE deletes only an empty group. A rule's position shifts down as one before it
+        # goes, so the last goes first.
+        group_url="${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/groups/${group}"
+        pve "${group_url}" 2> /dev/null | jq -r '[.data[].pos] | sort | reverse | .[]' | while read -r pos; do
+            pve -X DELETE "${group_url}/${pos}" > /dev/null 2>&1 || true
+        done
+        pve -X DELETE "${group_url}" > /dev/null 2>&1 || true
         group_made=false
     fi
     if [ -n "${firewall_before}" ]; then
@@ -89,9 +94,13 @@ vip_holder() { workload -n kube-system get lease plndr-cp-lock -o jsonpath='{.sp
 # written <name>: writes a ConfigMap through the virtual IP, which etcd takes only with a quorum.
 written() { workload -n default create configmap "$1" --from-literal=written=true > /dev/null 2>&1; }
 
-# cluster_vms: the node and ID of each VM the cluster's pool holds, one per line.
+# cluster_vms: the node and ID of each node's VM, one per line, as the cluster's ProxmoxMachines
+# record them. Not the pool's VMs: the pool also holds the volume owner VM, which has no NIC, no
+# IPSet and never starts. Fails while a machine has no VM yet.
 cluster_vms() {
-    pve_get "cluster/resources?type=vm" | jq -r --arg p "/${ns}." '.data[] | select(.pool // "" | contains($p)) | "\(.node) \(.vmid)"'
+    kubectl -n "${ns}" get proxmoxmachines -o json | jq -r '.items[] |
+        if .spec.virtualMachineID and .status.proxmoxNode then "\(.status.proxmoxNode) \(.spec.virtualMachineID)"
+        else error("ProxmoxMachine \(.metadata.name) has no VM yet") end'
 }
 # ipset_entries <node> <vmid>: the entries of the VM's kubehenge IPSet, sorted, one per line. A VM
 # without the IPSet has none.
@@ -100,7 +109,7 @@ ipset_entries() { pve_get "nodes/$1/qemu/$2/firewall/ipset/kubehenge" | jq -r '.
 # ipsets_hold <present|absent> <address>: whether every VM's IPSet holds the address, or none does.
 # shellcheck disable=SC2310,SC2312 # polled.
 ipsets_hold() {
-    vm_list=$(cluster_vms)
+    vm_list=$(cluster_vms) || return 1
     [ -n "${vm_list}" ] || return 1
     echo "${vm_list}" | while read -r vm_node vm_id; do
         if ipset_entries "${vm_node}" "${vm_id}" | grep -qxF "$2"; then held=present; else held=absent; fi
@@ -110,7 +119,7 @@ ipsets_hold() {
 # ipsets_agree: whether every VM's IPSet holds the same entries, which one cluster's VMs share.
 # shellcheck disable=SC2310,SC2312 # polled.
 ipsets_agree() {
-    vm_list=$(cluster_vms)
+    vm_list=$(cluster_vms) || return 1
     seen=$(echo "${vm_list}" | while read -r vm_node vm_id; do
         ipset_entries "${vm_node}" "${vm_id}" | tr '\n' ' '
         echo
@@ -120,12 +129,18 @@ ipsets_agree() {
 # firewalled_nics: whether every NIC of every VM has firewall=1.
 # shellcheck disable=SC2310,SC2312 # polled.
 firewalled_nics() {
-    vm_list=$(cluster_vms)
+    vm_list=$(cluster_vms) || return 1
     [ -n "${vm_list}" ] || return 1
-    echo "${vm_list}" | while read -r vm_node vm_id; do
-        pve_get "nodes/${vm_node}/qemu/${vm_id}/config" |
-            jq -e '[.data | to_entries[] | select(.key | test("^net[0-9]+$")) | .value] | length > 0 and all(contains("firewall=1"))' > /dev/null || exit 1
-    done
+    # A here-document keeps the loop in this shell, so that seen reaches until_true's message.
+    while read -r vm_node vm_id; do
+        nics=$(pve_get "nodes/${vm_node}/qemu/${vm_id}/config" |
+            jq -c '[.data | to_entries[] | select(.key | test("^net[0-9]+$")) | "\(.key)=\(.value)"]') || return 1
+        seen="VM ${vm_id} on ${vm_node}: ${nics}"
+        printf '%s' "${nics}" | jq -e 'length > 0 and all(contains("firewall=1"))' > /dev/null || return 1
+    done << EOF
+${vm_list}
+EOF
+    seen=
 }
 # port_state <address> <port>: dropped when the connection times out, as a firewall's drop does,
 # refused when nothing listens, and open when something answers.
@@ -233,7 +248,9 @@ until_true 120 "every NIC with firewall=1" firewalled_nics
 node_addresses=$(workload get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}')
 node_count=$(echo "${node_addresses}" | wc -l)
 [ "${node_count}" -eq 4 ] || fail "expected four nodes' addresses, have: ${node_addresses}"
-until_true 120 "SSH answers on every node" every_node_is open 22
+# Nodes run no SSH server, so port 22 let in meets the guest's own refusal. The firewall's policy
+# drops what it does not let in, which times out instead.
+until_true 120 "SSH's port let in to every node" every_node_is refused 22
 until_true 120 "the kubelet's port is dropped on every node" every_node_is dropped 10250
 workload create namespace e2e-firewall
 node_names=$(workload get nodes -o jsonpath='{.items[*].metadata.name}')

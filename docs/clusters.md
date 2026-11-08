@@ -118,6 +118,7 @@ Kubehenge sets both ranges on every cluster it creates. It takes those you give,
 Name Proxmox VE security groups to turn on the firewall of every node's interface. Without groups it stays off.
 
 - **Before.** The datacenter firewall is on (Datacenter, Firewall, Options). Each group exists under Datacenter, Firewall, Security Group, or the controller refuses it.
+- **The Proxmox VE nodes' own firewall.** It comes on with the datacenter firewall and lets in the API only from the node's local network and the `management` IPSet. Add the appliance, the management cluster's nodes and every cluster's nodes to that IPSet when they are on another network.
 - **Names.** Up to 16 groups of 2 to 18 letters, digits, `-` and `_`. The first is a letter.
 - **When.** Each VM's firewall is written before it first starts. Changing the groups replaces every node, one at a time.
 
@@ -129,7 +130,9 @@ Name Proxmox VE security groups to turn on the firewall of every node's interfac
 
 A new address of the nodes, the management cluster or the appliance goes into each running VM's `kubehenge` IPSet. No node is replaced. When the appliance gets a new address by DHCP, the clusters accept it within a minute.
 
-A bridge behind NAT needs the conntrack zone rule from Proxmox VE's [Network Configuration guide](https://pve.proxmox.com/wiki/Network_Configuration#_masquerading_nat_with_iptables), or the firewall drops the nodes' outbound connections.
+Both of Proxmox VE's firewalls read what Kubehenge writes: the default one on iptables and the one on nftables (Host, Firewall, Options, nftables). The end-to-end tests run the nftables one.
+
+With the iptables firewall, a bridge behind NAT needs the conntrack zone rule from Proxmox VE's [Network Configuration guide](https://pve.proxmox.com/wiki/Network_Configuration#_masquerading_nat_with_iptables). Without it the firewall drops the nodes' outbound connections. The nftables firewall needs none.
 
 #### IPv6 and dual-stack
 

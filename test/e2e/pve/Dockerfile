@@ -34,10 +34,12 @@ RUN apt-get update -qq \
     # it goes to, this node too; e2fsprogs, which every full Debian has and pve-container leaves
     # undeclared, formats a container's disk on directory storage; ifupdown2 brings up the VMs'
     # bridge and dnsmasq answers their name lookups there; openssl for the appliance's installer and
-    # jq for its test, which run on the node.
+    # jq for its test, which run on the node. proxmox-firewall, which pve-manager only recommends, is
+    # the firewall on nftables: pve-firewall needs the legacy iptables tables and br_netfilter, which
+    # runner kernels lack, and then applies no rule at all (test/e2e/ci/up.sh turns it on).
     && apt-get install -y -qq --no-install-recommends systemd systemd-sysv dbus kmod procps iproute2 \
         ifupdown2 iptables dnsmasq pve-manager qemu-server pve-container pve-cluster postfix socat \
-        openssh-server e2fsprogs openssl jq \
+        openssh-server e2fsprogs openssl jq proxmox-firewall \
     # Installing pve-manager adds the subscription-only repository, which answers 401 without a
     # subscription and fails every later apt-get update.
     && rm -f /etc/apt/sources.list.d/pve-enterprise.sources \
