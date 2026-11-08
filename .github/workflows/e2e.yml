@@ -25,8 +25,9 @@ on:
 permissions:
   contents: read
 
+# A dispatch is a run someone asked for, so a later one on the same branch never cancels it.
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
