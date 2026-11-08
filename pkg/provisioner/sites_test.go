@@ -335,14 +335,14 @@ func TestPlacerRecordsOnlyTheNodesTheTemplateCanBeClonedOn(t *testing.T) {
 
 type skippingFake struct {
 	nodes   *fakeNodes
-	skipped []string
+	skipped []NodeFault
 }
 
 func (s *skippingFake) OnlineNodes(ctx context.Context) ([]Node, error) {
 	return s.nodes.OnlineNodes(ctx)
 }
 
-func (s *skippingFake) Unreadable() []string { return s.skipped }
+func (s *skippingFake) Unreachable() []NodeFault { return s.skipped }
 
 func TestOnlineNodesSkipsANodeWhoseStatusCannotBeRead(t *testing.T) {
 	t.Parallel()
@@ -367,8 +367,8 @@ func TestOnlineNodesSkipsANodeWhoseStatusCannotBeRead(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(online, []Node{{Name: "pve1", CPULevel: 3}}) {
 		t.Fatalf("OnlineNodes = %v, %v; want pve1 alone and no error", online, err)
 	}
-	if got := p.Unreadable(); !slices.Equal(got, []string{"pve2"}) {
-		t.Errorf("Unreadable = %v, want pve2", got)
+	if got := p.Unreachable(); len(got) != 1 || got[0].Node != "pve2" || !strings.Contains(got[0].Reason, "500") {
+		t.Errorf("Unreachable = %v, want pve2 with the 500", got)
 	}
 }
 
@@ -376,7 +376,7 @@ func TestPlacerCountsTheNodesItLeftOut(t *testing.T) {
 	t.Parallel()
 	web := cluster()
 	_, c := newReconciler(t, nil, web)
-	nodes := &skippingFake{nodes: &fakeNodes{online: []string{"pve1"}}, skipped: []string{"pve2"}}
+	nodes := &skippingFake{nodes: &fakeNodes{online: []string{"pve1"}}, skipped: []NodeFault{{Node: "pve2", Reason: "HTTP 596: certificate verify failed"}}}
 	p := &Placer{Client: c, ClassNamespace: "kubehenge-system", Nodes: nodes}
 	p.placeAll(t.Context())
 	read := func() *metav1.Condition {
@@ -386,8 +386,8 @@ func TestPlacerCountsTheNodesItLeftOut(t *testing.T) {
 		}
 		return meta.FindStatusCondition(got.Status.Conditions, NodesSkippedCondition)
 	}
-	if cond := read(); cond == nil || cond.Status != metav1.ConditionTrue || !strings.Contains(cond.Message, "1 Proxmox VE node(s) left out of placement") || !strings.Contains(cond.Message, "pve2") {
-		t.Errorf("%s = %+v, want it to count pve2", NodesSkippedCondition, cond)
+	if cond := read(); cond == nil || cond.Status != metav1.ConditionTrue || cond.Message != "Not reachable through the cluster: pve2 (HTTP 596: certificate verify failed)" {
+		t.Errorf("%s = %+v, want it to name pve2 with the 596 and its reason", NodesSkippedCondition, cond)
 	}
 	nodes.skipped = nil
 	p.placeAll(t.Context())

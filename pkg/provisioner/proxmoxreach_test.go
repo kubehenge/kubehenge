@@ -17,6 +17,31 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+func TestProxmoxReachRecordsTheNodesThatDoNotAnswerForwardedCalls(t *testing.T) {
+	t.Parallel()
+	_, p := newForwardingPVE(t, map[string]string{"pve1": "ok", "pve2": "596"})
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	kube := fake.NewClientBuilder().WithScheme(scheme).Build()
+	if _, err := p.OnlineNodes(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	r := &ProxmoxReach{Reader: kube, Client: kube, Namespace: "kubehenge-system", Proxmox: p.Client, Interval: time.Minute, Unreachable: p.Unreachable}
+	if err := r.publish(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := kube.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge-system", Name: ProxmoxReachName}, cm); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ParseReachability(cm)
+	if err != nil || len(got.Unreachable) != 1 || got.Unreachable[0].Node != "pve2" || !strings.HasPrefix(got.Unreachable[0].Reason, "HTTP 596") {
+		t.Errorf("recorded %+v, %v; want pve2 with its 596", got, err)
+	}
+}
+
 func TestProxmoxReachRecordsWhetherProxmoxVEAnswers(t *testing.T) {
 	t.Parallel()
 	var down atomic.Bool

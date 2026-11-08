@@ -5,13 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -72,9 +75,81 @@ func needsOf(c *clusterv1.Cluster, s *Sites) (templateNeeds, error) {
 	return needs, nil
 }
 
-// OnlineNodes lists the nodes Proxmox VE reports online, sorted by name. A node's CPU is read once
-// while it stays online: it changes only with the hardware, which takes the node down first. A node
-// back online is judged by the memory it reports itself until the list has its new figures.
+// NodeFault is a node that Proxmox VE lists as online and that does not answer a call forwarded to
+// it through the cluster, with why.
+type NodeFault struct {
+	Node string `json:"node"`
+	// Reason is the status Proxmox VE answered with and its text, or that the node did not answer.
+	Reason string `json:"reason"`
+}
+
+// faultList words faults as `pve2 (HTTP 596: certificate verify failed), pve3 (no answer in time)`.
+func faultList(faults []NodeFault) string {
+	parts := make([]string, len(faults))
+	for i, f := range faults {
+		parts[i] = f.Node + " (" + f.Reason + ")"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// nodeProbeTimeout bounds the status call to one node, so that a node that hangs costs a read this
+// long and no more.
+const nodeProbeTimeout = 10 * time.Second
+
+// nodeProbe is what a node's own status answered: its facts, or in fault why it did not answer.
+type nodeProbe struct {
+	status pveNodeStatus
+	fault  string
+	at     time.Time
+}
+
+func (p *Proxmox) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
+}
+
+// probe asks a node for its own status through the node the controller is connected to, which is
+// the call every VM operation on it takes too. Proxmox VE lists a node as online while its member of
+// the cluster file system or its certificate is broken, and the call then fails with 596. The
+// second result is why it failed, empty when the node answered. A cancelled ctx is not a fault of
+// the node and is not kept.
+func (p *Proxmox) probe(ctx context.Context, node string) (pveNodeStatus, string) {
+	if p.ProbeTTL > 0 {
+		p.mu.Lock()
+		kept, ok := p.probes[node]
+		p.mu.Unlock()
+		if ok && p.now().Sub(kept.at) < p.ProbeTTL {
+			return kept.status, kept.fault
+		}
+	}
+	ask, cancel := context.WithTimeout(ctx, cmp.Or(p.ProbeTimeout, nodeProbeTimeout))
+	defer cancel()
+	var status pveNodeStatus
+	err := p.Client.Get(ask, "/nodes/"+url.PathEscape(node)+"/status", &status)
+	var fault string
+	if err != nil {
+		if ctx.Err() != nil {
+			return status, pve.Reason(ctx.Err())
+		}
+		fault = pve.Reason(err)
+	}
+	if p.ProbeTTL > 0 {
+		p.mu.Lock()
+		if p.probes == nil {
+			p.probes = map[string]nodeProbe{}
+		}
+		p.probes[node] = nodeProbe{status: status, fault: fault, at: p.now()}
+		p.mu.Unlock()
+	}
+	return status, fault
+}
+
+// OnlineNodes lists the nodes Proxmox VE reports online that answer a call forwarded to them,
+// sorted by name. Each read asks every online node for its status, all at once, which also gives
+// its CPU and the memory it has free now. A node that does not answer is left out and named by
+// Unreachable.
 func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 	var nodes []pveNode
 	if err := p.Client.Get(ctx, "/nodes", &nodes); err != nil {
@@ -85,23 +160,36 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 		return nil, fmt.Errorf("listing storages: %w", err)
 	}
 	maintenance, _ := haMaintenance(ctx, p.Client) // a refusal is ProxmoxReach's to report, once
-	var online []Node
-	var skipped []string
+	var listed []pveNode
 	for _, n := range nodes {
-		if n.Status != nodeOnline {
+		if n.Status == nodeOnline {
+			listed = append(listed, n)
+		}
+	}
+	probes := make([]nodeProbe, len(listed))
+	var wg sync.WaitGroup
+	for i, n := range listed {
+		wg.Go(func() { probes[i].status, probes[i].fault = p.probe(ctx, n.Node) })
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("reading the nodes' status: %w", err)
+	}
+	var online []Node
+	var faults []NodeFault
+	for i, n := range listed {
+		// A node that shows online but whose status does not answer (a broken certificate, a reboot,
+		// a token without Sys.Audit on it) would otherwise be chosen for VMs that then cannot start,
+		// or leave every cluster unplaced.
+		if fault := probes[i].fault; fault != "" {
+			ctrl.LoggerFrom(ctx).Info("leaving a node out of placement", "node", n.Node, "reason", fault)
+			faults = append(faults, NodeFault{Node: n.Node, Reason: fault})
 			continue
 		}
-		// A node that shows online but whose status cannot be read (a reboot, a token without
-		// Sys.Audit on it) would otherwise leave every cluster unplaced.
-		level, live, err := p.nodeFacts(ctx, n)
-		if err != nil {
-			ctrl.LoggerFrom(ctx).Error(err, "leaving a node out of placement", "node", n.Node)
-			skipped = append(skipped, n.Node)
-			continue
-		}
-		node := Node{Name: n.Node, CPULevel: level, Maintenance: maintenance[n.Node]}
+		status := probes[i].status
+		node := Node{Name: n.Node, CPULevel: templates.CPULevelOf(status.CPUInfo.Flags), Maintenance: maintenance[n.Node]}
 		node.Version, node.Major = p.versions.read(ctx, p.Client, n.Node)
-		node.FreeMiB, node.MemoryKnown = freeMiB(n, live)
+		node.FreeMiB, node.MemoryKnown = freeMiB(n, &status.Memory)
 		for _, s := range storages {
 			if s.Node == n.Node && s.Status != storageAvailable && !slices.Contains(node.InactiveStorages, s.Storage) {
 				node.InactiveStorages = append(node.InactiveStorages, s.Storage)
@@ -110,28 +198,29 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 		online = append(online, node)
 	}
 	slices.SortFunc(online, func(a, b Node) int { return strings.Compare(a.Name, b.Name) })
-	slices.Sort(skipped)
+	slices.SortFunc(faults, func(a, b NodeFault) int { return strings.Compare(a.Node, b.Node) })
 	names := make([]string, len(online))
 	for i, n := range online {
 		names[i] = n.Name
 	}
 	p.versions.keep(names)
 	p.mu.Lock()
-	p.skipped = skipped
-	for name := range p.seen {
-		if !slices.ContainsFunc(online, func(n Node) bool { return n.Name == name }) {
-			delete(p.seen, name)
+	p.faults = faults
+	for name := range p.probes {
+		if !slices.ContainsFunc(listed, func(n pveNode) bool { return n.Node == name }) {
+			delete(p.probes, name)
 		}
 	}
 	p.mu.Unlock()
 	return online, nil
 }
 
-// Unreadable are the nodes the last OnlineNodes left out because their status could not be read.
-func (p *Proxmox) Unreadable() []string {
+// Unreachable are the nodes the last OnlineNodes left out because Proxmox VE lists them online and
+// their status does not answer, sorted by name.
+func (p *Proxmox) Unreachable() []NodeFault {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return slices.Clone(p.skipped)
+	return slices.Clone(p.faults)
 }
 
 // pveNodeStatus is the part of a node's own status that names its CPU's features and its memory.
@@ -150,56 +239,18 @@ type pveMemory struct {
 	Used  int64 `json:"used"`
 }
 
-// seenNode is what is kept of an online node from the look it came online at.
-type seenNode struct {
-	level int
-	// listedUptime is the uptime /nodes showed at that look. Proxmox VE lists a node with the last
-	// figures it sent for five minutes after it stops sending, so a node back online is listed with
-	// the memory it had before it left until it reports again, which moves its uptime.
-	listedUptime int64
-}
-
-// freeMiB is the node's free memory, from live where the node was read itself, and whether it is
-// known at all.
+// freeMiB is the node's free memory, and whether it is known at all. The node's own figures rule
+// over the list's: Proxmox VE lists a node with the last figures it sent for five minutes after it
+// stops sending, so a node back online is listed with the memory it had before it left.
 func freeMiB(n pveNode, live *pveMemory) (int64, bool) {
 	total, used := n.MaxMem, n.Mem
-	if live != nil {
+	if live != nil && live.Total > 0 {
 		total, used = live.Total, live.Used
 	}
 	if total <= 0 {
 		return 0, false
 	}
 	return max(0, total-used) / bytesPerMiB, true
-}
-
-// nodeFacts reads what the node list does not say of an online node: its CPU's level, once while
-// it stays online, and its memory while the list may still hold the figures from before it came
-// online. The memory is nil where the list's figures are the node's own or the list has none.
-func (p *Proxmox) nodeFacts(ctx context.Context, n pveNode) (int, *pveMemory, error) {
-	p.mu.Lock()
-	seen, ok := p.seen[n.Node]
-	p.mu.Unlock()
-	listed := n.MaxMem > 0
-	if ok && (!listed || n.Uptime != seen.listedUptime) {
-		return seen.level, nil, nil
-	}
-	var status pveNodeStatus
-	if err := p.Client.Get(ctx, "/nodes/"+n.Node+"/status", &status); err != nil {
-		return 0, nil, fmt.Errorf("reading node %s's status: %w", n.Node, err)
-	}
-	if !ok {
-		seen = seenNode{level: templates.CPULevelOf(status.CPUInfo.Flags), listedUptime: n.Uptime}
-		p.mu.Lock()
-		if p.seen == nil {
-			p.seen = map[string]seenNode{}
-		}
-		p.seen[n.Node] = seen
-		p.mu.Unlock()
-	}
-	if !listed || status.Memory.Total <= 0 {
-		return seen.level, nil, nil
-	}
-	return seen.level, &status.Memory, nil
 }
 
 // clusterCPULevel is the x86-64 microarchitecture level a cluster's nodes need of the Proxmox VE

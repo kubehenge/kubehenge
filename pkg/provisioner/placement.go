@@ -67,12 +67,12 @@ type Placer struct {
 }
 
 // NodesSkippedCondition on a Cluster says that Placer left Proxmox VE nodes out of its placement
-// because their status could not be read.
+// because they are online in the cluster and do not answer calls forwarded to them.
 const NodesSkippedCondition = "NodesSkipped"
 
-// skippingNodes is implemented by a Nodes that skips the nodes it cannot read.
+// skippingNodes is implemented by a Nodes that skips the nodes that do not answer.
 type skippingNodes interface {
-	Unreadable() []string
+	Unreachable() []NodeFault
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -106,9 +106,9 @@ func (p *Placer) placeAll(ctx context.Context) {
 			return
 		}
 	}
-	var skipped []string
+	var skipped []NodeFault
 	if u, ok := p.Nodes.(skippingNodes); ok {
-		skipped = u.Unreadable()
+		skipped = u.Unreachable()
 	}
 	clusters := &clusterv1.ClusterList{}
 	if err := p.Client.List(ctx, clusters, client.UnsafeDisableDeepCopy); err != nil {
@@ -151,8 +151,24 @@ func (p *Placer) placeAll(ctx context.Context) {
 		} else {
 			p.clearNewer(c)
 		}
-		p.record(ctx, c, hosts, blocked)
+		p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
 	}
+}
+
+// refusedForFaults is the reason no VM can be placed: blocked where it is already set, else that the
+// placement is empty or only nodes that do not answer (which a cluster kept to its chosen nodes
+// would otherwise stay on), else none.
+func refusedForFaults(blocked string, hosts []string, faults []NodeFault) string {
+	if blocked != "" || len(faults) == 0 {
+		return blocked
+	}
+	answering := slices.ContainsFunc(hosts, func(h string) bool {
+		return !slices.ContainsFunc(faults, func(f NodeFault) bool { return f.Node == h })
+	})
+	if answering {
+		return ""
+	}
+	return "No Proxmox VE node can take a new VM: not reachable through the cluster: " + faultList(faults)
 }
 
 // record writes on the cluster the nodes its VMs may use, and why none can take a new VM, when
@@ -181,15 +197,15 @@ func (p *Placer) record(ctx context.Context, c *clusterv1.Cluster, hosts []strin
 	}
 }
 
-// markSkipped records on the cluster the nodes left out of placement for want of a status, and
-// clears the record once they answer.
-func (p *Placer) markSkipped(ctx context.Context, c *clusterv1.Cluster, skipped []string) {
+// markSkipped records on the cluster the nodes left out of placement because they do not answer,
+// each with Proxmox VE's reason, and clears the record once they answer.
+func (p *Placer) markSkipped(ctx context.Context, c *clusterv1.Cluster, skipped []NodeFault) {
 	var cond *metav1.Condition
 	have := meta.FindStatusCondition(c.Status.Conditions, NodesSkippedCondition)
 	if len(skipped) > 0 {
 		cond = &metav1.Condition{
-			Status: metav1.ConditionTrue, Reason: "StatusUnreadable",
-			Message: fmt.Sprintf("%d Proxmox VE node(s) left out of placement because their status could not be read: %s", len(skipped), strings.Join(skipped, ", ")),
+			Status: metav1.ConditionTrue, Reason: "NotReachable",
+			Message: "Not reachable through the cluster: " + faultList(skipped),
 		}
 		if have != nil && have.Message == cond.Message {
 			return

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -54,8 +55,12 @@ type Storage struct {
 
 // Node is a Proxmox VE node as the user sees it.
 type Node struct {
-	Node   string `json:"node"`
-	Online bool   `json:"online"`
+	Node string `json:"node"`
+	// Online is set only for a node that is a cluster member and answers calls forwarded to it.
+	Online bool `json:"online"`
+	// Fault says why a node that is a cluster member does not answer them, as Reason words it. It is
+	// empty for every other node.
+	Fault string `json:"fault,omitempty"`
 	// Memory is what the node uses and MaxMemory what it has, in bytes, 0 where Proxmox VE does not
 	// say, as for a node that is down.
 	Memory    int64 `json:"memory,omitempty"`
@@ -358,11 +363,44 @@ func (a *Accounts) Nodes(ctx context.Context, t *Ticket) ([]Node, error) {
 	if err := a.get(ctx, t, "/cluster/resources?type=node", &res); err != nil {
 		return nil, err
 	}
-	nodes := make([]Node, 0, len(res))
-	for _, r := range res {
-		nodes = append(nodes, Node{Node: r.Node, Online: r.Status == "online", Memory: r.Mem, MaxMemory: r.MaxMem})
+	nodes := make([]Node, len(res))
+	var wg sync.WaitGroup
+	for i, r := range res {
+		nodes[i] = Node{Node: r.Node, Online: r.Status == "online", Memory: r.Mem, MaxMemory: r.MaxMem}
+		if !nodes[i].Online {
+			continue
+		}
+		wg.Go(func() {
+			if fault := a.forwardFault(ctx, t, r.Node); fault != "" {
+				nodes[i].Online, nodes[i].Fault = false, fault
+			}
+		})
 	}
+	wg.Wait()
 	return nodes, nil
+}
+
+// nodeProbeTimeout bounds the call that tells whether a node answers, so that a node that hangs
+// costs the list this long and no more.
+const nodeProbeTimeout = 10 * time.Second
+
+// forwardFault asks a node for its status through the node the interface is connected to, and says
+// why it did not answer, or "" when it did. Proxmox VE lists a node as online while its member of
+// the cluster file system or its certificate is broken, and every call forwarded to it then fails
+// with 596. An answer of any kind below 500 shows the call arrived, a refusal for want of a
+// privilege included.
+func (a *Accounts) forwardFault(ctx context.Context, t *Ticket, node string) string {
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(a.probeTimeout, nodeProbeTimeout))
+	defer cancel()
+	err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/status", &json.RawMessage{})
+	var api *APIError
+	switch {
+	case err == nil, errors.Is(err, ErrForbidden), errors.Is(err, ErrAuthentication), errors.Is(err, ErrNodesDisagree):
+		return ""
+	case errors.As(err, &api) && !strings.HasPrefix(api.Status, "5"):
+		return ""
+	}
+	return Reason(err)
 }
 
 // Bridges lists a node's bridges. Proxmox VE shows them to users with Sys.Audit on the node.

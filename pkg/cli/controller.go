@@ -57,6 +57,9 @@ const (
 	// placementInterval is how soon a node that goes down is left out of the clusters' placement:
 	// well inside the minutes a machine health check waits before replacing a VM it ran.
 	placementInterval = 15 * time.Second
+	// nodeProbeTTL is how long a node's answer to the status call is reused, so the reads of the
+	// online nodes within one reconcile cost one call per node.
+	nodeProbeTTL = 5 * time.Second
 	// templateVersionsInterval is how soon a kubeadm template just built is offered in the interface.
 	templateVersionsInterval = 30 * time.Second
 	// haRulesInterval is how soon an HA rule made in Proxmox VE is offered to cluster creators.
@@ -337,7 +340,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		return err
 	}
 	distributions := &provisioner.Distributions{ClassNamespace: o.r.ClassNamespace, Providers: providers}
-	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings}
+	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings, ProbeTTL: nodeProbeTTL}
 	o.completeReconciler(cloud, provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}, rancherMinors)
 
 	logger, err := o.logs.zapLogger()
@@ -816,6 +819,8 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 		Proxmox:   cloud.Client,
 		Interval:  proxmoxReachInterval,
 		Tokens:    o.tokenProbes(mgr, cloud.Client),
+
+		Unreachable: cloud.Unreachable,
 	}
 	if err := mgr.Add(reach); err != nil {
 		return fmt.Errorf("the Proxmox VE reachability check: %w", err)

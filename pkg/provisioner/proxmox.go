@@ -61,20 +61,27 @@ type Credentials struct {
 type Proxmox struct {
 	Client   *proxmox.Client
 	Settings Settings
+	// ProbeTTL is how long a node's answer to the status call is trusted, so that the many reads of
+	// the online nodes in one reconcile cost one call per node. Zero asks at every read.
+	ProbeTTL time.Duration
+	// ProbeTimeout bounds the status call to one node, nodeProbeTimeout where zero.
+	ProbeTimeout time.Duration
+	// Now is the clock, time.Now unless a test sets it.
+	Now func() time.Time
 
 	// region is the Proxmox VE cluster's name once read. It does not change while the controller
 	// runs.
 	mu     sync.Mutex
 	region string
-	// seen are the online nodes as read at the look they came online.
-	seen map[string]seenNode
+	// probes are the last answer of each node's own status, kept for ProbeTTL.
+	probes map[string]nodeProbe
 	// siteCache keeps where each template's disks are, so a look at the templates reads one
 	// configuration per new template.
 	siteCache templates.SiteCache
 	// versions are the nodes' Proxmox VE versions as read.
 	versions versionCache
-	// skipped are the online nodes the last OnlineNodes could not read.
-	skipped []string
+	// faults are the online nodes the last OnlineNodes left out because their status did not answer.
+	faults []NodeFault
 	// newHolders are the holder VMs created lately, by pool, which Proxmox VE may not list yet.
 	newHolders map[string][]holderVM
 }
@@ -260,8 +267,6 @@ type pveNode struct {
 	// Mem and MaxMem are the memory in use and the total, in bytes, of an online node.
 	Mem    int64 `json:"mem"`
 	MaxMem int64 `json:"maxmem"`
-	// Uptime is the node's uptime in seconds as of its last report, so it moves with every report.
-	Uptime int64 `json:"uptime"`
 }
 
 // removeLocalVolumes deletes the owner VM's volumes on node-local storages. Destroying the VM
@@ -850,10 +855,19 @@ func (p *Proxmox) ownerNode(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("listing nodes: %w", err)
 	}
 	slices.SortFunc(nodes, func(a, b pveNode) int { return strings.Compare(a.Node, b.Node) })
+	var refused []NodeFault
 	for _, node := range nodes {
-		if node.Status == nodeOnline {
-			return node.Node, nil
+		if node.Status != nodeOnline {
+			continue
 		}
+		if _, fault := p.probe(ctx, node.Node); fault != "" {
+			refused = append(refused, NodeFault{Node: node.Node, Reason: fault})
+			continue
+		}
+		return node.Node, nil
+	}
+	if len(refused) > 0 {
+		return "", fmt.Errorf("no Proxmox VE node that is online answers: %s", faultList(refused))
 	}
 	return "", errors.New("no Proxmox VE node is online")
 }
