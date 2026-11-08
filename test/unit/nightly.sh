@@ -88,13 +88,13 @@ while [ "${night}" -lt "${nights}" ]; do
             *) bad "night ${night} leaves ${t} out" ;;
         esac
     done
-    # Every lane is one the merge queue runs, its tests without their options, or one of the
+    # Every lane is one a pull request runs, its tests without their options, or one of the
     # nightly run's own: none runs only at night by accident.
     for lane in ${tests}; do
         strip_options "${lane}"
         case ${queue} in
             *" ${bare} "*) ok ;;
-            *) bad "night ${night} runs the lane ${lane}, which the merge queue does not run as ${bare}" ;;
+            *) bad "night ${night} runs the lane ${lane}, which a pull request does not run as ${bare}" ;;
         esac
     done
     for lane in ${tests}; do
@@ -103,7 +103,7 @@ while [ "${night}" -lt "${nights}" ]; do
             *+*) ;;
             *) continue ;;
         esac
-        # The options are the first test's, and the lane's other test runs as in the merge queue.
+        # The options are the first test's, and the lane's other test runs as in a pull request.
         name=${lane%%,*}
         case ${lane#"${name}"} in
             *+*) bad "night ${night}: ${lane} gives options to the test after ${name}" ;;

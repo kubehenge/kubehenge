@@ -1,6 +1,6 @@
 #!/bin/sh
-# Unit test of test/e2e/ci/scope.sh, which picks a merge group's end-to-end tests from the paths it
-# changes: each of the nightly run's four extra tests comes with its own script and the code only it
+# Unit test of test/e2e/ci/scope.sh, which picks the end-to-end tests of a pull request or merge group
+# from the paths it changes: each of the nightly run's four extra tests comes with its own script and the code only it
 # exercises, and a path no rule names brings every other test.
 #
 # The lanes scope.sh prints are matched in the shell, as each process started costs most of this
@@ -138,7 +138,7 @@ read -r all < "${work}/all"
 list=${all}
 compact
 want_all=${list}
-# expect_all <paths>: every lane of the merge queue.
+# expect_all <paths>: every lane of a pull request.
 expect_all() {
     expect_lanes "$1" "${want_all}"
 }
@@ -282,9 +282,9 @@ diffed=$(git -C "${moved}" -c core.quotepath=off diff --name-only --no-renames "
 expect_each "${diffed}" yes talos talos-addons-a
 
 # Every test a rule names is one the nightly run has: scope.sh refuses an unknown name, and the
-# nightly run holds all of them. The same list holds the checks of --all, which stays the merge
-# queue's set without the nightly run's own. It holds 20 lanes at most, as many as a run's jobs at
-# once, with every pair, and each test in one lane only.
+# nightly run holds all of them. The same list holds the checks of --all, which stays a pull
+# request's set without the nightly run's own. It holds 20 lanes at most, as many as a run's jobs
+# at once, with every pair, and each test in one lane only.
 nightly_tests=$(sh "${ci}/nightly.sh" 20000 | jq -j '.[] | split(",")[] | split("+")[0] | . + " "')
 checks=$(
     printf '%s' "${all}" | jq -j '
@@ -366,7 +366,7 @@ expect_values "with Rancher's Turtles changed" yes
 sed 's|depName=ghcr.io/headlamp-k8s/headlamp|depName=ghcr.io/headlamp-k8s/headlamp2|; s|^  # Prometheus, Alertmanager|  # Prometheus and Alertmanager|' "${work}/original.yaml" > "${values}"
 expect_values 'changed outside addons.rancher' no
 
-# --all stays the merge queue's set, without the nightly run's own.
+# --all stays a pull request's set, without the nightly run's own.
 for problem in ${problems}; do
     case ${problem} in
         rancher) echo 'FAIL: --all lists rancher' ;;
