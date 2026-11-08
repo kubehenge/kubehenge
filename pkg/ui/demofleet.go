@@ -678,6 +678,12 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		c.Spec.Paused = new(true)
 	}
 	f.waitForWindow(c, d.AddonChanges)
+	f.etcdTrouble(c, d, since)
+	return c
+}
+
+// etcdTrouble sets the conditions of a demo cluster whose etcd lost its quorum or writes slowly.
+func (f *demoFleet) etcdTrouble(c *clusterv1.Cluster, d *demoCluster, since metav1.Time) {
 	if d.QuorumLost {
 		since := f.now.Add(-14 * time.Minute)
 		lost := d.ControlPlanes - demoQuorumLostVMs
@@ -700,7 +706,6 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 			c.Status.Conditions = append(c.Status.Conditions, *cond)
 		}
 	}
-	return c
 }
 
 // waitForWindow records on the cluster the add-on changes that wait for its next window.
