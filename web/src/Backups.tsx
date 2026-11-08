@@ -21,6 +21,7 @@ import {
   pollCache,
   pollIdle,
   pollRunning,
+  Said,
   sentence,
   sole,
   timeZones,
@@ -838,7 +839,11 @@ function BackupsSummary({
                   {" "}
                   {s.volumeData ? "with their volumes' data" : "their resources only, not their volumes' data"}
                 </span>
-                {filled(s.message) && <div className="hint message">{sentence(s.message)}</div>}
+                {filled(s.message) && (
+                  <div className="hint message">
+                    <Said text={sentence(s.message)} />
+                  </div>
+                )}
               </div>
             ))}
           </dd>

@@ -2,6 +2,7 @@ package templates
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -9,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/luthermonson/go-proxmox"
+
+	pveapi "github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // preflightPVE serves a node's storages, the datacenter options and the token's privileges.
@@ -261,6 +264,41 @@ func TestCheckTagsNamesTheOptionUnlessTheTokenMaySetAnyTag(t *testing.T) {
 	pve.guests = nil
 	if err = CheckTags(t.Context(), pve.client(t), tags); err == nil || !strings.Contains(err.Error(), "refuses kubehenge, kubehenge-building, rke2.") {
 		t.Errorf("CheckTags = %v with the tags on no guest", err)
+	}
+}
+
+func TestPickNodeSkipsAnOnlineNodeThatAnswers596AndSaysWhy(t *testing.T) {
+	t.Parallel()
+	tmpl, err := Plan(&Request{Distribution: RKE2, NodeOS: DefaultNodeOS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/api2/json")
+		switch path {
+		case "/nodes":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"node": "pve1", "status": "online"}, {"node": "pve2", "status": "online"}}})
+		case "/nodes/pve1/status":
+			conn, _, hijackErr := http.NewResponseController(w).Hijack()
+			if hijackErr != nil {
+				t.Error(hijackErr)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = io.WriteString(conn, "HTTP/1.1 596 certificate verify failed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"cpuinfo": map[string]any{"flags": strings.Join(slices.Concat(cpuLevelFlags[2], cpuLevelFlags[3]), " ")}}})
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := &http.Client{Transport: pveapi.CheckStatus(http.DefaultTransport)}
+	b := &Builder{Client: proxmox.NewClient(srv.URL+"/api2/json", proxmox.WithHTTPClient(client)), Candidates: []string{"pve1", "pve2"}, Node: "pve1"}
+	if err = b.pickNode(t.Context(), &tmpl); err != nil || b.Node != "pve2" {
+		t.Fatalf("pickNode = %v with node %q; want pve2, since pve1 does not answer", err, b.Node)
+	}
+	b.Candidates = []string{"pve1"}
+	if err = b.pickNode(t.Context(), &tmpl); err == nil || !strings.Contains(err.Error(), "pve1 is not reachable through the cluster (HTTP 596: certificate verify failed)") {
+		t.Errorf("pickNode = %v, want pve1's 596 and its reason", err)
 	}
 }
 

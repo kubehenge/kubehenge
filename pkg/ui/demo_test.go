@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
+	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -226,6 +227,29 @@ func TestDemoHoldsTheTalosUpgradeOfPlatform(t *testing.T) {
 	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/platform/activity", ""), &activity)
 	if !slices.ContainsFunc(activity.Events.Items, func(e eventView) bool { return e.Reason == "TalosDrainBlocked" }) {
 		t.Errorf("platform's events %+v", activity.Events)
+	}
+}
+
+func TestDemoHasANodeThatIsOnlineAndNotReachable(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var nodes []pve.Node
+	decodeDemo(t, b.do("GET", "/api/proxmox/nodes", ""), &nodes)
+	faulty := slices.IndexFunc(nodes, func(n pve.Node) bool { return n.Fault != "" })
+	if faulty < 0 || nodes[faulty].Online || nodes[faulty].Fault != "HTTP 596: certificate verify failed" {
+		t.Fatalf("nodes %+v, want one that is not online and says why", nodes)
+	}
+	var clusters []clusterView
+	decodeDemo(t, b.do("GET", "/api/clusters", ""), &clusters)
+	skipped := false
+	for i := range clusters {
+		for _, cond := range clusters[i].Conditions {
+			skipped = skipped || clusters[i].Name == "staging" && cond.Type == provisioner.NodesSkippedCondition && strings.Contains(cond.Message, nodes[faulty].Node)
+		}
+	}
+	if !skipped {
+		t.Error("the demo's staging cluster does not show NodesSkipped for the node")
 	}
 }
 

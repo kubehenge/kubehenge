@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,22 +81,33 @@ func clockSyncAttention(a *attention, v *nodeView, unsynced map[string]bool) {
 // nodeClockWarn is how far a Proxmox VE node's clock may be from the controller's.
 const nodeClockWarn = clockSkewLimit
 
+// memberQEMU is the type of a pool member that is a virtual machine.
+const memberQEMU = "qemu"
+
+// poolNodes are the Proxmox VE nodes that run the VMs of a cluster's pool, by name. The page and the
+// fleet's summary both read them here, so that they list the same warnings. A pool the user may not
+// audit, or that does not answer, has none.
+func (s *Server) poolNodes(ctx context.Context, u user, poolPath string) []string {
+	members, err := s.Accounts.PoolMembers(ctx, u.ticket, strings.TrimPrefix(poolPath, "/pool/"))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for i := range members {
+		if m := &members[i]; m.Type == memberQEMU && m.Template == 0 && m.Node != "" && !slices.Contains(names, m.Node) {
+			names = append(names, m.Node)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 // addNodeClocks adds a warning for each Proxmox VE node that runs one of the cluster's VMs and whose
 // clock is over nodeClockWarn from this machine's. Proxmox VE shows a node's time to users with
 // Sys.Audit on the node, so a user without it sees nothing, and a node that does not answer is left
 // out. The nodes are asked with the user's own ticket.
-func (s *Server) addNodeClocks(ctx context.Context, u user, v *healthView) {
-	nodes := map[string]bool{}
-	for i := range v.Nodes.Items {
-		if vm := v.Nodes.Items[i].VM; vm != nil && vm.Node != "" {
-			nodes[vm.Node] = true
-		}
-	}
-	names := make([]string, 0, len(nodes))
-	for n := range nodes {
-		names = append(names, n)
-	}
-	slices.Sort(names)
+func (s *Server) addNodeClocks(ctx context.Context, u user, poolPath string, v *healthView) {
+	names := s.poolNodes(ctx, u, poolPath)
 	found, asked := s.nodeSkews(ctx, u, names)
 	var a attention
 	for i, name := range names {

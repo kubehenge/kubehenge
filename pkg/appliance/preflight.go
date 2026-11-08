@@ -147,6 +147,8 @@ func checkNodeExists(inv *Inventory, f *Findings, name, missingFix, offlineFix s
 	switch {
 	case i < 0:
 		f.Errors = append(f.Errors, fmt.Sprintf("Node %s is not in the Proxmox VE cluster. %s", name, missingFix))
+	case inv.Nodes[i].Fault != "":
+		f.Errors = append(f.Errors, fmt.Sprintf("Node %s is online but not reachable through the cluster (%s). Run `pvecm updatecerts --force` on it, then restart pveproxy.", name, inv.Nodes[i].Fault))
 	case !inv.Nodes[i].Online:
 		f.Errors = append(f.Errors, fmt.Sprintf("Node %s is offline. %s", name, offlineFix))
 	default:

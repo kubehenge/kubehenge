@@ -11,6 +11,7 @@ import {
   Dialog,
   ErrorBox,
   RowMenu,
+  Said,
   Skeleton,
   Status,
   age,
@@ -297,7 +298,11 @@ function MachineStatusCell({
     <td data-label="Status" className="nowrap">
       <Status state={s.state} text={s.text} />
       {node?.unschedulable === true && <div className="hint">Cordoned</div>}
-      {node?.down === true && filled(node.message) && <Detail>{node.message}</Detail>}
+      {node?.down === true && filled(node.message) && (
+        <Detail>
+          <Said text={node.message} />
+        </Detail>
+      )}
       {m.replacing === true && filled(m.waiting) && <Detail>{m.waiting}</Detail>}
       {filled(m.held) && <Detail>{heldText(m)}</Detail>}
       {filled(m.stalled) && <Detail>{m.stalled}</Detail>}

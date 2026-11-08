@@ -144,6 +144,9 @@ type demoCluster struct {
 	// Held is set on a cluster whose last machine sits on a Proxmox VE node in maintenance, so that
 	// its replacement is held.
 	Held bool `json:"held"`
+	// AvoidSkewedNode keeps the cluster's VMs off the node whose clock is wrong, so that the cluster
+	// stays healthy beside those that show the warning.
+	AvoidSkewedNode bool `json:"avoidSkewedNode"`
 	// Unsynced is set on a Talos cluster whose last worker has not synced its clock.
 	Unsynced bool `json:"unsynced"`
 	// Paused is a cluster whose reconciling is paused.
@@ -306,6 +309,13 @@ func (f *demoFleet) etcdHealth() ([]client.Object, error) {
 	}), nil
 }
 
+// unreachable is the demo's node that is online in the cluster while calls forwarded to it fail
+// with 596, as after a join that lost its certificate.
+func (f *demoFleet) unreachable() provisioner.NodeFault {
+	nodes := f.data.ProxmoxNodes
+	return provisioner.NodeFault{Node: nodes[len(nodes)-1], Reason: "HTTP 596: certificate verify failed"}
+}
+
 // proxmoxReach is the controller's record of its last test of the Proxmox VE tokens, with two that
 // fail: the controller's, which lost a privilege, and a cluster's, whose API certificate is from a
 // CA it does not know.
@@ -321,7 +331,7 @@ func (f *demoFleet) proxmoxReach() (*corev1.ConfigMap, error) {
 			Problem: provisioner.TokenCertificate, Error: "x509: certificate signed by unknown authority",
 		})
 	}
-	raw, err := json.Marshal(provisioner.Reachability{OK: true, Tokens: tokens, Checked: f.now})
+	raw, err := json.Marshal(provisioner.Reachability{OK: true, Tokens: tokens, Unreachable: []provisioner.NodeFault{f.unreachable()}, Checked: f.now})
 	if err != nil {
 		return nil, fmt.Errorf("the demo's Proxmox VE reachability: %w", err)
 	}
@@ -389,7 +399,7 @@ func (f *demoFleet) templateLines() error {
 	vmid := demoTemplateVMID
 	add := func(t *templates.Template) {
 		f.templates = append(f.templates, pve.Member{
-			VMID: vmid, Node: f.data.ProxmoxNodes[vmid%len(f.data.ProxmoxNodes)], Type: "qemu", Name: t.Name, Template: 1, Tags: strings.Join(t.Tags, ";"),
+			VMID: vmid, Node: f.data.ProxmoxNodes[vmid%len(f.data.ProxmoxNodes)], Type: memberQEMU, Name: t.Name, Template: 1, Tags: strings.Join(t.Tags, ";"),
 		})
 		vmid++
 	}
@@ -493,6 +503,10 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 		f.objects = append(f.objects, demoReferences(&n)...)
 	}
 	nodes := f.data.ProxmoxNodes
+	hosts := nodes
+	if d.AvoidSkewedNode {
+		hosts = slices.DeleteFunc(slices.Clone(nodes), func(n string) bool { return n == f.skewedNode() })
+	}
 	for i, m := range machines {
 		if d.Held && i == len(machines)-1 {
 			m.Annotations = map[string]string{
@@ -508,7 +522,7 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 			mem = 16 * demoGiB
 		}
 		f.members[names.Pool] = append(f.members[names.Pool], pve.Member{
-			VMID: *vmid, Node: nodes[i%len(nodes)], Type: "qemu", Name: m.Spec.InfrastructureRef.Name,
+			VMID: *vmid, Node: hosts[i%len(hosts)], Type: memberQEMU, Name: m.Spec.InfrastructureRef.Name,
 			Status: f.vmStatus(d, m, i), CPU: 0.08 + float64((*vmid*7)%23)/100, Cores: 4, Memory: mem * int64(40+(*vmid*13)%35) / 100, MaxMem: mem,
 			Uptime: int64(f.now.Sub(m.CreationTimestamp.Time).Seconds()),
 		})
@@ -1160,7 +1174,11 @@ func (a *demoAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
 	nodes := a.fleet.data.ProxmoxNodes
 	list := make([]pve.Node, 0, len(nodes))
 	for i, node := range nodes {
-		list = append(list, pve.Node{Node: node, Online: true, Memory: int64(148+22*i) * demoGiB, MaxMemory: 384 * demoGiB})
+		n := pve.Node{Node: node, Online: true, Memory: int64(148+22*i) * demoGiB, MaxMemory: 384 * demoGiB}
+		if fault := a.fleet.unreachable(); fault.Node == node {
+			n.Online, n.Fault = false, fault.Reason
+		}
+		list = append(list, n)
 	}
 	return list, nil
 }
@@ -1173,9 +1191,17 @@ func (*demoAccounts) DNS(context.Context, *pve.Ticket, string) (pve.NodeDNS, err
 	return pve.NodeDNS{Servers: []string{"10.20.0.53"}, Search: "corp.example"}, nil
 }
 
+// skewedNode is the node whose clock runs ahead, the second one, or none.
+func (f *demoFleet) skewedNode() string {
+	if nodes := f.data.ProxmoxNodes; len(nodes) > 1 {
+		return nodes[1]
+	}
+	return ""
+}
+
 // NodeTime is the node's clock, which the demo has the second node run a minute and a half ahead.
 func (a *demoAccounts) NodeTime(_ context.Context, _ *pve.Ticket, node string) (time.Time, error) {
-	if nodes := a.fleet.data.ProxmoxNodes; len(nodes) > 1 && node == nodes[1] {
+	if node == a.fleet.skewedNode() {
 		return a.fleet.now.Add(95 * time.Second), nil
 	}
 	return a.fleet.now, nil

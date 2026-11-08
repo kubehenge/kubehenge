@@ -504,6 +504,45 @@ func TestHealthReadOnceForEveryViewer(t *testing.T) {
 	}
 }
 
+func TestFleetHealthCountsWhatThePageListsForANodeThatIsNotReachable(t *testing.T) {
+	t.Parallel()
+	two := cluster("default", "two")
+	two.UID = "uid-two"
+	two.Status.Conditions = append(two.Status.Conditions, metav1.Condition{
+		Type: provisioner.NodesSkippedCondition, Status: metav1.ConditionTrue, Reason: "NotReachable",
+		Message: "Not reachable through the cluster: pve3 (HTTP 596: certificate verify failed)",
+	})
+	h, _ := healthHarness(t, two)
+	h.accounts.nodeSkew = map[string]time.Duration{"pve2": 95 * time.Second}
+	b := h.browser()
+	b.signIn("admin@pve")
+	rec := b.do("GET", "/api/clusters/default/two/health", "")
+	expect(t, rec, http.StatusOK)
+	var page healthView
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	rec = b.do("GET", "/api/fleet/health", "")
+	expect(t, rec, http.StatusOK)
+	var fleet []fleetHealthView
+	if err := json.Unmarshal(rec.Body.Bytes(), &fleet); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(fleet, func(f fleetHealthView) bool { return f.Name == "two" })
+	if i < 0 {
+		t.Fatalf("fleet %+v lacks cluster two", fleet)
+	}
+	listed := slices.ContainsFunc(page.Attention, func(a attentionView) bool {
+		return a.What == "Proxmox VE node not reachable" && a.Command == "pvecm updatecerts --force" && !strings.Contains(a.Message, "`")
+	})
+	if !listed {
+		t.Errorf("the page lacks the not-reachable item: %+v", page.Attention)
+	}
+	if got := len(fleet[i].Attention) + fleet[i].More; got != len(page.Attention) {
+		t.Errorf("the fleet counts %d items and the page lists %d", got, len(page.Attention))
+	}
+}
+
 func TestFleetHealthSumsUpTheClustersTheUserSees(t *testing.T) {
 	t.Parallel()
 	two := cluster("default", "two")

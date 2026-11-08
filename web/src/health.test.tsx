@@ -3,8 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { fakeServer, held, reads, type Route } from "./fake-server";
+import { standing } from "./fleet";
 import { HealthView } from "./Health";
-import type { Cluster, ClusterHealth, UnwellPod } from "./types";
+import type { Cluster, ClusterHealth, FleetHealth, UnwellPod } from "./types";
 
 const minutesAgo = (n: number): string => new Date(Date.now() - n * 60_000).toISOString();
 
@@ -405,6 +406,62 @@ describe("health page", () => {
     const row = within(await screen.findByRole("row", { name: /Something odd/u }));
     expect(row.getByText("Something odd")).toBeInTheDocument();
     expect(row.queryByRole("link", { name: "Something odd" })).not.toBeInTheDocument();
+  });
+
+  it("warns of a Proxmox VE node that is not reachable, with the fix, and drops the row once it answers", async () => {
+    const docs = "https://kubehenge.dev/troubleshooting#a-node-is-online-but-not-reachable";
+    const item = {
+      severity: "warning" as const,
+      section: "nodes",
+      what: "Proxmox VE node not reachable",
+      message:
+        "Not reachable through the cluster: pve3 (HTTP 596: certificate verify failed). Run this on that node, then restart pveproxy:",
+      command: "pvecm updatecerts --force",
+      docs,
+    };
+    const fleet = (verdict: FleetHealth["verdict"], attention: (typeof item)[]): FleetHealth => ({
+      namespace: "default",
+      name: "web",
+      read: new Date().toISOString(),
+      verdict,
+      attention,
+    });
+    fakeServer({ [healthPath]: { body: { ...degraded, attention: [item] } } });
+    const { unmount } = render(<HealthView cluster={cluster} headlamp={undefined} />);
+    const row = within(await screen.findByRole("row", { name: /Proxmox VE node not reachable/u }));
+    expect(row.getByText(/pve3 \(HTTP 596: certificate verify failed\)/u)).toBeInTheDocument();
+    expect(row.getByText("pvecm updatecerts --force").tagName).toBe("CODE");
+    expect(row.getByRole("link", { name: "How to fix" })).toHaveAttribute("href", docs);
+    expect(standing(cluster, fleet("degraded", [item]))).toMatchObject({
+      group: "needs",
+      state: "warning",
+      verdict: "Degraded",
+      reason: "Proxmox VE node not reachable",
+    });
+    unmount();
+
+    fakeServer({ [healthPath]: { body: { ...degraded, verdict: "healthy", attention: [] } } });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+    await screen.findByRole("list", { name: "At a glance" });
+    expect(screen.queryByText("Proxmox VE node not reachable")).not.toBeInTheDocument();
+    expect(standing(cluster, fleet("healthy", []))).toMatchObject({ group: "healthy", verdict: "Available" });
+  });
+
+  it("shows a command in an attention message as code", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [
+            { severity: "warning", section: "nodes", what: "A fix", message: "Run `qm unlock 100` on the node." },
+          ],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+    const row = within(await screen.findByRole("row", { name: /A fix/u }));
+    expect(row.getByText("qm unlock 100").tagName).toBe("CODE");
+    expect(row.queryByText(/`/u)).not.toBeInTheDocument();
   });
 
   it("lists a Proxmox VE upgrade under way, its interface sizes and the HA rules that wait", async () => {

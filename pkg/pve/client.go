@@ -2,6 +2,7 @@
 package pve
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -72,6 +73,29 @@ func (cfg Config) Upstream() (*url.URL, http.RoundTripper, error) {
 		return nil, nil, fmt.Errorf("the Proxmox VE URL %q: %w", cfg.URL, err)
 	}
 	return u, httpClient.Transport, nil
+}
+
+// CheckStatus wraps a transport so that it fails on the answers go-proxmox would take as success.
+// Connect and ConnectSession already use it, and a test's client needs it to see what they see.
+func CheckStatus(next http.RoundTripper) http.RoundTripper { return statusChecked{next} }
+
+// Reason says in a few words why a call to a node failed: the status Proxmox VE answered with and
+// its reason text, as `HTTP 596: certificate verify failed`, or that the node did not answer in time.
+func Reason(err error) string {
+	var api *APIError
+	switch {
+	case errors.As(err, &api):
+		code, text, _ := strings.Cut(api.Status, " ")
+		if text = strings.TrimSpace(text); text != "" {
+			return "HTTP " + code + ": " + text
+		}
+		return "HTTP " + code
+	case errors.Is(err, context.DeadlineExceeded):
+		return "no answer in time"
+	case errors.Is(err, proxmox.ErrNotAuthorized), errors.Is(err, ErrForbidden), errors.Is(err, ErrAuthentication):
+		return "not authorised"
+	}
+	return err.Error()
 }
 
 // statusChecked turns into an error every answer go-proxmox would take as success without

@@ -95,10 +95,18 @@ function rulesHint({ haRules, haRulesError }: HARulesRead): JSX.Element | undefi
 
 const noNodes: string[] = [];
 
+/** nodeNote says after a node's name why it cannot take VMs: down, or a member whose forwarded calls fail. */
+export const nodeNote = (n: PveNode): string => {
+  if (n.online) {
+    return "";
+  }
+  return filled(n.fault) ? " (not reachable)" : " (offline)";
+};
+
 // choices are the nodes to tick: those the user sees, and those the cluster has that they do not,
 // which a change may keep.
-function choices(nodes: PveNode[], kept: string[]): { node: string; note: string }[] {
-  const seen = nodes.map((n) => ({ node: n.node, note: n.online ? "" : " (offline)" }));
+function choices(nodes: PveNode[], kept: string[]): { node: string; note: string; why?: string }[] {
+  const seen = nodes.map((n) => ({ node: n.node, note: nodeNote(n), why: n.fault }));
   const unseen = kept
     .filter((x) => !nodes.some((n) => n.node === x))
     .map((node) => ({ node, note: " (not shown to you)" }));
@@ -195,8 +203,8 @@ export function PlacementFields({
       {value.placement === "nodes" && (
         <fieldset className="group">
           <legend>Nodes</legend>
-          {choices(nodes, kept).map(({ node, note }) => (
-            <label key={node} className="check">
+          {choices(nodes, kept).map(({ node, note, why }) => (
+            <label key={node} className="check" title={why}>
               <input
                 type="checkbox"
                 aria-invalid={problem === undefined ? undefined : true}

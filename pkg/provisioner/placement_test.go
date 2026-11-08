@@ -231,8 +231,8 @@ func TestOnlineNodesLeavesOutNodesThatAreDown(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if statuses["/api2/json/nodes/pve1/status"] != 1 || statuses["/api2/json/nodes/pve3/status"] != 1 {
-		t.Errorf("read the nodes' CPUs %v times; once each is enough", statuses)
+	if len(statuses) != 2 || statuses["/api2/json/nodes/pve1/status"] != 2 || statuses["/api2/json/nodes/pve3/status"] != 2 {
+		t.Errorf("read the nodes' status %v times; want each online node once per read and the offline one never", statuses)
 	}
 }
 

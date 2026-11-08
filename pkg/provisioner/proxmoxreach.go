@@ -35,8 +35,11 @@ type Reachability struct {
 	// has it. Without it Kubehenge cannot keep machines from replacement while a host is emptied.
 	Blind string `json:"blind,omitempty"`
 	// Tokens is the last test of every token Kubehenge relies on, which Tokens of ProxmoxReach makes.
-	Tokens  []TokenState `json:"tokens,omitempty"`
-	Checked time.Time    `json:"checked"`
+	Tokens []TokenState `json:"tokens,omitempty"`
+	// Unreachable are the nodes Proxmox VE lists as online that do not answer a call forwarded to
+	// them, as the Placer last read.
+	Unreachable []NodeFault `json:"unreachable,omitempty"`
+	Checked     time.Time   `json:"checked"`
 }
 
 // hostBlindPrivilege is what reading the HA manager's status takes (`Status.pm`, manager_status).
@@ -66,6 +69,9 @@ type ProxmoxReach struct {
 	// that is zero. Nil leaves them untested.
 	Tokens        *TokenProbes
 	TokenInterval time.Duration
+	// Unreachable, when set, names the online nodes that do not answer, as the Placer last found.
+	// It reads what that look kept, so it adds no call.
+	Unreachable func() []NodeFault
 
 	mu         sync.Mutex
 	lastStates []TokenState
@@ -110,6 +116,9 @@ func (r *ProxmoxReach) publish(ctx context.Context) error {
 		outcome.Blind = hostBlindPrivilege
 	}
 	outcome.Tokens = r.tokenStates(ctx, outcome.Checked)
+	if r.Unreachable != nil {
+		outcome.Unreachable = r.Unreachable()
+	}
 	raw, err := json.Marshal(outcome)
 	if err != nil {
 		return fmt.Errorf("encoding the outcome: %w", err)

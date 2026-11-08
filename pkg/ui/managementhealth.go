@@ -109,8 +109,11 @@ type proxmoxReachView struct {
 	// Blind is the privilege the controller's token lacks to see hosts in maintenance.
 	Blind string `json:"blind,omitempty"`
 	// Tokens are the tokens that fail their test, each with what is wrong. Working ones are not listed.
-	Tokens  []tokenProblemView `json:"tokens,omitempty"`
-	Checked time.Time          `json:"checked"`
+	Tokens []tokenProblemView `json:"tokens,omitempty"`
+	// Unreachable are the nodes that are online in the cluster and do not answer calls forwarded to
+	// them, each with Proxmox VE's reason.
+	Unreachable []provisioner.NodeFault `json:"unreachable,omitempty"`
+	Checked     time.Time               `json:"checked"`
 }
 
 // tokenProblemView is a Proxmox VE token that is refused, cannot verify the API or lacks privileges.
@@ -149,7 +152,7 @@ func (s *Server) proxmoxReach(ctx context.Context, kube client.Client) *proxmoxR
 		s.Log.WarnContext(ctx, "reading whether the controller reaches Proxmox VE", "error", err)
 		return nil
 	}
-	return &proxmoxReachView{OK: r.OK, Error: r.Error, Blind: r.Blind, Tokens: tokenProblems(r.Tokens), Checked: r.Checked}
+	return &proxmoxReachView{OK: r.OK, Error: r.Error, Blind: r.Blind, Tokens: tokenProblems(r.Tokens), Unreachable: r.Unreachable, Checked: r.Checked}
 }
 
 func readManagementHealth(ctx context.Context, kube client.Client) (managementHealthView, error) {

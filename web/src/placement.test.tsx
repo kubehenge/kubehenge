@@ -42,6 +42,7 @@ async function openPlacement(haRules: HARules = readRules): Promise<{
       body: [
         { node: "pve1", online: true },
         { node: "pve2", online: false },
+        { node: "pve3", online: false, fault: "HTTP 596: certificate verify failed" },
       ],
     },
     "GET /api/proxmox/ha-rules": { body: haRules },
@@ -67,6 +68,8 @@ describe("a cluster's placement", () => {
     expect(within(dialog).queryByText("Placement")).toBeNull();
     expect(within(dialog).getByLabelText(/^pve9 \(not shown to you\)$/u)).toBeChecked();
     expect(within(dialog).getByLabelText(/^pve2 \(offline\)$/u)).not.toBeChecked();
+    expect(within(dialog).getByLabelText(/^pve3 \(not reachable\)$/u)).not.toBeChecked();
+    expect(within(dialog).getByTitle("HTTP 596: certificate verify failed")).toBeInTheDocument();
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByLabelText(/^pve9/u));
     expect(save).toBeDisabled();

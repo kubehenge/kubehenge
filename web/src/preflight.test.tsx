@@ -38,6 +38,21 @@ describe("the pre-flight findings", () => {
     expect(screen.getByText("10.96.0.0/12")).toBeInTheDocument();
   });
 
+  it("shows a command the server marks in backticks as code", () => {
+    render(
+      <PreflightFindings
+        findings={{
+          errors: ["Not reachable through the cluster: pve3 (HTTP 596). Run `pvecm updatecerts --force` there."],
+          warnings: ["Run `qm unlock 100` first."],
+        }}
+      />,
+    );
+    const errors = within(screen.getByRole("alert"));
+    expect(errors.getByText("pvecm updatecerts --force").tagName).toBe("CODE");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("`");
+    expect(within(screen.getByRole("list", { name: "Warnings" })).getByText("qm unlock 100").tagName).toBe("CODE");
+  });
+
   it("shows nothing before Proxmox VE has been asked", () => {
     const { container } = render(<PreflightFindings findings={undefined} />);
     expect(container).toBeEmptyDOMElement();

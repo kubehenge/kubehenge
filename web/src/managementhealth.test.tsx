@@ -48,6 +48,22 @@ describe("the management cluster's health", () => {
     ]);
   });
 
+  it("names a Proxmox VE node that is online and does not answer forwarded calls, with its reason", async () => {
+    show({
+      answers: true,
+      nodes: [ready("mgmt-1")],
+      controllers: [],
+      proxmox: {
+        ok: true,
+        checked: "2026-01-02T12:00:00Z",
+        unreachable: [{ node: "pve2", reason: "HTTP 596: certificate verify failed" }],
+      },
+    });
+    await expect(screen.findByText("Degraded")).resolves.toBeInTheDocument();
+    const items = within(screen.getByRole("list", { name: "Proxmox VE nodes" })).getAllByRole("listitem");
+    expect(items.map((i) => i.textContent)).toStrictEqual(["Not reachablepve2: HTTP 596: certificate verify failed"]);
+  });
+
   it("says when the cluster does not answer, with the reason behind Details", async () => {
     show({ answers: false, error: "dial tcp 192.0.2.20:6443: connect: connection refused" });
     await expect(screen.findByText("Not answering")).resolves.toBeInTheDocument();
@@ -132,6 +148,22 @@ describe("the management cluster's health", () => {
     const list = screen.getByRole("list", { name: "Proxmox VE tokens" });
     expect(list).toHaveTextContent("Controller token lacks Realm.AllocateUser on /access/realm/pve.");
     expect(list).toHaveTextContent("Certificate");
+  });
+
+  it("shows a command in a token's message as code", async () => {
+    show({
+      answers: true,
+      nodes: [ready("mgmt-1")],
+      controllers: [],
+      proxmox: {
+        ok: true,
+        checked: "2026-01-02T12:00:00Z",
+        tokens: [{ name: "Controller", problem: "Privileges", message: "Grant it with `pveum acl modify /`." }],
+      },
+    });
+    const code = await screen.findByText("pveum acl modify /");
+    expect(code.tagName).toBe("CODE");
+    expect(screen.getByRole("list", { name: "Proxmox VE tokens" })).not.toHaveTextContent("`");
   });
 
   it("warns when the token cannot see host maintenance", async () => {

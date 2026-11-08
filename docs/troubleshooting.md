@@ -434,11 +434,21 @@ When creating one failed, the message reads `Proxmox VE objects:` followed by th
 
 #### Placement refused
 
-A Proxmox VE node that shows online but whose status cannot be read is left out of every cluster's placement. Each cluster then has a `NodesSkipped` condition naming the node. It clears once the node answers.
+A Proxmox VE node that shows online but does not answer forwarded calls is left out of placement, like a node that is down. See [a node is online but not reachable](#a-node-is-online-but-not-reachable).
 
 A cluster is refused when none of the nodes it may use has its storage or bridge, or can clone its template. The message names the storage, bridge or template and the fix. A storage outside the management cluster's `workload_datastores` is refused too, because the clusters' tokens hold no rights there.
 
 A VNet counts as present on the nodes where its zone is applied. Where Kubehenge's token cannot see the zone, it counts the VNet as present on every node.
+
+#### A node is online but not reachable
+
+Proxmox VE lists a node as online while every call forwarded to it through another node fails with HTTP 596. Clones and starts on it then fail and machines hang. Kubehenge asks each online node for its status on every read and leaves out the ones that do not answer.
+
+- Each cluster has a `NodesSkipped` condition naming the node with the status and Proxmox VE's reason, such as `pve2 (HTTP 596: certificate verify failed)`.
+- The management cluster's Health page lists the node as not reachable. The create wizard and the placement choices show it as unavailable.
+- When no node answers, new VMs are refused with the same reasons.
+
+The usual causes are a node certificate that is missing, expired or replaced. A second node joining a one-node cluster can also lose the new node's certificate. Run `pvecm updatecerts --force` on the node, then `systemctl restart pveproxy`. The condition clears on the next read, within about 15 seconds.
 
 #### The first cluster of a distribution
 

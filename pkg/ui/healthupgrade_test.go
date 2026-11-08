@@ -10,6 +10,30 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
+func TestHealthWarnsOfANodeThatIsNotReachableUntilItAnswers(t *testing.T) {
+	t.Parallel()
+	c := &clusterv1.Cluster{Name: "web", Status: clusterv1.ClusterStatus{Conditions: []metav1.Condition{{
+		Type: provisioner.NodesSkippedCondition, Status: metav1.ConditionTrue, Reason: "NotReachable",
+		Message: "Not reachable through the cluster: pve3 (HTTP 596: certificate verify failed)",
+	}}}}
+	var a attention
+	watchAttention(c, &a)
+	if len(a) != 1 || a[0].Severity != severityWarning || a[0].What != "Proxmox VE node not reachable" ||
+		!strings.Contains(a[0].Message, "pve3 (HTTP 596: certificate verify failed)") ||
+		strings.Contains(a[0].Message, "`") || a[0].Command != "pvecm updatecerts --force" || !strings.Contains(a[0].Docs, "#a-node-is-online-but-not-reachable") {
+		t.Fatalf("rows %+v, want one warning naming the node, its 596 and the fix", a)
+	}
+	if got := verdict(c, false, a.sorted()); got != "degraded" {
+		t.Errorf("verdict %q, want degraded", got)
+	}
+	c.Status.Conditions = nil
+	a = nil
+	watchAttention(c, &a)
+	if len(a) != 0 {
+		t.Errorf("rows %+v once the node answers", a)
+	}
+}
+
 func TestHealthListsAProxmoxVEUpgradeUnderWay(t *testing.T) {
 	t.Parallel()
 	c := &clusterv1.Cluster{Name: "web", Status: clusterv1.ClusterStatus{Conditions: []metav1.Condition{{

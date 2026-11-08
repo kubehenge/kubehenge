@@ -35,6 +35,7 @@ import {
   type FamilyChoice,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
+import { nodeNote } from "./Placement";
 import type {
   BackupTarget,
   Bridge,
@@ -61,6 +62,7 @@ import {
   passphraseShort,
   pollIdle,
   pollRunning,
+  Said,
   timeZones,
   usePoll,
   weekdayName,
@@ -2659,14 +2661,18 @@ export function PreflightFindings({ findings }: { findings: SetupFindings | unde
       {findings.errors.length > 0 && (
         <ul className="health-short findings findings-errors" role="alert" aria-label="Errors">
           {findings.errors.map((m) => (
-            <li key={m}>{m}</li>
+            <li key={m}>
+              <Said text={m} />
+            </li>
           ))}
         </ul>
       )}
       {findings.warnings.length > 0 && (
         <ul className="health-short findings" aria-label="Warnings">
           {findings.warnings.map((m) => (
-            <li key={m}>{m}</li>
+            <li key={m}>
+              <Said text={m} />
+            </li>
           ))}
         </ul>
       )}
@@ -2851,7 +2857,7 @@ function setupFields({
         <fieldset className="group">
           <legend>Proxmox VE nodes</legend>
           {nodes.map((n) => (
-            <label key={n.node} className="check">
+            <label key={n.node} className="check" title={n.fault}>
               <input
                 type="checkbox"
                 disabled={!n.online && !form.nodes.includes(n.node)}
@@ -2859,7 +2865,7 @@ function setupFields({
                 onChange={(e) => toggle("nodes", n.node, e.target.checked)}
               />{" "}
               {n.node}
-              {!n.online && <span className="muted"> (offline)</span>}
+              {!n.online && <span className="muted">{nodeNote(n)}</span>}
             </label>
           ))}
           <FieldError message={shown("nodes")} />

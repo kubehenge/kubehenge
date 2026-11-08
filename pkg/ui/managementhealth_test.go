@@ -13,6 +13,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 func managementNodeObject(name string, ready corev1.ConditionStatus, message string) *corev1.Node {
@@ -99,6 +101,16 @@ func TestManagementHealthSaysWhenHostMaintenanceIsNotVisible(t *testing.T) {
 	got := readHealth(t, h, "admin@pve", http.StatusOK)
 	if got.Proxmox == nil || !got.Proxmox.OK || got.Proxmox.Blind != "Sys.Audit on /" {
 		t.Fatalf("health %+v, want the missing privilege", got.Proxmox)
+	}
+}
+
+func TestManagementHealthNamesTheNodesThatDoNotAnswerForwardedCalls(t *testing.T) {
+	t.Parallel()
+	raw := `{"ok":true,"checked":"2026-01-02T12:00:00Z","unreachable":[{"node":"pve2","reason":"HTTP 596: certificate verify failed"}]}`
+	got := readHealth(t, newHarness(t, reachMap(raw)), "admin@pve", http.StatusOK)
+	want := []provisioner.NodeFault{{Node: "pve2", Reason: "HTTP 596: certificate verify failed"}}
+	if got.Proxmox == nil || !reflect.DeepEqual(got.Proxmox.Unreachable, want) {
+		t.Fatalf("health %+v, want %+v", got.Proxmox, want)
 	}
 }
 

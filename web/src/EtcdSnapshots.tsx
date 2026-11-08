@@ -33,6 +33,7 @@ import {
   pollCache,
   pollIdle,
   pollRunning,
+  Said,
   sentence,
   sole,
   timeZones,
@@ -551,7 +552,9 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
           </span>
         )}
         {v.condition?.status === "False" && filled(v.condition.message) && (
-          <Detail>{sentence(v.condition.message)}</Detail>
+          <Detail>
+            <Said text={sentence(v.condition.message)} />
+          </Detail>
         )}
       </dd>
     </dl>
@@ -584,7 +587,11 @@ function RestoreState({
           {source}
           {filled(r.by) && `, by ${r.by}`}, {when(at)}
         </span>
-        {filled(r.message) && <Detail>{sentence(r.message)}</Detail>}
+        {filled(r.message) && (
+          <Detail>
+            <Said text={sentence(r.message)} />
+          </Detail>
+        )}
         {filled(r.before) && (
           <div className="hint">
             Undo by restoring {before === undefined ? r.before : `the snapshot of ${when(before.time)}`}
