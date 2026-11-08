@@ -415,7 +415,8 @@ describe("health page", () => {
       section: "nodes",
       what: "Proxmox VE node not reachable",
       message:
-        "Not reachable through the cluster: pve3 (HTTP 596: certificate verify failed). Run `pvecm updatecerts --force` on it, then restart pveproxy.",
+        "Not reachable through the cluster: pve3 (HTTP 596: certificate verify failed). On the node, then restart pveproxy:",
+      command: "pvecm updatecerts --force",
       docs,
     };
     const fleet = (verdict: FleetHealth["verdict"], attention: (typeof item)[]): FleetHealth => ({
@@ -429,6 +430,7 @@ describe("health page", () => {
     const { unmount } = render(<HealthView cluster={cluster} headlamp={undefined} />);
     const row = within(await screen.findByRole("row", { name: /Proxmox VE node not reachable/u }));
     expect(row.getByText(/pve3 \(HTTP 596: certificate verify failed\)/u)).toBeInTheDocument();
+    expect(row.getByText("pvecm updatecerts --force").tagName).toBe("CODE");
     expect(row.getByRole("link", { name: "How to fix" })).toHaveAttribute("href", docs);
     expect(standing(cluster, fleet("degraded", [item]))).toMatchObject({
       group: "needs",

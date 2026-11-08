@@ -40,8 +40,8 @@ func upgradeAttention(c *clusterv1.Cluster, a *attention) {
 	if cond := trueCondition(c, provisioner.NodesSkippedCondition); cond != nil {
 		*a = append(*a, attentionView{
 			Severity: severityWarning, Section: sectionNodes, What: "Proxmox VE node not reachable",
-			Message: cond.Message + ". Run `pvecm updatecerts --force` on it, then restart pveproxy.",
-			Since:   cond.LastTransitionTime.Time, Docs: notReachableDocs,
+			Message: cond.Message + ". On the node, then restart pveproxy:",
+			Since:   cond.LastTransitionTime.Time, Docs: notReachableDocs, Command: "pvecm updatecerts --force",
 		})
 	}
 	if cond := trueCondition(c, provisioner.HARulesPendingCondition); cond != nil {

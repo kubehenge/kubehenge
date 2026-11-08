@@ -277,6 +277,8 @@ export interface Attention {
   accept?: string;
   /** The page that says how to fix the item. */
   docs?: string;
+  /** A command to run, shown as code under the message. */
+  command?: string;
 }
 
 export interface HealthVM {

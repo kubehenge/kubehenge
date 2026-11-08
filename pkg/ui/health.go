@@ -120,6 +120,8 @@ type attentionView struct {
 	Accept string `json:"accept,omitempty"`
 	// Docs is the address of the page that says how to fix the item.
 	Docs string `json:"docs,omitempty"`
+	// Command is a command the fix runs, shown apart from the message.
+	Command string `json:"command,omitempty"`
 }
 
 type podRef struct {
@@ -343,7 +345,7 @@ func (s *Server) clusterHealth(w http.ResponseWriter, r *http.Request, u user) {
 	v.Nodes.Items = slices.Clone(shared.Nodes.Items)
 	v.VMs = s.addVMs(r.Context(), u, c, access.path, v.Nodes.Items)
 	v.Attention = slices.Clone(shared.Attention)
-	s.addNodeClocks(r.Context(), u, &v)
+	s.addNodeClocks(r.Context(), u, access.path, &v)
 	v.Logs = u.namespaces.has(c.Namespace) && access.held.Has(privKubeconfig) && v.Workload == ""
 	writeJSON(w, http.StatusOK, v)
 }

@@ -20,7 +20,7 @@ func TestHealthWarnsOfANodeThatIsNotReachableUntilItAnswers(t *testing.T) {
 	watchAttention(c, &a)
 	if len(a) != 1 || a[0].Severity != severityWarning || a[0].What != "Proxmox VE node not reachable" ||
 		!strings.Contains(a[0].Message, "pve3 (HTTP 596: certificate verify failed)") ||
-		!strings.Contains(a[0].Message, "pvecm updatecerts --force") || !strings.Contains(a[0].Docs, "#a-node-is-online-but-not-reachable") {
+		strings.Contains(a[0].Message, "`") || a[0].Command != "pvecm updatecerts --force" || !strings.Contains(a[0].Docs, "#a-node-is-online-but-not-reachable") {
 		t.Fatalf("rows %+v, want one warning naming the node, its 596 and the fix", a)
 	}
 	if got := verdict(c, false, a.sorted()); got != "degraded" {

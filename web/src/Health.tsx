@@ -450,6 +450,11 @@ function NeedsAttention({
                   {fix === undefined && pageSections.has(a.section) && <a href={`#${anchor(a.section)}`}>{a.what}</a>}
                   {fix === undefined && !pageSections.has(a.section) && a.what}
                   {filled(a.message) && <div className="hint message">{localDates(a.message)}</div>}
+                  {filled(a.command) && (
+                    <div>
+                      <code>{a.command}</code>
+                    </div>
+                  )}
                   {filled(a.accept) && <AcceptUpgrade cluster={cluster} version={a.accept} />}
                   {filled(a.docs) && (
                     <div>
