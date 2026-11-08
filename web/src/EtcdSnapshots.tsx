@@ -614,7 +614,7 @@ function SnapshotsTable({
   return (
     <div className="box scroll">
       <h3>Snapshots</h3>
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Taken</th>
@@ -641,9 +641,9 @@ function SnapshotsTable({
                 <td title={s.name}>
                   {when(s.time)} <span className="muted">({age(s.time)} ago)</span>
                 </td>
-                <td>{s.kubernetesVersion ?? ""}</td>
-                <td>{s.revision ?? ""}</td>
-                <td>{s.size === undefined ? "" : bytes(s.size)}</td>
+                <td data-label="Kubernetes">{s.kubernetesVersion ?? ""}</td>
+                <td data-label="Revision">{s.revision ?? ""}</td>
+                <td data-label="Size">{s.size === undefined ? "" : bytes(s.size)}</td>
                 <td className="row-action">
                   {v.canRestore ? (
                     <a

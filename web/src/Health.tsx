@@ -94,7 +94,11 @@ function worst(severities: Severity[]): State {
 
 // since shows how long ago, with the time itself on hover.
 function Since({ at }: { at?: string | undefined }): JSX.Element {
-  return <td title={filled(at) ? new Date(at).toLocaleString() : undefined}>{filled(at) ? age(at) : ""}</td>;
+  return (
+    <td data-label="Since" title={filled(at) ? new Date(at).toLocaleString() : undefined}>
+      {filled(at) ? age(at) : ""}
+    </td>
+  );
 }
 
 // SectionNote says why a section shows less than it should: it could not be read, or only in part.
@@ -506,7 +510,7 @@ const cores = (millicores: number): string => (millicores / millicoresPerCore).t
 
 function CPUCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefined }): JSX.Element {
   return (
-    <td>
+    <td data-label="CPU">
       {vm !== undefined && vm.status === "running" && (
         <div className="use">
           <Sparkline load={vm.load ?? []} />
@@ -526,7 +530,7 @@ function CPUCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefined }
 
 function MemoryCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefined }): JSX.Element {
   return (
-    <td>
+    <td data-label="Memory">
       {vm !== undefined && vm.status === "running" && vm.maxMemory > 0 && (
         <div className="use">
           <meter className="bar" min={0} max={vm.maxMemory} value={vm.memory} aria-label={`${n.name}'s memory use`} />
@@ -602,7 +606,7 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
           </ul>
         )}
       </td>
-      <td>
+      <td data-label="Status">
         <Status state={s.state} text={s.text} />
         {filled(n.message) && <Detail>{n.message}</Detail>}
         {nodeNotes(n).map((x) => (
@@ -613,9 +617,15 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
       </td>
       <CPUCell node={n} vm={vm} />
       <MemoryCell node={n} vm={vm} />
-      <td className="nowrap">{n.joined ? n.pods : ""}</td>
-      <td className="nowrap">{n.kubelet ?? ""}</td>
-      <td className="nowrap">{vm !== undefined && vm.status === "running" ? uptime(vm.uptime) : (vm?.status ?? "")}</td>
+      <td data-label="Pods" className="nowrap">
+        {n.joined ? n.pods : ""}
+      </td>
+      <td data-label="Kubelet" className="nowrap">
+        {n.kubelet ?? ""}
+      </td>
+      <td data-label="Up" className="nowrap">
+        {vm !== undefined && vm.status === "running" ? uptime(vm.uptime) : (vm?.status ?? "")}
+      </td>
     </tr>
   );
 }
@@ -631,7 +641,7 @@ function Nodes({ health: h }: { health: ClusterHealth }): JSX.Element {
           <Detail>{h.vms}</Detail>
         </div>
       )}
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Name</th>
@@ -668,7 +678,7 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
     <div className="box scroll" id={anchor("pods")}>
       <h3>Pods not well</h3>
       <SectionNote section={h.pods} what="pods" />
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Pod</th>
@@ -695,12 +705,12 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
                 {p.name}
                 <div className="hint">{p.namespace}</div>
               </td>
-              <td>{p.node ?? ""}</td>
-              <td>
+              <td data-label="Node">{p.node ?? ""}</td>
+              <td data-label="Status">
                 <Status state={severityState[p.severity]} text={p.reason} />
                 {filled(p.message) && <Detail>{p.message}</Detail>}
               </td>
-              <td>{p.restarts}</td>
+              <td data-label="Restarts">{p.restarts}</td>
               <Since at={p.since} />
               <PodButtons pod={p} actions={actions} />
             </tr>
@@ -764,7 +774,7 @@ function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
     <div className="box scroll" id={anchor("addons")}>
       <h3>Add-ons</h3>
       <SectionNote section={h.addons} what="add-ons" />
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Release</th>
@@ -790,15 +800,15 @@ function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
                   {r.release}
                   {filled(r.namespace) && <div className="hint">{r.namespace}</div>}
                 </td>
-                <td>
+                <td data-label="Chart">
                   {r.chart}
                   {filled(r.version) && ` ${r.version}`}
                 </td>
-                <td>
+                <td data-label="Status">
                   <Status state={s.state} text={s.text} />
                   {filled(r.message) && <Detail>{r.message}</Detail>}
                 </td>
-                <td>{r.revision ?? ""}</td>
+                <td data-label="Revision">{r.revision ?? ""}</td>
                 <Since at={r.since} />
               </tr>
             );
@@ -867,7 +877,7 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
     <>
       <h4>Worker pools</h4>
       <SectionNote section={pools} what="worker pools" />
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Pool</th>
@@ -884,11 +894,11 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
             return (
               <tr key={p.name} className={s.state === "ok" ? "" : "attention"}>
                 <td className="nowrap">{p.name}</td>
-                <td>
+                <td data-label="Status">
                   <Status state={s.state} text={s.text} />
                   {filled(p.message) && <Detail>{p.message}</Detail>}
                 </td>
-                <td>
+                <td data-label="Desired">
                   {p.desired}
                   {p.autoscaling && (
                     <div className="hint">
@@ -896,9 +906,9 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
                     </div>
                   )}
                 </td>
-                <td>{p.ready}</td>
-                <td>{p.available}</td>
-                <td>{p.upToDate}</td>
+                <td data-label="Ready">{p.ready}</td>
+                <td data-label="Available">{p.available}</td>
+                <td data-label="Up to date">{p.upToDate}</td>
               </tr>
             );
           })}

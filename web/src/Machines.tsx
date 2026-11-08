@@ -130,13 +130,14 @@ export function Machines({
   };
   const [bootLog, setBootLog] = useState<Machine>();
   const focused = useQuery("machine");
+  // Beside the Talos release, the version is named for what it is.
+  const versionLabel = talos ? "Kubernetes" : "Version";
   const columns = [
     "Name",
     "Role",
     "Proxmox VE node",
     "Status",
-    // Beside the Talos release, the version is named for what it is.
-    talos ? "Kubernetes" : "Version",
+    versionLabel,
     ...(talos ? ["Talos"] : []),
     "Addresses",
     "Age",
@@ -146,7 +147,7 @@ export function Machines({
       {bootLog !== undefined && <BootLogDialog cluster={c} machine={bootLog} onClose={() => setBootLog(undefined)} />}
       {crowded !== undefined && <p className="warning">{crowded}</p>}
       <ErrorBox message={rowError} />
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             {columns.map((h) => (
@@ -178,13 +179,19 @@ export function Machines({
                   <span className="nowrap">{m.node ?? m.name}</span>
                   {m.replacing !== true && filled(m.waiting) && <div className="hint message">{m.waiting}</div>}
                 </td>
-                <td className="nowrap">{m.role === "control-plane" ? "Control plane" : "Worker"}</td>
-                <td>{m.proxmoxNode ?? (m.notReporting === true ? "Not reporting" : "")}</td>
+                <td data-label="Role" className="nowrap">
+                  {m.role === "control-plane" ? "Control plane" : "Worker"}
+                </td>
+                <td data-label="Proxmox VE node">
+                  {m.proxmoxNode ?? (m.notReporting === true ? "Not reporting" : "")}
+                </td>
                 <MachineStatusCell machine={m} offline={offline.has(m.proxmoxNode ?? "")} node={node} />
-                <td>{m.version ?? ""}</td>
-                {talos && <td>{m.talos ?? ""}</td>}
-                <td>{(m.addresses ?? []).join(", ")}</td>
-                <td title={new Date(m.created).toLocaleString()}>{age(m.created)}</td>
+                <td data-label={versionLabel}>{m.version ?? ""}</td>
+                {talos && <td data-label="Talos">{m.talos ?? ""}</td>}
+                <td data-label="Addresses">{(m.addresses ?? []).join(", ")}</td>
+                <td data-label="Age" title={new Date(m.created).toLocaleString()}>
+                  {age(m.created)}
+                </td>
                 <td className="row-action">
                   <MachineActions
                     machine={m}
@@ -287,7 +294,7 @@ function MachineStatusCell({
 }): JSX.Element {
   const s = machineStatus(m, offline, node);
   return (
-    <td className="nowrap">
+    <td data-label="Status" className="nowrap">
       <Status state={s.state} text={s.text} />
       {node?.unschedulable === true && <div className="hint">Cordoned</div>}
       {node?.down === true && filled(node.message) && <Detail>{node.message}</Detail>}

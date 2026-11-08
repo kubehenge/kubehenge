@@ -1910,7 +1910,7 @@ fieldset.choices .check {
     grid-column: 1 / -1;
 
     min-inline-size: 0;
-    padding: 0 0 0 7em;
+    padding: 0 0 0 8.5em;
     border: none;
 
     text-align: start;
@@ -1934,6 +1934,10 @@ fieldset.choices .check {
     position: absolute;
     inset-inline-start: 0;
     color: var(--dim);
+  }
+
+  .grid.stack td[data-label]:empty {
+    display: none;
   }
 
   .grid.stack td.row-action {

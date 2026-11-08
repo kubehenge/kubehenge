@@ -876,7 +876,7 @@ function BackupsTable({
   return (
     <div className="box scroll">
       <h3>{title}</h3>
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Name</th>
@@ -903,13 +903,13 @@ function BackupsTable({
             return (
               <tr key={b.name}>
                 <td className="nowrap">{b.name}</td>
-                <td className="started">
+                <td data-label="Started" className="started">
                   <span title={when(b.started)}>{ago(b.started)}</span>
                   {(b.scheduled || filled(b.by)) && (
                     <div className="hint message">{b.scheduled ? "By the schedule" : `By ${b.by}`}</div>
                   )}
                 </td>
-                <td className="state">
+                <td data-label="Status" className="state">
                   <Status state={s.state} text={s.text} />
                   {b.total > 0 && (
                     <div className="hint">
@@ -923,7 +923,9 @@ function BackupsTable({
                     </div>
                   ))}
                 </td>
-                <td className="nowrap">{b.expires === undefined ? "" : new Date(b.expires).toLocaleDateString()}</td>
+                <td data-label="Deleted on" className="nowrap">
+                  {b.expires === undefined ? "" : new Date(b.expires).toLocaleDateString()}
+                </td>
                 <td className="row-action">
                   <button
                     type="button"

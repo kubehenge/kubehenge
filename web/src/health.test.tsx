@@ -513,6 +513,37 @@ describe("health page", () => {
     expect(screen.queryByRole("list", { name: "web-md-0-a taints" })).not.toBeInTheDocument();
   });
 
+  it("labels every cell of the nodes, pods and add-ons for the stacked phone layout", async () => {
+    fakeServer({ [healthPath]: { body: degraded } });
+    render(<HealthView cluster={cluster} />);
+
+    await screen.findByRole("row", { name: /^web-cp-a/u });
+    const stacked = screen.getAllByRole("table").filter((t) => t.classList.contains("stack"));
+    const heads = stacked.map((t) =>
+      within(t)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    );
+    expect(heads).toStrictEqual(
+      expect.arrayContaining([
+        ["Name", "Status", "CPU", "Memory", "Pods", "Kubelet", "Up"],
+        ["Pod", "Node", "Status", "Restarts", "Since", "Actions"],
+      ]),
+    );
+    // Each cell after the heading cell names its column, which the phone layout shows beside the value.
+    const labels = stacked.map((t) =>
+      [...t.querySelectorAll<HTMLElement>("tbody tr:first-child td:not(.row-action)")]
+        .slice(1)
+        .map((c) => c.dataset["label"]),
+    );
+    expect(labels).toStrictEqual(
+      expect.arrayContaining([
+        ["Status", "CPU", "Memory", "Pods", "Kubelet", "Up"],
+        ["Node", "Status", "Restarts", "Since"],
+      ]),
+    );
+  });
+
   it("says the autoscaler brings workers to a pool at none, which keeps the control plane to itself", async () => {
     const atNone = {
       name: "md-0",
