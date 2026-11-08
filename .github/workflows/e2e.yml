@@ -9,7 +9,6 @@ name: e2e
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  merge_group:
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
@@ -34,7 +33,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A pull request that is not a draft, or a merge group, runs the tests its changes need
+  # A pull request that is not a draft runs the tests its changes need
   # (test/e2e/ci/scope.sh), on the tree that would land on main. A draft runs none. The nightly run
   # (test/e2e/ci/nightly.sh) runs every test, adds the upgrade of the management cluster, Rancher,
   # a control plane of three servers and a Proxmox VE cluster of two nodes, and runs each workload
@@ -47,9 +46,8 @@ jobs:
     outputs:
       tests: ${{ steps.scope.outputs.tests }}
     steps:
-      # A pull request's merge ref or a merge group's commit. The merge ref's first parent is the
-      # main commit under it, so a second commit gives the comparison its base. A merge group's base
-      # is fetched below.
+      # A pull request's merge ref, whose first parent is the main commit under it, so a second
+      # commit gives the comparison its base.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -58,7 +56,6 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           DRAFT: ${{ github.event.pull_request.draft }}
-          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           ASKED: ${{ inputs.tests }}
         run: |
           case "$EVENT" in
@@ -71,15 +68,6 @@ jobs:
                 tests=$(git -c core.quotepath=off diff --name-only --no-renames HEAD^1 HEAD |
                   test/e2e/ci/scope.sh --base HEAD^1)
               fi
-              ;;
-            # A group holds one commit per pull request on top of main, so its changes are the
-            # difference from main's commit under it.
-            merge_group)
-              git fetch --no-tags --depth=1 origin "$GROUP_BASE"
-              # Without renames a moved file lists both paths, and quotepath off keeps a path with
-              # non-ASCII characters whole.
-              tests=$(git -c core.quotepath=off diff --name-only --no-renames "$GROUP_BASE" HEAD |
-                test/e2e/ci/scope.sh --base "$GROUP_BASE")
               ;;
             # run.sh refuses a name it cannot read before anything is built.
             workflow_dispatch)

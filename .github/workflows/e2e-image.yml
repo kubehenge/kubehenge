@@ -2,7 +2,7 @@
 name: e2e image
 
 # What the end-to-end lanes restore instead of building, made on main once its inputs change: a
-# cache saved on main is read by every branch and merge group, so the next pull request run after
+# cache saved on main is read by every branch and pull request, so the next pull request run after
 # the change finds it. Without this, every lane of every run until the nightly run would build it
 # again.
 # - Proxmox VE's image (test/e2e/pve), under its files' hash. Built in a lane it comes from Proxmox

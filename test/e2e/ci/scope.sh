@@ -1,13 +1,13 @@
 #!/bin/sh
-# Prints, as a JSON list of lanes, the end-to-end tests a pull request or merge group needs, from the
-# paths it changes, one per line on standard input. A lane is a test, or two run one after the other
+# Prints, as a JSON list of lanes, the end-to-end tests a pull request needs, from the paths it
+# changes, one per line on standard input. A lane is a test, or two run one after the other
 # on one runner, as in k3s-etcd,cluster-mesh:
 #
 #   git -c core.quotepath=off diff --name-only --no-renames <base> HEAD | test/e2e/ci/scope.sh [--base <base>]
 #   test/e2e/ci/scope.sh --all
 #
-# A path no rule below names needs them all, as --all does. Only a pull request that is ready, or a
-# merge group, runs end-to-end tests, so a rule that leaves a test out lets a change reach main
+# A path no rule below names needs them all, as --all does. Only a pull request that is ready runs
+# end-to-end tests, so a rule that leaves a test out lets a change reach main
 # without it until the nightly run, which runs them all: leave a test out only for a path it cannot
 # reach. The nightly run's own tests are long, so a pull request runs one only for its own script
 # and the code only it exercises.

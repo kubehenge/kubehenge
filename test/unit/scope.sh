@@ -1,5 +1,5 @@
 #!/bin/sh
-# Unit test of test/e2e/ci/scope.sh, which picks the end-to-end tests of a pull request or merge group
+# Unit test of test/e2e/ci/scope.sh, which picks the end-to-end tests of a pull request
 # from the paths it changes: each of the nightly run's four extra tests comes with its own script and the code only it
 # exercises, and a path no rule names brings every other test.
 #

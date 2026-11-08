@@ -3,7 +3,6 @@ name: ci
 
 on:
   pull_request:
-  merge_group:
   # A batch branch gathers work before its one pull request, so every merge into it is checked.
   push:
     branches: [main, 'batch-*']
@@ -22,11 +21,7 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# A merge group runs `test` and `workflows` because their result depends on the combination: two
-# pull requests can each pass alone and break lint, a unit test or a generated file together.
-# `Dependencies` reads one pull request's diff, so it is skipped there. codeql.yml reports without
-# analysing, and e2e.yml runs the lanes its scope picks. A draft pull request runs only these fast
-# checks, and e2e.yml waits for it to be ready for review.
+# A draft pull request runs only these fast checks, and e2e.yml waits for it to be ready for review.
 jobs:
   # Lint, unit and integration tiers: Go, the frontend, the OpenTofu module against mocked
   # providers, the Helm charts, the shell scripts, and the chart and controllers against a real API
@@ -41,8 +36,8 @@ jobs:
         with:
           persist-credentials: false
       # What Go, npm and uv download and build, by the lock files they read. Only a push to main
-      # saves it: a pull request's or merge group's entry would serve no other run and push main's
-      # out of the cache's 10 GB.
+      # saves it: a pull request's entry would serve no other run and push main's out of the
+      # cache's 10 GB.
       - id: cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
