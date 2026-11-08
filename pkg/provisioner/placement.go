@@ -145,7 +145,11 @@ func (p *Placer) placeAll(ctx context.Context) {
 			return fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, h)
 		})
 		p.markShort(ctx, c, short)
-		p.markNewer(c, online, newer)
+		if newer {
+			p.sayNewer(c, online)
+		} else {
+			p.clearNewer(c)
+		}
 		p.record(ctx, c, hosts, blocked)
 	}
 }

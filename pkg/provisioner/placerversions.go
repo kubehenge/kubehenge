@@ -25,9 +25,9 @@ type vmMTUs interface {
 
 // annotate sets an annotation on the cluster, or removes it when value is empty, and does nothing
 // when the cluster holds it already.
-func (p *Placer) annotate(ctx context.Context, c *clusterv1.Cluster, key, value string) bool {
+func (p *Placer) annotate(ctx context.Context, c *clusterv1.Cluster, key, value string) {
 	if c.Annotations[key] == value {
-		return false
+		return
 	}
 	var v *string
 	if value != "" {
@@ -36,7 +36,7 @@ func (p *Placer) annotate(ctx context.Context, c *clusterv1.Cluster, key, value 
 	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{annotationsKey: map[string]any{key: v}}})
 	if err != nil {
 		ctrl.LoggerFrom(ctx).WithName("placer").Error(err, "encoding an annotation", "annotation", key)
-		return false
+		return
 	}
 	target := &clusterv1.Cluster{}
 	target.Namespace, target.Name = c.Namespace, c.Name
@@ -44,9 +44,7 @@ func (p *Placer) annotate(ctx context.Context, c *clusterv1.Cluster, key, value 
 		if ctx.Err() == nil {
 			ctrl.LoggerFrom(ctx).WithName("placer").Error(err, "recording an annotation", "annotation", key, "cluster", client.ObjectKeyFromObject(c))
 		}
-		return false
 	}
-	return true
 }
 
 // markVersions records on the cluster which Proxmox VE nodes run which major version while they
@@ -55,16 +53,22 @@ func (p *Placer) markVersions(ctx context.Context, c *clusterv1.Cluster, online 
 	p.annotate(ctx, c, ProxmoxVersionsAnnotation, versionNote(online))
 }
 
-// markNewer says in an event, once each time it starts, that the cluster's placement holds nodes of a
+// clearNewer notes that the cluster's placement holds no node of a newer Proxmox VE version for want
+// of room among the older ones.
+func (p *Placer) clearNewer(c *clusterv1.Cluster) {
+	delete(p.newer, client.ObjectKeyFromObject(c).String())
+}
+
+// sayNewer says in an event, once each time it starts, that the cluster's placement holds nodes of a
 // newer Proxmox VE version because none of the older nodes has room.
-func (p *Placer) markNewer(c *clusterv1.Cluster, online []Node, newer bool) {
+func (p *Placer) sayNewer(c *clusterv1.Cluster, online []Node) {
 	key := client.ObjectKeyFromObject(c).String()
 	was := p.newer[key]
 	if p.newer == nil {
 		p.newer = map[string]bool{}
 	}
-	p.newer[key] = newer
-	if !newer || was || p.Events == nil {
+	p.newer[key] = true
+	if was || p.Events == nil {
 		return
 	}
 	p.Events.Eventf(c, nil, corev1.EventTypeWarning, "ProxmoxVersionsMixed", "Place",

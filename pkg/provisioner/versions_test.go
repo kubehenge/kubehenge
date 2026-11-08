@@ -224,9 +224,9 @@ func TestPlacerSaysOnceThatItFellBackToANewerNode(t *testing.T) {
 	rec := events.NewFakeRecorder(10)
 	p := &Placer{Events: rec}
 	online := nodesOf(map[string]int{"pve1": 8, "pve2": 9})
-	p.markNewer(web, online, false)
-	p.markNewer(web, online, true)
-	p.markNewer(web, online, true)
+	p.clearNewer(web)
+	p.sayNewer(web, online)
+	p.sayNewer(web, online)
 	select {
 	case e := <-rec.Events:
 		if !strings.Contains(e, "8: pve1, 9: pve2") || !strings.Contains(e, "cannot move back to an older node") {
@@ -240,8 +240,8 @@ func TestPlacerSaysOnceThatItFellBackToANewerNode(t *testing.T) {
 		t.Errorf("a second look repeats the event: %q", e)
 	default:
 	}
-	p.markNewer(web, online, false)
-	p.markNewer(web, online, true)
+	p.clearNewer(web)
+	p.sayNewer(web, online)
 	if len(rec.Events) != 1 {
 		t.Errorf("%d events after the placement fell back again, want 1", len(rec.Events))
 	}
