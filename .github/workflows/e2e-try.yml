@@ -414,6 +414,8 @@ jobs:
           free -m > "$out/memory.txt"; sudo dmesg | tee "$out/dmesg.txt" >/dev/null || true
           pve() { docker exec kubehenge-e2e-pve "$@"; }
           pve journalctl -b --no-pager > "$out/proxmox-journal.txt" || true
+          # proxmox-firewall logs nothing when it applies its rules, so the rules themselves.
+          pve nft list ruleset > "$out/proxmox-nftables.txt" 2>&1 || true
           # The second node, in the lane that joins one (test/e2e/ci/second-node.sh).
           pve2_journal="$out/proxmox-journal-pve2.txt"
           docker exec kubehenge-e2e-pve2 journalctl -b --no-pager > "$pve2_journal" 2>/dev/null ||

@@ -42,8 +42,13 @@ firewall_before='' group_made=false
 # shellcheck disable=SC2310 # best effort: a failed restore must not hide the run's own status.
 firewall_restore() {
     if [ "${group_made}" = true ]; then
-        # The VMs hold rules that name the group until they are gone, so a run that fails leaves it.
-        pve -X DELETE "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/groups/${group}" > /dev/null 2>&1 || true
+        # Proxmox VE deletes only an empty group. A rule's position shifts down as one before it
+        # goes, so the last goes first.
+        group_url="${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/groups/${group}"
+        pve "${group_url}" 2> /dev/null | jq -r '[.data[].pos] | sort | reverse | .[]' | while read -r pos; do
+            pve -X DELETE "${group_url}/${pos}" > /dev/null 2>&1 || true
+        done
+        pve -X DELETE "${group_url}" > /dev/null 2>&1 || true
         group_made=false
     fi
     if [ -n "${firewall_before}" ]; then
