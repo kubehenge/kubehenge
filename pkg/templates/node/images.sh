@@ -13,8 +13,24 @@ COSIGN_SHA256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
 
 work=$(mktemp -d -p /var/tmp)
 trap 'rm -rf "${work}"' EXIT
-curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors \
-    --output "${work}/cosign" "https://github.com/sigstore/cosign/releases/download/${COSIGN}/cosign-linux-amd64"
+# GitHub's release download address can answer 504 for hours while its API serves the same file.
+# The API's limit without a token is 60 requests an hour per address, which is why it comes second.
+curl --fail --silent --show-error --location --proto '=https' --retry 2 --retry-all-errors \
+    --output "${work}/cosign" "https://github.com/sigstore/cosign/releases/download/${COSIGN}/cosign-linux-amd64" || {
+    api=https://api.github.com/repos/sigstore/cosign/releases
+    curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors \
+        --output "${work}/release.json" "${api}/tags/${COSIGN}"
+    # The pretty-printed answer lists each asset's "url" before its "name".
+    id=$(awk '
+        /releases\/assets\/[0-9]+"/ { id = $0; sub(/.*releases\/assets\//, "", id); sub(/".*/, "", id) }
+        $1 == "\"name\":" && $2 == "\"cosign-linux-amd64\"," { print id; exit }' "${work}/release.json")
+    [ -n "${id}" ] || {
+        echo "kubehenge-images: cosign ${COSIGN} has no asset cosign-linux-amd64" >&2
+        exit 1
+    }
+    curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors \
+        --header 'Accept: application/octet-stream' --output "${work}/cosign" "${api}/assets/${id}"
+}
 echo "${COSIGN_SHA256}  ${work}/cosign" | sha256sum --check --strict --quiet
 chmod 0755 "${work}/cosign"
 

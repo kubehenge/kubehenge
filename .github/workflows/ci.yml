@@ -74,11 +74,16 @@ jobs:
         env:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.
           GH_TOKEN: ${{ github.token }}
+          # scripts/fetch.sh reads release files through the API when the download address fails.
+          GITHUB_TOKEN: ${{ github.token }}
       - run: make integration
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       # The providers from Kubehenge's forks, as their pins stand or as Renovate moves them.
       - run: make verify-providers
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
       - if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

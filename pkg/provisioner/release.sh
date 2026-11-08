@@ -26,8 +26,42 @@ images="/var/lib/rancher/${distribution}/agent/images"
 work=$(mktemp -d -p /var/tmp)
 trap 'rm -rf "${work}"' EXIT
 
+# fetch <url> <file>: downloads into ${work}. GitHub's release download address can answer 504 for
+# hours while its API serves the same file, so once the address fails, this and every later release
+# asset of the run comes through the API, by its tag and name. Curl takes the node's proxy
+# settings from the environment for both. The API's limit without a token is 60 requests an hour
+# per address, which is why the address is tried first.
+release_down=
 fetch() {
-    curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors --output "${work}/$2" "$1"
+    case "$1" in
+        https://github.com/*/*/releases/download/*/*)
+            if [ -z "${release_down}" ]; then
+                curl --fail --silent --show-error --location --proto '=https' --retry 2 --retry-all-errors --output "${work}/$2" "$1" && return 0
+                release_down=1
+            fi
+            api_fetch "$1" "$2"
+            ;;
+        *) curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors --output "${work}/$2" "$1" ;;
+    esac
+}
+
+# api_fetch <release download url> <file>
+api_fetch() {
+    path=${1#https://github.com/}
+    api="https://api.github.com/repos/${path%%/releases/download/*}/releases"
+    tag_asset=${path#*/releases/download/}
+    curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors \
+        --output "${work}/release.json" "${api}/tags/${tag_asset%%/*}"
+    # The pretty-printed answer lists each asset's "url" before its "name".
+    id=$(asset="${tag_asset#*/}" awk '
+        /releases\/assets\/[0-9]+"/ { id = $0; sub(/.*releases\/assets\//, "", id); sub(/".*/, "", id) }
+        $1 == "\"name\":" && $2 == "\"" ENVIRON["asset"] "\"," { print id; exit }' "${work}/release.json")
+    [ -n "${id}" ] || {
+        echo "kubehenge-release: ${tag_asset%%/*} has no asset ${tag_asset#*/}" >&2
+        return 1
+    }
+    curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors \
+        --header 'Accept: application/octet-stream' --output "${work}/$2" "${api}/assets/${id}"
 }
 
 fetch "${release}/sha256sum-amd64.txt" sha256sum-amd64.txt
