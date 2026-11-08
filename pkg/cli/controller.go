@@ -400,6 +400,7 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		Bridges:           cloud,
 		SecurityGroups:    cloud,
 		APIReach:          cloud,
+		Endpoint:          o.r.Endpoint.URL,
 		Management: &provisioner.FirewallSources{
 			Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace, Management: o.managementAddrs,
 		},

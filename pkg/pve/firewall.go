@@ -3,6 +3,7 @@ package pve
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -288,6 +289,31 @@ func parseSource(text string) (netip.Prefix, bool) {
 		return netip.PrefixFrom(a, a.BitLen()), true
 	}
 	return netip.Prefix{}, false
+}
+
+// EndpointAddresses are the addresses an API endpoint names, or its host name resolves to, and its
+// port. Either family may be used for a name that resolves to both. What cannot be resolved gives none.
+func EndpointAddresses(ctx context.Context, endpoint string) ([]netip.Addr, string) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" {
+		return nil, ""
+	}
+	port := u.Port()
+	if port == "" {
+		port = "8006"
+	}
+	if ip, perr := netip.ParseAddr(u.Hostname()); perr == nil {
+		return []netip.Addr{ip.Unmap()}, port
+	}
+	resolved, err := net.DefaultResolver.LookupNetIP(ctx, "ip", u.Hostname())
+	if err != nil {
+		return nil, port
+	}
+	out := make([]netip.Addr, len(resolved))
+	for i, ip := range resolved {
+		out[i] = ip.Unmap()
+	}
+	return out, port
 }
 
 // LockoutMessage words the finding for the addresses cut off, and the fix. It is the same text in the

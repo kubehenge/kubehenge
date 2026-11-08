@@ -61,11 +61,14 @@ func (p *Proxmox) APIReach(ctx context.Context) (*pve.APIReach, bool) {
 // in only from the node's local network and the IPSet management, so an appliance or management
 // cluster on another network could then no longer create or manage a VM. What cannot be told is
 // let through, since Proxmox VE's own answer is not read here.
-func checkAPIReach(reach *pve.APIReach, management []string) field.ErrorList {
+func checkAPIReach(reach *pve.APIReach, management []string, endpoints []netip.Addr) field.ErrorList {
 	var addrs []netip.Addr
 	for _, text := range management {
-		if ip, err := netip.ParseAddr(text); err == nil {
-			addrs = append(addrs, ip)
+		// Only an address in a family of the endpoint reaches the API, so an IPv6 address of an
+		// appliance that talks to an IPv4 endpoint is never cut off.
+		ip, err := netip.ParseAddr(text)
+		if err == nil && slices.ContainsFunc(endpoints, func(e netip.Addr) bool { return e.Is4() == ip.Unmap().Is4() }) {
+			addrs = append(addrs, ip.Unmap())
 		}
 	}
 	cut := reach.Cut(addrs).Cut
@@ -114,6 +117,10 @@ func (v *ClusterValidator) validateAPIReach(ctx context.Context) field.ErrorList
 	if v.Hooks.APIReach == nil || v.Hooks.Management == nil {
 		return nil
 	}
+	endpoints, _ := pve.EndpointAddresses(ctx, v.Hooks.Endpoint)
+	if len(endpoints) == 0 {
+		return nil
+	}
 	management, err := v.Hooks.Management.Addresses(ctx)
 	if err != nil || len(management) == 0 {
 		return nil
@@ -122,5 +129,5 @@ func (v *ClusterValidator) validateAPIReach(ctx context.Context) field.ErrorList
 	if !ok {
 		return nil
 	}
-	return checkAPIReach(reach, management)
+	return checkAPIReach(reach, management, endpoints)
 }

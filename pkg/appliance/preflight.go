@@ -52,9 +52,9 @@ type Inventory struct {
 	// APIReach is what the Proxmox VE firewalls let in on the API port. Nil means it could not be
 	// read.
 	APIReach *pve.APIReach
-	// ApplianceAddresses are the appliance's own addresses, which reach the API as the management
-	// cluster's nodes do.
-	ApplianceAddresses []netip.Addr
+	// Route is how traffic reaches the API endpoint from the appliance. The management cluster's
+	// nodes reach it in the endpoint's families.
+	Route APIRoute
 }
 
 // Findings are what a preflight found. Errors stop the run, warnings do not. Each names the node,
@@ -143,14 +143,18 @@ func (s *Settings) checkAPIReach(inv *Inventory, f *Findings) {
 	if inv.APIReach == nil || !inv.APIReach.Enabled {
 		return
 	}
-	var addrs []netip.Addr
+	// Only addresses that reach the API count: the appliance's source towards each endpoint address,
+	// and the nodes' addresses in the endpoint's families. A host name that resolves to both has
+	// either used.
+	addrs := slices.Clone(inv.Route.Sources)
 	for _, text := range slices.Concat(s.NodeAddresses, s.NodeAddressesIPv6) {
 		host, _, _ := strings.Cut(text, "/")
-		if ip, err := netip.ParseAddr(host); err == nil {
+		ip, err := netip.ParseAddr(host)
+		if err == nil && slices.ContainsFunc(inv.Route.Endpoints, func(e netip.Addr) bool { return e.Is4() == ip.Is4() }) {
 			addrs = append(addrs, ip)
 		}
 	}
-	addrs = slices.Compact(slices.SortedFunc(slices.Values(slices.Concat(addrs, inv.ApplianceAddresses)), netip.Addr.Compare))
+	addrs = slices.Compact(slices.SortedFunc(slices.Values(addrs), netip.Addr.Compare))
 	r := inv.APIReach.Cut(addrs)
 	if msg := pve.LockoutMessage(r.Cut); msg != "" {
 		f.Errors = append(f.Errors, msg)

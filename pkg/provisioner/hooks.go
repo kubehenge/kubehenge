@@ -91,6 +91,8 @@ type Hooks struct {
 	// refuse security groups that would cut those off. Either nil, no such check is made.
 	APIReach   APIReach
 	Management ManagementAddresses
+	// Endpoint is the Proxmox VE API address, which says which of the addresses reach it.
+	Endpoint string
 	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
 	// and the validator refuses a release it does not pin.
 	Releases *ReleaseChecksums

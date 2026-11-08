@@ -65,9 +65,7 @@ func (s *Server) inventory(ctx context.Context, u user, settings *appliance.Sett
 	// A user without Sys.Audit on / cannot read the firewall, and Proxmox VE then judges the run.
 	if reach, err := s.Accounts.APIReach(ctx, u.ticket); err == nil {
 		inv.APIReach = reach
-		if own, err := s.Appliance.OwnAddresses(); err == nil {
-			inv.ApplianceAddresses = own
-		}
+		inv.Route = appliance.RouteToAPI(ctx, s.Appliance.ProxmoxURL)
 	}
 	if !owned {
 		inv.Answering = s.probe(ctx, setupAddresses(settings))
