@@ -174,8 +174,10 @@ func TestRefusedSecondFactorsSayWhatTheyCanMean(t *testing.T) {
 		recovery []int
 		want     string
 	}{
-		{"a code, recovery keys left", "totp", []int{0, 1}, "A recovery key unlocks it."},
-		{"a code, no recovery keys", "totp", nil, "Ask an administrator to reset it."},
+		{"a code, recovery keys left", "totp", []int{0, 1}, "A recovery key unlocks a locked factor."},
+		{"a code, recovery keys left, no quorum", "totp", []int{0, 1}, "Without quorum, use a node's console."},
+		{"a code, no recovery keys", "totp", nil, "An administrator resets a locked factor."},
+		{"a code, no recovery keys, no quorum", "totp", nil, "Without quorum, use a node's console."},
 		{"a recovery key", "recovery", []int{0}, "the cluster has no quorum"},
 	}
 	for _, tt := range tests {

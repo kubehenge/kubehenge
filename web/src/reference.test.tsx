@@ -41,11 +41,13 @@ describe("error references", () => {
   it("shows what a refused second factor can mean", async () => {
     render(
       <ErrorBox
-        message={await failure({ error: "Wrong code, or the factor is locked. A recovery key unlocks it." })}
+        message={await failure({
+          error: "Wrong code, a locked factor or a cluster without quorum. A recovery key unlocks a locked factor.",
+        })}
       />,
     );
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Wrong code, or the factor is locked. A recovery key unlocks it.",
+      "Wrong code, a locked factor or a cluster without quorum. A recovery key unlocks a locked factor.",
     );
   });
 
