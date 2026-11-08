@@ -1872,6 +1872,16 @@ so the check runs before every start instead.
 {{- end -}}
 
 {{/*
+How a server's API server reaches the kubelets, for RKE2 and k3s alike: directly, as on kubeadm
+and Talos, which the nodes allow as they let each other in on every port. Through the agents'
+tunnel, the distributions' default, a log read, exec or port-forward is cut off when it opens just
+as the agent sends the tunnel's minutely list of its connections, which leaves out the new one.
+*/}}
+{{- define "kubehenge.directKubeletEgress" -}}
+egress-selector-mode: disabled
+{{- end -}}
+
+{{/*
 The API server's audit policy as a bootstrap file at path, the same for every distribution.
 */}}
 {{- define "kubehenge.auditPolicyFile" -}}

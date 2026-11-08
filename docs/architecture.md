@@ -311,6 +311,10 @@ The API server refuses a release Kubehenge does not pin, on a new cluster or a v
 
 A node downloads the script, the release and the airgap images of its core and its CNI. It checks each against the pinned checksum file and hands them to its bootstrap provider's air-gapped install. No registry is involved.
 
+### The API server's way to the kubelets
+
+On RKE2 and k3s the API server reaches each kubelet directly (`egress-selector-mode: disabled`), as on kubeadm and Talos. Through the agents' tunnel, the distributions' default, a log read, exec or port-forward opened as an agent syncs its connection list is cut off with `EOF`.
+
 ### Template records
 
 Every 30 seconds the controller also records what its token finds in the template pool. On the kubeadm ClusterClass it records the Kubernetes versions with templates for each node OS (`kubehenge.dev/kubeadm-versions`, as JSON). On the RKE2 and k3s ClusterClasses it records the node OSes their templates are there for (`kubehenge.dev/node-os-templates`).

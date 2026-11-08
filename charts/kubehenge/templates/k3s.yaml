@@ -460,6 +460,7 @@ template:
           permissions: "0600"
           content: |
             secrets-encryption: true
+            {{- include "kubehenge.directKubeletEgress" . | nindent 12 }}
             kube-apiserver-arg:
               - admission-control-config-file=/etc/rancher/k3s/pod-security.yaml
               - enable-admission-plugins=NodeRestriction,EventRateLimit

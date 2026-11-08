@@ -336,6 +336,11 @@ template:
         permissions: "0600"
         content: |
           audit-policy-file: /etc/rancher/rke2/audit-policy.yaml
+      - path: /etc/rancher/rke2/config.yaml.d/40-kubehenge-server.yaml
+        owner: root:root
+        permissions: "0600"
+        content: |
+          {{- include "kubehenge.directKubeletEgress" . | nindent 10 }}
       # Requests RKE2's charts leave out, where a container without one gets the least CPU weight a
       # node gives and fails its liveness probe while the node is busy. helm-controller passes over
       # the configuration of a chart RKE2 does not install, canal's with another CNI.

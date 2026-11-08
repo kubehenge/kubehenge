@@ -235,6 +235,37 @@ func TestAgentNodesTakeTheirCustomisation(t *testing.T) {
 	}
 }
 
+// The API server reaches the kubelets directly, as on kubeadm and Talos, never through the agents'
+// tunnel, whose connection sync cuts off a log read or exec opened in the same moment.
+func TestAgentServersReachKubeletsDirectly(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ file, dist, cpKind string }{
+		{"rke2.yaml", "rke2", "RKE2ControlPlaneTemplate"},
+		{"k3s.yaml", "k3s", "KThreesControlPlaneTemplate"},
+	} {
+		class := renderClass(t, c.file)
+		cp := asMap(t, field(t, class.templates[c.cpKind], "spec", "template", "spec"))
+		if c.dist == "k3s" {
+			cp = asMap(t, cp["kthreesConfigSpec"])
+		}
+		f, n := fileOf(t, cp["files"], "/etc/rancher/"+c.dist+"/config.yaml.d/40-kubehenge-server.yaml")
+		if n != 1 {
+			t.Fatalf("%s: %d server drop-ins", c.file, n)
+		}
+		text, isString := f["content"].(string)
+		if !isString {
+			t.Fatalf("%s: drop-in %v", c.file, f)
+		}
+		var content map[string]any
+		if err := yaml.Unmarshal([]byte(text), &content); err != nil {
+			t.Fatalf("%s: %v", c.file, err)
+		}
+		if content["egress-selector-mode"] != "disabled" {
+			t.Errorf("%s: egress-selector-mode %v, want disabled", c.file, content["egress-selector-mode"])
+		}
+	}
+}
+
 func TestTalosNodesTakeTheirCustomisation(t *testing.T) {
 	t.Parallel()
 	class := renderTalosClass(t)
