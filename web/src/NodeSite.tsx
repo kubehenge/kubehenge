@@ -237,25 +237,53 @@ export interface ReleaseMirrorProblems {
   caBundle?: string | undefined;
 }
 
+// releaseMirrorAddressProblem says what is wrong with an address, in the webhook's words.
+function releaseMirrorAddressProblem(url: string): string | undefined {
+  if (url === "" || releaseMirrorAddress.test(url)) {
+    return undefined;
+  }
+  const [, authority = ""] = /^https?:\/\/(?<authority>[^/?#]*)/u.exec(url) ?? [];
+  if (authority === "") {
+    return "Not an http:// or https:// address with a host";
+  }
+  if (authority.includes("@")) {
+    return "Holds credentials. Give the address alone";
+  }
+  if (url.endsWith("/")) {
+    return "Ends in /. Give it without";
+  }
+  return "Has a query, a fragment or a character an address cannot hold";
+}
+
+// releaseMirrorCAProblem says what is wrong with an authority for the address, in the webhook's words.
+function releaseMirrorCAProblem(bundle: string, url: string): string | undefined {
+  if (bundle.trim() === "") {
+    return undefined;
+  }
+  if (bundle.includes("PRIVATE KEY")) {
+    return "Holds a private key. Give certificates only";
+  }
+  if (!bundle.includes("-----BEGIN CERTIFICATE-----")) {
+    return "Holds no PEM certificate";
+  }
+  if (certificateProblem(bundle) !== undefined) {
+    return "Holds text besides its certificates";
+  }
+  if (url === "") {
+    return "A certificate needs a release mirror";
+  }
+  return url.startsWith("https://") ? undefined : "A certificate is for an https:// mirror";
+}
+
 /** releaseMirrorProblems are what is wrong with the fields. The server checks the same, and the dates. */
 export function releaseMirrorProblems(m: ReleaseMirror): ReleaseMirrorProblems {
-  const p: ReleaseMirrorProblems = {};
   const url = m.url.trim();
-  if (url !== "" && !releaseMirrorAddress.test(url)) {
-    p.url = "Use an http:// or https:// address with no trailing slash, query or credentials";
-  }
-  if (m.caBundle.trim() !== "") {
-    const problem = certificateProblem(m.caBundle);
-    if (problem !== undefined) {
-      p.caBundle = problem;
-    } else if (url === "") {
-      p.caBundle = "Add a release mirror first";
-    } else if (!url.startsWith("https://")) {
-      p.caBundle = "A certificate needs an https:// mirror";
-    }
-  }
-  return p;
+  return { url: releaseMirrorAddressProblem(url), caBundle: releaseMirrorCAProblem(m.caBundle, url) };
 }
+
+/** releaseMirrorFound holds when either field has a problem. */
+export const releaseMirrorFound = (p: ReleaseMirrorProblems): boolean =>
+  p.url !== undefined || p.caBundle !== undefined;
 
 /** useReleaseMirrorDefault is the management cluster's release mirror the class's nodes take by default. */
 export function useReleaseMirrorDefault(className: string): string | undefined {
@@ -326,6 +354,9 @@ export function ReleaseMirrorDialog({ cluster: c, onClose }: { cluster: Cluster;
   const fallback = useReleaseMirrorDefault(c.class);
   const { busy, error, send } = useChange(c, onClose);
   const found = releaseMirrorProblems(value);
+  // A field's problem shows once it is edited, as in the wizard. The address decides whether a
+  // certificate fits, so editing it shows the certificate's too.
+  const urlEdited = value.url !== current.url;
   const next = releaseMirrorVariable(value);
   const changed = JSON.stringify(next) !== JSON.stringify(releaseMirrorVariable(current));
   return (
@@ -333,7 +364,7 @@ export function ReleaseMirrorDialog({ cluster: c, onClose }: { cluster: Cluster;
       title="Edit release mirror"
       onClose={onClose}
       onSubmit={() => {
-        if (found.url !== undefined || found.caBundle !== undefined) {
+        if (releaseMirrorFound(found)) {
           setAttempted(true);
           return;
         }
@@ -354,7 +385,10 @@ export function ReleaseMirrorDialog({ cluster: c, onClose }: { cluster: Cluster;
         value={value}
         onChange={setValue}
         fallback={fallback}
-        errors={attempted ? found : undefined}
+        errors={{
+          url: attempted || urlEdited ? found.url : undefined,
+          caBundle: attempted || urlEdited || value.caBundle !== current.caBundle ? found.caBundle : undefined,
+        }}
       />
       <ErrorBox message={error} />
     </Dialog>

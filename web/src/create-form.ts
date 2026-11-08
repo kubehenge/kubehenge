@@ -126,7 +126,6 @@ import {
   mirrorsProblem,
   mirrorsText,
   mirrorsVariable,
-  newReleaseMirror,
   releaseMirrorProblems,
   releaseMirrorText,
   releaseMirrorVariable,
@@ -253,7 +252,9 @@ export interface Form {
   /** PEM authorities the nodes trust besides their OS's own. */
   trustedCAs: string;
   /** Where RKE2 and k3s nodes download their release. Empty takes the management cluster's mirror. */
-  releaseMirror: ReleaseMirror;
+  releaseMirror: string;
+  /** The PEM authority of that mirror's certificate. Empty for the usual ones. */
+  releaseMirrorCA: string;
   loadBalancer: Implementation;
   loadBalancerAddresses: string;
   loadBalancerMode: Mode;
@@ -893,7 +894,8 @@ export const newForm = (): Form => ({
   ntpServers: "",
   registryMirrors: [],
   trustedCAs: "",
-  releaseMirror: newReleaseMirror(),
+  releaseMirror: "",
+  releaseMirrorCA: "",
   loadBalancer: "",
   loadBalancerAddresses: "",
   loadBalancerMode: "l2",
@@ -1119,7 +1121,7 @@ function reachVariables(form: Form, defined: Set<string>): Record<string, unknow
   if (trusted !== undefined) {
     variables["trustedCAs"] = trusted;
   }
-  const release = defined.has("releaseMirror") ? releaseMirrorVariable(form.releaseMirror) : undefined;
+  const release = defined.has("releaseMirror") ? releaseMirrorVariable(formReleaseMirror(form)) : undefined;
   if (release !== undefined) {
     variables["releaseMirror"] = release;
   }
@@ -1622,8 +1624,8 @@ function reachRows(form: Form, defined: Set<string>): [string, string][] {
   if (defined.has("trustedCAs") && trustedVariable(form.trustedCAs) !== undefined) {
     rows.push(["Trusted CAs", trustedText(form.trustedCAs)]);
   }
-  if (defined.has("releaseMirror") && releaseMirrorVariable(form.releaseMirror) !== undefined) {
-    rows.push(["Release mirror", releaseMirrorText(form.releaseMirror, undefined)]);
+  if (defined.has("releaseMirror") && releaseMirrorVariable(formReleaseMirror(form)) !== undefined) {
+    rows.push(["Release mirror", releaseMirrorText(formReleaseMirror(form), undefined)]);
   }
   return [...rows, ...installRows(form, defined)];
 }
@@ -1705,8 +1707,8 @@ export type FieldKey =
   | `egress.${EgressField}`
   | "registryMirrors"
   | "trustedCAs"
-  | "releaseMirror.url"
-  | "releaseMirror.caBundle"
+  | "releaseMirror"
+  | "releaseMirrorCA"
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -2147,6 +2149,12 @@ function egressFormProblems(form: Form, c: ClusterClass | undefined): Problems {
   return p;
 }
 
+/** formReleaseMirror is the release mirror the form's two fields name. */
+export const formReleaseMirror = (form: Form): ReleaseMirror => ({
+  url: form.releaseMirror,
+  caBundle: form.releaseMirrorCA,
+});
+
 // nodeSiteProblems are what is wrong with the registry mirrors and trusted authorities the form names.
 function nodeSiteProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
@@ -2159,12 +2167,12 @@ function nodeSiteProblems(form: Form, c: ClusterClass | undefined): Problems {
     p.trustedCAs = trusted;
   }
   if (variable(c, "releaseMirror") !== undefined) {
-    const release = releaseMirrorProblems(form.releaseMirror);
+    const release = releaseMirrorProblems(formReleaseMirror(form));
     if (release.url !== undefined) {
-      p["releaseMirror.url"] = release.url;
+      p.releaseMirror = release.url;
     }
     if (release.caBundle !== undefined) {
-      p["releaseMirror.caBundle"] = release.caBundle;
+      p.releaseMirrorCA = release.caBundle;
     }
   }
   return p;

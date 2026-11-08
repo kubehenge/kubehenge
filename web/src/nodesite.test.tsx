@@ -138,29 +138,104 @@ describe("a cluster's own release mirror", () => {
     expect(releaseMirrorText(newReleaseMirror(), undefined)).toBe("Default");
   });
 
-  it("holds the address and authority to the class's rules", () => {
-    expect(releaseMirrorProblems(newReleaseMirror())).toStrictEqual({});
-    expect(releaseMirrorProblems({ url: "http://10.0.0.5:8944", caBundle: "" })).toStrictEqual({});
-    expect(releaseMirrorProblems({ url: "https://m.example/gh", caBundle: certificate })).toStrictEqual({});
-    for (const url of [
-      "m.example",
-      "ftp://m.example",
-      "https://u:p@m.example",
-      "https://m.example/",
-      "https://m.example?a=b",
-      "https://m'.example",
-    ]) {
-      expect(releaseMirrorProblems({ url, caBundle: "" }).url).toMatch(/^Use an http:\/\/ or https:\/\/ address/u);
-    }
-    expect(releaseMirrorProblems({ url: "https://m.example", caBundle: key }).caBundle).toBe(
-      "Paste PEM certificates only",
-    );
-    expect(releaseMirrorProblems({ url: "http://m.example", caBundle: certificate }).caBundle).toBe(
-      "A certificate needs an https:// mirror",
-    );
-    expect(releaseMirrorProblems({ url: "", caBundle: certificate }).caBundle).toBe("Add a release mirror first");
+  it("accepts an address, with a certificate for https", () => {
+    const none = { url: undefined, caBundle: undefined };
+    expect(releaseMirrorProblems(newReleaseMirror())).toStrictEqual(none);
+    expect(releaseMirrorProblems({ url: "http://10.0.0.5:8944", caBundle: "" })).toStrictEqual(none);
+    expect(releaseMirrorProblems({ url: "https://[2001:db8::5]:8944/gh", caBundle: "" })).toStrictEqual(none);
+    expect(releaseMirrorProblems({ url: " https://m.example/gh ", caBundle: certificate })).toStrictEqual(none);
+  });
+
+  it.each([
+    ["m.example", "Not an http:// or https:// address with a host"],
+    ["ftp://m.example", "Not an http:// or https:// address with a host"],
+    ["https://", "Not an http:// or https:// address with a host"],
+    ["https://u:p@m.example", "Holds credentials. Give the address alone"],
+    ["https://m.example/", "Ends in /. Give it without"],
+    ["https://m.example?a=b", "Has a query, a fragment or a character an address cannot hold"],
+    ["https://m.example/a#b", "Has a query, a fragment or a character an address cannot hold"],
+    ["https://m'.example", "Has a query, a fragment or a character an address cannot hold"],
+  ])("refuses the address %s", (url, want) => {
+    expect(releaseMirrorProblems({ url, caBundle: "" }).url).toBe(want);
+  });
+
+  it.each([
+    ["https://m.example", "not a certificate", "Holds no PEM certificate"],
+    ["https://m.example", key, "Holds a private key. Give certificates only"],
+    ["https://m.example", certificate + key, "Holds a private key. Give certificates only"],
+    ["https://m.example", `${certificate}EOF\n`, "Holds text besides its certificates"],
+    ["http://m.example", certificate, "A certificate is for an https:// mirror"],
+    ["", certificate, "A certificate needs a release mirror"],
+  ])("refuses for %s the certificate %#", (url, caBundle, want) => {
+    expect(releaseMirrorProblems({ url, caBundle }).caBundle).toBe(want);
   });
 });
+
+// inlineCases are the problems the release mirror's fields show as they are filled in.
+const inlineCases: { url: string; caBundle: string; urlError: string | undefined; caError: string | undefined }[] = [
+  { url: "http://site.example/", caBundle: "", urlError: "Ends in /. Give it without", caError: undefined },
+  {
+    url: "https://u:p@site.example",
+    caBundle: "",
+    urlError: "Holds credentials. Give the address alone",
+    caError: undefined,
+  },
+  {
+    url: "http://site.example",
+    caBundle: certificate,
+    urlError: undefined,
+    caError: "A certificate is for an https:// mirror",
+  },
+  {
+    url: "https://site.example",
+    caBundle: "not a certificate",
+    urlError: undefined,
+    caError: "Holds no PEM certificate",
+  },
+  { url: "", caBundle: certificate, urlError: undefined, caError: "A certificate needs a release mirror" },
+];
+
+describe("the wizard's release mirror", () => {
+  const k3s: ClusterClass = {
+    name: "kubehenge-k3s",
+    distribution: "k3s",
+    versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+k3s\d+$` },
+    variables: [
+      { name: "storage", required: true, schema: { type: "string" } },
+      { name: "releaseMirror", required: false, schema: { type: "object" } },
+    ],
+    releaseMirror: "https://mirror.example/github",
+  };
+
+  it.each(inlineCases)("shows the problems of $url inline as they are typed", async (c) => {
+    window.history.replaceState(null, "", "/clusters/new");
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/classes": { body: [k3s] },
+      "GET /api/proxmox/storages": { body: [] },
+      "GET /api/proxmox/nodes": { body: [] },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Name"), "branch");
+    await waitFor(() => expect(screen.getByRole("option", { name: "k3s" })).toBeInTheDocument());
+    await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-k3s");
+    await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+k3s1");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByLabelText("Release mirror"));
+    expect(screen.getByText("Default: https://mirror.example/github")).toBeInTheDocument();
+    await user.paste(c.url);
+    await user.click(screen.getByLabelText("Release mirror certificate"));
+    await user.paste(c.caBundle);
+    expect(fieldError("Release mirror")).toBe(c.urlError);
+    expect(fieldError("Release mirror certificate")).toBe(c.caError);
+  });
+});
+
+// fieldError is the error a field shows under it, if any.
+const fieldError = (label: string, inside: HTMLElement = document.body): string | undefined =>
+  within(inside).getByLabelText(label).closest(".field")?.querySelector(".field-error")?.textContent ?? undefined;
 
 describe("the wizard's site settings", () => {
   const cls: ClusterClass = {
@@ -205,7 +280,7 @@ describe("the wizard's site settings", () => {
       variables: [...cls.variables, { name: "releaseMirror", required: false, schema: { type: "object" } }],
     };
     const form = { ...newForm(), rancherRegister: false };
-    const set = { ...form, releaseMirror: { url: "https://site.example/gh", caBundle: certificate } };
+    const set = { ...form, releaseMirror: "https://site.example/gh", releaseMirrorCA: certificate };
     expect(request(form, agent).variables).not.toHaveProperty("releaseMirror");
     expect(request(set, agent).variables["releaseMirror"]).toStrictEqual({
       url: "https://site.example/gh",
@@ -214,11 +289,11 @@ describe("the wizard's site settings", () => {
     expect(request(set, cls).variables).not.toHaveProperty("releaseMirror");
     expect(Object.fromEntries(summary(set, agent))).toMatchObject({ "Release mirror": "https://site.example/gh" });
     expect(Object.fromEntries(summary(form, agent))).not.toHaveProperty("Release mirror");
-    const wrong = { ...form, releaseMirror: { url: "http://site.example", caBundle: certificate } };
+    const wrong = { ...form, releaseMirror: "http://site.example", releaseMirrorCA: certificate };
     expect(fieldProblems("Network", wrong, agent)).toMatchObject({
-      "releaseMirror.caBundle": "A certificate needs an https:// mirror",
+      releaseMirrorCA: "A certificate is for an https:// mirror",
     });
-    expect(fieldProblems("Network", wrong, cls)).not.toHaveProperty("releaseMirror.caBundle");
+    expect(fieldProblems("Network", wrong, cls)).not.toHaveProperty("releaseMirrorCA");
   });
 });
 
@@ -351,8 +426,8 @@ describe("a cluster's site options", () => {
     await user.type(within(dialog).getByLabelText("Release mirror"), "http://site.example");
     await user.click(within(dialog).getByLabelText("Release mirror certificate"));
     await user.paste(certificate);
+    expect(fieldError("Release mirror certificate", dialog)).toBe("A certificate is for an https:// mirror");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    expect(within(dialog).getByText("A certificate needs an https:// mirror")).toBeInTheDocument();
     expect(calls.filter((c) => c.key === "PATCH /api/clusters/clusters/web")).toHaveLength(0);
     await user.clear(within(dialog).getByLabelText("Release mirror"));
     await user.type(within(dialog).getByLabelText("Release mirror"), "https://site.example/gh");
@@ -385,6 +460,29 @@ describe("a cluster's site options", () => {
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { releaseMirror: null },
     });
+  });
+
+  it.each(inlineCases)("show the release mirror's problems inline for $url", async (c) => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: cluster },
+      "PATCH /api/clusters/clusters/web": { body: cluster },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Edit the release mirror" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit release mirror" });
+    await user.click(within(dialog).getByLabelText("Release mirror"));
+    await user.paste(c.url);
+    await user.click(within(dialog).getByLabelText("Release mirror certificate"));
+    await user.paste(c.caBundle);
+    expect(fieldError("Release mirror", dialog)).toBe(c.urlError);
+    expect(fieldError("Release mirror certificate", dialog)).toBe(c.caError);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("dialog", { name: "Edit release mirror" })).toBeInTheDocument();
+    expect(calls.filter((call) => call.key === "PATCH /api/clusters/clusters/web")).toHaveLength(0);
   });
 
   it("offer no release mirror on a kubeadm cluster", async () => {

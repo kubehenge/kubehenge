@@ -6,6 +6,7 @@ import {
   chosenNodeOS,
   controlPlaneSizes,
   formLoadBalancerValue,
+  formReleaseMirror,
   machineLeast,
   memoryNodeWarning,
   mostWorkers,
@@ -897,10 +898,17 @@ export function NetworkStep({
       )}
       {variable(cls, "releaseMirror") && (
         <ReleaseMirrorFields
-          value={form.releaseMirror}
-          onChange={(m) => set("releaseMirror", m)}
+          value={formReleaseMirror(form)}
+          onChange={(m) => {
+            if (m.url !== form.releaseMirror) {
+              set("releaseMirror", m.url);
+            }
+            if (m.caBundle !== form.releaseMirrorCA) {
+              set("releaseMirrorCA", m.caBundle);
+            }
+          }}
           fallback={cls === undefined ? undefined : (cls.releaseMirror ?? "")}
-          errors={{ url: shown("releaseMirror.url"), caBundle: shown("releaseMirror.caBundle") }}
+          errors={{ url: shown("releaseMirror"), caBundle: shown("releaseMirrorCA") }}
         />
       )}
       {variable(cls, "loadBalancer") && (
