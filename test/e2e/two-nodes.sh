@@ -190,7 +190,10 @@ step "back to one worker, with room again for ${second}"
 kubectl -n "${ns}" patch cluster/nodes --type=json -p '[{"op": "replace", "path": "/spec/topology/workers/machineDeployments/0/replicas", "value": 1}]'
 until_true 1200 "the second worker gone" all_on "${first}"
 until_true 300 "the second worker's VM gone" running_vms 2
-until_true 300 "${join_mib} MiB free on ${first}" free_at_least "${first}" "${join_mib}"
+# Where the two nodes share one machine's memory, the second's own services take up to 450 MiB of
+# it once it is back, so the room is measured with them counted.
+room_mib=$((join_mib + 512))
+until_true 300 "${room_mib} MiB free on ${first}" free_at_least "${first}" "${room_mib}"
 
 step "${second} back in the cluster's placement, and the cluster deleted"
 sh -c "${KUBEHENGE_E2E_UP}"
