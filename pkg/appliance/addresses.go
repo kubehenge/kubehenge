@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -87,6 +88,21 @@ func (a *Appliance) recordAddresses(ctx context.Context, kube kubernetes.Interfa
 	}
 	a.Log.Info("recorded the appliance's addresses for the clusters' firewalls", "addresses", want)
 	return nil
+}
+
+// OwnAddresses are the addresses the appliance reaches Proxmox VE from.
+func (a *Appliance) OwnAddresses() ([]netip.Addr, error) {
+	texts, err := a.addresses()
+	if err != nil {
+		return nil, err
+	}
+	addrs := make([]netip.Addr, 0, len(texts))
+	for _, text := range texts {
+		if ip, perr := netip.ParseAddr(text); perr == nil {
+			addrs = append(addrs, ip)
+		}
+	}
+	return addrs, nil
 }
 
 // addresses are the appliance's own addresses, which the workload clusters' firewalls accept: its

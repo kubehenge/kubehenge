@@ -73,6 +73,7 @@ type Resources interface {
 	DNS(ctx context.Context, t *pve.Ticket, node string) (pve.NodeDNS, error)
 	AccessNames(ctx context.Context, t *pve.Ticket) (pve.Names, error)
 	NodeAddresses(ctx context.Context, t *pve.Ticket) (map[string]string, error)
+	APIReach(ctx context.Context, t *pve.Ticket) (*pve.APIReach, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
 	Network(ctx context.Context, t *pve.Ticket, bridge string) (pve.Network, error)
 }

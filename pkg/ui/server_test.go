@@ -44,6 +44,7 @@ type fakeAccounts struct {
 	// storages, when set, replace the storages listed. names are the pools, roles, users and groups
 	// that exist.
 	storages       []pve.Storage
+	reach          *pve.APIReach
 	names          pve.Names
 	privilegeCalls int
 	backupChecks   int
@@ -221,6 +222,16 @@ func (f *fakeAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.names, nil
+}
+
+// APIReach answers with the firewalls a test sets, or the datacenter firewall off.
+func (f *fakeAccounts) APIReach(context.Context, *pve.Ticket) (*pve.APIReach, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reach == nil {
+		return &pve.APIReach{}, nil
+	}
+	return f.reach, nil
 }
 
 func (*fakeAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]string, error) {

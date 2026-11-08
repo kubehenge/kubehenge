@@ -86,6 +86,11 @@ type Hooks struct {
 	// SecurityGroups lists Proxmox VE's security groups, which the validator holds a cluster's
 	// firewall to. Nil, no group is looked up.
 	SecurityGroups SecurityGroups
+	// APIReach reads who the Proxmox VE firewalls let in on the API port, and Management names the
+	// addresses of the appliance and the management cluster's nodes. Together they have the validator
+	// refuse security groups that would cut those off. Either nil, no such check is made.
+	APIReach   APIReach
+	Management ManagementAddresses
 	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
 	// and the validator refuses a release it does not pin.
 	Releases *ReleaseChecksums

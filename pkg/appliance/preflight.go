@@ -49,6 +49,12 @@ type Inventory struct {
 	// UsedVMIDs are the IDs of the VMs and containers the user sees. Nil means they could not be
 	// read.
 	UsedVMIDs map[int]bool
+	// APIReach is what the Proxmox VE firewalls let in on the API port. Nil means it could not be
+	// read.
+	APIReach *pve.APIReach
+	// ApplianceAddresses are the appliance's own addresses, which reach the API as the management
+	// cluster's nodes do.
+	ApplianceAddresses []netip.Addr
 }
 
 // Findings are what a preflight found. Errors stop the run, warnings do not. Each names the node,
@@ -123,9 +129,35 @@ func (s *Settings) Preflight(inv *Inventory, owned bool) Findings { //nolint:rev
 		s.checkNamesFree(inv, &f)
 		s.checkVMIDs(inv, &f)
 	}
+	s.checkAPIReach(inv, &f)
 	s.warnPlacement(inv, &f)
 	s.warnRanges(inv, &f)
 	return f
+}
+
+// checkAPIReach checks that the datacenter firewall, once on, still lets the appliance and the
+// management cluster's nodes reach the Proxmox VE API. It cuts them off at once otherwise, and
+// nothing can then create or manage a VM. The setup asks for no security groups, so a firewall that
+// is off is left alone, as a cluster that turns it on is checked where it names its groups.
+func (s *Settings) checkAPIReach(inv *Inventory, f *Findings) {
+	if inv.APIReach == nil || !inv.APIReach.Enabled {
+		return
+	}
+	var addrs []netip.Addr
+	for _, text := range slices.Concat(s.NodeAddresses, s.NodeAddressesIPv6) {
+		host, _, _ := strings.Cut(text, "/")
+		if ip, err := netip.ParseAddr(host); err == nil {
+			addrs = append(addrs, ip)
+		}
+	}
+	addrs = slices.Compact(slices.SortedFunc(slices.Values(slices.Concat(addrs, inv.ApplianceAddresses)), netip.Addr.Compare))
+	r := inv.APIReach.Cut(addrs)
+	if msg := pve.LockoutMessage(r.Cut); msg != "" {
+		f.Errors = append(f.Errors, msg)
+	}
+	if msg := pve.UnsureMessage(r.Unsure); msg != "" {
+		f.Warnings = append(f.Warnings, msg)
+	}
 }
 
 func (s *Settings) checkNodesExist(inv *Inventory, f *Findings) {

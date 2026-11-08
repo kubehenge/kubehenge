@@ -112,18 +112,25 @@ func firewalled(c *clusterv1.Cluster) bool {
 // ConfigMap the appliance has not written adds nothing, as on a management cluster set up without
 // the appliance.
 func (f *FirewallSources) sources(ctx context.Context) (string, error) {
+	sources, err := f.Addresses(ctx)
+	return strings.Join(sources, ","), err
+}
+
+// Addresses are the sources as a list. The admission check of a cluster's security groups asks for
+// them too, so that it holds the same addresses the firewall keeps.
+func (f *FirewallSources) Addresses(ctx context.Context) ([]string, error) {
 	sources := slices.Clone(f.Management)
 	cm := &corev1.ConfigMap{}
 	err := f.Reader.Get(ctx, client.ObjectKey{Namespace: f.Namespace, Name: ApplianceAddressesName}, cm)
 	if err != nil && !apierrors.IsNotFound(err) {
-		return "", fmt.Errorf("reading the appliance's addresses: %w", err)
+		return nil, fmt.Errorf("reading the appliance's addresses: %w", err)
 	}
 	for address := range strings.SplitSeq(cm.Data[ApplianceAddressesKey], ",") {
 		if address = strings.TrimSpace(address); address != "" && !slices.Contains(sources, address) {
 			sources = append(sources, address)
 		}
 	}
-	return strings.Join(sources, ","), nil
+	return sources, nil
 }
 
 // annotate sets the ProxmoxCluster's sources to want where they differ, and takes the annotation
