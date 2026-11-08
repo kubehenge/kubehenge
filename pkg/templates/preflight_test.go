@@ -34,9 +34,11 @@ func (p *preflightPVE) client(t *testing.T) *proxmox.Client {
 			data = p.guests
 		case "/access/permissions":
 			path := r.URL.Query().Get("path")
+			// Each privilege maps to whether it propagates. 0, as for the storage grants of the
+			// module, which do not propagate, is held all the same.
 			held := map[string]int{}
 			for _, priv := range p.granted[path] {
-				held[priv] = 1
+				held[priv] = 0
 			}
 			data = map[string]any{path: held}
 		default:

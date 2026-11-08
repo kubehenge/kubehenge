@@ -121,7 +121,10 @@ func holds(ctx context.Context, c *proxmox.Client, path, priv string) bool {
 	if err := c.Get(ctx, "/access/permissions?"+url.Values{"path": {path}}.Encode(), &held); err != nil {
 		return true
 	}
-	return held[path][priv] != 0
+	// The answer maps each privilege held to whether it propagates, so one granted without
+	// propagation reads 0 and is held all the same.
+	_, ok := held[path][priv]
+	return ok
 }
 
 // storageContentName is how Proxmox VE's storage settings name a content type.
