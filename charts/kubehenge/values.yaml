@@ -131,8 +131,9 @@ proxy:
 chartMirrors: {}
 
 # A mirror of the RKE2 and k3s releases, which serves them on GitHub's paths beneath its url:
-# <url>/<repository>/releases/download/<version>/<file> and <url>/<repository>/raw/<version>/install.sh.
-# Nodes download their release from it in place of GitHub, and still install only the pinned files.
+# <url>/<repository>/releases/download/<version>/<file> and
+# <url>/<repository>/raw/<version>/install.sh. Nodes download their release from it in place of
+# GitHub, and still install only the pinned files.
 # caBundle (PEM) is the authority of a mirror the usual authorities do not sign. Empty, GitHub.
 releaseMirror:
   url: ""

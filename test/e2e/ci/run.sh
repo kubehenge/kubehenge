@@ -464,7 +464,8 @@ if [ -n "${releases_key}" ]; then
     fi
     started=$(date +%s)
     sh "${repo}/test/e2e/ci/releases.sh" fetch "${work}/releases" "${releases_lane}"
-    echo "the releases the guests install are in place in $(($(date +%s) - started)) s (${releases_key})"
+    finished=$(date +%s)
+    echo "the releases the guests install are in place in $((finished - started)) s (${releases_key})"
     mirror_url="https://${KUBEHENGE_E2E_OIDC_ADDRESS}:8944"
     if ! curl -fsS --cacert "${mirror}/ca.crt" -o /dev/null "${mirror_url}/" 2> /dev/null; then
         python3 -c '

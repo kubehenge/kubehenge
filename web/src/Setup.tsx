@@ -1009,7 +1009,7 @@ function chartMirrorProblems(f: SetupForm): SetupProblems {
 }
 
 // releaseMirrorAddress is an http(s):// address that a node's command line carries as it is.
-const releaseMirrorAddress = /^https?:\/\/[A-Za-z0-9._~:[\]-]+(\/[A-Za-z0-9._~:/[\]-]*[A-Za-z0-9._~:[\]-])?$/;
+const releaseMirrorAddress = /^https?:\/\/[A-Za-z0-9._~:[\]-]+(?<path>\/[A-Za-z0-9._~:/[\]-]*[A-Za-z0-9._~:[\]-])?$/u;
 
 // releaseMirrorProblems are those of the release mirror and its certificate authority.
 function releaseMirrorProblems(f: SetupForm): SetupProblems {
@@ -1280,6 +1280,8 @@ function headlampRows(s: ManagementSettings): [string, string][] {
   ];
 }
 
+const releaseMirrorSummary = (s: ManagementSettings): string => s.releaseMirror?.url ?? "GitHub";
+
 function chartMirrorsSummary(s: ManagementSettings): string {
   const mirrors = s.chartRepositories?.mirrors;
   return mirrors ? formatChartMirrors(mirrors).split("\n").join(", ") : "None";
@@ -1324,7 +1326,7 @@ function ManagedSummary({
     ["etcd restores", s.etcdRestore === true ? "Guest agent" : "By hand"],
     ["Registry mirrors", s.registryMirrors ? formatMirrors(s.registryMirrors).split("\n").join(", ") : "None"],
     ["Chart mirrors", chartMirrorsSummary(s)],
-    ["Release mirror", s.releaseMirror?.url ?? "GitHub"],
+    ["Release mirror", releaseMirrorSummary(s)],
     ["Proxy", proxySummary(s.proxy)],
     ["Pod ranges", s.podSubnets?.join(", ") ?? "Automatic"],
     ["Service ranges", s.serviceSubnets?.join(", ") ?? "Automatic"],

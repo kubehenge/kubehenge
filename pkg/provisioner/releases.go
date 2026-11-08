@@ -162,32 +162,13 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 	if err != nil {
 		return nil, err //nolint:wrapcheck // names the node OS
 	}
-	args := []string{releaseScriptPath}
-	ops := []map[string]any{
-		addOp(tmpl.spec+"/files/-", map[string]any{
-			"path": releaseScriptPath, "owner": "root:root", "permissions": "0700", "content": releaseScript,
-		}),
-	}
-	if mirror := r.mirror(); mirror.Enabled() {
-		args = append(args, "--mirror", mirror.URL)
-		if mirror.CABundle != "" {
-			args = append(args, "--mirror-ca", releaseMirrorCAPath)
-			ops = append(ops, addOp(tmpl.spec+"/files/-", map[string]any{
-				"path": releaseMirrorCAPath, "owner": "root:root", "permissions": "0644", "content": mirror.CABundle,
-			}))
-		}
-	}
-	args = append(args, string(release.distribution), version, sums.File, sums.Script)
-	ops = append(ops,
-		addOp(tmpl.spec+"/"+tmpl.commands+"/-", strings.Join(append(args, files...), " ")),
-		addOp(tmpl.spec+"/agentConfig/airGapped", true),
-	)
+	ops := r.installOps(tmpl, append([]string{string(release.distribution), version, sums.File, sums.Script}, files...))
 	if family.MAC() == templates.SELinux {
 		// Neither bootstrap provider has a field for it, and both distributions read every file in
 		// config.yaml.d. The node's template carries the distribution's policy package.
 		ops = append(ops, addOp(tmpl.spec+"/files/-", map[string]any{
 			"path":  "/etc/rancher/" + string(release.distribution) + "/config.yaml.d/50-kubehenge-selinux.yaml",
-			"owner": "root:root", "permissions": "0600", "content": "selinux: true\n",
+			"owner": rootOwner, "permissions": "0600", "content": "selinux: true\n",
 		}))
 	}
 	patch, err := json.Marshal(ops)
@@ -195,6 +176,33 @@ func (r *ReleaseChecksums) patch(ctx context.Context, item *runtimehooksv1.Gener
 		return nil, fmt.Errorf("patching template %s: %w", item.UID, err)
 	}
 	return patch, nil
+}
+
+// rootOwner owns the files the release's install puts on a node.
+const rootOwner = "root:root"
+
+// installOps put the release script on a node, with the mirror's authority when it has one, and
+// run it with its arguments from the mirror or GitHub.
+func (r *ReleaseChecksums) installOps(tmpl releaseTemplate, args []string) []map[string]any {
+	command := []string{releaseScriptPath}
+	ops := []map[string]any{
+		addOp(tmpl.spec+"/files/-", map[string]any{
+			"path": releaseScriptPath, "owner": rootOwner, "permissions": "0700", "content": releaseScript,
+		}),
+	}
+	if mirror := r.mirror(); mirror.Enabled() {
+		command = append(command, "--mirror", mirror.URL)
+		if mirror.CABundle != "" {
+			command = append(command, "--mirror-ca", releaseMirrorCAPath)
+			ops = append(ops, addOp(tmpl.spec+"/files/-", map[string]any{
+				"path": releaseMirrorCAPath, "owner": rootOwner, "permissions": "0644", "content": mirror.CABundle,
+			}))
+		}
+	}
+	return append(ops,
+		addOp(tmpl.spec+"/"+tmpl.commands+"/-", strings.Join(append(command, args...), " ")),
+		addOp(tmpl.spec+"/agentConfig/airGapped", true),
+	)
 }
 
 // builtinVersion is the Kubernetes version the template's machines run: during an upgrade the

@@ -371,10 +371,13 @@ jobs:
       - name: Releases to keep
         id: releases-kept
         if: >-
-          !cancelled() && steps.releases.outputs.key != '' && steps.releases-cache.outputs.cache-hit != 'true'
+          !cancelled() && steps.releases.outputs.key != ''
+          && steps.releases-cache.outputs.cache-hit != 'true'
           && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
-          if [ -e "$RUNNER_TEMP/e2e/releases/.complete" ]; then echo keep=true >> "$GITHUB_OUTPUT"; fi
+          if [ -e "$RUNNER_TEMP/e2e/releases/.complete" ]; then
+            echo keep=true >> "$GITHUB_OUTPUT"
+          fi
       - if: steps.releases-kept.outputs.keep == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

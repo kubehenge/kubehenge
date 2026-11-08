@@ -96,7 +96,7 @@ cluster's API (KUBECONFIG) and a right to change that ConfigMap.`,
 func pinChecks(address, caFile string) (*provisioner.ReleaseChecksums, error) {
 	mirror := provisioner.ReleaseMirror{URL: address}
 	if caFile != "" {
-		ca, err := os.ReadFile(caFile)
+		ca, err := os.ReadFile(caFile) //nolint:gosec // the file the user names
 		if err != nil {
 			return nil, fmt.Errorf("--mirror-ca: %w", err)
 		}

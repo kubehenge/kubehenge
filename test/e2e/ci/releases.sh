@@ -35,7 +35,11 @@ pinned() {
 # groups <lane>: the distributions the lane's tests install, one a line, RKE2's with its CNI.
 groups() {
     for lane_test in $(printf '%s' "$1" | tr , ' '); do
-        cni=$(eval "$(variant "${lane_test}")" && printf '%s' "${KUBEHENGE_E2E_CNI:-}")
+        exports=$(variant "${lane_test}")
+        cni=$(
+            eval "${exports}"
+            printf '%s' "${KUBEHENGE_E2E_CNI:-}"
+        )
         case "${lane_test%%+*}" in
             rke2 | rke2-*) echo "rke2-${cni:-canal}" ;;
             k3s | k3s-* | rancher | cluster-mesh | node-image-refresh | autoscaler | control-plane-ha | two-nodes) echo k3s ;;
@@ -49,14 +53,18 @@ needs() {
     for group in $(groups "$1"); do
         case "${group}" in
             rke2-*)
-                for version in $(printf '%s\n' "$(pinned rke2 "${from}")" "$(pinned rke2 "${to}")" | sort -u); do
+                first=$(pinned rke2 "${from}")
+                last=$(pinned rke2 "${to}")
+                for version in $(printf '%s\n' "${first}" "${last}" | sort -u); do
                     echo "rancher/rke2 ${version} rke2.linux-amd64.tar.gz rke2-images-core.linux-amd64.tar.zst rke2-images-${group#rke2-}.linux-amd64.tar.zst"
                 done
                 ;;
             k3s)
                 # control-plane-ha and two-nodes start on the from release itself, the others on
                 # the newest of its minor.
-                for version in $(printf '%s\n' "$(pinned k3s "${from}")" "$(pinned k3s "${to}")" "${from}+k3s1" | sort -u); do
+                first=$(pinned k3s "${from}")
+                last=$(pinned k3s "${to}")
+                for version in $(printf '%s\n' "${first}" "${last}" "${from}+k3s1" | sort -u); do
                     echo "k3s-io/k3s ${version} k3s k3s-airgap-images-amd64.tar.zst"
                 done
                 ;;
@@ -80,7 +88,8 @@ case "${mode}" in
         [ -n "${need}" ] || exit 0
         name=$(groups "${lane}" | paste -sd- -)
         sum=$(printf '%s\n' "${need}" | while read -r repository version files; do
-            echo "${repository} ${files} $(pin_of "${version}")"
+            pin=$(pin_of "${version}")
+            echo "${repository} ${files} ${pin}"
         done | sha256sum | cut -c1-16)
         echo "key=e2e-releases-${name}-${sum}"
         ;;
@@ -100,9 +109,12 @@ case "${mode}" in
             [ -s "${raw}/install.sh" ] ||
                 "${repo}/scripts/fetch.sh" "https://raw.githubusercontent.com/${repository}/${version}/install.sh" "${raw}/install.sh"
             # The guests check the same, but a file a cache kept wrong is better found here.
+            # A pin is "<version> <checksum file's SHA-256> <install script's SHA-256>".
             pin=$(pin_of "${version}")
-            printf '%s  %s\n%s  %s\n' "$(echo "${pin}" | cut -d' ' -f2)" "${assets}/sha256sum-amd64.txt" \
-                "$(echo "${pin}" | cut -d' ' -f3)" "${raw}/install.sh" | sha256sum --check --strict --quiet || {
+            sums_sum=${pin#* }
+            sums_sum=${sums_sum%% *}
+            printf '%s  %s\n%s  %s\n' "${sums_sum}" "${assets}/sha256sum-amd64.txt" "${pin##* }" "${raw}/install.sh" |
+                sha256sum --check --strict --quiet || {
                 rm -rf "${assets}" "${raw}"
                 echo "the checksum file or install script of ${repository} ${version} is not the pinned one" >&2
                 exit 1

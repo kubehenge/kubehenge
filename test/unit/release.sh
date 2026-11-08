@@ -73,9 +73,11 @@ fi
 cp "${file}" "${output}"
 [ -z "${write}" ] || printf 200
 EOF
+# shellcheck disable=SC2016 # the stand-ins expand their own variables.
 for tool in install mv mkdir; do
     printf '#!/bin/sh\necho "%s $*" >> "${INSTALLS}"\n' "${tool}" > "${bin}/${tool}"
 done
+# shellcheck disable=SC2016 # the stand-in expands its own variables.
 printf '#!/bin/sh\nd=${ROOT}/work.$$\n"%s" "${d}"\necho "${d}"\n' "${real_mkdir}" > "${bin}/mktemp"
 chmod +x "${bin}"/*
 
@@ -88,12 +90,13 @@ publish() {
     echo "k3s images" > "${assets}/k3s-airgap-images-amd64.tar.zst"
     # As the release lists them, in text mode, which sha256sum on Windows does not default to.
     for asset in k3s k3s-airgap-images-amd64.tar.zst; do
-        printf '%s  %s\n' "$(sha256sum < "${assets}/${asset}" | cut -d' ' -f1)" "${asset}"
+        sum=$(sha256sum < "${assets}/${asset}")
+        printf '%s  %s\n' "${sum%% *}" "${asset}"
     done > "${assets}/sha256sum-amd64.txt"
     echo '#!/bin/sh' > "${served}/$2/install.sh"
 }
-publish github.com raw.githubusercontent.com/k3s-io/k3s/${version}
-publish mirror.example.org/github mirror.example.org/github/k3s-io/k3s/raw/${version}
+publish github.com "raw.githubusercontent.com/k3s-io/k3s/${version}"
+publish mirror.example.org/github "mirror.example.org/github/k3s-io/k3s/raw/${version}"
 sums=$(sha256sum < "${served}/github.com/k3s-io/k3s/releases/download/${version}/sha256sum-amd64.txt" | cut -d' ' -f1)
 script_sum=$(sha256sum < "${served}/raw.githubusercontent.com/k3s-io/k3s/${version}/install.sh" | cut -d' ' -f1)
 

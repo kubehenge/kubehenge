@@ -50,7 +50,7 @@ func TestControllerMountsTheReleaseMirrorsAuthority(t *testing.T) {
 func TestChartRefusesAReleaseMirrorThatIsNoAddress(t *testing.T) {
 	t.Parallel()
 	for _, mirror := range []string{"mirror.example.org", "https://mirror.example.org/", "https://mirror.example.org/a b", "oci://mirror.example.org"} {
-		cmd := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system",
+		cmd := exec.CommandContext(t.Context(), "helm", "template", //nolint:gosec // helm with the test's own arguments "kubehenge", ".", "--namespace", "kubehenge-system",
 			"--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--set-string", "releaseMirror.url="+mirror)
 		if out, err := cmd.CombinedOutput(); err == nil {
 			t.Errorf("the release mirror %q was accepted:\n%.300s", mirror, out)

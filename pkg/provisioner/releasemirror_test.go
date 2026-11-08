@@ -29,7 +29,7 @@ func TestReleaseMirrorCheck(t *testing.T) {
 		{ReleaseMirror{CABundle: ca}, "needs a release mirror"},
 		{ReleaseMirror{URL: "mirror.example.org"}, "no http:// or https:// address"},
 		{ReleaseMirror{URL: "ftp://mirror.example.org"}, "no http:// or https:// address"},
-		{ReleaseMirror{URL: "https://user:secret@mirror.example.org"}, "holds credentials"},
+		{ReleaseMirror{URL: "https://user:secret@mirror.example.org"}, "holds credentials"}, //nolint:gosec // a fake address
 		{ReleaseMirror{URL: "https://mirror.example.org/?a=b"}, "a query"},
 		{ReleaseMirror{URL: "https://mirror.example.org/a;rm"}, "characters other than"},
 		{ReleaseMirror{URL: "https://mirror.example.org/a$(id)"}, "characters other than"},
@@ -53,6 +53,7 @@ func TestReleasePatchesDownloadFromTheMirror(t *testing.T) {
 	t.Parallel()
 	r, _ := newReleaseChecksums(t)
 	const ca = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+	const address = "https://mirror.example.org/github"
 	for _, tc := range []struct {
 		name   string
 		mirror ReleaseMirror
@@ -60,9 +61,8 @@ func TestReleasePatchesDownloadFromTheMirror(t *testing.T) {
 		caFile bool
 	}{
 		{"unset", ReleaseMirror{}, releaseScriptPath + " k3s ", false},
-		{"set", ReleaseMirror{URL: "https://mirror.example.org/github"}, releaseScriptPath + " --mirror https://mirror.example.org/github k3s ", false},
-		{"with an authority", ReleaseMirror{URL: "https://mirror.example.org/github", CABundle: ca},
-			releaseScriptPath + " --mirror https://mirror.example.org/github --mirror-ca " + releaseMirrorCAPath + " k3s ", true},
+		{"set", ReleaseMirror{URL: address}, releaseScriptPath + " --mirror " + address + " k3s ", false},
+		{"with an authority", ReleaseMirror{URL: address, CABundle: ca}, releaseScriptPath + " --mirror " + address + " --mirror-ca " + releaseMirrorCAPath + " k3s ", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -78,7 +78,10 @@ func TestReleasePatchesDownloadFromTheMirror(t *testing.T) {
 				t.Errorf("the command is %q, want it to start %q", commands, tc.args)
 			}
 			var found bool
-			files, _ := ops[templateSpec+"/files/-+"].([]any)
+			files, ok := ops[templateSpec+"/files/-+"].([]any)
+			if !ok {
+				t.Fatalf("the files after the script are %v", ops[templateSpec+"/files/-+"])
+			}
 			for _, f := range files {
 				if file, isFile := f.(map[string]any); isFile && file["path"] == releaseMirrorCAPath {
 					found = file["content"] == ca
@@ -93,10 +96,8 @@ func TestReleasePatchesDownloadFromTheMirror(t *testing.T) {
 
 // mirrorOf serves the releases newReleaseChecksums pins on GitHub's paths beneath /github, as a
 // mirror does, and counts the requests that reach GitHub's own addresses.
-func mirrorOf(t *testing.T, f *fakeReleases, tlsServer bool) (srv *httptest.Server, github *atomic.Int32) {
-	t.Helper()
-	github = &atomic.Int32{}
-	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+func mirrorOf(f *fakeReleases, github *atomic.Int32) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		path, mirrored := strings.CutPrefix(req.URL.Path, "/github")
 		if !mirrored {
 			github.Add(1)
@@ -110,19 +111,14 @@ func mirrorOf(t *testing.T, f *fakeReleases, tlsServer bool) (srv *httptest.Serv
 		req.URL.Path = path
 		f.ServeHTTP(w, req)
 	})
-	if tlsServer {
-		srv = httptest.NewTLSServer(handler)
-	} else {
-		srv = httptest.NewServer(handler)
-	}
-	t.Cleanup(srv.Close)
-	return srv, github
 }
 
 func TestReleaseChecksumsReadThroughTheMirror(t *testing.T) {
 	t.Parallel()
 	r, f := newReleaseChecksums(t)
-	srv, github := mirrorOf(t, f, false)
+	var github atomic.Int32
+	srv := httptest.NewServer(mirrorOf(f, &github))
+	t.Cleanup(srv.Close)
 	r.GitHub, r.Raw, r.HTTP = srv.URL, srv.URL, srv.Client()
 	r.Mirror = func() ReleaseMirror { return ReleaseMirror{URL: srv.URL + "/github"} }
 	pin, err := r.Digests(t.Context(), "v1.37.1+k3s1")
@@ -140,7 +136,8 @@ func TestReleaseChecksumsReadThroughTheMirror(t *testing.T) {
 func TestReleaseChecksumsNameTheMirrorAndTheFileItLacks(t *testing.T) {
 	t.Parallel()
 	r, f := newReleaseChecksums(t)
-	srv, _ := mirrorOf(t, f, false)
+	srv := httptest.NewServer(mirrorOf(f, &atomic.Int32{}))
+	t.Cleanup(srv.Close)
 	r.HTTP = srv.Client()
 	mirror := srv.URL + "/github"
 	r.Mirror = func() ReleaseMirror { return ReleaseMirror{URL: mirror} }
@@ -159,7 +156,8 @@ func TestReleaseChecksumsNameTheMirrorAndTheFileItLacks(t *testing.T) {
 func TestReleaseChecksumsTrustTheMirrorsAuthority(t *testing.T) {
 	t.Parallel()
 	r, f := newReleaseChecksums(t)
-	srv, _ := mirrorOf(t, f, true)
+	srv := httptest.NewTLSServer(mirrorOf(f, &atomic.Int32{}))
+	t.Cleanup(srv.Close)
 	mirror := ReleaseMirror{
 		URL:      srv.URL + "/github",
 		CABundle: string(pem.EncodeToMemory(&pem.Block{Type: certificateBlock, Bytes: srv.Certificate().Raw})),
