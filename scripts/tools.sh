@@ -25,14 +25,42 @@ wanted() {
     esac
 }
 
+# fetch <url>: downloads to ${work}/download. --retry alone leaves out a connection the host resets
+# mid-transfer (curl's exit 92). The caller's checksum makes trying again safe. GitHub's release
+# download address can answer 504 for an hour while its API serves the same file, so a GitHub
+# release asset is fetched through the API once its address gives up.
+fetch() {
+    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$1" && return 0
+    case "$1" in
+        https://github.com/*/*/releases/download/*/*) ;;
+        *) return 1 ;;
+    esac
+    path=${1#https://github.com/}
+    repository=${path%%/releases/download/*}
+    tag_asset=${path#*/releases/download/}
+    asset_id=$(api "repos/${repository}/releases/tags/${tag_asset%%/*}" |
+        jq -r --arg name "${tag_asset#*/}" '.assets[] | select(.name == $name) | .id')
+    [ -n "${asset_id}" ] || return 1
+    api "repos/${repository}/releases/assets/${asset_id}" -H 'Accept: application/octet-stream' -o "${work}/download"
+}
+
+# api <path> [curl option...]: a GET of GitHub's API, with GITHUB_TOKEN where CI sets it, since the
+# address's limit without one is shared by every job on the runner's address.
+api() {
+    api_path=$1
+    shift
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        set -- -H "Authorization: Bearer ${GITHUB_TOKEN}" "$@"
+    fi
+    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 "$@" "https://api.github.com/${api_path}"
+}
+
 # tool <name> <url> <sha256> [member of the archive]
 tool() {
     # shellcheck disable=SC2310 # wanted only matches a word, nothing in it can fail.
     wanted "$1" || return 0
-    # --retry alone leaves out a connection the host resets mid-transfer (curl's exit 92); the
-    # checksum makes trying again safe. Eight tries back off over about four minutes, which outlasts
-    # the spells of 504s GitHub's release downloads give; five gave up after half a minute.
-    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
+    # shellcheck disable=SC2310 # its failure is the message below.
+    fetch "$2" || {
         echo "tools: could not download $2" >&2
         exit 1
     }
@@ -56,7 +84,8 @@ release() {
 tree() {
     # shellcheck disable=SC2310
     wanted "$1" || return 0
-    curl -fsSL --proto '=https' --retry 8 --retry-all-errors --tlsv1.2 -o "${work}/download" "$2" || {
+    # shellcheck disable=SC2310 # its failure is the message below.
+    fetch "$2" || {
         echo "tools: could not download $2" >&2
         exit 1
     }

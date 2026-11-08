@@ -129,6 +129,8 @@ jobs:
             e2e-go-
       - name: Tools
         if: env.E2E_RUN == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

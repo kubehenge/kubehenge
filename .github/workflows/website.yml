@@ -125,6 +125,8 @@ jobs:
           key: website-${{ hashFiles('website/package-lock.json') }}
           restore-keys: website-
       - name: Node
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" node
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -194,6 +196,8 @@ jobs:
           key: website-${{ hashFiles('website/package-lock.json') }}
           restore-keys: website-
       - name: Node
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" node
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

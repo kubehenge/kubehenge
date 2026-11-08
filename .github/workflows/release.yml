@@ -58,6 +58,8 @@ jobs:
           sparse-checkout: scripts/tools.sh
           sparse-checkout-cone-mode: false
       - name: cosign
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" cosign
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

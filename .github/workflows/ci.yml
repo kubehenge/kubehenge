@@ -53,6 +53,8 @@ jobs:
             ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
           restore-keys: ci-
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -87,6 +89,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" actionlint shellcheck uv
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

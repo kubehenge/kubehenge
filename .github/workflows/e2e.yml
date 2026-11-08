@@ -106,6 +106,8 @@ jobs:
             e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
             e2e-go-
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"

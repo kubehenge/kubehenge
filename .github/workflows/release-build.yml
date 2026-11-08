@@ -202,6 +202,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" go node uv
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -231,6 +233,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -350,6 +354,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Tools
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" go syft
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -406,6 +412,8 @@ jobs:
           sparse-checkout: scripts/tools.sh
           sparse-checkout-cone-mode: false
       - name: cosign
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" cosign
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
