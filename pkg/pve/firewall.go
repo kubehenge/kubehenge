@@ -106,11 +106,11 @@ func ReadAPIReach(ctx context.Context, get Getter) (*APIReach, error) {
 		r.Management = append(r.Management, IPSetEntry{CIDR: e.CIDR, NoMatch: bool(e.NoMatch)})
 	}
 
-	r.readNodes(ctx, get)
+	readNodes(ctx, r, get)
 	return r, nil
 }
 
-func (r *APIReach) readNodes(ctx context.Context, get Getter) {
+func readNodes(ctx context.Context, r *APIReach, get Getter) {
 	var status []struct {
 		Type string `json:"type"`
 		Name string `json:"name"`
@@ -134,14 +134,14 @@ func (r *APIReach) readNodes(ctx context.Context, get Getter) {
 		}
 	}
 	for _, n := range nodes {
-		if reach, on := r.readNode(ctx, get, n.Node, addresses[n.Node]); on {
+		if reach, on := readNode(ctx, r, get, n.Node,addresses[n.Node]); on {
 			r.Nodes = append(r.Nodes, reach)
 		}
 	}
 }
 
 // readNode reads one node's interfaces, and says whether its firewall is on.
-func (r *APIReach) readNode(ctx context.Context, get Getter, name string, address netip.Addr) (NodeReach, bool) {
+func readNode(ctx context.Context, r *APIReach, get Getter, name string, address netip.Addr) (NodeReach, bool) {
 	escaped := url.PathEscape(name)
 	var options struct {
 		Enable *flag `json:"enable"`
