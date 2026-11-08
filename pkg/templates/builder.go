@@ -1215,8 +1215,17 @@ const bakeAccount = `awk '$1 != t { t = $1; print }' "$1" | tail -n 60; echo ...
 // shows there whether it waits on a socket, a lock or a child.
 const bakeProcesses = `ps -eo pid,ppid,etimes,stat,wchan:32,args --forest | cut -c1-220 | tail -n 80; echo; ss -tnpo | cut -c1-220 | head -n 40`
 
+// cloudInitAccount prints what a failed cloud-init module left behind, since its status names only
+// the module: the end of the output its commands printed (a runcmd script's error among it), and
+// each warning and error of cloud-init's own log with the traceback after it. The VM, removed after a
+// failed bake, keeps neither.
+const cloudInitAccount = `echo '/var/log/cloud-init-output.log, its end:'; tail -n 60 /var/log/cloud-init-output.log; ` +
+	`echo '/var/log/cloud-init.log, its warnings and errors with the lines after each:'; ` +
+	`grep -E -A 12 '\[(WARNING|ERROR|CRITICAL)\]' /var/log/cloud-init.log | tail -n 80`
+
 // waitAndCheck waits for the guest agent and runs the checks in the guest. On a failure it adds
-// cloud-init's own account, the bake's log and what still runs, which the exit code does not carry.
+// cloud-init's own account and what its modules printed, the bake's log and what still runs, which
+// the exit code does not carry.
 func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, checks [][]string, log string) error {
 	if err := vm.WaitForAgent(ctx, int(bakeTimeout.Seconds())); err != nil {
 		return fmt.Errorf("the guest agent did not start: %w", err)
@@ -1231,6 +1240,9 @@ func (b *Builder) waitAndCheck(ctx context.Context, vm *proxmox.VirtualMachine, 
 		}
 		if check[0] == cloudInit {
 			if out, lerr := b.output(ctx, vm, []string{cloudInit, "status", "--long"}); lerr == nil {
+				err = fmt.Errorf("%w\n%s", err, out)
+			}
+			if out, lerr := b.output(ctx, vm, []string{"sh", "-c", cloudInitAccount}); lerr == nil {
 				err = fmt.Errorf("%w\n%s", err, out)
 			}
 		}
