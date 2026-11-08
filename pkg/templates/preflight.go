@@ -56,8 +56,20 @@ func (b *Builder) pickNode(ctx context.Context, t *Template) error {
 	return fmt.Errorf("none of the nodes %s can build %s: %s", strings.Join(b.Candidates, ", "), t.LineName, strings.Join(why, ", "))
 }
 
-// privAllocateSpace is what writing a file to a storage takes.
-const privAllocateSpace = "Datastore.AllocateSpace"
+const (
+	// privAllocateTemplate is what Proxmox VE's download-url and upload calls take on the storage.
+	privAllocateTemplate = "Datastore.AllocateTemplate"
+	// privAllocate is what deleting a file that no VM owns takes, as the cloud-init ISO's removal does.
+	privAllocate = "Datastore.Allocate"
+)
+
+// isoPrivileges are what a bake's cloud-init ISO takes on its storage: the upload and the removal.
+var isoPrivileges = []string{privAllocateTemplate, privAllocate}
+
+// holdsAll reports whether the token holds every one of privs on path.
+func holdsAll(ctx context.Context, c *proxmox.Client, path string, privs ...string) bool {
+	return !slices.ContainsFunc(privs, func(p string) bool { return !holds(ctx, c, path, p) })
+}
 
 // nodeStorage is a storage as a node lists it.
 type nodeStorage struct {
@@ -154,8 +166,8 @@ func (b *Builder) preflight(ctx context.Context, t *Template) ([]nodeStorage, er
 			return nil, wrongContent(check.name, check.content)
 		}
 	}
-	if !holds(ctx, b.Client, "/storage/"+b.ImportStorage, privAllocateSpace) {
-		return nil, lasting(fmt.Errorf("the builder's token lacks %s on /storage/%s, where the image is downloaded", privAllocateSpace, b.ImportStorage))
+	if !holds(ctx, b.Client, "/storage/"+b.ImportStorage, privAllocateTemplate) {
+		return nil, lasting(fmt.Errorf("the builder's token lacks %s on /storage/%s, where the image is downloaded", privAllocateTemplate, b.ImportStorage))
 	}
 	return list, CheckTags(ctx, b.Client, append(slices.Clone(t.Tags), kubehengeTag, buildingTag))
 }
@@ -170,8 +182,9 @@ func (b *Builder) chooseISO(ctx context.Context, list []nodeStorage) (string, er
 			return "", lasting(fmt.Errorf("ISO storage %s is not on node %s or not visible to the builder's token", b.ISOStorage, b.Node))
 		case !list[i].takes("iso"):
 			return "", wrongContent(b.ISOStorage, "iso")
-		case !holds(ctx, b.Client, "/storage/"+b.ISOStorage, privAllocateSpace):
-			return "", lasting(fmt.Errorf("the builder's token lacks %s on /storage/%s, where the cloud-init ISO is written", privAllocateSpace, b.ISOStorage))
+		case !holdsAll(ctx, b.Client, "/storage/"+b.ISOStorage, isoPrivileges...):
+			return "", lasting(fmt.Errorf("the builder's token needs %s on /storage/%s, where the cloud-init ISO is written and removed",
+				strings.Join(isoPrivileges, " and "), b.ISOStorage))
 		}
 		return b.ISOStorage, nil
 	}
@@ -180,14 +193,14 @@ func (b *Builder) chooseISO(ctx context.Context, list []nodeStorage) (string, er
 		if !s.takes("iso") || s.Active == 0 || s.Enabled == 0 {
 			continue
 		}
-		if holds(ctx, b.Client, "/storage/"+s.Storage, privAllocateSpace) {
+		if holdsAll(ctx, b.Client, "/storage/"+s.Storage, isoPrivileges...) {
 			return s.Storage, nil
 		}
 		readOnly = append(readOnly, s.Storage)
 	}
 	if len(readOnly) > 0 {
-		return "", lasting(fmt.Errorf("the builder's token lacks %s on every storage of node %s that takes ISO images (%s). Grant it on one, or pass --iso-storage",
-			privAllocateSpace, b.Node, strings.Join(readOnly, ", ")))
+		return "", lasting(fmt.Errorf("the builder's token needs %s on a storage of node %s that takes ISO images (%s). Grant them on one, or pass --iso-storage",
+			strings.Join(isoPrivileges, " and "), b.Node, strings.Join(readOnly, ", ")))
 	}
 	return "", lasting(fmt.Errorf("no storage on node %s takes ISO images. In Proxmox VE open Datacenter, Storage, a file storage, Edit, Content and add %q",
 		b.Node, storageContentName["iso"]))
