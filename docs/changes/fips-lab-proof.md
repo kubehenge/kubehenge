@@ -1,1 +1,3 @@
-- FIPS mode stays unsupported until every part of the workload cluster test passes on a node OS. On Rocky Linux 10 with RKE2 and Canal, `etcd` passed and `machines` failed at its last step. The add-on parts have not run ([templates.md](templates.md#fips-mode)).
+### Added
+
+- FIPS mode stays unsupported until the end-to-end tests pass on it ([templates.md](templates.md#fips-mode)).

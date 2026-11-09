@@ -1,1 +1,3 @@
-- Security groups that would cut the appliance or the management cluster off the Proxmox VE API are refused, and the setup's pre-flight reports the same. Both name the addresses to add to the datacenter firewall's IPSet `management`.
+### Added
+
+- Security groups that would cut the appliance or management cluster off the Proxmox VE API are refused and reported by the pre-flight, with the addresses to add to the IPSet `management`.

@@ -1,1 +1,3 @@
+### Internal
+
 - The website's documentation pages no longer jump when their font loads late.

@@ -77,7 +77,11 @@ Its `Release index` job downloads the latest release's index, archive and proven
 
 ## Each release
 
-1. In a pull request, set the version in `charts/kubehenge/Chart.yaml` (`appVersion`, and raise `version`) and fold the pull requests' lines in `docs/changes/` into its section of `docs/changelog.md` with `make changelog VERSION=<version>`. The release build refuses a tag while fragments remain.
+1. In a pull request, set the version in `charts/kubehenge/Chart.yaml` (`appVersion`, and raise `version`). Fold the fragments in `docs/changes/` into the version's section of `docs/changelog.md` with `make changelog VERSION=<version>`.
+   - The fold groups the lines by heading and leaves out `Internal`.
+   - Replace its marker under `### Highlights` with one to five bullets on what matters most to users. `make test` refuses the section until then.
+   - Read the section as one text. Merge bullets that repeat each other, and fold a fix to something this release adds into that thing's line.
+   - The section becomes the release's notes, after the alpha warning. The release build refuses a tag while fragments remain.
 2. Once it is merged and main's checks have finished, tag main's commit and push the tag:
 
    ```sh

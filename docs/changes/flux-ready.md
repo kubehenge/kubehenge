@@ -1,1 +1,3 @@
-- The add-on room check also counts the memory the add-ons' pods request. A worker that holds what they use but not what they ask for is refused, as its pods would stay pending.
+### Changed
+
+- The add-on room check counts the memory the add-ons' pods request, not only what they use, so their pods no longer stay pending.

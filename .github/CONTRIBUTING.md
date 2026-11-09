@@ -15,7 +15,7 @@ Kubehenge creates, scales, upgrades and deletes Kubernetes clusters on Proxmox V
 | `web/` | the interface's frontend, React and TypeScript, built by `make web` into `pkg/ui/dist` and embedded in the binary |
 | `appliance/` | the appliance's install script and service units. `appliance/pve-entry/` is the optional entry in Proxmox VE's own interface |
 | `test/integration/`, `test/e2e/` | the integration tier's assets and the API server it runs, with Cluster API's webhooks where a test asks. The end-to-end tests run against a Proxmox VE host |
-| `scripts/` | the pinned tools `make test` needs, Go and Node among them (`tools.sh`), and the Python linters' lock file (`lint/`). The pinned ko every image build runs (`ko.sh`). The image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`). The check of the Talos providers from Kubehenge's forks (`verify-providers.sh`) |
+| `scripts/` | the pinned tools `make test` needs, Go and Node among them (`tools.sh`), and the Python linters' lock file (`lint/`). The mirror of the module's OpenTofu providers that every `tofu` installs from (`providers.sh`). The pinned ko every image build runs (`ko.sh`). The image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`). The check of the Talos providers from Kubehenge's forks (`verify-providers.sh`) |
 | `.github/` | CI on every pull request, fuzzing, the release workflows, issue templates, this guide and the security policy (`SECURITY.md`) |
 
 ## Working on it
@@ -67,7 +67,15 @@ Details and reasons: `docs/architecture.md`.
 - **Accessibility.** The frontend's unit tests run axe over every page and dialog in its main states, and none may fail.
 - **Spelling.** typos checks every file in British English. An American spelling passes only as an outside name, with its reason in `.typos.toml`.
 - **Website.** Lighthouse CI checks the built site on each pull request that changes it (`make website-check`, limits in `website/lighthouserc.cjs`).
-- **Changelog.** Put each user-visible line, as a bullet, in `docs/changes/<branch>.md` and leave `docs/changelog.md` alone, so pull requests never conflict. A release folds the files into its section (`make changelog VERSION=<version>`).
+- **Changelog.** Put your lines in `docs/changes/<branch>.md` and leave `docs/changelog.md` alone, so pull requests never conflict. A release folds the files into its section (`make changelog VERSION=<version>`).
+  - Each line goes under one of `### Before you upgrade`, `### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Security` or `### Internal`. Internal lines (CI, tests, tooling, the website) stay out of the release notes.
+  - Each bullet is one change, in one or two sentences and at most 200 characters. It says what changed for the reader, in their words. Backticks hold only what the reader types or reads, and labels are bold.
+  - A line that changes nothing for a reader stays out, such as behaviour that stays the same, how a fix works inside or a retry count the user never sees.
+  - A fix or change to something not yet released goes into that thing's Added line, not under Fixed, Changed or Removed.
+  - A change that asks something of an upgrader (a setting to remove, a rebuild, a replaced node) goes under Before you upgrade, with what to do.
+  - Detail goes into the docs, with a link written relative to `docs/changelog.md`. `make test` checks the shape (`scripts/changelog.sh check`).
+  - A release adds one to five highlights to its section, after Before you upgrade (`docs/releasing.md`). A highlight says in plain words what matters most and never repeats a bullet.
+- **Subjects.** Commit subjects are at most 72 characters. Pull request titles are at most 64, as the squash commit adds the number (`(#N)`). CI checks both.
 - **Page dates.** The published site serves each page's fingerprint and the day its content last changed as `/pages.json`, and a deployment starts from it. Nothing is committed for it.
 - **Links.** lychee checks the outside links of the README, `docs/` and the website every night (`make links`).
 - **Logs escape what they carry.** Go code logs through `log/slog` and the controller through controller-runtime's zap in JSON. Both escape a value, so nothing a user sends can forge a log line.

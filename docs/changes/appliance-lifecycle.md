@@ -1,12 +1,23 @@
-- An appliance whose certificate has expired upgrades again. Its health check took the expiry as a failed release and rolled back every upgrade.
-- After a restore, the Administration page says that automatic upgrades lost their key. Switching them off and on works again, as the service takes ownership of the empty key volume a restore brings.
-- Switching automatic upgrades on names the cause when it fails.
-- `install.sh --upgrade --proxmox-url <URL>` moves the appliance to another address of the Proxmox VE API, checked as an install checks it. It was accepted and ignored.
-- The installer protects the appliance's container, so Proxmox VE refuses to destroy it or restore over it. The docs say how to test a backup without a second appliance on the network.
-- The appliance's updater tries a download up to five times when a proxy or mirror drops the connection or answers 502, 503, 504 or 429. A slow link no longer fails at 10 minutes, as only two minutes without data end a try.
-- An upgrade checks for room first, about three times what is installed, in the updater and in `install.sh --upgrade`. A full disk had left the old software half replaced.
-- An upgrade cut off by a reboot or a kill is undone at the interface's next start, and its status says so instead of "under way" for ever. `install.sh --upgrade` undoes its own the same way when run again.
-- The installer sets up Debian's daily security updates in the container, through its proxy, and `--upgrade` adds them to appliances that lack them.
-- After a restore to another ID or a clone, the backup check and the commands the interface shows find the appliance by its MAC address. A guest ID that is gone no longer counts as backed up.
-- The interface warns administrators when the appliance's address is no longer the one its certificate is for, as after a DHCP change. The warning names the command that renews it.
+### Added
+
+- The installer protects the appliance's container, so Proxmox VE refuses to destroy it or restore over it. The docs say how to test a backup without a second appliance.
+- The interface warns administrators when the appliance's address no longer matches its certificate, with the command that renews it.
 - `install.sh --certificate` points this node's Kubernetes entry at the appliance's new address and prints the command for the other nodes.
+
+### Changed
+
+- Switching automatic upgrades on names the cause when it fails.
+- An appliance upgrade no longer fails when a proxy or mirror drops a download or answers 502, 503, 504 or 429. A slow link fails it only after two minutes without data.
+
+### Fixed
+
+- An appliance whose certificate has expired upgrades again, where its health check rolled back every upgrade.
+- After a restore, the Administration page says that automatic upgrades lost their key, and switching them off and on works again.
+- `install.sh --upgrade --proxmox-url <URL>` moves the appliance to another address of the Proxmox VE API, checked as at install.
+- An upgrade first checks for free space of about three times what is installed, so a full disk no longer leaves the old software half replaced.
+- An upgrade cut off by a reboot or a kill is undone at the interface's next start, or when `install.sh --upgrade` runs again, where its status said "under way" for ever.
+- After a restore to another ID or a clone, the backup check and the interface's commands still find the appliance. A guest ID that is gone no longer counts as backed up.
+
+### Security
+
+- The installer sets up Debian's daily security updates in the container, through its proxy, and `install.sh --upgrade` adds them to appliances that lack them.

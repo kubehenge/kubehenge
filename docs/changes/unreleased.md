@@ -1,32 +1,37 @@
-- The installer checks `--bridge` before it downloads anything. A bridge, Open vSwitch bridge or SDN VNet is accepted. Without `--bridge` it uses the bridge of the node's default route, else `vmbr0`.
-- New `--vlan` and `--mtu` options for the container's network. `--ip` and `--gateway` take IPv4 only and are checked at once.
-- The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free and prints the type of the one it picks.
+### Added
+
+- The installer takes `--vlan` and `--mtu` for the container's network. `--tofu <file>` installs OpenTofu from a local archive, checked against the script's checksum.
+- The installer tests the gateway, the name server and the API's port from inside the container. A failure names the option to check (`--vlan`, `--gateway`, `--dns` or the node's firewall).
+- SDN VNets work wherever a bridge is chosen, listed with their zone and alias. `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone.
+- The management cluster's setup takes **Time servers**. Left empty, its nodes use Talos's default servers.
+- The setup's pre-flight checks storages, bridges, memory, disk space, addresses and leftover objects against Proxmox VE. A failure names the node or storage and the fix, and holds **Apply**.
+- The setup warns of VMs sharing nodes, of an API address that is one node's, and of pod or service ranges that overlap a node's networks. It shows the ranges chosen.
+- The management cluster's health shows when the controller cannot reach the Proxmox VE API from inside the cluster.
+- A Talos node drained before its upgrade reboot records the event `TalosDrained` on its Cluster.
+
+### Changed
+
+- The installer checks `--bridge` before it downloads anything, and takes a bridge, Open vSwitch bridge or SDN VNet. Without it, the installer uses the bridge of the node's default route, else `vmbr0`.
+- `--ip` and `--gateway` take IPv4 only and are checked at once.
+- The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free.
 - The installer stops when the cluster has an appliance already. `--upgrade` and `--certificate` on the wrong node name the node that runs the container.
-- The installer asks about the Proxmox VE interface entry on the same terminal as its other questions, also when piped into `sh`.
-- A dropped session or an interrupt now removes the half-made container and the temporary files.
-- The installer stops early, in plain words, without quorum, with a resolver that names only loopback servers, or with too little room for the downloads.
+- The installer stops early and says why, without quorum, with only loopback name servers or with too little room for downloads.
 - A failed download gives curl's exit code and the HTTP status.
 - An option without its value reports `<option> needs a value`. A storage name is matched as written.
-- New `--tofu <file>` option installs OpenTofu from a local archive, checked against the script's checksum.
-- A container that cannot resolve the API's name makes the installer take the next name or address the certificate covers. It names every one it tried when none works.
-- The usage text and the docs describe how `--template-storage` is chosen.
-- Once the container has an address, the installer checks its network from inside it. It tests the gateway, the name server and the API's port in turn, and a failure names the option to check (`--vlan`, `--gateway`, `--dns` or the node's firewall).
-- A refused or timed-out connection to the Proxmox VE API is reported as a failed connection. Only an untrusted certificate is reported as one.
-- A container that gets no DHCP address now names `--vlan` and the DHCP server.
-- Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes cloned from an older template get it when a rolling upgrade replaces them.
-- SDN VNets work wherever a bridge is chosen, listed with their zone and alias, and `workload_bridges` takes `zone/vnet`, with `PVESDNUser` granted in that zone. A VLAN tag on a VNet of a VLAN zone is refused.
-- AlmaLinux and Rocky Linux templates get the kernel's extra modules with the kernel itself. In the hours after a kernel release, a bake could reach a mirror without that kernel's modules and fail.
-- New management VMs get their MAC addresses from Proxmox VE, so two installs on one network never share them. An existing management cluster keeps its addresses and is not changed by an upgrade.
-- A "Time servers" setting writes Talos's `TimeSyncConfig` for the management nodes. Empty keeps Talos's default servers.
-- A cut-off apply sends OpenTofu an interrupt and waits up to five minutes for it to write its state before killing it.
-- A failed run's error carries OpenTofu's error diagnostics, not only the exit status.
-- Every Helm release of the management module that waits has a timeout of 900 seconds.
-- The setup checks the settings against Proxmox VE before it runs. It covers storages, bridges, memory, disk space, answering addresses and leftover pools, roles, users and groups.
-- A failed check names the node or storage and the fix. The setup page shows it before Apply and disables Apply while an error stands.
-- Too little free space is an error on thick LVM and on ZFS without sparse. On other storage, such as LVM-thin, Ceph RBD or files on a directory, it is a warning.
+- A container that cannot resolve the API's name makes the installer try the other names and addresses the certificate covers. When none works, it names each one it tried.
+- A refused or timed-out connection to the Proxmox VE API is reported as a failed connection, not an untrusted certificate.
+- A container that gets no DHCP address names `--vlan` and the DHCP server.
+- A VLAN tag on a VNet of a VLAN zone is refused.
+- New management VMs get their MAC addresses from Proxmox VE, so two installs on one network never share them.
+- A failed management cluster run's error carries OpenTofu's diagnostics, not only its exit status.
 - Changing the management cluster's Proxmox VE nodes once it is Ready is refused, as its VMs would migrate.
-- The setup warns of VMs sharing nodes and of an API address that is one node's. It also warns of pod or service ranges that overlap a node's networks, and shows the ranges chosen.
-- The management cluster's health shows when the controller cannot reach the Proxmox VE API from inside the cluster.
 - An answer from Proxmox VE larger than 1 MiB fails with an error naming the path.
-- A Talos node drained before its upgrade reboot records the event `TalosDrained` on its Cluster.
-- Kyverno's two admission controllers run on different nodes, so draining a node no longer waits on them. With one worker, the second runs on a control-plane node.
+- The pre-flight takes too little free space as an error on thick LVM and ZFS without sparse, and as a warning elsewhere.
+
+### Fixed
+
+- The installer asks about the Proxmox VE interface entry on the same terminal as its other questions, also when piped into `sh`.
+- A dropped session or an interrupt, also during `pct create`, removes the installer's half-made container, its disks and temporary files.
+- Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes from older templates get it once they are replaced from rebuilt ones.
+- AlmaLinux and Rocky Linux template builds no longer fail in the hours after a kernel release, as the kernel's extra modules come with the kernel itself.
+- Draining a node no longer waits on Kyverno's admission controllers, which run on different nodes.

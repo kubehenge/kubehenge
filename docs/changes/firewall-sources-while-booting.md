@@ -1,2 +1,3 @@
-- A node's firewall sources now follow the cluster from the VM's first start, not only once the node is ready. A node whose cloud-init was slow or failed no longer keeps the sources it was cloned with.
-- The setup log says plainly that Proxmox VE refused the management VMs' network addresses when the user lacks `VM.GuestAgent.Audit`. The run does not need them.
+### Changed
+
+- The setup log names the missing `VM.GuestAgent.Audit` when Proxmox VE refuses the management VMs' addresses, then carries on.

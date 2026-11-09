@@ -1,10 +1,8 @@
 TOFU ?= tofu
-# OpenTofu tries a registry request, a provider's checksums among them, only twice by default.
-# Spells of 504s from GitHub's release downloads outlast that, while eight back off over about two
-# minutes.
-export TF_PROVIDER_DOWNLOAD_RETRY ?= 8
-export TF_REGISTRY_DISCOVERY_RETRY ?= 8
 MODULES := management-cluster
+# Every tofu here installs the providers from this mirror alone (`make providers`).
+PROVIDERS := dist/cache/providers
+export TF_CLI_CONFIG_FILE := $(CURDIR)/$(PROVIDERS)/tofu.tfrc
 # Where `make image` pushes the controller's image, `make capmox-image` capmox's and
 # `make helm-addon-image` the Add-on Provider for Helm's; KO_FLAGS such as --tags or
 # --insecure-registry.
@@ -15,8 +13,8 @@ KO_FLAGS ?=
 # Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
 
-.PHONY: build web changelog gateway-api capmox-crds capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
-.PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
+.PHONY: build web changelog gateway-api capmox-crds capi-operator-chart providers website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
+.PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
 # comes, as the end-to-end runs do.
@@ -73,6 +71,14 @@ $(CAPI_OPERATOR_CHART):
 
 capi-operator-chart: $(CAPI_OPERATOR_CHART)
 
+# The providers the module's lock file pins, for this machine's tofu, checked against the lock file
+# (scripts/providers.sh). OpenTofu's own install downloads them from GitHub without a token, which
+# fails for as long as GitHub turns away anonymous requests.
+$(PROVIDERS)/tofu.tfrc: management-cluster/.terraform.lock.hcl scripts/providers.sh
+	TOFU=$(TOFU) scripts/providers.sh management-cluster/.terraform.lock.hcl $(PROVIDERS)
+
+providers: $(PROVIDERS)/tofu.tfrc
+
 # The frontend's packages, installed again only when the lockfile changes.
 web/node_modules/.package-lock.json: web/package-lock.json
 	cd web && npm ci --no-fund --no-audit
@@ -95,7 +101,7 @@ website:
 # Folds the changelog fragments of docs/changes/ into the release's section of docs/changelog.md:
 # make changelog VERSION=0.4.3
 changelog:
-	sh scripts/changelog.sh $(if $(filter command line,$(origin VERSION)),$(VERSION),$(error VERSION is not set: make changelog VERSION=0.4.3))
+	sh scripts/changelog.sh fold $(if $(filter command line,$(origin VERSION)),$(VERSION),$(error VERSION is not set: make changelog VERSION=0.4.3))
 
 # Checks over the built website in Playwright's Chromium. First website/check-layers.js: no
 # composited layer on the home page over 1.5 windows at a phone and a desktop size, and no motion
@@ -143,6 +149,11 @@ dist: web gateway-api capi-operator-chart
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' \
 		-o dist/stage/bin/kubehenge ./cmd/kubehenge
 	tar -cf - --exclude=.terraform --exclude=tests --exclude=.tflint.hcl --exclude='*.tfstate*' --exclude='*.go' management-cluster charts | tar -xf - -C dist/stage/share/kubehenge
+	# The appliance's OpenTofu installs the module's providers from these alone, so an apply needs no
+	# download, on a closed network too.
+	scripts/providers.sh management-cluster/.terraform.lock.hcl $(PROVIDERS) linux_amd64 > /dev/null
+	mkdir dist/stage/share/kubehenge/providers
+	cd $(PROVIDERS) && find registry.opentofu.org -name '*_linux_amd64.zip' | tar -cf - -T - | tar -xf - -C $(CURDIR)/dist/stage/share/kubehenge/providers
 	if [ -n '$(CONTROLLER_IMAGE)' ]; then \
 		sed -i 's|^image: ""$$|image: "$(CONTROLLER_IMAGE)"|' dist/stage/share/kubehenge/charts/kubehenge/values.yaml && \
 		grep -qxF 'image: "$(CONTROLLER_IMAGE)"' dist/stage/share/kubehenge/charts/kubehenge/values.yaml; \
@@ -212,10 +223,10 @@ verify-providers:
 	sh scripts/verify-providers.sh
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
-# YAML, Markdown, the e2e image's Dockerfile and the node images' Containerfiles, spelling and
-# Renovate's config, each at its strictest settings; the files are the repository's own, as git
-# lists them.
-lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos
+# YAML, Markdown, the changelog, the e2e image's Dockerfile and the node images' Containerfiles,
+# spelling and Renovate's config, each at its strictest settings; the files are the repository's
+# own, as git lists them.
+lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
 
 FILES = git ls-files --cached --others --exclude-standard
 SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh website/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
@@ -273,7 +284,7 @@ lint-web: web/node_modules/.package-lock.json
 lint-typos:
 	typos
 
-tofu-init:
+tofu-init: providers
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false -lockfile=readonly >/dev/null; done
 
 # fmt gets the configuration's directories: from the root it walks web/node_modules, which npm ci may be rebuilding beside it.
@@ -314,6 +325,10 @@ lint-yaml:
 
 lint-markdown: web/node_modules/.package-lock.json
 	$(MARKDOWNLINT) $$($(FILES) '*.md')
+
+# The fragments of docs/changes/ and the sections of docs/changelog.md (.github/CONTRIBUTING.md).
+lint-changelog:
+	sh scripts/changelog.sh check
 
 lint-docker:
 	hadolint --failure-threshold style test/e2e/pve/Dockerfile pkg/templates/el/*Containerfile
@@ -359,10 +374,10 @@ integration: web gateway-api
 		go test -tags integration -count=1 -run '^TestIntegration' ./pkg/...
 
 # End-to-end tier: needs a Proxmox VE host. DIR is a root configuration applying management-cluster/.
-e2e-management-cluster: capi-operator-chart
+e2e-management-cluster: capi-operator-chart providers
 	TOFU=$(TOFU) test/e2e/management-cluster.sh $(DIR)
 
-e2e-management-cluster-upgrade: capi-operator-chart
+e2e-management-cluster-upgrade: capi-operator-chart providers
 	TOFU=$(TOFU) test/e2e/management-cluster-upgrade.sh $(DIR)
 
 # Against the management cluster in KUBECONFIG; settings in test/e2e/workload-cluster.sh.

@@ -1,0 +1,36 @@
+---
+name: subjects
+
+# A workflow of its own, so editing a pull request's title re-runs this check and nothing else.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: subjects-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The title stays within 64 characters, so the squash commit with " (#N)" fits 72 on main. Every
+  # commit subject stays within 72, so each reads whole in git's one-line log and GitHub's lists.
+  subjects:
+    name: Subjects
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          status=0
+          printf '%s\n' "$TITLE" | scripts/subjects.sh title || status=1
+          git log --format=%s "$BASE..$HEAD" | scripts/subjects.sh commits || status=1
+          exit "$status"

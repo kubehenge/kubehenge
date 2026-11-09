@@ -746,7 +746,15 @@ func checkClassAddonRoom(t *testing.T, class *clusterv1.ClusterClass, oneWorker 
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestMiB := max(least, requestRoom.Base+requestRoom.Need+requestNodes["workers"])
+	requestFigures, _, err := addonFigures(addonMemoryRequests, class)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cniRequests, err := cniOnce(requestFigures, all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestMiB := max(least, requestRoom.Base+requestRoom.Need+requestNodes["workers"]+cniRequests)
 	withMiB := func(n int) *clusterv1.Cluster {
 		return withAddons(all.DeepCopy(), map[string]string{"workerMachine": fmt.Sprintf(`{"memoryMiB":%d}`, n)})
 	}
@@ -796,6 +804,10 @@ func checkClassFigures(t *testing.T, class *clusterv1.ClusterClass) {
 		if addons[key] < requested[key] {
 			t.Errorf("%s: %s's memory figure of %d MiB is below the %d its pods request", class.Name, key, addons[key], requested[key])
 		}
+	}
+	// Every class offers both CNIs Kubehenge sizes, and each runs pods once per cluster.
+	if once, _, err := classFigures(class, CNIMemoryRequestsAnnotation); err != nil || once[cniCilium] <= 0 || once[cniCalico] <= 0 {
+		t.Errorf("%s: %s %v, %v", class.Name, CNIMemoryRequestsAnnotation, once, err)
 	}
 	for _, annotation := range []string{NodeMemoryAnnotation, NodeMemoryRequestsAnnotation, NodeCPUAnnotation} {
 		if nodes, _, err := classFigures(class, annotation); err != nil || nodes["controlPlane"] <= 0 || nodes["worker"] <= 0 {

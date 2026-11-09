@@ -1,2 +1,4 @@
-- A new address of the nodes, the management cluster or the appliance reaches the firewall of every running node through its `kubehenge` IPSet. No node is replaced ([clusters.md](clusters.md#firewall)).
-- The appliance records its own addresses, so one renewed by DHCP reaches the clusters' firewalls within a minute. The management cluster's module drops its `appliance_addresses` setting.
+### Added
+
+- A new address of the nodes, management cluster or appliance reaches every running node's firewall through its `kubehenge` IPSet, without replacing a node ([clusters.md](clusters.md#firewall)).
+- The appliance records its own addresses, so one renewed by DHCP reaches the clusters' firewalls within a minute.

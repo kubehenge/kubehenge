@@ -1,2 +1,7 @@
-- A Proxmox VE backup job that includes every VM leaves cluster nodes out (`backup=0` on their disks) and never freezes them. Kubehenge's etcd snapshots and Velero back up the clusters.
+### Changed
+
+- A Proxmox VE backup of every VM leaves cluster nodes out (`backup=0`) and never freezes them, as etcd snapshots and Velero cover them.
+
+### Fixed
+
 - A user name with an `@` of its own, such as an Active Directory principal name, signs in with the chosen realm.

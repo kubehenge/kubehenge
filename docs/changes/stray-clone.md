@@ -1,2 +1,4 @@
-- A machine's VM is cloned once, also when the management cluster's API server is slow. Kubehenge's capmox build stores the VM ID before it clones.
+### Fixed
+
+- A machine's VM is cloned once, also when the management cluster's API server is slow.
 - No stopped second clone is left in a cluster's pool, where it kept a deletion from removing the pool.

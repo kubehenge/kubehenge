@@ -537,7 +537,7 @@ fi
 # which the balloon below keeps.
 release_mirror=$(release_mirror_variable)
 worker_need=$(worker_need_for "${class_json}" "${sized_for}" "${sized_gitops}")
-worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(worker_memory_for "${class_json}" "${sized_for}" "${sized_gitops}")}
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(worker_memory_for "${class_json}" "${sized_for}" "${sized_gitops}" "${KUBEHENGE_E2E_CNI:-}")}
 # Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
 # request, the GitOps engine that asks for more of the two.
 worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
@@ -1491,7 +1491,7 @@ persistent_volume
 set_variable() {
     vars=$(kubectl -n "${ns}" get "cluster/${name}" -o json |
         jq -c --arg n "$1" --argjson v "$2" '[.spec.topology.variables[] | select(.name != $n)] + [{name: $n, value: $v}]')
-    kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}"
+    webhook_retried kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}"
 }
 
 if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
@@ -1941,7 +1941,7 @@ if [ "${restores_etcd}" = true ]; then
     set_variable etcdSnapshots "{\"enabled\":true,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
     # As the interface's Take a snapshot now asks for one.
     now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+    webhook_retried kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
         "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
     # snapshot_taken: whether the controller has taken the snapshot asked for; one it tried and failed
     # fails the test with why.
@@ -2006,7 +2006,7 @@ if [ "${restores_etcd}" = true ]; then
         held_since=$(date -u -d "@$((held_from - 60))" +%Y-%m-%dT%H:%M:%SZ)
         held_leases=$(lease_times | jq -c --arg since "${held_since}" '[to_entries[] | select(.value > $since) | .key]')
         now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        kubectl -n "${ns}" annotate cluster "${name}" \
+        webhook_retried kubectl -n "${ns}" annotate cluster "${name}" \
             "kubehenge.dev/etcd-restore={\"snapshot\":\"${snapshot_name}\",\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
     }
     if [ "${distribution}" = talos ]; then
@@ -2123,10 +2123,13 @@ case ${part}-${distribution} in
     *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
 esac
 
-# restarts: each pod's container restarts, by namespace/name.
+# restarts [nodes]: each pod's container restarts, by namespace/name, leaving out the pods on the
+# nodes named.
 restarts() {
     wl get pods -A -o json |
-        jq -c '[.items[] | {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
+        jq -c --arg skip "${1:-}" '($skip | split(" ") | map(select(. != ""))) as $skip |
+            [.items[] | select(.spec.nodeName as $n | $skip | index([$n]) | not) |
+            {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
 }
 # server_restarts: how often systemd has restarted the control planes' distribution service. k3s runs
 # every control-plane component in it, so it is the one place k3s's restarts show. Talos has no
@@ -2145,6 +2148,8 @@ server_restarts() {
 # restart_baseline: notes the restarts so far, which restarts_since compares with.
 restart_baseline() {
     servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    baseline_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    nodes_before=" $(wl get nodes -o jsonpath='{.items[*].metadata.name}') "
     pods_before=$(restarts)
     if [ -n "${server_unit}" ]; then
         # shellcheck disable=SC2310 # a failed count fails the step.
@@ -2160,8 +2165,9 @@ found_restarts() {
     fi
 }
 # restarts_since: whether anything restarted since restart_baseline, the same control planes still
-# there; $1 says while what. Why each container ended, and how starved each node has been of CPU,
-# memory and IO over the last minutes, tell a component's fault from nodes too small for the load.
+# there; $1 says while what, and $2 names nodes made since whose reboot was expected, whose pods are
+# left out. Why each container ended, and how starved each node has been of CPU, memory and IO over
+# the last minutes, tell a component's fault from nodes too small for the load.
 restarts_since() {
     if [ -n "${server_unit}" ]; then
         # shellcheck disable=SC2310 # a failed count fails the step.
@@ -2169,11 +2175,18 @@ restarts_since() {
         [ "${servers_after}" = "${servers_before}" ] ||
             found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes $1"
     fi
-    pods_after=$(restarts)
+    for rebooted_node in ${2:-}; do
+        case ${nodes_before} in
+            *" ${rebooted_node} "*) fail "node ${rebooted_node}, there before, rebooted $1" ;;
+            *) echo "leaving out the pods of ${rebooted_node}, made since and rebooted as expected" ;;
+        esac
+    done
+    pods_after=$(restarts "${2:-}")
     restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
     [ -n "${restarted}" ] || return 0
     echo "the restarted containers' last ends:"
-    wl get pods -A -o json | jq -r '.items[] | .metadata as $m | .status.containerStatuses[]? |
+    wl get pods -A -o json | jq -r --arg skip "${2:-}" '($skip | split(" ") | map(select(. != ""))) as $skip |
+        .items[] | select(.spec.nodeName as $n | $skip | index([$n]) | not) | .metadata as $m | .status.containerStatuses[]? |
         select(.restartCount > 0) | .lastState.terminated // {} |
         "\($m.namespace)/\($m.name): \(.reason // "?") exit \(.exitCode // "?") at \(.finishedAt // "?")"'
     for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
@@ -2192,12 +2205,13 @@ restarts_since() {
     found_restarts "containers restarted $1 (pod, restarts): ${restarted}"
 }
 
-# shellcheck disable=SC2310 # on only reads a list.
-if [ -n "${addons}" ]; then
+if [ "${restores_etcd}" = true ]; then
     # A component that could not renew its Lease while the API was away, through the restore or a
     # control plane's replacement, exits only once its renew deadline has passed, which may be after the
-    # API is back. Once each Lease renewed before the restore is renewed again after this point, every
-    # such restart has happened and is in the baseline.
+    # API is back. One that cannot reach the API as it starts exits again, each time later by the
+    # kubelet's back-off, as the CSI plugin's provisioner does. Once each Lease renewed before the
+    # restore is renewed again after this point, every such restart has happened, before any restart
+    # baseline is taken.
     leases_at=$(lease_times)
     leases_renewed() {
         # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
@@ -2206,6 +2220,10 @@ if [ -n "${addons}" ]; then
             '. as $now | all($held[]; ($now[.] // "") > ($at[.] // ""))' > /dev/null
     }
     until_true 300 "the components' Leases renewed after the restore" leases_renewed
+fi
+
+# shellcheck disable=SC2310 # on only reads a list.
+if [ -n "${addons}" ]; then
     restart_baseline
     measured "memory before the add-ons" pod_memory "${work}/workload"
     measured "CPU requested before the add-ons" pod_cpu "${work}/workload"
@@ -3256,7 +3274,7 @@ type: kubehenge.dev/user-credential
 stringData:
   hmacKey: "${eab_hmac}"
 EOF
-        kubectl -n "${ns}" annotate cluster "${name}" --overwrite "kubehenge.dev/credentials-stored-at=${stored_at}"
+        webhook_retried kubectl -n "${ns}" annotate cluster "${name}" --overwrite "kubehenge.dev/credentials-stored-at=${stored_at}"
         dns01=$(jq -cn --arg s "${acme_server}" --rawfile ca "${work}/ca.crt" --arg d "${dns_ip}:53" --arg k "${eab_key_id}" '{enabled: true, issuer: "acme-dns01", domain: "e2e.test",
     acme: {server: $s, caBundle: $ca, externalAccountBinding: {keyID: $k}}, dns01: {provider: "rfc2136", nameservers: [$d], rfc2136: {nameserver: $d, tsigKeyName: "e2e", tsigAlgorithm: "HMACSHA256"}}}')
         set_variable certificates "${dns01}"
@@ -3830,7 +3848,7 @@ if [ "${replaces_machines}" = true ]; then
         until_true 1800 "$1 worker nodes ready" sh -c "[ \"\$(KUBECONFIG=${work}/workload kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o json | jq '[.items[] | select(any(.status.conditions[]; .type == \"Ready\" and .status == \"True\"))] | length')\" = $1 ] && [ \"\$(kubectl -n ${ns} get machines -l cluster.x-k8s.io/deployment-name -o json | jq '[.items[] | select(.metadata.deletionTimestamp == null)] | length')\" = $1 ]"
     }
     workers() {
-        kubectl -n "${ns}" patch "cluster/${name}" --type=json \
+        webhook_retried kubectl -n "${ns}" patch "cluster/${name}" --type=json \
             -p "[{\"op\":\"replace\",\"path\":\"/spec/topology/workers/machineDeployments/0/replicas\",\"value\":$1}]"
         workers_ready "$1"
     }
@@ -3914,7 +3932,16 @@ if [ "${replaces_machines}" = true ]; then
     fi
     # Outside an upgrade, the second worker and its replacement put the most machines on the host.
     step "nothing restarted while workers came and went"
-    restarts_since "while workers were added and removed"
+    upgraded_in_place=
+    if [ "${distribution}" = talos ]; then
+        # A worker the scaling made boots the release before the in-place upgrade, and the controller
+        # upgrades it at once: it reboots, and so restarts its pods, which the window cannot count.
+        until_true 2700 "every node on Talos ${talos_to}" talos_upgraded
+        upgraded_in_place=$(kubectl -n "${ns}" get events -o json | jq -r --arg s "${baseline_at}" '[.items[] |
+            select((.lastTimestamp // .eventTime // "") >= $s and .reason == "TalosUpgrading") |
+            .message | capture("^node (?<node>[^ ]+) installed").node] | unique | join(" ")')
+    fi
+    restarts_since "while workers were added and removed" "${upgraded_in_place}"
 
     step "upgrade to ${upgrade}"
     if [ "${distribution}" = talos ]; then
@@ -3925,7 +3952,7 @@ if [ "${replaces_machines}" = true ]; then
     old_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
     # The cluster has one control plane, so kubectl hears from the admission webhook what the
     # interface's plan says before the same change.
-    kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${upgrade}\"}}}" 2> "${work}/upgrade-warnings"
+    webhook_retried kubectl -n "${ns}" patch "cluster/${name}" --type=merge -p "{\"spec\":{\"topology\":{\"version\":\"${upgrade}\"}}}" 2> "${work}/upgrade-warnings"
     cat "${work}/upgrade-warnings" >&2
     grep -q "Replaces the only control plane" "${work}/upgrade-warnings" ||
         fail "kubectl was not warned that the upgrade replaces the cluster's only control plane"
@@ -4087,7 +4114,7 @@ if [ "${replaces_machines}" = true ]; then
     infra=$(kubectl -n "${ns}" get machine "${worker}" -o jsonpath='{.spec.infrastructureRef.name}')
     vmid=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.spec.virtualMachineID}')
     node=$(kubectl -n "${ns}" get proxmoxmachine "${infra}" -o jsonpath='{.status.proxmoxNode}')
-    kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation= > /dev/null
+    webhook_retried kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation= > /dev/null
     pve_post "nodes/${node}/qemu/${vmid}/status/suspend"
     vms_paused() {
         kubectl -n "${ns}" get "cluster/${name}" -o json | jq -e --arg m "${worker} (VM ${vmid} on ${node}) paused" \
@@ -4101,7 +4128,7 @@ if [ "${replaces_machines}" = true ]; then
             kubectl -n "${ns}" get events -o json | jq -e --arg n "${name}" 'any(.items[]; .reason == "VMsRunning" and .involvedObject.name == $n)' > /dev/null
     }
     until_true 300 "the report cleared, with an event saying so" vms_running
-    kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation- > /dev/null
+    webhook_retried kubectl -n "${ns}" annotate "machine/${worker}" cluster.x-k8s.io/skip-remediation- > /dev/null
     until_true 600 "worker ${worker} ready again" sh -c "kubectl -n ${ns} get machine ${worker} -o json | jq -e '.status.conditions // [] | any(.type == \"Ready\" and .status == \"True\")' >/dev/null"
 
     case ${class} in
@@ -4152,7 +4179,7 @@ EOF
     # a stopped VM shows, gets 60 s. Ready=False stays at the class's 300 s, since a replacement worker
     # reports it for longer than 60 s while its CNI starts. The integration tier pins the classes' own
     # checks. The override has to repeat the class's remediation, or it would drop it.
-    kubectl -n "${ns}" patch "cluster/${name}" --type=json -p '[{"op": "add", "path": "/spec/topology/workers/machineDeployments/0/healthCheck", "value": {
+    webhook_retried kubectl -n "${ns}" patch "cluster/${name}" --type=json -p '[{"op": "add", "path": "/spec/topology/workers/machineDeployments/0/healthCheck", "value": {
   "checks": {"nodeStartupTimeoutSeconds": 1200, "unhealthyNodeConditions": [
     {"type": "Ready", "status": "Unknown", "timeoutSeconds": 60}, {"type": "Ready", "status": "False", "timeoutSeconds": 300}]},
   "remediation": {"maxInFlight": 1}}}]'
@@ -4176,7 +4203,7 @@ step "delete, held up by a worker, reported stalled and abandoned"
 hold=e2e.kubehenge.dev/hold
 worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.name // empty')
 [ -n "${worker}" ] || fail "no worker machine to hold the deletion up with"
-kubectl -n "${ns}" patch "machine/${worker}" --type json -p "[{\"op\":\"add\",\"path\":\"/metadata/finalizers/-\",\"value\":\"${hold}\"}]" > /dev/null
+webhook_retried kubectl -n "${ns}" patch "machine/${worker}" --type json -p "[{\"op\":\"add\",\"path\":\"/metadata/finalizers/-\",\"value\":\"${hold}\"}]" > /dev/null
 creator -n "${ns}" delete "cluster/${name}" --wait=false
 # deletion_holds: the deletion's status names the held Machine and the test's finalizer.
 deletion_holds() {
@@ -4190,10 +4217,11 @@ deletion_stalled() {
 }
 until_true 600 "the deletion reported stalled, with an event" deletion_stalled
 kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r '.status.conditions[] | select(.type == "DeletionStalled") | .message'
-if kubectl -n "${ns}" annotate "cluster/${name}" "kubehenge.dev/abandon-deletion=not-${name}" > /dev/null 2>&1; then
+# shellcheck disable=SC2310 # the refusal is what is checked, and webhook_retried needs no set -e.
+if webhook_retried kubectl -n "${ns}" annotate "cluster/${name}" "kubehenge.dev/abandon-deletion=not-${name}" > /dev/null 2>&1; then
     fail "the abandonment was taken with another cluster's name"
 fi
-kubectl -n "${ns}" annotate "cluster/${name}" "kubehenge.dev/abandon-deletion=${name}" > /dev/null
+webhook_retried kubectl -n "${ns}" annotate "cluster/${name}" "kubehenge.dev/abandon-deletion=${name}" > /dev/null
 kubectl -n "${ns}" wait --for=delete "cluster/${name}" --timeout=15m
 # Every VM could still be deleted within the grace, so nothing is left behind; the checks below
 # hold the abandoned deletion to that.

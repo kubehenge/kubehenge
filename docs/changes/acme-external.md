@@ -1,3 +1,8 @@
-- Certificates take an ACME server's external account binding (`acme.externalAccountBinding.keyID`), with the HMAC key as the cluster's own credential. Sectigo, DigiCert, ZeroSSL, Google Trust Services and step-ca no longer fail with `externalAccountRequired`.
-- A cluster whose binding key is missing gets no issuer and a `NoACMEEABCredential` event.
-- New certificates issuer `external` (`issuerName`, `issuerKind`, `issuerGroup`) points every certificate at an issuer you run, such as Vault's, ADCS's or an existing ClusterIssuer. Kubehenge makes no issuer of its own.
+### Added
+
+- Certificates take an ACME server's external account binding (`acme.externalAccountBinding.keyID`), its HMAC key stored as a credential. A missing key leaves no issuer, with a `NoACMEEABCredential` event.
+- The `external` issuer (`issuerName`, `issuerKind`, `issuerGroup`) uses one you run, such as Vault, ADCS or a ClusterIssuer, in place of Kubehenge's own.
+
+### Fixed
+
+- Certificates from Sectigo, DigiCert, ZeroSSL, Google Trust Services and step-ca no longer fail with `externalAccountRequired`.

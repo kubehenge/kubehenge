@@ -1,12 +1,19 @@
-- A template on storage that is not shared can be cloned only on its own node. Clusters now run only on the nodes that can clone their template. A cluster whose allowed nodes leave none is refused, with the template, its storage and the fix named.
-- `kubehenge template create` and the build dialog say when the template's storage is not shared. Without `--storage` the command takes the shared storage with the most room that allows disk images, else asks for `--storage`.
-- A cluster's storage must be available on at least one online node it may use. Placement leaves out the nodes where it is not.
-- A cluster storage outside the management cluster's `workload_datastores` is refused with the setting to add it to. Before, the clusters' tokens failed with a permission error.
-- A template build checks the import, ISO and disk storages' content types and its own `Datastore.AllocateSpace` before downloading. Without `--iso-storage` it takes the first ISO storage the token can write to.
-- Placement takes the CPU level from the chosen template's own `cpu` setting when it names one, such as `x86-64-v4`.
-- A Proxmox VE node that shows online but whose status cannot be read is left out of placement and counted in the clusters' `NodesSkipped` condition. It no longer stops every cluster from being placed.
-- A failure creating a cluster's Proxmox VE pool, user, token or volume owner is a `ProxmoxObjectsFailed` Warning Event. The creation hook's message reads `Proxmox VE objects:` followed by the error.
-- Template builds and new clusters check the datacenter's `user-tag-access` and `registered-tags` first, as Proxmox VE does. Tags match with their case, `existing` allows tags already on guests the token can audit, and only `Sys.Modify` on `/` bypasses the options.
-- Cluster admission reads Proxmox VE for 2 seconds at most and reads each template's configuration once. A failed or late read admits the cluster, and the creation hook, which retries, checks its storage and templates.
+### Added
+
+- A failure creating a cluster's Proxmox VE pool, user, token or volume owner records a `ProxmoxObjectsFailed` warning event with the error.
 - `--node` of `kubehenge template create` and `refresh`, and the chart's `templateRefresh.node`, take several nodes. The build runs on the first that is online and whose CPU runs the node OS.
-- A cluster whose name matches an existing Proxmox VE pool that holds other VMs is refused instead of taking the pool over.
+
+### Changed
+
+- Clusters run only on the nodes that can clone their template, as one on unshared storage clones only on its own node. With none allowed, the refusal names the template, its storage and the fix.
+- `kubehenge template create` and the build dialog say when the template's storage is not shared. Without `--storage`, the command takes the shared storage with the most room, else asks.
+- Placement leaves out nodes where the cluster's storage is unavailable, and needs one online node that has it.
+- A template build checks its storages' content types and its own `Datastore.AllocateSpace` before downloading. Without `--iso-storage` it takes the first ISO storage the token can write to.
+- Template builds and new clusters check the datacenter's `user-tag-access` and `registered-tags` first, as Proxmox VE does. Tags match with their case, and only `Sys.Modify` on `/` bypasses the options.
+- Applying a Cluster waits at most 2 seconds for Proxmox VE. When it is slower, the storage and template checks run as the cluster is created.
+
+### Fixed
+
+- A cluster storage outside the management cluster's `workload_datastores` is refused, naming the setting to add it to, where the clusters' tokens failed with a permission error.
+- A Proxmox VE node that shows online but whose status cannot be read is left out of placement and counted in `NodesSkipped`, where it stopped every cluster from being placed.
+- A cluster whose name matches a Proxmox VE pool holding other VMs is refused instead of taking the pool over.

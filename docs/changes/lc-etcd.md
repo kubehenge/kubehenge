@@ -1,4 +1,6 @@
-- Every cluster gets an etcd database limit (the `etcd` variable, `quotaGiB` 2 to 8, default 8) and periodic compaction. Before, kubeadm, RKE2, k3s and Talos ran etcd's 2 GiB default, after which etcd refused writes.
-- The controller reads each etcd member's database size every ten minutes. The cluster page shows it, and the Health view warns above 60 percent of the limit or on a `NOSPACE` alarm.
+### Added
+
+- Every cluster gets an etcd database limit (`etcd` variable, `quotaGiB` 2 to 8, default 8) and periodic compaction, so etcd no longer refuses writes at the old 2 GiB default.
+- The controller reads each etcd member's database size every 10 minutes for the cluster page. Health warns above 60% of the limit or on a `NOSPACE` alarm.
 - The controller defragments etcd members one at a time, followers first, inside the upgrade window. `kubehenge cluster etcd defrag` and `kubehenge cluster etcd set --quota-gib` act at once.
 - A Talos upgrade waits before a control-plane node while another etcd member is unhealthy or a learner, with a message on the cluster and a `TalosUpgradeWaiting` event.
