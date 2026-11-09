@@ -428,10 +428,10 @@ func newTemplateCreateCommand(conn *pve.Config) *cobra.Command {
 
 Talos templates are baked from Sidero's imager, installer base and QEMU guest agent, each pinned by
 digest, and need the build VM's network as the others do. RKE2, k3s and kubeadm templates are built
-from a node OS (--node-os) and its packages alone. They carry cloud-init, the
-QEMU guest agent and SELinux enforcing with the distribution's policy. kubeadm templates add
-containerd, the kubelet and kubeadm at one Kubernetes version. Every image and package is checked
-against its publisher's signature.
+from a node OS (--node-os) and its packages alone. They carry cloud-init, the QEMU guest agent and
+SELinux enforcing with the distribution's policy. kubeadm templates add containerd, the kubelet and
+kubeadm at one Kubernetes version. Every image and package is checked against its publisher's
+signature.
 
 Node OS templates are built again for their updates. Each build is a template of its own, tagged
 with when it was made. Clusters move to a new build inside their upgrade windows. Without

@@ -16,11 +16,11 @@ certs=${PWD}/talos-ca
 rm -rf "${out}" "${certs}"
 mkdir "${out}"
 
-# The imager pulls the installer base and its extensions itself and trusts only what it is given:
-# Go reads SSL_CERT_DIR alone then, so a copy the container cannot read fails every pull instead of
-# falling back to the image's own roots. A copy, as /etc/pki is cert_t, which an unprivileged
-# container reads only with container_read_certs, and ':Z' then relabels the copy, never the
-# builder's own trust store. That bundle holds the proxy's CA when the bake has a proxy (up.sh).
+# The imager pulls the installer base and its extensions itself. With SSL_CERT_FILE and
+# SSL_CERT_DIR set, Go reads only those, so a copy the container cannot read fails every pull
+# rather than falling back to the image's own roots. The bundle is copied because /etc/pki is
+# cert_t, which a container reads only with container_read_certs. ':Z' relabels the copy, never the
+# builder's own trust store. The bundle holds the proxy's CA when the bake has a proxy (up.sh).
 install -D -m 0644 /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem "${certs}/ca.pem"
 
 podman pull "${imager}"
@@ -35,7 +35,7 @@ if [ -e "${here}/talos-privileged" ]; then
     # Imagers before v1.13 attach a loop device. This VM is thrown away after the bake.
     set -- "$@" --privileged --volume /dev:/dev
 else
-    # The imager's image names no user, so it would run as root. Sidero's own run needs none.
+    # The imager's image names no user, so it would run as root. Sidero runs it as an ordinary user.
     chown 65534:65534 "${out}"
     set -- "$@" --user 65534:65534
 fi

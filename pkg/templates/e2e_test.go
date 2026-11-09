@@ -11,9 +11,9 @@
 // bridge has no DHCP, it reads KUBEHENGE_E2E_ADDRESS (with prefix), _GATEWAY and _DNS (comma-separated) for the
 // VMs that bake and boot images. KUBEHENGE_E2E_KUBERNETES_VERSION picks the kubeadm templates' version.
 // Talos is baked for the newest pinned release of each minor version, and kubeadm, whose template
-// carries the most, on every node OS available. One whose
-// CPU level no node of the host reaches is skipped, and the test says so. RKE2's and k3s's templates are made
-// and booted by the workload cluster tests.
+// carries the most, on every node OS available. One whose CPU level no node of the host reaches
+// is skipped, and the test says so. RKE2's and k3s's templates are made and booted by the
+// workload cluster tests.
 
 package templates
 

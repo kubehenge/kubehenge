@@ -932,7 +932,7 @@ func TestCreateMakesATemplateAndRemovesItsDownload(t *testing.T) {
 		"download " + volume + " " + sum,
 		"create 101",
 		"config tags=" + kubehengeTag + ";" + buildingTag,
-		// The builder's disk grows, as the imager's tools boot from it.
+		// The builder's disk grows, as the builder VM boots from it and the imager works on it.
 		"resize scsi1 20G",
 		"upload " + seed, "config ide2=" + seed + ",media=cdrom", "start",
 		"run true", "run sh -c " + builtCheck[2],

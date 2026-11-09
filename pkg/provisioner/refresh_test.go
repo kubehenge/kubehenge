@@ -472,3 +472,47 @@ func TestTemplateRequestsStartOneRunAtATime(t *testing.T) {
 		t.Fatalf("jobs %v, %v", jobs.Items, err)
 	}
 }
+
+// A machine waiting on an old selector keeps its one match: the baked template of its release,
+// though that release is past keep and no cluster runs it.
+func TestTemplateRefreshKeepsAWaitingMachinesOnlyMatch(t *testing.T) {
+	t.Parallel()
+	pool := &fakePool{}
+	for _, v := range []string{"v1.13.8", "v1.13.9", "v1.13.10", "v1.13.11", "v1.13.12"} {
+		line, err := templates.Plan(&templates.Request{Distribution: templates.Talos, TalosVersion: v})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool.list = append(pool.list, &proxmox.ClusterResource{VMID: uint64(9000 + len(pool.list)), Name: line.Name, Tags: strings.Join(line.Tags, ";")})
+	}
+	old := []string{"kubehenge", "talos", "talos-v1.13.9"}
+	pool.list = append(pool.list, &proxmox.ClusterResource{VMID: 9201, Name: "kubehenge-talos-v1.13.9", Tags: strings.Join(old, ";")})
+	m := &unstructured.Unstructured{}
+	m.SetAPIVersion("infrastructure.cluster.x-k8s.io/" + proxmoxMachineVersion)
+	m.SetKind("ProxmoxMachine")
+	m.SetNamespace("clusters")
+	m.SetName("api-old")
+	if err := unstructured.SetNestedStringSlice(m.Object, old, "spec", "templateSelector", "matchTags"); err != nil {
+		t.Fatal(err)
+	}
+	r := &TemplateRefresh{
+		Kube: refreshKube(t, m), Pool: pool, ClassNamespace: "kubehenge-system", Keep: DefaultBuildsKept,
+		Soak: DefaultNodeImageSoak, Now: func() time.Time { return day(22) }, MissingOnly: true,
+	}
+	if err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(pool.deleted)
+	if want := []string{"kubehenge-talos-v1.13.10", "kubehenge-talos-v1.13.8", "kubehenge-talos-v1.13.9"}; !slices.Equal(pool.deleted, want) {
+		t.Errorf("deleted %v, want %v", pool.deleted, want)
+	}
+	var matches []uint64
+	for _, res := range pool.list {
+		if tags := templates.ParseTags(res.Tags); !slices.ContainsFunc(old, func(s string) bool { return !slices.Contains(tags, s) }) {
+			matches = append(matches, res.VMID)
+		}
+	}
+	if !slices.Equal(matches, []uint64{9001}) {
+		t.Errorf("the waiting machine's selector matches VMs %v, want the baked v1.13.9 (9001) alone", matches)
+	}
+}

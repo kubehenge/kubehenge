@@ -138,10 +138,10 @@ if [ "${test%-addons-?}" = talos ]; then
         exit 1
     }
     # The newest pinned release before it, the patch before it unless it opens a minor version. A
-    # pin is the lines of five fields, blank lines and comments left out.
+    # Talos pin is a line of five fields. Blank lines and comments are skipped.
     talos_from=${KUBEHENGE_E2E_TALOS_FROM:-$(awk 'NF && !/^#/ { sub(/ #.*/, ""); if (NF == 5) print $1 }' \
         "${repo}/pkg/provisioner/releasepins.txt" | sort -V -u |
-        awk -v to="${talos_to}" '$1 == to { exit } { last = $1 } END { if (last != "") print last }')}
+        awk -v to="${talos_to}" '$1 == to { found = 1; exit } { last = $1 } END { if (found && last != "") print last }')}
     [ -n "${talos_from}" ] || {
         echo "pkg/provisioner/releasepins.txt pins no Talos release before ${talos_to}" >&2
         exit 1

@@ -510,13 +510,24 @@ func unneededTalos(list []*proxmox.ClusterResource, inUse []string, pending map[
 		releases := byMinor[minor]
 		slices.SortFunc(releases, func(x, y talosTemplate) int { return slices.Compare(y.version[:], x.version[:]) })
 		for i, r := range releases {
-			if i < keep || kept[r.raw] || pending[strings.Join(templates.ParseTags(r.res.Tags), ";")] {
+			if i < keep || kept[r.raw] || pendingSelects(templates.ParseTags(r.res.Tags), pending) {
 				continue
 			}
 			out = append(out, r.res)
 		}
 	}
 	return out
+}
+
+// pendingSelects tells whether a machine still waiting for its VM selects a template of these tags.
+// Its selector is a subset of them, as capmox's uniqueSubset matches.
+func pendingSelects(tags []string, pending map[string]bool) bool {
+	for selector := range pending {
+		if !slices.ContainsFunc(strings.Split(selector, ";"), func(s string) bool { return !slices.Contains(tags, s) }) {
+			return true
+		}
+	}
+	return false
 }
 
 // talosTemplate is a baked Talos template of the list, by its release.
@@ -548,7 +559,7 @@ func talosByMinor(list []*proxmox.ClusterResource, pending map[string]bool) (map
 			continue
 		}
 		if !isTalosLine(raw, tags) {
-			if baked[raw] || !pending[strings.Join(tags, ";")] {
+			if baked[raw] || !pendingSelects(tags, pending) {
 				factoryMade = append(factoryMade, res)
 			}
 			continue
