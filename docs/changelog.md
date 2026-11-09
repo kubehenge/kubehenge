@@ -8,27 +8,18 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Highlights
 
-- A new cluster's workers get 6144 MiB by default, enough for most add-ons together.
-- The installer asks which storage takes the appliance's disks and which its template, and never uses a disabled one.
-- Downloads from GitHub are retried for about four minutes, and OpenTofu tries each provider download up to eight times.
-- Activity no longer misses a kubectl change made just before an API server's log rotates or the API server restarts.
+- Workers have room for most add-ons out of the box.
+- The installer lets you pick its storages and skips disabled ones.
+- Activity shows every kubectl change, also across an API server restart.
 
 ### Changed
 
-- The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000.
-- A change of `node_cpu_units` reaches running nodes without a reboot.
-- A new cluster's workers get 6144 MiB by default, up from 4096 MiB, and the minimums are unchanged.
-- 6144 MiB fits all add-ons together except Rancher, logs, backups and GitOps, with about 2 GiB to spare.
-- Where several storages fit, the installer asks which takes the appliance's disks and which the template (`--storage`, `--template-storage`).
-- The installer never uses a disabled storage, such as `local` on some nodes.
-- The installer downloads the container template itself and checks it against a SHA-512 it carries, without `pveam` or its indexes.
-- A container template already on a storage is used where it is.
-- The installer shows a progress bar for each download and a line for each finished step, including each verified checksum.
+- The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000. A change reaches running nodes without a reboot.
+- A new cluster's workers get 6144 MiB by default, up from 4096 MiB, with the minimums unchanged. That fits all add-ons together except Rancher, logs, backups and GitOps, with about 2 GiB to spare.
+- Where several storages fit, the installer asks which takes the appliance's disks and which the template (`--storage`, `--template-storage`). It never uses a disabled storage, such as `local` on some nodes.
+- The installer downloads the container template itself and checks it against a SHA-512 it carries, without `pveam` or its indexes. A template already on a storage is used where it is.
 - Only the installer's own downloads go through the datacenter's HTTP proxy, where one is set.
-- Downloads from GitHub, including the installer's and the template builds', are retried for about four minutes.
-- The appliance's OpenTofu tries each provider download up to eight times, up from two.
-- The interface follows each API server log as it is written, and after a restart reads the old container's last lines.
-- A registry that refuses a Talos installer image still fails the upgrade at once.
+- Installs, template builds and the appliance's OpenTofu outlast GitHub release downloads that fail for a few minutes.
 - The docs warn that a volume snapshot copies a volume its pods may still write to, so stop or pause the workload first.
 
 ### Fixed
@@ -371,13 +362,12 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Highlights
 
-- A machine whose VM needs no configuration change is started, where it was reported ready with its VM off.
-- A transient error while attaching the bootstrap ISO is retried instead of failing the machine.
+- New machines start reliably.
 
 ### Changed
 
 - capmox, which creates the clusters' VMs, is built from a later commit of its main branch.
-- The installer names the address of a download that still fails after its retries, where curl gives only the HTTP status.
+- The installer names the address of a download that fails, where curl gives only the HTTP status.
 
 ### Fixed
 
@@ -595,143 +585,86 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Highlights
 
-- Every cluster gets the Gateway API, with Traefik's Gateway `traefik-gateway`, beside Ingresses.
-- Control-plane components keep their leader leases through a stall of up to 40 seconds rather than restart.
-- A cluster may choose the Proxmox VE CSI plugin's newest release.
-- The installer reaches the Proxmox VE API only at a name its certificate covers, and finds the API's CA by itself.
+- Gateways and HTTPRoutes work in every cluster.
+- Clusters ride out short API stalls without restarting their controllers.
+- The installer finds the right Proxmox VE API address and CA by itself.
 
 ### Added
 
-- Every cluster has the Gateway API, so Gateways and HTTPRoutes work beside Ingresses.
-- The Gateway API brings the standard channel's CRDs, with upstream's admission policy that refuses older or experimental ones over them.
+- Every cluster has the Gateway API's standard CRDs, so Gateways and HTTPRoutes work beside Ingresses. Upstream's admission policy refuses older or experimental CRDs over them.
 - Traefik's Gateway `traefik-gateway` in `kube-system` listens for HTTP where Traefik does and takes HTTPRoutes from every namespace.
-- RKE2's and k3s's Gateway API CRDs stay theirs while they ship them, and Kubehenge brings its own release where they do not.
-- Kubehenge never installs an older Gateway API release over a newer one.
+- RKE2's and k3s's Gateway API CRDs stay theirs while they ship them. Elsewhere Kubehenge brings its own release, never an older one over a newer.
 - Istio's waypoints are Gateways of the class `istio-waypoint`.
-- With `cluster_datastore_allocate` (**CSI plugin** in the setup), a cluster may choose the Proxmox VE CSI plugin's newest release.
-- A cluster chooses the CSI plugin's release in the wizard, under **Options** or with its `csi` variable.
-- The newest CSI plugin's token gets `Datastore.Allocate`, only on a storage no other cluster, template or management VM uses.
-- Other clusters keep the CSI plugin release that needs no `Datastore.Allocate`.
-- An administrator can offer Proxmox VE's HA node-affinity rules as placements to everyone who may create or change a cluster.
-- Cluster creators then need no `Sys.Audit` on `/` of their own.
-- HA rules for cluster creators are off by default, and set in the setup or with the module's `offer_ha_rules`.
-- The controller reads the HA rules with its own token, and the interface hands out only each rule's name and nodes.
-- `--proxmox-insecure`, for the installer and `--upgrade`, reaches the API without verifying its certificate.
-- `--proxmox-insecure` covers the appliance, OpenTofu's and Cluster API's Proxmox VE providers and Kubehenge's controller.
-- `--proxmox-insecure` also covers the clusters' cloud controller manager and CSI plugin.
-- The Administration page shows `--proxmox-insecure`, and `--upgrade --proxmox-ca` turns verification back on.
+- With `cluster_datastore_allocate`, a cluster may choose the newest Proxmox VE CSI plugin in the wizard, **Options** or `csi`. Its token then gets `Datastore.Allocate` on a storage of its own.
+- An administrator can offer Proxmox VE's HA node-affinity rules as placements to cluster creators, who then need no `Sys.Audit` on `/`. It is off by default (`offer_ha_rules`).
+- `--proxmox-insecure` makes the appliance, its providers, controller and clusters reach the API without verifying its certificate. `--upgrade --proxmox-ca` turns verification back on.
 
 ### Changed
 
-- The control planes' controller managers and schedulers keep their leader leases through a stall of up to 40 seconds rather than restart.
-- The cloud controller managers, CSI controller and Cilium operator Kubehenge installs keep their leases too.
-- The installer reaches the Proxmox VE API only at a name or address of the cluster's own nodes that its certificate is valid for.
-- The installer never uses another host the certificate also names.
-- The installer prefers a name for several nodes, then this node's names, its addresses, a bare name, then other nodes' names and addresses.
-- A wildcard counts for this node's own name.
-- Where several API names are as good, the installer asks on the terminal.
-- Where no API name is left, the installer stops and says what the certificate names.
-- Without `--proxmox-ca`, a certificate the cluster's CA did not sign is checked against the node trust store's CA it rests on.
-- The appliance and the clusters are given that CA alone.
-- Failing that, the installer checks the certificate against the CA the API serves, once its fingerprint is accepted on the terminal.
-- `--proxmox-ca` takes a bundle such as a whole trust store, reduced to the CA the certificate rests on.
-- `--proxmox-ca` also takes a CA that is not self-signed.
+- Controller managers, schedulers, the CSI controller and the Cilium operator keep their leader leases through a stall of up to 40 seconds rather than restart.
+- The installer reaches the Proxmox VE API only at a name or address of the cluster's own nodes that its certificate covers. Where several are as good it asks, and where none is left it stops.
+- Without `--proxmox-ca`, the installer finds the CA the API's certificate rests on in the node's trust store, else asks to accept the CA the API serves. The appliance and clusters get that CA alone.
+- `--proxmox-ca` takes a bundle such as a whole trust store, reduced to the CA the certificate rests on, and a CA that is not self-signed.
 
 ### Fixed
 
-- The health page reads a stopped container's log from its newest ended run, which the kubelet always keeps.
-- A crash-looping pod's log no longer shows an error in its place.
+- The health page reads a stopped container's log from its newest ended run, where a crash-looping pod's log sometimes showed an error.
 - On k3s, replacing a single control plane no longer takes its etcd member down with restarting controllers.
 
 ### Security
 
 - The installer's certificate checks trust only the CA file given, not the node's default trust store besides.
-- That holds for the API's certificate and for whether the installer made the appliance's own certificate.
 
 ## [0.1.0] - 2026-10-22
 
 ### Highlights
 
-- One script on a Proxmox VE 9 node installs the appliance, a small container with Kubehenge's web interface.
-- Users sign in with their Proxmox VE accounts and act with their own Proxmox VE permissions.
-- The interface sets up a Talos management cluster that runs Cluster API and its providers.
-- Workload clusters on kubeadm, RKE2 and k3s are created, scaled, upgraded, repaired and deleted.
-- Each cluster has its own Proxmox VE pool, user and token, and add-ons from Headlamp to Istio.
+- Kubernetes on Proxmox VE, from one install script and a web interface.
+- Sign in with your Proxmox VE account and its permissions.
+- kubeadm, RKE2 and k3s clusters, each walled off from the others.
+- Add-ons from Headlamp and Rancher to monitoring, logs and Istio.
 
 ### Added
 
-- One script on a Proxmox VE 9 node installs a small unprivileged container running Kubehenge's web interface.
-- Users sign in with their Proxmox VE accounts, any realm, and act with their own Proxmox VE permissions.
+- One script on a Proxmox VE 9 node installs a small unprivileged container running Kubehenge's web interface. Users sign in with their Proxmox VE accounts and act with their own permissions.
 - The appliance upgrades itself from a button, or automatically within a major version.
-- The appliance's certificate is signed by the Proxmox VE cluster's CA, or is one of your own.
-- A DNS name can be added to the appliance's certificate and removed again.
-- The certificate is renewed from the Proxmox VE shell, and the interface warns before it runs out.
+- The appliance's certificate is signed by the Proxmox VE cluster's CA or is your own, and can take a DNS name. It is renewed from the Proxmox VE shell, and the interface warns before it runs out.
 - A Proxmox VE API whose certificate comes from another CA works too, with that CA given to the installer.
-- The management cluster is set up from the interface, or with the OpenTofu module in `management-cluster/`.
-- The management cluster is a Talos Linux cluster of one or three VMs, spread over the Proxmox VE nodes chosen.
-- It runs Cluster API, the Proxmox VE, kubeadm, RKE2 and k3s providers, IP address management and the Helm add-on provider.
-- The Proxmox VE provider is Kubehenge's own reproducible, signed build of an upstream commit after v0.9.1.
-- That commit carries the fix kubeadm upgrades need, and the build stays until a provider release carries it too.
+- The interface or the module in `management-cluster/` sets up a Talos management cluster of one or three VMs. It runs Cluster API with the Proxmox VE, kubeadm, RKE2, k3s and Helm add-on providers.
+- The Proxmox VE provider is Kubehenge's own reproducible, signed build of an upstream commit after v0.9.1, which carries the fix kubeadm upgrades need.
 - A distribution's controllers run only while a cluster uses it.
-- The controllers hold their leader leases through API stalls of up to 40 seconds instead of restarting.
-- Such stalls happen when Proxmox VE clones a disk on the same storage.
+- The controllers hold their leader leases through the API stalls a disk clone on the same storage causes, up to 40 seconds.
 - Every controller has a memory request, so none is the first a node short of memory stops.
-- Workload clusters come from three ClusterClasses, kubeadm, RKE2 and k3s.
-- Clusters are created, scaled, upgraded one minor version at a time, repaired when nodes fail, and deleted.
-- Each cluster gets the Proxmox VE cloud controller manager, the Proxmox CSI plugin and a control-plane virtual IP with kube-vip.
-- Each cluster gets a CNI, the distribution's own, or Cilium or Calico chosen at creation.
-- Traefik is the ingress controller on every node, RKE2's and k3s's own, and installed by Kubehenge on kubeadm.
-- `LoadBalancer` Services get addresses from a range on the nodes' network, with MetalLB (recommended) or kube-vip per cluster.
-- A load-balancer range is refused where it clashes with the nodes', the API address or another cluster's.
+- Workload clusters come from three ClusterClasses, kubeadm, RKE2 and k3s. They are created, scaled, upgraded one minor version at a time, repaired when nodes fail, and deleted.
+- Each cluster gets the Proxmox VE cloud controller manager, the Proxmox CSI plugin, a kube-vip control-plane address and Traefik for ingress. Its CNI is the distribution's own, Cilium or Calico.
+- `LoadBalancer` Services get addresses from a range on the nodes' network, with MetalLB (recommended) or kube-vip. A range that clashes with the nodes', the API address or another cluster's is refused.
 - Pod and service ranges, OpenID Connect sign-in and automatic upgrades within windows are set per cluster.
-- While a cluster has workers, its control-plane nodes are tainted and run only what has to run there.
-- A cluster without workers runs its workloads on its control planes, which add a worker's minimum.
-- Control planes are sized by the distributions' server sizing guides, from 2 cores and 4096 MiB.
-- A cluster whose control planes are too small for its workers is refused.
+- While a cluster has workers, its control-plane nodes are tainted and run only what has to run there. Without workers, the control planes run the workloads and get a worker's minimum on top.
+- Control planes are sized by the distributions' server sizing guides, from 2 cores and 4096 MiB. A cluster whose control planes are too small for its workers is refused.
 - The nodes that run the add-ons need room for each add-on's measured memory, and the interface raises the machines to it.
-- Each cluster's Health page says whether it is healthy, changing, degraded or unreachable, and what needs attention first.
-- Health lists nodes not ready or under pressure, and pods that crash-loop, cannot pull their image or cannot be scheduled.
-- Health lists waiting volume claims, add-ons not deployed, failing readiness checks and worker pools short of machines.
-- Health shows health checks holding back, each VM's CPU over the last hour, the last hour's warnings and the cluster's conditions.
-- Health reads inside the cluster with read-only identities of its own, whose short-lived tokens the controller renews.
-- Pods' logs need `Sys.Modify` on the cluster's pool and come from an identity that reads logs only.
-- A cluster's VMs spread over every online Proxmox VE node, or over the nodes chosen by hand.
-- The nodes can also come from one of Proxmox VE's HA node-affinity rules, and the choice can change later.
+- Each cluster's Health page says whether it is healthy, changing, degraded or unreachable, and what needs attention first. It shows failing nodes, pods, volumes and add-ons, and each VM's CPU.
+- Health reads inside the cluster with read-only identities of its own. Pods' logs need `Sys.Modify` on the cluster's pool and come from an identity that reads logs only.
+- A cluster's VMs spread over every online Proxmox VE node, the nodes chosen by hand or one of Proxmox VE's HA node-affinity rules. The choice can change later.
 - A node that goes down is left out within about 15 seconds, so replacement VMs go elsewhere.
 - The cluster page shows where each VM runs and warns when control-plane VMs share a node.
-- Where the administrator switches on Proxmox VE HA, it keeps every cluster's control-plane VMs on separate nodes.
-- HA restarts them elsewhere after a node fails, for clusters on shared storage that do not opt out.
+- With Proxmox VE HA on, every cluster's control-plane VMs stay on separate nodes. HA restarts them elsewhere after a node fails, for clusters on shared storage that do not opt out.
 - Headlamp runs per cluster, or shared in the appliance behind its sign-in.
 - Rancher installs into a Kubehenge cluster, with the other clusters registered in it automatically.
 - Monitoring with kube-prometheus-stack scrapes every node and control-plane component over verified, authenticated TLS.
-- kubeadm clusters' kubelets serve certificates from the cluster CA, which the controller approves and the API server verifies.
-- Logs run beside monitoring, with Loki on a volume of its own, kept 7 days in 10 GiB unless set otherwise.
-- Loki sits behind a kube-rbac-proxy that lets in only requests with credentials RBAC permits.
-- Grafana Alloy needs that permission to push, and monitoring's Grafana to read.
-- Alloy collects container logs, short-lived pods' too, the journal and the API server's audit log on every node.
-- Without access to the host, Alloy collects through the Kubernetes API.
-- Pod security is a Pod Security Standard level enforced by Pod Security Admission, by Kyverno, or both.
-- The namespaces of the components that need the host are exempt from pod security.
+- Logs run beside monitoring, with Grafana Alloy collecting on every node into Loki, kept 7 days in 10 GiB unless set otherwise. Loki lets in only requests with credentials RBAC permits.
+- Pod security is a Pod Security Standard level enforced by Pod Security Admission, by Kyverno, or both. The namespaces of the components that need the host are exempt.
 - CIS hardening is chosen at creation, beyond the CIS Kubernetes Benchmark baseline every cluster gets.
-- Istio in ambient mode gives mutual TLS between the pods of enrolled namespaces, without sidecars.
-- Switching Istio off takes the namespaces out of the mesh first.
-- Cilium Cluster Mesh works on kubeadm, RKE2 and k3s.
-- Clusters of one namespace that run Cilium and list each other reach each other's pods and global services.
-- Every new Cilium cluster gets a pod range of its own, and peers come and go without restarting anything.
+- Istio in ambient mode gives mutual TLS between the pods of enrolled namespaces, without sidecars. Switching it off takes the namespaces out of the mesh first.
+- Cilium Cluster Mesh joins clusters of one namespace that run Cilium and list each other, so they reach each other's pods and global services. Peers come and go without restarts.
 - An optional entry in the Proxmox VE interface leads to the appliance (`appliance/pve-entry/`), if the administrator agrees at install.
 
 ### Security
 
-- The appliance installs only releases signed with the project's release key.
-- The appliance unpacks each release where none of its entries can write outside the release's own directory.
-- Each cluster has its own Proxmox VE pool, user and API token with rights on its own VMs only.
-- Each cluster has a VM that owns its persistent volumes, so a compromised cluster cannot reach another's VMs or volumes.
+- The appliance installs only releases signed with the project's release key, unpacked where none of their entries can write outside their own directory.
+- Each cluster has its own Proxmox VE pool, user and API token with rights on its own VMs only. A VM of its own owns its volumes, so a compromised cluster cannot reach another's.
 - Only the cloud controller manager and the CSI plugin's controller hold the token, on control-plane nodes only.
-- Every cluster audits its API server, encrypts Secrets in etcd, limits the rate of events and offers only strong TLS ciphers.
-- Every cluster refuses requests without credentials beyond its health checks and, on kubeadm, what `kubeadm join` reads.
+- kubeadm clusters' kubelets serve certificates from the cluster CA, which the controller approves and the API server verifies.
+- Every cluster audits its API server, encrypts Secrets in etcd, limits the rate of events and offers only strong TLS ciphers. It refuses requests without credentials beyond its health checks.
 - Every cluster keeps its controller manager and scheduler on loopback and runs its kubelets on the kernel settings they expect.
-- Every image, chart, provider file and tool Kubehenge deploys or builds with is named by its digest beside its version.
-- Where bytes are not stable or carry no digest, a signature is required instead.
-- Signatures cover the Talos Image Factory's images, the management cluster's registry.k8s.io pulls and kubeadm's control-plane images.
-- Signatures also cover Ubuntu's cloud images and archive.
+- Every image, chart, provider file and tool Kubehenge deploys or builds with is named by its digest. Where bytes are not stable or carry no digest, a signature is required instead.
 - RKE2 and k3s sign neither releases nor images, so they install from files checked against checksums recorded at first use.

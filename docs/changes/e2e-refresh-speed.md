@@ -1,6 +1,4 @@
 ### Changed
 
-- A node image refresh or hold starts once the cluster's `upgrades` change, it settles or its class gets a new build.
-- A node image refresh no longer waits up to five minutes to start.
-- A template build that shows no work for 10 minutes fails and is tried again, where it held the run for 45 minutes.
-- No work means no new log line, under 1 MiB received and 16 MiB written, and idle CPUs.
+- A node image refresh or hold starts once the cluster's `upgrades` change, it settles or its class gets a new build, with no wait of up to five minutes.
+- A template build with no work for 10 minutes (no new log line, under 1 MiB received, 16 MiB written, idle CPUs) fails and is tried again, where it held the run for 45 minutes.

@@ -1,8 +1,6 @@
 ### Added
 
-- Load balancing has a BGP mode, for routed address ranges and switches that drop gratuitous ARP.
-- In BGP mode MetalLB peers with your routers from the workers, and kube-vip announces the API address from the control planes.
-- BGP mode needs MetalLB and a worker, and is not available on Talos.
+- Load balancing has a BGP mode for routed ranges and switches that drop gratuitous ARP, with MetalLB peering from the workers and kube-vip announcing the API address. It needs a worker, not Talos.
 - BGP sessions can carry a TCP-MD5 password, stored as the cluster's credential and never in a ClusterClass, chart value or `BGPPeer`.
 
 ### Changed

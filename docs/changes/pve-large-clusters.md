@@ -4,5 +4,4 @@
 
 ### Fixed
 
-- A VM that Proxmox VE lists without a name, as its node dropped out of the statistics, is matched to its machine by guest ID.
-- A machine with no VM to match shows "Not reporting" as its node.
+- A VM that Proxmox VE lists without a name, as its node dropped out of the statistics, is matched to its machine by guest ID. A machine with no VM to match shows "Not reporting" as its node.

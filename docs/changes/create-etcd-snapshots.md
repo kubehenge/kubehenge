@@ -1,8 +1,6 @@
 ### Added
 
-- The create wizard offers etcd snapshots on its add-ons step, on by default wherever the class offers a backup target.
-- Etcd snapshots share the backups' access key, entered once.
-- A new cluster started from another takes its etcd snapshot settings.
+- The create wizard offers etcd snapshots on its add-ons step, on by default where the class offers a backup target. They share the backups' access key, and a cluster started from another copies them.
 
 ### Changed
 

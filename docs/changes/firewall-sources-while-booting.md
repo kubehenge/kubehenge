@@ -4,5 +4,4 @@
 
 ### Fixed
 
-- A node's firewall sources follow the cluster from the VM's first start, not only once the node is ready.
-- A node whose cloud-init was slow or failed no longer keeps the firewall sources it was cloned with.
+- A node's firewall sources follow the cluster from the VM's first start, so a node with slow or failed cloud-init no longer keeps the sources it was cloned with.

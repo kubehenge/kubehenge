@@ -1,9 +1,7 @@
 ### Added
 
-- A release mirror serves the RKE2 and k3s releases in place of GitHub ([install.md](install.md#mirroring-the-releases)).
-- Nodes, the interface and `kubehenge release pin --mirror` read from the mirror, and nodes still install only the pinned files.
-- An RKE2 or k3s cluster can name its own mirror in `releaseMirror`, which replaces the management cluster's for its nodes ([clusters.md](clusters.md#a-clusters-own-release-mirror)).
-- The wizard and Options offer `releaseMirror`.
+- A release mirror serves the RKE2 and k3s releases in place of GitHub ([install.md](install.md#mirroring-the-releases)). Nodes, the interface and `kubehenge release pin --mirror` read from it.
+- An RKE2 or k3s cluster can name its own mirror in `releaseMirror`, in the wizard or Options ([clusters.md](clusters.md#a-clusters-own-release-mirror)). It replaces the management cluster's for its nodes.
 - A node whose release download fails names the file and the mirror or GitHub.
 
 ### Security

@@ -1,10 +1,8 @@
 ### Added
 
 - **Apply now**, `kubehenge cluster apply-addon-changes` or `kubehenge.dev/apply-addon-changes` apply waiting add-on changes at once.
-- The condition `AddonConflict` names the definition that clashes with an add-on.
-- `useExisting.certManager` uses the cluster's own cert-manager.
-- The docs list what each add-on owns, with its namespaces, privileges and registries.
-- `namespaceLabels` labels the add-on namespaces before their first pod.
+- `useExisting.certManager` uses the cluster's own cert-manager, and the condition `AddonConflict` names a clashing definition.
+- The docs list each add-on's namespaces, privileges and registries, and `namespaceLabels` labels the add-on namespaces before their first pod.
 
 ### Changed
 
