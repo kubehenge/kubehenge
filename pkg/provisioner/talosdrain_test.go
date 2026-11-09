@@ -358,19 +358,21 @@ func TestRemoteDrainerWaitsOnABudgetAndNamesIt(t *testing.T) {
 }
 
 // When the timeout runs out with a pod still held, the drain returns ErrDrainTimeout and leaves the
-// pod where it is, which is what a Machine's deletion does at its nodeDrainTimeoutSeconds. The timeout
-// outlasts the first round on a loaded runner, since the drain ends without reporting a round that
-// the deadline overtook.
+// pod where it is, which is what a Machine's deletion does at its nodeDrainTimeoutSeconds. A timeout
+// shorter than one round still gets that round, reported and named in the error.
 func TestRemoteDrainerStopsAtItsTimeoutWithThePodLeft(t *testing.T) {
 	t.Parallel()
 	d, api, c := heldRig(t)
 	rounds := 0
-	err := d.Drain(t.Context(), c, "web-w-1", DrainOptions{Timeout: 2 * time.Second, Blocked: func(string, bool) { rounds++ }})
+	err := d.Drain(t.Context(), c, "web-w-1", DrainOptions{Timeout: time.Nanosecond, Blocked: func(string, bool) { rounds++ }})
 	if !errors.Is(err, ErrDrainTimeout) {
 		t.Fatalf("drain: %v", err)
 	}
-	if rounds == 0 {
-		t.Error("the held pod was never reported")
+	if !strings.Contains(err.Error(), "db-0") {
+		t.Errorf("the timeout does not name the held pod: %v", err)
+	}
+	if rounds != 1 {
+		t.Errorf("rounds = %d, want the one round the timeout allows", rounds)
 	}
 	if left := api.left(); !slices.Equal(left, []string{"db-0"}) {
 		t.Errorf("left %v", left)

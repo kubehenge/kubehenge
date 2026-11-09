@@ -106,23 +106,26 @@ func (d *RemoteDrainer) evict(h *drain.Helper, node string, o DrainOptions) erro
 		deadline = time.Now().Add(o.Timeout)
 	}
 	retry := cmp.Or(d.RetryDelay, drainRetryDelay)
-	for {
+	// The first round runs whatever the timeout, so a drain that times out has always tried once
+	// and can say which pods held it.
+	var held heldPods
+	for round := 1; ; round++ {
 		pods, err := podsToEvict(h, node)
 		if err == nil && len(pods) == 0 {
 			return nil
 		}
-		if stopped := drainStopped(h.Ctx, node, deadline); stopped != nil {
+		if stopped := drainStopped(h.Ctx, node, deadline, held); round > 1 && stopped != nil {
 			return stopped
 		}
 		if err != nil {
 			return err
 		}
-		held := evictAll(h, gv, pods)
-		if stopped := drainStopped(h.Ctx, node, deadline); stopped != nil {
-			return stopped
-		}
+		held = evictAll(h, gv, pods)
 		if o.Blocked != nil {
 			o.Blocked(held.String(), len(held.refusals) > 0)
+		}
+		if stopped := drainStopped(h.Ctx, node, deadline, held); stopped != nil {
+			return stopped
 		}
 		wait := retry
 		if !deadline.IsZero() {
@@ -135,15 +138,19 @@ func (d *RemoteDrainer) evict(h *drain.Helper, node string, o DrainOptions) erro
 	}
 }
 
-// drainStopped is why a drain ended before it finished, or nil while it may go on.
-func drainStopped(ctx context.Context, node string, deadline time.Time) error {
+// drainStopped is why a drain ended before it finished, or nil while it may go on. A timeout names
+// the pods that held the last round.
+func drainStopped(ctx context.Context, node string, deadline time.Time, held heldPods) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("draining node %s: %w", node, context.Cause(ctx))
 	}
-	if !deadline.IsZero() && !time.Now().Before(deadline) {
-		return fmt.Errorf("draining node %s: %w", node, ErrDrainTimeout)
+	if deadline.IsZero() || time.Now().Before(deadline) {
+		return nil
 	}
-	return nil
+	if reasons := held.String(); reasons != "" {
+		return fmt.Errorf("draining node %s: %w, held by %s", node, ErrDrainTimeout, reasons)
+	}
+	return fmt.Errorf("draining node %s: %w", node, ErrDrainTimeout)
 }
 
 func podsToEvict(h *drain.Helper, node string) ([]corev1.Pod, error) {

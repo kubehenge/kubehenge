@@ -1,6 +1,7 @@
 ### Added
 
 - The cluster page names the budget and pod that hold a drain.
+- A drain that runs out of time names the pods still holding it, and always tries once first, however short its timeout.
 
 ### Changed
 
