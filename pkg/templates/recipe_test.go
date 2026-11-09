@@ -434,6 +434,20 @@ func TestKubeadmPatchesRunTheControlPlaneAsSPC(t *testing.T) {
 	}
 }
 
+// kubeadm's preflight checks the default IPv6 forwarding of every IPv6 or dual-stack node.
+func TestKubeadmNodesForwardBothFamilies(t *testing.T) {
+	t.Parallel()
+	script, err := recipeFiles.ReadFile("node/kubeadm.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sysctl := range []string{"'net.ipv4.ip_forward = 1'", "'net.ipv6.conf.all.forwarding = 1'", "'net.ipv6.conf.default.forwarding = 1'"} {
+		if !strings.Contains(string(script), sysctl) {
+			t.Errorf("node/kubeadm.sh does not set %s", sysctl)
+		}
+	}
+}
+
 func TestRecipeRefuses(t *testing.T) {
 	t.Parallel()
 	alma, release, err := ReleaseOf(DefaultNodeOS)
