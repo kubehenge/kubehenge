@@ -456,7 +456,7 @@ func TestRecipeRefuses(t *testing.T) {
 			return err
 		},
 		"Talos": func() error {
-			_, err := alma.Recipe(release, &Bake{Distribution: Talos}, nil)
+			_, err := alma.Recipe(release, &Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: DefaultTalosVersion}, nil)
 			return err
 		},
 		"Talos on Leap": func() error {

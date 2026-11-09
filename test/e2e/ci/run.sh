@@ -137,14 +137,13 @@ if [ "${test%-addons-?}" = talos ]; then
         echo "pkg/templates/plan.go names no DefaultTalosVersion" >&2
         exit 1
     }
-    # The newest release before it that the Image Factory serves, the templates' source, which is
-    # the patch before it unless it opens a minor version.
-    talos_from=${KUBEHENGE_E2E_TALOS_FROM:-$(curl -fsS --retry 8 --retry-all-errors https://factory.talos.dev/versions |
-        jq -r --arg to "${talos_to}" '
-            def key: ltrimstr("v") | split(".") | map(tonumber);
-            ($to | key) as $t | [.[] | select(test("^v[0-9]+[.][0-9]+[.][0-9]+$")) | select(key < $t)] | max_by(key) // empty')}
+    # The newest pinned release before it, the patch before it unless it opens a minor version. A
+    # Talos pin is a line of five fields. Blank lines and comments are skipped.
+    talos_from=${KUBEHENGE_E2E_TALOS_FROM:-$(awk 'NF && !/^#/ { sub(/ #.*/, ""); if (NF == 5) print $1 }' \
+        "${repo}/pkg/provisioner/releasepins.txt" | sort -V -u |
+        awk -v to="${talos_to}" '$1 == to { found = 1; exit } { last = $1 } END { if (found && last != "") print last }')}
     [ -n "${talos_from}" ] || {
-        echo "the Image Factory serves no Talos release before ${talos_to}" >&2
+        echo "pkg/provisioner/releasepins.txt pins no Talos release before ${talos_to}" >&2
         exit 1
     }
 fi

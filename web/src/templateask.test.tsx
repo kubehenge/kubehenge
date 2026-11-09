@@ -104,7 +104,7 @@ describe("a missing template", () => {
     });
   });
 
-  it("is made of a Talos release the Image Factory builds", async () => {
+  it("is made of a pinned Talos release", async () => {
     const builds = { allowed: true, requested: [] as string[], building: [] as string[] };
     const calls = fakeServer({
       "GET /api/template-builds": () => ({ body: builds }),
@@ -170,7 +170,7 @@ describe("a missing template", () => {
     expect(screen.getByText("Requested: Talos v1.14.9")).toBeInTheDocument();
   });
 
-  it("takes a typed Talos release when the Image Factory's cannot be read", async () => {
+  it("takes a typed Talos release when the Talos releases cannot be read", async () => {
     const calls = fakeServer({
       "GET /api/template-builds": { body: { allowed: true, requested: [], building: [] } },
       "POST /api/template-builds": { status: 202 },

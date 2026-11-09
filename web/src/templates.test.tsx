@@ -66,10 +66,15 @@ describe("vM templates", () => {
       buildGateway: "192.0.2.1",
       buildDNS: ["192.0.2.1", "192.0.2.2"],
     });
-    // A Talos image is not booted to be built, so it takes none of what that VM needs, and Talos is
-    // its own OS.
+    // A Talos template has a build VM but no node OS of its own.
     const talos = { ...form, distribution: "talos" as const, nodeOS: "almalinux-10", talosVersion: "v1.14" };
     expect(buildProblems(talos)).toStrictEqual({ talosVersion: "Enter a release such as v1.14.4" });
+    expect(
+      buildProblems({ ...talos, talosVersion: "v1.14.4", vlan: "70000", buildAddress: "192.0.2.50" }),
+    ).toStrictEqual({
+      vlan: "A whole number from 1 to 4094",
+      buildAddress: "Enter the prefix length, a gateway and a DNS server",
+    });
     expect(
       buildRequest({
         ...talos,
@@ -77,6 +82,8 @@ describe("vM templates", () => {
         vlan: "30",
         isoStorage: "local",
         buildAddress: "192.0.2.50/24",
+        buildGateway: "192.0.2.1",
+        buildDNS: "192.0.2.1",
       }),
     ).toStrictEqual({
       distribution: "talos",
@@ -85,10 +92,15 @@ describe("vM templates", () => {
       storage: "ceph",
       importStorage: "local",
       bridge: "vmbr0",
+      vlan: 30,
+      isoStorage: "local",
+      buildAddress: "192.0.2.50/24",
+      buildGateway: "192.0.2.1",
+      buildDNS: ["192.0.2.1"],
     });
   });
 
-  it("makes a Talos release's template, offering the releases the Image Factory builds", async () => {
+  it("makes a Talos release's template, offering the releases Kubehenge pins", async () => {
     const calls = fakeServer({
       "GET /api/templates": {
         body: {
@@ -134,8 +146,10 @@ describe("vM templates", () => {
         .getAllByRole("option")
         .map((o) => o.textContent),
     ).toStrictEqual(["v1.15.1", "v1.14.4 (default, has a template)"]);
-    expect(dialog.queryByLabelText("Cloud-init image")).not.toBeInTheDocument();
-    expect(dialog.queryByText("Static address")).not.toBeInTheDocument();
+    // A Talos template has a build VM, so the fields that VM takes are there.
+    expect(dialog.getByLabelText("Cloud-init image")).toBeInTheDocument();
+    expect(dialog.getByLabelText("VLAN tag")).toBeInTheDocument();
+    expect(dialog.getByText("Static address")).toBeInTheDocument();
     await waitFor(() => expect(dialog.getByLabelText("Bridge")).toHaveValue("vmbr0"));
     await user.click(dialog.getByRole("button", { name: "Build" }));
     await waitFor(() =>

@@ -2,7 +2,8 @@
 # Builds a node image in the bake's builder, a VM of the family's own cloud image, and installs it
 # onto the template's disk: a minimal root file system composed from the family's signed
 # repositories, the node's layer on top of it (node.sh), checked by bootc and installed by bootc
-# itself. It works in the directory holding the bake's files, the parent of its own:
+# itself. For talos it only installs podman and hands the disk to talos.sh. It works in the
+# directory holding the bake's files, the parent of its own:
 #
 #   build.sh <distribution> [<Kubernetes version>]
 set -eu
@@ -31,6 +32,12 @@ mkdir -p "${mirrors}"
 use_metalinks /etc/yum.repos.d
 fetch_mirrors "${mirrors}"
 point_at_mirrors /etc/yum.repos.d "${mirrors}"
+
+# Talos has no node image to compose: Sidero's pinned imager writes its disk (talos.sh).
+if [ "${distribution}" = talos ]; then
+    from_repositories "${mirrors}" dnf -y install podman
+    exec sh el/talos.sh "${target}"
+fi
 
 compose() {
     rm -rf rootfs

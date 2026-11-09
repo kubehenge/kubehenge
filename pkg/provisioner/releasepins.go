@@ -346,6 +346,11 @@ func (p ReleasePins) offered(release *distributionRelease) []string {
 	return out
 }
 
+// refusal is the error for a release the pins do not hold, with the releases they offer instead.
+func (p ReleasePins) refusal(release *distributionRelease, version string) error {
+	return fmt.Errorf("%w; the newest it pins of each minor version: %s", unpinnedRelease(release, version), strings.Join(p.offered(release), ", "))
+}
+
 // newest is the newest pinned release of the distribution's minor version, if any.
 func (p ReleasePins) newest(release *distributionRelease, minor int) (kubeVersion, bool) {
 	var best kubeVersion

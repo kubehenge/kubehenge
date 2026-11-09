@@ -180,43 +180,56 @@ func TestANewVMIsTaggedOnceInThePool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeCluster{t: t, views: [][]map[string]any{{}}, configs: map[int]map[string]any{}}
-	b := &Builder{Client: f.client(), Pool: testPool, Storage: "local-lvm"}
-	ctx := t.Context()
-	node, err := b.Client.Node(ctx, "pve1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	recipe := &Recipe{Image: &NodeImageBoot{}, DiskGiB: 12, BuilderDiskGiB: 20, MemoryMiB: 4096}
-	if err = b.createVM(ctx, node, 104, &build, "local:import/almalinux.qcow2", DefaultHardware(DefaultCPUType), recipe); err != nil {
-		t.Fatal(err)
-	}
-	f.mu.Lock()
-	created := slices.Clone(f.created)
-	f.mu.Unlock()
-	if len(created) != 1 || created[0]["pool"] != testPool || created[0]["name"] != build.Name {
-		t.Fatalf("created %v; want one VM named %s in %s", created, build.Name, testPool)
-	}
-	// In image mode the template's own disk starts empty, and the family's image boots beside it.
-	if created[0]["scsi0"] != "local-lvm:12,backup=0,discard=on,ssd=1" || created[0]["scsi1"] != "local-lvm:0,import-from=local:import/almalinux.qcow2,backup=0,discard=on,ssd=1" ||
-		created[0]["boot"] != "order=scsi1" || fmt.Sprint(created[0]["memory"]) != "4096" {
-		t.Errorf("created %v", created[0])
-	}
-	if tags, given := created[0]["tags"]; given {
-		t.Errorf("the VM was created with the tags %v", tags)
-	}
-	vm, err := node.VirtualMachine(ctx, 104)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = markBuilding(ctx, vm); err != nil {
-		t.Fatal(err)
-	}
-	f.mu.Lock()
-	tags := f.configs[104]["tags"]
-	f.mu.Unlock()
-	if tags != "kubehenge;kubehenge-building" {
-		t.Errorf("tags %v; want those of a build under way", tags)
+	// The second recipe is a Talos bake, which writes the template's disk and never boots it.
+	for _, tc := range []struct {
+		name   string
+		recipe *Recipe
+		disk   int
+	}{
+		{"the node image", &Recipe{Image: &NodeImageBoot{}, DiskGiB: 12, BuilderDiskGiB: 20, MemoryMiB: 4096}, 12},
+		{"a disk written and never booted", &Recipe{DiskGiB: 5, BuilderDiskGiB: 20, MemoryMiB: 4096}, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := &fakeCluster{t: t, views: [][]map[string]any{{}}, configs: map[int]map[string]any{}}
+			b := &Builder{Client: f.client(), Pool: testPool, Storage: "local-lvm"}
+			ctx := t.Context()
+			node, err := b.Client.Node(ctx, "pve1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = b.createVM(ctx, node, 104, &build, "local:import/almalinux.qcow2", DefaultHardware(DefaultCPUType), tc.recipe); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			created := slices.Clone(f.created)
+			f.mu.Unlock()
+			if len(created) != 1 || created[0]["pool"] != testPool || created[0]["name"] != build.Name {
+				t.Fatalf("created %v; want one VM named %s in %s", created, build.Name, testPool)
+			}
+			// The template's own disk starts empty, and the family's image boots beside it.
+			if created[0]["scsi0"] != fmt.Sprintf("local-lvm:%d,backup=0,discard=on,ssd=1", tc.disk) ||
+				created[0]["scsi1"] != "local-lvm:0,import-from=local:import/almalinux.qcow2,backup=0,discard=on,ssd=1" ||
+				created[0]["boot"] != "order=scsi1" || fmt.Sprint(created[0]["memory"]) != "4096" {
+				t.Errorf("created %v", created[0])
+			}
+			if tags, given := created[0]["tags"]; given {
+				t.Errorf("the VM was created with the tags %v", tags)
+			}
+			vm, err := node.VirtualMachine(ctx, 104)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = markBuilding(ctx, vm); err != nil {
+				t.Fatal(err)
+			}
+			f.mu.Lock()
+			tags := f.configs[104]["tags"]
+			f.mu.Unlock()
+			if tags != "kubehenge;kubehenge-building" {
+				t.Errorf("tags %v; want those of a build under way", tags)
+			}
+		})
 	}
 }
 

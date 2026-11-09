@@ -362,7 +362,7 @@ Each distribution boots from a different VM template:
 | Distribution | Template |
 | --- | --- |
 | kubeadm | the cluster's node OS with containerd, the kubelet and kubeadm preinstalled at one Kubernetes version. Its control-plane images are each checked against Kubernetes' release signature |
-| Talos | Talos's own image of one release from the Talos Image Factory, with the QEMU guest agent. Talos is its own OS, so no node OS is chosen |
+| Talos | a disk baked on the host from Sidero's imager, installer base and QEMU guest agent, each pinned by digest. Talos is its own OS, so no node OS is chosen |
 | RKE2, k3s | the cluster's node OS with the distribution's SELinux policy. The distribution installs at boot from checked files |
 
 `kubehenge template create`, or the appliance's Administration page with an administrator's session, fetches the image. It boots the image once where it needs preparing. It then turns the image into a template `capmox` selects by its tags. All of it goes through the Proxmox VE API ([templates.md](templates.md)).

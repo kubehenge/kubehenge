@@ -32,6 +32,11 @@ const kubehengeTag = "kubehenge"
 // kubernetesTagPrefix and a version tag a kubeadm line.
 const kubernetesTagPrefix = "kubernetes-"
 
+// talosBakedTag marks a Talos template this Kubehenge baked. It does not start with "talos-", which
+// reads as a release, and it keeps an older template made from the Image Factory's image out of
+// every selector, since a machine's template must be the one match of its tags.
+const talosBakedTag = "baked"
+
 // buildingTag marks, beside kubehengeTag, a VM the builder is still making into a template.
 const buildingTag = "kubehenge-building"
 
@@ -66,17 +71,14 @@ type Template struct {
 
 // ImageRef names the disk image a template starts from. The source resolves it to a URL and checksum.
 type ImageRef struct {
-	Kind    ImageKind
-	Version string // Talos version
-	NodeOS  NodeOS // the node OS whose image a bake boots
+	Kind   ImageKind
+	NodeOS NodeOS // the node OS whose image a bake boots
 }
 
 // ImageKind is where an image comes from.
 type ImageKind string
 
 const (
-	// TalosFactory is an image from the Talos Image Factory.
-	TalosFactory ImageKind = "talos-factory"
 	// NodeOSImage is the image a node OS family publishes that a bake starts from.
 	NodeOSImage ImageKind = "node-os"
 )
@@ -88,6 +90,11 @@ type Bake struct {
 	// KubernetesVersion, for kubeadm, preinstalls kubeadm, the kubelet and containerd at that
 	// version.
 	KubernetesVersion string
+	// TalosVersion, for Talos, is the release whose image the bake writes onto the template's disk.
+	TalosVersion string
+	// Talos is that release's pin. Like Proxy it is no part of the template's identity, so Plan
+	// never sets it.
+	Talos TalosPin
 	// Proxy is what the builder's guests download through. It is no part of the template's
 	// identity, so Plan never sets it.
 	Proxy *GuestProxy
@@ -110,8 +117,9 @@ func Plan(req *Request) (Template, error) {
 		if !versionRE.MatchString(v) {
 			return Template{}, fmt.Errorf("the Talos version %q is not of the form v1.2.3", v)
 		}
-		return newTemplate("kubehenge-talos-"+v, []string{kubehengeTag, "talos", "talos-" + v},
-			ImageRef{Kind: TalosFactory, Version: v}, nil)
+		return newTemplate("kubehenge-talos-"+v, []string{talosBakedTag, kubehengeTag, "talos", "talos-" + v},
+			ImageRef{Kind: NodeOSImage, NodeOS: DefaultNodeOS.Base()},
+			&Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: v})
 
 	case RKE2, K3s:
 		os, err := checkNodeOS(req.Distribution, req.NodeOS)
@@ -206,7 +214,7 @@ const (
 // bake makes of the family's packages as they stand. A Talos template is its release's image, the
 // same at every build.
 func (t *Template) Refreshed() bool {
-	return t.Bake != nil
+	return t.Bake != nil && t.Bake.Distribution != Talos
 }
 
 // Build is the build of the line t made at the given time, tagged and named for it.

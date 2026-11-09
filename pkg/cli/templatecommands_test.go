@@ -293,7 +293,7 @@ func TestConnectNeedsATokenAndAnAPI(t *testing.T) {
 		t.Errorf("connect over HTTP: %v", err)
 	}
 	b, err := connect(&pve.Config{URL: "https://pve.example.test:8006", Token: testToken})
-	if err != nil || b.Client == nil || b.Sources == nil || b.Sources.TalosFactoryURL != templates.DefaultSources().TalosFactoryURL {
+	if err != nil || b.Client == nil || b.Sources == nil || b.Sources.TalosFactoryURL != templates.DefaultSources(nil).TalosFactoryURL {
 		t.Errorf("connect gave %+v, %v", b, err)
 	}
 }

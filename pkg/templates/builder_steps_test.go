@@ -887,11 +887,18 @@ func TestCreateRefusesARepositoryKeyOfAnotherFingerprint(t *testing.T) {
 	}
 }
 
-// talosBuilder is a builder of Talos's template, whose image the fake publishers' Image Factory
-// names, and that image's file name in the import storage.
-func talosBuilder(t *testing.T, h *bakeHost) (*Builder, Template, string) {
+// importVolume is where the import storage holds a downloaded image.
+func importVolume(image Resolved) string { return "local:import/" + image.FileName }
+
+// downloadSum is the checksum a download of the image carries, as the fake host writes it.
+func downloadSum(image Resolved) string { return image.ChecksumAlgorithm + ":" + image.Checksum }
+
+// talosBuilder is a builder of Talos's template, which bakes it in a VM of the default node OS's
+// image, and that image.
+func talosBuilder(t *testing.T, h *bakeHost) (*Builder, Template, Resolved) {
 	t.Helper()
 	sources, _ := fakePublishers(t)
+	sources.TalosPins = map[string]TalosPin{DefaultTalosVersion: testTalosPin}
 	tmpl, err := Plan(&Request{Distribution: Talos})
 	if err != nil {
 		t.Fatal(err)
@@ -901,28 +908,36 @@ func talosBuilder(t *testing.T, h *bakeHost) (*Builder, Template, string) {
 		t.Fatal(err)
 	}
 	b := &Builder{
-		Client: h.client(), Sources: sources, Node: "pve1", ImportStorage: "local", Storage: "local-lvm", Pool: testPool,
+		Client: h.client(), Sources: sources, Node: "pve1", ImportStorage: "local", Storage: "local-lvm", Pool: testPool, Bridge: "vmbr0",
 		selectableSettle: time.Nanosecond, selectablePoll: time.Millisecond,
 	}
-	return b, tmpl, "local:import/" + image.FileName
+	return b, tmpl, image
 }
 
 func TestCreateMakesATemplateAndRemovesItsDownload(t *testing.T) {
 	t.Parallel()
 	h := newBakeHost(t)
-	b, tmpl, volume := talosBuilder(t, h)
-	// A download an interrupted run left, which carries no checksum to trust it by.
+	b, tmpl, image := talosBuilder(t, h)
+	volume, sum := importVolume(image), downloadSum(image)
+	// A download an interrupted run left, which is fetched again.
 	h.volumes = []string{volume}
 
 	vmid, err := b.Create(t.Context(), &tmpl)
 	if err != nil || vmid != 101 {
 		t.Fatalf("Create gave %d, %v; want VM 101", vmid, err)
 	}
+	const seed = "local:iso/user-data-101.iso"
 	want := []string{
 		"remove " + volume,
-		"download " + volume,
+		"download " + volume + " " + sum,
 		"create 101",
 		"config tags=" + kubehengeTag + ";" + buildingTag,
+		// The builder's disk grows, as the builder VM boots from it and the imager works on it.
+		"resize scsi1 20G",
+		"upload " + seed, "config ide2=" + seed + ",media=cdrom", "start",
+		"run true", "run sh -c " + builtCheck[2],
+		// The image is written and never booted, so there are no facts and no clean-up.
+		"shutdown", "unlink scsi1", "config boot=order=scsi0 delete=ide2,net0", "remove " + seed,
 		"config boot=order=scsi0 cores=1 memory=512 tags=" + strings.Join(NormaliseTags(append(slices.Clone(tmpl.Tags), DefaultHardware(DefaultCPUType).Tags()...)), ";"),
 		"template",
 		"remove " + volume,
@@ -933,11 +948,14 @@ func TestCreateMakesATemplateAndRemovesItsDownload(t *testing.T) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c := h.vms[101]
-	if c["template"] != 1 || c["cpu"] != DefaultCPUType || c["pool"] != testPool || c["scsi0"] != "local-lvm:0,import-from="+volume+",backup=0,discard=on,ssd=1" {
+	if c["template"] != 1 || c["cpu"] != DefaultCPUType || c["pool"] != testPool || c["scsi0"] != "local-lvm:5,backup=0,discard=on,ssd=1" {
 		t.Errorf("the template is %v", c)
 	}
-	if c["net0"] != nil {
-		t.Errorf("a template that bakes nothing has a network: %v", c["net0"])
+	if c["scsi1"] != nil || c["ide2"] != nil || c["net0"] != nil {
+		t.Errorf("the template keeps the builder's devices: %v", c)
+	}
+	if c["description"] != templateDescription {
+		t.Errorf("the template's description is %q, not the fixed text", c["description"])
 	}
 }
 
@@ -946,7 +964,8 @@ func TestCreateRemovesWhatAFailedBuildMade(t *testing.T) {
 	for _, keep := range []bool{false, true} {
 		h := newBakeHost(t)
 		h.failing = "qmtemplate"
-		b, tmpl, volume := talosBuilder(t, h)
+		b, tmpl, image := talosBuilder(t, h)
+		volume := importVolume(image)
 		b.KeepOnFailure = keep
 
 		_, err := b.Create(t.Context(), &tmpl)
@@ -971,13 +990,14 @@ func TestCreateMakesNoVMWhenTheDownloadFails(t *testing.T) {
 	t.Parallel()
 	h := newBakeHost(t)
 	h.failing = "download"
-	b, tmpl, volume := talosBuilder(t, h)
+	b, tmpl, image := talosBuilder(t, h)
+	volume, sum := importVolume(image), downloadSum(image)
 
 	_, err := b.Create(t.Context(), &tmpl)
 	if err == nil || !strings.Contains(err.Error(), "failed: download went wrong") {
 		t.Errorf("Create gave %v; want the download's failure", err)
 	}
-	if got, want := h.steps(), []string{"download " + volume}; !slices.Equal(got, want) {
+	if got, want := h.steps(), []string{"download " + volume + " " + sum}; !slices.Equal(got, want) {
 		t.Errorf("steps %v, want %v", got, want)
 	}
 }

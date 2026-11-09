@@ -251,7 +251,7 @@ func builtinVersion(variables []runtimehooksv1.Variable, controlPlane bool) (str
 
 // unpinnedRelease is the error for a release this Kubehenge does not pin.
 func unpinnedRelease(release *distributionRelease, version string) error {
-	return fmt.Errorf("this Kubehenge release pins no %s release %s: its nodes install only the releases it carries the checksums of", release.distribution, version)
+	return fmt.Errorf("this Kubehenge release pins no %s release %s: its nodes install only the releases it carries the checksums or digests of", release.distribution, version)
 }
 
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)

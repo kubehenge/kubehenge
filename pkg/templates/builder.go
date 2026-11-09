@@ -656,8 +656,10 @@ func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.Vi
 		if err != nil {
 			return fmt.Errorf("baking %s: %w", t.Name, err)
 		}
-		b.logf("%s installed kernel %s and packages %s", t.Name, facts.Kernel, facts.Packages)
-		options = append(options, proxmox.VirtualMachineOption{Name: "description", Value: facts.Description(templateDescription)})
+		if facts != (BuildFacts{}) {
+			b.logf("%s installed kernel %s and packages %s", t.Name, facts.Kernel, facts.Packages)
+			options = append(options, proxmox.VirtualMachineOption{Name: "description", Value: facts.Description(templateDescription)})
+		}
 	}
 	task, err := vm.Config(ctx, options...)
 	err = waitTask(ctx, task, err, configTimeout)
@@ -813,19 +815,13 @@ func (b *Builder) selectable(ctx context.Context, t *Template, vmid int) (bool, 
 }
 
 func (b *Builder) download(ctx context.Context, storage *proxmox.Storage, image Resolved, volume string) error {
-	// A file of the same name is a leftover from an interrupted run. Talos images carry no checksum
-	// to compare it against, so it is fetched again rather than trusted.
+	// A file of the same name is a leftover from an interrupted run, fetched again rather than
+	// trusted.
 	if err := deleteVolume(ctx, storage, volume); err != nil {
 		return err
 	}
 	b.logf("downloading %s", image.URL)
-	var task *proxmox.Task
-	var err error
-	if image.Checksum == "" {
-		task, err = storage.DownloadURL(ctx, "import", image.FileName, image.URL)
-	} else {
-		task, err = storage.DownloadURLWithHash(ctx, "import", image.FileName, image.URL, image.Checksum, image.ChecksumAlgorithm)
-	}
+	task, err := storage.DownloadURLWithHash(ctx, "import", image.FileName, image.URL, image.Checksum, image.ChecksumAlgorithm)
 	return waitTask(ctx, task, err, transferTimeout)
 }
 
@@ -864,6 +860,7 @@ func (b *Builder) recipe(ctx context.Context, bake *Bake) (*Recipe, error) {
 	}
 	withProxy := *bake
 	withProxy.Proxy = b.Proxy
+	withProxy.Talos = b.Sources.TalosPins[bake.TalosVersion]
 	recipe, err := f.Recipe(r, &withProxy, keys)
 	if err != nil {
 		return nil, fmt.Errorf("the bake of %s %s: %w", f.Title(), r.Name, err)
@@ -997,8 +994,8 @@ func (b *Builder) createFresh(
 	}
 }
 
-// createVM creates the VM that becomes the template. In image mode its own disk starts empty, and
-// the family's image boots from a second disk beside it to build the node image onto it.
+// createVM creates the VM that becomes the template. With a builder's disk the template's own disk
+// starts empty, and the family's image boots from a second disk beside it to build onto it.
 func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t *Template, volume string, hw Hardware, recipe *Recipe) error {
 	cores, memory := templateCores, templateMemoryMB
 	diskOptions := nodeDiskBackup + hw.diskOptions()
@@ -1006,7 +1003,7 @@ func (b *Builder) createVM(ctx context.Context, node *proxmox.Node, vmid int, t 
 	disks := []proxmox.VirtualMachineOption{{Name: templateDisk, Value: imported}, bootFrom(templateDisk)}
 	if recipe != nil {
 		cores, memory = bakeCores, cmp.Or(recipe.MemoryMiB, bakeMemoryMB)
-		if recipe.Image != nil {
+		if recipe.BuilderDiskGiB > 0 {
 			disks = []proxmox.VirtualMachineOption{
 				{Name: templateDisk, Value: fmt.Sprintf("%s:%d,%s", b.Storage, recipe.DiskGiB, diskOptions)},
 				{Name: builderDisk, Value: imported},
@@ -1090,6 +1087,14 @@ func (b *Builder) bake(ctx context.Context, node *proxmox.Node, vm *proxmox.Virt
 	if err = b.install(ctx, node, vm, isoStorage, recipe); err != nil {
 		return BuildFacts{}, err
 	}
+	if recipe.Image == nil && recipe.BuilderDiskGiB > 0 {
+		// The builder wrote the template's disk and it is never booted here, so there is nothing to
+		// read and no first boot to clean up after.
+		if err = shutdown(ctx, vm); err != nil {
+			return BuildFacts{}, err
+		}
+		return BuildFacts{}, dropBuilder(ctx, vm, bakeDevice+",net0")
+	}
 	facts, err := b.readFacts(ctx, vm)
 	if err != nil {
 		return BuildFacts{}, err
@@ -1147,11 +1152,11 @@ func (b *Builder) readFacts(ctx context.Context, vm *proxmox.VirtualMachine) (Bu
 	return parseFactsOutput(out)
 }
 
-// growDisk gives the disk the bake runs on the room it needs: in image mode the builder's, whose
+// growDisk gives the disk the bake runs on the room it needs: with a builder's disk, that one, whose
 // image is a few GB at most, otherwise the template's own, which cloud-init grows its file system to.
 func growDisk(ctx context.Context, vm *proxmox.VirtualMachine, recipe *Recipe) error {
 	disk, size := templateDisk, recipe.DiskGiB
-	if recipe.Image != nil {
+	if recipe.BuilderDiskGiB > 0 {
 		disk, size = builderDisk, recipe.BuilderDiskGiB
 	}
 	task, err := vm.ResizeDisk(ctx, disk, fmt.Sprintf("%dG", size))
@@ -1177,18 +1182,24 @@ func (b *Builder) boot(ctx context.Context, node *proxmox.Node, vm *proxmox.Virt
 	return waitTask(ctx, task, err, shortTaskTimeout)
 }
 
+// dropBuilder removes the builder's disk for good, with one configuration that boots the template's
+// own disk and deletes the devices named in drop. The VM must be stopped.
+func dropBuilder(ctx context.Context, vm *proxmox.VirtualMachine, drop string) error {
+	task, err := vm.UnlinkDisk(ctx, builderDisk, true)
+	if err = waitTask(ctx, task, err, longTaskTimeout); err != nil {
+		return fmt.Errorf("removing the builder's disk: %w", err)
+	}
+	task, err = vm.Config(ctx, bootFrom(templateDisk), proxmox.VirtualMachineOption{Name: "delete", Value: drop})
+	return waitTask(ctx, task, err, configTimeout)
+}
+
 // bootNodeImage stops the builder, removes its disk for good and boots the node image the builder
 // installed onto the template's own disk, with a seed of its own as a clone's first boot has.
 func (b *Builder) bootNodeImage(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, isoStorage string, image *NodeImageBoot) error {
 	if err := shutdown(ctx, vm); err != nil {
 		return err
 	}
-	task, err := vm.UnlinkDisk(ctx, builderDisk, true)
-	if err = waitTask(ctx, task, err, longTaskTimeout); err != nil {
-		return fmt.Errorf("removing the builder's disk: %w", err)
-	}
-	task, err = vm.Config(ctx, bootFrom(templateDisk), proxmox.VirtualMachineOption{Name: "delete", Value: bakeDevice})
-	if err = waitTask(ctx, task, err, configTimeout); err != nil {
+	if err := dropBuilder(ctx, vm, bakeDevice); err != nil {
 		return err
 	}
 	b.removeSeed(ctx, node, vm, isoStorage)

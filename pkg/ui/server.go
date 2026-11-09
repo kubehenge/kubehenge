@@ -152,7 +152,7 @@ type Server struct {
 	// PinChecks reads the checksum file and install script of an RKE2 or k3s release to pin. Nil
 	// leaves pinning to kubehenge release pin and kubectl.
 	PinChecks *provisioner.ReleaseChecksums
-	// TalosReleases lists the Talos releases the Image Factory builds. Nil offers only those the
+	// TalosReleases lists the Talos releases this Kubehenge pins. Nil offers only those the
 	// template pool has.
 	TalosReleases func(ctx context.Context) ([]string, error)
 	// TalosClock asks a Talos node whether its clock is synced, for the Health page. Nil asks the

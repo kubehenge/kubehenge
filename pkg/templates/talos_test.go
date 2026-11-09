@@ -117,3 +117,14 @@ func TestTalosStepsThroughTheNewestOfEachMinor(t *testing.T) {
 		t.Error("stepped through a minor with no release")
 	}
 }
+
+func TestNewestOfEachMinor(t *testing.T) {
+	t.Parallel()
+	got := NewestOfEachMinor([]string{"v1.13.4", "v1.14.9", "v1.14.10", "v1.12.1", "junk", "v1.13.12"})
+	if want := []string{"v1.14.10", "v1.13.12", "v1.12.1"}; !slices.Equal(got, want) {
+		t.Errorf("NewestOfEachMinor = %v, want %v", got, want)
+	}
+	if got := NewestOfEachMinor(nil); got == nil || len(got) != 0 {
+		t.Errorf("NewestOfEachMinor(nil) = %#v, want an empty list that is not nil", got)
+	}
+}
