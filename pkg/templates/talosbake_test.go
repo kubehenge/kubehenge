@@ -178,3 +178,28 @@ func TestTheBuilderHandsTheBakeItsPin(t *testing.T) {
 		t.Errorf("an unpinned release gave %v, final %v", err, Final(err))
 	}
 }
+
+func TestDefaultSourcesOfferTheGivenPins(t *testing.T) {
+	t.Parallel()
+	got, err := DefaultSources(map[string]TalosPin{"v1.14.5": testTalosPin, "v1.13.4": testTalosPin}).TalosReleases(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"v1.13.4", "v1.14.5"}; !slices.Equal(got, want) {
+		t.Errorf("DefaultSources offers %v, want %v", got, want)
+	}
+}
+
+// build.sh hands a Talos bake to talos.sh after installing podman, since no node image is composed.
+func TestBuildScriptHandsATalosBakeToTheImager(t *testing.T) {
+	t.Parallel()
+	script, err := recipeFiles.ReadFile("el/build.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`[ "${distribution}" = talos ]`, "dnf -y install podman", `exec sh el/talos.sh "${target}"`} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("el/build.sh lacks %s", want)
+		}
+	}
+}
