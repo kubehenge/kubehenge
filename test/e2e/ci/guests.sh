@@ -328,10 +328,16 @@ guest_script() {
             echo 'dmesg -T 2>&1 | tail -n 1500'
             ;;
         # The bootstrap's commands as cloud-init ran them, with what each printed, and cloud-init's
-        # own warnings and errors.
+        # own warnings and errors. Then the network cloud-init read from capmox's seed and the
+        # NetworkManager connections it rendered, which tell a renderer's fault from the seed's.
+        # Neither holds a secret, as capmox writes only addresses, routes, DNS servers and MACs.
         cloud-init)
             echo 'tail -n 3000 /var/log/cloud-init-output.log; echo
-                grep -E "WARNING|ERROR|Traceback" /var/log/cloud-init.log | tail -n 300'
+                grep -E "WARNING|ERROR|Traceback" /var/log/cloud-init.log | tail -n 300
+                for f in /var/lib/cloud/instance/network-config.json /etc/NetworkManager/system-connections/* \
+                    /run/NetworkManager/system-connections/*; do
+                    [ -f "$f" ] && { echo; echo "== $f"; cat "$f"; }
+                done'
             ;;
         # The members of this node's etcd as it sees them, its own status (leader, raft index,
         # learner, errors) and health, through etcd's gateway with the node's etcd client

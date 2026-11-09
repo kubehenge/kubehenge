@@ -1,0 +1,17 @@
+diff --git a/cloudinit/net/network_manager.py b/cloudinit/net/network_manager.py
+--- a/cloudinit/net/network_manager.py
++++ b/cloudinit/net/network_manager.py
+@@ -249,12 +249,12 @@ class NMConnection:
+         value = f'{route["network"]}/{route["prefix"]}'
+         if "gateway" in route:
+             value += f',{route["gateway"]}'
++        route_key = self._get_next_numbered_section(family, "route")
+         if "metric" in route:
+             if self._is_default_route(route):
+                 self.config[family]["route-metric"] = f'{route["metric"]}'
+             else:
+                 value += f',{route["metric"]}'
+-        route_key = self._get_next_numbered_section(family, "route")
+         self.config[family][route_key] = value
+         if "mtu" in route:
+             self._add_route_options(family, route_key, "mtu", route["mtu"])
