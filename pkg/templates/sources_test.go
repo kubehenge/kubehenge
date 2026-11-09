@@ -322,8 +322,10 @@ func TestThePairWaitIsCappedAtFiveMinutes(t *testing.T) {
 	if _, err := resolveAlmaForPair(s); err != nil {
 		t.Fatal(err)
 	}
-	want := []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second,
-		160 * time.Second, 5 * time.Minute, 5 * time.Minute, 5 * time.Minute}
+	want := []time.Duration{
+		10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second,
+		5 * time.Minute, 5 * time.Minute, 5 * time.Minute,
+	}
 	if !slices.Equal(clock.waits, want) {
 		t.Errorf("waits %v, want %v", clock.waits, want)
 	}
@@ -348,7 +350,7 @@ func TestAPairThatNeverAgreesFailsOnceTheBudgetIsSpent(t *testing.T) {
 	if waited := clock.at.Sub(start); waited != signedPairBudget {
 		t.Errorf("waited %s, want the budget of %s", waited, signedPairBudget)
 	}
-	if got := int32(len(clock.waits)) + 1; sums.Load() != got || sigs.Load() != got {
+	if got := len(clock.waits) + 1; int(sums.Load()) != got || int(sigs.Load()) != got {
 		t.Errorf("%d checksum fetches and %d signature fetches, want %d of each", sums.Load(), sigs.Load(), got)
 	}
 	if !Final(err) {
@@ -364,9 +366,10 @@ func TestACancelledContextEndsThePairWaitAtOnce(t *testing.T) {
 	defer cancel()
 	calls := 0
 	s.retryWait = 0
-	s.now =func() time.Time {
-		// The third reading is the one after the first mismatch.
-		if calls++; calls == 2 {
+	s.now = func() time.Time {
+		// The second reading is the one after the first mismatch.
+		calls++
+		if calls == 2 {
 			cancel()
 		}
 		return time.Date(2026, 11, 9, 11, 50, 56, 0, time.UTC)

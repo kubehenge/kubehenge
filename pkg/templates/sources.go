@@ -59,6 +59,7 @@ const (
 	signedPairBudget    = 65 * time.Minute
 	signedPairFirstWait = 10 * time.Second
 	signedPairMaxWait   = 5 * time.Minute
+	waitFactor          = 2
 )
 
 // Sources fetches image metadata and repository keys from the publishers.
@@ -89,27 +90,6 @@ func logFrom(ctx context.Context) func(format string, args ...any) {
 		return log
 	}
 	return func(string, ...any) {}
-}
-
-func (s *Sources) clock() time.Time {
-	if s.now != nil {
-		return s.now()
-	}
-	return time.Now()
-}
-
-func (s *Sources) pause(ctx context.Context, d time.Duration) error {
-	if s.sleep != nil {
-		return s.sleep(ctx, d)
-	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 // DefaultSources uses the public Talos Image Factory and every publisher's own address.
@@ -286,6 +266,27 @@ func (s *Sources) signedImage(ctx context.Context, signer signingKey, imageURL, 
 	}, nil
 }
 
+func (s *Sources) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+func (s *Sources) pause(ctx context.Context, d time.Duration) error {
+	if s.sleep != nil {
+		return s.sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for the publisher's cache: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
 // signedPair returns a checksum file whose signature verifies. Both files are fetched again together
 // while they disagree, because a cache can hand out one new file beside the other's old copy. A
 // pair that still disagrees once signedPairBudget is spent fails, so nothing unverified is used.
@@ -316,11 +317,11 @@ func (s *Sources) signedPair(ctx context.Context, signer signingKey, sumsURL, si
 		// The last wait ends on the deadline, so the budget is spent on a final fetch and not left over.
 		wait = min(wait, remaining)
 		logFrom(ctx)("%s and %s do not match yet, which a publisher's cache causes while it holds one old file; trying again at %s",
-			sumsURL, sigURL, s.clock().Add(wait).Format("15:04:05"))
+			sumsURL, sigURL, s.clock().Add(wait).Format(time.TimeOnly))
 		if err := s.pause(ctx, wait); err != nil {
 			return nil, fmt.Errorf("%s and %s: %w", sumsURL, sigURL, err)
 		}
-		wait = min(wait*2, signedPairMaxWait)
+		wait = min(wait*waitFactor, signedPairMaxWait)
 	}
 }
 
