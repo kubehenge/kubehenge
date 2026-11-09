@@ -127,7 +127,7 @@ func (s *PinStore) Add(ctx context.Context, version string, pin ReleasePin, by s
 		file += "\n"
 	}
 	file += fmt.Sprintf("%s %s %s # added by %s at %s\n", version, pin.File, pin.Script, strings.Join(strings.Fields(by), "_"), at.UTC().Format(time.RFC3339))
-	if _, err = parseAdded(file); err != nil {
+	if _, err = ParseReleasePins(file); err != nil {
 		return err
 	}
 	cm.Namespace, cm.Name = s.Namespace, ReleasePinsName
