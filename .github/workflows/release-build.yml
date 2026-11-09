@@ -171,19 +171,10 @@ jobs:
           if [ -n "$(find docs/changes -name '*.md' 2> /dev/null)" ]; then
             fail "docs/changes/ has fragments: fold them with make changelog VERSION=$version first"
           fi
-          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {p = 1; next} /^## \[/ {p = 0} p' \
-            docs/changelog.md > "$RUNNER_TEMP/changes.md"
-          [ -s "$RUNNER_TEMP/changes.md" ] || fail "docs/changelog.md has no section for $version"
-          # Before 1.0.0 every release opens with the README's alpha warning, so nobody reads a
-          # release page without it.
-          case $version in
-            0.*)
-              alpha=$(grep -m 1 '^> \*\*Alpha' README.md) || fail "README.md has no alpha warning"
-              printf '%s\n' "$alpha" > "$RUNNER_TEMP/notes/notes.md"
-              ;;
-            *) : > "$RUNNER_TEMP/notes/notes.md" ;;
-          esac
-          cat "$RUNNER_TEMP/changes.md" >> "$RUNNER_TEMP/notes/notes.md"
+          # The version's section, after README's alpha warning before 1.0.0, with its links to docs
+          # pages sent to the website. It fails when the section or the warning is missing.
+          sh scripts/changelog.sh notes "$version" > "$RUNNER_TEMP/notes/notes.md" ||
+            fail "no release notes for $version: see the line above"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
