@@ -95,6 +95,31 @@ until_true() {
     done
 }
 
+# webhook_retried <command...>: runs a write to the API, again with until_true's pauses for up to
+# KUBEHENGE_E2E_WEBHOOK_WAIT seconds (300) while the API server cannot get an admission webhook's
+# answer, as while the webhook's pod restarts. Any other failure, a webhook's refusal among them,
+# returns at once. The command's output, errors and status are its own.
+webhook_retried() {
+    webhook_limit=$(($(date +%s) + ${KUBEHENGE_E2E_WEBHOOK_WAIT:-300})) webhook_pause=2
+    webhook_errors=$(mktemp)
+    while :; do
+        webhook_status=0
+        "$@" 2> "${webhook_errors}" || webhook_status=$?
+        webhook_now=$(date +%s)
+        if [ "${webhook_status}" -ne 0 ] && [ "${webhook_now}" -lt "${webhook_limit}" ] &&
+            grep -q 'failed calling webhook' "${webhook_errors}"; then
+            webhook_said=$(head -n 1 "${webhook_errors}")
+            printf 'a webhook did not answer, trying again in %d s: %s\n' "${webhook_pause}" "${webhook_said}" >&2
+            sleep "${webhook_pause}"
+            webhook_pause=$((webhook_pause < 8 ? webhook_pause * 2 : 10))
+            continue
+        fi
+        cat "${webhook_errors}" >&2
+        rm -f "${webhook_errors}"
+        return "${webhook_status}"
+    done
+}
+
 # release_mirror_variable: the releaseMirror variable of an RKE2 or k3s Cluster's manifest, as lines
 # under its variables, when the run serves the releases as a cluster's own mirror
 # (KUBEHENGE_E2E_RELEASE_MIRROR, from test/e2e/ci/run.sh). Nothing otherwise.
