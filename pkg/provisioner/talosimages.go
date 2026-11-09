@@ -296,10 +296,11 @@ func (p *ReleasePinner) blob(ctx context.Context, img talosImage, digest string)
 	return p.registryGet(ctx, img, "blobs", digest, "")
 }
 
-// registryGet reads a manifest or blob. A reference that is a digest is checked against the bytes,
-// and one that is no digest or tag shape is refused before it reaches an address.
+// registryGet reads a manifest or blob. A reference with a colon is a digest, which has to be a
+// SHA-256 one so that the bytes can be checked against it. Any other is refused before it reaches
+// an address.
 func (p *ReleasePinner) registryGet(ctx context.Context, img talosImage, kind, reference, accept string) ([]byte, error) {
-	if hex, ok := strings.CutPrefix(reference, "sha256:"); ok && !sha256Hex.MatchString(hex) {
+	if algorithm, hex, isDigest := strings.Cut(reference, ":"); isDigest && (algorithm != "sha256" || !sha256Hex.MatchString(hex)) {
 		return nil, fmt.Errorf("%s %s: %q is not a SHA-256 digest", img.release, img.name, reference)
 	}
 	address := p.Registry + "/v2/siderolabs/" + img.repository + "/" + kind + "/" + url.PathEscape(reference)

@@ -225,7 +225,7 @@ type ReleasePinner struct {
 // hundred over the minors a channel lists.
 const githubReleases = 20
 
-// Pin adds the releases pins lacks, and returns their versions. A RKE2 or k3s release that lacks a
+// Pin adds the releases pins lacks, and returns their versions. An RKE2 or k3s release that lacks a
 // file its nodes install is left out, as no node could install it. A Talos release's images are
 // pushed before GitHub publishes it, so a missing one is an error.
 func (p *ReleasePinner) Pin(ctx context.Context, pins ReleasePins) ([]string, error) {

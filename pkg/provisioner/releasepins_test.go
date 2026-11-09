@@ -73,7 +73,11 @@ func TestTheEmbeddedPinsHoldTheNewestReleases(t *testing.T) {
 			t.Errorf("the header's talos %s is not DefaultTalosVersion %s", n[2], templates.DefaultTalosVersion)
 		}
 		if _, ok := pins[n[2]]; !ok {
-			t.Errorf("%s %s is not pinned: run make release-pins with GH_TOKEN set", release.distribution, n[2])
+			name := string(release.distribution)
+			if release == talosRelease {
+				name = "Talos"
+			}
+			t.Errorf("%s %s is not pinned: run make release-pins with GH_TOKEN set", name, n[2])
 		}
 		v, _ := parseKubeVersion(n[2])
 		for m := v.Minor - supportedMinors; m <= v.Minor; m++ {
@@ -235,6 +239,31 @@ func TestReleasePinnerPinsTheNewMinorsReleasesOnce(t *testing.T) {
 	p.Token = "wrong"
 	if _, err := p.Pin(context.Background(), ReleasePins{}); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("a refused API read: %v", err)
+	}
+}
+
+// A listing GitHub refuses ends the run, and what was pinned before it comes back all the same.
+func TestPinReturnsWhatItAddedBeforeAListingError(t *testing.T) {
+	t.Parallel()
+	f := &fakeReleases{files: map[string]string{}}
+	maps.Copy(f.files, releaseFiles(rke2Release, "v1.37.1+rke2r1", rke2Listing))
+	api := &githubAPI{files: f, token: "t", releases: map[string][]githubRelease{"rancher/rke2": {tag("v1.37.1+rke2r1")}}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "siderolabs/talos") {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		api.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	p := &ReleasePinner{HTTP: srv.Client(), API: srv.URL, Token: "t", Checksums: &ReleaseChecksums{HTTP: srv.Client(), GitHub: srv.URL, Raw: srv.URL}}
+	pins := ReleasePins{}
+	added, err := p.Pin(context.Background(), pins)
+	if err == nil || !strings.Contains(err.Error(), "500") || !slices.Equal(added, []string{"v1.37.1+rke2r1"}) {
+		t.Errorf("Pin = %v, %v, want the RKE2 release and GitHub's 500", added, err)
+	}
+	if _, ok := pins["v1.37.1+rke2r1"]; !ok {
+		t.Error("the pin added before the error was dropped")
 	}
 }
 

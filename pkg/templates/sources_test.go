@@ -369,6 +369,13 @@ func failingPublisher(t *testing.T, failures int32, status int) (*Sources, *atom
 	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, retryWait: time.Millisecond}, &requests
 }
 
+func TestSourcesRetryFromTwoSecondsInFourTries(t *testing.T) {
+	t.Parallel()
+	if sourcesAttempts != 4 || sourcesFirstWait != 2*time.Second {
+		t.Errorf("%d tries from %v, want 4 from 2s", sourcesAttempts, sourcesFirstWait)
+	}
+}
+
 func TestAPassingFailureIsTriedAgain(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusTooManyRequests, http.StatusRequestTimeout} {

@@ -73,12 +73,12 @@ type releaseSpec struct {
 func goodDigests(release string) string {
 	var b strings.Builder
 	for i := range 3 {
-		fmt.Fprintf(&b, "ghcr.io/siderolabs/module-%d:6.18-%s@sha256:%s\n", i, release, hexSHA256([]byte(fmt.Sprint(i, release))))
+		fmt.Fprintf(&b, "ghcr.io/siderolabs/module-%d:6.18-%s@sha256:%s\n", i, release, hexSHA256(fmt.Append(nil, i, release)))
 	}
 	for _, kind := range []string{"lts", "production"} {
 		fmt.Fprintf(&b, "ghcr.io/siderolabs/nvidia-container-toolkit-%s:580.1-v1.17.5@sha256:%s\n", kind, hexSHA256([]byte(kind)))
 	}
-	b.WriteString(agentLine(release) + "\n")
+	fmt.Fprintln(&b, agentLine(release))
 	return b.String()
 }
 
@@ -689,6 +689,37 @@ func TestTalosImagesTakesTheOneAmd64Manifest(t *testing.T) {
 				t.Errorf("Pin = %v, %v, want an error naming imager and %q", added, err, tc.want)
 			}
 		})
+	}
+}
+
+// A registry read starts its waits at two seconds, and a test's own wait replaces that.
+func TestTalosImagesFirstWaitIsTwoSeconds(t *testing.T) {
+	t.Parallel()
+	if got := (&ReleasePinner{}).firstWait(); got != 2*time.Second {
+		t.Errorf("first wait %v, want 2s", got)
+	}
+	if got := (&ReleasePinner{retryWait: 5 * time.Millisecond}).firstWait(); got != 5*time.Millisecond {
+		t.Errorf("first wait %v with retryWait set, want 5ms", got)
+	}
+	if registryAttempts != 4 {
+		t.Errorf("%d tries, want 4", registryAttempts)
+	}
+}
+
+// Only a SHA-256 digest can be checked against its bytes, so any other is refused unread.
+func TestRegistryGetRefusesWhatIsNoSHA256Digest(t *testing.T) {
+	t.Parallel()
+	r := newFakeSidero()
+	p := r.start(t, nil)
+	img := talosImage{release: "v1.14.6", name: "imager", repository: "imager"}
+	for _, reference := range []string{"sha512:" + pinA, "md5:abc", "sha256:" + pinA[:63], "sha256:"} {
+		_, err := p.registryGet(context.Background(), img, "blobs", reference, "")
+		if err == nil || !strings.Contains(err.Error(), "is not a SHA-256 digest") {
+			t.Errorf("%s: %v, want a refusal", reference, err)
+		}
+	}
+	if n := r.requestsFor("/blobs/"); n != 0 {
+		t.Errorf("%d requests for a refused digest, want none", n)
 	}
 }
 

@@ -93,14 +93,22 @@ func TestRetryingTriesOnlyTransientFailures(t *testing.T) {
 	t.Run("a cancelled context stops the wait", func(t *testing.T) {
 		t.Parallel()
 		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
 		runs := 0
-		err := Retrying(ctx, 4, time.Hour, func() error {
-			runs++
-			cancel()
-			return Transient(cause)
-		})
-		if runs != 1 || !errors.Is(err, cause) {
-			t.Errorf("%d runs, %v", runs, err)
+		done := make(chan error, 1)
+		go func() {
+			done <- Retrying(ctx, 4, time.Hour, func() error { runs++; return Transient(cause) })
+		}()
+		// The first try has failed and the hour's wait has begun once its context is cancelled here.
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		select {
+		case err := <-done:
+			if runs != 1 || !errors.Is(err, cause) {
+				t.Errorf("%d runs, %v", runs, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the wait ignored its cancelled context")
 		}
 	})
 	t.Run("the mark does not reach an outer Retrying", func(t *testing.T) {
@@ -117,9 +125,14 @@ func TestRetryingTriesOnlyTransientFailures(t *testing.T) {
 	t.Run("the wait doubles from the first", func(t *testing.T) {
 		t.Parallel()
 		var stamps []time.Time
-		_ = Retrying(t.Context(), 3, 40*time.Millisecond, func() error { stamps = append(stamps, time.Now()); return Transient(cause) })
-		if len(stamps) != 3 || stamps[1].Sub(stamps[0]) < 40*time.Millisecond || stamps[2].Sub(stamps[1]) < 80*time.Millisecond {
-			t.Errorf("tries at %v", stamps)
+		_ = Retrying(t.Context(), 3, 100*time.Millisecond, func() error { stamps = append(stamps, time.Now()); return Transient(cause) })
+		if len(stamps) != 3 {
+			t.Fatalf("%d tries, want 3", len(stamps))
+		}
+		// Each gap from both sides, with room for a busy machine: 100 ms, then 200 ms, never 400 ms.
+		first, second := stamps[1].Sub(stamps[0]), stamps[2].Sub(stamps[1])
+		if first < 100*time.Millisecond || first > 250*time.Millisecond || second < 200*time.Millisecond || second > 350*time.Millisecond {
+			t.Errorf("waits %v and %v, want about 100ms and 200ms", first, second)
 		}
 	})
 }

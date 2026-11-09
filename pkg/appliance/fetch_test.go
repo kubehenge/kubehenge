@@ -108,7 +108,7 @@ func TestDownloadsWaitASecondThenDoubleIt(t *testing.T) {
 		t.Fatalf("get = %v", err)
 	}
 	slack := 50 * time.Millisecond
-	if first, second := stamps[1].Sub(stamps[0]), stamps[2].Sub(stamps[1]); first < retryDelay-slack || first > 2*retryDelay-slack || second < 2*retryDelay-slack {
+	if first, second := stamps[1].Sub(stamps[0]), stamps[2].Sub(stamps[1]); first < retryDelay-slack || first > 2*retryDelay-slack || second < 2*retryDelay-slack || second > 3*retryDelay+slack {
 		t.Errorf("waits %v and %v, want about %v and %v", first, second, retryDelay, 2*retryDelay)
 	}
 	if retryDelay != time.Second || downloadAttempts != 5 {

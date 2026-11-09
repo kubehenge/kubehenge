@@ -57,7 +57,7 @@ type Sources struct {
 	HTTP            *http.Client
 	TalosFactoryURL string
 	// Mirrors serve a publisher's files from another place, by the publisher's address
-	// (https://host); a test points them at its own server.
+	// (https://host). A test points them at its own server.
 	Mirrors map[string]string
 	// retryWait replaces sourcesFirstWait, so that a test retries without waiting.
 	retryWait time.Duration
