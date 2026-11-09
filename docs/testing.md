@@ -17,6 +17,8 @@ A ClusterClass or add-on is listed as supported only after the end-to-end tier r
 
 The frontend's packages are installed again only when `web/package-lock.json` changes. The frontend is built again only when one of its sources does. Every Go step first downloads the Gateway API's install file the controller carries, once per release (`make gateway-api`). It refuses the file unless it matches the SHA-256 in the `Makefile`.
 
+Every `tofu` the `Makefile` and the end-to-end tests run installs the module's providers from one mirror alone (`make providers`, `scripts/providers.sh`). The mirror is filled again only when `management-cluster/.terraform.lock.hcl` changes, and each package must match its checksum there. The downloads switch to GitHub's API, with `GITHUB_TOKEN` when set, once GitHub's release address fails.
+
 | Command | What it runs | Needs |
 | --- | --- | --- |
 | `make lint` | Lint and static: Go (golangci-lint with every linter but those that contradict Go's conventions, gofumpt), the known vulnerabilities the Go code reaches (govulncheck), the frontend (oxfmt, type-aware oxlint, TypeScript), CSS (stylelint), the Proxmox VE entry's script (oxfmt, oxlint), British English spelling (typos), shell (ShellCheck with every optional check, shfmt), Terraform/OpenTofu (fmt, validate, TFLint), the Helm charts with their values, the workflows (actionlint, zizmor), YAML (yamllint), Markdown (markdownlint) and the e2e image's Dockerfile (hadolint). `make fmt` rewrites what the format checks refuse. | the tools from `scripts/tools.sh` |

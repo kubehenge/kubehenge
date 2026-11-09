@@ -58,7 +58,7 @@ Kubehenge gives every node of every cluster a static address, with no DHCP serve
 | Who | Reaches |
 | --- | --- |
 | The node running the installer | GitHub, for Kubehenge's release and OpenTofu. `download.proxmox.com`, for the container template, unless a storage holds it already. The installer downloads through the datacenter's HTTP proxy, where one is set. |
-| The appliance | GitHub, for the release index and upgrades. While it applies the management cluster: the OpenTofu registry, `quay.io` (cert-manager's chart) and the Talos Image Factory. While it makes VM templates: the Talos Image Factory (`factory.talos.dev`), the node OSes' image mirrors for their signed checksums (`repo.almalinux.org`, `dl.rockylinux.org`), and the package repositories' signing keys (`pkgs.k8s.io`, `rpm.rancher.io`). |
+| The appliance | GitHub, for the release index and upgrades. While it applies the management cluster: `quay.io` (cert-manager's chart) and the Talos Image Factory. While it makes VM templates: the Talos Image Factory (`factory.talos.dev`), the node OSes' image mirrors for their signed checksums (`repo.almalinux.org`, `dl.rockylinux.org`), and the package repositories' signing keys (`pkgs.k8s.io`, `rpm.rancher.io`). |
 | The Proxmox VE nodes | the Talos Image Factory and the node OSes' image mirrors, which Proxmox VE downloads disk images from |
 | The management cluster's nodes, for time | NTP servers on UDP 123: Talos's default public ones, or the hosts set under Time servers in the setup's Network step. |
 | Clusters' nodes, for time | NTP servers on UDP 123: the node image's public pool, or the hosts in the cluster's **Time servers** ([clusters.md](clusters.md#network)). Talos's default is `time.cloudflare.com`. |

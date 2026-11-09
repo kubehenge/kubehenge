@@ -149,12 +149,14 @@ if [ "${test%-addons-?}" = talos ]; then
     }
 fi
 
-mkdir -p "${work}/mgmt" "${work}/plugins"
-# The module installs the Cluster API operator from the chart archive beside it, which no checkout holds.
-make -s -C "${repo}" capi-operator-chart
+mkdir -p "${work}/mgmt"
+# The module installs the Cluster API operator from the chart archive beside it, which no checkout
+# holds. Its providers come from the mirror `make providers` fetches with the run's token, since
+# OpenTofu's own install downloads them from GitHub without one.
+make -s -C "${repo}" capi-operator-chart providers
+export TF_CLI_CONFIG_FILE="${repo}/dist/cache/providers/tofu.tfrc"
 # OpenTofu reads only the root module's lock, so the module's own checks the providers.
 cp "${repo}/test/e2e/ci/main.tf" "${repo}/management-cluster/.terraform.lock.hcl" "${work}/mgmt/"
-export TF_PLUGIN_CACHE_DIR="${work}/plugins"
 export TF_VAR_repository="${repo}" TF_VAR_proxmox_api_token="${KUBEHENGE_PROXMOX_TOKEN}"
 TF_VAR_refresh_weekday=$(LC_ALL=C date -u -d '+3 days' +%a)
 export TF_VAR_refresh_weekday
