@@ -2,10 +2,12 @@ package templates
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,6 +52,12 @@ const (
 	// where the same request seconds later gets through.
 	sourcesAttempts  = 4
 	sourcesFirstWait = 2 * time.Second
+	// A publisher behind a CDN replaces a checksum file and its signature a second apart, and each
+	// cache node drops its old copy of either on its own clock, which can take an hour. The pair
+	// is fetched again 10s, 20s and on up to 5m20s apart (about 10 minutes in all), so that a
+	// request can land on caches that hold both new files.
+	signedPairAttempts  = 7
+	signedPairFirstWait = 10 * time.Second
 )
 
 // Sources fetches image metadata and repository keys from the publishers.
@@ -59,7 +67,8 @@ type Sources struct {
 	// Mirrors serve a publisher's files from another place, by the publisher's address
 	// (https://host); a test points them at its own server.
 	Mirrors map[string]string
-	// retryWait replaces sourcesFirstWait, so that a test retries without waiting.
+	// retryWait replaces sourcesFirstWait and signedPairFirstWait, so that a test retries without
+	// waiting.
 	retryWait time.Duration
 }
 
@@ -220,16 +229,9 @@ func (s *Sources) talos(ctx context.Context, version string) (Resolved, error) {
 // the one with the pinned fingerprint, before the checksum is read. The template's disk is
 // downloaded under fileName.
 func (s *Sources) signedImage(ctx context.Context, signer signingKey, imageURL, sumsURL, sigURL, fileName string) (Resolved, error) {
-	sums, err := s.get(ctx, sumsURL)
+	sums, err := s.signedPair(ctx, signer, sumsURL, sigURL)
 	if err != nil {
 		return Resolved{}, err
-	}
-	sig, err := s.get(ctx, sigURL)
-	if err != nil {
-		return Resolved{}, err
-	}
-	if err = signer.verify(sums, sig); err != nil {
-		return Resolved{}, fmt.Errorf("%s: %w", sumsURL, err)
 	}
 	file := imageURL[strings.LastIndex(imageURL, "/")+1:]
 	sum, err := findChecksum(sums, file)
@@ -243,6 +245,46 @@ func (s *Sources) signedImage(ctx context.Context, signer signingKey, imageURL, 
 		ChecksumAlgorithm: "sha256",
 	}, nil
 }
+
+// signedPair returns a checksum file whose signature verifies. Both files are fetched again together
+// while they disagree, because a cache can hand out one new file beside the other's old copy. A
+// pair that never agrees fails, so nothing unverified is used.
+func (s *Sources) signedPair(ctx context.Context, signer signingKey, sumsURL, sigURL string) ([]byte, error) {
+	wait := cmp.Or(s.retryWait, signedPairFirstWait)
+	for attempt := 1; ; attempt++ {
+		sums, err := s.get(ctx, sumsURL)
+		if err != nil {
+			return nil, err
+		}
+		sig, err := s.get(ctx, sigURL)
+		if err != nil {
+			return nil, err
+		}
+		err = signer.verify(sums, sig)
+		if err == nil {
+			return sums, nil
+		}
+		if _, ok := errors.AsType[notSignedError](err); !ok {
+			return nil, fmt.Errorf("%s: %w", sumsURL, err)
+		}
+		if attempt == signedPairAttempts {
+			return nil, fmt.Errorf("%s and %s: the publisher's checksum and signature disagree after %d fetches: %w",
+				sumsURL, sigURL, attempt, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%s and %s: %w", sumsURL, sigURL, err)
+		case <-time.After(wait):
+		}
+		wait *= 2
+	}
+}
+
+// notSignedError is a signature that does not verify its data, which another fetch of the files may
+// cure. A wrong embedded key it never wraps.
+type notSignedError struct{ error }
+
+func (e notSignedError) Unwrap() error { return e.error }
 
 // signingKey is a publisher's embedded key and the fingerprint it must have.
 type signingKey struct {
@@ -264,10 +306,10 @@ func (k signingKey) verify(data, sig []byte) error {
 	v3, isV3, err := parseV3(sig)
 	switch {
 	case err != nil:
-		return fmt.Errorf("not signed by %s's key: %w", k.name, err)
+		return notSignedError{fmt.Errorf("not signed by %s's key: %w", k.name, err)}
 	case isV3:
 		if err = v3.verify(keyring[0], data, time.Now()); err != nil {
-			return fmt.Errorf("not signed by %s's key: %w", k.name, err)
+			return notSignedError{fmt.Errorf("not signed by %s's key: %w", k.name, err)}
 		}
 		return nil
 	}
@@ -277,10 +319,10 @@ func (k signingKey) verify(data, sig []byte) error {
 	}
 	signer, err := check(keyring, bytes.NewReader(data), bytes.NewReader(sig), nil)
 	if err != nil {
-		return fmt.Errorf("not signed by %s's key: %w", k.name, err)
+		return notSignedError{fmt.Errorf("not signed by %s's key: %w", k.name, err)}
 	}
 	if fp := fingerprint(signer); fp != k.fingerprint {
-		return fmt.Errorf("signed by %s, not %s's %s", fp, k.name, k.fingerprint)
+		return notSignedError{fmt.Errorf("signed by %s, not %s's %s", fp, k.name, k.fingerprint)}
 	}
 	return nil
 }

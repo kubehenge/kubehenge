@@ -74,7 +74,7 @@ func fakePublishers(t *testing.T) (*Sources, map[string][]byte) {
 	for _, publisher := range []string{"https://repo.almalinux.org", "https://dl.rockylinux.org", "https://download.opensuse.org", "https://pkgs.k8s.io"} {
 		mirrors[publisher] = srv.URL
 	}
-	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, Mirrors: mirrors}, files
+	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, Mirrors: mirrors, retryWait: time.Millisecond}, files
 }
 
 func TestResolveTalos(t *testing.T) {
@@ -216,6 +216,84 @@ func TestVerifyRefusesWhatIsNoSignatureOfTheKey(t *testing.T) {
 	}
 	if err := alma.verify(sums, []byte("-----BEGIN PGP SIGNATURE-----\n\n-----END PGP SIGNATURE-----\n")); err == nil {
 		t.Error("an empty signature verified")
+	}
+}
+
+// almaPairPublisher stands in for a CDN that hands out a replaced checksum file beside the old
+// signature. staleSigs is how many of the signature's fetches get the old one, which never signs the
+// checksum file.
+func almaPairPublisher(t *testing.T, staleSigs int32) (*Sources, *atomic.Int32, *atomic.Int32) {
+	t.Helper()
+	var sumsFetches, sigFetches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case almaFixtureDir + "/CHECKSUM":
+			sumsFetches.Add(1)
+			_, _ = w.Write(readFixture(t, "almalinux-10/CHECKSUM"))
+		case almaFixtureDir + "/CHECKSUM.asc":
+			if sigFetches.Add(1) <= staleSigs {
+				_, _ = w.Write(readFixture(t, "rocky-10/"+rockyFixture+".CHECKSUM.asc"))
+				return
+			}
+			_, _ = w.Write(readFixture(t, "almalinux-10/CHECKSUM.asc"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	s := &Sources{HTTP: srv.Client(), Mirrors: map[string]string{"https://repo.almalinux.org": srv.URL}, retryWait: time.Millisecond}
+	return s, &sumsFetches, &sigFetches
+}
+
+func resolveAlmaForPair(s *Sources) (Resolved, error) {
+	return almaLinux{}.Image(context.Background(), s, Release{Name: "10", Build: "10.2-20261012.0", Mode: ImageMode})
+}
+
+// Fails a build that gives up at the first mismatch, or fetches only the signature again.
+func TestAMismatchedPairIsFetchedAgainTogether(t *testing.T) {
+	t.Parallel()
+	s, sums, sigs := almaPairPublisher(t, 2)
+	got, err := resolveAlmaForPair(s)
+	if err != nil {
+		t.Fatalf("a pair that agrees on the third fetch: %v", err)
+	}
+	if got.Checksum != "bf441cb90a56ee08ec8a3c38d920996e217e79cfdf6e33561afd3408bed5a337" {
+		t.Errorf("checksum %q", got.Checksum)
+	}
+	if sums.Load() != 3 || sigs.Load() != 3 {
+		t.Errorf("%d checksum fetches and %d signature fetches, want 3 of each", sums.Load(), sigs.Load())
+	}
+}
+
+// Fails a build that retries without end, or that accepts a pair that never verifies.
+func TestAPairThatNeverAgreesFailsAfterTheLastFetch(t *testing.T) {
+	t.Parallel()
+	s, sums, sigs := almaPairPublisher(t, 1<<30)
+	_, err := resolveAlmaForPair(s)
+	if err == nil {
+		t.Fatal("a pair that never verifies resolved")
+	}
+	for _, want := range []string{"/CHECKSUM and ", "/CHECKSUM.asc", "the publisher's checksum and signature disagree", "not signed by"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if sums.Load() != signedPairAttempts || sigs.Load() != signedPairAttempts {
+		t.Errorf("%d checksum fetches and %d signature fetches, want %d of each", sums.Load(), sigs.Load(), signedPairAttempts)
+	}
+}
+
+// A wrong embedded key is no cache's doing, so fetching again would only delay the error.
+func TestAWrongEmbeddedKeyIsNotFetchedAgain(t *testing.T) {
+	t.Parallel()
+	s, sums, _ := almaPairPublisher(t, 0)
+	key := signingKey{name: "AlmaLinux OS 10", armoured: almaLinux10Key, fingerprint: Rocky10KeyFingerprint}
+	dir := "https://repo.almalinux.org" + almaFixtureDir
+	if _, err := s.signedPair(context.Background(), key, dir+"/CHECKSUM", dir+"/CHECKSUM.asc"); err == nil {
+		t.Fatal("a key with another fingerprint verified")
+	}
+	if got := sums.Load(); got != 1 {
+		t.Errorf("%d checksum fetches, want 1", got)
 	}
 }
 
