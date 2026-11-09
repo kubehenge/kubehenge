@@ -43,17 +43,22 @@ func TestKubeadmControlPlanesRegisterWithTheTaintKubeadmLeavesOff(t *testing.T) 
 			t.Fatalf("files %v", files)
 		}
 		for _, f := range list {
-			file := asMap(t, f)
+			var file struct {
+				Path    string `json:"path"`
+				Content string `json:"content"`
+			}
+			if err := json.Unmarshal([]byte(asJSON(t, f)), &file); err != nil {
+				t.Fatal(err)
+			}
 			var kubelet struct {
 				RegisterWithTaints []corev1.Taint `json:"registerWithTaints"`
 			}
-			content, _ := file["content"].(string)
-			if err := yaml.Unmarshal([]byte(content), &kubelet); err != nil {
+			if err := yaml.Unmarshal([]byte(file.Content), &kubelet); err != nil {
 				continue
 			}
 			if slices.ContainsFunc(kubelet.RegisterWithTaints, func(x corev1.Taint) bool { return cpTaint.MatchTaint(&x) }) {
-				if path, _ := file["path"].(string); path != "/etc/kubernetes/patches/kubeletconfiguration0+merge.yaml" {
-					t.Errorf("the taint's kubelet patch is at %s, which kubeadm does not apply as a patch", path)
+				if file.Path != "/etc/kubernetes/patches/kubeletconfiguration0+merge.yaml" {
+					t.Errorf("the taint's kubelet patch is at %s, not among kubeadm's kubelet patches", file.Path)
 				}
 				return true
 			}
