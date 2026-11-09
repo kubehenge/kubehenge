@@ -32,6 +32,13 @@ variable "node_count" {
   default = 1
 }
 
+# Dual-stack, IPv4 first, for a workload cluster whose API address is IPv6: Cluster API reaches it
+# from the management cluster's pods, which have no IPv6 route on an IPv4-only cluster.
+variable "ipv6" {
+  type    = bool
+  default = false
+}
+
 # With a second node (test/e2e/ci/second-node.sh), the nodes and the storage both share.
 variable "proxmox_nodes" {
   type    = list(string)
@@ -113,10 +120,13 @@ module "management_cluster" {
   workload_datastores        = distinct([var.datastore, "local", "own"])
   cluster_datastore_allocate = true
 
-  node_addresses     = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
-  node_cores         = var.node_cores
-  node_memory_mb     = var.node_memory_mb
-  node_memory_min_mb = var.node_memory_min_mb
+  ip_families         = var.ipv6 ? ["IPv4", "IPv6"] : ["IPv4"]
+  node_addresses      = [for i in range(var.node_count) : "172.20.99.${11 + i}/24"]
+  node_addresses_ipv6 = var.ipv6 ? [for i in range(var.node_count) : "fd99:20:99::${11 + i}/64"] : []
+  gateway_ipv6        = var.ipv6 ? "fd99:20:99::1" : null
+  node_cores          = var.node_cores
+  node_memory_mb      = var.node_memory_mb
+  node_memory_min_mb  = var.node_memory_min_mb
   # The runner's guests have more vCPUs than it has CPUs, more contention than a real host sees
   # (docs/testing.md).
   node_cpu_units = 1000
@@ -136,7 +146,7 @@ module "management_cluster" {
 
   api_address = "172.20.99.10"
   gateway     = "172.20.99.1"
-  dns_servers = ["172.20.99.1"]
+  dns_servers = var.ipv6 ? ["172.20.99.1", "fd99:20:99::1"] : ["172.20.99.1"]
 
   # The controller and Kubehenge's provider builds are pushed under their ghcr.io paths; everything
   # else falls through to ghcr.io.
