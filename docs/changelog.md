@@ -6,16 +6,39 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [0.4.2] - 2026-11-05
 
-- Activity no longer misses a kubectl change made just before the kubelet rotates an API server's log or the API server restarts. The interface follows each log as it is written. After a restart it reads the old container's last lines.
-- A Talos upgrade tries a node's installer pull again when the registry drops the connection, rather than failing the upgrade. A registry that refuses the image still fails it at once.
-- The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000. A change reaches running nodes without a reboot.
-- A new cluster's workers get 6144 MiB by default, up from 4096 MiB (the minimums are unchanged). That fits all add-ons together except Rancher, logs, backups and GitOps, with about 2 GiB to spare.
-- Where several storages fit, the installer asks which takes the appliance's disks and which the container template (`--storage`, `--template-storage`). A disabled storage, such as `local` on some nodes, is never used.
-- The installer downloads the container template itself and checks it against a SHA-512 it carries, without `pveam` or its template indexes. A template already on a storage is used where it is.
+### Highlights
+
+- A new cluster's workers get 6144 MiB by default, enough for most add-ons together.
+- The installer asks which storage takes the appliance's disks and which its template, and never uses a disabled one.
+- Downloads from GitHub are retried for about four minutes, and OpenTofu tries each provider download up to eight times.
+- Activity no longer misses a kubectl change made just before an API server's log rotates or the API server restarts.
+
+### Changed
+
+- The management cluster's nodes default to a CPU weight of 200 (`node_cpu_units`), twice a default VM's, down from 1000.
+- A change of `node_cpu_units` reaches running nodes without a reboot.
+- A new cluster's workers get 6144 MiB by default, up from 4096 MiB, and the minimums are unchanged.
+- 6144 MiB fits all add-ons together except Rancher, logs, backups and GitOps, with about 2 GiB to spare.
+- Where several storages fit, the installer asks which takes the appliance's disks and which the template (`--storage`, `--template-storage`).
+- The installer never uses a disabled storage, such as `local` on some nodes.
+- The installer downloads the container template itself and checks it against a SHA-512 it carries, without `pveam` or its indexes.
+- A container template already on a storage is used where it is.
 - The installer shows a progress bar for each download and a line for each finished step, including each verified checksum.
-- Only the installer's own downloads go through the datacenter's HTTP proxy, where one is set. The installer prints the proxy without its credentials.
-- Downloads from GitHub, including the installer's and the template builds', are retried for about four minutes, to outlast GitHub's failed release downloads. The appliance's OpenTofu tries each provider download up to eight times, up from two.
-- The docs warn that a volume snapshot copies a volume its pods may still write to. Stop the workload or pause its writes first.
+- Only the installer's own downloads go through the datacenter's HTTP proxy, where one is set.
+- Downloads from GitHub, including the installer's and the template builds', are retried for about four minutes.
+- The appliance's OpenTofu tries each provider download up to eight times, up from two.
+- The interface follows each API server log as it is written, and after a restart reads the old container's last lines.
+- A registry that refuses a Talos installer image still fails the upgrade at once.
+- The docs warn that a volume snapshot copies a volume its pods may still write to, so stop or pause the workload first.
+
+### Fixed
+
+- Activity no longer misses a kubectl change made just before an API server's log rotates or the API server restarts.
+- A Talos upgrade tries a node's installer pull again when the registry drops the connection, rather than failing.
+
+### Security
+
+- The installer prints the datacenter's proxy without its credentials.
 
 ## [0.4.1] - 2026-11-05
 
@@ -293,9 +316,20 @@ The first release of 0.4. The v0.4.0 tag was never published.
 
 ## [0.3.1] - 2026-10-28
 
+### Highlights
+
+- A machine whose VM needs no configuration change is started, where it was reported ready with its VM off.
+- A transient error while attaching the bootstrap ISO is retried instead of failing the machine.
+
+### Changed
+
 - capmox, which creates the clusters' VMs, is built from a later commit of its main branch.
-- A machine whose VM needs no configuration change is started instead of being reported ready while its VM stays off. A transient error while attaching the bootstrap ISO is retried instead of failing the machine for good.
-- The installer names the address of a download that still fails after its retries, where curl's own message gives only the HTTP status.
+- The installer names the address of a download that still fails after its retries, where curl gives only the HTTP status.
+
+### Fixed
+
+- A machine whose VM needs no configuration change is started instead of being reported ready while its VM stays off.
+- A transient error while attaching the bootstrap ISO is retried instead of failing the machine for good.
 
 ## [0.3.0] - 2026-10-27
 
