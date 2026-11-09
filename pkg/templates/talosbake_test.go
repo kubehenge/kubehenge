@@ -42,13 +42,14 @@ type schematicExtensions struct {
 	OfficialExtensions []string `json:"officialExtensions"`
 }
 
-type schematicCustomization struct {
+type schematicCustomisation struct {
 	SystemExtensions schematicExtensions `json:"systemExtensions"`
 }
 
 // schematicFile is the part of a schematic the extensions check reads.
 type schematicFile struct {
-	Customization schematicCustomization `json:"customization"`
+	// The Image Factory's own key.
+	Customisation schematicCustomisation `json:"customization"` // spellchecker:disable-line
 }
 
 type profileExtension struct {
@@ -80,7 +81,7 @@ func TestTalosProfileAndSchematicCarryTheSameExtensions(t *testing.T) {
 		baked = append(baked, repository)
 	}
 	want := []string{"siderolabs/qemu-guest-agent"}
-	if got := schematic.Customization.SystemExtensions.OfficialExtensions; !slices.Equal(got, want) {
+	if got := schematic.Customisation.SystemExtensions.OfficialExtensions; !slices.Equal(got, want) {
 		t.Errorf("the schematic holds %v, want %v", got, want)
 	}
 	if !slices.Equal(baked, want) {
