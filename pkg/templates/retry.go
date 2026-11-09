@@ -45,6 +45,11 @@ func TransientStatus(code int) bool {
 // further one. A Transient error it gives up on comes back without the mark, so that an outer
 // Retrying does not try the whole read again.
 func Retrying(ctx context.Context, attempts int, first time.Duration, try func() error) error {
+	return retryingOn(ctx, realClock{}, attempts, first, try)
+}
+
+// retryingOn is Retrying with waits taken on c.
+func retryingOn(ctx context.Context, c clock, attempts int, first time.Duration, try func() error) error {
 	wait := first
 	for attempt := 1; ; attempt++ {
 		err := try()
@@ -55,14 +60,32 @@ func Retrying(ctx context.Context, attempts int, first time.Duration, try func()
 		if attempt >= attempts || ctx.Err() != nil {
 			return mark.err
 		}
-		t := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			t.Stop()
+		if c.sleep(ctx, wait) != nil {
 			return mark.err
-		case <-t.C:
 		}
 		wait *= 2
+	}
+}
+
+// clock is where the time and the waits of a fetch come from, so that a test waits an hour without
+// taking one. sleep returns ctx's error when ctx ends first.
+type clock interface {
+	now() time.Time
+	sleep(ctx context.Context, d time.Duration) error
+}
+
+type realClock struct{}
+
+func (realClock) now() time.Time { return time.Now() }
+
+func (realClock) sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("waiting: %w", ctx.Err())
+	case <-t.C:
+		return nil
 	}
 }
 

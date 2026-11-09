@@ -154,7 +154,8 @@ jobs:
       matrix:
         template: ${{ fromJSON(needs.templates.outputs.missing) }}
     runs-on: ubuntu-26.04
-    # A build can wait an hour for a publisher's cache (signedPairBudget in pkg/templates/sources.go).
+    # A build can wait an hour for a publisher's cache
+    # (signedPairBudget in pkg/templates/sources.go).
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -2,7 +2,6 @@ package templates
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -73,13 +72,8 @@ type Sources struct {
 	// Mirrors serve a publisher's files from another place, by the publisher's address
 	// (https://host). A test points them at its own server.
 	Mirrors map[string]string
-	// retryWait replaces sourcesFirstWait and signedPairFirstWait, so that a test retries without
-	// waiting.
-	retryWait time.Duration
-	// now and sleep replace the clock for signedPair, so that a test waits an hour without taking
-	// one. sleep returns early with ctx's error when ctx ends.
-	now   func() time.Time
-	sleep func(ctx context.Context, d time.Duration) error
+	// clock is the time and waits of every retry. The real clock when nil.
+	clock clock
 }
 
 type logKey struct{}
@@ -218,6 +212,20 @@ func (s *Sources) at(address string) string {
 	return address
 }
 
+func (s *Sources) now() time.Time {
+	if s.clock == nil {
+		return realClock{}.now()
+	}
+	return s.clock.now()
+}
+
+func (s *Sources) sleep(ctx context.Context, d time.Duration) error {
+	if s.clock == nil {
+		return realClock{}.sleep(ctx, d)
+	}
+	return s.clock.sleep(ctx, d)
+}
+
 func (s *Sources) get(ctx context.Context, address string) ([]byte, error) {
 	return s.do(ctx, http.MethodGet, s.at(address), nil)
 }
@@ -244,33 +252,12 @@ func (s *Sources) signedImage(ctx context.Context, signer signingKey, imageURL, 
 	}, nil
 }
 
-func (s *Sources) clock() time.Time {
-	if s.now != nil {
-		return s.now()
-	}
-	return time.Now()
-}
-
-func (s *Sources) pause(ctx context.Context, d time.Duration) error {
-	if s.sleep != nil {
-		return s.sleep(ctx, d)
-	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("waiting for the publisher's cache: %w", ctx.Err())
-	case <-timer.C:
-		return nil
-	}
-}
-
 // signedPair returns a checksum file whose signature verifies. Both files are fetched again together
 // while they disagree, because a cache can hand out one new file beside the other's old copy. A
 // pair that still disagrees once signedPairBudget is spent fails, so nothing unverified is used.
 func (s *Sources) signedPair(ctx context.Context, signer signingKey, sumsURL, sigURL string) ([]byte, error) {
-	wait := cmp.Or(s.retryWait, signedPairFirstWait)
-	deadline := s.clock().Add(signedPairBudget)
+	wait := signedPairFirstWait
+	deadline := s.now().Add(signedPairBudget)
 	for fetches := 1; ; fetches++ {
 		sums, err := s.get(ctx, sumsURL)
 		if err != nil {
@@ -287,7 +274,7 @@ func (s *Sources) signedPair(ctx context.Context, signer signingKey, sumsURL, si
 		if _, ok := errors.AsType[notSignedError](err); !ok {
 			return nil, fmt.Errorf("%s: %w", sumsURL, err)
 		}
-		remaining := deadline.Sub(s.clock())
+		remaining := deadline.Sub(s.now())
 		if remaining <= 0 {
 			return nil, lasting(fmt.Errorf("%s and %s: the publisher's checksum and signature disagree after %d fetches: %w",
 				sumsURL, sigURL, fetches, err))
@@ -295,9 +282,9 @@ func (s *Sources) signedPair(ctx context.Context, signer signingKey, sumsURL, si
 		// The last wait ends on the deadline, so the budget is spent on a final fetch and not left over.
 		wait = min(wait, remaining)
 		logFrom(ctx)("%s and %s do not match yet, as the publisher's cache still holds an old copy. Trying again at %s",
-			sumsURL, sigURL, s.clock().Add(wait).Format(time.TimeOnly))
-		if err := s.pause(ctx, wait); err != nil {
-			return nil, fmt.Errorf("%s and %s: %w", sumsURL, sigURL, err)
+			sumsURL, sigURL, s.now().Add(wait).Format(time.TimeOnly))
+		if err := s.sleep(ctx, wait); err != nil {
+			return nil, fmt.Errorf("%s and %s: waiting for the publisher's cache: %w", sumsURL, sigURL, err)
 		}
 		wait = min(wait*waitFactor, signedPairMaxWait)
 	}
@@ -386,12 +373,8 @@ func fingerprint(e *openpgp.Entity) string {
 // do sends a request, again after a failure that may pass: no answer, a broken answer, a 5xx, a 429
 // or a 408. Every request it sends may be repeated, as the schematic's ID is its content.
 func (s *Sources) do(ctx context.Context, method, address string, body []byte) ([]byte, error) {
-	wait := s.retryWait
-	if wait == 0 {
-		wait = sourcesFirstWait
-	}
 	var data []byte
-	err := Retrying(ctx, sourcesAttempts, wait, func() error {
+	err := retryingOn(ctx, s, sourcesAttempts, sourcesFirstWait, func() error {
 		var err error
 		data, err = s.once(ctx, method, address, body)
 		return err

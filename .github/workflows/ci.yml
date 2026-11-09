@@ -81,7 +81,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-      # Sidero's images the Talos pins name, by their content and signature. The registry reads are anonymous.
+      # Sidero's images the Talos pins name, by their content and signature.
+      # The registry reads are anonymous.
       - run: make verify-talos-pins
       - if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

@@ -75,7 +75,7 @@ func fakePublishers(t *testing.T) (*Sources, map[string][]byte) {
 	for _, publisher := range []string{"https://repo.almalinux.org", "https://dl.rockylinux.org", "https://download.opensuse.org", "https://pkgs.k8s.io"} {
 		mirrors[publisher] = srv.URL
 	}
-	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, Mirrors: mirrors, retryWait: time.Millisecond}, files
+	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, Mirrors: mirrors, clock: &pairClock{at: pairStart}}, files
 }
 
 // The pins are the releases on offer, read with no request: the factory here fails every one.
@@ -248,7 +248,7 @@ func almaPairPublisher(t *testing.T, staleSigs int32) (*Sources, *atomic.Int32, 
 		}
 	}))
 	t.Cleanup(srv.Close)
-	s := &Sources{HTTP: srv.Client(), Mirrors: map[string]string{"https://repo.almalinux.org": srv.URL}, retryWait: time.Millisecond}
+	s := &Sources{HTTP: srv.Client(), Mirrors: map[string]string{"https://repo.almalinux.org": srv.URL}, clock: &pairClock{at: pairStart}}
 	return s, &sumsFetches, &sigFetches
 }
 
@@ -260,29 +260,51 @@ func resolveAlmaForPairWith(ctx context.Context, s *Sources) (Resolved, error) {
 	return almaLinux{}.Image(ctx, s, Release{Name: "10", Build: "10.2-20261012.0", Mode: ImageMode})
 }
 
+var pairStart = time.Date(2026, 11, 9, 11, 50, 56, 0, time.UTC)
+
 // pairClock is a clock a test moves by the waits it is asked for, so that an hour passes in no time.
+// A build that never stops waiting is cut off after 200 waits, so that a test of it fails instead of
+// hanging.
 type pairClock struct {
 	at    time.Time
 	waits []time.Duration
 }
 
-// use makes s wait on the clock. A build that never stops waiting is cut off after 200 waits, so
-// that a test of it fails instead of hanging.
-func (c *pairClock) use(s *Sources) {
-	c.at = time.Date(2026, 11, 9, 11, 50, 56, 0, time.UTC)
-	s.retryWait = 0
-	s.now = func() time.Time { return c.at }
-	s.sleep = func(ctx context.Context, d time.Duration) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if len(c.waits) >= 200 {
-			return errors.New("still waiting after 200 waits")
-		}
-		c.waits = append(c.waits, d)
-		c.at = c.at.Add(d)
-		return nil
+func (c *pairClock) now() time.Time { return c.at }
+
+func (c *pairClock) sleep(ctx context.Context, d time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	if len(c.waits) >= 200 {
+		return errors.New("still waiting after 200 waits")
+	}
+	c.waits = append(c.waits, d)
+	c.at = c.at.Add(d)
+	return nil
+}
+
+// use makes s wait on the clock.
+func (c *pairClock) use(s *Sources) {
+	c.at = pairStart
+	s.clock = c
+}
+
+// cancelClock cancels its context at the second reading of the time, which is the one after the
+// first mismatch.
+type cancelClock struct {
+	pairClock
+
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (c *cancelClock) now() time.Time {
+	c.reads++
+	if c.reads == 2 {
+		c.cancel()
+	}
+	return pairStart
 }
 
 // Fails a build that gives up at the first mismatch, or fetches only the signature again.
@@ -370,20 +392,14 @@ func TestACancelledContextEndsThePairWaitAtOnce(t *testing.T) {
 	s, _, _ := almaPairPublisher(t, 1<<30)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	calls := 0
-	s.retryWait = 0
-	s.now = func() time.Time {
-		// The second reading is the one after the first mismatch.
-		calls++
-		if calls == 2 {
-			cancel()
-		}
-		return time.Date(2026, 11, 9, 11, 50, 56, 0, time.UTC)
-	}
+	s.clock = &cancelClock{cancel: cancel}
 	started := time.Now()
 	_, err := resolveAlmaForPairWith(ctx, s)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error %v, want the context's", err)
+	}
+	if !strings.Contains(err.Error(), "waiting for the publisher's cache") {
+		t.Errorf("error %q is not the wait's, so the wait ignored the context", err)
 	}
 	if took := time.Since(started); took > 5*time.Second {
 		t.Errorf("took %s, want the wait to end at once", took)
@@ -551,7 +567,7 @@ func failingPublisher(t *testing.T, failures int32, status int) (*Sources, *atom
 		_, _ = io.Copy(w, r.Body)
 	}))
 	t.Cleanup(srv.Close)
-	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, retryWait: time.Millisecond}, &requests
+	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, clock: &pairClock{at: pairStart}}, &requests
 }
 
 func TestSourcesRetryFromTwoSecondsInFourTries(t *testing.T) {
@@ -617,7 +633,7 @@ func TestADroppedConnectionIsTriedAgain(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	}))
 	t.Cleanup(srv.Close)
-	s := &Sources{HTTP: srv.Client(), retryWait: time.Millisecond}
+	s := &Sources{HTTP: srv.Client(), clock: &pairClock{at: pairStart}}
 	body, err := s.do(context.Background(), http.MethodGet, srv.URL, nil)
 	if err != nil || string(body) != "ok" {
 		t.Errorf("got %q, %v after a dropped connection, want ok", body, err)
@@ -637,7 +653,8 @@ func TestACancelledBuildStopsRetrying(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
-	s := &Sources{HTTP: srv.Client(), retryWait: time.Hour}
+	clock := &pairClock{at: pairStart}
+	s := &Sources{HTTP: srv.Client(), clock: clock}
 	done := make(chan error, 1)
 	go func() {
 		_, err := s.do(ctx, http.MethodGet, srv.URL, nil)
@@ -648,5 +665,8 @@ func TestACancelledBuildStopsRetrying(t *testing.T) {
 	}
 	if got := requests.Load(); got != 1 {
 		t.Errorf("%d requests, want 1", got)
+	}
+	if len(clock.waits) != 0 {
+		t.Errorf("waited %v after the build was cancelled", clock.waits)
 	}
 }
