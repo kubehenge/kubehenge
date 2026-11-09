@@ -15,7 +15,7 @@ Kubehenge creates, scales, upgrades and deletes Kubernetes clusters on Proxmox V
 | `web/` | the interface's frontend, React and TypeScript, built by `make web` into `pkg/ui/dist` and embedded in the binary |
 | `appliance/` | the appliance's install script and service units. `appliance/pve-entry/` is the optional entry in Proxmox VE's own interface |
 | `test/integration/`, `test/e2e/` | the integration tier's assets and the API server it runs, with Cluster API's webhooks where a test asks. The end-to-end tests run against a Proxmox VE host |
-| `scripts/` | the pinned tools `make test` needs, Go and Node among them (`tools.sh`), and the Python linters' lock file (`lint/`). The pinned ko every image build runs (`ko.sh`). The image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`). The check of the Talos providers from Kubehenge's forks (`verify-providers.sh`) |
+| `scripts/` | the pinned tools `make test` needs, Go and Node among them (`tools.sh`), and the Python linters' lock file (`lint/`). The mirror of the module's OpenTofu providers that every `tofu` installs from (`providers.sh`). The pinned ko every image build runs (`ko.sh`). The image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`). The check of the Talos providers from Kubehenge's forks (`verify-providers.sh`) |
 | `.github/` | CI on every pull request, fuzzing, the release workflows, issue templates, this guide and the security policy (`SECURITY.md`) |
 
 ## Working on it

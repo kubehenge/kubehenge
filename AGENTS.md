@@ -15,7 +15,7 @@ The engineering rules are in `.github/CONTRIBUTING.md` and apply in full. Read i
 | `appliance/` | the LXC appliance's install script and units |
 | `appliance/pve-entry/` | the opt-in Proxmox VE interface entry |
 | `test/integration/`, `test/e2e/` | integration assets and the API server harness with Cluster API's webhooks. End-to-end tests against a Proxmox VE host |
-| `scripts/` | the pinned tools (`tools.sh`). The download helper for build, CI and test code, which falls back to GitHub's API when its release address fails (`fetch.sh`). The pinned ko every image build runs (`ko.sh`). The image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`). The check of the Talos providers from Kubehenge's forks (`verify-providers.sh`) |
+| `scripts/` | the pinned tools (`tools.sh`). The download helper for build, CI and test code, which falls back to GitHub's API when its release address fails (`fetch.sh`). The mirror of the module's OpenTofu providers that every `tofu` installs from (`providers.sh`). The pinned ko every image build runs (`ko.sh`). The image builds of capmox and the Add-on Provider for Helm (`provider-image.sh`) and the fixes they carry (`capmox-patches/`, `helm-addon-patches/`). The check of the Talos providers from Kubehenge's forks (`verify-providers.sh`) |
 | `docs/` | user guides, architecture, templates, testing, releasing, roadmap, changelog |
 | `website/` | kubehenge.dev: `docs/` with a home page, built with VitePress and published from main |
 

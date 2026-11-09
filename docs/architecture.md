@@ -1197,7 +1197,7 @@ One Terraform/OpenTofu apply, or the appliance, creates a small management clust
 
 The appliance (`appliance/install.sh`) checks everything it downloads against checksums it carries. It creates an unprivileged Debian container with a certificate from the Proxmox VE cluster's own CA. The interface runs as an unprivileged user on ports 443 and 8443 (the shared Headlamp).
 
-Its first-run page runs the `management-cluster/` module with OpenTofu on the administrator's session, whose ticket and CSRF token reach OpenTofu through its environment only. The state is encrypted with a key derived from a passphrase nothing stores. Every later apply asks for it again, unless automatic upgrades of the management cluster are on ([Upgrades](#upgrades)).
+Its first-run page runs the `management-cluster/` module with OpenTofu on the administrator's session, whose ticket and CSRF token reach OpenTofu through its environment only. OpenTofu installs the module's providers from the release archive alone, checked against the module's lock file. The state is encrypted with a key derived from a passphrase nothing stores. Every later apply asks for it again, unless automatic upgrades of the management cluster are on ([Upgrades](#upgrades)).
 
 The management cluster's admin kubeconfig and talosconfig stay inside that state. An administrator can open the state with the passphrase on the Administration page, and every download is logged.
 

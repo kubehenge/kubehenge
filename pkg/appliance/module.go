@@ -277,23 +277,34 @@ func tokenAuth(token string) []string {
 	return []string{"PROXMOX_VE_API_TOKEN=" + token}
 }
 
+// cliConfig has OpenTofu install providers from the release's own copies alone (make dist), which
+// init checks against the module's lock file. An apply then downloads no provider, so it works on a
+// closed network and while GitHub turns away anonymous downloads.
+const cliConfig = `# Written by Kubehenge's appliance; changes are overwritten.
+provider_installation {
+  filesystem_mirror {
+    path    = %q
+    include = ["registry.opentofu.org/*/*"]
+  }
+}
+`
+
+// providers is the release's directory of the module's providers, beside the module.
+func (a *Appliance) providers() string { return filepath.Join(filepath.Dir(a.Module), "providers") }
+
 // env is all OpenTofu gets: nothing of the appliance's own environment beyond the path and any
 // proxy, so no other credential reaches it.
 func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
-	cache := filepath.Join(a.Dir, "plugins")
-	if err := os.MkdirAll(cache, privateDir); err != nil {
-		return nil, fmt.Errorf("preparing OpenTofu's plugin cache: %w", err)
+	config := filepath.Join(a.Dir, "tofu.tfrc")
+	if err := writeFileAtomic(config, fmt.Appendf(nil, cliConfig, filepath.ToSlash(a.providers()))); err != nil {
+		return nil, fmt.Errorf("writing OpenTofu's configuration: %w", err)
 	}
 	env := []string{
 		"PATH=/usr/local/bin:/usr/bin:/bin",
 		"HOME=" + a.Dir,
 		"TF_IN_AUTOMATION=1",
 		"TF_INPUT=0",
-		"TF_PLUGIN_CACHE_DIR=" + cache,
-		// More tries than OpenTofu's own, which spells of 504s from GitHub's release downloads
-		// outlast. Each backs off longer, about two minutes in all.
-		"TF_PROVIDER_DOWNLOAD_RETRY=8",
-		"TF_REGISTRY_DISCOVERY_RETRY=8",
+		"TF_CLI_CONFIG_FILE=" + config,
 		"TF_ENCRYPTION=" + encryption(passphrase),
 	}
 	env = append(env, auth...)
