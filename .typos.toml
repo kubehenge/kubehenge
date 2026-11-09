@@ -49,6 +49,8 @@ extend-ignore-re = [
   "color-scheme|colorScheme|--force-color-profile|-no-color\\b|color-contrast(-enhanced)?",
   # fontTools' pyftsubset flag for the output format.
   "--flavor=",
+  # cosign's command that fetches Sigstore's trust root, and a test stub's case for it.
+  "(?m)cosign initialize|^\\s*initialize\\)",
 ]
 
 [default.extend-words]

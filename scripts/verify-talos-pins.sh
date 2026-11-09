@@ -47,8 +47,8 @@ while read -r release imager installer extensions agent; do
 done < "${work}/talos" > "${work}/jobs"
 
 tuf=$(mktemp -d "${work}/tuf.XXXXXX")
-TUF_ROOT=${tuf} cosign initialize > "${work}/initialize.log" 2>&1 || {
-    cat "${work}/initialize.log" >&2
+TUF_ROOT=${tuf} cosign initialize > "${work}/trust-root.log" 2>&1 || {
+    cat "${work}/trust-root.log" >&2
     fail "cosign could not fetch Sigstore's trust root"
 }
 

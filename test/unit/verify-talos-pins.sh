@@ -45,13 +45,13 @@ lacks() {
 }
 
 # The stub appends a line to ${CALLS} for each call. It refuses a verify whose arguments hold
-# ${STUB_REFUSE}, and fails initialize when STUB_INIT_FAIL is set.
+# ${STUB_REFUSE}, and fails the trust root's fetch when STUB_INIT_FAIL is set.
 mkdir "${tmp}/bin"
 cat > "${tmp}/bin/cosign" << 'EOF'
 #!/bin/sh
 case $1 in
     initialize)
-        echo "initialize" >> "${CALLS}"
+        echo "trust-root" >> "${CALLS}"
         if [ -n "${STUB_INIT_FAIL:-}" ]; then
             echo "no route to the TUF root" >&2
             exit 1
@@ -113,7 +113,7 @@ cd "${tmp}"
 
 run "${pins}"
 same "a good run exits 0" 0 "${status}"
-same "one initialize" 1 "$(grep -c '^initialize$' "${tmp}/calls" || true)"
+same "one trust-root fetch" 1 "$(grep -c '^trust-root$' "${tmp}/calls" || true)"
 same "eight verifies, four for each Talos pin" 8 "$(grep -c '^verify ' "${tmp}/calls" || true)"
 lacks "no header word is read as a pin" "imager@to" "${calls}"
 lacks "the RKE2 pin is not verified" "${da}" "${calls}"
@@ -135,9 +135,9 @@ mentions "a refusal names its image and release" "cosign refused installer-base 
 mentions "a refusal prints cosign's log" "no matching signatures" "${out}"
 
 STUB_INIT_FAIL=1 run "${pins}"
-same "a failed initialize exits 1" 1 "${status}"
-mentions "a failed initialize says so" "could not fetch Sigstore's trust root" "${out}"
-lacks "no verify after a failed initialize" "verify " "${calls}"
+same "a failed trust-root fetch exits 1" 1 "${status}"
+mentions "a failed trust-root fetch says so" "could not fetch Sigstore's trust root" "${out}"
+lacks "no verify after a failed trust-root fetch" "verify " "${calls}"
 
 four=${tmp}/four.txt
 write_pins "${four}" "v1.12.1 sha256:${d1} sha256:${d2} sha256:${d3}"
