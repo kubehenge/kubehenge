@@ -2,10 +2,26 @@ package templates
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/siderolabs/talos/pkg/machinery/config"
 )
+
+func TestTalosPinRefs(t *testing.T) {
+	t.Parallel()
+	d := func(c string) string { return "sha256:" + strings.Repeat(c, 64) }
+	pin := TalosPin{Imager: d("a"), InstallerBase: d("b"), Extensions: d("c"), GuestAgent: "11.1.1@" + d("d")}
+	for got, want := range map[string]string{
+		pin.ImagerRef():        "ghcr.io/siderolabs/imager@" + d("a"),
+		pin.InstallerBaseRef(): "ghcr.io/siderolabs/installer-base@" + d("b"),
+		pin.GuestAgentRef():    "ghcr.io/siderolabs/qemu-guest-agent:11.1.1@" + d("d"),
+	} {
+		if got != want {
+			t.Errorf("reference %q, want %q", got, want)
+		}
+	}
+}
 
 func TestTalosContractIsTheReleasesMinor(t *testing.T) {
 	t.Parallel()

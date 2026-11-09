@@ -19,11 +19,24 @@ import (
 var (
 	pinA = strings.Repeat("a", 64)
 	pinB = strings.Repeat("b", 64)
+	// goodImages are the four fields of a Talos line.
+	goodImages = "sha256:" + strings.Repeat("1", 64) + " sha256:" + strings.Repeat("2", 64) + " sha256:" + strings.Repeat("3", 64) + " 11.1.1@sha256:" + strings.Repeat("4", 64)
+	goodTalos  = templates.TalosPin{
+		Imager: "sha256:" + strings.Repeat("1", 64), InstallerBase: "sha256:" + strings.Repeat("2", 64),
+		Extensions: "sha256:" + strings.Repeat("3", 64), GuestAgent: "11.1.1@sha256:" + strings.Repeat("4", 64),
+	}
 )
 
 func TestParseReleasePinsRefusesAMalformedFile(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, file, want string }{
+		{"a Talos version with a leading zero", "v1.10.01 " + goodImages, "line 1"},
+		{"a Talos line of four fields", "v1.10.1 " + strings.Join(strings.Fields(goodImages)[:3], " "), "line 1"},
+		{"an imager without sha256:", "v1.10.1 " + strings.Repeat("1", 64) + " " + strings.Join(strings.Fields(goodImages)[1:], " "), "line 1"},
+		{"an agent without @sha256:", "v1.10.1 " + strings.Join(strings.Fields(goodImages)[:3], " ") + " 11.1.1", "line 1"},
+		{"an agent with a 63-digit digest", "v1.10.1 " + strings.Join(strings.Fields(goodImages)[:3], " ") + " 11.1.1@sha256:" + pinA[:63], "line 1"},
+		{"an RKE2 version with four images", "v1.37.1+rke2r1 " + goodImages, "line 1"},
+		{"a Talos release twice", "v1.10.1 " + goodImages + "\nv1.10.1 " + goodImages, "line 2: v1.10.1 twice"},
 		{"a version of neither distribution", "v1.37.1 " + pinA + " " + pinB, "line 1"},
 		{"a version that would reach a node's shell", "v1.37.1+k3s1;reboot " + pinA + " " + pinB, "line 1"},
 		{"a short checksum", "# header\nv1.37.1+k3s1 " + pinA[:63] + " " + pinB, "line 2"},
@@ -36,7 +49,7 @@ func TestParseReleasePinsRefusesAMalformedFile(t *testing.T) {
 		}
 	}
 	pins, err := ParseReleasePins("# comment\n\nv1.37.1+k3s1 " + pinA + " " + pinB + "\n  v1.36.5+rke2r2 " + pinB + " " + pinA + "  \n")
-	if err != nil || len(pins) != 2 || pins["v1.37.1+k3s1"] != (ReleasePin{pinA, pinB}) || pins["v1.36.5+rke2r2"] != (ReleasePin{pinB, pinA}) {
+	if err != nil || len(pins) != 2 || pins["v1.37.1+k3s1"] != (ReleasePin{File: pinA, Script: pinB}) || pins["v1.36.5+rke2r2"] != (ReleasePin{File: pinB, Script: pinA}) {
 		t.Errorf("pins %v, %v", pins, err)
 	}
 }
@@ -46,18 +59,25 @@ func TestParseReleasePinsRefusesAMalformedFile(t *testing.T) {
 func TestTheEmbeddedPinsHoldTheNewestReleases(t *testing.T) {
 	t.Parallel()
 	pins := DefaultReleasePins()
-	newest := regexp.MustCompile(`(?m)^# (rke2|k3s) = (\S+)$`).FindAllStringSubmatch(releasePinsFile, -1)
-	if len(newest) != 2 {
-		t.Fatalf("the header names %d newest releases, want rke2's and k3s's", len(newest))
+	newest := regexp.MustCompile(`(?m)^# (rke2|k3s|talos) = (\S+)$`).FindAllStringSubmatch(releasePinsFile, -1)
+	if len(newest) != 3 {
+		t.Fatalf("the header names %d newest releases, want rke2's, k3s's and talos's", len(newest))
 	}
 	for _, n := range newest {
-		release := distributionReleaseOf(n[2])
+		release := pinnedReleaseOf(n[2])
 		if release == nil || string(release.distribution) != n[1] {
 			t.Errorf("the header's %s = %s is no %s release", n[1], n[2], n[1])
 			continue
 		}
+		if n[1] == "talos" && n[2] != templates.DefaultTalosVersion {
+			t.Errorf("the header's talos %s is not DefaultTalosVersion %s", n[2], templates.DefaultTalosVersion)
+		}
 		if _, ok := pins[n[2]]; !ok {
-			t.Errorf("%s is not pinned: run make release-pins", n[2])
+			name := string(release.distribution)
+			if release == talosRelease {
+				name = "Talos"
+			}
+			t.Errorf("%s %s is not pinned: run make release-pins with GH_TOKEN set", name, n[2])
 		}
 		v, _ := parseKubeVersion(n[2])
 		for m := v.Minor - supportedMinors; m <= v.Minor; m++ {
@@ -74,14 +94,22 @@ func TestTheEmbeddedPinsHoldTheNewestReleases(t *testing.T) {
 func TestReleasePinsFormatSortsByDistributionAndVersion(t *testing.T) {
 	t.Parallel()
 	pins := ReleasePins{
-		"v1.37.1+k3s1":    {pinA, pinB},
-		"v1.36.10+rke2r1": {pinA, pinB},
-		"v1.36.9+rke2r2":  {pinA, pinB},
-		"v1.36.9+rke2r1":  {pinA, pinB},
-		"v1.36.5+k3s1":    {pinB, pinA},
+		"v1.37.1+k3s1":    {File: pinA, Script: pinB},
+		"v1.36.10+rke2r1": {File: pinA, Script: pinB},
+		"v1.36.9+rke2r2":  {File: pinA, Script: pinB},
+		"v1.36.9+rke2r1":  {File: pinA, Script: pinB},
+		"v1.36.5+k3s1":    {File: pinB, Script: pinA},
+		"v1.14.10":        {Talos: goodTalos},
+		"v1.14.9":         {Talos: goodTalos},
+		"v1.10.0":         {Talos: goodTalos},
+		"v1.9.0":          {Talos: goodTalos},
 	}
 	got := pins.Format("# pins\n")
 	want := "# pins\n" +
+		"v1.9.0 " + goodImages + "\n" +
+		"v1.10.0 " + goodImages + "\n" +
+		"v1.14.9 " + goodImages + "\n" +
+		"v1.14.10 " + goodImages + "\n" +
 		"v1.36.9+rke2r1 " + pinA + " " + pinB + "\n" +
 		"v1.36.9+rke2r2 " + pinA + " " + pinB + "\n" +
 		"v1.36.10+rke2r1 " + pinA + " " + pinB + "\n" +
@@ -96,6 +124,15 @@ func TestReleasePinsFormatSortsByDistributionAndVersion(t *testing.T) {
 	}
 	if h := PinsHeader("# a\n# b\nv1.37.1+k3s1 x y\n# c\n"); h != "# a\n# b\n" {
 		t.Errorf("header %q", h)
+	}
+}
+
+func TestReleasePinsTalosHoldsOnlyTalos(t *testing.T) {
+	t.Parallel()
+	pins := ReleasePins{"v1.14.5": {Talos: goodTalos}, "v1.37.1+rke2r1": {File: pinA, Script: pinB}, "v1.37.1+k3s1": {File: pinB, Script: pinA}}
+	got := pins.Talos()
+	if len(got) != 1 || got["v1.14.5"] != goodTalos {
+		t.Errorf("Talos() = %v", got)
 	}
 }
 
@@ -181,7 +218,7 @@ func TestReleasePinnerPinsTheNewMinorsReleasesOnce(t *testing.T) {
 	srv := httptest.NewServer(api)
 	defer srv.Close()
 	p := &ReleasePinner{HTTP: srv.Client(), API: srv.URL, Token: "t", Checksums: &ReleaseChecksums{HTTP: srv.Client(), GitHub: srv.URL, Raw: srv.URL}}
-	kept := ReleasePin{pinA, pinB}
+	kept := ReleasePin{File: pinA, Script: pinB}
 	pins := ReleasePins{"v1.37.1+k3s1": kept}
 	added, err := p.Pin(context.Background(), pins)
 	if err != nil {
@@ -203,6 +240,61 @@ func TestReleasePinnerPinsTheNewMinorsReleasesOnce(t *testing.T) {
 	if _, err := p.Pin(context.Background(), ReleasePins{}); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("a refused API read: %v", err)
 	}
+}
+
+// A listing GitHub refuses ends the run, and what was pinned before it comes back all the same.
+func TestPinReturnsWhatItAddedBeforeAListingError(t *testing.T) {
+	t.Parallel()
+	f := &fakeReleases{files: map[string]string{}}
+	maps.Copy(f.files, releaseFiles(rke2Release, "v1.37.1+rke2r1", rke2Listing))
+	api := &githubAPI{files: f, token: "t", releases: map[string][]githubRelease{"rancher/rke2": {tag("v1.37.1+rke2r1")}}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "siderolabs/talos") {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
+		api.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	p := &ReleasePinner{HTTP: srv.Client(), API: srv.URL, Token: "t", Checksums: &ReleaseChecksums{HTTP: srv.Client(), GitHub: srv.URL, Raw: srv.URL}}
+	pins := ReleasePins{}
+	added, err := p.Pin(context.Background(), pins)
+	if err == nil || !strings.Contains(err.Error(), "500") || !slices.Equal(added, []string{"v1.37.1+rke2r1"}) {
+		t.Errorf("Pin = %v, %v, want the RKE2 release and GitHub's 500", added, err)
+	}
+	if _, ok := pins["v1.37.1+rke2r1"]; !ok {
+		t.Error("the pin added before the error was dropped")
+	}
+}
+
+// A Talos tag with a leading zero is no release, however the listing names it. Pin, pinnedMinors and
+// newest each say so, and offered takes newest's answer.
+func TestTalosVersionsWithALeadingZeroAreNoRelease(t *testing.T) {
+	t.Parallel()
+	t.Run("Pin skips the tag", func(t *testing.T) {
+		t.Parallel()
+		r := newFakeSidero()
+		r.add("v1.14.6", releaseSpec{})
+		p := r.start(t, talosListing("v1.14.6", "v1.10.01"))
+		added, err := p.Pin(context.Background(), ReleasePins{})
+		if err != nil || !slices.Equal(added, []string{"v1.14.6"}) {
+			t.Errorf("Pin = %v, %v, want only v1.14.6", added, err)
+		}
+	})
+	t.Run("pinnedMinors does not count it as the newest", func(t *testing.T) {
+		t.Parallel()
+		minors := pinnedMinors(talosRelease, []string{"v1.99.01", "v1.14.6"})
+		if minors[99] || !minors[14] {
+			t.Errorf("minors %v, want 14 and the four before it, not 99", minors)
+		}
+	})
+	// offered lists a minor only when newest finds a release in it, so newest's rule is its rule.
+	t.Run("newest does not find it", func(t *testing.T) {
+		t.Parallel()
+		if v, ok := (ReleasePins{"v1.10.01": {}}).newest(talosRelease, 10); ok {
+			t.Errorf("newest found %s", v.Raw)
+		}
+	})
 }
 
 func TestChannelsOfferOnlyPinnedReleases(t *testing.T) {

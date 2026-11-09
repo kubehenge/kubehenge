@@ -93,7 +93,7 @@ request. kubehenge.service runs it so before the interface starts.`,
 func newReleaseCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "release",
-		Short: "Pin RKE2 and k3s releases, and make release keys and indexes",
+		Short: "Pin RKE2, k3s and Talos releases, and make release keys and indexes",
 	}
 	keys := release.PublicKeys()
 	cmd.AddCommand(newReleasePinCommand(), newReleaseUnpinCommand(), newKeygenCommand(), newSignCommand(keys), newIndexCommand(keys), newRenewCommand(keys), newPinsCommand())
@@ -105,16 +105,24 @@ const pinsTimeout = 30 * time.Minute
 
 // pinsSources are where pinning reads releases: GitHub's API, its release downloads and its raw
 // files. Tests point them at a server of their own.
-var pinsSources = struct{ api, github, raw string }{"https://api.github.com", "https://github.com", "https://raw.githubusercontent.com"}
+var pinsSources = struct{ api, github, raw, registry string }{
+	api: "https://api.github.com", github: "https://github.com", raw: "https://raw.githubusercontent.com", registry: "https://ghcr.io",
+}
 
 func newPinsCommand() *cobra.Command {
-	return &cobra.Command{
+	var check bool
+	cmd := &cobra.Command{
 		Use:   "pins <releasepins.txt>",
-		Short: "Pin the RKE2 and k3s releases a pins file lacks",
-		Long: `Add to a pins file (pkg/provisioner/releasepins.txt) every RKE2 and k3s release it lacks, for each
-minor version a new cluster may start on and the one before. A pin is the SHA-256 of the release's
-checksum file and of its install script, as they are now. A pin already there never changes. With
-GH_TOKEN set, it reads GitHub's API at a higher rate limit.`,
+		Short: "Pin the RKE2, k3s and Talos releases a pins file lacks, or check its Talos pins' content",
+		Long: `Add to a pins file (pkg/provisioner/releasepins.txt) every RKE2, k3s and Talos release it lacks,
+for each minor version a new cluster may start on and the one before. An RKE2 or k3s pin is the
+SHA-256 of the release's checksum file and of its install script, as they are now. A Talos pin is
+the digests of Sidero's imager, installer base and extensions image and of the QEMU guest agent. A
+pin already there never changes. With GH_TOKEN set, it reads GitHub's API at a higher rate limit.
+
+--check reads each Talos pin by its digests and checks that its images name its release. It checks
+no signature: make verify-talos-pins runs this check and scripts/verify-talos-pins.sh, which checks
+Sidero's signatures.`,
 		Args: argsSay(cobra.ExactArgs(1), "give the pins file"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			raw, err := os.ReadFile(args[0])
@@ -126,12 +134,22 @@ GH_TOKEN set, it reads GitHub's API at a higher rate limit.`,
 				return err //nolint:wrapcheck // names the file's line
 			}
 			client := &http.Client{Timeout: time.Minute}
-			pinner := &provisioner.ReleasePinner{
-				HTTP: client, API: pinsSources.api, Token: os.Getenv("GH_TOKEN"),
-				Checksums: &provisioner.ReleaseChecksums{HTTP: client, GitHub: pinsSources.github, Raw: pinsSources.raw},
-			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), pinsTimeout)
 			defer cancel()
+			if check {
+				pinner := &provisioner.ReleasePinner{HTTP: client, Registry: pinsSources.registry}
+				if err = pinner.CheckTalos(ctx, pins); err != nil {
+					return err //nolint:wrapcheck // names the release and the image
+				}
+				if _, err = fmt.Fprintf(cmd.OutOrStdout(), "checked %d Talos pins by digest\n", len(pins.Talos())); err != nil {
+					return fmt.Errorf("printing: %w", err)
+				}
+				return nil
+			}
+			pinner := &provisioner.ReleasePinner{
+				HTTP: client, API: pinsSources.api, Token: os.Getenv("GH_TOKEN"), Registry: pinsSources.registry,
+				Checksums: &provisioner.ReleaseChecksums{HTTP: client, GitHub: pinsSources.github, Raw: pinsSources.raw},
+			}
 			added, err := pinner.Pin(ctx, pins)
 			// What was pinned before an error is kept: a pin never changes, so the next run goes on from it.
 			if writeErr := os.WriteFile(args[0], []byte(pins.Format(provisioner.PinsHeader(string(raw)))), signatureMode); writeErr != nil { //nolint:gosec // a public list
@@ -145,6 +163,8 @@ GH_TOKEN set, it reads GitHub's API at a higher rate limit.`,
 			return err //nolint:wrapcheck // names the release and the address
 		},
 	}
+	cmd.Flags().BoolVar(&check, "check", false, "check the Talos pins by their digests, and write nothing")
+	return cmd
 }
 
 func newKeygenCommand() *cobra.Command {

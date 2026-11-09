@@ -65,7 +65,7 @@ type Sources struct {
 	HTTP            *http.Client
 	TalosFactoryURL string
 	// Mirrors serve a publisher's files from another place, by the publisher's address
-	// (https://host); a test points them at its own server.
+	// (https://host). A test points them at its own server.
 	Mirrors map[string]string
 	// retryWait replaces sourcesFirstWait and signedPairFirstWait, so that a test retries without
 	// waiting.
@@ -360,49 +360,55 @@ func fingerprint(e *openpgp.Entity) string {
 	return strings.ToUpper(hex.EncodeToString(e.PrimaryKey.Fingerprint))
 }
 
-// do sends a request, again after a failure that may pass: no answer, a broken answer, a 5xx or a
-// 429. Every request it sends may be repeated, as the schematic's ID is its content.
+// do sends a request, again after a failure that may pass: no answer, a broken answer, a 5xx, a 429
+// or a 408. Every request it sends may be repeated, as the schematic's ID is its content.
 func (s *Sources) do(ctx context.Context, method, address string, body []byte) ([]byte, error) {
 	wait := s.retryWait
 	if wait == 0 {
 		wait = sourcesFirstWait
 	}
-	for attempt := 1; ; attempt++ {
-		data, passing, err := s.once(ctx, method, address, body)
-		if err == nil || !passing || attempt == sourcesAttempts {
-			return data, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, err
-		case <-time.After(wait):
-		}
-		wait *= 2
-	}
+	var data []byte
+	err := Retrying(ctx, sourcesAttempts, wait, func() error {
+		var err error
+		data, err = s.once(ctx, method, address, body)
+		return err
+	})
+	return data, err
 }
 
-// once sends a request once and says whether its failure may pass.
-func (s *Sources) once(ctx context.Context, method, address string, body []byte) ([]byte, bool, error) {
+// once sends a request once. A failure that may pass is marked Transient.
+func (s *Sources) once(ctx context.Context, method, address string, body []byte) ([]byte, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, address, reader)
 	if err != nil {
-		return nil, false, fmt.Errorf("%s %s: %w", method, address, err)
+		return nil, fmt.Errorf("%s %s: %w", method, address, err)
 	}
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
-		return nil, ctx.Err() == nil, fmt.Errorf("%s %s: %w", method, address, err)
+		return nil, passing(ctx, fmt.Errorf("%s %s: %w", method, address, err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return nil, ctx.Err() == nil, fmt.Errorf("%s %s: reading the answer: %w", method, address, err)
+		return nil, passing(ctx, fmt.Errorf("%s %s: reading the answer: %w", method, address, err))
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		passing := resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests
-		return nil, passing, fmt.Errorf("%s %s: %s", method, address, resp.Status)
+		err = fmt.Errorf("%s %s: %s", method, address, resp.Status)
+		if TransientStatus(resp.StatusCode) {
+			err = Transient(err)
+		}
+		return nil, err
 	}
-	return data, false, nil
+	return data, nil
+}
+
+// passing marks err Transient unless the caller's context has ended, which no retry helps with.
+func passing(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	return Transient(err)
 }

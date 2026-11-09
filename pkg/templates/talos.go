@@ -14,6 +14,23 @@ import (
 // which Kubehenge offers Talos clusters as the stable one.
 var TalosDefaultKubernetes = "v" + constants.DefaultKubernetesVersion
 
+// TalosPin is the images of one Talos release, each by its digest, as Kubehenge captured them
+// once. Imager, InstallerBase and Extensions are "sha256:<64 hex>", GuestAgent "<tag>@sha256:<64 hex>".
+type TalosPin struct{ Imager, InstallerBase, Extensions, GuestAgent string }
+
+// ImagerRef is Sidero's imager image, which also holds the kernel and initramfs.
+func (p TalosPin) ImagerRef() string { return "ghcr.io/siderolabs/imager@" + p.Imager }
+
+// InstallerBaseRef is the base image of the installer.
+func (p TalosPin) InstallerBaseRef() string {
+	return "ghcr.io/siderolabs/installer-base@" + p.InstallerBase
+}
+
+// GuestAgentRef is the QEMU guest agent's extension image.
+func (p TalosPin) GuestAgentRef() string {
+	return "ghcr.io/siderolabs/qemu-guest-agent:" + p.GuestAgent
+}
+
 // TalosMinor is a Talos release's minor version, such as 14 for v1.14.4.
 func TalosMinor(version string) (int, error) {
 	if !versionRE.MatchString(version) {

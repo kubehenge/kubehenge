@@ -56,6 +56,87 @@ func TestRetry(t *testing.T) {
 	}
 }
 
+func TestRetryingTriesOnlyTransientFailures(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("cause")
+	t.Run("transient twice, then fine", func(t *testing.T) {
+		t.Parallel()
+		runs := 0
+		err := Retrying(t.Context(), 4, time.Millisecond, func() error {
+			runs++
+			if runs < 3 {
+				return Transient(cause)
+			}
+			return nil
+		})
+		if err != nil || runs != 3 {
+			t.Errorf("%d runs, %v", runs, err)
+		}
+	})
+	t.Run("a plain error ends it", func(t *testing.T) {
+		t.Parallel()
+		runs := 0
+		err := Retrying(t.Context(), 4, time.Millisecond, func() error { runs++; return cause })
+		if !errors.Is(err, cause) || runs != 1 {
+			t.Errorf("%d runs, %v", runs, err)
+		}
+	})
+	t.Run("the last attempt ends it, unmarked", func(t *testing.T) {
+		t.Parallel()
+		runs := 0
+		err := Retrying(t.Context(), 4, time.Millisecond, func() error { runs++; return Transient(cause) })
+		var mark transientError
+		if runs != 4 || !errors.Is(err, cause) || errors.As(err, &mark) {
+			t.Errorf("%d runs, %v, marked %t", runs, err, errors.As(err, &mark))
+		}
+	})
+	t.Run("a cancelled context stops the wait", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		runs := 0
+		done := make(chan error, 1)
+		go func() {
+			done <- Retrying(ctx, 4, time.Hour, func() error { runs++; return Transient(cause) })
+		}()
+		// The first try has failed and the hour's wait has begun once its context is cancelled here.
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		select {
+		case err := <-done:
+			if runs != 1 || !errors.Is(err, cause) {
+				t.Errorf("%d runs, %v", runs, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the wait ignored its cancelled context")
+		}
+	})
+	t.Run("the mark does not reach an outer Retrying", func(t *testing.T) {
+		t.Parallel()
+		inner, outer := 0, 0
+		_ = Retrying(t.Context(), 3, time.Millisecond, func() error {
+			outer++
+			return Retrying(t.Context(), 4, time.Millisecond, func() error { inner++; return Transient(cause) })
+		})
+		if inner != 4 || outer != 1 {
+			t.Errorf("inner %d, outer %d, want 4 and 1", inner, outer)
+		}
+	})
+	t.Run("the wait doubles from the first", func(t *testing.T) {
+		t.Parallel()
+		var stamps []time.Time
+		_ = Retrying(t.Context(), 3, 100*time.Millisecond, func() error { stamps = append(stamps, time.Now()); return Transient(cause) })
+		if len(stamps) != 3 {
+			t.Fatalf("%d tries, want 3", len(stamps))
+		}
+		// Each gap from both sides, with room for a busy machine: 100 ms, then 200 ms, never 400 ms.
+		first, second := stamps[1].Sub(stamps[0]), stamps[2].Sub(stamps[1])
+		if first < 100*time.Millisecond || first > 250*time.Millisecond || second < 200*time.Millisecond || second > 350*time.Millisecond {
+			t.Errorf("waits %v and %v, want about 100ms and 200ms", first, second)
+		}
+	})
+}
+
 // A run cut off while waiting stops at once.
 func TestRetryStopsWithItsContext(t *testing.T) {
 	t.Parallel()
