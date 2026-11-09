@@ -235,7 +235,7 @@ section_refused marker '## [0.4.2] - 2026-11-05
 
 ### Highlights
 
-<!-- Write three to five highlights here as bullets, then delete this line. -->
+<!-- Write one to five highlights here as bullets, then delete this line. -->
 
 ### Fixed
 
@@ -311,7 +311,7 @@ same 'fold: section in order' '## [0.5.0] - 2026-11-07
 
 ### Highlights
 
-<!-- Write three to five highlights here as bullets, then delete this line. -->
+<!-- Write one to five highlights here as bullets, then delete this line. -->
 
 ### Added
 

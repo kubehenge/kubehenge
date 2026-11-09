@@ -1,6 +1,6 @@
 #!/bin/sh
-# Unit test of scripts/subjects.sh, which refuses a pull request title or commit subject over 72
-# characters. Needs no Proxmox VE.
+# Unit test of scripts/subjects.sh, which refuses a pull request title over 64 characters or a
+# commit subject over 72. Needs no Proxmox VE.
 #
 #   test/unit/subjects.sh
 set -eu
@@ -22,11 +22,16 @@ expect() {
 
 fits=$(printf '%072d' 0 | tr 0 a)
 over=$(printf '%073d' 0 | tr 0 a)
+title_fits=$(printf '%064d' 0 | tr 0 a)
+title_over=$(printf '%065d' 0 | tr 0 a)
 accented=$(printf '%072d' 0 | sed 's/0/é/g')
+title_accented=$(printf '%064d' 0 | sed 's/0/é/g')
 
-expect '72 characters: passes' 0 title "${fits}"
-expect '73 characters: refused' 1 title "${over}"
-expect '73 characters in a commit: refused' 1 commits "${over}"
+expect 'title of 64 characters: passes' 0 title "${title_fits}"
+expect 'title of 65 characters: refused' 1 title "${title_over}"
+expect 'title of 64 letters with accents: counted as letters' 0 title "${title_accented}"
+expect 'commit subject of 72 characters: passes' 0 commits "${fits}"
+expect 'commit subject of 73 characters: refused' 1 commits "${over}"
 expect '72 letters with accents: counted as letters' 0 commits "${accented}"
 expect 'several subjects, one long: refused' 1 commits "Short subject
 ${over}
@@ -38,9 +43,9 @@ expect 'long merge subject in a title: refused' 1 title "Merge branch 'a-branch-
 expect 'long subject that only starts like a merge: refused' 1 commits "Merge branch 'main' and fix the installer's handling of storages with little free space"
 expect 'unknown kind: refused' 2 subject 'A subject'
 
-out=$(printf '%s\n' "${over}" | sh "${script}" title 2>&1) || true
+out=$(printf '%s\n' "${title_over}" | sh "${script}" title 2>&1) || true
 case ${out} in
-    *'the title is 73 characters, 72 at most'*) passes=$((passes + 1)) ;;
+    *'the title is 65 characters, 64 at most'*) passes=$((passes + 1)) ;;
     *)
         printf 'FAIL: names the length\n  got: %s\n' "${out}"
         failures=$((failures + 1))

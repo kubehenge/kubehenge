@@ -19,7 +19,7 @@ changelog=docs/changelog.md
 # release writes, and adds Internal, which the notes leave out.
 order='Before you upgrade|Highlights|Added|Changed|Fixed|Removed|Security'
 kinds='Before you upgrade|Added|Changed|Fixed|Removed|Security|Internal'
-marker='<!-- Write three to five highlights here as bullets, then delete this line. -->'
+marker='<!-- Write one to five highlights here as bullets, then delete this line. -->'
 
 fail() {
     printf 'changelog: %s\n' "$*" >&2

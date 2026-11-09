@@ -83,7 +83,7 @@ need=
         .golangci.yml | .markdownlint* | .github/ISSUE_TEMPLATE/* | .github/workflows/ci.yml) ;;
         .github/workflows/codeql.yml | .github/workflows/scorecard.yml | .github/workflows/release.yml) ;;
         .github/workflows/release-build.yml | .github/workflows/fuzz.yml | scripts/sbom.sh | scripts/syft.yaml | scripts/changelog.sh) ;;
-        scripts/subjects.sh) ;;
+        scripts/subjects.sh | .github/workflows/subjects.yml) ;;
         .github/codeql-config.yml | .github/zizmor.yml) ;;
         .github/workflows/website.yml | osv-scanner.toml | scripts/lint/*) ;;
         .github/workflows/cache.yml | scripts/cache-prune.sh) ;;
