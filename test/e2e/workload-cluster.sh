@@ -2192,12 +2192,13 @@ restarts_since() {
     found_restarts "containers restarted $1 (pod, restarts): ${restarted}"
 }
 
-# shellcheck disable=SC2310 # on only reads a list.
-if [ -n "${addons}" ]; then
+if [ "${restores_etcd}" = true ]; then
     # A component that could not renew its Lease while the API was away, through the restore or a
     # control plane's replacement, exits only once its renew deadline has passed, which may be after the
-    # API is back. Once each Lease renewed before the restore is renewed again after this point, every
-    # such restart has happened and is in the baseline.
+    # API is back. One that cannot reach the API as it starts exits again, each time later by the
+    # kubelet's back-off, as the CSI plugin's provisioner does. Once each Lease renewed before the
+    # restore is renewed again after this point, every such restart has happened, before any restart
+    # baseline is taken.
     leases_at=$(lease_times)
     leases_renewed() {
         # shellcheck disable=SC2310 # polled with set -e off, so a failed request is only a retry.
@@ -2206,6 +2207,10 @@ if [ -n "${addons}" ]; then
             '. as $now | all($held[]; ($now[.] // "") > ($at[.] // ""))' > /dev/null
     }
     until_true 300 "the components' Leases renewed after the restore" leases_renewed
+fi
+
+# shellcheck disable=SC2310 # on only reads a list.
+if [ -n "${addons}" ]; then
     restart_baseline
     measured "memory before the add-ons" pod_memory "${work}/workload"
     measured "CPU requested before the add-ons" pod_cpu "${work}/workload"
