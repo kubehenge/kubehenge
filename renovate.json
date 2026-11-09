@@ -202,7 +202,7 @@
       ]
     },
     {
-      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, Go, Node, Helm and kubectl in scripts/tools.sh, ko and the Go it is built with in scripts/ko.sh, and the newest RKE2 and k3s releases, which the release pins have to hold (`make release-pins` on the update's pull request). An image's digest moves with its tag.",
+      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, Go, Node, Helm and kubectl in scripts/tools.sh, ko and the Go it is built with in scripts/ko.sh, and the newest RKE2, k3s and Talos releases, which the release pins have to hold (`make release-pins` on the update's pull request). An image's digest moves with its tag.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",

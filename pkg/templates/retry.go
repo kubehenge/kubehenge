@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -21,6 +22,48 @@ func lasting(err error) error { return finalError{err: err} }
 func Final(err error) bool {
 	var f finalError
 	return errors.As(err, &f)
+}
+
+// transientError is a failed read that may succeed when tried again.
+type transientError struct{ err error }
+
+func (e transientError) Error() string { return e.err.Error() }
+func (e transientError) Unwrap() error { return e.err }
+
+// Transient marks err as a failure another try may get past, such as a dropped connection or a
+// busy server.
+func Transient(err error) error { return transientError{err: err} }
+
+// TransientStatus tells whether an HTTP status is a failure another try may get past: a server
+// error, too many requests or a request timeout.
+func TransientStatus(code int) bool {
+	return code >= http.StatusInternalServerError || code == http.StatusTooManyRequests || code == http.StatusRequestTimeout
+}
+
+// Retrying calls try until it returns nil or an error Transient did not mark, ctx ends, or try has
+// run attempts times in all. It waits first before the second call and twice as long before each
+// further one. A Transient error it gives up on comes back without the mark, so that an outer
+// Retrying does not try the whole read again.
+func Retrying(ctx context.Context, attempts int, first time.Duration, try func() error) error {
+	wait := first
+	for attempt := 1; ; attempt++ {
+		err := try()
+		var mark transientError
+		if err == nil || !errors.As(err, &mark) {
+			return err
+		}
+		if attempt >= attempts || ctx.Err() != nil {
+			return mark.err
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return mark.err
+		case <-t.C:
+		}
+		wait *= 2
+	}
 }
 
 // Build retries are spaced out so that what fails for a while, a mirror being synced or a node

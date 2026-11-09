@@ -360,7 +360,7 @@ func TestReadingAReleaseRefusesOneNoNodeCouldInstall(t *testing.T) {
 	}
 	r, f := newReleaseChecksums(t)
 	sums, err := r.read(t.Context(), rke2Release, "v1.37.1+rke2r1")
-	if err != nil || ReleasePin(sums) != f.pin(rke2Release, "v1.37.1+rke2r1") {
+	if err != nil || sums != f.pin(rke2Release, "v1.37.1+rke2r1") {
 		t.Errorf("read %v, %v; want %v", sums, err, f.pin(rke2Release, "v1.37.1+rke2r1"))
 	}
 }

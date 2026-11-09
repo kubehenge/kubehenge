@@ -371,7 +371,7 @@ func failingPublisher(t *testing.T, failures int32, status int) (*Sources, *atom
 
 func TestAPassingFailureIsTriedAgain(t *testing.T) {
 	t.Parallel()
-	for _, status := range []int{http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusTooManyRequests} {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusTooManyRequests, http.StatusRequestTimeout} {
 		s, requests := failingPublisher(t, 2, status)
 		body, err := s.do(context.Background(), http.MethodPost, s.TalosFactoryURL+"/schematics", []byte(TalosSchematic))
 		if err != nil {

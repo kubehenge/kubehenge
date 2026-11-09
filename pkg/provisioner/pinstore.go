@@ -13,6 +13,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 // ReleasePinsName is the ConfigMap, in the namespace of Kubehenge's ClusterClasses, that holds the
@@ -48,9 +50,24 @@ func (s *PinStore) Added(ctx context.Context) (ReleasePins, error) {
 		}
 		return nil, fmt.Errorf("reading ConfigMap %s/%s: %w", s.Namespace, ReleasePinsName, err)
 	}
-	pins, err := ParseReleasePins(cm.Data[releasePinsKey])
+	pins, err := parseAdded(cm.Data[releasePinsKey])
 	if err != nil {
 		return nil, fmt.Errorf("ConfigMap %s/%s: %w", s.Namespace, ReleasePinsName, err)
+	}
+	return pins, nil
+}
+
+// parseAdded reads the administrators' pins. A Talos pin is refused, as the template bake reads only
+// the pins a Kubehenge build carries and would ignore it.
+func parseAdded(file string) (ReleasePins, error) {
+	pins, err := ParseReleasePins(file)
+	if err != nil {
+		return nil, err
+	}
+	for version, pin := range pins {
+		if pin.Talos != (templates.TalosPin{}) {
+			return nil, fmt.Errorf("%s is a Talos release, which only a Kubehenge build pins", version)
+		}
 	}
 	return pins, nil
 }
@@ -89,7 +106,7 @@ func (s *PinStore) Records(ctx context.Context) ([]PinRecord, error) {
 
 // Add records the pin of version with who added it and when. It is refused for a version that is
 // no RKE2 or k3s release and for one this build already pins.
-func (s *PinStore) Add(ctx context.Context, version string, pin ReleasePin, by string, at time.Time) error {
+func (s *PinStore) Add(ctx context.Context, version string, pin ReleasePin, by string, at time.Time) error { //nolint:gocritic // a pin is a value its callers hold
 	if distributionReleaseOf(version) == nil {
 		return fmt.Errorf("%q: %w such as v1.36.6+rke2r1 or v1.36.6+k3s1", version, ErrNotARelease)
 	}
@@ -103,14 +120,14 @@ func (s *PinStore) Add(ctx context.Context, version string, pin ReleasePin, by s
 		return fmt.Errorf("reading ConfigMap %s/%s: %w", s.Namespace, ReleasePinsName, err)
 	}
 	file := cm.Data[releasePinsKey]
-	if _, err = ParseReleasePins(file); err != nil {
+	if _, err = parseAdded(file); err != nil {
 		return fmt.Errorf("ConfigMap %s/%s: %w", s.Namespace, ReleasePinsName, err)
 	}
 	if file != "" && !strings.HasSuffix(file, "\n") {
 		file += "\n"
 	}
 	file += fmt.Sprintf("%s %s %s # added by %s at %s\n", version, pin.File, pin.Script, strings.Join(strings.Fields(by), "_"), at.UTC().Format(time.RFC3339))
-	if _, err = ParseReleasePins(file); err != nil {
+	if _, err = parseAdded(file); err != nil {
 		return err
 	}
 	cm.Namespace, cm.Name = s.Namespace, ReleasePinsName
@@ -202,7 +219,7 @@ func (r *ReleaseChecksums) Digests(ctx context.Context, version string) (Release
 		}
 		return ReleasePin{}, err
 	}
-	return ReleasePin(sums), nil
+	return sums, nil
 }
 
 // pins are the pins a node may install: this build's, then the administrators'.

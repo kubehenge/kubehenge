@@ -52,11 +52,45 @@ func TestPinStoreRefusesWhatIsNoReleaseOrAlreadyPinned(t *testing.T) {
 	}
 	var embedded string
 	for v := range DefaultReleasePins() {
-		embedded = v
-		break
+		if distributionReleaseOf(v) != nil {
+			embedded = v
+			break
+		}
 	}
 	if err := s.Add(context.Background(), embedded, pin, "admin", time.Now()); !errors.Is(err, ErrPinEmbedded) {
 		t.Errorf("a version this build pins gave %v", err)
+	}
+}
+
+// Only a Kubehenge build pins a Talos release, so a ConfigMap holding one is refused as Added reads
+// it and as Add extends it, and Add saves nothing.
+func TestThePinStoreRefusesATalosLine(t *testing.T) {
+	t.Parallel()
+	var talosLine string
+	for line := range strings.Lines(releasePinsFile) {
+		if fields := strings.Fields(line); len(fields) == 5 && !strings.HasPrefix(line, "#") {
+			talosLine = line
+			break
+		}
+	}
+	if talosLine == "" {
+		t.Fatal("releasepins.txt holds no Talos line: run make release-pins")
+	}
+	file := "v1.99.1+rke2r1 " + strings.Repeat("a", 64) + " " + strings.Repeat("b", 64) + " # added by admin\n" + talosLine
+	cm := &corev1.ConfigMap{Namespace: "kubehenge-system", Name: ReleasePinsName, Data: map[string]string{"pins": file}}
+	s := pinStore(t, cm)
+	pins, err := s.Added(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "is a Talos release") || len(pins) != 0 {
+		t.Errorf("Added gave %v, %v", pins, err)
+	}
+	pin := ReleasePin{File: strings.Repeat("c", 64), Script: strings.Repeat("d", 64)}
+	err = s.Add(context.Background(), "v1.30.9+rke2r1", pin, "admin", time.Now())
+	if err == nil || !strings.Contains(err.Error(), "is a Talos release") {
+		t.Errorf("Add gave %v", err)
+	}
+	got := &corev1.ConfigMap{}
+	if err = s.Reader.Get(context.Background(), client.ObjectKeyFromObject(cm), got); err != nil || got.Data["pins"] != file {
+		t.Errorf("the ConfigMap changed: %q, %v", got.Data["pins"], err)
 	}
 }
 
@@ -123,10 +157,11 @@ func TestThePatchHookReadsThePinsAnAdministratorAdded(t *testing.T) {
 func TestChannelsAndTheValidatorAdmitAReleaseAnAdministratorPinned(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[{"id":"stable","latest":"v1.36.6+rke2r1"},{"id":"v1.36","latest":"v1.36.6+rke2r1"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"stable","latest":"v1.36.88+rke2r1"},{"id":"v1.36","latest":"v1.36.88+rke2r1"}]}`))
 	}))
 	defer srv.Close()
-	const newer = "v1.36.6+rke2r1"
+	// A release no build pins, however far the pins file has come.
+	const newer = "v1.36.88+rke2r1"
 	store := pinStore(t)
 	embedded := ReleasePins{"v1.36.5+rke2r1": {}}
 	s := &ChannelServer{HTTP: srv.Client(), URLs: map[string]string{"rke2": srv.URL}, Pins: embedded, Store: store}

@@ -9,9 +9,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 // flakyServer answers the first fails requests with fail and the rest with body.
@@ -84,6 +87,35 @@ func TestDownloadsAreTriedAgain(t *testing.T) {
 	}
 }
 
+// The wait before the second try is a second, and each further wait doubles it.
+func TestDownloadsWaitASecondThenDoubleIt(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var stamps []time.Time
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		stamps = append(stamps, time.Now())
+		n := len(stamps)
+		mu.Unlock()
+		if n <= 2 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(srv.Close)
+	if _, err := get(t.Context(), srv.Client(), srv.URL+"/index.json", 1<<20); err != nil {
+		t.Fatalf("get = %v", err)
+	}
+	slack := 50 * time.Millisecond
+	if first, second := stamps[1].Sub(stamps[0]), stamps[2].Sub(stamps[1]); first < retryDelay-slack || first > 2*retryDelay-slack || second < 2*retryDelay-slack {
+		t.Errorf("waits %v and %v, want about %v and %v", first, second, retryDelay, 2*retryDelay)
+	}
+	if retryDelay != time.Second || downloadAttempts != 5 {
+		t.Errorf("%d tries from %v, want 5 from 1s", downloadAttempts, retryDelay)
+	}
+}
+
 // A refusal, a wrong checksum and a server that keeps failing end the download.
 func TestDownloadsFailForGood(t *testing.T) {
 	t.Parallel()
@@ -150,7 +182,7 @@ func TestStalledDownloadsAreTriedAgain(t *testing.T) { //nolint:paralleltest // 
 	if n := requests.Load(); n != 2 {
 		t.Errorf("%d requests, want 2", n)
 	}
-	if !errors.Is(transientError{errStalled}, errStalled) {
+	if !errors.Is(templates.Transient(errStalled), errStalled) {
 		t.Error("a stall is not told as one")
 	}
 }

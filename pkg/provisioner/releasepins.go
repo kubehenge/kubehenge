@@ -10,9 +10,14 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
+
+	relver "github.com/kubehenge/kubehenge/pkg/release"
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 //go:embed releasepins.txt
@@ -20,13 +25,32 @@ var releasePinsFile string
 
 // ReleasePin is what a node of an RKE2 or k3s release checks before it installs anything: the
 // SHA-256 of the release's checksum file, which lists every file of the release with its own, and
-// of its install script.
-type ReleasePin struct{ File, Script string }
+// of its install script. A Talos release's pin is Talos, the digests of its images, and the other
+// two are empty.
+type ReleasePin struct {
+	File, Script string
+	Talos        templates.TalosPin
+}
 
-// ReleasePins are the pins of every RKE2 and k3s release a cluster may run, by version. Neither
-// project signs its releases or images, and a tag or an asset can be replaced. A release Kubehenge
-// pins is installed only as it was when it was pinned, and one it does not pin not at all.
+// ReleasePins are the pins of every RKE2, k3s and Talos release a cluster may run, by version.
+// Neither RKE2 nor k3s signs its releases or images, and a tag or an asset can be replaced. A
+// release Kubehenge pins is installed only as it was when it was pinned, and one it does not pin
+// not at all.
 type ReleasePins map[string]ReleasePin
+
+// talosGuestAgent is the image the guest agent of every Talos pin is a tag and digest of.
+const talosGuestAgent = "ghcr.io/siderolabs/qemu-guest-agent:"
+
+// Talos gives the Talos pins by release.
+func (p ReleasePins) Talos() map[string]templates.TalosPin {
+	out := map[string]templates.TalosPin{}
+	for version, pin := range p {
+		if talosRelease.holds(version) && pin.Talos != (templates.TalosPin{}) {
+			out[version] = pin.Talos
+		}
+	}
+	return out
+}
 
 // DefaultReleasePins are the pins this build of Kubehenge carries, releasepins.txt.
 func DefaultReleasePins() ReleasePins {
@@ -39,7 +63,8 @@ func DefaultReleasePins() ReleasePins {
 }
 
 // ParseReleasePins reads a pins file: a line "<version> <checksum file's SHA-256> <install
-// script's SHA-256>" for each release, and comments starting with #.
+// script's SHA-256>" for each RKE2 or k3s release, "<version> <imager> <installer base> <extensions
+// image> <guest agent>" for each Talos release, and comments starting with #.
 func ParseReleasePins(file string) (ReleasePins, error) {
 	pins := ReleasePins{}
 	lines := bufio.NewScanner(strings.NewReader(file))
@@ -51,18 +76,53 @@ func ParseReleasePins(file string) (ReleasePins, error) {
 		// A pin an administrator added ends in a comment saying who added it.
 		line, _, _ = strings.Cut(line, " #")
 		fields := strings.Fields(line)
-		if len(fields) != 3 || distributionReleaseOf(fields[0]) == nil || !sha256Hex.MatchString(fields[1]) || !sha256Hex.MatchString(fields[2]) {
-			return nil, fmt.Errorf("release pins, line %d: not an RKE2 or k3s version and two SHA-256s: %q", n, line)
+		pin, ok := parsePin(fields)
+		if !ok {
+			return nil, fmt.Errorf("release pins, line %d: not an RKE2 or k3s version and two SHA-256s, nor a Talos release and its four images: %q", n, line)
 		}
 		if _, dup := pins[fields[0]]; dup {
 			return nil, fmt.Errorf("release pins, line %d: %s twice", n, fields[0])
 		}
-		pins[fields[0]] = ReleasePin{File: fields[1], Script: fields[2]}
+		pins[fields[0]] = pin
 	}
 	return pins, nil
 }
 
-// distributionReleaseOf is the distribution version is a release of, RKE2 or k3s, or nil.
+// The fields of a pin line: a version and two SHA-256s, or a version and four images.
+const (
+	checksumPinFields = 3
+	talosPinFields    = 5
+)
+
+// parsePin reads the fields of one pin line.
+func parsePin(fields []string) (ReleasePin, bool) {
+	switch len(fields) {
+	case checksumPinFields:
+		if distributionReleaseOf(fields[0]) == nil || !sha256Hex.MatchString(fields[1]) || !sha256Hex.MatchString(fields[2]) {
+			return ReleasePin{}, false
+		}
+		return ReleasePin{File: fields[1], Script: fields[2]}, true
+	case talosPinFields:
+		if !talosRelease.holds(fields[0]) {
+			return ReleasePin{}, false
+		}
+		for _, d := range fields[1:4] {
+			if hex, ok := strings.CutPrefix(d, "sha256:"); !ok || !sha256Hex.MatchString(hex) {
+				return ReleasePin{}, false
+			}
+		}
+		agent, err := ParseImage(talosGuestAgent + fields[4])
+		if err != nil || agent.Registry != "ghcr.io" || agent.Repository != "siderolabs/qemu-guest-agent" {
+			return ReleasePin{}, false
+		}
+		return ReleasePin{Talos: templates.TalosPin{Imager: fields[1], InstallerBase: fields[2], Extensions: fields[3], GuestAgent: fields[4]}}, true
+	}
+	return ReleasePin{}, false
+}
+
+// distributionReleaseOf is the distribution version is a release of, RKE2 or k3s, or nil. Talos
+// releases are not among them: nodes of a cluster install no Talos release from these pins, and an
+// administrator pins none.
 func distributionReleaseOf(version string) *distributionRelease {
 	for _, r := range []*distributionRelease{rke2Release, k3sRelease} {
 		if r.version.MatchString(version) {
@@ -72,13 +132,41 @@ func distributionReleaseOf(version string) *distributionRelease {
 	return nil
 }
 
-// Format writes the pins after header, the leading comments of the file they were read from: RKE2's
-// releases, then k3s's, each oldest first.
+// pinnedReleaseOf is the distribution version is a pinned release of, Talos included, or nil.
+func pinnedReleaseOf(version string) *distributionRelease {
+	if r := distributionReleaseOf(version); r != nil {
+		return r
+	}
+	if talosRelease.holds(version) {
+		return talosRelease
+	}
+	return nil
+}
+
+// talosRelease is Sidero's Talos. It is no entry of releaseTemplates, as no node installs it from
+// a pin: the template bake reads the pin's images.
+var talosRelease = &distributionRelease{templates.Talos, "siderolabs/talos", regexp.MustCompile(`^v1\.\d+\.\d+$`), nil}
+
+// holds reports whether version is a release of r. A Talos release also has to be a plain
+// SemVer, which refuses a part with a leading zero.
+func (r *distributionRelease) holds(version string) bool {
+	if !r.version.MatchString(version) {
+		return false
+	}
+	if r == talosRelease {
+		_, err := relver.ParseVersion(version)
+		return err == nil
+	}
+	return true
+}
+
+// Format writes the pins after header, the leading comments of the file they were read from:
+// Talos's releases, then RKE2's, then k3s's, each oldest first.
 func (p ReleasePins) Format(header string) string {
 	var b strings.Builder
 	b.WriteString(header)
 	versions := slices.SortedFunc(maps.Keys(p), func(a, c string) int {
-		if d := cmp.Compare(distributionReleaseOf(a).repository, distributionReleaseOf(c).repository); d != 0 {
+		if d := cmp.Compare(pinnedReleaseOf(a).repository, pinnedReleaseOf(c).repository); d != 0 {
 			return -d
 		}
 		va, _ := parseKubeVersion(a)
@@ -92,6 +180,10 @@ func (p ReleasePins) Format(header string) string {
 		return cmp.Compare(a, c)
 	})
 	for _, v := range versions {
+		if t := p[v].Talos; talosRelease.holds(v) {
+			fmt.Fprintf(&b, "%s %s %s %s %s\n", v, t.Imager, t.InstallerBase, t.Extensions, t.GuestAgent)
+			continue
+		}
 		fmt.Fprintf(&b, "%s %s %s\n", v, p[v].File, p[v].Script)
 	}
 	return b.String()
@@ -112,25 +204,34 @@ func PinsHeader(file string) string {
 // errUnlisted is a release whose checksum file misses a file its nodes install.
 var errUnlisted = errors.New("unlisted")
 
-// ReleasePinner pins the RKE2 and k3s releases published since, of the minor versions a cluster
-// may run.
+// ReleasePinner pins the RKE2, k3s and Talos releases published since, of the minor versions a
+// cluster may run.
 type ReleasePinner struct {
 	HTTP *http.Client
 	// API is GitHub's REST API, and Token, when set, a token it is read with, for a higher rate limit.
+	// The token goes to the API only, never to the registry.
 	API, Token string
+	// Registry is Sidero's image registry, ghcr.io, read with no credentials.
+	Registry string
 	// Checksums reads each release's checksum file and install script.
 	Checksums *ReleaseChecksums
+	// retryWait replaces the first wait of a registry read's retries, so that a test does not wait.
+	retryWait time.Duration
+	// tokens are the registry's anonymous tokens of the run in progress, by repository.
+	tokens map[string]string
 }
 
 // githubReleases bounds the pages of releases read, a hundred each. RKE2 and k3s publish a few
 // hundred over the minors a channel lists.
 const githubReleases = 20
 
-// Pin adds the releases pins lacks, and returns their versions. A release that lacks a file its
-// nodes install is left out, as no node could install it.
+// Pin adds the releases pins lacks, and returns their versions. A RKE2 or k3s release that lacks a
+// file its nodes install is left out, as no node could install it. A Talos release's images are
+// pushed before GitHub publishes it, so a missing one is an error.
 func (p *ReleasePinner) Pin(ctx context.Context, pins ReleasePins) ([]string, error) {
+	p.tokens = map[string]string{}
 	var added []string
-	for _, release := range []*distributionRelease{rke2Release, k3sRelease} {
+	for _, release := range []*distributionRelease{rke2Release, k3sRelease, talosRelease} {
 		tags, err := p.tags(ctx, release)
 		if err != nil {
 			return added, err
@@ -138,21 +239,30 @@ func (p *ReleasePinner) Pin(ctx context.Context, pins ReleasePins) ([]string, er
 		minors := pinnedMinors(release, tags)
 		for _, tag := range tags {
 			v, ok := parseKubeVersion(tag)
-			if _, pinned := pins[tag]; pinned || !ok || !release.version.MatchString(tag) || !minors[v.Minor] {
+			if _, pinned := pins[tag]; pinned || !ok || !release.holds(tag) || !minors[v.Minor] {
 				continue
 			}
-			sums, err := p.Checksums.read(ctx, release, tag)
-			if errors.Is(err, errUnlisted) {
+			pin, captureErr := p.capture(ctx, release, tag)
+			if errors.Is(captureErr, errUnlisted) {
 				continue
 			}
-			if err != nil {
-				return added, err
+			if captureErr != nil {
+				return added, captureErr
 			}
-			pins[tag] = ReleasePin(sums)
+			pins[tag] = pin
 			added = append(added, tag)
 		}
 	}
 	return added, nil
+}
+
+// capture reads a release's pin as it is now.
+func (p *ReleasePinner) capture(ctx context.Context, release *distributionRelease, tag string) (ReleasePin, error) {
+	if release != talosRelease {
+		return p.Checksums.read(ctx, release, tag)
+	}
+	images, err := p.talosImages(ctx, tag, tag, tag, tag)
+	return ReleasePin{Talos: images}, err
 }
 
 // pinnedMinors are the minor versions a new cluster may start on, counted down from the newest
@@ -160,7 +270,7 @@ func (p *ReleasePinner) Pin(ctx context.Context, pins ReleasePins) ([]string, er
 func pinnedMinors(release *distributionRelease, tags []string) map[int]bool {
 	newest := -1
 	for _, tag := range tags {
-		if v, ok := parseKubeVersion(tag); ok && release.version.MatchString(tag) {
+		if v, ok := parseKubeVersion(tag); ok && release.holds(tag) {
 			newest = max(newest, v.Minor)
 		}
 	}
@@ -223,7 +333,7 @@ func (p ReleasePins) pinned(version string) bool {
 func (p ReleasePins) offered(release *distributionRelease) []string {
 	minors := map[int]bool{}
 	for v := range p {
-		if kv, ok := parseKubeVersion(v); ok && release.version.MatchString(v) {
+		if kv, ok := parseKubeVersion(v); ok && release.holds(v) {
 			minors[kv.Minor] = true
 		}
 	}
@@ -242,7 +352,7 @@ func (p ReleasePins) newest(release *distributionRelease, minor int) (kubeVersio
 	found := false
 	for v := range p {
 		kv, ok := parseKubeVersion(v)
-		if !ok || kv.Minor != minor || !release.version.MatchString(v) {
+		if !ok || kv.Minor != minor || !release.holds(v) {
 			continue
 		}
 		if !found || best.less(kv) {

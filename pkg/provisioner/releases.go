@@ -256,11 +256,9 @@ func unpinnedRelease(release *distributionRelease, version string) error {
 
 var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-type releaseSums struct{ File, Script string }
-
 // read hashes the release's checksum file and install script as they are now, for pinning them,
 // and checks the file lists everything a node of the release may install.
-func (r *ReleaseChecksums) read(ctx context.Context, release *distributionRelease, version string) (releaseSums, error) {
+func (r *ReleaseChecksums) read(ctx context.Context, release *distributionRelease, version string) (ReleasePin, error) {
 	mirror := r.mirror()
 	const sumsName = "sha256sum-amd64.txt"
 	var file []byte
@@ -271,7 +269,7 @@ func (r *ReleaseChecksums) read(ctx context.Context, release *distributionReleas
 		file, err = r.fetchAsset(ctx, release.repository, version, sumsName, maxChecksumFile)
 	}
 	if err != nil {
-		return releaseSums{}, err
+		return ReleasePin{}, err
 	}
 	listed := map[string]bool{}
 	lines := bufio.NewScanner(bytes.NewReader(file))
@@ -289,7 +287,7 @@ func (r *ReleaseChecksums) read(ctx context.Context, release *distributionReleas
 	}
 	for _, f := range want {
 		if !listed[f] {
-			return releaseSums{}, fmt.Errorf("%w: the checksums of %s list no %s", errUnlisted, version, f)
+			return ReleasePin{}, fmt.Errorf("%w: the checksums of %s list no %s", errUnlisted, version, f)
 		}
 	}
 	var script []byte
@@ -299,9 +297,9 @@ func (r *ReleaseChecksums) read(ctx context.Context, release *distributionReleas
 		script, err = r.fetch(ctx, mirror.scriptURL(r.Raw, release.repository, version), maxInstallScript)
 	}
 	if err != nil {
-		return releaseSums{}, err
+		return ReleasePin{}, err
 	}
-	return releaseSums{File: hexSHA256(file), Script: hexSHA256(script)}, nil
+	return ReleasePin{File: hexSHA256(file), Script: hexSHA256(script)}, nil
 }
 
 // fetchMirrored reads a file of a release from the release mirror, which has no API to fall back on.

@@ -15,7 +15,7 @@ KO_FLAGS ?=
 # Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
 
-.PHONY: build web changelog gateway-api capmox-crds capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
+.PHONY: build web changelog gateway-api capmox-crds capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers verify-talos-pins lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
 .PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
@@ -172,8 +172,8 @@ dist: web gateway-api capi-operator-chart
 		appliance/install.sh > dist/install.sh
 	cd dist && sha256sum install.sh >> kubehenge_$(VERSION)_SHA256SUMS
 
-# Pins the RKE2 and k3s releases published since (pkg/provisioner/releasepins.txt), so that clusters
-# may run them. GH_TOKEN, when set, reads GitHub's API with a higher rate limit.
+# Pins the RKE2, k3s and Talos releases published since (pkg/provisioner/releasepins.txt), so that
+# clusters may run them. GH_TOKEN, when set, reads GitHub's API with a higher rate limit.
 release-pins: web gateway-api
 	go run ./cmd/kubehenge release pins pkg/provisioner/releasepins.txt
 
@@ -210,6 +210,12 @@ helm-addon-image:
 # by the digests versions.tf names, and their provenance and signatures from each fork's release.
 verify-providers:
 	sh scripts/verify-providers.sh
+
+# The Talos pins, each image naming its release and signed by Sidero. Needs cosign, as
+# scripts/tools.sh installs it.
+verify-talos-pins: web gateway-api
+	sh scripts/verify-talos-pins.sh
+	go run ./cmd/kubehenge release pins --check pkg/provisioner/releasepins.txt
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
 # YAML, Markdown, the e2e image's Dockerfile and the node images' Containerfiles, spelling and

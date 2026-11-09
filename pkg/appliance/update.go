@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/release"
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 // The spool between the interface and the updater. The interface (unprivileged) may only drop
@@ -660,12 +661,12 @@ func downloadTofu(ctx context.Context, client *http.Client, t *release.Artefact,
 // as it arrives, and returns the file's path.
 func download(ctx context.Context, client *http.Client, url, want, dir string) (string, error) {
 	var name string
-	err := retrying(ctx, func() error {
+	err := templates.Retrying(ctx, downloadAttempts, retryDelay, func() error {
 		var err error
 		name, err = downloadOnce(ctx, client, url, want, dir)
 		return err
 	})
-	return name, err
+	return name, err //nolint:wrapcheck // try's own error, which names the address
 }
 
 func downloadOnce(ctx context.Context, client *http.Client, url, want, dir string) (string, error) {
@@ -683,7 +684,7 @@ func downloadOnce(ctx context.Context, client *http.Client, url, want, dir strin
 	err = f.Close()
 	switch {
 	case copyErr != nil:
-		err = transientError{fmt.Errorf("GET %s: %w", url, copyErr)}
+		err = templates.Transient(fmt.Errorf("GET %s: %w", url, copyErr))
 	case err != nil:
 		err = fmt.Errorf("GET %s: %w", url, err)
 	case n > maxArchive:
@@ -819,7 +820,7 @@ func openTarball(archive string) (*tar.Reader, func(), error) {
 
 func get(ctx context.Context, client *http.Client, url string, limit int64) ([]byte, error) {
 	var body []byte
-	err := retrying(ctx, func() error {
+	err := templates.Retrying(ctx, downloadAttempts, retryDelay, func() error {
 		resp, err := fetch(ctx, client, url)
 		if err != nil {
 			return err
@@ -827,12 +828,12 @@ func get(ctx context.Context, client *http.Client, url string, limit int64) ([]b
 		defer func() { _ = resp.Body.Close() }()
 		body, err = io.ReadAll(io.LimitReader(resp.Body, limit+1))
 		if err != nil {
-			return transientError{fmt.Errorf("GET %s: %w", url, err)}
+			return templates.Transient(fmt.Errorf("GET %s: %w", url, err))
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, err //nolint:wrapcheck // try's own error, which names the address
 	}
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("GET %s: larger than %d bytes", url, limit)
@@ -847,30 +848,6 @@ const (
 	// retryDelay is the wait before the second try, doubled before each further one.
 	retryDelay = time.Second
 )
-
-// transientError is a failed download that may succeed when tried again.
-type transientError struct{ err error }
-
-func (e transientError) Error() string { return e.err.Error() }
-func (e transientError) Unwrap() error { return e.err }
-
-// retrying calls try until it succeeds, fails for good, or has been tried downloadAttempts times.
-func retrying(ctx context.Context, try func() error) error {
-	delay := retryDelay
-	for attempt := 1; ; attempt++ {
-		err := try()
-		var transient transientError
-		if err == nil || !errors.As(err, &transient) || attempt == downloadAttempts || ctx.Err() != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return err
-		case <-time.After(delay):
-		}
-		delay *= 2
-	}
-}
 
 // stallTimeout ends a download that receives nothing for that long. A slow link may take as long
 // as it needs, as long as data keeps arriving.
@@ -907,7 +884,7 @@ func (b *watchedBody) Close() error {
 
 // fetch starts a GET of url, which has to be https, and returns the response once its status is
 // OK. The caller closes its body. A failed connection, a stalled one and an answer a busy or
-// failing server gives are transientError.
+// failing server gives are templates.Transient.
 func fetch(ctx context.Context, client *http.Client, url string) (*http.Response, error) {
 	if !strings.HasPrefix(url, "https://") {
 		return nil, fmt.Errorf("%s is not https", url)
@@ -927,14 +904,14 @@ func fetch(ctx context.Context, client *http.Client, url string) (*http.Response
 			err = errStalled
 		}
 		stop(nil)
-		return nil, transientError{fmt.Errorf("downloading %s: %w", url, err)}
+		return nil, templates.Transient(fmt.Errorf("downloading %s: %w", url, err)) //nolint:wrapcheck // Transient marks the error it is given
 	}
 	resp.Body = &watchedBody{ReadCloser: resp.Body, cause: func() error { return context.Cause(ctx) }, timer: timer, stop: stop}
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
 		err = fmt.Errorf("GET %s: %s", url, resp.Status)
-		if resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusRequestTimeout {
-			return nil, transientError{err}
+		if templates.TransientStatus(resp.StatusCode) {
+			return nil, templates.Transient(err) //nolint:wrapcheck // Transient marks the error it is given
 		}
 		return nil, err
 	}
