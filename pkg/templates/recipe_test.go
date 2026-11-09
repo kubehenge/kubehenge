@@ -188,8 +188,10 @@ func checkGuestExec(t *testing.T, bootcmd []string) {
 // and repositories that check their packages against those keys.
 func checkFiles(t *testing.T, files map[string]string, dir string, keys []RepositoryKey, names map[string]bool) {
 	t.Helper()
-	for _, name := range []string{dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/kubehenge-calico.cil", "node/images.sh", "node/kubeadm.sh", "node/boot-log.sh", "node/kubehenge-boot-log.service", "node/kubehenge-boot-log.timer",
-		"node/cloud-init.sh", "node/cloud-init/create-route-section-before-its-metric.patch", "node/cloud-init/dual-stack-ipv4-first.yaml", "node/cloud-init/dual-stack-ipv6-first.yaml"} {
+	for _, name := range []string{
+		dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/kubehenge-calico.cil", "node/images.sh", "node/kubeadm.sh", "node/boot-log.sh", "node/kubehenge-boot-log.service", "node/kubehenge-boot-log.timer",
+		"node/cloud-init.sh", "node/cloud-init/create-route-section-before-its-metric.patch", "node/cloud-init/dual-stack-ipv4-first.yaml", "node/cloud-init/dual-stack-ipv6-first.yaml",
+	} {
 		if files[name] == "" {
 			t.Errorf("the bake does not carry %s", name)
 		}
