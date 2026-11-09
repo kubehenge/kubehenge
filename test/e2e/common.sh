@@ -48,20 +48,22 @@ worker_need_for() {
         | $node.worker + ([$on[] | $addon[.]] | add) + $fixtures'
 }
 
-# worker_memory_for <class JSON> <add-ons JSON array> <gitops: true|false>: the least memory in MiB
-# a worker may have for a class with those add-ons on. It is the largest of the class's own minimum,
-# what a worker and the add-ons use, and what the scheduler needs for the requests of a worker's own
-# pods, the add-ons' pods and, with GitOps, the test's own pods, to a multiple of 8.
+# worker_memory_for <class JSON> <add-ons JSON array> <gitops: true|false> [CNI]: the least memory in
+# MiB a worker may have for a class with those add-ons on. It is the largest of the class's own
+# minimum, what a worker and the add-ons use, and what the scheduler needs for the requests of a
+# worker's own pods, the pods the CNI runs once per cluster, the add-ons' pods and, with GitOps, the
+# test's own pods, to a multiple of 8.
 worker_memory_for() {
     worker_fixtures "$3"
-    printf '%s' "$1" | jq -r --argjson on "$2" --argjson fixtures "${worker_memory_fixtures}" '
+    printf '%s' "$1" | jq -r --argjson on "$2" --argjson fixtures "${worker_memory_fixtures}" --arg cni "${4:-}" '
         (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
         | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
         | (.metadata.annotations["kubehenge.dev/addon-memory-requests"] | fromjson) as $requests
         | (.metadata.annotations["kubehenge.dev/node-memory-requests"] | fromjson) as $requested
+        | (.metadata.annotations["kubehenge.dev/cni-memory-requests"] // "{}" | fromjson) as $cnis
         | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
             $node.worker + ([$on[] | $addon[.]] | add) + $fixtures,
-            (($requested.worker + ($requested.workers // 0) + ([$on[] | if . == "argocd" then ([$requests.argocd, $requests.flux] | max) else $requests[.] end] | add) + $fixtures) / 8 | ceil) * 8]
+            (($requested.worker + ($requested.workers // 0) + ($cnis[$cni] // 0) + ([$on[] | if . == "argocd" then ([$requests.argocd, $requests.flux] | max) else $requests[.] end] | add) + $fixtures) / 8 | ceil) * 8]
         | max'
 }
 # The S3 store the backup tests write to.

@@ -108,7 +108,7 @@ The workload and Rancher tests print each node's and namespace's memory and the 
 
 The classes' memory figures come from these prints. They cover the add-ons, what a CNI other than the class's own adds to a control plane and the nodes (`kubehenge.dev/addon-memory`, `kubehenge.dev/addon-control-plane-memory`, `kubehenge.dev/cni-control-plane-memory` and `kubehenge.dev/node-memory`, [clusters.md](clusters.md#machines)). The workload test gives its nodes the least the figures allow. A figure a new add-on or release outgrows is raised in `charts/kubehenge/templates`.
 
-The CPU and requested memory figures are the requests of the pinned charts and distributions and move with them. They are `kubehenge.dev/addon-cpu`, `kubehenge.dev/node-cpu`, `kubehenge.dev/addon-memory-requests` and `kubehenge.dev/node-memory-requests`. A figure that falls behind shows in the requests the tests print. The test's worker then leaves a pod pending.
+The CPU and requested memory figures are the requests of the pinned charts and distributions and move with them. They are `kubehenge.dev/addon-cpu`, `kubehenge.dev/node-cpu`, `kubehenge.dev/addon-memory-requests`, `kubehenge.dev/node-memory-requests` and `kubehenge.dev/cni-memory-requests`. A figure that falls behind shows in the requests the tests print. The test's worker then leaves a pod pending.
 
 ### The workload cluster test
 
@@ -408,7 +408,9 @@ Swap is no room for guests, since one read back from swap stalls until its own c
 
 #### Each test's guests
 
-Every node is at the least Kubehenge allows for what its test switches on. With GitOps the worker also holds the memory its Git server and test pods request, 208 MiB (`gitea_request_mib`, `gitops_agnhost_pods` and `agnhost_request_mib` in `common.sh`). A worker is sized for the larger of what its pods use and what they request. The management node has the module's default 4 GiB. A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). The guests of each add-on part together, per CNI, in MiB:
+Every node is at the least Kubehenge allows for what its test switches on. With GitOps the worker also holds the memory its Git server and test pods request, 208 MiB (`gitea_request_mib`, `gitops_agnhost_pods` and `agnhost_request_mib` in `common.sh`). A worker is sized for the larger of what its pods use and what they request. The management node has the module's default 4 GiB.
+
+A CNI other than the class's default grows the control plane ([clusters.md](clusters.md#machines)). Its pods that run once per cluster can grow the worker too, as Calico's grow `talos-addons-c`'s to 2720 MiB. The worker column is the default CNI's. The guests of each add-on part together, per CNI, in MiB:
 
 | Test | Worker | Default CNI | Cilium | Calico |
 | --- | --- | --- | --- | --- |
@@ -423,7 +425,7 @@ Every node is at the least Kubehenge allows for what its test switches on. With 
 | `k3s-addons-b` | 3320 | 11512 | 11832 | 12480 |
 | `talos-addons-a` | 3648 | 11840 | 11840 | 11840 |
 | `talos-addons-b` | 2368 | 10560 | 10560 | 10560 |
-| `talos-addons-c` | 2552 | 10744 | 10744 | 10744 |
+| `talos-addons-c` | 2552 | 10744 | 10744 | 10912 |
 
 #### Tests above 12 GiB
 

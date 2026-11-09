@@ -58,6 +58,7 @@ metadata:
     # manager's and kube-vip's 32 each, Cilium's operator's 64, and the 160 by which Calico's agent,
     # operator, Typha, controllers and API server ask for more than Cilium's.
     kubehenge.dev/node-memory-requests: '{"controlPlane":1128,"worker":664}'
+    {{- include "kubehenge.cniMemoryRequests" . | nindent 4 }}
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

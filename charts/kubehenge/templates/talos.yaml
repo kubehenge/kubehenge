@@ -58,6 +58,7 @@ metadata:
     # scheduler's 64 (Talos's documented defaults, LAB), the CSI controller's 80, the cloud controller
     # manager's 32 and Cilium's operator's 64.
     kubehenge.dev/node-memory-requests: '{"controlPlane":2328,"worker":960,"workers":140}'
+    {{- include "kubehenge.cniMemoryRequests" . | nindent 4 }}
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

@@ -617,7 +617,8 @@ export function addonNeedRequestedMiB(form: Form, c: ClusterClass | undefined): 
   const figures = classFigures(c, "kubehenge.dev/node-memory-requests");
   const own =
     quantity(figures[key === "workerMachine" ? "worker" : "controlPlane"]) ?? plainLeast(form, c, key).memoryMiB;
-  const once = key === "workerMachine" ? (quantity(figures["workers"]) ?? 0) : 0;
+  const cni = quantity(classFigures(c, "kubehenge.dev/cni-memory-requests")[form.cni]) ?? 0;
+  const once = key === "workerMachine" ? (quantity(figures["workers"]) ?? 0) + cni : 0;
   return own + Math.ceil((mib + once) / nodes / memoryStepMiB) * memoryStepMiB;
 }
 

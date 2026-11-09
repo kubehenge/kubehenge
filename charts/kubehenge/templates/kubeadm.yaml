@@ -54,6 +54,7 @@ metadata:
     # Typha, controllers and API server ask for more than Cilium's. The API server, controller
     # manager and scheduler ask for no memory.
     kubehenge.dev/node-memory-requests: '{"controlPlane":1232,"worker":528,"workers":140}'
+    {{- include "kubehenge.cniMemoryRequests" . | nindent 4 }}
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

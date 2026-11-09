@@ -72,6 +72,16 @@ class='{"metadata":{"annotations":{"kubehenge.dev/addon-memory":"{\"a\":100}","k
 "spec":{"variables":[{"name":"workerMachine","schema":{"openAPIV3Schema":{"properties":{"memoryMiB":{"minimum":1024}}}}}]}}'
 synthetic=$(worker_memory_for "${class}" '["a"]' false)
 expect "requests set the size" 1504 "${synthetic}"
+synthetic=$(worker_memory_for "${class}" '["a"]' false calico)
+expect "a class without CNI figures counts none" 1504 "${synthetic}"
+cni_class=$(printf '%s' "${class}" | jq -c '.metadata.annotations["kubehenge.dev/cni-memory-requests"] = "{\"calico\":100}"')
+synthetic=$(worker_memory_for "${cni_class}" '["a"]' false calico)
+expect "the CNI's pods that run once add to the requests" 1600 "${synthetic}"
+synthetic=$(worker_memory_for "${cni_class}" '["a"]' false cilium)
+expect "a CNI without a figure adds nothing" 1504 "${synthetic}"
+# The Talos lane with Calico has room for what Calico runs once beside the load balancer and Rancher's agent.
+synthetic=$(worker_memory_for "$(cat "${root}/talos.json")" '["loadBalancer","rancherAgent"]' false calico)
+expect "the Talos lane with Calico" 1680 "${synthetic}"
 synthetic=$(worker_memory_for "${class}" '["a"]' true)
 expect "the fixtures add to the requests" 1712 "${synthetic}"
 # The balloon's floor is what the worker and the add-ons use, and the fixtures' requests.

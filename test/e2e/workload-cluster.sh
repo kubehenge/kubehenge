@@ -537,7 +537,7 @@ fi
 # which the balloon below keeps.
 release_mirror=$(release_mirror_variable)
 worker_need=$(worker_need_for "${class_json}" "${sized_for}" "${sized_gitops}")
-worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(worker_memory_for "${class_json}" "${sized_for}" "${sized_gitops}")}
+worker_memory=${KUBEHENGE_E2E_WORKER_MEMORY:-$(worker_memory_for "${class_json}" "${sized_for}" "${sized_gitops}" "${KUBEHENGE_E2E_CNI:-}")}
 # Its cores likewise, for the CPU a worker's own pods, what the cluster runs once and each add-on's
 # request, the GitOps engine that asks for more of the two.
 worker_cores=${KUBEHENGE_E2E_WORKER_CORES:-$(printf '%s' "${class_json}" | jq -r --argjson on "${sized_for}" '
