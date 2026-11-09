@@ -1,6 +1,11 @@
 # The management cluster on the Proxmox VE test/e2e/ci/up.sh starts, one node or two. run.sh copies
 # this beside its state and sets the variables.
 
+# The API at the name up.sh gives it, which Proxmox VE's certificate lists.
+variable "proxmox_endpoint" {
+  type = string
+}
+
 variable "proxmox_api_token" {
   type      = string
   sensitive = true
@@ -100,7 +105,7 @@ module "management_cluster" {
   # The whole repository, as a published module source would fetch it: the module reads ../charts.
   source = "${var.repository}//management-cluster"
 
-  proxmox_endpoint       = "https://172.21.99.2:8006"
+  proxmox_endpoint       = var.proxmox_endpoint
   proxmox_api_token      = var.proxmox_api_token
   proxmox_ca_certificate = var.proxmox_ca_certificate
   proxmox_nodes          = var.proxmox_nodes

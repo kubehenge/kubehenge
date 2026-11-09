@@ -693,6 +693,13 @@ func (s *Server) proxmoxError(w http.ResponseWriter, r *http.Request, err error)
 // anonymousProxmoxError answers a request whose call to Proxmox VE was made for someone not yet
 // signed in. It tells a stranger nothing of Proxmox VE's reasons.
 func (s *Server) anonymousProxmoxError(w http.ResponseWriter, r *http.Request, err error) {
+	// Proxmox VE shows its certificate to anyone who connects, so its names tell a stranger nothing
+	// new, and an administrator who cannot sign in has nowhere else to read them.
+	if mismatch, ok := errors.AsType[*pve.CertificateNameError](err); ok {
+		s.Log.ErrorContext(r.Context(), "proxmox VE's certificate is not valid for its URL", "error", err)
+		writeError(w, http.StatusBadGateway, mismatch.Error())
+		return
+	}
 	switch {
 	case errors.Is(err, pve.ErrNodesDisagree):
 		writeError(w, http.StatusUnauthorized, nodesDisagree)

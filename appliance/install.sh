@@ -488,6 +488,23 @@ choose_api_host() {
     echo "${best}"
 }
 
+# api_family_note <certificate> <API host> <bridge address>: a note when the API is reached at an
+# IPv6 address because the certificate lacks this node's IPv4 address on the bridge, as on a
+# dual-stack node whose name resolves to its IPv6 address first. Clusters without IPv6 cannot
+# reach it there.
+api_family_note() {
+    case "$2" in
+        *:*) ;;
+        *) return 0 ;;
+    esac
+    case "$3" in
+        *:* | '') return 0 ;;
+        *) ;;
+    esac
+    certificate_names "$1" | grep -qx "ip $3" && return 0
+    echo "kubehenge: Proxmox VE's certificate does not list this node's address $3 on ${bridge}, so the appliance and the clusters reach the API at $2, which clusters without IPv6 cannot. To use $3, make this node's name resolve to it first (/etc/hosts), run pvecm updatecerts --force and systemctl restart pveproxy, then: sh install.sh --upgrade --ctid ${ctid} --proxmox-url https://$3:8006" >&2
+}
+
 # storages <content> [<least free KiB>]: "<name> <type> <free KiB>" a line for each enabled, active
 # storage on this node that takes the content and has that much free, best first: local block
 # storage, then directories, NFS, CIFS, CephFS and the rest, and within a kind the most free space.
@@ -682,6 +699,25 @@ api_connects() {
     api_handshake | grep -q -e '-----BEGIN CERTIFICATE-----'
 }
 
+# certificate_mismatch <certificate>: nothing when it is valid for $api_host, else why not: what it
+# is valid for, loopback left out, and how to reach the API at a name or address it lists or
+# have it list this one. Proxmox VE's own certificate lists only the first address the node's
+# name resolves to, or its address in the cluster, which on a dual-stack node is often the IPv6
+# one.
+certificate_mismatch() {
+    api_endpoint
+    check=-checkhost
+    [ "${api_check}" = -verify_hostname ] || check=-checkip
+    openssl x509 -in "$1" -noout "${check}" "${api_host}" 2> /dev/null | grep -q 'does match' && return
+    listed=$(certificate_names "$1" | cut -d ' ' -f 2 | grep -v -x -i -e '127\.[0-9.]*' -e '::1' -e localhost | paste -sd , - | sed 's/,/, /g')
+    printf "Proxmox VE's certificate is valid for %s, not %s. Give a URL with one of those with --proxmox-url" "${listed:-no name or address but loopback}" "${api_host}"
+    if [ "${check}" = -checkip ]; then
+        printf ", or reissue the certificate for %s: make the node's name resolve to %s first, then run pvecm updatecerts --force and systemctl restart pveproxy" "${api_host}" "${api_host}"
+    else
+        printf ', or install a certificate for %s on Proxmox VE' "${api_host}"
+    fi
+}
+
 # check_api <CA file>: stops unless the API's certificate is one that CA signed for the URL.
 check_api() {
     # shellcheck disable=SC2310 # api_trusted is a predicate; its status is the answer.
@@ -689,6 +725,11 @@ check_api() {
     # shellcheck disable=SC2310 # api_connects is a predicate; its status is the answer.
     if ! api_connects; then
         fail "this node cannot connect to the Proxmox VE API at ${proxmox_url}. Check that port ${api_connect##*:} is open in the node's firewall and that pveproxy listens on it (LISTEN_IP in /etc/default/pveproxy), or give another URL with --proxmox-url"
+    fi
+    # shellcheck disable=SC2310 # served_chain is a predicate; its status is the answer.
+    if served_chain "${work}/named"; then
+        mismatch=$(certificate_mismatch "${work}/named/1.pem")
+        [ -z "${mismatch}" ] || fail "${mismatch}"
     fi
     if [ -n "${proxmox_ca}" ]; then
         fail "the Proxmox VE API at ${proxmox_url} serves no certificate that ${proxmox_ca} signed for it"
@@ -1959,6 +2000,9 @@ if [ "${reachable}" != "${first_host}" ]; then
     proxmox_url=https://$(url_host "${reachable}"):8006
 fi
 check_container_api_port "${reachable}"
+# Only where the address was chosen here from Proxmox VE's own certificate: one given with
+# --proxmox-url, or a certificate of the administrator's, is theirs to choose.
+[ "${served:-}" != /etc/pve/local/pve-ssl.pem ] || api_family_note "${served}" "${reachable}" "${pveip}"
 
 if [ -n "${cert_file}" ]; then
     step "checking the certificate for ${public}"

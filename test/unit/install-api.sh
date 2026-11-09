@@ -88,6 +88,16 @@ certificate short pve1 org-issuing "${leaf}
 subjectAltName = DNS:localhost, DNS:pve1, IP:127.0.0.1, IP:198.51.100.11, DNS:pve2.example.org"
 certificate mixed mixed.example.org org-issuing "${leaf}
 subjectAltName = DNS:mixed.example.org, IP:192.0.2.12, DNS:PVE2.example.org"
+# Proxmox VE's own certificates as a node's name resolving one way or the other leaves them, but
+# without 127.0.0.1, which the TLS server below is reached at as the address they lack.
+certificate only-ipv6 pve1 cluster-root "${leaf}
+subjectAltName = DNS:localhost, DNS:pve1, IP:::1, IP:2001:db8::11"
+certificate only-ipv4 pve1 cluster-root "${leaf}
+subjectAltName = DNS:localhost, DNS:pve1, IP:::1, IP:192.0.2.11"
+certificate both pve1 cluster-root "${leaf}
+subjectAltName = DNS:pve1.example.org, IP:192.0.2.11, IP:2001:db8::11"
+certificate only-name pve1 cluster-root "${leaf}
+subjectAltName = DNS:pve1.example.org"
 
 # This node, pve1, on 192.0.2.11 (its bridge) and 198.51.100.11; pve2 and pve3 beside it; a
 # backup server outside the cluster; and names for the whole cluster.
@@ -246,6 +256,47 @@ serve org-node
 printf 'y\n' > "${tty}"
 expect "the certificate alone served, said yes to: that certificate" "${org_node} 1" chosen_ca
 tty=${root}/no-terminal
+
+# A certificate not valid for the URL's address stops the install naming what it is valid for and
+# the fix, whichever CA vouches for it. Fails on a build whose check_api blames the CA instead.
+reissue="or reissue the certificate for 127.0.0.1: make the node's name resolve to 127.0.0.1 first, then run pvecm updatecerts --force and systemctl restart pveproxy"
+serve only-ipv6
+expect_in "a certificate of the IPv6 address alone, reached over IPv4" \
+    "Proxmox VE's certificate is valid for pve1, 2001:db8::11, not 127.0.0.1. Give a URL with one of those with --proxmox-url, ${reissue}" chosen_ca
+proxmox_ca=${certs}/cluster-root.crt
+expect_in "the same with --proxmox-ca" "is valid for pve1, 2001:db8::11, not 127.0.0.1" chosen_ca
+proxmox_ca=${certs}/other-root.crt
+expect_in "the same with --proxmox-ca of another CA" "is valid for pve1, 2001:db8::11, not 127.0.0.1" chosen_ca
+proxmox_ca=''
+serve only-ipv4
+expect_in "a certificate of another IPv4 address" "is valid for pve1, 192.0.2.11, not 127.0.0.1. Give a URL with one of those with --proxmox-url, ${reissue}" chosen_ca
+serve both
+expect_in "a certificate of both families' addresses but this one" "is valid for pve1.example.org, 192.0.2.11, 2001:db8::11, not 127.0.0.1" chosen_ca
+serve only-name
+expect_in "a certificate of a host name alone" "is valid for pve1.example.org, not 127.0.0.1. Give a URL with one of those with --proxmox-url, ${reissue}" chosen_ca
+mismatch_for() {
+    proxmox_url=$1
+    certificate_mismatch "${certs}/$2.crt"
+}
+expect "a host name the certificate lists: no mismatch" "" mismatch_for https://pve1.example.org:8006 only-name
+expect "an IPv6 address the certificate lists: no mismatch" "" mismatch_for https://[2001:db8::11]:8006 only-ipv6
+expect "another host name: a certificate of its own, never pvecm" \
+    "Proxmox VE's certificate is valid for pve1.example.org, not pve.example.org. Give a URL with one of those with --proxmox-url, or install a certificate for pve.example.org on Proxmox VE" \
+    mismatch_for https://pve.example.org:8006 only-name
+expect_in "an IPv6 address the certificate lacks" "is valid for pve1, 192.0.2.11, not 2001:db8::11." mismatch_for https://[2001:db8::11]:8006 only-ipv4
+
+# The note on an API reached at an IPv6 address because the certificate lacks the bridge's IPv4
+# one. Fails on a build without api_family_note.
+ctid=105
+note() { api_family_note "${certs}/$1.crt" "$2" "$3" 2>&1; }
+expect_in "the IPv6 address chosen, the bridge's IPv4 address unlisted: the note and the fix" \
+    "does not list this node's address 192.0.2.11 on vmbr0, so the appliance and the clusters reach the API at 2001:db8::11, which clusters without IPv6 cannot. To use 192.0.2.11, make this node's name resolve to it first (/etc/hosts), run pvecm updatecerts --force and systemctl restart pveproxy, then: sh install.sh --upgrade --ctid 105 --proxmox-url https://192.0.2.11:8006" \
+    note only-ipv6 2001:db8::11 192.0.2.11
+expect "the bridge's IPv4 address listed too: no note" "" note both 2001:db8::11 192.0.2.11
+expect "an IPv4 address chosen: no note" "" note only-ipv4 192.0.2.11 192.0.2.11
+expect "a name chosen: no note" "" note only-ipv6 pve1 192.0.2.11
+expect "an IPv6-only bridge: no note" "" note only-ipv6 2001:db8::11 2001:db8::11
+ctid=''
 
 # Nothing listening: a refused connection is no certificate problem.
 kill "${server}" 2> /dev/null || true

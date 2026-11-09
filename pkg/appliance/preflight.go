@@ -129,10 +129,33 @@ func (s *Settings) Preflight(inv *Inventory, owned bool) Findings { //nolint:rev
 		s.checkNamesFree(inv, &f)
 		s.checkVMIDs(inv, &f)
 	}
+	s.checkAPIFamily(inv, &f)
 	s.checkAPIReach(inv, &f)
 	s.warnPlacement(inv, &f)
 	s.warnRanges(inv, &f)
 	return f
+}
+
+// checkAPIFamily refuses a Proxmox VE API address of a family the management cluster's nodes have
+// no address in, which they could never reach. The installer picks an address Proxmox VE's own
+// certificate lists, and on a dual-stack node that may be the IPv6 one alone.
+func (s *Settings) checkAPIFamily(inv *Inventory, f *Findings) {
+	u, err := url.Parse(inv.ProxmoxURL)
+	if err != nil {
+		return
+	}
+	ip, err := netip.ParseAddr(u.Hostname())
+	if err != nil {
+		return
+	}
+	family, other := familyIPv4, familyIPv6
+	if ip.Unmap().Is6() {
+		family, other = familyIPv6, familyIPv4
+	}
+	if slices.Contains(s.Families(), family) {
+		return
+	}
+	f.Errors = append(f.Errors, fmt.Sprintf("The management cluster's nodes have no %s address, so they cannot reach the Proxmox VE API at %s. Give them %s addresses, or move the appliance to an %s address or name of the API that its certificate lists: sh install.sh --upgrade --ctid <id> --proxmox-url <URL>.", family, ip.Unmap(), family, other))
 }
 
 // checkAPIReach checks that the datacenter firewall, once on, still lets the appliance and the

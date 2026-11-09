@@ -106,13 +106,17 @@ secret=$(pve pveum user token add root@pam e2e --privsep 0 --output-format json 
     sed -n 's/.*"value" *: *"\([^"]*\)".*/\1/p')
 [ -n "${secret}" ]
 sudo ip route replace 172.20.99.0/24 via 172.21.99.2
+# The tests reach the API at the node's name, which Proxmox VE's certificate lists whatever order
+# the resolver gives the node's addresses in: with IPv6 on, glibc puts the IPv6 one first, and the
+# certificate then lists no IPv4 address. The VMs resolve the name through the node's dnsmasq.
+grep -qx '172.21.99.2 pve' /etc/hosts || echo '172.21.99.2 pve' | sudo tee -a /etc/hosts > /dev/null
 if [ "${KUBEHENGE_E2E_IPV6:-}" = 1 ]; then
     sudo ip -6 route replace fd99:20:99::/64 via fd99:21:99::2
 fi
 
 umask 077
 cat > "${work}/env" << EOF
-export KUBEHENGE_PROXMOX_URL=https://172.21.99.2:8006
+export KUBEHENGE_PROXMOX_URL=https://pve:8006
 export KUBEHENGE_PROXMOX_TOKEN='root@pam!e2e=${secret}'
 export KUBEHENGE_PROXMOX_CA=${work}/pve-root-ca.pem
 export KUBEHENGE_E2E_NODE=pve KUBEHENGE_E2E_STORAGE=local KUBEHENGE_E2E_BRIDGE=vmbr0
@@ -126,4 +130,4 @@ export KUBEHENGE_E2E_IPV6_LOAD_BALANCER_ADDRESSES=fd99:20:99::30-fd99:20:99::39
 export KUBEHENGE_E2E_OIDC_ADDRESS=172.21.99.1
 export KUBEHENGE_E2E_REGISTRY=172.21.99.3:5000
 EOF
-echo "Proxmox VE is up at https://172.21.99.2:8006; settings in ${work}/env"
+echo "Proxmox VE is up at https://pve:8006 (172.21.99.2); settings in ${work}/env"

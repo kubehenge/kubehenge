@@ -240,6 +240,23 @@ Of the names and addresses that remain, the installer takes, in this order:
 
 A name counts as it resolves on this node. The appliance and the clusters' VMs must resolve it the same way. Where several tie, the installer asks which, with the first as the default. Without a terminal it takes the first and names it.
 
+#### An address the certificate lacks
+
+Proxmox VE's own certificate (`pve-ssl.pem`) lists one address of a node. In a cluster that is the node's cluster address. A node on its own gets the first address its name resolves to, on a dual-stack node usually the IPv6 one.
+
+- The installer then takes the node's name or its IPv6 address, and notes the missing IPv4 one.
+- The setup check refuses an IPv6 address for a management cluster without IPv6.
+- A `--proxmox-url` the certificate lacks stops the installer, which names what it lists.
+
+#### Adding the address to the certificate
+
+On the node:
+
+1. Make the node's name resolve to it first. glibc puts IPv6 first even from `/etc/hosts`, so list only the IPv4 address for the name there, or raise IPv4's precedence in `/etc/gai.conf`.
+2. Run `pvecm updatecerts --force`, then `systemctl restart pveproxy`.
+
+A certificate of your own that lists the address does too (**System**, **Certificates** of the node). Then run `install.sh --upgrade --ctid <id> --proxmox-url https://<address>:8006`.
+
 #### The CA
 
 The CA the certificate is checked against is, without `--proxmox-ca`:
