@@ -54,8 +54,9 @@ jobs:
       contents: read
       checks: write # The runner's beacon (test/e2e/ci/beacon.sh) keeps its record in a check run.
     # node-image-refresh, eight template builds from the families' mirrors, has taken from 63 to 112
-    # minutes when it passed.
-    timeout-minutes: 150
+    # minutes when it passed. A build can wait another hour for a publisher's cache
+    # (signedPairBudget in pkg/templates/sources.go).
+    timeout-minutes: 220
     outputs:
       handed-back: ${{ steps.host.outputs.handed-back || steps.load.outputs.handed-back }}
       failed: ${{ steps.failed.outputs.test }}
@@ -308,7 +309,7 @@ jobs:
       # guard ends.
       - name: ${{ inputs.test }}
         if: env.E2E_RUN == 'true'
-        timeout-minutes: 140
+        timeout-minutes: 210
         env:
           TEST: ${{ inputs.test }}
           GITHUB_TOKEN: ${{ github.token }}
