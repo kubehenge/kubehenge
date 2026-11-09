@@ -40,9 +40,10 @@ function description(markdown) {
 }
 
 // The unreleased lines live in docs/changes/, a file per pull request. The site shows them under
-// [Unreleased], in the order a release folds them in, which the folding script alone decides.
+// [Unreleased], by heading and in the order a release folds them in, which the folding script alone
+// decides.
 function withUnreleased(markdown) {
-  const lines = execFileSync("sh", [join(site, "..", "scripts", "changelog.sh"), "--unreleased"], {
+  const lines = execFileSync("sh", [join(site, "..", "scripts", "changelog.sh"), "unreleased"], {
     encoding: "utf8",
   }).trim();
   const heading = "## [Unreleased]\n";

@@ -124,6 +124,28 @@ jobs:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.
           GH_TOKEN: ${{ github.token }}
 
+  # The pull request's title and every commit subject in it stay within 72 characters, so they read
+  # whole in git's one-line log and in GitHub's lists.
+  subjects:
+    name: Subjects
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          status=0
+          printf '%s\n' "$TITLE" | scripts/subjects.sh title || status=1
+          git log --format=%s "$BASE..$HEAD" | scripts/subjects.sh commits || status=1
+          exit "$status"
+
   # A pull request's new or changed dependencies: their licences and known vulnerabilities, against
   # .github/dependency-review-config.yml.
   dependencies:

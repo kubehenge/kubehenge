@@ -16,7 +16,7 @@ KO_FLAGS ?=
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
 
 .PHONY: build web changelog gateway-api capmox-crds capi-operator-chart website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
-.PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
+.PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
 # comes, as the end-to-end runs do.
@@ -95,7 +95,7 @@ website:
 # Folds the changelog fragments of docs/changes/ into the release's section of docs/changelog.md:
 # make changelog VERSION=0.4.3
 changelog:
-	sh scripts/changelog.sh $(if $(filter command line,$(origin VERSION)),$(VERSION),$(error VERSION is not set: make changelog VERSION=0.4.3))
+	sh scripts/changelog.sh fold $(if $(filter command line,$(origin VERSION)),$(VERSION),$(error VERSION is not set: make changelog VERSION=0.4.3))
 
 # Checks over the built website in Playwright's Chromium. First website/check-layers.js: no
 # composited layer on the home page over 1.5 windows at a phone and a desktop size, and no motion
@@ -212,10 +212,10 @@ verify-providers:
 	sh scripts/verify-providers.sh
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
-# YAML, Markdown, the e2e image's Dockerfile and the node images' Containerfiles, spelling and
-# Renovate's config, each at its strictest settings; the files are the repository's own, as git
-# lists them.
-lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-docker lint-typos
+# YAML, Markdown, the changelog, the e2e image's Dockerfile and the node images' Containerfiles,
+# spelling and Renovate's config, each at its strictest settings; the files are the repository's
+# own, as git lists them.
+lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
 
 FILES = git ls-files --cached --others --exclude-standard
 SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh website/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
@@ -314,6 +314,10 @@ lint-yaml:
 
 lint-markdown: web/node_modules/.package-lock.json
 	$(MARKDOWNLINT) $$($(FILES) '*.md')
+
+# The fragments of docs/changes/ and the sections of docs/changelog.md (.github/CONTRIBUTING.md).
+lint-changelog:
+	sh scripts/changelog.sh check
 
 lint-docker:
 	hadolint --failure-threshold style test/e2e/pve/Dockerfile pkg/templates/el/*Containerfile

@@ -67,7 +67,11 @@ Details and reasons: `docs/architecture.md`.
 - **Accessibility.** The frontend's unit tests run axe over every page and dialog in its main states, and none may fail.
 - **Spelling.** typos checks every file in British English. An American spelling passes only as an outside name, with its reason in `.typos.toml`.
 - **Website.** Lighthouse CI checks the built site on each pull request that changes it (`make website-check`, limits in `website/lighthouserc.cjs`).
-- **Changelog.** Put each user-visible line, as a bullet, in `docs/changes/<branch>.md` and leave `docs/changelog.md` alone, so pull requests never conflict. A release folds the files into its section (`make changelog VERSION=<version>`).
+- **Changelog.** Put your lines in `docs/changes/<branch>.md` and leave `docs/changelog.md` alone, so pull requests never conflict. A release folds the files into its section (`make changelog VERSION=<version>`).
+  - Each line goes under one of `### Before you upgrade`, `### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Security` or `### Internal`. Internal lines (CI, tests, tooling) stay out of the release notes.
+  - Each line is a bullet of one sentence and at most 140 characters. It says what changed for the reader, with code and names in backticks.
+  - Detail goes into the docs, with a link written relative to `docs/changelog.md`. `make test` checks the shape (`scripts/changelog.sh check`).
+- **Subjects.** Commit subjects and pull request titles are at most 72 characters. CI checks both.
 - **Page dates.** The published site serves each page's fingerprint and the day its content last changed as `/pages.json`, and a deployment starts from it. Nothing is committed for it.
 - **Links.** lychee checks the outside links of the README, `docs/` and the website every night (`make links`).
 - **Logs escape what they carry.** Go code logs through `log/slog` and the controller through controller-runtime's zap in JSON. Both escape a value, so nothing a user sends can forge a log line.
