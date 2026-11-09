@@ -136,6 +136,15 @@
       "propertyNames": { "pattern": "^[A-Za-z0-9.-]+(:[0-9]+)?$" },
       "additionalProperties": { "type": "string", "pattern": "^(oci|https?)://[^/?#\\s]+(/[^?#\\s]*)?$" }
     },
+    "releaseMirror": {
+      "description": "A mirror of the RKE2 and k3s releases, on GitHub's paths, with the PEM authority of a mirror the usual authorities do not sign.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": { "type": "string", "pattern": "^$|^https?://[A-Za-z0-9._~:\\[\\]-]+(/[A-Za-z0-9._~:/\\[\\]-]*[A-Za-z0-9._~:\\[\\]-])?$" },
+        "caBundle": { "type": "string", "maxLength": 262144 }
+      }
+    },
     "controllerLogs": {
       "description": "How the controller logs, in JSON either way.",
       "type": "object",
@@ -190,6 +199,12 @@
       "description": "The management cluster's API as workload clusters reach it, for autoscalers that run inside their cluster; empty, none can.",
       "type": "string",
       "pattern": "^(https://[^\\s/]+)?$"
+    },
+    "managementAddresses": {
+      "description": "The management cluster's node addresses, which a workload cluster's firewall accepts.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[0-9A-Fa-f.:]+$" }
     },
     "watch": {
       "description": "What the controller watches for on its own, and how long it gives each before it reports it.",

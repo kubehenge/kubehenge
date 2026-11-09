@@ -142,6 +142,8 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case f.nodeStorageRoutes(a, path):
 	case r.URL.Path == "/api2/json/nodes":
 		a.reply(f.nodes())
+	case len(path) == 3 && path[0] == "nodes" && path[2] == "status":
+		a.reply(map[string]any{"memory": map[string]any{"free": 1 << 34}})
 	case r.URL.Path == "/api2/json/pools":
 		f.pools(a, r)
 	case r.URL.Path == "/api2/json/access/acl" && r.Method == http.MethodPut:

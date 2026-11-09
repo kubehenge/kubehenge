@@ -446,7 +446,7 @@ type bake struct {
 }
 
 func (k *bake) finish(ctx context.Context) error {
-	return k.b.finish(ctx, k.node, k.vm, 101, &k.tmpl, k.recipe)
+	return k.b.finish(ctx, k.node, k.vm, 101, &k.tmpl, DefaultHardware(DefaultCPUType), k.recipe)
 }
 
 // bakeVM creates the VM of an RKE2 build as Create does.
@@ -465,7 +465,7 @@ func bakeVM(ctx context.Context, t *testing.T, h *bakeHost, recipe *Recipe) *bak
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = b.createVM(ctx, node, 101, &tmpl, "local:import/image.qcow2", DefaultCPUType, recipe); err != nil {
+	if err = b.createVM(ctx, node, 101, &tmpl, "local:import/image.qcow2", DefaultHardware(DefaultCPUType), recipe); err != nil {
 		t.Fatal(err)
 	}
 	vm, err := node.VirtualMachine(ctx, 101)
@@ -533,7 +533,8 @@ func TestFinishBakesAnImageModeBuildStepByStep(t *testing.T) {
 		"run cloud-init clean --logs",
 		"shutdown", "config delete=ide2,net0",
 		"remove " + seed,
-		"config boot=order=scsi0 cores=1 description=" + facts.Description(templateDescription) + " memory=512 tags=" + strings.Join(k.tmpl.Tags, ";"),
+		"config boot=order=scsi0 cores=1 description=" + facts.Description(templateDescription) + " memory=512 tags=" +
+			strings.Join(NormaliseTags(append(slices.Clone(k.tmpl.Tags), DefaultHardware(DefaultCPUType).Tags()...)), ";"),
 		"template",
 	}
 	if got := h.steps(); !slices.Equal(got, want) {
@@ -593,6 +594,45 @@ func TestAFailedCheckReportsCloudInitAndTheBakeLog(t *testing.T) {
 	}
 	if last := steps[len(steps)-1]; last != "remove local:iso/user-data-101.iso" {
 		t.Errorf("the last step was %q, not the seed's removal", last)
+	}
+}
+
+// A node image's boot keeps no bake log, so what its failed cloud-init module printed is all that
+// names the cause, and it has to be read before the VM goes.
+func TestAFailedNodeBootReportsWhatCloudInitsModulePrinted(t *testing.T) {
+	t.Parallel()
+	h := newBakeHost(t)
+	recipe := imageRecipe()
+	recipe.Checks = [][]string{{"test", "-e", "/built"}}
+	recipe.Image.Checks = [][]string{{cloudInit, "status", "--wait"}, {"getenforce"}}
+	h.exit["cloud-init status --wait"] = guestResult{code: 1, out: "status: error"}
+	h.exit["cloud-init status --long"] = guestResult{code: 1, out: "errors:\n\t- ('scripts_user', RuntimeError('Runparts: 1 failures (runcmd) in 1 attempted commands'))"}
+	account := "sh -c " + cloudInitAccount
+	h.exit[account] = guestResult{out: "/var/log/cloud-init-output.log, its end:\nkubehenge-images: pulling registry.k8s.io/pause:3.10: connection refused\n" +
+		"/var/log/cloud-init.log, its warnings and errors with the lines after each:\nutil.py[WARNING]: Running module scripts_user failed\nTraceback (most recent call last):"}
+	ctx := t.Context()
+	k := bakeVM(ctx, t, h, recipe)
+
+	err := k.finish(ctx)
+	for _, want := range []string{
+		`"cloud-init status --wait" exited 1: status: error`, "('scripts_user', RuntimeError(",
+		"kubehenge-images: pulling registry.k8s.io/pause:3.10: connection refused", "Running module scripts_user failed\nTraceback",
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("finish gave %v; want it to carry %q", err, want)
+		}
+	}
+	if err != nil && strings.Contains(err.Error(), "the first line of each second") {
+		t.Errorf("a boot without a bake log reported one: %v", err)
+	}
+	steps := h.steps()
+	read := slices.Index(steps, "run "+account)
+	if read < 0 || slices.Contains(steps, "run getenforce") {
+		t.Fatalf("cloud-init's account was not read, or the checks went on, in steps %v", steps)
+	}
+	// Create removes the VM once finish returns, so nothing but the seed's removal may come between.
+	if rest := steps[read+1:]; !slices.Equal(rest, []string{"remove local:iso/user-data-101.iso"}) {
+		t.Errorf("after reading cloud-init's account the bake went on with %v", rest)
 	}
 }
 
@@ -883,7 +923,7 @@ func TestCreateMakesATemplateAndRemovesItsDownload(t *testing.T) {
 		"download " + volume,
 		"create 101",
 		"config tags=" + kubehengeTag + ";" + buildingTag,
-		"config boot=order=scsi0 cores=1 memory=512 tags=" + strings.Join(tmpl.Tags, ";"),
+		"config boot=order=scsi0 cores=1 memory=512 tags=" + strings.Join(NormaliseTags(append(slices.Clone(tmpl.Tags), DefaultHardware(DefaultCPUType).Tags()...)), ";"),
 		"template",
 		"remove " + volume,
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,6 +38,9 @@ const (
 	rancherNamespace = "cattle-system"
 	// cisVariable hardens the cluster to the CIS benchmark beyond what every cluster gets.
 	cisVariable = "cis"
+	// kubernetesName is the word the API server's in-cluster name, Calico's node address source and
+	// the Flux operator's cluster type share.
+	kubernetesName = "kubernetes"
 
 	// apiVersionKey is a manifest's own, in those written as maps.
 	apiVersionKey = "apiVersion"
@@ -506,16 +510,71 @@ func workloadManifest(name string, data map[string]string) ([]byte, error) {
 	return manifest, nil
 }
 
-// podRange is the CNI's pod range: the Cluster's own, or else the one the distribution's own
-// components assume, kube-proxy's cluster CIDR among them.
-func podRange(cluster *clusterv1.Cluster, cni CNI) (string, error) {
-	if blocks := cluster.Spec.ClusterNetwork.Pods.CIDRBlocks; len(blocks) > 0 {
-		return blocks[0], nil
+// podRanges are the CNI's pod ranges, one of each of the cluster's families: the Cluster's own, or
+// else the IPv4 one the distribution's own components assume, kube-proxy's cluster CIDR among them.
+func podRanges(cluster *clusterv1.Cluster, cni CNI) (podFamilies, error) {
+	var r podFamilies
+	blocks := cluster.Spec.ClusterNetwork.Pods.CIDRBlocks
+	if len(blocks) == 0 {
+		if cni.Pods == "" {
+			return r, fmt.Errorf("cluster %s/%s: no pod range for the CNI", cluster.Namespace, cluster.Name)
+		}
+		blocks = []string{cni.Pods}
 	}
-	if cni.Pods == "" {
-		return "", fmt.Errorf("cluster %s/%s: no pod range for the CNI", cluster.Namespace, cluster.Name)
+	for _, b := range blocks {
+		p, err := netip.ParsePrefix(b)
+		switch {
+		case err != nil:
+			return r, fmt.Errorf("cluster %s/%s: pod range %q: %w", cluster.Namespace, cluster.Name, b, err)
+		case p.Addr().Is4():
+			r.ipv4 = b
+		default:
+			r.ipv6 = b
+		}
 	}
-	return cni.Pods, nil
+	return r, nil
+}
+
+// podFamilies are a cluster's pod ranges by family, "" for a family it does not have.
+type podFamilies struct{ ipv4, ipv6 string }
+
+// ciliumFamilies fits Cilium to the cluster's families: IPv6 where the cluster has it, IPv4 off
+// where it has none, then also as the protocol its tunnels run over.
+func ciliumFamilies(values map[string]any, r podFamilies) {
+	if r.ipv6 != "" {
+		values["ipv6"] = map[string]any{"enabled": true}
+	}
+	if r.ipv4 == "" {
+		values["ipv4"] = map[string]any{"enabled": false}
+		values["underlayProtocol"] = "ipv6"
+	}
+}
+
+// ciliumPools has Cilium's own IPAM hand out the cluster's pod ranges, where the distribution's
+// IPAM does not.
+func ciliumPools(values map[string]any, r podFamilies) {
+	operator := map[string]any{}
+	if r.ipv4 != "" {
+		operator["clusterPoolIPv4PodCIDRList"] = []any{r.ipv4}
+	}
+	if r.ipv6 != "" {
+		operator["clusterPoolIPv6PodCIDRList"] = []any{r.ipv6}
+	}
+	values["ipam"] = map[string]any{"mode": "cluster-pool", "operator": operator}
+}
+
+// calicoPools are the Installation's IP pools, one of each of the cluster's families. Calico finds
+// each node's address of a family on the interface the kubelet registered it with.
+func calicoPools(network map[string]any, r podFamilies) {
+	var pools []any
+	if r.ipv4 != "" {
+		pools = append(pools, map[string]any{"cidr": r.ipv4, "encapsulation": "VXLANCrossSubnet"})
+	}
+	if r.ipv6 != "" {
+		pools = append(pools, map[string]any{"cidr": r.ipv6, "encapsulation": "VXLAN", "natOutgoing": "Enabled"})
+		network["nodeAddressAutodetectionV6"] = map[string]any{kubernetesName: "NodeInternalIP"}
+	}
+	network["ipPools"] = pools
 }
 
 func calicoResourcesName(cluster *clusterv1.Cluster) string {
@@ -564,11 +623,12 @@ func calicoImageSet(images []Image) map[string]any {
 // retries until they exist. Nor can Helm install the CRDs first: Calico's CRD chart is larger than
 // the 1 MiB Secret a Helm release is kept in.
 func calicoResources(cluster *clusterv1.Cluster, cni CNI, images []Image) (*corev1.Secret, error) {
-	pods, err := podRange(cluster, cni)
+	pods, err := podRanges(cluster, cni)
 	if err != nil {
 		return nil, err
 	}
-	network := map[string]any{"ipPools": []any{map[string]any{"cidr": pods, "encapsulation": "VXLANCrossSubnet"}}}
+	network := map[string]any{}
+	calicoPools(network, pods)
 	if cni.ContainerForwarding {
 		network["containerIPForwarding"] = "Enabled"
 	}
@@ -697,6 +757,15 @@ func rke2CiliumConfig(cluster *clusterv1.Cluster, id int, addons *Addons) (*core
 	values, err := ciliumValues(cluster, id, addons, map[string]any{})
 	if err != nil {
 		return nil, err
+	}
+	// RKE2's chart takes the pod ranges from RKE2's own settings, but has IPv6 on only when told. A
+	// cluster that names no ranges runs RKE2's own IPv4 one.
+	if len(cluster.Spec.ClusterNetwork.Pods.CIDRBlocks) > 0 {
+		pods, err := podRanges(cluster, CNI{})
+		if err != nil {
+			return nil, err
+		}
+		ciliumFamilies(values, pods)
 	}
 	return rke2ChartConfig(rke2CiliumName(cluster), cluster, rke2CiliumChart, values)
 }
@@ -1047,7 +1116,7 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 	case "":
 		return nil, nil
 	case cniCilium:
-		pods, err := podRange(cluster, cni)
+		pods, err := podRanges(cluster, cni)
 		if err != nil {
 			return nil, err
 		}
@@ -1055,7 +1124,8 @@ func cniChart(cluster *clusterv1.Cluster, charts *Charts, cni CNI, addons *Addon
 		if err != nil {
 			return nil, err
 		}
-		values["ipam"] = map[string]any{"mode": "cluster-pool", "operator": map[string]any{"clusterPoolIPv4PodCIDRList": []any{pods}}}
+		ciliumFamilies(values, pods)
+		ciliumPools(values, pods)
 		if isTalos(cluster) {
 			talosCilium(values)
 		}

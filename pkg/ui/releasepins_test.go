@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
@@ -115,4 +117,35 @@ func TestOnlyAdministratorsChangeReleasePins(t *testing.T) {
 	expect(t, d.do("POST", "/api/release-pins/check", `{"version":"`+pinnedK3s+`"}`), http.StatusForbidden)
 	expect(t, d.do("POST", "/api/release-pins", `{"version":"`+pinnedK3s+`"}`), http.StatusForbidden)
 	expect(t, d.do("DELETE", "/api/release-pins/"+strings.ReplaceAll(pinnedK3s, "+", "%2B"), ""), http.StatusForbidden)
+}
+
+func TestClassesWithAReleaseMirrorShowTheManagementOne(t *testing.T) {
+	t.Parallel()
+	class := func(variables ...string) *clusterv1.ClusterClass {
+		c := &clusterv1.ClusterClass{Name: "kubehenge-k3s"}
+		for _, name := range variables {
+			c.Spec.Variables = append(c.Spec.Variables, clusterv1.ClusterClassVariable{
+				Name: name, Schema: clusterv1.VariableSchema{OpenAPIV3Schema: clusterv1.JSONSchemaProps{Type: "object"}},
+			})
+		}
+		return c
+	}
+	const address = "https://mirror.example.org/github"
+	mirrored := &provisioner.ReleaseChecksums{Mirror: func() provisioner.ReleaseMirror { return provisioner.ReleaseMirror{URL: address} }}
+	for _, tc := range []struct {
+		name   string
+		checks *provisioner.ReleaseChecksums
+		class  *clusterv1.ClusterClass
+		want   string
+	}{
+		{"a mirror", mirrored, class("trustedCAs", "releaseMirror"), address},
+		{"no variable", mirrored, class("trustedCAs"), ""},
+		{"no mirror", &provisioner.ReleaseChecksums{}, class("releaseMirror"), ""},
+		{"no checks", nil, class("releaseMirror"), ""},
+	} {
+		s := &Server{PinChecks: tc.checks, Log: slog.New(slog.DiscardHandler)}
+		if got := s.classView(t.Context(), tc.class, "k3s").ReleaseMirror; got != tc.want {
+			t.Errorf("%s: the class shows %q, want %q", tc.name, got, tc.want)
+		}
+	}
 }

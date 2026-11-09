@@ -122,7 +122,7 @@ func (r *Reconciler) talosServesControlPlaneMetrics(ctx context.Context, c *clus
 	}
 	for _, component := range []string{"kube-controller-manager", "kube-scheduler"} {
 		var pods corev1.PodList
-		if err := workload.client.List(ctx, &pods, client.InNamespace(metav1.NamespaceSystem), client.MatchingLabels{"component": component}); err != nil {
+		if err := workload.client.List(ctx, &pods, client.InNamespace(metav1.NamespaceSystem), client.MatchingLabels{componentLabel: component}); err != nil {
 			r.Remotes.forget(c)
 			return false
 		}

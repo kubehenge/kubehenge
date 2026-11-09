@@ -9,15 +9,29 @@ import { CredentialField } from "./CredentialField";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { EgressDialog, egressOf, egressText } from "./EgressProxy";
 import { EtcdDialog, etcdQuotaOf, etcdText } from "./EtcdSize";
+import { FirewallDialog, securityGroupsOf, securityGroupsText } from "./Firewall";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { HostOutageDialog, graceOf, graceText, graceVariable } from "./HostOutage";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
 import { LogsDialog, logsOf, logsText } from "./Logs";
 import { labelsOf, labelsText } from "./namespace-labels";
 import { NamespaceLabelsDialog } from "./NamespaceLabels";
+import { choiceOf, familyLabels } from "./network";
 import { nodeCustomisationOf, nodeCustomisationText } from "./node-customisation";
 import { choosable, cpuNote, findNodeOS, fipsCNI, nodeOSKey, nodeOSRef } from "./node-os";
 import { NodeCustomisationDialog } from "./NodeCustomisation";
+import {
+  MirrorsDialog,
+  ReleaseMirrorDialog,
+  TrustedCAsDialog,
+  mirrorsOf,
+  mirrorsText,
+  releaseMirrorOf,
+  releaseMirrorText,
+  trustedOf,
+  trustedText,
+  useReleaseMirrorDefault,
+} from "./NodeSite";
 import { OIDCProviders, cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import {
   PlacementDialog,
@@ -72,6 +86,10 @@ export type OptionAction =
   | "rancher"
   | "gitops"
   | "egressProxy"
+  | "registryMirrors"
+  | "trustedCAs"
+  | "releaseMirror"
+  | "firewall"
   | "upgrades"
   | "certificates"
   | "namespaceLabels"
@@ -133,6 +151,10 @@ export function OptionDialog({
     rancher: RancherDialog,
     gitops: GitOpsDialog,
     egressProxy: EgressDialog,
+    registryMirrors: MirrorsDialog,
+    trustedCAs: TrustedCAsDialog,
+    releaseMirror: ReleaseMirrorDialog,
+    firewall: FirewallDialog,
     upgrades: UpgradesDialog,
     certificates: CertificatesDialog,
     namespaceLabels: NamespaceLabelsDialog,
@@ -197,10 +219,15 @@ export interface Offered {
   /** What keeps the CSI plugin's newest release or volume snapshots from being switched on. */
   csiProblem?: string | undefined;
   snapshotsProblem?: string | undefined;
+  /** The management cluster's release mirror, empty for GitHub, undefined while unknown. */
+  releaseMirror?: string | undefined;
 }
 
 /** everything offers every setting, for a list that has to show whatever a change sets. */
 export const everything: Offered = { ha: true, csi: true, snapshots: true, haGroups: true };
+
+// takesReleaseMirror holds for the distributions whose classes offer a release mirror of their own.
+const takesReleaseMirror = (c: Cluster): boolean => c.distribution === "rke2" || c.distribution === "k3s";
 
 /** useOffered reads which of the settings offered only at times a cluster offers. */
 export function useOffered(c: Cluster): Offered {
@@ -208,6 +235,7 @@ export function useOffered(c: Cluster): Offered {
   const csi = useCSIOffer(c);
   const snapshots = useSnapshotsOffer(c);
   const haGroups = useHAGroupsOffered(c);
+  const releaseMirror = useReleaseMirrorDefault(c.class);
   return {
     ha,
     csi: csi.offered,
@@ -215,6 +243,7 @@ export function useOffered(c: Cluster): Offered {
     haGroups,
     csiProblem: csi.problem,
     snapshotsProblem: snapshots.problem,
+    releaseMirror,
   };
 }
 
@@ -284,6 +313,11 @@ export function optionRows<A extends string = never>(
   const rows: OptionRow<OptionAction | A>[] = [
     ...nodeOSRows(c),
     ...talos,
+    {
+      label: "Address families",
+      value: familyLabels[choiceOf(record(c.variables["network"])["ipFamilies"])],
+      group: "Network",
+    },
     { label: "Pod network", value: clusterCNI(text(c.variables["cni"]), c.distribution), group: "Network" },
     {
       label: "Load balancer",
@@ -418,6 +452,38 @@ export function optionRows<A extends string = never>(
       group: "Network",
       action: "egressProxy",
       name: "the egress proxy",
+    },
+    {
+      label: "Registry mirrors",
+      value: mirrorsText(mirrorsOf(c.variables["registryMirrors"])),
+      group: "Network",
+      action: "registryMirrors",
+      name: "the registry mirrors",
+    },
+    {
+      label: "Trusted CAs",
+      value: trustedText(trustedOf(c.variables["trustedCAs"])),
+      group: "Network",
+      action: "trustedCAs",
+      name: "the trusted CAs",
+    },
+    ...(takesReleaseMirror(c)
+      ? [
+          {
+            label: "Release mirror",
+            value: releaseMirrorText(releaseMirrorOf(c.variables["releaseMirror"]), offered.releaseMirror),
+            group: "Network" as const,
+            action: "releaseMirror" as const,
+            name: "the release mirror",
+          },
+        ]
+      : []),
+    {
+      label: "Firewall security groups",
+      value: securityGroupsText(securityGroupsOf(c.variables["securityGroups"])),
+      group: "Network",
+      action: "firewall",
+      name: "the firewall security groups",
     },
     {
       label: "Automatic upgrades",

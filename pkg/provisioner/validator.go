@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -24,7 +26,8 @@ import (
 // alone, volume snapshots where they cannot be taken, Sys.Audit on / where no cluster may hold it,
 // autoscaled pools whose bounds the autoscaler cannot work with or whose nodes would run out of
 // addresses, and a Talos release that does not run the Kubernetes version or that Talos cannot
-// upgrade to from the one before, and an interface MTU or queue count out of bounds, or an MTU above the
+// upgrade to from the one before, a firewall security group Proxmox VE lacks, and an interface MTU
+// or queue count out of bounds, or an MTU above the
 // bridge's. A cluster that already fell short before a change is not held to it for unrelated
 // edits.
 type ClusterValidator struct {
@@ -86,7 +89,9 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	defer cancel()
 	reads := v.Hooks.reads()
 	errs = append(errs, v.validateNodeNIC(pveCtx, old, c)...)
+	errs = append(errs, v.validateFirewall(pveCtx, old, c)...)
 	errs = append(errs, v.validateNodeOS(pveCtx, reads, old, c)...)
+	errs = append(errs, v.validateNUMA(pveCtx, reads, old, c, class)...)
 	errs = append(errs, v.validatePlacement(pveCtx, reads, old, c, class)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
@@ -98,6 +103,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 		errs = append(errs, v.validateRancher(ctx, old, c, class)...)
 	}
 	errs = append(errs, validateClusterMesh(old, c)...)
+	errs = append(errs, validateFamilies(old, c)...)
 	errs = append(errs, validateRanges(old, c, class)...)
 	errs = append(errs, validateTimeServers(c)...)
 	if err := checkLogs(c); err != nil {
@@ -112,6 +118,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateMonitoring(c)...)
 	errs = append(errs, validateGitOps(c)...)
 	errs = append(errs, validateEgress(c)...)
+	errs = append(errs, validateNodeSite(c, time.Now())...)
 	errs = append(errs, validateAddonSettings(old, c)...)
 	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
 	errs = append(errs, validateAutoscaling(c)...)
@@ -120,7 +127,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 		errs = append(errs, field.Invalid(topology.Child("variables").Key(etcdSnapshotsVariable), etcdSnapshotsVariable, err.Error()))
 	}
 	if err := checkNodeAddresses(old, c); err != nil {
-		errs = append(errs, field.Forbidden(topology.Child("variables").Key("network"), err.Error()))
+		errs = append(errs, field.Forbidden(topology.Child("variables").Key(networkVariable), err.Error()))
 	}
 	if err := checkTalos(old, c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(TalosVersionVariable), err.Error()))
@@ -130,7 +137,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	}
 	if addressesChanged(old, c) {
 		if err := v.Hooks.checkAddresses(ctx, c); err != nil {
-			errs = append(errs, field.Forbidden(topology.Child("variables").Key("network"), err.Error()))
+			errs = append(errs, field.Forbidden(topology.Child("variables").Key(networkVariable), err.Error()))
 		}
 	}
 	errs = append(errs, v.validateGrants(ctx, old, c, class)...)
@@ -145,7 +152,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 // validateRanges holds a new cluster's pod and service ranges to checkRanges. Unset, the network is
 // the class's schema's to refuse.
 func validateRanges(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
-	if _, set, _ := optionalVariable[nodeNetwork](c, "network"); old != nil || !set {
+	if _, set, _ := optionalVariable[nodeNetwork](c, networkVariable); old != nil || !set {
 		return nil
 	}
 	if err := checkRanges(c, class); err != nil {
@@ -199,13 +206,33 @@ func (v *ClusterValidator) validatePlacement(ctx context.Context, reads *pveRead
 			errs = append(errs, field.Forbidden(variables.Key("storage"), err.Error()))
 		}
 	}
-	if old != nil && !slices.ContainsFunc([]string{"storage", allowedNodesVariable, NodeOSVariable, "network"}, func(name string) bool { return variableChanged(old, c, name) }) {
+	if old != nil && !slices.ContainsFunc([]string{"storage", allowedNodesVariable, NodeOSVariable, networkVariable}, func(name string) bool { return variableChanged(old, c, name) }) {
 		return errs
 	}
 	if err := admitOnReadFailure(ctx, v.Hooks.checkPlacement(ctx, reads, c)); err != nil {
 		errs = append(errs, field.Forbidden(variables.Key(allowedNodesVariable), err.Error()))
 	}
 	return errs
+}
+
+// validateNUMA checks the machines' cores against the templates' NUMA when a cluster is created and
+// when what sizes its machines or picks their templates changes.
+func (v *ClusterValidator) validateNUMA(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	if old != nil && !machinesChanged(old, c) {
+		return nil
+	}
+	if err := v.Hooks.checkNUMA(ctx, reads, c, class); err != nil {
+		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology"), err.Error())}
+	}
+	return nil
+}
+
+// machinesChanged tells whether the update changes what sizes the machines or which templates they
+// are cloned from.
+func machinesChanged(old, c *clusterv1.Cluster) bool {
+	return variableChanged(old, c, "controlPlaneMachine") || variableChanged(old, c, "workerMachine") ||
+		variableChanged(old, c, NodeOSVariable) || !reflect.DeepEqual(old.Spec.Topology.ControlPlane.Variables, c.Spec.Topology.ControlPlane.Variables) ||
+		!reflect.DeepEqual(old.Spec.Topology.Workers, c.Spec.Topology.Workers)
 }
 
 // validateGrants holds the privileges a cluster asks for beyond its pool to what the management

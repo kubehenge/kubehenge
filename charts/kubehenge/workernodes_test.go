@@ -14,6 +14,7 @@ import (
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 	fielderrors "k8s.io/apimachinery/pkg/util/validation/field"
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
 	"sigs.k8s.io/yaml"
@@ -70,6 +71,12 @@ func renderClass(t *testing.T, file string) renderedClass {
 				v := &head.Spec.Variables[i]
 				class.variables[v.Name] = &v.Schema.OpenAPIV3Schema
 			}
+		case "ProxmoxClusterTemplate", "ProxmoxMachineTemplate":
+			var obj map[string]any
+			if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+				t.Fatal(err)
+			}
+			class.templates[head.Kind] = obj
 		case "ConfigMap":
 			for tpl := range strings.SplitSeq(head.Data["templates.yaml"], "\n---\n") {
 				var obj map[string]any
@@ -103,7 +110,10 @@ func (c renderedClass) patched(t *testing.T, kind string, variables map[string]a
 			}
 			for _, jp := range d.JSONPatches {
 				value := jp.Value
-				if jp.ValueFrom != nil {
+				switch {
+				case jp.ValueFrom != nil && jp.ValueFrom.Variable != "":
+					value = variableAt(variables, jp.ValueFrom.Variable)
+				case jp.ValueFrom != nil:
 					if err := yaml.Unmarshal([]byte(capiTemplate(t, jp.ValueFrom.Template, variables)), &value); err != nil {
 						t.Fatalf("patch %s: %v", p.Name, err)
 					}
@@ -127,6 +137,20 @@ func (c renderedClass) patched(t *testing.T, kind string, variables map[string]a
 		t.Fatal(err)
 	}
 	return out
+}
+
+// variableAt is the value at a variable's dotted path, as Cluster API reads a patch's valueFrom,
+// nil where a test leaves it unset.
+func variableAt(variables map[string]any, path string) any {
+	var v any = variables
+	for name := range strings.SplitSeq(path, ".") {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v = m[name]
+	}
+	return v
 }
 
 const poolNodes = `{"workerNodes": {
@@ -225,9 +249,28 @@ func validateVariable(t *testing.T, schema *apiextensionsv1.JSONSchemaProps, val
 	if err != nil {
 		t.Fatal(err)
 	}
+	value, old = asServed(t, value), asServed(t, old)
 	errs := validation.ValidateCustomResource(fielderrors.NewPath("value"), value, validator)
 	celErrs, _ := cel.NewValidator(structural, true, celconfig.PerCallLimit).Validate(t.Context(), fielderrors.NewPath("value"), structural, value, old, celconfig.RuntimeCELCostBudget)
 	return append(errs, celErrs...)
+}
+
+// asServed decodes a value as the API server does, whole numbers as int64, which CEL reads as
+// integers where encoding/json's float64 fails a rule that reads an integer field.
+func asServed(t *testing.T, v any) any {
+	t.Helper()
+	if v == nil {
+		return nil
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out any
+	if err := utiljson.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 func TestNodeLabelsAndTaintsAreValidatedByTheClass(t *testing.T) {

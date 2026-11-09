@@ -3,7 +3,6 @@ name: ci
 
 on:
   pull_request:
-  merge_group:
   push:
     branches: [main]
 
@@ -21,10 +20,8 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# A merge group runs `test` and `workflows` because their result depends on the combination: two
-# pull requests can each pass alone and break lint, a unit test or a generated file together.
-# `Dependencies` reads one pull request's diff, so it is skipped there. codeql.yml reports without
-# analysing, and e2e.yml keeps running in full.
+# A draft pull request runs only these fast checks on every push, and e2e.yml waits for it to be
+# ready for review.
 jobs:
   # Lint, unit and integration tiers: Go, the frontend, the OpenTofu module against mocked
   # providers, the Helm charts, the shell scripts, and the chart and controllers against a real API
@@ -39,8 +36,8 @@ jobs:
         with:
           persist-credentials: false
       # What Go, npm and uv download and build, by the lock files they read. Only a push to main
-      # saves it: a pull request's or merge group's entry would serve no other run and push main's
-      # out of the cache's 10 GB.
+      # saves it: a pull request's entry would serve no other run and push main's out of the
+      # cache's 10 GB.
       - id: cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -52,12 +49,24 @@ jobs:
           key: >-
             ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
           restore-keys: ci-
-      - name: Tools
+      # The tools by scripts/tools.sh's hash and the list named, downloaded only on a miss. Only
+      # main saves, as above, and no job that publishes restores it.
+      - id: tools
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: >-
+            tools-${{ runner.os }}-${{ runner.arch }}-all-${{ hashFiles('scripts/tools.sh') }}
+      - if: steps.tools.outputs.cache-hit != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        run: scripts/tools.sh "$RUNNER_TEMP/bin"
+      - if: steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: make test
         env:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.
@@ -72,7 +81,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-      - if: github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+      - if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -93,12 +102,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Tools
+      - id: tools
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: >-
+            tools-${{ runner.os }}-${{ runner.arch }}-actionlint+shellcheck+uv-${{
+            hashFiles('scripts/tools.sh') }}
+      - if: steps.tools.outputs.cache-hit != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin" actionlint shellcheck uv
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        run: scripts/tools.sh "$RUNNER_TEMP/bin" actionlint shellcheck uv
+      - if: steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - run: make lint-actions ZIZMOR_FLAGS=--format=github
         env:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.

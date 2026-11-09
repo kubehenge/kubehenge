@@ -226,13 +226,22 @@ func etcdClientTLS(ca *etcdCAPair, now time.Time) (*tls.Config, error) {
 	}, nil
 }
 
+// componentLabel names the control-plane component a kubeadm or RKE2 static pod runs.
+const componentLabel = "component"
+
+// etcdPodLabels select the pods etcd is reached through: each member's static pod on kubeadm and
+// RKE2, the k3s provider's proxy on every k3s server.
+func etcdPodLabels(d templates.Distribution) client.MatchingLabels {
+	if d == templates.K3s {
+		return client.MatchingLabels{"app": "etcd-proxy"}
+	}
+	return client.MatchingLabels{componentLabel: etcdKey}
+}
+
 // etcdPods are the pods etcd is reached through, running and ready, by name: each member's static
 // pod on kubeadm and RKE2, the k3s provider's proxy on every k3s server.
 func etcdPods(ctx context.Context, workload client.Client, d templates.Distribution) ([]corev1.Pod, error) {
-	labels := client.MatchingLabels{"component": "etcd"}
-	if d == templates.K3s {
-		labels = client.MatchingLabels{"app": "etcd-proxy"}
-	}
+	labels := etcdPodLabels(d)
 	pods := &corev1.PodList{}
 	if err := workload.List(ctx, pods, client.InNamespace(metav1.NamespaceSystem), labels); err != nil {
 		return nil, fmt.Errorf("listing the etcd pods: %w", err)

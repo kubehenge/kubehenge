@@ -3,10 +3,12 @@ name: e2e
 
 # No paths filter: a required check that never reports holds a pull request forever. The scope job
 # decides instead.
-# Main needs no run of its own on a push: the merge queue tested the same tree before it landed.
+# A pull request runs its tests once it is ready for review, on the merge ref, and the ruleset
+# requires the branch to be up to date with main, so that tree is the one that lands. Main needs no
+# run of its own on a push.
 on:
   pull_request:
-  merge_group:
+    types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     - cron: '17 2 * * *'
   workflow_dispatch:
@@ -25,14 +27,14 @@ on:
 permissions:
   contents: read
 
+# A dispatch is a run someone asked for, so a later one on the same branch never cancels it.
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # A merge group runs the tests its pull requests' changes need together (test/e2e/ci/scope.sh),
-  # on the tree that would land on main; a pull request runs none, since the queue runs them on
-  # exactly what lands and a second run on the pull request only doubles the wait. The nightly run
+  # A pull request that is not a draft runs the tests its changes need
+  # (test/e2e/ci/scope.sh), on the tree that would land on main. A draft runs none. The nightly run
   # (test/e2e/ci/nightly.sh) runs every test, adds the upgrade of the management cluster, Rancher,
   # a control plane of three servers and a Proxmox VE cluster of two nodes, and runs each workload
   # distribution once more on a CNI
@@ -44,26 +46,28 @@ jobs:
     outputs:
       tests: ${{ steps.scope.outputs.tests }}
     steps:
-      # A merge group's commit; the comparison fetches main's commit under it.
+      # A pull request's merge ref, whose first parent is the main commit under it, so a second
+      # commit gives the comparison its base.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 1 }}
       - id: scope
         env:
           EVENT: ${{ github.event_name }}
-          GROUP_BASE: ${{ github.event.merge_group.base_sha }}
+          DRAFT: ${{ github.event.pull_request.draft }}
           ASKED: ${{ inputs.tests }}
         run: |
           case "$EVENT" in
-            pull_request) tests='[]' ;;
-            # A group holds one commit per pull request on top of main, so its changes are the
-            # difference from main's commit under it.
-            merge_group)
-              git fetch --no-tags --depth=1 origin "$GROUP_BASE"
-              # Without renames a moved file lists both paths, and quotepath off keeps a path with
-              # non-ASCII characters whole.
-              tests=$(git -c core.quotepath=off diff --name-only --no-renames "$GROUP_BASE" HEAD |
-                test/e2e/ci/scope.sh --base "$GROUP_BASE")
+            pull_request)
+              if [ "$DRAFT" = true ]; then
+                tests='[]'
+              else
+                # Without renames a moved file lists both paths, and quotepath off keeps a path
+                # with non-ASCII characters whole.
+                tests=$(git -c core.quotepath=off diff --name-only --no-renames HEAD^1 HEAD |
+                  test/e2e/ci/scope.sh --base HEAD^1)
+              fi
               ;;
             # run.sh refuses a name it cannot read before anything is built.
             workflow_dispatch)
@@ -105,12 +109,21 @@ jobs:
           restore-keys: |
             e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
             e2e-go-
-      - name: Tools
+      - id: tools
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: tools-${{ runner.os }}-${{ runner.arch }}-all-${{ hashFiles('scripts/tools.sh') }}
+      - if: steps.tools.outputs.cache-hit != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        run: scripts/tools.sh "$RUNNER_TEMP/bin"
+      - if: steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Build
         run: |
           test/e2e/ci/build.sh "$RUNNER_TEMP/build"
@@ -152,10 +165,13 @@ jobs:
       test: ${{ matrix.test }}
       fresh: ${{ github.event_name == 'schedule' || inputs.fresh == true }}
 
-  # The one check the main branch's ruleset requires: the matrix's tests differ by event, and a pull
-  # request, or a merge group of documentation only, skips them.
+  # The one check the main branch's ruleset requires: the matrix's tests differ by event, and a
+  # draft, or a change to documentation only, skips them. A skipped job counts as a success to the
+  # ruleset, and a check that never reports blocks the merge. A draft therefore reports this job
+  # under another name, which leaves the required `e2e` pending until the pull request is ready
+  # for review and its run reports.
   result:
-    name: e2e
+    name: ${{ github.event.pull_request.draft && 'e2e (draft, not run)' || 'e2e' }}
     needs: [scope, build, test]
     if: always()
     runs-on: ubuntu-26.04

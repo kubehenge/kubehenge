@@ -101,12 +101,13 @@ func (s *Server) reservePassphrase(w http.ResponseWriter, u user) (func(failed b
 
 func (s *Server) configureManagementBackups(w http.ResponseWriter, r *http.Request, u user) {
 	var req struct {
-		Target          string `json:"target"`
-		EveryHours      int    `json:"everyHours"`
-		Keep            int    `json:"keep"`
-		AccessKeyID     string `json:"accessKeyID"`
-		SecretAccessKey string `json:"secretAccessKey"`
-		Passphrase      string `json:"passphrase"`
+		Target          string   `json:"target"`
+		EveryHours      int      `json:"everyHours"`
+		Keep            int      `json:"keep"`
+		AccessKeyID     string   `json:"accessKeyID"`
+		SecretAccessKey string   `json:"secretAccessKey"`
+		Passphrase      string   `json:"passphrase"`
+		SpecRecipients  []string `json:"specRecipients"`
 	}
 	if !readJSON(w, r, &req) || !s.mayBackUpManagement(w, r, u) {
 		return
@@ -118,12 +119,13 @@ func (s *Server) configureManagementBackups(w http.ResponseWriter, r *http.Reque
 	}
 	settings := appliance.EtcdBackupSettings{
 		Target: req.Target, EveryHours: req.EveryHours, Keep: req.Keep, By: u.ticket.Username, Since: time.Now(),
+		SpecRecipients: req.SpecRecipients,
 	}
 	done, ok := s.reservePassphrase(w, u)
 	if !ok {
 		return
 	}
-	err := a.ConfigureEtcdBackups(r.Context(), settings, req.AccessKeyID, req.SecretAccessKey, req.Passphrase)
+	err := a.ConfigureEtcdBackups(r.Context(), &settings, req.AccessKeyID, req.SecretAccessKey, req.Passphrase)
 	if !checkPassphrase(w, done, err) {
 		return
 	}

@@ -191,6 +191,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	s.PinChecks = &provisioner.ReleaseChecksums{
 		HTTP: savedProxyClient(o.a.Dir, conn.URL, pinFetchTimeout), GitHub: pinsSources.github, Raw: pinsSources.raw,
+		Mirror: o.savedReleaseMirror,
 	}
 	sources := templates.DefaultSources()
 	sources.HTTP = savedProxyClient(o.a.Dir, conn.URL, sources.HTTP.Timeout)
@@ -388,6 +389,7 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	wg.Go(func() { s.Run(ctx) })
 	if o.a.Dir != "" {
 		wg.Go(func() { o.a.RenewInterfaceToken(ctx) })
+		wg.Go(func() { o.a.KeepAddresses(ctx) })
 		wg.Go(func() {
 			<-ctx.Done()
 			stopping, done := context.WithTimeout(context.WithoutCancel(ctx), jobStopTimeout)

@@ -86,6 +86,8 @@ export interface ClusterClass {
   /** The waits the class gives a removed machine's node, for the control planes and for the workers. */
   controlPlaneTimeouts?: NodeTimeouts;
   workerTimeouts?: NodeTimeouts;
+  /** The management cluster's release mirror, which the class's nodes take unless a cluster names its own. */
+  releaseMirror?: string;
 }
 
 /**
@@ -221,6 +223,8 @@ export interface Machine {
   proxmoxNode?: string;
   /** Its VM is not among those Proxmox VE lists with a name, because its node dropped out of the statistics. */
   notReporting?: boolean;
+  /** The state Proxmox VE gives its VM, such as running or stopped, where the user may see the VM. */
+  vm?: string;
   role: "control-plane" | "worker";
   /** The worker pool a worker belongs to. */
   pool?: string;
@@ -271,6 +275,10 @@ export interface Attention {
   machine?: string;
   /** The version whose findings Upgrade anyway accepts, on a skipped automatic upgrade. */
   accept?: string;
+  /** The page that says how to fix the item. */
+  docs?: string;
+  /** A command to run, shown as code under the message. */
+  command?: string;
 }
 
 export interface HealthVM {
@@ -700,7 +708,10 @@ export interface Storage {
 
 export interface PveNode {
   node: string;
+  /** Whether the node is a cluster member that answers calls forwarded to it. */
   online: boolean;
+  /** Why a member of the cluster does not answer them, such as `HTTP 596: certificate verify failed`. */
+  fault?: string;
   /** Memory in use and in all, in bytes, while the node is online. */
   memory?: number;
   maxMemory?: number;
@@ -733,6 +744,9 @@ export interface Bridge {
   /** The node's own IPv4 address on the bridge, like 192.0.2.5/24, and its gateway, where it has them. */
   cidr?: string;
   gateway?: string;
+  /** The same for IPv6, like 2001:db8::5/64. */
+  cidr6?: string;
+  gateway6?: string;
   /** The bridge's MTU where a node lists one: the nodes' interface MTU cannot exceed it. */
   mtu?: number;
   /** The SDN zone of a VNet, which a node's own bridge lacks. */
@@ -743,14 +757,21 @@ export interface Bridge {
 }
 
 /**
- * FreeAddresses are free addresses on a bridge's network for a new cluster, the endpoint's and a
- * range for its nodes, and which of the addresses checked a host answers on. Network is missing
- * where nothing was probed.
+ * FreeAddresses are free addresses on the nodes' network for a new cluster, the endpoint's and a
+ * range for its nodes, and which of the addresses checked a host answers on. Network is the one
+ * searched. It is missing where nothing was probed.
  */
 export interface FreeAddresses {
   network?: string;
   endpoint?: string;
   addresses?: string;
+  /** Nodes were asked for and the network has no free run for them. */
+  full?: boolean;
+  /** The same for the IPv6 network, with an IPv6 family asked for. */
+  network6?: string;
+  endpoint6?: string;
+  addresses6?: string;
+  full6?: boolean;
   answering: string[];
 }
 
@@ -774,9 +795,15 @@ export interface ManagementSettings {
   vlan?: number;
   /** The management VMs' interface MTU. Absent: the bridge's. */
   mtu?: number;
+  /** The address families, the primary one first. Absent: IPv4 alone. */
+  ipFamilies?: string[];
+  /** The IPv4 node addresses and gateway, empty without IPv4. */
   nodeAddresses: string[];
   apiAddress: string;
   gateway: string;
+  /** The IPv6 node addresses and gateway, set with IPv6. */
+  nodeAddressesIPv6?: string[];
+  gatewayIPv6?: string;
   dnsServers: string[];
   /** Domains appended to a name without dots, on the nodes and in the clusters' network. */
   searchDomains?: string[];
@@ -791,6 +818,11 @@ export interface ManagementSettings {
    * digests. The authority is PEM, for mirrors the usual authorities do not sign.
    */
   chartRepositories?: { mirrors?: Record<string, string>; caBundle?: string };
+  /**
+   * The mirror RKE2 and k3s nodes download their release from in place of GitHub, on GitHub's
+   * paths. The authority is PEM, for a mirror the usual authorities do not sign.
+   */
+  releaseMirror?: { url?: string; caBundle?: string };
   /**
    * The proxy downloads go through. The address has no credentials. The server never sends the
    * password, only passwordSet. Sent back, an empty password keeps the saved one and clearPassword
@@ -1003,6 +1035,8 @@ export interface ManagementBackupSettings {
   keep: number;
   by?: string;
   since?: string;
+  /** Public age keys every cluster spec's Secrets are also sealed to, so an offline key opens them. */
+  specRecipients?: string[];
 }
 
 /** The management cluster's etcd backups, and the targets they may go to. */
@@ -1015,6 +1049,13 @@ export interface ManagementBackups {
   taking?: boolean;
   targets: string[];
   keysStored: boolean;
+  /** Stands while the management cluster's etcd is not backed up. */
+  warning?: { dismissal?: { by: string; at: string; until: string } };
+  /** Set when no export of the appliance's state was taken since its backup settings changed. */
+  exportDue?: boolean;
+  exportedAt?: string;
+  /** Set once the appliance holds the recovery key that opens the specs' Secrets. */
+  specKey?: boolean;
 }
 
 export interface ManagementSnapshots {
@@ -1030,6 +1071,7 @@ export interface ManagementBackupRequest {
   accessKeyID: string;
   secretAccessKey: string;
   passphrase: string;
+  specRecipients?: string[];
 }
 
 export type EtcdRestorePhase =
@@ -1178,10 +1220,34 @@ export interface ManagementHealth {
     ok: boolean;
     error?: string;
     blind?: string;
+    /** The nodes online in the cluster that do not answer calls forwarded to them, each with Proxmox VE's reason. */
+    unreachable?: { node: string; reason: string }[];
     /** The tokens that are refused, cannot verify the API's certificate or lack a privilege. */
     tokens?: { name: string; problem: "Refused" | "Certificate" | "Unreachable" | "Privileges"; message: string }[];
     checked: string;
   };
+  /** How many of its control-plane nodes' etcd members are healthy. Unset where they cannot be read. */
+  etcd?: { healthy: number; members: number };
+  /** VMs in Kubehenge's pools that no cluster owns. Nothing deletes them. */
+  unowned?: { checked: string; vms: { vmid: number; name?: string; node?: string; pool: string }[] };
+}
+
+/** Whether a Proxmox VE node may be rebooted, or why not. */
+export interface RebootAnswer {
+  node?: string;
+  ready: boolean;
+  blocker?: string;
+  /** A degraded cluster that does not hold this node back. */
+  note?: string;
+}
+
+/** Whether Proxmox VE nodes may be rebooted: the whole, and each node by itself. */
+export interface RebootReadiness {
+  checked: string;
+  ready: boolean;
+  blocker?: string;
+  nodes: RebootAnswer[];
+  answer: RebootAnswer;
 }
 
 /** What the setup would run into: errors stop it, warnings do not. */
@@ -1255,6 +1321,17 @@ export interface VMTemplate {
   inUse?: string;
   /** The operating system its machines run, such as AlmaLinux 10. Absent for a Talos template. */
   nodeOS?: string;
+  /** What its clones carry over from it. Absent for a template made before this was recorded. */
+  hardware?: TemplateHardware;
+}
+
+/** The VM options a template's clones keep. */
+export interface TemplateHardware {
+  cpuType: string;
+  ssd: boolean;
+  discard: boolean;
+  ioThread: boolean;
+  numa: boolean;
 }
 
 /** The weekly template build: its schedule, what was asked for, and how the last run went. */
@@ -1350,6 +1427,12 @@ export interface TemplateRequest {
   buildAddress?: string;
   buildGateway?: string;
   buildDNS?: string[];
+  /** The hardware the clones keep. Absent, the line's newest build's, else the default. */
+  cpuType?: string;
+  ssd?: boolean;
+  discard?: boolean;
+  ioThread?: boolean;
+  numa?: boolean;
 }
 
 export interface Upgrades {

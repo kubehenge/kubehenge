@@ -41,6 +41,54 @@ run "chart_mirrors_reach_the_controller_and_the_helm_provider" {
   }
 }
 
+run "no_release_mirror_leaves_releases_on_github" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "releaseMirror")
+    error_message = "without a release mirror the controller is told none"
+  }
+}
+
+run "release_mirror_reaches_the_controller" {
+  command = plan
+
+  variables {
+    release_mirror = {
+      url       = "https://mirror.example.org/github"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).releaseMirror == { url = "https://mirror.example.org/github", caBundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----" }
+    error_message = "the controller is told the release mirror and its authority"
+  }
+}
+
+run "release_mirror_refuses_an_authority_for_plain_http" {
+  command = plan
+
+  variables {
+    release_mirror = {
+      url       = "http://mirror.example.org/github"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    }
+  }
+
+  expect_failures = [var.release_mirror]
+}
+
+run "release_mirror_refuses_a_trailing_slash" {
+  command = plan
+
+  variables {
+    release_mirror = { url = "https://mirror.example.org/" }
+  }
+
+  expect_failures = [var.release_mirror]
+}
+
 run "chart_mirror_authority_joins_the_proxy_authority" {
   command = plan
 
@@ -230,6 +278,11 @@ run "nodes" {
   }
 
   assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.startup[0].order == 1 && vm.startup[0].up_delay == 90])
+    error_message = "the management VMs must start first after a host reboot, and give their etcd members 90 seconds before the next guest"
+  }
+
+  assert {
     condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.memory[0].dedicated == 4096 && vm.memory[0].floating == 4096])
     error_message = "without a minimum, each node keeps all its memory and still has a balloon device"
   }
@@ -311,13 +364,13 @@ run "cluster_api_token_is_least_privilege" {
     condition = toset(keys(proxmox_acl.cluster_api)) == toset([
       "/ kubehenge-audit",
       "/nodes kubehenge-audit",
-      "/pool/kubehenge PVEVMAdmin",
-      "/pool/kubehenge-templates PVETemplateUser",
-      "/storage/local PVEDatastoreAdmin",
+      "/pool/kubehenge kubehenge-cluster-api-vms",
+      "/pool/kubehenge-templates kubehenge-cluster-api-templates",
+      "/storage/local kubehenge-cluster-api-bootstrap",
       "/storage/local-lvm kubehenge-allocate-space",
       "/storage/ceph kubehenge-allocate-space",
-      "/sdn/zones/localnetwork/vmbr0 PVESDNUser",
-      "/sdn/zones/localnetwork/vmbr1 PVESDNUser",
+      "/sdn/zones/localnetwork/vmbr0 kubehenge-cluster-api-network",
+      "/sdn/zones/localnetwork/vmbr1 kubehenge-cluster-api-network",
     ])
     error_message = "the Cluster API token's ACLs differ from the least-privilege set"
   }
@@ -332,7 +385,7 @@ run "cluster_api_token_is_least_privilege" {
   }
 
   assert {
-    condition     = proxmox_acl.cluster_api["/pool/kubehenge PVEVMAdmin"].propagate && !proxmox_acl.cluster_api["/pool/kubehenge-templates PVETemplateUser"].propagate
+    condition     = proxmox_acl.cluster_api["/pool/kubehenge kubehenge-cluster-api-vms"].propagate && !proxmox_acl.cluster_api["/pool/kubehenge-templates kubehenge-cluster-api-templates"].propagate
     error_message = "the workload pool's ACL must reach the clusters' nested pools; the template pool's has nothing below it to reach"
   }
 
@@ -467,6 +520,8 @@ run "controller_and_clusters_are_least_privilege" {
       backupTargets      = []
       image              = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
       managementEndpoint = "https://192.0.2.10:6443"
+      # Every workload cluster's firewall accepts these.
+      managementAddresses = ["192.0.2.11", "192.0.2.12", "192.0.2.13"]
     }
     error_message = "the Kubehenge chart's values differ"
   }
@@ -852,9 +907,9 @@ run "vnets_are_granted_in_their_zones" {
 
   assert {
     condition = toset([for k in keys(proxmox_acl.cluster_api) : k if strcontains(k, "/sdn/")]) == toset([
-      "/sdn/zones/localnetwork/vmbr0 PVESDNUser",
-      "/sdn/zones/evpn1/web PVESDNUser",
-      "/sdn/zones/vlanz/corp PVESDNUser",
+      "/sdn/zones/localnetwork/vmbr0 kubehenge-cluster-api-network",
+      "/sdn/zones/evpn1/web kubehenge-cluster-api-network",
+      "/sdn/zones/vlanz/corp kubehenge-cluster-api-network",
     ])
     error_message = "a VNet is granted in its own zone and a node's bridge in localnetwork, never a VNet under localnetwork"
   }
@@ -1933,5 +1988,270 @@ run "the_link_alias_selects_the_one_virtio_nic" {
   assert {
     condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : length(vm.network_device) == 1 && vm.network_device[0].model == "virtio"])
     error_message = "the alias matches exactly one link only while each node has one virtio NIC"
+  }
+}
+
+# IPv6 and dual-stack. The IPv4 runs above hold the unchanged default.
+run "dual_stack_ipv4_first" {
+  command = apply
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+  }
+
+  assert {
+    condition = alltrue([
+      for i, c in [for vm in proxmox_virtual_environment_vm.node : vm.initialization[0].ip_config[0]] : # spellchecker:disable-line
+      length(c.ipv4) == 1 && length(c.ipv6) == 1 &&
+      c.ipv4[0].address == "192.0.2.${11 + i}/24" &&
+      c.ipv4[0].gateway == "192.0.2.1" &&
+      c.ipv6[0].address == "2001:db8:1::${11 + i}/64" &&
+      c.ipv6[0].gateway == "2001:db8:1::1"
+    ])
+    error_message = "each VM takes node i's address and the gateway of both families"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if try(yamldecode(d).kind == "KubeNetworkConfig", false)
+      ] == [{
+        apiVersion     = "v1alpha1"
+        kind           = "KubeNetworkConfig"
+        podSubnets     = ["10.244.0.0/16", "fd5e:4b1c:9a20::/56"]
+        serviceSubnets = ["10.96.0.0/12", "fd5e:4b1c:9a21::/112"]
+    }]
+    error_message = "the pod and service ranges are one per family, in ip_families order"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if can(yamldecode(d).machine.kubelet)
+      ] == [{
+        machine = { kubelet = { nodeIP = { validSubnets = ["192.0.2.0/24", "2001:db8:1::/64"] } } }
+        cluster = { etcd = { advertisedSubnets = ["192.0.2.0/24"] } }
+    }]
+    error_message = "the kubelet picks its addresses from both node networks, primary first, and etcd advertises the primary one"
+  }
+
+  assert {
+    condition     = output.api_endpoint == "https://192.0.2.10:6443"
+    error_message = "an IPv4-first cluster's endpoint is the IPv4 virtual IP"
+  }
+}
+
+run "dual_stack_ipv6_first" {
+  command = apply
+
+  variables {
+    ip_families         = ["IPv6", "IPv4"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    api_address         = "2001:db8:1::10"
+    dns_servers         = ["2001:db8:1::53", "192.0.2.1"]
+  }
+
+  assert {
+    condition = alltrue([
+      for i, c in [for vm in proxmox_virtual_environment_vm.node : vm.initialization[0].ip_config[0]] : # spellchecker:disable-line
+      length(c.ipv4) == 1 && length(c.ipv6) == 1 &&
+      c.ipv4[0].address == "192.0.2.${11 + i}/24" &&
+      c.ipv6[0].address == "2001:db8:1::${11 + i}/64"
+    ])
+    error_message = "each VM takes node i's address of both families"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if try(yamldecode(d).kind == "KubeNetworkConfig", false)
+      ] == [{
+        apiVersion     = "v1alpha1"
+        kind           = "KubeNetworkConfig"
+        podSubnets     = ["fd5e:4b1c:9a20::/56", "10.244.0.0/16"]
+        serviceSubnets = ["fd5e:4b1c:9a21::/112", "10.96.0.0/12"]
+    }]
+    error_message = "the ranges follow ip_families order, IPv6 first"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if can(yamldecode(d).machine.kubelet)
+      ] == [{
+        machine = { kubelet = { nodeIP = { validSubnets = ["2001:db8:1::/64", "192.0.2.0/24"] } } }
+        cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } }
+    }]
+    error_message = "the kubelet picks the IPv6 address first, and etcd advertises the IPv6 network"
+  }
+
+  assert {
+    condition     = output.api_endpoint == "https://[2001:db8:1::10]:6443"
+    error_message = "an IPv6 virtual IP is bracketed in the API endpoint"
+  }
+}
+
+run "ipv6_only" {
+  command = apply
+
+  variables {
+    ip_families         = ["IPv6"]
+    node_addresses      = []
+    gateway             = null
+    node_addresses_ipv6 = ["2001:db8:1::11/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    api_address         = "2001:db8:1::10"
+    dns_servers         = ["2001:db8:1::53"]
+  }
+
+  assert {
+    condition = alltrue([
+      for c in [for vm in proxmox_virtual_environment_vm.node : vm.initialization[0].ip_config[0]] : # spellchecker:disable-line
+      length(c.ipv4) == 0 && length(c.ipv6) == 1 &&
+      c.ipv6[0].address == "2001:db8:1::11/64" &&
+      c.ipv6[0].gateway == "2001:db8:1::1"
+    ])
+    error_message = "an IPv6-only VM gets an ipv6 block and no ipv4 block"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if try(yamldecode(d).kind == "KubeNetworkConfig", false)
+      ] == [{
+        apiVersion     = "v1alpha1"
+        kind           = "KubeNetworkConfig"
+        podSubnets     = ["fd5e:4b1c:9a20::/56"]
+        serviceSubnets = ["fd5e:4b1c:9a21::/112"]
+    }]
+    error_message = "an IPv6-only cluster takes the IPv6 default ranges"
+  }
+
+  assert {
+    condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
+      if can(yamldecode(d).machine.kubelet)
+      ] == [{
+        machine = { kubelet = { nodeIP = { validSubnets = ["2001:db8:1::/64"] } } }
+        cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } }
+    }]
+    error_message = "the kubelet and etcd use the IPv6 node network"
+  }
+
+  assert {
+    condition     = output.api_endpoint == "https://[2001:db8:1::10]:6443"
+    error_message = "an IPv6 virtual IP is bracketed in the API endpoint"
+  }
+}
+
+run "ipv4_config_has_no_ipv6_patch" {
+  command = apply
+
+  assert {
+    condition     = !anytrue([for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : can(yamldecode(d).machine.kubelet)])
+    error_message = "an IPv4-only cluster's Talos config carries no kubelet or etcd address settings"
+  }
+
+  assert {
+    condition = alltrue([
+      for c in [for vm in proxmox_virtual_environment_vm.node : vm.initialization[0].ip_config[0]] : # spellchecker:disable-line
+      length(c.ipv4) == 1 && length(c.ipv6) == 0
+    ])
+    error_message = "an IPv4-only VM gets no ipv6 block"
+  }
+}
+
+run "rejects_an_ipv6_address_in_node_addresses" {
+  command = plan
+
+  variables {
+    node_addresses = ["2001:db8:1::11/64"]
+  }
+
+  expect_failures = [var.node_addresses]
+}
+
+run "rejects_subnets_in_the_wrong_family_order" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+    pod_subnets         = ["fd5e:4b1c:9a20::/56", "10.244.0.0/16"]
+  }
+
+  expect_failures = [var.pod_subnets]
+}
+
+run "rejects_dual_stack_without_an_ipv6_gateway" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+  }
+
+  expect_failures = [var.gateway_ipv6]
+}
+
+run "rejects_dual_stack_without_an_ipv6_dns_server" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+  }
+
+  expect_failures = [var.dns_servers]
+}
+
+run "rejects_an_ipv6_pod_range_longer_than_63" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv6"]
+    node_addresses      = []
+    gateway             = null
+    node_addresses_ipv6 = ["2001:db8:1::11/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    api_address         = "2001:db8:1::10"
+    dns_servers         = ["2001:db8:1::53"]
+    pod_subnets         = ["fd5e:4b1c:9a20::/64"]
+  }
+
+  expect_failures = [var.pod_subnets]
+}
+
+run "rejects_an_ipv6_pod_range_over_the_node_network" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+    pod_subnets         = ["10.244.0.0/16", "2001:db8:1::/56"]
+  }
+
+  expect_failures = [proxmox_virtual_environment_vm.node]
+}
+
+run "accepts_an_ipv6_range_beside_the_node_network" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv4", "IPv6"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64", "2001:db8:1::12/64", "2001:db8:1::13/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+    pod_subnets         = ["10.244.0.0/16", "2001:db8:2::/56"]
   }
 }

@@ -37,6 +37,7 @@ import {
   errorMessage,
   filled,
   localDates,
+  Said,
   sentence,
   usePoll,
   Skeleton,
@@ -94,7 +95,11 @@ function worst(severities: Severity[]): State {
 
 // since shows how long ago, with the time itself on hover.
 function Since({ at }: { at?: string | undefined }): JSX.Element {
-  return <td title={filled(at) ? new Date(at).toLocaleString() : undefined}>{filled(at) ? age(at) : ""}</td>;
+  return (
+    <td data-label="Since" title={filled(at) ? new Date(at).toLocaleString() : undefined}>
+      {filled(at) ? age(at) : ""}
+    </td>
+  );
 }
 
 // SectionNote says why a section shows less than it should: it could not be read, or only in part.
@@ -445,8 +450,24 @@ function NeedsAttention({
                   {fix !== undefined && <Link to={fix.to}>{a.what}</Link>}
                   {fix === undefined && pageSections.has(a.section) && <a href={`#${anchor(a.section)}`}>{a.what}</a>}
                   {fix === undefined && !pageSections.has(a.section) && a.what}
-                  {filled(a.message) && <div className="hint message">{localDates(a.message)}</div>}
+                  {filled(a.message) && (
+                    <div className="hint message">
+                      <Said text={localDates(a.message)} />
+                    </div>
+                  )}
+                  {filled(a.command) && (
+                    <div>
+                      <code>{a.command}</code>
+                    </div>
+                  )}
                   {filled(a.accept) && <AcceptUpgrade cluster={cluster} version={a.accept} />}
+                  {filled(a.docs) && (
+                    <div>
+                      <a href={a.docs} target="_blank" rel="noreferrer">
+                        How to fix
+                      </a>
+                    </div>
+                  )}
                 </td>
                 <Since at={a.since} />
                 <PodButtons pod={a.pod === undefined ? undefined : pods.get(podKey(a.pod))} actions={actions} />
@@ -506,7 +527,7 @@ const cores = (millicores: number): string => (millicores / millicoresPerCore).t
 
 function CPUCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefined }): JSX.Element {
   return (
-    <td>
+    <td data-label="CPU">
       {vm !== undefined && vm.status === "running" && (
         <div className="use">
           <Sparkline load={vm.load ?? []} />
@@ -526,7 +547,7 @@ function CPUCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefined }
 
 function MemoryCell({ node: n, vm }: { node: HealthNode; vm: HealthVM | undefined }): JSX.Element {
   return (
-    <td>
+    <td data-label="Memory">
       {vm !== undefined && vm.status === "running" && vm.maxMemory > 0 && (
         <div className="use">
           <meter className="bar" min={0} max={vm.maxMemory} value={vm.memory} aria-label={`${n.name}'s memory use`} />
@@ -602,9 +623,13 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
           </ul>
         )}
       </td>
-      <td>
+      <td data-label="Status">
         <Status state={s.state} text={s.text} />
-        {filled(n.message) && <Detail>{n.message}</Detail>}
+        {filled(n.message) && (
+          <Detail>
+            <Said text={n.message} />
+          </Detail>
+        )}
         {nodeNotes(n).map((x) => (
           <div key={x} className="hint">
             {x}
@@ -613,9 +638,15 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
       </td>
       <CPUCell node={n} vm={vm} />
       <MemoryCell node={n} vm={vm} />
-      <td className="nowrap">{n.joined ? n.pods : ""}</td>
-      <td className="nowrap">{n.kubelet ?? ""}</td>
-      <td className="nowrap">{vm !== undefined && vm.status === "running" ? uptime(vm.uptime) : (vm?.status ?? "")}</td>
+      <td data-label="Pods" className="nowrap">
+        {n.joined ? n.pods : ""}
+      </td>
+      <td data-label="Kubelet" className="nowrap">
+        {n.kubelet ?? ""}
+      </td>
+      <td data-label="Up" className="nowrap">
+        {vm !== undefined && vm.status === "running" ? uptime(vm.uptime) : (vm?.status ?? "")}
+      </td>
     </tr>
   );
 }
@@ -631,7 +662,7 @@ function Nodes({ health: h }: { health: ClusterHealth }): JSX.Element {
           <Detail>{h.vms}</Detail>
         </div>
       )}
-      <table className="grid">
+      <table className="grid stack-wide">
         <thead>
           <tr>
             <th>Name</th>
@@ -668,7 +699,7 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
     <div className="box scroll" id={anchor("pods")}>
       <h3>Pods not well</h3>
       <SectionNote section={h.pods} what="pods" />
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Pod</th>
@@ -695,12 +726,16 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
                 {p.name}
                 <div className="hint">{p.namespace}</div>
               </td>
-              <td>{p.node ?? ""}</td>
-              <td>
+              <td data-label="Node">{p.node ?? ""}</td>
+              <td data-label="Status">
                 <Status state={severityState[p.severity]} text={p.reason} />
-                {filled(p.message) && <Detail>{p.message}</Detail>}
+                {filled(p.message) && (
+                  <Detail>
+                    <Said text={p.message} />
+                  </Detail>
+                )}
               </td>
-              <td>{p.restarts}</td>
+              <td data-label="Restarts">{p.restarts}</td>
               <Since at={p.since} />
               <PodButtons pod={p} actions={actions} />
             </tr>
@@ -764,7 +799,7 @@ function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
     <div className="box scroll" id={anchor("addons")}>
       <h3>Add-ons</h3>
       <SectionNote section={h.addons} what="add-ons" />
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Release</th>
@@ -790,15 +825,19 @@ function Addons({ health: h }: { health: ClusterHealth }): JSX.Element {
                   {r.release}
                   {filled(r.namespace) && <div className="hint">{r.namespace}</div>}
                 </td>
-                <td>
+                <td data-label="Chart">
                   {r.chart}
                   {filled(r.version) && ` ${r.version}`}
                 </td>
-                <td>
+                <td data-label="Status">
                   <Status state={s.state} text={s.text} />
-                  {filled(r.message) && <Detail>{r.message}</Detail>}
+                  {filled(r.message) && (
+                    <Detail>
+                      <Said text={r.message} />
+                    </Detail>
+                  )}
                 </td>
-                <td>{r.revision ?? ""}</td>
+                <td data-label="Revision">{r.revision ?? ""}</td>
                 <Since at={r.since} />
               </tr>
             );
@@ -867,7 +906,7 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
     <>
       <h4>Worker pools</h4>
       <SectionNote section={pools} what="worker pools" />
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Pool</th>
@@ -884,11 +923,15 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
             return (
               <tr key={p.name} className={s.state === "ok" ? "" : "attention"}>
                 <td className="nowrap">{p.name}</td>
-                <td>
+                <td data-label="Status">
                   <Status state={s.state} text={s.text} />
-                  {filled(p.message) && <Detail>{p.message}</Detail>}
+                  {filled(p.message) && (
+                    <Detail>
+                      <Said text={p.message} />
+                    </Detail>
+                  )}
                 </td>
-                <td>
+                <td data-label="Desired">
                   {p.desired}
                   {p.autoscaling && (
                     <div className="hint">
@@ -896,9 +939,9 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
                     </div>
                   )}
                 </td>
-                <td>{p.ready}</td>
-                <td>{p.available}</td>
-                <td>{p.upToDate}</td>
+                <td data-label="Ready">{p.ready}</td>
+                <td data-label="Available">{p.available}</td>
+                <td data-label="Up to date">{p.upToDate}</td>
               </tr>
             );
           })}
@@ -949,7 +992,11 @@ function HealthChecks({ checks }: { checks: HealthSection<HealthCheck> }): JSX.E
                 <td className="nowrap">{x.name}</td>
                 <td>
                   <Status state={s.state} text={s.text} />
-                  {filled(x.message) && <Detail>{x.message}</Detail>}
+                  {filled(x.message) && (
+                    <Detail>
+                      <Said text={x.message} />
+                    </Detail>
+                  )}
                 </td>
                 <td>{(x.remediating ?? []).join(", ")}</td>
               </tr>
@@ -991,7 +1038,9 @@ function ConditionTable({ conditions, empty }: { conditions: Condition[]; empty:
               </td>
               <td>{x.status}</td>
               <td>{x.reason ?? ""}</td>
-              <td className="message">{x.message ?? ""}</td>
+              <td className="message">
+                <Said text={x.message ?? ""} />
+              </td>
               <Since at={x.since} />
             </tr>
           );
@@ -1079,7 +1128,9 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
                 <div className="hint">{e.source === "workload" ? "In the cluster" : "Cluster API"}</div>
               </td>
               <td>{e.object}</td>
-              <td className="message">{e.message}</td>
+              <td className="message">
+                <Said text={e.message} />
+              </td>
               <td className={e.count > 1 ? "count" : "count once"}>{e.count}</td>
             </tr>
           ))}

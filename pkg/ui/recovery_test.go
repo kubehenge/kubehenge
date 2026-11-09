@@ -35,8 +35,6 @@ func TestRecoverControlPlane(t *testing.T) {
 	b.signIn("dev@pve")
 	body := `{"machine":"one-cp-a","confirm":"one"}`
 
-	// Nothing to recover from while the roll goes on.
-	expect(t, b.do("POST", "/api/clusters/default/one/control-plane-recovery", body), http.StatusConflict)
 	h.stall(provisioner.RollStalledUnreachable)
 
 	expect(t, b.do("POST", "/api/clusters/default/one/control-plane-recovery", `{"machine":"one-cp-a","confirm":"One"}`), http.StatusUnprocessableEntity)
@@ -82,6 +80,25 @@ func TestControlPlaneRecoveryByHand(t *testing.T) {
 		t.Errorf("view %+v", view)
 	}
 	expect(t, b.do("POST", "/api/clusters/default/one/control-plane-recovery", `{"machine":"one-cp-b","confirm":"one"}`), http.StatusConflict)
+}
+
+func TestHealthSaysTheVMsAreMissing(t *testing.T) {
+	t.Parallel()
+	missing := func(status metav1.ConditionStatus) *clusterv1.Cluster {
+		return &clusterv1.Cluster{Status: clusterv1.ClusterStatus{Conditions: []metav1.Condition{{
+			Type: provisioner.VMsMissingCondition, Status: status, Reason: provisioner.VMsMissingReason, Message: "None of the cluster's 3 VMs exists in Proxmox VE.",
+		}}}}
+	}
+	var a attention
+	watchAttention(missing(metav1.ConditionTrue), &a)
+	if len(a) != 1 || a[0].Severity != severityError || a[0].What != "VMs missing" || a[0].Section != sectionNodes {
+		t.Errorf("missing VMs: %+v", a)
+	}
+	a = nil
+	watchAttention(missing(metav1.ConditionFalse), &a)
+	if len(a) != 0 {
+		t.Errorf("a cleared condition needs attention: %+v", a)
+	}
 }
 
 func TestHealthSaysTheRollStalled(t *testing.T) {

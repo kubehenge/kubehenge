@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -56,15 +57,22 @@ type Placer struct {
 	// Interval is how often the nodes are looked at: a node that goes down is left out of the
 	// clusters' placement within about that long.
 	Interval time.Duration
+	// Events records a placement that has to use newer Proxmox VE nodes while the nodes run
+	// different major versions. Unset, none is.
+	Events events.EventRecorder
+	newer  map[string]bool
+	// WorkloadPool names the clusters' VM pools, for reading the interface sizes of their VMs.
+	// Unset, the sizes are not read.
+	WorkloadPool string
 }
 
 // NodesSkippedCondition on a Cluster says that Placer left Proxmox VE nodes out of its placement
-// because their status could not be read.
+// because they are online in the cluster and do not answer calls forwarded to them.
 const NodesSkippedCondition = "NodesSkipped"
 
-// skippingNodes is implemented by a Nodes that skips the nodes it cannot read.
+// skippingNodes is implemented by a Nodes that skips the nodes that do not answer.
 type skippingNodes interface {
-	Unreadable() []string
+	Unreachable() []NodeFault
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -98,9 +106,9 @@ func (p *Placer) placeAll(ctx context.Context) {
 			return
 		}
 	}
-	var skipped []string
+	var skipped []NodeFault
 	if u, ok := p.Nodes.(skippingNodes); ok {
-		skipped = u.Unreadable()
+		skipped = u.Unreachable()
 	}
 	clusters := &clusterv1.ClusterList{}
 	if err := p.Client.List(ctx, clusters, client.UnsafeDisableDeepCopy); err != nil {
@@ -113,11 +121,14 @@ func (p *Placer) placeAll(ctx context.Context) {
 			continue
 		}
 		p.markSkipped(ctx, c, skipped)
-		level, err := clusterCPULevel(c)
+		p.markVersions(ctx, c, online)
+		p.markMTUs(ctx, c, online)
+		needs, err := needsOf(c, sites)
 		if err != nil {
 			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
 			continue
 		}
+		level := needs.Level
 		chosen, storage, err := placementVariables(c)
 		if err != nil {
 			log.Error(err, "reading the cluster's nodes and storage", "cluster", client.ObjectKeyFromObject(c))
@@ -131,10 +142,33 @@ func (p *Placer) placeAll(ctx context.Context) {
 		if sites != nil {
 			hosts = sites.Hosts(c, usable, level)
 		}
-		hosts, short := fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, hosts)
+		hosts, short, newer := preferOldest(online, hosts, func(h []string) ([]string, *roomOn) {
+			return fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, h)
+		})
 		p.markShort(ctx, c, short)
-		p.record(ctx, c, hosts, blocked)
+		if newer {
+			p.sayNewer(c, online)
+		} else {
+			p.clearNewer(c)
+		}
+		p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
 	}
+}
+
+// refusedForFaults is the reason no VM can be placed: blocked where it is already set, else that the
+// placement is empty or only nodes that do not answer (which a cluster kept to its chosen nodes
+// would otherwise stay on), else none.
+func refusedForFaults(blocked string, hosts []string, faults []NodeFault) string {
+	if blocked != "" || len(faults) == 0 {
+		return blocked
+	}
+	answering := slices.ContainsFunc(hosts, func(h string) bool {
+		return !slices.ContainsFunc(faults, func(f NodeFault) bool { return f.Node == h })
+	})
+	if answering {
+		return ""
+	}
+	return "No Proxmox VE node can take a new VM: not reachable through the cluster: " + faultList(faults)
 }
 
 // record writes on the cluster the nodes its VMs may use, and why none can take a new VM, when
@@ -163,15 +197,15 @@ func (p *Placer) record(ctx context.Context, c *clusterv1.Cluster, hosts []strin
 	}
 }
 
-// markSkipped records on the cluster the nodes left out of placement for want of a status, and
-// clears the record once they answer.
-func (p *Placer) markSkipped(ctx context.Context, c *clusterv1.Cluster, skipped []string) {
+// markSkipped records on the cluster the nodes left out of placement because they do not answer,
+// each with Proxmox VE's reason, and clears the record once they answer.
+func (p *Placer) markSkipped(ctx context.Context, c *clusterv1.Cluster, skipped []NodeFault) {
 	var cond *metav1.Condition
 	have := meta.FindStatusCondition(c.Status.Conditions, NodesSkippedCondition)
 	if len(skipped) > 0 {
 		cond = &metav1.Condition{
-			Status: metav1.ConditionTrue, Reason: "StatusUnreadable",
-			Message: fmt.Sprintf("%d Proxmox VE node(s) left out of placement because their status could not be read: %s", len(skipped), strings.Join(skipped, ", ")),
+			Status: metav1.ConditionTrue, Reason: "NotReachable",
+			Message: "Not reachable through the cluster: " + faultList(skipped),
 		}
 		if have != nil && have.Message == cond.Message {
 			return
@@ -307,10 +341,6 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster, cho
 	if h.Nodes == nil {
 		return nil, "", nil
 	}
-	level, err := clusterCPULevel(cluster)
-	if err != nil {
-		return nil, "", err
-	}
 	online, err := h.Nodes.OnlineNodes(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("reading the Proxmox VE nodes: %w", err)
@@ -319,16 +349,24 @@ func (h *Hooks) onlineNodes(ctx context.Context, cluster *clusterv1.Cluster, cho
 	if err != nil {
 		return nil, "", err
 	}
-	hosts, _ := nodesToPlace(online, level, nil, storage)
-	_, blocked := nodesToPlace(online, level, chosen, storage)
-	usable := placeable(online, storage)
+	var sites *Sites
 	if h.Sites != nil {
-		sites, err := h.Sites.Sites(ctx)
-		if err != nil {
+		if sites, err = h.Sites.Sites(ctx); err != nil {
 			return nil, "", fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)
 		}
-		hosts = sites.Hosts(cluster, usable, level)
 	}
-	hosts, _ = fitMemory(ctx, h.Reader, h.ClassNamespace, cluster, usable, hosts)
+	needs, err := needsOf(cluster, sites)
+	if err != nil {
+		return nil, "", err
+	}
+	hosts, _ := nodesToPlace(online, needs.Level, nil, storage)
+	_, blocked := nodesToPlace(online, needs.Level, chosen, storage)
+	usable := placeable(online, storage)
+	if sites != nil {
+		hosts = sites.Hosts(cluster, usable, needs.Level)
+	}
+	hosts, _, _ = preferOldest(online, hosts, func(list []string) ([]string, *roomOn) {
+		return fitMemory(ctx, h.Reader, h.ClassNamespace, cluster, usable, list)
+	})
 	return hosts, blocked, nil
 }

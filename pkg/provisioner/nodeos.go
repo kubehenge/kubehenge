@@ -5,13 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -28,6 +31,10 @@ type Node struct {
 	Maintenance bool
 	// InactiveStorages are the storages that are defined for the node and not available on it.
 	InactiveStorages []string
+	// Version is the node's pve-manager version and Major its major number, 0 where it could not be
+	// read.
+	Version string
+	Major   int
 }
 
 // Nodes tells which Proxmox VE nodes are online; *Proxmox is the real one.
@@ -35,9 +42,114 @@ type Nodes interface {
 	OnlineNodes(ctx context.Context) ([]Node, error)
 }
 
-// OnlineNodes lists the nodes Proxmox VE reports online, sorted by name. A node's CPU is read once
-// while it stays online: it changes only with the hardware, which takes the node down first. A node
-// back online is judged by the memory it reports itself until the list has its new figures.
+// templateNeeds is what a cluster's templates ask of the Proxmox VE nodes and of its machines.
+type templateNeeds struct {
+	// Level is the x86-64 microarchitecture level the nodes must reach.
+	Level int
+	// CPUType names the CPU type behind Level when a template's own raised it above the node OS's.
+	CPUType string
+	// NUMA is set when a template gives its clones a NUMA topology.
+	NUMA bool
+}
+
+// needsOf are what the cluster's node OS or Talos needs, or, where Proxmox VE was looked at,
+// what the newest builds of the cluster's template lines ask: their clones keep the template's CPU
+// type, so it rules over the node OS's. The CPU type is named only where it asks more than the node
+// OS or Talos does. Without a look, s is nil and the node OS's own need stands.
+func needsOf(c *clusterv1.Cluster, s *Sites) (templateNeeds, error) {
+	level, err := clusterCPULevel(c)
+	if err != nil {
+		return templateNeeds{}, err
+	}
+	needs := templateNeeds{Level: level}
+	if s == nil {
+		return needs, nil
+	}
+	if cpu, set := templateCPU(s, c); set {
+		needs.Level = cpu.level
+		if cpu.level > level {
+			needs.CPUType = cpu.model
+		}
+	}
+	needs.NUMA = templateNUMA(s, c)
+	return needs, nil
+}
+
+// NodeFault is a node that Proxmox VE lists as online and that does not answer a call forwarded to
+// it through the cluster, with why.
+type NodeFault struct {
+	Node string `json:"node"`
+	// Reason is the status Proxmox VE answered with and its text, or that the node did not answer.
+	Reason string `json:"reason"`
+}
+
+// faultList words faults as `pve2 (HTTP 596: certificate verify failed), pve3 (no answer in time)`.
+func faultList(faults []NodeFault) string {
+	parts := make([]string, len(faults))
+	for i, f := range faults {
+		parts[i] = f.Node + " (" + f.Reason + ")"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// nodeProbeTimeout bounds the status call to one node, so that a node that hangs costs a read this
+// long and no more.
+const nodeProbeTimeout = 10 * time.Second
+
+// nodeProbe is what a node's own status answered: its facts, or in fault why it did not answer.
+type nodeProbe struct {
+	status pveNodeStatus
+	fault  string
+	at     time.Time
+}
+
+func (p *Proxmox) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
+}
+
+// probe asks a node for its own status through the node the controller is connected to, which is
+// the call every VM operation on it takes too. Proxmox VE lists a node as online while its member of
+// the cluster file system or its certificate is broken, and the call then fails with 596. The
+// second result is why it failed, empty when the node answered. A cancelled ctx is not a fault of
+// the node and is not kept.
+func (p *Proxmox) probe(ctx context.Context, node string) (pveNodeStatus, string) {
+	if p.ProbeTTL > 0 {
+		p.mu.Lock()
+		kept, ok := p.probes[node]
+		p.mu.Unlock()
+		if ok && p.now().Sub(kept.at) < p.ProbeTTL {
+			return kept.status, kept.fault
+		}
+	}
+	ask, cancel := context.WithTimeout(ctx, cmp.Or(p.ProbeTimeout, nodeProbeTimeout))
+	defer cancel()
+	var status pveNodeStatus
+	err := p.Client.Get(ask, "/nodes/"+url.PathEscape(node)+"/status", &status)
+	var fault string
+	if err != nil {
+		if ctx.Err() != nil {
+			return status, pve.Reason(ctx.Err())
+		}
+		fault = pve.Reason(err)
+	}
+	if p.ProbeTTL > 0 {
+		p.mu.Lock()
+		if p.probes == nil {
+			p.probes = map[string]nodeProbe{}
+		}
+		p.probes[node] = nodeProbe{status: status, fault: fault, at: p.now()}
+		p.mu.Unlock()
+	}
+	return status, fault
+}
+
+// OnlineNodes lists the nodes Proxmox VE reports online that answer a call forwarded to them,
+// sorted by name. Each read asks every online node for its status, all at once, which also gives
+// its CPU and the memory it has free now. A node that does not answer is left out and named by
+// Unreachable.
 func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 	var nodes []pveNode
 	if err := p.Client.Get(ctx, "/nodes", &nodes); err != nil {
@@ -48,28 +160,36 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 		return nil, fmt.Errorf("listing storages: %w", err)
 	}
 	maintenance, _ := haMaintenance(ctx, p.Client) // a refusal is ProxmoxReach's to report, once
-	var online []Node
-	var skipped []string
+	var listed []pveNode
 	for _, n := range nodes {
-		if n.Status != nodeOnline {
+		if n.Status == nodeOnline {
+			listed = append(listed, n)
+		}
+	}
+	probes := make([]nodeProbe, len(listed))
+	var wg sync.WaitGroup
+	for i, n := range listed {
+		wg.Go(func() { probes[i].status, probes[i].fault = p.probe(ctx, n.Node) })
+	}
+	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("reading the nodes' status: %w", err)
+	}
+	var online []Node
+	var faults []NodeFault
+	for i, n := range listed {
+		// A node that shows online but whose status does not answer (a broken certificate, a reboot,
+		// a token without Sys.Audit on it) would otherwise be chosen for VMs that then cannot start,
+		// or leave every cluster unplaced.
+		if fault := probes[i].fault; fault != "" {
+			ctrl.LoggerFrom(ctx).Info("leaving a node out of placement", "node", n.Node, "reason", fault)
+			faults = append(faults, NodeFault{Node: n.Node, Reason: fault})
 			continue
 		}
-		// A node that shows online but whose status cannot be read (a reboot, a token without
-		// Sys.Audit on it) would otherwise leave every cluster unplaced.
-		level, live, err := p.nodeFacts(ctx, n)
-		if err != nil {
-			ctrl.LoggerFrom(ctx).Error(err, "leaving a node out of placement", "node", n.Node)
-			skipped = append(skipped, n.Node)
-			continue
-		}
-		node := Node{Name: n.Node, CPULevel: level, Maintenance: maintenance[n.Node]}
-		total, used := n.MaxMem, n.Mem
-		if live != nil {
-			total, used = live.Total, live.Used
-		}
-		if total > 0 {
-			node.FreeMiB, node.MemoryKnown = max(0, total-used)/bytesPerMiB, true
-		}
+		status := probes[i].status
+		node := Node{Name: n.Node, CPULevel: templates.CPULevelOf(status.CPUInfo.Flags), Maintenance: maintenance[n.Node]}
+		node.Version, node.Major = p.versions.read(ctx, p.Client, n.Node)
+		node.FreeMiB, node.MemoryKnown = freeMiB(n, &status.Memory)
 		for _, s := range storages {
 			if s.Node == n.Node && s.Status != storageAvailable && !slices.Contains(node.InactiveStorages, s.Storage) {
 				node.InactiveStorages = append(node.InactiveStorages, s.Storage)
@@ -78,23 +198,29 @@ func (p *Proxmox) OnlineNodes(ctx context.Context) ([]Node, error) {
 		online = append(online, node)
 	}
 	slices.SortFunc(online, func(a, b Node) int { return strings.Compare(a.Name, b.Name) })
-	slices.Sort(skipped)
+	slices.SortFunc(faults, func(a, b NodeFault) int { return strings.Compare(a.Node, b.Node) })
+	names := make([]string, len(online))
+	for i, n := range online {
+		names[i] = n.Name
+	}
+	p.versions.keep(names)
 	p.mu.Lock()
-	p.skipped = skipped
-	for name := range p.seen {
-		if !slices.ContainsFunc(online, func(n Node) bool { return n.Name == name }) {
-			delete(p.seen, name)
+	p.faults = faults
+	for name := range p.probes {
+		if !slices.ContainsFunc(listed, func(n pveNode) bool { return n.Node == name }) {
+			delete(p.probes, name)
 		}
 	}
 	p.mu.Unlock()
 	return online, nil
 }
 
-// Unreadable are the nodes the last OnlineNodes left out because their status could not be read.
-func (p *Proxmox) Unreadable() []string {
+// Unreachable are the nodes the last OnlineNodes left out because Proxmox VE lists them online and
+// their status does not answer, sorted by name.
+func (p *Proxmox) Unreachable() []NodeFault {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return slices.Clone(p.skipped)
+	return slices.Clone(p.faults)
 }
 
 // pveNodeStatus is the part of a node's own status that names its CPU's features and its memory.
@@ -113,43 +239,18 @@ type pveMemory struct {
 	Used  int64 `json:"used"`
 }
 
-// seenNode is what is kept of an online node from the look it came online at.
-type seenNode struct {
-	level int
-	// listedUptime is the uptime /nodes showed at that look. Proxmox VE lists a node with the last
-	// figures it sent for five minutes after it stops sending, so a node back online is listed with
-	// the memory it had before it left until it reports again, which moves its uptime.
-	listedUptime int64
-}
-
-// nodeFacts reads what the node list does not say of an online node: its CPU's level, once while
-// it stays online, and its memory while the list may still hold the figures from before it came
-// online. The memory is nil where the list's figures are the node's own or the list has none.
-func (p *Proxmox) nodeFacts(ctx context.Context, n pveNode) (int, *pveMemory, error) {
-	p.mu.Lock()
-	seen, ok := p.seen[n.Node]
-	p.mu.Unlock()
-	listed := n.MaxMem > 0
-	if ok && (!listed || n.Uptime != seen.listedUptime) {
-		return seen.level, nil, nil
+// freeMiB is the node's free memory, and whether it is known at all. The node's own figures rule
+// over the list's: Proxmox VE lists a node with the last figures it sent for five minutes after it
+// stops sending, so a node back online is listed with the memory it had before it left.
+func freeMiB(n pveNode, live *pveMemory) (int64, bool) {
+	total, used := n.MaxMem, n.Mem
+	if live != nil && live.Total > 0 {
+		total, used = live.Total, live.Used
 	}
-	var status pveNodeStatus
-	if err := p.Client.Get(ctx, "/nodes/"+n.Node+"/status", &status); err != nil {
-		return 0, nil, fmt.Errorf("reading node %s's status: %w", n.Node, err)
+	if total <= 0 {
+		return 0, false
 	}
-	if !ok {
-		seen = seenNode{level: templates.CPULevelOf(status.CPUInfo.Flags), listedUptime: n.Uptime}
-		p.mu.Lock()
-		if p.seen == nil {
-			p.seen = map[string]seenNode{}
-		}
-		p.seen[n.Node] = seen
-		p.mu.Unlock()
-	}
-	if !listed || status.Memory.Total <= 0 {
-		return seen.level, nil, nil
-	}
-	return seen.level, &status.Memory, nil
+	return max(0, total-used) / bytesPerMiB, true
 }
 
 // clusterCPULevel is the x86-64 microarchitecture level a cluster's nodes need of the Proxmox VE
@@ -237,20 +338,9 @@ func checkFIPS(c *clusterv1.Cluster) error {
 // to judge by, and the cluster waits for its nodes as any other does. A Talos cluster has no node
 // OS: Talos is its own.
 func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.Cluster) error {
-	if isTalos(c) {
-		return nil
-	}
-	o, err := ClusterNodeOS(c)
+	o, err := buildableNodeOS(c)
 	if err != nil {
 		return err
-	}
-	if _, _, err = templates.Available(o); err != nil {
-		return err //nolint:wrapcheck // says all a person needs
-	}
-	if o.FIPS {
-		if err = checkFIPS(c); err != nil {
-			return err
-		}
 	}
 	if h.Nodes == nil {
 		return nil
@@ -259,20 +349,44 @@ func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.C
 	if err != nil {
 		return err
 	}
-	need := templates.CPULevel(o)
-	if sites != nil {
-		need = cpuNeed(sites, c, need)
+	needs, err := needsOf(c, sites)
+	if err != nil {
+		return err
 	}
-	if need <= 1 || len(online) == 0 || len(nodesFor(online, need)) > 0 {
+	// Talos's own level is no reason to refuse: only a template's CPU type above it is.
+	if needs.Level <= 1 || (isTalos(c) && needs.CPUType == "") || len(online) == 0 || len(nodesFor(online, needs.Level)) > 0 {
 		return nil
 	}
 	names := make([]string, len(online))
 	for i, n := range online {
 		names[i] = n.Name
 	}
+	if needs.CPUType != "" {
+		return fmt.Errorf("the templates of %s use CPU type %s, which no allowed node (%s) offers. Build them with another CPU type",
+			strings.Join(distributionTags(c, o), " on "), needs.CPUType, strings.Join(names, ", "))
+	}
 	f, r, _ := templates.ReleaseOf(o)
 	return fmt.Errorf("%s %s needs CPU type %s, which no allowed node (%s) offers. Choose another node OS",
 		f.Title(), r.Name, templates.CPUTypeOf(r), strings.Join(names, ", "))
+}
+
+// buildableNodeOS is the cluster's node OS once Kubehenge builds templates of it and its FIPS
+// choices hold. A Talos cluster has none.
+func buildableNodeOS(c *clusterv1.Cluster) (templates.NodeOS, error) {
+	if isTalos(c) {
+		return templates.NodeOS{}, nil
+	}
+	o, err := ClusterNodeOS(c)
+	if err != nil {
+		return o, err
+	}
+	if _, _, err = templates.Available(o); err != nil {
+		return o, err //nolint:wrapcheck // says all a person needs
+	}
+	if o.FIPS {
+		return o, checkFIPS(c)
+	}
+	return o, nil
 }
 
 // pveReads is what one admission or hook call reads from Proxmox VE. Each read happens at most once
@@ -282,6 +396,17 @@ type pveReads struct {
 	h      *Hooks
 	online memo[[]Node]
 	sites  memo[*Sites]
+}
+
+// lookAtSites is where the storages and templates are. Callers check that the hooks have Sites.
+func (r *pveReads) lookAtSites(ctx context.Context) (*Sites, error) {
+	return r.sites.get(func() (*Sites, error) {
+		s, err := r.h.Sites.Sites(ctx)
+		if err != nil {
+			return nil, &pveReadError{fmt.Errorf("reading the Proxmox VE storages and templates: %w", err)}
+		}
+		return s, nil
+	})
 }
 
 // memo is one read, made on first use.
@@ -326,13 +451,7 @@ func (r *pveReads) allowedOnline(ctx context.Context, c *clusterv1.Cluster) ([]N
 	if r.h.Sites == nil {
 		return online, nil, nil
 	}
-	sites, err := r.sites.get(func() (*Sites, error) {
-		s, readErr := r.h.Sites.Sites(ctx)
-		if readErr != nil {
-			return nil, &pveReadError{fmt.Errorf("reading the Proxmox VE storages and templates: %w", readErr)}
-		}
-		return s, nil
-	})
+	sites, err := r.lookAtSites(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -375,4 +494,47 @@ func (h *Hooks) checkPlacement(ctx context.Context, r *pveReads, c *clusterv1.Cl
 		return err
 	}
 	return sites.Refusal(c, online)
+}
+
+// distributionTags names a cluster's template line for a person: its distribution, then its node OS
+// where it has one.
+func distributionTags(c *clusterv1.Cluster, o templates.NodeOS) []string {
+	if isTalos(c) {
+		return []string{"Talos"}
+	}
+	f, r, _ := templates.ReleaseOf(o)
+	return []string{strings.ToUpper(string(distributionOf(c))), f.Title() + " " + r.Name}
+}
+
+// checkNUMA refuses a cluster whose templates give the guest a NUMA topology but whose machines
+// have fewer cores than that is worth, on the control plane or in any machine deployment.
+func (h *Hooks) checkNUMA(ctx context.Context, reads *pveReads, c *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
+	if h.Sites == nil || class == nil {
+		return nil
+	}
+	sites, err := reads.lookAtSites(ctx)
+	if err != nil {
+		return err
+	}
+	needs, err := needsOf(c, sites)
+	if err != nil || !needs.NUMA {
+		return err
+	}
+	topology := c.Spec.Topology
+	if cores, _, err := nodeSize(c, class, "controlPlaneMachine", topology.ControlPlane.Variables.Overrides); err != nil {
+		return err
+	} else if cores < templates.NUMAMinCores {
+		return fmt.Errorf("the templates use NUMA, which needs at least %d cores per machine, and the control plane has %d", templates.NUMAMinCores, cores)
+	}
+	for i := range topology.Workers.MachineDeployments {
+		md := &topology.Workers.MachineDeployments[i]
+		cores, _, err := nodeSize(c, class, "workerMachine", md.Variables.Overrides)
+		if err != nil {
+			return err
+		}
+		if cores < templates.NUMAMinCores {
+			return fmt.Errorf("the templates use NUMA, which needs at least %d cores per machine, and worker pool %s has %d", templates.NUMAMinCores, md.Name, cores)
+		}
+	}
+	return nil
 }

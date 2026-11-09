@@ -900,6 +900,9 @@ func TestJSONMessageNamesTheResourceADiagnosticIsAbout(t *testing.T) {
 		line: `{"@level":"info","@message":"module.management.proxmox_acl.clusters: Creating...","type":"apply_start"}`,
 		want: `module.management.proxmox_acl.clusters: Creating...`,
 	}, {
+		line: `{"@level":"warning","@message":"Warning: error waiting for network interfaces from QEMU agent","type":"diagnostic","diagnostic":{"summary":"error waiting for network interfaces from QEMU agent","detail":"received an HTTP 403 response - Reason: Permission check failed (/vms/100, VM.GuestAgent.Audit)","address":"module.management.proxmox_virtual_environment_vm.node[0]"}}`,
+		want: `warning: module.management.proxmox_virtual_environment_vm.node[0]: Proxmox VE refused to list the guest agent's network addresses, since the user lacks VM.GuestAgent.Audit. The setup does not use them.`,
+	}, {
 		line: "  not json  ",
 		want: "not json",
 	}} {

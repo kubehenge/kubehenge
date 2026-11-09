@@ -30,11 +30,15 @@ On the Administration page, **Remove Kubehenge** takes the state passphrase and 
 - destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made)).
 - switches the [backups of its etcd](install.md#back-up-the-management-clusters-etcd) off and deletes the access key and talosconfig the appliance kept for them. The snapshots stay in the target.
 
+A removal that stopped part way can be run again. When the management cluster no longer answers, the removal goes on if Proxmox VE holds none of its VMs (the pool `kubehenge-management`). Otherwise it names the VMs and refuses. Start them, or remove them in Proxmox VE.
+
+### After removal in the appliance
+
 The page follows the log. The appliance stays and returns to its first run with the last settings filled in. The state is deleted, so the next setup chooses a new passphrase. Removal needs the same [privileges](install.md#who-may-set-it-up) on `/` as the setup.
 
 ### With Terraform/OpenTofu
 
-Delete the clusters first. Then delete the templates in the template pool (`kubehenge template delete`, or delete the VMs), since Proxmox VE refuses to delete a pool that still holds VMs. Then:
+Delete the clusters first. Then delete the templates in the template pool (`kubehenge template delete`, or delete the VMs), because Proxmox VE refuses to delete a pool that still holds VMs. Then:
 
 ```sh
 tofu destroy

@@ -30,6 +30,7 @@ import type {
   NotificationSent,
   PodLogs,
   PodSecurityCheck,
+  RebootReadiness,
   Plan,
   UpgradeChecks,
   PveNode,
@@ -434,6 +435,7 @@ export interface Api {
   removeManagement: (passphrase: string) => Promise<Job>;
   takeOverManagement: (passphrase: string) => Promise<void>;
   managementHealth: () => Promise<ManagementHealth>;
+  rebootReady: () => Promise<RebootReadiness>;
   managementBackups: () => Promise<ManagementBackups>;
   configureManagementBackups: (req: ManagementBackupRequest) => Promise<ManagementBackups>;
   stopManagementBackups: () => Promise<void>;
@@ -441,6 +443,15 @@ export interface Api {
   takeManagementSnapshot: () => Promise<ManagementBackups>;
   /** restoreManagement restores the management cluster's etcd as a run of the appliance's. */
   restoreManagement: (snapshot: string, passphrase: string) => Promise<Job>;
+  /** recreateManagement makes the management cluster's VMs again and restores a snapshot into them. */
+  recreateManagement: (snapshot: string, passphrase: string) => Promise<Job>;
+  dismissBackupWarning: () => Promise<ManagementBackups>;
+  /** exportManagement downloads the appliance's state, encrypted with exportPassphrase. */
+  exportManagement: (passphrase: string, exportPassphrase: string) => Promise<Blob>;
+  /** importManagement puts an export, as base64, into an appliance with no management cluster. */
+  importManagement: (bundle: string, exportPassphrase: string) => Promise<ManagementBackups>;
+  /** clusterSpec downloads the cluster's spec as the backup target keeps it. */
+  clusterSpec: (ns: string, name: string) => Promise<Blob>;
   upgrades: () => Promise<Upgrades>;
   upgrade: (version: string) => Promise<void>;
   /** nodeOS, such as almalinux-10, narrows kubeadm's versions to those with a template on it. */
@@ -472,11 +483,23 @@ export interface Api {
   bridges: (node: string) => Promise<Bridge[]>;
   /** The DNS servers and search domain a node resolves with. */
   dns: (node: string) => Promise<NodeDNS>;
-  /** Free addresses on a bridge's network for a new cluster's API and nodes, where nodes is above 0, and which of check a host answers on. */
+  /**
+   * Free addresses for a new cluster's API and nodes, where nodes is above 0, and which of check a host answers on.
+   * They are on the network a family's gateway and prefix length give, else on the bridge's.
+   */
   freeAddresses: (
     node: string,
     bridge: string,
-    req: { vlan: number; nodes: number; check: string[] },
+    req: {
+      vlan: number;
+      nodes: number;
+      check: string[];
+      families?: string[];
+      gateway?: string;
+      prefix?: number;
+      gateway6?: string;
+      prefix6?: number;
+    },
   ) => Promise<FreeAddresses>;
   haRules: () => Promise<HARules>;
 }
@@ -585,6 +608,7 @@ export const api: Api = {
   removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
   takeOverManagement: (passphrase) => act("POST", "/api/setup/take-over", { passphrase }),
   managementHealth: () => request("GET", "/api/setup/health"),
+  rebootReady: () => request("GET", "/api/appliance/reboot-ready"),
   managementBackups: () => request("GET", "/api/appliance/etcd-backups"),
   configureManagementBackups: (req) => request("PUT", "/api/appliance/etcd-backups", req),
   stopManagementBackups: () => act("DELETE", "/api/appliance/etcd-backups"),
@@ -592,6 +616,14 @@ export const api: Api = {
   takeManagementSnapshot: () => request("POST", "/api/appliance/etcd-backups/snapshots"),
   restoreManagement: (snapshot, passphrase) =>
     request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/restore`, { passphrase }),
+  recreateManagement: (snapshot, passphrase) =>
+    request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/recreate`, { passphrase }),
+  dismissBackupWarning: () => request("POST", "/api/appliance/etcd-backups/warning/dismissal"),
+  exportManagement: (passphrase, exportPassphrase) =>
+    download("POST", "/api/appliance/export", { passphrase, exportPassphrase }),
+  importManagement: (bundle, exportPassphrase) =>
+    request("POST", "/api/appliance/import", { bundle, exportPassphrase }),
+  clusterSpec: (ns, name) => download("GET", `${clusterPath(ns, name)}/spec`),
   upgrades: () => request("GET", "/api/appliance/upgrades"),
   upgrade: (version) => act("POST", "/api/appliance/upgrades", { version }),
   versions: (distribution, nodeOS) =>

@@ -4,7 +4,7 @@ import { api } from "./api";
 import { clusterPath } from "./cluster-paths";
 import { Link } from "./router";
 import type { Activity, ActivityEntry, HealthEvent, HealthSection } from "./types";
-import { age, Detail, ErrorBox, filled, pollIdle, Skeleton, Status, usePoll } from "./ui";
+import { age, Detail, ErrorBox, filled, pollIdle, Said, Skeleton, Status, usePoll } from "./ui";
 
 const windows = [
   { days: 1, label: "Last day" },
@@ -175,7 +175,9 @@ function Events({ events }: { events: HealthSection<HealthEvent> }): JSX.Element
               <When at={e.last} />
               <td>{e.reason}</td>
               <td>{e.object}</td>
-              <td className="message">{e.message}</td>
+              <td className="message">
+                <Said text={e.message} />
+              </td>
               <td className={e.count > 1 ? "count" : "count once"}>{e.count}</td>
             </tr>
           ))}

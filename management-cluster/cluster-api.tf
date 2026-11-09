@@ -458,8 +458,11 @@ resource "helm_release" "kubehenge" {
       workloadPool       = proxmox_virtual_environment_pool.workload.pool_id
       providerNamespaces = local.class_provider_namespaces
       managementEndpoint = local.api_endpoint
-      talos              = { imageSignatures = local.image_signatures }
-      watch              = { stallMinutes = var.watch.stall_minutes }
+      # A workload cluster's firewall accepts the management cluster's traffic, which leaves from
+      # the nodes' addresses. The appliance records its own, which change on DHCP renewal.
+      managementAddresses = [for a in concat(var.node_addresses, var.node_addresses_ipv6) : split("/", a)[0]]
+      talos               = { imageSignatures = local.image_signatures }
+      watch               = { stallMinutes = var.watch.stall_minutes }
       interface = {
         extraNamespaces = var.extra_cluster_namespaces
         offerHARules    = var.offer_ha_rules
@@ -530,6 +533,7 @@ resource "helm_release" "kubehenge" {
     { image = local.controller_image },
     local.proxy_enabled ? { proxy = { secret = local.proxy_secret_name, ca = local.proxy_has_ca } } : {},
     length(var.chart_repositories.mirrors) > 0 ? { chartMirrors = var.chart_repositories.mirrors } : {},
+    var.release_mirror.url != "" ? { releaseMirror = { url = var.release_mirror.url, caBundle = var.release_mirror.ca_bundle } } : {},
   ))]
 
   depends_on = [helm_release.cluster_api_providers, proxmox_acl.provisioner, proxmox_acl.ha, proxmox_acl.template_builder, proxmox_acl.etcd_restore]

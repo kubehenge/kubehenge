@@ -202,10 +202,16 @@ type meshMember struct {
 	cilium         bool
 	id             int
 	pods, services []string
+	// underlay is the family Cilium's tunnels between nodes run over: IPv4 where the nodes have it.
+	// Cilium links only clusters of one datapath mode, whose nodes reach each other.
+	underlay string
 }
 
 func memberOf(c *clusterv1.Cluster, classes []clusterv1.ClusterClass) meshMember {
-	m := meshMember{name: c.Name, endpoint: c.Spec.ControlPlaneEndpoint.Host}
+	m := meshMember{name: c.Name, endpoint: c.Spec.ControlPlaneEndpoint.Host, underlay: familyIPv6}
+	if slices.Contains(clusterFamilies(c), familyIPv4) {
+		m.underlay = familyIPv4
+	}
 	m.mesh, _, _ = optionalVariable[ClusterMesh](c, clusterMeshVariable)
 	m.cilium = runsCilium(c)
 	m.id, _ = CiliumClusterID(c)
@@ -270,6 +276,8 @@ func meshRefusal(self, peer *meshMember) string {
 		return fmt.Sprintf("both have Cilium cluster id %d", self.id)
 	case self.endpoint == "" || peer.endpoint == "":
 		return "waiting for a control-plane endpoint"
+	case self.underlay != peer.underlay:
+		return fmt.Sprintf("its nodes link over %s and this cluster's over %s", peer.underlay, self.underlay)
 	}
 	if len(self.pods) == 0 || len(peer.pods) == 0 {
 		return "a pod range is unknown"

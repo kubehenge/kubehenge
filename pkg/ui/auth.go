@@ -181,17 +181,17 @@ const maxUsernameLength = 64
 const signInRefused = "Sign-in failed. Check the user name, password and realm, or set up the required second factor."
 
 // secondFactorRefused says what a refused second factor can mean. Proxmox VE answers a wrong code,
-// a factor locked after too many tries and a cluster without quorum (which cannot record a used
-// recovery key) with the same 401. The user has given the right password, so naming them tells
-// no stranger anything.
+// a factor locked after too many tries and a cluster without quorum (which cannot write the
+// factor's state, a used recovery key or a TOTP code's counter) with the same 401. The user has
+// given the right password, so naming them tells no stranger anything.
 func secondFactorRefused(kind string, c *pve.Challenge) string {
 	switch {
 	case kind == "recovery":
 		return "Wrong recovery key, or the cluster has no quorum. Without quorum, use a node's console."
 	case len(c.Recovery) > 0:
-		return "Wrong code, or the factor is locked. A recovery key unlocks it."
+		return "Wrong code, a locked factor or a cluster without quorum. A recovery key unlocks a locked factor. Without quorum, use a node's console."
 	default:
-		return "Wrong code, or the factor is locked after too many tries. Ask an administrator to reset it."
+		return "Wrong code, a locked factor or a cluster without quorum. An administrator resets a locked factor. Without quorum, use a node's console."
 	}
 }
 

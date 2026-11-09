@@ -22,6 +22,8 @@ Kubehenge creates, scales, upgrades and deletes Kubernetes clusters on Proxmox V
 
 `scripts/tools.sh <dir>` installs the pinned tools, Go, Node and uv among them. With them on PATH, `make test` runs every lint and unit test, as CI does on each pull request. `make fmt` formats what the checks would refuse. `make build` builds the `kubehenge` binary with the interface embedded.
 
+A draft pull request runs the fast checks on each push. Once it is ready for review, the end-to-end tests its changes need run on the tree that would land (`docs/testing.md`). The branch has to be up to date with main, and auto-merge squashes the pull request when every required check is green.
+
 ## Design
 
 - **Cluster API underneath**, as in both of those:

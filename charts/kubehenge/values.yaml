@@ -130,6 +130,15 @@ proxy:
 # repository.
 chartMirrors: {}
 
+# A mirror of the RKE2 and k3s releases, which serves them on GitHub's paths beneath its url:
+# <url>/<repository>/releases/download/<version>/<file> and
+# <url>/<repository>/raw/<version>/install.sh. Nodes download their release from it in place of
+# GitHub, and still install only the pinned files.
+# caBundle (PEM) is the authority of a mirror the usual authorities do not sign. Empty, GitHub.
+releaseMirror:
+  url: ""
+  caBundle: ""
+
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.
   url: ""
@@ -233,6 +242,12 @@ kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28
 # management cluster's module sets it. Without it, no cluster's autoscaler can run inside the
 # cluster (the autoscaler variable's placement workload).
 managementEndpoint: ""
+
+# The addresses, without prefix lengths, of the management cluster's nodes; the management
+# cluster's module sets them. A workload cluster's firewall (the securityGroups variable) accepts
+# them and the appliance's alongside the cluster's own addresses. The controller writes them onto
+# each cluster's ProxmoxCluster, so a change replaces no node.
+managementAddresses: []
 
 # What Kubehenge's controller watches for on its own, and how long it gives each before it says
 # so on the Cluster (a condition and an event) and on the interface's Health page.

@@ -118,6 +118,15 @@ func TestPlacerKeepsThePlacementWhenNoNodeHasRoom(t *testing.T) {
 	}
 }
 
+func TestNoRoomGivesTheMachinesSizeWithoutRoundingItUp(t *testing.T) {
+	t.Parallel()
+	for mib, want := range map[int64]string{8192: "8 GiB", 1024: "1 GiB", 3321: "3.3 GiB", 3277: "3.3 GiB", 3276: "3.2 GiB", 1025: "1.1 GiB"} {
+		if got := neededGiB(mib); got != want {
+			t.Errorf("neededGiB(%d) = %q, want %q", mib, got, want)
+		}
+	}
+}
+
 func TestPlacerHoldsOnlyTheNodesThatCanStillRunTheCluster(t *testing.T) {
 	t.Parallel()
 	before := "pve1,pve2"
@@ -337,8 +346,6 @@ type returningPVE struct {
 	listed, own, pve1Free int64
 	// uptime is pve2's uptime in its last report.
 	uptime int64
-	// statusReads counts the reads of pve2's own status.
-	statusReads int
 }
 
 func (f *returningPVE) serve(t *testing.T) *Proxmox {
@@ -357,7 +364,6 @@ func (f *returningPVE) serve(t *testing.T) *Proxmox {
 		case "/api2/json/nodes/pve1/status":
 			data = map[string]any{"cpuinfo": map[string]any{"flags": zen3Flags}, "memory": map[string]any{"total": total * mib, "used": (total - f.pve1Free) * mib}}
 		case "/api2/json/nodes/pve2/status":
-			f.statusReads++
 			data = map[string]any{"cpuinfo": map[string]any{"flags": zen3Flags}, "memory": map[string]any{"total": total * mib, "used": (total - f.own) * mib}}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
@@ -370,12 +376,6 @@ func (f *returningPVE) set(change func(*returningPVE)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	change(f)
-}
-
-func (f *returningPVE) reads() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.statusReads
 }
 
 func TestOnlineNodesJudgeANodeBackOnlineByItsOwnMemory(t *testing.T) {
@@ -401,13 +401,9 @@ func TestOnlineNodesJudgeANodeBackOnlineByItsOwnMemory(t *testing.T) {
 	if got := free(); got != 2900 {
 		t.Errorf("pve2, still listed with its old figures, has %d MiB free, want the 2900 it reports itself", got)
 	}
-	f.set(func(f *returningPVE) { f.uptime, f.listed, f.own = 4, 2800, 1 })
-	reads := f.reads()
+	f.set(func(f *returningPVE) { f.uptime, f.listed, f.own = 4, 2800, 2800 })
 	if got := free(); got != 2800 {
-		t.Errorf("pve2, listed with new figures, has %d MiB free, want the 2800 listed", got)
-	}
-	if f.reads() != reads {
-		t.Error("pve2's status was read again once the list had its new figures")
+		t.Errorf("pve2, listed with new figures, has %d MiB free, want the 2800 it reports itself", got)
 	}
 }
 

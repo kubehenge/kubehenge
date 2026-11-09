@@ -15,3 +15,11 @@ api_address    = "192.0.2.10"
 gateway        = "192.0.2.1"
 dns_servers    = ["192.0.2.1"]
 search_domains = ["corp.example"]
+
+# IPv6 or dual-stack: list the families, the first is primary. node_addresses and gateway are the
+# IPv4 ones and stay empty and unset for an IPv6-only cluster. A dual-stack cluster gives both lists
+# the same length, api_address an address of the primary family and dns_servers one of each family.
+# pod_subnets and service_subnets, when set, hold one range per family in this order.
+# ip_families         = ["IPv4", "IPv6"]
+# node_addresses_ipv6 = ["2001:db8:1::11/64"]
+# gateway_ipv6        = "2001:db8:1::1"

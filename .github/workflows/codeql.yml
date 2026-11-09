@@ -10,7 +10,6 @@ on:
     branches: [main]
   # Every pull request, whatever it targets, so that one stacked on another is checked too.
   pull_request:
-  merge_group:
   # A query pack that learns a new pattern finds it in code that has not changed since.
   schedule:
     - cron: '29 3 * * 3'
@@ -40,31 +39,37 @@ jobs:
     permissions:
       contents: read # Reads the source it analyses.
       security-events: write # Uploads the findings to code scanning.
-    # A merge group reports the three required checks without analysing: each pull request was
-    # analysed alone, a pattern CodeQL finds rarely depends on another queued change, and the
-    # weekly and main runs catch the rest. Every step is skipped rather than the job, because a
-    # matrix job skipped by a job-level `if` reports under its unexpanded name, which satisfies no
-    # required check.
     steps:
-      - if: github.event_name != 'merge_group'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - id: tools
+        if: matrix.language == 'go'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: tools-${{ runner.os }}-${{ runner.arch }}-go-${{ hashFiles('scripts/tools.sh') }}
       - name: Go
-        if: github.event_name != 'merge_group' && matrix.language == 'go'
+        if: matrix.language == 'go' && steps.tools.outputs.cache-hit != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/tools.sh "$RUNNER_TEMP/bin" go
+      - if: >-
+          matrix.language == 'go' && steps.tools.outputs.cache-hit != 'true'
+          && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - if: matrix.language == 'go'
         run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin" go
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           echo GOTOOLCHAIN=local >> "$GITHUB_ENV"
-      - if: github.event_name != 'merge_group'
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           config-file: ./.github/codeql-config.yml
-      - if: github.event_name != 'merge_group'
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: /language:${{ matrix.language }}

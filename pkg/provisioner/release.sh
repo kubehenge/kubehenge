@@ -3,9 +3,28 @@
 # file checked first against the release's checksum file, and that file and the install script
 # against the SHA-256s Kubehenge's controller recorded when a cluster first used the release:
 #
-#   kubehenge-release rke2|k3s <version> <checksum file's SHA-256> <install script's SHA-256> <file>...
+#   kubehenge-release [--mirror <address> [--mirror-ca <PEM file>]] rke2|k3s <version> \
+#       <checksum file's SHA-256> <install script's SHA-256> <file>...
+#
+# A mirror serves the files on GitHub's paths beneath its address:
+# <address>/<repository>/releases/download/<version>/<file> and <address>/<repository>/raw/<version>/install.sh.
 set -eu
 
+mirror=
+mirror_ca=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --mirror)
+            mirror=$2
+            shift 2
+            ;;
+        --mirror-ca)
+            mirror_ca=$2
+            shift 2
+            ;;
+        *) break ;;
+    esac
+done
 distribution=$1
 version=$2
 sums=$3
@@ -20,7 +39,15 @@ case "${distribution}" in
         exit 1
         ;;
 esac
-release="https://github.com/${repository}/releases/download/${version}"
+if [ -n "${mirror}" ]; then
+    release="${mirror}/${repository}/releases/download/${version}"
+    install_script="${mirror}/${repository}/raw/${version}/install.sh"
+    source="the release mirror ${mirror}"
+else
+    release="https://github.com/${repository}/releases/download/${version}"
+    install_script="https://raw.githubusercontent.com/${repository}/${version}/install.sh"
+    source=GitHub
+fi
 images="/var/lib/rancher/${distribution}/agent/images"
 # On disk: /tmp may be kept in memory, and the images take hundreds of MB.
 work=$(mktemp -d -p /var/tmp)
@@ -33,6 +60,10 @@ trap 'rm -rf "${work}"' EXIT
 # per address, which is why the address is tried first.
 release_down=
 fetch() {
+    if [ -n "${mirror}" ]; then
+        mirror_fetch "$@"
+        return
+    fi
     case "$1" in
         https://github.com/*/*/releases/download/*/*)
             if [ -z "${release_down}" ]; then
@@ -43,6 +74,24 @@ fetch() {
             ;;
         *) curl --fail --silent --show-error --location --proto '=https' --retry 8 --retry-all-errors --output "${work}/$2" "$1" ;;
     esac
+}
+
+# mirror_fetch <url> <file>: a mirror's answer of "not there" ends the download at once, while one
+# that fails on the way is tried again. It may serve plain HTTP, since the pins check every file.
+mirror_fetch() {
+    set -- "$1" "$2" --fail --silent --show-error --location --proto '=http,https' --retry 8 --retry-connrefused \
+        --write-out '%{http_code}' --output "${work}/$2"
+    if [ -n "${mirror_ca}" ]; then
+        set -- "$@" --cacert "${mirror_ca}"
+    fi
+    url=$1 name=$2
+    shift 2
+    code=$(curl "$@" "${url}") && return 0
+    case "${code}" in
+        404 | 410) echo "kubehenge-release: ${source} has no ${name} of ${repository} ${version} (${url})" >&2 ;;
+        *) echo "kubehenge-release: ${source} did not serve ${name} of ${repository} ${version} (${url}, HTTP ${code:-none})" >&2 ;;
+    esac
+    return 1
 }
 
 # api_fetch <release download url> <file>
@@ -65,7 +114,7 @@ api_fetch() {
 }
 
 fetch "${release}/sha256sum-amd64.txt" sha256sum-amd64.txt
-fetch "https://raw.githubusercontent.com/${repository}/${version}/install.sh" install.sh
+fetch "${install_script}" install.sh
 printf '%s  %s\n%s  %s\n' "${sums}" sha256sum-amd64.txt "${script}" install.sh > "${work}/recorded"
 for file in "$@"; do
     awk -v file="${file}" '$2 == file { print; found = 1 } END { exit !found }' "${work}/sha256sum-amd64.txt" >> "${work}/listed" || {
@@ -74,7 +123,10 @@ for file in "$@"; do
     }
     fetch "${release}/${file}" "${file}"
 done
-(cd "${work}" && sha256sum --check --strict --quiet recorded && sha256sum --check --strict --quiet listed)
+if ! (cd "${work}" && sha256sum --check --strict --quiet recorded && sha256sum --check --strict --quiet listed); then
+    echo "kubehenge-release: the files of ${repository} ${version} from ${source} do not match the pinned checksums. Nothing was installed" >&2
+    exit 1
+fi
 
 install -D -m 0755 "${work}/install.sh" /opt/install.sh
 mkdir -p "${images}"

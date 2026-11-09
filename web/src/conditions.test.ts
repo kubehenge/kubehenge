@@ -11,12 +11,14 @@ describe("the Health page's condition list", () => {
       upgradeHeldCondition,
       "DeletionStalled",
       "VMsNotRunning",
+      "VMsMissing",
       "CertificatesExpiring",
       "NodesSkipped",
       "NodesLackMemory",
+      "HARulesPending",
     ];
-    expect(marked(kubehenge, "True")).toStrictEqual([true, true, true, true, true, true]);
-    expect(marked(kubehenge, "False")).toStrictEqual([false, false, false, false, false, false]);
+    expect(marked(kubehenge, "True")).toStrictEqual(kubehenge.map(() => true));
+    expect(marked(kubehenge, "False")).toStrictEqual(kubehenge.map(() => false));
   });
 
   it("marks Cluster API's conditions by their own polarity", () => {

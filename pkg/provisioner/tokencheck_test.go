@@ -3,6 +3,8 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -206,7 +208,7 @@ func TestATokenWithoutAPrivilegeNamesItAndItsPath(t *testing.T) {
 		"controller on the templates":   {controllerTk, "Controller", ControllerNeeds(&places), Need{"/pool/kubehenge-templates", "VM.Audit"}},
 		"HA":                            {haTk, "Proxmox VE HA", HANeeds(), Need{"/", "Sys.Console"}},
 		"restore":                       {restoreTk, "etcd restore", RestoreNeeds(&places), Need{"/pool/" + testPool, "VM.GuestAgent.Unrestricted"}},
-		"capmox":                        {capmoxTk, "Cluster API provider", CapmoxNeeds(&places), Need{"/pool/" + testPool, "VM.Clone"}},
+		"capmox":                        {capmoxTk, "Cluster API provider", CapmoxNeeds(&places), Need{"/pool/" + testPool, "VM.PowerMgmt"}},
 		"template builder":              {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/", "Sys.Audit"}},
 		"template builder on its pool":  {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/pool/kubehenge-templates", "VM.PowerMgmt"}},
 		"template builder on its node":  {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/nodes/pve1", "Sys.AccessNetwork"}},
@@ -269,6 +271,26 @@ func TestAnAPIThatDoesNotAnswerIsUnreachableNotRefused(t *testing.T) {
 	f.srv.Close()
 	if s := f.states()["Controller"]; s.OK || s.Problem != TokenUnreachable {
 		t.Fatalf("state %+v", s)
+	}
+}
+
+// Addresses and ports are part of the error text, so digits in them never decide the class.
+func TestTokenErrorsAreClassifiedByMeaningNotDigits(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{errors.New(`reading permissions on /: Get "https://127.0.0.1:40139/api2/json/access/permissions": dial tcp 127.0.0.1:40139: connect: connection refused`), TokenUnreachable},
+		{errors.New(`dial tcp 10.0.4.1:4010: i/o timeout`), TokenUnreachable},
+		{fmt.Errorf("reading permissions on /: %w", proxmox.ErrNotAuthorized), TokenRefused},
+		{errors.New("asking a token Job: not authorized to access endpoint"), TokenRefused},
+		{errors.New("asking a token Job: authentication failure"), TokenRefused},
+		{errors.New(`Get "https://pve:8006/": x509: certificate signed by unknown authority`), TokenCertificate},
+	} {
+		if got := classifyTokenError(c.err); got != c.want {
+			t.Errorf("%q is %s, want %s", c.err, got, c.want)
+		}
 	}
 }
 

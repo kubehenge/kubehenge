@@ -5,7 +5,7 @@ import { ago, deletable, outcome, phaseStatus, restorable, running, when } from 
 import type { OptionRow } from "./ClusterOptions";
 import { CredentialField, type CredentialKey } from "./CredentialField";
 import { useFleet } from "./fleet";
-import { RestoreDialog, RestoredNotice, RestoresTable, ResultsDialog } from "./Restores";
+import { RestoreDialog, RestoredNotice, RestoresTable, ResultsDialog, SpecExport } from "./Restores";
 import type { BackupRun, BackupSource, Cluster, ClusterBackups, ClusterClass, RestoreRun } from "./types";
 import {
   Detail,
@@ -21,6 +21,7 @@ import {
   pollCache,
   pollIdle,
   pollRunning,
+  Said,
   sentence,
   sole,
   timeZones,
@@ -658,14 +659,17 @@ export function BackupsView({
   }
   if (!v.enabled) {
     return (
-      <div className="box">
-        <p>Backups are off</p>
-        <div className="actions">
-          <button type="button" disabled={!can} onClick={() => onEdit("backups")}>
-            Set up backups…
-          </button>
+      <>
+        <div className="box">
+          <p>Backups are off</p>
+          <div className="actions">
+            <button type="button" disabled={!can} onClick={() => onEdit("backups")}>
+              Set up backups…
+            </button>
+          </div>
         </div>
-      </div>
+        <SpecExport cluster={c} />
+      </>
     );
   }
 
@@ -718,6 +722,7 @@ export function BackupsView({
         <ErrorBox message={actionError} />
         <ErrorBox message={error} />
       </div>
+      <SpecExport cluster={c} />
 
       <BackupsTable
         title="Backups"
@@ -834,7 +839,11 @@ function BackupsSummary({
                   {" "}
                   {s.volumeData ? "with their volumes' data" : "their resources only, not their volumes' data"}
                 </span>
-                {filled(s.message) && <div className="hint message">{sentence(s.message)}</div>}
+                {filled(s.message) && (
+                  <div className="hint message">
+                    <Said text={sentence(s.message)} />
+                  </div>
+                )}
               </div>
             ))}
           </dd>
@@ -872,7 +881,7 @@ function BackupsTable({
   return (
     <div className="box scroll">
       <h3>{title}</h3>
-      <table className="grid">
+      <table className="grid stack-wide">
         <thead>
           <tr>
             <th>Name</th>
@@ -899,13 +908,13 @@ function BackupsTable({
             return (
               <tr key={b.name}>
                 <td className="nowrap">{b.name}</td>
-                <td className="started">
+                <td data-label="Started" className="started">
                   <span title={when(b.started)}>{ago(b.started)}</span>
                   {(b.scheduled || filled(b.by)) && (
                     <div className="hint message">{b.scheduled ? "By the schedule" : `By ${b.by}`}</div>
                   )}
                 </td>
-                <td className="state">
+                <td data-label="Status" className="state">
                   <Status state={s.state} text={s.text} />
                   {b.total > 0 && (
                     <div className="hint">
@@ -919,7 +928,9 @@ function BackupsTable({
                     </div>
                   ))}
                 </td>
-                <td className="nowrap">{b.expires === undefined ? "" : new Date(b.expires).toLocaleDateString()}</td>
+                <td data-label="Deleted on" className="nowrap">
+                  {b.expires === undefined ? "" : new Date(b.expires).toLocaleDateString()}
+                </td>
                 <td className="row-action">
                   <button
                     type="button"

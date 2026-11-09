@@ -149,7 +149,7 @@ index 8d77c2e..72aabc5 100644
  		return nil, fmt.Errorf("cannot delete vm with id %d: %w", vmID, err)
  	}
 diff --git a/pkg/proxmox/goproxmox/api_client_test.go b/pkg/proxmox/goproxmox/api_client_test.go
-index 563086a..92c8d10 100644
+index 563086a..bc24102 100644
 --- a/pkg/proxmox/goproxmox/api_client_test.go
 +++ b/pkg/proxmox/goproxmox/api_client_test.go
 @@ -20,6 +20,7 @@ import (
@@ -158,17 +158,37 @@ index 563086a..92c8d10 100644
  	"net/http"
 +	"net/url"
  	"testing"
- 
+
  	"github.com/go-logr/logr"
-@@ -605,6 +606,36 @@ func TestProxmoxAPIClient_DeleteVM(t *testing.T) {
+@@ -33,6 +34,9 @@ import (
+
+ const testBaseURL = "http://pve.local.test/" // regression test against trailing /
+
++// destroyUPID has the form "UPID:$node:$pid:$pstart:$startime:$dtype:$id:$user".
++const destroyUPID = "UPID:test:000D6BDA:041E0A54:654A5A1D:qmdestroy:101:root@pam:"
++
+ func newTestClient(t *testing.T) *APIClient {
+ 	httpmock.Activate()
+ 	t.Cleanup(httpmock.DeactivateAndReset)
+@@ -566,8 +570,7 @@ func TestProxmoxAPIClient_DeleteVM(t *testing.T) {
+ 		t.Run(test.name, func(t *testing.T) {
+ 			client := newTestClient(t)
+
+-			// "UPID:$node:$pid:$pstart:$startime:$dtype:$id:$user"
+-			upid := "UPID:test:000D6BDA:041E0A54:654A5A1D:qmdestroy:101:root@pam:"
++			upid := destroyUPID
+
+ 			httpmock.RegisterResponder(http.MethodGet, `=~/cluster/nextid`,
+ 				newJSONResponder(400, fmt.Sprintf("VM %d already exists", test.vmID)))
+@@ -605,9 +608,38 @@ func TestProxmoxAPIClient_DeleteVM(t *testing.T) {
  	}
  }
- 
+
 +// A VM under an HA resource, in a backup job or in a replication job is destroyed in one call only
 +// with purge, and its leftover disks go with the destroy.
 +func TestProxmoxAPIClient_DeleteVMPurges(t *testing.T) {
 +	client := newTestClient(t)
-+	upid := "UPID:test:000D6BDA:041E0A54:654A5A1D:qmdestroy:101:root@pam:"
++	upid := destroyUPID
 +
 +	httpmock.RegisterResponder(http.MethodGet, `=~/cluster/nextid`,
 +		newJSONResponder(400, "VM 101 already exists"))
@@ -195,5 +215,9 @@ index 563086a..92c8d10 100644
 +}
 +
  func TestProxmoxAPIClient_GetTask(t *testing.T) {
- 	// "UPID:$node:$pid:$pstart:$startime:$dtype:$id:$user"
- 	upid := "UPID:test:000D6BDA:041E0A54:654A5A1D:qmdestroy:101:root@pam:"
+-	// "UPID:$node:$pid:$pstart:$startime:$dtype:$id:$user"
+-	upid := "UPID:test:000D6BDA:041E0A54:654A5A1D:qmdestroy:101:root@pam:"
++	upid := destroyUPID
+ 	upid2 := "UPID:test:000D6BDA:041E0A54:654A5A1D:qmdestroy:102:root@pam:"
+ 	tests := []struct {
+ 		name  string

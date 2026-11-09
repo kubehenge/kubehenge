@@ -17,6 +17,10 @@
 /pkg/provisioner/gatewayapi/*
 !/pkg/provisioner/gatewayapi/.keep
 
+# The Proxmox VE provider's CRDs, which `make capmox-crds` downloads for the chart's test.
+/test/crds/*
+!/test/crds/.keep
+
 # The Cluster API operator's chart archive, which `make capi-operator-chart` downloads.
 /management-cluster/charts/cluster-api-operator-*.tgz
 

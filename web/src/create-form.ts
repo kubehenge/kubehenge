@@ -54,6 +54,7 @@ import {
   type EtcdSnapshotFields,
   type EtcdSnapshotsValue,
 } from "./EtcdSnapshots";
+import { securityGroupsProblem } from "./Firewall";
 import {
   gitOpsFields,
   gitOpsProblems,
@@ -78,10 +79,16 @@ import {
 import { logsProblem, logsText, logsVariable, newLogs, type Logs } from "./Logs";
 import { labelsText, parseLabels } from "./namespace-labels";
 import {
-  addressBits,
   addressCount,
+  bitsOf,
+  choiceOf,
+  familiesOf,
+  familyFieldLabel,
+  familyLabels,
+  familyNames,
+  familyOf,
+  hasFamily,
   inList,
-  ipv4,
   isMTU,
   isQueues,
   isVLAN,
@@ -90,10 +97,13 @@ import {
   maxQueues,
   minMTU,
   networkOf,
+  parseCidr,
   rangeProblem,
   searchDomainsProblem,
   timeServersProblem,
   whole,
+  type Family,
+  type FamilyChoice,
 } from "./network";
 import {
   noNodeCustomisation,
@@ -111,6 +121,19 @@ import {
   nodesVariable,
   type NodeSettings,
 } from "./node-settings";
+import {
+  certificateProblem,
+  mirrorsProblem,
+  mirrorsText,
+  mirrorsVariable,
+  releaseMirrorProblems,
+  releaseMirrorText,
+  releaseMirrorVariable,
+  trustedText,
+  trustedVariable,
+  type MirrorRow,
+  type ReleaseMirror,
+} from "./NodeSite";
 import { noTimeouts, timeoutProblems, timeoutsOf, timeoutsSet, type TimeoutEntry } from "./NodeTimeouts";
 import { cleanProviders, oidcProblems, oidcProviders } from "./OIDCProviders";
 import { allowedNodes, anyNode, haText, placeProblem, placeText, type Place } from "./Placement";
@@ -208,18 +231,36 @@ export interface Form {
   mtu: string;
   /** The nodes' interface queues, empty for one. */
   queues: string;
+  /** Proxmox VE security groups of the nodes' firewall, comma-separated, empty to leave the firewall off. */
+  securityGroups: string;
+  /** The address families of the nodes, the primary first. Fixed once the cluster exists. */
+  families: FamilyChoice;
+  /** The IPv4 network. Left out of the cluster with IPv6 alone. */
   addresses: string;
   prefix: number;
   gateway: string;
+  /** The IPv6 network, with a family choice that has IPv6. */
+  addresses6: string;
+  prefix6: number;
+  gateway6: string;
   dnsServers: string;
   searchDomains: string;
   /** NTP servers for the nodes. Empty keeps the node image's own. */
   ntpServers: string;
+  /** Where the nodes pull images from, per registry. */
+  registryMirrors: MirrorRow[];
+  /** PEM authorities the nodes trust besides their OS's own. */
+  trustedCAs: string;
+  /** Where RKE2 and k3s nodes download their release. Empty takes the management cluster's mirror. */
+  releaseMirror: string;
+  /** The PEM authority of that mirror's certificate. Empty for the usual ones. */
+  releaseMirrorCA: string;
   loadBalancer: Implementation;
   loadBalancerAddresses: string;
   loadBalancerMode: Mode;
   loadBalancerAsn: string;
   loadBalancerPeers: string;
+  loadBalancerRouterID: string;
   loadBalancerAuthenticated: boolean;
   /** Typed here and stored as the cluster's bgp credential once it exists. Never copied from another cluster. */
   loadBalancerPassword: string;
@@ -685,6 +726,8 @@ export function withTalosRelease(f: Form, talos: TalosReleases | undefined, offe
 export interface BridgeNetwork {
   cidr?: string | undefined;
   gateway?: string | undefined;
+  cidr6?: string | undefined;
+  gateway6?: string | undefined;
   dns: string[];
   search: string;
 }
@@ -697,26 +740,88 @@ export function bridgeNetwork(
   bridge: string,
   bridgesByNode: Record<string, Bridge[]>,
   dnsByNode: Record<string, NodeDNS>,
-): { net?: BridgeNetwork; network?: string; node?: string } {
+): { net?: BridgeNetwork; network?: string; network6?: string; node?: string } {
   const on = Object.values(bridgesByNode)
     .flat()
-    .find((b) => b.bridge === bridge && filled(b.gateway));
+    .find((b) => b.bridge === bridge && (filled(b.gateway) || filled(b.gateway6)));
   if (on === undefined) {
     return {};
   }
   const dns = dnsByNode[on.node];
-  const net = { cidr: on.cidr, gateway: on.gateway, dns: dns?.servers ?? [], search: dns?.search ?? "" };
+  const net = {
+    cidr: on.cidr,
+    gateway: on.gateway,
+    cidr6: on.cidr6,
+    gateway6: on.gateway6,
+    dns: dns?.servers ?? [],
+    search: dns?.search ?? "",
+  };
   const network = on.cidr === undefined ? undefined : networkOf(on.cidr);
-  return network === undefined ? { net, node: on.node } : { net, network, node: on.node };
+  const network6 = on.cidr6 === undefined ? undefined : networkOf(on.cidr6);
+  return {
+    net,
+    node: on.node,
+    ...(network === undefined ? {} : { network }),
+    ...(network6 === undefined ? {} : { network6 }),
+  };
 }
 
 /** addressesOf are a form's node addresses and API address, as entries to probe. */
-export const addressesOf = (f: Form): string[] => [...list(f.addresses), f.endpoint].filter((a) => filled(a));
+export const addressesOf = (f: Form): string[] =>
+  [
+    ...(hasFamily(f.families, "IPv4") ? list(f.addresses) : []),
+    ...(hasFamily(f.families, "IPv6") ? list(f.addresses6) : []),
+    f.endpoint,
+  ].filter((a) => filled(a));
+
+type NetworkFields = Pick<
+  Form,
+  | "bridge"
+  | "vlan"
+  | "mtu"
+  | "queues"
+  | "families"
+  | "prefix"
+  | "gateway"
+  | "prefix6"
+  | "gateway6"
+  | "dnsServers"
+  | "searchDomains"
+  | "ntpServers"
+>;
+
+/** networkFieldsOf reads a cluster's network variable into the form's fields a new cluster takes from it. */
+export function networkFieldsOf(v: unknown, base: Form): NetworkFields {
+  const network = record(v);
+  const v6 = record(network["ipv6"]);
+  return {
+    families: choiceOf(network["ipFamilies"]),
+    prefix6: quantity(v6["prefix"]) ?? base.prefix6,
+    gateway6: text(v6["gateway"]) ?? "",
+    bridge: text(network["bridge"]) ?? "",
+    vlan: quantity(network["vlan"])?.toString() ?? "",
+    mtu: quantity(network["mtu"])?.toString() ?? "",
+    queues: quantity(network["queues"])?.toString() ?? "",
+    prefix: quantity(network["prefix"]) ?? base.prefix,
+    gateway: text(network["gateway"]) ?? "",
+    dnsServers: (texts(network["dnsServers"]) ?? []).join(", "),
+    searchDomains: (texts(network["searchDomains"]) ?? []).join(", "),
+    ntpServers: (texts(network["ntp"]) ?? []).join(", "),
+  };
+}
 
 /** withFreeAddresses fills the API address and the node addresses with those found free, where the user has given none. */
 export function withFreeAddresses(f: Form, free: FreeAddresses | undefined, touched: (k: keyof Form) => boolean): Form {
-  const filledIn = (k: "endpoint" | "addresses"): string => (f[k] === "" && !touched(k) ? (free?.[k] ?? "") : f[k]);
-  return { ...f, endpoint: filledIn("endpoint"), addresses: filledIn("addresses") };
+  const filledIn = (k: "endpoint" | "addresses" | "addresses6", found: string | undefined): string =>
+    f[k] === "" && !touched(k) ? (found ?? "") : f[k];
+  // The API address is of the primary family.
+  const endpoint = familiesOf(f.families)[0] === "IPv6" ? free?.endpoint6 : free?.endpoint;
+  return {
+    ...f,
+    endpoint: filledIn("endpoint", endpoint),
+    addresses: filledIn("addresses", free?.addresses),
+    addresses6: filledIn("addresses6", free?.addresses6),
+  };
 }
 
 /**
@@ -741,11 +846,17 @@ export function withBridgeNetwork(f: Form, net: BridgeNetwork | undefined, touch
     return f;
   }
   const bits = Number(net.cidr?.split("/")[1]);
+  const bits6 = Number(net.cidr6?.split("/")[1]);
   return {
     ...f,
-    prefix: touched("prefix") || !whole(bits, 1, addressBits) ? f.prefix : bits,
+    prefix: touched("prefix") || !whole(bits, 1, bitsOf("IPv4")) ? f.prefix : bits,
+    prefix6: touched("prefix6") || !whole(bits6, 1, bitsOf("IPv6")) ? f.prefix6 : bits6,
     gateway: f.gateway === "" && !touched("gateway") ? (net.gateway ?? "") : f.gateway,
-    dnsServers: f.dnsServers === "" && !touched("dnsServers") ? net.dns.join(", ") : f.dnsServers,
+    gateway6: f.gateway6 === "" && !touched("gateway6") ? (net.gateway6 ?? "") : f.gateway6,
+    dnsServers:
+      f.dnsServers === "" && !touched("dnsServers")
+        ? net.dns.filter((d) => familiesOf(f.families).includes(familyOf(d) ?? "IPv4")).join(", ")
+        : f.dnsServers,
     searchDomains: f.searchDomains === "" && !touched("searchDomains") ? net.search : f.searchDomains,
   };
 }
@@ -770,17 +881,27 @@ export const newForm = (): Form => ({
   vlan: "",
   mtu: "",
   queues: "",
+  securityGroups: "",
+  families: "ipv4",
   addresses: "",
   prefix: 24,
   gateway: "",
+  addresses6: "",
+  prefix6: 64,
+  gateway6: "",
   dnsServers: "",
   searchDomains: "",
   ntpServers: "",
+  registryMirrors: [],
+  trustedCAs: "",
+  releaseMirror: "",
+  releaseMirrorCA: "",
   loadBalancer: "",
   loadBalancerAddresses: "",
   loadBalancerMode: "l2",
   loadBalancerAsn: "",
   loadBalancerPeers: "",
+  loadBalancerRouterID: "",
   loadBalancerAuthenticated: false,
   loadBalancerPassword: "",
   pods: "",
@@ -992,6 +1113,18 @@ function reachVariables(form: Form, defined: Set<string>): Record<string, unknow
   if (egress !== undefined) {
     variables["egressProxy"] = egress;
   }
+  const mirrors = defined.has("registryMirrors") ? mirrorsVariable(form.registryMirrors) : undefined;
+  if (mirrors !== undefined) {
+    variables["registryMirrors"] = mirrors;
+  }
+  const trusted = defined.has("trustedCAs") ? trustedVariable(form.trustedCAs) : undefined;
+  if (trusted !== undefined) {
+    variables["trustedCAs"] = trusted;
+  }
+  const release = defined.has("releaseMirror") ? releaseMirrorVariable(formReleaseMirror(form)) : undefined;
+  if (release !== undefined) {
+    variables["releaseMirror"] = release;
+  }
   return { ...variables, ...installVariables(form, defined) };
 }
 
@@ -1135,12 +1268,16 @@ function graceVariables(form: Form): Record<string, unknown> {
 }
 
 // networkVariable is the network variable of the form's nodes.
-function networkVariable(form: Form): Record<string, unknown> {
+function networkVariable(form: Form, c: ClusterClass): Record<string, unknown> {
+  const v4 = hasFamily(form.families, "IPv4");
+  const classKnows = variable(c, "network")?.properties?.["ipFamilies"] !== undefined;
   return {
     bridge: form.bridge,
-    addresses: list(form.addresses),
-    prefix: form.prefix,
-    gateway: form.gateway,
+    ...((form.families !== "ipv4" || classKnows) && { ipFamilies: familyNames(form.families) }),
+    ...(v4 && { addresses: list(form.addresses), prefix: form.prefix, gateway: form.gateway }),
+    ...(hasFamily(form.families, "IPv6") && {
+      ipv6: { addresses: list(form.addresses6), prefix: form.prefix6, gateway: form.gateway6 },
+    }),
     dnsServers: list(form.dnsServers),
     ...interfaceOptions(form),
     ...(list(form.searchDomains).length > 0 && { searchDomains: list(form.searchDomains) }),
@@ -1169,6 +1306,9 @@ function proxmoxVariables(form: Form, defined: ReadonlySet<string>): Record<stri
   if (!form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: false };
   }
+  if (list(form.securityGroups).length > 0 && defined.has("securityGroups")) {
+    variables["securityGroups"] = list(form.securityGroups);
+  }
   return variables;
 }
 
@@ -1177,7 +1317,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   const defined = new Set(c.variables.map((v) => v.name));
   const variables: Record<string, unknown> = {
     controlPlaneEndpoint: form.endpoint,
-    network: networkVariable(form),
+    network: networkVariable(form, c),
     storage: form.storage,
     controlPlaneMachine: form.controlPlaneMachine,
     workerMachine: form.workerMachine,
@@ -1215,11 +1355,11 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   if (autoscales(form, c)) {
     req.workerAutoscaling = { min: form.workerReplicas, max: form.workerMax };
   }
-  if (form.pods) {
-    req.pods = [form.pods];
+  if (list(form.pods).length > 0) {
+    req.pods = list(form.pods);
   }
-  if (form.services) {
-    req.services = [form.services];
+  if (list(form.services).length > 0) {
+    req.services = list(form.services);
   }
   return req;
 }
@@ -1236,6 +1376,7 @@ export const formLoadBalancerValue = (form: Form): LoadBalancerValue => ({
   mode: form.loadBalancerMode,
   asn: form.loadBalancerAsn,
   peers: form.loadBalancerPeers,
+  routerID: form.loadBalancerRouterID,
   authenticated: form.loadBalancerAuthenticated,
 });
 
@@ -1278,6 +1419,9 @@ function interfaceRows(form: Form): [string, string][] {
   }
   if (form.queues) {
     rows.push(["Queues", form.queues]);
+  }
+  if (list(form.securityGroups).length > 0) {
+    rows.push(["Security groups", list(form.securityGroups).join(", ")]);
   }
   return rows;
 }
@@ -1335,6 +1479,7 @@ function proxmoxRows(form: Form, defined: ReadonlySet<string>, offered: SummaryO
 // VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
 export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {}): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
+  const shownFamilies = familiesOf(form.families).length;
   const rows: [string, string][] = [
     ...(form.namespace ? [["Namespace", form.namespace] as [string, string]] : []),
     ["Name", form.name],
@@ -1346,9 +1491,20 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
     ],
     ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
     ...interfaceRows(form),
+    ...(form.families === "ipv4" ? [] : [["Address families", familyLabels[form.families]] as [string, string]]),
     ["API address", form.endpoint],
-    ["Node addresses", list(form.addresses).join(", ")],
-    ["Prefix length and gateway", `/${form.prefix}, ${form.gateway}`],
+    ...(hasFamily(form.families, "IPv4")
+      ? ([
+          [familyFieldLabel("Node addresses", "IPv4", shownFamilies), list(form.addresses).join(", ")],
+          [familyFieldLabel("Prefix length and gateway", "IPv4", shownFamilies), `/${form.prefix}, ${form.gateway}`],
+        ] as [string, string][])
+      : []),
+    ...(hasFamily(form.families, "IPv6")
+      ? ([
+          [familyFieldLabel("Node addresses", "IPv6", shownFamilies), list(form.addresses6).join(", ")],
+          [familyFieldLabel("Prefix length and gateway", "IPv6", shownFamilies), `/${form.prefix6}, ${form.gateway6}`],
+        ] as [string, string][])
+      : []),
     ["DNS servers", list(form.dnsServers).join(", ")],
     ["Search domains", list(form.searchDomains).join(", ") || "None"],
     ...timeServersRow(form),
@@ -1462,6 +1618,15 @@ function reachRows(form: Form, defined: Set<string>): [string, string][] {
   if (defined.has("egressProxy")) {
     rows.push(["Egress proxy", egressText(form.egress)]);
   }
+  if (defined.has("registryMirrors") && mirrorsVariable(form.registryMirrors) !== undefined) {
+    rows.push(["Registry mirrors", mirrorsText(form.registryMirrors)]);
+  }
+  if (defined.has("trustedCAs") && trustedVariable(form.trustedCAs) !== undefined) {
+    rows.push(["Trusted CAs", trustedText(form.trustedCAs)]);
+  }
+  if (defined.has("releaseMirror") && releaseMirrorVariable(formReleaseMirror(form)) !== undefined) {
+    rows.push(["Release mirror", releaseMirrorText(formReleaseMirror(form), undefined)]);
+  }
   return [...rows, ...installRows(form, defined)];
 }
 
@@ -1498,16 +1663,21 @@ export type FieldKey =
   | "vlan"
   | "mtu"
   | "queues"
+  | "securityGroups"
   | "endpoint"
   | "addresses"
   | "prefix"
   | "gateway"
+  | "addresses6"
+  | "prefix6"
+  | "gateway6"
   | "dnsServers"
   | "searchDomains"
   | "ntpServers"
   | "loadBalancerAddresses"
   | "loadBalancerAsn"
   | "loadBalancerPeers"
+  | "loadBalancerRouterID"
   | "loadBalancerPassword"
   | "pods"
   | "services"
@@ -1535,6 +1705,10 @@ export type FieldKey =
   | "namespaceLabels"
   | `gitops.${GitOpsField}`
   | `egress.${EgressField}`
+  | "registryMirrors"
+  | "trustedCAs"
+  | "releaseMirror"
+  | "releaseMirrorCA"
   | "oidc";
 
 type Problems = Partial<Record<FieldKey, string>>;
@@ -1618,26 +1792,91 @@ export function addonsProblem(form: Form, c: ClusterClass | undefined): string |
     : undefined;
 }
 
+/** The form's node networks, the primary family's first. */
+function familyNetworks(form: Form): {
+  family: Family;
+  key: "addresses" | "addresses6";
+  entries: string[];
+  gateway: string;
+  prefix: number;
+}[] {
+  return familiesOf(form.families).map((family) =>
+    family === "IPv4"
+      ? { family, key: "addresses", entries: list(form.addresses), gateway: form.gateway, prefix: form.prefix }
+      : { family, key: "addresses6", entries: list(form.addresses6), gateway: form.gateway6, prefix: form.prefix6 },
+  );
+}
+
 function addressProblems(form: Form, routed: boolean): Problems {
   const p: Problems = {};
-  const entries = list(form.addresses);
-  const { count, bad } = addressCount(entries, form.gateway, form.prefix);
   const needed = nodesNeeded(form);
-  if (entries.length === 0) {
-    p.addresses = "Enter at least one address, range or network";
-  } else if (bad !== undefined) {
-    p.addresses = `${bad} is not an address, range or network on the gateway's network`;
-  } else if (count < needed) {
-    p.addresses = `Enter at least ${needed} addresses, one per node plus one spare`;
+  const networks = familyNetworks(form);
+  for (const n of networks) {
+    const { count, bad } = addressCount(n.entries, n.gateway, n.prefix);
+    const other = n.entries.find((e) => {
+      const f = familyOf(e.split(/[/-]/u)[0] ?? "");
+      return f !== undefined && f !== n.family;
+    });
+    if (n.entries.length === 0) {
+      p[n.key] = "Enter at least one address, range or network";
+    } else if (other !== undefined) {
+      p[n.key] = `${other} is an ${n.family === "IPv4" ? "IPv6" : "IPv4"} address. Enter ${n.family} addresses here`;
+    } else if (bad !== undefined) {
+      p[n.key] = `${bad} is not an address, range or network on the gateway's network`;
+    } else if (count < needed) {
+      p[n.key] = `Enter at least ${needed} addresses, one per node plus one spare`;
+    }
   }
-  if (!ipv4.test(form.endpoint)) {
-    p.endpoint = "Enter an IPv4 address";
-  } else if (inList(form.endpoint, entries)) {
+  const [primary] = networks;
+  const endpointFamily = familyOf(form.endpoint);
+  if (primary === undefined || endpointFamily === undefined) {
+    p.endpoint = `Enter an ${primary?.family ?? "IPv4"} address`;
+  } else if (endpointFamily !== primary.family) {
+    p.endpoint = `Use an ${primary.family} address, the primary family`;
+  } else if (
+    inList(
+      form.endpoint,
+      networks.flatMap((n) => n.entries),
+    )
+  ) {
     p.endpoint = "Use an address outside the node addresses";
-  } else if (!routed && addressCount([form.endpoint], form.gateway, form.prefix).bad !== undefined) {
+  } else if (!routed && addressCount([form.endpoint], primary.gateway, primary.prefix).bad !== undefined) {
     p.endpoint = "Use an address on the gateway's network";
   }
   return p;
+}
+
+// dnsProblem holds the DNS servers to the cluster's families: each is an address of one of them,
+// and a cluster with both has a server of each.
+function dnsProblem(form: Form): string | undefined {
+  const servers = list(form.dnsServers);
+  const families = familiesOf(form.families);
+  if (servers.length === 0) {
+    return "Enter at least one DNS server";
+  }
+  const got = servers.map((d) => familyOf(d));
+  const only = families.length === 1 ? (families[0] ?? "IP") : "IP";
+  if (got.some((f) => f === undefined || !families.includes(f))) {
+    return `DNS servers must be ${only} addresses`;
+  }
+  const lacking = families.find((f) => !got.includes(f));
+  return lacking === undefined ? undefined : `Add an ${lacking} DNS server too`;
+}
+
+// rangesProblem holds pod or service ranges to the cluster's families: one network of each, in order.
+function rangesProblem(form: Form, v: string): string | undefined {
+  const ranges = list(v);
+  for (const r of ranges) {
+    const problem = rangeProblem(r);
+    if (problem !== undefined) {
+      return problem;
+    }
+  }
+  const got = ranges.map((r) => parseCidr(r)?.address.family);
+  const want = familiesOf(form.families);
+  return ranges.length === 0 || got.join(",") === want.join(",")
+    ? undefined
+    : `Enter one range per family, in order: ${want.join(", ")}`;
 }
 
 function interfaceProblems(form: Form): Problems {
@@ -1651,15 +1890,25 @@ function interfaceProblems(form: Form): Problems {
   if (form.queues && !isQueues(form.queues)) {
     p.queues = `A whole number from 1 to ${maxQueues}`;
   }
+  const groups = securityGroupsProblem(form.securityGroups);
+  if (groups !== undefined) {
+    p.securityGroups = groups;
+  }
   return p;
 }
 
 /** balancerProblems holds the load balancer's fields to the nodes' network, or in BGP to the routers. */
 function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
   const lb = loadBalancerProblems(formLoadBalancerValue(form), c?.distribution, {
+    families: form.families,
     gateway: form.gateway,
     prefix: form.prefix,
-    addresses: list(form.addresses),
+    gateway6: form.gateway6,
+    prefix6: form.prefix6,
+    addresses: [
+      ...(hasFamily(form.families, "IPv4") ? list(form.addresses) : []),
+      ...(hasFamily(form.families, "IPv6") ? list(form.addresses6) : []),
+    ],
     endpoint: form.endpoint,
   });
   const p: Problems = {};
@@ -1671,6 +1920,9 @@ function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   if (lb.peers !== undefined) {
     p.loadBalancerPeers = lb.peers;
+  }
+  if (lb.routerID !== undefined) {
+    p.loadBalancerRouterID = lb.routerID;
   }
   if (form.loadBalancerAuthenticated && /[\s:,]/u.test(form.loadBalancerPassword)) {
     p.loadBalancerPassword = "No spaces, colons or commas";
@@ -1698,6 +1950,9 @@ export function setLoadBalancer(
   if (patch.peers !== undefined) {
     set("loadBalancerPeers", patch.peers);
   }
+  if (patch.routerID !== undefined) {
+    set("loadBalancerRouterID", patch.routerID);
+  }
   if (patch.authenticated !== undefined) {
     set("loadBalancerAuthenticated", patch.authenticated);
   }
@@ -1720,21 +1975,24 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
     p.bridge = "Choose a bridge";
   }
   Object.assign(p, interfaceProblems(form));
-  if (!whole(form.prefix, 1, addressBits)) {
-    p.prefix = `A whole number from 1 to ${addressBits}`;
-  }
-  if (!ipv4.test(form.gateway)) {
-    p.gateway = "Enter an IPv4 address";
+  for (const family of familiesOf(form.families)) {
+    const [prefixKey, gatewayKey] =
+      family === "IPv4" ? (["prefix", "gateway"] as const) : (["prefix6", "gateway6"] as const);
+    if (!whole(form[prefixKey], 1, bitsOf(family))) {
+      p[prefixKey] = `A whole number from 1 to ${bitsOf(family)}`;
+    }
+    if (familyOf(form[gatewayKey]) !== family) {
+      p[gatewayKey] = `Enter an ${family} address`;
+    }
   }
   const lbValue = formLoadBalancerValue(form);
   Object.assign(
     p,
     addressProblems(form, lbValue.mode === "bgp" && bgpOffered(c?.distribution, lbValue.implementation)),
   );
-  if (list(form.dnsServers).length === 0) {
-    p.dnsServers = "Enter at least one DNS server";
-  } else if (list(form.dnsServers).some((d) => !ipv4.test(d))) {
-    p.dnsServers = "DNS servers must be IPv4 addresses";
+  const dns = dnsProblem(form);
+  if (dns !== undefined) {
+    p.dnsServers = dns;
   }
   const domains = searchDomainsProblem(list(form.searchDomains));
   if (domains !== undefined) {
@@ -1744,12 +2002,12 @@ function networkProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (ntpProblem !== undefined) {
     p.ntpServers = ntpProblem;
   }
-  Object.assign(p, balancerProblems(form, c));
+  Object.assign(p, nodeSiteProblems(form, c), balancerProblems(form, c));
   for (const [key, v] of [
     ["pods", form.pods],
     ["services", form.services],
   ] as const) {
-    const problem = v ? rangeProblem(v) : undefined;
+    const problem = v ? rangesProblem(form, v) : undefined;
     if (problem !== undefined) {
       p[key] = problem;
     }
@@ -1886,6 +2144,35 @@ function egressFormProblems(form: Form, c: ClusterClass | undefined): Problems {
     const problem = e[field];
     if (problem !== undefined) {
       p[`egress.${field}`] = problem;
+    }
+  }
+  return p;
+}
+
+/** formReleaseMirror is the release mirror the form's two fields name. */
+export const formReleaseMirror = (form: Form): ReleaseMirror => ({
+  url: form.releaseMirror,
+  caBundle: form.releaseMirrorCA,
+});
+
+// nodeSiteProblems are what is wrong with the registry mirrors and trusted authorities the form names.
+function nodeSiteProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const p: Problems = {};
+  const mirrors = variable(c, "registryMirrors") === undefined ? undefined : mirrorsProblem(form.registryMirrors);
+  if (mirrors !== undefined) {
+    p.registryMirrors = mirrors;
+  }
+  const trusted = variable(c, "trustedCAs") === undefined ? undefined : certificateProblem(form.trustedCAs);
+  if (trusted !== undefined) {
+    p.trustedCAs = trusted;
+  }
+  if (variable(c, "releaseMirror") !== undefined) {
+    const release = releaseMirrorProblems(formReleaseMirror(form));
+    if (release.url !== undefined) {
+      p.releaseMirror = release.url;
+    }
+    if (release.caBundle !== undefined) {
+      p.releaseMirrorCA = release.caBundle;
     }
   }
   return p;

@@ -13,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
@@ -29,6 +30,18 @@ type managementHealthView struct {
 	Controllers []managementController `json:"controllers,omitempty"`
 	// Proxmox tells whether the controller reaches the Proxmox VE API from inside the cluster.
 	Proxmox *proxmoxReachView `json:"proxmox,omitempty"`
+	// Etcd is how many of the control-plane nodes' etcd members are healthy.
+	Etcd *etcdMembersView `json:"etcd,omitempty"`
+	// Unowned are the VMs in Kubehenge's pools that no Cluster owns. They are never deleted
+	// automatically.
+	Unowned *provisioner.UnownedVMs `json:"unowned,omitempty"`
+	// BackupWarning stands while the management cluster's etcd is not backed up.
+	BackupWarning *appliance.EtcdBackupWarning `json:"backupWarning,omitempty"`
+}
+
+type etcdMembersView struct {
+	Healthy int `json:"healthy"`
+	Members int `json:"members"`
 }
 
 type managementNode struct {
@@ -65,8 +78,27 @@ func (s *Server) managementHealth(w http.ResponseWriter, r *http.Request, u user
 	}
 	if v.Answers {
 		v.Proxmox = s.proxmoxReach(ctx, kube)
+		v.Etcd = s.managementMembers(ctx, kube)
+		v.Unowned = s.unownedVMs(ctx, kube)
+	}
+	if s.Appliance != nil {
+		v.BackupWarning = s.Appliance.EtcdBackups().Warning
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// managementMembers counts the management cluster's healthy etcd members. It is nil where they
+// cannot be read, so the card shows nothing rather than a wrong figure.
+func (s *Server) managementMembers(ctx context.Context, kube client.Client) *etcdMembersView {
+	set, err := provisioner.ManagementEtcd(ctx, kube, s.managementHosts())
+	if err != nil {
+		s.Log.WarnContext(ctx, "reading the management cluster's etcd members", "error", err)
+		return nil
+	}
+	if len(set.Members) == 0 {
+		return nil
+	}
+	return &etcdMembersView{Healthy: set.Healthy(), Members: len(set.Members)}
 }
 
 // proxmoxReachView is whether the controller reaches the Proxmox VE API from inside the management
@@ -77,8 +109,11 @@ type proxmoxReachView struct {
 	// Blind is the privilege the controller's token lacks to see hosts in maintenance.
 	Blind string `json:"blind,omitempty"`
 	// Tokens are the tokens that fail their test, each with what is wrong. Working ones are not listed.
-	Tokens  []tokenProblemView `json:"tokens,omitempty"`
-	Checked time.Time          `json:"checked"`
+	Tokens []tokenProblemView `json:"tokens,omitempty"`
+	// Unreachable are the nodes that are online in the cluster and do not answer calls forwarded to
+	// them, each with Proxmox VE's reason.
+	Unreachable []provisioner.NodeFault `json:"unreachable,omitempty"`
+	Checked     time.Time               `json:"checked"`
 }
 
 // tokenProblemView is a Proxmox VE token that is refused, cannot verify the API or lacks privileges.
@@ -117,7 +152,7 @@ func (s *Server) proxmoxReach(ctx context.Context, kube client.Client) *proxmoxR
 		s.Log.WarnContext(ctx, "reading whether the controller reaches Proxmox VE", "error", err)
 		return nil
 	}
-	return &proxmoxReachView{OK: r.OK, Error: r.Error, Blind: r.Blind, Tokens: tokenProblems(r.Tokens), Checked: r.Checked}
+	return &proxmoxReachView{OK: r.OK, Error: r.Error, Blind: r.Blind, Tokens: tokenProblems(r.Tokens), Unreachable: r.Unreachable, Checked: r.Checked}
 }
 
 func readManagementHealth(ctx context.Context, kube client.Client) (managementHealthView, error) {

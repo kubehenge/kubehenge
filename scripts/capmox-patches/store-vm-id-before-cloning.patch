@@ -1,0 +1,717 @@
+diff --git a/internal/service/vmservice/delete.go b/internal/service/vmservice/delete.go
+index f685d81..1689aff 100644
+--- a/internal/service/vmservice/delete.go
++++ b/internal/service/vmservice/delete.go
+@@ -43,7 +43,8 @@ var errNotMachineVM = errors.New("the vmid does not hold this machine's vm")
+ const destroyRequestedAnnotation = "kubehenge.dev/vm-destroy-requested"
+
+ // unidentifiedVMError means a VM of another name holds the machine's VM ID and nothing proves it is
+-// not the machine's VM renamed: no provider ID is recorded and no destroy was requested.
++// not the machine's VM renamed: no provider ID is recorded, no destroy was requested and the ID was
++// not picked by this controller.
+ type unidentifiedVMError struct {
+ 	vmID int64
+ 	name string
+@@ -172,6 +173,11 @@ func locateMachineVM(ctx context.Context, machineScope *scope.MachineScope, vmID
+ 		machineScope.Info("vmid was freed by the destroy and holds another vm now", "vmID", vmID, "vmName", name)
+ 		return "", false, errNotMachineVM
+ 	}
++	// The reconcile treats such a VM as an ID collision too and clones under another ID.
++	if vmIDCollisionIsRecoverable(machineScope) {
++		machineScope.Info("vmid picked by this controller holds another vm, not destroying it", "vmID", vmID, "vmName", name)
++		return "", false, errNotMachineVM
++	}
+ 	return "", false, &unidentifiedVMError{vmID: vmID, name: name, want: machineName}
+ }
+
+diff --git a/internal/service/vmservice/delete_test.go b/internal/service/vmservice/delete_test.go
+index 79da967..f7d0dd0 100644
+--- a/internal/service/vmservice/delete_test.go
++++ b/internal/service/vmservice/delete_test.go
+@@ -131,6 +131,16 @@ func TestDeleteVM_UnidentifiedVMStallsTheDeletion(t *testing.T) {
+ 	require.Contains(t, cond.Message, "rename it to")
+ }
+
++// The controller picked the ID for a clone, and another VM took it first.
++func TestDeleteVM_PickedVMIDHeldByAnotherVM(t *testing.T) {
++	machineScope, proxmoxClient := setupDeleteTest(t)
++	machineScope.SetAnnotation(vmIDAllocatedByControllerAnnotation, "true")
++	expectVM(proxmoxClient, "node1", "other-machine", testBIOSUUID)
++
++	require.NoError(t, DeleteVM(context.TODO(), machineScope))
++	requireReleased(t, machineScope)
++}
++
+ // The destroy this provider requested freed the ID, and another VM took it before this pass.
+ func TestDeleteVM_ReusedVMIDAfterOurDestroy(t *testing.T) {
+ 	machineScope, proxmoxClient := setupDeleteTest(t)
+diff --git a/internal/service/vmservice/vm.go b/internal/service/vmservice/vm.go
+index 4eec61f..6abf2c4 100644
+--- a/internal/service/vmservice/vm.go
++++ b/internal/service/vmservice/vm.go
+@@ -217,6 +217,9 @@ func ensureVirtualMachine(ctx context.Context, machineScope *scope.MachineScope)
+ 	if err != nil {
+ 		switch {
+ 		case errors.Is(err, ErrVMNotFound):
++			if requeue, err := releaseUnusedVMID(ctx, machineScope); err != nil || requeue {
++				return requeue, err
++			}
+ 			if locationErr := updateVMLocation(ctx, machineScope); locationErr != nil {
+ 				if errors.Is(locationErr, ErrVMIDCollision) {
+ 					return false, recoverFromVMIDCollision(machineScope, locationErr)
+@@ -259,11 +262,8 @@ func ensureVirtualMachine(ctx context.Context, machineScope *scope.MachineScope)
+ 			return false, err
+ 		}
+ 		machineScope.Logger.V(4).Info("Task created", "taskID", resp.Task.ID)
+-
+-		// make sure spec.VirtualMachineID is always set.
+ 		machineScope.ProxmoxMachine.Status.TaskRef = new(string(resp.Task.UPID))
+-		machineScope.SetVirtualMachineID(resp.NewID)
+-		machineScope.SetAnnotation(vmIDAllocatedByControllerAnnotation, "true")
++		resumeAfterCloningFailed(machineScope)
+
+ 		// requeue until cloning is finished
+ 		return true, nil
+@@ -276,6 +276,10 @@ func ensureVirtualMachine(ctx context.Context, machineScope *scope.MachineScope)
+ 	// setting the VirtualMachine object for completing the reconciliation.
+ 	machineScope.SetVirtualMachine(vmRef)
+
++	// A clone request that failed after Proxmox VE accepted it left CloningFailed behind, and its
++	// VM is found under the reserved ID.
++	resumeAfterCloningFailed(machineScope)
++
+ 	// at this point the VM is found, so err must be nil
+ 	return false, nil
+ }
+@@ -496,23 +500,9 @@ func getClusterAPIMachineAddresses(scope *scope.MachineScope) ([]clusterv1.Machi
+ }
+
+ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneResponse, error) {
+-	vmid, err := getVMID(ctx, scope)
+-	if err != nil {
+-		if errors.Is(err, ErrNoVMIDInRangeFree) {
+-			conditions.Set(scope.ProxmoxMachine, metav1.Condition{
+-				Type:    infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
+-				Status:  metav1.ConditionFalse,
+-				Reason:  infrav1.ProxmoxMachineVirtualMachineProvisionedVMProvisionFailedReason,
+-				Message: err.Error(),
+-			})
+-		}
+-		return proxmox.VMCloneResponse{}, err
+-	}
+-
+ 	options := proxmox.VMCloneRequest{
+-		Node:  scope.ProxmoxMachine.GetSourceNode(),
+-		NewID: int(vmid),
+-		Name:  scope.ProxmoxMachine.GetName(),
++		Node: scope.ProxmoxMachine.GetSourceNode(),
++		Name: scope.ProxmoxMachine.GetName(),
+ 	}
+
+ 	if scope.ProxmoxMachine.Spec.Description != nil {
+@@ -571,6 +561,24 @@ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneRe
+ 			return proxmox.VMCloneResponse{}, err
+ 		}
+ 	}
++
++	vmid, err := getVMID(ctx, scope)
++	if err != nil {
++		if errors.Is(err, ErrNoVMIDInRangeFree) {
++			conditions.Set(scope.ProxmoxMachine, metav1.Condition{
++				Type:    infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
++				Status:  metav1.ConditionFalse,
++				Reason:  infrav1.ProxmoxMachineVirtualMachineProvisionedVMProvisionFailedReason,
++				Message: err.Error(),
++			})
++		}
++		return proxmox.VMCloneResponse{}, err
++	}
++	options.NewID = int(vmid)
++	if err := reserveVMID(ctx, scope, vmid); err != nil {
++		return proxmox.VMCloneResponse{}, err
++	}
++
+ 	res, err := scope.InfraCluster.ProxmoxClient.CloneVM(ctx, int(templateID), options)
+ 	if err != nil {
+ 		return res, err
+@@ -593,6 +601,59 @@ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneRe
+ 	return res, scope.InfraCluster.PatchObject()
+ }
+
++// reserveVMID stores the VM ID before the clone, so a failed spec write cannot lose it.
++func reserveVMID(ctx context.Context, s *scope.MachineScope, vmID int64) error {
++	err := s.PatchNow(ctx, func() {
++		s.SetVirtualMachineID(vmID)
++		s.SetAnnotation(vmIDAllocatedByControllerAnnotation, "true")
++	})
++	if err != nil {
++		forgetVMID(s)
++		return errors.Wrapf(err, "failed to store VM ID %d", vmID)
++	}
++	return nil
++}
++
++// releaseUnusedVMID drops a VM ID this controller reserved when no VM holds it, so the next
++// reconcile clones under a new one.
++func releaseUnusedVMID(ctx context.Context, s *scope.MachineScope) (bool, error) {
++	if !vmIDCollisionIsRecoverable(s) || proxmoxMachineHasVMProvisionFailedReason(s) {
++		return false, nil
++	}
++	vmID := s.GetVirtualMachineID()
++	free, err := s.InfraCluster.ProxmoxClient.CheckID(ctx, vmID)
++	if err != nil || !free {
++		return false, err
++	}
++	s.Info("no VM holds the reserved VM ID, picking a new one", "vmID", vmID)
++	forgetVMID(s)
++	conditions.Set(s.ProxmoxMachine, metav1.Condition{
++		Type:   infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
++		Status: metav1.ConditionFalse,
++		Reason: infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason,
++	})
++	return true, nil
++}
++
++// resumeAfterCloningFailed moves a machine past a failed clone attempt once a clone runs or its VM
++// is found. Each later step runs only from the reason the step before it sets.
++func resumeAfterCloningFailed(s *scope.MachineScope) {
++	if conditions.GetReason(s.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition) !=
++		infrav1.ProxmoxMachineVirtualMachineProvisionedCloningFailedReason {
++		return
++	}
++	conditions.Set(s.ProxmoxMachine, metav1.Condition{
++		Type:   infrav1.ProxmoxMachineVirtualMachineProvisionedCondition,
++		Status: metav1.ConditionFalse,
++		Reason: infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason,
++	})
++}
++
++func forgetVMID(s *scope.MachineScope) {
++	s.ProxmoxMachine.Spec.VirtualMachineID = nil
++	delete(s.ProxmoxMachine.Annotations, vmIDAllocatedByControllerAnnotation)
++}
++
+ func getVMID(ctx context.Context, scope *scope.MachineScope) (int64, error) {
+ 	if scope.ProxmoxMachine.Spec.VMIDRange != nil {
+ 		vmIDRangeStart := scope.ProxmoxMachine.Spec.VMIDRange.Start
+@@ -601,8 +662,7 @@ func getVMID(ctx context.Context, scope *scope.MachineScope) (int64, error) {
+ 			return getNextFreeVMIDfromRange(ctx, scope, vmIDRangeStart, vmIDRangeEnd)
+ 		}
+ 	}
+-	// If VMIDRange is not defined, return 0 to let luthermonson/go-proxmox get the next free id.
+-	return 0, nil
++	return scope.InfraCluster.ProxmoxClient.NextVMID(ctx)
+ }
+
+ func getNextFreeVMIDfromRange(ctx context.Context, scope *scope.MachineScope, vmIDRangeStart int64, vmIDRangeEnd int64) (int64, error) {
+diff --git a/internal/service/vmservice/vm_test.go b/internal/service/vmservice/vm_test.go
+index 7d4bfd5..59e241f 100644
+--- a/internal/service/vmservice/vm_test.go
++++ b/internal/service/vmservice/vm_test.go
+@@ -18,22 +18,28 @@ package vmservice
+
+ import (
+ 	"context"
++	"errors"
+ 	"fmt"
+ 	"testing"
+
+ 	lutherproxmox "github.com/luthermonson/go-proxmox"
++	"github.com/stretchr/testify/mock"
+ 	"github.com/stretchr/testify/require"
+ 	corev1 "k8s.io/api/core/v1"
++	apierrors "k8s.io/apimachinery/pkg/api/errors"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/utils/ptr"
+ 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+ 	"sigs.k8s.io/cluster-api/util/conditions"
+ 	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+ 	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
+ 	"github.com/ionos-cloud/cluster-api-provider-proxmox/internal/service/scheduler"
++	"github.com/ionos-cloud/cluster-api-provider-proxmox/internal/service/taskservice"
+ 	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/proxmox"
+ 	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/proxmox/goproxmox"
++	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/proxmox/proxmoxtest"
+ 	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/scope"
+ )
+
+@@ -134,7 +140,9 @@ func TestEnsureVirtualMachine_CreateVM_FullOptions(t *testing.T) {
+ 		Storage:     "storage",
+ 		Target:      "node2",
+ 	}
++	expectedOptions.NewID = 123
+ 	response := proxmox.VMCloneResponse{NewID: 123, Task: newTask()}
++	proxmoxClient.EXPECT().NextVMID(context.Background()).Return(int64(123), nil).Once()
+ 	proxmoxClient.EXPECT().CloneVM(context.Background(), 123, expectedOptions).Return(response, nil).Once()
+ 	proxmoxClient.EXPECT().GetReservableMemoryBytes(context.Background(), "node2", int64(100)).Return(^uint64(0), nil).Once()
+
+@@ -165,6 +173,233 @@ func TestEnsureVirtualMachine_CreateVM_CloneAlreadyStarted(t *testing.T) {
+ 	require.Nil(t, machineScope.ProxmoxMachine.Status.TaskRef)
+ }
+
++// The spec and the status of a ProxmoxMachine are written by separate requests, and the status
++// write goes ahead when the spec write fails. A spec write after the clone that times out in the
++// admission webhook must not lead to a second clone.
++func TestEnsureVirtualMachine_SpecWriteFails_ClonesOnce(t *testing.T) {
++	machineScope, proxmoxClient, kubeClient := setupReconcilerTest(t)
++
++	cloned, webhookTimeouts := false, 1
++	intercepted := interceptor.NewClient(kubeClient.(client.WithWatch), interceptor.Funcs{
++		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
++			if _, ok := obj.(*infrav1.ProxmoxMachine); ok && cloned && webhookTimeouts > 0 {
++				webhookTimeouts--
++				return apierrors.NewInternalError(errors.New(`failed calling webhook "default.proxmoxmachine.infrastructure.cluster.x-k8s.io": context deadline exceeded`))
++			}
++			return c.Patch(ctx, obj, p, opts...)
++		},
++	})
++
++	proxmoxClient.EXPECT().NextVMID(mock.Anything).Return(int64(107), nil).Once()
++	proxmoxClient.EXPECT().CloneVM(mock.Anything, 123, mock.Anything).
++		Run(func(context.Context, int, proxmox.VMCloneRequest) { cloned = true }).
++		Return(cloneResponse(proxmoxClient, 107), nil).Once()
++
++	errs := reconcileRounds(t, machineScope, intercepted, 4)
++
++	require.Zero(t, webhookTimeouts, "the spec write after the clone failed")
++	require.ErrorContains(t, errs[0], "context deadline exceeded")
++	require.Equal(t, []error{nil, nil, nil}, errs[1:])
++	requireClonedVM(t, machineScope, kubeClient, 107)
++}
++
++// The controller restarted after it stored the VM ID and before it cloned.
++func TestEnsureVirtualMachine_RestartBeforeClone_ClonesOnce(t *testing.T) {
++	machineScope, proxmoxClient, kubeClient := setupReconcilerTest(t)
++	storeReservedVMID(t, machineScope, kubeClient, 107)
++
++	proxmoxClient.EXPECT().GetVM(mock.Anything, mock.Anything, int64(107)).Return(nil, errors.New("vm 107 not found")).Once()
++	proxmoxClient.EXPECT().FindVMResource(mock.Anything, uint64(107)).Return(nil, errors.New("unable to find VM with ID 107 on any of the nodes")).Maybe()
++	proxmoxClient.EXPECT().CheckID(mock.Anything, int64(107)).Return(true, nil).Once()
++	proxmoxClient.EXPECT().NextVMID(mock.Anything).Return(int64(108), nil).Once()
++	expectClone(proxmoxClient, 108)
++
++	errs := reconcileRounds(t, machineScope, kubeClient, 3)
++
++	require.Equal(t, []error{nil, nil, nil}, errs)
++	requireClonedVM(t, machineScope, kubeClient, 108)
++}
++
++// The clone request fails, and Proxmox VE cannot be asked about the ID until it answers again.
++func TestEnsureVirtualMachine_CloneFailsWhileProxmoxUnreachable_Recovers(t *testing.T) {
++	machineScope, proxmoxClient, kubeClient := setupReconcilerTest(t)
++	unreachable := errors.New("dial tcp 10.0.0.1:8006: connect: connection refused")
++
++	proxmoxClient.EXPECT().NextVMID(mock.Anything).Return(int64(107), nil).Once()
++	proxmoxClient.EXPECT().CloneVM(mock.Anything, 123, cloneTo(107)).Return(proxmox.VMCloneResponse{}, unreachable).Once()
++	proxmoxClient.EXPECT().GetVM(mock.Anything, mock.Anything, int64(107)).Return(nil, unreachable).Times(3)
++	proxmoxClient.EXPECT().FindVMResource(mock.Anything, uint64(107)).Return(nil, unreachable).Maybe()
++	proxmoxClient.EXPECT().CheckID(mock.Anything, int64(107)).Return(false, unreachable).Times(2)
++	proxmoxClient.EXPECT().CheckID(mock.Anything, int64(107)).Return(true, nil).Once()
++	proxmoxClient.EXPECT().NextVMID(mock.Anything).Return(int64(108), nil).Once()
++	expectClone(proxmoxClient, 108)
++
++	errs := reconcileRounds(t, machineScope, kubeClient, 6)
++
++	for i, err := range errs[:3] {
++		require.ErrorIs(t, err, unreachable, "round %d", i)
++	}
++	require.Equal(t, []error{nil, nil, nil}, errs[3:])
++	requireClonedVM(t, machineScope, kubeClient, 108)
++}
++
++// Another VM takes the picked ID before the clone. Nothing may touch that VM.
++func TestEnsureVirtualMachine_PickedVMIDTakenByAnotherVM_ClonesOwnVM(t *testing.T) {
++	machineScope, proxmoxClient, kubeClient := setupReconcilerTest(t)
++	other := newStoppedVM()
++	other.Name = "other-machine"
++	other.VMID = 107
++
++	proxmoxClient.EXPECT().NextVMID(mock.Anything).Return(int64(107), nil).Once()
++	proxmoxClient.EXPECT().CloneVM(mock.Anything, 123, cloneTo(107)).
++		Return(proxmox.VMCloneResponse{}, errors.New("unable to create VM 107: config file already exists")).Once()
++	proxmoxClient.EXPECT().CheckID(mock.Anything, int64(107)).Return(false, nil).Maybe()
++	proxmoxClient.EXPECT().GetVM(mock.Anything, mock.Anything, int64(107)).Return(other, nil).Once()
++	proxmoxClient.EXPECT().NextVMID(mock.Anything).Return(int64(108), nil).Once()
++	expectClone(proxmoxClient, 108)
++
++	errs := reconcileRounds(t, machineScope, kubeClient, 4)
++
++	require.ErrorContains(t, errs[0], "config file already exists")
++	require.ErrorIs(t, errs[1], ErrVMIDCollision)
++	require.Equal(t, []error{nil, nil}, errs[2:])
++	requireClonedVM(t, machineScope, kubeClient, 108)
++}
++
++// The clone request fails after Proxmox VE accepted it, and the clone goes on.
++func TestEnsureVirtualMachine_CloneAcceptedButRequestFailed_KeepsVM(t *testing.T) {
++	machineScope, proxmoxClient, kubeClient := setupReconcilerTest(t)
++	vm := newStoppedVM()
++	vm.VMID = 107
++
++	proxmoxClient.EXPECT().NextVMID(mock.Anything).Return(int64(107), nil).Once()
++	proxmoxClient.EXPECT().CloneVM(mock.Anything, 123, cloneTo(107)).Return(proxmox.VMCloneResponse{}, errors.New("i/o timeout")).Once()
++	proxmoxClient.EXPECT().CheckID(mock.Anything, int64(107)).Return(false, nil).Maybe()
++	proxmoxClient.EXPECT().GetVM(mock.Anything, mock.Anything, int64(107)).Return(vm, nil).Once()
++
++	errs := reconcileRounds(t, machineScope, kubeClient, 2)
++
++	require.ErrorContains(t, errs[0], "i/o timeout")
++	require.NoError(t, errs[1])
++	requireClonedVM(t, machineScope, kubeClient, 107)
++}
++
++func TestEnsureVirtualMachine_CreateVM_ReserveFails_DoesNotClone(t *testing.T) {
++	machineScope, proxmoxClient, kubeClient := setupReconcilerTest(t)
++	writeFailures := 1
++	intercepted := interceptor.NewClient(kubeClient.(client.WithWatch), interceptor.Funcs{
++		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
++			if _, ok := obj.(*infrav1.ProxmoxMachine); ok && writeFailures > 0 {
++				writeFailures--
++				return apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
++			}
++			return c.Patch(ctx, obj, p, opts...)
++		},
++	})
++
++	proxmoxClient.EXPECT().NextVMID(mock.Anything).Return(int64(107), nil).Times(2)
++	expectClone(proxmoxClient, 107)
++
++	errs := reconcileRounds(t, machineScope, intercepted, 1)
++	require.ErrorContains(t, errs[0], "failed to store VM ID 107")
++	stored := storedMachine(t, machineScope, kubeClient)
++	require.Nil(t, stored.Spec.VirtualMachineID)
++	require.Equal(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningFailedReason,
++		conditions.GetReason(stored, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition))
++
++	errs = reconcileRounds(t, machineScope, intercepted, 2)
++	require.Equal(t, []error{nil, nil}, errs)
++	requireClonedVM(t, machineScope, kubeClient, 107)
++}
++
++func TestEnsureVirtualMachine_CreateVM_NextVMIDFails_DoesNotClone(t *testing.T) {
++	ctx := context.Background()
++	machineScope, proxmoxClient, _ := setupReconcilerTest(t)
++	proxmoxClient.EXPECT().NextVMID(ctx).Return(int64(0), errors.New("cannot get the next free vm id")).Once()
++
++	_, err := ensureVirtualMachine(ctx, machineScope)
++	require.ErrorContains(t, err, "cannot get the next free vm id")
++	require.Nil(t, machineScope.ProxmoxMachine.Spec.VirtualMachineID)
++}
++
++// reconcileRounds runs the clone part of a ProxmoxMachine reconcile rounds times. Each round reads
++// the ProxmoxMachine as stored and writes back what it changed, as the controller does. It returns
++// each round's error, the write at the end included.
++func reconcileRounds(t *testing.T, machineScope *scope.MachineScope, kubeClient client.Client, rounds int) []error {
++	t.Helper()
++	ctx := context.Background()
++	errs := make([]error, rounds)
++	for i := range rounds {
++		pm := &infrav1.ProxmoxMachine{}
++		require.NoError(t, kubeClient.Get(ctx, client.ObjectKeyFromObject(machineScope.ProxmoxMachine), pm))
++		s, err := scope.NewMachineScope(scope.MachineScopeParams{
++			Client:         kubeClient,
++			Logger:         machineScope.Logger,
++			Cluster:        machineScope.Cluster,
++			Machine:        machineScope.Machine,
++			InfraCluster:   machineScope.InfraCluster,
++			ProxmoxMachine: pm,
++			IPAMHelper:     machineScope.IPAMHelper,
++		})
++		require.NoError(t, err)
++		inFlight, err := taskservice.ReconcileInFlightTask(ctx, s)
++		if err == nil && !inFlight {
++			_, err = ensureVirtualMachine(ctx, s)
++		}
++		errs[i] = errors.Join(err, s.Close())
++	}
++	return errs
++}
++
++func storedMachine(t *testing.T, machineScope *scope.MachineScope, kubeClient client.Client) *infrav1.ProxmoxMachine {
++	t.Helper()
++	stored := &infrav1.ProxmoxMachine{}
++	require.NoError(t, kubeClient.Get(context.Background(), client.ObjectKeyFromObject(machineScope.ProxmoxMachine), stored))
++	return stored
++}
++
++func storeReservedVMID(t *testing.T, machineScope *scope.MachineScope, kubeClient client.Client, vmID int64) {
++	t.Helper()
++	stored := storedMachine(t, machineScope, kubeClient)
++	stored.Spec.VirtualMachineID = new(vmID)
++	stored.Annotations = map[string]string{vmIDAllocatedByControllerAnnotation: "true"}
++	require.NoError(t, kubeClient.Update(context.Background(), stored))
++}
++
++func cloneTo(vmID int) any {
++	return mock.MatchedBy(func(options proxmox.VMCloneRequest) bool { return options.NewID == vmID })
++}
++
++// expectClone has one clone of template 123 under vmID succeed.
++func expectClone(proxmoxClient *proxmoxtest.MockClient, vmID int64) {
++	proxmoxClient.EXPECT().CloneVM(mock.Anything, 123, cloneTo(int(vmID))).
++		Return(cloneResponse(proxmoxClient, vmID), nil).Once()
++}
++
++// cloneResponse returns the response to a clone under vmID. Its task succeeds, and its VM is found
++// under the machine's name.
++func cloneResponse(proxmoxClient *proxmoxtest.MockClient, vmID int64) proxmox.VMCloneResponse {
++	upid := fmt.Sprintf("UPID:node1:00009B1C:00B5A531:6AEFD6D1:qmclone:123:root@pam:%d", vmID)
++	task := &lutherproxmox.Task{UPID: lutherproxmox.UPID(upid), Type: "qmclone", IsSuccessful: true, IsCompleted: true}
++	proxmoxClient.EXPECT().GetTask(mock.Anything, upid).Return(task, nil).Maybe()
++	vm := newStoppedVM()
++	vm.VMID = lutherproxmox.StringOrUint64(vmID)
++	proxmoxClient.EXPECT().GetVM(mock.Anything, mock.Anything, vmID).Return(vm, nil).Maybe()
++	return proxmox.VMCloneResponse{NewID: vmID, Task: task}
++}
++
++// requireClonedVM asserts that the machine holds its clone under vmID and that provisioning goes on
++// from it.
++func requireClonedVM(t *testing.T, machineScope *scope.MachineScope, kubeClient client.Client, vmID int64) {
++	t.Helper()
++	stored := storedMachine(t, machineScope, kubeClient)
++	require.Equal(t, vmID, stored.GetVirtualMachineID())
++	require.NotEmpty(t, stored.Spec.ProviderID, "the VM was found")
++	require.Nil(t, stored.Status.TaskRef)
++	require.Equal(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason,
++		conditions.GetReason(stored, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition))
++}
++
+ func TestEnsureVirtualMachine_CreateVM_FullOptions_TemplateSelector(t *testing.T) {
+ 	vmTemplateTags := []string{"foo", "bar"}
+
+@@ -203,7 +438,9 @@ func TestEnsureVirtualMachine_CreateVM_FullOptions_TemplateSelector(t *testing.T
+ 		Return("node1", 123, nil).
+ 		Once()
+
++	expectedOptions.NewID = 123
+ 	response := proxmox.VMCloneResponse{NewID: 123, Task: newTask()}
++	proxmoxClient.EXPECT().NextVMID(context.Background()).Return(int64(123), nil).Once()
+ 	proxmoxClient.EXPECT().CloneVM(context.Background(), 123, expectedOptions).Return(response, nil).Once()
+ 	proxmoxClient.EXPECT().GetReservableMemoryBytes(context.Background(), "node1", int64(100)).Return(0, nil).Once()
+ 	proxmoxClient.EXPECT().GetReservableMemoryBytes(context.Background(), "node2", int64(100)).Return(^uint64(0), nil).Once()
+@@ -260,7 +497,9 @@ func TestEnsureVirtualMachine_CreateVM_SelectNode(t *testing.T) {
+ 	t.Cleanup(func() { selectNextNode = scheduler.ScheduleVM })
+
+ 	expectedOptions := proxmox.VMCloneRequest{Node: "node1", Name: "test", Target: "node3", Full: true}
++	expectedOptions.NewID = 123
+ 	response := proxmox.VMCloneResponse{NewID: 123, Task: newTask()}
++	proxmoxClient.EXPECT().NextVMID(context.Background()).Return(int64(123), nil).Once()
+ 	proxmoxClient.EXPECT().CloneVM(context.Background(), 123, expectedOptions).Return(response, nil).Once()
+
+ 	requeue, err := ensureVirtualMachine(context.Background(), machineScope)
+@@ -283,7 +522,9 @@ func TestEnsureVirtualMachine_CreateVM_SelectNode_MachineAllowedNodes(t *testing
+ 	t.Cleanup(func() { selectNextNode = scheduler.ScheduleVM })
+
+ 	expectedOptions := proxmox.VMCloneRequest{Node: "node1", Name: "test", Target: "node2", Full: true}
++	expectedOptions.NewID = 123
+ 	response := proxmox.VMCloneResponse{NewID: 123, Task: newTask()}
++	proxmoxClient.EXPECT().NextVMID(context.Background()).Return(int64(123), nil).Once()
+ 	proxmoxClient.EXPECT().CloneVM(context.Background(), 123, expectedOptions).Return(response, nil).Once()
+
+ 	requeue, err := ensureVirtualMachine(context.Background(), machineScope)
+@@ -455,6 +696,7 @@ func TestEnsureVirtualMachine_VMIDCollisionRecovers(t *testing.T) {
+ 	vmResource.Name = foreignVM.Name
+
+ 	proxmoxClient.EXPECT().GetVM(ctx, "node2", int64(123)).Return(nil, fmt.Errorf("not found")).Once()
++	proxmoxClient.EXPECT().CheckID(ctx, int64(123)).Return(false, nil).Once()
+ 	proxmoxClient.EXPECT().FindVMResource(ctx, uint64(123)).Return(vmResource, nil).Once()
+ 	proxmoxClient.EXPECT().GetVM(ctx, "node1", int64(123)).Return(foreignVM, nil).Once()
+
+@@ -960,8 +1202,10 @@ func TestReconcileVM_StateMachine(t *testing.T) {
+ 	// Round 0: no VM exists yet; CloneVM creates one and requeues for the task to complete.
+ 	proxmoxClient.EXPECT().GetReservableMemoryBytes(context.Background(), "node1", int64(100)).Return(0, nil).Once()
+ 	proxmoxClient.EXPECT().GetReservableMemoryBytes(context.Background(), "node2", int64(100)).Return(^uint64(0), nil).Once()
++	proxmoxClient.EXPECT().NextVMID(context.Background()).Return(int64(123), nil).Once()
+ 	proxmoxClient.EXPECT().CloneVM(context.Background(), 123, proxmox.VMCloneRequest{
+ 		Node:        "node1",
++		NewID:       123,
+ 		Name:        "test",
+ 		Description: "test vm",
+ 		Format:      "raw",
+diff --git a/pkg/proxmox/client.go b/pkg/proxmox/client.go
+index dc1f21b..00d3530 100644
+--- a/pkg/proxmox/client.go
++++ b/pkg/proxmox/client.go
+@@ -33,6 +33,7 @@ type Client interface {
+ 	FindVMTemplateByTags(ctx context.Context, templateTags []string, resolutionPolicy string) (string, int32, error)
+
+ 	CheckID(ctx context.Context, vmID int64) (bool, error)
++	NextVMID(ctx context.Context) (int64, error)
+
+ 	GetVM(ctx context.Context, nodeName string, vmID int64) (*proxmox.VirtualMachine, error)
+
+diff --git a/pkg/proxmox/goproxmox/api_client.go b/pkg/proxmox/goproxmox/api_client.go
+index 72aabc5..e719dd2 100644
+--- a/pkg/proxmox/goproxmox/api_client.go
++++ b/pkg/proxmox/goproxmox/api_client.go
+@@ -272,6 +272,20 @@ func (c *APIClient) CheckID(ctx context.Context, vmid int64) (bool, error) {
+ 	return cluster.CheckID(ctx, int(vmid))
+ }
+
++// NextVMID returns the lowest VM ID that is free on the cluster. It reserves nothing, so a clone
++// that comes later can find the ID taken.
++func (c *APIClient) NextVMID(ctx context.Context) (int64, error) {
++	cluster, err := c.Cluster(ctx)
++	if err != nil {
++		return 0, fmt.Errorf("cannot get cluster: %w", err)
++	}
++	vmID, err := cluster.NextID(ctx)
++	if err != nil {
++		return 0, fmt.Errorf("cannot get the next free vm id: %w", err)
++	}
++	return int64(vmID), nil
++}
++
+ // GetTask returns a task associated with upID.
+ func (c *APIClient) GetTask(ctx context.Context, upID string) (*proxmox.Task, error) {
+ 	task := proxmox.NewTask(proxmox.UPID(upID), c.Client)
+diff --git a/pkg/proxmox/goproxmox/api_client_test.go b/pkg/proxmox/goproxmox/api_client_test.go
+index bc24102..49ac407 100644
+--- a/pkg/proxmox/goproxmox/api_client_test.go
++++ b/pkg/proxmox/goproxmox/api_client_test.go
+@@ -638,6 +638,25 @@ func TestProxmoxAPIClient_DeleteVMPurges(t *testing.T) {
+ 	require.Equal(t, "1", query.Get("destroy-unreferenced-disks"))
+ }
+
++func TestProxmoxAPIClient_NextVMID(t *testing.T) {
++	client := newTestClient(t)
++	httpmock.RegisterResponder(http.MethodGet, `=~/cluster/status`,
++		newJSONResponder(200, proxmox.NodeStatuses{{Name: "test"}}))
++	httpmock.RegisterResponder(http.MethodGet, `=~/cluster/nextid`,
++		newJSONResponder(200, "107"))
++
++	vmID, err := client.NextVMID(context.Background())
++	require.NoError(t, err)
++	require.Equal(t, int64(107), vmID)
++
++	httpmock.RegisterResponder(http.MethodGet, `=~/cluster/status`,
++		newJSONResponder(200, proxmox.NodeStatuses{{Name: "test"}}))
++	httpmock.RegisterResponder(http.MethodGet, `=~/cluster/nextid`,
++		newJSONResponder(500, nil))
++	_, err = client.NextVMID(context.Background())
++	require.ErrorContains(t, err, "cannot get the next free vm id")
++}
++
+ func TestProxmoxAPIClient_GetTask(t *testing.T) {
+ 	upid := destroyUPID
+ 	upid2 := "UPID:test:000D6BDA:041E0A54:654A5A1D:qmdestroy:102:root@pam:"
+diff --git a/pkg/proxmox/proxmoxtest/mock_client.go b/pkg/proxmox/proxmoxtest/mock_client.go
+index 46ced2a..68ec500 100644
+--- a/pkg/proxmox/proxmoxtest/mock_client.go
++++ b/pkg/proxmox/proxmoxtest/mock_client.go
+@@ -688,6 +688,62 @@ func (_c *MockClient_HasActiveTask_Call) RunAndReturn(run func(context.Context,
+ 	return _c
+ }
+
++// NextVMID provides a mock function with given fields: ctx
++func (_m *MockClient) NextVMID(ctx context.Context) (int64, error) {
++	ret := _m.Called(ctx)
++
++	if len(ret) == 0 {
++		panic("no return value specified for NextVMID")
++	}
++
++	var r0 int64
++	var r1 error
++	if rf, ok := ret.Get(0).(func(context.Context) (int64, error)); ok {
++		return rf(ctx)
++	}
++	if rf, ok := ret.Get(0).(func(context.Context) int64); ok {
++		r0 = rf(ctx)
++	} else {
++		r0 = ret.Get(0).(int64)
++	}
++
++	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
++		r1 = rf(ctx)
++	} else {
++		r1 = ret.Error(1)
++	}
++
++	return r0, r1
++}
++
++// MockClient_NextVMID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'NextVMID'
++type MockClient_NextVMID_Call struct {
++	*mock.Call
++}
++
++// NextVMID is a helper method to define mock.On call
++//   - ctx context.Context
++func (_e *MockClient_Expecter) NextVMID(ctx interface{}) *MockClient_NextVMID_Call {
++	return &MockClient_NextVMID_Call{Call: _e.mock.On("NextVMID", ctx)}
++}
++
++func (_c *MockClient_NextVMID_Call) Run(run func(ctx context.Context)) *MockClient_NextVMID_Call {
++	_c.Call.Run(func(args mock.Arguments) {
++		run(args[0].(context.Context))
++	})
++	return _c
++}
++
++func (_c *MockClient_NextVMID_Call) Return(_a0 int64, _a1 error) *MockClient_NextVMID_Call {
++	_c.Call.Return(_a0, _a1)
++	return _c
++}
++
++func (_c *MockClient_NextVMID_Call) RunAndReturn(run func(context.Context) (int64, error)) *MockClient_NextVMID_Call {
++	_c.Call.Return(run)
++	return _c
++}
++
+ // QemuAgentStatus provides a mock function with given fields: ctx, vm
+ func (_m *MockClient) QemuAgentStatus(ctx context.Context, vm *go_proxmox.VirtualMachine) error {
+ 	ret := _m.Called(ctx, vm)
+diff --git a/pkg/scope/machine.go b/pkg/scope/machine.go
+index 8c9e76b..94f1ff9 100644
+--- a/pkg/scope/machine.go
++++ b/pkg/scope/machine.go
+@@ -201,6 +201,13 @@ func (m *MachineScope) SetAnnotation(key, value string) {
+ 	m.ProxmoxMachine.Annotations[key] = value
+ }
+
++// PatchNow writes the change made by mutate to the API server straight away.
++func (m *MachineScope) PatchNow(ctx context.Context, mutate func()) error {
++	before := m.ProxmoxMachine.DeepCopy()
++	mutate()
++	return m.client.Patch(ctx, m.ProxmoxMachine.DeepCopy(), client.MergeFrom(before))
++}
++
+ // HasFailed returns the failure state of the machine scope.
+ func (m *MachineScope) HasFailed() bool {
+ 	cond := conditions.Get(m.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
+diff --git a/pkg/scope/machine_test.go b/pkg/scope/machine_test.go
+index beb04e4..e12f62c 100644
+--- a/pkg/scope/machine_test.go
++++ b/pkg/scope/machine_test.go
+@@ -151,6 +151,28 @@ func newCloneStartedScope(t *testing.T, stored ...client.Object) *MachineScope {
+ 	return scope
+ }
+
++func TestMachineScope_PatchNow(t *testing.T) {
++	stored := &infrav1.ProxmoxMachine{
++		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: metav1.NamespaceDefault},
++		Spec:       infrav1.ProxmoxMachineSpec{ProviderID: "proxmox://stored"},
++	}
++	scope := newCloneStartedScope(t, stored)
++	require.NoError(t, scope.client.Get(context.Background(), client.ObjectKeyFromObject(stored), scope.ProxmoxMachine))
++	// A change made before PatchNow is left to the patch at the end of the reconcile.
++	scope.ProxmoxMachine.Spec.ProviderID = "proxmox://unwritten"
++
++	require.NoError(t, scope.PatchNow(context.Background(), func() {
++		scope.SetVirtualMachineID(100)
++		scope.SetAnnotation("example.com/key", "value")
++	}))
++
++	got := &infrav1.ProxmoxMachine{}
++	require.NoError(t, scope.client.Get(context.Background(), client.ObjectKeyFromObject(stored), got))
++	require.Equal(t, int64(100), got.GetVirtualMachineID())
++	require.Equal(t, "value", got.Annotations["example.com/key"])
++	require.Equal(t, "proxmox://stored", got.Spec.ProviderID)
++}
++
+ func TestMachineScope_SetReady(t *testing.T) {
+ 	p := infrav1.ProxmoxMachine{
+ 		Spec: infrav1.ProxmoxMachineSpec{},

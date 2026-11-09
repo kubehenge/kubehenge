@@ -6,6 +6,7 @@ import {
   chosenNodeOS,
   controlPlaneSizes,
   formLoadBalancerValue,
+  formReleaseMirror,
   machineLeast,
   memoryNodeWarning,
   mostWorkers,
@@ -19,13 +20,26 @@ import {
 } from "./create-form";
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
+import { FamiliesField } from "./Families";
+import { SecurityGroupsField } from "./Firewall";
 import { HostOutageField, graceVariable } from "./HostOutage";
 import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
-import { addressBits, addressIn, bridgeLabel } from "./network";
+import {
+  addressIn,
+  bitsOf,
+  bridgeLabel,
+  familiesOf,
+  familyFieldLabel,
+  familyNames,
+  gatewayNetwork,
+  type Family,
+  type FamilyChoice,
+} from "./network";
 import { baseTitle, choosable, cpuNote, findNodeOS, fipsCNI, macName, nodeOSKey, nodeOSLabel } from "./node-os";
 import { NodeCustomisationFields } from "./NodeCustomisation";
 import { NodeSettingsFields } from "./NodeSettings";
+import { MirrorFields, ReleaseMirrorFields, TrustedCAField } from "./NodeSite";
 import { NodeTimeoutFields } from "./NodeTimeouts";
 import { OIDCProviders } from "./OIDCProviders";
 import { HAField, HAGroupsField, PlacementFields, type HARulesRead } from "./Placement";
@@ -354,23 +368,33 @@ export const useClassTalos = (cls: ClusterClass | undefined): TalosReleases | un
 // How long after the network settings last change the wizard probes them.
 const probeAfter = 500;
 
-/** ProbeOn is where addresses are probed: the bridge of a node that reports its network, and the VLAN tag typed. */
+/**
+ * ProbeOn is where addresses are probed: the bridge of a node that reports its network, the VLAN
+ * tag typed, and the address families asked for. The gateway and prefix length of a family give
+ * the network searched, else the bridge's is.
+ */
 export interface ProbeOn {
   node: string | undefined;
   bridge: string;
   vlan: string;
+  families: FamilyChoice;
+  gateway: string;
+  prefix: number;
+  gateway6: string;
+  prefix6: number;
 }
 
 /**
- * useFreeAddresses asks, a moment after its inputs last change, for free addresses on a bridge's
+ * useFreeAddresses asks, a moment after its inputs last change, for free addresses on the nodes'
  * network: a run for the API and the nodes where nodes is above 0, and which of check a host
  * answers on. It is advice, so where the question fails there is none.
  */
 export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): FreeAddresses | undefined {
-  const { node, bridge } = on;
+  const { node, bridge, gateway, prefix, gateway6, prefix6 } = on;
   const vlan = filled(on.vlan) ? Number(on.vlan) : 0;
   const checked = check.join("\n");
-  const key = [node, bridge, vlan, nodes, checked].join(" ");
+  const asked = familyNames(on.families).join(",");
+  const key = [node, bridge, vlan, nodes, checked, asked, gateway, prefix, gateway6, prefix6].join(" ");
   const [found, setFound] = useState<{ key: string; free: FreeAddresses }>();
   useEffect(() => {
     let current = true;
@@ -380,6 +404,9 @@ export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): F
           vlan,
           nodes,
           check: checked === "" ? [] : checked.split("\n"),
+          ...(asked === "IPv4" ? {} : { families: asked.split(",") }),
+          ...(filled(gateway) && Number.isInteger(prefix) && { gateway, prefix }),
+          ...(filled(gateway6) && Number.isInteger(prefix6) && { gateway6, prefix6 }),
         });
         if (current) {
           setFound({ key, free });
@@ -398,7 +425,7 @@ export function useFreeAddresses(on: ProbeOn, nodes: number, check: string[]): F
       current = false;
       clearTimeout(timer);
     };
-  }, [node, bridge, vlan, nodes, checked, key]);
+  }, [node, bridge, vlan, nodes, checked, asked, gateway, prefix, gateway6, prefix6, key]);
   return found?.key === key ? found.free : undefined;
 }
 
@@ -635,6 +662,114 @@ const exampleEndpoint = 20;
 const exampleFirst = 21;
 const exampleLast = 29;
 
+// The ranges the controller takes for an IPv6 family when none is asked for.
+const defaultPodsIPv6 = "fd5e:4b1c:9a20::/56";
+const defaultServicesIPv6 = "fd5e:4b1c:9a21::/112";
+
+// FamilyFields are the node addresses, prefix length and gateway of one address family. Their
+// labels name the family where both families show.
+function FamilyFields({
+  family,
+  shownFamilies,
+  form,
+  set,
+  shown,
+  inUse: busy,
+  full,
+  first,
+  last,
+}: StepProps & {
+  family: Family;
+  shownFamilies: number;
+  inUse: JSX.Element | undefined;
+  /** The network searched, where it has no free addresses for the cluster. */
+  full: string | undefined;
+  first: string;
+  last: string;
+}): JSX.Element {
+  const [addresses, prefix, gateway] =
+    family === "IPv6"
+      ? (["addresses6", "prefix6", "gateway6"] as const)
+      : (["addresses", "prefix", "gateway"] as const);
+  const label = (plain: string): string => familyFieldLabel(plain, family, shownFamilies);
+  const none =
+    full === undefined || filled(form[addresses]) ? undefined : (
+      <span className="hint-warning">No free addresses found in {full}</span>
+    );
+  return (
+    <>
+      <Field
+        label={label("Node addresses")}
+        hint={busy ?? none ?? `Ranges like ${first}-${last}, networks or addresses`}
+        error={shown(addresses)}
+      >
+        {(id) => <textarea id={id} rows={3} value={form[addresses]} onChange={(e) => set(addresses, e.target.value)} />}
+      </Field>
+      <Field label={label("Prefix length")} error={shown(prefix)}>
+        {(id) => (
+          <input
+            id={id}
+            type="number"
+            min={1}
+            max={bitsOf(family)}
+            value={shownNumber(form[prefix])}
+            onChange={(e) => set(prefix, typedNumber(e.target.value))}
+          />
+        )}
+      </Field>
+      <Field label={label("Gateway")} error={shown(gateway)}>
+        {(id) => <input id={id} value={form[gateway]} onChange={(e) => set(gateway, e.target.value.trim())} />}
+      </Field>
+    </>
+  );
+}
+
+/** InterfaceFields are the options of the nodes' interface the class offers. */
+function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element {
+  const network = variable(cls, "network")?.properties;
+  return (
+    <>
+      <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
+        {(id) => (
+          <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
+        )}
+      </Field>
+      {network?.["mtu"] === undefined ? null : (
+        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.mtu}
+              onChange={(e) => set("mtu", e.target.value.trim())}
+              placeholder="1500"
+            />
+          )}
+        </Field>
+      )}
+      {network?.["queues"] === undefined ? null : (
+        <Field label="Queues" hint="Optional" error={shown("queues")}>
+          {(id) => (
+            <input
+              id={id}
+              inputMode="numeric"
+              value={form.queues}
+              onChange={(e) => set("queues", e.target.value.trim())}
+            />
+          )}
+        </Field>
+      )}
+      {variable(cls, "securityGroups") === undefined ? null : (
+        <SecurityGroupsField
+          value={form.securityGroups}
+          onChange={(s) => set("securityGroups", s)}
+          error={shown("securityGroups")}
+        />
+      )}
+    </>
+  );
+}
+
 export function NetworkStep({
   form,
   set,
@@ -642,25 +777,35 @@ export function NetworkStep({
   cls,
   bridgeOptions,
   network,
+  network6,
+  free,
   checked,
 }: StepProps & {
   cls: ClusterClass | undefined;
   bridgeOptions: Bridge[];
-  /** The bridge's network, like 192.0.2.0/24, where a node reports it, else the gateway's. The examples are taken from it. */
+  /** The bridge's network, like 192.0.2.0/24, where a node reports it. The examples are taken from it where the gateway gives none. */
   network?: string | undefined;
+  /** The same for IPv6, like 2001:db8::/64. */
+  network6?: string | undefined;
+  /** The free addresses found for the cluster. */
+  free?: FreeAddresses | undefined;
   /** What probing the addresses typed found. */
   checked?: FreeAddresses | undefined;
 }): JSX.Element {
+  const fullIn = (family: Family): string | undefined => {
+    const [full, searched] = family === "IPv6" ? [free?.full6, free?.network6] : [free?.full, free?.network];
+    return full === true ? searched : undefined;
+  };
   const cni = variable(cls, "cni");
   const fips = chosenNodeOS(form, cls)?.fips === true;
   const answering = checked?.answering ?? [];
   const endpointInUse = inUse(answering.filter((a) => a === form.endpoint));
   const nodesInUse = inUse(answering.filter((a) => a !== form.endpoint));
-  const example = (offset: number, otherwise: string): string =>
-    (network === undefined ? undefined : addressIn(network, offset)) ?? otherwise;
-  // Cilium's ranges also keep clear of the other clusters', so the cluster can join a Cluster Mesh.
-  const rangeHint =
-    form.cni === "cilium" ? "Leave empty to choose one clear of other clusters" : "Leave empty to choose a free one";
+  const families = familiesOf(form.families);
+  const examples = exampleNetworks(form, { IPv4: network, IPv6: network6 });
+  const sample = (family: Family, offset: number): string => exampleAddress(family, offset, examples[family]);
+  const [primary = "IPv4"] = families;
+  const offersFamilies = variable(cls, "network")?.properties?.["ipFamilies"] !== undefined;
   return (
     <>
       <Field label="Bridge" error={shown("bridge")}>
@@ -687,35 +832,15 @@ export function NetworkStep({
           )
         }
       </Field>
-      <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
-        {(id) => (
-          <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
-        )}
-      </Field>
-      {variable(cls, "network")?.properties?.["mtu"] === undefined ? null : (
-        <Field label="MTU" hint="Optional" error={shown("mtu")}>
-          {(id) => (
-            <input
-              id={id}
-              inputMode="numeric"
-              value={form.mtu}
-              onChange={(e) => set("mtu", e.target.value.trim())}
-              placeholder="1500"
-            />
-          )}
-        </Field>
-      )}
-      {variable(cls, "network")?.properties?.["queues"] === undefined ? null : (
-        <Field label="Queues" hint="Optional" error={shown("queues")}>
-          {(id) => (
-            <input
-              id={id}
-              inputMode="numeric"
-              value={form.queues}
-              onChange={(e) => set("queues", e.target.value.trim())}
-            />
-          )}
-        </Field>
+      <InterfaceFields form={form} set={set} shown={shown} cls={cls} />
+      {offersFamilies && (
+        <FamiliesField
+          value={form.families}
+          hint="Fixed once the cluster exists"
+          onChoose={(choice) => {
+            set("families", choice);
+          }}
+        />
       )}
       <Field
         label="API address"
@@ -727,37 +852,24 @@ export function NetworkStep({
             id={id}
             value={form.endpoint}
             onChange={(e) => set("endpoint", e.target.value.trim())}
-            placeholder={example(exampleEndpoint, "10.0.0.20")}
+            placeholder={sample(primary, exampleEndpoint)}
           />
         )}
       </Field>
-      <Field
-        label="Node addresses"
-        hint={
-          nodesInUse ??
-          `Ranges like ${example(exampleFirst, "10.0.0.21")}-${example(exampleLast, "10.0.0.29")}, networks or addresses`
-        }
-        error={shown("addresses")}
-      >
-        {(id) => (
-          <textarea id={id} rows={3} value={form.addresses} onChange={(e) => set("addresses", e.target.value)} />
-        )}
-      </Field>
-      <Field label="Prefix length" error={shown("prefix")}>
-        {(id) => (
-          <input
-            id={id}
-            type="number"
-            min={1}
-            max={addressBits}
-            value={shownNumber(form.prefix)}
-            onChange={(e) => set("prefix", typedNumber(e.target.value))}
-          />
-        )}
-      </Field>
-      <Field label="Gateway" error={shown("gateway")}>
-        {(id) => <input id={id} value={form.gateway} onChange={(e) => set("gateway", e.target.value.trim())} />}
-      </Field>
+      {families.map((family) => (
+        <FamilyFields
+          key={family}
+          family={family}
+          shownFamilies={families.length}
+          form={form}
+          set={set}
+          shown={shown}
+          inUse={nodesInUse}
+          full={fullIn(family)}
+          first={sample(family, exampleFirst)}
+          last={sample(family, exampleLast)}
+        />
+      ))}
       <Field label="DNS servers" error={shown("dnsServers")}>
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
@@ -774,14 +886,41 @@ export function NetworkStep({
       <Field label="Time servers" hint="Optional, separated by commas" error={shown("ntpServers")}>
         {(id) => <input id={id} value={form.ntpServers} onChange={(e) => set("ntpServers", e.target.value)} />}
       </Field>
+      {variable(cls, "registryMirrors") && (
+        <MirrorFields
+          value={form.registryMirrors}
+          onChange={(rows) => set("registryMirrors", rows)}
+          error={shown("registryMirrors")}
+        />
+      )}
+      {variable(cls, "trustedCAs") && (
+        <TrustedCAField value={form.trustedCAs} onChange={(s) => set("trustedCAs", s)} error={shown("trustedCAs")} />
+      )}
+      {variable(cls, "releaseMirror") && (
+        <ReleaseMirrorFields
+          value={formReleaseMirror(form)}
+          onChange={(m) => {
+            if (m.url !== form.releaseMirror) {
+              set("releaseMirror", m.url);
+            }
+            if (m.caBundle !== form.releaseMirrorCA) {
+              set("releaseMirrorCA", m.caBundle);
+            }
+          }}
+          fallback={cls === undefined ? undefined : (cls.releaseMirror ?? "")}
+          errors={{ url: shown("releaseMirror"), caBundle: shown("releaseMirrorCA") }}
+        />
+      )}
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
+          families={form.families}
           value={formLoadBalancerValue(form)}
           errors={{
             addresses: shown("loadBalancerAddresses"),
             asn: shown("loadBalancerAsn"),
             peers: shown("loadBalancerPeers"),
+            routerID: shown("loadBalancerRouterID"),
           }}
           onChange={(patch) => {
             setLoadBalancer(set, patch);
@@ -821,33 +960,67 @@ export function NetworkStep({
           )}
         </Field>
       )}
-      <details
-        className="advanced"
-        open={shown("pods") !== undefined || shown("services") !== undefined ? true : undefined}
-      >
-        <summary>Pod and service ranges</summary>
-        <Field label="Pod range" hint={rangeHint} error={shown("pods")}>
-          {(id) => (
-            <input
-              id={id}
-              value={form.pods}
-              placeholder={cls?.annotations?.["kubehenge.dev/default-pods"]}
-              onChange={(e) => set("pods", e.target.value.trim())}
-            />
-          )}
-        </Field>
-        <Field label="Service range" hint={rangeHint} error={shown("services")}>
-          {(id) => (
-            <input
-              id={id}
-              value={form.services}
-              placeholder={cls?.annotations?.["kubehenge.dev/default-services"]}
-              onChange={(e) => set("services", e.target.value.trim())}
-            />
-          )}
-        </Field>
-      </details>
+      <RangeFields form={form} set={set} shown={shown} cls={cls} />
     </>
+  );
+}
+
+// exampleNetworks are the networks the examples of each family are taken from: the gateway's, the
+// one the free addresses come from, else the bridge's where a node reports it.
+const exampleNetworks = (
+  form: Form,
+  bridge: Record<Family, string | undefined>,
+): Record<Family, string | undefined> => ({
+  IPv4: gatewayNetwork(form.gateway, form.prefix, "IPv4") ?? bridge.IPv4,
+  IPv6: gatewayNetwork(form.gateway6, form.prefix6, "IPv6") ?? bridge.IPv6,
+});
+
+// exampleAddress is the address that many into the example network, else in a documentation network.
+function exampleAddress(family: Family, offset: number, network: string | undefined): string {
+  const fallback = family === "IPv4" ? `10.0.0.${offset}` : `2001:db8::${offset}`;
+  return (network === undefined ? undefined : addressIn(network, offset)) ?? fallback;
+}
+
+// RangeFields are the pod and service ranges, one per family when the cluster has both.
+function RangeFields({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element {
+  const families = familiesOf(form.families);
+  const dual = families.length > 1;
+  // The ranges the class would choose, one per family in order, for the fields to show as examples.
+  const defaultRanges = (annotation: string, v6: string): string | undefined =>
+    families
+      .map((f) => (f === "IPv4" ? cls?.annotations?.[annotation] : v6))
+      .filter((r) => r !== undefined)
+      .join(", ") || undefined;
+  // Cilium's ranges also keep clear of the other clusters', so the cluster can join a Cluster Mesh.
+  const rangeHint =
+    form.cni === "cilium" ? "Leave empty to choose one clear of other clusters" : "Leave empty to choose a free one";
+  return (
+    <details
+      className="advanced"
+      open={shown("pods") !== undefined || shown("services") !== undefined ? true : undefined}
+    >
+      <summary>Pod and service ranges</summary>
+      <Field label={dual ? "Pod ranges" : "Pod range"} hint={rangeHint} error={shown("pods")}>
+        {(id) => (
+          <input
+            id={id}
+            value={form.pods}
+            placeholder={defaultRanges("kubehenge.dev/default-pods", defaultPodsIPv6)}
+            onChange={(e) => set("pods", e.target.value)}
+          />
+        )}
+      </Field>
+      <Field label={dual ? "Service ranges" : "Service range"} hint={rangeHint} error={shown("services")}>
+        {(id) => (
+          <input
+            id={id}
+            value={form.services}
+            placeholder={defaultRanges("kubehenge.dev/default-services", defaultServicesIPv6)}
+            onChange={(e) => set("services", e.target.value)}
+          />
+        )}
+      </Field>
+    </details>
   );
 }
 

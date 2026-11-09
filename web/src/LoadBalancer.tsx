@@ -1,7 +1,20 @@
 import { useState, type JSX, type ReactNode } from "react";
 
 import { CredentialField } from "./CredentialField";
-import { addressBits, addressCount, list, maskOf, overlapping, pointToPoint, spanOf, toInt } from "./network";
+import {
+  addressCountIn,
+  choiceOf,
+  familiesOf,
+  hasFamily,
+  isRouterID,
+  list,
+  overlapping,
+  parseAddress,
+  reservedAddresses,
+  spanOf,
+  type FamilyChoice,
+  type NodeNetwork,
+} from "./network";
 import type { Cluster } from "./types";
 import { Dialog, ErrorBox, Field, useChange } from "./ui";
 import { flag, quantity, record, text, texts } from "./values";
@@ -37,6 +50,8 @@ export interface LoadBalancer {
   mode: Mode;
   asn: string;
   peers: string;
+  /** The router id every node gives, empty for each node's own IPv4 address. */
+  routerID: string;
   /** Whether the sessions carry the password in the cluster's bgp credential. */
   authenticated: boolean;
 }
@@ -53,7 +68,7 @@ export function routersOf(typed: string): Router[] | undefined {
   const routers: Router[] = [];
   for (const entry of typed.split(/[\n,]+/u).filter((e) => e.trim() !== "")) {
     const [address = "", asn, ...rest] = entry.trim().split(/\s+/u);
-    if (toInt(address) === undefined || asn === undefined || rest.length > 0 || !isASN(Number(asn))) {
+    if (parseAddress(address) === undefined || asn === undefined || rest.length > 0 || !isASN(Number(asn))) {
       return undefined;
     }
     routers.push({ address, asn: Number(asn) });
@@ -70,6 +85,7 @@ export function loadBalancerOf(v: unknown): LoadBalancer {
     mode: text(r["mode"]) === "bgp" ? ("bgp" as const) : ("l2" as const),
     asn: String(quantity(bgp["asn"]) ?? ""),
     peers: peers.map((p) => `${text(record(p)["address"]) ?? ""} ${quantity(record(p)["asn"]) ?? ""}`).join("\n"),
+    routerID: text(bgp["routerID"]) ?? "",
     authenticated: flag(bgp["authenticated"]) === true,
   };
   if (flag(r["enabled"]) !== true) {
@@ -91,7 +107,12 @@ export function loadBalancerVariable(lb: LoadBalancer): Record<string, unknown> 
   return {
     ...variable,
     mode: "bgp",
-    bgp: { asn: Number(lb.asn), peers, ...(lb.authenticated ? { authenticated: true } : {}) },
+    bgp: {
+      asn: Number(lb.asn),
+      peers,
+      ...(lb.routerID === "" ? {} : { routerID: lb.routerID }),
+      ...(lb.authenticated ? { authenticated: true } : {}),
+    },
   };
 }
 
@@ -107,13 +128,25 @@ export function loadBalancerText(lb: LoadBalancer, distribution: string | undefi
 
 const loadBalancerInfo = "Gives each LoadBalancer Service its own address.";
 
-const addressesHint = "Free addresses on the nodes' network, like 10.0.0.100-10.0.0.120";
+const addressesHint = (families: FamilyChoice): string =>
+  hasFamily(families, "IPv4")
+    ? "Free addresses on the nodes' network, like 10.0.0.100-10.0.0.120"
+    : "Free addresses on the nodes' network, like 2001:db8::100-2001:db8::120";
 
-const routedHint = "Addresses the routers send to the nodes, like 198.51.100.0/28";
+const routedHint = (families: FamilyChoice): string =>
+  hasFamily(families, "IPv4")
+    ? "Addresses the routers send to the nodes, like 198.51.100.0/28"
+    : "Addresses the routers send to the nodes, like 2001:db8:1::/120";
 
 const modeInfo = "BGP also announces the API address, from the control planes. Not on Talos.";
 
 const peersHint = "One per line, like 10.0.0.1 64512";
+
+export const routerIDLabel = "Router ID";
+
+/** The hint of the router id: what an empty one means, or that IPv6 alone needs one. */
+export const routerIDHint = (families: FamilyChoice): string =>
+  hasFamily(families, "IPv4") ? "Empty: each node's own IPv4 address" : "Required, like 192.0.2.1";
 
 /** What the BGP password field is called and says about itself. */
 export const passwordLabel = "BGP password";
@@ -124,56 +157,92 @@ export const passwordInfo = "The same password for every router. The cluster wai
 export interface BGPProblems {
   asn?: string;
   peers?: string;
+  routerID?: string;
 }
 
-/** bgpProblems says what is wrong with a cluster's AS number and routers. */
-export function bgpProblems(lb: Pick<LoadBalancer, "asn" | "peers">): BGPProblems {
+/** What bgpProblems needs to know of the cluster: its families, which decide the router id and the routers. */
+export interface BGPContext {
+  families: FamilyChoice;
+}
+
+/** bgpProblems says what is wrong with a cluster's AS number, router id and routers. */
+export function bgpProblems(lb: Pick<LoadBalancer, "asn" | "peers" | "routerID">, context: BGPContext): BGPProblems {
   const problems: BGPProblems = {};
   if (!isASN(Number(lb.asn))) {
     problems.asn = `Enter a number from 1 to ${maxASN}`;
   }
   const routers = routersOf(lb.peers);
   if (routers === undefined) {
-    problems.peers = "Each line needs an IPv4 address and an AS number from 1 to 4294967295";
+    problems.peers = `Each line needs an ${context.families === "ipv4" ? "IPv4" : "IP"} address and an AS number from 1 to 4294967295`;
   } else if (routers.length === 0) {
     problems.peers = "Enter at least one router";
   } else if (new Set(routers.map((r) => r.address)).size < routers.length) {
     problems.peers = "A router is listed twice";
+  } else {
+    const own = familiesOf(context.families);
+    const foreign = routers.find((r) => {
+      const family = parseAddress(r.address)?.family;
+      return family === undefined || !own.includes(family);
+    });
+    if (foreign !== undefined) {
+      problems.peers = `${foreign.address} is not of the cluster's address families`;
+    }
+  }
+  if (lb.routerID === "") {
+    if (!hasFamily(context.families, "IPv4")) {
+      problems.routerID = "IPv6 only needs a router ID like 192.0.2.1";
+    }
+  } else if (!isRouterID(lb.routerID)) {
+    problems.routerID = "Enter a dotted ID like 192.0.2.1, not 0.0.0.0";
   }
   return problems;
 }
 
-/** The nodes' network a cluster's load-balancer addresses are held to. */
+/** The nodes' network a cluster's load-balancer addresses are held to. The IPv6 fields are for a cluster with IPv6. */
 export interface NodesNetwork {
+  families: FamilyChoice;
   gateway: string;
   prefix: number;
+  gateway6: string;
+  prefix6: number;
   addresses: string[];
   endpoint: string;
+}
+
+/** networksOf lists the gateway and prefix length of each of a network's families, the primary first. */
+export function networksOf(
+  n: Pick<NodesNetwork, "families" | "gateway" | "prefix" | "gateway6" | "prefix6">,
+): NodeNetwork[] {
+  return familiesOf(n.families).map((f) =>
+    f === "IPv4" ? { gateway: n.gateway, prefix: n.prefix } : { gateway: n.gateway6, prefix: n.prefix6 },
+  );
 }
 
 /** networkOf reads the nodes' network from a cluster's variables. */
 export function networkOf(c: Cluster): NodesNetwork {
   const n = record(c.variables["network"]);
+  const v6 = record(n["ipv6"]);
   return {
+    families: choiceOf(n["ipFamilies"]),
     gateway: text(n["gateway"]) ?? "",
     prefix: quantity(n["prefix"]) ?? 0,
-    addresses: texts(n["addresses"]) ?? [],
+    gateway6: text(v6["gateway"]) ?? "",
+    prefix6: quantity(v6["prefix"]) ?? 0,
+    addresses: [...(texts(n["addresses"]) ?? []), ...(texts(v6["addresses"]) ?? [])],
     endpoint: text(c.variables["controlPlaneEndpoint"]) ?? "",
   };
 }
 
-// holdingReserved is the first entry holding the network's own or its broadcast address, which
-// hosts on the network never answer for. A /31 or /32 has neither.
+// holdingReserved is the first entry holding an address of the nodes' networks that hosts there
+// never answer for.
 function holdingReserved(entries: string[], network: NodesNetwork): string | undefined {
-  const g = toInt(network.gateway);
-  if (g === undefined || network.prefix < 1 || network.prefix >= pointToPoint) {
-    return undefined;
-  }
-  const own = (g & maskOf(network.prefix)) >>> 0;
-  const broadcast = own + 2 ** (addressBits - network.prefix) - 1;
+  const reserved = networksOf(network).flatMap((net) => {
+    const g = parseAddress(net.gateway);
+    return g === undefined ? [] : reservedAddresses(g, net.prefix).map((at) => ({ family: g.family, at }));
+  });
   return entries.find((e) => {
     const s = spanOf(e);
-    return s !== undefined && [own, broadcast].some((a) => s[0] <= a && a <= s[1]);
+    return s !== undefined && reserved.some((r) => r.family === s.family && s.first <= r.at && r.at <= s.last);
   });
 }
 
@@ -185,7 +254,17 @@ export function addressesProblem(entries: string[], network: NodesNetwork, route
   if (entries.length === 0) {
     return "Enter at least one address, range or network";
   }
-  const { bad } = addressCount(entries, network.gateway, routed ? 0 : network.prefix);
+  const own = familiesOf(network.families);
+  const foreign = entries.find((e) => {
+    const s = spanOf(e);
+    return s !== undefined && !own.includes(s.family);
+  });
+  if (foreign !== undefined) {
+    return `${foreign} is not of the cluster's address families`;
+  }
+  // Routed addresses may lie outside the nodes' networks, which a prefix length of 0 allows.
+  const networks = networksOf(network).map((n) => ({ gateway: n.gateway, prefix: routed ? 0 : n.prefix }));
+  const { bad } = addressCountIn(entries, networks);
   if (bad !== undefined) {
     return routed
       ? `${bad} is not an address, range or network`
@@ -198,7 +277,7 @@ export function addressesProblem(entries: string[], network: NodesNetwork, route
   const taken: [string, string[]][] = [
     ["the node addresses", network.addresses],
     ["the API address", [network.endpoint]],
-    ["the gateway", [network.gateway]],
+    ["the gateway", networksOf(network).map((n) => n.gateway)],
   ];
   for (const [what, others] of taken) {
     const clash = overlapping(entries, others);
@@ -221,6 +300,7 @@ export interface LoadBalancerValue {
   mode: Mode;
   asn: string;
   peers: string;
+  routerID: string;
   authenticated: boolean;
 }
 
@@ -229,6 +309,7 @@ export interface LoadBalancerErrors {
   addresses?: string | undefined;
   asn?: string | undefined;
   peers?: string | undefined;
+  routerID?: string | undefined;
 }
 
 /** The fields of a value that can change. */
@@ -241,12 +322,14 @@ export const bgpOffered = (distribution: string | undefined, implementation: Imp
 /** LoadBalancerFields chooses the load balancer, how it announces and its addresses. */
 export function LoadBalancerFields({
   distribution,
+  families,
   value,
   errors,
   onChange,
   password,
 }: {
   distribution: string | undefined;
+  families: FamilyChoice;
   value: LoadBalancerValue;
   errors: LoadBalancerErrors;
   onChange: (patch: Partial<LoadBalancerValue>) => void;
@@ -290,7 +373,11 @@ export function LoadBalancerFields({
         </Field>
       )}
       {value.implementation !== "" && (
-        <Field label="Load-balancer addresses" hint={bgp ? routedHint : addressesHint} error={errors.addresses}>
+        <Field
+          label="Load-balancer addresses"
+          hint={bgp ? routedHint(families) : addressesHint(families)}
+          error={errors.addresses}
+        >
           {(id) => (
             <textarea
               id={id}
@@ -318,6 +405,11 @@ export function LoadBalancerFields({
               <textarea id={id} rows={2} value={value.peers} onChange={(e) => onChange({ peers: e.target.value })} />
             )}
           </Field>
+          <Field label={routerIDLabel} hint={routerIDHint(families)} error={errors.routerID}>
+            {(id) => (
+              <input id={id} value={value.routerID} onChange={(e) => onChange({ routerID: e.target.value.trim() })} />
+            )}
+          </Field>
           <label className="check">
             <input
               type="checkbox"
@@ -343,7 +435,10 @@ export function loadBalancerProblems(
     return {};
   }
   const bgp = value.mode === "bgp" && bgpOffered(distribution, value.implementation);
-  return { addresses: addressesProblem(list(value.addresses), network, bgp), ...(bgp ? bgpProblems(value) : {}) };
+  return {
+    addresses: addressesProblem(list(value.addresses), network, bgp),
+    ...(bgp ? bgpProblems(value, { families: network.families }) : {}),
+  };
 }
 
 /** loadBalancerOfValue is the settings a value stands for. A mode that is not offered stays layer 2. */
@@ -386,11 +481,13 @@ export function LoadBalancerDialog({ cluster: c, onClose }: { cluster: Cluster; 
     >
       <LoadBalancerFields
         distribution={c.distribution}
+        families={networkOf(c).families}
         value={value}
         errors={{
           addresses: shown("addresses", problems.addresses),
           asn: shown("asn", problems.asn),
           peers: shown("peers", problems.peers),
+          routerID: shown("routerID", problems.routerID),
         }}
         onChange={(patch) => {
           setValue((was) => ({ ...was, ...patch }));

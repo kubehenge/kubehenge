@@ -51,7 +51,7 @@ template:
     full: true
     templateSelector:
       matchTags: {{ toJson .tags }}
-      matchPolicy: exact
+      matchPolicy: uniqueSubset
     {{- if .serviceJoins }}
     checks:
       skipCloudInitStatus: true
@@ -107,17 +107,49 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
   schema:
     openAPIV3Schema:
       type: string
-      format: ipv4
       description: >-
-        Virtual IP address of the Kubernetes API. It moves between the control-plane nodes, so it is
-        an unused address on the nodes' network and outside the range in network.addresses.
+        Virtual IP address of the Kubernetes API, of the cluster's first address family. It moves
+        between the control-plane nodes, so it is an unused address on the nodes' network and
+        outside the node addresses.
+      x-kubernetes-validations:
+        - rule: isIP(self)
+          message: The control-plane endpoint is an IPv4 or IPv6 address.
 - name: network
   required: true
   schema:
     openAPIV3Schema:
       type: object
-      required: [bridge, addresses, prefix, gateway, dnsServers]
+      required: [bridge, dnsServers]
+      {{- /* ipFamilies has a default, which Cluster API sets before it validates; the rules read a
+      missing one as that default, IPv4 alone. */}}
+      x-kubernetes-validations:
+        - rule: "!(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || (has(self.addresses) && has(self.prefix) && has(self.gateway))"
+          message: IPv4 needs addresses, prefix and gateway.
+        - rule: "(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || !(has(self.addresses) || has(self.prefix) || has(self.gateway))"
+          message: addresses, prefix and gateway are IPv4 settings. Add IPv4 to ipFamilies or remove them.
+        - rule: "!(has(self.ipFamilies) && 'IPv6' in self.ipFamilies) || has(self.ipv6)"
+          message: IPv6 needs ipv6 with addresses, prefix and gateway.
+        - rule: "(has(self.ipFamilies) && 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+          message: ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.
+        {{- /* On the object, as Cluster API refuses oldSelf in a rule on the array itself. */}}
+        - rule: "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
+          message: The address families are chosen when the cluster is created.
       properties:
+        ipFamilies:
+          type: array
+          minItems: 1
+          maxItems: 2
+          default: [IPv4]
+          description: >-
+            The address families of the nodes, pods and services, the first one primary: [IPv4],
+            [IPv6], or both for dual-stack. Fixed once the cluster exists.
+          items:
+            type: string
+            enum: [IPv4, IPv6]
+            maxLength: 4
+          x-kubernetes-validations:
+            - rule: self.size() < 2 || self[0] != self[1]
+              message: Each address family once.
         bridge:
           type: string
           minLength: 1
@@ -145,7 +177,7 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
         addresses:
           type: array
           minItems: 1
-          description: Addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.
+          description: IPv4 addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.
           items:
             type: string
             minLength: 1
@@ -153,15 +185,48 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
           type: integer
           minimum: 1
           maximum: 32
+          description: Prefix length of the nodes' IPv4 network.
         gateway:
           type: string
           format: ipv4
+          description: IPv4 gateway of the nodes' network.
+        ipv6:
+          type: object
+          required: [addresses, prefix, gateway]
+          description: The nodes' IPv6 network, for a cluster whose ipFamilies hold IPv6.
+          properties:
+            addresses:
+              type: array
+              minItems: 1
+              description: IPv6 addresses the nodes take theirs from, as ranges (2001:db8::10-2001:db8::20), networks in CIDR notation or single addresses.
+              items:
+                type: string
+                minLength: 1
+            prefix:
+              type: integer
+              minimum: 1
+              maximum: 128
+              description: Prefix length of the nodes' IPv6 network, usually 64.
+            gateway:
+              type: string
+              format: ipv6
+              description: IPv6 gateway of the nodes' network.
         dnsServers:
           type: array
           minItems: 1
+          maxItems: 6
+          description: >-
+            DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster
+            names at least one of each.
           items:
             type: string
             minLength: 1
+            {{- /* The longest written IPv6 address. Without bounds, the API server's cost estimate
+            of the rule below exceeds its budget and Cluster API refuses the class. */}}
+            maxLength: 45
+            x-kubernetes-validations:
+              - rule: isIP(self)
+                message: A DNS server is an IPv4 or IPv6 address.
         searchDomains:
           type: array
           # glibc's resolver reads six.
@@ -907,8 +972,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           enum: [l2, bgp]
           default: l2
           description: >-
-            l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the
-            nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and
+            l2 answers ARP, or NDP for IPv6, for the addresses on the nodes' network, so the switch
+            has to accept the nodes' gratuitous ARP and unsolicited neighbour advertisements. bgp announces them to routers instead, for routed ranges and
             switches that drop such ARP, and also announces the control-plane endpoint through
             kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and
             the routers have to accept a session from every node.
@@ -934,8 +999,10 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
                 properties:
                   address:
                     type: string
-                    format: ipv4
-                    description: The router's IPv4 address.
+                    description: The router's address.
+                    x-kubernetes-validations:
+                      - rule: isIP(self)
+                        message: A router's address is an IPv4 or IPv6 address.
                   asn:
                     type: integer
                     format: int64
@@ -949,13 +1016,23 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
               description: >-
                 Sign every session with the password in the cluster's bgp credential, which the
                 routers have to be set to expect. The password is kept in a Secret, never here.
+            routerID:
+              type: string
+              description: >-
+                The BGP router id every node gives the routers, a dotted 32-bit id such as
+                10.0.0.1. Each node takes its own IPv4 address when this is unset. Required on
+                IPv6-only clusters, whose nodes have none.
+              x-kubernetes-validations:
+                - rule: "isIP(self) && ip(self).family() == 4 && self != '0.0.0.0'"
+                  message: A router id is a dotted 32-bit id other than 0.0.0.0, such as 10.0.0.1.
           required: [asn, peers]
         addresses:
           type: array
           minItems: 1
           description: >-
-            Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in
-            CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in
+            Addresses the Services take theirs from, of the cluster's families, as ranges
+            (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses. A Service asking
+            for both families needs a range of each. In mode l2 unused addresses on the nodes' network, in
             bgp any routed ones, apart from network.addresses, the control-plane endpoint, the
             gateway, the network's own and broadcast addresses and other clusters' addresses
             there. Services outside a changed range take new addresses from it.
@@ -1380,6 +1457,24 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           message: Flux's web interface signs in with a client secret.
         - rule: "!has(self.repository) || !has(self.repository.caBundle) || !(has(self.auth) && self.auth == 'existingSecret' && has(self.engine) && self.engine == 'flux')"
           message: Flux reads the authority from ca.crt in your own Secret.
+- name: securityGroups
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: array
+      minItems: 1
+      maxItems: 16
+      uniqueItems: true
+      description: >-
+        Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the
+        firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped,
+        so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A
+        change replaces the nodes.
+      items:
+        type: string
+        minLength: 2
+        maxLength: 18
+        pattern: "^[A-Za-z][A-Za-z0-9_-]+$"
 - name: egressProxy
   required: false
   schema:
@@ -1387,17 +1482,25 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       type: object
       description: >-
         The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero,
-        Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has
-        one without credentials in its address. The cluster's pod and service ranges, .svc and
+        Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the
+        container runtime, the distribution's installer and its service. Unset, the add-ons take the
+        management side's proxy, if it has one without credentials in its address, and the nodes go
+        direct. The cluster's pod, service and node networks, its API address, .svc and
         .cluster.local always bypass it.
       properties:
         url:
           type: string
           maxLength: 2048
-          pattern: "^https?://[^\\s/@?#]+/?$"
+          pattern: '^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?/?$'
           description: >-
             The proxy's address, as http://host:port, without credentials, since add-on settings
-            are plain text.
+            and node files are plain text. It serves http:// addresses, and https:// ones unless
+            httpsUrl says otherwise.
+        httpsUrl:
+          type: string
+          maxLength: 2048
+          pattern: '^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?/?$'
+          description: The proxy for https:// addresses, where it differs from url.
         noProxy:
           type: array
           maxItems: 64
@@ -1406,13 +1509,15 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             type: string
             minLength: 1
             maxLength: 253
-            pattern: "^[^,\\s]+$"
+            pattern: '^[A-Za-z0-9._*:/\[\]-]+$'
         disabled:
           type: boolean
           description: Go direct, whatever the management side uses.
       x-kubernetes-validations:
-        - rule: "!has(self.disabled) || !self.disabled || !has(self.url)"
+        - rule: "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
           message: A cluster that goes direct names no proxy.
+        - rule: "!has(self.httpsUrl) || has(self.url)"
+          message: httpsUrl comes with url, for http:// addresses.
 {{- end -}}
 
 {{/*
@@ -1552,6 +1657,77 @@ Proxmox VE HA take it from there. Applied before the distribution starts with sy
     kernel.keys.root_maxbytes=25000000
 {{- end -}}
 
+{{/*
+A patch's enabledIf for a cluster whose network.ipFamilies hold the family given ("IPv4" or "IPv6"),
+or lack it. A cluster that names no families has IPv4 alone, the variable's default.
+*/}}
+{{- define "kubehenge.hasFamily" -}}
+{{ include "kubehenge.hasFamilyTest" . | quote }}
+{{- end -}}
+
+{{- define "kubehenge.hasFamilyTest" -}}
+{{ printf "{{ with .network }}{{ if has %q (.ipFamilies | default (list \"IPv4\")) }}true{{ end }}{{ end }}" . }}
+{{- end -}}
+
+{{- define "kubehenge.lacksFamily" -}}
+{{ printf "{{ with .network }}{{ if not (has %q (.ipFamilies | default (list \"IPv4\"))) }}true{{ end }}{{ end }}" . | quote }}
+{{- end -}}
+
+{{/*
+Gives a kubeadm, RKE2 or k3s node of a cluster with IPv6 its node IPs, one of each of the cluster's
+families in their order (files/node-ip.sh). The kubelet registers the first as the node's primary
+address, which has to be of the same family as the Services' primary range. Call with
+"distribution" (kubeadm, rke2 or k3s). kubeadm's nodes run the script whatever their families, and
+take IPv4 alone without the list of families.
+*/}}
+{{- define "kubehenge.nodeIPPatch" -}}
+{{- $targets := dict
+  "kubeadm" (dict "controlPlane" "KubeadmControlPlaneTemplate" "worker" "KubeadmConfigTemplate" "spec" "/spec/template/spec/kubeadmConfigSpec" "commands" "preKubeadmCommands")
+  "rke2" (dict "controlPlane" "RKE2ControlPlaneTemplate" "worker" "RKE2ConfigTemplate" "spec" "/spec/template/spec" "commands" "preRKE2Commands")
+  "k3s" (dict "controlPlane" "KThreesControlPlaneTemplate" "worker" "KThreesConfigTemplate" "spec" "/spec/template/spec/kthreesConfigSpec" "commands" "preK3sCommands") -}}
+{{- $target := get $targets .distribution -}}
+{{- $api := dict "controlPlane" "controlplane.cluster.x-k8s.io/v1beta2" "worker" "bootstrap.cluster.x-k8s.io/v1beta2" -}}
+{{- $selector := dict "controlPlane" (dict "controlPlane" true) "worker" (dict "machineDeploymentClass" (dict "names" (list "worker"))) -}}
+- name: {{ .distribution }}-node-ip
+  enabledIf: {{ include "kubehenge.hasFamily" "IPv6" }}
+  definitions:
+    {{- range $role := list "controlPlane" "worker" }}
+    {{- $spec := ternary $target.spec "/spec/template/spec" (eq $role "controlPlane") }}
+    - selector:
+        apiVersion: {{ get $api $role }}
+        kind: {{ get $target $role }}
+        matchResources:
+          {{- toYaml (get $selector $role) | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: {{ $spec }}/files/-
+          valueFrom:
+            template: |
+              path: /etc/kubehenge/ip-families
+              owner: root:root
+              permissions: "0644"
+              content: {{ `{{ join " " .network.ipFamilies | quote }}` }}
+        {{- if ne $.distribution "kubeadm" }}
+        - op: add
+          path: {{ $spec }}/files/-
+          value:
+            {{- include "kubehenge.nodeIPFile" $.root | nindent 12 }}
+        - op: add
+          path: {{ $spec }}/{{ $target.commands }}/-
+          value: /etc/kubehenge/node-ip.sh {{ $.distribution }}
+        {{- end }}
+    {{- end }}
+{{- end -}}
+
+{{/* The script that sets a node's IPs (kubehenge.nodeIPPatch). Call with the root context. */}}
+{{- define "kubehenge.nodeIPFile" -}}
+path: /etc/kubehenge/node-ip.sh
+owner: root:root
+permissions: "0700"
+content: |
+  {{- .Files.Get "files/node-ip.sh" | nindent 2 }}
+{{- end -}}
+
 {{- define "kubehenge.searchDomainsEnabled" -}}
 {{ "{{ with .network }}{{ if .searchDomains }}true{{ end }}{{ end }}" | quote }}
 {{- end -}}
@@ -1594,7 +1770,7 @@ carry nothing a shell would read.
                 set -eu
                 nmcli -t -f UUID,DEVICE,TYPE connection show --active | while IFS=: read -r uuid device type; do
                   [ "$type" = 802-3-ethernet ] || continue
-                  nmcli connection modify "$uuid" ipv4.dns-search "{{ `{{ join " " .network.searchDomains }}` }}"
+                  nmcli connection modify "$uuid"{{ `{{ range (.network.ipFamilies | default (list "IPv4")) }} {{ lower . }}.dns-search "{{ join " " $.network.searchDomains }}"{{ end }}` }}
                   nmcli device reapply "$device"
                 done
         - op: add
@@ -1693,6 +1869,16 @@ so the check runs before every start instead.
   content: |
     [Service]
     ExecStartPre=/bin/sh -c '! test -e /var/lib/rancher/{{ .distribution }}/server/db/etcd/tombstone'
+{{- end -}}
+
+{{/*
+How a server's API server reaches the kubelets, for RKE2 and k3s alike: directly, as on kubeadm
+and Talos, which the nodes allow as they let each other in on every port. Through the agents'
+tunnel, the distributions' default, a log read, exec or port-forward is cut off when it opens just
+as the agent sends the tunnel's minutely list of its connections, which leaves out the new one.
+*/}}
+{{- define "kubehenge.directKubeletEgress" -}}
+egress-selector-mode: disabled
 {{- end -}}
 
 {{/*
@@ -2202,6 +2388,20 @@ Call with the root context.
           valueFrom:
             variable: controlPlaneEndpoint
         - op: replace
+          path: /spec/template/spec/dnsServers
+          valueFrom:
+            variable: network.dnsServers
+{{- /* capmox gives every node an address from each family's pool it is given. */}}
+- name: proxmox-ipv4
+  enabledIf: {{ include "kubehenge.hasFamily" "IPv4" }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+      jsonPatches:
+        - op: replace
           path: /spec/template/spec/ipv4Config/addresses
           valueFrom:
             variable: network.addresses
@@ -2213,10 +2413,30 @@ Call with the root context.
           path: /spec/template/spec/ipv4Config/gateway
           valueFrom:
             variable: network.gateway
-        - op: replace
-          path: /spec/template/spec/dnsServers
+- name: proxmox-ipv6
+  enabledIf: {{ include "kubehenge.hasFamily" "IPv6" }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+      jsonPatches:
+        - op: add
+          path: /spec/template/spec/ipv6Config
           valueFrom:
-            variable: network.dnsServers
+            variable: network.ipv6
+- name: proxmox-no-ipv4
+  enabledIf: {{ include "kubehenge.lacksFamily" "IPv4" }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxClusterTemplate
+        matchResources:
+          infrastructureCluster: true
+      jsonPatches:
+        - op: remove
+          path: /spec/template/spec/ipv4Config
 # The controller names the nodes capmox may use, the allowed ones that are online: capmox clones
 # onto the template's node when given none, and places no VM while a node it is given is down. On
 # RKE2 and k3s it also has every node install its release from files checked against the checksums
@@ -2243,6 +2463,33 @@ Call with the root context.
           valueFrom:
             template: |
               {{- .Files.Get "files/proxmox-network.tpl" | nindent 14 }}
+# Cluster API copies the machine template's annotations onto each ProxmoxMachine, where Kubehenge's
+# capmox build reads them (scripts/capmox-patches): capmox has no firewall field, and a field of its
+# own would be pruned by the CRDs of capmox's release. The groups are part of the machine, so a change
+# replaces the nodes. capmox keeps each VM's IPSet, which the firewall accepts everything from ahead
+# of the groups, at the cluster's own addresses: the control-plane endpoint, the node addresses and
+# the pods (which reach other nodes unencapsulated with Cilium's native routing or Calico's BGP). That
+# keeps every port and protocol a distribution or CNI uses (VXLAN, Geneve, BGP, WireGuard, etcd, the
+# kubelet) open between them without a port list. The controller's annotation on the ProxmoxCluster
+# adds the management cluster's nodes and the appliance. capmox follows a change of the
+# ProxmoxCluster on the running VMs, so a new address replaces no node.
+- name: proxmox-firewall
+  enabledIf: {{ `{{ if .securityGroups }}true{{ end }}` | quote }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxMachineTemplate
+        matchResources:
+          controlPlane: true
+          machineDeploymentClass:
+            names: [worker]
+      jsonPatches:
+        - op: add
+          path: /spec/template/metadata
+          valueFrom:
+            template: |
+              annotations:
+                kubehenge.dev/firewall-groups: {{ `{{ join "," .securityGroups | quote }}` }}
 - name: proxmox-storage
   definitions:
     - selector:
@@ -2429,13 +2676,21 @@ content: |
           - name: bgp_enable
             value: "true"
           - name: bgp_routerid
+            {{- `{{ with .bgp.routerID }}` }}
+            value: {{ "{{ . | quote }}" }}
+            {{- `{{ else }}{{ $first := "IPv4" }}{{ with $.network }}{{ with .ipFamilies }}{{ $first = index . 0 }}{{ end }}{{ end }}{{ if eq $first "IPv6" }}` }}
+            # A router id is a dotted 32-bit id: node-ip.sh writes the node's IPv4 address in here.
+            value: kubehenge-node-ipv4
+            {{- `{{ else }}` }}
             valueFrom:
               fieldRef:
                 fieldPath: status.hostIP
+            {{- `{{ end }}{{ end }}` }}
           - name: bgp_as
             value: "{{ `{{ int64 .bgp.asn }}` }}"
           - name: bgp_peers
-            value: "{{ `{{ range $i, $p := .bgp.peers }}{{ if $i }},{{ end }}{{ $p.address }}:{{ int64 $p.asn }}::false{{ end }}` }}"
+            {{- /* kube-vip reads an IPv6 router in brackets, its address holding the separator. */}}
+            value: "{{ `{{ range $i, $p := .bgp.peers }}{{ if $i }},{{ end }}{{ if contains ":" $p.address }}[{{ $p.address }}]{{ else }}{{ $p.address }}{{ end }}:{{ int64 $p.asn }}::false{{ end }}` }}"
           {{- `{{ end }}{{ end }}` }}
           - name: cp_enable
             value: "true"

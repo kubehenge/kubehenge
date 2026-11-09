@@ -80,21 +80,20 @@ func TestTemplatesEndToEnd(t *testing.T) {
 	b := e2eBuilder(t)
 	kubernetes := env(t, "KUBEHENGE_E2E_KUBERNETES_VERSION", "v1.37.1")
 	nodeOSes := AvailableNodeOSes()
-	requests := append(make([]Request, 0, 2+len(nodeOSes)), Request{Distribution: Talos})
+	requests := append(make([]Request, 0, 1+len(nodeOSes)), Request{Distribution: Talos})
 	for _, o := range nodeOSes {
 		nodeOS, err := ParseNodeOS(o)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !nodeOS.FIPS {
+		// FIPS mode is RKE2's alone: each FIPS node OS gets its own template line, and its clone
+		// boots with the kernel in FIPS mode and the policy set.
+		if nodeOS.FIPS {
+			requests = append(requests, Request{Distribution: RKE2, NodeOS: nodeOS})
+		} else {
 			requests = append(requests, Request{Distribution: Kubeadm, NodeOS: nodeOS, KubernetesVersion: kubernetes})
 		}
 	}
-	// FIPS mode, on RKE2 alone, proven on the default node OS: its clone boots with the kernel in
-	// FIPS mode and the policy set.
-	fips := DefaultNodeOS
-	fips.FIPS = true
-	requests = append(requests, Request{Distribution: RKE2, NodeOS: fips})
 	for _, req := range requests {
 		name := string(req.Distribution)
 		if req.Distribution != Talos {

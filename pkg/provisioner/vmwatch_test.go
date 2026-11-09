@@ -3,12 +3,14 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -79,7 +81,7 @@ type vmFixture struct {
 func newVMFixture(t *testing.T) *vmFixture {
 	t.Helper()
 	scheme := runtime.NewScheme()
-	if err := clusterv1.AddToScheme(scheme); err != nil {
+	if err := errors.Join(clusterv1.AddToScheme(scheme), corev1.AddToScheme(scheme)); err != nil {
 		t.Fatal(err)
 	}
 	listGVK := proxmoxMachineGVK

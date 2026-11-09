@@ -40,6 +40,7 @@ import (
 type Accounts interface {
 	SignIns
 	Resources
+	Firewalls
 	Guests
 	VMIDPool
 	Removals
@@ -75,6 +76,11 @@ type Resources interface {
 	NodeAddresses(ctx context.Context, t *pve.Ticket) (map[string]string, error)
 	NodeAffinityRules(ctx context.Context, t *pve.Ticket) ([]pve.HARule, error)
 	Network(ctx context.Context, t *pve.Ticket, bridge string) (pve.Network, error)
+}
+
+// Firewalls are the Proxmox VE firewalls a signed-in user may read.
+type Firewalls interface {
+	APIReach(ctx context.Context, t *pve.Ticket) (*pve.APIReach, error)
 }
 
 // Guests are the VMs a signed-in user sees in Proxmox VE, and how they run.
@@ -233,6 +239,7 @@ func (s *Server) Run(ctx context.Context) {
 	wg.Go(func() { s.autoUpgrade(ctx) })
 	wg.Go(func() { s.watchChanges(ctx) })
 	wg.Go(func() { s.backUpManagementEtcd(ctx) })
+	wg.Go(func() { s.storeClusterSpecs(ctx) })
 	wg.Go(func() { s.notifyLoop(ctx) })
 	if s.Headlamp != nil {
 		wg.Go(func() { s.syncHeadlamp(ctx, headlampSyncEvery) })
@@ -275,6 +282,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/activity", s.managed(s.activity))
 	mux.HandleFunc("GET /api/events", s.managed(s.changeStream))
 	mux.HandleFunc("POST /api/clusters", s.managed(s.createCluster))
+	mux.HandleFunc("POST /api/cluster-specs", s.managed(s.createFromSpec))
 	s.clusterRoutes(mux)
 	mux.HandleFunc("GET /api/credentials/{purpose}", s.managed(s.applianceCredential))
 	mux.HandleFunc("PUT /api/credentials/{purpose}", s.managed(s.storeApplianceCredential))
@@ -310,6 +318,7 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
 	mux.HandleFunc("POST /api/setup/take-over", s.signedIn(s.takeOver))
 	mux.HandleFunc("GET /api/setup/health", s.signedIn(s.managementHealth))
+	mux.HandleFunc("GET /api/appliance/reboot-ready", s.signedIn(s.rebootReady))
 	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
 	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))
 	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))
@@ -321,6 +330,10 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/appliance/etcd-backups/snapshots", s.signedIn(s.managementSnapshots))
 	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots", s.signedIn(s.takeManagementSnapshot))
 	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/restore", s.signedIn(s.restoreManagementEtcd))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/warning/dismissal", s.signedIn(s.dismissBackupWarning))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/recreate", s.signedIn(s.recreateManagement))
+	mux.HandleFunc("POST /api/appliance/export", s.signedIn(s.exportManagement))
+	mux.HandleFunc("POST /api/appliance/import", s.signedIn(s.importManagement))
 	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
 	mux.HandleFunc("POST /api/templates", s.signedIn(s.createTemplate))
 	mux.HandleFunc("DELETE /api/templates/{vmid}", s.signedIn(s.deleteTemplate))
@@ -339,6 +352,7 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/clusters/{namespace}/{name}", s.managed(s.changeCluster))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/plan", s.managed(s.planCluster))
 	mux.HandleFunc("DELETE /api/clusters/{namespace}/{name}", s.managed(s.deleteCluster))
+	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/spec", s.managed(s.clusterSpec))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/kubeconfig", s.managed(s.kubeconfig))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/talosconfig", s.managed(s.talosconfig))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/support-bundle", s.managed(s.supportBundle))

@@ -1,7 +1,6 @@
 package provisioner
 
 import (
-	"encoding/binary"
 	"fmt"
 	"maps"
 	"net/netip"
@@ -133,13 +132,22 @@ func (a addresses) short() int { return a.need - a.have }
 // addressNeed is what the cluster needs of its nodes' addresses. It is false where the variables do not
 // read, which Cluster API refuses itself.
 func addressNeed(c *clusterv1.Cluster) (addresses, bool) {
-	network, err := variable[nodeNetwork](c, "network")
+	network, err := variable[nodeNetwork](c, networkVariable)
 	if err != nil {
 		return addresses{}, false
 	}
-	have, err := addressCount(network.Addrs)
-	if err != nil {
-		return addresses{}, false
+	// Each node takes an address of every family, so the family with the fewest sets the bound.
+	have := maxCount
+	for _, family := range network.families() {
+		f := network.of(family)
+		if f == nil {
+			return addresses{}, false
+		}
+		n, err := addressCount(f.Addrs)
+		if err != nil {
+			return addresses{}, false
+		}
+		have = min(have, n)
 	}
 	need := 1
 	if r := c.Spec.Topology.ControlPlane.Replicas; r != nil {
@@ -154,7 +162,8 @@ func addressNeed(c *clusterv1.Cluster) (addresses, bool) {
 }
 
 // addressCount counts the addresses entries give nodes as the network variable writes them:
-// ranges, networks without their own and broadcast address, and single addresses.
+// ranges, networks without the addresses no host answers at, and single addresses. It stops at
+// maxCount, which an IPv6 network passes.
 func addressCount(entries []string) (int, error) {
 	n := 0
 	for _, e := range entries {
@@ -163,18 +172,13 @@ func addressCount(entries []string) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		size := int(addressNumber(s.last)-addressNumber(s.first)) + 1
-		if p, err := netip.ParsePrefix(e); err == nil && p.Bits() < pointToPointBits {
-			size -= 2
+		size := spanSize(s)
+		if p, err := netip.ParsePrefix(e); err == nil && size < maxCount {
+			size -= len(reservedAddresses(p))
 		}
-		n += size
+		n = min(n+size, maxCount)
 	}
 	return n, nil
-}
-
-func addressNumber(a netip.Addr) uint32 {
-	b := a.As4()
-	return binary.BigEndian.Uint32(b[:])
 }
 
 // capacityAnnotations tell the autoscaler what a node of a pool holds, from its machine's size, and

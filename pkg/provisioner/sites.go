@@ -29,8 +29,10 @@ type TemplateSite struct {
 	Tags     []string
 	Storages []string
 	// CPU is the template's own cpu setting, which its clones keep.
-	CPU   string
-	Built time.Time
+	CPU string
+	// Hardware is what the template's hardware tags record, zero for one made before they were.
+	Hardware templates.Hardware
+	Built    time.Time
 }
 
 // Sites is where the storages and the templates of a Proxmox VE cluster can be used, as one look
@@ -74,8 +76,9 @@ func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
 	for i, r := range inv.Templates {
 		tags := templates.ParseTags(r.Tags)
 		at, _ := templates.BuildOf(tags)
+		hw, _ := templates.HardwareOf(templates.ParseAllTags(r.Tags))
 		s.Templates = append(s.Templates, TemplateSite{
-			Name: r.Name, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Built: at,
+			Name: r.Name, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Hardware: hw, Built: at,
 		})
 	}
 	p.readNetworks(ctx, s)
@@ -212,15 +215,16 @@ func templateLines(c *clusterv1.Cluster) [][]string {
 func newest(s *Sites, line []string) []TemplateSite {
 	key := templates.LineKey(line)
 	var out []TemplateSite
-	for _, t := range s.Templates {
+	for i := range s.Templates {
+		t := &s.Templates[i]
 		if templates.LineKey(t.Tags) != key {
 			continue
 		}
 		switch {
 		case len(out) == 0 || t.Built.After(out[0].Built):
-			out = append(out[:0], t)
+			out = append(out[:0], *t)
 		case t.Built.Equal(out[0].Built):
-			out = append(out, t)
+			out = append(out, *t)
 		}
 	}
 	return out
@@ -270,18 +274,43 @@ func lineReach(s *Sites, line []string) ([]string, []TemplateSite, bool) {
 // cpuNeed is the x86-64 level the cluster's nodes need of its hosts: the one its templates' own cpu
 // setting presents when they set one, else fallback, the node OS's.
 func cpuNeed(s *Sites, c *clusterv1.Cluster, fallback int) int {
-	need, set := 0, false
+	if cpu, set := templateCPU(s, c); set {
+		return cpu.level
+	}
+	return fallback
+}
+
+// templateSetting is a template's cpu setting: the x86-64 level it presents and its model.
+type templateSetting struct {
+	level int
+	model string
+}
+
+// templateCPU is the cpu setting of the cluster's newest templates that presents the highest
+// x86-64 level. It is false where none of them sets one.
+func templateCPU(s *Sites, c *clusterv1.Cluster) (templateSetting, bool) {
+	var best templateSetting
+	set := false
 	for _, line := range templateLines(c) {
-		for _, t := range newest(s, line) {
-			if level, ok := templates.SettingLevel(t.CPU); ok {
-				need, set = max(need, level), true
+		found := newest(s, line)
+		for i := range found {
+			if level, ok := templates.SettingLevel(found[i].CPU); ok && (!set || level > best.level) {
+				best, set = templateSetting{level: level, model: templates.SettingModel(found[i].CPU)}, true
 			}
 		}
 	}
-	if !set {
-		return fallback
+	return best, set
+}
+
+// templateNUMA tells whether a newest template of the cluster's lines gives its clones a NUMA
+// topology.
+func templateNUMA(s *Sites, c *clusterv1.Cluster) bool {
+	for _, line := range templateLines(c) {
+		if slices.ContainsFunc(newest(s, line), func(t TemplateSite) bool { return t.Hardware.NUMA }) {
+			return true
+		}
 	}
-	return need
+	return false
 }
 
 func storageRefusal(s *Sites, c *clusterv1.Cluster, names []string) error {
@@ -305,7 +334,7 @@ func storageRefusal(s *Sites, c *clusterv1.Cluster, names []string) error {
 
 // clusterBridge is the bridge or VNet the cluster's VMs attach to, or "".
 func clusterBridge(c *clusterv1.Cluster) string {
-	network, _, err := optionalVariable[nodeNetwork](c, "network")
+	network, _, err := optionalVariable[nodeNetwork](c, networkVariable)
 	if err != nil {
 		return ""
 	}

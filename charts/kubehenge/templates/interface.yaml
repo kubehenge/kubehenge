@@ -58,6 +58,14 @@ data:
   apiAuditLog: "true"
   {{- end }}
 ---
+# The appliance's own addresses, which the firewall of every cluster with security groups accepts.
+# The appliance writes them, and the chart holds no data, so an upgrade leaves them as they are.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubehenge-appliance-addresses
+  namespace: {{ .Release.Namespace }}
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -139,6 +147,11 @@ rules:
     resources: [configmaps]
     resourceNames: [kubehenge-proxmox-reach]
     verbs: [get]
+  # The appliance's own addresses, which it alone writes, for the clusters' firewalls.
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kubehenge-appliance-addresses]
+    verbs: [get, patch]
   {{- if .Values.interface.offerHARules }}
   # The HA rules' names and nodes, which it offers to those who may create or change a cluster.
   - apiGroups: [""]

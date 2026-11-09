@@ -62,9 +62,11 @@ func (r VMIDRange) Free(used map[int]bool) int {
 	return free
 }
 
-// vmIDRange reads the datacenter's next-id with the ticket and chooses the range. A user without
-// the privilege to read it, or an appliance that cannot ask, gets the default.
-func (a *Appliance) vmIDRange(ctx context.Context, t *pve.Ticket, nodes int) (VMIDRange, error) {
+// vmIDRange reads the datacenter's next-id with the ticket and chooses the range for the settings'
+// nodes, in whichever family they are numbered. A user without the privilege to read it, or an
+// appliance that cannot ask, gets the default.
+func (a *Appliance) vmIDRange(ctx context.Context, t *pve.Ticket, s *Settings) (VMIDRange, error) {
+	nodes := s.NodeCount()
 	if a.NextID == nil {
 		return ChooseVMIDRange(pve.NextID{}, nodes), nil
 	}

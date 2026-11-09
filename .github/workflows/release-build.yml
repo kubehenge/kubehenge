@@ -64,7 +64,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read # Reads the tagged source, the tag, and the signatures GitHub verified.
-      checks: read # Reads the checks the release commit passed in the merge queue.
+      checks: read # Reads the checks the release commit's pull request passed.
+      pull-requests: read # Finds the pull request that landed the release commit.
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -99,9 +100,10 @@ jobs:
           [ "$commit" = "${GITHUB_SHA}" ] ||
             fail "${GITHUB_REF_NAME} names $commit, not ${GITHUB_SHA}"
 
-      # Read from the merge queue, which ran every check main requires on this very commit before
-      # main moved to it. Only GitHub Actions' own check runs count: any app with access to checks
-      # could post one by the same name.
+      # Read from the pull request that landed the commit. The squash commit is new, so the checks
+      # sit on the pull request's head, and the ruleset's up-to-date rule makes the two trees equal:
+      # the same tree passed every check main requires. Only GitHub Actions' own check runs count:
+      # any app with access to checks could post one by the same name.
       - name: Checks the commit passed
         env:
           GH_TOKEN: ${{ github.token }}
@@ -113,15 +115,21 @@ jobs:
             | .parameters.required_status_checks[].context' | sort -u > "${RUNNER_TEMP}/required"
           [ -s "${RUNNER_TEMP}/required" ] ||
             fail "main's rules require no checks, so nothing vouches for ${GITHUB_SHA}"
+          pull=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --jq \
+            "[.[] | select(.merge_commit_sha == \"${GITHUB_SHA}\")][0].number // empty")
+          [ -n "${pull}" ] || fail "no pull request landed ${GITHUB_SHA}"
+          head=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pull}" --jq .head.sha)
+          tree() { gh api "repos/${GITHUB_REPOSITORY}/commits/$1" --jq .commit.tree.sha; }
+          [ "$(tree "${GITHUB_SHA}")" = "$(tree "${head}")" ] ||
+            fail "${GITHUB_SHA} differs from the head ${head} of pull request ${pull}"
           # The latest run of each check decides, as it does for a pull request.
           latest() {
             awk -F '\t' -v n="$1" '$2 == n && $1 + 0 > id + 0 { id = $1; c = $3 } END { print c }' \
               "${RUNNER_TEMP}/runs"
           }
-          # Main's own runs on the commit start when the queue moves main to it, so a tag pushed
-          # straight after a merge finds them still running: their outcome is awaited.
+          # A run still going on the head, such as a rerun, is awaited.
           for attempt in $(seq 1 40); do
-            gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${head}/check-runs" \
               -f per_page=100 -X GET --jq '.check_runs[] | select(.app.slug == "github-actions")
                 | "\(.id)\t\(.name)\t\(.conclusion // .status)"' > "${RUNNER_TEMP}/runs"
             running=
@@ -133,7 +141,7 @@ jobs:
             done < "${RUNNER_TEMP}/required"
             [ -n "${running}" ] || break
             [ "${attempt}" -lt 40 ] ||
-              fail "still running on ${GITHUB_SHA} after 20 minutes:${running%,}"
+              fail "still running on ${head} after 20 minutes:${running%,}"
             echo "waiting for:${running%,}"
             sleep 30
           done
@@ -142,10 +150,10 @@ jobs:
             conclusion=$(latest "${name}")
             case ${conclusion} in
               success | skipped | neutral) echo "${name}: ${conclusion}" ;;
-              *) echo "::error::${name}: ${conclusion:-never ran} on ${GITHUB_SHA}"; missing=1 ;;
+              *) echo "::error::${name}: ${conclusion:-never ran} on ${head}"; missing=1 ;;
             esac
           done < "${RUNNER_TEMP}/required"
-          [ "${missing}" = 0 ] || fail "${GITHUB_SHA} has not passed every check main requires"
+          [ "${missing}" = 0 ] || fail "${head} has not passed every check main requires"
 
       - name: Version
         id: version
@@ -187,9 +195,9 @@ jobs:
           overwrite: true
 
   # Only what can change without a commit: a vulnerability published since the merge, in a Go
-  # module or an action, fails here before anything ships with it. The gate has shown that the merge
-  # queue ran every lint, unit and integration test on this commit, with a warm build cache this job
-  # may not use.
+  # module or an action, fails here before anything ships with it. The gate has shown that the pull
+  # request ran every lint, unit and integration test on this tree, with a warm build cache this
+  # job may not use.
   test:
     name: test
     needs: gate

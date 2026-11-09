@@ -353,7 +353,7 @@ func newHAFixture(t *testing.T, c *clusterv1.Cluster, nodes ...string) *haFixtur
 		objs = append(objs, m, pm)
 	}
 	worker := &clusterv1.Machine{Name: "web-md-0", Namespace: "team-a", Labels: map[string]string{clusterv1.ClusterNameLabel: "web"}}
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objs, worker)...).Build()
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&clusterv1.Cluster{}).WithObjects(append(objs, worker)...).Build()
 	srv := httptest.NewServer(pve)
 	t.Cleanup(srv.Close)
 	r := &HAReconciler{

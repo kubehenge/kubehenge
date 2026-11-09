@@ -119,6 +119,8 @@ spec:
     {{- include "kubehenge.etcdVariable" . | nindent 4 }}
     {{- include "kubehenge.workerNodesVariable" . | nindent 4 }}
     {{- include "kubehenge.nodeCustomisationVariable" . | nindent 4 }}
+    {{- include "kubehenge.nodeSiteVariables" (dict) | nindent 4 }}
+    {{- include "kubehenge.releaseMirrorVariable" (dict) | nindent 4 }}
     - name: cni
       required: false
       schema:
@@ -272,6 +274,10 @@ spec:
             {{- end }}
         {{- end }}
     {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "rke2") | nindent 4 }}
+    {{- include "kubehenge.nodeIPPatch" (dict "distribution" "rke2" "root" .) | nindent 4 }}
+    # RKE2 installs from its RPM repository on an EL node. A mirror of its releases has it install the
+    # release's tarball from there instead.
+    {{- include "kubehenge.nodeSitePatches" (dict "root" . "distribution" "rke2" "pods" "10.42.0.0/16" "services" "10.43.0.0/16") | nindent 4 }}
     # Last, so that Kubehenge's own settings come first.
     {{- include "kubehenge.nodeCustomisationPatches" "rke2" | nindent 4 }}
 ---
@@ -330,6 +336,11 @@ template:
         permissions: "0600"
         content: |
           audit-policy-file: /etc/rancher/rke2/audit-policy.yaml
+      - path: /etc/rancher/rke2/config.yaml.d/40-kubehenge-server.yaml
+        owner: root:root
+        permissions: "0600"
+        content: |
+          {{- include "kubehenge.directKubeletEgress" . | nindent 10 }}
       # Requests RKE2's charts leave out, where a container without one gets the least CPU weight a
       # node gives and fails its liveness probe while the node is busy. helm-controller passes over
       # the configuration of a chart RKE2 does not install, canal's with another CNI.

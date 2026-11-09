@@ -188,6 +188,12 @@ func TestMeshPeersLinkOnlyWhatBothSidesAgreeOn(t *testing.T) {
 	elsewhere.Namespace = "team-b"
 	services := meshCluster("j", 11, "10.0.0.20", "10.96.0.0/16", `{"enabled":true,"peers":["a"]}`)
 	services.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.11.0.0/16"}
+	dual := meshCluster("k", 12, "10.0.0.21", "10.12.0.0/16", `{"enabled":true,"peers":["a"]}`)
+	dual.Spec.ClusterNetwork.Pods.CIDRBlocks = append(dual.Spec.ClusterNetwork.Pods.CIDRBlocks, DefaultPodsIPv6)
+	dual.Spec.Topology.Variables = append(dual.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "network", Value: apiextensionsv1.JSON{Raw: []byte(dualNetwork)}})
+	ipv6Only := meshCluster("l", 13, "fd00:10::21", "fd5e:4b1c:9a20:100::/56", `{"enabled":true,"peers":["a"]}`)
+	ipv6Only.Spec.ClusterNetwork.Services.CIDRBlocks = []string{DefaultServicesIPv6}
+	ipv6Only.Spec.Topology.Variables = append(ipv6Only.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "network", Value: apiextensionsv1.JSON{Raw: []byte(ipv6OnlyNetwork)}})
 	clusters := []clusterv1.Cluster{
 		*self,
 		*meshCluster("b", 2, "10.0.0.11", "10.2.0.0/16", `{"enabled":true,"peers":["a"]}`),
@@ -200,8 +206,10 @@ func TestMeshPeersLinkOnlyWhatBothSidesAgreeOn(t *testing.T) {
 		*gone,
 		*elsewhere,
 		*services,
+		*dual,
+		*ipv6Only,
 	}
-	self.Spec.Topology.Variables[2].Value.Raw = []byte(`{"enabled":true,"peers":["b","c","d","e","f","g","h","i","j","missing","b"]}`)
+	self.Spec.Topology.Variables[2].Value.Raw = []byte(`{"enabled":true,"peers":["b","c","d","e","f","g","h","i","j","k","l","missing","b"]}`)
 	classes := []clusterv1.ClusterClass{{
 		Name:        "kubehenge-kubeadm",
 		Annotations: map[string]string{DefaultPodsAnnotation: "10.244.0.0/16", DefaultServicesAnnotation: "10.96.0.0/16"},
@@ -220,6 +228,8 @@ func TestMeshPeersLinkOnlyWhatBothSidesAgreeOn(t *testing.T) {
 		"h":       "waiting for a control-plane endpoint",
 		"i":       "no cluster of that name in the namespace",
 		"j":       "this cluster's service range 10.96.0.0/16 overlaps its pod range 10.96.0.0/16",
+		"k":       "",
+		"l":       "its nodes link over IPv6 and this cluster's over IPv4",
 		"missing": "no cluster of that name in the namespace",
 	}
 	if !maps.Equal(got, want) {

@@ -128,6 +128,17 @@ func fitMemory(ctx context.Context, reader client.Reader, classNamespace string,
 	return held, &room
 }
 
+// neededGiB gives a machine's memory in GiB, to a tenth rounded up where it is not whole, so that a
+// machine of 3321 MiB never reads as needing 4 GiB beside a node with 3 GiB free.
+func neededGiB(mib int64) string {
+	if mib%mebibytesPerGibibyte == 0 {
+		return fmt.Sprintf("%d GiB", mib/mebibytesPerGibibyte)
+	}
+	const tenthsPerGiB = 10
+	tenths := (mib*tenthsPerGiB + mebibytesPerGibibyte - 1) / mebibytesPerGibibyte
+	return fmt.Sprintf("%d.%d GiB", tenths/tenthsPerGiB, tenths%tenthsPerGiB)
+}
+
 // markShort records on the cluster that no node had room for it, as room says, and clears the
 // record once room is nil.
 func (p *Placer) markShort(ctx context.Context, c *clusterv1.Cluster, room *roomOn) {
@@ -136,9 +147,10 @@ func (p *Placer) markShort(ctx context.Context, c *clusterv1.Cluster, room *room
 	if room != nil {
 		cond = &metav1.Condition{
 			Status: metav1.ConditionTrue, Reason: "NoRoom",
-			// Whole GiB keep the message, and so the status write, from changing with every look.
-			Message: fmt.Sprintf("No Proxmox VE node this cluster may use has %d GiB of free memory for its largest machine. The best, %s, has %d GiB",
-				(room.Need+mebibytesPerGibibyte-1)/mebibytesPerGibibyte, room.Best.Name, room.Best.FreeMiB/mebibytesPerGibibyte),
+			// Whole GiB of free memory keep the message, and so the status write, from changing with
+			// every look. The machine's size is fixed, so it is given as it is.
+			Message: fmt.Sprintf("No Proxmox VE node this cluster may use has %s of free memory for its largest machine. The best, %s, has %d GiB",
+				neededGiB(room.Need), room.Best.Name, room.Best.FreeMiB/mebibytesPerGibibyte),
 		}
 		if have != nil && have.Message == cond.Message {
 			return

@@ -127,13 +127,25 @@ jobs:
           restore-keys: |
             e2e-go-${{ hashFiles('go.sum', 'web/package-lock.json') }}-
             e2e-go-
-      - name: Tools
+      - id: tools
         if: env.E2E_RUN == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: tools-${{ runner.os }}-${{ runner.arch }}-all-${{ hashFiles('scripts/tools.sh') }}
+      - if: env.E2E_RUN == 'true' && steps.tools.outputs.cache-hit != 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+        run: scripts/tools.sh "$RUNNER_TEMP/bin"
+      - if: >-
+          env.E2E_RUN == 'true' && steps.tools.outputs.cache-hit != 'true'
+          && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: ${{ steps.tools.outputs.cache-primary-key }}
+      - if: env.E2E_RUN == 'true'
+        run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       # The binary and images the run's build job made (test/e2e/ci/build.sh), which up.sh's
       # registry serves and run.sh uses instead of building them.
       - if: env.E2E_RUN == 'true'
@@ -151,9 +163,9 @@ jobs:
           echo "controller image $(cat "$build/controller-digest")"
       # The templates of kubeadm, RKE2 and k3s the test bakes, each kept in the cache under a hash
       # of its bake's inputs (test/e2e/ci/templates.sh). Kept from a nightly run, on main, every
-      # branch and merge group reads them. The nightly run, and a dispatch asked to, bakes every
-      # template afresh from the mirrors and only looks the keys up, keeping a template whose key
-      # the cache lacks.
+      # branch and pull request reads them. The nightly run, and a dispatch asked to,
+      # bakes every template afresh from the mirrors and only looks the keys up, keeping a template
+      # whose key the cache lacks.
       # Every template is kept under the one path vz/template-1, whatever its slot, as e2e-image.yml
       # bakes it: an entry's version covers its path, and one saved under another path is never
       # found. The second slot's is restored first and moved to vz/template-2.
@@ -183,8 +195,8 @@ jobs:
           path: ${{ runner.temp }}/e2e/vz/template-1
           key: ${{ steps.templates.outputs.key1 }}
           lookup-only: ${{ inputs.fresh }}
-      # Only the nightly run and a dispatch keep templates: a merge group's cache would serve no
-      # other run.
+      # Only the nightly run and a dispatch keep templates: a pull request's cache would
+      # serve no other run.
       - name: Templates to keep
         if: >-
           env.E2E_RUN == 'true'
@@ -201,6 +213,21 @@ jobs:
           [ -z "$KEY2" ] || [ "$HIT2" = true ] || keep="$keep 2"
           echo "templates to keep: ${keep:- none}"
           echo "KUBEHENGE_E2E_KEEP_TEMPLATES=${keep# }" >> "$GITHUB_ENV"
+      # The RKE2 and k3s releases the lane's guests install, which run.sh serves them as their
+      # release mirror, kept under a key of their pins (test/e2e/ci/releases.sh). run.sh downloads
+      # what the cache lacks, and the nightly run and a dispatch keep it.
+      - name: Release key
+        id: releases
+        if: env.E2E_RUN == 'true'
+        env:
+          TEST: ${{ inputs.test }}
+        run: test/e2e/ci/releases.sh key "$TEST" | tee -a "$GITHUB_OUTPUT"
+      - id: releases-cache
+        if: env.E2E_RUN == 'true' && steps.releases.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/e2e/releases
+          key: ${{ steps.releases.outputs.key }}
       - name: KVM and memory
         if: env.E2E_RUN == 'true'
         run: |
@@ -259,6 +286,9 @@ jobs:
           echo $! > "$RUNNER_TEMP/beacon.pid"
       - name: Proxmox VE
         if: env.E2E_RUN == 'true'
+        env:
+          # A cluster with IPv6 first reaches its API over IPv6, which the runner routes only then.
+          KUBEHENGE_E2E_IPV6: ${{ contains(inputs.test, '+ipv6-first') && '1' || '' }}
         run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
       # One nightly job keeps what the others read: the lane of the management cluster's test.
       - name: Keep Proxmox VE's image
@@ -338,6 +368,21 @@ jobs:
       - name: The runner's room
         if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
         run: test/e2e/ci/guard.sh peaks "$RUNNER_TEMP/guard.txt"
+      - name: Releases to keep
+        id: releases-kept
+        if: >-
+          !cancelled() && steps.releases.outputs.key != ''
+          && steps.releases-cache.outputs.cache-hit != 'true'
+          && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        run: |
+          if [ -e "$RUNNER_TEMP/e2e/releases/.complete" ]; then
+            echo keep=true >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.releases-kept.outputs.keep == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/e2e/releases
+          key: ${{ steps.releases.outputs.key }}
       # run.sh backs up only a template that passed its bake's checks.
       - if: >-
           !cancelled() && contains(format(' {0} ', env.KUBEHENGE_E2E_KEEP_TEMPLATES), ' 1 ')
@@ -369,6 +414,8 @@ jobs:
           free -m > "$out/memory.txt"; sudo dmesg | tee "$out/dmesg.txt" >/dev/null || true
           pve() { docker exec kubehenge-e2e-pve "$@"; }
           pve journalctl -b --no-pager > "$out/proxmox-journal.txt" || true
+          # proxmox-firewall logs nothing when it applies its rules, so the rules themselves.
+          pve nft list ruleset > "$out/proxmox-nftables.txt" 2>&1 || true
           # The second node, in the lane that joins one (test/e2e/ci/second-node.sh).
           pve2_journal="$out/proxmox-journal-pve2.txt"
           docker exec kubehenge-e2e-pve2 journalctl -b --no-pager > "$pve2_journal" 2>/dev/null ||

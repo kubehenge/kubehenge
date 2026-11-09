@@ -1,0 +1,40 @@
+{
+  "nodes": [
+    "pve1",
+    "pve2",
+    "pve3"
+  ],
+  "imageDatastore": "local",
+  "vmDatastore": "local-lvm",
+  "bridge": "vmbr0",
+  "mtu": 1450,
+  "nodeAddresses": [
+    "10.0.0.11/24",
+    "10.0.0.12/24",
+    "10.0.0.13/24"
+  ],
+  "apiAddress": "10.0.0.10",
+  "gateway": "10.0.0.1",
+  "dnsServers": [
+    "10.0.0.1"
+  ],
+  "searchDomains": [
+    "corp.example"
+  ],
+  "timeServers": [
+    "ntp.example.org"
+  ],
+  "workloadDatastores": [
+    "local-lvm"
+  ],
+  "workloadBridges": [
+    "vmbr0"
+  ],
+  "bootstrapDatastore": "local",
+  "podSubnets": [
+    "10.50.0.0/16"
+  ],
+  "serviceSubnets": [
+    "10.60.0.0/16"
+  ]
+}

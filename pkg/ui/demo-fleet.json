@@ -50,6 +50,7 @@
   "clusters": [
     {
       "name": "web",
+      "avoidSkewedNode": true,
       "distribution": "rke2",
       "version": "v1.37.1+rke2r1",
       "controlPlanes": 3,
@@ -94,10 +95,12 @@
         "apiServerArgs": [{ "name": "request-timeout", "value": "30s" }],
         "auditPolicy": { "configMap": "payments-audit-policy" },
         "auditWebhook": { "secret": "payments-siem", "key": "kubeconfig" }
-      }
+      },
+      "etcdFsyncMs": 41
     },
     {
       "name": "edge",
+      "avoidSkewedNode": true,
       "distribution": "k3s",
       "version": "v1.37.1+k3s1",
       "controlPlanes": 1,
@@ -140,6 +143,12 @@
           "reason": "RemovedAPIs",
           "agoHours": 7,
           "message": "The automatic upgrade to v1.37.1+rke2r1 waits. Removed APIs still in use: orders.example.com/v1beta1 invoices (removed in 1.37, last requested 2026-10-12). Choose Upgrade anyway to accept these, or upgrade by hand."
+        },
+        {
+          "type": "NodesSkipped",
+          "reason": "NotReachable",
+          "agoHours": 1,
+          "message": "Not reachable through the cluster: pve3 (HTTP 596: certificate verify failed)"
         }
       ]
     },
@@ -151,6 +160,7 @@
       "workers": 5,
       "subnet": 60,
       "ageDays": 203,
+      "quorumLost": true,
       "addOns": ["headlamp", "monitoring", "logs", "backups"]
     },
     {
@@ -162,7 +172,11 @@
       "subnet": 70,
       "ageDays": 9,
       "addOns": ["headlamp"],
-      "lackingMemory": "No Proxmox VE node this cluster may use has 16 GiB of free memory for its largest machine. The best, pve2, has 11 GiB"
+      "lackingMemory": "No Proxmox VE node this cluster may use has 16 GiB of free memory for its largest machine. The best, pve2, has 11 GiB",
+      "vmsMissing": true,
+      "proxmoxVersions": "8=pve1,pve3;9=pve2",
+      "nodeMTUs": "pve1=1500,pve2=9000",
+      "haRulesPending": "The Proxmox VE nodes run different major versions. The cluster's HA rules are written once they run one."
     },
     {
       "name": "legacy",

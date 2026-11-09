@@ -43,7 +43,6 @@ import {
 import { ConfirmStep, useCreateCheck } from "./CreateCheck";
 import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos, useFreeAddresses } from "./CreateSteps";
 import { useFleet } from "./fleet";
-import { networkOf } from "./network";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import { clusterKey, fromCluster, startable, startDefault, startKeys } from "./start-from";
@@ -217,7 +216,9 @@ export function CreateCluster({
   // Where there is only one bridge or storage to choose, it is chosen until another is.
   const bridge = bridgeOf(entered.bridge, bridgeOptions, bridgesByNode);
   // A VLAN's network is not the one a node reports on the bridge.
-  const { net, network, node } = filled(entered.vlan) ? noNetwork : bridgeNetwork(bridge, bridgesByNode, dnsByNode);
+  const { net, network, network6, node } = filled(entered.vlan)
+    ? noNetwork
+    : bridgeNetwork(bridge, bridgesByNode, dnsByNode);
   const chosen: Form = withBackupChoices(
     {
       ...withBridgeNetwork(withTalosRelease(entered, talos, offered), net, kept),
@@ -228,7 +229,16 @@ export function CreateCluster({
     cls,
     canTrust,
   );
-  const probeOn = { node, bridge, vlan: entered.vlan };
+  const probeOn = {
+    node,
+    bridge,
+    vlan: entered.vlan,
+    families: entered.families,
+    gateway: chosen.gateway,
+    prefix: chosen.prefix,
+    gateway6: chosen.gateway6,
+    prefix6: chosen.prefix6,
+  };
   const free = useFreeAddresses(probeOn, nodesNeeded(chosen), []);
   const typed = useFreeAddresses(probeOn, 0, addressesOf(entered));
   const form = withFreeAddresses(chosen, free, (k) => touched.has(k));
@@ -385,7 +395,9 @@ export function CreateCluster({
               shown={shown}
               cls={cls}
               bridgeOptions={bridgeOptions}
-              network={network ?? networkOf(`${form.gateway}/${form.prefix}`)}
+              network={network}
+              network6={network6}
+              free={free}
               checked={typed}
             />
           )}

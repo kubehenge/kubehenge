@@ -3,14 +3,14 @@
 # under. run.sh sources this file.
 #
 #   test/e2e/ci/templates.sh keys <lane>       # key1=<key> and key2=<key>
-#   test/e2e/ci/templates.sh current           # the keys of the merge queue's tests' templates
+#   test/e2e/ci/templates.sh current           # the keys of the pull requests' tests' templates
 #   test/e2e/ci/templates.sh missing <ref>     # those the cache lacks on <ref>, as JSON
 #   test/e2e/ci/templates.sh bake <work directory> <key> <options>...
 #   test/e2e/ci/templates.sh made <work directory> <slot> <options>...
 #
 # keys prints one key for each template of kubeadm, RKE2 or k3s the test makes, in the order run.sh
 # makes them. Talos's templates are only downloaded, not baked, and get none. missing lists, from
-# every test the merge queue runs, the templates whose keys the repository's cache lacks on <ref>,
+# every test a pull request runs, the templates whose keys the repository's cache lacks on <ref>,
 # for e2e-templates.yml (needs the GitHub CLI with actions: read). bake makes one template on the
 # Proxmox VE up.sh started and backs it up to <work directory>/vz/template-1 for the cache. made
 # restores a test's template in the slot or makes it, as run.sh does, during the test.
@@ -153,7 +153,8 @@ made() {
         *" ${made_slot} "*) ;;
         *) return 0 ;;
     esac
-    made_id=$(printf '%s\n' "${made_out}" | sed -n 's/^template .* is VM \([0-9][0-9]*\)$/\1/p' | tail -n 1)
+    # The builder adds the VM's hardware after the ID: "template <tags> is VM 100 (host, SSD, discard)".
+    made_id=$(printf '%s\n' "${made_out}" | sed -n 's/^template .* is VM \([0-9][0-9]*\)\( (.*)\)\{0,1\}$/\1/p' | tail -n 1)
     [ -n "${made_id}" ] || {
         echo "no VM ID for template $* to keep" >&2
         return 1

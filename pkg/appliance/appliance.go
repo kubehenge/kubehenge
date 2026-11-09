@@ -73,6 +73,9 @@ type Appliance struct {
 	// KeyWorkFactor is the scrypt work factor the passphrase seals the snapshots' key with, age's
 	// own when 0. Opening the key reads it from the sealed key.
 	KeyWorkFactor int
+	// Addresses lists the addresses the appliance reaches the workload clusters from, which their
+	// firewalls accept. Nil reads the container's own.
+	Addresses func() ([]string, error)
 
 	mu          sync.Mutex
 	job         *Job

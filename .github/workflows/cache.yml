@@ -44,7 +44,8 @@ jobs:
         run: |
           if [ "$EVENT" = pull_request ]; then
             scripts/cache-prune.sh all "refs/pull/$PULL/merge"
-            # A dispatch on the branch keeps its templates there, which no merge group reads.
+            # A dispatch on the branch keeps its templates there, which no pull request or merge
+            # group reads.
             scripts/cache-prune.sh all "refs/heads/$BRANCH"
           else
             scripts/cache-prune.sh newest refs/heads/main

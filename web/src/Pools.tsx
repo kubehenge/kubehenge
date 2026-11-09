@@ -77,7 +77,7 @@ export function Pools({
         </thead>
         <tbody>
           <tr>
-            <td className="pool-name">Control plane</td>
+            <td>Control plane</td>
             <td data-label="Nodes">{c.controlPlane.desired}</td>
             <SizeCells size={sizeOf(c.variables["controlPlaneMachine"])} />
             <td className="row-action">
@@ -105,7 +105,7 @@ export function Pools({
           </tr>
           {c.workerPools.map((p) => (
             <tr key={p.name}>
-              <td className="id pool-name">
+              <td className="id">
                 {p.name}
                 <NodeTags nodes={poolNodes(c, p)} />
               </td>

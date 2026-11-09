@@ -4,7 +4,10 @@
 # variant <test>: the settings an end-to-end test's name carries, as exports to evaluate. A workload
 # distribution's test (kubeadm, rke2, k3s, talos), the halves of rke2's and k3s's (rke2-etcd,
 # rke2-machines and so on) and its add-on parts (kubeadm-addons-a and so on) take options after
-# their name, each after a +: its CNI, its node OS as one word such as rocky-10, or cis-off for a cluster without CIS hardening, as in kubeadm+calico+rocky-10+cis-off; the test
+# their name, each after a +: its CNI, its node OS as one word such as rocky-10, cis-off for a
+# cluster without CIS hardening, dual-stack for IPv4 and IPv6 with IPv4 first, or ipv6-first for both
+# with IPv6 first, and for RKE2 and k3s github-releases, which leaves the lane without the runner's
+# release mirror, as in kubeadm+calico+rocky-10+cis-off or rke2+cilium+dual-stack; the test
 # itself is the name before the first +. Every test run.sh applies a management cluster for takes
 # management-<MiB>, its node's memory, as in management-cluster-upgrade+management-3584. Refuses an
 # option it does not know, or one the test does not take.
@@ -59,6 +62,17 @@ variant() {
         case ${variant_option} in
             flannel | canal | calico | cilium) printf 'export KUBEHENGE_E2E_CNI=%s\n' "${variant_option}" ;;
             cis-off) echo 'export KUBEHENGE_E2E_CIS=false' ;;
+            dual-stack) echo 'export KUBEHENGE_E2E_IP_FAMILIES=IPv4,IPv6' ;;
+            ipv6-first) echo 'export KUBEHENGE_E2E_IP_FAMILIES=IPv6,IPv4' ;;
+            github-releases)
+                case ${variant_distribution} in
+                    rke2 | k3s) echo 'export KUBEHENGE_E2E_RELEASES=github' ;;
+                    *)
+                        echo "${variant_distribution} nodes download no RKE2 or k3s release, so ${variant_test} takes no github-releases" >&2
+                        return 2
+                        ;;
+                esac
+                ;;
             [a-z]*-[0-9]*)
                 if [ "${variant_distribution}" = talos ]; then
                     echo "Talos nodes run Talos, not ${variant_option}" >&2

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,11 +21,16 @@ import (
 )
 
 // setupPrivileges are what the management-cluster module needs of the user it runs as: it creates
-// pools, users, groups, roles, ACLs, tokens and VMs, and downloads the Talos image. Proxmox VE
-// checks each call again. Asking first saves a half-done run.
+// pools, users, groups, roles, ACLs, tokens and VMs, downloads the Talos image and deletes it on
+// removal. Proxmox VE checks each call again. Asking first saves a half-done run. The list is every
+// privilege a run met a refusal for with a token that held nothing else: a VM's configuration needs
+// the VM.Config.* ones, the image download Sys.AccessNetwork, listing a bridge SDN.Audit, attaching
+// one SDN.Use, reading a pool Pool.Audit and deleting the image Datastore.Allocate.
 var setupPrivileges = []string{
 	"Sys.Modify", "Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate",
-	"VM.Allocate", "Datastore.AllocateSpace", "Datastore.AllocateTemplate",
+	"Pool.Audit", "VM.Allocate", "VM.Audit", "VM.PowerMgmt", "VM.Config.CPU", "VM.Config.Cloudinit", "VM.Config.Disk",
+	"VM.Config.HWType", "VM.Config.Memory", "VM.Config.Network", "VM.Config.Options", "Datastore.Allocate",
+	"Datastore.AllocateSpace", "Datastore.AllocateTemplate", "SDN.Audit", "SDN.Use", "Sys.AccessNetwork",
 }
 
 type setupView struct {
@@ -335,6 +341,34 @@ func (s *Server) takeOver(w http.ResponseWriter, r *http.Request, u user) {
 // appliance leaves its template_pool at the default.
 const templatePool = "kubehenge-templates"
 
+// managementPool is where the management-cluster module puts the management cluster's VMs.
+const managementPool = "kubehenge-management"
+
+// removalMayGoOn answers a removal whose management cluster did not answer. It returns true,
+// having written nothing, when Proxmox VE holds none of the cluster's VMs, so the removal may go on
+// and delete the rest. With VMs left it refuses, naming them, since removing the cluster under a VM
+// that may still run workload clusters would orphan them.
+func (s *Server) removalMayGoOn(w http.ResponseWriter, r *http.Request, u user, asked error) bool {
+	members, err := s.Accounts.PoolMembers(r.Context(), u.ticket, managementPool)
+	if err != nil {
+		s.proxmoxError(w, r, err)
+		return false
+	}
+	var ids []string
+	for i := range members {
+		if members[i].Template == 0 {
+			ids = append(ids, strconv.Itoa(members[i].VMID))
+		}
+	}
+	if len(ids) == 0 {
+		s.Log.WarnContext(r.Context(), "removing a management cluster that no longer answers", "error", asked)
+		return true
+	}
+	writeError(w, http.StatusConflict, "the management cluster does not answer and Proxmox VE still holds its VMs "+
+		strings.Join(ids, ", ")+". Start them so it can answer, or remove them in Proxmox VE, then remove again.")
+	return false
+}
+
 // remove takes the management cluster down and returns the appliance to its first run. Workload
 // clusters have to be deleted first, so none is left without the controller that would clean up
 // its Proxmox VE objects.
@@ -366,10 +400,12 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 	if kube := s.currentKube(); kube != nil {
 		var list clusterv1.ClusterList
 		if err := kube.List(r.Context(), &list); err != nil {
-			s.kubeError(w, r, err)
-			return
-		}
-		if n := len(list.Items); n > 0 {
+			// A removal that stopped part way left a management cluster that cannot answer. It goes on
+			// once Proxmox VE holds none of its VMs, or no retry could ever finish it.
+			if !s.removalMayGoOn(w, r, u, err) {
+				return
+			}
+		} else if n := len(list.Items); n > 0 {
 			writeError(w, http.StatusConflict, fmt.Sprintf("delete the %d clusters first", n))
 			return
 		}

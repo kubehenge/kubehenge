@@ -343,15 +343,18 @@ const negativePolarity = new Set([
   "UpgradeHeld",
   "AddonConflict",
   "ControlPlaneRollStalled",
+  "ControlPlaneQuorumLost",
   "DeletionStalled",
   "MachinesStalled",
   "CertificatesExpiring",
   "VMsNotRunning",
+  "VMsMissing",
   "StorageNearlyFull",
   "TemplateNodeDown",
   "NodeImageHeld",
   "NodesSkipped",
   "NodesLackMemory",
+  "HARulesPending",
   "StorageUnavailable",
   "RemediationHeld",
 ]);
@@ -463,6 +466,31 @@ export function sentence(message: string): string {
   return /[.!?…:]$/u.test(capital) ? capital : `${capital}.`;
 }
 
+const codeSpan = /`(?<code>[^`\n]+)`/gu;
+
+/**
+ * Said shows text the server wrote, which marks a command or a name in backticks for kubectl and the
+ * CLI. Each pair becomes code, and a backtick without a partner stays as it is.
+ */
+export function Said({ text }: { text: string }): JSX.Element {
+  // Splitting on a pattern with one group alternates plain text (even) and the span's text (odd).
+  const parts = text.split(codeSpan);
+  return (
+    <>
+      {parts.map((part, i) => {
+        const key = `${i}/${part}`;
+        return i % 2 === 1 ? (
+          <code key={key} className="said">
+            {part}
+          </code>
+        ) : (
+          <Fragment key={key}>{part}</Fragment>
+        );
+      })}
+    </>
+  );
+}
+
 const skeletonBars = ["a", "b", "c", "d", "e", "f", "g", "h"];
 
 /**
@@ -503,7 +531,7 @@ export function ErrorText({ message }: { message: string }): JSX.Element {
   const reference = at === -1 ? "" : message.slice(at + referenceMark.length);
   return (
     <>
-      {sentence(text)}
+      <Said text={sentence(text)} />
       {reference !== "" && (
         <small className="reference">
           Reference: <span className="id">{reference}</span>

@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/luthermonson/go-proxmox"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // listedNode is a node as /nodes lists it.
@@ -40,7 +42,7 @@ func (b *Builder) pickNode(ctx context.Context, t *Template) error {
 		}
 		var status nodeStatus
 		if err := b.Client.Get(ctx, "/nodes/"+url.PathEscape(name)+"/status", &status); err != nil {
-			why = append(why, name+"'s status cannot be read")
+			why = append(why, name+" is not reachable through the cluster ("+pve.Reason(err)+")")
 			continue
 		}
 		if have := CPULevelOf(status.CPUInfo.Flags); have < need {

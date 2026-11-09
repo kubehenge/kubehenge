@@ -25,21 +25,25 @@ A pushed tag starts `.github/workflows/release.yml`. It calls `.github/workflows
 1. `gate` refuses to go on unless:
    - the tag is annotated, carries a signature GitHub verifies and matches the chart's `appVersion`
    - it names a commit of main with a verified signature
-   - that commit passed every check main's ruleset requires in the merge queue's run on it, the end-to-end tests among them
+   - the pull request that landed that commit passed every check main's ruleset requires, the end-to-end tests among them, on a head with the commit's tree
    - `docs/changelog.md` has a section for the version and `pkg/release/release.pub` is there.
-2. `test` stops the release on a vulnerability published since the merge, in a Go module or an action (`make advisories`). The merge queue ran every other test on this commit.
+2. `test` stops the release on a vulnerability published since the merge, in a Go module or an action (`make advisories`). The pull request ran every other test on this tree.
 3. `build` pushes the three images and builds the archive, `install.sh` and `index.json`. The index is the previous release's signed index, checked against the release keys, with this release added.
 4. `sign` signs `index.json` into `index.json.sig` with the archive's `kubehenge` binary, which accepts only the keys it was built to trust. The release's only job that holds the key (the `release` environment's `RELEASE_KEY` secret), it checks out nothing and checks the archive against its checksum.
 5. `sbom` writes the SPDX SBOMs of the archive and of each image with syft (`scripts/sbom.sh`, `scripts/syft.yaml`) and checks each lists what ships. For the archive that is everything the table above names, for an image its program's Go module and the base image's packages.
 6. `attest` signs the images with Sigstore (keyless) and attests build provenance and the SBOMs ([below](#what-is-attested)). It alone holds the OpenID Connect token Sigstore signs against and runs no code but cosign (installed by its checksum) and the attest action.
 7. `verify` checks everything from the files alone, as a user would, with `release-build.yml` at this tag as the builder. It checks the checksums, each file's provenance, the archive's SBOM, and each image's provenance, SBOM and signature.
-8. `publish` creates the release with every file, publishes it as the latest and starts the website's workflow. Its notes are the version's changelog section, opened before 1.0.0 by the README's alpha warning. A draft left by a failed run is made again, but a published release is never rewritten.
+8. `publish` creates the release with every file and starts the website's workflow.
+   - It publishes the release as the latest, with the changelog section as notes (opened before 1.0.0 by the README's alpha warning).
+   - It remakes a draft a failed run left and never rewrites a published release.
+
+### Build level
 
 This is SLSA Build Level 3 on GitHub Actions. The build runs in a reusable workflow on GitHub-hosted runners, used once. The certificate Sigstore issues therefore names `release-build.yml`, not whatever called it. A verifier that insists on it (`--signer-workflow`, `--certificate-identity`) gets that workflow's exact steps at the tag, which no caller can change. No build cache that another workflow's run could have written reaches the release.
 
 ### The index appliances read
 
-An index expires two weeks after it is signed. Appliances refuse an expired one, so whoever serves an appliance an old index can hold back a fix for two weeks at most.
+An index expires two weeks after it is signed. Appliances refuse an expired one. Whoever serves an appliance an old index can hold back a fix for two weeks at most.
 
 A published release never changes, so its own `index.json` runs out. Appliances read the index at `https://kubehenge.dev/releases/index.json` instead. `.github/workflows/website.yml` signs it again every Monday, after each release and on every change to the website.
 
@@ -66,9 +70,9 @@ Its `Release index` job downloads the latest release's index, archive and proven
 2. In the repository's settings:
    - Create the environment `release`, deployable only from tags matching `v*`, with the secret `RELEASE_KEY` holding the contents of `release.key`.
    - Create the environment `release-index`, deployable only from `main`, with the same secret `RELEASE_KEY`.
-   - Add a tag ruleset for `v*` that blocks updates and deletions, so a released tag can never be moved.
+   - Add a tag ruleset for `v*` that blocks updates and deletions. A released tag can then never be moved.
    - Turn on immutable releases (Settings, General, Releases). A published release's files and tag then never change, and GitHub attests the release itself.
-   - Add the key you sign tags with to your GitHub account as a signing key, so GitHub verifies the tag's signature.
+   - Add the key you sign tags with to your GitHub account as a signing key. GitHub then verifies the tag's signature.
 3. After the first release, make the `kubehenge`, `cluster-api-provider-proxmox` and `cluster-api-addon-provider-helm` packages on ghcr.io public.
 
 ## Each release
@@ -87,10 +91,15 @@ Its `Release index` job downloads the latest release's index, archive and proven
 
 Every build trusts each key in `pkg/release/release.pub` (one per line) and takes an index any of them signed. The sign jobs sign with `RELEASE_KEY` and, when it is set, `RELEASE_KEY_NEXT`, a line of `index.json.sig` each. So the key changes without stranding an appliance:
 
-1. Make the new key with `kubehenge release keygen` and add its public key as a second line of `release.pub`. Give both environments, `release` and `release-index`, the secret `RELEASE_KEY_NEXT` holding it. Release. The index then carries both signatures and the release trusts both keys.
+1. Add the new key:
+   - Make it with `kubehenge release keygen` and add its public key as a second line of `release.pub`.
+   - Give both environments, `release` and `release-index`, the secret `RELEASE_KEY_NEXT` holding it.
+   - After the next release the index carries both signatures and the release trusts both keys.
 2. Once the appliances you look after run a release that trusts the new key, make it `RELEASE_KEY` and delete `RELEASE_KEY_NEXT`. Remove the old key's line from `release.pub` and release again.
 
-When the old key leaks, skip the wait. Remove it from `release.pub` and the secrets at once and release. Appliances whose release trusts only the old key then stop seeing upgrades. They move on with `install.sh --upgrade` ([upgrading.md](upgrading.md)), which checks the archive against the checksum the script carries.
+### When the old key leaks
+
+Do not wait for appliances to catch up. Remove the old key from `release.pub` and the secrets at once and release. Appliances whose release trusts only the old key then stop seeing upgrades. They move on with `install.sh --upgrade` ([upgrading.md](upgrading.md)), which checks the archive against the checksum the script carries.
 
 ## Checking a release
 

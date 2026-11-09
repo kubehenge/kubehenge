@@ -56,7 +56,7 @@ func TestDefaulterChoosesRangesClearOfTheNodes(t *testing.T) {
 		t.Errorf("nodes in 10.0.0.0/8: %s", got)
 	}
 	full := networkCluster("10.0.0.1", 0)
-	if err := d.Default(context.Background(), full); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "every pod range Kubehenge tries overlaps the nodes' network") {
+	if err := d.Default(context.Background(), full); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "every IPv4 pod range Kubehenge tries overlaps the nodes' networks") {
 		t.Errorf("no candidate clear of the nodes: %v", err)
 	}
 
@@ -158,9 +158,10 @@ func TestCheckRangesRefusesRangesThatAreNoNetworksOrOverlap(t *testing.T) {
 		"over the nodes":  {[]string{"10.0.0.0/16"}, nil, "pod range 10.0.0.0/16 overlaps the nodes' network 10.0.0.0/24"},
 		"over each other": {[]string{"172.30.0.0/16"}, []string{"172.30.128.0/17"}, "the service range 172.30.128.0/17 overlaps the pod range 172.30.0.0/16"},
 		"default over":    {[]string{"10.43.0.0/17"}, nil, "the service range 10.43.0.0/16 overlaps the pod range 10.43.0.0/17"},
-		"not a network":   {nil, []string{"172.31.0.1/16"}, "service range: 172.31.0.1/16 is no IPv4 network"},
-		"not IPv4":        {[]string{"fd00::/64"}, nil, "pod range: fd00::/64 is no IPv4 network"},
-		"no range":        {[]string{"everywhere"}, nil, "pod range: everywhere is no IPv4 network"},
+		"not a network":   {nil, []string{"172.31.0.1/16"}, "service range: 172.31.0.1/16 is no network"},
+		"not IPv4":        {[]string{"fd00::/56"}, nil, "the pod ranges are IPv6, and the cluster's families IPv4"},
+		"two of IPv4":     {[]string{"172.30.0.0/16", "172.29.0.0/16"}, nil, "the pod ranges are IPv4 and IPv4, and the cluster's families IPv4"},
+		"no range":        {[]string{"everywhere"}, nil, "pod range: everywhere is no network"},
 	} {
 		c := networkCluster("10.0.0.1", 24)
 		c.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks = tc.pods, tc.services

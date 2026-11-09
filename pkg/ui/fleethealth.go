@@ -38,12 +38,20 @@ func (s *Server) fleetHealth(w http.ResponseWriter, r *http.Request, u user) {
 	inParallel(len(shown), func(i int) {
 		c := shown[i]
 		key := c.Namespace + "/" + c.Name + "/" + string(c.UID)
-		v, err := s.health.get(ctx, key, fleetHealthFresh, s.now, func(ctx context.Context) healthView {
+		shared, err := s.health.get(ctx, key, fleetHealthFresh, s.now, func(ctx context.Context) healthView {
 			return s.readHealth(ctx, u.kube, c, u.namespaces)
 		})
-		if err == nil {
-			out[i] = summed(c, &v)
+		if err != nil {
+			return
 		}
+		// The page adds the clocks of the nodes beside the shared read, so the summary does too, or
+		// its count and the page's list differ.
+		v := shared
+		v.Attention = slices.Clone(shared.Attention)
+		if pool, poolErr := s.poolPath(c.Namespace, c.Name); poolErr == nil {
+			s.addNodeClocks(ctx, u, pool, &v)
+		}
+		out[i] = summed(c, &v)
 	})
 
 	// A cluster whose read the user did not wait for is left out, and shows again once read.

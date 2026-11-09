@@ -318,6 +318,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .securityGroups }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-securityGroups"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .storage }}"
                   }
                 }
@@ -399,9 +427,14 @@
           "required": true,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Virtual IP address of the Kubernetes API. It moves between the control-plane nodes, so it is an unused address on the nodes' network and outside the range in network.addresses.",
-              "format": "ipv4",
-              "type": "string"
+              "description": "Virtual IP address of the Kubernetes API, of the cluster's first address family. It moves between the control-plane nodes, so it is an unused address on the nodes' network and outside the node addresses.",
+              "type": "string",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The control-plane endpoint is an IPv4 or IPv6 address.",
+                  "rule": "isIP(self)"
+                }
+              ]
             }
           }
         },
@@ -412,7 +445,7 @@
             "openAPIV3Schema": {
               "properties": {
                 "addresses": {
-                  "description": "Addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.",
+                  "description": "IPv4 addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
@@ -429,16 +462,80 @@
                   "type": "string"
                 },
                 "dnsServers": {
+                  "description": "DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster names at least one of each.",
                   "items": {
+                    "maxLength": 45,
                     "minLength": 1,
-                    "type": "string"
+                    "type": "string",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A DNS server is an IPv4 or IPv6 address.",
+                        "rule": "isIP(self)"
+                      }
+                    ]
                   },
+                  "maxItems": 6,
                   "minItems": 1,
                   "type": "array"
                 },
                 "gateway": {
+                  "description": "IPv4 gateway of the nodes' network.",
                   "format": "ipv4",
                   "type": "string"
+                },
+                "ipFamilies": {
+                  "default": [
+                    "IPv4"
+                  ],
+                  "description": "The address families of the nodes, pods and services, the first one primary: [IPv4], [IPv6], or both for dual-stack. Fixed once the cluster exists.",
+                  "items": {
+                    "enum": [
+                      "IPv4",
+                      "IPv6"
+                    ],
+                    "maxLength": 4,
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 1,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each address family once.",
+                      "rule": "self.size() \u003c 2 || self[0] != self[1]"
+                    }
+                  ]
+                },
+                "ipv6": {
+                  "description": "The nodes' IPv6 network, for a cluster whose ipFamilies hold IPv6.",
+                  "properties": {
+                    "addresses": {
+                      "description": "IPv6 addresses the nodes take theirs from, as ranges (2001:db8::10-2001:db8::20), networks in CIDR notation or single addresses.",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "gateway": {
+                      "description": "IPv6 gateway of the nodes' network.",
+                      "format": "ipv6",
+                      "type": "string"
+                    },
+                    "prefix": {
+                      "description": "Prefix length of the nodes' IPv6 network, usually 64.",
+                      "maximum": 128,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "addresses",
+                    "prefix",
+                    "gateway"
+                  ],
+                  "type": "object"
                 },
                 "mtu": {
                   "description": "MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own, and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.",
@@ -457,6 +554,7 @@
                   "type": "array"
                 },
                 "prefix": {
+                  "description": "Prefix length of the nodes' IPv4 network.",
                   "maximum": 32,
                   "minimum": 1,
                   "type": "integer"
@@ -485,12 +583,31 @@
               },
               "required": [
                 "bridge",
-                "addresses",
-                "prefix",
-                "gateway",
                 "dnsServers"
               ],
-              "type": "object"
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "IPv4 needs addresses, prefix and gateway.",
+                  "rule": "!(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || (has(self.addresses) \u0026\u0026 has(self.prefix) \u0026\u0026 has(self.gateway))"
+                },
+                {
+                  "message": "addresses, prefix and gateway are IPv4 settings. Add IPv4 to ipFamilies or remove them.",
+                  "rule": "(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || !(has(self.addresses) || has(self.prefix) || has(self.gateway))"
+                },
+                {
+                  "message": "IPv6 needs ipv6 with addresses, prefix and gateway.",
+                  "rule": "!(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || has(self.ipv6)"
+                },
+                {
+                  "message": "ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.",
+                  "rule": "(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+                },
+                {
+                  "message": "The address families are chosen when the cluster is created.",
+                  "rule": "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
+                }
+              ]
             }
           }
         },
@@ -1239,7 +1356,7 @@
               "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network or, in mode bgp, a routed one. One node at a time answers for each address in mode l2, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
               "properties": {
                 "addresses": {
-                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
+                  "description": "Addresses the Services take theirs from, of the cluster's families, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses. A Service asking for both families needs a range of each. In mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
@@ -1267,9 +1384,14 @@
                       "items": {
                         "properties": {
                           "address": {
-                            "description": "The router's IPv4 address.",
-                            "format": "ipv4",
-                            "type": "string"
+                            "description": "The router's address.",
+                            "type": "string",
+                            "x-kubernetes-validations": [
+                              {
+                                "message": "A router's address is an IPv4 or IPv6 address.",
+                                "rule": "isIP(self)"
+                              }
+                            ]
                           },
                           "asn": {
                             "description": "The router's autonomous system number.",
@@ -1288,6 +1410,16 @@
                       "maxItems": 16,
                       "minItems": 1,
                       "type": "array"
+                    },
+                    "routerID": {
+                      "description": "The BGP router id every node gives the routers, a dotted 32-bit id such as 10.0.0.1. Each node takes its own IPv4 address when this is unset. Required on IPv6-only clusters, whose nodes have none.",
+                      "type": "string",
+                      "x-kubernetes-validations": [
+                        {
+                          "message": "A router id is a dotted 32-bit id other than 0.0.0.0, such as 10.0.0.1.",
+                          "rule": "isIP(self) \u0026\u0026 ip(self).family() == 4 \u0026\u0026 self != '0.0.0.0'"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -1311,7 +1443,7 @@
                 },
                 "mode": {
                   "default": "l2",
-                  "description": "l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
+                  "description": "l2 answers ARP, or NDP for IPv6, for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP and unsolicited neighbour advertisements. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
                   "enum": [
                     "l2",
                     "bgp"
@@ -1863,31 +1995,56 @@
           }
         },
         {
+          "name": "securityGroups",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "items": {
+                "maxLength": 18,
+                "minLength": 2,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          }
+        },
+        {
           "name": "egressProxy",
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has one without credentials in its address. The cluster's pod and service ranges, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
                   "type": "boolean"
+                },
+                "httpsUrl": {
+                  "description": "The proxy for https:// addresses, where it differs from url.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
+                  "type": "string"
                 },
                 "noProxy": {
                   "description": "Hosts, domains and networks that bypass the proxy.",
                   "items": {
                     "maxLength": 253,
                     "minLength": 1,
-                    "pattern": "^[^,\\s]+$",
+                    "pattern": "^[A-Za-z0-9._*:/\\[\\]-]+$",
                     "type": "string"
                   },
                   "maxItems": 64,
                   "type": "array"
                 },
                 "url": {
-                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings are plain text.",
+                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings and node files are plain text. It serves http:// addresses, and https:// ones unless httpsUrl says otherwise.",
                   "maxLength": 2048,
-                  "pattern": "^https?://[^\\s/@?#]+/?$",
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
                   "type": "string"
                 }
               },
@@ -1895,7 +2052,11 @@
               "x-kubernetes-validations": [
                 {
                   "message": "A cluster that goes direct names no proxy.",
-                  "rule": "!has(self.disabled) || !self.disabled || !has(self.url)"
+                  "rule": "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
+                },
+                {
+                  "message": "httpsUrl comes with url, for http:// addresses.",
+                  "rule": "!has(self.httpsUrl) || has(self.url)"
                 }
               ]
             }
@@ -2625,6 +2786,100 @@
           }
         },
         {
+          "name": "registryMirrors",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
+              "items": {
+                "properties": {
+                  "caBundle": {
+                    "description": "The authority that signed the mirrors' certificates, as PEM.",
+                    "maxLength": 65536,
+                    "minLength": 64,
+                    "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                    "type": "string"
+                  },
+                  "endpoints": {
+                    "items": {
+                      "maxLength": 512,
+                      "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/([A-Za-z0-9._-]+/)*v2)?$",
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "registry": {
+                    "description": "The registry's host name, with its port if it has one, or * for every registry.",
+                    "maxLength": 253,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "registry",
+                  "endpoints"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "trustedCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "releaseMirror",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Where the nodes download their release from, in place of the management cluster's release mirror or GitHub. It serves GitHub's paths beneath its address, and the nodes check every file against the same pins.",
+              "properties": {
+                "caBundle": {
+                  "description": "The authority that signed the mirror's certificate, as PEM, for an https:// mirror.",
+                  "maxLength": 65536,
+                  "minLength": 64,
+                  "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                  "type": "string"
+                },
+                "url": {
+                  "description": "An http:// or https:// address without credentials, a query or a trailing slash.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://[A-Za-z0-9._~:\\[\\]-]+(/[A-Za-z0-9._~:/\\[\\]-]*[A-Za-z0-9._~:\\[\\]-])?$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "A release mirror's caBundle is for an https:// mirror.",
+                  "rule": "!has(self.caBundle) || self.url.startsWith('https://')"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": false,
           "schema": {
@@ -2928,6 +3183,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .securityGroups }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-securityGroups"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .storage }}"
                   }
                 }
@@ -3009,9 +3292,14 @@
           "required": true,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Virtual IP address of the Kubernetes API. It moves between the control-plane nodes, so it is an unused address on the nodes' network and outside the range in network.addresses.",
-              "format": "ipv4",
-              "type": "string"
+              "description": "Virtual IP address of the Kubernetes API, of the cluster's first address family. It moves between the control-plane nodes, so it is an unused address on the nodes' network and outside the node addresses.",
+              "type": "string",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The control-plane endpoint is an IPv4 or IPv6 address.",
+                  "rule": "isIP(self)"
+                }
+              ]
             }
           }
         },
@@ -3022,7 +3310,7 @@
             "openAPIV3Schema": {
               "properties": {
                 "addresses": {
-                  "description": "Addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.",
+                  "description": "IPv4 addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
@@ -3039,16 +3327,80 @@
                   "type": "string"
                 },
                 "dnsServers": {
+                  "description": "DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster names at least one of each.",
                   "items": {
+                    "maxLength": 45,
                     "minLength": 1,
-                    "type": "string"
+                    "type": "string",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A DNS server is an IPv4 or IPv6 address.",
+                        "rule": "isIP(self)"
+                      }
+                    ]
                   },
+                  "maxItems": 6,
                   "minItems": 1,
                   "type": "array"
                 },
                 "gateway": {
+                  "description": "IPv4 gateway of the nodes' network.",
                   "format": "ipv4",
                   "type": "string"
+                },
+                "ipFamilies": {
+                  "default": [
+                    "IPv4"
+                  ],
+                  "description": "The address families of the nodes, pods and services, the first one primary: [IPv4], [IPv6], or both for dual-stack. Fixed once the cluster exists.",
+                  "items": {
+                    "enum": [
+                      "IPv4",
+                      "IPv6"
+                    ],
+                    "maxLength": 4,
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 1,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each address family once.",
+                      "rule": "self.size() \u003c 2 || self[0] != self[1]"
+                    }
+                  ]
+                },
+                "ipv6": {
+                  "description": "The nodes' IPv6 network, for a cluster whose ipFamilies hold IPv6.",
+                  "properties": {
+                    "addresses": {
+                      "description": "IPv6 addresses the nodes take theirs from, as ranges (2001:db8::10-2001:db8::20), networks in CIDR notation or single addresses.",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "gateway": {
+                      "description": "IPv6 gateway of the nodes' network.",
+                      "format": "ipv6",
+                      "type": "string"
+                    },
+                    "prefix": {
+                      "description": "Prefix length of the nodes' IPv6 network, usually 64.",
+                      "maximum": 128,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "addresses",
+                    "prefix",
+                    "gateway"
+                  ],
+                  "type": "object"
                 },
                 "mtu": {
                   "description": "MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own, and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.",
@@ -3067,6 +3419,7 @@
                   "type": "array"
                 },
                 "prefix": {
+                  "description": "Prefix length of the nodes' IPv4 network.",
                   "maximum": 32,
                   "minimum": 1,
                   "type": "integer"
@@ -3095,12 +3448,31 @@
               },
               "required": [
                 "bridge",
-                "addresses",
-                "prefix",
-                "gateway",
                 "dnsServers"
               ],
-              "type": "object"
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "IPv4 needs addresses, prefix and gateway.",
+                  "rule": "!(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || (has(self.addresses) \u0026\u0026 has(self.prefix) \u0026\u0026 has(self.gateway))"
+                },
+                {
+                  "message": "addresses, prefix and gateway are IPv4 settings. Add IPv4 to ipFamilies or remove them.",
+                  "rule": "(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || !(has(self.addresses) || has(self.prefix) || has(self.gateway))"
+                },
+                {
+                  "message": "IPv6 needs ipv6 with addresses, prefix and gateway.",
+                  "rule": "!(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || has(self.ipv6)"
+                },
+                {
+                  "message": "ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.",
+                  "rule": "(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+                },
+                {
+                  "message": "The address families are chosen when the cluster is created.",
+                  "rule": "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
+                }
+              ]
             }
           }
         },
@@ -3849,7 +4221,7 @@
               "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network or, in mode bgp, a routed one. One node at a time answers for each address in mode l2, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
               "properties": {
                 "addresses": {
-                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
+                  "description": "Addresses the Services take theirs from, of the cluster's families, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses. A Service asking for both families needs a range of each. In mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
@@ -3877,9 +4249,14 @@
                       "items": {
                         "properties": {
                           "address": {
-                            "description": "The router's IPv4 address.",
-                            "format": "ipv4",
-                            "type": "string"
+                            "description": "The router's address.",
+                            "type": "string",
+                            "x-kubernetes-validations": [
+                              {
+                                "message": "A router's address is an IPv4 or IPv6 address.",
+                                "rule": "isIP(self)"
+                              }
+                            ]
                           },
                           "asn": {
                             "description": "The router's autonomous system number.",
@@ -3898,6 +4275,16 @@
                       "maxItems": 16,
                       "minItems": 1,
                       "type": "array"
+                    },
+                    "routerID": {
+                      "description": "The BGP router id every node gives the routers, a dotted 32-bit id such as 10.0.0.1. Each node takes its own IPv4 address when this is unset. Required on IPv6-only clusters, whose nodes have none.",
+                      "type": "string",
+                      "x-kubernetes-validations": [
+                        {
+                          "message": "A router id is a dotted 32-bit id other than 0.0.0.0, such as 10.0.0.1.",
+                          "rule": "isIP(self) \u0026\u0026 ip(self).family() == 4 \u0026\u0026 self != '0.0.0.0'"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -3921,7 +4308,7 @@
                 },
                 "mode": {
                   "default": "l2",
-                  "description": "l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
+                  "description": "l2 answers ARP, or NDP for IPv6, for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP and unsolicited neighbour advertisements. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
                   "enum": [
                     "l2",
                     "bgp"
@@ -4473,31 +4860,56 @@
           }
         },
         {
+          "name": "securityGroups",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "items": {
+                "maxLength": 18,
+                "minLength": 2,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          }
+        },
+        {
           "name": "egressProxy",
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has one without credentials in its address. The cluster's pod and service ranges, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
                   "type": "boolean"
+                },
+                "httpsUrl": {
+                  "description": "The proxy for https:// addresses, where it differs from url.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
+                  "type": "string"
                 },
                 "noProxy": {
                   "description": "Hosts, domains and networks that bypass the proxy.",
                   "items": {
                     "maxLength": 253,
                     "minLength": 1,
-                    "pattern": "^[^,\\s]+$",
+                    "pattern": "^[A-Za-z0-9._*:/\\[\\]-]+$",
                     "type": "string"
                   },
                   "maxItems": 64,
                   "type": "array"
                 },
                 "url": {
-                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings are plain text.",
+                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings and node files are plain text. It serves http:// addresses, and https:// ones unless httpsUrl says otherwise.",
                   "maxLength": 2048,
-                  "pattern": "^https?://[^\\s/@?#]+/?$",
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
                   "type": "string"
                 }
               },
@@ -4505,7 +4917,11 @@
               "x-kubernetes-validations": [
                 {
                   "message": "A cluster that goes direct names no proxy.",
-                  "rule": "!has(self.disabled) || !self.disabled || !has(self.url)"
+                  "rule": "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
+                },
+                {
+                  "message": "httpsUrl comes with url, for http:// addresses.",
+                  "rule": "!has(self.httpsUrl) || has(self.url)"
                 }
               ]
             }
@@ -5235,6 +5651,66 @@
           }
         },
         {
+          "name": "registryMirrors",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
+              "items": {
+                "properties": {
+                  "caBundle": {
+                    "description": "The authority that signed the mirrors' certificates, as PEM.",
+                    "maxLength": 65536,
+                    "minLength": 64,
+                    "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                    "type": "string"
+                  },
+                  "endpoints": {
+                    "items": {
+                      "maxLength": 512,
+                      "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/([A-Za-z0-9._-]+/)*v2)?$",
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "registry": {
+                    "description": "The registry's host name, with its port if it has one, or * for every registry.",
+                    "maxLength": 253,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "registry",
+                  "endpoints"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "trustedCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": true,
           "schema": {
@@ -5581,6 +6057,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .securityGroups }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-securityGroups"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .storage }}"
                   }
                 }
@@ -5662,9 +6166,14 @@
           "required": true,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Virtual IP address of the Kubernetes API. It moves between the control-plane nodes, so it is an unused address on the nodes' network and outside the range in network.addresses.",
-              "format": "ipv4",
-              "type": "string"
+              "description": "Virtual IP address of the Kubernetes API, of the cluster's first address family. It moves between the control-plane nodes, so it is an unused address on the nodes' network and outside the node addresses.",
+              "type": "string",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The control-plane endpoint is an IPv4 or IPv6 address.",
+                  "rule": "isIP(self)"
+                }
+              ]
             }
           }
         },
@@ -5675,7 +6184,7 @@
             "openAPIV3Schema": {
               "properties": {
                 "addresses": {
-                  "description": "Addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.",
+                  "description": "IPv4 addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
@@ -5692,16 +6201,80 @@
                   "type": "string"
                 },
                 "dnsServers": {
+                  "description": "DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster names at least one of each.",
                   "items": {
+                    "maxLength": 45,
                     "minLength": 1,
-                    "type": "string"
+                    "type": "string",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A DNS server is an IPv4 or IPv6 address.",
+                        "rule": "isIP(self)"
+                      }
+                    ]
                   },
+                  "maxItems": 6,
                   "minItems": 1,
                   "type": "array"
                 },
                 "gateway": {
+                  "description": "IPv4 gateway of the nodes' network.",
                   "format": "ipv4",
                   "type": "string"
+                },
+                "ipFamilies": {
+                  "default": [
+                    "IPv4"
+                  ],
+                  "description": "The address families of the nodes, pods and services, the first one primary: [IPv4], [IPv6], or both for dual-stack. Fixed once the cluster exists.",
+                  "items": {
+                    "enum": [
+                      "IPv4",
+                      "IPv6"
+                    ],
+                    "maxLength": 4,
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 1,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each address family once.",
+                      "rule": "self.size() \u003c 2 || self[0] != self[1]"
+                    }
+                  ]
+                },
+                "ipv6": {
+                  "description": "The nodes' IPv6 network, for a cluster whose ipFamilies hold IPv6.",
+                  "properties": {
+                    "addresses": {
+                      "description": "IPv6 addresses the nodes take theirs from, as ranges (2001:db8::10-2001:db8::20), networks in CIDR notation or single addresses.",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "gateway": {
+                      "description": "IPv6 gateway of the nodes' network.",
+                      "format": "ipv6",
+                      "type": "string"
+                    },
+                    "prefix": {
+                      "description": "Prefix length of the nodes' IPv6 network, usually 64.",
+                      "maximum": 128,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "addresses",
+                    "prefix",
+                    "gateway"
+                  ],
+                  "type": "object"
                 },
                 "mtu": {
                   "description": "MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own, and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.",
@@ -5720,6 +6293,7 @@
                   "type": "array"
                 },
                 "prefix": {
+                  "description": "Prefix length of the nodes' IPv4 network.",
                   "maximum": 32,
                   "minimum": 1,
                   "type": "integer"
@@ -5748,12 +6322,31 @@
               },
               "required": [
                 "bridge",
-                "addresses",
-                "prefix",
-                "gateway",
                 "dnsServers"
               ],
-              "type": "object"
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "IPv4 needs addresses, prefix and gateway.",
+                  "rule": "!(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || (has(self.addresses) \u0026\u0026 has(self.prefix) \u0026\u0026 has(self.gateway))"
+                },
+                {
+                  "message": "addresses, prefix and gateway are IPv4 settings. Add IPv4 to ipFamilies or remove them.",
+                  "rule": "(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || !(has(self.addresses) || has(self.prefix) || has(self.gateway))"
+                },
+                {
+                  "message": "IPv6 needs ipv6 with addresses, prefix and gateway.",
+                  "rule": "!(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || has(self.ipv6)"
+                },
+                {
+                  "message": "ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.",
+                  "rule": "(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+                },
+                {
+                  "message": "The address families are chosen when the cluster is created.",
+                  "rule": "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
+                }
+              ]
             }
           }
         },
@@ -6502,7 +7095,7 @@
               "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network or, in mode bgp, a routed one. One node at a time answers for each address in mode l2, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
               "properties": {
                 "addresses": {
-                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
+                  "description": "Addresses the Services take theirs from, of the cluster's families, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses. A Service asking for both families needs a range of each. In mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
@@ -6530,9 +7123,14 @@
                       "items": {
                         "properties": {
                           "address": {
-                            "description": "The router's IPv4 address.",
-                            "format": "ipv4",
-                            "type": "string"
+                            "description": "The router's address.",
+                            "type": "string",
+                            "x-kubernetes-validations": [
+                              {
+                                "message": "A router's address is an IPv4 or IPv6 address.",
+                                "rule": "isIP(self)"
+                              }
+                            ]
                           },
                           "asn": {
                             "description": "The router's autonomous system number.",
@@ -6551,6 +7149,16 @@
                       "maxItems": 16,
                       "minItems": 1,
                       "type": "array"
+                    },
+                    "routerID": {
+                      "description": "The BGP router id every node gives the routers, a dotted 32-bit id such as 10.0.0.1. Each node takes its own IPv4 address when this is unset. Required on IPv6-only clusters, whose nodes have none.",
+                      "type": "string",
+                      "x-kubernetes-validations": [
+                        {
+                          "message": "A router id is a dotted 32-bit id other than 0.0.0.0, such as 10.0.0.1.",
+                          "rule": "isIP(self) \u0026\u0026 ip(self).family() == 4 \u0026\u0026 self != '0.0.0.0'"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -6574,7 +7182,7 @@
                 },
                 "mode": {
                   "default": "l2",
-                  "description": "l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
+                  "description": "l2 answers ARP, or NDP for IPv6, for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP and unsolicited neighbour advertisements. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
                   "enum": [
                     "l2",
                     "bgp"
@@ -7126,31 +7734,56 @@
           }
         },
         {
+          "name": "securityGroups",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "items": {
+                "maxLength": 18,
+                "minLength": 2,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          }
+        },
+        {
           "name": "egressProxy",
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has one without credentials in its address. The cluster's pod and service ranges, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
                   "type": "boolean"
+                },
+                "httpsUrl": {
+                  "description": "The proxy for https:// addresses, where it differs from url.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
+                  "type": "string"
                 },
                 "noProxy": {
                   "description": "Hosts, domains and networks that bypass the proxy.",
                   "items": {
                     "maxLength": 253,
                     "minLength": 1,
-                    "pattern": "^[^,\\s]+$",
+                    "pattern": "^[A-Za-z0-9._*:/\\[\\]-]+$",
                     "type": "string"
                   },
                   "maxItems": 64,
                   "type": "array"
                 },
                 "url": {
-                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings are plain text.",
+                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings and node files are plain text. It serves http:// addresses, and https:// ones unless httpsUrl says otherwise.",
                   "maxLength": 2048,
-                  "pattern": "^https?://[^\\s/@?#]+/?$",
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
                   "type": "string"
                 }
               },
@@ -7158,7 +7791,11 @@
               "x-kubernetes-validations": [
                 {
                   "message": "A cluster that goes direct names no proxy.",
-                  "rule": "!has(self.disabled) || !self.disabled || !has(self.url)"
+                  "rule": "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
+                },
+                {
+                  "message": "httpsUrl comes with url, for http:// addresses.",
+                  "rule": "!has(self.httpsUrl) || has(self.url)"
                 }
               ]
             }
@@ -7884,6 +8521,100 @@
           }
         },
         {
+          "name": "registryMirrors",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
+              "items": {
+                "properties": {
+                  "caBundle": {
+                    "description": "The authority that signed the mirrors' certificates, as PEM.",
+                    "maxLength": 65536,
+                    "minLength": 64,
+                    "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                    "type": "string"
+                  },
+                  "endpoints": {
+                    "items": {
+                      "maxLength": 512,
+                      "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/([A-Za-z0-9._-]+/)*v2)?$",
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "registry": {
+                    "description": "The registry's host name, with its port if it has one, or * for every registry.",
+                    "maxLength": 253,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "registry",
+                  "endpoints"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "trustedCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "releaseMirror",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Where the nodes download their release from, in place of the management cluster's release mirror or GitHub. It serves GitHub's paths beneath its address, and the nodes check every file against the same pins.",
+              "properties": {
+                "caBundle": {
+                  "description": "The authority that signed the mirror's certificate, as PEM, for an https:// mirror.",
+                  "maxLength": 65536,
+                  "minLength": 64,
+                  "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                  "type": "string"
+                },
+                "url": {
+                  "description": "An http:// or https:// address without credentials, a query or a trailing slash.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://[A-Za-z0-9._~:\\[\\]-]+(/[A-Za-z0-9._~:/\\[\\]-]*[A-Za-z0-9._~:\\[\\]-])?$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "A release mirror's caBundle is for an https:// mirror.",
+                  "rule": "!has(self.caBundle) || self.url.startsWith('https://')"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "cni",
           "required": false,
           "schema": {
@@ -8154,6 +8885,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .securityGroups }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-securityGroups"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .storage }}"
                   }
                 }
@@ -8235,9 +8994,14 @@
           "required": true,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Virtual IP address of the Kubernetes API. It moves between the control-plane nodes, so it is an unused address on the nodes' network and outside the range in network.addresses.",
-              "format": "ipv4",
-              "type": "string"
+              "description": "Virtual IP address of the Kubernetes API, of the cluster's first address family. It moves between the control-plane nodes, so it is an unused address on the nodes' network and outside the node addresses.",
+              "type": "string",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The control-plane endpoint is an IPv4 or IPv6 address.",
+                  "rule": "isIP(self)"
+                }
+              ]
             }
           }
         },
@@ -8248,7 +9012,7 @@
             "openAPIV3Schema": {
               "properties": {
                 "addresses": {
-                  "description": "Addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.",
+                  "description": "IPv4 addresses the nodes take theirs from, as ranges (10.0.0.10-10.0.0.20), networks in CIDR notation or single addresses.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
@@ -8265,16 +9029,80 @@
                   "type": "string"
                 },
                 "dnsServers": {
+                  "description": "DNS servers of the nodes, as addresses of the cluster's families. A dual-stack cluster names at least one of each.",
                   "items": {
+                    "maxLength": 45,
                     "minLength": 1,
-                    "type": "string"
+                    "type": "string",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A DNS server is an IPv4 or IPv6 address.",
+                        "rule": "isIP(self)"
+                      }
+                    ]
                   },
+                  "maxItems": 6,
                   "minItems": 1,
                   "type": "array"
                 },
                 "gateway": {
+                  "description": "IPv4 gateway of the nodes' network.",
                   "format": "ipv4",
                   "type": "string"
+                },
+                "ipFamilies": {
+                  "default": [
+                    "IPv4"
+                  ],
+                  "description": "The address families of the nodes, pods and services, the first one primary: [IPv4], [IPv6], or both for dual-stack. Fixed once the cluster exists.",
+                  "items": {
+                    "enum": [
+                      "IPv4",
+                      "IPv6"
+                    ],
+                    "maxLength": 4,
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 1,
+                  "type": "array",
+                  "x-kubernetes-validations": [
+                    {
+                      "message": "Each address family once.",
+                      "rule": "self.size() \u003c 2 || self[0] != self[1]"
+                    }
+                  ]
+                },
+                "ipv6": {
+                  "description": "The nodes' IPv6 network, for a cluster whose ipFamilies hold IPv6.",
+                  "properties": {
+                    "addresses": {
+                      "description": "IPv6 addresses the nodes take theirs from, as ranges (2001:db8::10-2001:db8::20), networks in CIDR notation or single addresses.",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "gateway": {
+                      "description": "IPv6 gateway of the nodes' network.",
+                      "format": "ipv6",
+                      "type": "string"
+                    },
+                    "prefix": {
+                      "description": "Prefix length of the nodes' IPv6 network, usually 64.",
+                      "maximum": 128,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "addresses",
+                    "prefix",
+                    "gateway"
+                  ],
+                  "type": "object"
                 },
                 "mtu": {
                   "description": "MTU of the nodes' network interface, for a network that carries less than 1500 (VXLAN underlays) or more (jumbo frames). It sets the Proxmox VE interface and the node's own, and the CNI follows it. Unset, the interface keeps Proxmox VE's default of 1500.",
@@ -8293,6 +9121,7 @@
                   "type": "array"
                 },
                 "prefix": {
+                  "description": "Prefix length of the nodes' IPv4 network.",
                   "maximum": 32,
                   "minimum": 1,
                   "type": "integer"
@@ -8321,12 +9150,31 @@
               },
               "required": [
                 "bridge",
-                "addresses",
-                "prefix",
-                "gateway",
                 "dnsServers"
               ],
-              "type": "object"
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "IPv4 needs addresses, prefix and gateway.",
+                  "rule": "!(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || (has(self.addresses) \u0026\u0026 has(self.prefix) \u0026\u0026 has(self.gateway))"
+                },
+                {
+                  "message": "addresses, prefix and gateway are IPv4 settings. Add IPv4 to ipFamilies or remove them.",
+                  "rule": "(has(self.ipFamilies) ? 'IPv4' in self.ipFamilies : true) || !(has(self.addresses) || has(self.prefix) || has(self.gateway))"
+                },
+                {
+                  "message": "IPv6 needs ipv6 with addresses, prefix and gateway.",
+                  "rule": "!(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || has(self.ipv6)"
+                },
+                {
+                  "message": "ipv6 holds IPv6 settings. Add IPv6 to ipFamilies or remove it.",
+                  "rule": "(has(self.ipFamilies) \u0026\u0026 'IPv6' in self.ipFamilies) || !has(self.ipv6)"
+                },
+                {
+                  "message": "The address families are chosen when the cluster is created.",
+                  "rule": "(has(self.ipFamilies) ? self.ipFamilies : ['IPv4']) == (has(oldSelf.ipFamilies) ? oldSelf.ipFamilies : ['IPv4'])"
+                }
+              ]
             }
           }
         },
@@ -9075,7 +9923,7 @@
               "description": "Addresses for the cluster's Services of type LoadBalancer, from a range on the nodes' network or, in mode bgp, a routed one. One node at a time answers for each address in mode l2, and another takes over when it fails. Without it, kubeadm and RKE2 give such Services no address, and k3s's servicelb answers for them on every node's own address.",
               "properties": {
                 "addresses": {
-                  "description": "Addresses the Services take theirs from, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses: in mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
+                  "description": "Addresses the Services take theirs from, of the cluster's families, as ranges (10.0.0.30-10.0.0.40), networks in CIDR notation or single addresses. A Service asking for both families needs a range of each. In mode l2 unused addresses on the nodes' network, in bgp any routed ones, apart from network.addresses, the control-plane endpoint, the gateway, the network's own and broadcast addresses and other clusters' addresses there. Services outside a changed range take new addresses from it.",
                   "items": {
                     "minLength": 1,
                     "type": "string"
@@ -9103,9 +9951,14 @@
                       "items": {
                         "properties": {
                           "address": {
-                            "description": "The router's IPv4 address.",
-                            "format": "ipv4",
-                            "type": "string"
+                            "description": "The router's address.",
+                            "type": "string",
+                            "x-kubernetes-validations": [
+                              {
+                                "message": "A router's address is an IPv4 or IPv6 address.",
+                                "rule": "isIP(self)"
+                              }
+                            ]
                           },
                           "asn": {
                             "description": "The router's autonomous system number.",
@@ -9124,6 +9977,16 @@
                       "maxItems": 16,
                       "minItems": 1,
                       "type": "array"
+                    },
+                    "routerID": {
+                      "description": "The BGP router id every node gives the routers, a dotted 32-bit id such as 10.0.0.1. Each node takes its own IPv4 address when this is unset. Required on IPv6-only clusters, whose nodes have none.",
+                      "type": "string",
+                      "x-kubernetes-validations": [
+                        {
+                          "message": "A router id is a dotted 32-bit id other than 0.0.0.0, such as 10.0.0.1.",
+                          "rule": "isIP(self) \u0026\u0026 ip(self).family() == 4 \u0026\u0026 self != '0.0.0.0'"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -9147,7 +10010,7 @@
                 },
                 "mode": {
                   "default": "l2",
-                  "description": "l2 answers ARP for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
+                  "description": "l2 answers ARP, or NDP for IPv6, for the addresses on the nodes' network, so the switch has to accept the nodes' gratuitous ARP and unsolicited neighbour advertisements. bgp announces them to routers instead, for routed ranges and switches that drop such ARP, and also announces the control-plane endpoint through kube-vip on the control planes. It needs MetalLB, worker nodes and not Talos, and the routers have to accept a session from every node.",
                   "enum": [
                     "l2",
                     "bgp"
@@ -9699,31 +10562,56 @@
           }
         },
         {
+          "name": "securityGroups",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "items": {
+                "maxLength": 18,
+                "minLength": 2,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "maxItems": 16,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            }
+          }
+        },
+        {
           "name": "egressProxy",
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. Unset, they take the management side's proxy, if it has one without credentials in its address. The cluster's pod and service ranges, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
                   "type": "boolean"
+                },
+                "httpsUrl": {
+                  "description": "The proxy for https:// addresses, where it differs from url.",
+                  "maxLength": 2048,
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
+                  "type": "string"
                 },
                 "noProxy": {
                   "description": "Hosts, domains and networks that bypass the proxy.",
                   "items": {
                     "maxLength": 253,
                     "minLength": 1,
-                    "pattern": "^[^,\\s]+$",
+                    "pattern": "^[A-Za-z0-9._*:/\\[\\]-]+$",
                     "type": "string"
                   },
                   "maxItems": 64,
                   "type": "array"
                 },
                 "url": {
-                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings are plain text.",
+                  "description": "The proxy's address, as http://host:port, without credentials, since add-on settings and node files are plain text. It serves http:// addresses, and https:// ones unless httpsUrl says otherwise.",
                   "maxLength": 2048,
-                  "pattern": "^https?://[^\\s/@?#]+/?$",
+                  "pattern": "^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$",
                   "type": "string"
                 }
               },
@@ -9731,7 +10619,11 @@
               "x-kubernetes-validations": [
                 {
                   "message": "A cluster that goes direct names no proxy.",
-                  "rule": "!has(self.disabled) || !self.disabled || !has(self.url)"
+                  "rule": "!has(self.disabled) || !self.disabled || !(has(self.url) || has(self.httpsUrl))"
+                },
+                {
+                  "message": "httpsUrl comes with url, for http:// addresses.",
+                  "rule": "!has(self.httpsUrl) || has(self.url)"
                 }
               ]
             }
@@ -10408,6 +11300,66 @@
                 }
               },
               "type": "object"
+            }
+          }
+        },
+        {
+          "name": "registryMirrors",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Mirrors the nodes pull images from, per registry, tried in order before the registry itself. An address may end in /v2 to be used as given, as a registry's proxy project needs.",
+              "items": {
+                "properties": {
+                  "caBundle": {
+                    "description": "The authority that signed the mirrors' certificates, as PEM.",
+                    "maxLength": 65536,
+                    "minLength": 64,
+                    "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                    "type": "string"
+                  },
+                  "endpoints": {
+                    "items": {
+                      "maxLength": 512,
+                      "pattern": "^https?://[A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?(:[0-9]{1,5})?(/([A-Za-z0-9._-]+/)*v2)?$",
+                      "type": "string"
+                    },
+                    "maxItems": 4,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "registry": {
+                    "description": "The registry's host name, with its port if it has one, or * for every registry.",
+                    "maxLength": 253,
+                    "pattern": "^(\\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]{1,5})?)$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "registry",
+                  "endpoints"
+                ],
+                "type": "object"
+              },
+              "maxItems": 16,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "trustedCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
             }
           }
         },

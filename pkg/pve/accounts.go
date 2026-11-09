@@ -49,6 +49,8 @@ const (
 type Accounts struct {
 	base string
 	http *http.Client
+	// probeTimeout bounds the call that tells whether a node answers, nodeProbeTimeout where zero.
+	probeTimeout time.Duration
 }
 
 // NewAccounts returns Accounts for the API cfg locates. cfg.Token is not used. It makes no request.

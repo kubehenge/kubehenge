@@ -32,6 +32,47 @@ resource "proxmox_virtual_environment_role" "allocate_space" {
   privileges = ["Datastore.AllocateSpace"]
 }
 
+# Cluster API's roles are lists of our own, since Proxmox VE's built-in roles gain privileges with
+# its releases. Each privilege is one capmox's calls need through this token, checked by
+# `CapmoxNeeds` (pkg/provisioner/tokenprobes.go).
+resource "proxmox_virtual_environment_role" "cluster_api_vms" {
+  role_id = "${var.cluster_name}-cluster-api-vms"
+  # VM.Allocate: create a VM in the cluster's pool by cloning, and destroy it.
+  # VM.Audit: read a VM's status and configuration, and see it in the resource list.
+  # VM.PowerMgmt: start, resume and stop a VM.
+  # VM.Config.CPU, VM.Config.Memory, VM.Config.Network: set cores, memory and the interface (bridge, MTU, VLAN tag, queues).
+  # VM.Config.Disk: resize the system disk and set the boot order.
+  # VM.Config.CDROM: attach and detach the cloud-init ISO.
+  # VM.Config.Options: set the description and the tags capmox keeps its state in.
+  # VM.GuestAgent.Audit: ask the guest agent for the OS, which says the VM is up.
+  # VM.GuestAgent.Unrestricted: kubeadm's cloud-init status check runs a command through the guest agent, and no narrower privilege allows that.
+  privileges = [
+    "VM.Allocate", "VM.Audit", "VM.Config.CDROM", "VM.Config.CPU", "VM.Config.Disk", "VM.Config.Memory", "VM.Config.Network",
+    "VM.Config.Options", "VM.GuestAgent.Audit", "VM.GuestAgent.Unrestricted", "VM.PowerMgmt",
+  ]
+}
+
+resource "proxmox_virtual_environment_role" "cluster_api_templates" {
+  role_id = "${var.cluster_name}-cluster-api-templates"
+  # VM.Clone: clone a template into a cluster's pool.
+  # VM.Audit: read the template's configuration and find it by its tags.
+  privileges = ["VM.Audit", "VM.Clone"]
+}
+
+resource "proxmox_virtual_environment_role" "cluster_api_bootstrap" {
+  role_id = "${var.cluster_name}-cluster-api-bootstrap"
+  # Datastore.AllocateTemplate: upload a machine's cloud-init ISO.
+  # Datastore.Allocate: delete that ISO again, which Proxmox VE allows only with it.
+  # Datastore.Audit: list the storage among those that hold ISOs.
+  privileges = ["Datastore.Allocate", "Datastore.AllocateTemplate", "Datastore.Audit"]
+}
+
+resource "proxmox_virtual_environment_role" "cluster_api_network" {
+  role_id = "${var.cluster_name}-cluster-api-network"
+  # SDN.Use: attach a VM's interface to the bridge or VNet, also when a VLAN tag is set.
+  privileges = ["SDN.Use"]
+}
+
 resource "proxmox_virtual_environment_user" "cluster_api" {
   user_id = "${var.cluster_name}-cluster-api@pve"
   comment = "Cluster API in Kubehenge management cluster ${var.cluster_name}; signs in with its API token only"
@@ -64,12 +105,12 @@ locals {
       { path = "/nodes", role = proxmox_virtual_environment_role.audit.role_id, propagate = true },
       # Propagated: each workload cluster's VMs sit in a pool of their own nested under this one, and
       # a pool's ACL reaches nested pools only when propagated.
-      { path = "/pool/${proxmox_virtual_environment_pool.workload.pool_id}", role = "PVEVMAdmin", propagate = true },
-      { path = "/pool/${proxmox_virtual_environment_pool.templates.pool_id}", role = "PVETemplateUser", propagate = false },
-      { path = "/storage/${var.bootstrap_datastore}", role = "PVEDatastoreAdmin", propagate = false },
+      { path = "/pool/${proxmox_virtual_environment_pool.workload.pool_id}", role = proxmox_virtual_environment_role.cluster_api_vms.role_id, propagate = true },
+      { path = "/pool/${proxmox_virtual_environment_pool.templates.pool_id}", role = proxmox_virtual_environment_role.cluster_api_templates.role_id, propagate = false },
+      { path = "/storage/${var.bootstrap_datastore}", role = proxmox_virtual_environment_role.cluster_api_bootstrap.role_id, propagate = false },
     ],
     [for s in var.workload_datastores : { path = "/storage/${s}", role = proxmox_virtual_environment_role.allocate_space.role_id, propagate = false }],
-    [for b in var.workload_bridges : { path = local.bridges[b].acl, role = "PVESDNUser", propagate = true }],
+    [for b in var.workload_bridges : { path = local.bridges[b].acl, role = proxmox_virtual_environment_role.cluster_api_network.role_id, propagate = true }],
   )
 }
 
@@ -412,6 +453,13 @@ resource "proxmox_virtual_environment_vm" "node" {
   # memory takes effect when each node next reboots, as a Talos upgrade reboots them one by one.
   reboot_after_update = false
 
+  # After a host reboot the management VMs start first, and the next guest waits 90 seconds for
+  # their etcd members to rejoin before the workload control planes come up.
+  startup {
+    order    = 1
+    up_delay = 90
+  }
+
   agent {
     enabled = true
   }
@@ -453,9 +501,20 @@ resource "proxmox_virtual_environment_vm" "node" {
     datastore_id = var.vm_datastore
 
     ip_config {
-      ipv4 {
-        address = local.nodes[count.index].address
-        gateway = var.gateway
+      dynamic "ipv4" {
+        for_each = local.has_ipv4 ? [local.nodes[count.index].address_ipv4] : []
+        content {
+          address = ipv4.value
+          gateway = var.gateway
+        }
+      }
+
+      dynamic "ipv6" {
+        for_each = local.has_ipv6 ? [local.nodes[count.index].address_ipv6] : []
+        content {
+          address = ipv6.value
+          gateway = var.gateway_ipv6
+        }
       }
     }
 

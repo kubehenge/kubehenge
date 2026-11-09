@@ -207,7 +207,7 @@ func (s *Settings) NoProxyList(proxmoxURL string) []string {
 	if u, err := url.Parse(proxmoxURL); err == nil && u.Hostname() != "" {
 		list = append(list, u.Hostname())
 	}
-	for _, a := range s.NodeAddresses {
+	for _, a := range slices.Concat(s.NodeAddresses, s.NodeAddressesIPv6) {
 		if prefix, err := netip.ParsePrefix(a); err == nil {
 			list = append(list, prefix.Masked().String())
 		}
@@ -317,6 +317,11 @@ func (t *SavedTransport) current() (http.RoundTripper, error) {
 	if !p.Enabled() {
 		// The environment still applies where the appliance's service sets it.
 		transport.Proxy = http.ProxyFromEnvironment
+	}
+	if saved != nil {
+		if err = saved.ReleaseMirror.Mirror().Trust(transport); err != nil {
+			return nil, fmt.Errorf("the saved release mirror: %w", err)
+		}
 	}
 	t.rt = transport
 	if statErr == nil {

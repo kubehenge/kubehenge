@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,7 +73,11 @@ func newTemplateListCommand(conn *pve.Config) *cobra.Command {
 				return fmt.Errorf("listing the templates: %w", err)
 			}
 			for _, r := range list {
-				if _, err = fmt.Fprintf(cmd.OutOrStdout(), "%d %s %s %s\n", r.VMID, r.Node, r.Name, strings.Join(templates.ParseTags(r.Tags), ";")); err != nil {
+				line := fmt.Sprintf("%d %s %s %s", r.VMID, r.Node, r.Name, strings.Join(templates.ParseTags(r.Tags), ";"))
+				if hw, recorded := templates.HardwareOf(templates.ParseAllTags(r.Tags)); recorded {
+					line += " " + hw.String()
+				}
+				if _, err = fmt.Fprintln(cmd.OutOrStdout(), line); err != nil {
 					return fmt.Errorf("writing the list: %w", err)
 				}
 			}
@@ -315,7 +320,10 @@ func (b *builderFlags) add(cmd *cobra.Command) {
 	f.StringVar(&b.gateway, "build-gateway", "", "gateway for --build-address")
 	f.StringSliceVar(&b.dns, "build-dns", nil, "DNS servers for --build-address")
 	f.BoolVar(&b.builder.KeepOnFailure, "keep-on-failure", false, "leave the VM in place when preparing an image fails")
-	f.StringVar(&b.builder.CPUType, "cpu-type", "", "QEMU CPU type of the template, which its clones keep. host gives them the node's own CPU (default: the newest build's, else the least its node OS runs on, "+templates.DefaultCPUType+" for most)")
+	f.StringVar(&b.builder.Hardware.CPUType, "cpu-type", "", "QEMU CPU type of the template, which its clones keep. host gives them the node's own CPU (default: the newest build's, else the least its node OS runs on, "+templates.DefaultCPUType+" for most)")
+	for _, o := range b.options() {
+		f.Bool(o.flag, o.def, o.usage+" (default: the newest build's, else "+strconv.FormatBool(o.def)+")")
+	}
 	_ = cmd.MarkFlagRequired("node")
 }
 
@@ -330,11 +338,50 @@ func splitNodes(value string) []string {
 	return nodes
 }
 
+// hardwareOption is a boolean VM option of the template, with the flag that sets it.
+type hardwareOption struct {
+	flag, usage string
+	def         bool
+	set         **bool
+}
+
+func (b *builderFlags) options() []hardwareOption {
+	h := &b.builder.Hardware
+	return []hardwareOption{
+		{"ssd", "present the template's disk to the guest as an SSD", true, &h.SSD},
+		{"discard", "pass the guest's trims on to the storage, which gives back thin-provisioned space", true, &h.Discard},
+		{"iothread", "serve the template's disk from an IO thread of its own", false, &h.IOThread},
+		{"numa", "give the guest a NUMA topology (the machines need at least 2 cores)", false, &h.NUMA},
+	}
+}
+
+// hardware reads the hardware flags the command line set, and refuses a CPU type Proxmox VE does
+// not know.
+func (b *builderFlags) hardware(cmd *cobra.Command) error {
+	if err := templates.ValidateCPUType(b.builder.Hardware.CPUType); err != nil {
+		return fmt.Errorf("--cpu-type: %w", err)
+	}
+	for _, o := range b.options() {
+		if !cmd.Flags().Changed(o.flag) {
+			continue
+		}
+		v, err := cmd.Flags().GetBool(o.flag)
+		if err != nil {
+			return fmt.Errorf("--%s: %w", o.flag, err)
+		}
+		*o.set = &v
+	}
+	return nil
+}
+
 // connect signs the builder in, with its log on the command's standard error.
 func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates.Builder, error) {
 	// Cobra's required check passes --node "", which would reach the API as /nodes//.
 	if len(splitNodes(b.builder.Node)) == 0 {
 		return nil, errors.New("--node needs the Proxmox VE node to build on, such as --node pve1")
+	}
+	if err := b.hardware(cmd); err != nil {
+		return nil, err
 	}
 	var err error
 	switch {

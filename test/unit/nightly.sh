@@ -56,6 +56,8 @@ strip_options() {
 # which jq on Windows ends with CR LF.
 lanes_and_parts=$(sh "${ci}/scope.sh" --all | jq -j '(.[] | . + " "), "|", (.[] | gsub(","; " ") + " ")')
 lanes=${lanes_and_parts%%|*}
+# The dual-stack lane is the nightly run's own, kept out of the rotation's checks below.
+dual_stack=kubeadm+calico+dual-stack
 queue=" ${lanes} management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade "
 all_lanes=" ${lanes_and_parts#*|}"
 node_oses=" $(jq -j '.available[] | . + " "' "${chart}/files/node-oses.json")"
@@ -80,27 +82,28 @@ while [ "${night}" -lt "${nights}" ]; do
             ;;
     esac
     tests=" ${parsed#* }"
-    for t in ${queue}; do
+    for t in ${queue} ${dual_stack}; do
         case ${tests} in
             *" ${t} "*) ok ;;
             *) bad "night ${night} leaves ${t} out" ;;
         esac
     done
-    # Every lane is one the merge queue runs, its tests without their options, or one of the
+    # Every lane is one a pull request runs, its tests without their options, or one of the
     # nightly run's own: none runs only at night by accident.
     for lane in ${tests}; do
         strip_options "${lane}"
         case ${queue} in
             *" ${bare} "*) ok ;;
-            *) bad "night ${night} runs the lane ${lane}, which the merge queue does not run as ${bare}" ;;
+            *) bad "night ${night} runs the lane ${lane}, which a pull request does not run as ${bare}" ;;
         esac
     done
     for lane in ${tests}; do
         case ${lane} in
+            "${dual_stack}") continue ;;
             *+*) ;;
             *) continue ;;
         esac
-        # The options are the first test's, and the lane's other test runs as in the merge queue.
+        # The options are the first test's, and the lane's other test runs as in a pull request.
         name=${lane%%,*}
         case ${lane#"${name}"} in
             *+*) bad "night ${night}: ${lane} gives options to the test after ${name}" ;;
@@ -113,12 +116,17 @@ while [ "${night}" -lt "${nights}" ]; do
             continue
         fi
         # The settings carry nothing but what was asked for.
-        KUBEHENGE_E2E_CNI='' KUBEHENGE_E2E_NODE_OS='' KUBEHENGE_E2E_CIS=''
+        KUBEHENGE_E2E_CNI='' KUBEHENGE_E2E_NODE_OS='' KUBEHENGE_E2E_CIS='' KUBEHENGE_E2E_RELEASES=''
         eval "${settings}"
         test=${name%%+*}
         test=${test%-addons-?}
         test=${test%-etcd}
         test=${test%-machines}
+        # RKE2's and k3s's rotation downloads from GitHub, the path of a cluster without a mirror.
+        case ${test}:${KUBEHENGE_E2E_RELEASES} in
+            rke2:github | k3s:github | kubeadm: | talos:) ok ;;
+            *) bad "${name} downloads its releases from '${KUBEHENGE_E2E_RELEASES:-the runner}'" ;;
+        esac
         case ${test} in
             kubeadm) enum=${cnis_kubeadm} ;;
             rke2) enum=${cnis_rke2} ;;
@@ -236,6 +244,12 @@ refused management-cluster+management-0
 refused management-cluster+management-035
 refused management-cluster+management-35x
 refused management-cluster+management-3584+calico
+refused appliance+dual-stack
+refused management-cluster+ipv6-first
+refused control-plane-ha+dual-stack
+refused kubeadm+github-releases
+refused talos-addons-a+github-releases
+refused two-nodes+github-releases
 # reads <name> <settings>: the settings the name carries, one per line.
 reads() {
     variant_of "$1"
@@ -246,6 +260,13 @@ reads control-plane-ha+management-5120 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=5
 reads kubeadm-addons-a+calico+management-4096 'export KUBEHENGE_E2E_CNI=calico
 export KUBEHENGE_E2E_MANAGEMENT_MEMORY=4096'
 reads rke2+calico 'export KUBEHENGE_E2E_CNI=calico'
+reads kubeadm+calico+dual-stack 'export KUBEHENGE_E2E_CNI=calico
+export KUBEHENGE_E2E_IP_FAMILIES=IPv4,IPv6'
+reads rke2-etcd+cilium+ipv6-first 'export KUBEHENGE_E2E_CNI=cilium
+export KUBEHENGE_E2E_IP_FAMILIES=IPv6,IPv4'
+reads k3s-addons-b+flannel+github-releases 'export KUBEHENGE_E2E_CNI=flannel
+export KUBEHENGE_E2E_RELEASES=github'
+reads rke2-machines+github-releases 'export KUBEHENGE_E2E_RELEASES=github'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
 variant_of control-plane-ha

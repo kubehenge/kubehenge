@@ -1,0 +1,23 @@
+{
+  "nodes": [
+    "pve1"
+  ],
+  "imageDatastore": "local",
+  "vmDatastore": "local-lvm",
+  "bridge": "vmbr0",
+  "nodeAddresses": [
+    "10.0.0.11/24"
+  ],
+  "apiAddress": "10.0.0.10",
+  "gateway": "10.0.0.1",
+  "dnsServers": [
+    "10.0.0.1"
+  ],
+  "workloadDatastores": [
+    "local-lvm"
+  ],
+  "workloadBridges": [
+    "vmbr0"
+  ],
+  "bootstrapDatastore": "local"
+}

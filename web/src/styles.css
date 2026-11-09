@@ -96,6 +96,13 @@ pre,
   font-size: 0.9em;
 }
 
+/* A command moves to the next line whole, so a break never splits it at one of its hyphens, and it
+   wraps inside only when a whole line cannot hold it. */
+code.said {
+  display: inline-block;
+  max-inline-size: 100%;
+}
+
 kbd {
   display: inline-block;
 
@@ -280,6 +287,7 @@ output.notice {
    inside, such as a hidden column heading, scrolls with the table rather than widening the page. */
 .scroll {
   position: relative;
+  container: grid / inline-size;
   overflow-x: auto;
 }
 
@@ -1325,80 +1333,12 @@ h4.subsection {
   color: var(--dim);
 }
 
-/* On a phone each row of a stacking table becomes a card: its first cell is the title and every other
-   cell shows its label before its value. */
-@media (width <= 600px) {
-  .grid.stack,
-  .grid.stack tbody {
-    display: block;
-  }
-
-  .grid.stack thead {
-    position: absolute;
-
-    overflow: hidden;
-
-    inline-size: 1px;
-    block-size: 1px;
-
-    clip-path: inset(50%);
-  }
-
-  .grid.stack tr {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 4px 12px;
-
-    padding: 10px 0;
-    border-block-end: 1px solid var(--line);
-  }
-
-  .grid.stack :is(td, th) {
-    display: block;
-
-    min-inline-size: 0;
-    padding: 0;
-    border: none;
-
-    text-align: start;
-    white-space: normal;
-  }
-
-  .grid.stack :is(td, th):not(.row-action, .pool-name) {
-    grid-column: 1 / -1;
-  }
-
-  .grid.stack tbody th {
-    grid-column: 1 / -1;
-    padding-block-end: 2px;
-  }
-
-  .grid.stack td[data-label]::before {
-    content: attr(data-label) " ";
-    display: inline-block;
-    min-inline-size: 6em;
-    color: var(--dim);
-  }
-
-  .grid.stack .row-action {
-    grid-column: 2;
-    grid-row: 1;
-    align-self: center;
-    inline-size: auto;
-  }
-
-  .grid.stack .pool-name {
-    grid-column: 1;
-    grid-row: 1;
-    align-self: center;
-  }
-}
-
 .object-view {
   min-inline-size: 0;
 }
 
 .box {
+  container: grid / inline-size;
   padding: 14px 16px;
   border-block-end: 1px solid var(--line);
 }
@@ -1934,16 +1874,22 @@ fieldset.choices .check {
   white-space: nowrap;
 }
 
+.row-action > button:not(:first-child) {
+  margin-inline-start: 6px;
+}
+
 /* A row with a button centres its text beside it. Rows of text alone keep to the top, where a
    cell of several lines starts. */
 .grid tr:has(> .row-action) > :is(td, th) {
   vertical-align: middle;
 }
 
-/* On a phone a row of a stacked grid is a card: each cell is a line with its column's name before
-   it, and the first cell, which has none, heads the card. */
-@media (width <= 600px) {
-  .grid.stack :is(table, tbody, tr, td) {
+/* A row of a stacked grid is a card when its box is narrow: always on a phone. The cell without a
+   label heads it, and every other cell is a line with its column's name before it. One action sits
+   beside the heading, several go below the lines. */
+@container grid (width <= 600px) {
+  .grid.stack,
+  .grid.stack tbody {
     display: block;
   }
 
@@ -1959,26 +1905,36 @@ fieldset.choices .check {
   }
 
   .grid.stack tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+
     padding-block: 10px;
     border-block-end: 1px solid var(--line);
   }
 
-  .grid.stack td {
+  .grid.stack :is(td, th) {
     position: relative;
 
+    grid-column: 1 / -1;
+
     min-inline-size: 0;
-    padding: 2px 0 2px 7em;
+    padding: 0 0 0 8.5em;
     border: none;
 
+    text-align: start;
     overflow-wrap: anywhere;
+    white-space: normal;
   }
 
-  .grid.stack td:not([data-label]) {
+  .grid.stack :is(td, th):not([data-label], .row-action) {
+    grid-column: 1;
+    align-self: center;
     padding-inline-start: 0;
     font-weight: 600;
   }
 
-  .grid.stack td:not([data-label]) .muted {
+  .grid.stack :is(td, th):not([data-label], .row-action) .muted {
     font-weight: 400;
   }
 
@@ -1989,10 +1945,96 @@ fieldset.choices .check {
     color: var(--dim);
   }
 
+  .grid.stack td[data-label]:empty {
+    display: none;
+  }
+
   .grid.stack td.row-action {
     inline-size: auto;
-    padding: 8px 0 0;
+    padding: 6px 0 0;
+  }
+
+  .grid.stack td.row-action:has(> button:only-of-type) {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    padding: 0;
+  }
+}
+
+/* A grid of many columns stacks while its box is narrower than they need, so no column hides behind a scroll. */
+@container grid (width <= 1000px) {
+  .grid.stack-wide,
+  .grid.stack-wide tbody {
+    display: block;
+  }
+
+  .grid.stack-wide thead {
+    position: absolute;
+
+    overflow: hidden;
+
+    inline-size: 1px;
+    block-size: 1px;
+
+    clip-path: inset(50%);
+  }
+
+  .grid.stack-wide tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+
+    padding-block: 10px;
+    border-block-end: 1px solid var(--line);
+  }
+
+  .grid.stack-wide :is(td, th) {
+    position: relative;
+
+    grid-column: 1 / -1;
+
+    min-inline-size: 0;
+    padding: 0 0 0 8.5em;
+    border: none;
+
     text-align: start;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .grid.stack-wide :is(td, th):not([data-label], .row-action) {
+    grid-column: 1;
+    align-self: center;
+    padding-inline-start: 0;
+    font-weight: 600;
+  }
+
+  .grid.stack-wide :is(td, th):not([data-label], .row-action) .muted {
+    font-weight: 400;
+  }
+
+  .grid.stack-wide td[data-label]::before {
+    content: attr(data-label);
+    position: absolute;
+    inset-inline-start: 0;
+    color: var(--dim);
+  }
+
+  .grid.stack-wide td[data-label]:empty {
+    display: none;
+  }
+
+  .grid.stack-wide td.row-action {
+    inline-size: auto;
+    padding: 6px 0 0;
+  }
+
+  .grid.stack-wide td.row-action:has(> button:only-of-type) {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    padding: 0;
   }
 }
 
@@ -3036,8 +3078,13 @@ form.box > *,
 }
 
 /* The frame closes round the wizard, instead of running on empty across the page. */
-.panel:has(> .wizard) {
+.panel:has(> .wizard),
+.panel.setup-import {
   max-inline-size: calc(var(--form-width) + 2px);
+}
+
+.panel.setup-import > .box {
+  border-block-end: 0;
 }
 
 /* The frame closes round a page of fields too. */

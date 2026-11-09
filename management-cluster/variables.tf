@@ -88,34 +88,118 @@ variable "cluster_name" {
   }
 }
 
+variable "ip_families" {
+  description = "The cluster's address families: \"IPv4\", \"IPv6\" or both. The first is the primary one, which the API address, the nodes' Talos and etcd traffic and the API endpoint use. Both make a dual-stack cluster, which needs node_addresses and node_addresses_ipv6 of the same length."
+  type        = list(string)
+  default     = ["IPv4"]
+
+  validation {
+    condition     = contains([1, 2], length(var.ip_families)) && length(distinct(var.ip_families)) == length(var.ip_families) && alltrue([for f in var.ip_families : contains(["IPv4", "IPv6"], f)])
+    error_message = "ip_families is [\"IPv4\"], [\"IPv6\"], [\"IPv4\", \"IPv6\"] or [\"IPv6\", \"IPv4\"]."
+  }
+}
+
 variable "node_addresses" {
-  description = "Static address of each control-plane node, with prefix length, such as [\"192.0.2.11/24\"]. One node, or three for high availability. Once the cluster runs, only append: a node given another address loses its etcd member, and one removed leaves it behind."
+  description = "Static IPv4 address of each control-plane node, with prefix length, such as [\"192.0.2.11/24\"]. Needed when ip_families holds IPv4, and an empty list otherwise. One node, or three for high availability. Once the cluster runs, only append: a node given another address loses its etcd member, and one removed leaves it behind."
   type        = list(string)
 
   validation {
-    condition     = contains([1, 3, 5], length(var.node_addresses)) && alltrue([for a in var.node_addresses : can(cidrhost(a, 0))])
-    error_message = "node_addresses must hold one, three or five addresses with prefix length."
+    condition = contains(var.ip_families, "IPv4") ? (
+      contains([1, 3, 5], length(var.node_addresses)) && alltrue([for a in var.node_addresses : can(cidrhost(a, 0)) && !strcontains(a, ":")])
+    ) : length(var.node_addresses) == 0
+    error_message = "node_addresses must hold one, three or five IPv4 addresses with prefix length when ip_families holds IPv4, and none otherwise."
+  }
+}
+
+variable "node_addresses_ipv6" {
+  description = "Static IPv6 address of each control-plane node, with prefix length, such as [\"2001:db8::11/64\"]. Needed when ip_families holds IPv6, and empty otherwise. A dual-stack cluster gives as many as node_addresses, and node i takes element i of each."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = contains(var.ip_families, "IPv6") ? (
+      contains([1, 3, 5], length(var.node_addresses_ipv6)) && alltrue([for a in var.node_addresses_ipv6 : can(cidrhost(a, 0)) && strcontains(a, ":")])
+    ) : length(var.node_addresses_ipv6) == 0
+    error_message = "node_addresses_ipv6 must hold one, three or five IPv6 addresses with prefix length when ip_families holds IPv6, and none otherwise."
+  }
+
+  validation {
+    condition     = length(var.ip_families) < 2 || length(var.node_addresses) == length(var.node_addresses_ipv6)
+    error_message = "A dual-stack cluster needs as many node_addresses_ipv6 as node_addresses."
   }
 }
 
 variable "api_address" {
-  description = "Virtual IP of the Kubernetes API, in the nodes' subnet and not used by anything else. It moves to a healthy control-plane node if one fails."
+  description = "Virtual IP of the Kubernetes API, an address of the primary family without prefix length, in that family's node network and used by nothing else. It moves to a healthy control-plane node if one fails."
   type        = string
 
   validation {
-    condition     = can(cidrhost("${var.api_address}/32", 0))
-    error_message = "api_address must be an IPv4 address without prefix length."
+    condition     = can(cidrhost("${var.api_address}/${var.ip_families[0] == "IPv6" ? 128 : 32}", 0)) && strcontains(var.api_address, ":") == (var.ip_families[0] == "IPv6")
+    error_message = "api_address must be an address of the primary family in ip_families, without prefix length."
+  }
+
+  validation {
+    condition = try(
+      cidrsubnet(var.ip_families[0] == "IPv6" ? var.node_addresses_ipv6[0] : var.node_addresses[0], 0, 0) ==
+      cidrsubnet("${var.api_address}/${split("/", var.ip_families[0] == "IPv6" ? var.node_addresses_ipv6[0] : var.node_addresses[0])[1]}", 0, 0),
+      true
+    )
+    error_message = "api_address must be inside the nodes' network of the primary family."
+  }
+
+  validation {
+    condition = try(
+      !contains(
+        [for a in(var.ip_families[0] == "IPv6" ? var.node_addresses_ipv6 : var.node_addresses) : cidrhost("${split("/", a)[0]}/${var.ip_families[0] == "IPv6" ? 128 : 32}", 0)],
+        cidrhost("${var.api_address}/${var.ip_families[0] == "IPv6" ? 128 : 32}", 0)
+      ) && cidrhost("${var.api_address}/${var.ip_families[0] == "IPv6" ? 128 : 32}", 0) != cidrhost("${var.ip_families[0] == "IPv6" ? var.gateway_ipv6 : var.gateway}/${var.ip_families[0] == "IPv6" ? 128 : 32}", 0),
+      true
+    )
+    error_message = "api_address must be neither a node address nor the gateway."
   }
 }
 
 variable "gateway" {
-  description = "Default gateway of the nodes' subnet."
+  description = "Default IPv4 gateway of the nodes' network. Needed when ip_families holds IPv4, and unset otherwise."
   type        = string
+  default     = null
+
+  validation {
+    condition = contains(var.ip_families, "IPv4") ? (
+      var.gateway == null ? false : can(cidrhost("${var.gateway}/32", 0)) && !strcontains(var.gateway, ":")
+    ) : var.gateway == null
+    error_message = "gateway must be an IPv4 address when ip_families holds IPv4, and unset otherwise."
+  }
+}
+
+variable "gateway_ipv6" {
+  description = "Default IPv6 gateway of the nodes' network. Needed when ip_families holds IPv6, and unset otherwise."
+  type        = string
+  default     = null
+
+  validation {
+    condition = contains(var.ip_families, "IPv6") ? (
+      var.gateway_ipv6 == null ? false : can(cidrhost("${var.gateway_ipv6}/128", 0)) && strcontains(var.gateway_ipv6, ":")
+    ) : var.gateway_ipv6 == null
+    error_message = "gateway_ipv6 must be an IPv6 address when ip_families holds IPv6, and unset otherwise."
+  }
 }
 
 variable "dns_servers" {
-  description = "DNS servers the nodes use."
+  description = "DNS servers the nodes use, addresses of the cluster's families. A dual-stack cluster needs at least one of each."
   type        = list(string)
+
+  validation {
+    condition = alltrue([
+      for d in var.dns_servers : can(cidrhost("${d}/${strcontains(d, ":") ? 128 : 32}", 0)) && contains(var.ip_families, strcontains(d, ":") ? "IPv6" : "IPv4")
+    ])
+    error_message = "dns_servers must be addresses of the families in ip_families."
+  }
+
+  validation {
+    condition     = length(var.ip_families) < 2 || alltrue([for f in var.ip_families : anytrue([for d in var.dns_servers : strcontains(d, ":") == (f == "IPv6")])])
+    error_message = "A dual-stack cluster needs at least one IPv4 and one IPv6 DNS server."
+  }
 }
 
 variable "search_domains" {
@@ -189,15 +273,47 @@ variable "provider_manifests" {
 }
 
 variable "pod_subnets" {
-  description = "Address ranges of the management cluster's pods. They must not overlap the nodes' network."
+  description = "Address ranges of the management cluster's pods, one per family in ip_families order. They must not overlap the nodes' network. Unset takes 10.244.0.0/16 for IPv4 and fd5e:4b1c:9a20::/56 for IPv6. An IPv6 range is /48 to /63, since each node takes a /64 of it and Kubernetes allows 16 bits between."
   type        = list(string)
-  default     = ["10.244.0.0/16"]
+  default     = null
+
+  validation {
+    condition = var.pod_subnets == null ? true : try(
+      length(var.pod_subnets) == length(var.ip_families) && alltrue([
+        for i, c in var.pod_subnets : can(cidrhost(c, 0)) && strcontains(c, ":") == (var.ip_families[i] == "IPv6") &&
+        cidrhost(c, 0) == cidrhost("${split("/", c)[0]}/${strcontains(c, ":") ? 128 : 32}", 0)
+      ]),
+      false
+    )
+    error_message = "pod_subnets holds one network without host bits per family in ip_families, in that order."
+  }
+
+  validation {
+    condition     = var.pod_subnets == null ? true : try(alltrue([for c in var.pod_subnets : !strcontains(c, ":") || (tonumber(split("/", c)[1]) >= 48 && tonumber(split("/", c)[1]) <= 63)]), true)
+    error_message = "An IPv6 pod range is /48 to /63."
+  }
 }
 
 variable "service_subnets" {
-  description = "Address ranges of the management cluster's services. Kubernetes' default, 10.96.0.0/12, spans 10.96.0.0 to 10.111.255.255; choose another if the nodes' network is in it."
+  description = "Address ranges of the management cluster's services, one per family in ip_families order. Unset takes 10.96.0.0/12 for IPv4, which spans 10.96.0.0 to 10.111.255.255, and fd5e:4b1c:9a21::/112 for IPv6. Choose another if the nodes' network is in it. An IPv6 range is /108 to /120."
   type        = list(string)
-  default     = ["10.96.0.0/12"]
+  default     = null
+
+  validation {
+    condition = var.service_subnets == null ? true : try(
+      length(var.service_subnets) == length(var.ip_families) && alltrue([
+        for i, c in var.service_subnets : can(cidrhost(c, 0)) && strcontains(c, ":") == (var.ip_families[i] == "IPv6") &&
+        cidrhost(c, 0) == cidrhost("${split("/", c)[0]}/${strcontains(c, ":") ? 128 : 32}", 0)
+      ]),
+      false
+    )
+    error_message = "service_subnets holds one network without host bits per family in ip_families, in that order."
+  }
+
+  validation {
+    condition     = var.service_subnets == null ? true : try(alltrue([for c in var.service_subnets : !strcontains(c, ":") || (tonumber(split("/", c)[1]) >= 108 && tonumber(split("/", c)[1]) <= 120)]), true)
+    error_message = "An IPv6 service range is /108 to /120."
+  }
 }
 
 variable "node_cores" {
@@ -536,6 +652,25 @@ variable "chart_repositories" {
   validation {
     condition     = var.chart_repositories.ca_bundle == "" || length(var.chart_repositories.mirrors) > 0
     error_message = "chart_repositories.ca_bundle needs mirrors."
+  }
+}
+
+variable "release_mirror" {
+  description = "Where the nodes of RKE2 and k3s clusters download their release in place of GitHub. url serves the releases on GitHub's paths beneath it: <url>/<repository>/releases/download/<version>/<file> and <url>/<repository>/raw/<version>/install.sh. Nodes still install only the pinned files. ca_bundle (PEM) is the authority of a mirror the usual authorities do not sign."
+  type = object({
+    url       = optional(string, "")
+    ca_bundle = optional(string, "")
+  })
+  default  = {}
+  nullable = false
+
+  validation {
+    condition     = var.release_mirror.url == "" || can(regex("^https?://[A-Za-z0-9._~:\\[\\]-]+(/[A-Za-z0-9._~:/\\[\\]-]*[A-Za-z0-9._~:\\[\\]-])?$", var.release_mirror.url))
+    error_message = "release_mirror.url is an http:// or https:// address with a host, without credentials, a query or a trailing slash."
+  }
+  validation {
+    condition     = var.release_mirror.ca_bundle == "" || startswith(var.release_mirror.url, "https://")
+    error_message = "release_mirror.ca_bundle needs an https:// url."
   }
 }
 

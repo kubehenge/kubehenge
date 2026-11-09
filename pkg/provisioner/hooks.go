@@ -83,6 +83,16 @@ type Hooks struct {
 	// Bridges is asked for a bridge's MTU, which the validator holds a cluster's interface MTU to.
 	// Nil, no bridge is looked at.
 	Bridges BridgeMTUs
+	// SecurityGroups lists Proxmox VE's security groups, which the validator holds a cluster's
+	// firewall to. Nil, no group is looked up.
+	SecurityGroups SecurityGroups
+	// APIReach reads who the Proxmox VE firewalls let in on the API port, and Management names the
+	// addresses of the appliance and the management cluster's nodes. Together they have the validator
+	// refuse security groups that would cut those off. Either nil, no such check is made.
+	APIReach   APIReach
+	Management ManagementAddresses
+	// Endpoint is the Proxmox VE API address, which says which of the addresses reach it.
+	Endpoint string
 	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
 	// and the validator refuses a release it does not pin.
 	Releases *ReleaseChecksums
@@ -273,6 +283,7 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 	reads := h.reads()
 	for _, check := range []func() error{
 		func() error { return h.checkNodeOS(ctx, reads, cluster) },
+		func() error { return h.checkNUMA(ctx, reads, cluster, class) },
 		func() error { return h.checkTemplateNode(cluster, class) },
 		func() error { return h.checkPlacement(ctx, reads, cluster) },
 		func() error { return checkStorageListed(cluster, class) },

@@ -1,15 +1,16 @@
 #!/bin/sh
-# Prints, as a JSON list of lanes, the end-to-end tests a merge group needs, from the paths its pull
-# requests change, one per line on standard input. A lane is a test, or two run one after the other
+# Prints, as a JSON list of lanes, the end-to-end tests a pull request needs, from the paths it
+# changes, one per line on standard input. A lane is a test, or two run one after the other
 # on one runner, as in k3s-etcd,cluster-mesh:
 #
 #   git -c core.quotepath=off diff --name-only --no-renames <base> HEAD | test/e2e/ci/scope.sh [--base <base>]
 #   test/e2e/ci/scope.sh --all
 #
-# A path no rule below names needs them all, as --all does. Only the merge queue runs end-to-end
-# tests, so a rule that leaves a test out lets a change reach main without it until the nightly run,
-# which runs them all: leave a test out only for a path it cannot reach. The nightly run's own tests
-# are long, so a merge group runs one only for its own script and the code only it exercises.
+# A path no rule below names needs them all, as --all does. Only a pull request that is ready runs
+# end-to-end tests, so a rule that leaves a test out lets a change reach main
+# without it until the nightly run, which runs them all: leave a test out only for a path it cannot
+# reach. The nightly run's own tests are long, so a pull request runs one only for its own script
+# and the code only it exercises.
 # With --base, run in the repository's checkout, a change to the chart's values brings Rancher's
 # test only when it changes addons.rancher since <base>, a commit or tree; without it, any change to
 # them does.
@@ -43,7 +44,7 @@ talos='talos talos-addons-a talos-addons-b talos-addons-c'
 workload="${kubeadm} ${rke2} ${k3s} ${talos}"
 all="management-cluster appliance ${workload} cluster-mesh node-image-refresh autoscaler"
 # The tests that make a cluster of kubehenge-k3s themselves, beside the workload tests of k3s. The
-# nightly run's own four do too, and join a merge group only for their own code.
+# nightly run's own four do too, and join a pull request only for their own code.
 k3s_users='cluster-mesh node-image-refresh autoscaler'
 # The tests that run `kubehenge serve`: the appliance's service, and the one workload test that
 # replaces machines in a namespace the interface creates in (workload-cluster.sh, creator_config),
@@ -53,7 +54,7 @@ interface_users='appliance k3s-machines'
 chart_users='management-cluster appliance'
 # Tests the nightly run adds to --all.
 nightly='management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade'
-# Tests that share a lane, one after the other on its runner, which keeps the merge queue at 20 lanes,
+# Tests that share a lane, one after the other on its runner, which keeps a pull request at 20 lanes,
 # as many as a run's jobs at once. Each pair ends within the longest lane, and the first test leaves
 # no guest behind (docs/testing.md).
 pairs='appliance,management-cluster k3s-etcd,cluster-mesh k3s-addons-b,autoscaler'
@@ -137,7 +138,7 @@ need=
             ;;
         pkg/provisioner/rancher*.go | pkg/provisioner/turtles*.go | pkg/provisioner/hooks.go | pkg/provisioner/upgradehold.go) need="${need} ${all} rancher" ;;
         pkg/provisioner/placement.go | pkg/provisioner/ha*.go) need="${need} ${all} two-nodes" ;;
-        # A release tag is accepted only on a commit that passed the queue, and the release reruns no
+        # A release tag is accepted only on a commit whose pull request passed, and the release reruns no
         # lane, so the release pull request (appVersion) runs them all.
         charts/kubehenge/Chart.yaml) need="${need} ${all}" ;;
         charts/kubehenge/files/kube-vip-credentials.sh) need="${need} ${all} control-plane-ha" ;;

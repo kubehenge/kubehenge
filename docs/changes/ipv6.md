@@ -1,0 +1,7 @@
+- Clusters can be IPv6-only or dual-stack, on Talos, kubeadm, RKE2 and k3s with each of their CNIs. The address families are chosen when a cluster is created, the first one primary.
+- IPv6 and dual-stack are unsupported until an end-to-end test passes on them ([clusters.md](clusters.md#ipv6-and-dual-stack)).
+- An IPv6 cluster gets IPv6 pod and Service ranges of its own: `fd5e:4b1c:9a20::/56` and `fd5e:4b1c:9a21::/112` unless they clash.
+- Every node gives its kubelet its address of each family.
+- Load-balancer addresses, BGP routers and DNS servers can be IPv6. The API address is of the primary family.
+- BGP has a router id setting. Each node otherwise gives its own IPv4 address, so an IPv6-only cluster needs one.
+- The management cluster and the appliance take IPv6 and dual-stack addresses too.

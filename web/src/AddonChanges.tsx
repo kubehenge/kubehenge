@@ -3,7 +3,7 @@ import { useState, type JSX } from "react";
 import { api } from "./api";
 import { addonConflictCondition, windowTime } from "./fleet";
 import type { AddonChange, Cluster } from "./types";
-import { Detail, ErrorBox, errorMessage, filled } from "./ui";
+import { Detail, ErrorBox, Said, errorMessage, filled } from "./ui";
 
 /** changeText is one waiting change. Equal versions mean only the add-on's values change. */
 export const changeText = (c: AddonChange): string =>
@@ -79,7 +79,11 @@ export function AddonConflict({ cluster: c }: { cluster: Cluster }): JSX.Element
   return (
     <div className="warning held-up">
       <strong>Add-on conflict</strong>
-      {filled(found.message) && <Detail>{found.message}</Detail>}
+      {filled(found.message) && (
+        <Detail>
+          <Said text={found.message} />
+        </Detail>
+      )}
     </div>
   );
 }

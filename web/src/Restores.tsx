@@ -19,7 +19,51 @@ import {
 import { clusterPath } from "./cluster-paths";
 import { Link } from "./router";
 import type { BackupRun, Cluster, ClusterBackups, RestoreMessages, RestoreResults, RestoreRun } from "./types";
-import { Dialog, ErrorBox, Field, Status, errorMessage, filled, sentence } from "./ui";
+import { Dialog, ErrorBox, Field, Status, errorMessage, filled, Said, saveFile, sentence } from "./ui";
+
+/** SpecExport downloads a cluster's spec, which is also kept in the management backups' target. */
+export function SpecExport({ cluster: c }: { cluster: Cluster }): JSX.Element {
+  const [error, setError] = useState<string>();
+  const [included, setIncluded] = useState<string>();
+  return (
+    <div className="box">
+      <h3>Spec</h3>
+      <p className="muted">Kept in the management backup target after every change. Secrets are sealed.</p>
+      <div className="actions">
+        <button
+          type="button"
+          onClick={() => {
+            void (async () => {
+              try {
+                const spec = await api.clusterSpec(c.namespace, c.name);
+                saveFile(spec, `${c.name}.cluster.yaml`);
+                setIncluded(secretsIncluded(await spec.text()));
+                setError(undefined);
+              } catch (err) {
+                setError(errorMessage(err));
+              }
+            })();
+          }}
+        >
+          Download spec
+        </button>
+      </div>
+      {included !== undefined && <p className="muted">{included}</p>}
+      <ErrorBox message={error} />
+    </div>
+  );
+}
+
+/** secretsIncluded reads a downloaded spec's first line, which says whether its Secrets hold values. */
+function secretsIncluded(spec: string): string {
+  const found = /^# Secrets: (?<state>\w+), (?<count>\d+)/u.exec(spec)?.groups;
+  const state = found?.["state"];
+  const count = found?.["count"];
+  if (state === "sealed") {
+    return `${count} Secrets included, sealed.`;
+  }
+  return state === "none" ? "No Secrets." : `${count ?? "Its"} Secrets not included.`;
+}
 
 /** RestoredNotice says where a restore into another cluster can be followed. */
 export function RestoredNotice({ namespace, into }: { namespace: string; into: string }): JSX.Element {
@@ -142,7 +186,9 @@ function MessagesTable({ title, messages: m }: { title: string; messages: Restor
             {rows.map((r) => (
               <tr key={r.key}>
                 <td className="message">{r.where}</td>
-                <td className="message">{r.message}</td>
+                <td className="message">
+                  <Said text={r.message} />
+                </td>
               </tr>
             ))}
           </tbody>

@@ -4,8 +4,9 @@
 #
 #   test/e2e/ci/nightly.sh [day]
 #
-# Every test the merge queue may run (scope.sh --all) and those only the nightly run runs, then every
-# part of each workload distribution's test once more with options (variant.sh): a CNI of its class
+# Every test a pull request may run (scope.sh --all) and those only the nightly run runs, among them
+# kubeadm's test on IPv4 and IPv6 (dual-stack). Then every part of each workload distribution's test
+# once more with options (variant.sh): a CNI of its class
 # other than the one its own test runs, a node OS other than the default, and every other night no
 # CIS hardening. The choice moves on each night, and from one distribution to the next, so that a
 # few nights cover every CNI and node OS of every class, each with hardening and without.
@@ -120,7 +121,13 @@ for distribution in kubeadm rke2 k3s talos; do
         name=${name}+${picked}
     fi
     [ $((n / count % 2)) = 1 ] || name=${name}+cis-off
-    # The same options on each of its parts, in the same lanes as the merge queue's: a part that
+    # Every other lane downloads RKE2 and k3s from the runner's mirror. These download from GitHub,
+    # as a cluster without a mirror does.
+    case ${distribution} in
+        rke2 | k3s) name=${name}+github-releases ;;
+        *) ;;
+    esac
+    # The same options on each of its parts, in the same lanes as a pull request's: a part that
     # shares one runs the test it shares it with after it, as there.
     for lane in ${lanes}; do
         first=${lane%%,*}
@@ -135,6 +142,6 @@ for distribution in kubeadm rke2 k3s talos; do
 done
 
 # shellcheck disable=SC2086 # one test per word
-jq -c '. + $ARGS.positional' --args management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade ${variants} << EOF
+jq -c '. + $ARGS.positional' --args management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade kubeadm+calico+dual-stack ${variants} << EOF
 ${lanes_json}
 EOF

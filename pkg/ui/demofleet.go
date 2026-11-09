@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,6 +123,14 @@ type demoCluster struct {
 	Crashing string `json:"crashing"`
 	// LackingMemory is the message of a NodesLackMemory condition: no node has room for the cluster.
 	LackingMemory string `json:"lackingMemory"`
+	// EtcdFsyncMs, when set, is the 99th percentile of its etcd members' write-ahead log syncs.
+	EtcdFsyncMs int `json:"etcdFsyncMs"`
+	// ProxmoxVersions and NodeMTUs are the annotations the placer sets while the Proxmox VE nodes run
+	// different major versions and the VMs different interface sizes. HARulesPending is the message
+	// of the condition for the HA rules that wait.
+	ProxmoxVersions string `json:"proxmoxVersions"`
+	NodeMTUs        string `json:"nodeMTUs"`
+	HARulesPending  string `json:"haRulesPending"`
 	// Upgrade is set on a cluster whose upgrade is under way.
 	Upgrade *demoUpgrade `json:"upgrade"`
 	// AddonChanges wait for the cluster's upgrade window.
@@ -135,6 +144,9 @@ type demoCluster struct {
 	// Held is set on a cluster whose last machine sits on a Proxmox VE node in maintenance, so that
 	// its replacement is held.
 	Held bool `json:"held"`
+	// AvoidSkewedNode keeps the cluster's VMs off the node whose clock is wrong, so that the cluster
+	// stays healthy beside those that show the warning.
+	AvoidSkewedNode bool `json:"avoidSkewedNode"`
 	// Unsynced is set on a Talos cluster whose last worker has not synced its clock.
 	Unsynced bool `json:"unsynced"`
 	// Paused is a cluster whose reconciling is paused.
@@ -143,6 +155,11 @@ type demoCluster struct {
 	Conditions []demoNote `json:"conditions"`
 	// TalosHold is a Talos upgrade of the first control-plane node that a disruption budget holds.
 	TalosHold *demoTalosHold `json:"talosHold"`
+	// QuorumLost is set on a cluster with three control planes whose first two VMs are stopped, so
+	// that its API is silent and etcd has no quorum.
+	QuorumLost bool `json:"quorumLost"`
+	// VMsMissing marks a cluster whose VMs are all gone from Proxmox VE.
+	VMsMissing bool `json:"vmsMissing"`
 }
 
 type demoTalosHold struct {
@@ -226,6 +243,11 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 		return nil, reachErr
 	}
 	f.objects = append(f.objects, reach)
+	health, healthErr := f.etcdHealth()
+	if healthErr != nil {
+		return nil, healthErr
+	}
+	f.objects = append(f.objects, health...)
 	for _, l := range f.data.Activity {
 		e := activityEntry{At: now.Add(-time.Duration(l.AgoMinutes) * time.Minute), User: l.User, What: l.What, Details: l.Details}
 		if l.Cluster != "" {
@@ -234,6 +256,64 @@ func newDemoFleet(now time.Time) (*demoFleet, error) {
 		f.activity = append(f.activity, e)
 	}
 	return f, nil
+}
+
+// demoQuorumLostVMs is how many of a cluster's control-plane VMs stop when it has lost its quorum.
+const demoQuorumLostVMs = 2
+
+// vmStatus is the state the demo gives a machine's VM.
+func (f *demoFleet) vmStatus(d *demoCluster, m *clusterv1.Machine, i int) string {
+	if d.QuorumLost && isControlPlane(m) && i < demoQuorumLostVMs {
+		return "stopped"
+	}
+	return f.data.VMStatus
+}
+
+// etcdHealth is the management cluster's control-plane nodes with their apiserver pods, and the
+// controller's record of the clusters' etcd members, which follow the VMs of the fleet.
+func (f *demoFleet) etcdHealth() ([]client.Object, error) {
+	var objects []client.Object
+	for i := range f.data.ProxmoxNodes {
+		name := "kubehenge-cp-" + strconv.Itoa(i)
+		node := demoNode(&clusterv1.Machine{
+			Name: name, Labels: map[string]string{clusterv1.MachineControlPlaneLabel: ""}, CreationTimestamp: metav1.NewTime(f.now.AddDate(0, 0, -240)),
+			Spec:   clusterv1.MachineSpec{Version: "v1.37.1"},
+			Status: clusterv1.MachineStatus{NodeRef: clusterv1.MachineNodeReference{Name: name}},
+		})
+		pod := demoPod(metav1.NamespaceSystem, "kube-apiserver-"+name, name, f.now.AddDate(0, 0, -30), "250m", "512Mi")
+		objects = append(objects, node, pod)
+	}
+	record := provisioner.EtcdHealth{Checked: f.now, Nodes: f.data.ProxmoxNodes, Clusters: []provisioner.EtcdSet{}}
+	for i := range f.data.Clusters {
+		d := &f.data.Clusters[i]
+		set := provisioner.EtcdSet{Cluster: clusterKey(demoNamespace, d.Name)}
+		for j := range d.ControlPlanes {
+			m := provisioner.EtcdMemberHealth{
+				Machine: fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, int(j))),
+				Node:    f.data.ProxmoxNodes[int(j)%len(f.data.ProxmoxNodes)], Healthy: true,
+			}
+			if d.QuorumLost && int(j) < demoQuorumLostVMs {
+				m.Healthy, m.Reason = false, "its VM is stopped"
+			}
+			set.Members = append(set.Members, m)
+		}
+		record.Clusters = append(record.Clusters, set)
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("the demo's etcd health: %w", err)
+	}
+	return append(objects, &corev1.ConfigMap{
+		Namespace: demoClassNamespace, Name: provisioner.EtcdHealthName,
+		Data: map[string]string{provisioner.EtcdHealthKey: string(raw)},
+	}), nil
+}
+
+// unreachable is the demo's node that is online in the cluster while calls forwarded to it fail
+// with 596, as after a join that lost its certificate.
+func (f *demoFleet) unreachable() provisioner.NodeFault {
+	nodes := f.data.ProxmoxNodes
+	return provisioner.NodeFault{Node: nodes[len(nodes)-1], Reason: "HTTP 596: certificate verify failed"}
 }
 
 // proxmoxReach is the controller's record of its last test of the Proxmox VE tokens, with two that
@@ -251,7 +331,7 @@ func (f *demoFleet) proxmoxReach() (*corev1.ConfigMap, error) {
 			Problem: provisioner.TokenCertificate, Error: "x509: certificate signed by unknown authority",
 		})
 	}
-	raw, err := json.Marshal(provisioner.Reachability{OK: true, Tokens: tokens, Checked: f.now})
+	raw, err := json.Marshal(provisioner.Reachability{OK: true, Tokens: tokens, Unreachable: []provisioner.NodeFault{f.unreachable()}, Checked: f.now})
 	if err != nil {
 		return nil, fmt.Errorf("the demo's Proxmox VE reachability: %w", err)
 	}
@@ -319,7 +399,7 @@ func (f *demoFleet) templateLines() error {
 	vmid := demoTemplateVMID
 	add := func(t *templates.Template) {
 		f.templates = append(f.templates, pve.Member{
-			VMID: vmid, Node: f.data.ProxmoxNodes[vmid%len(f.data.ProxmoxNodes)], Type: "qemu", Name: t.Name, Template: 1, Tags: strings.Join(t.Tags, ";"),
+			VMID: vmid, Node: f.data.ProxmoxNodes[vmid%len(f.data.ProxmoxNodes)], Type: memberQEMU, Name: t.Name, Template: 1, Tags: strings.Join(t.Tags, ";"),
 		})
 		vmid++
 	}
@@ -423,6 +503,10 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 		f.objects = append(f.objects, demoReferences(&n)...)
 	}
 	nodes := f.data.ProxmoxNodes
+	hosts := nodes
+	if d.AvoidSkewedNode {
+		hosts = slices.DeleteFunc(slices.Clone(nodes), func(n string) bool { return n == f.skewedNode() })
+	}
 	for i, m := range machines {
 		if d.Held && i == len(machines)-1 {
 			m.Annotations = map[string]string{
@@ -438,8 +522,8 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 			mem = 16 * demoGiB
 		}
 		f.members[names.Pool] = append(f.members[names.Pool], pve.Member{
-			VMID: *vmid, Node: nodes[i%len(nodes)], Type: "qemu", Name: m.Spec.InfrastructureRef.Name,
-			Status: f.data.VMStatus, CPU: 0.08 + float64((*vmid*7)%23)/100, Cores: 4, Memory: mem * int64(40+(*vmid*13)%35) / 100, MaxMem: mem,
+			VMID: *vmid, Node: hosts[i%len(hosts)], Type: memberQEMU, Name: m.Spec.InfrastructureRef.Name,
+			Status: f.vmStatus(d, m, i), CPU: 0.08 + float64((*vmid*7)%23)/100, Cores: 4, Memory: mem * int64(40+(*vmid*13)%35) / 100, MaxMem: mem,
 			Uptime: int64(f.now.Sub(m.CreationTimestamp.Time).Seconds()),
 		})
 		*vmid++
@@ -511,6 +595,12 @@ func (f *demoFleet) heldConditions(d *demoCluster) []metav1.Condition {
 			LastTransitionTime: metav1.NewTime(f.now.Add(-time.Duration(n.AgoHours) * time.Hour)),
 		})
 	}
+	if d.HARulesPending != "" {
+		out = append(out, metav1.Condition{
+			Type: provisioner.HARulesPendingCondition, Status: metav1.ConditionTrue, Reason: "MixedVersions",
+			Message: d.HARulesPending, LastTransitionTime: metav1.NewTime(f.now.Add(-40 * time.Minute)),
+		})
+	}
 	if d.LackingMemory != "" {
 		out = append(out, metav1.Condition{
 			Type: provisioner.NodesLackMemoryCondition, Status: metav1.ConditionTrue, Reason: "NoRoom",
@@ -561,22 +651,35 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		c.Annotations[changeAnnotation] = string(raw)
 		c.Generation++
 	}
+	if d.ProxmoxVersions != "" {
+		c.Annotations[provisioner.ProxmoxVersionsAnnotation] = d.ProxmoxVersions
+	}
+	if d.NodeMTUs != "" {
+		c.Annotations[provisioner.NodeMTUsAnnotation] = d.NodeMTUs
+	}
 	if h := d.TalosHold; h != nil {
 		node := fmt.Sprintf("%s-%s-%s", d.Name, controlPlaneRole, demoSuffix(d.Name, controlPlaneRole, 0))
 		since := f.now.Add(-time.Duration(h.SinceMinutes) * time.Minute).UTC().Format(time.RFC3339)
 		c.Annotations[provisioner.TalosUpgradingAnnotation] = fmt.Sprintf("%s to %s since %s", node, h.To, since)
 		c.Annotations[provisioner.TalosWaitingAnnotation] = h.held(node)
 	}
+	conditions := []metav1.Condition{
+		{Type: clusterv1.AvailableCondition, Status: metav1.ConditionTrue, Reason: clusterv1.AvailableReason, LastTransitionTime: since},
+		{Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue, Reason: clusterv1.ClusterControlPlaneInitializedReason, LastTransitionTime: since},
+		{Type: provisioner.KubehengeReadyCondition, Status: metav1.ConditionTrue, Reason: clusterv1.ReadyReason, LastTransitionTime: since},
+		reconciled,
+	}
+	if d.VMsMissing {
+		conditions = append(conditions, metav1.Condition{
+			Type: provisioner.VMsMissingCondition, Status: metav1.ConditionTrue, Reason: provisioner.VMsMissingReason,
+			Message: provisioner.VMsMissingMessage(int(d.ControlPlanes + d.Workers)), LastTransitionTime: since,
+		})
+	}
 	c.Status = clusterv1.ClusterStatus{
 		Phase:              string(clusterv1.ClusterPhaseProvisioned),
 		ObservedGeneration: c.Generation,
 		Initialization:     clusterv1.ClusterInitializationStatus{InfrastructureProvisioned: new(true), ControlPlaneInitialized: new(true)},
-		Conditions: []metav1.Condition{
-			{Type: clusterv1.AvailableCondition, Status: metav1.ConditionTrue, Reason: clusterv1.AvailableReason, LastTransitionTime: since},
-			{Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue, Reason: clusterv1.ClusterControlPlaneInitializedReason, LastTransitionTime: since},
-			{Type: provisioner.KubehengeReadyCondition, Status: metav1.ConditionTrue, Reason: clusterv1.ReadyReason, LastTransitionTime: since},
-			reconciled,
-		},
+		Conditions:         conditions,
 		ControlPlane: &clusterv1.ClusterControlPlaneStatus{
 			DesiredReplicas: &cp, Replicas: &cp, ReadyReplicas: &cp, AvailableReplicas: &cp, UpToDateReplicas: &upToDateCP,
 		},
@@ -589,7 +692,34 @@ func (f *demoFleet) cluster(d *demoCluster, created time.Time) *clusterv1.Cluste
 		c.Spec.Paused = new(true)
 	}
 	f.waitForWindow(c, d.AddonChanges)
+	f.etcdTrouble(c, d, since)
 	return c
+}
+
+// etcdTrouble sets the conditions of a demo cluster whose etcd lost its quorum or writes slowly.
+func (f *demoFleet) etcdTrouble(c *clusterv1.Cluster, d *demoCluster, since metav1.Time) {
+	if d.QuorumLost {
+		since := f.now.Add(-14 * time.Minute)
+		lost := d.ControlPlanes - demoQuorumLostVMs
+		c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
+			Type: provisioner.QuorumLostCondition, Status: metav1.ConditionTrue, Reason: provisioner.QuorumLostReason, LastTransitionTime: metav1.NewTime(since),
+			Message: fmt.Sprintf("%d of %d control-plane machines have a running VM, and etcd needs %d. The API has been silent for 10m0s or more.",
+				lost, d.ControlPlanes, d.ControlPlanes/2+1),
+		})
+		c.Status.ControlPlane.ReadyReplicas, c.Status.ControlPlane.AvailableReplicas = &lost, new(int32)
+	}
+	if d.EtcdFsyncMs > 0 {
+		members := make([]provisioner.MemberFsync, 0, d.ControlPlanes)
+		for i := range d.ControlPlanes {
+			members = append(members, provisioner.MemberFsync{
+				Member: fmt.Sprintf("etcd-%s-control-plane-%d", d.Name, i+1), P99: time.Duration(d.EtcdFsyncMs) * time.Millisecond, Syncs: demoFsyncs,
+			})
+		}
+		if cond := provisioner.EtcdLatencyConditionOf(members); cond != nil {
+			cond.Type, cond.LastTransitionTime = provisioner.EtcdLatencyCondition, since
+			c.Status.Conditions = append(c.Status.Conditions, *cond)
+		}
+	}
 }
 
 // waitForWindow records on the cluster the add-on changes that wait for its next window.
@@ -605,6 +735,9 @@ func (f *demoFleet) waitForWindow(c *clusterv1.Cluster, changes []provisioner.Ad
 		Message: "Add-on changes wait for the upgrade window, which opens " + opens.Format(time.RFC3339), LastTransitionTime: metav1.NewTime(f.now.Add(-2 * time.Hour)),
 	})
 }
+
+// demoFsyncs is how many write-ahead log syncs the demo's slow etcd members report.
+const demoFsyncs = 48000
 
 // demoCondition is a condition that holds, as an unstructured object carries it.
 func demoCondition(kind, reason string, at time.Time) map[string]any {
@@ -688,6 +821,10 @@ func (f *demoFleet) machine(d *demoCluster, role string, i int, created time.Tim
 			version = d.Upgrade.From
 		}
 	}
+	var nodeInfo *corev1.NodeSystemInfo
+	if d.Distribution == templates.Talos {
+		nodeInfo = &corev1.NodeSystemInfo{OSImage: "Talos (" + templates.DefaultTalosVersion + ")"}
+	}
 	return &clusterv1.Machine{
 		Namespace: demoNamespace, Name: name, Labels: labels, CreationTimestamp: metav1.NewTime(born),
 		Spec: clusterv1.MachineSpec{
@@ -697,6 +834,7 @@ func (f *demoFleet) machine(d *demoCluster, role string, i int, created time.Tim
 		Status: clusterv1.MachineStatus{
 			Phase:     string(clusterv1.MachinePhaseRunning),
 			NodeRef:   clusterv1.MachineNodeReference{Name: name},
+			NodeInfo:  nodeInfo,
 			Addresses: clusterv1.MachineAddresses{{Type: clusterv1.MachineInternalIP, Address: fmt.Sprintf("10.20.%d.%d", d.Subnet, host)}},
 			Conditions: []metav1.Condition{{
 				Type: clusterv1.MachineReadyCondition, Status: metav1.ConditionTrue, Reason: clusterv1.MachineReadyReason, LastTransitionTime: metav1.NewTime(born.Add(4 * time.Minute)),
@@ -974,6 +1112,9 @@ var demoPrivileges = pve.Privileges{
 	"VM.Audit": true, "VM.Allocate": true, "VM.Console": true, "VM.PowerMgmt": true, "Sys.Modify": true, "Sys.Audit": true,
 	"Datastore.AllocateSpace": true, "Datastore.AllocateTemplate": true, "SDN.Use": true, "Permissions.Modify": true,
 	"User.Modify": true, "Group.Allocate": true, "Realm.AllocateUser": true, "Pool.Allocate": true,
+	"Pool.Audit": true, "VM.Config.CPU": true, "VM.Config.Cloudinit": true, "VM.Config.Disk": true, "VM.Config.HWType": true,
+	"VM.Config.Memory": true, "VM.Config.Network": true, "VM.Config.Options": true, "Datastore.Allocate": true,
+	"SDN.Audit": true, "Sys.AccessNetwork": true,
 }
 
 // demoTicket is issued now, not at the demo's time: sessions end by the real clock.
@@ -1033,22 +1174,34 @@ func (a *demoAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
 	nodes := a.fleet.data.ProxmoxNodes
 	list := make([]pve.Node, 0, len(nodes))
 	for i, node := range nodes {
-		list = append(list, pve.Node{Node: node, Online: true, Memory: int64(148+22*i) * demoGiB, MaxMemory: 384 * demoGiB})
+		n := pve.Node{Node: node, Online: true, Memory: int64(148+22*i) * demoGiB, MaxMemory: 384 * demoGiB}
+		if fault := a.fleet.unreachable(); fault.Node == node {
+			n.Online, n.Fault = false, fault.Reason
+		}
+		list = append(list, n)
 	}
 	return list, nil
 }
 
 func (*demoAccounts) Bridges(_ context.Context, _ *pve.Ticket, node string) ([]pve.Bridge, error) {
-	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.20.0.2/16", Gateway: "10.20.0.1"}}, nil
+	return []pve.Bridge{{Bridge: "vmbr0", Node: node, CIDR: "10.20.0.2/16", Gateway: "10.20.0.1", CIDR6: "fd00:20::2/64", Gateway6: "fd00:20::1"}}, nil
 }
 
 func (*demoAccounts) DNS(context.Context, *pve.Ticket, string) (pve.NodeDNS, error) {
 	return pve.NodeDNS{Servers: []string{"10.20.0.53"}, Search: "corp.example"}, nil
 }
 
+// skewedNode is the node whose clock runs ahead, the second one, or none.
+func (f *demoFleet) skewedNode() string {
+	if nodes := f.data.ProxmoxNodes; len(nodes) > 1 {
+		return nodes[1]
+	}
+	return ""
+}
+
 // NodeTime is the node's clock, which the demo has the second node run a minute and a half ahead.
 func (a *demoAccounts) NodeTime(_ context.Context, _ *pve.Ticket, node string) (time.Time, error) {
-	if nodes := a.fleet.data.ProxmoxNodes; len(nodes) > 1 && node == nodes[1] {
+	if node == a.fleet.skewedNode() {
 		return a.fleet.now.Add(95 * time.Second), nil
 	}
 	return a.fleet.now, nil
@@ -1060,6 +1213,10 @@ func (*demoAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, error
 
 func (*demoAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]string, error) {
 	return map[string]string{}, nil
+}
+
+func (*demoAccounts) APIReach(context.Context, *pve.Ticket) (*pve.APIReach, error) {
+	return &pve.APIReach{}, nil
 }
 
 func (*demoAccounts) NextID(context.Context, *pve.Ticket) (pve.NextID, error) {

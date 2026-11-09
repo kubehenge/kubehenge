@@ -104,6 +104,7 @@ step "a k3s cluster with one pool the autoscaler keeps between 0 and 2 workers"
 kubectl create namespace "${ns}"
 addresses=$(json_list "${KUBEHENGE_E2E_ADDRESSES}")
 dns_servers=$(json_list "${KUBEHENGE_E2E_DNS}")
+release_mirror=$(release_mirror_variable)
 kubectl apply -f - << EOF
 apiVersion: cluster.x-k8s.io/v1beta2
 kind: Cluster
@@ -146,8 +147,10 @@ spec:
         value: {cores: 2, memoryMiB: 2048, diskGiB: 20}
       - name: autoscaler
         value: {scaleDownUnneededMinutes: 1, scaleDownDelayAfterAddMinutes: 1}
+${release_mirror}
 EOF
 kubectl -n "${ns}" wait --for=condition=Available cluster/web --timeout=40m
+check_release_mirror "${ns}" web kthreescontrolplanes
 kubectl -n "${ns}" get secret web-kubeconfig -o jsonpath='{.data.value}' | base64 -d > "${work}/web"
 until_true 600 "the autoscaler's Deployment" kubectl -n "${autoscalers}" get "deployment/${name}" -o name
 kubectl -n "${autoscalers}" rollout status "deployment/${name}" --timeout=10m

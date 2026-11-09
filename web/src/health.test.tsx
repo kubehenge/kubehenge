@@ -3,8 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { fakeServer, held, reads, type Route } from "./fake-server";
+import { standing } from "./fleet";
 import { HealthView } from "./Health";
-import type { Cluster, ClusterHealth, UnwellPod } from "./types";
+import type { Cluster, ClusterHealth, FleetHealth, UnwellPod } from "./types";
 
 const minutesAgo = (n: number): string => new Date(Date.now() - n * 60_000).toISOString();
 
@@ -407,6 +408,98 @@ describe("health page", () => {
     expect(row.queryByRole("link", { name: "Something odd" })).not.toBeInTheDocument();
   });
 
+  it("warns of a Proxmox VE node that is not reachable, with the fix, and drops the row once it answers", async () => {
+    const docs = "https://kubehenge.dev/troubleshooting#a-node-is-online-but-not-reachable";
+    const item = {
+      severity: "warning" as const,
+      section: "nodes",
+      what: "Proxmox VE node not reachable",
+      message:
+        "Not reachable through the cluster: pve3 (HTTP 596: certificate verify failed). Run this on that node, then restart pveproxy:",
+      command: "pvecm updatecerts --force",
+      docs,
+    };
+    const fleet = (verdict: FleetHealth["verdict"], attention: (typeof item)[]): FleetHealth => ({
+      namespace: "default",
+      name: "web",
+      read: new Date().toISOString(),
+      verdict,
+      attention,
+    });
+    fakeServer({ [healthPath]: { body: { ...degraded, attention: [item] } } });
+    const { unmount } = render(<HealthView cluster={cluster} headlamp={undefined} />);
+    const row = within(await screen.findByRole("row", { name: /Proxmox VE node not reachable/u }));
+    expect(row.getByText(/pve3 \(HTTP 596: certificate verify failed\)/u)).toBeInTheDocument();
+    expect(row.getByText("pvecm updatecerts --force").tagName).toBe("CODE");
+    expect(row.getByRole("link", { name: "How to fix" })).toHaveAttribute("href", docs);
+    expect(standing(cluster, fleet("degraded", [item]))).toMatchObject({
+      group: "needs",
+      state: "warning",
+      verdict: "Degraded",
+      reason: "Proxmox VE node not reachable",
+    });
+    unmount();
+
+    fakeServer({ [healthPath]: { body: { ...degraded, verdict: "healthy", attention: [] } } });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+    await screen.findByRole("list", { name: "At a glance" });
+    expect(screen.queryByText("Proxmox VE node not reachable")).not.toBeInTheDocument();
+    expect(standing(cluster, fleet("healthy", []))).toMatchObject({ group: "healthy", verdict: "Available" });
+  });
+
+  it("shows a command in an attention message as code", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [
+            { severity: "warning", section: "nodes", what: "A fix", message: "Run `qm unlock 100` on the node." },
+          ],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+    const row = within(await screen.findByRole("row", { name: /A fix/u }));
+    expect(row.getByText("qm unlock 100").tagName).toBe("CODE");
+    expect(row.queryByText(/`/u)).not.toBeInTheDocument();
+  });
+
+  it("lists a Proxmox VE upgrade under way, its interface sizes and the HA rules that wait", async () => {
+    fakeServer({
+      [healthPath]: {
+        body: {
+          ...degraded,
+          attention: [
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "Proxmox VE 8 and 9 nodes in one cluster",
+              message: "Proxmox VE 8: pve1, pve3. Proxmox VE 9: pve2.",
+            },
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "VMs differ in interface MTU",
+              message: "pve1: 1500, pve2: 9000.",
+            },
+            {
+              severity: "warning",
+              section: "nodes",
+              what: "HA rules wait for the Proxmox VE upgrade",
+              message: "The cluster's HA rules are written once the nodes run one version.",
+            },
+          ],
+        },
+      },
+    });
+    render(<HealthView cluster={cluster} headlamp={undefined} />);
+
+    const versions = within(await screen.findByRole("row", { name: /Proxmox VE 8 and 9 nodes in one cluster/u }));
+    expect(versions.getByText("Proxmox VE 8: pve1, pve3. Proxmox VE 9: pve2.")).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /VMs differ in interface MTU/u })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /HA rules wait for the Proxmox VE upgrade/u })).toBeInTheDocument();
+  });
+
   it("shows no alerts section for a cluster without monitoring", async () => {
     fakeServer({ [healthPath]: { body: degraded } });
     render(<HealthView cluster={cluster} headlamp={undefined} />);
@@ -475,6 +568,39 @@ describe("health page", () => {
     expect(screen.queryByText(/^Taint /u)).not.toBeInTheDocument();
     // A node without taints has no empty list.
     expect(screen.queryByRole("list", { name: "web-md-0-a taints" })).not.toBeInTheDocument();
+  });
+
+  it("labels every cell of the nodes, pods and add-ons for the stacked phone layout", async () => {
+    fakeServer({ [healthPath]: { body: degraded } });
+    render(<HealthView cluster={cluster} />);
+
+    await screen.findByRole("row", { name: /^web-cp-a/u });
+    const stacked = screen
+      .getAllByRole("table")
+      .filter((t) => ["stack", "stack-wide"].some((c) => t.classList.contains(c)));
+    const heads = stacked.map((t) =>
+      within(t)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    );
+    expect(heads).toStrictEqual(
+      expect.arrayContaining([
+        ["Name", "Status", "CPU", "Memory", "Pods", "Kubelet", "Up"],
+        ["Pod", "Node", "Status", "Restarts", "Since", "Actions"],
+      ]),
+    );
+    // Each cell after the heading cell names its column, which the phone layout shows beside the value.
+    const labels = stacked.map((t) =>
+      [...t.querySelectorAll<HTMLElement>("tbody tr:first-child td:not(.row-action)")]
+        .slice(1)
+        .map((c) => c.dataset["label"]),
+    );
+    expect(labels).toStrictEqual(
+      expect.arrayContaining([
+        ["Status", "CPU", "Memory", "Pods", "Kubelet", "Up"],
+        ["Node", "Status", "Restarts", "Since"],
+      ]),
+    );
   });
 
   it("says the autoscaler brings workers to a pool at none, which keeps the control plane to itself", async () => {

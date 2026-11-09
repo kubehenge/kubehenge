@@ -445,6 +445,62 @@ case "${serves_s3}" in
     *) ;;
 esac
 
+# The RKE2 and k3s releases the lane's guests install, served from this machine as their release
+# mirror under a certificate of a CA made for the run, so that no guest downloads from GitHub
+# (test/e2e/ci/releases.sh). The whole lane's, so that its later test finds them served and the
+# management cluster's apply changes nothing.
+releases_lane=${KUBEHENGE_E2E_LANE:-$2}
+releases_key=$(sh "${repo}/test/e2e/ci/releases.sh" key "${releases_lane}")
+if [ -n "${releases_key}" ]; then
+    mirror=${work}/mirror
+    mkdir -p "${mirror}"
+    if [ ! -s "${mirror}/tls.crt" ]; then
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-mirror-ca \
+            -keyout "${mirror}/ca.key" -out "${mirror}/ca.crt" 2> /dev/null
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=kubehenge-e2e-mirror \
+            -keyout "${mirror}/tls.key" -out "${mirror}/tls.csr" 2> /dev/null
+        printf 'subjectAltName = IP:%s\nextendedKeyUsage = serverAuth\n' "${KUBEHENGE_E2E_OIDC_ADDRESS:?}" > "${mirror}/san.cnf"
+        openssl x509 -req -in "${mirror}/tls.csr" -CA "${mirror}/ca.crt" -CAkey "${mirror}/ca.key" -CAcreateserial \
+            -CAserial "${mirror}/ca.srl" -days 2 -extfile "${mirror}/san.cnf" -out "${mirror}/tls.crt" 2> /dev/null
+    fi
+    started=$(date +%s)
+    sh "${repo}/test/e2e/ci/releases.sh" fetch "${work}/releases" "${releases_lane}"
+    finished=$(date +%s)
+    echo "the releases the guests install are in place in $((finished - started)) s (${releases_key})"
+    mirror_url="https://${KUBEHENGE_E2E_OIDC_ADDRESS}:8944"
+    if ! curl -fsS --cacert "${mirror}/ca.crt" -o /dev/null "${mirror_url}/" 2> /dev/null; then
+        python3 -c '
+import http.server, ssl, sys, functools
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
+s = http.server.ThreadingHTTPServer(("0.0.0.0", int(sys.argv[2])), handler)
+c = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain(sys.argv[3], sys.argv[4])
+s.socket = c.wrap_socket(s.socket, server_side=True)
+s.serve_forever()' "${work}/releases" 8944 "${mirror}/tls.crt" "${mirror}/tls.key" >> "${work}/mirror.log" 2>&1 &
+        waited=0
+        until curl -fsS --cacert "${mirror}/ca.crt" -o /dev/null "${mirror_url}/" 2> /dev/null; do
+            if [ "${waited}" -ge 30 ]; then
+                cat "${work}/mirror.log" >&2
+                echo "the release mirror did not answer in 30 s" >&2
+                exit 1
+            fi
+            sleep 1
+            waited=$((waited + 1))
+        done
+    fi
+    # The lane of k3s-addons-b gives its clusters the mirror as their own and the management cluster
+    # none, so that a cluster's own mirror is proven as the management cluster's is by the others.
+    case ",${releases_lane}," in
+        *,k3s-addons-b,* | *,k3s-addons-b+*)
+            KUBEHENGE_E2E_RELEASE_MIRROR=$(jq -cn --arg u "${mirror_url}" --rawfile ca "${mirror}/ca.crt" '{url: $u, caBundle: $ca}')
+            export KUBEHENGE_E2E_RELEASE_MIRROR
+            ;;
+        *)
+            TF_VAR_release_mirror=$(jq -cn --arg u "${mirror_url}" --rawfile ca "${mirror}/ca.crt" '{url: $u, ca_bundle: $ca}')
+            export TF_VAR_release_mirror
+            ;;
+    esac
+fi
+
 tofu -chdir="${work}/mgmt" init -input=false -lockfile=readonly > /dev/null
 if ! tofu -chdir="${work}/mgmt" apply -input=false -auto-approve -no-color > "${work}/apply.log"; then
     tail -n 50 "${work}/apply.log" >&2

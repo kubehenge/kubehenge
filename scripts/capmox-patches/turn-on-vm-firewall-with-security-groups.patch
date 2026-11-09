@@ -1,0 +1,1232 @@
+diff --git a/internal/controller/proxmoxmachine_controller.go b/internal/controller/proxmoxmachine_controller.go
+index d275077..51afb19 100644
+--- a/internal/controller/proxmoxmachine_controller.go
++++ b/internal/controller/proxmoxmachine_controller.go
+@@ -33,10 +33,12 @@ import (
+ 	"sigs.k8s.io/cluster-api/util/annotations"
+ 	"sigs.k8s.io/cluster-api/util/conditions"
+ 	ctrl "sigs.k8s.io/controller-runtime"
++	"sigs.k8s.io/controller-runtime/pkg/builder"
+ 	"sigs.k8s.io/controller-runtime/pkg/client"
+ 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+ 	"sigs.k8s.io/controller-runtime/pkg/handler"
+ 	"sigs.k8s.io/controller-runtime/pkg/log"
++	"sigs.k8s.io/controller-runtime/pkg/predicate"
+ 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+ 	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
+@@ -64,9 +66,42 @@ func (r *ProxmoxMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
+ 			&clusterv1.Machine{},
+ 			handler.EnqueueRequestsFromMapFunc(util.MachineToInfrastructureMapFunc(infrav1.GroupVersion.WithKind(infrav1.ProxmoxMachineKind))),
+ 		).
++		Watches(
++			&infrav1.ProxmoxCluster{},
++			handler.EnqueueRequestsFromMapFunc(r.proxmoxClusterToFirewalledMachines),
++			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{})),
++		).
+ 		Complete(r)
+ }
+
++// proxmoxClusterToFirewalledMachines maps a ProxmoxCluster to its machines with security groups,
++// whose firewall sources follow its node address pools and its annotation.
++func (r *ProxmoxMachineReconciler) proxmoxClusterToFirewalledMachines(ctx context.Context, o client.Object) []reconcile.Request {
++	clusterName := o.GetLabels()[clusterv1.ClusterNameLabel]
++	if clusterName == "" {
++		for _, ref := range o.GetOwnerReferences() {
++			if ref.Kind == clusterv1.ClusterKind {
++				clusterName = ref.Name
++			}
++		}
++	}
++	if clusterName == "" {
++		return nil
++	}
++	machines := &infrav1.ProxmoxMachineList{}
++	if err := r.Client.List(ctx, machines, client.InNamespace(o.GetNamespace()), client.MatchingLabels{clusterv1.ClusterNameLabel: clusterName}); err != nil {
++		log.FromContext(ctx).Error(err, "unable to list the ProxmoxMachines of a cluster", "cluster", clusterName)
++		return nil
++	}
++	var requests []reconcile.Request
++	for i := range machines.Items {
++		if vmservice.HasFirewall(&machines.Items[i]) {
++			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&machines.Items[i])})
++		}
++	}
++	return requests
++}
++
+ // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=proxmoxmachines,verbs=get;list;watch;create;update;patch;delete
+ // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=proxmoxmachines/status,verbs=get;update;patch
+ // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=proxmoxmachines/finalizers,verbs=update
+@@ -251,6 +286,11 @@ func (r *ProxmoxMachineReconciler) reconcileNormal(ctx context.Context, machineS
+ 	})
+ 	machineScope.Logger.Info("ProxmoxMachine is ready")
+
++	// A failure leaves the machine ready and is retried, as for a VM whose node is offline.
++	if err := vmservice.ReconcileFirewallSources(ctx, machineScope); err != nil {
++		return reconcile.Result{}, errors.Wrap(err, "failed to reconcile the firewall sources")
++	}
++
+ 	return reconcile.Result{}, nil
+ }
+
+diff --git a/internal/controller/proxmoxmachine_firewall_test.go b/internal/controller/proxmoxmachine_firewall_test.go
+new file mode 100644
+index 0000000..ff36a65
+--- /dev/null
++++ b/internal/controller/proxmoxmachine_firewall_test.go
+@@ -0,0 +1,77 @@
++/*
++Copyright 2023-2026 IONOS Cloud.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package controller
++
++import (
++	"context"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/apimachinery/pkg/types"
++	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
++	"sigs.k8s.io/controller-runtime/pkg/client/fake"
++	"sigs.k8s.io/controller-runtime/pkg/reconcile"
++
++	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
++)
++
++// A change of a ProxmoxCluster reaches each of its machines with security groups, also one whose VM
++// is still being created, so their IPSets follow it. Machines without groups and those of other
++// clusters are left alone.
++func TestProxmoxClusterToFirewalledMachines(t *testing.T) {
++	scheme := runtime.NewScheme()
++	require.NoError(t, infrav1.AddToScheme(scheme))
++	machine := func(name, cluster, groups string) *infrav1.ProxmoxMachine {
++		m := &infrav1.ProxmoxMachine{ObjectMeta: metav1.ObjectMeta{
++			Name: name, Namespace: "ns", Labels: map[string]string{clusterv1.ClusterNameLabel: cluster},
++		}}
++		if groups != "" {
++			m.Annotations = map[string]string{"kubehenge.dev/firewall-groups": groups}
++		}
++		return m
++	}
++	r := &ProxmoxMachineReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(
++		machine("cp-1", "c", "k8s"),
++		machine("cp-2-provisioning", "c", "k8s,base"),
++		machine("worker-1", "c", ""),
++		machine("other-1", "other", "k8s"),
++	).Build()}
++
++	byLabel := &infrav1.ProxmoxCluster{ObjectMeta: metav1.ObjectMeta{
++		Name: "c-x1", Namespace: "ns", Labels: map[string]string{clusterv1.ClusterNameLabel: "c"},
++	}}
++	want := []reconcile.Request{
++		{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "cp-1"}},
++		{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "cp-2-provisioning"}},
++	}
++	require.ElementsMatch(t, want, r.proxmoxClusterToFirewalledMachines(context.Background(), byLabel))
++
++	byOwner := &infrav1.ProxmoxCluster{ObjectMeta: metav1.ObjectMeta{
++		Name: "c-x1", Namespace: "ns",
++		OwnerReferences: []metav1.OwnerReference{{APIVersion: clusterv1.GroupVersion.String(), Kind: clusterv1.ClusterKind, Name: "c"}},
++	}}
++	require.ElementsMatch(t, want, r.proxmoxClusterToFirewalledMachines(context.Background(), byOwner))
++
++	orphan := &infrav1.ProxmoxCluster{ObjectMeta: metav1.ObjectMeta{Name: "c-x1", Namespace: "ns"}}
++	require.Empty(t, r.proxmoxClusterToFirewalledMachines(context.Background(), orphan))
++
++	otherNamespace := byLabel.DeepCopy()
++	otherNamespace.Namespace = "elsewhere"
++	require.Empty(t, r.proxmoxClusterToFirewalledMachines(context.Background(), otherNamespace))
++}
+diff --git a/internal/service/vmservice/firewall.go b/internal/service/vmservice/firewall.go
+new file mode 100644
+index 0000000..2ec1fed
+--- /dev/null
++++ b/internal/service/vmservice/firewall.go
+@@ -0,0 +1,165 @@
++/*
++Copyright 2023-2026 IONOS Cloud.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package vmservice
++
++import (
++	"context"
++	"net/netip"
++	"slices"
++	"strings"
++
++	"github.com/pkg/errors"
++
++	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
++	"github.com/ionos-cloud/cluster-api-provider-proxmox/pkg/scope"
++)
++
++const (
++	// firewallSourcesAnnotation names, comma-separated, on the ProxmoxCluster, further addresses,
++	// networks in CIDR notation and address ranges that the firewall of each of its machines with
++	// security groups accepts all inbound traffic from. A change reaches the running VMs in place.
++	firewallSourcesAnnotation = "kubehenge.dev/firewall-sources"
++
++	// firewallIPSet is the VM's IPSet of the sources its firewall accepts everything from, ahead of
++	// the security groups.
++	firewallIPSet = "kubehenge"
++)
++
++// firewallSourceRule is the source of the VM's rule that accepts its IPSet. The guest scope keeps a
++// datacenter IPSet of the same name from standing in for it.
++const firewallSourceRule = "+guest/" + firewallIPSet
++
++// ReconcileFirewallSources keeps the IPSet of a VM with security groups at the sources its firewall
++// accepts everything from: the cluster's own traffic and the ProxmoxCluster's further sources. The
++// node address pools and those sources change without replacing the machine, so each reconcile
++// writes them again. Machines without security groups are left alone.
++func ReconcileFirewallSources(ctx context.Context, machineScope *scope.MachineScope) error {
++	if len(firewallGroups(machineScope)) == 0 || machineScope.VirtualMachine == nil {
++		return nil
++	}
++	entries, err := firewallEntries(machineScope)
++	if err != nil {
++		return err
++	}
++	return machineScope.InfraCluster.ProxmoxClient.SyncVMFirewallIPSet(ctx, machineScope.VirtualMachine, firewallIPSet, entries)
++}
++
++// firewallEntries are the IPSet entries of a VM with security groups: the control-plane endpoint,
++// every node address pool and the pod networks, which carry the cluster's own traffic, and the
++// ProxmoxCluster's further sources. They are networks in CIDR notation and single addresses, sorted
++// and each once.
++func firewallEntries(machineScope *scope.MachineScope) ([]string, error) {
++	cluster := machineScope.InfraCluster.ProxmoxCluster
++	var sources []string
++	if _, err := netip.ParseAddr(cluster.Spec.ControlPlaneEndpoint.Host); err == nil {
++		sources = append(sources, cluster.Spec.ControlPlaneEndpoint.Host)
++	}
++	pools := make([]*infrav1.IPConfigSpec, 0, 2+2*len(cluster.Spec.ZoneConfigs))
++	pools = append(pools, cluster.Spec.IPv4Config, cluster.Spec.IPv6Config)
++	for _, zone := range cluster.Spec.ZoneConfigs {
++		pools = append(pools, zone.IPv4Config, zone.IPv6Config)
++	}
++	for _, pool := range pools {
++		if pool != nil {
++			sources = append(sources, pool.Addresses...)
++		}
++	}
++	if machineScope.Cluster != nil {
++		sources = append(sources, machineScope.Cluster.Spec.ClusterNetwork.Pods.CIDRBlocks...)
++	}
++	sources = append(sources, annotationList(cluster.GetAnnotations(), firewallSourcesAnnotation)...)
++
++	entries := make([]string, 0, len(sources))
++	for _, source := range sources {
++		prefixes, err := sourcePrefixes(source)
++		if err != nil {
++			return nil, err
++		}
++		for _, prefix := range prefixes {
++			entries = append(entries, ipSetEntry(prefix))
++		}
++	}
++	slices.Sort(entries)
++	return slices.Compact(entries), nil
++}
++
++// sourcePrefixes turns an address, a network in CIDR notation or an address range such as
++// 10.0.0.10-10.0.0.20 into the fewest networks that cover it, since an IPSet holds no ranges.
++func sourcePrefixes(source string) ([]netip.Prefix, error) {
++	if first, last, isRange := strings.Cut(source, "-"); isRange {
++		from, fromErr := netip.ParseAddr(strings.TrimSpace(first))
++		to, toErr := netip.ParseAddr(strings.TrimSpace(last))
++		if fromErr != nil || toErr != nil || from.BitLen() != to.BitLen() || to.Less(from) {
++			return nil, errors.Errorf("invalid firewall source %q: not an address range", source)
++		}
++		return rangePrefixes(from.WithZone(""), to.WithZone("")), nil
++	}
++	if strings.Contains(source, "/") {
++		prefix, err := netip.ParsePrefix(source)
++		if err != nil {
++			return nil, errors.Wrapf(err, "invalid firewall source %q", source)
++		}
++		return []netip.Prefix{prefix.Masked()}, nil
++	}
++	addr, err := netip.ParseAddr(source)
++	if err != nil {
++		return nil, errors.Wrapf(err, "invalid firewall source %q", source)
++	}
++	addr = addr.WithZone("")
++	return []netip.Prefix{netip.PrefixFrom(addr, addr.BitLen())}, nil
++}
++
++// rangePrefixes splits the range from..to into the fewest networks, from the lowest.
++func rangePrefixes(from, to netip.Addr) []netip.Prefix {
++	var prefixes []netip.Prefix
++	for {
++		bits := from.BitLen()
++		for bits > 0 {
++			wider := netip.PrefixFrom(from, bits-1).Masked()
++			if wider.Addr() != from || lastAddr(wider).Compare(to) > 0 {
++				break
++			}
++			bits--
++		}
++		prefix := netip.PrefixFrom(from, bits)
++		prefixes = append(prefixes, prefix)
++		last := lastAddr(prefix)
++		if last.Compare(to) >= 0 {
++			return prefixes
++		}
++		from = last.Next()
++	}
++}
++
++// lastAddr is the highest address of a network.
++func lastAddr(prefix netip.Prefix) netip.Addr {
++	b := prefix.Addr().AsSlice()
++	for i := prefix.Bits(); i < len(b)*8; i++ {
++		b[i/8] |= 1 << (7 - i%8)
++	}
++	addr, _ := netip.AddrFromSlice(b)
++	return addr
++}
++
++// ipSetEntry writes a network as Proxmox VE keeps an IPSet entry, a single address without its
++// prefix length.
++func ipSetEntry(prefix netip.Prefix) string {
++	if prefix.IsSingleIP() {
++		return prefix.Addr().String()
++	}
++	return prefix.String()
++}
+diff --git a/internal/service/vmservice/firewall_test.go b/internal/service/vmservice/firewall_test.go
+new file mode 100644
+index 0000000..e66bf7e
+--- /dev/null
++++ b/internal/service/vmservice/firewall_test.go
+@@ -0,0 +1,133 @@
++/*
++Copyright 2023-2026 IONOS Cloud.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package vmservice
++
++import (
++	"context"
++	"errors"
++	"net/netip"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++
++	infrav1 "github.com/ionos-cloud/cluster-api-provider-proxmox/api/v1alpha2"
++)
++
++func TestSourcePrefixes(t *testing.T) {
++	tests := []struct {
++		source string
++		want   []string
++	}{
++		{source: "10.0.0.5", want: []string{"10.0.0.5/32"}},
++		{source: "10.244.1.7/16", want: []string{"10.244.0.0/16"}},
++		{source: "10.0.0.10-10.0.0.20", want: []string{"10.0.0.10/31", "10.0.0.12/30", "10.0.0.16/30", "10.0.0.20/32"}},
++		{source: "10.0.0.0-10.0.0.255", want: []string{"10.0.0.0/24"}},
++		{source: "10.0.0.7-10.0.0.7", want: []string{"10.0.0.7/32"}},
++		{source: "0.0.0.0-255.255.255.255", want: []string{"0.0.0.0/0"}},
++		{source: "2001:db8::10-2001:db8::20", want: []string{"2001:db8::10/124", "2001:db8::20/128"}},
++		{source: "2001:db8::/64", want: []string{"2001:db8::/64"}},
++		{source: "2001:db8::5", want: []string{"2001:db8::5/128"}},
++	}
++	for _, test := range tests {
++		prefixes, err := sourcePrefixes(test.source)
++		require.NoError(t, err, test.source)
++		got := make([]string, 0, len(prefixes))
++		for _, p := range prefixes {
++			got = append(got, p.String())
++		}
++		require.Equal(t, test.want, got, test.source)
++	}
++	for _, invalid := range []string{"10.0.0.20-10.0.0.10", "10.0.0.1-2001:db8::1", "10.0.0.1-", "10.0.0.0/33", "node1"} {
++		_, err := sourcePrefixes(invalid)
++		require.Error(t, err, invalid)
++	}
++}
++
++// Every network a range splits into lies inside it, and together they hold each of its addresses once.
++func TestRangePrefixesCoverTheRange(t *testing.T) {
++	from, to := netip.MustParseAddr("192.0.2.3"), netip.MustParseAddr("192.0.2.200")
++	next := from
++	for _, prefix := range rangePrefixes(from, to) {
++		require.Equal(t, next, prefix.Addr())
++		next = lastAddr(prefix).Next()
++	}
++	require.Equal(t, to.Next(), next)
++}
++
++// The IPSet holds the cluster's own traffic, the control-plane endpoint, the node address pools of
++// both families and every zone and the pod networks, and the ProxmoxCluster's further sources, each
++// once.
++func TestFirewallEntries(t *testing.T) {
++	machineScope, _, _ := setupReconcilerTest(t)
++	cluster := machineScope.InfraCluster.ProxmoxCluster
++	cluster.Spec.ControlPlaneEndpoint.Host = "10.0.0.5"
++	cluster.Spec.IPv6Config = &infrav1.IPConfigSpec{Addresses: []string{"2001:db8::10-2001:db8::1f"}, Prefix: 64, Gateway: "2001:db8::1"}
++	cluster.Spec.ZoneConfigs = []infrav1.ZoneConfigSpec{{
++		Zone:       new("zone2"),
++		IPv4Config: &infrav1.IPConfigSpec{Addresses: []string{"10.1.0.0/28"}, Prefix: 24, Gateway: "10.1.0.1"},
++	}}
++	machineScope.Cluster.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"10.244.0.0/16", "fd5e:4b1c:9a20::/56"}
++	cluster.SetAnnotations(map[string]string{firewallSourcesAnnotation: "192.0.2.11, 2001:db8:1::11,192.0.2.11,"})
++
++	entries, err := firewallEntries(machineScope)
++	require.NoError(t, err)
++	require.Equal(t, []string{
++		"10.0.0.10/31", "10.0.0.12/30", "10.0.0.16/30", "10.0.0.20", "10.0.0.5",
++		"10.1.0.0/28", "10.244.0.0/16", "192.0.2.11",
++		"2001:db8:1::11", "2001:db8::10/124", "fd5e:4b1c:9a20::/56",
++	}, entries)
++
++	cluster.Spec.ControlPlaneEndpoint.Host = "api.example.com"
++	cluster.SetAnnotations(nil)
++	machineScope.Cluster.Spec.ClusterNetwork.Pods.CIDRBlocks = nil
++	cluster.Spec.IPv6Config, cluster.Spec.ZoneConfigs = nil, nil
++	entries, err = firewallEntries(machineScope)
++	require.NoError(t, err)
++	require.Equal(t, []string{"10.0.0.10/31", "10.0.0.12/30", "10.0.0.16/30", "10.0.0.20"}, entries)
++
++	cluster.SetAnnotations(map[string]string{firewallSourcesAnnotation: "management"})
++	_, err = firewallEntries(machineScope)
++	require.ErrorContains(t, err, `invalid firewall source "management"`)
++}
++
++// Only a machine with security groups and a VM has its IPSet written, each time with the cluster's
++// current sources, so an address added, removed or changed on the ProxmoxCluster reaches it.
++func TestReconcileFirewallSources(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTest(t)
++	require.NoError(t, ReconcileFirewallSources(context.Background(), machineScope), "no groups, no VM")
++
++	vm := newRunningVM()
++	machineScope.SetVirtualMachine(vm)
++	require.NoError(t, ReconcileFirewallSources(context.Background(), machineScope), "no groups")
++
++	machineScope.SetAnnotation(firewallGroupsAnnotation, "k8s")
++	cluster := machineScope.InfraCluster.ProxmoxCluster
++	cluster.SetAnnotations(map[string]string{firewallSourcesAnnotation: "192.0.2.11,2001:db8::11"})
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge",
++		[]string{"10.0.0.10/31", "10.0.0.12/30", "10.0.0.16/30", "10.0.0.20", "192.0.2.11", "2001:db8::11"}).Return(nil).Once()
++	require.NoError(t, ReconcileFirewallSources(context.Background(), machineScope))
++
++	cluster.SetAnnotations(map[string]string{firewallSourcesAnnotation: "192.0.2.12"})
++	cluster.Spec.IPv4Config.Addresses = []string{"10.0.0.10-10.0.0.11"}
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge",
++		[]string{"10.0.0.10/31", "192.0.2.12"}).Return(nil).Once()
++	require.NoError(t, ReconcileFirewallSources(context.Background(), machineScope))
++
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge",
++		[]string{"10.0.0.10/31", "192.0.2.12"}).Return(errors.New("595 no route to host")).Once()
++	require.ErrorContains(t, ReconcileFirewallSources(context.Background(), machineScope), "no route to host")
++}
+diff --git a/internal/service/vmservice/utils.go b/internal/service/vmservice/utils.go
+index 6b9a7fe..28536d6 100644
+--- a/internal/service/vmservice/utils.go
++++ b/internal/service/vmservice/utils.go
+@@ -40,8 +40,45 @@ const (
+
+ 	// DefaultNetworkDeviceIPv6 is the default network device name for ipv6.
+ 	DefaultNetworkDeviceIPv6 = "net0-inet6"
++
++	// firewallGroupsAnnotation names, comma-separated, the Proxmox VE security groups whose rules
++	// police a machine's traffic. With it, the VM's firewall and each interface's firewall flag
++	// are on. Without it, neither is touched.
++	firewallGroupsAnnotation = "kubehenge.dev/firewall-groups"
+ )
+
++// annotationList returns the comma-separated entries of an annotation, none when unset.
++func annotationList(annotations map[string]string, annotation string) []string {
++	var entries []string
++	for entry := range strings.SplitSeq(annotations[annotation], ",") {
++		if entry = strings.TrimSpace(entry); entry != "" {
++			entries = append(entries, entry)
++		}
++	}
++	return entries
++}
++
++// firewallGroups returns the security groups of the machine's firewall, none when it has none.
++func firewallGroups(machineScope *scope.MachineScope) []string {
++	return annotationList(machineScope.ProxmoxMachine.GetAnnotations(), firewallGroupsAnnotation)
++}
++
++// HasFirewall reports whether a machine names security groups, which turn its VM's firewall on.
++func HasFirewall(machine *infrav1.ProxmoxMachine) bool {
++	return len(annotationList(machine.GetAnnotations(), firewallGroupsAnnotation)) > 0
++}
++
++// extractNetworkFirewall reports whether a net device input such as
++// virtio=A6:23:64:4D:84:CB,bridge=vmbr1,firewall=1 has its firewall flag on.
++func extractNetworkFirewall(input string) bool {
++	for option := range strings.SplitSeq(input, ",") {
++		if option == "firewall=1" {
++			return true
++		}
++	}
++	return false
++}
++
+ // GetInClusterIPPoolRefs gets only the object references (per zone) from the clusters
+ // inClusterIPPools.
+ func GetInClusterIPPoolRefs(ctx context.Context, machineScope *scope.MachineScope) (struct {
+@@ -162,6 +199,7 @@ func shouldUpdateNetworkDevices(machineScope *scope.MachineScope) bool {
+ 	}
+
+ 	nets := machineScope.VirtualMachine.VirtualMachineConfig.Nets
++	firewall := len(firewallGroups(machineScope)) > 0
+
+ 	devices := machineScope.ProxmoxMachine.Spec.Network.NetworkDevices
+ 	for _, v := range devices {
+@@ -183,6 +221,10 @@ func shouldUpdateNetworkDevices(machineScope *scope.MachineScope) bool {
+ 			return true
+ 		}
+
++		if firewall && !extractNetworkFirewall(net) {
++			return true
++		}
++
+ 		if v.MTU != nil {
+ 			mtu := extractNetworkMTU(net)
+
+diff --git a/internal/service/vmservice/utils_test.go b/internal/service/vmservice/utils_test.go
+index 50fa1b4..e1255dd 100644
+--- a/internal/service/vmservice/utils_test.go
++++ b/internal/service/vmservice/utils_test.go
+@@ -239,6 +239,56 @@ func TestShouldUpdateNetworkDevices_NoUpdate(t *testing.T) {
+ 	require.False(t, shouldUpdateNetworkDevices(machineScope))
+ }
+
++// A machine with security groups needs the firewall flag on every interface. Without them, an
++// interface's flag is left as the template had it.
++func TestShouldUpdateNetworkDevices_Firewall(t *testing.T) {
++	tests := []struct {
++		name   string
++		groups string
++		net    string
++		update bool
++	}{
++		{name: "groups, flag off", groups: "k8s", net: "virtio=A6:23:64:4D:84:CD,bridge=vmbr0", update: true},
++		{name: "groups, flag on", groups: "k8s", net: "virtio=A6:23:64:4D:84:CD,bridge=vmbr0,firewall=1", update: false},
++		{name: "groups, flag explicitly off", groups: "k8s", net: "virtio=A6:23:64:4D:84:CD,bridge=vmbr0,firewall=0", update: true},
++		{name: "no groups, flag on", net: "virtio=A6:23:64:4D:84:CD,bridge=vmbr0,firewall=1", update: false},
++		{name: "no groups, flag off", net: "virtio=A6:23:64:4D:84:CD,bridge=vmbr0", update: false},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			machineScope, _, _ := setupReconcilerTest(t)
++			if test.groups != "" {
++				machineScope.SetAnnotation(firewallGroupsAnnotation, test.groups)
++			}
++			machineScope.ProxmoxMachine.Spec.Network = &infrav1.NetworkSpec{
++				NetworkDevices: []infrav1.NetworkDevice{{Bridge: new("vmbr0"), Model: new("virtio")}},
++			}
++			machineScope.SetVirtualMachine(newVMWithNets(test.net))
++
++			require.Equal(t, test.update, shouldUpdateNetworkDevices(machineScope))
++		})
++	}
++}
++
++func TestFirewallGroups(t *testing.T) {
++	tests := []struct {
++		annotation string
++		want       []string
++	}{
++		{annotation: "", want: nil},
++		{annotation: "k8s", want: []string{"k8s"}},
++		{annotation: "k8s,base", want: []string{"k8s", "base"}},
++		{annotation: " k8s , base ,, ", want: []string{"k8s", "base"}},
++		{annotation: ",", want: nil},
++	}
++	for _, test := range tests {
++		machineScope, _, _ := setupReconcilerTest(t)
++		machineScope.SetAnnotation(firewallGroupsAnnotation, test.annotation)
++		require.Equal(t, test.want, firewallGroups(machineScope), test.annotation)
++		require.Equal(t, test.want != nil, HasFirewall(machineScope.ProxmoxMachine), test.annotation)
++	}
++}
++
+ func TestExtractNetworkVLAN(t *testing.T) {
+ 	type match struct {
+ 		test     string
+diff --git a/internal/service/vmservice/vm.go b/internal/service/vmservice/vm.go
+index 6abf2c4..d5212ae 100644
+--- a/internal/service/vmservice/vm.go
++++ b/internal/service/vmservice/vm.go
+@@ -116,6 +116,12 @@ func ReconcileVM(ctx context.Context, scope *scope.MachineScope) (infrav1.Virtua
+ 		return vm, err
+ 	} // VirtualMachineProvisioned reason is WaitingForClusterAPIMachineAddresses
+
++	// The IPSet follows the cluster from the first start on, not only once the machine is ready: a
++	// VM whose cloud-init does not finish keeps the sources it was cloned with otherwise.
++	if err := ReconcileFirewallSources(ctx, scope); err != nil {
++		return vm, errors.Wrapf(err, "failed to write the firewall sources of VM %s", scope.Name())
++	}
++
+ 	if err := reconcileMachineAddresses(scope); err != nil {
+ 		scope.Logger.V(4).Info("after reconcileMachineAddresses", "machineName", scope.ProxmoxMachine.GetName(), "err", err)
+ 		return vm, err
+@@ -387,14 +393,27 @@ func reconcileVirtualMachineConfig(ctx context.Context, machineScope *scope.Mach
+ 		}
+ 	}
+
++	// The firewall's IPSet and rules are in place before the VM first starts. The rules stay with it
++	// until it is destroyed, and the IPSet follows the cluster.
++	securityGroups := firewallGroups(machineScope)
++	if len(securityGroups) > 0 {
++		if err := ReconcileFirewallSources(ctx, machineScope); err != nil {
++			return false, errors.Wrapf(err, "failed to write the firewall sources of VM %s", machineScope.Name())
++		}
++		if err := machineScope.InfraCluster.ProxmoxClient.EnableVMFirewall(ctx, machineScope.VirtualMachine, []string{firewallSourceRule}, securityGroups); err != nil {
++			return false, errors.Wrapf(err, "failed to enable the firewall of VM %s", machineScope.Name())
++		}
++	}
++
+ 	// Network vmbrs.
+ 	if machineScope.ProxmoxMachine.Spec.Network != nil && shouldUpdateNetworkDevices(machineScope) {
+ 		devices := machineScope.ProxmoxMachine.Spec.Network.NetworkDevices
+ 		for _, v := range devices {
+-			vmOptions = append(vmOptions, proxmox.VirtualMachineOption{
+-				Name:  string(v.Name),
+-				Value: formatNetworkDevice(ptr.Deref(v.Model, "virtio"), ptr.Deref(v.Bridge, ""), v.MTU, v.VLAN, v.Queues),
+-			})
++			device := formatNetworkDevice(ptr.Deref(v.Model, "virtio"), ptr.Deref(v.Bridge, ""), v.MTU, v.VLAN, v.Queues)
++			if len(securityGroups) > 0 {
++				device += ",firewall=1"
++			}
++			vmOptions = append(vmOptions, proxmox.VirtualMachineOption{Name: string(v.Name), Value: device})
+ 		}
+ 	}
+
+diff --git a/internal/service/vmservice/vm_test.go b/internal/service/vmservice/vm_test.go
+index 59e241f..562f0e1 100644
+--- a/internal/service/vmservice/vm_test.go
++++ b/internal/service/vmservice/vm_test.go
+@@ -20,6 +20,7 @@ import (
+ 	"context"
+ 	"errors"
+ 	"fmt"
++	"slices"
+ 	"testing"
+
+ 	lutherproxmox "github.com/luthermonson/go-proxmox"
+@@ -804,6 +805,89 @@ func TestReconcileVirtualMachineConfig_ApplyConfig(t *testing.T) {
+ 	require.EqualValues(t, task.UPID, *machineScope.ProxmoxMachine.Status.TaskRef)
+ }
+
++// A machine with security groups gets its VM's IPSet of the cluster's sources, then its firewall
++// with the rule accepting that IPSet ahead of those groups, and the firewall flag on every
++// interface, before the VM first starts.
++func TestReconcileVirtualMachineConfig_Firewall(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
++	machineScope.SetAnnotation(firewallGroupsAnnotation, "k8s,base")
++	machineScope.InfraCluster.ProxmoxCluster.SetAnnotations(map[string]string{firewallSourcesAnnotation: "192.0.2.11"})
++	machineScope.Cluster.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"10.244.0.0/16"}
++	machineScope.ProxmoxMachine.Spec.Network = &infrav1.NetworkSpec{
++		NetworkDevices: []infrav1.NetworkDevice{
++			{Name: "net0", Bridge: new("vmbr0"), Model: new("virtio"), MTU: new(int32(1450))},
++			{Name: "net1", Bridge: new("vmbr1"), Model: new("virtio")},
++		},
++	}
++
++	vm := newStoppedVM()
++	vm.VirtualMachineConfig.Description = machineScope.ProxmoxMachine.GetName()
++	vm.VirtualMachineConfig.Nets = map[string]string{
++		"net0": "virtio=A6:23:64:4D:84:CD,bridge=vmbr0,mtu=1450",
++		"net1": "virtio=A6:23:64:4D:84:CE,bridge=vmbr1",
++	}
++	machineScope.SetVirtualMachine(vm)
++	task := newTask()
++
++	ipSet := proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge",
++		[]string{"10.0.0.10/31", "10.0.0.12/30", "10.0.0.16/30", "10.0.0.20", "10.244.0.0/16", "192.0.2.11"}).Return(nil).Once()
++	proxmoxClient.EXPECT().EnableVMFirewall(context.Background(), vm,
++		[]string{"+guest/kubehenge"}, []string{"k8s", "base"}).Return(nil).Once().NotBefore(ipSet)
++	proxmoxClient.EXPECT().ConfigureVM(context.Background(), vm,
++		proxmox.VirtualMachineOption{Name: "net0", Value: "virtio,bridge=vmbr0,mtu=1450,firewall=1"},
++		proxmox.VirtualMachineOption{Name: "net1", Value: "virtio,bridge=vmbr1,firewall=1"},
++	).Return(task, nil).Once()
++
++	requeue, err := reconcileVirtualMachineConfig(context.Background(), machineScope)
++	require.NoError(t, err)
++	require.True(t, requeue)
++}
++
++// A VM whose interfaces already have the flag still gets its firewall, and nothing else is changed.
++func TestReconcileVirtualMachineConfig_FirewallFlagsSet(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
++	machineScope.SetAnnotation(firewallGroupsAnnotation, "k8s")
++	machineScope.ProxmoxMachine.Spec.Network = &infrav1.NetworkSpec{
++		NetworkDevices: []infrav1.NetworkDevice{{Name: "net0", Bridge: new("vmbr0"), Model: new("virtio")}},
++	}
++
++	vm := newStoppedVM()
++	vm.VirtualMachineConfig.Description = machineScope.ProxmoxMachine.GetName()
++	vm.VirtualMachineConfig.Nets = map[string]string{"net0": "virtio=A6:23:64:4D:84:CD,bridge=vmbr0,firewall=1"}
++	machineScope.SetVirtualMachine(vm)
++
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", mock.Anything).Return(nil).Once()
++	proxmoxClient.EXPECT().EnableVMFirewall(context.Background(), vm, []string{"+guest/kubehenge"}, []string{"k8s"}).Return(nil).Once()
++
++	requeue, err := reconcileVirtualMachineConfig(context.Background(), machineScope)
++	require.NoError(t, err)
++	require.False(t, requeue)
++	require.Equal(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForDiskReconciliationReason,
++		conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition))
++}
++
++// A failed firewall write is retried before the VM is configured or started.
++func TestReconcileVirtualMachineConfig_FirewallFails(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
++	machineScope.SetAnnotation(firewallGroupsAnnotation, "k8s")
++	vm := newStoppedVM()
++	machineScope.SetVirtualMachine(vm)
++
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", mock.Anything).Return(nil).Once()
++	proxmoxClient.EXPECT().EnableVMFirewall(context.Background(), vm, []string{"+guest/kubehenge"}, []string{"k8s"}).Return(errors.New("permission denied")).Once()
++
++	_, err := reconcileVirtualMachineConfig(context.Background(), machineScope)
++	require.ErrorContains(t, err, "permission denied")
++	require.Equal(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason,
++		conditions.GetReason(machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition))
++
++	// An IPSet that cannot be written, as on a node that is offline, holds the VM back from its
++	// firewall and its first start.
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", mock.Anything).Return(errors.New("595 no route to host")).Once()
++	_, err = reconcileVirtualMachineConfig(context.Background(), machineScope)
++	require.ErrorContains(t, err, "failed to write the firewall sources")
++}
++
+ func TestReconcileVirtualMachineConfigTags(t *testing.T) {
+ 	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedCloningReason)
+
+@@ -1168,6 +1252,59 @@ func TestReconcileVM_CloudInitRunning(t *testing.T) {
+ 	require.Equal(t, infrav1.VirtualMachineStatePending, result.State)
+ }
+
++// A change of the cluster's firewall sources reaches a VM that has started and is not ready yet,
++// since a VM whose cloud-init never finishes would otherwise keep the IPSet it was cloned with.
++func TestReconcileVM_FirewallSourcesFollowWhileWaitingForCloudInit(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForCloudInitReason)
++	machineScope.SetAnnotation(firewallGroupsAnnotation, "k8s")
++	machineScope.InfraCluster.ProxmoxCluster.SetAnnotations(map[string]string{firewallSourcesAnnotation: "192.0.2.40"})
++	vm := newRunningVM()
++	machineScope.SetVirtualMachineID(int64(vm.VMID))
++	machineScope.ProxmoxMachine.Status.IPAddresses = []infrav1.IPAddressesSpec{{
++		NetName: string(infrav1.DefaultNetworkDevice),
++		IPv4:    []string{"10.10.10.10"},
++	}, {
++		NetName: "default",
++		IPv4:    []string{"10.10.10.10"},
++	}}
++	machineScope.ProxmoxMachine.Status.BootstrapDataProvided = new(true)
++	machineScope.ProxmoxMachine.Status.Initialization.Provisioned = new(true)
++
++	proxmoxClient.EXPECT().GetVM(context.Background(), "node1", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", mock.MatchedBy(func(entries []string) bool {
++		return slices.Contains(entries, "192.0.2.40")
++	})).Return(nil).Once()
++	proxmoxClient.EXPECT().QemuAgentStatus(context.Background(), vm).Return(nil).Once()
++	proxmoxClient.EXPECT().CloudInitStatus(context.Background(), vm).Return(true, nil).Once()
++
++	result, err := ReconcileVM(context.Background(), machineScope)
++	require.NoError(t, err)
++	require.Equal(t, infrav1.VirtualMachineStatePending, result.State)
++}
++
++// An IPSet that cannot be written holds the VM at its state, to be retried.
++func TestReconcileVM_FirewallSourcesFailWhileWaitingForCloudInit(t *testing.T) {
++	machineScope, proxmoxClient, _ := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForCloudInitReason)
++	machineScope.SetAnnotation(firewallGroupsAnnotation, "k8s")
++	vm := newRunningVM()
++	machineScope.SetVirtualMachineID(int64(vm.VMID))
++	machineScope.ProxmoxMachine.Status.IPAddresses = []infrav1.IPAddressesSpec{{
++		NetName: string(infrav1.DefaultNetworkDevice),
++		IPv4:    []string{"10.10.10.10"},
++	}, {
++		NetName: "default",
++		IPv4:    []string{"10.10.10.10"},
++	}}
++	machineScope.ProxmoxMachine.Status.BootstrapDataProvided = new(true)
++	machineScope.ProxmoxMachine.Status.Initialization.Provisioned = new(true)
++
++	proxmoxClient.EXPECT().GetVM(context.Background(), "node1", int64(123)).Return(vm, nil).Once()
++	proxmoxClient.EXPECT().SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", mock.Anything).Return(errors.New("595 no route to host")).Once()
++
++	_, err := ReconcileVM(context.Background(), machineScope)
++	require.ErrorContains(t, err, "failed to write the firewall sources")
++}
++
+ // This test is supposed to test the entire state machine transition.
+ func TestReconcileVM_StateMachine(t *testing.T) {
+ 	machineScope, proxmoxClient, _ := setupReconcilerTest(t)
+diff --git a/pkg/proxmox/client.go b/pkg/proxmox/client.go
+index 00d3530..b955526 100644
+--- a/pkg/proxmox/client.go
++++ b/pkg/proxmox/client.go
+@@ -29,6 +29,9 @@ type Client interface {
+
+ 	ConfigureVM(ctx context.Context, vm *proxmox.VirtualMachine, options ...VirtualMachineOption) (*proxmox.Task, error)
+
++	EnableVMFirewall(ctx context.Context, vm *proxmox.VirtualMachine, sources, securityGroups []string) error
++	SyncVMFirewallIPSet(ctx context.Context, vm *proxmox.VirtualMachine, name string, entries []string) error
++
+ 	FindVMResource(ctx context.Context, vmID uint64) (*proxmox.ClusterResource, error)
+ 	FindVMTemplateByTags(ctx context.Context, templateTags []string, resolutionPolicy string) (string, int32, error)
+
+diff --git a/pkg/proxmox/goproxmox/api_client.go b/pkg/proxmox/goproxmox/api_client.go
+index e719dd2..c989607 100644
+--- a/pkg/proxmox/goproxmox/api_client.go
++++ b/pkg/proxmox/goproxmox/api_client.go
+@@ -21,6 +21,7 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"maps"
++	"net/netip"
+ 	"net/url"
+ 	"slices"
+ 	"strings"
+@@ -109,6 +110,107 @@ func (c *APIClient) ConfigureVM(ctx context.Context, vm *proxmox.VirtualMachine,
+ 	return task, nil
+ }
+
++// firewallSourceComment marks the rules EnableVMFirewall adds for a source it accepts.
++const firewallSourceComment = "kubehenge: the cluster's own traffic"
++
++// EnableVMFirewall turns on a VM's firewall. Its rules accept all inbound traffic from each source
++// (an address, a network in CIDR notation or an address range), then apply each security group,
++// in the order given and ahead of any rule the VM already had. A rule already there is not added
++// again, so a repeated call adds nothing. Proxmox VE filters an interface only when both the VM's
++// firewall and the interface's firewall flag are on.
++func (c *APIClient) EnableVMFirewall(ctx context.Context, vm *proxmox.VirtualMachine, sources, securityGroups []string) error {
++	rules, err := vm.FirewallRules(ctx)
++	if err != nil {
++		return fmt.Errorf("unable to list the firewall rules of vm %d: %w", vm.VMID, err)
++	}
++	present := make(map[string]bool, len(rules))
++	for _, rule := range rules {
++		present[rule.Type+" "+rule.Action+" "+rule.Source] = true
++	}
++	wanted := make([]*proxmox.FirewallRule, 0, len(sources)+len(securityGroups))
++	for _, source := range sources {
++		wanted = append(wanted, &proxmox.FirewallRule{Type: "in", Action: "ACCEPT", Source: source, Enable: 1, Comment: firewallSourceComment})
++	}
++	for _, group := range securityGroups {
++		wanted = append(wanted, &proxmox.FirewallRule{Type: "group", Action: group, Enable: 1})
++	}
++	// Proxmox VE puts a new rule first, so the rules go in from the last one.
++	for i := len(wanted) - 1; i >= 0; i-- {
++		rule := wanted[i]
++		if present[rule.Type+" "+rule.Action+" "+rule.Source] {
++			continue
++		}
++		if err := vm.NewFirewallRule(ctx, rule); err != nil {
++			what := "security group " + rule.Action
++			if rule.Type == "in" {
++				what = "the firewall rule accepting " + rule.Source
++			}
++			return fmt.Errorf("unable to add %s to vm %d: %w", what, vm.VMID, err)
++		}
++	}
++	if err := vm.FirewallOptionSet(ctx, &proxmox.FirewallVirtualMachineOption{Enable: true}); err != nil {
++		return fmt.Errorf("unable to enable the firewall of vm %d: %w", vm.VMID, err)
++	}
++	return nil
++}
++
++// SyncVMFirewallIPSet makes a VM's IPSet hold exactly the entries given, each an address or a network
++// in CIDR notation, and creates the IPSet where the VM lacks it. New entries go in before old ones
++// go, so an address that changes is never left out in between.
++func (c *APIClient) SyncVMFirewallIPSet(ctx context.Context, vm *proxmox.VirtualMachine, name string, entries []string) error {
++	ipSets, err := vm.GetFirewallIPSet(ctx)
++	if err != nil {
++		return fmt.Errorf("unable to list the IPSets of vm %d: %w", vm.VMID, err)
++	}
++	if !slices.ContainsFunc(ipSets, func(ipSet *proxmox.FirewallIPSet) bool { return ipSet.Name == name }) {
++		if err := vm.NewFirewallIPSet(ctx, proxmox.FirewallIPSetCreationOption{Name: name, Comment: firewallSourceComment}); err != nil {
++			return fmt.Errorf("unable to create IPSet %s of vm %d: %w", name, vm.VMID, err)
++		}
++	}
++	present, err := vm.GetFirewallIPSetEntries(ctx, name)
++	if err != nil {
++		return fmt.Errorf("unable to list IPSet %s of vm %d: %w", name, vm.VMID, err)
++	}
++	// Proxmox VE may write an entry otherwise than it was given, so both sides compare as networks.
++	have := make(map[string]string, len(present))
++	for _, entry := range present {
++		have[canonicalIPSetEntry(entry.CIDR)] = entry.CIDR
++	}
++	wanted := make(map[string]bool, len(entries))
++	for _, entry := range entries {
++		key := canonicalIPSetEntry(entry)
++		wanted[key] = true
++		if _, ok := have[key]; ok {
++			continue
++		}
++		if err := vm.NewFirewallIPSetEntry(ctx, name, proxmox.FirewallIPSetEntryCreationOption{CIDR: entry}); err != nil {
++			return fmt.Errorf("unable to add %s to IPSet %s of vm %d: %w", entry, name, vm.VMID, err)
++		}
++	}
++	for _, key := range slices.Sorted(maps.Keys(have)) {
++		if wanted[key] {
++			continue
++		}
++		// The entry is a path segment, and a network's slash would split it.
++		if err := vm.DeleteFirewallIPSetEntry(ctx, name, url.PathEscape(have[key]), ""); err != nil {
++			return fmt.Errorf("unable to remove %s from IPSet %s of vm %d: %w", have[key], name, vm.VMID, err)
++		}
++	}
++	return nil
++}
++
++// canonicalIPSetEntry writes an address or a network in one form, a single address as a full-length
++// network, and leaves anything else as it is.
++func canonicalIPSetEntry(entry string) string {
++	if prefix, err := netip.ParsePrefix(entry); err == nil {
++		return prefix.Masked().String()
++	}
++	if addr, err := netip.ParseAddr(entry); err == nil {
++		return netip.PrefixFrom(addr, addr.BitLen()).String()
++	}
++	return entry
++}
++
+ // GetVM returns a VM based on nodeName and vmID.
+ func (c *APIClient) GetVM(ctx context.Context, nodeName string, vmID int64) (*proxmox.VirtualMachine, error) {
+ 	node := (&proxmox.Node{}).New(c.Client, nodeName)
+diff --git a/pkg/proxmox/goproxmox/api_client_test.go b/pkg/proxmox/goproxmox/api_client_test.go
+index 49ac407..69cf4a7 100644
+--- a/pkg/proxmox/goproxmox/api_client_test.go
++++ b/pkg/proxmox/goproxmox/api_client_test.go
+@@ -18,9 +18,11 @@ package goproxmox
+
+ import (
+ 	"context"
++	"encoding/json"
+ 	"fmt"
+ 	"net/http"
+ 	"net/url"
++	"strings"
+ 	"testing"
+
+ 	"github.com/go-logr/logr"
+@@ -292,6 +294,159 @@ func TestProxmoxAPIClient_ConfigureVM(t *testing.T) {
+ 	}
+ }
+
++// The rules go in from the last one, since Proxmox VE puts a new rule first, so the sources come
++// ahead of the groups. A rule the VM already has is not added again, and the VM's firewall is
++// turned on after its rules.
++func TestProxmoxAPIClient_EnableVMFirewall(t *testing.T) {
++	client := newTestClient(t)
++	vm := &proxmox.VirtualMachine{Node: "test", VMID: 101}
++	vm.New(client.Client, "test", 101)
++
++	var calls []string
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/qemu/101/firewall/rules`,
++		newJSONResponder(200, []map[string]any{
++			{"type": "group", "action": "base", "pos": 0},
++			{"type": "in", "action": "ACCEPT", "source": "10.0.0.5", "pos": 1},
++		}))
++	httpmock.RegisterResponder(http.MethodPost, `=~/nodes/test/qemu/101/firewall/rules`,
++		func(req *http.Request) (*http.Response, error) {
++			var rule map[string]any
++			require.NoError(t, json.NewDecoder(req.Body).Decode(&rule))
++			calls = append(calls, fmt.Sprintf("rule %v %v %v %v", rule["type"], rule["action"], rule["source"], rule["enable"]))
++			return httpmock.NewJsonResponse(200, map[string]any{"data": nil})
++		})
++	httpmock.RegisterResponder(http.MethodPut, `=~/nodes/test/qemu/101/firewall/options`,
++		func(req *http.Request) (*http.Response, error) {
++			var options map[string]any
++			require.NoError(t, json.NewDecoder(req.Body).Decode(&options))
++			calls = append(calls, fmt.Sprintf("options %v", options))
++			return httpmock.NewJsonResponse(200, map[string]any{"data": nil})
++		})
++
++	sources := []string{"10.0.0.10-10.0.0.20", "10.0.0.5", "fd00::/64"}
++	require.NoError(t, client.EnableVMFirewall(context.Background(), vm, sources, []string{"k8s", "base", "ops"}))
++	require.Equal(t, []string{
++		"rule group ops <nil> 1",
++		"rule group k8s <nil> 1",
++		"rule in ACCEPT fd00::/64 1",
++		"rule in ACCEPT 10.0.0.10-10.0.0.20 1",
++		"options map[enable:1]",
++	}, calls)
++}
++
++func TestProxmoxAPIClient_EnableVMFirewallFails(t *testing.T) {
++	client := newTestClient(t)
++	vm := &proxmox.VirtualMachine{Node: "test", VMID: 101}
++	vm.New(client.Client, "test", 101)
++
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/qemu/101/firewall/rules`,
++		newJSONResponder(200, []map[string]any{}))
++	httpmock.RegisterResponder(http.MethodPost, `=~/nodes/test/qemu/101/firewall/rules`,
++		newJSONResponder(403, nil))
++
++	err := client.EnableVMFirewall(context.Background(), vm, nil, []string{"k8s"})
++	require.ErrorContains(t, err, "unable to add security group k8s to vm 101")
++
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/qemu/101/firewall/rules`,
++		newJSONResponder(200, []map[string]any{}))
++	httpmock.RegisterResponder(http.MethodPost, `=~/nodes/test/qemu/101/firewall/rules`,
++		newJSONResponder(403, nil))
++	err = client.EnableVMFirewall(context.Background(), vm, []string{"10.0.0.5"}, nil)
++	require.ErrorContains(t, err, "unable to add the firewall rule accepting 10.0.0.5 to vm 101")
++}
++
++// registerIPSetResponders answers the IPSet calls of VM 101 with the IPSets and entries given, and
++// logs each write.
++func registerIPSetResponders(t *testing.T, ipSets []map[string]any, entries []map[string]any) *[]string {
++	t.Helper()
++	var calls []string
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/qemu/101/firewall/ipset\z`, newJSONResponder(200, ipSets))
++	httpmock.RegisterResponder(http.MethodPost, `=~/nodes/test/qemu/101/firewall/ipset\z`,
++		func(req *http.Request) (*http.Response, error) {
++			var body map[string]any
++			require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
++			calls = append(calls, fmt.Sprintf("create %v", body["name"]))
++			return httpmock.NewJsonResponse(200, map[string]any{"data": nil})
++		})
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/qemu/101/firewall/ipset/kubehenge\z`, newJSONResponder(200, entries))
++	httpmock.RegisterResponder(http.MethodPost, `=~/nodes/test/qemu/101/firewall/ipset/kubehenge\z`,
++		func(req *http.Request) (*http.Response, error) {
++			var body map[string]any
++			require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
++			calls = append(calls, fmt.Sprintf("add %v", body["cidr"]))
++			return httpmock.NewJsonResponse(200, map[string]any{"data": nil})
++		})
++	httpmock.RegisterResponder(http.MethodDelete, `=~/nodes/test/qemu/101/firewall/ipset/kubehenge/`,
++		func(req *http.Request) (*http.Response, error) {
++			calls = append(calls, "remove "+strings.TrimPrefix(req.URL.EscapedPath(), "/api2/json/nodes/test/qemu/101/firewall/ipset/kubehenge/"))
++			return httpmock.NewJsonResponse(200, map[string]any{"data": nil})
++		})
++	return &calls
++}
++
++// A VM without the IPSet gets it, with every entry.
++func TestProxmoxAPIClient_SyncVMFirewallIPSetCreates(t *testing.T) {
++	client := newTestClient(t)
++	vm := &proxmox.VirtualMachine{Node: "test", VMID: 101}
++	vm.New(client.Client, "test", 101)
++	calls := registerIPSetResponders(t, []map[string]any{{"name": "other"}}, []map[string]any{})
++
++	require.NoError(t, client.SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", []string{"10.0.0.10/31", "192.0.2.11", "2001:db8::11"}))
++	require.Equal(t, []string{"create kubehenge", "add 10.0.0.10/31", "add 192.0.2.11", "add 2001:db8::11"}, *calls)
++}
++
++// Entries are added before stale ones are removed, on both families. An entry Proxmox VE writes
++// otherwise than it was given is kept, and a network's slash is escaped in the path.
++func TestProxmoxAPIClient_SyncVMFirewallIPSetChanges(t *testing.T) {
++	client := newTestClient(t)
++	vm := &proxmox.VirtualMachine{Node: "test", VMID: 101}
++	vm.New(client.Client, "test", 101)
++	calls := registerIPSetResponders(t, []map[string]any{{"name": "kubehenge"}}, []map[string]any{
++		{"cidr": "10.0.0.5"},
++		{"cidr": "10.0.0.0/30"},
++		{"cidr": "2001:db8::5"},
++		{"cidr": "fd00::/64"},
++	})
++
++	require.NoError(t, client.SyncVMFirewallIPSet(context.Background(), vm, "kubehenge",
++		[]string{"10.0.0.0/29", "10.0.0.5/32", "2001:db8::6", "fd00:0::/64"}))
++	require.Equal(t, []string{
++		"add 10.0.0.0/29",
++		"add 2001:db8::6",
++		"remove 10.0.0.0%2F30",
++		"remove 2001:db8::5",
++	}, *calls)
++
++	calls = registerIPSetResponders(t, []map[string]any{{"name": "kubehenge"}}, []map[string]any{{"cidr": "10.0.0.5"}})
++	require.NoError(t, client.SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", []string{"10.0.0.5"}))
++	require.Empty(t, *calls, "an IPSet already in step is not written")
++
++	calls = registerIPSetResponders(t, []map[string]any{{"name": "kubehenge"}}, []map[string]any{{"cidr": "10.0.0.5"}})
++	require.NoError(t, client.SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", nil))
++	require.Equal(t, []string{"remove 10.0.0.5"}, *calls)
++}
++
++func TestProxmoxAPIClient_SyncVMFirewallIPSetFails(t *testing.T) {
++	client := newTestClient(t)
++	vm := &proxmox.VirtualMachine{Node: "test", VMID: 101}
++	vm.New(client.Client, "test", 101)
++
++	// Proxmox VE answers for a node that is offline with status 595 and no body.
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/test/qemu/101/firewall/ipset\z`, httpmock.NewStringResponder(595, ""))
++	err := client.SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", []string{"10.0.0.5"})
++	require.ErrorContains(t, err, "unable to list the IPSets of vm 101")
++
++	registerIPSetResponders(t, []map[string]any{{"name": "kubehenge"}}, []map[string]any{{"cidr": "10.0.0.6"}})
++	httpmock.RegisterResponder(http.MethodPost, `=~/nodes/test/qemu/101/firewall/ipset/kubehenge\z`, newJSONResponder(403, nil))
++	err = client.SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", []string{"10.0.0.5"})
++	require.ErrorContains(t, err, "unable to add 10.0.0.5 to IPSet kubehenge of vm 101")
++
++	registerIPSetResponders(t, []map[string]any{{"name": "kubehenge"}}, []map[string]any{{"cidr": "10.0.0.6"}})
++	httpmock.RegisterResponder(http.MethodDelete, `=~/nodes/test/qemu/101/firewall/ipset/kubehenge/`, newJSONResponder(403, nil))
++	err = client.SyncVMFirewallIPSet(context.Background(), vm, "kubehenge", nil)
++	require.ErrorContains(t, err, "unable to remove 10.0.0.6 from IPSet kubehenge of vm 101")
++}
++
+ func TestProxmoxAPIClient_GetVM(t *testing.T) {
+ 	tests := []struct {
+ 		name  string
+diff --git a/pkg/proxmox/proxmoxtest/mock_client.go b/pkg/proxmox/proxmoxtest/mock_client.go
+index 68ec500..c6bd18b 100644
+--- a/pkg/proxmox/proxmoxtest/mock_client.go
++++ b/pkg/proxmox/proxmoxtest/mock_client.go
+@@ -330,6 +330,55 @@ func (_c *MockClient_DeleteVM_Call) RunAndReturn(run func(context.Context, strin
+ 	return _c
+ }
+
++// EnableVMFirewall provides a mock function with given fields: ctx, vm, sources, securityGroups
++func (_m *MockClient) EnableVMFirewall(ctx context.Context, vm *go_proxmox.VirtualMachine, sources []string, securityGroups []string) error {
++	ret := _m.Called(ctx, vm, sources, securityGroups)
++
++	if len(ret) == 0 {
++		panic("no return value specified for EnableVMFirewall")
++	}
++
++	var r0 error
++	if rf, ok := ret.Get(0).(func(context.Context, *go_proxmox.VirtualMachine, []string, []string) error); ok {
++		r0 = rf(ctx, vm, sources, securityGroups)
++	} else {
++		r0 = ret.Error(0)
++	}
++
++	return r0
++}
++
++// MockClient_EnableVMFirewall_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'EnableVMFirewall'
++type MockClient_EnableVMFirewall_Call struct {
++	*mock.Call
++}
++
++// EnableVMFirewall is a helper method to define mock.On call
++//   - ctx context.Context
++//   - vm *go_proxmox.VirtualMachine
++//   - sources []string
++//   - securityGroups []string
++func (_e *MockClient_Expecter) EnableVMFirewall(ctx interface{}, vm interface{}, sources interface{}, securityGroups interface{}) *MockClient_EnableVMFirewall_Call {
++	return &MockClient_EnableVMFirewall_Call{Call: _e.mock.On("EnableVMFirewall", ctx, vm, sources, securityGroups)}
++}
++
++func (_c *MockClient_EnableVMFirewall_Call) Run(run func(ctx context.Context, vm *go_proxmox.VirtualMachine, sources []string, securityGroups []string)) *MockClient_EnableVMFirewall_Call {
++	_c.Call.Run(func(args mock.Arguments) {
++		run(args[0].(context.Context), args[1].(*go_proxmox.VirtualMachine), args[2].([]string), args[3].([]string))
++	})
++	return _c
++}
++
++func (_c *MockClient_EnableVMFirewall_Call) Return(_a0 error) *MockClient_EnableVMFirewall_Call {
++	_c.Call.Return(_a0)
++	return _c
++}
++
++func (_c *MockClient_EnableVMFirewall_Call) RunAndReturn(run func(context.Context, *go_proxmox.VirtualMachine, []string, []string) error) *MockClient_EnableVMFirewall_Call {
++	_c.Call.Return(run)
++	return _c
++}
++
+ // FindVMResource provides a mock function with given fields: ctx, vmID
+ func (_m *MockClient) FindVMResource(ctx context.Context, vmID uint64) (*go_proxmox.ClusterResource, error) {
+ 	ret := _m.Called(ctx, vmID)
+@@ -970,6 +1019,55 @@ func (_c *MockClient_StartVM_Call) RunAndReturn(run func(context.Context, *go_pr
+ 	return _c
+ }
+
++// SyncVMFirewallIPSet provides a mock function with given fields: ctx, vm, name, entries
++func (_m *MockClient) SyncVMFirewallIPSet(ctx context.Context, vm *go_proxmox.VirtualMachine, name string, entries []string) error {
++	ret := _m.Called(ctx, vm, name, entries)
++
++	if len(ret) == 0 {
++		panic("no return value specified for SyncVMFirewallIPSet")
++	}
++
++	var r0 error
++	if rf, ok := ret.Get(0).(func(context.Context, *go_proxmox.VirtualMachine, string, []string) error); ok {
++		r0 = rf(ctx, vm, name, entries)
++	} else {
++		r0 = ret.Error(0)
++	}
++
++	return r0
++}
++
++// MockClient_SyncVMFirewallIPSet_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SyncVMFirewallIPSet'
++type MockClient_SyncVMFirewallIPSet_Call struct {
++	*mock.Call
++}
++
++// SyncVMFirewallIPSet is a helper method to define mock.On call
++//   - ctx context.Context
++//   - vm *go_proxmox.VirtualMachine
++//   - name string
++//   - entries []string
++func (_e *MockClient_Expecter) SyncVMFirewallIPSet(ctx interface{}, vm interface{}, name interface{}, entries interface{}) *MockClient_SyncVMFirewallIPSet_Call {
++	return &MockClient_SyncVMFirewallIPSet_Call{Call: _e.mock.On("SyncVMFirewallIPSet", ctx, vm, name, entries)}
++}
++
++func (_c *MockClient_SyncVMFirewallIPSet_Call) Run(run func(ctx context.Context, vm *go_proxmox.VirtualMachine, name string, entries []string)) *MockClient_SyncVMFirewallIPSet_Call {
++	_c.Call.Run(func(args mock.Arguments) {
++		run(args[0].(context.Context), args[1].(*go_proxmox.VirtualMachine), args[2].(string), args[3].([]string))
++	})
++	return _c
++}
++
++func (_c *MockClient_SyncVMFirewallIPSet_Call) Return(_a0 error) *MockClient_SyncVMFirewallIPSet_Call {
++	_c.Call.Return(_a0)
++	return _c
++}
++
++func (_c *MockClient_SyncVMFirewallIPSet_Call) RunAndReturn(run func(context.Context, *go_proxmox.VirtualMachine, string, []string) error) *MockClient_SyncVMFirewallIPSet_Call {
++	_c.Call.Return(run)
++	return _c
++}
++
+ // TagVM provides a mock function with given fields: ctx, vm, tag
+ func (_m *MockClient) TagVM(ctx context.Context, vm *go_proxmox.VirtualMachine, tag string) (*go_proxmox.Task, error) {
+ 	ret := _m.Called(ctx, vm, tag)

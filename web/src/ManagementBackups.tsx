@@ -2,6 +2,7 @@ import { useState, type JSX } from "react";
 
 import { adminPath } from "./admin-views";
 import { api } from "./api";
+import { BackupWarning, ExportBox, RecreateDialog } from "./ManagementRecovery";
 import { Link } from "./router";
 import type { EtcdSnapshot, ManagementBackups as Backups, ManagementBackupSettings } from "./types";
 import {
@@ -25,6 +26,15 @@ import {
 const when = (iso: string | undefined): string => (iso === undefined ? "" : new Date(iso).toLocaleString());
 
 const defaults = { everyHours: 6, keep: 28 };
+
+const recipientText = (s: ManagementBackupSettings | undefined): string => (s?.specRecipients ?? []).join("\n");
+
+/** The keys typed one per line, without blank lines. The server validates them. */
+const recipientLines = (text: string): string[] =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
 
 // ManagementBackups snapshots the management cluster's etcd into a backup target on a schedule,
 // lists the snapshots there and restores one. The appliance does all of it through the nodes'
@@ -57,6 +67,12 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
     <>
       <div className="box">
         <h3>Management cluster etcd</h3>
+        <BackupWarning
+          backups={b}
+          onChanged={() => {
+            void reload();
+          }}
+        />
         {b.settings === undefined ? (
           <NotSetUp backups={b} onSetUp={() => setEditing(true)} />
         ) : (
@@ -90,6 +106,7 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
         )}
         <ErrorBox message={actionError} />
       </div>
+      {b.settings !== undefined && <ExportBox backups={b} />}
       {b.settings !== undefined && <Snapshots running={running} />}
       {editing && (
         <SetUpDialog
@@ -167,12 +184,13 @@ function Summary({ backups: b, settings: s }: { backups: Backups; settings: Mana
 function Snapshots({ running }: { running: boolean }): JSX.Element {
   const { data: v, error } = usePoll(api.managementSnapshots, pollIdle);
   const [restoring, setRestoring] = useState<EtcdSnapshot>();
+  const [recreating, setRecreating] = useState<EtcdSnapshot>();
   const list = v?.snapshots ?? [];
   return (
     <div className="box scroll">
       <h3>Snapshots in the target</h3>
       <ErrorBox message={error ?? v?.error} />
-      <table className="grid">
+      <table className="grid stack">
         <thead>
           <tr>
             <th>Taken</th>
@@ -196,8 +214,8 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
               <td title={s.name}>
                 {when(s.time)} <span className="muted">({age(s.time)} ago)</span>
               </td>
-              <td>{s.kubernetesVersion ?? ""}</td>
-              <td>{s.size === undefined ? "" : bytes(s.size)}</td>
+              <td data-label="Kubernetes">{s.kubernetesVersion ?? ""}</td>
+              <td data-label="Size">{s.size === undefined ? "" : bytes(s.size)}</td>
               <td className="row-action">
                 <button
                   type="button"
@@ -208,6 +226,15 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
                 >
                   Restore…
                 </button>
+                <button
+                  type="button"
+                  disabled={running}
+                  title={running ? "Run under way" : undefined}
+                  aria-label={`Recreate from ${s.name}`}
+                  onClick={() => setRecreating(s)}
+                >
+                  Recreate…
+                </button>
               </td>
             </tr>
           ))}
@@ -216,6 +243,7 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
       {restoring !== undefined && (
         <ManagementRestoreDialog snapshot={restoring} onClose={() => setRestoring(undefined)} />
       )}
+      {recreating !== undefined && <RecreateDialog snapshot={recreating} onClose={() => setRecreating(undefined)} />}
     </div>
   );
 }
@@ -236,6 +264,7 @@ function SetUpDialog({
   const [accessKeyID, setAccessKeyID] = useState("");
   const [secretAccessKey, setSecretAccessKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const [recipients, setRecipients] = useState(recipientText(s));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const keepKeys = b.keysStored && accessKeyID === "" && secretAccessKey === "";
@@ -259,6 +288,7 @@ function SetUpDialog({
         accessKeyID,
         secretAccessKey,
         passphrase,
+        specRecipients: recipientLines(recipients),
       });
       await onDone();
     } catch (err) {
@@ -343,6 +373,21 @@ function SetUpDialog({
           />
         )}
       </Field>
+      <Field label="Extra recipients">
+        {(id) => (
+          <textarea
+            id={id}
+            rows={2}
+            spellCheck={false}
+            autoComplete="off"
+            value={recipients}
+            onChange={(e) => setRecipients(e.target.value)}
+          />
+        )}
+      </Field>
+      <p className="muted">
+        One age1… key per line. An offline recipient opens the specs&apos; Secrets without this appliance.
+      </p>
       <p className="warning">
         The appliance keeps the access key and a talosconfig that can only take etcd snapshots. Restoring needs this
         passphrase.

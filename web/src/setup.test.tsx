@@ -5,7 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { cleanTargets, targetProblems } from "./BackupTargets";
 import { fakeServer, reads, type Route } from "./fake-server";
-import { formOf, proxySummary, settings, setupFieldProblems, setupProblems, type SetupForm } from "./Setup";
+import {
+  addressRows,
+  formOf,
+  proxySummary,
+  settings,
+  setupFieldProblems,
+  setupProblems,
+  type SetupForm,
+} from "./Setup";
 
 const form: SetupForm = {
   nodes: ["pve1"],
@@ -14,9 +22,12 @@ const form: SetupForm = {
   bridge: "vmbr0",
   vlan: "",
   mtu: "",
+  families: "ipv4",
   nodeAddresses: "192.0.2.11/24",
+  nodeAddresses6: "",
   apiAddress: "192.0.2.10",
   gateway: "192.0.2.1",
+  gateway6: "",
   dnsServers: "192.0.2.1, 1.1.1.1",
   searchDomains: "",
   timeServers: "",
@@ -26,6 +37,8 @@ const form: SetupForm = {
   mirrors: "",
   chartMirrors: "",
   chartMirrorCA: "",
+  releaseMirror: "",
+  releaseMirrorCA: "",
   proxyURL: "",
   proxyUser: "",
   proxyPassword: "",
@@ -98,12 +111,58 @@ const oneNode = {
   },
   "GET /api/proxmox/nodes/pve1/bridges": {
     body: [
-      { bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true, cidr: "192.0.2.5/24", gateway: "192.0.2.1" },
+      {
+        bridge: "vmbr0",
+        node: "pve1",
+        vlanAware: false,
+        usable: true,
+        cidr: "192.0.2.5/24",
+        gateway: "192.0.2.1",
+        cidr6: "2001:db8::5/64",
+        gateway6: "2001:db8::1",
+      },
       { bridge: "vmbr1", node: "pve1", vlanAware: true, usable: true },
     ],
   },
-  "GET /api/proxmox/nodes/pve1/dns": { body: { servers: ["192.0.2.53", "198.51.100.53"], search: "corp.example" } },
+  // The IPv6 server stays out of an IPv4 cluster's DNS servers.
+  "GET /api/proxmox/nodes/pve1/dns": {
+    body: { servers: ["192.0.2.53", "2001:db8::53", "198.51.100.53"], search: "corp.example" },
+  },
 };
+
+// A management cluster on both families with IPv6 first, and on IPv6 alone.
+const dualStack: Partial<SetupForm> = {
+  families: "ipv6-ipv4",
+  nodeAddresses6: "2001:db8::11/64",
+  gateway6: "2001:db8::1",
+  apiAddress: "2001:db8::10",
+  dnsServers: "192.0.2.53, 2001:db8::53",
+};
+const ipv6Only: Partial<SetupForm> = { ...dualStack, families: "ipv6", dnsServers: "2001:db8::53" };
+
+type NetworkKey = "nodes" | "nodeAddresses" | "nodeAddresses6" | "gateway" | "gateway6" | "apiAddress" | "dnsServers";
+const networkKeys: NetworkKey[] = [
+  "nodes",
+  "nodeAddresses",
+  "nodeAddresses6",
+  "gateway",
+  "gateway6",
+  "apiAddress",
+  "dnsServers",
+];
+
+// network are the problems of the form with over, those of the nodes and their addresses alone.
+function network(over: Partial<SetupForm>): Partial<Record<NetworkKey, string>> {
+  const p = setupFieldProblems({ ...form, ...over });
+  const out: Partial<Record<NetworkKey, string>> = {};
+  for (const k of networkKeys) {
+    const problem = p[k];
+    if (problem !== undefined) {
+      out[k] = problem;
+    }
+  }
+  return out;
+}
 
 const next = async (user: UserEvent): Promise<void> => user.click(screen.getByRole("button", { name: "Next" }));
 
@@ -201,6 +260,12 @@ describe("setup", () => {
       "Enter IP addresses only.",
     ]);
     expect(setupFieldProblems({ ...form, refresh: false, refreshGateway: "x" })).not.toHaveProperty("refreshAddress");
+    // An IPv6 build network may route through a link-local gateway, an IPv4 one never.
+    const sixBuild = { ...form, refreshAddress: "2001:db8::50/64", refreshGateway: "fe80::1" };
+    expect(setupFieldProblems(sixBuild)).not.toHaveProperty("refreshGateway");
+    expect(
+      setupFieldProblems({ ...form, refreshAddress: "192.0.2.50/24", refreshGateway: "169.254.0.1" }),
+    ).toHaveProperty("refreshGateway");
   });
 
   it("reads registry mirrors and ranges", () => {
@@ -282,6 +347,43 @@ describe("setup", () => {
       "Paste certificates only, no private key.",
     );
     expect(problems({ chartMirrorCA: pem }).chartMirrorCA).toBe("Add a chart mirror first.");
+  });
+
+  it("sends the release mirror and its authority only when set, and reads them back", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(settings(form)).not.toHaveProperty("releaseMirror");
+    const sent = settings({ ...form, releaseMirror: " https://m.example/github ", releaseMirrorCA: ` ${pem}\n\n` });
+    expect(sent.releaseMirror).toStrictEqual({ url: "https://m.example/github", caBundle: `${pem}\n` });
+    const again = formOf(sent);
+    expect(again.releaseMirror).toBe("https://m.example/github");
+    expect(settings({ ...again, passphrase: "", confirm: "" }).releaseMirror).toStrictEqual(sent.releaseMirror);
+    expect(formOf(settings(form)).releaseMirror).toBe("");
+  });
+
+  it("checks the release mirror and its authority", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    for (const ok of ["https://m.example", "http://10.0.0.1:8080/github", "https://[2001:db8::1]:8443/gh"]) {
+      expect(problems({ releaseMirror: ok })).toStrictEqual({});
+    }
+    const wrong = [
+      "m.example",
+      "ftp://m.example",
+      "https://m.example/",
+      "https://user:pw@m.example",
+      "https://m.example/a b",
+      "https://m.example/?a=b",
+      "https://m.example/a;b",
+    ];
+    const accepted = wrong.filter((address) => problems({ releaseMirror: address }).releaseMirror === undefined);
+    expect(accepted).toStrictEqual([]);
+    expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: pem })).toStrictEqual({});
+    expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: "junk" }).releaseMirrorCA).toBe(
+      "Paste PEM certificates.",
+    );
+    expect(problems({ releaseMirror: "http://m.example", releaseMirrorCA: pem }).releaseMirrorCA).toBe(
+      "A certificate needs an https:// mirror.",
+    );
+    expect(problems({ releaseMirrorCA: pem }).releaseMirrorCA).toBe("Add a release mirror first.");
   });
 
   it("sends a proxy only when it has an address", () => {
@@ -930,7 +1032,7 @@ describe("setup", () => {
     expect(problemsOf({ apiAddress: "192.0.2.11" }).apiAddress).toMatch(/unused/u);
     expect(problemsOf({ apiAddress: "198.51.100.10" }).apiAddress).toBe("Use an address in the nodes' network.");
     expect(problemsOf({ dnsServers: "dns.example" }).dnsServers).toBe("Enter IP addresses only.");
-    expect(problemsOf({ dnsServers: "2001:db8::53" }).dnsServers).toBeUndefined();
+    expect(problemsOf({ dnsServers: "2001:db8::53" }).dnsServers).toBe("Enter IPv4 addresses only.");
     expect(problemsOf({ searchDomains: "corp.example, example.org" }).searchDomains).toBeUndefined();
     expect(problemsOf({ searchDomains: "corp example." }).searchDomains).toBe("Enter domain names like corp.example");
     expect(problemsOf({ searchDomains: "a b c d e f g" }).searchDomains).toBe("At most 6 domains");
@@ -956,6 +1058,113 @@ describe("setup", () => {
       setupFieldProblems({ ...form, nodeAddresses: "192.0.2.11/24 192.0.2.12/24 192.0.2.13/24" }, false, was)
         .nodeAddresses,
     ).toBeUndefined();
+  });
+
+  it("sends and reads back the network of each family choice", () => {
+    expect(settings(form)).not.toHaveProperty("ipFamilies");
+    expect(settings(form)).not.toHaveProperty("nodeAddressesIPv6");
+    const saved = settings({ ...form, ...dualStack });
+    expect(saved).toMatchObject({
+      ipFamilies: ["IPv6", "IPv4"],
+      nodeAddresses: ["192.0.2.11/24"],
+      gateway: "192.0.2.1",
+      nodeAddressesIPv6: ["2001:db8::11/64"],
+      gatewayIPv6: "2001:db8::1",
+      apiAddress: "2001:db8::10",
+    });
+    expect(formOf(saved)).toMatchObject({
+      families: "ipv6-ipv4",
+      nodeAddresses6: "2001:db8::11/64",
+      gateway6: "2001:db8::1",
+    });
+    expect(settings({ ...form, ...ipv6Only, gateway: "192.0.2.1" })).toMatchObject({
+      ipFamilies: ["IPv6"],
+      nodeAddresses: [],
+      gateway: "",
+      nodeAddressesIPv6: ["2001:db8::11/64"],
+    });
+  });
+
+  it("checks each family's addresses as the appliance does", () => {
+    expect(network(dualStack)).toStrictEqual({});
+    expect(network(ipv6Only)).toStrictEqual({});
+    // The fields of a family the cluster lacks are left alone.
+    expect(network({ ...ipv6Only, gateway: "nonsense", nodeAddresses: "" })).toStrictEqual({});
+    expect(network({ ...ipv6Only, nodeAddresses6: "192.0.2.11/24" }).nodeAddresses6).toBe(
+      "192.0.2.11/24 is not in the form 2001:db8::11/64.",
+    );
+    expect(network({ ...ipv6Only, nodeAddresses6: "2001:db8::/64" }).nodeAddresses6).toBe(
+      "2001:db8::/64 is its network's own address.",
+    );
+    expect(network({ ...ipv6Only, nodeAddresses6: "2001:db9::11/64" }).nodeAddresses6).toMatch(
+      /outside the gateway's network/u,
+    );
+    // A link-local IPv6 gateway reaches every IPv6 network.
+    expect(network({ ...ipv6Only, gateway6: "fe80::1" })).toStrictEqual({});
+    expect(network({ ...ipv6Only, gateway6: "192.0.2.1" }).gateway6).toBe("Enter an IPv6 address.");
+    expect(network({ ...ipv6Only, apiAddress: "192.0.2.10" }).apiAddress).toBe("Enter an IPv6 address.");
+    expect(network({ ...ipv6Only, apiAddress: "2001:db8::11" }).apiAddress).toMatch(/unused/u);
+    expect(network({ ...ipv6Only, dnsServers: "192.0.2.53" }).dnsServers).toBe("Enter IPv6 addresses only.");
+    expect(network({ ...dualStack, dnsServers: "192.0.2.53" }).dnsServers).toBe("Add an IPv6 DNS server too.");
+    expect(network({ ...dualStack, apiAddress: "192.0.2.10" }).apiAddress).toBe("Enter an IPv6 address.");
+    // Node i takes the i-th address of each family.
+    expect(
+      network({ ...dualStack, nodeAddresses: "192.0.2.11/24 192.0.2.12/24 192.0.2.13/24", nodes: ["pve1"] })
+        .nodeAddresses6,
+    ).toBe("Enter as many IPv6 as IPv4 addresses.");
+    // The primary family's addresses count the nodes.
+    expect(network({ ...ipv6Only, nodeAddresses: "", nodes: ["pve1", "pve2"] }).nodes).toBe(
+      "Choose no more nodes than addresses.",
+    );
+  });
+
+  it("keeps a management cluster's IPv6 addresses and families", () => {
+    const was = settings({ ...form, ...dualStack });
+    expect(
+      setupFieldProblems({ ...form, ...dualStack, nodeAddresses6: "2001:db8::12/64" }, false, was).nodeAddresses6,
+    ).toBe("Keep 2001:db8::11/64 first and add new addresses after.");
+    expect(addressRows(was)).toStrictEqual([
+      ["Address families", "IPv6 and IPv4"],
+      ["IPv4 node addresses", "192.0.2.11/24"],
+      ["IPv6 node addresses", "2001:db8::11/64"],
+      ["API address", "2001:db8::10"],
+      ["IPv4 gateway", "192.0.2.1"],
+      ["IPv6 gateway", "2001:db8::1"],
+    ]);
+    expect(addressRows(settings(form)).map(([label]) => label)).toStrictEqual([
+      "Node addresses",
+      "API address",
+      "Gateway",
+    ]);
+  });
+
+  it("shows the fields of the families chosen", async () => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    const families = screen.getByLabelText("Address families");
+    expect(families).toHaveValue("ipv4");
+    expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1");
+    expect(screen.queryByLabelText("IPv6 node addresses")).toBeNull();
+    expect(screen.queryByLabelText("IPv4 node addresses")).toBeNull();
+    await user.selectOptions(families, "IPv6 and IPv4");
+    expect(screen.getByLabelText("IPv6 node addresses")).toHaveAccessibleDescription("1 or 3 in 2001:db8::/64");
+    expect(screen.getByLabelText("IPv6 gateway")).toHaveValue("2001:db8::1");
+    expect(screen.getByLabelText("IPv4 gateway")).toHaveValue("192.0.2.1");
+    expect(screen.queryByLabelText("Gateway")).toBeNull();
+    // One family takes the plain labels, IPv6 included.
+    await user.selectOptions(families, "IPv6");
+    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription("1 or 3 in 2001:db8::/64");
+    expect(screen.getByLabelText("Gateway")).toHaveValue("2001:db8::1");
+    expect(screen.queryByLabelText("IPv4 gateway")).toBeNull();
+    expect(screen.queryByLabelText("IPv6 gateway")).toBeNull();
+    expect(screen.getByLabelText("DNS servers")).toHaveValue("2001:db8::53");
   });
 
   it("follows a run that has logged nothing yet", async () => {

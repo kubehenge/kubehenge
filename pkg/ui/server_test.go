@@ -44,6 +44,7 @@ type fakeAccounts struct {
 	// storages, when set, replace the storages listed. names are the pools, roles, users and groups
 	// that exist.
 	storages       []pve.Storage
+	reach          *pve.APIReach
 	names          pve.Names
 	privilegeCalls int
 	backupChecks   int
@@ -221,6 +222,16 @@ func (f *fakeAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.names, nil
+}
+
+// APIReach answers with the firewalls a test sets, or the datacenter firewall off.
+func (f *fakeAccounts) APIReach(context.Context, *pve.Ticket) (*pve.APIReach, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reach == nil {
+		return &pve.APIReach{}, nil
+	}
+	return f.reach, nil
 }
 
 func (*fakeAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]string, error) {
@@ -445,6 +456,8 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 			"admin@pve": {"/": {
 				"VM.Audit", "VM.Allocate", "VM.Console", "VM.PowerMgmt", "Sys.Modify", "Datastore.AllocateSpace", "SDN.Use",
 				"Permissions.Modify", "User.Modify", "Group.Allocate", "Realm.AllocateUser", "Pool.Allocate", "Datastore.AllocateTemplate", "Sys.Audit",
+				"Pool.Audit", "VM.Config.CPU", "VM.Config.Cloudinit", "VM.Config.Disk", "VM.Config.HWType", "VM.Config.Memory",
+				"VM.Config.Network", "VM.Config.Options", "Datastore.Allocate", "SDN.Audit", "Sys.AccessNetwork",
 			}},
 			"viewer@pve": {"/pool/kubehenge/default.one": {"VM.Audit"}},
 			"dev@pve": {
@@ -1525,7 +1538,7 @@ func TestClusterShowsWhereItsVMsRun(t *testing.T) {
 	worker.Status.Conditions = []metav1.Condition{{Type: clusterv1.MachineReadyCondition, Status: metav1.ConditionFalse, Message: waiting}}
 	h := newHarness(t, cluster("default", "one"), cp, worker)
 	// The provider names a VM after its infrastructure machine, not after the Machine.
-	h.accounts.members = []pve.Member{{VMID: 201, Node: "pve2", Type: "qemu", Name: "one-cp-a-x1"}, {VMID: 202, Node: "pve1", Type: "qemu", Name: "one-cp-a"}}
+	h.accounts.members = []pve.Member{{VMID: 201, Node: "pve2", Type: "qemu", Name: "one-cp-a-x1", Status: "stopped"}, {VMID: 202, Node: "pve1", Type: "qemu", Name: "one-cp-a"}}
 	h.server.ProxmoxURL = "https://pve.example.org:8006"
 	view := func(username string) clusterView {
 		b := h.browser()
@@ -1539,7 +1552,7 @@ func TestClusterShowsWhereItsVMsRun(t *testing.T) {
 		return v
 	}
 	admin := view("admin@pve")
-	if len(admin.Machines) != 2 || admin.Machines[0].ProxmoxNode != "pve2" || admin.Machines[1].ProxmoxNode != "" {
+	if len(admin.Machines) != 2 || admin.Machines[0].ProxmoxNode != "pve2" || admin.Machines[0].VM != "stopped" || admin.Machines[1].ProxmoxNode != "" || admin.Machines[1].VM != "" {
 		t.Fatalf("machines = %+v", admin.Machines)
 	}
 	// The console opens in Proxmox VE's own web interface, for a VM it named.

@@ -21,6 +21,9 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionControlPlane, "Control-plane roll stalled", provisioner.RollStallHead(cond.Message), cond.LastTransitionTime.Time)
 	}
+	if cond := trueCondition(c, provisioner.QuorumLostCondition); cond != nil {
+		a.add(severityError, sectionControlPlane, "Control-plane quorum lost", provisioner.QuorumLostHead(cond.Message), cond.LastTransitionTime.Time)
+	}
 	if cond := trueCondition(c, provisioner.DeletionStalledCondition); cond != nil && !provisioner.Abandoned(c) {
 		a.add(severityWarning, sectionClusterAPI, "Deletion stalled", provisioner.DeletionStallHead(cond.Message), cond.LastTransitionTime.Time)
 	}
@@ -46,6 +49,21 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 			a.add(severityWarning, sectionNodes, "Certificates expire", provisioner.CertificatesSummary(cond.Message), cond.LastTransitionTime.Time)
 		}
 	}
+	if cond := trueCondition(c, provisioner.EtcdLatencyCondition); cond != nil {
+		a.add(severityWarning, sectionControlPlane, "etcd disk slow", provisioner.EtcdLatencySummary(cond.Message), cond.LastTransitionTime.Time)
+	}
+	vmAttention(c, a)
+	if cond := trueCondition(c, provisioner.StorageCondition); cond != nil {
+		severity, what := severityWarning, "Storage nearly full"
+		if cond.Reason == provisioner.StorageFull {
+			severity, what = severityError, "Storage full"
+		}
+		a.add(severity, sectionVolumes, what, provisioner.StorageSummary(cond.Message), cond.LastTransitionTime.Time)
+	}
+}
+
+// vmAttention adds what the machines' VMs and their Proxmox VE hosts say.
+func vmAttention(c *clusterv1.Cluster, a *attention) {
 	if cond := trueCondition(c, provisioner.VMsCondition); cond != nil {
 		severity := severityWarning
 		if cond.Reason == provisioner.VMsIOError || cond.Reason == provisioner.VMsPanicked {
@@ -54,12 +72,9 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		a.add(severity, sectionNodes, vmTitles[cond.Reason], cond.Message, cond.LastTransitionTime.Time)
 	}
 	hostAttention(c, a)
-	if cond := trueCondition(c, provisioner.StorageCondition); cond != nil {
-		severity, what := severityWarning, "Storage nearly full"
-		if cond.Reason == provisioner.StorageFull {
-			severity, what = severityError, "Storage full"
-		}
-		a.add(severity, sectionVolumes, what, provisioner.StorageSummary(cond.Message), cond.LastTransitionTime.Time)
+	upgradeAttention(c, a)
+	if cond := trueCondition(c, provisioner.VMsMissingCondition); cond != nil {
+		a.add(severityError, sectionNodes, "VMs missing", cond.Message, cond.LastTransitionTime.Time)
 	}
 }
 
