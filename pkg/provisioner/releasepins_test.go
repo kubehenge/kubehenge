@@ -267,6 +267,36 @@ func TestPinReturnsWhatItAddedBeforeAListingError(t *testing.T) {
 	}
 }
 
+// A Talos tag with a leading zero is no release, however the listing names it. Pin, pinnedMinors and
+// newest each say so, and offered takes newest's answer.
+func TestTalosVersionsWithALeadingZeroAreNoRelease(t *testing.T) {
+	t.Parallel()
+	t.Run("Pin skips the tag", func(t *testing.T) {
+		t.Parallel()
+		r := newFakeSidero()
+		r.add("v1.14.6", releaseSpec{})
+		p := r.start(t, talosListing("v1.14.6", "v1.10.01"))
+		added, err := p.Pin(context.Background(), ReleasePins{})
+		if err != nil || !slices.Equal(added, []string{"v1.14.6"}) {
+			t.Errorf("Pin = %v, %v, want only v1.14.6", added, err)
+		}
+	})
+	t.Run("pinnedMinors does not count it as the newest", func(t *testing.T) {
+		t.Parallel()
+		minors := pinnedMinors(talosRelease, []string{"v1.99.01", "v1.14.6"})
+		if minors[99] || !minors[14] {
+			t.Errorf("minors %v, want 14 and the four before it, not 99", minors)
+		}
+	})
+	// offered lists a minor only when newest finds a release in it, so newest's rule is its rule.
+	t.Run("newest does not find it", func(t *testing.T) {
+		t.Parallel()
+		if v, ok := (ReleasePins{"v1.10.01": {}}).newest(talosRelease, 10); ok {
+			t.Errorf("newest found %s", v.Raw)
+		}
+	})
+}
+
 func TestChannelsOfferOnlyPinnedReleases(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

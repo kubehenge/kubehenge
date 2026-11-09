@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
@@ -47,6 +48,34 @@ func TestPinsCheckWritesNothing(t *testing.T) { //nolint:paralleltest // points 
 	after, err := os.ReadFile(file) //nolint:gosec // the test's own temporary file
 	if err != nil || !bytes.Equal(after, raw) {
 		t.Errorf("--check changed the file: %v", err)
+	}
+}
+
+// Pinning reads Sidero's images from the registry address the command holds.
+func TestPinsReadsTheRegistryForANewTalosRelease(t *testing.T) { //nolint:paralleltest // points the package's addresses at its server
+	var registryReads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v2/"):
+			registryReads.Add(1)
+			http.NotFound(w, r)
+		case r.URL.Path == "/repos/siderolabs/talos/releases" && r.URL.Query().Get("page") == "1":
+			_, _ = w.Write([]byte(`[{"tag_name":"v1.14.6"}]`))
+		default:
+			_, _ = w.Write([]byte(`[]`))
+		}
+	}))
+	defer srv.Close()
+	saved := pinsSources
+	pinsSources.api, pinsSources.github, pinsSources.raw, pinsSources.registry = srv.URL, srv.URL, srv.URL, srv.URL
+	t.Cleanup(func() { pinsSources = saved })
+	file := filepath.Join(t.TempDir(), "releasepins.txt")
+	if err := os.WriteFile(file, []byte("# header\n"), 0o600); err != nil { //nolint:gosec // the test's own temporary file
+		t.Fatal(err)
+	}
+	_, err := run(t, "release", "pins", file)
+	if err == nil || !strings.Contains(err.Error(), "v1.14.6") || registryReads.Load() == 0 {
+		t.Errorf("pins gave %v after %d registry reads, want an error from the registry for v1.14.6", err, registryReads.Load())
 	}
 }
 

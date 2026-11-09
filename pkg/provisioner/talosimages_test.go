@@ -692,6 +692,26 @@ func TestTalosImagesTakesTheOneAmd64Manifest(t *testing.T) {
 	}
 }
 
+// Each run asks the registry for its tokens again, so a token from an earlier run is never sent.
+func TestPinStartsEachRunWithoutTokens(t *testing.T) {
+	t.Parallel()
+	r := newFakeSidero()
+	r.add("v1.14.6", releaseSpec{})
+	r.add("v1.14.7", releaseSpec{})
+	github := talosListing("v1.14.6")
+	p := r.start(t, github)
+	if added, err := p.Pin(context.Background(), ReleasePins{}); err != nil || len(added) != 1 {
+		t.Fatalf("first run: %v, %v", added, err)
+	}
+	github["siderolabs/talos"] = []githubRelease{tag("v1.14.7")}
+	if added, err := p.Pin(context.Background(), ReleasePins{}); err != nil || len(added) != 1 {
+		t.Fatalf("second run: %v, %v", added, err)
+	}
+	if n := r.challenged["imager"]; n != 2 {
+		t.Errorf("%d challenges for the imager over two runs, want one a run", n)
+	}
+}
+
 // A registry read starts its waits at two seconds, and a test's own wait replaces that.
 func TestTalosImagesFirstWaitIsTwoSeconds(t *testing.T) {
 	t.Parallel()
