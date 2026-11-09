@@ -80,7 +80,8 @@ expect "the CNI's pods that run once add to the requests" 1600 "${synthetic}"
 synthetic=$(worker_memory_for "${cni_class}" '["a"]' false cilium)
 expect "a CNI without a figure adds nothing" 1504 "${synthetic}"
 # The Talos lane with Calico has room for what Calico runs once beside the load balancer and Rancher's agent.
-synthetic=$(worker_memory_for "$(cat "${root}/talos.json")" '["loadBalancer","rancherAgent"]' false calico)
+talos_class=$(cat "${root}/talos.json")
+synthetic=$(worker_memory_for "${talos_class}" '["loadBalancer","rancherAgent"]' false calico)
 expect "the Talos lane with Calico" 1680 "${synthetic}"
 synthetic=$(worker_memory_for "${class}" '["a"]' true)
 expect "the fixtures add to the requests" 1712 "${synthetic}"
