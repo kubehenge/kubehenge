@@ -333,7 +333,7 @@ func (p ReleasePins) pinned(version string) bool {
 func (p ReleasePins) offered(release *distributionRelease) []string {
 	minors := map[int]bool{}
 	for v := range p {
-		if kv, ok := parseKubeVersion(v); ok && release.holds(v) {
+		if kv, ok := parseKubeVersion(v); ok && release.version.MatchString(v) {
 			minors[kv.Minor] = true
 		}
 	}
