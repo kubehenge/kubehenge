@@ -1683,6 +1683,11 @@ or lack it. A cluster that names no families has IPv4 alone, the variable's defa
 {{ printf "{{ with .network }}{{ if not (has %q (.ipFamilies | default (list \"IPv4\"))) }}true{{ end }}{{ end }}" . | quote }}
 {{- end -}}
 
+{{/* A patch's enabledIf for a cluster whose primary family, the first of network.ipFamilies, is the one given. */}}
+{{- define "kubehenge.primaryFamily" -}}
+{{ printf "{{ with .network }}{{ if eq %q (index (.ipFamilies | default (list \"IPv4\")) 0) }}true{{ end }}{{ end }}" . | quote }}
+{{- end -}}
+
 {{/*
 Gives a kubeadm, RKE2 or k3s node of a cluster with IPv6 its node IPs, one of each of the cluster's
 families in their order (files/node-ip.sh). The kubelet registers the first as the node's primary
