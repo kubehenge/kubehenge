@@ -1,3 +1,12 @@
-- Add-on chart and value changes from a new release wait for a cluster's upgrade window and show on its page and in the Upgrade dialog. **Apply now**, `kubehenge cluster apply-addon-changes` or the annotation `kubehenge.dev/apply-addon-changes` applies them at once.
-- Kubehenge no longer installs cert-manager, Kyverno or monitoring over a cluster's own install, and the condition `AddonConflict` names the definition. `useExisting.certManager` uses the cluster's own cert-manager, and the docs list what each add-on owns.
-- The docs list each add-on's namespaces, privileges and registries, from the code. The new `namespaceLabels` setting labels the add-on namespaces before their first pod.
+### Added
+
+- **Apply now**, `kubehenge cluster apply-addon-changes` or `kubehenge.dev/apply-addon-changes` apply waiting add-on changes at once.
+- The condition `AddonConflict` names the definition that clashes with an add-on.
+- `useExisting.certManager` uses the cluster's own cert-manager.
+- The docs list what each add-on owns, with its namespaces, privileges and registries.
+- `namespaceLabels` labels the add-on namespaces before their first pod.
+
+### Changed
+
+- Add-on chart and value changes from a new release wait for the cluster's upgrade window, shown on its page and in the Upgrade dialog.
+- Kubehenge no longer installs cert-manager, Kyverno or monitoring over a cluster's own install.

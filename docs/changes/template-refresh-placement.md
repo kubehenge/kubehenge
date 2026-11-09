@@ -1,1 +1,3 @@
+### Added
+
 - The weekly template build takes a node, bridge and VLAN, and the setup checks that the storage and bridge are on that node.

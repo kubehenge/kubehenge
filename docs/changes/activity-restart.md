@@ -1,2 +1,4 @@
-- Activity keeps a kubectl change made before an API server restarted, also when the interface first meets the API server after the restart.
-- Activity follows the management cluster's API servers as soon as the cluster is set up. A change made right after the setup is no longer missed.
+### Fixed
+
+- Activity keeps a kubectl change made before an API server restarted, also when the interface first sees it after the restart.
+- Activity follows the management cluster's API servers from setup, so it no longer misses a change made right after.

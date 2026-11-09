@@ -1,2 +1,8 @@
-- The create form asks Proxmox VE for the user's privileges once and shares the answer between lists. With 20 nodes and 30 VNets it made 600 calls and now makes at most 31.
-- A VM that Proxmox VE lists without a name, because its node dropped out of the statistics, is matched to its machine by guest ID. A machine with no VM to match shows "Not reporting" as its node.
+### Changed
+
+- The create form asks Proxmox VE for the user's privileges once, so 20 nodes and 30 VNets take 31 calls at most, not 600.
+
+### Fixed
+
+- A VM that Proxmox VE lists without a name, as its node dropped out of the statistics, is matched to its machine by guest ID.
+- A machine with no VM to match shows "Not reporting" as its node.
