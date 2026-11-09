@@ -1861,6 +1861,15 @@ describe("create", () => {
     expect(withRoom(istio, requested).workerMachine).toStrictEqual({ ...least, memoryMiB: 5040 });
     // Two workers share the requests out.
     expect(machineLeast({ ...istio, workerReplicas: 2 }, requested, "workerMachine").memoryMiB).toBe(4320);
+    // The workers carry the pods the chosen CNI runs once per cluster with the rest.
+    const withCNI: ClusterClass = {
+      ...requested,
+      annotations: { ...requested.annotations, "kubehenge.dev/cni-memory-requests": '{"cilium":128,"calico":192}' },
+    };
+    expect(istio.cni).toBe("cilium");
+    expect(machineLeast(istio, withCNI, "workerMachine").memoryMiB).toBe(5168);
+    expect(machineLeast({ ...istio, workerReplicas: 2 }, withCNI, "workerMachine").memoryMiB).toBe(4384);
+    expect(machineLeast({ ...istio, cni: "canal" }, withCNI, "workerMachine").memoryMiB).toBe(5040);
   });
 
   it("says why the sign-in page is back, what a lost connection means, and who may create", async () => {

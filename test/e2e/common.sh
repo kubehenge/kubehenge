@@ -48,20 +48,22 @@ worker_need_for() {
         | $node.worker + ([$on[] | $addon[.]] | add) + $fixtures'
 }
 
-# worker_memory_for <class JSON> <add-ons JSON array> <gitops: true|false>: the least memory in MiB
-# a worker may have for a class with those add-ons on. It is the largest of the class's own minimum,
-# what a worker and the add-ons use, and what the scheduler needs for the requests of a worker's own
-# pods, the add-ons' pods and, with GitOps, the test's own pods, to a multiple of 8.
+# worker_memory_for <class JSON> <add-ons JSON array> <gitops: true|false> [CNI]: the least memory in
+# MiB a worker may have for a class with those add-ons on. It is the largest of the class's own
+# minimum, what a worker and the add-ons use, and what the scheduler needs for the requests of a
+# worker's own pods, the pods the CNI runs once per cluster, the add-ons' pods and, with GitOps, the
+# test's own pods, to a multiple of 8.
 worker_memory_for() {
     worker_fixtures "$3"
-    printf '%s' "$1" | jq -r --argjson on "$2" --argjson fixtures "${worker_memory_fixtures}" '
+    printf '%s' "$1" | jq -r --argjson on "$2" --argjson fixtures "${worker_memory_fixtures}" --arg cni "${4:-}" '
         (.metadata.annotations["kubehenge.dev/addon-memory"] | fromjson) as $addon
         | (.metadata.annotations["kubehenge.dev/node-memory"] | fromjson) as $node
         | (.metadata.annotations["kubehenge.dev/addon-memory-requests"] | fromjson) as $requests
         | (.metadata.annotations["kubehenge.dev/node-memory-requests"] | fromjson) as $requested
+        | (.metadata.annotations["kubehenge.dev/cni-memory-requests"] // "{}" | fromjson) as $cnis
         | [(.spec.variables[] | select(.name == "workerMachine") | .schema.openAPIV3Schema.properties.memoryMiB.minimum),
             $node.worker + ([$on[] | $addon[.]] | add) + $fixtures,
-            (($requested.worker + ($requested.workers // 0) + ([$on[] | if . == "argocd" then ([$requests.argocd, $requests.flux] | max) else $requests[.] end] | add) + $fixtures) / 8 | ceil) * 8]
+            (($requested.worker + ($requested.workers // 0) + ($cnis[$cni] // 0) + ([$on[] | if . == "argocd" then ([$requests.argocd, $requests.flux] | max) else $requests[.] end] | add) + $fixtures) / 8 | ceil) * 8]
         | max'
 }
 # The S3 store the backup tests write to.
@@ -92,6 +94,31 @@ until_true() {
         [ "${now}" -lt "${limit}" ] || fail "timed out: ${what}${seen:+; last seen: ${seen}}"
         sleep "${pause}"
         pause=$((pause < 8 ? pause * 2 : 10))
+    done
+}
+
+# webhook_retried <command...>: runs a write to the API, again with until_true's pauses for up to
+# KUBEHENGE_E2E_WEBHOOK_WAIT seconds (300) while the API server cannot get an admission webhook's
+# answer, as while the webhook's pod restarts. Any other failure, a webhook's refusal among them,
+# returns at once. The command's output, errors and status are its own.
+webhook_retried() {
+    webhook_limit=$(($(date +%s) + ${KUBEHENGE_E2E_WEBHOOK_WAIT:-300})) webhook_pause=2
+    webhook_errors=$(mktemp)
+    while :; do
+        webhook_status=0
+        "$@" 2> "${webhook_errors}" || webhook_status=$?
+        webhook_now=$(date +%s)
+        if [ "${webhook_status}" -ne 0 ] && [ "${webhook_now}" -lt "${webhook_limit}" ] &&
+            grep -q 'failed calling webhook' "${webhook_errors}"; then
+            webhook_said=$(head -n 1 "${webhook_errors}")
+            printf 'a webhook did not answer, trying again in %d s: %s\n' "${webhook_pause}" "${webhook_said}" >&2
+            sleep "${webhook_pause}"
+            webhook_pause=$((webhook_pause < 8 ? webhook_pause * 2 : 10))
+            continue
+        fi
+        cat "${webhook_errors}" >&2
+        rm -f "${webhook_errors}"
+        return "${webhook_status}"
     done
 }
 

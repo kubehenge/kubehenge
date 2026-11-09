@@ -18,9 +18,10 @@ import (
 // controlPlaneRole labels a control-plane node in every distribution.
 const controlPlaneRole = "node-role.kubernetes.io/control-plane"
 
-// controlPlaneTaint keeps workloads off control-plane nodes. kubeadm registers them with it, the
-// k3s and RKE2 classes ask for it, and everything that has to run there tolerates it: the
-// distributions' own components, k3s's etcd proxy, and the cloud controller manager and CSI
+// controlPlaneTaint keeps workloads off control-plane nodes. The kubeadm class registers them with
+// it through the kubelet rather than kubeadm, so that Cluster API's kubeadm control plane does not
+// require it, and the k3s and RKE2 classes ask for it. Everything that has to run there tolerates
+// it: the distributions' own components, k3s's etcd proxy, and the cloud controller manager and CSI
 // controller Kubehenge installs. CriticalAddonsOnly, which k3s and RKE2 suggest for dedicated
 // servers, would evict the k3s control-plane provider's etcd proxy.
 var controlPlaneTaint = corev1.Taint{Key: controlPlaneRole, Effect: corev1.TaintEffectNoSchedule}

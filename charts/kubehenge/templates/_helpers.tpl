@@ -399,6 +399,16 @@ kubehenge.dev/addon-memory-requests: '{"headlamp":64,"monitoring":752,"logs":464
 {{- end -}}
 
 {{/*
+The memory, in MiB, the pods requested once per cluster by a CNI that Kubehenge installs (kubeadm,
+Talos and k3s). They tolerate the control-plane taint, yet the scheduler may put them all on one
+worker. Cilium runs its one operator at 64. Calico runs the Tigera operator, Typha and its
+controllers at 64 each, and its two webhooks at 32 each.
+*/}}
+{{- define "kubehenge.cniMemoryRequests" -}}
+kubehenge.dev/cni-memory-requests: '{"cilium":64,"calico":256}'
+{{- end -}}
+
+{{/*
 The memory, in MiB, each add-on adds to what each control plane uses itself, where the API server
 runs as a pod of its own (kubeadm and RKE2; k3s has figures of its own): what the end-to-end tests
 saw the highest working set of a control plane so far grow by as the add-on was switched on, the

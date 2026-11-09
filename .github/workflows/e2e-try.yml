@@ -581,6 +581,18 @@ jobs:
                     k logs -n kube-system "$pod" -c kube-network-policies --prefix --tail=5000 ||
                       true
                   done > "$dir/network-policies.log" 2>&1 || true
+                # Why a pod cannot reach the API server's Service address, as after an etcd restore:
+                # the API servers the Service leads to, and what kube-proxy did with them, before a
+                # restart too. k3s runs kube-proxy inside its own process, which logs to the node.
+                {
+                  k get endpointslices -n default -l kubernetes.io/service-name=kubernetes -o yaml
+                  k get pods -n kube-system "${names[@]}" 2>/dev/null | grep -E '^kube-proxy-' |
+                    while read -r pod; do
+                      k logs -n kube-system "$pod" --all-containers --prefix --tail=-1 || true
+                      k logs -n kube-system "$pod" --all-containers --prefix --previous --tail=-1 ||
+                        true
+                    done
+                } > "$dir/kube-proxy.log" 2>&1 || true
                 # The run before a restart says why the container ended; when it cannot be had, the
                 # error says why. It is asked for container by container, since with all of them
                 # kubectl stops at the first one that never restarted.

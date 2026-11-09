@@ -50,6 +50,10 @@ metadata:
     # (RKE2's documented defaults, LAB), the CSI controller's 80, and 32 each for the cloud
     # controller manager, kube-vip and the snapshot controller.
     kubehenge.dev/node-memory-requests: '{"controlPlane":3128,"worker":1032}'
+    # The memory, in MiB, the pods requested once per cluster by RKE2's own CNIs, which may all land
+    # on one worker. Its Cilium chart runs two operators at 64 each. Its Calico runs the Tigera
+    # operator, Typha and Calico's controllers at 64 each, and asks nothing for the rest.
+    kubehenge.dev/cni-memory-requests: '{"cilium":128,"calico":192}'
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"

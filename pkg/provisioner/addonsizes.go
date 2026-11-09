@@ -60,6 +60,13 @@ const AddonMemoryRequestsAnnotation = "kubehenge.dev/addon-memory-requests"
 // Kubehenge's own request.
 const NodeMemoryRequestsAnnotation = "kubehenge.dev/node-memory-requests"
 
+// CNIMemoryRequestsAnnotation on a ClusterClass is the memory, in MiB, that the pods a CNI runs
+// once per cluster request, by the cni variable's values: its operator, and Calico's Typha,
+// controllers and webhooks. They tolerate the control-plane taint but may all land on one worker,
+// so the workers carry them together beside NodeMemoryRequestsAnnotation's workers figure. Without
+// workers, its controlPlane figure counts them.
+const CNIMemoryRequestsAnnotation = "kubehenge.dev/cni-memory-requests"
+
 // The keys in AddonMemoryAnnotation of what is not an add-on of its own.
 const (
 	certManagerFigure  = "certManager"
@@ -121,7 +128,10 @@ type addonResource struct {
 	growth string
 	// cni names the figures of what each CNI adds to each control plane's own use, empty but for
 	// memory, as growth.
-	cni        string
+	cni string
+	// once names the figures of what each CNI runs once per cluster, which the workers carry
+	// together, empty but for requested memory.
+	once       string
 	unit, name string
 	// of is how much of it a node of this size has.
 	of func(controlPlaneSize) int
@@ -136,7 +146,7 @@ var (
 		cni: CNIControlPlaneMemoryAnnotation, unit: mebibytes, name: "memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
 	}
 	addonMemoryRequests = &addonResource{
-		addons: AddonMemoryRequestsAnnotation, nodes: NodeMemoryRequestsAnnotation,
+		addons: AddonMemoryRequestsAnnotation, nodes: NodeMemoryRequestsAnnotation, once: CNIMemoryRequestsAnnotation,
 		unit: mebibytes, name: "requested memory", of: func(s controlPlaneSize) int { return s.MemoryMiB },
 	}
 	addonCPU = &addonResource{
@@ -229,9 +239,9 @@ func classFigures(class *clusterv1.ClusterClass, annotation string) (map[string]
 }
 
 // resourceFigures are a class's figures for one resource: its add-ons' pods', what they add to each
-// control plane's own use, and its nodes' own.
+// control plane's own use, its nodes' own, and what each CNI runs once per cluster.
 type resourceFigures struct {
-	pods, growth, cni, nodes map[string]int
+	pods, growth, cni, nodes, once map[string]int
 }
 
 // addonFigures reads a class's figures for the resource. A class without figures for the add-ons'
@@ -252,7 +262,16 @@ func addonFigures(r *addonResource, class *clusterv1.ClusterClass) (resourceFigu
 	if f.cni, _, err = classFigures(class, r.cni); err != nil {
 		return f, false, err
 	}
+	if f.once, _, err = classFigures(class, r.once); err != nil {
+		return f, false, err
+	}
 	return f, true, nil
+}
+
+// cniOnce is what the cluster's CNI runs once per cluster by the class's figures.
+func cniOnce(f resourceFigures, cluster *clusterv1.Cluster) (int, error) {
+	cni, _, err := optionalVariable[string](cluster, "cni")
+	return f.once[cni], err
 }
 
 // cniCounted names the cluster's CNI for a refusal, followed by " and ", where its figure counts.
@@ -330,7 +349,11 @@ func addonRoomOf(r *addonResource, cluster *clusterv1.Cluster, class *clusterv1.
 	if room.Base == 0 {
 		room.Base = r.of(classMinimumSize(class, "workerMachine"))
 	}
-	workers, most, err := workersRoom(&room, r, cluster, class, nodes["workers"])
+	once, err := cniOnce(f, cluster)
+	if err != nil {
+		return room, err
+	}
+	workers, most, err := workersRoom(&room, r, cluster, class, nodes["workers"]+once)
 	if err != nil {
 		return room, err
 	}

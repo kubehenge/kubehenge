@@ -54,6 +54,7 @@ metadata:
     # Typha, controllers and API server ask for more than Cilium's. The API server, controller
     # manager and scheduler ask for no memory.
     kubehenge.dev/node-memory-requests: '{"controlPlane":1232,"worker":528,"workers":140}'
+    {{- include "kubehenge.cniMemoryRequests" . | nindent 4 }}
     {{- if .Values.proxmox.ha }}
     # Tells the interface to offer the proxmoxHA variable: an administrator switched Proxmox VE HA on.
     kubehenge.dev/proxmox-ha: "true"
@@ -247,8 +248,18 @@ spec:
   (dict "apiVersion" "bootstrap.cluster.x-k8s.io/v1beta2" "kind" "KubeadmConfigTemplate" "name" $workerName "spec" $workerSpec)
 )) }}
 
+{{/*
+A node's registration, called with "controlPlane" or "worker". kubeadm's own control-plane taint
+is off: the kubelet registers a control plane with it (kubehenge.kubeadmControlPlaneTaintFile), and
+the controller takes it off while the cluster has no worker. Left to kubeadm, the taint is one the
+control-plane provider requires, and it holds a control plane not ready for as long as the taint is
+off, minutes past its return.
+*/}}
 {{- define "kubehenge.kubeadmNodeRegistration" -}}
 nodeRegistration:
+  {{- if eq . "controlPlane" }}
+  taints: []
+  {{- end }}
   kubeletExtraArgs:
     # The Proxmox VE cloud controller manager initialises the nodes.
     - name: cloud-provider
@@ -274,6 +285,21 @@ start on kernel settings other than its own (kubehenge.sysctlFile), and offers o
     serverTLSBootstrap: true
     protectKernelDefaults: true
     tlsCipherSuites: [{{ include "kubehenge.tlsCipherSuites" . }}]
+{{- end -}}
+
+{{/*
+A control plane registers with the control-plane taint, so it takes no workloads before the
+controller has looked at it. kubeadm applies its patches for a target in the order of their names,
+this one after the kubelet's own and before the CIS benchmark's.
+*/}}
+{{- define "kubehenge.kubeadmControlPlaneTaintFile" -}}
+- path: /etc/kubernetes/patches/kubeletconfiguration0+merge.yaml
+  owner: root:root
+  permissions: "0600"
+  content: |
+    registerWithTaints:
+      - key: node-role.kubernetes.io/control-plane
+        effect: NoSchedule
 {{- end -}}
 
 {{/*
@@ -408,9 +434,9 @@ template:
         scheduler:
           {{- include "kubehenge.kubeadmServing" "kube-scheduler" | nindent 10 }}
       initConfiguration:
-        {{- include "kubehenge.kubeadmNodeRegistration" . | nindent 8 }}
+        {{- include "kubehenge.kubeadmNodeRegistration" "controlPlane" | nindent 8 }}
       joinConfiguration:
-        {{- include "kubehenge.kubeadmNodeRegistration" . | nindent 8 }}
+        {{- include "kubehenge.kubeadmNodeRegistration" "controlPlane" | nindent 8 }}
       files:
         # On the first node kube-vip runs on super-admin.conf while kubeadm init does, admin.conf
         # after (files/kube-vip-credentials.sh).
@@ -421,6 +447,7 @@ template:
             {{- .Files.Get "files/kube-vip-credentials.sh" | nindent 12 }}
         {{- include "kubehenge.kubeadmNodeIPFile" . | nindent 8 }}
         {{- include "kubehenge.kubeletConfigFile" . | nindent 8 }}
+        {{- include "kubehenge.kubeadmControlPlaneTaintFile" . | nindent 8 }}
         {{- include "kubehenge.kubeadmServingFile" . | nindent 8 }}
         {{- include "kubehenge.sysctlFile" . | nindent 8 }}
         {{- include "kubehenge.clockFile" . | nindent 8 }}
@@ -449,7 +476,7 @@ in the node's read-only /usr, where the template already has them root's alone.
 template:
   spec:
     joinConfiguration:
-      {{- include "kubehenge.kubeadmNodeRegistration" . | nindent 6 }}
+      {{- include "kubehenge.kubeadmNodeRegistration" "worker" | nindent 6 }}
     files:
       {{- include "kubehenge.kubeadmNodeIPFile" . | nindent 6 }}
       {{- include "kubehenge.kubeletConfigFile" . | nindent 6 }}
