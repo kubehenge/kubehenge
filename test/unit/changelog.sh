@@ -107,6 +107,7 @@ section_refused() {
 }
 
 long=$(printf '%0141d' 0 | tr 0 a)
+accented=$(printf '%0139d' 0 | sed 's/0/é/g')
 
 # A valid fragment: every heading a fragment may hold, a link counted by its text, code by what
 # is inside the backticks, and 140 letters with accents counted as letters, not bytes.
@@ -118,7 +119,7 @@ fragment valid good "### Before you upgrade
 ### Added
 
 - A \`--vlan\` option, described in [install.md](install.md#a-very-long-anchor-that-would-take-the-line-past-the-limit-if-it-counted).
-- $(printf '%0139d' 0 | sed 's/0/é/g').
+- ${accented}.
 
 ### Changed
 

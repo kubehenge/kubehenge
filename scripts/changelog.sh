@@ -48,6 +48,7 @@ fragments() {
 # What a bullet must be, in both checks: one line holding one sentence that ends in a full stop, of
 # at most 140 characters as read. A link counts by its text and code by what is inside the
 # backticks. Under LC_ALL=C every awk counts bytes, so UTF-8's continuation bytes are dropped first.
+# shellcheck disable=SC2016 # awk code, which awk expands
 rules='
 function refuse(why) {
     printf "%s:%d: %s\n", FILENAME, FNR, why > "/dev/stderr"
@@ -155,8 +156,10 @@ check() {
     bad=0
     for f in "${changes}"/*.md; do
         [ -e "${f}" ] || continue
+        # shellcheck disable=SC2310 # its status is the verdict, and every file is checked before failing
         check_fragment "${f}" || bad=1
     done
+    # shellcheck disable=SC2310 # its status is the verdict, as for the fragments
     check_changelog || bad=1
     [ "${bad}" = 0 ] || fail "out of shape: see the lines above and the rules in .github/CONTRIBUTING.md"
 }
