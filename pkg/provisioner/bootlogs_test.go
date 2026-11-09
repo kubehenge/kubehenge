@@ -340,7 +340,8 @@ func TestParseBootLogsKeepsTheEnd(t *testing.T) {
 	var out strings.Builder
 	out.WriteString(templates.BootLogMark + "journal of kubelet\n")
 	for range 2 * bootLogSectionBytes / 100 {
-		out.WriteString(strings.Repeat("y", 99) + "\n")
+		out.WriteString(strings.Repeat("y", 99))
+		out.WriteString("\n")
 	}
 	out.WriteString("the last line")
 	s := parseBootLogs(out.String())

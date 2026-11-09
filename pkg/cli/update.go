@@ -203,7 +203,8 @@ func newSignCommand(trusted []ed25519.PublicKey) *cobra.Command {
 					return fmt.Errorf("%s: the same key twice", f)
 				}
 				signers = append(signers, pub)
-				sigs.WriteString(release.Sign(index, key) + "\n")
+				sigs.WriteString(release.Sign(index, key))
+				sigs.WriteString("\n")
 			}
 			if _, err = release.Parse(index, sigs.String(), signers, time.Now()); err != nil {
 				return err //nolint:wrapcheck // release.Parse names the index

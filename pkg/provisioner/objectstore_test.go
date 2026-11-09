@@ -423,7 +423,10 @@ func (f *fakeS3) verify(r *http.Request) error {
 			}
 			value = strings.Join(values, ",")
 		}
-		headers.WriteString(name + ":" + value + "\n")
+		headers.WriteString(name)
+		headers.WriteString(":")
+		headers.WriteString(value)
+		headers.WriteString("\n")
 	}
 	canonical := strings.Join([]string{
 		r.Method, s3utils.EncodePath(r.URL.Path), strings.ReplaceAll(q.Encode(), "+", "%20"), headers.String(), signed, payload,

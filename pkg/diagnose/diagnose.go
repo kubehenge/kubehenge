@@ -396,12 +396,16 @@ func (b *bundle) manifest() {
 	s.WriteString("The logs hold only the lines that name one of the objects under objects/.\n\n")
 	s.WriteString("Collected:\n")
 	for _, c := range b.collected {
-		s.WriteString("  " + c + "\n")
+		s.WriteString("  ")
+		s.WriteString(c)
+		s.WriteString("\n")
 	}
 	if len(b.failed) > 0 {
 		s.WriteString("\nNot collected:\n")
 		for _, f := range b.failed {
-			s.WriteString("  " + f + "\n")
+			s.WriteString("  ")
+			s.WriteString(f)
+			s.WriteString("\n")
 		}
 	}
 	b.file("manifest.txt", []byte(s.String()))

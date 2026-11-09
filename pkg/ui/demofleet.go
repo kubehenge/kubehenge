@@ -853,7 +853,7 @@ func demoSuffix(parts ...any) string {
 		length      = 5
 	)
 	h := uint32(offsetBasis)
-	for _, b := range []byte(fmt.Sprint(parts...)) {
+	for _, b := range fmt.Append(nil, parts...) {
 		h = (h ^ uint32(b)) * prime
 	}
 	out := make([]byte, length)
