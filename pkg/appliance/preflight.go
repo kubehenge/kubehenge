@@ -49,6 +49,12 @@ type Inventory struct {
 	// UsedVMIDs are the IDs of the VMs and containers the user sees. Nil means they could not be
 	// read.
 	UsedVMIDs map[int]bool
+	// APIReach is what the Proxmox VE firewalls let in on the API port. Nil means it could not be
+	// read.
+	APIReach *pve.APIReach
+	// Route is how traffic reaches the API endpoint from the appliance. The management cluster's
+	// nodes reach it in the endpoint's families.
+	Route APIRoute
 }
 
 // Findings are what a preflight found. Errors stop the run, warnings do not. Each names the node,
@@ -123,9 +129,39 @@ func (s *Settings) Preflight(inv *Inventory, owned bool) Findings { //nolint:rev
 		s.checkNamesFree(inv, &f)
 		s.checkVMIDs(inv, &f)
 	}
+	s.checkAPIReach(inv, &f)
 	s.warnPlacement(inv, &f)
 	s.warnRanges(inv, &f)
 	return f
+}
+
+// checkAPIReach checks that the datacenter firewall, once on, still lets the appliance and the
+// management cluster's nodes reach the Proxmox VE API. It cuts them off at once otherwise, and
+// nothing can then create or manage a VM. The setup asks for no security groups, so a firewall that
+// is off is left alone, as a cluster that turns it on is checked where it names its groups.
+func (s *Settings) checkAPIReach(inv *Inventory, f *Findings) {
+	if inv.APIReach == nil || !inv.APIReach.Enabled {
+		return
+	}
+	// Only addresses that reach the API count: the appliance's source towards each endpoint address,
+	// and the nodes' addresses in the endpoint's families. A host name that resolves to both has
+	// either used.
+	addrs := slices.Clone(inv.Route.Sources)
+	for _, text := range slices.Concat(s.NodeAddresses, s.NodeAddressesIPv6) {
+		host, _, _ := strings.Cut(text, "/")
+		ip, err := netip.ParseAddr(host)
+		if err == nil && slices.ContainsFunc(inv.Route.Endpoints, func(e netip.Addr) bool { return e.Is4() == ip.Is4() }) {
+			addrs = append(addrs, ip)
+		}
+	}
+	addrs = slices.Compact(slices.SortedFunc(slices.Values(addrs), netip.Addr.Compare))
+	r := inv.APIReach.Cut(addrs)
+	if msg := pve.LockoutMessage(r.Cut); msg != "" {
+		f.Errors = append(f.Errors, msg)
+	}
+	if msg := pve.UnsureMessage(r.Unsure); msg != "" {
+		f.Warnings = append(f.Warnings, msg)
+	}
 }
 
 func (s *Settings) checkNodesExist(inv *Inventory, f *Findings) {

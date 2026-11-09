@@ -1215,6 +1215,10 @@ func (*demoAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]str
 	return map[string]string{}, nil
 }
 
+func (*demoAccounts) APIReach(context.Context, *pve.Ticket) (*pve.APIReach, error) {
+	return &pve.APIReach{}, nil
+}
+
 func (*demoAccounts) NextID(context.Context, *pve.Ticket) (pve.NextID, error) {
 	return pve.NextID{}, nil
 }
