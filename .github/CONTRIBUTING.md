@@ -69,9 +69,10 @@ Details and reasons: `docs/architecture.md`.
 - **Website.** Lighthouse CI checks the built site on each pull request that changes it (`make website-check`, limits in `website/lighthouserc.cjs`).
 - **Changelog.** Put your lines in `docs/changes/<branch>.md` and leave `docs/changelog.md` alone, so pull requests never conflict. A release folds the files into its section (`make changelog VERSION=<version>`).
   - Each line goes under one of `### Before you upgrade`, `### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Security` or `### Internal`. Internal lines (CI, tests, tooling) stay out of the release notes.
-  - Each line is a bullet of one sentence and at most 140 characters. It says what changed for the reader, with code and names in backticks.
+  - Each bullet is one change, in one or two sentences and at most 200 characters. It says what changed for the reader, with code and names in backticks.
+  - A line that changes nothing for a reader stays out, such as behaviour that stays the same or a retry count the user never sees.
   - Detail goes into the docs, with a link written relative to `docs/changelog.md`. `make test` checks the shape (`scripts/changelog.sh check`).
-  - A release adds one to five highlights to its section (`docs/releasing.md`).
+  - A release adds one to five highlights to its section (`docs/releasing.md`). A highlight sums up in plain words what matters most, and never repeats a bullet.
 - **Subjects.** Commit subjects are at most 72 characters. Pull request titles are at most 64, as the squash commit adds the number (`(#N)`). CI checks both.
 - **Page dates.** The published site serves each page's fingerprint and the day its content last changed as `/pages.json`, and a deployment starts from it. Nothing is committed for it.
 - **Links.** lychee checks the outside links of the README, `docs/` and the website every night (`make links`).

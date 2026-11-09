@@ -106,19 +106,21 @@ section_refused() {
     mentions "$1: says why" "$3" "${out}"
 }
 
-long=$(printf '%0141d' 0 | tr 0 a)
-accented=$(printf '%0139d' 0 | sed 's/0/é/g')
+long=$(printf '%0201d' 0 | tr 0 a)
+accented=$(printf '%0199d' 0 | sed 's/0/é/g')
+anchor=$(printf '%0150d' 0 | tr 0 a)
 
-# A valid fragment: every heading a fragment may hold, a link counted by its text, code by what
-# is inside the backticks, and 140 letters with accents counted as letters, not bytes.
+# A valid fragment: every heading a fragment may hold, a bullet of two sentences, a link counted by
+# its text, code by what is inside the backticks, and 200 letters with accents counted as letters,
+# not bytes.
 repo valid
 fragment valid good "### Before you upgrade
 
-- Upgrade the appliance before its clusters.
+- Upgrade the appliance before its clusters. Each cluster's page says when it may follow.
 
 ### Added
 
-- A \`--vlan\` option, described in [install.md](install.md#a-very-long-anchor-that-would-take-the-line-past-the-limit-if-it-counted).
+- A \`--vlan\` option for the container's network, described in [install.md](install.md#${anchor}).
 - ${accented}.
 
 ### Changed
@@ -154,10 +156,10 @@ refused wrong-level '## Added
 refused missing-heading '- A line without a heading.' 'a bullet before any heading'
 refused too-long "### Fixed
 
-- ${long}." 'a bullet over 140 characters (142)'
-refused two-sentences '### Fixed
+- ${long}." 'a bullet over 200 characters (202)'
+refused three-sentences '### Fixed
 
-- Nodes keep their identity. A reboot keeps it too.' 'a bullet of more than one sentence'
+- Nodes keep their identity. A reboot keeps it too. So does a move.' 'a bullet of more than two sentences'
 refused no-full-stop '### Fixed
 
 - Nodes keep their identity' 'does not end in a full stop'
@@ -255,7 +257,36 @@ section_refused section-bullet "## [0.4.2] - 2026-11-05
 
 ### Highlights
 
-- ${long}." 'a bullet over 140 characters'
+- ${long}." 'a bullet over 200 characters'
+section_refused repeated-highlight '## [0.4.2] - 2026-11-05
+
+### Highlights
+
+- Nodes keep their identity.
+
+### Fixed
+
+- Nodes keep their identity.' 'a highlight that repeats the bullet on line 13'
+section_refused repeated-before-upgrade '## [0.4.2] - 2026-11-05
+
+### Before you upgrade
+
+- Build the templates first.
+
+### Highlights
+
+- Build the templates first.' 'a highlight that repeats the bullet on line 9'
+repo highlight-in-other-words '## [0.4.2] - 2026-11-05
+
+### Highlights
+
+- Nodes stay who they are.
+
+### Fixed
+
+- Nodes keep their identity through a rename.'
+run highlight-in-other-words check
+same 'highlight in other words: passes' 0 "${status}"
 repo unreleased-lines
 printf '# Changelog\n\n## [Unreleased]\n\n- A line.\n\n%s\n' "${released}" > "${root}/unreleased-lines/docs/changelog.md"
 run unreleased-lines check

@@ -45,8 +45,8 @@ fragments() {
     done | awk '!seen[$0]++'
 }
 
-# What a bullet must be, in both checks: one line holding one sentence that ends in a full stop, of
-# at most 140 characters as read. A link counts by its text and code by what is inside the
+# What a bullet must be, in both checks: one line of one or two sentences that ends in a full stop,
+# at most 200 characters as read. A link counts by its text and code by what is inside the
 # backticks. Under LC_ALL=C every awk counts bytes, so UTF-8's continuation bytes are dropped first.
 # shellcheck disable=SC2016 # awk code, which awk expands
 rules='
@@ -59,12 +59,12 @@ function bullet(text,   read, plain) {
     gsub(/\]\([^)]*\)/, "", read)
     gsub(/[[`]/, "", read)
     gsub(/[\200-\277]/, "", read)
-    if (length(read) > 140) refuse("a bullet over 140 characters (" length(read) "): " text)
+    if (length(read) > 200) refuse("a bullet over 200 characters (" length(read) "): " text)
     plain = text
     gsub(/`[^`]*`/, "code", plain)
     gsub(/\]\([^)]*\)/, "]", plain)
     if (plain !~ /\.$/) refuse("a bullet that does not end in a full stop: " text)
-    else if (plain ~ /[.!?][")]*[ \t]/) refuse("a bullet of more than one sentence: " text)
+    else if (gsub(/[.!?][")]*[ \t]/, "&", plain) > 1) refuse("a bullet of more than two sentences: " text)
 }
 '
 
@@ -98,7 +98,8 @@ check_fragment() {
 }
 
 # check_changelog: refuses a section of docs/changelog.md out of shape. [Unreleased] stays empty, and
-# each version holds its headings in order, Highlights among them, each with bullets.
+# each version holds its headings in order, Highlights among them, each with bullets. A highlight
+# sums a change up in its own words, so one that repeats a bullet of its section is refused.
 check_changelog() {
     [ -f "${changelog}" ] || fail "${changelog} is missing"
     grep -q '^## \[Unreleased\]$' "${changelog}" || fail "${changelog} has no '## [Unreleased]' heading"
@@ -109,9 +110,13 @@ check_changelog() {
             printf "%s:%d: ### %s has no bullet\n", FILENAME, at, heading > "/dev/stderr"
             bad = 1
         }
-        function done() {
+        function done(   text) {
             if (version == "" || unreleased) return
             empty()
+            for (text in said) if (text in other) {
+                printf "%s:%d: a highlight that repeats the bullet on line %d: %s\n", FILENAME, said[text], other[text], text > "/dev/stderr"
+                bad = 1
+            }
             if (!highlights) { printf "%s: %s has no ### Highlights with bullets\n", FILENAME, version > "/dev/stderr"; bad = 1 }
             if (highlights > 5) { printf "%s: %s has %d highlights, five at most\n", FILENAME, version, highlights > "/dev/stderr"; bad = 1 }
         }
@@ -121,6 +126,8 @@ check_changelog() {
             unreleased = $0 == "## [Unreleased]"
             heading = ""
             last = bullets = highlights = 0
+            split("", said)
+            split("", other)
             next
         }
         version == "" || /^[ \t]*$/ { next }
@@ -143,7 +150,10 @@ check_changelog() {
         /^- / {
             if (heading == "") refuse("a bullet before any heading: " $0)
             bullets++
-            if (heading == "Highlights") highlights++
+            if (heading == "Highlights") {
+                highlights++
+                said[substr($0, 3)] = FNR
+            } else other[substr($0, 3)] = FNR
             bullet(substr($0, 3))
             next
         }
