@@ -70,7 +70,7 @@ func TestPinsReadsTheRegistryForANewTalosRelease(t *testing.T) { //nolint:parall
 	pinsSources.api, pinsSources.github, pinsSources.raw, pinsSources.registry = srv.URL, srv.URL, srv.URL, srv.URL
 	t.Cleanup(func() { pinsSources = saved })
 	file := filepath.Join(t.TempDir(), "releasepins.txt")
-	if err := os.WriteFile(file, []byte("# header\n"), 0o600); err != nil { //nolint:gosec // the test's own temporary file
+	if err := os.WriteFile(file, []byte("# header\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := run(t, "release", "pins", file)
