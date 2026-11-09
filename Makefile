@@ -122,8 +122,14 @@ website-check: website
 		KUBEHENGE_LIGHTHOUSE=$$form npm exec --no -- lhci autorun --config=lighthouserc.cjs; \
 	done
 
-# The outside links of the README, docs/ and the built website (lychee.toml). Links between pages
-# are the website build's to check. A dead outside link fails the nightly run, never a pull request.
+# The links inside the built website (website/lychee.toml): each must land on a page and a heading
+# the site made, which the build alone does not check. Run it after `make website`.
+.PHONY: website-links
+website-links:
+	lychee --config website/lychee.toml --root-dir "$$PWD/website/.vitepress/dist" 'website/.vitepress/dist/**/*.html'
+
+# The outside links of the README, docs/ and the built website (lychee.toml). A dead outside link
+# fails the nightly run, never a pull request.
 .PHONY: links
 links: website
 	lychee --config lychee.toml README.md docs website/index.md 'website/.vitepress/dist/**/*.html'

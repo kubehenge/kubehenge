@@ -1,0 +1,10 @@
+# lychee over the built site, offline: every link between pages, to an anchor and within a page must
+# land on a file and a heading the site made. VitePress's build checks only that a page exists.
+# Outside links are the nightly run's (the root lychee.toml). Run it through `make website-links`,
+# which gives the root directory that root-relative links resolve against.
+offline = true
+include_fragments = "full"
+# cleanUrls: /docs/install is dist/docs/install.html.
+fallback_extensions = ["html"]
+include_verbatim = false
+no_progress = true

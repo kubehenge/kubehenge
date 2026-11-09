@@ -130,7 +130,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          scripts/tools.sh "$RUNNER_TEMP/bin" node
+          scripts/tools.sh "$RUNNER_TEMP/bin" node lychee
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       # The page dates are the published site's own pages.json, so no pull request has to carry
       # them. A missing file means the first deploy. Any other failure stops the build, as an empty
@@ -153,6 +153,8 @@ jobs:
           PAGES_PREVIOUS: >-
             ${{ github.event_name != 'pull_request'
             && format('{0}/page-dates/before.json', runner.temp) || '' }}
+      # A link to a page or heading the site does not make fails here, on main as well.
+      - run: make website-links
       # What IndexNow compares: the dates before this deploy and the ones it publishes.
       - if: github.event_name != 'pull_request'
         run: cp website/.vitepress/dist/pages.json "$RUNNER_TEMP/page-dates/after.json"
