@@ -1,7 +1,7 @@
 ### Changed
 
 - A refusal from Proxmox VE reads "Proxmox VE refused:" with its own reason, such as "VM is locked (backup)". Only a lost connection, a timeout or a gateway error reads "did not answer".
-- A refused second factor says the factor may be locked, or for a recovery key that the cluster may lack quorum.
+- A refused second factor says it may be locked. A refused recovery key says the Proxmox VE cluster may lack quorum.
 - The docs' example roles for cluster users hold `Pool.Audit`. A user without it is told so on the cluster page and on reboot, instead of "The machine has no VM in the cluster's pool".
 
 ### Fixed

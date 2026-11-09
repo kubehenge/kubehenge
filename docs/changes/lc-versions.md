@@ -5,4 +5,4 @@
 
 ### Changed
 
-- A build with an older kernel than the previous build's stays out of what clusters move to and Templates marks it. The controller builds again an hour later, 3 times at most.
+- Clusters do not move to a build whose kernel is older than the previous build's, and **Templates** marks it. The controller builds again an hour later, 3 times at most.

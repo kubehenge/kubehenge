@@ -1,6 +1,6 @@
 ### Added
 
-- A machine deleting for 20 minutes gets the condition `MachineDeletionStalled`, with why.
+- A machine still deleting after 20 minutes gets the condition `MachineDeletionStalled`, with why.
 - A stuck machine can be forgotten from the interface, `kubehenge cluster machine forget` or the annotation `kubehenge.dev/forget-machine`. That is refused while its VM runs on a node that answers.
 - The controller tests every token it relies on every 10 minutes, privileges included. A failure shows in Health, goes out as a notification and gives the cluster `ProxmoxAccessRefused`.
 

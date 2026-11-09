@@ -1,9 +1,9 @@
 ### Added
 
-- The monitoring add-on takes alert receivers (email, webhook, Slack, Teams), a remote write target and external Alertmanagers, with secrets stored as credentials, set in the interface, kubectl or CLI.
-- The docs list what stays after monitoring, logs or Headlamp is switched off, and the monitoring dialog says the volumes stay.
+- The monitoring add-on takes alert receivers (email, webhook, Slack, Teams), a remote write target and external Alertmanagers. Their secrets are stored as credentials.
+- Switching monitoring off keeps its volumes, as its dialog says. The docs list what monitoring, logs and Headlamp leave behind.
 
 ### Changed
 
 - Prometheus reads every ServiceMonitor, PodMonitor, Probe, ScrapeConfig and PrometheusRule of the cluster, not only the release's.
-- The monitoring chart's own job applies the Prometheus Operator's CRDs on every install and upgrade, with images pinned by digest.
+- Monitoring installs and upgrades bring the Prometheus Operator's CRDs up to date.

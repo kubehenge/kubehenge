@@ -4,4 +4,4 @@
 
 ### Changed
 
-- A Talos upgrade first waits for the StatefulSets with a ready pod on the node, then drains for its drain timeout (60 minutes by default), not a fixed five.
+- A Talos upgrade first waits for the StatefulSets with a ready pod on the node, then drains for its drain timeout (60 minutes by default), not a fixed five minutes.

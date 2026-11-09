@@ -1,7 +1,7 @@
 ### Added
 
-- The create wizard says that volumes on node-local storage stay on one node. The docs explain how replacements meet them and how to move one, and troubleshooting covers "volume node affinity conflict".
-- The create wizard warns before submit, in amber, when no node it may use has the free memory. A bridge missing on the allowed nodes names the nodes that have it.
+- The create wizard says that volumes on node-local storage stay on one node. The docs cover moving one and the "volume node affinity conflict" error.
+- The create wizard warns before submit when no node it may use has the free memory. A bridge missing on the allowed nodes names the nodes that have it.
 
 ### Changed
 

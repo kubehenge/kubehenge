@@ -1,6 +1,6 @@
 ### Added
 
-- The volume owner VM is protected in Proxmox VE and says in its description not to delete it. A cluster whose owner VM disappeared gets a `VolumeOwnerMissing` event with the old VMID.
+- The volume owner VM is protected in Proxmox VE and says in its description not to delete it. A cluster whose owner VM disappeared gets a `VolumeOwnerMissing` event with the old VM ID.
 
 ### Changed
 

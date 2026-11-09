@@ -7,7 +7,7 @@
 
 ### Fixed
 
-- While Proxmox VE refuses HA rules before migrating its HA groups, Kubehenge sets `HARulesPending` and tries again after 5 minutes, where the reconcile failed.
+- While Proxmox VE refuses HA rules until its HA groups are migrated, Kubehenge sets `HARulesPending` and tries again after 5 minutes.
 - Kubehenge writes no HA rule while nodes run different major versions, and offers no HA rule placements then.
 
 ### Security
