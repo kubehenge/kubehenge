@@ -1,15 +1,11 @@
 package ui
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,9 +69,9 @@ type talosReleasesView struct {
 	// Templates are the releases the template pool has a template of, newest first: a cluster
 	// starts on one of these.
 	Templates []string `json:"templates"`
-	// Releases are the newest release of each minor version the Image Factory builds and Talos's
-	// compatibility tables in this Kubehenge know, newest first, which a template can be built of
-	// and a cluster upgraded to.
+	// Releases are the newest pinned release of each minor version that Talos's compatibility
+	// tables in this Kubehenge know, newest first, which a template can be built of and a cluster
+	// upgraded to.
 	Releases []string `json:"releases"`
 	// Default is the release Kubehenge makes templates of unless another is asked for.
 	Default string `json:"default"`
@@ -86,7 +82,7 @@ type talosReleasesView struct {
 	Error string `json:"error,omitempty"`
 }
 
-// talosReleasesCacheKey keeps the Image Factory's releases in the release cache beside the
+// talosReleasesCacheKey keeps the pinned Talos releases in the release cache beside the
 // distributions' channels.
 const talosReleasesCacheKey = "talos-releases"
 
@@ -134,27 +130,13 @@ func (s *Server) cachedTalosReleases(ctx context.Context) ([]string, error) {
 		s.Log.WarnContext(ctx, "reading the Talos releases", "error", err)
 		return []string{}, fmt.Errorf("the Talos releases could not be read: %w", err)
 	}
-	newest := map[int]string{}
-	for _, v := range all {
-		minor, err := templates.TalosMinor(v)
-		// A release newer than the compatibility tables Kubehenge was built with is refused by the
-		// cluster checks, so it is not offered.
-		if err != nil {
-			continue
-		}
-		if _, err := templates.TalosKubernetesMinors(v); err != nil {
-			continue
-		}
-		if old, ok := newest[minor]; !ok || talosPatch(old) < talosPatch(v) {
-			newest[minor] = v
-		}
-	}
-	minors := slices.Sorted(maps.Keys(newest))
-	slices.Reverse(minors)
-	out := make([]string, 0, len(minors))
-	for _, m := range minors {
-		out = append(out, newest[m])
-	}
+	// A release newer than the compatibility tables Kubehenge was built with is refused by the
+	// cluster checks, so it is not offered.
+	known := slices.DeleteFunc(slices.Clone(all), func(v string) bool {
+		_, err := templates.TalosKubernetesMinors(v)
+		return err != nil
+	})
+	out := templates.NewestOfEachMinor(known)
 	c.mu.Lock()
 	if c.seen == nil {
 		c.seen = map[string]cachedRelease{}
@@ -162,12 +144,6 @@ func (s *Server) cachedTalosReleases(ctx context.Context) ([]string, error) {
 	c.seen[talosReleasesCacheKey] = cachedRelease{view: versionsView{Versions: out}, fetched: time.Now()}
 	c.mu.Unlock()
 	return out, nil
-}
-
-// talosPatch is a v1.x.y release's patch number.
-func talosPatch(v string) int {
-	p, _ := strconv.Atoi(v[strings.LastIndex(v, ".")+1:])
-	return p
 }
 
 // publishedVersions are RKE2's or k3s's releases, the same whatever the node OS, or the Kubernetes
@@ -255,8 +231,6 @@ func distributionTitle(d string) string {
 	return templates.Distribution(d).Title()
 }
 
-var kubeadmVersion = regexp.MustCompile(`^v1\.(\d+)\.(\d+)$`)
-
 // kubeadmVersions are the versions a kubeadm cluster on the node OS can run: those a template of it
 // has been built for in the template pool, as the controller records them on the kubeadm class.
 // Cluster API clones with its own token, so they are offered whatever the user may see in
@@ -280,26 +254,7 @@ func (s *Server) kubeadmVersions(ctx context.Context, nodeOS templates.NodeOS) v
 		s.Log.WarnContext(ctx, "reading the kubeadm ClusterClass", "error", err)
 		return versionsView{Versions: []string{}, Error: "the kubeadm cluster class could not be read"}
 	}
-	type version struct{ minor, patch int }
-	newest := map[int]version{}
-	for _, raw := range recorded[nodeOS.String()] {
-		if v := kubeadmVersion.FindStringSubmatch(raw); v != nil {
-			minor, _ := strconv.Atoi(v[1])
-			patch, _ := strconv.Atoi(v[2])
-			if old, ok := newest[minor]; !ok || old.patch < patch {
-				newest[minor] = version{minor, patch}
-			}
-		}
-	}
-	list := make([]version, 0, len(newest))
-	for _, v := range newest {
-		list = append(list, v)
-	}
-	slices.SortFunc(list, func(a, b version) int { return cmp.Compare(b.minor, a.minor) })
-	view := versionsView{Versions: []string{}}
-	for _, v := range list {
-		view.Versions = append(view.Versions, "v1."+strconv.Itoa(v.minor)+"."+strconv.Itoa(v.patch))
-	}
+	view := versionsView{Versions: templates.NewestOfEachMinor(recorded[nodeOS.String()])}
 	if len(view.Versions) == 0 {
 		view.Error = "no kubeadm VM template on " + nodeOSTitle(nodeOS) + " yet. An administrator builds it in Administration"
 	}

@@ -644,7 +644,7 @@ export interface EtcdSizes {
 export interface TalosReleases {
   /** The releases the template pool has a template of, newest first. */
   templates: string[];
-  /** The newest release of each minor version the Image Factory builds, newest first. */
+  /** The newest pinned release of each minor version, newest first. */
   releases: string[];
   /** The release templates are made of unless another is asked for. */
   default: string;

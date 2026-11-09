@@ -86,7 +86,7 @@ func TestCreateAppliesTheHardware(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := newBakeHost(t)
-			b, tmpl, volume := talosBuilder(t, h)
+			b, tmpl, _ := talosBuilder(t, h)
 			b.Hardware = tc.choice
 			if _, err := b.Create(t.Context(), &tmpl); err != nil {
 				t.Fatal(err)
@@ -94,7 +94,7 @@ func TestCreateAppliesTheHardware(t *testing.T) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
 			c := h.vms[101]
-			if c["cpu"] != tc.cpu || c["scsihw"] != tc.scsihw || c["scsi0"] != "local-lvm:0,import-from="+volume+tc.disk {
+			if c["cpu"] != tc.cpu || c["scsihw"] != tc.scsihw || c["scsi0"] != "local-lvm:5"+tc.disk {
 				t.Errorf("the template is %v", c)
 			}
 			if _, numa := c["numa"]; numa != tc.numa {

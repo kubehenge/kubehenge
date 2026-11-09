@@ -23,8 +23,9 @@ func TestPlan(t *testing.T) {
 			req:  Request{Distribution: Talos},
 			want: Template{
 				Name:  "kubehenge-talos-" + DefaultTalosVersion,
-				Tags:  []string{"kubehenge", "talos", "talos-" + DefaultTalosVersion},
-				Image: ImageRef{Kind: TalosFactory, Version: DefaultTalosVersion},
+				Tags:  []string{"baked", "kubehenge", "talos", "talos-" + DefaultTalosVersion},
+				Image: ImageRef{Kind: NodeOSImage, NodeOS: DefaultNodeOS.Base()},
+				Bake:  &Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: DefaultTalosVersion},
 			},
 		},
 		{
@@ -91,7 +92,8 @@ func TestPlan(t *testing.T) {
 			if (got.Bake == nil) != (tt.want.Bake == nil) || (got.Bake != nil && *got.Bake != *tt.want.Bake) {
 				t.Errorf("Plan().Bake = %+v, want %+v", got.Bake, tt.want.Bake)
 			}
-			if got.Bake != nil {
+			// RequestOf reads the node OS lines a refresh builds again. A Talos template has no os- tag.
+			if got.Refreshed() {
 				if back, ok := RequestOf(got.Tags); !ok || back.NodeOS != got.Bake.NodeOS || back.Distribution != tt.req.Distribution ||
 					back.KubernetesVersion != tt.req.KubernetesVersion {
 					t.Errorf("RequestOf(%v) = %+v, %v", got.Tags, back, ok)

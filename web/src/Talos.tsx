@@ -26,7 +26,7 @@ function newestFirst(a: string, b: string): number {
 
 /**
  * offeredReleases are the Talos releases a cluster or a template can name: those with a template,
- * those the Image Factory builds and the default, newest first.
+ * those Kubehenge pins and the default, newest first.
  */
 export function offeredReleases(r: TalosReleases): string[] {
   return [...new Set([...r.templates, ...r.releases, ...(filled(r.default) ? [r.default] : [])])].toSorted(newestFirst);

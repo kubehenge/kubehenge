@@ -45,6 +45,9 @@ func TestCheckTalosHoldsTheReleaseToTalosRules(t *testing.T) {
 		return c
 	}
 	both := sharedKubernetes(t, "v1.13.5", "v1.14.4")
+	// The refusal names the release and the pins' newest of each minor.
+	unpinned := "v1.14.99: its nodes install only the releases it carries the checksums or digests of; the newest it pins of each minor version: " +
+		strings.Join(DefaultReleasePins().offered(talosRelease), ", ")
 	for _, tc := range []struct {
 		name    string
 		old, c  *clusterv1.Cluster
@@ -58,6 +61,9 @@ func TestCheckTalosHoldsTheReleaseToTalosRules(t *testing.T) {
 		{"two minors at once", with("v1.12.6", templates.TalosDefaultKubernetes), with("v1.14.4", templates.TalosDefaultKubernetes), "to the newest 1.13 release first"},
 		{"back", with("v1.14.4", both), with("v1.13.5", both), "cannot downgrade"},
 		{"the same release, the Kubernetes changed", with("v1.14.4", both), with("v1.14.4", templates.TalosDefaultKubernetes), ""},
+		{"a new cluster on a release not pinned", nil, with("v1.14.99", templates.TalosDefaultKubernetes), unpinned},
+		{"a move to a release not pinned", with("v1.14.4", both), with("v1.14.99", both), unpinned},
+		{"a release not pinned, which the cluster stays on", with("v1.14.99", both), with("v1.14.99", templates.TalosDefaultKubernetes), ""},
 	} {
 		if tc.name == "no release" {
 			tc.c.Spec.Topology.ClassRef.Name = ClassPrefix + "talos"

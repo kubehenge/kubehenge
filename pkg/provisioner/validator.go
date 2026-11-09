@@ -3,10 +3,8 @@ package provisioner
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"reflect"
 	"slices"
-	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -180,7 +178,7 @@ func (v *ClusterValidator) validatePinned(ctx context.Context, old, c *clusterv1
 		return nil
 	}
 	return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "version"), version,
-		fmt.Sprintf("%s; the newest it pins of each minor version: %s", unpinnedRelease(release, version), strings.Join(pins.offered(release), ", ")))}
+		pins.refusal(release, version).Error())}
 }
 
 // validateNodeOS checks the node OS when it changes, and when the nodes the cluster may use do, which

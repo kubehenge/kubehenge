@@ -492,7 +492,9 @@ func (r *TemplateRefresh) collect(ctx context.Context, clusters []refreshedClust
 // unneededTalos are the Talos templates collect deletes. A Talos release's template is made once,
 // so each release stands for a build of its minor's line: of each minor, all but the newest keep
 // releases go, unless a cluster's machines boot it or are upgraded to it, a machine still waiting
-// for its VM selects it, or the run was asked to make it.
+// for its VM selects it, or the run was asked to make it. Only baked templates take a place among
+// those. A template made from the Image Factory's image goes once its release's baked template is
+// in the list, and before that stays only while a waiting machine selects it.
 func unneededTalos(list []*proxmox.ClusterResource, inUse []string, pending map[string]bool, asked []templates.Request, keep int) []*proxmox.ClusterResource {
 	kept := map[string]bool{}
 	for _, v := range inUse {
@@ -503,28 +505,10 @@ func unneededTalos(list []*proxmox.ClusterResource, inUse []string, pending map[
 			kept[req.TalosVersion] = true
 		}
 	}
-	type release struct {
-		res     *proxmox.ClusterResource
-		version [3]int
-		raw     string
-	}
-	byMinor := map[int][]release{}
-	for _, res := range list {
-		tags := templates.ParseTags(res.Tags)
-		raw, ok := talosTemplateRelease(tags)
-		if !ok {
-			continue
-		}
-		var v [3]int
-		if _, err := fmt.Sscanf(raw, "v%d.%d.%d", &v[0], &v[1], &v[2]); err != nil {
-			continue
-		}
-		byMinor[v[1]] = append(byMinor[v[1]], release{res: res, version: v, raw: raw})
-	}
-	var out []*proxmox.ClusterResource
+	byMinor, out := talosByMinor(list, pending)
 	for _, minor := range slices.Sorted(maps.Keys(byMinor)) {
 		releases := byMinor[minor]
-		slices.SortFunc(releases, func(x, y release) int { return slices.Compare(y.version[:], x.version[:]) })
+		slices.SortFunc(releases, func(x, y talosTemplate) int { return slices.Compare(y.version[:], x.version[:]) })
 		for i, r := range releases {
 			if i < keep || kept[r.raw] || pending[strings.Join(templates.ParseTags(r.res.Tags), ";")] {
 				continue
@@ -533,6 +517,55 @@ func unneededTalos(list []*proxmox.ClusterResource, inUse []string, pending map[
 		}
 	}
 	return out
+}
+
+// talosTemplate is a baked Talos template of the list, by its release.
+type talosTemplate struct {
+	res     *proxmox.ClusterResource
+	version [3]int
+	raw     string
+}
+
+// talosByMinor sorts the Talos templates of the list into the baked ones, by minor version, and the
+// ones made from the Image Factory's image that collect deletes. Kubehenge's machines select a baked
+// template, so a factory-made one only serves a machine still waiting for its VM that selected it
+// before, and only until its release's baked template exists: capmox refuses a selector that two
+// templates match.
+func talosByMinor(list []*proxmox.ClusterResource, pending map[string]bool) (map[int][]talosTemplate, []*proxmox.ClusterResource) {
+	baked := map[string]bool{}
+	for _, res := range list {
+		tags := templates.ParseTags(res.Tags)
+		if raw, ok := talosTemplateRelease(tags); ok && isTalosLine(raw, tags) {
+			baked[raw] = true
+		}
+	}
+	byMinor := map[int][]talosTemplate{}
+	var factoryMade []*proxmox.ClusterResource
+	for _, res := range list {
+		tags := templates.ParseTags(res.Tags)
+		raw, ok := talosTemplateRelease(tags)
+		if !ok {
+			continue
+		}
+		if !isTalosLine(raw, tags) {
+			if baked[raw] || !pending[strings.Join(tags, ";")] {
+				factoryMade = append(factoryMade, res)
+			}
+			continue
+		}
+		var v [3]int
+		if _, err := fmt.Sscanf(raw, "v%d.%d.%d", &v[0], &v[1], &v[2]); err == nil {
+			byMinor[v[1]] = append(byMinor[v[1]], talosTemplate{res: res, version: v, raw: raw})
+		}
+	}
+	return byMinor, factoryMade
+}
+
+// isTalosLine tells whether tags are exactly those of the baked template of a Talos release. A
+// Talos template made from the Image Factory's image has the same release tag and no baked tag.
+func isTalosLine(raw string, tags []string) bool {
+	line, err := TalosLine(raw)
+	return err == nil && slices.Equal(line, tags)
 }
 
 // talosTemplateRelease is the Talos release a template listing's tags are of, if they are a Talos

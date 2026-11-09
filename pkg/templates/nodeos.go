@@ -153,7 +153,8 @@ type Recipe struct {
 	// Checks run through the guest agent once cloud-init has finished. Each must exit 0.
 	Checks [][]string
 	// Image is set in ImageMode: the bake's first boot built the node image onto the target disk,
-	// which is then booted on its own for its first-boot checks.
+	// which is then booted on its own for its first-boot checks. With BuilderDiskGiB set and Image
+	// nil, the bake writes the template's disk and never boots it.
 	Image *NodeImageBoot
 	// Reboot asks for a reboot after Checks, into what the bake installed, followed by
 	// RebootChecks.
@@ -163,7 +164,8 @@ type Recipe struct {
 	Cleanup [][]string
 	// DiskGiB is the template's disk. Clones can only grow it, so it stays modest.
 	DiskGiB int
-	// BuilderDiskGiB is, in ImageMode, the disk of the VM that builds the image.
+	// BuilderDiskGiB above 0 gives the bake's VM a disk of its own beside the template's, which it
+	// boots from to build the image onto the template's.
 	BuilderDiskGiB int
 	// MemoryMiB is what the bake's VM gets. 0 means the builder's default.
 	MemoryMiB int

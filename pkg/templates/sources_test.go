@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -77,21 +78,27 @@ func fakePublishers(t *testing.T) (*Sources, map[string][]byte) {
 	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, Mirrors: mirrors}, files
 }
 
-func TestResolveTalos(t *testing.T) {
+// The pins are the releases on offer, read with no request: the factory here fails every one.
+func TestTalosReleasesAreThePins(t *testing.T) {
 	t.Parallel()
-	s, _ := fakePublishers(t)
-	got, err := s.Resolve(context.Background(), ImageRef{Kind: TalosFactory, Version: "v1.14.2"})
+	failing := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("no request expected")
+	})}
+	s := &Sources{HTTP: failing, TalosFactoryURL: "http://factory.invalid", TalosPins: map[string]TalosPin{
+		"v1.14.5": {}, "v1.13.4": {}, "v1.14.4": {},
+	}}
+	got, err := s.TalosReleases(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Resolved{
-		URL:      s.TalosFactoryURL + "/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.14.2/nocloud-amd64.qcow2",
-		FileName: "template-talos-v1.14.2-ce4c980550dd-nocloud-amd64.qcow2",
-	}
-	if got != want {
-		t.Errorf("Resolve() = %+v, want %+v", got, want)
+	if want := []string{"v1.13.4", "v1.14.4", "v1.14.5"}; !slices.Equal(got, want) {
+		t.Errorf("TalosReleases() = %v, want %v", got, want)
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // Each family's image is resolved only through its publisher's signature over the checksum file.
 func TestResolveEachFamilyVerifiesItsSignedChecksums(t *testing.T) {

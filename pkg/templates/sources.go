@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -29,8 +30,9 @@ type Resolved struct {
 	ChecksumAlgorithm string
 }
 
-// TalosSchematic is the Image Factory customisation of every Talos image Kubehenge uses: the QEMU
-// guest agent, which Cluster API's Proxmox VE provider waits for.
+// TalosSchematic is the customisation of the installer the nodes install and upgrade with
+// (TalosInstaller). It must hold the extensions talosProfile bakes into the template's disk, so an
+// upgrade keeps them: the QEMU guest agent, which Cluster API's Proxmox VE provider waits for.
 const TalosSchematic = `customization:
   systemExtensions:
     officialExtensions:
@@ -56,6 +58,8 @@ const (
 type Sources struct {
 	HTTP            *http.Client
 	TalosFactoryURL string
+	// TalosPins are the Talos pins by release that pkg/cli fills from the release pins.
+	TalosPins map[string]TalosPin
 	// Mirrors serve a publisher's files from another place, by the publisher's address
 	// (https://host). A test points them at its own server.
 	Mirrors map[string]string
@@ -63,31 +67,30 @@ type Sources struct {
 	retryWait time.Duration
 }
 
-// DefaultSources uses the public Talos Image Factory and every publisher's own address.
-func DefaultSources() *Sources {
+// DefaultSources uses the public Talos Image Factory for the installer an upgrade names, every
+// publisher's own address, and the given Talos pins.
+func DefaultSources(talos map[string]TalosPin) *Sources {
 	return &Sources{
 		HTTP:            &http.Client{Timeout: sourcesTimeout},
 		TalosFactoryURL: "https://factory.talos.dev",
+		TalosPins:       talos,
 	}
 }
 
 // Resolve finds the URL, file name and checksum of an image.
 func (s *Sources) Resolve(ctx context.Context, ref ImageRef) (Resolved, error) {
-	switch ref.Kind {
-	case TalosFactory:
-		return s.talos(ctx, ref.Version)
-	case NodeOSImage:
-		f, r, err := Available(ref.NodeOS)
-		if err != nil {
-			return Resolved{}, err
-		}
-		resolved, err := f.Image(ctx, s, r)
-		if err != nil {
-			return Resolved{}, fmt.Errorf("the image of %s %s: %w", f.Title(), r.Name, err)
-		}
-		return resolved, nil
+	if ref.Kind != NodeOSImage {
+		return Resolved{}, fmt.Errorf("unknown image kind %q", ref.Kind)
 	}
-	return Resolved{}, fmt.Errorf("unknown image kind %q", ref.Kind)
+	f, r, err := Available(ref.NodeOS)
+	if err != nil {
+		return Resolved{}, err
+	}
+	resolved, err := f.Image(ctx, s, r)
+	if err != nil {
+		return Resolved{}, fmt.Errorf("the image of %s %s: %w", f.Title(), r.Name, err)
+	}
+	return resolved, nil
 }
 
 // RepositoryKey fetches a package repository's signing key and returns it ASCII-armoured after
@@ -170,23 +173,10 @@ func (s *Sources) TalosInstaller(ctx context.Context, version string) (string, e
 	return fmt.Sprintf("%s/nocloud-installer/%s:%s", u.Host, id, version), nil
 }
 
-// TalosReleases are the Talos releases the Image Factory builds, pre-releases left out.
-func (s *Sources) TalosReleases(ctx context.Context) ([]string, error) {
-	body, err := s.do(ctx, http.MethodGet, s.TalosFactoryURL+"/versions", nil)
-	if err != nil {
-		return nil, fmt.Errorf("listing the Talos releases: %w", err)
-	}
-	var all []string
-	if err := json.Unmarshal(body, &all); err != nil {
-		return nil, fmt.Errorf("unexpected Image Factory answer %q", body)
-	}
-	out := make([]string, 0, len(all))
-	for _, v := range all {
-		if versionRE.MatchString(v) {
-			out = append(out, v)
-		}
-	}
-	return out, nil
+// TalosReleases are the Talos releases this Kubehenge pins, sorted as text. It makes no request.
+// It returns an error to satisfy the TalosImages interface.
+func (s *Sources) TalosReleases(_ context.Context) ([]string, error) {
+	return slices.Sorted(maps.Keys(s.TalosPins)), nil
 }
 
 // at is where a publisher's URL is fetched from: the publisher itself unless a mirror stands in.
@@ -201,18 +191,6 @@ func (s *Sources) at(address string) string {
 
 func (s *Sources) get(ctx context.Context, address string) ([]byte, error) {
 	return s.do(ctx, http.MethodGet, s.at(address), nil)
-}
-
-func (s *Sources) talos(ctx context.Context, version string) (Resolved, error) {
-	id, err := s.TalosSchematicID(ctx)
-	if err != nil {
-		return Resolved{}, err
-	}
-	return Resolved{
-		// The uncompressed qcow2: Proxmox VE cannot decompress images it imports.
-		URL:      fmt.Sprintf("%s/image/%s/%s/nocloud-amd64.qcow2", s.TalosFactoryURL, id, version),
-		FileName: fmt.Sprintf("template-talos-%s-%s-nocloud-amd64.qcow2", version, id[:12]),
-	}, nil
 }
 
 // signedImage resolves an image whose publisher lists its SHA-256 in a checksum file it signs with

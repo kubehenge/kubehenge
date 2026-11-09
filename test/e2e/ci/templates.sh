@@ -9,7 +9,8 @@
 #   test/e2e/ci/templates.sh made <work directory> <slot> <options>...
 #
 # keys prints one key for each template of kubeadm, RKE2 or k3s the test makes, in the order run.sh
-# makes them. Talos's templates are only downloaded, not baked, and get none. missing lists, from
+# makes them. Talos's templates are baked in the lane that needs them, are kept out of the cache
+# and get none. missing lists, from
 # every test a pull request runs, the templates whose keys the repository's cache lacks on <ref>,
 # for e2e-templates.yml (needs the GitHub CLI with actions: read). bake makes one template on the
 # Proxmox VE up.sh started and backs it up to <work directory>/vz/template-1 for the cache. made
@@ -185,7 +186,8 @@ if [ "${0##*/}" = templates.sh ]; then
     here=$(dirname "${script}")
     repo=$(readlink -f "${here}/../../..")
     node_os=
-    # Talos's templates are never baked.
+    # Talos's templates are baked in the lane that needs them and kept out of the cache, so script
+    # mode names no release.
     talos_from=
     talos_to=
     kubernetes_versions "${repo}"
