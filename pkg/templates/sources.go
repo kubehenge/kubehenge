@@ -53,7 +53,7 @@ const (
 	sourcesAttempts  = 4
 	sourcesFirstWait = 2 * time.Second
 	// A publisher behind a CDN replaces a checksum file and its signature a second apart, and each
-	// cache caches each file on its own for up to an hour (AlmaLinux's Fastly: 3600 s). The pair is
+	// cache keeps each file on its own for up to an hour (3600 s on AlmaLinux's Fastly). The pair is
 	// fetched again, the wait doubling from 10s up to 5m, until the budget (the cache's hour and a
 	// margin) is spent, so that a request lands on caches that hold both new files.
 	signedPairBudget    = 65 * time.Minute
@@ -316,7 +316,7 @@ func (s *Sources) signedPair(ctx context.Context, signer signingKey, sumsURL, si
 		}
 		// The last wait ends on the deadline, so the budget is spent on a final fetch and not left over.
 		wait = min(wait, remaining)
-		logFrom(ctx)("%s and %s do not match yet, which a publisher's cache causes while it holds one old file; trying again at %s",
+		logFrom(ctx)("%s and %s do not match yet, as the publisher's cache still holds an old copy. Trying again at %s",
 			sumsURL, sigURL, s.clock().Add(wait).Format(time.TimeOnly))
 		if err := s.pause(ctx, wait); err != nil {
 			return nil, fmt.Errorf("%s and %s: %w", sumsURL, sigURL, err)
