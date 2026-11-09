@@ -1,3 +1,3 @@
 ### Fixed
 
-- A template build waits up to 10 minutes for a publisher's checksum file and its signature to match after a release, rather than failing at once.
+- A template build waits up to 10 minutes for a publisher's checksums and their signature to match, rather than failing at once.
