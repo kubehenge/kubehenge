@@ -101,7 +101,7 @@ kubehenge template create kubeadm --kubernetes-version v1.36.5 --node pve1
 
 A node OS template is built by a VM of its own, which boots the family's cloud image. In image mode the VM composes the node image from the family's packages and checks it with `bootc container lint`. It installs the image onto the template's disk, then boots it once on its own. A transactional node OS installs what a node needs as a new snapshot and reboots into it.
 
-A Talos template is baked by the same kind of VM. It runs Sidero's pinned imager and writes the disk the imager makes onto the template's own. That disk is never booted.
+A Talos template is baked by the same kind of VM. It runs Sidero's pinned imager and writes the disk the imager makes onto the template's own. That disk is never booted. Baking takes about 2 to 4 minutes.
 
 That VM reaches the package repositories by DHCP on `--bridge`. It can use a static address instead, given with `--build-address`, `--build-gateway` and `--build-dns`. For a Talos template it also reaches `ghcr.io` and `pkg-containers.githubusercontent.com`, where `ghcr.io` redirects its downloads.
 
