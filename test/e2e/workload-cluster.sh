@@ -2123,10 +2123,13 @@ case ${part}-${distribution} in
     *) set_variable etcdSnapshots "{\"enabled\":false,\"target\":\"${KUBEHENGE_E2E_BACKUP_TARGET}\"}" ;;
 esac
 
-# restarts: each pod's container restarts, by namespace/name.
+# restarts [nodes]: each pod's container restarts, by namespace/name, leaving out the pods on the
+# nodes named.
 restarts() {
     wl get pods -A -o json |
-        jq -c '[.items[] | {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
+        jq -c --arg skip "${1:-}" '($skip | split(" ") | map(select(. != ""))) as $skip |
+            [.items[] | select(.spec.nodeName as $n | $skip | index([$n]) | not) |
+            {key: "\(.metadata.namespace)/\(.metadata.name)", value: ([.status.containerStatuses[]?.restartCount] | add // 0)}] | from_entries'
 }
 # server_restarts: how often systemd has restarted the control planes' distribution service. k3s runs
 # every control-plane component in it, so it is the one place k3s's restarts show. Talos has no
@@ -2145,6 +2148,8 @@ server_restarts() {
 # restart_baseline: notes the restarts so far, which restarts_since compares with.
 restart_baseline() {
     servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    baseline_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    nodes_before=" $(wl get nodes -o jsonpath='{.items[*].metadata.name}') "
     pods_before=$(restarts)
     if [ -n "${server_unit}" ]; then
         # shellcheck disable=SC2310 # a failed count fails the step.
@@ -2160,8 +2165,9 @@ found_restarts() {
     fi
 }
 # restarts_since: whether anything restarted since restart_baseline, the same control planes still
-# there; $1 says while what. Why each container ended, and how starved each node has been of CPU,
-# memory and IO over the last minutes, tell a component's fault from nodes too small for the load.
+# there; $1 says while what, and $2 names nodes made since whose reboot was expected, whose pods are
+# left out. Why each container ended, and how starved each node has been of CPU, memory and IO over
+# the last minutes, tell a component's fault from nodes too small for the load.
 restarts_since() {
     if [ -n "${server_unit}" ]; then
         # shellcheck disable=SC2310 # a failed count fails the step.
@@ -2169,11 +2175,18 @@ restarts_since() {
         [ "${servers_after}" = "${servers_before}" ] ||
             found_restarts "${server_unit} restarted $((servers_after - servers_before)) times on the control planes $1"
     fi
-    pods_after=$(restarts)
+    for rebooted_node in ${2:-}; do
+        case ${nodes_before} in
+            *" ${rebooted_node} "*) fail "node ${rebooted_node}, there before, rebooted $1" ;;
+            *) echo "leaving out the pods of ${rebooted_node}, made since and rebooted as expected" ;;
+        esac
+    done
+    pods_after=$(restarts "${2:-}")
     restarted=$(jq -rn --argjson b "${pods_before}" --argjson a "${pods_after}" '$a | to_entries[] | select(.value > ($b[.key] // 0)) | "\(.key) \(.value - ($b[.key] // 0))"')
     [ -n "${restarted}" ] || return 0
     echo "the restarted containers' last ends:"
-    wl get pods -A -o json | jq -r '.items[] | .metadata as $m | .status.containerStatuses[]? |
+    wl get pods -A -o json | jq -r --arg skip "${2:-}" '($skip | split(" ") | map(select(. != ""))) as $skip |
+        .items[] | select(.spec.nodeName as $n | $skip | index([$n]) | not) | .metadata as $m | .status.containerStatuses[]? |
         select(.restartCount > 0) | .lastState.terminated // {} |
         "\($m.namespace)/\($m.name): \(.reason // "?") exit \(.exitCode // "?") at \(.finishedAt // "?")"'
     for m in $(kubectl -n "${ns}" get machines -o jsonpath='{.items[*].metadata.name}'); do
@@ -3919,7 +3932,16 @@ if [ "${replaces_machines}" = true ]; then
     fi
     # Outside an upgrade, the second worker and its replacement put the most machines on the host.
     step "nothing restarted while workers came and went"
-    restarts_since "while workers were added and removed"
+    upgraded_in_place=
+    if [ "${distribution}" = talos ]; then
+        # A worker the scaling made boots the release before the in-place upgrade, and the controller
+        # upgrades it at once: it reboots, and so restarts its pods, which the window cannot count.
+        until_true 2700 "every node on Talos ${talos_to}" talos_upgraded
+        upgraded_in_place=$(kubectl -n "${ns}" get events -o json | jq -r --arg s "${baseline_at}" '[.items[] |
+            select((.lastTimestamp // .eventTime // "") >= $s and .reason == "TalosUpgrading") |
+            .message | capture("^node (?<node>[^ ]+) installed").node] | unique | join(" ")')
+    fi
+    restarts_since "while workers were added and removed" "${upgraded_in_place}"
 
     step "upgrade to ${upgrade}"
     if [ "${distribution}" = talos ]; then
