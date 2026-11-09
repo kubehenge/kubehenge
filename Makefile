@@ -473,7 +473,7 @@ e2e-two-nodes:
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/templates/e2e_test.go.
 .PHONY: e2e-templates
 e2e-templates:
-	go test -tags e2e -timeout 2h -count=1 -v -run TestTemplatesEndToEnd ./pkg/templates/
+	go test -tags e2e -timeout 3h -count=1 -v -run TestTemplatesEndToEnd ./pkg/templates/
 
 # Against the management cluster in KUBECONFIG (an admin kubeconfig) at KUBEHENGE_E2E_API_ENDPOINT.
 .PHONY: e2e-interface

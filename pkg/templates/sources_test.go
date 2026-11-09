@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -246,7 +247,36 @@ func almaPairPublisher(t *testing.T, staleSigs int32) (*Sources, *atomic.Int32, 
 }
 
 func resolveAlmaForPair(s *Sources) (Resolved, error) {
-	return almaLinux{}.Image(context.Background(), s, Release{Name: "10", Build: "10.2-20261012.0", Mode: ImageMode})
+	return resolveAlmaForPairWith(context.Background(), s)
+}
+
+func resolveAlmaForPairWith(ctx context.Context, s *Sources) (Resolved, error) {
+	return almaLinux{}.Image(ctx, s, Release{Name: "10", Build: "10.2-20261012.0", Mode: ImageMode})
+}
+
+// pairClock is a clock a test moves by the waits it is asked for, so that an hour passes in no time.
+type pairClock struct {
+	at    time.Time
+	waits []time.Duration
+}
+
+// use makes s wait on the clock. A build that never stops waiting is cut off after 200 waits, so
+// that a test of it fails instead of hanging.
+func (c *pairClock) use(s *Sources) {
+	c.at = time.Date(2026, 11, 9, 11, 50, 56, 0, time.UTC)
+	s.retryWait = 0
+	s.now = func() time.Time { return c.at }
+	s.sleep = func(ctx context.Context, d time.Duration) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(c.waits) >= 200 {
+			return errors.New("still waiting after 200 waits")
+		}
+		c.waits = append(c.waits, d)
+		c.at = c.at.Add(d)
+		return nil
+	}
 }
 
 // Fails a build that gives up at the first mismatch, or fetches only the signature again.
@@ -265,10 +295,49 @@ func TestAMismatchedPairIsFetchedAgainTogether(t *testing.T) {
 	}
 }
 
-// Fails a build that retries without end, or that accepts a pair that never verifies.
-func TestAPairThatNeverAgreesFailsAfterTheLastFetch(t *testing.T) {
+// Fails a build of the old seven fetches, which gave up after about 10.5 minutes.
+func TestAPairThatAgreesAfterTheOldBudgetPasses(t *testing.T) {
+	t.Parallel()
+	s, sums, _ := almaPairPublisher(t, 9)
+	var clock pairClock
+	clock.use(s)
+	start := time.Date(2026, 11, 9, 11, 50, 56, 0, time.UTC)
+	if _, err := resolveAlmaForPair(s); err != nil {
+		t.Fatalf("a pair that agrees on the tenth fetch: %v", err)
+	}
+	if waited := clock.at.Sub(start); waited <= 10*time.Minute+30*time.Second {
+		t.Errorf("waited %s, want more than the old 10.5 minutes", waited)
+	}
+	if sums.Load() != 10 {
+		t.Errorf("%d checksum fetches, want 10", sums.Load())
+	}
+}
+
+// Fails a build that lets the wait keep doubling.
+func TestThePairWaitIsCappedAtFiveMinutes(t *testing.T) {
+	t.Parallel()
+	s, _, _ := almaPairPublisher(t, 8)
+	var clock pairClock
+	clock.use(s)
+	if _, err := resolveAlmaForPair(s); err != nil {
+		t.Fatal(err)
+	}
+	want := []time.Duration{
+		10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second,
+		5 * time.Minute, 5 * time.Minute, 5 * time.Minute,
+	}
+	if !slices.Equal(clock.waits, want) {
+		t.Errorf("waits %v, want %v", clock.waits, want)
+	}
+}
+
+// Fails a build that never gives up, or that gives up before the budget is spent.
+func TestAPairThatNeverAgreesFailsOnceTheBudgetIsSpent(t *testing.T) {
 	t.Parallel()
 	s, sums, sigs := almaPairPublisher(t, 1<<30)
+	var clock pairClock
+	clock.use(s)
+	start := time.Date(2026, 11, 9, 11, 50, 56, 0, time.UTC)
 	_, err := resolveAlmaForPair(s)
 	if err == nil {
 		t.Fatal("a pair that never verifies resolved")
@@ -278,8 +347,40 @@ func TestAPairThatNeverAgreesFailsAfterTheLastFetch(t *testing.T) {
 			t.Errorf("error %q lacks %q", err, want)
 		}
 	}
-	if sums.Load() != signedPairAttempts || sigs.Load() != signedPairAttempts {
-		t.Errorf("%d checksum fetches and %d signature fetches, want %d of each", sums.Load(), sigs.Load(), signedPairAttempts)
+	if waited := clock.at.Sub(start); waited != signedPairBudget {
+		t.Errorf("waited %s, want the budget of %s", waited, signedPairBudget)
+	}
+	if got := len(clock.waits) + 1; int(sums.Load()) != got || int(sigs.Load()) != got {
+		t.Errorf("%d checksum fetches and %d signature fetches, want %d of each", sums.Load(), sigs.Load(), got)
+	}
+	if !Final(err) {
+		t.Error("a build that waited the whole budget would be run again")
+	}
+}
+
+// Fails a build whose wait ignores the context.
+func TestACancelledContextEndsThePairWaitAtOnce(t *testing.T) {
+	t.Parallel()
+	s, _, _ := almaPairPublisher(t, 1<<30)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	s.retryWait = 0
+	s.now = func() time.Time {
+		// The second reading is the one after the first mismatch.
+		calls++
+		if calls == 2 {
+			cancel()
+		}
+		return time.Date(2026, 11, 9, 11, 50, 56, 0, time.UTC)
+	}
+	started := time.Now()
+	_, err := resolveAlmaForPairWith(ctx, s)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error %v, want the context's", err)
+	}
+	if took := time.Since(started); took > 5*time.Second {
+		t.Errorf("took %s, want the wait to end at once", took)
 	}
 }
 

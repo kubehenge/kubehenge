@@ -335,7 +335,7 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	if err = b.checkBuild(ctx, t, recipe); err != nil {
 		return 0, err
 	}
-	image, err := b.Sources.Resolve(ctx, t.Image)
+	image, err := b.Sources.Resolve(withLog(ctx, b.logf), t.Image)
 	if err != nil {
 		return 0, err
 	}
