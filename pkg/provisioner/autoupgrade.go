@@ -797,13 +797,30 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 		u.clearSkipped(ctx, c)
 		return "", nil
 	}
-	if reason, err := u.heldBy(ctx, c, to); err != nil || reason != "" {
-		return "", err
+	targets := []string{to}
+	// A hold on the next minor must not cost the cluster the patches of its own.
+	if patch := ch.Target(c.Spec.Topology.Version, upgradePatch); patch != "" && patch != to {
+		targets = append(targets, patch)
 	}
-	if !u.vetUpgrade(ctx, c, to) {
-		return "", nil
+	var reason, message string
+	for i, target := range targets {
+		r, m, err := u.heldBy(ctx, c, target)
+		if err != nil {
+			return "", err
+		}
+		if r != "" {
+			if i == 0 {
+				reason, message = r, m
+			}
+			continue
+		}
+		if !u.vetUpgrade(ctx, c, target) {
+			return "", nil
+		}
+		return target, nil
 	}
-	return to, nil
+	u.markSkipped(ctx, c, to, reason, fmt.Sprintf("An automatic upgrade to %s is held back. %s", to, message))
+	return "", nil
 }
 
 // channelsOf reads the release channels of a cluster's distribution on its node OS, once a round

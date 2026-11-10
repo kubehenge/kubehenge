@@ -757,6 +757,10 @@ An automatic upgrade that is due waits while the Cluster has the condition `Auto
 | `RemovedAPIs` | A client requested an API the new version removes within the last 7 days. The message names it and the date. Move the client to the current API and the note ends 7 days after the last request. Or accept it, below. |
 | `FailClosedWebhooks` | A webhook that rejects requests when it is down has fewer than two ready endpoints, or all on one node. Run two replicas on different nodes, or set `failurePolicy: Ignore` on the webhook. Or accept it, below. |
 | `ChecksUnavailable` | The cluster could not be read. The message says why. Often the cluster's read access is not set up yet or has expired, and the next controller pass fixes it. |
+| `RancherKubernetes` | The Rancher release Kubehenge installs does not run on the version. Upgrade by hand to a version Rancher runs, or wait for a Kubehenge release with a newer Rancher. |
+| `RancherElsewhere` | Another cluster runs Rancher already. Only one cluster may. |
+| `TalosRelease` | The cluster's Talos release does not run the version. Upgrade Talos by hand first ([clusters.md](clusters.md#talos-upgrades)). |
+| `TalosUpgrade` | A node is moving to another Talos release. The upgrade goes on once it is done. |
 
 `kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.type=="AutoUpgradeSkipped")].message}'` prints it. An upgrade by hand goes past the warning.
 

@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -359,5 +361,29 @@ func TestUpgraderTakesAnyVersionWhereNoRancherRangeIsSet(t *testing.T) {
 	kube := upgradeRound(t, u, rancherCluster("v1.36.2+rke2r1", `{"mode":"patch"}`))
 	if got := clusterAfter(t, kube, "rancher").Spec.Topology.Version; got != "v1.36.5+rke2r1" {
 		t.Errorf("no Rancher range set: the cluster stays on %s, want v1.36.5+rke2r1", got)
+	}
+}
+
+// A hold on the next minor leaves the cluster the patch releases of its own, and says why where
+// there is nothing else to take.
+func TestRancherHoldOnTheNextMinorStillTakesPatchReleases(t *testing.T) {
+	t.Parallel()
+	releases := fixedReleases{"rke2": channels(37, "v1.36.5+rke2r1", "v1.37.1+rke2r1")}
+	for _, c := range []struct{ name, from, want, reason string }{
+		{"a patch release is due", "v1.36.2+rke2r1", "v1.36.5+rke2r1", ""},
+		{"the newest patch is running", "v1.36.5+rke2r1", "v1.36.5+rke2r1", UpgradeHeldRancherKubernetes},
+	} {
+		u := &Upgrader{Releases: releases, RancherKubernetes: KubernetesMinors{Min: 34, Max: 36}}
+		got := clusterAfter(t, upgradeRound(t, u, rancherCluster(c.from, `{"mode":"minor"}`)), "rancher")
+		if got.Spec.Topology.Version != c.want {
+			t.Errorf("%s: Rancher runs on 1.34 to 1.36 and the cluster stays on %s, want %s", c.name, got.Spec.Topology.Version, c.want)
+		}
+		cond := meta.FindStatusCondition(got.Status.Conditions, AutoUpgradeSkippedCondition)
+		switch {
+		case c.reason == "" && cond != nil:
+			t.Errorf("%s: the upgrade it took carries the note %+v", c.name, cond)
+		case c.reason != "" && (cond == nil || cond.Reason != c.reason || !strings.Contains(cond.Message, "v1.37.1+rke2r1")):
+			t.Errorf("%s: note %+v, want the reason %s and the version it holds back", c.name, cond, c.reason)
+		}
 	}
 }

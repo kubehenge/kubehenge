@@ -18,7 +18,8 @@ import (
 
 // AutoUpgradeSkippedCondition on a Cluster says that an automatic upgrade is due and waits because
 // the cluster would run into something, which the message names. A person can still upgrade it by
-// hand, past the warning.
+// hand, past the warning. A version that Rancher or the Talos release does not run, and a Talos node
+// upgrade under way, hold it too, with the reasons of UpgradeHeldCondition.
 const AutoUpgradeSkippedCondition = "AutoUpgradeSkipped"
 
 // The reasons of AutoUpgradeSkippedCondition.
@@ -29,29 +30,10 @@ const (
 	AutoUpgradeSkippedWebhooks = "FailClosedWebhooks"
 	// AutoUpgradeSkippedUnchecked: the cluster could not be read for either.
 	AutoUpgradeSkippedUnchecked = "ChecksUnavailable"
+	// AutoUpgradeSkippedTalosRelease: the cluster's Talos release does not run the version. The
+	// Talos release moves first, by hand.
+	AutoUpgradeSkippedTalosRelease = "TalosRelease"
 )
-
-// heldBy is why an automatic upgrade of the cluster to version waits for something outside the
-// cluster's own health, or "" when nothing holds it. It asks the rules BeforeClusterUpgrade
-// applies, so the hook would not hold back what the upgrader starts, and adds the Talos release
-// that must run the version.
-func (u *Upgrader) heldBy(ctx context.Context, c *clusterv1.Cluster, version string) (string, error) {
-	holds := upgradeHolds{reader: u.Client, classNamespace: u.ClassNamespace, rancher: u.RancherKubernetes}
-	cond, held, err := holds.hold(ctx, c, version)
-	if err != nil || held {
-		return cond.Reason, err
-	}
-	if isTalos(c) {
-		talos, err := TalosVersion(c)
-		if err != nil {
-			return "", err
-		}
-		if templates.TalosRunsKubernetes(talos, version) != nil {
-			return "TalosRelease", nil
-		}
-	}
-	return "", nil
-}
 
 // KubernetesOutOfSupportCondition on a Cluster says that its Kubernetes minor version is older
 // than the oldest Kubehenge offers for new clusters.
@@ -129,21 +111,47 @@ func (u *Upgrader) vetUpgrade(ctx context.Context, c *clusterv1.Cluster, to stri
 	case len(found.Webhooks) > 0:
 		reason = AutoUpgradeSkippedWebhooks
 	}
-	cond := &metav1.Condition{
-		Status: metav1.ConditionTrue, Reason: reason,
-		Message: fmt.Sprintf("%s%s waits. %s Choose Upgrade anyway to accept these, or upgrade by hand.", skippedPrefix, to, strings.Join(found.Lines(), " ")),
-	}
+	u.markSkipped(ctx, c, to, reason,
+		fmt.Sprintf("%s%s waits. %s Choose Upgrade anyway to accept these, or upgrade by hand.", skippedPrefix, to, strings.Join(found.Lines(), " ")))
+	return false
+}
+
+// markSkipped records on the cluster, and in an event, that the automatic upgrade to version does
+// not start.
+func (u *Upgrader) markSkipped(ctx context.Context, c *clusterv1.Cluster, version, reason, message string) {
+	cond := &metav1.Condition{Status: metav1.ConditionTrue, Reason: reason, Message: message}
 	log := ctrl.LoggerFrom(ctx).WithName("upgrader")
 	before, err := markCluster(ctx, u.Client, nil, client.ObjectKeyFromObject(c), AutoUpgradeSkippedCondition, cond)
 	if err != nil {
 		log.Error(err, "recording a skipped automatic upgrade", "cluster", client.ObjectKeyFromObject(c))
-		return false
+		return
 	}
 	if u.Events != nil && (before == nil || before.Reason != reason || before.Message != shorten(cond.Message, watchMessageMax)) {
 		u.Events.Eventf(c, nil, corev1.EventTypeWarning, "AutoUpgradeSkipped", "Upgrade", "%s", shorten(cond.Message, eventNoteMax))
 	}
-	log.Info("automatic upgrade skipped", "cluster", client.ObjectKeyFromObject(c), "to", to, "reason", reason)
-	return false
+	log.Info("automatic upgrade skipped", "cluster", client.ObjectKeyFromObject(c), "to", version, "reason", reason)
+}
+
+// heldBy is why an automatic upgrade of the cluster to version waits for something outside the
+// cluster's own health, or "" when nothing holds it. It asks the rules BeforeClusterUpgrade
+// applies, so the hook would not hold back what the upgrader starts, and adds the Talos release
+// that must run the version.
+func (u *Upgrader) heldBy(ctx context.Context, c *clusterv1.Cluster, version string) (string, string, error) {
+	holds := upgradeHolds{reader: u.Client, classNamespace: u.ClassNamespace, rancher: u.RancherKubernetes}
+	cond, held, err := holds.hold(ctx, c, version)
+	if err != nil || held {
+		return cond.Reason, cond.Message, err
+	}
+	if isTalos(c) {
+		talos, err := TalosVersion(c)
+		if err != nil {
+			return "", "", err
+		}
+		if err := templates.TalosRunsKubernetes(talos, version); err != nil {
+			return AutoUpgradeSkippedTalosRelease, err.Error(), nil
+		}
+	}
+	return "", "", nil
 }
 
 // clearSkipped takes AutoUpgradeSkippedCondition away once nothing holds the upgrade back.

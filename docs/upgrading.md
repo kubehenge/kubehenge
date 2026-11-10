@@ -225,7 +225,7 @@ Kubehenge's controller looks at every cluster every five minutes. It starts an u
 - while the cluster is available, with every node at the same version and no rollout running
 - one step at a time, the next once the cluster is settled again.
   - `patch` mode steps to the newest release of the cluster's minor version.
-  - `minor` mode steps to the newest release of the next minor version once the distribution's stable release has reached it, otherwise as `patch` does.
+  - `minor` mode steps to the newest release of the next minor version once the distribution's stable release has reached it, otherwise as `patch` does. Where Rancher or the Talos release does not run the next minor version, the cluster still takes the patch releases of its own and gets the condition `AutoUpgradeSkipped` ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)).
 
 Cluster API then rolls the nodes as for any upgrade. A rollout that has started finishes even if the window closes. The last automatic upgrade shows in the cluster's **Summary** as **Last automatic upgrade**, recorded on the Cluster in the annotation `kubehenge.dev/auto-upgraded`.
 

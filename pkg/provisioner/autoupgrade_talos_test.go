@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -73,6 +74,37 @@ func TestNewestTalosPatchStaysOnTheMinor(t *testing.T) {
 	} {
 		if got := newestTalosPatch(c.current, releases); got != c.want {
 			t.Errorf("newestTalosPatch(%s) = %s, want %s", c.current, got, c.want)
+		}
+	}
+}
+
+// talosOn is a Talos cluster on the Talos release and Kubernetes version, with the upgrades policy.
+func talosOn(talos, kubernetes, policy string) *clusterv1.Cluster {
+	c := talosCluster("talos", talos)
+	c.Spec.Topology.Version = kubernetes
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "upgrades"})
+	c.Spec.Topology.Variables[len(c.Spec.Topology.Variables)-1].Value.Raw = []byte(policy)
+	return c
+}
+
+// Talos v1.13 runs Kubernetes up to 1.36, v1.14 up to 1.37.
+func TestTalosReleaseHoldOnTheNextMinorStillTakesPatchReleases(t *testing.T) {
+	t.Parallel()
+	releases := fixedReleases{"talos": channels(37, "v1.36.5", "v1.37.1")}
+	for _, c := range []struct{ name, from, want, reason string }{
+		{"a patch release is due", "v1.36.2", "v1.36.5", ""},
+		{"the newest patch is running", "v1.36.5", "v1.36.5", "TalosRelease"},
+	} {
+		got := clusterAfter(t, upgradeRound(t, &Upgrader{Releases: releases}, talosOn("v1.13.0", c.from, `{"mode":"minor"}`)), "talos")
+		if got.Spec.Topology.Version != c.want {
+			t.Errorf("%s: Talos v1.13.0 does not run 1.37 and the cluster stays on %s, want %s", c.name, got.Spec.Topology.Version, c.want)
+		}
+		cond := meta.FindStatusCondition(got.Status.Conditions, AutoUpgradeSkippedCondition)
+		switch {
+		case c.reason == "" && cond != nil:
+			t.Errorf("%s: the upgrade it took carries the note %+v", c.name, cond)
+		case c.reason != "" && (cond == nil || cond.Reason != c.reason || !strings.Contains(cond.Message, "v1.37.1")):
+			t.Errorf("%s: note %+v, want the reason %s and the version it holds back", c.name, cond, c.reason)
 		}
 	}
 }
