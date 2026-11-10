@@ -31,8 +31,13 @@ allow-licenses:
 # is the contributors' sign-off, which grants nothing and asks nothing of users. Sentry's CLI, under
 # the Functional Source License, comes only inside Lighthouse, which scores the website in CI. The
 # licence forbids only a product competing with Sentry, and nothing Kubehenge distributes holds it.
+# Two modules of gopls, which only lints the code in CI, add a Creative Commons licence beside their
+# code's: structtag (BSD-3-Clause) for the Go gopher's artwork, and the MCP Go SDK (Apache-2.0 and
+# MIT) for its documentation, CC-BY-4.0.
 allow-dependencies-licenses:
+  - pkg:golang/github.com/fatih/structtag
   - pkg:golang/github.com/ghodss/yaml
+  - pkg:golang/github.com/modelcontextprotocol/go-sdk
   - pkg:golang/github.com/moby/spdystream
   - pkg:golang/github.com/opencontainers/go-digest
   - pkg:golang/github.com/opencontainers/runtime-spec

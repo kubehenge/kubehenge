@@ -302,9 +302,9 @@ lint-go: web gateway-api
 		mkdir -p dist/lint-go && touch "dist/lint-go/$$key"; fi
 	$(GOVULNCHECK) ./...
 
-# The analyzers gopls shows in an editor, most of them internal to it (writestring, unusedfunc,
+# The analysers gopls shows in an editor, most of them internal to it (writestring, unusedfunc,
 # infertypeargs, fmtappendf), so only `gopls check` runs them. It exits 0 with findings, so any
-# output fails the step. Severity info and up: the hint tier is the modernize suite and
+# output fails the step. Severity info and up: the hint tier is the modernisation suite and
 # deprecations, which golangci-lint already runs (staticcheck's SA1019 carries the reasons for the
 # deprecated imports that stay). gopls is pinned in its own module, so its dependencies stay out of
 # the one that ships. One process at a time, on two threads at low priority: gopls starts several
