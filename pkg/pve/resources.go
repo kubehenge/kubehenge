@@ -252,12 +252,6 @@ func (a *Accounts) Realms(ctx context.Context) ([]Realm, error) {
 // storage is sparse.
 func isZFS(plugin string) bool { return plugin == "zfspool" || plugin == "zfs" }
 
-// Disk formats a VM disk is made in on a storage that keeps files.
-const (
-	FormatRaw   = "raw"
-	FormatQCOW2 = "qcow2"
-)
-
 // AllocatesOnWrite tells whether a disk takes its space as the guest writes, which Proxmox VE lets
 // exceed the free space. LVM-thin and Ceph RBD always do. A ZFS volume does when the storage is
 // sparse, and otherwise reserves its whole size. Thick LVM reserves it too. On storage that keeps
