@@ -1378,8 +1378,8 @@ func setWorkerReplicas(c *clusterv1.Cluster, name string, n int32) bool {
 // the request when one fails.
 func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, vars map[string]json.RawMessage) bool {
 	for name, value := range vars {
-		if !changeableVariables[name] {
-			writeError(w, http.StatusUnprocessableEntity, name+" cannot change after the cluster is created")
+		if provisioner.VariableFixed(name) || !changeableVariables[name] {
+			writeError(w, http.StatusUnprocessableEntity, provisioner.FixedVariableRefusal(name))
 			return false
 		}
 		if !s.allowVariable(w, r, u, c, access, name, value) {

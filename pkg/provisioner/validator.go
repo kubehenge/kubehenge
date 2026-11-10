@@ -83,6 +83,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	var errs field.ErrorList
 	topology := field.NewPath("spec", "topology")
 	errs = append(errs, validateTopology(old, c)...)
+	errs = append(errs, validateFixed(old, c)...)
 	errs = append(errs, v.validatePinned(ctx, old, c)...)
 	// One budget and one set of reads for every check of Proxmox VE, inside the webhook's timeout.
 	pveCtx, cancel := v.Hooks.admissionContext(ctx)
