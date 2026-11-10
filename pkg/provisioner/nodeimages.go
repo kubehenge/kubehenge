@@ -1,7 +1,6 @@
 package provisioner
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -366,13 +365,9 @@ func (w *Window) Next(from time.Time) (time.Time, error) {
 	if err != nil || open {
 		return from, err
 	}
-	loc, err := time.LoadLocation(cmp.Or(w.TimeZone, "UTC"))
+	loc, hm, err := w.zoneAndStart()
 	if err != nil {
-		return time.Time{}, fmt.Errorf("window time zone: %w", err)
-	}
-	hm, err := time.Parse("15:04", cmp.Or(w.Start, "02:00"))
-	if err != nil {
-		return time.Time{}, fmt.Errorf("window start: %w", err)
+		return time.Time{}, err
 	}
 	t := from.In(loc)
 	// Every month has a 31st within two of them, and every weekday comes within one.

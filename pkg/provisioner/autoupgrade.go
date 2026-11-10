@@ -55,14 +55,9 @@ const defaultWindowMinutes = 240
 // Open tells whether now lies in the window. A window may run past midnight, so the one that
 // opened the day before counts too.
 func (w *Window) Open(now time.Time) (bool, error) {
-	loc, err := time.LoadLocation(cmp.Or(w.TimeZone, "UTC"))
+	loc, hm, err := w.zoneAndStart()
 	if err != nil {
-		return false, fmt.Errorf("window time zone: %w", err)
-	}
-	start := cmp.Or(w.Start, "02:00")
-	hm, err := time.Parse("15:04", start)
-	if err != nil {
-		return false, fmt.Errorf("window start %q: %w", start, err)
+		return false, err
 	}
 	minutes := w.DurationMinutes
 	if minutes == 0 {
@@ -80,6 +75,21 @@ func (w *Window) Open(now time.Time) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// zoneAndStart is the window's time zone and the time of day it opens, with the defaults for
+// either left unset.
+func (w *Window) zoneAndStart() (*time.Location, time.Time, error) {
+	loc, err := time.LoadLocation(cmp.Or(w.TimeZone, "UTC"))
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("window time zone: %w", err)
+	}
+	start := cmp.Or(w.Start, "02:00")
+	hm, err := time.Parse("15:04", start)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("window start %q: %w", start, err)
+	}
+	return loc, hm, nil
 }
 
 func (w *Window) onDay(d time.Time) bool {
