@@ -44,7 +44,6 @@ type fakeAccounts struct {
 	// storages, when set, replace the storages listed. names are the pools, roles, users and groups
 	// that exist.
 	storages       []pve.Storage
-	reach          *pve.APIReach
 	names          pve.Names
 	privilegeCalls int
 	backupChecks   int
@@ -69,10 +68,9 @@ type fakeAccounts struct {
 	released []string
 	// loadReads records the VMs whose load was read.
 	loadReads []int
-	// users are the users made with an administrator token, by ID. usersDeleted counts deletions.
-	users        map[string]string
-	usersDeleted int
-	rebooted     []int
+	// users are the users made with an administrator token, by ID.
+	users    map[string]string
+	rebooted []int
 	// bridgeList, when set, replaces the default bridges.
 	bridgeList []pve.Bridge
 	// viaPool are privileges a user holds on a path only through a pool's members, which Proxmox VE
@@ -102,7 +100,6 @@ func (f *fakeAccounts) DeleteUser(_ context.Context, _ *pve.Ticket, userid strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.users, userid)
-	f.usersDeleted++
 	return nil
 }
 
@@ -224,14 +221,9 @@ func (f *fakeAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, err
 	return f.names, nil
 }
 
-// APIReach answers with the firewalls a test sets, or the datacenter firewall off.
-func (f *fakeAccounts) APIReach(context.Context, *pve.Ticket) (*pve.APIReach, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.reach == nil {
-		return &pve.APIReach{}, nil
-	}
-	return f.reach, nil
+// APIReach answers with the datacenter firewall off.
+func (*fakeAccounts) APIReach(context.Context, *pve.Ticket) (*pve.APIReach, error) {
+	return &pve.APIReach{}, nil
 }
 
 func (*fakeAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]string, error) {
