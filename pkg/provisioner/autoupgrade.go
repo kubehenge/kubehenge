@@ -797,18 +797,8 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 		u.clearSkipped(ctx, c)
 		return "", nil
 	}
-	if r, err := rancherOf(c); err == nil && r.Install && !u.RancherKubernetes.Allows(to) {
-		return "", nil
-	}
-	if isTalos(c) {
-		// The Talos release moves first, by hand: a minor version it does not run waits for it.
-		talos, err := TalosVersion(c)
-		if err != nil || templates.TalosRunsKubernetes(talos, to) != nil {
-			return "", err
-		}
-		if _, upgrading := c.Annotations[TalosUpgradingAnnotation]; upgrading {
-			return "", nil
-		}
+	if reason, err := u.heldBy(ctx, c, to); err != nil || reason != "" {
+		return "", err
 	}
 	if !u.vetUpgrade(ctx, c, to) {
 		return "", nil

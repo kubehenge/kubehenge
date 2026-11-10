@@ -308,3 +308,56 @@ func TestUpgraderNeverOverwritesAChangeMadeMeanwhile(t *testing.T) {
 		t.Errorf("version %s, annotation %q: the user's change was overwritten", got.Spec.Topology.Version, got.Annotations[autoUpgraded])
 	}
 }
+
+// upgradeRound runs one round of u, at a time inside the default window, over clusters.
+func upgradeRound(t *testing.T, u *Upgrader, clusters ...*clusterv1.Cluster) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := clusterv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	objects := make([]client.Object, len(clusters))
+	for i, c := range clusters {
+		objects[i] = c
+	}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	for _, c := range clusters {
+		if err := kube.Status().Update(context.Background(), c.DeepCopy()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	u.Client, u.ClassNamespace = kube, "kubehenge-system"
+	if u.Now == nil {
+		u.Now = func() time.Time { return time.Date(2026, 10, 13, 3, 0, 0, 0, time.UTC) }
+	}
+	u.RunOnce(context.Background())
+	return kube
+}
+
+func clusterAfter(t *testing.T, kube client.Client, name string) *clusterv1.Cluster {
+	t.Helper()
+	c := &clusterv1.Cluster{}
+	if err := kube.Get(context.Background(), client.ObjectKey{Namespace: "clusters", Name: name}, c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func rancherCluster(version, policy string) *clusterv1.Cluster {
+	return settledCluster("rancher", version, map[string]string{"upgrades": policy, "rancher": `{"install":true,"hostname":"r.example"}`})
+}
+
+// The hook and the controller allow any version where no Rancher range is set, and 0-0 parses to
+// that.
+func TestUpgraderTakesAnyVersionWhereNoRancherRangeIsSet(t *testing.T) {
+	t.Parallel()
+	unset, err := ParseKubernetesMinors("0-0")
+	if err != nil || unset != (KubernetesMinors{}) {
+		t.Fatalf("0-0 parsed to %+v, %v", unset, err)
+	}
+	u := &Upgrader{Releases: fixedReleases{"rke2": channels(36, "v1.36.5+rke2r1")}, RancherKubernetes: unset}
+	kube := upgradeRound(t, u, rancherCluster("v1.36.2+rke2r1", `{"mode":"patch"}`))
+	if got := clusterAfter(t, kube, "rancher").Spec.Topology.Version; got != "v1.36.5+rke2r1" {
+		t.Errorf("no Rancher range set: the cluster stays on %s, want v1.36.5+rke2r1", got)
+	}
+}

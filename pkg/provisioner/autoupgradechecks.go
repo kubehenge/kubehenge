@@ -12,6 +12,8 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 // AutoUpgradeSkippedCondition on a Cluster says that an automatic upgrade is due and waits because
@@ -28,6 +30,28 @@ const (
 	// AutoUpgradeSkippedUnchecked: the cluster could not be read for either.
 	AutoUpgradeSkippedUnchecked = "ChecksUnavailable"
 )
+
+// heldBy is why an automatic upgrade of the cluster to version waits for something outside the
+// cluster's own health, or "" when nothing holds it. It asks the rules BeforeClusterUpgrade
+// applies, so the hook would not hold back what the upgrader starts, and adds the Talos release
+// that must run the version.
+func (u *Upgrader) heldBy(ctx context.Context, c *clusterv1.Cluster, version string) (string, error) {
+	holds := upgradeHolds{reader: u.Client, classNamespace: u.ClassNamespace, rancher: u.RancherKubernetes}
+	cond, held, err := holds.hold(ctx, c, version)
+	if err != nil || held {
+		return cond.Reason, err
+	}
+	if isTalos(c) {
+		talos, err := TalosVersion(c)
+		if err != nil {
+			return "", err
+		}
+		if templates.TalosRunsKubernetes(talos, version) != nil {
+			return "TalosRelease", nil
+		}
+	}
+	return "", nil
+}
 
 // KubernetesOutOfSupportCondition on a Cluster says that its Kubernetes minor version is older
 // than the oldest Kubehenge offers for new clusters.
