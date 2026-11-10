@@ -24,7 +24,6 @@ const (
 	maxTrustedCAs      = 8
 	maxNodePEMBytes    = 65536
 	certificateBlock   = "CERTIFICATE"
-	wildcardRegistry   = "*"
 	mirrorAPIPath      = "/v2"
 )
 

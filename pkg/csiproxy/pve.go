@@ -86,7 +86,10 @@ func (c *pve) call(ctx context.Context, method, path string, params url.Values, 
 		var msg strings.Builder
 		msg.WriteString(strings.TrimSpace(resp.Status))
 		for _, k := range slices.Sorted(maps.Keys(answer.Errors)) {
-			msg.WriteString("; " + k + ": " + answer.Errors[k])
+			msg.WriteString("; ")
+			msg.WriteString(k)
+			msg.WriteString(": ")
+			msg.WriteString(answer.Errors[k])
 		}
 		return fmt.Errorf("%s %s: %w", method, path, &apiError{status: resp.StatusCode, message: msg.String()})
 	}

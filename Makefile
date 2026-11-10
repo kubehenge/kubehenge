@@ -256,7 +256,7 @@ verify-talos-pins: web gateway-api
 # spelling and Renovate's config, each at its strictest settings; the files are the repository's
 # own, as git lists them.
 .PHONY: lint
-lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
+lint: lint-go lint-gopls lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
 
 FILES = git ls-files --cached --others --exclude-standard
 SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh website/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
@@ -301,6 +301,26 @@ lint-go: web gateway-api
 	else GOOS=linux $(LINT_GO) ./... && GOOS=windows $(LINT_GO) ./... && \
 		mkdir -p dist/lint-go && touch "dist/lint-go/$$key"; fi
 	$(GOVULNCHECK) ./...
+
+# The analyzers gopls shows in an editor, most of them internal to it (writestring, unusedfunc,
+# infertypeargs, fmtappendf), so only `gopls check` runs them. It exits 0 with findings, so any
+# output fails the step. Severity info and up: the hint tier is the modernize suite and
+# deprecations, which golangci-lint already runs (staticcheck's SA1019 carries the reasons for the
+# deprecated imports that stay). gopls is pinned in its own module, so its dependencies stay out of
+# the one that ships. One process at a time, on two threads at low priority: gopls starts several
+# analysis workers per file it is given, and side by side they hold every core.
+# Inputs that already passed are not checked again, as for lint-go.
+GOPLS_MOD := scripts/gopls/go.mod
+LINT_GOPLS_INPUTS := '*.go' go.mod go.sum $(GOPLS_MOD) scripts/gopls/go.sum
+.PHONY: lint-gopls
+lint-gopls: web gateway-api
+	key=$$({ git ls-files -s -- $(LINT_GOPLS_INPUTS); git diff HEAD -- $(LINT_GOPLS_INPUTS); \
+		git ls-files -o --exclude-standard -z -- '*.go' | xargs -0 -r git hash-object; } | sha256sum | cut -c1-16); \
+	if [ -f "dist/lint-gopls/$$key" ]; then echo "gopls check: these inputs passed before"; exit 0; fi; \
+	gopls=$$(go tool -modfile=$(GOPLS_MOD) -n gopls) && log=$$(mktemp) && \
+	if git ls-files '*.go' | GOFLAGS=-tags=e2e,integration GOMAXPROCS=2 GOMEMLIMIT=2GiB xargs -n 400 nice -n 19 "$$gopls" check -severity=info >"$$log" 2>&1 \
+		&& [ ! -s "$$log" ]; then rm -f "$$log"; mkdir -p dist/lint-gopls && touch "dist/lint-gopls/$$key"; \
+	else cat "$$log"; rm -f "$$log"; echo "gopls check: findings above (or gopls failed)"; exit 1; fi
 
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
 # The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools, and so is
