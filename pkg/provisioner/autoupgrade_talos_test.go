@@ -109,6 +109,48 @@ func TestTalosReleaseHoldOnTheNextMinorStillTakesPatchReleases(t *testing.T) {
 	}
 }
 
+func TestUpgraderKeepsATalosClusterToTheKubernetesItsTalosReleaseRuns(t *testing.T) {
+	t.Parallel()
+	u := &Upgrader{Releases: fixedReleases{"talos": channels(37, "v1.36.5", "v1.37.1")}}
+	if got := clusterAfter(t, upgradeRound(t, u, talosOn("v1.13.0", "v1.36.5", `{"mode":"minor"}`)), "talos").Spec.Topology.Version; got != "v1.36.5" {
+		t.Errorf("Talos v1.13.0 runs no Kubernetes 1.37: the cluster moved to %s", got)
+	}
+	if got := clusterAfter(t, upgradeRound(t, &Upgrader{Releases: u.Releases}, talosOn("v1.14.0", "v1.36.5", `{"mode":"minor"}`)), "talos").Spec.Topology.Version; got != "v1.37.1" {
+		t.Errorf("Talos v1.14.0 runs Kubernetes 1.37: the cluster stays on %s", got)
+	}
+}
+
+func TestUpgraderWaitsForATalosNodeUpgradeBeforeAKubernetesUpgrade(t *testing.T) {
+	t.Parallel()
+	c := talosOn("v1.14.0", "v1.36.2", `{"mode":"minor"}`)
+	c.Annotations[TalosUpgradingAnnotation] = "web-cp-1 to v1.14.4 since 2026-10-13T02:30:00Z"
+	u := &Upgrader{Releases: fixedReleases{"talos": channels(37, "v1.36.5", "v1.37.1")}}
+	if got := clusterAfter(t, upgradeRound(t, u, c), "talos").Spec.Topology.Version; got != "v1.36.2" {
+		t.Errorf("a node is moving to another Talos release and the cluster moved to Kubernetes %s", got)
+	}
+}
+
+func TestTalosPatchWaitsForAReleaseThatRunsTheClustersKubernetes(t *testing.T) {
+	t.Parallel()
+	// Kubernetes 1.38 is past what any Talos v1.14 release runs.
+	u := &Upgrader{Releases: fixedReleases{}, TalosImages: fakeTalosImages{"v1.14.4"}}
+	c := talosOn("v1.14.0", "v1.38.0", `{"mode":"off"}`)
+	if got, err := TalosVersion(clusterAfter(t, upgradeRound(t, u, c), "talos")); err != nil || got != "v1.14.0" {
+		t.Errorf("Talos %s, %v: moved to a release that does not run the cluster's Kubernetes", got, err)
+	}
+}
+
+func TestTalosPatchWaitsForAClusterThatIsRolling(t *testing.T) {
+	t.Parallel()
+	two := int32(2)
+	c := talosOn("v1.14.0", "v1.36.5", `{"mode":"off"}`)
+	c.Status.ControlPlane.DesiredReplicas = &two
+	u := &Upgrader{Releases: fixedReleases{}, TalosImages: fakeTalosImages{"v1.14.4"}}
+	if got, err := TalosVersion(clusterAfter(t, upgradeRound(t, u, c), "talos")); err != nil || got != "v1.14.0" {
+		t.Errorf("Talos %s, %v: patched while the cluster rolls", got, err)
+	}
+}
+
 func TestUpgraderMovesTalosToTheNewestPatchInsideTheWindow(t *testing.T) {
 	t.Parallel()
 	scheme := runtime.NewScheme()
