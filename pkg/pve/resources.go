@@ -389,7 +389,7 @@ func (a *Accounts) forwardFault(ctx context.Context, t *Ticket, node string) str
 	err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/status", &json.RawMessage{})
 	var api *APIError
 	switch {
-	case err == nil, errors.Is(err, ErrForbidden), errors.Is(err, ErrAuthentication), errors.Is(err, ErrNodesDisagree):
+	case err == nil, errors.Is(err, ErrForbidden), errors.Is(err, ErrAuthentication):
 		return ""
 	case errors.As(err, &api) && !strings.HasPrefix(api.Status, "5"):
 		return ""

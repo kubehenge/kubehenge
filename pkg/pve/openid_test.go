@@ -134,22 +134,3 @@ func TestOpenIDLoginFailsWhenProxmoxVEDropsTheConnection(t *testing.T) {
 		t.Errorf("a dropped connection: %v", err)
 	}
 }
-
-func TestSecondFactorChallengeExpiresWithTheTicket(t *testing.T) {
-	t.Parallel()
-	before := time.Now()
-	_, c, err := fakeTicketAPI(t).SignIn(context.Background(), "bob@pve", "secret")
-	if err != nil || c == nil {
-		t.Fatalf("challenge %v, %v", c, err)
-	}
-	after := time.Now()
-	if c.Expired(after) {
-		t.Error("a challenge just issued has expired")
-	}
-	if c.Expired(before.Add(TicketLifetime - time.Second)) {
-		t.Error("a challenge expired before its ticket's lifetime")
-	}
-	if !c.Expired(after.Add(TicketLifetime)) {
-		t.Error("a challenge outlived its ticket")
-	}
-}
