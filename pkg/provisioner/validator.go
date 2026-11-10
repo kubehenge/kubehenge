@@ -86,7 +86,6 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	var errs field.ErrorList
 	topology := field.NewPath("spec", "topology")
 	errs = append(errs, validateTopology(old, c)...)
-	errs = append(errs, validateFixed(old, c)...)
 	errs = append(errs, v.validatePinned(ctx, old, c)...)
 	// One budget and one set of reads for every check of Proxmox VE, inside the webhook's timeout.
 	pveCtx, cancel := v.Hooks.admissionContext(ctx)
@@ -96,9 +95,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, v.validateFirewall(pveCtx, old, c)...)
 	errs = append(errs, v.validateNodeOS(pveCtx, reads, old, c)...)
 	errs = append(errs, v.validateNUMA(pveCtx, reads, old, c, class)...)
-	errs = append(errs, v.validatePlacement(pveCtx, reads, old, c, class)...)
-	errs = append(errs, v.validateAllowedNodes(pveCtx, reads, old, c)...)
-	errs = append(errs, v.validateVLAN(pveCtx, reads, old, c)...)
+	errs = append(errs, v.validateSettings(pveCtx, reads, old, c, class)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
@@ -199,6 +196,15 @@ func (v *ClusterValidator) validateNodeOS(ctx context.Context, reads *pveReads, 
 		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology", "variables").Key(NodeOSVariable), err.Error())}
 	}
 	return nil
+}
+
+// validateSettings holds a cluster's placement, and the settings that say where its VMs and API
+// address are, to the rules the interface holds them to.
+func (v *ClusterValidator) validateSettings(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	errs := validateFixed(old, c)
+	errs = append(errs, v.validatePlacement(ctx, reads, old, c, class)...)
+	errs = append(errs, v.validateAllowedNodes(ctx, reads, old, c)...)
+	return append(errs, v.validateVLAN(ctx, reads, old, c)...)
 }
 
 // validatePlacement holds a cluster to a storage the management cluster gives rights on, and to

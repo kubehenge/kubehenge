@@ -28,7 +28,7 @@ func AllowedNodesRefusal(nodes, kept []string, known func(node string) bool) str
 	return ""
 }
 
-// validateAllowedNodes holds the nodes a cluster's VMs are kept to to AllowedNodesRefusal, when the
+// validateAllowedNodes holds the nodes a cluster's VMs are kept to by AllowedNodesRefusal, when the
 // cluster is created or the list changes. An unset list means every node and is not judged here.
 func (v *ClusterValidator) validateAllowedNodes(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster) field.ErrorList {
 	if old != nil && !variableChanged(old, c, allowedNodesVariable) {

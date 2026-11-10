@@ -8,13 +8,13 @@ import (
 )
 
 // onNetwork is a sound cluster on the bridge, with the VLAN tag when it is not 0.
-func onNetwork(t *testing.T, bridge string, vlan int, extra ...clusterv1.ClusterVariable) *clusterv1.Cluster {
+func onNetwork(t *testing.T, bridge string, vlan int) *clusterv1.Cluster {
 	t.Helper()
 	network := map[string]any{"bridge": bridge, "addresses": []string{"192.0.2.0/24"}, "prefix": 24, "gateway": "192.0.2.1", "dnsServers": []string{"192.0.2.1"}}
 	if vlan != 0 {
 		network["vlan"] = vlan
 	}
-	return withWorker(storedCluster("team-a", "web", "ceph", append([]clusterv1.ClusterVariable{clusterVariable(t, "network", network)}, extra...)...))
+	return withWorker(storedCluster("team-a", "web", "ceph", clusterVariable(t, "network", network)))
 }
 
 func TestAdmissionRefusesAVLANTagOnAVNetThatTagsAlready(t *testing.T) {
