@@ -527,7 +527,7 @@ func (p *poolTemplates) add(tags []string, facts *templates.BuildFacts) {
 // template offers a new cluster is left out, since it cannot be cloned from.
 func (p *poolTemplates) addDown(r *proxmox.ClusterResource) {
 	tags := templates.NormaliseTags(templates.ParseTags(r.Tags))
-	vmid, _ := templateVMID(r)
+	vmid, _ := templates.VMID(r)
 	p.down = append(p.down, DownTemplate{Name: r.Name, VMID: vmid, Node: r.Node, Tags: tags})
 	at, built := templates.BuildOf(tags)
 	os, known := templates.NodeOSOf(tags)
@@ -536,15 +536,6 @@ func (p *poolTemplates) addDown(r *proxmox.ClusterResource) {
 	}
 	line := templates.LineKey(tags)
 	p.builds[line] = append(p.builds[line], at)
-}
-
-// templateVMID reads a VM ID from the cluster's resource list, where it is unsigned.
-func templateVMID(r *proxmox.ClusterResource) (int, error) {
-	const largest = 999999999 // Proxmox VE's own upper bound
-	if r.VMID > largest {
-		return 0, fmt.Errorf("VM ID %d is outside Proxmox VE's range", r.VMID)
-	}
-	return int(r.VMID), nil
 }
 
 // sort puts the versions and releases newest first, the node OSes by name and the builds oldest

@@ -303,11 +303,11 @@ func (b *Builder) Delete(ctx context.Context, t *Template) (int, error) {
 	if err = b.DeleteBuild(ctx, existing); err != nil {
 		return 0, err
 	}
-	return vmID(existing)
+	return VMID(existing)
 }
 
-// vmID reads a VM ID from the cluster's resource list, where it is unsigned.
-func vmID(r *proxmox.ClusterResource) (int, error) {
+// VMID reads a VM ID from the cluster's resource list, where it is unsigned.
+func VMID(r *proxmox.ClusterResource) (int, error) {
 	const largest = 999999999 // Proxmox VE's own upper bound
 	if r.VMID > largest {
 		return 0, fmt.Errorf("VM ID %d is outside Proxmox VE's range", r.VMID)
@@ -321,7 +321,7 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	switch {
 	case err == nil:
 		b.logf("template %s already exists as VM %d", strings.Join(t.Tags, ";"), existing.VMID)
-		return vmID(existing)
+		return VMID(existing)
 	case !errors.Is(err, ErrNoTemplate):
 		return 0, err
 	}
@@ -399,7 +399,7 @@ func (b *Builder) Builds(ctx context.Context, line *Template) ([]Built, error) {
 	}
 	for _, r := range inv.Down {
 		if slices.Equal(LineOf(ParseTags(r.Tags)), line.Tags) {
-			id, idErr := vmID(r)
+			id, idErr := VMID(r)
 			if idErr != nil {
 				return nil, idErr
 			}
@@ -430,7 +430,7 @@ func (b *Builder) Ensure(ctx context.Context, line *Template, now time.Time) (in
 	}
 	if len(builds) > 0 {
 		b.logf("template %s is the newest build of %s, VM %d", builds[0].Resource.Name, line.LineName, builds[0].Resource.VMID)
-		return vmID(builds[0].Resource)
+		return VMID(builds[0].Resource)
 	}
 	build, err := line.Build(now)
 	if err != nil {
@@ -464,7 +464,7 @@ func (b *Builder) RemoveLeftovers(ctx context.Context, line *Template, olderThan
 		if !building(c, line) || !known || now.Sub(made) < olderThan {
 			continue
 		}
-		id, err := vmID(r)
+		id, err := VMID(r)
 		if err != nil {
 			return removed, err
 		}
@@ -485,7 +485,7 @@ func (b *Builder) RemoveLeftovers(ctx context.Context, line *Template, olderThan
 
 // DeleteBuild removes one template of the builder's pool, as listed.
 func (b *Builder) DeleteBuild(ctx context.Context, r *proxmox.ClusterResource) error {
-	id, err := vmID(r)
+	id, err := VMID(r)
 	if err != nil {
 		return err
 	}
@@ -510,7 +510,7 @@ func (b *Builder) readTemplates(ctx context.Context, resources proxmox.ClusterRe
 		if !isQemu(r) || !b.inPool(r) || !slices.Contains(ParseTags(r.Tags), kubehengeTag) {
 			continue
 		}
-		id, err := vmID(r)
+		id, err := VMID(r)
 		if err != nil {
 			return listing{}, err
 		}
@@ -616,7 +616,7 @@ func confirmed(r *proxmox.ClusterResource, c *proxmox.VirtualMachineConfig) *pro
 // view can say so (status unknown), or only pveproxy does, with a 595 on a node that went down
 // after the view was made.
 func (b *Builder) config(ctx context.Context, r *proxmox.ClusterResource) (*proxmox.VirtualMachineConfig, error) {
-	id, err := vmID(r)
+	id, err := VMID(r)
 	if err != nil {
 		return nil, err
 	}
@@ -793,7 +793,7 @@ func (b *Builder) selectable(ctx context.Context, t *Template, vmid int) (bool, 
 		if !isQemu(r) {
 			continue
 		}
-		id, err := vmID(r)
+		id, err := VMID(r)
 		if err != nil {
 			return false, err
 		}
