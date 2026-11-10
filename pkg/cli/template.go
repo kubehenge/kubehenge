@@ -130,7 +130,7 @@ clusters are read from the management cluster KUBECONFIG points at. For a broken
 --roll-clusters deletes it anyway and replaces those clusters' nodes now with clones of the build
 before it. The last build of a template is never deleted while a cluster runs it.`,
 		Args:      argsSay(cobra.ExactArgs(1), distributionArg),
-		ValidArgs: []string{"talos", "rke2", "k3s", "kubeadm"},
+		ValidArgs: templates.DistributionNames(),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Distribution = templates.Distribution(args[0])
 			t, err := templates.Plan(&req)
@@ -172,7 +172,7 @@ before it. The last build of a template is never deleted while a cluster runs it
 	return cmd
 }
 
-const distributionArg = "give the distribution: talos, rke2, k3s or kubeadm"
+var distributionArg = "give the distribution: " + joinList(templates.DistributionNames(), "or")
 
 // deleteChecks are what deleteTemplate checks a build against before it deletes it: who clones
 // from each build of the pool (provisioner.BuildUsers), and whether builds in use may go.
@@ -442,7 +442,7 @@ network.
 
 The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 		Args:      argsSay(cobra.ExactArgs(1), distributionArg),
-		ValidArgs: []string{"talos", "rke2", "k3s", "kubeadm"},
+		ValidArgs: templates.DistributionNames(),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Distribution = templates.Distribution(args[0])
 			t, err := templates.Plan(&req)
