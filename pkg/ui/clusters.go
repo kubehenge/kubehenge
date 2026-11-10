@@ -968,7 +968,7 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 		return false
 	}
 	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) ||
-		!s.allowBackupSources(w, r, u, cmp.Or(req.Namespace, s.Namespace), req.Variables["backups"], nil) {
+		!s.allowBackupSources(w, r, u, req.Namespace, req.Variables["backups"], nil) {
 		return false
 	}
 	raw, ok := req.Variables[oidcVariable]
@@ -1460,11 +1460,8 @@ func variableValue(c *clusterv1.Cluster, name string) json.RawMessage {
 
 // allowOIDC checks a change of the cluster's oidc variable from old to value against its class.
 func (s *Server) allowOIDC(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, value, old json.RawMessage) bool {
-	class, ref := &clusterv1.ClusterClass{}, c.Spec.Topology.ClassRef
-	if ref.Namespace == "" {
-		ref.Namespace = c.Namespace
-	}
-	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}, class); err != nil {
+	class := &clusterv1.ClusterClass{}
+	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: s.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}, class); err != nil {
 		s.kubeError(w, r, err)
 		return false
 	}
@@ -1621,11 +1618,9 @@ func (s *Server) kubeError(w http.ResponseWriter, r *http.Request, err error) {
 	case apierrors.IsConflict(err):
 		writeError(w, http.StatusConflict, clusterChanged)
 	case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
-		if errors.As(err, &status) {
-			writeError(w, http.StatusUnprocessableEntity, status.Status().Message)
-			return
-		}
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		// Both predicates hold only for an error that carries an APIStatus.
+		_ = errors.As(err, &status)
+		writeError(w, http.StatusUnprocessableEntity, status.Status().Message)
 	default:
 		s.Log.ErrorContext(r.Context(), "management cluster request failed", "error", err)
 		writeError(w, http.StatusBadGateway, "the management cluster did not answer")
