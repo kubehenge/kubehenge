@@ -102,7 +102,7 @@ if [ "${test}" = two-nodes ]; then
     TF_VAR_proxmox_nodes=$(printf '%s' "${KUBEHENGE_E2E_NODES}" | jq -Rc 'split(",")')
     export TF_VAR_proxmox_nodes TF_VAR_datastore="${KUBEHENGE_E2E_SHARED_STORAGE}"
 fi
-: "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}" "${KUBEHENGE_E2E_NODE:?}" "${KUBEHENGE_E2E_ADDRESS:?}"
+: "${KUBEHENGE_PROXMOX_URL:?}" "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}" "${KUBEHENGE_E2E_NODE:?}" "${KUBEHENGE_E2E_ADDRESS:?}"
 : "${KUBEHENGE_E2E_GATEWAY:?}" "${KUBEHENGE_E2E_DNS:?}" "${KUBEHENGE_E2E_REGISTRY:?}"
 
 # shellcheck source=templates.sh

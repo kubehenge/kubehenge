@@ -501,6 +501,7 @@ api_family_note() {
         *:* | '') return 0 ;;
         *) ;;
     esac
+    # shellcheck disable=SC2310 # certificate_names heads a pipeline; grep's status is the answer.
     certificate_names "$1" | grep -qx "ip $3" && return 0
     echo "kubehenge: Proxmox VE's certificate does not list this node's address $3 on ${bridge}, so the appliance and the clusters reach the API at $2, which clusters without IPv6 cannot. To use $3, make this node's name resolve to it first (/etc/hosts), run pvecm updatecerts --force and systemctl restart pveproxy, then: sh install.sh --upgrade --ctid ${ctid} --proxmox-url https://$3:8006" >&2
 }

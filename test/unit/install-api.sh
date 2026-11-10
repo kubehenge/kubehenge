@@ -279,11 +279,11 @@ mismatch_for() {
     certificate_mismatch "${certs}/$2.crt"
 }
 expect "a host name the certificate lists: no mismatch" "" mismatch_for https://pve1.example.org:8006 only-name
-expect "an IPv6 address the certificate lists: no mismatch" "" mismatch_for https://[2001:db8::11]:8006 only-ipv6
+expect "an IPv6 address the certificate lists: no mismatch" "" mismatch_for 'https://[2001:db8::11]:8006' only-ipv6
 expect "another host name: a certificate of its own, never pvecm" \
     "Proxmox VE's certificate is valid for pve1.example.org, not pve.example.org. Give a URL with one of those with --proxmox-url, or install a certificate for pve.example.org on Proxmox VE" \
     mismatch_for https://pve.example.org:8006 only-name
-expect_in "an IPv6 address the certificate lacks" "is valid for pve1, 192.0.2.11, not 2001:db8::11." mismatch_for https://[2001:db8::11]:8006 only-ipv4
+expect_in "an IPv6 address the certificate lacks" "is valid for pve1, 192.0.2.11, not 2001:db8::11." mismatch_for 'https://[2001:db8::11]:8006' only-ipv4
 
 # The note on an API reached at an IPv6 address because the certificate lacks the bridge's IPv4
 # one. Fails on a build without api_family_note.
