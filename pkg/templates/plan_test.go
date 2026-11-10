@@ -165,8 +165,17 @@ func TestPlanRefusesFIPSModeWhereNoneIs(t *testing.T) {
 			t.Errorf("Plan(%+v) = %v, want %q", tc.req, err, tc.want)
 		}
 	}
-	if err := FIPSDistribution(Talos); err == nil {
-		t.Error("Talos has FIPS mode")
+	if err := FIPSDistribution(Talos); err == nil || !strings.HasPrefix(err.Error(), "Talos has no FIPS mode") {
+		t.Errorf("FIPSDistribution(Talos) = %v, want Talos refused by name", err)
+	}
+}
+
+func TestDistributionTitleIsTheDistributionAsItsProjectWritesIt(t *testing.T) {
+	t.Parallel()
+	for d, want := range map[Distribution]string{Talos: "Talos", RKE2: "RKE2", K3s: "k3s", Kubeadm: "kubeadm"} {
+		if got := d.Title(); got != want {
+			t.Errorf("%s.Title() = %q, want %q", d, got, want)
+		}
 	}
 }
 

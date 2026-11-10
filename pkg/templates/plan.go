@@ -185,7 +185,9 @@ func (d Distribution) Title() string {
 	switch d {
 	case RKE2:
 		return "RKE2"
-	case Talos, K3s, Kubeadm:
+	case Talos:
+		return "Talos"
+	case K3s, Kubeadm:
 	}
 	return string(d)
 }
