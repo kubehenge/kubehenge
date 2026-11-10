@@ -346,7 +346,7 @@ func clusterAfter(t *testing.T, kube client.Client, name string) *clusterv1.Clus
 	return c
 }
 
-func rancherCluster(version, policy string) *clusterv1.Cluster {
+func settledRancherCluster(version, policy string) *clusterv1.Cluster {
 	return settledCluster("rancher", version, map[string]string{"upgrades": policy, "rancher": `{"install":true,"hostname":"r.example"}`})
 }
 
@@ -359,7 +359,7 @@ func TestUpgraderTakesAnyVersionWhereNoRancherRangeIsSet(t *testing.T) {
 		t.Fatalf("0-0 parsed to %+v, %v", unset, err)
 	}
 	u := &Upgrader{Releases: fixedReleases{"rke2": channels(36, "v1.36.5+rke2r1")}, RancherKubernetes: unset}
-	kube := upgradeRound(t, u, rancherCluster("v1.36.2+rke2r1", `{"mode":"patch"}`))
+	kube := upgradeRound(t, u, settledRancherCluster("v1.36.2+rke2r1", `{"mode":"patch"}`))
 	if got := clusterAfter(t, kube, "rancher").Spec.Topology.Version; got != "v1.36.5+rke2r1" {
 		t.Errorf("no Rancher range set: the cluster stays on %s, want v1.36.5+rke2r1", got)
 	}
@@ -375,7 +375,7 @@ func TestRancherHoldOnTheNextMinorStillTakesPatchReleases(t *testing.T) {
 		{"the newest patch is running", "v1.36.5+rke2r1", "v1.36.5+rke2r1", UpgradeHeldRancherKubernetes},
 	} {
 		u := &Upgrader{Releases: releases, RancherKubernetes: KubernetesMinors{Min: 34, Max: 36}}
-		got := clusterAfter(t, upgradeRound(t, u, rancherCluster(c.from, `{"mode":"minor"}`)), "rancher")
+		got := clusterAfter(t, upgradeRound(t, u, settledRancherCluster(c.from, `{"mode":"minor"}`)), "rancher")
 		if got.Spec.Topology.Version != c.want {
 			t.Errorf("%s: Rancher runs on 1.34 to 1.36 and the cluster stays on %s, want %s", c.name, got.Spec.Topology.Version, c.want)
 		}
@@ -448,10 +448,10 @@ func TestUpgraderReadsTheChannelsOfEachNodeOS(t *testing.T) {
 		c.Spec.Topology.ClassRef.Name = ClassPrefix + "kubeadm"
 		return c
 	}
-	u := &Upgrader{Releases: osReleases{
-		templates.DefaultNodeOS.String():                       channels(36, "v1.36.5"),
-		templates.NodeOS{Family: "rocky", Release: "10"}.String(): channels(36, "v1.36.7"),
-	}}
+	releases := osReleases{}
+	releases[templates.DefaultNodeOS.String()] = channels(36, "v1.36.5")
+	releases[templates.NodeOS{Family: "rocky", Release: "10"}.String()] = channels(36, "v1.36.7")
+	u := &Upgrader{Releases: releases}
 	kube := upgradeRound(t, u, kubeadm("alma", ""), kubeadm("rocky", `{"family":"rocky","release":"10"}`))
 	for name, want := range map[string]string{"alma": "v1.36.5", "rocky": "v1.36.7"} {
 		if got := clusterAfter(t, kube, name).Spec.Topology.Version; got != want {

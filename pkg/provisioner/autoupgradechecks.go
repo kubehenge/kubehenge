@@ -148,7 +148,7 @@ func (u *Upgrader) heldBy(ctx context.Context, c *clusterv1.Cluster, version str
 			return "", "", err
 		}
 		if err := templates.TalosRunsKubernetes(talos, version); err != nil {
-			return AutoUpgradeSkippedTalosRelease, err.Error(), nil
+			return AutoUpgradeSkippedTalosRelease, err.Error(), nil //nolint:nilerr // a release that does not run the version holds the upgrade, it is no failure
 		}
 	}
 	return "", "", nil

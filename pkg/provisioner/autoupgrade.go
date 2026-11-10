@@ -797,8 +797,14 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 		u.clearSkipped(ctx, c)
 		return "", nil
 	}
+	return u.unheld(ctx, c, ch, to)
+}
+
+// unheld is the first of to and, failing that, the newest patch release of the cluster's own minor
+// version that nothing holds back, or "". A hold on the next minor must not cost the cluster the
+// patch releases of its own. Where all are held, the cluster says why the first waits.
+func (u *Upgrader) unheld(ctx context.Context, c *clusterv1.Cluster, ch Channels, to string) (string, error) {
 	targets := []string{to}
-	// A hold on the next minor must not cost the cluster the patches of its own.
 	if patch := ch.Target(c.Spec.Topology.Version, upgradePatch); patch != "" && patch != to {
 		targets = append(targets, patch)
 	}
