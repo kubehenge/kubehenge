@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -88,7 +89,7 @@ func ParseRefreshSchedule(data map[string]string) (RefreshSchedule, error) {
 
 // Next is when the next scheduled run starts after from.
 func (s *RefreshSchedule) Next(from time.Time) (time.Time, error) {
-	loc, err := time.LoadLocation(cmpOr(s.TimeZone, "UTC"))
+	loc, err := time.LoadLocation(cmp.Or(s.TimeZone, "UTC"))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("%s: time zone: %w", TemplateRefreshName, err)
 	}

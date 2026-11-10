@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -194,7 +195,7 @@ func (n *talosNode) EtcdSnapshot(ctx context.Context) (io.ReadCloser, string, er
 	}
 	version := ""
 	for _, m := range etcd.GetMessages() {
-		version = cmpOr(version, m.GetMemberStatus().GetProtocolVersion())
+		version = cmp.Or(version, m.GetMemberStatus().GetProtocolVersion())
 	}
 	r, err := n.c.EtcdSnapshot(ctx, &machine.EtcdSnapshotRequest{})
 	if err != nil {

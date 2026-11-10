@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,11 +55,11 @@ const defaultWindowMinutes = 240
 // Open tells whether now lies in the window. A window may run past midnight, so the one that
 // opened the day before counts too.
 func (w *Window) Open(now time.Time) (bool, error) {
-	loc, err := time.LoadLocation(cmpOr(w.TimeZone, "UTC"))
+	loc, err := time.LoadLocation(cmp.Or(w.TimeZone, "UTC"))
 	if err != nil {
 		return false, fmt.Errorf("window time zone: %w", err)
 	}
-	start := cmpOr(w.Start, "02:00")
+	start := cmp.Or(w.Start, "02:00")
 	hm, err := time.Parse("15:04", start)
 	if err != nil {
 		return false, fmt.Errorf("window start %q: %w", start, err)
@@ -86,13 +87,6 @@ func (w *Window) onDay(d time.Time) bool {
 		return true
 	}
 	return slices.Contains(w.Weekdays, d.Weekday().String()[:3]) || slices.Contains(w.MonthDays, d.Day())
-}
-
-func cmpOr(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
 }
 
 // kubeVersion is a distribution's Kubernetes version: v1.36.5, v1.36.5+rke2r1 or v1.36.5+k3s1.
@@ -1048,7 +1042,7 @@ func ClassBuilds(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (No
 // records as being on a down node.
 func classBuildsAndDown(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (NodeImageBuilds, []DownTemplate, error) {
 	ref := c.Spec.Topology.ClassRef
-	ns := cmpOr(ref.Namespace, c.Namespace)
+	ns := cmp.Or(ref.Namespace, c.Namespace)
 	class := &clusterv1.ClusterClass{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, class); err != nil {
 		return nil, nil, fmt.Errorf("reading ClusterClass %s/%s: %w", ns, ref.Name, err)

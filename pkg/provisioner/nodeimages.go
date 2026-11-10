@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -365,11 +366,11 @@ func (w *Window) Next(from time.Time) (time.Time, error) {
 	if err != nil || open {
 		return from, err
 	}
-	loc, err := time.LoadLocation(cmpOr(w.TimeZone, "UTC"))
+	loc, err := time.LoadLocation(cmp.Or(w.TimeZone, "UTC"))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("window time zone: %w", err)
 	}
-	hm, err := time.Parse("15:04", cmpOr(w.Start, "02:00"))
+	hm, err := time.Parse("15:04", cmp.Or(w.Start, "02:00"))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("window start: %w", err)
 	}

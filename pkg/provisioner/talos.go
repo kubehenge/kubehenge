@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -187,7 +188,7 @@ func (h *Hooks) newestTalosImage(ctx context.Context, c *clusterv1.Cluster) (boo
 	}
 	class := &clusterv1.ClusterClass{}
 	ref := c.Spec.Topology.ClassRef
-	if err := h.Reader.Get(ctx, client.ObjectKey{Namespace: cmpOr(ref.Namespace, c.Namespace), Name: ref.Name}, class); err != nil {
+	if err := h.Reader.Get(ctx, client.ObjectKey{Namespace: cmp.Or(ref.Namespace, c.Namespace), Name: ref.Name}, class); err != nil {
 		return false, fmt.Errorf("reading the cluster's ClusterClass: %w", err)
 	}
 	if !slices.Contains(ClassTalosTemplates(class), talos) {
