@@ -71,6 +71,9 @@ func (s *TokenState) Message() string {
 	case TokenRefused:
 		return fmt.Sprintf("%s token is refused by Proxmox VE (%s). It may have expired, been disabled or lost its user.", s.Name, s.Error)
 	case TokenCertificate:
+		if strings.Contains(s.Error, certificateNames) {
+			return fmt.Sprintf("%s token cannot verify the Proxmox VE API's certificate: %s", s.Name, s.Error)
+		}
 		return fmt.Sprintf("%s token cannot verify the Proxmox VE API's certificate (%s). The API may use a new CA.", s.Name, s.Error)
 	case TokenPrivileges:
 		needs := make([]string, len(s.Missing))
@@ -182,6 +185,10 @@ func (p TokenProbe) Check(ctx context.Context) TokenState {
 	return state
 }
 
+// certificateNames is in the text of a certificate valid for other names than the URL's, from Go's
+// own x509 error and from pve.CertificateNameError, which a Job passes on as text.
+const certificateNames = "certificate is valid for"
+
 // classifyTokenError tells a refused token from an untrusted certificate and from an API that did
 // not answer. Errors that came through a Job carry only text.
 func classifyTokenError(err error) string {
@@ -190,7 +197,7 @@ func classifyTokenError(err error) string {
 	var host x509.HostnameError
 	text := err.Error()
 	switch {
-	case errors.As(err, &unknown) || errors.As(err, &invalid) || errors.As(err, &host) || strings.Contains(text, "x509:"):
+	case errors.As(err, &unknown) || errors.As(err, &invalid) || errors.As(err, &host) || strings.Contains(text, "x509:") || strings.Contains(text, certificateNames):
 		return TokenCertificate
 	case errors.Is(err, proxmox.ErrNotAuthorized) || strings.Contains(text, proxmox.ErrNotAuthorized.Error()) ||
 		strings.Contains(text, "authentication failure"):

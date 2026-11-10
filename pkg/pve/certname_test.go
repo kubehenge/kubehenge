@@ -123,7 +123,7 @@ func TestClientsReachingTheAPIAtAnUnlistedAddressAreToldTheListedOnes(t *testing
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	ca := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+	if err = os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Connect(Config{URL: srv.URL, Token: "kubehenge@pve!controller=s3cret", CAFile: ca}) //nolint:gosec // test data
