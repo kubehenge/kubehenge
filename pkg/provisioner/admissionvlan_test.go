@@ -53,7 +53,7 @@ func TestAdmissionRefusesAVLANTagAddedToAClusterOnATaggingVNet(t *testing.T) {
 	if err := updateOf(t, h, old, onNetwork(t, "tagged", 100)); err == nil || !strings.Contains(err.Error(), "tags already") {
 		t.Errorf("adding a tag to a cluster on a tagging VNet: %v", err)
 	}
-	other := withVariable(onNetwork(t, "tagged", 100), "headlamp", `{"enabled":true}`)
+	other := changedVariable(onNetwork(t, "tagged", 100), "headlamp", `{"enabled":true}`)
 	if err := updateOf(t, h, onNetwork(t, "tagged", 100), other); err != nil && strings.Contains(err.Error(), "tags already") {
 		t.Errorf("an unrelated change to a cluster that already had the tag was held to it: %v", err)
 	}

@@ -42,7 +42,7 @@ func TestAdmissionHoldsTheAllowedNodesAsTheInterfaceDoes(t *testing.T) {
 		{"one that is offline", `["pve3"]`, ""},
 		{"one kept and one dropped", `["pve2"]`, ""},
 	} {
-		err := updateOf(t, h, old, withVariable(old, allowedNodesVariable, tc.nodes))
+		err := updateOf(t, h, old, changedVariable(old, allowedNodesVariable, tc.nodes))
 		switch {
 		case tc.refusal == "" && err != nil:
 			t.Errorf("allowedNodes %s (%s) was refused: %v", tc.nodes, tc.name, err)
@@ -65,7 +65,7 @@ func TestAdmissionKeepsANodeTheClusterHadWhenItIsUnknownNow(t *testing.T) {
 	t.Parallel()
 	old := storedCluster("team-a", "web", "ceph", variableOf(allowedNodesVariable, `["pve1","pve9"]`))
 	h := placementHooks(t, old)
-	if err := updateOf(t, h, old, withVariable(old, allowedNodesVariable, `["pve9","pve1","pve2"]`)); err != nil {
+	if err := updateOf(t, h, old, changedVariable(old, allowedNodesVariable, `["pve9","pve1","pve2"]`)); err != nil {
 		t.Errorf("keeping a node the cluster already listed was refused: %v", err)
 	}
 }

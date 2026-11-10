@@ -22,7 +22,7 @@ func TestAdmissionRefusesASpecChangeToAClusterBeingDeleted(t *testing.T) {
 	h, _ := hooksFor(t, old)
 	for name, change := range map[string]func(*clusterv1.Cluster){
 		"a variable": func(c *clusterv1.Cluster) {
-			c.Spec.Topology.Variables = withVariable(c, "headlamp", `{"enabled":true}`).Spec.Topology.Variables
+			c.Spec.Topology.Variables = changedVariable(c, "headlamp", `{"enabled":true}`).Spec.Topology.Variables
 		},
 		"the version": func(c *clusterv1.Cluster) { c.Spec.Topology.Version = "v1.37.2+rke2r1" },
 		"a pool": func(c *clusterv1.Cluster) {
