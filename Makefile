@@ -422,6 +422,15 @@ endif
 .PHONY: unit-tofu
 unit-tofu: tofu-init capi-operator-chart
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m test; done
+	$(MAKE) unit-talos-config
+
+# The plans carry the configurations the real Talos provider generates for the nodes, which Talos's
+# own validation then checks. The file holds the generated PKI of a throwaway cluster.
+TALOS_PLANS := $(or $(TMPDIR),/tmp)/kubehenge-talos-plans.json
+.PHONY: unit-talos-config
+unit-talos-config:
+	$(TOFU) -chdir=management-cluster test -test-directory=tests/talos -json -verbose > $(TALOS_PLANS)
+	KUBEHENGE_TALOS_PLANS=$(TALOS_PLANS) go test -count=1 ./management-cluster/tests/talos
 
 UNIT_SHELL := $(patsubst test/unit/%.sh,unit-shell-%,$(wildcard test/unit/*.sh))
 .PHONY: unit-shell

@@ -99,12 +99,17 @@ data "talos_machine_configuration" "node" {
       # Flannel enforces no NetworkPolicy by itself; Talos runs kube-network-policies beside it,
       # which does, with kube-proxy left as it is.
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeFlannelCNIConfig", kubeNetworkPoliciesEnabled = true }),
-      # The management cluster has no workers: its controllers run on the control plane.
-      yamlencode({
+      # The management cluster has no workers: its controllers run on the control plane. With IPv6
+      # the kubelet registers one address per family, primary first, picked from the nodes'
+      # networks so the VIP is never taken. Talos refuses that setting in .machine.kubelet beside
+      # this document.
+      yamlencode(merge({
         apiVersion = "v1alpha1"
         kind       = "KubeNodeConfig"
         taints     = { "node-role.kubernetes.io/control-plane" = { "$patch" = "delete" } }
-      }),
+        }, local.has_ipv6 ? {
+        nodeIP = { validSubnets = flatten(local.node_networks) }
+      } : {})),
       # The leases of the Cluster API providers (local.patient_leases), for the same API stalls.
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeControllerManagerConfig", extraArgs = local.patient_lease_args }),
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeSchedulerConfig", extraArgs = local.patient_lease_args }),
@@ -167,11 +172,9 @@ data "talos_machine_configuration" "node" {
         kind          = "ResolverConfig"
         searchDomains = { domains = var.search_domains }
       })],
-      # With IPv6 the kubelet registers one address per family, primary first, picked from the
-      # nodes' networks so the VIP is never taken. etcd advertises a node address of the primary
-      # family, never the VIP or an address of the other family.
+      # With IPv6, etcd advertises a node address of the primary family, never the VIP or an
+      # address of the other family.
       !local.has_ipv6 ? [] : [yamlencode({
-        machine = { kubelet = { nodeIP = { validSubnets = flatten(local.node_networks) } } }
         cluster = { etcd = { advertisedSubnets = local.node_networks[0] } }
       })],
     )),

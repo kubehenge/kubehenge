@@ -294,6 +294,11 @@ esac
 # It used up to 2752 MB with the add-on tests (docs/testing.md). At 3072 MiB it saw only 2874 MB
 # and thrashed, so the minimum leaves it about 3350 MB.
 export TF_VAR_node_memory_min_mb="${KUBEHENGE_E2E_MANAGEMENT_MEMORY_MIN:-3584}"
+# Cluster API reaches an IPv6 API address only from a management cluster with IPv6 (main.tf).
+case "${KUBEHENGE_E2E_IP_FAMILIES:-}" in
+    IPv6,*) export TF_VAR_ipv6=true ;;
+    *) ;;
+esac
 
 # The tests' own output is shown as it comes rather than when each make target ends.
 e2e() { make -C "${repo}" OUTPUT_SYNC=none "$@"; }

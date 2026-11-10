@@ -9,8 +9,10 @@ files=$(dirname "$(dirname "$0")")
 
 # kube-proxy reads conntrack's settings when it starts, before anything else loads the module.
 printf 'overlay\nbr_netfilter\nnf_conntrack\n' > /usr/lib/modules-load.d/kubernetes.conf
-printf 'net.ipv4.ip_forward = 1\nnet.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\n' \
-    > /usr/lib/sysctl.d/90-kubernetes.conf
+# kubeadm's preflight refuses an IPv6 or dual-stack node whose default IPv6 forwarding is off.
+# NetworkManager takes router advertisements itself, so forwarding costs a node no address.
+printf '%s\n' 'net.ipv4.ip_forward = 1' 'net.ipv6.conf.all.forwarding = 1' 'net.ipv6.conf.default.forwarding = 1' \
+    'net.bridge.bridge-nf-call-iptables = 1' 'net.bridge.bridge-nf-call-ip6tables = 1' > /usr/lib/sysctl.d/90-kubernetes.conf
 
 mkdir -p /etc/containerd
 containerd config default |

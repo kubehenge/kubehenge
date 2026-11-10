@@ -44,8 +44,16 @@ case "${distribution}" in
         exit 1
         ;;
 esac
+# patch carries cloud-init's fixes (node/cloud-init.sh), and goes again unless the image had it.
+had_patch=true
+if ! rpm -q patch > /dev/null 2>&1; then
+    had_patch=false
+    packages="${packages} patch"
+fi
 # shellcheck disable=SC2086 # one word per package
 zypper --non-interactive install --no-recommends ${packages}
+sh "${files}/node/cloud-init.sh" opensuse
+[ "${had_patch}" = true ] || rpm -e patch
 rm -f /etc/zypp/repos.d/kubehenge-*.repo /etc/pki/rpm-gpg/kubehenge-*.asc
 zypper --non-interactive clean --all
 

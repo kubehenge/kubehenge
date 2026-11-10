@@ -188,7 +188,10 @@ func checkGuestExec(t *testing.T, bootcmd []string) {
 // and repositories that check their packages against those keys.
 func checkFiles(t *testing.T, files map[string]string, dir string, keys []RepositoryKey, names map[string]bool) {
 	t.Helper()
-	for _, name := range []string{dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/kubehenge-calico.cil", "node/images.sh", "node/kubeadm.sh", "node/boot-log.sh", "node/kubehenge-boot-log.service", "node/kubehenge-boot-log.timer"} {
+	for _, name := range []string{
+		dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/kubehenge-calico.cil", "node/images.sh", "node/kubeadm.sh", "node/boot-log.sh", "node/kubehenge-boot-log.service", "node/kubehenge-boot-log.timer",
+		"node/cloud-init.sh", "node/cloud-init/create-route-section-before-its-metric.patch", "node/cloud-init/dual-stack-ipv4-first.yaml", "node/cloud-init/dual-stack-ipv6-first.yaml",
+	} {
 		if files[name] == "" {
 			t.Errorf("the bake does not carry %s", name)
 		}
@@ -428,6 +431,20 @@ func TestKubeadmPatchesRunTheControlPlaneAsSPC(t *testing.T) {
 	}
 	if !strings.Contains(string(script), `\n      type: spc_t\n`) {
 		t.Error("node/kubeadm.sh's patches do not run the pods as spc_t")
+	}
+}
+
+// kubeadm's preflight checks the default IPv6 forwarding of every IPv6 or dual-stack node.
+func TestKubeadmNodesForwardBothFamilies(t *testing.T) {
+	t.Parallel()
+	script, err := recipeFiles.ReadFile("node/kubeadm.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sysctl := range []string{"'net.ipv4.ip_forward = 1'", "'net.ipv6.conf.all.forwarding = 1'", "'net.ipv6.conf.default.forwarding = 1'"} {
+		if !strings.Contains(string(script), sysctl) {
+			t.Errorf("node/kubeadm.sh does not set %s", sysctl)
+		}
 	}
 }
 

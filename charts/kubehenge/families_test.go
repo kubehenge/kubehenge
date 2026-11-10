@@ -3,6 +3,7 @@ package kubehenge_test
 import (
 	"encoding/json"
 	"maps"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -145,6 +146,62 @@ func TestProxmoxClusterTakesTheNetworkOfEachFamily(t *testing.T) {
 						t.Errorf("an IPv4 cluster has ipv6Config %v", got)
 					}
 				})
+			}
+		})
+	}
+}
+
+// kube-apiserver refuses to start when its advertised address is not of the Services' primary
+// family, and kubeadm takes an IPv4 address when none is named. Where IPv6 comes first the class
+// names a placeholder for kubeadm init and for a control-plane join, which node-ip.sh replaces.
+func TestKubeadmAdvertisesAnAddressOfThePrimaryFamily(t *testing.T) {
+	t.Parallel()
+	const placeholder = "kubehenge-node-address"
+	script, err := os.ReadFile("files/node-ip.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(script), "grep -q "+placeholder+" ") {
+		t.Errorf("node-ip.sh does not replace %s", placeholder)
+	}
+	class := renderClass(t, "kubeadm.yaml")
+	advertised := func(doc map[string]any, path ...string) any {
+		var v any = doc
+		for _, p := range path {
+			m, ok := v.(map[string]any)
+			if !ok {
+				return nil
+			}
+			v = m[p]
+		}
+		return v
+	}
+	for name, tc := range map[string]struct {
+		network string
+		ipv6    bool
+	}{
+		"IPv4":                   {network: ipv4Net},
+		"dual-stack, IPv4 first": {network: dualNet},
+		"dual-stack, IPv6 first": {network: dualIPv6Net, ipv6: true},
+		"IPv6 only":              {network: ipv6OnlyNet, ipv6: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			variables := map[string]any{"controlPlaneEndpoint": "10.0.0.5", "network": jsonValue(t, tc.network), "cni": "calico"}
+			var want any
+			if tc.ipv6 {
+				want = placeholder
+			}
+			spec := asMap(t, field(t, class.patched(t, "KubeadmControlPlaneTemplate", variables), "spec", "template", "spec", "kubeadmConfigSpec"))
+			if got := advertised(spec, "initConfiguration", "localAPIEndpoint", "advertiseAddress"); got != want {
+				t.Errorf("kubeadm init advertises %v, want %v", got, want)
+			}
+			if got := advertised(spec, "joinConfiguration", "controlPlane", "localAPIEndpoint", "advertiseAddress"); got != want {
+				t.Errorf("a control-plane join advertises %v, want %v", got, want)
+			}
+			worker := asMap(t, field(t, class.patched(t, "KubeadmConfigTemplate", variables), "spec", "template", "spec"))
+			if got := advertised(worker, "joinConfiguration", "controlPlane"); got != nil {
+				t.Errorf("a worker joins as a control-plane node: %v", got)
 			}
 		})
 	}

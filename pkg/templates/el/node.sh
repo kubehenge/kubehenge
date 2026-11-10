@@ -58,9 +58,17 @@ if [ -e "${files}/fips" ]; then
     fips=true
     packages="${packages} crypto-policies-scripts"
 fi
+# patch carries cloud-init's fixes (node/cloud-init.sh), and goes again unless the image had it.
+had_patch=true
+if ! rpm -q patch > /dev/null 2>&1; then
+    had_patch=false
+    packages="${packages} patch"
+fi
 # A slow mirror is left for the next, as in build.sh.
 # shellcheck disable=SC2086 # one word per package
 dnf -y install --setopt=reposdir="${repos}" --setopt=install_weak_deps=False --setopt=minrate=100k ${packages}
+sh "${files}/node/cloud-init.sh" rhel
+[ "${had_patch}" = true ] || rpm -e patch
 dnf clean all
 rm -rf "${repos}"
 # The chart writes a cluster's time servers and the host clock source into /etc/chrony.d, which the

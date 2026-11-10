@@ -2029,12 +2029,12 @@ run "dual_stack_ipv4_first" {
 
   assert {
     condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).nodeIP
+      if can(yamldecode(d).nodeIP)
+      ] == [{ validSubnets = ["192.0.2.0/24", "2001:db8:1::/64"] }] && [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
-      if can(yamldecode(d).machine.kubelet)
-      ] == [{
-        machine = { kubelet = { nodeIP = { validSubnets = ["192.0.2.0/24", "2001:db8:1::/64"] } } }
-        cluster = { etcd = { advertisedSubnets = ["192.0.2.0/24"] } }
-    }]
+      if can(yamldecode(d).cluster.etcd)
+    ] == [{ cluster = { etcd = { advertisedSubnets = ["192.0.2.0/24"] } } }]
     error_message = "the kubelet picks its addresses from both node networks, primary first, and etcd advertises the primary one"
   }
 
@@ -2080,12 +2080,12 @@ run "dual_stack_ipv6_first" {
 
   assert {
     condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).nodeIP
+      if can(yamldecode(d).nodeIP)
+      ] == [{ validSubnets = ["2001:db8:1::/64", "192.0.2.0/24"] }] && [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
-      if can(yamldecode(d).machine.kubelet)
-      ] == [{
-        machine = { kubelet = { nodeIP = { validSubnets = ["2001:db8:1::/64", "192.0.2.0/24"] } } }
-        cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } }
-    }]
+      if can(yamldecode(d).cluster.etcd)
+    ] == [{ cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } } }]
     error_message = "the kubelet picks the IPv6 address first, and etcd advertises the IPv6 network"
   }
 
@@ -2133,12 +2133,12 @@ run "ipv6_only" {
 
   assert {
     condition = [
+      for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).nodeIP
+      if can(yamldecode(d).nodeIP)
+      ] == [{ validSubnets = ["2001:db8:1::/64"] }] && [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
-      if can(yamldecode(d).machine.kubelet)
-      ] == [{
-        machine = { kubelet = { nodeIP = { validSubnets = ["2001:db8:1::/64"] } } }
-        cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } }
-    }]
+      if can(yamldecode(d).cluster.etcd)
+    ] == [{ cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } } }]
     error_message = "the kubelet and etcd use the IPv6 node network"
   }
 
@@ -2152,7 +2152,7 @@ run "ipv4_config_has_no_ipv6_patch" {
   command = apply
 
   assert {
-    condition     = !anytrue([for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : can(yamldecode(d).machine.kubelet)])
+    condition     = !anytrue([for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : can(yamldecode(d).nodeIP) || can(yamldecode(d).cluster.etcd)])
     error_message = "an IPv4-only cluster's Talos config carries no kubelet or etcd address settings"
   }
 
