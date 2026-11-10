@@ -1,3 +1,7 @@
+# The Talos provider is the real one here: its data source applies the module's patches to the
+# generated configuration, so the plans of the runs below carry the configuration each node is sent.
+# Everything that would reach a network is overridden. talos_test.go, which make unit-tofu runs on
+# this test's output, validates those configurations with Talos's own library.
 mock_provider "proxmox" {
   mock_resource "proxmox_user_token" {
     defaults = {
@@ -12,13 +16,6 @@ mock_provider "proxmox" {
   }
 }
 mock_provider "helm" {}
-mock_provider "talos" {
-  mock_resource "talos_image_factory_schematic" {
-    defaults = {
-      id = "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
-    }
-  }
-}
 
 override_resource {
   target = talos_image_factory_schematic.this
@@ -31,10 +28,35 @@ override_data {
   target = data.talos_image_factory_urls.this
   values = {
     urls = {
-      disk_image = "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.14.4/nocloud-amd64.qcow2"
-      installer  = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.14.4"
+      disk_image            = "https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.14.4/nocloud-amd64.qcow2"
+      installer             = "factory.talos.dev/nocloud-installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1.14.4"
+      disk_image_secureboot = ""
+      initramfs             = ""
+      installer_secureboot  = ""
+      iso                   = ""
+      iso_secureboot        = ""
+      kernel                = ""
+      kernel_command_line   = ""
+      pxe                   = ""
+      uki                   = ""
     }
   }
+}
+
+override_resource {
+  target = talos_cluster.this
+}
+
+override_resource {
+  target = talos_cluster_kubeconfig.this
+}
+
+override_data {
+  target = data.talos_cluster_health.this
+}
+
+override_resource {
+  target = module.talos_node_0.talos_machine.this
 }
 
 variables {
@@ -67,5 +89,31 @@ run "dual" {
     node_addresses_ipv6 = ["2001:db8:1::11/64"]
     gateway_ipv6        = "2001:db8:1::1"
     dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+  }
+}
+
+run "ipv6_first" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv6", "IPv4"]
+    node_addresses_ipv6 = ["2001:db8:1::11/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    api_address         = "2001:db8:1::10"
+    dns_servers         = ["2001:db8:1::53", "192.0.2.1"]
+  }
+}
+
+run "ipv6_only" {
+  command = plan
+
+  variables {
+    ip_families         = ["IPv6"]
+    node_addresses      = []
+    gateway             = null
+    node_addresses_ipv6 = ["2001:db8:1::11/64"]
+    gateway_ipv6        = "2001:db8:1::1"
+    api_address         = "2001:db8:1::10"
+    dns_servers         = ["2001:db8:1::53"]
   }
 }
