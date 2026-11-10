@@ -1038,24 +1038,22 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 	// Without a list of nodes there are none to keep.
 	_ = json.Unmarshal(kept, &old)
 	var nodes []string
-	if err := json.Unmarshal(raw, &nodes); err != nil || len(nodes) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "allowed nodes: choose at least one Proxmox VE node")
-		return false
+	if json.Unmarshal(raw, &nodes) != nil {
+		nodes = nil
 	}
-	visible, err := s.Accounts.Nodes(r.Context(), u.ticket)
-	if err != nil {
-		s.proxmoxError(w, r, err)
-		return false
-	}
-	for i, node := range nodes {
-		if slices.Contains(nodes[:i], node) {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("allowed nodes: %s is listed twice", node))
+	var visible []pve.Node
+	// An empty list is refused without asking Proxmox VE which nodes there are.
+	if len(nodes) > 0 {
+		var err error
+		if visible, err = s.Accounts.Nodes(r.Context(), u.ticket); err != nil {
+			s.proxmoxError(w, r, err)
 			return false
 		}
-		if !slices.Contains(old, node) && !slices.ContainsFunc(visible, func(n pve.Node) bool { return n.Node == node }) {
-			writeError(w, http.StatusUnprocessableEntity, "allowed nodes: no Proxmox VE node "+node)
-			return false
-		}
+	}
+	known := func(node string) bool { return slices.ContainsFunc(visible, func(n pve.Node) bool { return n.Node == node }) }
+	if msg := provisioner.AllowedNodesRefusal(nodes, old, known); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return false
 	}
 	return true
 }

@@ -21,12 +21,19 @@ func (twoNodes) OnlineNodes(context.Context) ([]provisioner.Node, error) {
 	return []provisioner.Node{{Name: "pve1", CPULevel: 3}, {Name: "pve2", CPULevel: 3}}, nil
 }
 
+// knownNodes is a Proxmox VE with two nodes and nothing else the checks would read.
+type knownNodes struct{}
+
+func (knownNodes) Sites(context.Context) (*provisioner.Sites, error) {
+	return &provisioner.Sites{Nodes: []string{"pve1", "pve2"}}, nil
+}
+
 // admissionOver is the admission validator over the harness's objects, with two nodes online. It
 // first proves itself on the harness's cluster: an unchanged cluster passes and four control planes
 // do not.
 func admissionOver(t *testing.T, h *harness, old *clusterv1.Cluster) *provisioner.ClusterValidator {
 	t.Helper()
-	v := &provisioner.ClusterValidator{Hooks: &provisioner.Hooks{Reader: h.kube, ClassNamespace: "kubehenge-system", Nodes: twoNodes{}}}
+	v := &provisioner.ClusterValidator{Hooks: &provisioner.Hooks{Reader: h.kube, ClassNamespace: "kubehenge-system", Nodes: twoNodes{}, Sites: knownNodes{}}}
 	if _, err := v.ValidateUpdate(t.Context(), old, old.DeepCopy()); err != nil {
 		t.Fatalf("the harness's own cluster does not pass admission unchanged: %v", err)
 	}
@@ -69,6 +76,23 @@ func TestInterfaceAndAdmissionBothRefuseAChangeToAClusterBeingDeleted(t *testing
 	unfinalized.Finalizers = nil
 	if _, err := v.ValidateUpdate(t.Context(), stored, unfinalized); err != nil {
 		t.Errorf("admission refuses the removal of a finalizer from a cluster being deleted: %v", err)
+	}
+}
+
+func TestInterfaceAndAdmissionBothRefuseTheSameAllowedNodes(t *testing.T) {
+	t.Parallel()
+	old := cluster("default", "one")
+	h := newHarness(t, old.DeepCopy())
+	b := h.browser()
+	b.signIn("dev@pve")
+	v := admissionOver(t, h, old)
+	for _, nodes := range []string{`[]`, `["pve1","pve1"]`, `["pve8"]`} {
+		expect(t, b.do("PATCH", "/api/clusters/default/one", `{"variables":{"allowedNodes":`+nodes+`}}`), http.StatusUnprocessableEntity)
+		kept := old.DeepCopy()
+		setVariable(kept, "allowedNodes", json.RawMessage(nodes))
+		if _, err := v.ValidateUpdate(t.Context(), old, kept); err == nil {
+			t.Errorf("admission admits allowedNodes %s, which the interface refuses with 422", nodes)
+		}
 	}
 }
 

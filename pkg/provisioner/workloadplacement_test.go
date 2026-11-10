@@ -460,4 +460,7 @@ func TestSitesReadTheBridgesAndTheZonesTheTokenSees(t *testing.T) {
 	if s.VNets["v1"] != "z1" || !slices.Equal(s.ZoneNodes["z1"], []string{"pve1"}) {
 		t.Errorf("VNets %v and zones %v, want v1 in z1 applied on pve1 only", s.VNets, s.ZoneNodes)
 	}
+	if !slices.Equal(s.Nodes, []string{"pve1", "pve2", "pve3"}) {
+		t.Errorf("nodes = %v, want every node Proxmox VE lists, the offline one too", s.Nodes)
+	}
 }

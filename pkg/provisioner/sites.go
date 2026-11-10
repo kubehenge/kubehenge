@@ -46,6 +46,12 @@ type Sites struct {
 	// applied on, for the zones the token sees.
 	VNets     map[string]string
 	ZoneNodes map[string][]string
+	// Nodes are all the nodes Proxmox VE lists, offline ones too. Nil where they could not be read.
+	Nodes []string
+	// TaggingVNets are the VNets whose zone puts every frame in a VLAN of its own, so that a VLAN
+	// tag on a VM's device would add a second one. A VNet whose zone the token cannot read is not
+	// listed.
+	TaggingVNets map[string]bool
 }
 
 // SiteSource looks at the storages and templates; *Proxmox is the real one.
@@ -95,6 +101,10 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 		return
 	}
 	s.Bridges = map[string][]string{}
+	s.Nodes = make([]string, len(nodes))
+	for i, n := range nodes {
+		s.Nodes[i] = n.Node
+	}
 	for _, n := range nodes {
 		if n.Status != nodeOnline {
 			continue
