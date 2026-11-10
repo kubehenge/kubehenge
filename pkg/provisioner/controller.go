@@ -111,6 +111,12 @@ func Owns(c *clusterv1.Cluster, classNamespace string) bool {
 	return strings.HasPrefix(ref.Name, ClassPrefix) && ns == classNamespace
 }
 
+// ownedAndLive is Owns for a Cluster that is not being deleted, the only kind a background loop
+// works on.
+func ownedAndLive(c *clusterv1.Cluster, classNamespace string) bool {
+	return Owns(c, classNamespace) && c.DeletionTimestamp.IsZero()
+}
+
 // SetupWithManager registers the reconciler. Status updates do not trigger it: only a new
 // generation, deletion, or the requeue every resync. Several clusters reconcile at once and each
 // reconcile is bounded, so one cluster whose Proxmox VE calls hang holds up no other.

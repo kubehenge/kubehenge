@@ -169,7 +169,7 @@ func (r *TemplateRefresh) clusters(ctx context.Context) ([]refreshedCluster, err
 	var out []refreshedCluster
 	for i := range list.Items {
 		c := &list.Items[i]
-		if !Owns(c, r.ClassNamespace) || !c.DeletionTimestamp.IsZero() || !RefreshesNodes(c) {
+		if !ownedAndLive(c, r.ClassNamespace) || !RefreshesNodes(c) {
 			continue
 		}
 		lines, err := ClusterLines(c)
@@ -262,7 +262,7 @@ func (r *TemplateRefresh) talosReleases(ctx context.Context) ([]string, error) {
 	var out []string
 	for i := range list.Items {
 		c := &list.Items[i]
-		if !Owns(c, r.ClassNamespace) || !c.DeletionTimestamp.IsZero() || !isTalos(c) {
+		if !ownedAndLive(c, r.ClassNamespace) || !isTalos(c) {
 			continue
 		}
 		for _, release := range []func(*clusterv1.Cluster) (string, error){TalosImage, TalosVersion} {

@@ -33,7 +33,7 @@ func findingsMessage(target string, lines []string) string {
 // recordChecks stores, as conditions on the cluster, what an upgrade to the next minor and the next
 // patch would run into. What could not be read is left out, since it is no finding.
 func (u *Upgrader) recordChecks(ctx context.Context, c *clusterv1.Cluster, channels map[string]Channels) {
-	if u.Checker == nil || !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+	if u.Checker == nil || !ownedAndLive(c, u.ClassNamespace) {
 		return
 	}
 	running, ok := parseKubeVersion(c.Spec.Topology.Version)

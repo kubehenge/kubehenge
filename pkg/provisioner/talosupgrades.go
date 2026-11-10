@@ -134,7 +134,7 @@ func (u *TalosUpgrader) RunOnce(ctx context.Context, running *sync.WaitGroup) {
 	}
 	for i := range list.Items {
 		c := &list.Items[i]
-		if !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() || !isTalos(c) || u.isBusy(c) {
+		if !ownedAndLive(c, u.ClassNamespace) || !isTalos(c) || u.isBusy(c) {
 			continue
 		}
 		step, err := u.look(ctx, c)

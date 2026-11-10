@@ -228,7 +228,7 @@ func (t *TokenProbes) clusterProbes(ctx context.Context) []TokenProbe {
 	var probes []TokenProbe
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		if !Owns(c, t.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+		if !ownedAndLive(c, t.ClassNamespace) {
 			continue
 		}
 		names, err := NamesFor(t.Places.WorkloadPool, c.Namespace, c.Name)

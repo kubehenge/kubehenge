@@ -758,7 +758,7 @@ func variableValue(c *clusterv1.Cluster, name string) []byte {
 
 // next returns the version a cluster should move to now, or "".
 func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[string]Channels) (string, error) {
-	if !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+	if !ownedAndLive(c, u.ClassNamespace) {
 		return "", nil
 	}
 	policy, set, err := optionalVariable[UpgradePolicy](c, "upgrades")
@@ -830,7 +830,7 @@ func (u *Upgrader) channelsOf(ctx context.Context, c *clusterv1.Cluster, channel
 // window and a build it does not run yet has been offered. Outside the window it records that it
 // holds the cluster, and until when.
 func (u *Upgrader) refresh(ctx context.Context, c *clusterv1.Cluster) error {
-	if !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+	if !ownedAndLive(c, u.ClassNamespace) {
 		return nil
 	}
 	if isTalos(c) {

@@ -267,7 +267,7 @@ func (m *EtcdMaintainer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		}
 		return ctrl.Result{}, fmt.Errorf("reading the cluster: %w", err)
 	}
-	if !Owns(c, m.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+	if !ownedAndLive(c, m.ClassNamespace) {
 		return ctrl.Result{}, nil
 	}
 	if RestoreInProgress(c) || !meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {

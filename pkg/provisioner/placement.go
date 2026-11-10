@@ -117,7 +117,7 @@ func (p *Placer) placeAll(ctx context.Context) {
 	}
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		if !Owns(c, p.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+		if !ownedAndLive(c, p.ClassNamespace) {
 			continue
 		}
 		p.markSkipped(ctx, c, skipped)

@@ -48,7 +48,7 @@ func (u *Upgrader) supportDue() bool {
 // markSupport sets KubernetesOutOfSupportCondition on a cluster whose minor is older than the
 // oldest one offered for a new cluster, and takes it away once it is not.
 func (u *Upgrader) markSupport(ctx context.Context, c *clusterv1.Cluster, channels map[string]Channels) {
-	if !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+	if !ownedAndLive(c, u.ClassNamespace) {
 		return
 	}
 	log := ctrl.LoggerFrom(ctx).WithName("upgrader")
