@@ -87,17 +87,6 @@ func (p *Proxy) FullURL() string {
 	return u.String()
 }
 
-// RedactURL is a proxy URL as it may be shown or logged: the password hidden. An address that does
-// not parse is hidden whole, since a parse failure says nothing about where the password is.
-func RedactURL(raw string) string {
-	u, err := url.Parse(raw)
-	// Without a scheme, "user:pass@host" parses as an opaque URL whose password Redacted cannot see.
-	if err != nil || (u.User == nil && strings.Contains(raw, "@")) {
-		return "(unreadable address)"
-	}
-	return u.Redacted()
-}
-
 // Redacted is the setting as the interface may show it back.
 func (p *Proxy) Redacted() *Proxy {
 	if p == nil {
