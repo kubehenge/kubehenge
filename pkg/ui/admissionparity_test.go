@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
@@ -36,6 +37,39 @@ func admissionOver(t *testing.T, h *harness, old *clusterv1.Cluster) *provisione
 		t.Fatal("the validator admits four control planes, so it proves nothing here")
 	}
 	return v
+}
+
+func TestInterfaceAndAdmissionBothRefuseAChangeToAClusterBeingDeleted(t *testing.T) {
+	t.Parallel()
+	c := cluster("default", "one")
+	c.Finalizers = []string{"kubehenge.dev/parity"}
+	h := newHarness(t, c.DeepCopy())
+	stored := &clusterv1.Cluster{}
+	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), stored); err != nil {
+		t.Fatal(err)
+	}
+	v := admissionOver(t, h, stored)
+	if err := h.kube.Delete(t.Context(), stored); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.kube.Get(t.Context(), client.ObjectKeyFromObject(c), stored); err != nil || stored.DeletionTimestamp.IsZero() {
+		t.Fatalf("the cluster is not being deleted: %v", err)
+	}
+	b := h.browser()
+	b.signIn("admin@pve")
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"controlPlaneReplicas":3}`), http.StatusConflict)
+
+	scaled := stored.DeepCopy()
+	three := int32(3)
+	scaled.Spec.Topology.ControlPlane.Replicas = &three
+	if _, err := v.ValidateUpdate(t.Context(), stored, scaled); err == nil {
+		t.Error("admission admits three control planes on a cluster being deleted, which the interface refuses with 409")
+	}
+	unfinalized := stored.DeepCopy()
+	unfinalized.Finalizers = nil
+	if _, err := v.ValidateUpdate(t.Context(), stored, unfinalized); err != nil {
+		t.Errorf("admission refuses the removal of a finalizer from a cluster being deleted: %v", err)
+	}
 }
 
 func TestInterfaceAndAdmissionBothRefuseAChangedStorage(t *testing.T) {

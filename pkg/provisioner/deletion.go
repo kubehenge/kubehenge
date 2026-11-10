@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -123,6 +124,19 @@ func validateAbandon(old, c *clusterv1.Cluster) error {
 		return nil
 	}
 	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+}
+
+// ClusterBeingDeleted is what a change to a cluster being deleted is refused with.
+const ClusterBeingDeleted = "the cluster is being deleted"
+
+// validateDeleting refuses a change of the spec of a cluster being deleted. Finalizers, annotations
+// and labels still change, as Cluster API and the controller write them while the deletion runs.
+func validateDeleting(old, c *clusterv1.Cluster) error {
+	if old == nil || equality.Semantic.DeepEqual(old.Spec, c.Spec) {
+		return nil
+	}
+	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, //nolint:wrapcheck // made here, not passed on
+		field.ErrorList{field.Forbidden(field.NewPath("spec"), ClusterBeingDeleted)})
 }
 
 // deletionKinds are the kinds of what Cluster API and the providers Kubehenge installs keep of a

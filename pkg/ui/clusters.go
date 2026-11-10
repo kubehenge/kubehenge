@@ -1244,7 +1244,7 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, r
 		return nil, false
 	}
 	if !c.DeletionTimestamp.IsZero() {
-		writeError(w, http.StatusConflict, "the cluster is being deleted")
+		writeError(w, http.StatusConflict, provisioner.ClusterBeingDeleted)
 		return nil, false
 	}
 	if !unchangedSince(w, r, c) {

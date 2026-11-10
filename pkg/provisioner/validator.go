@@ -59,8 +59,11 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 	if !Owns(c, v.Hooks.ClassNamespace) {
 		return nil, nil
 	}
-	if err := validateAbandon(old, c); err != nil || !c.DeletionTimestamp.IsZero() {
+	if err := validateAbandon(old, c); err != nil {
 		return nil, err
+	}
+	if !c.DeletionTimestamp.IsZero() {
+		return nil, validateDeleting(old, c)
 	}
 	r, err := rancherOf(c)
 	if err != nil {
