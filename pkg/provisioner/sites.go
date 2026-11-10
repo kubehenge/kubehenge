@@ -11,6 +11,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -122,10 +123,7 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 		}
 		s.Bridges[n.Node] = bridges
 	}
-	var vnets []struct {
-		VNet string `json:"vnet"`
-		Zone string `json:"zone"`
-	}
+	var vnets []sdnVNet
 	if err := p.Client.Get(ctx, "/cluster/sdn/vnets", &vnets); err != nil {
 		log.V(1).Info("reading the SDN VNets", "error", err.Error())
 		return
@@ -134,6 +132,7 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 	for _, v := range vnets {
 		s.VNets[v.VNet] = v.Zone
 	}
+	s.TaggingVNets = p.taggingVNets(ctx, vnets)
 	var zones []struct {
 		SDN    string `json:"sdn"`
 		Node   string `json:"node"`
@@ -151,6 +150,37 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 		}
 		s.ZoneNodes[z.SDN] = applied
 	}
+}
+
+// sdnVNet is a VNet as Proxmox VE lists it.
+type sdnVNet struct {
+	VNet      string  `json:"vnet"`
+	Zone      string  `json:"zone"`
+	VLANAware pveFlag `json:"vlanaware"`
+}
+
+// taggingVNets are the VNets whose zone tags all its traffic. Where the zones cannot be read, none
+// is known to, so none is listed.
+func (p *Proxmox) taggingVNets(ctx context.Context, vnets []sdnVNet) map[string]bool {
+	var zones []struct {
+		Zone string `json:"zone"`
+		Type string `json:"type"`
+	}
+	if err := p.Client.Get(ctx, "/cluster/sdn/zones", &zones); err != nil {
+		ctrl.LoggerFrom(ctx).V(1).Info("reading the SDN zones", "error", err.Error())
+		return nil
+	}
+	types := make(map[string]string, len(zones))
+	for _, z := range zones {
+		types[z.Zone] = z.Type
+	}
+	tagging := map[string]bool{}
+	for _, v := range vnets {
+		if (pve.Network{ZoneType: types[v.Zone], VLANAware: bool(v.VLANAware)}).TagsTraffic() {
+			tagging[v.VNet] = true
+		}
+	}
+	return tagging
 }
 
 // Hosts are the names of the online nodes that can run the cluster's VMs: whose CPU reaches the

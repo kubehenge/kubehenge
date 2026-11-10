@@ -132,6 +132,11 @@ type Network struct {
 // a VM's device would add a second one. A VLAN-aware VNet leaves the tag to the device.
 func (n Network) TagsTraffic() bool { return n.ZoneType == "vlan" && !n.VLANAware }
 
+// VLANOnTaggedNetwork is the refusal of a VLAN tag on a VNet whose zone tags its traffic already.
+func VLANOnTaggedNetwork(vnet string) string {
+	return "VNet " + vnet + " is in a VLAN zone and tags already. Leave the VLAN tag empty."
+}
+
 // flag is a Proxmox VE boolean, which its API writes as 1 or true.
 type flag bool
 

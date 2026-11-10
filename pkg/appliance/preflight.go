@@ -279,7 +279,7 @@ func (s *Settings) checkBridge(inv *Inventory, f *Findings) {
 			f.Errors = append(f.Errors, fmt.Sprintf("Bridge %s is in zone %s. Write it as %s/%s.", ref, network.Zone, network.Zone, n))
 		}
 		if i == 0 && s.VLAN != nil && *s.VLAN > 0 && network.TagsTraffic() {
-			f.Errors = append(f.Errors, fmt.Sprintf("VNet %s is in a VLAN zone and tags already. Leave the VLAN tag empty.", n))
+			f.Errors = append(f.Errors, pve.VLANOnTaggedNetwork(n))
 		}
 	}
 	for _, node := range s.Nodes {

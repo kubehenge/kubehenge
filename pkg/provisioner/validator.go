@@ -98,6 +98,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, v.validateNUMA(pveCtx, reads, old, c, class)...)
 	errs = append(errs, v.validatePlacement(pveCtx, reads, old, c, class)...)
 	errs = append(errs, v.validateAllowedNodes(pveCtx, reads, old, c)...)
+	errs = append(errs, v.validateVLAN(pveCtx, reads, old, c)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}

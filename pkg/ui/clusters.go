@@ -1014,15 +1014,10 @@ func (s *Server) mayUseNetwork(w http.ResponseWriter, r *http.Request, u user, c
 		return false
 	}
 	if vlan != "" && network.TagsTraffic() {
-		writeError(w, http.StatusUnprocessableEntity, vlanOnTaggedNetwork(bridge))
+		writeError(w, http.StatusUnprocessableEntity, pve.VLANOnTaggedNetwork(bridge))
 		return false
 	}
 	return s.require(w, r, u, bridgePath(network.Zone, bridge, vlan), privBridge)
-}
-
-// vlanOnTaggedNetwork is the refusal of a VLAN tag on a VNet whose zone tags its traffic already.
-func vlanOnTaggedNetwork(vnet string) string {
-	return "VNet " + vnet + " is in a VLAN zone and tags already. Leave the VLAN tag empty."
 }
 
 // allowedNodesVariable keeps a cluster's VMs to some of the Proxmox VE nodes.
@@ -1050,7 +1045,9 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 			return false
 		}
 	}
-	known := func(node string) bool { return slices.ContainsFunc(visible, func(n pve.Node) bool { return n.Node == node }) }
+	known := func(node string) bool {
+		return slices.ContainsFunc(visible, func(n pve.Node) bool { return n.Node == node })
+	}
 	if msg := provisioner.AllowedNodesRefusal(nodes, old, known); msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)
 		return false
