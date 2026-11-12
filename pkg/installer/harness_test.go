@@ -139,6 +139,16 @@ func newKey(t *testing.T) *ecdsa.PrivateKey {
 	return k
 }
 
+// newSerial is a random certificate serial, so two certificates made in the same clock tick differ.
+func newSerial(t *testing.T) *big.Int {
+	t.Helper()
+	n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 63))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 type ca struct {
 	cert *x509.Certificate
 	key  *ecdsa.PrivateKey
@@ -148,8 +158,9 @@ func newCA(t *testing.T, cn string) ca {
 	t.Helper()
 	key := newKey(t)
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: cn},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour * 365),
+		SerialNumber: newSerial(t), Subject: pkix.Name{CommonName: cn},
+		// Valid at every instant a test checks it at, the fixed test clock and the wall clock alike.
+		NotBefore: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC),
 		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
@@ -164,7 +175,7 @@ func (c ca) issue(t *testing.T, dns, ips []string) *x509.Certificate {
 	t.Helper()
 	key := newKey(t)
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "pve"},
+		SerialNumber: newSerial(t), Subject: pkix.Name{CommonName: "pve"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour * 30),
 		DNSNames: dns, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

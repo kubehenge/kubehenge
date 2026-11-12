@@ -241,7 +241,8 @@ first_version=$(version_of "${release}")
 newer_version=$(version_of "${newer}")
 newest_version=$(version_of "${newest}")
 # A release whose interface does not start, newer than all three: the newest with its binary
-# behind a wrapper that fails to serve and does all else, the health check included.
+# behind a wrapper that fails to serve and does all else, the health check included. The install
+# command runs it on the node first, so the wrapper finds the binary beside itself.
 broken_version=$(printf '%s' "${newest_version}" | awk -F. '{ printf "%d.%d.%d", $1, $2, $3 + 1 }')
 mkdir "${work}/broken"
 tar -xzf "${newest}" -C "${work}/broken"
@@ -253,7 +254,7 @@ if [ "${1:-}" = serve ]; then
     echo "kubehenge: this release is broken on purpose" >&2
     exit 1
 fi
-exec /usr/local/share/kubehenge/broken/kubehenge "$@"
+exec "$(dirname "$0")/../share/kubehenge/broken/kubehenge" "$@"
 EOF
 chmod 0755 "${work}/broken/bin/kubehenge"
 echo "${broken_version}" > "${work}/broken/share/kubehenge/VERSION"
