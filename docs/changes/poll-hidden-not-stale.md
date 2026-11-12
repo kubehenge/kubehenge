@@ -1,3 +1,0 @@
-### Fixed
-
-- A browser tab shown again after a while in the background no longer marks the fleet and health as stale before its first read answers.
