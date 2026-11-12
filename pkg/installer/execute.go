@@ -21,11 +21,6 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 	if err := cfg.CheckOptionFiles(); err != nil {
 		return err
 	}
-	switch cfg.Mode() {
-	case ModeUpgrade, ModeCertificate:
-		return userErr("--upgrade and --certificate are not available in this installer yet", "Use install.sh of the release that is installed")
-	case ModeInstall:
-	}
 	env, err := NewEnv(cfg)
 	if err != nil {
 		return err
@@ -33,6 +28,9 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 	defer env.Cleanup()
 	s := &Session{Node: env.Node, Cfg: *cfg}
 	newRunner := func(emit func(Event)) *Runner { return env.NewRunner(s, emit) }
+	if cfg.Mode() != ModeInstall {
+		return maintain(ctx, s, newRunner(nil), stdout)
+	}
 
 	plain := !interactive || cfg.Plain
 	if !plain && cfg.IP != "" && cfg.PVEEntry != "" {
@@ -55,6 +53,24 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 		return nil
 	}
 	return model.Err()
+}
+
+// maintain runs --upgrade or --certificate, which print one line per step.
+func maintain(ctx context.Context, s *Session, r *Runner, out io.Writer) error {
+	if !s.Node.Quorate(ctx) {
+		return userErr("this node has no quorum in its Proxmox VE cluster, so it cannot change any container", "Start the other nodes, then run this again")
+	}
+	if s.Cfg.Mode() == ModeUpgrade {
+		_, err := r.Upgrade(ctx, out)
+		return err
+	}
+	res, err := r.ReplaceCertificate(ctx, out)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "\nKubehenge in container %s: %s\nCertificate SHA-256 fingerprint: %s\nValid until: %s\n",
+		res.CTID, res.URL, res.Fingerprint, res.ValidUntil.UTC().Format("Mon, 02 Jan 2006 15:04:05 MST"))
+	return nil
 }
 
 // detect runs the detection every road shares, once.

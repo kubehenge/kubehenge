@@ -73,6 +73,10 @@ func NewEnv(cfg *Config) (*Env, error) {
 	e.Cleanup = func() {
 		_ = e.Log.Close()
 		_ = os.RemoveAll(e.Work)
+		// install.sh unpacked the release here and leaves its removal to the installer.
+		if dir := os.Getenv("KUBEHENGE_BOOTSTRAP_DIR"); dir != "" {
+			_ = os.RemoveAll(dir)
+		}
 	}
 	return e, nil
 }
