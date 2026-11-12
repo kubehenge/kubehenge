@@ -304,6 +304,7 @@ Kubehenge refuses a cluster short of that room on creation and when an add-on or
 | Istio | 488 MiB | 484 MiB | 288 MiB | 504 MiB | 400 millicores |
 | Cilium Cluster Mesh | 128 MiB | 128 MiB | none | none | 30 millicores |
 | Load balancer | 128 MiB | 128 MiB | none | none | 60 millicores |
+| frr-k8s, added where the load balancer announces over BGP | 176 MiB | 176 MiB | none | none | 45 millicores |
 | GitOps with Argo CD | 512 MiB | 352 MiB | 432 MiB | 360 MiB | 90 millicores |
 | GitOps with Flux | 384 MiB | 320 MiB | none | none | 50 millicores |
 | cert-manager, with monitoring, Rancher or certificates | 192 MiB | 160 MiB | 48 MiB | none | 30 millicores |
