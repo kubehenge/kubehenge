@@ -4,7 +4,7 @@
 
   Stopped
 
-  Cause             the Proxmox VE API at https://pve1.example.com:8006 serves a certificate this cluster's CA did not sign for it
+  Cause             the Proxmox VE API at https://pve1.example.com:8006 serves a certificate that this cluster's CA did not sign
   Do                Give the CA that did with --proxmox-ca <file>, or another URL with --proxmox-url
   Changed           nothing
 

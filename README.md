@@ -29,7 +29,7 @@ VMware's vSphere Kubernetes Service is built on Cluster API. Kubehenge is the Pr
 
 ## What it does
 
-- **Create, scale, upgrade and delete clusters** on Proxmox VE, from the interface or with `kubectl apply`. Upgrades replace nodes one at a time, as do health checks for nodes not ready for five minutes.
+- **Create, scale, upgrade and delete clusters** on Proxmox VE, from the interface or with `kubectl apply`. Upgrades replace nodes one at a time. A node not ready for five minutes is replaced too.
 - **A distribution per cluster:** kubeadm (upstream Kubernetes), RKE2, k3s or Talos Linux, with the distribution's own CNI, Cilium or Calico.
 - **Proxmox VE built in:** the Proxmox CSI plugin for volumes, its cloud controller manager and a control-plane virtual IP.
 - **Clusters kept apart.** Each cluster gets its own Proxmox VE pool, user and API token, with rights on its own VMs and volumes only.

@@ -133,7 +133,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - `kubehenge appliance ready-for-reboot` exits 0 only when every etcd member is healthy. With `--node NODE`, it exits 0 when stopping that node's guests leaves every cluster's etcd a healthy majority.
 - A blocked reboot prints its first blocker in one line, with the cluster, the member and the node.
 - **Administration**, **Health** shows the same answer for each Proxmox VE node under **Ready for reboot**.
-- The install guide's steps for patching Proxmox VE hosts reboot one host at a time, each once the check passes ([install.md](install.md)).
+- The install guide patches Proxmox VE hosts one at a time, rebooting each once the check passes for it ([install.md](install.md)).
 - A cluster whose API is silent for 10 minutes, with under a majority of control-plane VMs running, gets `ControlPlaneQuorumLost`. An event of that name and a Health item come with it.
 - **Recover…** also works on a cluster that lost quorum, through the interface, the CLI and kubectl. It lists the control planes still running and warns that what only the lost members held is gone.
 - The troubleshooting page covers recovering a cluster that lost two of three control planes, with the kubectl annotation.

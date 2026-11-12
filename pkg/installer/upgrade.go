@@ -465,8 +465,8 @@ func (r *Runner) planAPI(ctx context.Context) (apiPlan, error) {
 		return plan, err
 	}
 	if ca.NeedsTrust && !c.TrustServedCA {
-		return plan, userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate neither this cluster's CA nor this node's trust store vouches for, resting on %s with the SHA-256 fingerprint %s",
-			c.ProxmoxURL, ca.Subject, ca.Fingerprint), "Once you have checked that this is your CA, give it with --proxmox-ca <file>")
+		return plan, userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate from %s (SHA-256 fingerprint %s) that this node does not trust",
+			c.ProxmoxURL, ca.Subject, ca.Fingerprint), "Check that it is your CA, then give it with --proxmox-ca <file>")
 	}
 	plan.ca = ca
 	return plan, nil
@@ -477,7 +477,7 @@ func (r *Runner) checkNewURL(ctx context.Context, newURL string) error {
 	host, port, _ := splitAPI(newURL)
 	if !isAddress(host) {
 		if _, err := r.inCT(ctx, "getent", "hosts", host); err != nil {
-			return userErr("the container cannot resolve any host the Proxmox VE API could be reached at (tried "+host+")",
+			return userErr("the container cannot resolve any name of the Proxmox VE API (tried "+host+")",
 				"Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns")
 		}
 	}
