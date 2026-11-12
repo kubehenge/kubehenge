@@ -11,10 +11,17 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A cluster whose etcd snapshots and backups use different targets is refused at its next change of either. Point both at one target first.
 - Add-on chart and value changes from a new release wait for the cluster's upgrade window, shown on its page and in the Upgrade dialog.
 - Build every node template again before nodes are added or replaced. kubeadm, RKE2 and k3s nodes wait at boot for a chrony that older templates do not set up.
+- A scripted `install.sh` with no terminal, on a node whose own network is static, needs `--ip <address>/<prefix>` and `--gateway`. `--ip dhcp` keeps the old default.
+- Give the roles of cluster users `Pool.Audit`, as the docs' examples now do. Without it, the cluster page and a reboot say the machine has no VM.
+- Export the appliance once it is upgraded. The stored cluster specs open only with its key, and the fleet warns until you do.
 
 ### Highlights
 
-<!-- Write one to five highlights here as bullets, then delete this line. -->
+- **New installer.** `install.sh` starts a full-screen guide that asks DHCP or static, shows a summary before it changes anything and refuses an address already in use.
+- **Upgrade checks.** Removed APIs and weak webhooks are found before a cluster upgrades, and an automatic upgrade waits until you accept what they find.
+- **Outages and recovery.** Machines of a rebooting host are kept for 30 minutes. Appliance export and restore, and recovery of a cluster that lost quorum, are new.
+- **Limited-access sites.** Mirrors for charts, releases and registries, proxies and trusted CAs work for nodes and add-ons.
+- **Networking.** IPv6 and dual-stack clusters, BGP load balancing, SDN VNets, security groups and a node MTU are new.
 
 ### Added
 
@@ -28,9 +35,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A Talos node drained before its upgrade reboot records the event `TalosDrained` on its Cluster.
 - The weekly template build takes a node, bridge and VLAN, and the setup checks that the storage and bridge are on that node.
 - The upgrade dialog warns of deprecated APIs in use that the target version removes and of fail-closed webhooks with under two ready endpoints or all on one node.
-- An automatic upgrade waits, with `AutoUpgradeSkipped` and a warning event, while the checks find something or cannot read the cluster.
+- An automatic upgrade waits, with `AutoUpgradeSkipped` and a warning event, while the checks find something or cannot read the cluster. A deprecated API counts only if called in the last 7 days.
 - `kubehenge cluster upgrade NAME --version V` prints the same list and asks before it upgrades.
-- A deprecated API holds an automatic upgrade only while something called it in the last 7 days.
 - **Upgrade anyway** on the Health page, `kubehenge cluster accept-upgrade` or the annotation `kubehenge.dev/acknowledged-upgrade-findings` lets a skipped automatic upgrade go ahead for one minor version.
 - A cluster on a Kubernetes minor older than any offered for new clusters gets `KubernetesOutOfSupport` and a Health warning, and the appliance's notifications repeat monthly.
 - `UpgradeFindingsNextMinor` and `UpgradeFindingsNextPatch` hold what the next minor or patch upgrade would hit. Changing `spec.topology.version` in kubectl or GitOps prints them as warnings, never refusing.
@@ -50,13 +56,11 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The installer protects the appliance's container, so Proxmox VE refuses to destroy it or restore over it. The docs say how to test a backup without a second appliance.
 - The interface warns administrators when the appliance's address no longer matches its certificate, with the command that renews it.
 - `install.sh --certificate` points this node's Kubernetes entry at the appliance's new address and prints the command for the other nodes.
-- Clusters take search domains with their name servers, so a pod resolves `git` as `git.corp.example`. The create wizard, `network.searchDomains` and the management cluster's settings carry them.
-- The create wizard and the management cluster's setup fill **Search domains** from the Proxmox VE node's own until you edit the field.
-- RKE2 clusters can run their node OS in FIPS mode (`almalinux-10-fips` or `rocky-10-fips`) with `fips: true` in `nodeOS`. Nodes boot with `fips=1` and the `FIPS` crypto policy from their own templates.
-- FIPS mode needs Canal, RKE2's only CNI built for it. k3s and kubeadm refuse it, in the interface, the CLI and kubectl alike.
+- Clusters take search domains with their name servers, so a pod resolves `git` as `git.corp.example`. The wizard, `network.searchDomains` and the management cluster's setup fill them from the node's own.
+- RKE2 clusters can run their node OS in FIPS mode (`almalinux-10-fips` or `rocky-10-fips`) with `fips: true` in `nodeOS`. It needs Canal, and k3s and kubeadm refuse it.
+- FIPS mode stays unsupported until end-to-end tests pass on it ([templates.md](templates.md#fips-mode)).
 - Load balancing has a BGP mode for routed ranges and switches that drop gratuitous ARP, which needs a worker. kube-vip announces the API address over BGP too, except on Talos.
-- BGP sessions can carry a TCP-MD5 password, stored as the cluster's credential and never in a ClusterClass, chart value or `BGPPeer`.
-- In BGP mode the add-on room checks count frr-k8s.
+- BGP sessions can carry a TCP-MD5 password, stored as the cluster's credential and never in a ClusterClass, chart value or `BGPPeer`. The add-on room check counts frr-k8s.
 - Every cluster gets an etcd database limit (`etcd` variable, `quotaGiB` 2 to 8, default 8) and periodic compaction, so etcd no longer refuses writes at the old 2 GiB default.
 - The controller reads each etcd member's database size every 10 minutes for the cluster page. Health warns above 60% of the limit or on a `NOSPACE` alarm.
 - The controller defragments etcd members one at a time, followers first, inside the upgrade window. `kubehenge cluster etcd defrag` and `kubehenge cluster etcd set --quota-gib` act at once.
@@ -68,20 +72,17 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - CIS hardening can be switched on after creation, in **Options** and with `kubehenge cluster update --cis`, but not off. The dialog lists running pods that the `restricted` level would refuse.
 - Every kubeadm, RKE2 and k3s node image runs chrony, checked when the template is built.
 - The Health page warns about a cluster node whose clock is over 30 seconds off the controller's.
-- The cluster page names the budget and pod that hold a drain.
-- A drain that runs out of time names the pods still holding it, and always tries once first, however short its timeout.
+- The cluster page names the budget and pod that hold a drain. A drain that runs out of time names the pods still holding it, and always tries once first.
 - The weekly build makes the kubeadm template of each running minor's newest patch release and of the next minor, and `template_refresh.kubeadm_patches` switches this off.
 - Administrators pin RKE2 and k3s releases from Administration or with `kubehenge release pin`, after seeing the checksum digests. Each pin records who added it.
 - Logs go to up to four more destinations beside Loki (syslog, OTLP over HTTP or another Loki), each with a stored credential and a choice of streams under **Log outputs** in the logs card.
 - The management cluster's setup takes an **MTU** for its VMs' interface, 1280 to 65520, and refuses one above the bridge's.
-- A cluster's `network` variable takes an `mtu` (1280 to 65520) and `queues` (1 to 64) for its nodes' interface, set in Proxmox VE and inside the node.
-- The wizard and the controller refuse an interface MTU above the bridge's.
+- A cluster's `network` variable takes an `mtu` (1280 to 65520) and `queues` (1 to 64) for its nodes' interface. The wizard and the controller refuse an MTU above the bridge's.
 - A failure creating a cluster's Proxmox VE pool, user, token or volume owner records a `ProxmoxObjectsFailed` warning event with the error.
 - `--node` of `kubehenge template create` and `refresh`, and the chart's `templateRefresh.node`, take several nodes. The build runs on the first that is online and whose CPU runs the node OS.
 - The management cluster's setup takes an HTTP(S) proxy for every download it makes ([install.md](install.md#behind-a-proxy)). The saved password is never shown again.
-- Machines on a Proxmox VE node that reboots or is in HA maintenance are not replaced for 30 minutes. The Machines and Health views say why, and the Cluster has the condition `RemediationHeld`.
+- Machines on a Proxmox VE node that reboots or is in HA maintenance are not replaced for 30 minutes (`RemediationHeld`), and a host removed from the Proxmox VE cluster ends the wait.
 - `hostOutageGraceMinutes` sets that wait, 30 by default, 0 for no ceiling, otherwise 5 to 10080. The wizard, **Options** and `kubehenge cluster create` and `update` (`--host-outage-grace-minutes`) set it.
-- A host removed from the Proxmox VE cluster ends the wait at once, since it will not come back.
 - The management cluster's Health says when the controller's token lacks `Sys.Audit` on `/`, which hides HA maintenance and removed hosts.
 - Storage unavailable on a node running a cluster's VMs shows in Health and holds replacement of the machines on it.
 - A machine still deleting after 20 minutes gets the condition `MachineDeletionStalled`, with why.
@@ -95,18 +96,14 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A cluster's network takes up to 8 `ntp` time servers, as **Time servers** in the create wizard, a Cluster or `kubehenge cluster create -f`. Nodes fall back to the hypervisor's clock.
 - A kubeadm, RKE2 or k3s node waits up to 3 minutes for chrony before its bootstrap makes certificates. It stops with `clock not synced` when neither a time server nor the host clock works.
 - The Health page lists a Proxmox VE node that runs the cluster's VMs and whose clock is over 30 seconds from the controller's. Users with `Sys.Audit` on the node see it.
-- A Proxmox VE ticket refused seconds after sign-in reads `Proxmox VE nodes disagree about the time`.
-- An expired release index error says to check the appliance's clock.
+- A Proxmox VE ticket refused seconds after sign-in reads `Proxmox VE nodes disagree about the time`. An expired release index says to check the appliance's clock.
 - The docs list UDP 123 among the nodes' outbound traffic.
 - The create wizard says that volumes on node-local storage stay on one node. The docs cover moving one and the "volume node affinity conflict" error.
 - The create wizard warns before submit when no node it may use has the free memory. A bridge missing on the allowed nodes names the nodes that have it.
 - The volume owner VM is protected in Proxmox VE and says in its description not to delete it. A cluster whose owner VM disappeared gets a `VolumeOwnerMissing` event with the old VM ID.
-- FIPS mode stays unsupported until the end-to-end tests pass on it ([templates.md](templates.md#fips-mode)).
-- A new address of the nodes, management cluster or appliance reaches every running node's firewall through its `kubehenge` IPSet, without replacing a node ([clusters.md](clusters.md#firewall)).
-- The appliance records its own addresses, so one renewed by DHCP reaches the clusters' firewalls within a minute.
+- A new address of the nodes, management cluster or appliance reaches every running node's firewall through its `kubehenge` IPSet, without replacing a node ([clusters.md](clusters.md#firewall)). A DHCP renewal takes a minute.
 - Security groups that would cut the appliance or management cluster off the Proxmox VE API are refused and reported by the pre-flight, with the addresses to add to the IPSet `management`.
-- Clusters can be IPv6-only or dual-stack on Talos, kubeadm, RKE2 and k3s with each of their CNIs, the families chosen at creation and the first one primary.
-- IPv6 and dual-stack are unsupported until an end-to-end test passes on them ([clusters.md](clusters.md#ipv6-and-dual-stack)).
+- Clusters can be IPv6-only or dual-stack on Talos, kubeadm, RKE2 and k3s with each CNI, the families chosen at creation. Unsupported until an end-to-end test passes ([clusters.md](clusters.md#ipv6-and-dual-stack)).
 - An IPv6 cluster gets pod and Service ranges of its own, `fd5e:4b1c:9a20::/56` and `fd5e:4b1c:9a21::/112` unless they clash.
 - Load-balancer addresses, BGP routers and DNS servers can be IPv6, and the API address is of the primary family.
 - An IPv6-only cluster sets BGP's router ID, as its nodes have no IPv4 address to use.
@@ -117,9 +114,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A cluster whose templates use NUMA is refused machines of one core, through the interface, kubectl and the CLI alike.
 - Health warns when an etcd member's write-ahead log syncs have a 99th percentile above 25 ms, on every distribution ([clusters.md](clusters.md#etcd-storage) has a sizing guide).
 - A cluster's `securityGroups` names Proxmox VE security groups and turns on every node interface's firewall ([clusters.md](clusters.md#firewall)).
-- Each VM then accepts the cluster's own traffic, the management cluster's and the appliance's, and the groups accept the rest.
+- Each VM then accepts the cluster's own traffic, the management cluster's and the appliance's, and the groups accept the rest. A group that Proxmox VE lacks is refused.
 - The wizard asks for the groups in the Network step, and **Options** changes them on a running cluster, replacing every node one at a time.
-- The controller refuses a group that Proxmox VE lacks.
 - The management Health page, the create wizard, the pre-flight and `NodesSkipped` name an unreachable node with its status and reason ([Troubleshooting](troubleshooting.md#a-node-is-online-but-not-reachable)).
 - A workload cluster's Health page lists such a node as a warning with its fix, and the fleet and Health tab count it.
 - Nodes take registry mirrors, trusted CAs and a proxy on every distribution and node OS, set in the wizard or on the cluster page, and a change replaces the nodes one at a time ([clusters.md](clusters.md#sites-with-limited-access)).
@@ -156,12 +152,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - `--ip` and `--gateway` take IPv4 only and are checked at once.
 - The installer ranks storages: local block storage, then directories, NFS, CIFS and CephFS, each by free space. It leaves out storages with under 9 GiB free.
 - The installer stops when the cluster has an appliance already. `--upgrade` and `--certificate` on the wrong node name the node that runs the container.
-- The installer stops early and says why, without quorum, with only loopback name servers or with too little room for downloads.
-- A failed download gives curl's exit code and the HTTP status.
-- An option without its value reports `<option> needs a value`. A storage name is matched as written.
+- The installer stops early and says why, without quorum, with only loopback name servers or with too little room for downloads. A failed download gives curl's exit code and the HTTP status.
+- An option without its value reports `<option> needs a value`. A storage name is matched as written, and a `--ctid` another guest has is refused.
 - A container that cannot resolve the API's name makes the installer try the other names and addresses the certificate covers. When none works, it names each one it tried.
 - A refused or timed-out connection to the Proxmox VE API is reported as a failed connection, not an untrusted certificate.
-- A container that gets no DHCP address names `--vlan` and the DHCP server.
 - A VLAN tag on a VNet of a VLAN zone is refused.
 - New management VMs get their MAC addresses from Proxmox VE, so two installs on one network never share them.
 - A failed management cluster run's error carries OpenTofu's diagnostics, not only its exit status.
@@ -173,9 +167,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A refusal from Proxmox VE reads "Proxmox VE refused:" with its own reason, such as "VM is locked (backup)". Only a lost connection, a timeout or a gateway error reads "did not answer".
 - A refused second factor says it may be locked. A refused recovery key says the Proxmox VE cluster may lack quorum.
 - The docs' example roles for cluster users hold `Pool.Audit`. A user without it is told so on the cluster page and on reboot, instead of "The machine has no VM in the cluster's pool".
-- A cluster's etcd snapshots and backups use the same target, as they share one access key.
-- Etcd snapshot schedules use the browser's time zone, like backups.
-- A Proxmox VE backup of every VM leaves cluster nodes out (`backup=0`) and never freezes them, as etcd snapshots and Velero cover them.
+- A Proxmox VE backup of every VM leaves cluster nodes out (`backup=0`) and never freezes them, as etcd snapshots and Velero cover them. Etcd snapshots use the backups' target and the browser's time zone.
 - Prometheus reads every ServiceMonitor, PodMonitor, Probe, ScrapeConfig and PrometheusRule of the cluster, not only the release's.
 - Monitoring installs and upgrades bring the Prometheus Operator's CRDs up to date.
 - Kubehenge no longer installs cert-manager, Kyverno or monitoring over a cluster's own install.
@@ -185,7 +177,6 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A node image refresh or hold starts as soon as the cluster's `upgrades` change, the cluster settles or its class gets a new build, not up to five minutes later.
 - A template build that makes no progress for 10 minutes fails and is tried again, where it held the run for 45 minutes.
 - The add-on room check counts the memory the add-ons' pods request, not only what they use, so their pods no longer stay pending.
-- The installer refuses at once a `--ctid` that another guest has.
 - When Proxmox VE's download server drops the pinned container template, the installer takes the Debian 13 one from the signed template index and checks its signature.
 - A failed management cluster run lists the pods it waited for and why, such as a node without the memory for one.
 - Proxmox VE HA never moves cluster nodes to a host whose CPU is too old for the node OS, such as Rocky Linux 10 without x86-64-v3.
@@ -202,21 +193,19 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - New VMs avoid a Proxmox VE node in HA maintenance. With no node left, the refusal names why.
 - The interface's certificate is valid from an hour before it is issued, so a browser whose clock runs behind accepts it.
 - A cluster's bridge or VNet must exist on a node it may use, or the cluster is refused. Placement leaves out the nodes without it.
-- The interface marks `NodesSkipped` and `NodesLackMemory` as problems while they are true.
 - The default StorageClass sets `discard` and `ssd`, so thin storage takes back the space of deleted data. The controller recreates a cluster's existing class once to apply it.
 - The setup log names the missing `VM.GuestAgent.Audit` when Proxmox VE refuses the management VMs' addresses, then carries on.
 - Placement, template builds and volume owners skip a Proxmox VE node the cluster cannot reach, such as one answering HTTP 596 or taking over 10 seconds.
 - The management VMs get `startup: order=1,up=90`, so they start first after a host boots.
 - The controller refuses an etcd reset to one machine unless the roll stalled or the quorum is lost, for kubectl and GitOps too. The restore status gives the reason.
 - The installer is a full-screen guide on a terminal (`kubehenge install`, started by `install.sh`). It asks DHCP or static, then only what is ambiguous, and shows a summary before it changes anything.
-- The installer's steps show as a live list, and their commands' output goes to `/var/log/kubehenge-install.log`.
-- `install.sh` only downloads and checks the release. Without a terminal, a node whose own network is static needs `--ip` (`--ip dhcp` to keep the old default).
+- A container that gets no DHCP address names `--vlan` and the DHCP server, and the guide offers a static address and retries. A static address that already answers is refused before anything is created.
+- The installer's steps show as a live list, and their commands' output goes to `/var/log/kubehenge-install.log`. An interrupt removes the half-made container, its disks and temporary files.
+- `install.sh` only downloads and checks the release, then starts the guide. A run without a terminal names the missing `--ip` and `--gateway`.
 - New Talos machines clone only baked templates. The template refresh deletes the ones made from the Image Factory once nothing waits on them.
 
 ### Fixed
 
-- The installer asks about the Proxmox VE interface entry on the same terminal as its other questions, also when piped into `sh`.
-- A dropped session or an interrupt, also during `pct create`, removes the installer's half-made container, its disks and temporary files.
 - Cluster nodes start again when their Proxmox VE host reboots, as templates set `onboot` for their clones. Nodes from older templates get it once they are replaced from rebuilt ones.
 - AlmaLinux and Rocky Linux template builds no longer fail in the hours after a kernel release, as the kernel's extra modules come with the kernel itself.
 - Draining a node no longer waits on Kyverno's admission controllers, which run on different nodes.
@@ -228,8 +217,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A sign-in name over 64 characters, realm included, is refused at once with the limit, not with an error that read like an outage.
 - A user name with an `@` of its own, such as an Active Directory principal name, signs in with the chosen realm.
 - Certificates from Sectigo, DigiCert, ZeroSSL, Google Trust Services and step-ca no longer fail with `externalAccountRequired`.
-- Activity no longer misses a kubectl change that the interface first reads after the API server restarted.
-- Activity no longer misses kubectl changes made right after the management cluster's setup.
+- Activity no longer misses a kubectl change that the interface first reads after the API server restarted or right after the management cluster's setup.
 - An appliance whose certificate has expired upgrades again, where its health check rolled back every upgrade.
 - After a restore, the Administration page says that automatic upgrades lost their key, and switching them off and on works again.
 - `install.sh --upgrade --proxmox-url <URL>` moves the appliance to another address of the Proxmox VE API, checked as at install.
@@ -256,22 +244,14 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A removed machine waits at most 60 minutes for its node to drain and 10 for its volumes to detach, where a rollout could stall for ever. `kubehenge cluster timeouts` changes both.
 - Deleting a cluster looks only at the storages it used, on the nodes where they are active, so offline nodes no longer block it. The stall message says what abandoning leaves behind.
 - Deleting a namespace that holds a cluster no longer hangs for hours.
-- A machine's VM is cloned once, also when the management cluster's API server is slow.
-- No stopped second clone is left in a cluster's pool, where it kept a deletion from removing the pool.
-- While Proxmox VE refuses HA rules until its HA groups are migrated, Kubehenge sets `HARulesPending` and tries again after 5 minutes.
-- Kubehenge writes no HA rule while nodes run different major versions, and offers no HA rule placements then.
-- A kubeadm control plane is ready as soon as its first worker joins, not up to 10 minutes later.
-- A kubeadm cluster without workers no longer reports its control planes as not ready.
-- Workers of a Calico or Cilium cluster need room for the pods the CNI runs once per cluster, so workloads are not left pending.
-- The interface asks the same worker memory for the chosen CNI as the controller does.
-- The appliance applies the management cluster while GitHub turns away anonymous downloads, on a closed network too.
-- The release archive carries the module's OpenTofu providers, so the appliance downloads none.
+- A machine's VM is cloned once, also when the management cluster's API server is slow. No stopped second clone is left to keep a deletion from removing the pool.
+- While Proxmox VE refuses HA rules until its HA groups are migrated, Kubehenge sets `HARulesPending` and tries again after 5 minutes. It writes none while nodes run different major versions.
+- A kubeadm control plane is ready as soon as its first worker joins, not up to 10 minutes later. A cluster without workers no longer reports its control planes as not ready.
+- Workers of a Calico or Cilium cluster need room for the pods the CNI runs once per cluster, as the interface and the controller both ask.
+- The release archive carries the module's OpenTofu providers, so the appliance applies the management cluster without downloads, on a closed network too.
 - A template build waits up to an hour for a publisher's checksums and their signature to match, rather than failing at once.
 - After a k3s or RKE2 upgrade, a cluster keeps the admission policy of the distribution's Gateway API chart. Helm could delete it while upgrading the Traefik CRD chart.
-- A container that gets no DHCP address is no longer deleted without a hint. The guide offers a static address and retries, and an unattended run names `--ip <address>/<prefix> --gateway <address>`.
-- A static address that already answers on the network is refused before anything is created.
-- Nodes pull up to three images at once, so a pull stuck on one slow registry no longer holds every later image of the node. Nodes roll to pick this up.
-- kubeadm nodes cancel a stalled image request after five minutes and retry it.
+- Nodes pull up to three images at once, so a pull stuck on a slow registry no longer holds the later ones, and kubeadm nodes cancel a stalled request after five minutes. Nodes roll to pick this up.
 - Links in a release's notes on GitHub open the docs page on kubehenge.dev, not a missing page.
 - Links on kubehenge.dev to a heading with an apostrophe, such as "Back up the management cluster's etcd", reach the heading.
 
