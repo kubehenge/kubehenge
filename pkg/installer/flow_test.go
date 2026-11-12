@@ -120,6 +120,20 @@ func TestUnattendedUntrustedCA(t *testing.T) {
 	}
 }
 
+// A static --ip that answers on the bridge is refused in plain mode before the node is changed.
+func TestPlainRefusesStaticAddressInUse(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	h.exec.fail("arping -c 2 -w 3 -I vmbr0 -D 192.0.2.40", 1)
+	_, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+	if err == nil || !strings.Contains(err.Error(), "192.0.2.40 answers on the network of vmbr0") || !strings.Contains(err.Error(), "--ip") {
+		t.Fatalf("want the in-use refusal, got %v", err)
+	}
+	if h.exec.changed() != 0 {
+		t.Fatalf("the node was changed: %v", h.exec.calls)
+	}
+}
+
 func TestExistingApplianceRefused(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{})

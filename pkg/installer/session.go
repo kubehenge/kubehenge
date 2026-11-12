@@ -66,6 +66,20 @@ func (s *Session) Prepare(ctx context.Context) error {
 	return nil
 }
 
+// CheckStaticFree refuses a static --ip that already answers on the bridge, before anything is
+// created. The terminal installer asks for another address instead.
+func (s *Session) CheckStaticFree(ctx context.Context) error {
+	c := &s.Cfg
+	if c.IP == "" || c.IP == optDHCP || c.IP == optNone || c.Bridge == "" {
+		return nil
+	}
+	addr, _, _ := strings.Cut(c.IP, "/")
+	if s.Node.AddressInUse(ctx, c.Bridge, addr) {
+		return userErr(addr+" answers on the network of "+c.Bridge, "Give a free address with --ip")
+	}
+	return nil
+}
+
 func contains(list []string, want string) bool {
 	return slices.Contains(list, want)
 }

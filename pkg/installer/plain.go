@@ -103,6 +103,9 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	if err := s.detect(ctx); err != nil {
 		return err
 	}
+	if err := s.CheckStaticFree(ctx); err != nil {
+		return err
+	}
 	if err := s.FillStorages(PickBest); err != nil {
 		return err
 	}
