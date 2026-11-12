@@ -1,6 +1,7 @@
 ### Changed
 
-- The installer is a full-screen guide on a terminal (`kubehenge install`, started by `install.sh`). It asks DHCP or static first, then only what is ambiguous, shows a summary to change, and runs a live step list. Its commands' output goes to `/var/log/kubehenge-install.log`.
+- The installer is a full-screen guide on a terminal (`kubehenge install`, started by `install.sh`). It asks DHCP or static, then only what is ambiguous, and shows a summary before it changes anything.
+- The installer's steps show as a live list, and their commands' output goes to `/var/log/kubehenge-install.log`.
 - `install.sh` only downloads and checks the release. Without a terminal, a node whose own network is static needs `--ip` (`--ip dhcp` to keep the old default).
 
 ### Fixed
