@@ -18,8 +18,10 @@ func TestAPIHostsOrdered(t *testing.T) {
 	h := newHarness(t, opts{})
 	s := prepared(t, h, Config{})
 	s.Facts.Candidates = []APICandidate{
-		{Rank: 1, Host: "pve.example.org"}, {Rank: 2, Host: "api.example.org"},
-		{Rank: 3, Host: "pve1.example.org"}, {Rank: 4, Host: "192.0.2.11"},
+		{Rank: 1, Host: "pve.example.org"},
+		{Rank: 2, Host: "api.example.org"},
+		{Rank: 3, Host: "pve1.example.org"},
+		{Rank: 4, Host: "192.0.2.11"},
 	}
 	for chosen, want := range map[string]string{
 		"api.example.org": "api.example.org,pve.example.org,pve1.example.org,192.0.2.11",
@@ -33,9 +35,7 @@ func TestAPIHostsOrdered(t *testing.T) {
 }
 
 // The check of the appliance's realms goes to the container's address whatever the name in the URL
-// resolves to, and never through a proxy.
-//
-//nolint:paralleltest // t.Setenv sets the proxy variables the check must ignore.
+// resolves to, and never through a proxy. It sets the proxy variables, so it does not run in parallel.
 func TestRealmsCheckBypassesProxyAndReachesTheAddress(t *testing.T) {
 	h := newHarness(t, opts{})
 	cert, err := h.node.MakeCertificate("kubehenge", []string{"127.0.0.1"}, "kubehenge.example.org", time.Now())
