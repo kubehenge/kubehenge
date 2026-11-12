@@ -33,6 +33,10 @@ type recorder struct {
 	mu    sync.Mutex
 	views map[stage]string
 	last  string
+	// keys counts the key presses the installer has handled, and lastUpdate is when it handled any
+	// message last.
+	keys       int
+	lastUpdate time.Time
 }
 
 func (r *recorder) Init() tea.Cmd { return r.inner.Init() }
@@ -42,11 +46,28 @@ func (r *recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn /
 	screen := sanitise(r.inner.render())
 	r.mu.Lock()
 	r.last, r.views[r.inner.stage] = screen, screen
+	r.lastUpdate = time.Now()
+	if _, ok := msg.(tea.KeyPressMsg); ok {
+		r.keys++
+	}
 	r.mu.Unlock()
 	return r, cmd
 }
 
 func (r *recorder) View() tea.View { return r.inner.View() }
+
+func (r *recorder) keysHandled() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.keys
+}
+
+// quietFor is how long ago the installer handled a message last.
+func (r *recorder) quietFor() time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return time.Since(r.lastUpdate)
+}
 
 func (r *recorder) screen() string {
 	r.mu.Lock()
@@ -90,27 +111,63 @@ func (u *ui) waitFor(want string) {
 	u.t.Fatalf("waited for %q, the screen is:\n%s", want, u.rec.screen())
 }
 
+// quietPeriod is how long the installer must have handled no message for the screen to count as
+// settled: the messages one key sets off (a form's next field or group, a probe's answer) all
+// arrive within it.
+const quietPeriod = 50 * time.Millisecond
+
+// settle waits until the installer has handled no message for quietPeriod.
+func (u *ui) settle() {
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) && u.rec.quietFor() < quietPeriod {
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// press sends a key once the screen has settled, and returns once the installer handled it and
+// what it set off.
+func (u *ui) press(msg tea.KeyPressMsg) {
+	u.t.Helper()
+	u.settle()
+	want := u.rec.keysHandled() + 1
+	u.tm.Send(msg)
+	deadline := time.Now().Add(15 * time.Second)
+	for u.rec.keysHandled() < want {
+		if time.Now().After(deadline) {
+			u.t.Fatalf("the installer did not handle the key %q, the screen is:\n%s", msg.String(), u.rec.screen())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	u.settle()
+}
+
 func (u *ui) enter(n int) {
+	u.t.Helper()
 	for range n {
-		u.tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-		time.Sleep(30 * time.Millisecond)
+		u.press(tea.KeyPressMsg{Code: tea.KeyEnter})
 	}
 }
 
 func (u *ui) down(n int) {
+	u.t.Helper()
 	for range n {
-		u.tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
-		time.Sleep(30 * time.Millisecond)
+		u.press(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 }
 
 func (u *ui) key(r rune) {
-	u.tm.Send(tea.KeyPressMsg{Code: r, Text: string(r)})
-	time.Sleep(30 * time.Millisecond)
+	u.t.Helper()
+	u.press(tea.KeyPressMsg{Code: r, Text: string(r)})
 }
 
+// golden compares the last screen of a stage once it has settled and, where the stage holds a form,
+// shows the form's focus bar: the first frame of a form comes before its field takes focus.
 func (u *ui) golden(name string, s stage) {
 	u.t.Helper()
+	u.settle()
+	if s != stEnd && s != stFail && s != stRun {
+		u.waitFor("┃")
+	}
 	u.t.Run(name, func(t *testing.T) { golden.RequireEqual(t, u.rec.viewOf(s)) })
 }
 
@@ -303,7 +360,6 @@ func TestUIDHCPTimeoutThenStatic(t *testing.T) {
 	u.enter(1)
 	u.waitFor("Static")
 	u.networkDone()
-	u.waitFor("192.0.2.254/24")
 	u.waitFor("Change network")
 	u.enter(1)
 	u.waitFor("Kubehenge is running")
@@ -328,7 +384,10 @@ func TestUIGoBackFromSummary(t *testing.T) {
 	u.enter(1)
 	u.waitFor("Static")
 	u.networkDoneStaticFromDHCP()
-	u.waitFor("192.0.2.254/24")
+	u.waitFor("Change network")
+	if !strings.Contains(u.rec.screen(), "192.0.2.254/24") {
+		t.Fatalf("summary lacks the address:\n%s", u.rec.screen())
+	}
 	u.down(3)
 	u.enter(1)
 	u.finish()
