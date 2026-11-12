@@ -106,6 +106,33 @@ func asNoAddress(err error, target **NoAddressError) bool {
 	return ok
 }
 
+// The node's default route can leave by another interface than the bridge. Its gateway is then
+// not on the bridge's subnet and is not offered as the container's gateway.
+func TestGatewayPrefillStaysOnTheBridgeSubnet(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	h.exec.on("ip -4 route show default", "default via 198.51.100.1 dev eth0\n")
+	s := h.session(Config{})
+	if err := s.Prepare(context.Background()); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	m := NewModel(s, func(emit func(Event)) *Runner { return h.runner(s, emit) })
+	m.prefillNetwork()
+	if m.a.gateway != "" {
+		t.Fatalf("offered the off-link gateway %q", m.a.gateway)
+	}
+	h.exec.on("ip -4 route show default", "default via 192.0.2.1 dev vmbr0\n")
+	s2 := h.session(Config{})
+	if err := s2.Prepare(context.Background()); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	m2 := NewModel(s2, func(emit func(Event)) *Runner { return h.runner(s2, emit) })
+	m2.prefillNetwork()
+	if m2.a.gateway != "192.0.2.1" {
+		t.Fatalf("gateway on the subnet was %q", m2.a.gateway)
+	}
+}
+
 // Unattended and the API's certificate is vouched for by nothing here: refused with the
 // fingerprint and the flag that settles it, nothing created.
 func TestUnattendedUntrustedCA(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -331,7 +332,10 @@ func (m *Model) prefillNetwork() {
 	if f.NodeDHCP {
 		a.mode = optDHCP
 	}
-	a.address, a.gateway = "", f.Gateway
+	a.address, a.gateway = "", ""
+	if g, err := netip.ParseAddr(f.Gateway); err == nil && (!f.Prefix.IsValid() || f.Prefix.Contains(g)) {
+		a.gateway = f.Gateway
+	}
 	if f.SuggestedIP != "" {
 		a.address = fmt.Sprintf("%s/%d", f.SuggestedIP, f.Prefix.Bits())
 	}
