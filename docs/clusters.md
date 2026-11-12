@@ -661,6 +661,7 @@ When one Proxmox VE node runs more than one control-plane VM, the page warns and
 | **Reboot** | `VM.PowerMgmt` | Has Proxmox VE shut the VM down and start it again. |
 | **Console** | `VM.Console` | Opens the VM's console in Proxmox VE's web interface, signed in there as it asks. |
 | **Boot log** | `Sys.Modify` | Shows what the node logged as it booted, read by the controller, for a node that never joined ([troubleshooting.md](troubleshooting.md#a-nodes-boot-log)). |
+| **Forget…** | `Sys.Modify` | Only for a machine stuck deleting. Releases it and leaves its VM in Proxmox VE ([troubleshooting.md](troubleshooting.md#forgetting-a-machine-stuck-in-deletion)). |
 
 ### Other views
 
@@ -1921,7 +1922,7 @@ kubehenge cluster delete web --yes
 
 - `upgrade` prints the removed APIs and fail-closed webhooks the new version meets and asks before it upgrades. `--yes` skips the question.
 - `accept-upgrade` lets a skipped automatic upgrade go ahead past the findings it lists, for the minor version given.
-- `machine` takes a machine's name, as `get` lists it. `replace`, `keep`, `delete`, `cordon`, `uncordon` and `reboot` do what a machine's actions in the interface do.
+- `machine` takes a machine's name, as `get` lists it. `replace`, `keep`, `delete`, `cordon`, `uncordon`, `reboot` and `forget` do what a machine's actions in the interface do.
 - `get` and `list -o json` print the interface's own description of a cluster for scripts to read.
 
 ## With kubectl

@@ -155,8 +155,8 @@ onBeforeUnmount(() => stop());
                 signed by the Proxmox VE cluster's own CA.
               </li>
               <li>
-                Then, from the interface, an administrator sets up the management cluster: one, three or five Talos
-                Linux VMs running Cluster API and Kubehenge's controller.
+                Then, from the interface, an administrator sets up the management cluster: one or three Talos Linux VMs
+                running Cluster API and Kubehenge's controller.
               </li>
             </ul>
             <p class="readit">
