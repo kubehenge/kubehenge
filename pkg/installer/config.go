@@ -145,7 +145,7 @@ func (c *Config) containerNet() string {
 	}
 	if c.IP6 != "" {
 		fmt.Fprintf(&b, ",ip6=%s", c.IP6)
-		if c.IP6 != optAuto && c.IP6 != "dhcp" && c.Gateway6 != "" {
+		if c.IP6 != optAuto && c.IP6 != optDHCP && c.Gateway6 != "" {
 			fmt.Fprintf(&b, ",gw6=%s", c.Gateway6)
 		}
 	}

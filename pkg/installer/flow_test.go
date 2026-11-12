@@ -17,19 +17,19 @@ func prepared(t *testing.T, h *harness, cfg Config) *Session {
 	return s
 }
 
-func runPlain(t *testing.T, h *harness, cfg Config) (string, error, *Session) {
+func plainOn(t *testing.T, h *harness, cfg Config) (string, *Session, error) { //nolint:gocritic // tests pass a Config literal.
 	t.Helper()
 	s := h.session(cfg)
 	var out bytes.Buffer
 	err := RunPlain(context.Background(), s, func(emit func(Event)) *Runner { return h.runner(s, emit) }, &out)
-	return out.String(), err, s
+	return out.String(), s, err
 }
 
 // The road with DHCP: the node's own network has a DHCP server, so --ip is left out.
 func TestPlainDHCPRoad(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
-	out, err, _ := runPlain(t, h, Config{PVEEntry: "no"})
+	out, _, err := plainOn(t, h, Config{PVEEntry: "no"})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -49,7 +49,7 @@ func TestPlainStaticRoad(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pct config 100", "net0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24,gw=192.0.2.1\n")
-	out, err, _ := runPlain(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", DNS: "192.0.2.53", PVEEntry: "no"})
+	out, _, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", DNS: "192.0.2.53", PVEEntry: "no"})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -65,7 +65,7 @@ func TestPlainStaticRoad(t *testing.T) {
 func TestUnattendedWithoutIPOnNodeWithoutDHCP(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{})
-	out, err, _ := runPlain(t, h, Config{PVEEntry: "no"})
+	out, _, err := plainOn(t, h, Config{PVEEntry: "no"})
 	if err == nil {
 		t.Fatalf("installed without an address:\n%s", out)
 	}
@@ -84,7 +84,7 @@ func TestUnattendedDHCPTimeoutCleansUp(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "")
-	out, err, _ := runPlain(t, h, Config{PVEEntry: "no"})
+	out, _, err := plainOn(t, h, Config{PVEEntry: "no"})
 	var na *NoAddressError
 	if err == nil || !asNoAddress(err, &na) || !na.DHCP {
 		t.Fatalf("want a DHCP address failure, got %v\n%s", err, out)
@@ -111,7 +111,7 @@ func asNoAddress(err error, target **NoAddressError) bool {
 func TestUnattendedUntrustedCA(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{untrusted: true})
-	_, err, _ := runPlain(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+	_, _, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
 	if err == nil || !strings.Contains(err.Error(), "SHA-256 fingerprint") || !strings.Contains(err.Error(), "--proxmox-ca") {
 		t.Fatalf("want the CA refusal, got %v", err)
 	}

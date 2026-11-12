@@ -27,14 +27,14 @@ func userErr(cause, fix string) error { return &UserError{Cause: cause, Fix: fix
 var (
 	dnsNameRE   = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 	dnsListRE   = regexp.MustCompile(`^[0-9A-Fa-f.:]+(,[0-9A-Fa-f.:]+)*$`)
-	apiURLRE    = regexp.MustCompile(`^https://[A-Za-z0-9.:\[-]+\]?(:[0-9]+)?$`)
+	apiURLRE    = regexp.MustCompile(`^https://[A-Za-z0-9.:\[-]+\]?(:\d+)?$`)
 	hostnameRE  = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
-	dottedIPv4  = regexp.MustCompile(`^([0-9]{1,3}\.){3}[0-9]{1,3}$`)
+	dottedIPv4  = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
 	colonHexRE  = regexp.MustCompile(`^[0-9A-Fa-f:]+$`)
-	ipv6TailRE  = regexp.MustCompile(`^[0-9A-Fa-f:]*:[0-9A-Fa-f:]*(:[0-9]{1,3}(\.[0-9]{1,3}){3})?$`)
+	ipv6TailRE  = regexp.MustCompile(`^[0-9A-Fa-f:]*:[0-9A-Fa-f:]*(:\d{1,3}(\.\d{1,3}){3})?$`)
 	maxPrefix4  = 32
 	maxPrefix6  = 128
-	digitsOnlyR = regexp.MustCompile(`^[0-9]+$`)
+	digitsOnlyR = regexp.MustCompile(`^\d+$`)
 )
 
 // IsIPv4 reports whether s is a dotted IPv4 address.
@@ -85,7 +85,7 @@ func IsIPv6CIDR(s string) bool {
 // when given.
 func IsProxyRange(s string) bool {
 	addr, prefix, hasPrefix := strings.Cut(s, "/")
-	bits := 0
+	var bits int
 	switch {
 	case IsIPv4(addr):
 		bits = maxPrefix4
@@ -116,32 +116,7 @@ func ValidateIPv4(s string) error {
 // Validate checks every value the options give, as the shell installer did, before anything is
 // detected or changed.
 func (c *Config) Validate() error {
-	checks := []struct {
-		bad       bool
-		cause, to string
-	}{
-		{c.Name != "" && !dnsNameRE.MatchString(c.Name), "--name is a DNS name such as kubehenge.example.org", ""},
-		{c.DNS != "" && !dnsListRE.MatchString(c.DNS), "--dns is a comma-separated list of name server addresses, such as 192.0.2.53,192.0.2.54", ""},
-		{c.ProxmoxURL != "" && !apiURLRE.MatchString(c.ProxmoxURL), "--proxmox-url is the Proxmox VE API's https:// URL, such as https://pve.example.org:8006", ""},
-		{c.ProxmoxCA != "" && c.Insecure, "--proxmox-ca and --proxmox-insecure exclude each other", ""},
-		{c.Insecure && c.Certificate, "--proxmox-insecure goes with an install or --upgrade", ""},
-		{len(c.TrustedProxies) > 0 && c.Certificate, "--trusted-proxy goes with an install or --upgrade", ""},
-		{c.NoTrustedProxy && len(c.TrustedProxies) > 0, "--trusted-proxy and --no-trusted-proxy exclude each other", ""},
-		{c.NoTrustedProxy && !c.Upgrade, "--no-trusted-proxy goes with --upgrade", ""},
-		{c.IP != "" && c.IP != optDHCP && c.IP != "none" && !IsIPv4CIDR(c.IP), "--ip is dhcp or an IPv4 address with its prefix length, such as 192.0.2.5/24, or none on an IPv6-only network", ""},
-		{c.Gateway != "" && !IsIPv4(c.Gateway), "--gateway is an IPv4 address, such as 192.0.2.1", ""},
-		{c.IP6 != "" && c.IP6 != optAuto && c.IP6 != "dhcp" && !IsIPv6CIDR(c.IP6), "--ip6 is auto, dhcp or an IPv6 address with its prefix length, such as 2001:db8::5/64", ""},
-		{c.Gateway6 != "" && !IsIPv6(c.Gateway6), "--gateway6 is an IPv6 address, such as 2001:db8::1", ""},
-		{c.IP == "none" && c.IP6 == "", "--ip none needs --ip6, as the container needs an address", ""},
-		{c.IP == "none" && c.Gateway != "", "--gateway goes with a static --ip", ""},
-		{c.Gateway6 != "" && (c.IP6 == "" || c.IP6 == "auto" || c.IP6 == "dhcp"), "--gateway6 goes with a static --ip6", ""},
-		{c.VLAN != "" && !inRange(c.VLAN, 1, vlanMax), "--vlan is a VLAN tag from 1 to 4094", ""},
-		{c.MTU != "" && !inRange(c.MTU, mtuMin, mtuMax), "--mtu is a number of bytes from 576 to 65535", ""},
-		{c.NoName && (!c.Certificate || c.Name != ""), "--no-name goes with --certificate and without --name", ""},
-		{c.Hostname != "" && !hostnameRE.MatchString(c.Hostname), "--hostname is a host name such as kubehenge", ""},
-		{(c.CertFile != "") != (c.KeyFile != ""), "--cert and --key name a readable PEM certificate and its key", ""},
-	}
-	for _, check := range checks {
+	for _, check := range append(c.generalChecks(), c.networkChecks()...) {
 		if check.bad {
 			return userErr(check.cause, check.to)
 		}
@@ -155,4 +130,41 @@ func (c *Config) Validate() error {
 		return userErr("--release needs --sha256", "")
 	}
 	return nil
+}
+
+type optionCheck struct {
+	bad       bool
+	cause, to string
+}
+
+// generalChecks are the checks of the options that do not concern the container's network.
+func (c *Config) generalChecks() []optionCheck {
+	return []optionCheck{
+		{c.Name != "" && !dnsNameRE.MatchString(c.Name), "--name is a DNS name such as kubehenge.example.org", ""},
+		{c.DNS != "" && !dnsListRE.MatchString(c.DNS), "--dns is a comma-separated list of name server addresses, such as 192.0.2.53,192.0.2.54", ""},
+		{c.ProxmoxURL != "" && !apiURLRE.MatchString(c.ProxmoxURL), "--proxmox-url is the Proxmox VE API's https:// URL, such as https://pve.example.org:8006", ""},
+		{c.ProxmoxCA != "" && c.Insecure, "--proxmox-ca and --proxmox-insecure exclude each other", ""},
+		{c.Insecure && c.Certificate, "--proxmox-insecure goes with an install or --upgrade", ""},
+		{len(c.TrustedProxies) > 0 && c.Certificate, "--trusted-proxy goes with an install or --upgrade", ""},
+		{c.NoTrustedProxy && len(c.TrustedProxies) > 0, "--trusted-proxy and --no-trusted-proxy exclude each other", ""},
+		{c.NoTrustedProxy && !c.Upgrade, "--no-trusted-proxy goes with --upgrade", ""},
+		{c.NoName && (!c.Certificate || c.Name != ""), "--no-name goes with --certificate and without --name", ""},
+		{c.Hostname != "" && !hostnameRE.MatchString(c.Hostname), "--hostname is a host name such as kubehenge", ""},
+		{(c.CertFile != "") != (c.KeyFile != ""), "--cert and --key name a readable PEM certificate and its key", ""},
+	}
+}
+
+// networkChecks are the checks of the container's network options.
+func (c *Config) networkChecks() []optionCheck {
+	return []optionCheck{
+		{c.IP != "" && c.IP != optDHCP && c.IP != optNone && !IsIPv4CIDR(c.IP), "--ip is dhcp or an IPv4 address with its prefix length, such as 192.0.2.5/24, or none on an IPv6-only network", ""},
+		{c.Gateway != "" && !IsIPv4(c.Gateway), "--gateway is an IPv4 address, such as 192.0.2.1", ""},
+		{c.IP6 != "" && c.IP6 != optAuto && c.IP6 != optDHCP && !IsIPv6CIDR(c.IP6), "--ip6 is auto, dhcp or an IPv6 address with its prefix length, such as 2001:db8::5/64", ""},
+		{c.Gateway6 != "" && !IsIPv6(c.Gateway6), "--gateway6 is an IPv6 address, such as 2001:db8::1", ""},
+		{c.IP == optNone && c.IP6 == "", "--ip none needs --ip6, as the container needs an address", ""},
+		{c.IP == optNone && c.Gateway != "", "--gateway goes with a static --ip", ""},
+		{c.Gateway6 != "" && (c.IP6 == "" || c.IP6 == optAuto || c.IP6 == optDHCP), "--gateway6 goes with a static --ip6", ""},
+		{c.VLAN != "" && !inRange(c.VLAN, 1, vlanMax), "--vlan is a VLAN tag from 1 to 4094", ""},
+		{c.MTU != "" && !inRange(c.MTU, mtuMin, mtuMax), "--mtu is a number of bytes from 576 to 65535", ""},
+	}
 }

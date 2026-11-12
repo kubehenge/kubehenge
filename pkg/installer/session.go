@@ -98,9 +98,18 @@ func (s *Session) Questions() Needs {
 	}
 }
 
-// FillStorages sets each storage that needs no question: the only one that fits, or with fill the
-// best ranked.
-func (s *Session) FillStorages(fill bool) error {
+// Ties says what a choice between equal options does: wait for a question, or take the best ranked.
+type Ties int
+
+// What a tie does.
+const (
+	AskTies Ties = iota
+	PickBest
+)
+
+// FillStorages sets each storage that needs no question: the only one that fits, or with PickBest
+// the best ranked.
+func (s *Session) FillStorages(ties Ties) error {
 	c := &s.Cfg
 	if c.Storage == "" {
 		list := s.Facts.RootStorages
@@ -110,9 +119,9 @@ func (s *Session) FillStorages(fill bool) error {
 				return userErr("no storage that takes container disks has the 9 GiB free that the appliance needs: "+s.Facts.ShortRoot, "Free space, or name another with --storage")
 			}
 			return userErr("no enabled, active storage here takes container disks", "Enable one, or name one with --storage")
-		case len(list) == 1 || fill:
+		case len(list) == 1 || ties == PickBest:
 			c.Storage = list[0].Name
-			s.notice("storage %s (%s) for the appliance's disks, %s", list[0].Name, list[0].Type, why(len(list)))
+			s.noticef("storage %s (%s) for the appliance's disks, %s", list[0].Name, list[0].Type, why(len(list)))
 		}
 	} else if !hasStorage(s.Facts.RootStorages, c.Storage) {
 		return userErr(fmt.Sprintf("storage %s is disabled, inactive, takes no container disks here or has under 9 GiB free for them", c.Storage), "Name another with --storage")
@@ -124,9 +133,9 @@ func (s *Session) FillStorages(fill bool) error {
 			c.TemplateStorage = s.Facts.TemplateHeld
 		case len(list) == 0:
 			return userErr("no enabled, active storage here takes container templates", "Enable one, or name one with --template-storage")
-		case len(list) == 1 || fill:
+		case len(list) == 1 || ties == PickBest:
 			c.TemplateStorage = list[0].Name
-			s.notice("storage %s (%s) for the container template, %s", list[0].Name, list[0].Type, why(len(list)))
+			s.noticef("storage %s (%s) for the container template, %s", list[0].Name, list[0].Type, why(len(list)))
 		}
 	} else if !hasStorage(s.Facts.TemplateStorages, c.TemplateStorage) {
 		return userErr(fmt.Sprintf("storage %s is disabled, inactive or takes no container templates here", c.TemplateStorage), "Name another with --template-storage")
@@ -150,25 +159,14 @@ func hasStorage(list []Storage, name string) bool {
 	return false
 }
 
-// ResolveAPI settles the Proxmox VE API's address and the CA it is checked against. With fill, a
-// tie goes to the best-ranked candidate. It returns early when the user must pick the address.
-func (s *Session) ResolveAPI(ctx context.Context, fill bool) error {
+// ResolveAPI settles the Proxmox VE API's address and the CA it is checked against. With PickBest,
+// a tie goes to the best-ranked candidate. It returns early when the user must pick the address.
+func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 	c := &s.Cfg
 	if c.ProxmoxURL == "" {
-		if c.APIHost == "" {
-			cands := s.Facts.Candidates
-			if len(cands) == 0 {
-				_, file, _ := s.Node.servedCertificate()
-				return userErr(fmt.Sprintf("Proxmox VE's certificate (%s) is valid for no name or address of this cluster's nodes", file),
-					"Give the URL the appliance and the clusters reach the API at, by a name or address the certificate is valid for, with --proxmox-url")
-			}
-			if len(TiedCandidates(cands)) > 1 && !fill {
-				return nil
-			}
-			c.APIHost = cands[0].Host
-			if len(cands) > 1 {
-				s.notice("the Proxmox VE API at %s, its certificate is also valid for %s", c.APIHost, joinHosts(cands[1:]))
-			}
+		asked, err := s.pickAPIHost(ties)
+		if err != nil || asked {
+			return err
 		}
 		c.ProxmoxURL = APIURL(c.APIHost)
 	}
@@ -178,12 +176,35 @@ func (s *Session) ResolveAPI(ctx context.Context, fill bool) error {
 	}
 	s.CA = ca
 	if ca.Kind == CAInsecure {
-		s.notice("the Proxmox VE API at %s is reached without checking its certificate", c.ProxmoxURL)
+		s.noticef("the Proxmox VE API at %s is reached without checking its certificate", c.ProxmoxURL)
 	}
 	if ca.Kind == CASystem {
-		s.notice("the Proxmox VE API's certificate rests on %s in this node's trust store", ca.Subject)
+		s.noticef("the Proxmox VE API's certificate rests on %s in this node's trust store", ca.Subject)
 	}
 	return nil
+}
+
+// pickAPIHost sets the API host from the candidates. It reports true when a tie is left for the
+// user to settle.
+func (s *Session) pickAPIHost(ties Ties) (bool, error) {
+	c := &s.Cfg
+	if c.APIHost != "" {
+		return false, nil
+	}
+	cands := s.Facts.Candidates
+	if len(cands) == 0 {
+		_, file, _ := s.Node.servedCertificate()
+		return false, userErr(fmt.Sprintf("Proxmox VE's certificate (%s) is valid for no name or address of this cluster's nodes", file),
+			"Give the URL the appliance and the clusters reach the API at, by a name or address the certificate is valid for, with --proxmox-url")
+	}
+	if len(TiedCandidates(cands)) > 1 && ties != PickBest {
+		return true, nil
+	}
+	c.APIHost = cands[0].Host
+	if len(cands) > 1 {
+		s.noticef("the Proxmox VE API at %s, its certificate is also valid for %s", c.APIHost, joinHosts(cands[1:]))
+	}
+	return false, nil
 }
 
 func joinHosts(list []APICandidate) string {
@@ -218,7 +239,7 @@ func (s *Session) UnattendedCheck() error {
 	return nil
 }
 
-func (s *Session) notice(format string, args ...any) {
+func (s *Session) noticef(format string, args ...any) {
 	s.Notices = append(s.Notices, fmt.Sprintf(format, args...))
 }
 

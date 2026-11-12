@@ -555,7 +555,7 @@ func (r *Runner) stepNetwork(ctx context.Context) error {
 			"Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns")
 	}
 	if reachable != hosts[0] {
-		r.S.notice("the container cannot resolve %s, so the appliance and the clusters reach the Proxmox VE API at %s", hosts[0], reachable)
+		r.S.noticef("the container cannot resolve %s, so the appliance and the clusters reach the Proxmox VE API at %s", hosts[0], reachable)
 		c.ProxmoxURL = APIURL(reachable)
 	}
 	_, port, _ := splitAPI(c.ProxmoxURL)

@@ -304,7 +304,7 @@ func TestCleanupAfterCreate(t *testing.T) {
 func TestPlainSuccessKeepsTheContainer(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
-	if out, err, _ := runPlain(t, h, Config{PVEEntry: "no"}); err != nil {
+	if out, _, err := plainOn(t, h, Config{PVEEntry: "no"}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	if h.exec.count("pct destroy") != 0 {
@@ -427,12 +427,12 @@ nfs-down nfs inactive 9 9 900000000 1%
 	if s.Cfg.Storage != "" || !s.Questions().Storage {
 		t.Error("a tie must be asked")
 	}
-	if err := s.FillStorages(true); err != nil || s.Cfg.Storage != "ceph" || !strings.Contains(strings.Join(s.Notices, "\n"), "the best of 6 by type and free space") {
+	if err := s.FillStorages(PickBest); err != nil || s.Cfg.Storage != "ceph" || !strings.Contains(strings.Join(s.Notices, "\n"), "the best of 6 by type and free space") {
 		t.Errorf("unattended picks the best: %v %q %v", err, s.Cfg.Storage, s.Notices)
 	}
 	named := h.session(Config{Storage: "lvm-small"})
 	named.Facts = s.Facts
-	if err := named.FillStorages(false); err == nil || !strings.Contains(err.Error(), "storage lvm-small is disabled, inactive, takes no container disks here or has under 9 GiB free") {
+	if err := named.FillStorages(AskTies); err == nil || !strings.Contains(err.Error(), "storage lvm-small is disabled, inactive, takes no container disks here or has under 9 GiB free") {
 		t.Errorf("a named storage without room: %v", err)
 	}
 }
@@ -445,7 +445,7 @@ func TestNoStorageFits(t *testing.T) {
 	if err := s.Prepare(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	err := s.FillStorages(true)
+	err := s.FillStorages(PickBest)
 	if err == nil || !strings.Contains(err.Error(), "lvm-small (4.8 GiB free)") {
 		t.Fatalf("got %v", err)
 	}
@@ -560,7 +560,7 @@ func TestRefusedBridgeAndLoopbackDNS(t *testing.T) {
 		t.Errorf("a bond: %v", err)
 	}
 	writeTestFile(t, filepath.Join(h.root, resolvConf), []byte("nameserver 127.0.0.53\n"))
-	_, perr, _ := runPlain(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+	_, _, perr := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
 	if perr == nil || !strings.Contains(perr.Error(), "only name servers on this node's loopback") {
 		t.Errorf("loopback resolvers: %v", perr)
 	}

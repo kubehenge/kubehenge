@@ -14,6 +14,16 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// The actions of the summary.
+const (
+	actInstall = "install"
+	actNetwork = "network"
+	actStorage = "storage"
+	actAPI     = "api"
+	actPVE     = "pve"
+	actCancel  = "cancel"
+)
+
 type stage int
 
 const (
@@ -85,7 +95,7 @@ type Model struct {
 	S         *Session
 	NewRunner func(emit func(Event)) *Runner
 
-	ctx    context.Context
+	ctx    context.Context //nolint:containedctx // Bubble Tea runs commands outside Update, so the model carries the run's context.
 	cancel context.CancelFunc
 	stage  stage
 	width  int
@@ -150,63 +160,88 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.bar.SetWidth(barWidth)
 	case tea.KeyPressMsg:
-		switch {
-		case msg.String() == "ctrl+c" && m.stage == stRun:
-			m.cancel()
-			return m, nil
-		case msg.String() == "ctrl+c":
-			return m.leave()
-		case m.stage == stEnd || m.stage == stFail:
-			return m, tea.Quit
+		if cmd, handled := m.onKey(msg); handled {
+			return m, cmd
 		}
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		cmds = append(cmds, cmd)
 	case detectedMsg:
-		if msg.err != nil {
-			return m.failWith(msg.err)
-		}
-		return m, m.next()
+		return m.afterDetect(msg.err)
 	case resolvedMsg:
-		if msg.err != nil {
-			return m.failWith(msg.err)
-		}
-		return m, m.next()
+		return m.afterDetect(msg.err)
 	case probeMsg:
-		if msg.used {
-			m.netErr = msg.address + " answers on this network"
-			m.S.Cfg.IP = ""
-			m.stage = stNetwork
-			return m, m.networkForm()
-		}
-		m.netErr = ""
-		return m, m.next()
+		return m.afterProbe(msg)
 	case eventMsg:
 		m.onEvent(Event(msg))
-		return m, m.wait()
+		cmd := m.wait()
+		return m, cmd
 	case doneMsg:
 		return m.onDone(msg)
 	case cleanedMsg:
 		return m.afterCleanup()
 	}
 	if m.form != nil {
-		f, cmd := m.form.Update(msg)
-		if form, ok := f.(*huh.Form); ok {
-			m.form = form
-		}
-		cmds = append(cmds, cmd)
-		switch m.form.State {
-		case huh.StateCompleted:
-			m.form = nil
-			cmds = append(cmds, m.formDone())
-		case huh.StateAborted:
-			m.form = nil
-			return m.leave()
-		case huh.StateNormal:
-		}
+		cmds = append(cmds, m.updateForm(msg))
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// onKey handles the keys that act on the whole installer, and reports whether it did.
+func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	switch {
+	case msg.String() == "ctrl+c" && m.stage == stRun:
+		m.cancel()
+		return nil, true
+	case msg.String() == "ctrl+c":
+		return m.leave(), true
+	case m.stage == stEnd || m.stage == stFail:
+		return tea.Quit, true
+	}
+	return nil, false
+}
+
+// afterDetect opens the first question once the detection or a resolution ended.
+func (m *Model) afterDetect(err error) (*Model, tea.Cmd) {
+	if err != nil {
+		return m.failWith(err)
+	}
+	cmd := m.next()
+	return m, cmd
+}
+
+// afterProbe asks for another address when the one typed answers on the network.
+func (m *Model) afterProbe(msg probeMsg) (*Model, tea.Cmd) {
+	if msg.used {
+		m.netErr = msg.address + " answers on this network"
+		m.S.Cfg.IP = ""
+		m.stage = stNetwork
+		cmd := m.networkForm()
+		return m, cmd
+	}
+	m.netErr = ""
+	cmd := m.next()
+	return m, cmd
+}
+
+// updateForm passes a message to the open form and acts on its end.
+func (m *Model) updateForm(msg tea.Msg) tea.Cmd {
+	f, cmd := m.form.Update(msg)
+	if form, ok := f.(*huh.Form); ok {
+		m.form = form
+	}
+	cmds := []tea.Cmd{cmd}
+	switch m.form.State {
+	case huh.StateCompleted:
+		m.form = nil
+		cmds = append(cmds, m.formDone())
+	case huh.StateAborted:
+		m.form = nil
+		return m.leave()
+	case huh.StateNormal:
+	}
+	return tea.Batch(cmds...)
 }
 
 // View implements tea.Model.
@@ -222,13 +257,13 @@ func (m *Model) startForm(groups ...*huh.Group) tea.Cmd {
 	return m.form.Init()
 }
 
-func (m *Model) leave() (tea.Model, tea.Cmd) {
+func (m *Model) leave() tea.Cmd {
 	m.cancelled = true
 	m.cancel()
-	return m, tea.Quit
+	return tea.Quit
 }
 
-func (m *Model) failWith(err error) (tea.Model, tea.Cmd) {
+func (m *Model) failWith(err error) (*Model, tea.Cmd) {
 	m.fail, m.stage, m.form = err, stFail, nil
 	return m, nil
 }
@@ -252,80 +287,94 @@ func (m *Model) next() tea.Cmd {
 			Description("A Kubernetes button in this node's interface").Affirmative("Add").Negative("Skip").Value(&m.a.pve)))
 	default:
 		m.stage = stSummary
-		m.a.action = stepInstallName
+		m.a.action = actInstall
 		return m.summaryForm()
 	}
 }
 
 func (m *Model) networkForm() tea.Cmd {
 	f, c, a := m.S.Facts, &m.S.Cfg, &m.a
-	if a.mode == "" {
-		a.mode = optStatic
-		if f.NodeDHCP {
-			a.mode = optDHCP
-		}
-		a.address, a.gateway = "", f.Gateway
-		if f.SuggestedIP != "" {
-			a.address = fmt.Sprintf("%s/%d", f.SuggestedIP, f.Prefix.Bits())
-		}
-		if !f.LoopbackDNSOnly {
-			a.dns = strings.Join(f.DNS, ",")
-		}
-		a.ip6, a.vlan, a.mtu = c.IP6, c.VLAN, c.MTU
-		a.bridge = c.Bridge
-	}
+	m.prefillNetwork()
 	modeGroup := []huh.Field{huh.NewSelect[string]().Title("Address").
-		Options(huh.NewOption("DHCP", "dhcp"), huh.NewOption("Static", "static")).Value(&a.mode)}
+		Options(huh.NewOption("DHCP", optDHCP), huh.NewOption("Static", optStatic)).Value(&a.mode)}
 	if c.Bridge == "" {
 		opts := huh.NewOptions(f.Bridges...)
 		modeGroup = append(modeGroup, huh.NewSelect[string]().Title("Bridge").Options(opts...).Value(&a.bridge))
 	}
 	dnsField := func() *huh.Input {
-		return huh.NewInput().Title("DNS").Placeholder("192.0.2.53,192.0.2.54").Value(&a.dns).Validate(func(s string) error {
-			if s != "" && !dnsListRE.MatchString(s) {
-				return errors.New("comma-separated name server addresses")
-			}
-			if s == "" && f.LoopbackDNSOnly {
-				return errors.New("required, this node's resolver is on loopback")
-			}
-			return nil
-		})
+		return huh.NewInput().Title("DNS").Placeholder("192.0.2.53,192.0.2.54").Value(&a.dns).Validate(validateDNS(f.LoopbackDNSOnly))
 	}
 	static := huh.NewGroup(
 		huh.NewInput().Title("IPv4 address").Placeholder("192.0.2.40/24").Value(&a.address).Validate(ValidateAddressCIDR),
 		huh.NewInput().Title("Gateway").Placeholder("192.0.2.1").Value(&a.gateway).Validate(ValidateIPv4),
 		dnsField(),
-	).WithHideFunc(func() bool { return a.mode != "static" })
-	dhcpDNS := huh.NewGroup(dnsField()).WithHideFunc(func() bool { return a.mode != "dhcp" || !f.LoopbackDNSOnly })
+	).WithHideFunc(func() bool { return a.mode != optStatic })
+	dhcpDNS := huh.NewGroup(dnsField()).WithHideFunc(func() bool { return a.mode != optDHCP || !f.LoopbackDNSOnly })
 	more := huh.NewGroup(huh.NewConfirm().Title("Advanced").Description("IPv6, bridge, VLAN, MTU").Affirmative("Show").Negative("Skip").Value(&a.more))
 	adv := huh.NewGroup(
-		huh.NewInput().Title("IPv6").Placeholder("auto, dhcp or 2001:db8::40/64").Value(&a.ip6).Validate(func(s string) error {
-			if s != "" && s != optAuto && s != "dhcp" && !IsIPv6CIDR(s) {
-				return errors.New("auto, dhcp or an address with its prefix")
-			}
-			return nil
-		}),
-		huh.NewInput().Title("IPv6 gateway").Value(&a.gateway6).Validate(func(s string) error {
-			if s != "" && !IsIPv6(s) {
-				return errors.New("an IPv6 address")
-			}
-			return nil
-		}),
+		huh.NewInput().Title("IPv6").Placeholder("auto, dhcp or 2001:db8::40/64").Value(&a.ip6).Validate(validateIPv6),
+		huh.NewInput().Title("IPv6 gateway").Value(&a.gateway6).Validate(validateIPv6Gateway),
 		huh.NewSelect[string]().Title("Bridge").Options(huh.NewOptions(f.Bridges...)...).Value(&a.bridge),
-		huh.NewInput().Title("VLAN").Placeholder("none").Value(&a.vlan).Validate(func(s string) error {
-			if s != "" && !inRange(s, 1, vlanMax) {
-				return errors.New("1 to 4094")
-			}
-			return nil
-		}),
-		huh.NewInput().Title("MTU").Placeholder("bridge default").Value(&a.mtu).Validate(func(s string) error {
-			if s != "" && !inRange(s, mtuMin, mtuMax) {
-				return errors.New("576 to 65535")
-			}
-			return nil
-		}),
+		huh.NewInput().Title("VLAN").Placeholder("none").Value(&a.vlan).Validate(validateRange("1 to 4094", 1, vlanMax)),
+		huh.NewInput().Title("MTU").Placeholder("bridge default").Value(&a.mtu).Validate(validateRange("576 to 65535", mtuMin, mtuMax)),
 	).WithHideFunc(func() bool { return !a.more })
 	return m.startForm(huh.NewGroup(modeGroup...), static, dhcpDNS, more, adv)
+}
+
+// prefillNetwork fills the network answers from what was detected, the first time.
+func (m *Model) prefillNetwork() {
+	f, c, a := m.S.Facts, &m.S.Cfg, &m.a
+	if a.mode != "" {
+		return
+	}
+	a.mode = optStatic
+	if f.NodeDHCP {
+		a.mode = optDHCP
+	}
+	a.address, a.gateway = "", f.Gateway
+	if f.SuggestedIP != "" {
+		a.address = fmt.Sprintf("%s/%d", f.SuggestedIP, f.Prefix.Bits())
+	}
+	if !f.LoopbackDNSOnly {
+		a.dns = strings.Join(f.DNS, ",")
+	}
+	a.ip6, a.vlan, a.mtu = c.IP6, c.VLAN, c.MTU
+	a.bridge = c.Bridge
+}
+
+func validateDNS(loopbackOnly bool) func(string) error {
+	return func(s string) error {
+		if s != "" && !dnsListRE.MatchString(s) {
+			return errors.New("comma-separated name server addresses")
+		}
+		if s == "" && loopbackOnly {
+			return errors.New("required, this node's resolver is on loopback")
+		}
+		return nil
+	}
+}
+
+func validateIPv6(s string) error {
+	if s != "" && s != optAuto && s != optDHCP && !IsIPv6CIDR(s) {
+		return errors.New("auto, dhcp or an address with its prefix")
+	}
+	return nil
+}
+
+func validateIPv6Gateway(s string) error {
+	if s != "" && !IsIPv6(s) {
+		return errors.New("an IPv6 address")
+	}
+	return nil
+}
+
+func validateRange(message string, low, high int) func(string) error {
+	return func(s string) error {
+		if s != "" && !inRange(s, low, high) {
+			return errors.New(message)
+		}
+		return nil
+	}
 }
 
 func (m *Model) choicesForm(n Needs) tea.Cmd {
@@ -367,15 +416,59 @@ func (m *Model) trustForm() tea.Cmd {
 }
 
 func (m *Model) summaryForm() tea.Cmd {
-	opts := []huh.Option[string]{huh.NewOption("Install", "install"), huh.NewOption("Change network", "network")}
+	opts := []huh.Option[string]{huh.NewOption("Install", actInstall), huh.NewOption("Change network", actNetwork)}
 	if len(m.S.Facts.RootStorages) > 1 || len(m.S.Facts.TemplateStorages) > 1 {
-		opts = append(opts, huh.NewOption("Change storage", "storage"))
+		opts = append(opts, huh.NewOption("Change storage", actStorage))
 	}
 	if !m.urlGiven && len(TiedCandidates(m.S.Facts.Candidates)) > 1 {
-		opts = append(opts, huh.NewOption("Change API address", "api"))
+		opts = append(opts, huh.NewOption("Change API address", actAPI))
 	}
-	opts = append(opts, huh.NewOption("Change Proxmox VE entry", "pve"), huh.NewOption("Cancel", "cancel"))
+	opts = append(opts, huh.NewOption("Change Proxmox VE entry", actPVE), huh.NewOption("Cancel", actCancel))
 	return m.startForm(huh.NewGroup(huh.NewSelect[string]().Title("Next").Options(opts...).Value(&m.a.action)))
+}
+
+// networkDone applies the network answers and probes the typed address.
+func (m *Model) networkDone() tea.Cmd {
+	c, a := &m.S.Cfg, &m.a
+	if a.mode == optDHCP {
+		c.IP, c.Gateway = optDHCP, ""
+	} else {
+		c.IP, c.Gateway = a.address, a.gateway
+	}
+	if a.dns != "" {
+		c.DNS = a.dns
+	}
+	c.IP6, c.Gateway6, c.VLAN, c.MTU = a.ip6, a.gateway6, a.vlan, a.mtu
+	bridge := c.Bridge
+	if a.bridge != "" {
+		bridge = a.bridge
+	}
+	return func() tea.Msg {
+		if bridge != c.Bridge || c.Bridge == "" {
+			m.S.RefreshForBridge(m.ctx, bridge)
+		}
+		if a.mode == optStatic {
+			addr, _, _ := strings.Cut(c.IP, "/")
+			return probeMsg{address: addr, used: m.S.Node.AddressInUse(m.ctx, c.Bridge, addr)}
+		}
+		return probeMsg{}
+	}
+}
+
+// choicesDone applies the storage and API address answers.
+func (m *Model) choicesDone() tea.Cmd {
+	c, a := &m.S.Cfg, &m.a
+	if a.storage != "" {
+		c.Storage = a.storage
+	}
+	if a.templateStorage != "" {
+		c.TemplateStorage = a.templateStorage
+	}
+	if a.apiHost != "" {
+		c.APIHost = a.apiHost
+		return m.resolve()
+	}
+	return m.next()
 }
 
 // formDone applies a finished form and moves on.
@@ -383,41 +476,9 @@ func (m *Model) formDone() tea.Cmd {
 	c, a := &m.S.Cfg, &m.a
 	switch m.stage {
 	case stNetwork:
-		if a.mode == "dhcp" {
-			c.IP, c.Gateway = "dhcp", ""
-		} else {
-			c.IP, c.Gateway = a.address, a.gateway
-		}
-		if a.dns != "" {
-			c.DNS = a.dns
-		}
-		c.IP6, c.Gateway6, c.VLAN, c.MTU = a.ip6, a.gateway6, a.vlan, a.mtu
-		bridge := c.Bridge
-		if a.bridge != "" {
-			bridge = a.bridge
-		}
-		return func() tea.Msg {
-			if bridge != c.Bridge || c.Bridge == "" {
-				m.S.RefreshForBridge(m.ctx, bridge)
-			}
-			if a.mode == "static" {
-				addr, _, _ := strings.Cut(c.IP, "/")
-				return probeMsg{address: addr, used: m.S.Node.AddressInUse(m.ctx, c.Bridge, addr)}
-			}
-			return probeMsg{}
-		}
+		return m.networkDone()
 	case stChoices:
-		if a.storage != "" {
-			c.Storage = a.storage
-		}
-		if a.templateStorage != "" {
-			c.TemplateStorage = a.templateStorage
-		}
-		if a.apiHost != "" {
-			c.APIHost = a.apiHost
-			return m.resolve()
-		}
-		return m.next()
+		return m.choicesDone()
 	case stTrust:
 		if !a.trust {
 			m.fail = apiFailure(true, c.ProxmoxURL, "8006", "")
@@ -448,28 +509,28 @@ func (m *Model) formDone() tea.Cmd {
 }
 
 func (m *Model) resolve() tea.Cmd {
-	return func() tea.Msg { return resolvedMsg{m.S.ResolveAPI(m.ctx, false)} }
+	return func() tea.Msg { return resolvedMsg{m.S.ResolveAPI(m.ctx, AskTies)} }
 }
 
 func (m *Model) summaryAction() tea.Cmd {
 	c := &m.S.Cfg
 	switch m.a.action {
-	case "install":
+	case actInstall:
 		return m.startRun()
-	case stepNetworkName:
+	case actNetwork:
 		c.IP = ""
-	case "storage":
+	case actStorage:
 		c.Storage, c.TemplateStorage = "", ""
-		if err := m.S.FillStorages(false); err != nil {
+		if err := m.S.FillStorages(AskTies); err != nil {
 			m.fail, m.stage = err, stFail
 			return nil
 		}
-	case "api":
+	case actAPI:
 		c.APIHost, c.ProxmoxURL, m.S.CA = "", "", nil
 		return m.resolve()
-	case "pve":
+	case actPVE:
 		c.PVEEntry = ""
-	case "cancel":
+	case actCancel:
 		m.cancelled = true
 		return tea.Quit
 	}
@@ -524,7 +585,7 @@ func (m *Model) runFailure() error {
 	return errors.New("the install did not finish")
 }
 
-func (m *Model) onDone(d doneMsg) (tea.Model, tea.Cmd) {
+func (m *Model) onDone(d doneMsg) (*Model, tea.Cmd) {
 	if d.err == nil {
 		m.res, m.stage = d.res, stEnd
 		return m, nil
@@ -546,7 +607,7 @@ func (m *Model) onDone(d doneMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m *Model) afterCleanup() (tea.Model, tea.Cmd) {
+func (m *Model) afterCleanup() (*Model, tea.Cmd) {
 	m.cleaned = true
 	if m.fail != nil && m.fail.Error() == "cancelled" {
 		m.cancelled = true
@@ -555,8 +616,9 @@ func (m *Model) afterCleanup() (tea.Model, tea.Cmd) {
 	if m.noAddr != nil {
 		m.stage = stRetry
 		m.a.retry = true
-		return m, m.startForm(huh.NewGroup(huh.NewConfirm().Title("No address from DHCP").
+		cmd := m.startForm(huh.NewGroup(huh.NewConfirm().Title("No address from DHCP").
 			Description("The container is removed. Use a static address?").Affirmative("Use static").Negative("Stop").Value(&m.a.retry)))
+		return m, cmd
 	}
 	m.stage = stFail
 	return m, nil
@@ -668,8 +730,8 @@ func (m *Model) summary() string {
 		b.WriteString(row("DNS name", c.Name))
 	}
 	entry := "no"
-	if c.PVEEntry == "yes" {
-		entry = "yes"
+	if c.PVEEntry == optYes {
+		entry = optYes
 	}
 	b.WriteString(row("Proxmox VE entry", entry))
 	b.WriteString("\n")

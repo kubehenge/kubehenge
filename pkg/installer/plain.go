@@ -32,7 +32,7 @@ type Env struct {
 const LogFile = "/var/log/kubehenge-install.log"
 
 // NewEnv opens the log, the work directory and the node, ready for a run on this machine.
-func NewEnv(cfg *Config) (*Env, error) {
+func NewEnv(ctx context.Context) (*Env, error) {
 	if os.Geteuid() != 0 {
 		return nil, userErr("this needs root", "Run it as root in a Proxmox VE node's shell")
 	}
@@ -50,7 +50,7 @@ func NewEnv(cfg *Config) (*Env, error) {
 		return nil, fmt.Errorf("mkdir temp: %w", err)
 	}
 	e.Exec = &OSExec{Log: e.Log}
-	out, _ := e.Exec.Run(context.Background(), "pveversion")
+	out, _ := e.Exec.Run(ctx, "pveversion")
 	if !strings.HasPrefix(strings.TrimSpace(out), "pve-manager/9.") {
 		return nil, userErr("Kubehenge needs Proxmox VE 9", "Run it on a Proxmox VE 9 node")
 	}
@@ -75,7 +75,7 @@ func NewEnv(cfg *Config) (*Env, error) {
 		_ = os.RemoveAll(e.Work)
 		// install.sh unpacked the release here and leaves its removal to the installer.
 		if dir := os.Getenv("KUBEHENGE_BOOTSTRAP_DIR"); dir != "" {
-			_ = os.RemoveAll(dir)
+			_ = os.RemoveAll(dir) //nolint:gosec // the directory is the one install.sh made and handed over.
 		}
 	}
 	return e, nil
@@ -103,10 +103,10 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	if err := s.detect(ctx); err != nil {
 		return err
 	}
-	if err := s.FillStorages(true); err != nil {
+	if err := s.FillStorages(PickBest); err != nil {
 		return err
 	}
-	if err := s.ResolveAPI(ctx, true); err != nil {
+	if err := s.ResolveAPI(ctx, PickBest); err != nil {
 		return err
 	}
 	if err := s.UnattendedCheck(); err != nil {

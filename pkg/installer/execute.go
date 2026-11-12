@@ -22,7 +22,7 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 	if err := cfg.CheckOptionFiles(); err != nil {
 		return err
 	}
-	env, err := NewEnv(cfg)
+	env, err := NewEnv(ctx)
 	if err != nil {
 		return err
 	}
@@ -82,8 +82,8 @@ func (s *Session) detect(ctx context.Context) error {
 	if err := s.Prepare(ctx); err != nil {
 		return err
 	}
-	if err := s.FillStorages(false); err != nil {
+	if err := s.FillStorages(AskTies); err != nil {
 		return err
 	}
-	return s.ResolveAPI(ctx, false)
+	return s.ResolveAPI(ctx, AskTies)
 }
