@@ -128,13 +128,13 @@ func TestNoQuorumRefused(t *testing.T) {
 	}
 }
 
-func candidateHosts(t *testing.T, o opts) []string {
+func candidateHosts(t *testing.T, o opts) []string { //nolint:gocritic // tests pass an opts literal.
 	t.Helper()
 	facts, err := newHarness(t, o).node.Detect(context.Background(), &Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var hosts []string
+	hosts := make([]string, 0, len(facts.Candidates))
 	for _, c := range facts.Candidates {
 		hosts = append(hosts, c.Host)
 	}
@@ -304,7 +304,7 @@ func TestCleanupAfterCreate(t *testing.T) {
 func TestPlainSuccessKeepsTheContainer(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
-	if out, _, err := plainOn(t, h, Config{PVEEntry: "no"}); err != nil {
+	if out, err := plainOn(t, h, Config{PVEEntry: "no"}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	if h.exec.count("pct destroy") != 0 {
@@ -321,23 +321,23 @@ func TestEntryUpdate(t *testing.T) {
 	if out.Len() != 0 || h.exec.count("/usr/local/sbin/kubehenge-pve-entry") != 0 {
 		t.Fatal("no entry on this node, but something was done")
 	}
-	writeTestFile(t, filepath.Join(h.root, "etc/kubehenge-pve-entry.conf"), []byte("url=https://192.0.2.5\n"))
+	writeTestFile(t, filepath.Join(h.root, "etc", "kubehenge-pve-entry.conf"), []byte("url=https://192.0.2.5\n"))
 	r.updateEntry(context.Background(), "https://192.0.2.41", &out)
 	if h.exec.count("/usr/local/sbin/kubehenge-pve-entry") != 0 {
 		t.Fatal("an entry without its script was run")
 	}
-	writeTestFile(t, filepath.Join(h.root, "usr/local/sbin/kubehenge-pve-entry"), []byte("#!/bin/sh\n"))
+	writeTestFile(t, filepath.Join(h.root, "usr", "local", "sbin", "kubehenge-pve-entry"), []byte("#!/bin/sh\n"))
 	r.updateEntry(context.Background(), "https://192.0.2.41", &out)
 	if h.exec.last("/usr/local/sbin/kubehenge-pve-entry") != "/usr/local/sbin/kubehenge-pve-entry --url https://192.0.2.41" || !strings.Contains(out.String(), "On every other node") {
 		t.Fatalf("the entry was not pointed at the new address: %q", out.String())
 	}
-	writeTestFile(t, filepath.Join(h.root, "etc/kubehenge-pve-entry.conf"), []byte("url=https://192.0.2.41\n"))
+	writeTestFile(t, filepath.Join(h.root, "etc", "kubehenge-pve-entry.conf"), []byte("url=https://192.0.2.41\n"))
 	before := h.exec.count("/usr/local/sbin/kubehenge-pve-entry")
 	r.updateEntry(context.Background(), "https://192.0.2.41", &out)
 	if h.exec.count("/usr/local/sbin/kubehenge-pve-entry") != before {
 		t.Fatal("an entry leading to the appliance already was run again")
 	}
-	writeTestFile(t, filepath.Join(h.root, "etc/kubehenge-pve-entry.conf"), []byte("url=https://old\n"))
+	writeTestFile(t, filepath.Join(h.root, "etc", "kubehenge-pve-entry.conf"), []byte("url=https://old\n"))
 	h.exec.fail("/usr/local/sbin/kubehenge-pve-entry", 1)
 	out.Reset()
 	r.updateEntry(context.Background(), "https://kubehenge.example.org", &out)
@@ -360,7 +360,7 @@ func TestProxyHelpers(t *testing.T) {
 	t.Setenv("https_proxy", "")
 	t.Setenv("HTTPS_PROXY", "")
 	t.Setenv("http_proxy", "")
-	if got := DatacenterProxy([]byte("keyboard: de\nhttp_proxy: http://u:secret@proxy.example.org:3128 \r\n")); got != "http://u:secret@proxy.example.org:3128" {
+	if got := DatacenterProxy([]byte("keyboard: de\nhttp_proxy: http://u:secret@proxy.example.org:3128 \r\n")); got != "http://u:secret@proxy.example.org:3128" { //nolint:gosec // example credentials in a test string.
 		t.Errorf("datacenter proxy %q", got)
 	}
 	t.Setenv("http_proxy", "http://env.example.org:3128")
@@ -413,7 +413,7 @@ nfs-down nfs inactive 9 9 900000000 1%
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
+	names := make([]string, 0, len(fit))
 	for _, s := range fit {
 		names = append(names, s.Name)
 	}
@@ -560,7 +560,7 @@ func TestRefusedBridgeAndLoopbackDNS(t *testing.T) {
 		t.Errorf("a bond: %v", err)
 	}
 	writeTestFile(t, filepath.Join(h.root, resolvConf), []byte("nameserver 127.0.0.53\n"))
-	_, _, perr := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+	_, perr := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
 	if perr == nil || !strings.Contains(perr.Error(), "only name servers on this node's loopback") {
 		t.Errorf("loopback resolvers: %v", perr)
 	}
@@ -581,7 +581,8 @@ func upgradeHarness(t *testing.T) (*harness, *Runner, *bytes.Buffer) {
 	h.exec.on("pct exec 100 -- du", "100\t/usr/local/share/kubehenge\n")
 	s := h.session(Config{CTID: "100", Upgrade: true})
 	var out bytes.Buffer
-	return h, h.runner(s, nil), &out
+	r := h.runner(s, nil)
+	return h, r, &out
 }
 
 func TestUpgradeRoads(t *testing.T) {

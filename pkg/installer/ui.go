@@ -153,7 +153,7 @@ func theme(isDark bool) *huh.Styles {
 }
 
 // Update implements tea.Model.
-func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // tea.Model's method returns the interface.
 	var cmds []tea.Cmd
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -186,6 +186,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.updateForm(msg))
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// View implements tea.Model.
+func (m *Model) View() tea.View {
+	v := tea.NewView(m.render())
+	return v
 }
 
 // onKey handles the keys that act on the whole installer, and reports whether it did.
@@ -244,12 +250,6 @@ func (m *Model) updateForm(msg tea.Msg) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// View implements tea.Model.
-func (m *Model) View() tea.View {
-	v := tea.NewView(m.render())
-	return v
-}
-
 func (m *Model) formWidth() int { return min(m.width-formMargin, maxFormWidth) }
 
 func (m *Model) startForm(groups ...*huh.Group) tea.Cmd {
@@ -302,7 +302,7 @@ func (m *Model) networkForm() tea.Cmd {
 		modeGroup = append(modeGroup, huh.NewSelect[string]().Title("Bridge").Options(opts...).Value(&a.bridge))
 	}
 	dnsField := func() *huh.Input {
-		return huh.NewInput().Title("DNS").Placeholder("192.0.2.53,192.0.2.54").Value(&a.dns).Validate(validateDNS(f.LoopbackDNSOnly))
+		return huh.NewInput().Title("DNS").Placeholder("192.0.2.53,192.0.2.54").Value(&a.dns).Validate(validateDNS(f))
 	}
 	static := huh.NewGroup(
 		huh.NewInput().Title("IPv4 address").Placeholder("192.0.2.40/24").Value(&a.address).Validate(ValidateAddressCIDR),
@@ -342,12 +342,12 @@ func (m *Model) prefillNetwork() {
 	a.bridge = c.Bridge
 }
 
-func validateDNS(loopbackOnly bool) func(string) error {
+func validateDNS(f *Facts) func(string) error {
 	return func(s string) error {
 		if s != "" && !dnsListRE.MatchString(s) {
 			return errors.New("comma-separated name server addresses")
 		}
-		if s == "" && loopbackOnly {
+		if s == "" && f.LoopbackDNSOnly {
 			return errors.New("required, this node's resolver is on loopback")
 		}
 		return nil

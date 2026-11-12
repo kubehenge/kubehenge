@@ -1,6 +1,6 @@
 module github.com/kubehenge/kubehenge
 
-go 1.27.3
+go 1.27.4
 
 // npm's packages may carry Go code of their own, which is not Kubehenge's to build or lint.
 ignore (

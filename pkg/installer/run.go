@@ -141,7 +141,7 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	do := map[string]func(context.Context) error{
 		"tofu": r.stepTofu, "template": r.stepTemplate, "create": r.stepCreate, "start": r.stepStart,
 		"address": r.stepAddress, "network": r.stepNetwork, "certificate": r.stepCertificate,
-		"install": r.stepInstall, "service": r.stepService, "updates": r.stepUpdates, stepEntryName: r.stepEntry,
+		"install": r.stepInstall, "service": r.stepService, stepUpdatesName: r.stepUpdates, stepEntryName: r.stepEntry,
 	}
 	if err := r.unpackRelease(); err != nil {
 		return nil, err
@@ -226,6 +226,11 @@ systemctl enable --now kubehenge.service >/dev/null 2>&1
 // realmsStatus asks the appliance for its realms over the address, trusting the certificate just
 // installed. The container is on this node's network, so no proxy sees the request.
 func realmsStatus(ctx context.Context, public, address string, certPEM []byte) int {
+	return realmsStatusAt(ctx, public, net.JoinHostPort(address, "443"), certPEM)
+}
+
+// realmsStatusAt is realmsStatus for the host and port to connect to, whatever the name in the URL.
+func realmsStatusAt(ctx context.Context, public, connectTo string, certPEM []byte) int {
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(certPEM)
 	dialer := &net.Dialer{Timeout: dialTimeout}
@@ -233,7 +238,7 @@ func realmsStatus(ctx context.Context, public, address string, certPEM []byte) i
 		Proxy:           nil,
 		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12, ServerName: public},
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, net.JoinHostPort(address, "443"))
+			return dialer.DialContext(ctx, network, connectTo)
 		},
 	}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+urlHost(public)+"/api/realms", http.NoBody)
@@ -751,7 +756,7 @@ func (r *Runner) stepUpdates(ctx context.Context) error {
 	if err != nil {
 		r.warnings = append(r.warnings, "container "+r.S.Cfg.CTID+" could not install unattended-upgrades from Debian's mirrors ("+err.Error()+"). Update it with: pct exec "+r.S.Cfg.CTID+" -- sh -c 'apt-get update && apt-get -y upgrade'")
 		r.emit(Event{Step: stepUpdatesName, State: StepSkipped, Detail: "not installed"})
-		return nil
+		return nil //nolint:nilerr // the appliance works without automatic updates, so this is a warning.
 	}
 	_ = r.pushData(ctx, "auto-upgrades.conf", []byte("APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n"), "/etc/apt/apt.conf.d/20auto-upgrades", "0644")
 	r.finish("updates", "daily")
@@ -766,7 +771,7 @@ func (r *Runner) stepEntry(ctx context.Context) error {
 		if _, err := r.Exec.Run(ctx, "sh", script, "--url", "https://"+urlHost(r.public())); err != nil {
 			r.warnings = append(r.warnings, "the appliance is installed, but adding the entry to this node's Proxmox VE interface failed ("+err.Error()+"). See "+r.LogPath)
 			r.emit(Event{Step: stepEntryName, State: StepSkipped, Detail: "failed"})
-			return nil
+			return nil //nolint:nilerr // the appliance works without the entry, so this is a warning.
 		}
 	}
 	r.finish("entry", "")
@@ -827,7 +832,7 @@ func writePrivateExecutable(path string, src io.Reader) error {
 		return fmt.Errorf("open file: %w", err)
 	}
 	defer func() { _ = out.Close() }()
-	if _, err = io.Copy(out, src); err != nil { //nolint:gosec // the archive is checked against a pinned checksum.
+	if _, err = io.Copy(out, src); err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}
 	return nil

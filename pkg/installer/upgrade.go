@@ -63,7 +63,7 @@ func (r *Runner) startIfStopped(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) say(out io.Writer, format string, args ...any) {
+func (*Runner) sayf(out io.Writer, format string, args ...any) {
 	_, _ = fmt.Fprintf(out, format+"\n", args...)
 }
 
@@ -77,16 +77,16 @@ func (r *Runner) envValue(ctx context.Context, key string) string {
 	return ""
 }
 
-func (r *Runner) currentCertificate(ctx context.Context) (*x509.Certificate, []byte) {
+func (r *Runner) currentCertificate(ctx context.Context) *x509.Certificate {
 	out, err := r.inCT(ctx, "cat", "/etc/kubehenge/tls.crt")
 	if err != nil {
-		return nil, nil
+		return nil
 	}
 	c, err := parseCertFile([]byte(out))
 	if err != nil {
-		return nil, nil
+		return nil
 	}
-	return c, []byte(out)
+	return c
 }
 
 // signedHere reports whether this cluster's CA signed the certificate.
@@ -127,7 +127,7 @@ func (r *Runner) publicName(ctx context.Context, c *x509.Certificate, address st
 			return host
 		}
 	}
-	r.say(out, "kubehenge: leaving %s out of the certificate: this node's DNS does not resolve it to %s; give it with --name to keep it", host, address)
+	r.sayf(out, "kubehenge: leaving %s out of the certificate: this node's DNS does not resolve it to %s; give it with --name to keep it", host, address)
 	return ""
 }
 
@@ -183,7 +183,7 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 	}
 	name := c.Name
 	if name == "" && !c.NoName {
-		current, _ := r.currentCertificate(ctx)
+		current := r.currentCertificate(ctx)
 		name = r.publicName(ctx, current, addrs[0], out)
 	}
 	public := name
@@ -205,8 +205,8 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 	if err != nil {
 		return nil, err
 	}
-	r.say(out, "ok   Certificate for %s", public)
-	if err := r.installCertificate(ctx, cert, public); err != nil {
+	r.sayf(out, "ok   Certificate for %s", public)
+	if err = r.installCertificate(ctx, cert, public); err != nil {
 		return nil, userErr("copying the certificate into container "+c.CTID+" failed", "See "+r.LogPath)
 	}
 	// Not while the management cluster is applied or removed: the restart would cut the run off.
@@ -263,15 +263,15 @@ func (r *Runner) updateEntry(ctx context.Context, url string, out io.Writer) {
 		return
 	}
 	if _, err := r.Exec.Run(ctx, "/usr/local/sbin/kubehenge-pve-entry", "--url", url); err != nil {
-		r.say(out, "kubehenge: the entry still leads to %s; see %s", current, r.LogPath)
+		r.sayf(out, "kubehenge: the entry still leads to %s; see %s", current, r.LogPath)
 		return
 	}
-	r.say(out, "On every other node with the entry, run: kubehenge-pve-entry --url %s", url)
+	r.sayf(out, "On every other node with the entry, run: kubehenge-pve-entry --url %s", url)
 }
 
 // stageSoftware pushes the binaries, the module and the service units into the container beside
 // their places. The upgrade script, or the swap on install, renames them over the old ones.
-func (r *Runner) stageSoftware(ctx context.Context, pushTofu bool) error {
+func (r *Runner) stageSoftware(ctx context.Context, tofu tofuPlan) error {
 	if _, err := r.inCT(ctx, "sh", "-c", "mkdir -p /etc/kubehenge /usr/local/share/kubehenge /usr/local/share/ca-certificates"); err != nil {
 		return err
 	}
@@ -283,7 +283,7 @@ func (r *Runner) stageSoftware(ctx context.Context, pushTofu bool) error {
 	if err := r.push(ctx, filepath.Join(r.Dir, "bin", "kubehenge"), "/usr/local/bin/kubehenge.new", "0755"); err != nil {
 		return err
 	}
-	if pushTofu {
+	if tofu {
 		if err := r.push(ctx, filepath.Join(r.Work, "tofu", "tofu"), "/usr/local/bin/tofu.new", "0755"); err != nil {
 			return err
 		}
@@ -303,163 +303,225 @@ func (r *Runner) stageSoftware(ctx context.Context, pushTofu bool) error {
 // state, and stops if the management cluster is being applied.
 func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 	c := &r.S.Cfg
-	r.initDefaults()
-	if err := r.unpackRelease(); err != nil {
+	installed, err := r.beginUpgrade(ctx, out)
+	if err != nil {
 		return nil, err
 	}
-	if err := r.requireAppliance(ctx); err != nil {
+	tofu, err := r.prepareTofu(ctx, out)
+	if err != nil {
 		return nil, err
 	}
-	r.say(out, "== upgrading container %s to Kubehenge %s", c.CTID, r.version)
-	if err := r.startIfStopped(ctx); err != nil {
+	plan, err := r.planAPI(ctx)
+	if err != nil {
 		return nil, err
 	}
-	installedOut, _ := r.inCT(ctx, "cat", "/usr/local/share/kubehenge/VERSION")
-	installed := strings.TrimSpace(installedOut)
-	if installed != "" && versionLess(r.version, installed) {
-		return nil, userErr(fmt.Sprintf("container %s runs Kubehenge %s, newer than %s", c.CTID, installed, r.version), "")
-	}
-	if err := r.needUpgradeSpace(ctx); err != nil {
-		return nil, err
-	}
-	// The appliance's own upgrades may have brought a newer OpenTofu, and an older one cannot
-	// read the state a newer one wrote.
-	pushTofu := true
-	if v, _ := r.inCT(ctx, "/usr/local/bin/tofu", "version"); strings.HasPrefix(v, "OpenTofu v") {
-		have := strings.TrimPrefix(strings.SplitN(v, "\n", firstLineParts)[0], "OpenTofu v")
-		if versionLess(r.TofuV, have) {
-			r.say(out, "keeping OpenTofu %s, newer than the installer's %s", have, r.TofuV)
-			pushTofu = false
-		}
-	}
-	if pushTofu {
-		if err := r.stepTofu(ctx); err != nil {
+	if plan.newURL != "" {
+		if err = r.checkNewURL(ctx, plan.newURL); err != nil {
 			return nil, err
 		}
 	}
-	// --proxmox-url moves the appliance to another address of the API, such as once the node it
-	// named is gone.
-	currentURL := r.envValue(ctx, "KUBEHENGE_PROXMOX_URL")
-	newURL := ""
-	if c.ProxmoxURL != "" && c.ProxmoxURL != currentURL {
-		newURL = c.ProxmoxURL
+	if err = r.ensureKeyVolume(ctx, out); err != nil {
+		return nil, err
 	}
-	if c.ProxmoxURL == "" {
-		c.ProxmoxURL = currentURL
-	}
-	insecure, newCA := "", false
-	var ca *CAChoice
-	var err error
-	switch {
-	case c.Insecure:
-		insecure = "true"
-	case c.ProxmoxCA != "":
-		insecure, newCA = "false", true
-	case newURL != "" && r.envValue(ctx, "KUBEHENGE_PROXMOX_INSECURE") != "true":
-		newCA = true
-	}
-	if newCA {
-		if ca, err = r.S.Node.DecideCA(ctx, c, c.ProxmoxURL); err != nil {
-			return nil, err
-		}
-		if ca.NeedsTrust && !c.TrustServedCA {
-			return nil, userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate neither this cluster's CA nor this node's trust store vouches for, resting on %s with the SHA-256 fingerprint %s",
-				c.ProxmoxURL, ca.Subject, ca.Fingerprint), "Once you have checked that this is your CA, give it with --proxmox-ca <file>")
-		}
-	}
-	if newURL != "" {
-		host, port, _ := splitAPI(newURL)
-		if !isAddress(host) {
-			if _, err := r.inCT(ctx, "getent", "hosts", host); err != nil {
-				return nil, userErr("the container cannot resolve any host the Proxmox VE API could be reached at (tried "+host+")",
-					"Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns")
-			}
-		}
-		if _, err := r.inCT(ctx, "timeout", "5", "bash", "-c", `exec 3<>"/dev/tcp/$1/$2"`, "bash", host, port); err != nil {
-			return nil, userErr(fmt.Sprintf("container %s cannot connect to the Proxmox VE API at %s on port %s", c.CTID, host, port),
-				"Check the node's firewall for that port and pveproxy's LISTEN_IP in /etc/default/pveproxy")
-		}
-	}
-	if conf, _ := r.pct(ctx, "config", c.CTID); !regexp.MustCompile(`(?m)^mp[0-9]+: .*mp=` + regexp.QuoteMeta(keyDir) + `(,|$)`).MatchString(conf) {
-		r.say(out, "== a volume for the key of automatic upgrades, left out of backups")
-		free := 0
-		for strings.Contains(conf, fmt.Sprintf("\nmp%d: ", free)) || strings.HasPrefix(conf, fmt.Sprintf("mp%d: ", free)) {
-			free++
-		}
-		storage := ""
-		if m := regexp.MustCompile(`(?m)^rootfs: ([^:]*):`).FindStringSubmatch(conf); m != nil {
-			storage = m[1]
-		}
-		if _, err := r.pct(ctx, "set", c.CTID, fmt.Sprintf("--mp%d", free), storage+":1,mp="+keyDir+",backup=0"); err != nil {
-			return nil, userErr("adding the key volume to container "+c.CTID+" failed", "See "+r.LogPath)
-		}
-	}
-	if err := r.stageSoftware(ctx, pushTofu); err != nil {
+	if err = r.stageSoftware(ctx, tofu); err != nil {
 		return nil, userErr("copying the software into container "+c.CTID+" failed", "See "+r.LogPath+" for the command's message")
 	}
-	if newCA {
-		if err := r.pushData(ctx, "proxmox-ca.pem", ca.PEM, "/etc/kubehenge/proxmox-ca.pem.new", "0644"); err != nil {
+	if plan.newCA {
+		if err = r.pushData(ctx, "proxmox-ca.pem", plan.ca.PEM, "/etc/kubehenge/proxmox-ca.pem.new", "0644"); err != nil {
 			return nil, err
 		}
-		if err := r.pushData(ctx, "proxmox-ca.crt", ca.PEM, "/usr/local/share/ca-certificates/proxmox-ca.crt.new", "0644"); err != nil {
+		if err = r.pushData(ctx, "proxmox-ca.crt", plan.ca.PEM, "/usr/local/share/ca-certificates/proxmox-ca.crt.new", "0644"); err != nil {
 			return nil, err
 		}
 	}
 	// A certificate the installer made is renewed once it has less than 60 days left. The restart
 	// below puts it into use.
-	if current, _ := r.currentCertificate(ctx); current != nil && current.NotAfter.Before(r.Now().Add(certRenewBefore)) {
-		if err := r.renewCertificate(ctx, current, out); err != nil {
+	if current := r.currentCertificate(ctx); current != nil && current.NotAfter.Before(r.Now().Add(certRenewBefore)) {
+		if err = r.renewCertificate(ctx, current, out); err != nil {
 			return nil, err
 		}
 	}
-	r.say(out, "== starting Kubehenge %s, and checking that it serves", r.version)
+	r.sayf(out, "== starting Kubehenge %s, and checking that it serves", r.version)
 	proxies := strings.Join(c.TrustedProxies, ",")
 	if c.NoTrustedProxy {
 		proxies = optNone
 	}
-	reason, err := r.inCT(ctx, "flock", "-n", "-E", "75", "/var/lib/kubehenge", "sh", "-c", upgradeScript, "sh", "", c.CTID, insecure, units, newURL, proxies)
-	reason = strings.TrimSpace(reason)
-	before := installed
-	if before == "" {
-		before = "the release installed before"
-	}
+	reason, err := r.inCT(ctx, "flock", "-n", "-E", "75", "/var/lib/kubehenge", "sh", "-c", upgradeScript, "sh", "", c.CTID, plan.insecure, units, plan.newURL, proxies)
 	if err != nil {
-		code := -1
-		if ce, ok := errors.AsType[*CmdError](err); ok {
-			code = ce.Code
-		}
-		cleanup := "rm -rf /usr/local/bin/kubehenge.new /usr/local/bin/tofu.new /tmp/share.tar /etc/systemd/system/*.new /etc/kubehenge/proxmox-ca.pem.new /usr/local/share/ca-certificates/proxmox-ca.crt.new"
-		switch code {
-		case exitBusy:
-			_, _ = r.inCT(ctx, "sh", "-c", cleanup)
-			return nil, userErr("the management cluster is being applied or removed, or the appliance upgraded, in container "+c.CTID, "Run this again once that has finished")
-		case exitCutOff:
-			_, _ = r.inCT(ctx, "sh", "-c", cleanup)
-			return nil, userErr(reason, "Undo it with: pct exec "+c.CTID+" -- systemctl restart kubehenge.service. Then run this again")
-		case exitRolledBack:
-			return nil, userErr(fmt.Sprintf("release %s did not start: %s", r.version, reason), "Rolled back to "+before)
-		case exitStuck:
-			return nil, userErr(fmt.Sprintf("release %s did not start: %s. Rolling back to %s failed too", r.version, reason, before), "See: pct exec "+c.CTID+" -- journalctl -u kubehenge")
-		default:
-			return nil, userErr("upgrading container "+c.CTID+" failed: "+reason, "")
-		}
+		return nil, r.upgradeFailure(ctx, err, strings.TrimSpace(reason), installed)
 	}
 	r.address, r.address6 = r.addresses(ctx)
 	_ = r.stepUpdates(ctx)
-	r.say(out, "\nKubehenge %s is running in container %s. Apply the management cluster again from the interface to upgrade it too.", r.version, c.CTID)
-	if newURL != "" {
-		r.say(out, "The appliance reaches the Proxmox VE API at %s. The management cluster and the clusters do from its next apply.", newURL)
+	r.sayf(out, "\nKubehenge %s is running in container %s. Apply the management cluster again from the interface to upgrade it too.", r.version, c.CTID)
+	if plan.newURL != "" {
+		r.sayf(out, "The appliance reaches the Proxmox VE API at %s. The management cluster and the clusters do from its next apply.", plan.newURL)
 	}
 	return &Result{CTID: c.CTID, Version: r.version, LogPath: r.LogPath, Warnings: r.warnings}, nil
 }
 
+// beginUpgrade unpacks the release and checks that the container takes it, returning the version
+// it runs now.
+func (r *Runner) beginUpgrade(ctx context.Context, out io.Writer) (string, error) {
+	c := &r.S.Cfg
+	r.initDefaults()
+	if err := r.unpackRelease(); err != nil {
+		return "", err
+	}
+	if err := r.requireAppliance(ctx); err != nil {
+		return "", err
+	}
+	r.sayf(out, "== upgrading container %s to Kubehenge %s", c.CTID, r.version)
+	if err := r.startIfStopped(ctx); err != nil {
+		return "", err
+	}
+	installedOut, _ := r.inCT(ctx, "cat", "/usr/local/share/kubehenge/VERSION")
+	installed := strings.TrimSpace(installedOut)
+	if installed != "" && versionLess(r.version, installed) {
+		return "", userErr(fmt.Sprintf("container %s runs Kubehenge %s, newer than %s", c.CTID, installed, r.version), "")
+	}
+	return installed, r.needUpgradeSpace(ctx)
+}
+
+// upgradeFailure turns the exit of the upgrade script into the message that names the fix.
+func (r *Runner) upgradeFailure(ctx context.Context, err error, reason, installed string) error {
+	c := &r.S.Cfg
+	before := installed
+	if before == "" {
+		before = "the release installed before"
+	}
+	code := -1
+	if ce, ok := errors.AsType[*CmdError](err); ok {
+		code = ce.Code
+	}
+	cleanup := "rm -rf /usr/local/bin/kubehenge.new /usr/local/bin/tofu.new /tmp/share.tar /etc/systemd/system/*.new /etc/kubehenge/proxmox-ca.pem.new /usr/local/share/ca-certificates/proxmox-ca.crt.new"
+	switch code {
+	case exitBusy:
+		_, _ = r.inCT(ctx, "sh", "-c", cleanup)
+		return userErr("the management cluster is being applied or removed, or the appliance upgraded, in container "+c.CTID, "Run this again once that has finished")
+	case exitCutOff:
+		_, _ = r.inCT(ctx, "sh", "-c", cleanup)
+		return userErr(reason, "Undo it with: pct exec "+c.CTID+" -- systemctl restart kubehenge.service. Then run this again")
+	case exitRolledBack:
+		return userErr(fmt.Sprintf("release %s did not start: %s", r.version, reason), "Rolled back to "+before)
+	case exitStuck:
+		return userErr(fmt.Sprintf("release %s did not start: %s. Rolling back to %s failed too", r.version, reason, before), "See: pct exec "+c.CTID+" -- journalctl -u kubehenge")
+	default:
+		return userErr("upgrading container "+c.CTID+" failed: "+reason, "")
+	}
+}
+
+// tofuPlan says whether the upgrade pushes the installer's OpenTofu.
+type tofuPlan bool
+
+// prepareTofu keeps the container's OpenTofu when the appliance's own upgrades brought a newer
+// one, since an older one cannot read the state a newer one wrote. Otherwise it fetches the
+// installer's.
+func (r *Runner) prepareTofu(ctx context.Context, out io.Writer) (tofuPlan, error) {
+	if v, _ := r.inCT(ctx, "/usr/local/bin/tofu", "version"); strings.HasPrefix(v, "OpenTofu v") {
+		have := strings.TrimPrefix(strings.SplitN(v, "\n", firstLineParts)[0], "OpenTofu v")
+		if versionLess(r.TofuV, have) {
+			r.sayf(out, "keeping OpenTofu %s, newer than the installer's %s", have, r.TofuV)
+			return false, nil
+		}
+	}
+	if err := r.stepTofu(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// apiPlan is what an upgrade changes about the appliance's view of the Proxmox VE API.
+type apiPlan struct {
+	insecure, newURL string
+	newCA            bool
+	ca               *CAChoice
+}
+
+// planAPI works out the API URL and CA the upgrade sets. --proxmox-url moves the appliance to
+// another address of the API, such as once the node it named is gone.
+func (r *Runner) planAPI(ctx context.Context) (apiPlan, error) {
+	c := &r.S.Cfg
+	var plan apiPlan
+	currentURL := r.envValue(ctx, "KUBEHENGE_PROXMOX_URL")
+	if c.ProxmoxURL != "" && c.ProxmoxURL != currentURL {
+		plan.newURL = c.ProxmoxURL
+	}
+	if c.ProxmoxURL == "" {
+		c.ProxmoxURL = currentURL
+	}
+	switch {
+	case c.Insecure:
+		plan.insecure = "true"
+	case c.ProxmoxCA != "":
+		plan.insecure, plan.newCA = "false", true
+	case plan.newURL != "" && r.envValue(ctx, "KUBEHENGE_PROXMOX_INSECURE") != "true":
+		plan.newCA = true
+	}
+	if !plan.newCA {
+		return plan, nil
+	}
+	ca, err := r.S.Node.DecideCA(ctx, c, c.ProxmoxURL)
+	if err != nil {
+		return plan, err
+	}
+	if ca.NeedsTrust && !c.TrustServedCA {
+		return plan, userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate neither this cluster's CA nor this node's trust store vouches for, resting on %s with the SHA-256 fingerprint %s",
+			c.ProxmoxURL, ca.Subject, ca.Fingerprint), "Once you have checked that this is your CA, give it with --proxmox-ca <file>")
+	}
+	plan.ca = ca
+	return plan, nil
+}
+
+// checkNewURL checks that the container resolves and reaches the API at its new URL.
+func (r *Runner) checkNewURL(ctx context.Context, newURL string) error {
+	host, port, _ := splitAPI(newURL)
+	if !isAddress(host) {
+		if _, err := r.inCT(ctx, "getent", "hosts", host); err != nil {
+			return userErr("the container cannot resolve any host the Proxmox VE API could be reached at (tried "+host+")",
+				"Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns")
+		}
+	}
+	if _, err := r.inCT(ctx, "timeout", "5", "bash", "-c", `exec 3<>"/dev/tcp/$1/$2"`, "bash", host, port); err != nil {
+		return userErr(fmt.Sprintf("container %s cannot connect to the Proxmox VE API at %s on port %s", r.S.Cfg.CTID, host, port),
+			"Check the node's firewall for that port and pveproxy's LISTEN_IP in /etc/default/pveproxy")
+	}
+	return nil
+}
+
+var (
+	keyVolumeRE = regexp.MustCompile(`(?m)^mp\d+: .*mp=` + regexp.QuoteMeta(keyDir) + `(,|$)`)
+	rootfsRE    = regexp.MustCompile(`(?m)^rootfs: ([^:]*):`)
+)
+
+// ensureKeyVolume adds the volume that holds the key of automatic upgrades, left out of backups.
+func (r *Runner) ensureKeyVolume(ctx context.Context, out io.Writer) error {
+	c := &r.S.Cfg
+	conf, _ := r.pct(ctx, "config", c.CTID)
+	if keyVolumeRE.MatchString(conf) {
+		return nil
+	}
+	r.sayf(out, "== a volume for the key of automatic upgrades, left out of backups")
+	free := 0
+	for strings.Contains(conf, fmt.Sprintf("\nmp%d: ", free)) || strings.HasPrefix(conf, fmt.Sprintf("mp%d: ", free)) {
+		free++
+	}
+	storage := ""
+	if m := rootfsRE.FindStringSubmatch(conf); m != nil {
+		storage = m[1]
+	}
+	if _, err := r.pct(ctx, "set", c.CTID, fmt.Sprintf("--mp%d", free), storage+":1,mp="+keyDir+",backup=0"); err != nil {
+		return userErr("adding the key volume to container "+c.CTID+" failed", "See "+r.LogPath)
+	}
+	return nil
+}
+
 func (r *Runner) renewCertificate(ctx context.Context, current *x509.Certificate, out io.Writer) error {
 	if !r.madeHere(current) {
-		r.say(out, "kubehenge: the appliance's own certificate is valid until %s. Install a new one with: kubehenge install --certificate --ctid %s --cert <file> --key <file>",
+		r.sayf(out, "kubehenge: the appliance's own certificate is valid until %s. Install a new one with: kubehenge install --certificate --ctid %s --cert <file> --key <file>",
 			current.NotAfter.UTC().Format(time.RFC1123), r.S.Cfg.CTID)
 		return nil
 	}
-	r.say(out, "== renewing the certificate, valid until %s", current.NotAfter.UTC().Format(time.RFC1123))
+	r.sayf(out, "== renewing the certificate, valid until %s", current.NotAfter.UTC().Format(time.RFC1123))
 	addrs := r.applianceAddresses(ctx)
 	if len(addrs) == 0 {
 		return userErr("container "+r.S.Cfg.CTID+" has no IPv4 or IPv6 address", "")

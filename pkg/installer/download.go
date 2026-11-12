@@ -110,32 +110,10 @@ func (f *Fetcher) Fetch(ctx context.Context, from, dest, sum string, scheme Sche
 	if !strings.HasPrefix(from, "https://") && (scheme != HTTPOrHTTPS || !strings.HasPrefix(from, "http://")) {
 		return fmt.Errorf("%s is not an https address", from)
 	}
-	github := strings.HasPrefix(from, "https://github.com/") && strings.Contains(from, "/releases/download/")
-	if err := f.download(ctx, from, dest, github, progress); err != nil {
+	if err := f.download(ctx, from, dest, progress); err != nil {
 		return userErr("could not download "+from+" ("+err.Error()+")", "Check that this node reaches the address, or its datacenter HTTP proxy")
 	}
 	return checkSum(dest, sum, from)
-}
-
-// download fetches the file. A GitHub release asset goes through the API once the download
-// address has failed, which then stays the way for the rest of the run.
-func (f *Fetcher) download(ctx context.Context, from, dest string, github bool, progress func(done, total int64)) error {
-	if github && f.releasesDown {
-		return f.viaAPI(ctx, from, dest, progress)
-	}
-	tries := f.Retries
-	if github {
-		tries = 2
-	}
-	err := f.try(ctx, from, dest, tries, progress)
-	if err == nil || !github {
-		return err
-	}
-	f.releasesDown = true
-	if apiErr := f.viaAPI(ctx, from, dest, progress); apiErr != nil {
-		return fmt.Errorf("%w, nor through GitHub's API: %w", err, apiErr)
-	}
-	return nil
 }
 
 type countingReader struct {
@@ -266,6 +244,28 @@ var (
 	indexSumRE      = regexp.MustCompile(`^[0-9a-f]{128}$`)
 	digitsRE        = regexp.MustCompile(`\d+`)
 )
+
+// download fetches the file. A GitHub release asset goes through the API once the download
+// address has failed, which then stays the way for the rest of the run.
+func (f *Fetcher) download(ctx context.Context, from, dest string, progress func(done, total int64)) error {
+	github := strings.HasPrefix(from, "https://github.com/") && strings.Contains(from, "/releases/download/")
+	if github && f.releasesDown {
+		return f.viaAPI(ctx, from, dest, progress)
+	}
+	tries := f.Retries
+	if github {
+		tries = 2
+	}
+	err := f.try(ctx, from, dest, tries, progress)
+	if err == nil || !github {
+		return err
+	}
+	f.releasesDown = true
+	if apiErr := f.viaAPI(ctx, from, dest, progress); apiErr != nil {
+		return fmt.Errorf("%w, nor through GitHub's API: %w", err, apiErr)
+	}
+	return nil
+}
 
 func (f *Fetcher) try(ctx context.Context, from, dest string, tries int, progress func(done, total int64)) error {
 	var err error

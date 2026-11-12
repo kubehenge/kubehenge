@@ -66,6 +66,27 @@ func parseKey(data []byte) (crypto.Signer, error) {
 	return key, nil
 }
 
+// clusterSigner reads the cluster CA and its key, when this node holds both.
+func (n *Node) clusterSigner() (*x509.Certificate, crypto.Signer, bool) {
+	caPEM, err := n.readFile(clusterCA)
+	if err != nil {
+		return nil, nil, false
+	}
+	keyPEM, err := n.readFile(clusterCAKey)
+	if err != nil {
+		return nil, nil, false
+	}
+	ca, err := parseCertFile(caPEM)
+	if err != nil {
+		return nil, nil, false
+	}
+	caKey, err := parseKey(keyPEM)
+	if err != nil {
+		return nil, nil, false
+	}
+	return ca, caKey, true
+}
+
 // MakeCertificate makes a certificate and key for the appliance, signed by this cluster's CA so
 // that browsers trusting Proxmox VE's certificates trust Kubehenge's too, else by itself. The CA's
 // key stays on this node.
@@ -86,7 +107,7 @@ func (n *Node) MakeCertificate(hostname string, addresses []string, name string,
 	}
 	var ips []net.IP
 	for _, a := range addresses {
-		if p, err := netip.ParseAddr(a); err == nil {
+		if p, perr := netip.ParseAddr(a); perr == nil {
 			ips = append(ips, net.IP(p.AsSlice()))
 		}
 	}
@@ -98,14 +119,8 @@ func (n *Node) MakeCertificate(hostname string, addresses []string, name string,
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	parent, signer := tmpl, crypto.Signer(key)
-	if caPEM, err := n.readFile(clusterCA); err == nil {
-		if keyPEM, err := n.readFile(clusterCAKey); err == nil {
-			if ca, err := parseCertFile(caPEM); err == nil {
-				if caKey, err := parseKey(keyPEM); err == nil {
-					parent, signer = ca, caKey
-				}
-			}
-		}
+	if ca, caKey, ok := n.clusterSigner(); ok {
+		parent, signer = ca, caKey
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, signer)
 	if err != nil {

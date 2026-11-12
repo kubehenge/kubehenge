@@ -47,7 +47,7 @@ type OSExec struct {
 
 // Run implements Exec.
 func (e *OSExec) Run(ctx context.Context, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // running the command it is given is what an Exec does.
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

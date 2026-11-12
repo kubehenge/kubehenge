@@ -27,7 +27,8 @@ type APICandidate struct {
 
 // certNames returns the names and addresses a certificate carries, DNS names first.
 func certNames(c *x509.Certificate) ([]string, []string) {
-	var dns, ips []string
+	dns := make([]string, 0, len(c.DNSNames))
+	var ips []string
 	for _, d := range c.DNSNames {
 		dns = append(dns, strings.ToLower(d))
 	}

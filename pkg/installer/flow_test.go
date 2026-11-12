@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func prepared(t *testing.T, h *harness, cfg Config) *Session {
+func prepared(t *testing.T, h *harness, cfg Config) *Session { //nolint:gocritic // tests pass a Config literal.
 	t.Helper()
 	s := h.session(cfg)
 	if err := s.detect(context.Background()); err != nil {
@@ -17,19 +17,19 @@ func prepared(t *testing.T, h *harness, cfg Config) *Session {
 	return s
 }
 
-func plainOn(t *testing.T, h *harness, cfg Config) (string, *Session, error) { //nolint:gocritic // tests pass a Config literal.
+func plainOn(t *testing.T, h *harness, cfg Config) (string, error) { //nolint:gocritic // tests pass a Config literal.
 	t.Helper()
 	s := h.session(cfg)
 	var out bytes.Buffer
 	err := RunPlain(context.Background(), s, func(emit func(Event)) *Runner { return h.runner(s, emit) }, &out)
-	return out.String(), s, err
+	return out.String(), err
 }
 
 // The road with DHCP: the node's own network has a DHCP server, so --ip is left out.
 func TestPlainDHCPRoad(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
-	out, _, err := plainOn(t, h, Config{PVEEntry: "no"})
+	out, err := plainOn(t, h, Config{PVEEntry: "no"})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -49,7 +49,7 @@ func TestPlainStaticRoad(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pct config 100", "net0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24,gw=192.0.2.1\n")
-	out, _, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", DNS: "192.0.2.53", PVEEntry: "no"})
+	out, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", DNS: "192.0.2.53", PVEEntry: "no"})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -65,7 +65,7 @@ func TestPlainStaticRoad(t *testing.T) {
 func TestUnattendedWithoutIPOnNodeWithoutDHCP(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{})
-	out, _, err := plainOn(t, h, Config{PVEEntry: "no"})
+	out, err := plainOn(t, h, Config{PVEEntry: "no"})
 	if err == nil {
 		t.Fatalf("installed without an address:\n%s", out)
 	}
@@ -84,7 +84,7 @@ func TestUnattendedDHCPTimeoutCleansUp(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "")
-	out, _, err := plainOn(t, h, Config{PVEEntry: "no"})
+	out, err := plainOn(t, h, Config{PVEEntry: "no"})
 	var na *NoAddressError
 	if err == nil || !asNoAddress(err, &na) || !na.DHCP {
 		t.Fatalf("want a DHCP address failure, got %v\n%s", err, out)
@@ -111,7 +111,7 @@ func asNoAddress(err error, target **NoAddressError) bool {
 func TestUnattendedUntrustedCA(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{untrusted: true})
-	_, _, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+	_, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
 	if err == nil || !strings.Contains(err.Error(), "SHA-256 fingerprint") || !strings.Contains(err.Error(), "--proxmox-ca") {
 		t.Fatalf("want the CA refusal, got %v", err)
 	}
@@ -202,6 +202,53 @@ func TestQuestionsTrustCA(t *testing.T) {
 	s.Cfg.TrustServedCA = true
 	if s.Questions().TrustCA {
 		t.Fatal("asked again after a yes")
+	}
+}
+
+// A duplicate-address answer of arping (exit 1) settles that the address is in use, whatever ping
+// says. Any other arping failure falls back to ping.
+func TestAddressInUseReadsArpingExitCodes(t *testing.T) {
+	t.Parallel()
+	const bridge, address = "vmbr0", "192.0.2.254"
+	duplicate := newHarness(t, opts{})
+	duplicate.exec.fail("arping -c 2 -w 3 -I vmbr0 -D 192.0.2.254", 1)
+	duplicate.exec.fail("ping", 1)
+	if !duplicate.node.AddressInUse(context.Background(), bridge, address) {
+		t.Error("arping found a duplicate and the address was called free")
+	}
+	broken := newHarness(t, opts{})
+	broken.exec.fail("arping -c 2 -w 3 -I vmbr0 -D 192.0.2.254", 2)
+	broken.exec.fail("ping", 1)
+	if broken.node.AddressInUse(context.Background(), bridge, address) {
+		t.Error("an arping that could not run, and a ping nobody answers, called the address in use")
+	}
+}
+
+// After a failed DHCP run the container is removed and the retry starts at its creation: the
+// OpenTofu and the template that were fetched are not fetched or unpacked again.
+func TestRetryResumesAfterTheDownloads(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "")
+	s := prepared(t, h, Config{IP: "dhcp", PVEEntry: "no"})
+	var events []Event
+	r := h.runner(s, func(e Event) { events = append(events, e) })
+	if _, err := r.Run(context.Background()); err == nil {
+		t.Fatal("a container without an address installed")
+	}
+	r.Cleanup(context.Background())
+	events = nil
+	h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "2: eth0    inet 192.0.2.254/24 scope global eth0\n")
+	s.Cfg.IP, s.Cfg.Gateway = "192.0.2.254/24", "192.0.2.1"
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	ran := map[string]bool{}
+	for _, e := range events {
+		ran[e.Step] = true
+	}
+	if ran["tofu"] || ran["template"] || !ran["create"] {
+		t.Errorf("the retry ran the steps %v", ran)
 	}
 }
 

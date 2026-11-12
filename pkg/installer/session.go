@@ -184,29 +184,6 @@ func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 	return nil
 }
 
-// pickAPIHost sets the API host from the candidates. It reports true when a tie is left for the
-// user to settle.
-func (s *Session) pickAPIHost(ties Ties) (bool, error) {
-	c := &s.Cfg
-	if c.APIHost != "" {
-		return false, nil
-	}
-	cands := s.Facts.Candidates
-	if len(cands) == 0 {
-		_, file, _ := s.Node.servedCertificate()
-		return false, userErr(fmt.Sprintf("Proxmox VE's certificate (%s) is valid for no name or address of this cluster's nodes", file),
-			"Give the URL the appliance and the clusters reach the API at, by a name or address the certificate is valid for, with --proxmox-url")
-	}
-	if len(TiedCandidates(cands)) > 1 && ties != PickBest {
-		return true, nil
-	}
-	c.APIHost = cands[0].Host
-	if len(cands) > 1 {
-		s.noticef("the Proxmox VE API at %s, its certificate is also valid for %s", c.APIHost, joinHosts(cands[1:]))
-	}
-	return false, nil
-}
-
 func joinHosts(list []APICandidate) string {
 	hosts := make([]string, len(list))
 	for i, c := range list {
@@ -237,6 +214,29 @@ func (s *Session) UnattendedCheck() error {
 			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), "Once you have checked that this is your CA, give it with --proxmox-ca <file>")
 	}
 	return nil
+}
+
+// pickAPIHost sets the API host from the candidates. It reports true when a tie is left for the
+// user to settle.
+func (s *Session) pickAPIHost(ties Ties) (bool, error) {
+	c := &s.Cfg
+	if c.APIHost != "" {
+		return false, nil
+	}
+	cands := s.Facts.Candidates
+	if len(cands) == 0 {
+		_, file, _ := s.Node.servedCertificate()
+		return false, userErr(fmt.Sprintf("Proxmox VE's certificate (%s) is valid for no name or address of this cluster's nodes", file),
+			"Give the URL the appliance and the clusters reach the API at, by a name or address the certificate is valid for, with --proxmox-url")
+	}
+	if len(TiedCandidates(cands)) > 1 && ties != PickBest {
+		return true, nil
+	}
+	c.APIHost = cands[0].Host
+	if len(cands) > 1 {
+		s.noticef("the Proxmox VE API at %s, its certificate is also valid for %s", c.APIHost, joinHosts(cands[1:]))
+	}
+	return false, nil
 }
 
 func (s *Session) noticef(format string, args ...any) {

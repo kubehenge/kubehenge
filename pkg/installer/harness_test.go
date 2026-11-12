@@ -195,14 +195,14 @@ func storageTable(n int, kind string) string {
 	types := []string{"lvmthin", "zfspool", "nfs"}
 	var tableSb194 strings.Builder
 	for i := range n {
-		tableSb194.WriteString(fmt.Sprintf("%s %s active 500000000 1000 %d 1%%\n", names[i], types[i], 400000000-i*1000))
+		fmt.Fprintf(&tableSb194, "%s %s active 500000000 1000 %d 1%%\n", names[i], types[i], 400000000-i*1000)
 	}
 	table += tableSb194.String()
 	_ = kind
 	return table
 }
 
-func newHarness(t *testing.T, o opts) *harness {
+func newHarness(t *testing.T, o opts) *harness { //nolint:gocritic // tests pass an opts literal.
 	t.Helper()
 	root, work, dir := t.TempDir(), t.TempDir(), t.TempDir()
 	h := &harness{t: t, exec: &fakeExec{}, root: root, work: work, dir: dir}
@@ -316,7 +316,7 @@ func newHarness(t *testing.T, o opts) *harness {
 	return h
 }
 
-func (h *harness) session(cfg Config) *Session {
+func (h *harness) session(cfg Config) *Session { //nolint:gocritic // tests pass a Config literal.
 	if cfg.Hostname == "" {
 		cfg.Hostname = DefaultHostname
 	}

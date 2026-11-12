@@ -37,7 +37,7 @@ type recorder struct {
 
 func (r *recorder) Init() tea.Cmd { return r.inner.Init() }
 
-func (r *recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (r *recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // tea.Model's method returns the interface.
 	_, cmd := r.inner.Update(msg)
 	screen := sanitise(r.inner.render())
 	r.mu.Lock()
@@ -54,7 +54,7 @@ func (r *recorder) screen() string {
 	return r.last
 }
 
-func (r *recorder) view(s stage) string {
+func (r *recorder) viewOf(s stage) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.views[s]
@@ -69,11 +69,11 @@ type ui struct {
 	tm  *teatest.TestModel
 }
 
-func startUI(t *testing.T, h *harness, cfg Config) *ui {
+func startUI(t *testing.T, h *harness, cfg Config) *ui { //nolint:gocritic // tests pass a Config literal.
 	t.Helper()
 	s := h.session(cfg)
 	model := NewModel(s, func(emit func(Event)) *Runner { return h.runner(s, emit) })
-	rec := &recorder{inner: model, views: map[stage]string{}}
+	rec := &recorder{inner: model, views: make(map[stage]string)}
 	tm := teatest.NewTestModel(t, rec, teatest.WithInitialTermSize(100, 40))
 	return &ui{t: t, h: h, s: s, rec: rec, tm: tm}
 }
@@ -111,13 +111,17 @@ func (u *ui) key(r rune) {
 
 func (u *ui) golden(name string, s stage) {
 	u.t.Helper()
-	u.t.Run(name, func(t *testing.T) { golden.RequireEqual(t, u.rec.view(s)) })
+	u.t.Run(name, func(t *testing.T) { golden.RequireEqual(t, u.rec.viewOf(s)) })
 }
 
 func (u *ui) finish() *Model {
 	u.t.Helper()
 	u.tm.WaitFinished(u.t, teatest.WithFinalTimeout(10*time.Second))
-	return u.tm.FinalModel(u.t).(*recorder).inner
+	rec, ok := u.tm.FinalModel(u.t).(*recorder)
+	if !ok {
+		u.t.Fatal("the final model is not the recorder")
+	}
+	return rec.inner
 }
 
 // networkDone walks the network form of a static road through its five screens.
@@ -217,7 +221,7 @@ func TestUIStorageTiesNotShown(t *testing.T) {
 	u.waitFor("DHCP")
 	u.enter(2)
 	u.waitFor("Change network")
-	if strings.Contains(u.rec.view(stChoices), "Disk storage") {
+	if strings.Contains(u.rec.viewOf(stChoices), "Disk storage") {
 		t.Fatal("a single storage was asked")
 	}
 	u.down(3)
@@ -365,5 +369,8 @@ func TestUIRunScreen(t *testing.T) {
 	m.steps = m.runner.Steps()
 	m.state["tofu"], m.detail["tofu"] = StepDone, "OpenTofu 1.0.0, checksum verified"
 	m.state["template"], m.frac["template"] = StepRunning, 0.5
-	t.Run("run", func(t *testing.T) { golden.RequireEqual(t, sanitise(m.render())) })
+	t.Run("run", func(t *testing.T) {
+		t.Parallel()
+		golden.RequireEqual(t, sanitise(m.render()))
+	})
 }
