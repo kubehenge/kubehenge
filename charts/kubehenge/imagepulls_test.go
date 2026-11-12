@@ -27,8 +27,8 @@ func fileContent(t *testing.T, files any, path string) (string, bool) {
 	for _, f := range list {
 		file := asMap(t, f)
 		if file["path"] == path {
-			content, _ := file["content"].(string)
-			return content, true
+			content, ok := file["content"].(string)
+			return content, ok
 		}
 	}
 	return "", false

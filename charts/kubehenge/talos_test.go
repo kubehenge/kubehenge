@@ -371,7 +371,7 @@ func checkTalosCommon(t *testing.T, docs map[string]map[string]any) {
 		t.Errorf("kubelet serving certificate bootstrap = %v", docs["KubeletConfig"])
 	}
 	if serial, ok := field(t, docs["KubeletConfig"], "config", "serializeImagePulls").(bool); !ok || serial {
-		t.Errorf("kubelet serializes image pulls: %v", docs["KubeletConfig"])
+		t.Errorf("kubelet pulls images one at a time: %v", docs["KubeletConfig"])
 	}
 	if parallel, ok := field(t, docs["KubeletConfig"], "config", "maxParallelImagePulls").(float64); !ok || parallel != 3 {
 		t.Errorf("kubelet parallel image pulls = %v", docs["KubeletConfig"])
