@@ -199,7 +199,7 @@ func TestDecideCA(t *testing.T) {
 	}
 	other := newCA(t, "Other")
 	writeTestFile(t, given, encodeCerts(other.cert))
-	if _, err = u.node.DecideCA(ctx, &Config{ProxmoxCA: given}, "https://pve1.example.com:8006"); err == nil || !strings.Contains(err.Error(), "serves no certificate that "+given+" signed for it") {
+	if _, err = u.node.DecideCA(ctx, &Config{ProxmoxCA: given}, "https://pve1.example.com:8006"); err == nil || !strings.Contains(err.Error(), "serves a certificate that "+given+" did not sign") {
 		t.Fatalf("a CA that did not sign: %v", err)
 	}
 

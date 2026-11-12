@@ -362,9 +362,9 @@ func apiFailure(connects bool, apiURL, port, caFile string) error {
 		return userErr("this node cannot connect to the Proxmox VE API at "+apiURL,
 			fmt.Sprintf("Open port %s in the node's firewall and set LISTEN_IP in /etc/default/pveproxy, or give another URL with --proxmox-url", port))
 	case caFile != "":
-		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves no certificate that %s signed for it", apiURL, caFile), "")
+		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate that %s did not sign", apiURL, caFile), "")
 	default:
-		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate this cluster's CA did not sign for it", apiURL),
+		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate that this cluster's CA did not sign", apiURL),
 			"Give the CA that did with --proxmox-ca <file>, or another URL with --proxmox-url")
 	}
 }

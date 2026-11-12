@@ -166,7 +166,7 @@ On a terminal, the installer is a full-screen guide. It detects the node first, 
 
 Without a terminal, or with `--plain`, it prints one line per step and asks nothing. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers.
 
-`install.sh` carries the version of its release and the checksums of the release archive, the OpenTofu release and the container template it installs. It checks each download against them before using it. Once Proxmox's mirror drops that template, it takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
+`install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The installer inside the archive carries the container template's checksum. Every download is checked against its checksum before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
 
 ### Options
 
@@ -222,7 +222,10 @@ Without a terminal, or with `--plain`, it prints one line per step and asks noth
    Certificate SHA-256 fingerprint: …
    Valid until: …
    Sign in with a Proxmox VE administrator to create the management cluster.
+   Log: /var/log/kubehenge-install.log
    ```
+
+   With `--name`, a line before the sign-in one says to point the name at the appliance's address in your DNS.
 
 If a step up to starting the interface fails, the installer removes the container it created, so running it again starts clean. A failure to add the interface entry leaves the working appliance in place and says so.
 
@@ -434,11 +437,14 @@ They also bring the warnings about the [backup](#back-up-the-appliance) and the 
 | --- | --- |
 | Bridge | Bridge the management cluster's VMs attach to. A node's bridge, or an SDN VNet listed with its zone. |
 | VLAN tag | Optional, 1 to 4094. Refused on a VNet of a VLAN zone, which tags its traffic already. A VLAN-aware VNet takes one. |
+| MTU | Optional, 1280 to 65520 ([details](install-settings.md#management-network-mtu)). |
 | Address families | IPv4, IPv6, or both, the first one primary. Fixed once the management cluster exists. |
 | Node addresses | One address, or three for high availability, each with its prefix length: `192.0.2.11/24` or `2001:db8::11/64`. All in one network, the gateway's, and none of them the network's own address or an IPv4 broadcast address. With both families, the page asks for IPv4 and IPv6 node addresses. It takes as many of each. Each node takes the one at its place in both lists. |
 | API address | The virtual IP of the management cluster's Kubernetes API. An unused address of the primary family in the nodes' network, neither a node address nor the gateway. It moves to a healthy node when one fails. |
 | Gateway | The nodes' default gateway, one per family with both. An IPv6 one may be link-local. |
 | DNS servers | Addresses of the cluster's families, one per line or separated by commas. A dual-stack cluster needs one of each. |
+| Search domains | Domains the nodes append to a name without dots, at most six, separated by commas. Empty derives one from each node's host name. |
+| Time servers | NTP servers the nodes keep their clocks with, as host names or addresses separated by commas. Empty keeps Talos's default public servers. |
 | Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. They cover images, not charts. |
 | Advanced: Chart mirrors, Chart mirror certificate | `host=address`, one per line, such as `ghcr.io=oci://registry.example.org/ghcr`. Clusters fetch that host's charts from the address, and trust the certificate authority (PEM) for it. See [Mirroring the charts](#mirroring-the-charts). |
 | Advanced: Release mirror, Release mirror certificate | An `https://` or `http://` address, such as `https://mirror.example.org/github`. RKE2 and k3s nodes download their release from it in place of GitHub, and trust the certificate authority (PEM) for it. See [Mirroring the releases](#mirroring-the-releases). |
@@ -772,13 +778,17 @@ tofu output -raw talosconfig > talosconfig
 | `image_datastore` | `local` | Storage the Talos image is downloaded to, on each node. It must allow `import`. |
 | `vm_datastore` | `local-lvm` | Storage for the management cluster's disks. |
 | `bridge`, `vlan_id` | `vmbr0`, none | Bridge and VLAN tag of the management cluster's VMs. The bridge takes `zone/vnet` too. |
+| `mtu` | none | MTU of the management VMs' network interface, 1280 to 65520. None keeps the bridge's ([details](install-settings.md#management-network-mtu)). |
+| `search_domains` | `[]` | Domains the nodes append to a name without dots, at most six. Empty derives one from each node's host name. |
+| `time_servers` | `[]` | NTP servers of the management cluster's nodes, as host names or addresses. Empty keeps Talos's default public servers. |
+| `vm_id_range` | `{ start = 10000, end = 99999 }` | The range the management VMs' IDs are drawn from at random, `end` excluded ([details](install-settings.md#management-cluster-vm-ids)). |
 | `cluster_name` | `kubehenge` | The management cluster's name, a DNS label of at most 32 characters, also the prefix of its VMs' names and of the users, roles and group the module creates. |
 | `ip_families` | `["IPv4"]` | `["IPv4"]`, `["IPv6"]`, or both in either order. The first is the primary family. |
 | `node_addresses` | required | One, three or five IPv4 addresses with prefix length, such as `["192.0.2.11/24"]`. `[]` on an IPv6-only cluster. |
 | `node_addresses_ipv6` | `[]` | The IPv6 ones, such as `["2001:db8::11/64"]`. A dual-stack cluster gives as many as `node_addresses`. |
 | `api_address` | required | The Kubernetes API's virtual IP, of the primary family, in the nodes' subnet and unused. |
 | `gateway`, `gateway_ipv6`, `dns_servers` | as the families need | The nodes' gateway of each family and their DNS servers, one of each family on a dual-stack cluster. |
-| `pod_subnets`, `service_subnets` | `["10.244.0.0/16"]`, `["10.96.0.0/12"]` | The management cluster's own ranges, one per family in `ip_families` order. The plan refuses ranges that overlap the nodes' network. |
+| `pod_subnets`, `service_subnets` | none | The management cluster's own ranges, one per family in `ip_families` order. Unset, they are `10.244.0.0/16` and `10.96.0.0/12` for IPv4, and `fd5e:4b1c:9a20::/56` and `fd5e:4b1c:9a21::/112` for IPv6. The plan refuses ranges that overlap the nodes' network. |
 | `node_cores`, `node_memory_mb`, `node_disk_gb` | `4`, `4096`, `32` | Size of each node. |
 | `node_cpu_units` | `200` | Proxmox VE CPU weight of each node, from 1 to 10000. Proxmox VE's default is 100. When the host's CPUs are contended, the nodes get twice a default VM's share. A change reaches running nodes at once, without a reboot. |
 | `node_memory_min_mb` | none | Least memory Proxmox VE's ballooning takes each node down to while its host is above 80 % memory use. From 2048 up to `node_memory_mb`. |

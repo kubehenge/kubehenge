@@ -224,8 +224,8 @@ func (s *Session) UnattendedCheck() error {
 		c.IP = optDHCP
 	}
 	if s.CA != nil && s.CA.NeedsTrust && !c.TrustServedCA && c.ProxmoxCA == "" {
-		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate neither this cluster's CA nor this node's trust store vouches for, resting on %s with the SHA-256 fingerprint %s",
-			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), "Once you have checked that this is your CA, give it with --proxmox-ca <file>")
+		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate from %s (SHA-256 fingerprint %s) that this node does not trust",
+			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), "Check that it is your CA, then give it with --proxmox-ca <file>")
 	}
 	return nil
 }
@@ -262,7 +262,7 @@ func (c *Config) CheckOptionFiles() error {
 	if c.ProxmoxCA != "" {
 		data, err := os.ReadFile(c.ProxmoxCA)
 		if err != nil || len(data) == 0 {
-			return userErr("--proxmox-ca names a readable PEM file of the CA that signed the Proxmox VE API's certificate, alone or among others", "")
+			return userErr("--proxmox-ca needs a readable PEM file with the CA that signed the Proxmox VE API's certificate", "")
 		}
 	}
 	if c.Tofu != "" {

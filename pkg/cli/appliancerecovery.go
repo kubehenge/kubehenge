@@ -152,7 +152,7 @@ func (o *applianceOptions) snapshotRunCommand(spec *snapshotRun) *cobra.Command 
 func (o *applianceOptions) dismissWarningCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "dismiss-warning",
-		Short: "Silence the warning that the management cluster's etcd is not backed up for 30 days",
+		Short: "Silence the warning that the management cluster's etcd is not backed up, for 30 days",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {

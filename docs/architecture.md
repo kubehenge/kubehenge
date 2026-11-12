@@ -829,7 +829,8 @@ Every cluster gets the part of the [CIS Kubernetes Benchmark](https://www.cisecu
 - **Requests without credentials** are refused on RKE2 and k3s. On kubeadm they reach health checks and the `cluster-info` ConfigMap alone.
 - **The API server** limits event rates (EventRateLimit) and does not extend projected ServiceAccount tokens past their hour. It and the kubelets offer only forward-secret, authenticated TLS 1.2 ciphers.
   - Profiling is off in it, the controller manager and the scheduler, which serve on loopback only.
-- **Nodes** run with the kernel settings the kubelet expects. kubeadm's kubelet configuration and unit files are readable by root alone. Their kubelets pull up to three images at once, since the default of one at a time lets a single stalled pull hold back every other image of the node.
+- **Nodes** run with the kernel settings the kubelet expects. kubeadm's kubelet configuration and unit files are readable by root alone.
+- **Image pulls:** each kubelet pulls up to three images at once. The default of one lets a single stalled pull hold back every other image of the node.
 
 ### CIS hardening
 
@@ -1351,7 +1352,9 @@ RKE2 and k3s ship the CRDs in their Traefik CRD charts in some releases. Later r
 
 #### Whose objects
 
-Where the distribution has its own Gateway API chart, the Gateway API is the distribution's, and the controller applies none of its own release. It only puts back an object the chart's installed revision ships and the cluster lacks, marked as the chart's. The upgrade that brings the chart also upgrades the Traefik CRD chart, and Helm can delete the admission policy there after the Gateway API chart has adopted it.
+Where the distribution has its own Gateway API chart, the Gateway API is the distribution's, and the controller applies none of its own release. It only puts back an object the chart's installed revision ships and the cluster lacks, marked as the chart's.
+
+The upgrade that brings the chart also upgrades the Traefik CRD chart. Helm can then delete the admission policy there after the Gateway API chart has adopted it.
 
 Otherwise the controller looks at each object of the bundle in the cluster:
 

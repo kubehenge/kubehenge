@@ -556,7 +556,7 @@ func (r *Runner) stepNetwork(ctx context.Context) error {
 		break
 	}
 	if reachable == "" {
-		return userErr("the container cannot resolve any host the Proxmox VE API could be reached at (tried "+strings.Join(hosts, ", ")+")",
+		return userErr("the container cannot resolve any name of the Proxmox VE API (tried "+strings.Join(hosts, ", ")+")",
 			"Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns")
 	}
 	if reachable != hosts[0] {
@@ -726,7 +726,7 @@ func (r *Runner) stepService(ctx context.Context) error {
 
 func (r *Runner) serviceFailure(ctx context.Context, cause string) error {
 	_, _ = r.inCT(ctx, "journalctl", "-u", "kubehenge", "--no-pager", "-n", "60")
-	return userErr(cause, "Its log is in "+r.LogPath+". Give a URL it reaches with --proxmox-url, whose certificate names it")
+	return userErr(cause, "See "+r.LogPath+". Give a URL the container reaches, and that the certificate names, with --proxmox-url")
 }
 
 func (r *Runner) realms(ctx context.Context) int {
