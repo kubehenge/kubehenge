@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -48,11 +49,11 @@ func (s *Session) Prepare(ctx context.Context) error {
 	}
 	list := strings.Join(facts.Bridges, ", ")
 	if list == "" {
-		list = "none"
+		list = optNone
 	}
 	if s.Cfg.Bridge != "" {
 		if !contains(facts.Bridges, s.Cfg.Bridge) {
-			return userErr(fmt.Sprintf("%s is no bridge, Open vSwitch bridge or SDN VNet of this node", s.Cfg.Bridge), "Name one of "+list+" with --bridge")
+			return userErr(s.Cfg.Bridge+" is no bridge, Open vSwitch bridge or SDN VNet of this node", "Name one of "+list+" with --bridge")
 		}
 	} else if facts.DefaultBridge != "" {
 		s.Cfg.Bridge = facts.DefaultBridge
@@ -66,12 +67,7 @@ func (s *Session) Prepare(ctx context.Context) error {
 }
 
 func contains(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, want)
 }
 
 // RefreshForBridge detects the bridge's subnet, address suggestion and API candidates again after
@@ -100,10 +96,6 @@ func (s *Session) Questions() Needs {
 		TrustCA:         s.CA != nil && s.CA.NeedsTrust && !c.TrustServedCA && c.ProxmoxCA == "",
 		PVEEntry:        c.PVEEntry == "",
 	}
-}
-
-func (s *Session) notice(format string, args ...any) {
-	s.Notices = append(s.Notices, fmt.Sprintf(format, args...))
 }
 
 // FillStorages sets each storage that needs no question: the only one that fits, or with fill the
@@ -207,7 +199,7 @@ func joinHosts(list []APICandidate) string {
 func (s *Session) UnattendedCheck() error {
 	c, f := &s.Cfg, s.Facts
 	if c.Bridge == "" {
-		return userErr(fmt.Sprintf("no bridge carries this node's default route and there is no vmbr0. Name one of %s", strings.Join(f.Bridges, ", ")), "Give it with --bridge")
+		return userErr("no bridge carries this node's default route and there is no vmbr0. Name one of "+strings.Join(f.Bridges, ", "), "Give it with --bridge")
 	}
 	if c.DNS == "" && f.LoopbackDNSOnly {
 		return userErr("/etc/resolv.conf names only name servers on this node's loopback, which the container cannot reach", "Give the name servers it asks with --dns, such as 192.0.2.53,192.0.2.54")
@@ -217,13 +209,17 @@ func (s *Session) UnattendedCheck() error {
 			return userErr("this node's network has no sign of DHCP, so the container would get no address",
 				"Give one with --ip <address>/<prefix> --gateway <address>, or --ip dhcp where a DHCP server answers")
 		}
-		c.IP = "dhcp"
+		c.IP = optDHCP
 	}
 	if s.CA != nil && s.CA.NeedsTrust && !c.TrustServedCA && c.ProxmoxCA == "" {
 		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate neither this cluster's CA nor this node's trust store vouches for, resting on %s with the SHA-256 fingerprint %s",
 			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), "Once you have checked that this is your CA, give it with --proxmox-ca <file>")
 	}
 	return nil
+}
+
+func (s *Session) notice(format string, args ...any) {
+	s.Notices = append(s.Notices, fmt.Sprintf(format, args...))
 }
 
 // CheckOptionFiles checks the files the options name.

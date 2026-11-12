@@ -43,11 +43,11 @@ func NewEnv(cfg *Config) (*Env, error) {
 	}
 	e := &Env{LogPath: LogFile}
 	var err error
-	if e.Log, err = os.OpenFile(LogFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); err != nil {
-		return nil, err
+	if e.Log, err = os.OpenFile(LogFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, permFile); err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
 	}
 	if e.Work, err = os.MkdirTemp("", "kubehenge-install-"); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mkdir temp: %w", err)
 	}
 	e.Exec = &OSExec{Log: e.Log}
 	out, _ := e.Exec.Run(context.Background(), "pveversion")
@@ -65,7 +65,7 @@ func NewEnv(cfg *Config) (*Env, error) {
 	if e.Dir == "" {
 		exe, err := os.Executable()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("executable: %w", err)
 		}
 		e.Dir = filepath.Dir(filepath.Dir(exe))
 	}
@@ -82,7 +82,11 @@ func NewEnv(cfg *Config) (*Env, error) {
 }
 
 func lookupHost(ctx context.Context, name string) ([]string, error) {
-	return net.DefaultResolver.LookupHost(ctx, name)
+	addrs, err := net.DefaultResolver.LookupHost(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("look up host: %w", err)
+	}
+	return addrs, nil
 }
 
 // NewRunner builds the runner of a prepared session.
@@ -133,7 +137,7 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	res, err := runner.Run(ctx)
 	if err != nil {
 		// The cleanup must run even when the run was cancelled.
-		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 		_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
 		runner.Cleanup(cleanCtx)

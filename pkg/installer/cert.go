@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -37,10 +38,10 @@ func handshake(ctx context.Context, conn net.Conn, host string) ([]*x509.Certifi
 	if _, err := netip.ParseAddr(host); err != nil {
 		cfg.ServerName = host
 	}
-	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(probeTimeout))
 	c := tls.Client(conn, cfg)
 	if err := c.HandshakeContext(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("handshake context: %w", err)
 	}
 	return c.ConnectionState().PeerCertificates, nil
 }
@@ -48,7 +49,7 @@ func handshake(ctx context.Context, conn net.Conn, host string) ([]*x509.Certifi
 func parseKey(data []byte) (crypto.Signer, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return nil, fmt.Errorf("no PEM key")
+		return nil, errors.New("no PEM key")
 	}
 	if k, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
 		if s, ok := k.(crypto.Signer); ok {
@@ -58,7 +59,11 @@ func parseKey(data []byte) (crypto.Signer, error) {
 	if k, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
 		return k, nil
 	}
-	return x509.ParseECPrivateKey(block.Bytes)
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse private key: %w", err)
+	}
+	return key, nil
 }
 
 // MakeCertificate makes a certificate and key for the appliance, signed by this cluster's CA so
@@ -67,11 +72,11 @@ func parseKey(data []byte) (crypto.Signer, error) {
 func (n *Node) MakeCertificate(hostname string, addresses []string, name string, now time.Time) (*Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate key: %w", err)
 	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 126))
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), serialBits))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("int: %w", err)
 	}
 	cn := hostname
 	dns := []string{hostname}
@@ -104,11 +109,11 @@ func (n *Node) MakeCertificate(hostname string, addresses []string, name string,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, signer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create certificate: %w", err)
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal pkcs8 private key: %w", err)
 	}
 	cert, _ := x509.ParseCertificate(der)
 	return &Certificate{
@@ -121,7 +126,7 @@ func (n *Node) MakeCertificate(hostname string, addresses []string, name string,
 // OwnCertificate checks the administrator's --cert and --key for the public host.
 func OwnCertificate(certPEM, keyPEM []byte, certFile, keyFile, host string, now time.Time) (*Certificate, error) {
 	cert, err := parseCertFile(certPEM)
-	if err != nil || cert.NotAfter.Before(now.Add(24*time.Hour)) {
+	if err != nil || cert.NotAfter.Before(now.Add(certMinValidity)) {
 		return nil, userErr(certFile+" is not a PEM certificate valid for at least another day", "")
 	}
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)

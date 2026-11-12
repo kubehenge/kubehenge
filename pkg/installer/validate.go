@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"regexp"
@@ -41,7 +42,7 @@ func IsIPv4(s string) bool {
 	if !dottedIPv4.MatchString(s) {
 		return false
 	}
-	for _, octet := range strings.Split(s, ".") {
+	for octet := range strings.SplitSeq(s, ".") {
 		n, err := strconv.Atoi(octet)
 		if err != nil || n > 255 {
 			return false
@@ -99,7 +100,7 @@ func IsProxyRange(s string) bool {
 // ValidateAddressCIDR checks a static IPv4 address typed as address/prefix.
 func ValidateAddressCIDR(s string) error {
 	if !IsIPv4CIDR(s) {
-		return fmt.Errorf("an address with its prefix, such as 192.0.2.40/24")
+		return errors.New("an address with its prefix, such as 192.0.2.40/24")
 	}
 	return nil
 }
@@ -107,7 +108,7 @@ func ValidateAddressCIDR(s string) error {
 // ValidateIPv4 checks a single IPv4 address.
 func ValidateIPv4(s string) error {
 	if !IsIPv4(s) {
-		return fmt.Errorf("an IPv4 address, such as 192.0.2.1")
+		return errors.New("an IPv4 address, such as 192.0.2.1")
 	}
 	return nil
 }
@@ -127,15 +128,15 @@ func (c *Config) Validate() error {
 		{len(c.TrustedProxies) > 0 && c.Certificate, "--trusted-proxy goes with an install or --upgrade", ""},
 		{c.NoTrustedProxy && len(c.TrustedProxies) > 0, "--trusted-proxy and --no-trusted-proxy exclude each other", ""},
 		{c.NoTrustedProxy && !c.Upgrade, "--no-trusted-proxy goes with --upgrade", ""},
-		{c.IP != "" && c.IP != "dhcp" && c.IP != "none" && !IsIPv4CIDR(c.IP), "--ip is dhcp or an IPv4 address with its prefix length, such as 192.0.2.5/24, or none on an IPv6-only network", ""},
+		{c.IP != "" && c.IP != optDHCP && c.IP != "none" && !IsIPv4CIDR(c.IP), "--ip is dhcp or an IPv4 address with its prefix length, such as 192.0.2.5/24, or none on an IPv6-only network", ""},
 		{c.Gateway != "" && !IsIPv4(c.Gateway), "--gateway is an IPv4 address, such as 192.0.2.1", ""},
-		{c.IP6 != "" && c.IP6 != "auto" && c.IP6 != "dhcp" && !IsIPv6CIDR(c.IP6), "--ip6 is auto, dhcp or an IPv6 address with its prefix length, such as 2001:db8::5/64", ""},
+		{c.IP6 != "" && c.IP6 != optAuto && c.IP6 != "dhcp" && !IsIPv6CIDR(c.IP6), "--ip6 is auto, dhcp or an IPv6 address with its prefix length, such as 2001:db8::5/64", ""},
 		{c.Gateway6 != "" && !IsIPv6(c.Gateway6), "--gateway6 is an IPv6 address, such as 2001:db8::1", ""},
 		{c.IP == "none" && c.IP6 == "", "--ip none needs --ip6, as the container needs an address", ""},
 		{c.IP == "none" && c.Gateway != "", "--gateway goes with a static --ip", ""},
 		{c.Gateway6 != "" && (c.IP6 == "" || c.IP6 == "auto" || c.IP6 == "dhcp"), "--gateway6 goes with a static --ip6", ""},
-		{c.VLAN != "" && !inRange(c.VLAN, 1, 4094), "--vlan is a VLAN tag from 1 to 4094", ""},
-		{c.MTU != "" && !inRange(c.MTU, 576, 65535), "--mtu is a number of bytes from 576 to 65535", ""},
+		{c.VLAN != "" && !inRange(c.VLAN, 1, vlanMax), "--vlan is a VLAN tag from 1 to 4094", ""},
+		{c.MTU != "" && !inRange(c.MTU, mtuMin, mtuMax), "--mtu is a number of bytes from 576 to 65535", ""},
 		{c.NoName && (!c.Certificate || c.Name != ""), "--no-name goes with --certificate and without --name", ""},
 		{c.Hostname != "" && !hostnameRE.MatchString(c.Hostname), "--hostname is a host name such as kubehenge", ""},
 		{(c.CertFile != "") != (c.KeyFile != ""), "--cert and --key name a readable PEM certificate and its key", ""},

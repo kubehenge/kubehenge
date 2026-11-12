@@ -19,8 +19,8 @@ var (
 	trailingSpace = regexp.MustCompile(`(?m)[ \t]+$`)
 )
 
-// sanitize strips what changes between runs: styles, spinner frames and the certificate's fingerprint.
-func sanitize(s string) string {
+// sanitise strips what changes between runs: styles, spinner frames and the certificate's fingerprint.
+func sanitise(s string) string {
 	s = ansi.Strip(s)
 	s = spinnerGlyphs.ReplaceAllString(s, "*")
 	s = fingerprintRE.ReplaceAllString(s, "<fingerprint>")
@@ -39,7 +39,7 @@ func (r *recorder) Init() tea.Cmd { return r.inner.Init() }
 
 func (r *recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	_, cmd := r.inner.Update(msg)
-	screen := sanitize(r.inner.render())
+	screen := sanitise(r.inner.render())
 	r.mu.Lock()
 	r.last, r.views[r.inner.stage] = screen, screen
 	r.mu.Unlock()
@@ -91,14 +91,14 @@ func (u *ui) waitFor(want string) {
 }
 
 func (u *ui) enter(n int) {
-	for i := 0; i < n; i++ {
+	for range n {
 		u.tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 		time.Sleep(30 * time.Millisecond)
 	}
 }
 
 func (u *ui) down(n int) {
-	for i := 0; i < n; i++ {
+	for range n {
 		u.tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
 		time.Sleep(30 * time.Millisecond)
 	}
@@ -124,6 +124,7 @@ func (u *ui) finish() *Model {
 func (u *ui) networkDone() { u.enter(5) }
 
 func TestUIDHCPRoad(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	u := startUI(t, h, Config{})
 	u.waitFor("DHCP")
@@ -147,6 +148,7 @@ func TestUIDHCPRoad(t *testing.T) {
 }
 
 func TestUIStaticRoadWithPrefill(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pct config 100", "net0: name=eth0,bridge=vmbr0,ip=192.0.2.254/24,gw=192.0.2.1\n")
 	u := startUI(t, h, Config{PVEEntry: "no"})
@@ -171,6 +173,7 @@ func TestUIStaticRoadWithPrefill(t *testing.T) {
 }
 
 func TestUIAddressInUse(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	u := startUI(t, h, Config{PVEEntry: "no"})
 	u.waitFor("Static")
@@ -190,6 +193,7 @@ func TestUIAddressInUse(t *testing.T) {
 }
 
 func TestUIStorageTiesShown(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true, rootStorages: 2, templateStorages: 2})
 	u := startUI(t, h, Config{PVEEntry: "no"})
 	u.waitFor("DHCP")
@@ -207,6 +211,7 @@ func TestUIStorageTiesShown(t *testing.T) {
 }
 
 func TestUIStorageTiesNotShown(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	u := startUI(t, h, Config{PVEEntry: "no"})
 	u.waitFor("DHCP")
@@ -221,6 +226,7 @@ func TestUIStorageTiesNotShown(t *testing.T) {
 }
 
 func TestUIAPIAddressTieShown(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{
 		dhcp:  true,
 		names: []string{"a.example.com", "b.example.com"},
@@ -241,6 +247,7 @@ func TestUIAPIAddressTieShown(t *testing.T) {
 }
 
 func TestUICATrustShownAndAccepted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true, untrusted: true})
 	u := startUI(t, h, Config{PVEEntry: "no"})
 	u.waitFor("DHCP")
@@ -258,6 +265,7 @@ func TestUICATrustShownAndAccepted(t *testing.T) {
 }
 
 func TestUICATrustRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true, untrusted: true})
 	u := startUI(t, h, Config{PVEEntry: "no"})
 	u.waitFor("DHCP")
@@ -274,6 +282,7 @@ func TestUICATrustRefused(t *testing.T) {
 }
 
 func TestUIDHCPTimeoutThenStatic(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "")
 	u := startUI(t, h, Config{PVEEntry: "no"})
@@ -305,6 +314,7 @@ func TestUIDHCPTimeoutThenStatic(t *testing.T) {
 }
 
 func TestUIGoBackFromSummary(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	u := startUI(t, h, Config{PVEEntry: "no"})
 	u.waitFor("DHCP")
@@ -330,6 +340,7 @@ func (u *ui) networkDoneStaticFromDHCP() {
 }
 
 func TestUICancelBeforeAnyChange(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	u := startUI(t, h, Config{PVEEntry: "no"})
 	u.waitFor("DHCP")
@@ -345,6 +356,7 @@ func TestUICancelBeforeAnyChange(t *testing.T) {
 
 // The run, failure and end screens at fixed states.
 func TestUIRunScreen(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	s := prepared(t, h, Config{IP: "dhcp", PVEEntry: "no"})
 	m := NewModel(s, func(emit func(Event)) *Runner { return h.runner(s, emit) })
@@ -353,5 +365,5 @@ func TestUIRunScreen(t *testing.T) {
 	m.steps = m.runner.Steps()
 	m.state["tofu"], m.detail["tofu"] = StepDone, "OpenTofu 1.0.0, checksum verified"
 	m.state["template"], m.frac["template"] = StepRunning, 0.5
-	t.Run("run", func(t *testing.T) { golden.RequireEqual(t, sanitize(m.render())) })
+	t.Run("run", func(t *testing.T) { golden.RequireEqual(t, sanitise(m.render())) })
 }

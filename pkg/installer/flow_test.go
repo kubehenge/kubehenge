@@ -3,6 +3,7 @@ package installer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,7 @@ func runPlain(t *testing.T, h *harness, cfg Config) (string, error, *Session) {
 
 // The road with DHCP: the node's own network has a DHCP server, so --ip is left out.
 func TestPlainDHCPRoad(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	out, err, _ := runPlain(t, h, Config{PVEEntry: "no"})
 	if err != nil {
@@ -44,6 +46,7 @@ func TestPlainDHCPRoad(t *testing.T) {
 
 // The road with a static address given by flags, as the end-to-end tests call it.
 func TestPlainStaticRoad(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pct config 100", "net0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24,gw=192.0.2.1\n")
 	out, err, _ := runPlain(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", DNS: "192.0.2.53", PVEEntry: "no"})
@@ -60,6 +63,7 @@ func TestPlainStaticRoad(t *testing.T) {
 
 // Unattended on a node without DHCP and without --ip: refused before anything is created.
 func TestUnattendedWithoutIPOnNodeWithoutDHCP(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	out, err, _ := runPlain(t, h, Config{PVEEntry: "no"})
 	if err == nil {
@@ -77,6 +81,7 @@ func TestUnattendedWithoutIPOnNodeWithoutDHCP(t *testing.T) {
 
 // Under DHCP no address arrives: the unattended run names the fix and removes the container.
 func TestUnattendedDHCPTimeoutCleansUp(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "")
 	out, err, _ := runPlain(t, h, Config{PVEEntry: "no"})
@@ -93,7 +98,8 @@ func TestUnattendedDHCPTimeoutCleansUp(t *testing.T) {
 }
 
 func asNoAddress(err error, target **NoAddressError) bool {
-	na, ok := err.(*NoAddressError)
+	na := &NoAddressError{}
+	ok := errors.As(err, &na)
 	if ok {
 		*target = na
 	}
@@ -103,6 +109,7 @@ func asNoAddress(err error, target **NoAddressError) bool {
 // Unattended and the API's certificate is vouched for by nothing here: refused with the
 // fingerprint and the flag that settles it, nothing created.
 func TestUnattendedUntrustedCA(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{untrusted: true})
 	_, err, _ := runPlain(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
 	if err == nil || !strings.Contains(err.Error(), "SHA-256 fingerprint") || !strings.Contains(err.Error(), "--proxmox-ca") {
@@ -114,6 +121,7 @@ func TestUnattendedUntrustedCA(t *testing.T) {
 }
 
 func TestExistingApplianceRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pvesh get /cluster/resources", `[{"type":"lxc","vmid":105,"node":"pve2","tags":"a;kubehenge"}]`)
 	s := h.session(Config{})
@@ -124,6 +132,7 @@ func TestExistingApplianceRefused(t *testing.T) {
 }
 
 func TestQuestionsNetwork(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	if !prepared(t, h, Config{}).Questions().Network {
 		t.Fatal("DHCP or static is not asked without --ip")
@@ -134,6 +143,7 @@ func TestQuestionsNetwork(t *testing.T) {
 }
 
 func TestQuestionsStorageTie(t *testing.T) {
+	t.Parallel()
 	two := prepared(t, newHarness(t, opts{rootStorages: 2}), Config{})
 	if !two.Questions().Storage {
 		t.Fatal("two fitting storages are not asked")
@@ -147,6 +157,7 @@ func TestQuestionsStorageTie(t *testing.T) {
 }
 
 func TestQuestionsTemplateStorageTie(t *testing.T) {
+	t.Parallel()
 	if !prepared(t, newHarness(t, opts{templateStorages: 2}), Config{}).Questions().TemplateStorage {
 		t.Fatal("two template storages are not asked")
 	}
@@ -159,6 +170,7 @@ func TestQuestionsTemplateStorageTie(t *testing.T) {
 }
 
 func TestQuestionsAPIHostTie(t *testing.T) {
+	t.Parallel()
 	tie := opts{
 		names: []string{"a.example.com", "b.example.com"},
 		hosts: map[string][]string{"a.example.com": {"192.0.2.10"}, "b.example.com": {"192.0.2.10"}},
@@ -176,6 +188,7 @@ func TestQuestionsAPIHostTie(t *testing.T) {
 }
 
 func TestQuestionsTrustCA(t *testing.T) {
+	t.Parallel()
 	if prepared(t, newHarness(t, opts{}), Config{}).Questions().TrustCA {
 		t.Fatal("the cluster's own CA is asked")
 	}
@@ -193,6 +206,7 @@ func TestQuestionsTrustCA(t *testing.T) {
 }
 
 func TestStaticPrefillAndAddressInUse(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	s := prepared(t, h, Config{})
 	if s.Facts.SuggestedIP != "192.0.2.254" || s.Facts.Prefix.Bits() != 24 || s.Facts.Gateway != "192.0.2.1" {

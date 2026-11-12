@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	_ "embed" // the in-container upgrade script
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -42,12 +44,10 @@ func (r *Runner) requireAppliance(ctx context.Context) error {
 		}
 	}
 	conf, _ := r.pct(ctx, "config", id)
-	for _, line := range strings.Split(conf, "\n") {
+	for line := range strings.SplitSeq(conf, "\n") {
 		if tags, ok := strings.CutPrefix(line, "tags:"); ok {
-			for _, tag := range strings.FieldsFunc(tags, func(c rune) bool { return c == ';' || c == ' ' }) {
-				if tag == "kubehenge" {
-					return nil
-				}
+			if slices.Contains(strings.FieldsFunc(tags, func(c rune) bool { return c == ';' || c == ' ' }), "kubehenge") {
+				return nil
 			}
 		}
 	}
@@ -69,7 +69,7 @@ func (r *Runner) say(out io.Writer, format string, args ...any) {
 
 func (r *Runner) envValue(ctx context.Context, key string) string {
 	out, _ := r.inCT(ctx, "cat", "/etc/kubehenge/appliance.env")
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if v, ok := strings.CutPrefix(line, key+"="); ok {
 			return strings.TrimSpace(v)
 		}
@@ -101,7 +101,7 @@ func (r *Runner) signedHere(c *x509.Certificate) bool {
 
 // madeHere reports whether the installer made the certificate: signed by this cluster's CA or by itself.
 func (r *Runner) madeHere(c *x509.Certificate) bool {
-	return r.signedHere(c) || string(c.RawIssuer) == string(c.RawSubject)
+	return r.signedHere(c) || bytes.Equal(c.RawIssuer, c.RawSubject)
 }
 
 var hostLabelRE = regexp.MustCompile(`^[0-9A-Za-z.-]+$`)
@@ -123,10 +123,8 @@ func (r *Runner) publicName(ctx context.Context, c *x509.Certificate, address st
 		return ""
 	}
 	if addrs, err := r.S.Node.LookupHost(ctx, host); err == nil {
-		for _, a := range addrs {
-			if a == address {
-				return host
-			}
+		if slices.Contains(addrs, address) {
+			return host
 		}
 	}
 	r.say(out, "kubehenge: leaving %s out of the certificate: this node's DNS does not resolve it to %s; give it with --name to keep it", host, address)
@@ -238,7 +236,7 @@ func (r *Runner) initDefaults() {
 
 func (r *Runner) hostnameOf(ctx context.Context) string {
 	conf, _ := r.pct(ctx, "config", r.S.Cfg.CTID)
-	for _, line := range strings.Split(conf, "\n") {
+	for line := range strings.SplitSeq(conf, "\n") {
 		if h, ok := strings.CutPrefix(line, "hostname: "); ok {
 			return strings.TrimSpace(h)
 		}
@@ -256,7 +254,7 @@ func (r *Runner) updateEntry(ctx context.Context, url string, out io.Writer) {
 		return
 	}
 	current := ""
-	for _, line := range strings.Split(string(conf), "\n") {
+	for line := range strings.SplitSeq(string(conf), "\n") {
 		if v, ok := strings.CutPrefix(line, "url="); ok {
 			current = v
 		}
@@ -293,7 +291,7 @@ func (r *Runner) stageSoftware(ctx context.Context, pushTofu bool) error {
 	if err := r.push(ctx, shareTar, "/tmp/share.tar", ""); err != nil {
 		return err
 	}
-	for _, unit := range strings.Fields(units) {
+	for unit := range strings.FieldsSeq(units) {
 		if err := r.push(ctx, filepath.Join(share, "appliance", unit), "/etc/systemd/system/"+unit+".new", "0644"); err != nil {
 			return err
 		}
@@ -328,7 +326,7 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 	// read the state a newer one wrote.
 	pushTofu := true
 	if v, _ := r.inCT(ctx, "/usr/local/bin/tofu", "version"); strings.HasPrefix(v, "OpenTofu v") {
-		have := strings.TrimPrefix(strings.SplitN(v, "\n", 2)[0], "OpenTofu v")
+		have := strings.TrimPrefix(strings.SplitN(v, "\n", firstLineParts)[0], "OpenTofu v")
 		if versionLess(r.TofuV, have) {
 			r.say(out, "keeping OpenTofu %s, newer than the installer's %s", have, r.TofuV)
 			pushTofu = false
@@ -371,7 +369,7 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 	}
 	if newURL != "" {
 		host, port, _ := splitAPI(newURL)
-		if _, err := netipParse(host); err != nil {
+		if !isAddress(host) {
 			if _, err := r.inCT(ctx, "getent", "hosts", host); err != nil {
 				return nil, userErr("the container cannot resolve any host the Proxmox VE API could be reached at (tried "+host+")",
 					"Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns")
@@ -417,7 +415,7 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 	r.say(out, "== starting Kubehenge %s, and checking that it serves", r.version)
 	proxies := strings.Join(c.TrustedProxies, ",")
 	if c.NoTrustedProxy {
-		proxies = "none"
+		proxies = optNone
 	}
 	reason, err := r.inCT(ctx, "flock", "-n", "-E", "75", "/var/lib/kubehenge", "sh", "-c", upgradeScript, "sh", "", c.CTID, insecure, units, newURL, proxies)
 	reason = strings.TrimSpace(reason)
@@ -425,17 +423,16 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 	if before == "" {
 		before = "the release installed before"
 	}
-	var ce *CmdError
 	if err != nil {
 		code := -1
-		if errors.As(err, &ce) {
+		if ce, ok := errors.AsType[*CmdError](err); ok {
 			code = ce.Code
 		}
 		cleanup := "rm -rf /usr/local/bin/kubehenge.new /usr/local/bin/tofu.new /tmp/share.tar /etc/systemd/system/*.new /etc/kubehenge/proxmox-ca.pem.new /usr/local/share/ca-certificates/proxmox-ca.crt.new"
 		switch code {
 		case exitBusy:
 			_, _ = r.inCT(ctx, "sh", "-c", cleanup)
-			return nil, userErr(fmt.Sprintf("the management cluster is being applied or removed, or the appliance upgraded, in container %s", c.CTID), "Run this again once that has finished")
+			return nil, userErr("the management cluster is being applied or removed, or the appliance upgraded, in container "+c.CTID, "Run this again once that has finished")
 		case exitCutOff:
 			_, _ = r.inCT(ctx, "sh", "-c", cleanup)
 			return nil, userErr(reason, "Undo it with: pct exec "+c.CTID+" -- systemctl restart kubehenge.service. Then run this again")
@@ -487,19 +484,19 @@ func (r *Runner) needUpgradeSpace(ctx context.Context) error {
 	du, _ := r.inCT(ctx, "du", "-sk", "/usr/local/share/kubehenge", "/usr/local/bin/kubehenge", "/usr/local/bin/tofu")
 	var room, installed int64
 	if lines := strings.Split(strings.TrimSpace(df), "\n"); len(lines) > 1 {
-		if f := strings.Fields(lines[1]); len(f) > 3 {
-			_, _ = fmt.Sscan(f[3], &room)
+		if f := strings.Fields(lines[1]); len(f) > dfAvailable {
+			_, _ = fmt.Sscan(f[dfAvailable], &room)
 		}
 	}
-	for _, line := range strings.Split(du, "\n") {
+	for line := range strings.SplitSeq(du, "\n") {
 		var n int64
 		if _, err := fmt.Sscan(line, &n); err == nil {
 			installed += n
 		}
 	}
-	want := 3*installed + 65536
+	want := upgradeFactor*installed + upgradeSlackKiB
 	if room != 0 && room < want {
-		return userErr(fmt.Sprintf("container %s has %d MiB free and the upgrade needs %d MiB", r.S.Cfg.CTID, room/1024, want/1024),
+		return userErr(fmt.Sprintf("container %s has %d MiB free and the upgrade needs %d MiB", r.S.Cfg.CTID, room/kibPerMiB, want/kibPerMiB),
 			fmt.Sprintf("Free space in it, or grow its disk with: pct resize %s rootfs +4G", r.S.Cfg.CTID))
 	}
 	return nil

@@ -1,8 +1,10 @@
 package installer
 
 import (
+	"cmp"
 	"context"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -83,24 +85,17 @@ const (
 	pveNodePEM   = "/etc/pve/local/pve-ssl.pem"
 )
 
-func (n *Node) path(p string) string { return filepath.Join(n.Root, p) }
-
-func (n *Node) readFile(p string) ([]byte, error) { return os.ReadFile(n.path(p)) }
-
-func (n *Node) run(ctx context.Context, name string, args ...string) (string, error) {
-	return n.Exec.Run(ctx, name, args...)
-}
-
-var storageRank = map[string]int{"zfspool": 1, "lvmthin": 1, "lvm": 1, "rbd": 1, "dir": 2, "btrfs": 2, "nfs": 3, "cifs": 4, "cephfs": 5}
+var storageRank = map[string]int{"zfspool": rankLocal, "lvmthin": rankLocal, "lvm": rankLocal, "rbd": rankLocal, "dir": rankDir, "btrfs": rankDir, "nfs": rankNFS, "cifs": rankCIFS, "cephfs": rankCeph}
 
 // Storages lists the enabled, active storages that take the content and have that much free,
 // best first: local block storage, then directories, NFS, CIFS, CephFS and the rest, and within a
 // kind the most free space. A share is slower and goes away with its network.
-func (n *Node) Storages(ctx context.Context, content string, leastKiB int64) (fit []Storage, short []Storage, err error) {
+func (n *Node) Storages(ctx context.Context, content string, leastKiB int64) ([]Storage, []Storage, error) {
 	out, err := n.run(ctx, "pvesm", "status", "--content", content, "--enabled", "1")
 	if err != nil {
 		return nil, nil, err
 	}
+	var fit, short []Storage
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	for i, line := range lines {
 		f := strings.Fields(line)
@@ -122,17 +117,17 @@ func (n *Node) Storages(ctx context.Context, content string, leastKiB int64) (fi
 			short = append(short, s)
 		}
 	}
-	sort.SliceStable(fit, func(i, j int) bool {
-		if fit[i].rank != fit[j].rank {
-			return fit[i].rank < fit[j].rank
+	slices.SortStableFunc(fit, func(a, b Storage) int {
+		if a.rank != b.rank {
+			return cmp.Compare(a.rank, b.rank)
 		}
-		return fit[i].FreeKiB > fit[j].FreeKiB
+		return cmp.Compare(b.FreeKiB, a.FreeKiB)
 	})
 	return fit, short, nil
 }
 
 // FreeText formats a storage's free space.
-func (s Storage) FreeText() string { return fmt.Sprintf("%.1f GiB free", float64(s.FreeKiB)/1048576) }
+func (s Storage) FreeText() string { return fmt.Sprintf("%.1f GiB free", float64(s.FreeKiB)/kibPerGiB) }
 
 func jsonList(out string) []map[string]any {
 	var list []map[string]any
@@ -150,33 +145,6 @@ func str(m map[string]any, key string) string {
 	return ""
 }
 
-// bridges lists the bridges, Open vSwitch bridges and SDN VNets a container can attach to.
-func (n *Node) bridges(ctx context.Context) []string {
-	seen := map[string]bool{}
-	var list []string
-	add := func(name string) {
-		if name != "" && !seen[name] {
-			seen[name] = true
-			list = append(list, name)
-		}
-	}
-	if out, err := n.run(ctx, "pvesh", "get", "/nodes/"+n.Hostname+"/network", "--output-format", "json"); err == nil {
-		for _, m := range jsonList(out) {
-			if t := str(m, "type"); t == "bridge" || t == "OVSBridge" {
-				add(str(m, "iface"))
-			}
-		}
-	}
-	// Where SDN is not set up, the call fails and there are none.
-	if out, err := n.run(ctx, "pvesh", "get", "/cluster/sdn/vnets", "--output-format", "json"); err == nil {
-		for _, m := range jsonList(out) {
-			add(str(m, "vnet"))
-		}
-	}
-	sort.Strings(list)
-	return list
-}
-
 var (
 	viaDevRE  = regexp.MustCompile(`^default via (\S+)(?: dev (\S+))?`)
 	devRE     = regexp.MustCompile(`\bdev (\S+)`)
@@ -184,81 +152,6 @@ var (
 	inet6RE   = regexp.MustCompile(`\binet6 (\S+)`)
 	nameserRE = regexp.MustCompile(`^nameserver\s+(\S+)`)
 )
-
-func (n *Node) defaultRoute(ctx context.Context) (gateway, dev string) {
-	out, err := n.run(ctx, "ip", "-4", "route", "show", "default")
-	if err != nil {
-		return "", ""
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if m := viaDevRE.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-			dev := ""
-			if d := devRE.FindStringSubmatch(line); d != nil {
-				dev = d[1]
-			}
-			return m[1], dev
-		}
-	}
-	return "", ""
-}
-
-// bridgeAddress4 is the node's IPv4 address on the bridge, with its prefix.
-func (n *Node) bridgeAddress4(ctx context.Context, bridge string) netip.Prefix {
-	out, err := n.run(ctx, "ip", "-4", "-o", "addr", "show", "dev", bridge)
-	if err != nil {
-		return netip.Prefix{}
-	}
-	if m := inetRE.FindStringSubmatch(out); m != nil {
-		p, _ := netip.ParsePrefix(m[1])
-		return p
-	}
-	return netip.Prefix{}
-}
-
-func (n *Node) bridgeAddress6(ctx context.Context, bridge string) string {
-	out, err := n.run(ctx, "ip", "-6", "-o", "addr", "show", "dev", bridge, "scope", "global")
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "temporary") || strings.Contains(line, "deprecated") || strings.Contains(line, "tentative") {
-			continue
-		}
-		if m := inet6RE.FindStringSubmatch(line); m != nil {
-			if p, err := netip.ParsePrefix(m[1]); err == nil {
-				return p.Addr().String()
-			}
-		}
-	}
-	return ""
-}
-
-// bridgeIsDHCP reports whether /etc/network/interfaces configures the bridge by DHCP.
-func (n *Node) bridgeIsDHCP(bridge string) bool {
-	data, err := n.readFile(interfaces)
-	if err != nil {
-		return false
-	}
-	re := regexp.MustCompile(`(?m)^\s*iface\s+` + regexp.QuoteMeta(bridge) + `\s+inet\s+dhcp\b`)
-	return re.Match(data)
-}
-
-func (n *Node) resolvers() (all []string, loopbackOnly bool) {
-	data, err := n.readFile(resolvConf)
-	if err != nil {
-		return nil, false
-	}
-	loopbackOnly = true
-	for _, line := range strings.Split(string(data), "\n") {
-		if m := nameserRE.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-			all = append(all, m[1])
-			if !strings.HasPrefix(m[1], "127.") && m[1] != "::1" {
-				loopbackOnly = false
-			}
-		}
-	}
-	return all, loopbackOnly && len(all) > 0
-}
 
 // ApplianceContainers lists the containers of the cluster tagged kubehenge.
 func (n *Node) ApplianceContainers(ctx context.Context) []Appliance {
@@ -271,7 +164,7 @@ func (n *Node) ApplianceContainers(ctx context.Context) []Appliance {
 		if str(m, "type") != "lxc" {
 			continue
 		}
-		for _, tag := range strings.Split(str(m, "tags"), ";") {
+		for tag := range strings.SplitSeq(str(m, "tags"), ";") {
 			if tag == "kubehenge" {
 				found = append(found, Appliance{ID: str(m, "vmid"), Node: str(m, "node")})
 			}
@@ -400,7 +293,7 @@ func (n *Node) AddressInUse(ctx context.Context, bridge, address string) bool {
 // down from the top of the subnet, past the gateway, the node and every known neighbour.
 func (n *Node) SuggestAddress(ctx context.Context, bridge string, f *Facts) string {
 	prefix := f.Prefix.Masked()
-	if prefix.Bits() > 29 {
+	if prefix.Bits() > maxSuggestBits {
 		return ""
 	}
 	skip := map[netip.Addr]bool{f.Prefix.Addr(): true}
@@ -408,7 +301,7 @@ func (n *Node) SuggestAddress(ctx context.Context, bridge string, f *Facts) stri
 		skip[g] = true
 	}
 	if out, err := n.run(ctx, "ip", "-4", "neigh", "show", "dev", bridge); err == nil {
-		for _, line := range strings.Split(out, "\n") {
+		for line := range strings.SplitSeq(out, "\n") {
 			if fields := strings.Fields(line); len(fields) > 0 {
 				if a, err := netip.ParseAddr(fields[0]); err == nil {
 					skip[a] = true
@@ -430,12 +323,131 @@ func (n *Node) SuggestAddress(ctx context.Context, bridge string, f *Facts) stri
 	return ""
 }
 
+func (n *Node) path(p string) string { return filepath.Join(n.Root, p) }
+
+func (n *Node) readFile(p string) ([]byte, error) {
+	data, err := os.ReadFile(n.path(p))
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	return data, nil
+}
+
+func (n *Node) run(ctx context.Context, name string, args ...string) (string, error) {
+	return n.Exec.Run(ctx, name, args...) //nolint:wrapcheck // the caller names the command, and CmdError carries it.
+}
+
+// bridges lists the bridges, Open vSwitch bridges and SDN VNets a container can attach to.
+func (n *Node) bridges(ctx context.Context) []string {
+	seen := map[string]bool{}
+	var list []string
+	add := func(name string) {
+		if name != "" && !seen[name] {
+			seen[name] = true
+			list = append(list, name)
+		}
+	}
+	if out, err := n.run(ctx, "pvesh", "get", "/nodes/"+n.Hostname+"/network", "--output-format", "json"); err == nil {
+		for _, m := range jsonList(out) {
+			if t := str(m, "type"); t == "bridge" || t == "OVSBridge" {
+				add(str(m, "iface"))
+			}
+		}
+	}
+	// Where SDN is not set up, the call fails and there are none.
+	if out, err := n.run(ctx, "pvesh", "get", "/cluster/sdn/vnets", "--output-format", "json"); err == nil {
+		for _, m := range jsonList(out) {
+			add(str(m, "vnet"))
+		}
+	}
+	slices.Sort(list)
+	return list
+}
+
+func (n *Node) defaultRoute(ctx context.Context) (string, string) {
+	out, err := n.run(ctx, "ip", "-4", "route", "show", "default")
+	if err != nil {
+		return "", ""
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		if m := viaDevRE.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			dev := ""
+			if d := devRE.FindStringSubmatch(line); d != nil {
+				dev = d[1]
+			}
+			return m[1], dev
+		}
+	}
+	return "", ""
+}
+
+// bridgeAddress4 is the node's IPv4 address on the bridge, with its prefix.
+func (n *Node) bridgeAddress4(ctx context.Context, bridge string) netip.Prefix {
+	out, err := n.run(ctx, "ip", "-4", "-o", "addr", "show", "dev", bridge)
+	if err != nil {
+		return netip.Prefix{}
+	}
+	if m := inetRE.FindStringSubmatch(out); m != nil {
+		p, _ := netip.ParsePrefix(m[1])
+		return p
+	}
+	return netip.Prefix{}
+}
+
+func (n *Node) bridgeAddress6(ctx context.Context, bridge string) string {
+	out, err := n.run(ctx, "ip", "-6", "-o", "addr", "show", "dev", bridge, "scope", "global")
+	if err != nil {
+		return ""
+	}
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.Contains(line, "temporary") || strings.Contains(line, "deprecated") || strings.Contains(line, "tentative") {
+			continue
+		}
+		if m := inet6RE.FindStringSubmatch(line); m != nil {
+			if p, err := netip.ParsePrefix(m[1]); err == nil {
+				return p.Addr().String()
+			}
+		}
+	}
+	return ""
+}
+
+// bridgeIsDHCP reports whether /etc/network/interfaces configures the bridge by DHCP.
+func (n *Node) bridgeIsDHCP(bridge string) bool {
+	data, err := n.readFile(interfaces)
+	if err != nil {
+		return false
+	}
+	re := regexp.MustCompile(`(?m)^\s*iface\s+` + regexp.QuoteMeta(bridge) + `\s+inet\s+dhcp\b`)
+	return re.Match(data)
+}
+
+func (n *Node) resolvers() ([]string, bool) {
+	data, err := n.readFile(resolvConf)
+	if err != nil {
+		return nil, false
+	}
+	var all []string
+	loopbackOnly := true
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if m := nameserRE.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			all = append(all, m[1])
+			if !strings.HasPrefix(m[1], "127.") && m[1] != "::1" {
+				loopbackOnly = false
+			}
+		}
+	}
+	return all, loopbackOnly && len(all) > 0
+}
+
 func lastAddress(p netip.Prefix) netip.Addr {
 	a := p.Masked().Addr().As4()
-	host := 32 - p.Bits()
-	v := uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3])
+	host := ipv4Bits - p.Bits()
+	v := binary.BigEndian.Uint32(a[:])
 	v |= (1 << host) - 1
-	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
+	var out [4]byte
+	binary.BigEndian.PutUint32(out[:], v)
+	return netip.AddrFrom4(out)
 }
 
 // clusterAddresses lists the addresses this node knows of the cluster's nodes: its own, and each
@@ -450,44 +462,58 @@ func (n *Node) clusterAddresses(ctx context.Context) []Member {
 			members = append(members, m)
 		}
 	}
+	n.ownAddresses(ctx, func(address string) { add(address, n.Hostname) })
+	n.peerAddresses(ctx, add)
+	return members
+}
+
+// ownAddresses reports the global addresses of this node's interfaces.
+func (n *Node) ownAddresses(ctx context.Context, add func(address string)) {
 	for _, args := range [][]string{{"-4", "-o", "addr", "show"}, {"-6", "-o", "addr", "show", "scope", "global"}} {
 		out, err := n.run(ctx, "ip", args...)
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(out, "\n") {
+		re := inetRE
+		if args[0] == "-6" {
+			re = inet6RE
+		}
+		for line := range strings.SplitSeq(out, "\n") {
 			if strings.Contains(line, "temporary") || strings.Contains(line, "deprecated") || strings.Contains(line, "tentative") {
 				continue
 			}
-			re := inetRE
-			if args[0] == "-6" {
-				re = inet6RE
+			m := re.FindStringSubmatch(line)
+			if m == nil {
+				continue
 			}
-			if m := re.FindStringSubmatch(line); m != nil {
-				if p, err := netip.ParsePrefix(m[1]); err == nil {
-					add(p.Addr().String(), n.Hostname)
-				}
+			if p, perr := netip.ParsePrefix(m[1]); perr == nil {
+				add(p.Addr().String())
 			}
 		}
 	}
-	if out, err := n.run(ctx, "pvesh", "get", "/cluster/status", "--output-format", "json"); err == nil {
-		for _, m := range jsonList(out) {
-			if str(m, "type") != "node" || str(m, "local") == "1" {
-				continue
-			}
-			name := str(m, "name")
-			if name == "" {
-				continue
-			}
-			add(str(m, "ip"), name)
-			if addrs, err := n.LookupHost(ctx, name); err == nil {
-				for _, a := range addrs {
-					if p, err := netip.ParseAddr(a); err == nil && !p.Is4In6() {
-						add(p.String(), name)
-					}
-				}
+}
+
+// peerAddresses reports the cluster address of every other node and the addresses its name
+// resolves to.
+func (n *Node) peerAddresses(ctx context.Context, add func(address, node string)) {
+	out, err := n.run(ctx, "pvesh", "get", "/cluster/status", "--output-format", "json")
+	if err != nil {
+		return
+	}
+	for _, m := range jsonList(out) {
+		name := str(m, "name")
+		if str(m, "type") != "node" || str(m, "local") == "1" || name == "" {
+			continue
+		}
+		add(str(m, "ip"), name)
+		addrs, lerr := n.LookupHost(ctx, name)
+		if lerr != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if p, perr := netip.ParseAddr(a); perr == nil && !p.Is4In6() {
+				add(p.String(), name)
 			}
 		}
 	}
-	return members
 }

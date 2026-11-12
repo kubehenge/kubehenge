@@ -1,16 +1,19 @@
 package installer
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"net/url"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -23,7 +26,8 @@ type APICandidate struct {
 }
 
 // certNames returns the names and addresses a certificate carries, DNS names first.
-func certNames(c *x509.Certificate) (dns []string, ips []string) {
+func certNames(c *x509.Certificate) ([]string, []string) {
+	var dns, ips []string
 	for _, d := range c.DNSNames {
 		dns = append(dns, strings.ToLower(d))
 	}
@@ -38,9 +42,13 @@ func certNames(c *x509.Certificate) (dns []string, ips []string) {
 func parseCertFile(data []byte) (*x509.Certificate, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return nil, fmt.Errorf("no PEM certificate")
+		return nil, errors.New("no PEM certificate")
 	}
-	return x509.ParseCertificate(block.Bytes)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate: %w", err)
+	}
+	return cert, nil
 }
 
 // servedCertificate reads the certificate Proxmox VE serves its API with.
@@ -57,7 +65,7 @@ func (n *Node) servedCertificate() (*x509.Certificate, string, error) {
 	return c, file, err
 }
 
-func (n *Node) memberNode(f *Facts, address string) string {
+func (*Node) memberNode(f *Facts, address string) string {
 	for _, m := range f.Members {
 		if m.Address == address {
 			return m.Node
@@ -89,7 +97,7 @@ func (n *Node) nameNodes(ctx context.Context, f *Facts, name string) []string {
 	for o := range set {
 		owners = append(owners, o)
 	}
-	sort.Strings(owners)
+	slices.Sort(owners)
 	return owners
 }
 
@@ -102,13 +110,27 @@ func (n *Node) APICandidates(ctx context.Context, f *Facts, bridge string) []API
 	if err != nil {
 		return nil
 	}
-	bridgeAddr := ""
-	if p := n.bridgeAddress4(ctx, bridge); p.IsValid() {
-		bridgeAddr = p.Addr().String()
-	} else {
-		bridgeAddr = n.bridgeAddress6(ctx, bridge)
-	}
 	dns, ips := certNames(cert)
+	list := n.addressCandidates(f, ips, n.bridgeAddress(ctx, bridge), bridge)
+	for _, name := range dns {
+		if c, ok := n.nameCandidate(ctx, f, name); ok {
+			list = append(list, c)
+		}
+	}
+	slices.SortStableFunc(list, func(a, b APICandidate) int { return cmp.Compare(a.Rank, b.Rank) })
+	return firstPerHost(list)
+}
+
+// bridgeAddress is the address of the bridge, IPv4 first.
+func (n *Node) bridgeAddress(ctx context.Context, bridge string) string {
+	if p := n.bridgeAddress4(ctx, bridge); p.IsValid() {
+		return p.Addr().String()
+	}
+	return n.bridgeAddress6(ctx, bridge)
+}
+
+// addressCandidates ranks the certificate's addresses that belong to a cluster node.
+func (n *Node) addressCandidates(f *Facts, ips []string, bridgeAddr, bridge string) []APICandidate {
 	var list []APICandidate
 	for _, ip := range ips {
 		owner := n.memberNode(f, ip)
@@ -123,42 +145,40 @@ func (n *Node) APICandidates(ctx context.Context, f *Facts, bridge string) []API
 			list = append(list, APICandidate{5, ip, "an address of this node"})
 		}
 	}
-	for _, name := range dns {
-		if strings.HasPrefix(name, "*.") {
-			if i := strings.Index(f.FQDN, "."); i < 0 || f.FQDN[i+1:] != name[2:] {
-				continue
-			}
-			name = f.FQDN
+	return list
+}
+
+// nameCandidate ranks one name of the certificate, false when it leads outside the cluster.
+func (n *Node) nameCandidate(ctx context.Context, f *Facts, name string) (APICandidate, bool) {
+	if strings.HasPrefix(name, "*.") {
+		if i := strings.Index(f.FQDN, "."); i < 0 || f.FQDN[i+1:] != name[2:] {
+			return APICandidate{}, false
 		}
-		owners := n.nameNodes(ctx, f, name)
-		if len(owners) == 0 {
-			continue
-		}
-		outside := false
-		for _, o := range owners {
-			outside = outside || o == "-"
-		}
-		if outside {
-			continue
-		}
-		switch {
-		case !strings.Contains(name, "."):
-			if len(owners) == 1 && owners[0] == f.Node {
-				list = append(list, APICandidate{6, name, "this node's name without a domain"})
-			} else {
-				list = append(list, APICandidate{9, name, "a name without a domain"})
-			}
-		case len(owners) > 1:
-			list = append(list, APICandidate{1, name, "a name of nodes " + strings.Join(owners, ", ")})
-		case owners[0] != f.Node:
-			list = append(list, APICandidate{7, name, "a name of node " + owners[0]})
-		case name == f.FQDN:
-			list = append(list, APICandidate{2, name, "this node's name"})
-		default:
-			list = append(list, APICandidate{3, name, "a name of this node"})
-		}
+		name = f.FQDN
 	}
-	sort.SliceStable(list, func(i, j int) bool { return list[i].Rank < list[j].Rank })
+	owners := n.nameNodes(ctx, f, name)
+	if len(owners) == 0 || slices.Contains(owners, "-") {
+		return APICandidate{}, false
+	}
+	switch {
+	case !strings.Contains(name, "."):
+		if len(owners) == 1 && owners[0] == f.Node {
+			return APICandidate{6, name, "this node's name without a domain"}, true
+		}
+		return APICandidate{9, name, "a name without a domain"}, true
+	case len(owners) > 1:
+		return APICandidate{1, name, "a name of nodes " + strings.Join(owners, ", ")}, true
+	case owners[0] != f.Node:
+		return APICandidate{7, name, "a name of node " + owners[0]}, true
+	case name == f.FQDN:
+		return APICandidate{2, name, "this node's name"}, true
+	default:
+		return APICandidate{3, name, "a name of this node"}, true
+	}
+}
+
+// firstPerHost keeps the best-ranked candidate of each host in a ranked list.
+func firstPerHost(list []APICandidate) []APICandidate {
 	seen := map[string]bool{}
 	out := list[:0]
 	for _, c := range list {
@@ -190,12 +210,12 @@ func APIURL(host string) string {
 }
 
 // splitAPI returns the host and port of an API URL.
-func splitAPI(raw string) (host, port string, err error) {
+func splitAPI(raw string) (string, string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("parse: %w", err)
 	}
-	port = u.Port()
+	port := u.Port()
 	if port == "" {
 		port = "443"
 	}
@@ -235,7 +255,7 @@ func fingerprint(c *x509.Certificate) string {
 }
 
 func encodeCerts(certs ...*x509.Certificate) []byte {
-	var out []byte
+	out := make([]byte, 0, len(certs)*certPEMSize)
 	for _, c := range certs {
 		out = append(out, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})...)
 	}
@@ -274,7 +294,7 @@ func servedAuthority(served []*x509.Certificate) *x509.Certificate {
 		if c.IsCA {
 			top = c
 		}
-		if c.CheckSignatureFrom(c) == nil && string(c.RawIssuer) == string(c.RawSubject) {
+		if c.CheckSignatureFrom(c) == nil && bytes.Equal(c.RawIssuer, c.RawSubject) {
 			root = c
 		}
 	}
@@ -302,7 +322,7 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 	}
 	served, dialErr := n.Dial(ctx, host, port)
 	connects := dialErr == nil && len(served) > 0
-	check := func(pem []byte) (*x509.Certificate, bool) { return verifyAPI(served, host, poolOf(pem)) }
+	check := func(ca []byte) (*x509.Certificate, bool) { return verifyAPI(served, host, poolOf(ca)) }
 	if cfg.ProxmoxCA != "" {
 		given, err := os.ReadFile(cfg.ProxmoxCA)
 		if err != nil {
@@ -314,22 +334,23 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 		}
 		return &CAChoice{Kind: CAGiven, PEM: encodeCerts(anchor), Subject: subjectOf(anchor), Fingerprint: fingerprint(anchor)}, nil
 	}
-	if connects {
-		if _, ok := check(cluster); ok {
-			return &CAChoice{Kind: CACluster, PEM: cluster}, nil
+	if !connects {
+		return nil, apiFailure(connects, apiURL, port, "")
+	}
+	if _, ok := check(cluster); ok {
+		return &CAChoice{Kind: CACluster, PEM: cluster}, nil
+	}
+	if system, err := n.readFile(systemCA); err == nil {
+		if anchor, ok := check(system); ok {
+			return &CAChoice{Kind: CASystem, PEM: encodeCerts(anchor), Subject: subjectOf(anchor), Issuer: anchor.Issuer.String(), Fingerprint: fingerprint(anchor)}, nil
 		}
-		if system, err := n.readFile(systemCA); err == nil {
-			if anchor, ok := check(system); ok {
-				return &CAChoice{Kind: CASystem, PEM: encodeCerts(anchor), Subject: subjectOf(anchor), Issuer: anchor.Issuer.String(), Fingerprint: fingerprint(anchor)}, nil
-			}
-		}
-		authority := servedAuthority(served)
-		if _, ok := check(encodeCerts(authority)); ok {
-			return &CAChoice{
-				Kind: CAServed, PEM: encodeCerts(authority), NeedsTrust: true,
-				Subject: subjectOf(authority), Issuer: authority.Issuer.String(), Fingerprint: fingerprint(authority),
-			}, nil
-		}
+	}
+	authority := servedAuthority(served)
+	if _, ok := check(encodeCerts(authority)); ok {
+		return &CAChoice{
+			Kind: CAServed, PEM: encodeCerts(authority), NeedsTrust: true,
+			Subject: subjectOf(authority), Issuer: authority.Issuer.String(), Fingerprint: fingerprint(authority),
+		}, nil
 	}
 	return nil, apiFailure(connects, apiURL, port, "")
 }
@@ -337,7 +358,7 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 func apiFailure(connects bool, apiURL, port, caFile string) error {
 	switch {
 	case !connects:
-		return userErr(fmt.Sprintf("this node cannot connect to the Proxmox VE API at %s", apiURL),
+		return userErr("this node cannot connect to the Proxmox VE API at "+apiURL,
 			fmt.Sprintf("Open port %s in the node's firewall and set LISTEN_IP in /etc/default/pveproxy, or give another URL with --proxmox-url", port))
 	case caFile != "":
 		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves no certificate that %s signed for it", apiURL, caFile), "")
@@ -353,7 +374,7 @@ func netDial(ctx context.Context, host, port string) ([]*x509.Certificate, error
 	dialer := &net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dial context: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 	return handshake(ctx, conn, host)

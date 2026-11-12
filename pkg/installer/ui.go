@@ -40,11 +40,13 @@ var stageNames = []struct {
 	{"Done", []stage{stEnd, stFail}},
 }
 
+var hue = lipgloss.Color //nolint:misspell // lipgloss spells its constructor Color
+
 var (
-	accent  = lipgloss.Color("#E3B04B")
-	stone   = lipgloss.Color("#8A8F98")
-	good    = lipgloss.Color("#6CC4A1")
-	bad     = lipgloss.Color("#E5626B")
+	accent  = hue("#E3B04B")
+	stone   = hue("#8A8F98")
+	good    = hue("#6CC4A1")
+	bad     = hue("#E5626B")
 	bold    = lipgloss.NewStyle().Bold(true)
 	dim     = lipgloss.NewStyle().Foreground(stone)
 	accentS = lipgloss.NewStyle().Foreground(accent)
@@ -114,8 +116,8 @@ func NewModel(s *Session, newRunner func(emit func(Event)) *Runner) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(accentS))
 	return &Model{
-		S: s, NewRunner: newRunner, ctx: ctx, cancel: cancel, width: 80, height: 24,
-		spin: sp, bar: progress.New(progress.WithWidth(24)),
+		S: s, NewRunner: newRunner, ctx: ctx, cancel: cancel, width: defaultWidth, height: defaultHeight,
+		spin: sp, bar: progress.New(progress.WithWidth(barWidth)),
 		state: map[string]StepState{}, detail: map[string]string{}, frac: map[string]float64{},
 		urlGiven: s.Cfg.ProxmoxURL != "",
 	}
@@ -136,15 +138,8 @@ func theme(isDark bool) *huh.Styles {
 	s := huh.ThemeCharm(isDark)
 	s.Focused.Title = s.Focused.Title.Foreground(accent).Bold(true)
 	s.Focused.SelectSelector = s.Focused.SelectSelector.Foreground(accent)
-	s.Focused.FocusedButton = s.Focused.FocusedButton.Background(accent).Foreground(lipgloss.Color("#1B1B1B"))
+	s.Focused.FocusedButton = s.Focused.FocusedButton.Background(accent).Foreground(hue("#1B1B1B"))
 	return s
-}
-
-func (m *Model) formWidth() int { return min(m.width-4, 76) }
-
-func (m *Model) startForm(groups ...*huh.Group) tea.Cmd {
-	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(theme)).WithWidth(m.formWidth()).WithShowHelp(false)
-	return m.form.Init()
 }
 
 // Update implements tea.Model.
@@ -153,7 +148,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.bar.SetWidth(24)
+		m.bar.SetWidth(barWidth)
 	case tea.KeyPressMsg:
 		switch {
 		case msg.String() == "ctrl+c" && m.stage == stRun:
@@ -214,6 +209,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// View implements tea.Model.
+func (m *Model) View() tea.View {
+	v := tea.NewView(m.render())
+	return v
+}
+
+func (m *Model) formWidth() int { return min(m.width-formMargin, maxFormWidth) }
+
+func (m *Model) startForm(groups ...*huh.Group) tea.Cmd {
+	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(theme)).WithWidth(m.formWidth()).WithShowHelp(false)
+	return m.form.Init()
+}
+
 func (m *Model) leave() (tea.Model, tea.Cmd) {
 	m.cancelled = true
 	m.cancel()
@@ -244,7 +252,7 @@ func (m *Model) next() tea.Cmd {
 			Description("A Kubernetes button in this node's interface").Affirmative("Add").Negative("Skip").Value(&m.a.pve)))
 	default:
 		m.stage = stSummary
-		m.a.action = "install"
+		m.a.action = stepInstallName
 		return m.summaryForm()
 	}
 }
@@ -252,9 +260,9 @@ func (m *Model) next() tea.Cmd {
 func (m *Model) networkForm() tea.Cmd {
 	f, c, a := m.S.Facts, &m.S.Cfg, &m.a
 	if a.mode == "" {
-		a.mode = "static"
+		a.mode = optStatic
 		if f.NodeDHCP {
-			a.mode = "dhcp"
+			a.mode = optDHCP
 		}
 		a.address, a.gateway = "", f.Gateway
 		if f.SuggestedIP != "" {
@@ -292,7 +300,7 @@ func (m *Model) networkForm() tea.Cmd {
 	more := huh.NewGroup(huh.NewConfirm().Title("Advanced").Description("IPv6, bridge, VLAN, MTU").Affirmative("Show").Negative("Skip").Value(&a.more))
 	adv := huh.NewGroup(
 		huh.NewInput().Title("IPv6").Placeholder("auto, dhcp or 2001:db8::40/64").Value(&a.ip6).Validate(func(s string) error {
-			if s != "" && s != "auto" && s != "dhcp" && !IsIPv6CIDR(s) {
+			if s != "" && s != optAuto && s != "dhcp" && !IsIPv6CIDR(s) {
 				return errors.New("auto, dhcp or an address with its prefix")
 			}
 			return nil
@@ -305,13 +313,13 @@ func (m *Model) networkForm() tea.Cmd {
 		}),
 		huh.NewSelect[string]().Title("Bridge").Options(huh.NewOptions(f.Bridges...)...).Value(&a.bridge),
 		huh.NewInput().Title("VLAN").Placeholder("none").Value(&a.vlan).Validate(func(s string) error {
-			if s != "" && !inRange(s, 1, 4094) {
+			if s != "" && !inRange(s, 1, vlanMax) {
 				return errors.New("1 to 4094")
 			}
 			return nil
 		}),
 		huh.NewInput().Title("MTU").Placeholder("bridge default").Value(&a.mtu).Validate(func(s string) error {
-			if s != "" && !inRange(s, 576, 65535) {
+			if s != "" && !inRange(s, mtuMin, mtuMax) {
 				return errors.New("576 to 65535")
 			}
 			return nil
@@ -393,7 +401,7 @@ func (m *Model) formDone() tea.Cmd {
 				m.S.RefreshForBridge(m.ctx, bridge)
 			}
 			if a.mode == "static" {
-				addr := strings.SplitN(c.IP, "/", 2)[0]
+				addr, _, _ := strings.Cut(c.IP, "/")
 				return probeMsg{address: addr, used: m.S.Node.AddressInUse(m.ctx, c.Bridge, addr)}
 			}
 			return probeMsg{}
@@ -421,7 +429,7 @@ func (m *Model) formDone() tea.Cmd {
 	case stPVE:
 		c.PVEEntry = "no"
 		if a.pve {
-			c.PVEEntry = "yes"
+			c.PVEEntry = optYes
 		}
 		return m.next()
 	case stSummary:
@@ -448,7 +456,7 @@ func (m *Model) summaryAction() tea.Cmd {
 	switch m.a.action {
 	case "install":
 		return m.startRun()
-	case "network":
+	case stepNetworkName:
 		c.IP = ""
 	case "storage":
 		c.Storage, c.TemplateStorage = "", ""
@@ -471,7 +479,7 @@ func (m *Model) summaryAction() tea.Cmd {
 func (m *Model) startRun() tea.Cmd {
 	m.stage = stRun
 	if m.events == nil {
-		m.events = make(chan any, 256)
+		m.events = make(chan any, eventBuffer)
 	}
 	if m.runner == nil {
 		m.runner = m.NewRunner(func(e Event) {
@@ -531,7 +539,7 @@ func (m *Model) onDone(d doneMsg) (tea.Model, tea.Cmd) {
 		m.fail = errors.New("cancelled")
 	}
 	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(m.ctx), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(m.ctx), cleanupTimeout)
 		defer cancel()
 		m.runner.Cleanup(ctx)
 		return cleanedMsg{}
@@ -552,12 +560,6 @@ func (m *Model) afterCleanup() (tea.Model, tea.Cmd) {
 	}
 	m.stage = stFail
 	return m, nil
-}
-
-// View implements tea.Model.
-func (m *Model) View() tea.View {
-	v := tea.NewView(m.render())
-	return v
 }
 
 func (m *Model) render() string {
@@ -709,7 +711,7 @@ func (m *Model) runView() string {
 		if f, ok := m.frac[st.ID]; ok && m.state[st.ID] == StepRunning {
 			tail = m.bar.ViewAs(f)
 		}
-		b.WriteString(fmt.Sprintf("  %s %-20s %s\n", icon, label, tail))
+		fmt.Fprintf(&b, "  %s %-20s %s\n", icon, label, tail)
 	}
 	b.WriteString("\n" + dim.Render("  ctrl+c stops and removes the container") + "\n")
 	return b.String()
@@ -724,7 +726,7 @@ func (m *Model) endView() string {
 	b.WriteString(row("Container", r.CTID))
 	b.WriteString(row("Version", r.Version))
 	b.WriteString(row("Fingerprint", r.Fingerprint))
-	b.WriteString(row("Valid until", r.ValidUntil.UTC().Format("2006-01-02")))
+	b.WriteString(row("Valid until", r.ValidUntil.UTC().Format(time.DateOnly)))
 	if r.Name != "" {
 		b.WriteString(row("DNS", "point "+r.Name+" at "+r.Address))
 	}

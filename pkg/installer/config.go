@@ -118,7 +118,7 @@ func (c *Config) Normalise() error {
 	case yes != nil && no != nil && *yes && *no:
 		return userErr("--pve-entry and --no-pve-entry exclude each other", "")
 	case yes != nil && *yes:
-		c.PVEEntry = "yes"
+		c.PVEEntry = optYes
 	case no != nil && *no:
 		c.PVEEntry = "no"
 	}
@@ -137,15 +137,15 @@ func (c *Config) containerNet() string {
 	if c.MTU != "" {
 		fmt.Fprintf(&b, ",mtu=%s", c.MTU)
 	}
-	if c.IP != "none" {
+	if c.IP != optNone {
 		fmt.Fprintf(&b, ",ip=%s", c.IP)
-		if c.IP != "dhcp" && c.Gateway != "" {
+		if c.IP != optDHCP && c.Gateway != "" {
 			fmt.Fprintf(&b, ",gw=%s", c.Gateway)
 		}
 	}
 	if c.IP6 != "" {
 		fmt.Fprintf(&b, ",ip6=%s", c.IP6)
-		if c.IP6 != "auto" && c.IP6 != "dhcp" && c.Gateway6 != "" {
+		if c.IP6 != optAuto && c.IP6 != "dhcp" && c.Gateway6 != "" {
 			fmt.Fprintf(&b, ",gw6=%s", c.Gateway6)
 		}
 	}

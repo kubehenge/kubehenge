@@ -14,6 +14,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +42,22 @@ type fakeExec struct {
 	calls []string
 }
 
+func (f *fakeExec) Run(_ context.Context, name string, args ...string) (string, error) {
+	cmd := strings.Join(append([]string{name}, args...), " ")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, cmd)
+	for _, v := range slices.Backward(f.rules) {
+		if strings.HasPrefix(cmd, v.prefix) {
+			if v.code != 0 {
+				return "", &CmdError{Command: cmd, Code: v.code, Err: fmt.Errorf("exit status %d", v.code)}
+			}
+			return v.out, nil
+		}
+	}
+	return "", nil
+}
+
 func (f *fakeExec) on(prefix, out string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -50,22 +68,6 @@ func (f *fakeExec) fail(prefix string, code int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rules = append(f.rules, rule{prefix: prefix, code: code})
-}
-
-func (f *fakeExec) Run(_ context.Context, name string, args ...string) (string, error) {
-	cmd := strings.Join(append([]string{name}, args...), " ")
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, cmd)
-	for i := len(f.rules) - 1; i >= 0; i-- {
-		if strings.HasPrefix(cmd, f.rules[i].prefix) {
-			if f.rules[i].code != 0 {
-				return "", &CmdError{Command: cmd, Code: f.rules[i].code, Err: fmt.Errorf("exit status %d", f.rules[i].code)}
-			}
-			return f.rules[i].out, nil
-		}
-	}
-	return "", nil
 }
 
 func (f *fakeExec) count(prefix string) int {
@@ -83,9 +85,9 @@ func (f *fakeExec) count(prefix string) int {
 func (f *fakeExec) last(prefix string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for i := len(f.calls) - 1; i >= 0; i-- {
-		if strings.HasPrefix(f.calls[i], prefix) {
-			return f.calls[i]
+	for _, v := range slices.Backward(f.calls) {
+		if strings.HasPrefix(v, prefix) {
+			return v
 		}
 	}
 	return ""
@@ -191,9 +193,11 @@ func storageTable(n int, kind string) string {
 	table := "Name Type Status Total Used Available %\n"
 	names := []string{"local-lvm", "tank", "share"}
 	types := []string{"lvmthin", "zfspool", "nfs"}
-	for i := 0; i < n; i++ {
-		table += fmt.Sprintf("%s %s active 500000000 1000 %d 1%%\n", names[i], types[i], 400000000-i*1000)
+	var tableSb194 strings.Builder
+	for i := range n {
+		tableSb194.WriteString(fmt.Sprintf("%s %s active 500000000 1000 %d 1%%\n", names[i], types[i], 400000000-i*1000))
 	}
+	table += tableSb194.String()
 	_ = kind
 	return table
 }
@@ -268,7 +272,7 @@ func newHarness(t *testing.T, o opts) *harness {
 	tofuSum := sha256.Sum256(tarball.Bytes())
 	h.tofuSum = hex.EncodeToString(tofuSum[:])
 	writeTestFile(t, filepath.Join(dir, "share", "kubehenge", "VERSION"), []byte("9.9.9\n"))
-	for _, u := range strings.Fields(units) {
+	for u := range strings.FieldsSeq(units) {
 		writeTestFile(t, filepath.Join(dir, "share", "kubehenge", "appliance", u), []byte("[Unit]\n"))
 	}
 	writeTestFile(t, filepath.Join(dir, "bin", "kubehenge"), []byte("binary"))
@@ -305,7 +309,7 @@ func newHarness(t *testing.T, o opts) *harness {
 			if a, ok := o.hosts[name]; ok {
 				return a, nil
 			}
-			return nil, fmt.Errorf("no such host")
+			return nil, errors.New("no such host")
 		},
 		Dial: func(context.Context, string, string) ([]*x509.Certificate, error) { return h.chain, nil },
 	}

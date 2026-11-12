@@ -46,6 +46,7 @@ type StepInfo struct{ ID, Label string }
 // NoAddressError is the container getting no address, which DHCP can cause.
 type NoAddressError struct {
 	UserError
+
 	DHCP bool
 }
 
@@ -99,7 +100,6 @@ type Runner struct {
 	templateURL string
 	cert        *Certificate
 	version     string
-	apiHosts    []string
 	warnings    []string
 }
 
@@ -113,32 +113,18 @@ func (r *Runner) Steps() []StepInfo {
 		{"tofu", "OpenTofu"},
 		{"template", "Container template"},
 		{"create", "Create container"},
-		{"start", "Start container"},
-		{"address", "Wait for address"},
-		{"network", "Check network"},
-		{"certificate", "Certificate"},
-		{"install", "Install software"},
+		{stepStartName, "Start container"},
+		{stepAddressName, "Wait for address"},
+		{stepNetworkName, "Check network"},
+		{stepCertificateName, "Certificate"},
+		{stepInstallName, "Install software"},
 		{"service", "Start Kubehenge"},
-		{"updates", "Security updates"},
+		{stepUpdatesName, "Security updates"},
 	}
-	if r.S.Cfg.PVEEntry == "yes" {
-		list = append(list, StepInfo{"entry", "Proxmox VE entry"})
+	if r.S.Cfg.PVEEntry == optYes {
+		list = append(list, StepInfo{stepEntryName, "Proxmox VE entry"})
 	}
 	return list
-}
-
-func (r *Runner) emit(e Event) {
-	if r.Emit != nil {
-		r.Emit(e)
-	}
-}
-
-func (r *Runner) pct(ctx context.Context, args ...string) (string, error) {
-	return r.Exec.Run(ctx, "pct", args...)
-}
-
-func (r *Runner) inCT(ctx context.Context, args ...string) (string, error) {
-	return r.Exec.Run(ctx, "pct", append([]string{"exec", r.S.Cfg.CTID, "--"}, args...)...)
 }
 
 // Run executes the steps that have not finished, and returns the result.
@@ -155,7 +141,7 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	do := map[string]func(context.Context) error{
 		"tofu": r.stepTofu, "template": r.stepTemplate, "create": r.stepCreate, "start": r.stepStart,
 		"address": r.stepAddress, "network": r.stepNetwork, "certificate": r.stepCertificate,
-		"install": r.stepInstall, "service": r.stepService, "updates": r.stepUpdates, "entry": r.stepEntry,
+		"install": r.stepInstall, "service": r.stepService, "updates": r.stepUpdates, stepEntryName: r.stepEntry,
 	}
 	if err := r.unpackRelease(); err != nil {
 		return nil, err
@@ -189,6 +175,118 @@ func urlHost(h string) string {
 		return "[" + h + "]"
 	}
 	return h
+}
+
+var (
+	cfgIP4RE = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip=([0-9.]+)/`)
+	cfgIP6RE = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip6=([0-9A-Fa-f:]+)/`)
+)
+
+var gatewayRE = regexp.MustCompile(`(?m)^default via (\S+)`)
+
+func isAddress(s string) bool { return net.ParseIP(s) != nil }
+
+const swapScript = `
+set -e
+rm -rf /usr/local/share/kubehenge.new && mkdir /usr/local/share/kubehenge.new
+tar -xf /tmp/share.tar -C /usr/local/share/kubehenge.new && rm /tmp/share.tar
+rm -rf /usr/local/share/kubehenge.old
+mv /usr/local/share/kubehenge /usr/local/share/kubehenge.old
+mv /usr/local/share/kubehenge.new /usr/local/share/kubehenge
+rm -rf /usr/local/share/kubehenge.old
+mv /usr/local/bin/kubehenge.new /usr/local/bin/kubehenge
+[ ! -e /usr/local/bin/tofu.new ] || mv /usr/local/bin/tofu.new /usr/local/bin/tofu
+for unit in ` + units + `; do mv /etc/systemd/system/$unit.new /etc/systemd/system/$unit; done
+if [ -e /etc/kubehenge/proxmox-ca.pem.new ]; then
+    mv /etc/kubehenge/proxmox-ca.pem.new /etc/kubehenge/proxmox-ca.pem
+    mv /usr/local/share/ca-certificates/proxmox-ca.crt.new /usr/local/share/ca-certificates/proxmox-ca.crt
+    update-ca-certificates > /dev/null
+fi
+systemctl daemon-reload
+`
+
+// startScript runs inside the container. The appliance is reached only through its interface and
+// pct, so the template's SSH and mail servers are switched off.
+const startScript = `
+set -e
+for unit in ssh.service ssh.socket postfix.service; do
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    systemctl mask "$unit" >/dev/null 2>&1 || true
+done
+id kubehenge >/dev/null 2>&1 || useradd --system --home-dir /var/lib/kubehenge --shell /usr/sbin/nologin kubehenge
+install -d -o kubehenge -g kubehenge -m 0700 /var/lib/kubehenge /var/lib/kubehenge-keys
+install -d -o root -g root -m 0755 /var/lib/kubehenge-update
+install -d -o root -g kubehenge -m 0770 /var/lib/kubehenge-update/requests
+chown kubehenge:kubehenge /etc/kubehenge/tls.key
+systemctl daemon-reload
+systemctl enable --now kubehenge-update.path >/dev/null 2>&1
+systemctl enable --now kubehenge.service >/dev/null 2>&1
+`
+
+// realmsStatus asks the appliance for its realms over the address, trusting the certificate just
+// installed. The container is on this node's network, so no proxy sees the request.
+func realmsStatus(ctx context.Context, public, address string, certPEM []byte) int {
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(certPEM)
+	dialer := &net.Dialer{Timeout: dialTimeout}
+	client := &http.Client{Timeout: httpTimeout, Transport: &http.Transport{
+		Proxy:           nil,
+		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12, ServerName: public},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, net.JoinHostPort(address, "443"))
+		},
+	}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+urlHost(public)+"/api/realms", http.NoBody)
+	if err != nil {
+		return 0
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// Protect makes the finished appliance undeletable until its protection is taken off.
+func (r *Runner) Protect(ctx context.Context) error {
+	r.created = false
+	_, err := r.pct(ctx, "set", r.S.Cfg.CTID, "--protection", "1")
+	return err
+}
+
+// Cleanup removes what a failed run made, so running it again starts clean. It is safe to call
+// when nothing was made.
+func (r *Runner) Cleanup(ctx context.Context) {
+	if r.partial != "" {
+		_ = os.Remove(r.partial)
+		r.partial = ""
+	}
+	if !r.created {
+		return
+	}
+	id := r.S.Cfg.CTID
+	_, _ = r.pct(ctx, "unlock", id)
+	_, _ = r.pct(ctx, "stop", id)
+	_, _ = r.pct(ctx, "destroy", id, "--purge", "--destroy-unreferenced-disks", "1")
+	r.created, r.started = false, false
+	for _, s := range []string{"create", "start", "address", "network", "certificate", "install", "service", "updates", "entry"} {
+		delete(r.done, s)
+	}
+}
+
+func (r *Runner) emit(e Event) {
+	if r.Emit != nil {
+		r.Emit(e)
+	}
+}
+
+func (r *Runner) pct(ctx context.Context, args ...string) (string, error) {
+	return r.Exec.Run(ctx, "pct", args...) //nolint:wrapcheck // the caller names the step, and CmdError carries the command.
+}
+
+func (r *Runner) inCT(ctx context.Context, args ...string) (string, error) {
+	return r.Exec.Run(ctx, "pct", append([]string{"exec", r.S.Cfg.CTID, "--"}, args...)...) //nolint:wrapcheck // the caller names the step, and CmdError carries the command.
 }
 
 func (r *Runner) public() string {
@@ -237,7 +335,7 @@ func (r *Runner) stepTofu(ctx context.Context) error {
 		}
 	} else {
 		from := fmt.Sprintf("https://github.com/opentofu/opentofu/releases/download/v%s/tofu_%s_linux_amd64.tar.gz", r.TofuV, r.TofuV)
-		if err := r.Fetch.Fetch(ctx, from, archive, r.TofuSH, false, r.progress("tofu")); err != nil {
+		if err := r.Fetch.Fetch(ctx, from, archive, r.TofuSH, HTTPSOnly, r.progress("tofu")); err != nil {
 			return err
 		}
 	}
@@ -267,11 +365,11 @@ func (r *Runner) stepTemplate(ctx context.Context) error {
 	}
 	there := func() bool { return checkSum(file, r.templateSHA, "") == nil }
 	if !there() && r.Fetch.TemplateGone(ctx, r.templateURL) {
-		name, sum, location, err := r.Fetch.TemplateFromIndex(ctx, r.Exec, r.Work, TemplateMirror)
+		indexed, err := r.Fetch.TemplateFromIndex(ctx, r.Exec, r.Work, TemplateMirror)
 		if err != nil {
 			return err
 		}
-		r.template, r.templateSHA, r.templateURL = name, sum, TemplateMirror+"/"+location
+		r.template, r.templateSHA, r.templateURL = indexed.File, indexed.SHA512, TemplateMirror+"/"+indexed.Location
 		if file, err = r.templatePath(ctx); err != nil {
 			return err
 		}
@@ -281,19 +379,19 @@ func (r *Runner) stepTemplate(ctx context.Context) error {
 		return nil
 	}
 	dir := filepath.Dir(file)
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // the storage's template directory is read by Proxmox VE.
-		return err
+	if err := os.MkdirAll(dir, permExec); err != nil {
+		return fmt.Errorf("mkdir all: %w", err)
 	}
 	if err := r.needSpace(ctx, dir, templateKiB, "the container template", "Free space on storage "+r.S.Cfg.TemplateStorage+", or name another with --template-storage"); err != nil {
 		return err
 	}
 	// Downloaded beside its place and moved there once checked, so no half or wrong file is left as the template.
 	r.partial = file + ".part"
-	if err := r.Fetch.Fetch(ctx, r.templateURL, r.partial, r.templateSHA, true, r.progress("template")); err != nil {
+	if err := r.Fetch.Fetch(ctx, r.templateURL, r.partial, r.templateSHA, HTTPOrHTTPS, r.progress("template")); err != nil {
 		return err
 	}
 	if err := os.Rename(r.partial, file); err != nil {
-		return err
+		return fmt.Errorf("rename: %w", err)
 	}
 	r.partial = ""
 	r.finish("template", r.template+", checksum verified")
@@ -303,18 +401,18 @@ func (r *Runner) stepTemplate(ctx context.Context) error {
 func (r *Runner) needSpace(ctx context.Context, dir string, kib int64, what, fix string) error {
 	out, err := r.Exec.Run(ctx, "df", "-Pk", dir)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // without a df reading there is nothing to check the space against.
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) < 2 {
+	if len(lines) < dfMinLines {
 		return nil
 	}
 	f := strings.Fields(lines[1])
-	if len(f) < 4 {
+	if len(f) < dfFields {
 		return nil
 	}
 	if free, err := strconv.ParseInt(f[3], 10, 64); err == nil && free < kib {
-		return userErr(fmt.Sprintf("%s has %d MiB free and %s needs %d MiB", dir, free/1024, what, kib/1024), fix)
+		return userErr(fmt.Sprintf("%s has %d MiB free and %s needs %d MiB", dir, free/kibPerMiB, what, kib/kibPerMiB), fix)
 	}
 	return nil
 }
@@ -351,14 +449,10 @@ func (r *Runner) stepStart(ctx context.Context) error {
 	return nil
 }
 
-var (
-	cfgIP4RE = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip=([0-9.]+)/`)
-	cfgIP6RE = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip6=([0-9A-Fa-f:]+)/`)
-)
-
 // addresses returns the container's IPv4 and global IPv6 addresses: those its configuration gives,
 // else those DHCP, SLAAC or DHCPv6 gave it, as it reports them.
-func (r *Runner) addresses(ctx context.Context) (v4, v6 string) {
+func (r *Runner) addresses(ctx context.Context) (string, string) {
+	var v4, v6 string
 	conf, _ := r.pct(ctx, "config", r.S.Cfg.CTID)
 	if m := cfgIP4RE.FindStringSubmatch(conf); m != nil {
 		v4 = m[1]
@@ -370,7 +464,7 @@ func (r *Runner) addresses(ctx context.Context) (v4, v6 string) {
 	if m := cfgIP6RE.FindStringSubmatch(conf); m != nil {
 		v6 = m[1]
 	} else if out, err := r.inCT(ctx, "ip", "-6", "-o", "addr", "show", "dev", "eth0", "scope", "global"); err == nil {
-		for _, line := range strings.Split(out, "\n") {
+		for line := range strings.SplitSeq(out, "\n") {
 			if strings.Contains(line, "temporary") || strings.Contains(line, "deprecated") || strings.Contains(line, "tentative") {
 				continue
 			}
@@ -385,24 +479,25 @@ func (r *Runner) addresses(ctx context.Context) (v4, v6 string) {
 
 func (r *Runner) stepAddress(ctx context.Context) error {
 	c := &r.S.Cfg
-	for i := 0; i < 60; i++ {
+	for range 60 {
 		r.address, r.address6 = r.addresses(ctx)
 		if (r.address != "" || r.address6 != "") && (c.IP6 == "" || r.address6 != "") {
 			break
 		}
-		r.Sleep(2 * time.Second)
+		r.Sleep(stepPause)
 	}
 	if r.address == "" && r.address6 == "" {
-		if c.IP == "none" {
-			return &NoAddressError{UserError: UserError{
+		if c.IP == optNone {
+			return &NoAddressError{
 				Cause: "container " + c.CTID + " got no IPv6 address",
 				Fix:   "Check that the router advertises a prefix or a DHCPv6 server answers, or give --ip6 and --gateway6",
-			}}
+			}
 		}
-		return &NoAddressError{DHCP: c.IP == "dhcp", UserError: UserError{
+		return &NoAddressError{
+			DHCP:  c.IP == optDHCP,
 			Cause: "container " + c.CTID + " got no IPv4 address",
 			Fix:   "Check that a DHCP server answers on this network, or give --ip <address>/<prefix> --gateway <address>",
-		}}
+		}
 	}
 	if c.IP6 != "" && r.address6 == "" {
 		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address yet, so its certificate names its IPv4 address only")
@@ -414,8 +509,6 @@ func (r *Runner) stepAddress(ctx context.Context) error {
 	r.finish("address", shown)
 	return nil
 }
-
-var gatewayRE = regexp.MustCompile(`(?m)^default via (\S+)`)
 
 func (r *Runner) containerGateway(ctx context.Context) string {
 	for _, family := range []string{"-4", "-6"} {
@@ -449,7 +542,7 @@ func (r *Runner) stepNetwork(ctx context.Context) error {
 	hosts := r.apiHostsOrdered()
 	reachable := ""
 	for _, h := range hosts {
-		if _, err := netipParse(h); err != nil {
+		if !isAddress(h) {
 			if _, err := r.inCT(ctx, "getent", "hosts", h); err != nil {
 				continue
 			}
@@ -478,13 +571,6 @@ func (r *Runner) stepNetwork(ctx context.Context) error {
 	return nil
 }
 
-func netipParse(s string) (net.IP, error) {
-	if ip := net.ParseIP(s); ip != nil {
-		return ip, nil
-	}
-	return nil, fmt.Errorf("not an address")
-}
-
 // apiHostsOrdered returns the chosen API host, then the other candidates in rank order.
 func (r *Runner) apiHostsOrdered() []string {
 	host, _, _ := splitAPI(r.S.Cfg.ProxmoxURL)
@@ -499,17 +585,17 @@ func (r *Runner) apiHostsOrdered() []string {
 	return hosts
 }
 
-func (r *Runner) stepCertificate(ctx context.Context) error {
+func (r *Runner) stepCertificate(_ context.Context) error {
 	c := &r.S.Cfg
 	public := r.public()
 	if c.CertFile != "" {
 		certPEM, err := os.ReadFile(c.CertFile)
 		if err != nil {
-			return err
+			return fmt.Errorf("read file: %w", err)
 		}
 		keyPEM, err := os.ReadFile(c.KeyFile)
 		if err != nil {
-			return err
+			return fmt.Errorf("read file: %w", err)
 		}
 		if r.cert, err = OwnCertificate(certPEM, keyPEM, c.CertFile, c.KeyFile, public, r.Now()); err != nil {
 			return err
@@ -532,43 +618,6 @@ func (r *Runner) stepCertificate(ctx context.Context) error {
 	return nil
 }
 
-const swapScript = `
-set -e
-rm -rf /usr/local/share/kubehenge.new && mkdir /usr/local/share/kubehenge.new
-tar -xf /tmp/share.tar -C /usr/local/share/kubehenge.new && rm /tmp/share.tar
-rm -rf /usr/local/share/kubehenge.old
-mv /usr/local/share/kubehenge /usr/local/share/kubehenge.old
-mv /usr/local/share/kubehenge.new /usr/local/share/kubehenge
-rm -rf /usr/local/share/kubehenge.old
-mv /usr/local/bin/kubehenge.new /usr/local/bin/kubehenge
-[ ! -e /usr/local/bin/tofu.new ] || mv /usr/local/bin/tofu.new /usr/local/bin/tofu
-for unit in ` + units + `; do mv /etc/systemd/system/$unit.new /etc/systemd/system/$unit; done
-if [ -e /etc/kubehenge/proxmox-ca.pem.new ]; then
-    mv /etc/kubehenge/proxmox-ca.pem.new /etc/kubehenge/proxmox-ca.pem
-    mv /usr/local/share/ca-certificates/proxmox-ca.crt.new /usr/local/share/ca-certificates/proxmox-ca.crt
-    update-ca-certificates > /dev/null
-fi
-systemctl daemon-reload
-`
-
-// startScript runs inside the container. The appliance is reached only through its interface and
-// pct, so the template's SSH and mail servers are switched off.
-const startScript = `
-set -e
-for unit in ssh.service ssh.socket postfix.service; do
-    systemctl disable --now "$unit" >/dev/null 2>&1 || true
-    systemctl mask "$unit" >/dev/null 2>&1 || true
-done
-id kubehenge >/dev/null 2>&1 || useradd --system --home-dir /var/lib/kubehenge --shell /usr/sbin/nologin kubehenge
-install -d -o kubehenge -g kubehenge -m 0700 /var/lib/kubehenge /var/lib/kubehenge-keys
-install -d -o root -g root -m 0755 /var/lib/kubehenge-update
-install -d -o root -g kubehenge -m 0770 /var/lib/kubehenge-update/requests
-chown kubehenge:kubehenge /etc/kubehenge/tls.key
-systemctl daemon-reload
-systemctl enable --now kubehenge-update.path >/dev/null 2>&1
-systemctl enable --now kubehenge.service >/dev/null 2>&1
-`
-
 func (r *Runner) push(ctx context.Context, local, remote, perms string) error {
 	args := []string{"push", r.S.Cfg.CTID, local, remote}
 	if perms != "" {
@@ -580,8 +629,8 @@ func (r *Runner) push(ctx context.Context, local, remote, perms string) error {
 
 func (r *Runner) pushData(ctx context.Context, name string, data []byte, remote, perms string) error {
 	local := filepath.Join(r.Work, name)
-	if err := os.WriteFile(local, data, 0o600); err != nil {
-		return err
+	if err := os.WriteFile(local, data, permFile); err != nil { //nolint:gosec // the path is in the installer's own work directory.
+		return fmt.Errorf("write file: %w", err)
 	}
 	return r.push(ctx, local, remote, perms)
 }
@@ -605,7 +654,7 @@ func (r *Runner) stepInstall(ctx context.Context) error {
 		},
 		func() error { return r.push(ctx, shareTar, "/tmp/share.tar", "") },
 	}
-	for _, unit := range strings.Fields(units) {
+	for unit := range strings.FieldsSeq(units) {
 		steps = append(steps, func() error {
 			return r.push(ctx, filepath.Join(share, "appliance", unit), "/etc/systemd/system/"+unit+".new", "0644")
 		})
@@ -651,7 +700,7 @@ func (r *Runner) stepService(ctx context.Context) error {
 		return r.serviceFailure(ctx, "the service did not start")
 	}
 	r.started = true
-	r.Sleep(2 * time.Second)
+	r.Sleep(stepPause)
 	if _, err := r.inCT(ctx, "systemctl", "is-active", "--quiet", "kubehenge.service"); err != nil {
 		return r.serviceFailure(ctx, "the service did not start")
 	}
@@ -660,7 +709,7 @@ func (r *Runner) stepService(ctx context.Context) error {
 	status := 0
 	for i := 0; i < 10 && status != http.StatusOK; i++ {
 		if status = r.realms(ctx); status != http.StatusOK {
-			r.Sleep(2 * time.Second)
+			r.Sleep(stepPause)
 		}
 	}
 	if status != http.StatusOK {
@@ -689,31 +738,6 @@ func (r *Runner) addressOrV6() string {
 	return r.address6
 }
 
-// realmsStatus asks the appliance for its realms over the address, trusting the certificate just
-// installed. The container is on this node's network, so no proxy sees the request.
-func realmsStatus(ctx context.Context, public, address string, certPEM []byte) int {
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(certPEM)
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
-		Proxy:           nil,
-		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12, ServerName: public},
-		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, net.JoinHostPort(address, "443"))
-		},
-	}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+urlHost(public)+"/api/realms", nil)
-	if err != nil {
-		return 0
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0
-	}
-	_ = resp.Body.Close()
-	return resp.StatusCode
-}
-
 func (r *Runner) stepUpdates(ctx context.Context) error {
 	if out, err := r.inCT(ctx, "dpkg-query", "-W", "-f", "${Status}", "unattended-upgrades"); err == nil && strings.Contains(out, "ok installed") {
 		r.finish("updates", "already on")
@@ -725,8 +749,8 @@ func (r *Runner) stepUpdates(ctx context.Context) error {
 	}
 	_, err := r.inCT(ctx, "sh", "-c", "apt-get -q update && DEBIAN_FRONTEND=noninteractive apt-get -q -y install unattended-upgrades")
 	if err != nil {
-		r.warnings = append(r.warnings, "container "+r.S.Cfg.CTID+" could not install unattended-upgrades from Debian's mirrors. Update it with: pct exec "+r.S.Cfg.CTID+" -- sh -c 'apt-get update && apt-get -y upgrade'")
-		r.emit(Event{Step: "updates", State: StepSkipped, Detail: "not installed"})
+		r.warnings = append(r.warnings, "container "+r.S.Cfg.CTID+" could not install unattended-upgrades from Debian's mirrors ("+err.Error()+"). Update it with: pct exec "+r.S.Cfg.CTID+" -- sh -c 'apt-get update && apt-get -y upgrade'")
+		r.emit(Event{Step: stepUpdatesName, State: StepSkipped, Detail: "not installed"})
 		return nil
 	}
 	_ = r.pushData(ctx, "auto-upgrades.conf", []byte("APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n"), "/etc/apt/apt.conf.d/20auto-upgrades", "0644")
@@ -737,11 +761,11 @@ func (r *Runner) stepUpdates(ctx context.Context) error {
 func (r *Runner) stepEntry(ctx context.Context) error {
 	// From here the appliance works, and nothing after this removes it. It holds the only copy of
 	// the management cluster's state, so Proxmox VE refuses to destroy it until its protection is off.
-	if r.S.Cfg.PVEEntry == "yes" {
+	if r.S.Cfg.PVEEntry == optYes {
 		script := filepath.Join(r.Dir, "share", "kubehenge", "pve-entry", "install.sh")
 		if _, err := r.Exec.Run(ctx, "sh", script, "--url", "https://"+urlHost(r.public())); err != nil {
-			r.warnings = append(r.warnings, "the appliance is installed, but adding the entry to this node's Proxmox VE interface failed. See "+r.LogPath)
-			r.emit(Event{Step: "entry", State: StepSkipped, Detail: "failed"})
+			r.warnings = append(r.warnings, "the appliance is installed, but adding the entry to this node's Proxmox VE interface failed ("+err.Error()+"). See "+r.LogPath)
+			r.emit(Event{Step: stepEntryName, State: StepSkipped, Detail: "failed"})
 			return nil
 		}
 	}
@@ -749,58 +773,33 @@ func (r *Runner) stepEntry(ctx context.Context) error {
 	return nil
 }
 
-// Protect makes the finished appliance undeletable until its protection is taken off.
-func (r *Runner) Protect(ctx context.Context) error {
-	r.created = false
-	_, err := r.pct(ctx, "set", r.S.Cfg.CTID, "--protection", "1")
-	return err
-}
-
-// Cleanup removes what a failed run made, so running it again starts clean. It is safe to call
-// when nothing was made.
-func (r *Runner) Cleanup(ctx context.Context) {
-	if r.partial != "" {
-		_ = os.Remove(r.partial)
-		r.partial = ""
-	}
-	if !r.created {
-		return
-	}
-	id := r.S.Cfg.CTID
-	_, _ = r.pct(ctx, "unlock", id)
-	_, _ = r.pct(ctx, "stop", id)
-	_, _ = r.pct(ctx, "destroy", id, "--purge", "--destroy-unreferenced-disks", "1")
-	r.created, r.started = false, false
-	for _, s := range []string{"create", "start", "address", "network", "certificate", "install", "service", "updates", "entry"} {
-		delete(r.done, s)
-	}
-}
-
 func copyFile(from, to string) error {
-	in, err := os.Open(from)
+	in, err := os.Open(from) //nolint:gosec // the path is in the installer's own work directory.
 	if err != nil {
-		return err
+		return fmt.Errorf("open: %w", err)
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.Create(to)
+	out, err := os.Create(to) //nolint:gosec // the path is in the installer's own work directory.
 	if err != nil {
-		return err
+		return fmt.Errorf("create: %w", err)
 	}
 	defer func() { _ = out.Close() }()
-	_, err = io.Copy(out, in)
-	return err
+	if _, err = io.Copy(out, in); err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	return nil
 }
 
 // extractOne unpacks the named file of a .tar.gz into dir.
 func extractOne(archive, name, dir string) error {
-	f, err := os.Open(archive)
+	f, err := os.Open(archive) //nolint:gosec // the path is in the installer's own work directory.
 	if err != nil {
-		return err
+		return fmt.Errorf("open: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 	zr, err := gzip.NewReader(f)
 	if err != nil {
-		return err
+		return fmt.Errorf("new reader: %w", err)
 	}
 	tr := tar.NewReader(zr)
 	for {
@@ -809,29 +808,36 @@ func extractOne(archive, name, dir string) error {
 			return fmt.Errorf("%s holds no %s", archive, name)
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("next: %w", err)
 		}
 		if filepath.Base(h.Name) != name || h.Typeflag != tar.TypeReg {
 			continue
 		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-		out, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o700) //nolint:gosec // the file is the OpenTofu binary the installer pushes.
-		if err != nil {
-			return err
-		}
-		defer func() { _ = out.Close() }()
-		_, err = io.Copy(out, tr) //nolint:gosec // the archive is checked against a pinned checksum.
-		return err
+		return writePrivateExecutable(filepath.Join(dir, name), tr)
 	}
+}
+
+// writePrivateExecutable writes src to path, creating its directory, readable by its owner alone.
+func writePrivateExecutable(path string, src io.Reader) error {
+	if err := os.MkdirAll(filepath.Dir(path), permDir); err != nil {
+		return fmt.Errorf("mkdir all: %w", err)
+	}
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, permDir) //nolint:gosec // the file is the OpenTofu binary the installer pushes.
+	if err != nil {
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer func() { _ = out.Close() }()
+	if _, err = io.Copy(out, src); err != nil { //nolint:gosec // the archive is checked against a pinned checksum.
+		return fmt.Errorf("copy: %w", err)
+	}
+	return nil
 }
 
 // tarDir writes the directory's tree into a tar file, as the container unpacks it.
 func tarDir(dir, dest string) error {
-	out, err := os.Create(dest)
+	out, err := os.Create(dest) //nolint:gosec // the path is in the installer's own work directory.
 	if err != nil {
-		return err
+		return fmt.Errorf("create: %w", err)
 	}
 	defer func() { _ = out.Close() }()
 	tw := tar.NewWriter(out)
@@ -841,27 +847,35 @@ func tarDir(dir, dest string) error {
 		}
 		rel, err := filepath.Rel(dir, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("rel: %w", err)
 		}
 		h, err := tar.FileInfoHeader(info, "")
 		if err != nil {
-			return err
+			return fmt.Errorf("file info header: %w", err)
 		}
 		h.Name = filepath.ToSlash(rel)
 		h.Uid, h.Gid, h.Uname, h.Gname = 0, 0, "", ""
-		if err := tw.WriteHeader(h); err != nil || !info.Mode().IsRegular() {
-			return err
+		if werr := tw.WriteHeader(h); werr != nil {
+			return fmt.Errorf("write header: %w", werr)
 		}
-		in, err := os.Open(path)
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		in, err := os.Open(path) //nolint:gosec // the path is in the installer's own work directory.
 		if err != nil {
-			return err
+			return fmt.Errorf("open: %w", err)
 		}
 		defer func() { _ = in.Close() }()
-		_, err = io.Copy(tw, in)
-		return err
+		if _, err = io.Copy(tw, in); err != nil {
+			return fmt.Errorf("copy: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("walk: %w", err)
 	}
-	return tw.Close()
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("close archive: %w", err)
+	}
+	return nil
 }

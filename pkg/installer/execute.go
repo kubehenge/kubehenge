@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -46,7 +47,7 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 	model := NewModel(s, newRunner)
 	prog := tea.NewProgram(model, tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithContext(ctx))
 	if _, err := prog.Run(); err != nil {
-		return err
+		return fmt.Errorf("run: %w", err)
 	}
 	if model.Cancelled() {
 		_, _ = fmt.Fprintln(os.Stderr, "Cancelled. Nothing was changed.")
@@ -69,7 +70,7 @@ func maintain(ctx context.Context, s *Session, r *Runner, out io.Writer) error {
 		return err
 	}
 	_, _ = fmt.Fprintf(out, "\nKubehenge in container %s: %s\nCertificate SHA-256 fingerprint: %s\nValid until: %s\n",
-		res.CTID, res.URL, res.Fingerprint, res.ValidUntil.UTC().Format("Mon, 02 Jan 2006 15:04:05 MST"))
+		res.CTID, res.URL, res.Fingerprint, res.ValidUntil.UTC().Format(time.RFC1123))
 	return nil
 }
 

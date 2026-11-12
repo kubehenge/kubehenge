@@ -2,6 +2,7 @@ package installer
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -14,11 +15,10 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"compress/gzip"
 )
 
 func TestIPValidators(t *testing.T) {
+	t.Parallel()
 	yes := func(name string, fn func(string) bool, in ...string) {
 		for _, s := range in {
 			if !fn(s) {
@@ -47,6 +47,7 @@ func TestIPValidators(t *testing.T) {
 }
 
 func TestContainerNet(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		cfg  Config
 		want string
@@ -65,6 +66,7 @@ func TestContainerNet(t *testing.T) {
 }
 
 func TestValidateOptions(t *testing.T) {
+	t.Parallel()
 	bad := []struct {
 		cfg  Config
 		want string
@@ -100,6 +102,7 @@ func TestValidateOptions(t *testing.T) {
 }
 
 func TestExistingApplianceTagMatching(t *testing.T) {
+	t.Parallel()
 	cases := map[string]bool{
 		`[{"type":"lxc","vmid":105,"node":"pve2","tags":"a;kubehenge;b"}]`:   true,
 		`[{"type":"lxc","vmid":105,"node":"pve2","tags":"kubehenge-test"}]`:  false,
@@ -116,6 +119,7 @@ func TestExistingApplianceTagMatching(t *testing.T) {
 }
 
 func TestNoQuorumRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pvecm status", "Cluster information\nQuorate:          No\n")
 	err := h.session(Config{}).Prepare(context.Background())
@@ -138,6 +142,7 @@ func candidateHosts(t *testing.T, o opts) []string {
 }
 
 func TestAPICandidates(t *testing.T) {
+	t.Parallel()
 	same := func(names ...string) map[string][]string {
 		m := map[string][]string{}
 		for _, n := range names {
@@ -166,6 +171,7 @@ func TestAPICandidates(t *testing.T) {
 }
 
 func TestDecideCA(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h := newHarness(t, opts{})
 	if ca, err := h.node.DecideCA(ctx, &Config{}, "https://pve1.example.com:8006"); err != nil || ca.Kind != CACluster {
@@ -211,6 +217,7 @@ func TestDecideCA(t *testing.T) {
 }
 
 func TestMakeCertificate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
 	cert, err := h.node.MakeCertificate("kubehenge", []string{"203.0.113.7", "2001:db8::77"}, "kubehenge.example.org", now)
@@ -241,6 +248,7 @@ func TestMakeCertificate(t *testing.T) {
 }
 
 func TestOwnCertificate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	now := time.Now()
 	cert, _ := h.node.MakeCertificate("kubehenge", []string{"192.0.2.40"}, "", now)
@@ -260,6 +268,7 @@ func TestOwnCertificate(t *testing.T) {
 }
 
 func TestApplianceAddresses(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pct config 100", "net0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24,gw=192.0.2.1,ip6=2001:db8::40/64\n")
 	r := h.runner(h.session(Config{CTID: "100"}), nil)
@@ -275,6 +284,7 @@ func TestApplianceAddresses(t *testing.T) {
 }
 
 func TestCleanupAfterCreate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	r := h.runner(h.session(Config{CTID: "991"}), nil)
 	r.Cleanup(context.Background())
@@ -292,6 +302,7 @@ func TestCleanupAfterCreate(t *testing.T) {
 }
 
 func TestPlainSuccessKeepsTheContainer(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	if out, err, _ := runPlain(t, h, Config{PVEEntry: "no"}); err != nil {
 		t.Fatalf("%v\n%s", err, out)
@@ -302,6 +313,7 @@ func TestPlainSuccessKeepsTheContainer(t *testing.T) {
 }
 
 func TestEntryUpdate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	r := h.runner(h.session(Config{}), nil)
 	var out bytes.Buffer
@@ -358,6 +370,7 @@ func TestProxyHelpers(t *testing.T) {
 }
 
 func TestSecurityUpdates(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	s := h.session(Config{CTID: "900"})
 	r := h.runner(s, nil)
@@ -384,6 +397,7 @@ func TestSecurityUpdates(t *testing.T) {
 }
 
 func TestStorageRankingAndShortage(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pvesm status --content rootdir", `Name Type Status Total Used Available %
 nfs-big nfs active 9 9 900000000 1%
@@ -424,6 +438,7 @@ nfs-down nfs inactive 9 9 900000000 1%
 }
 
 func TestNoStorageFits(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pvesm status --content rootdir", "Name Type Status Total Used Available %\nlvm-small lvm active 9 9 5000000 1%\n")
 	s := h.session(Config{})
@@ -437,6 +452,7 @@ func TestNoStorageFits(t *testing.T) {
 }
 
 func TestFetchChecksums(t *testing.T) {
+	t.Parallel()
 	body := []byte("the file")
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
 	defer srv.Close()
@@ -446,27 +462,28 @@ func TestFetchChecksums(t *testing.T) {
 	s256, s512 := sha256.Sum256(body), sha512.Sum512(body)
 	dest := filepath.Join(t.TempDir(), "file")
 	for _, sum := range []string{hex.EncodeToString(s256[:]), hex.EncodeToString(s512[:])} {
-		if err := f.Fetch(context.Background(), srv.URL+"/x", dest, sum, false, nil); err != nil {
+		if err := f.Fetch(context.Background(), srv.URL+"/x", dest, sum, HTTPSOnly, nil); err != nil {
 			t.Errorf("a matching sum of %d digits: %v", len(sum), err)
 		}
 	}
 	wrong := strings.Repeat("0", 128)
-	if err := f.Fetch(context.Background(), srv.URL+"/x", dest, wrong, false, nil); err == nil || !strings.Contains(err.Error(), "does not match its checksum") {
+	if err := f.Fetch(context.Background(), srv.URL+"/x", dest, wrong, HTTPSOnly, nil); err == nil || !strings.Contains(err.Error(), "does not match its checksum") {
 		t.Errorf("a wrong sum: %v", err)
 	}
-	if err := f.Fetch(context.Background(), "http://example.com/x", dest, wrong, false, nil); err == nil {
+	if err := f.Fetch(context.Background(), "http://example.com/x", dest, wrong, HTTPSOnly, nil); err == nil {
 		t.Error("plain HTTP was accepted for a file that must come over HTTPS")
 	}
 	missing := httptest.NewTLSServer(http.NotFoundHandler())
 	defer missing.Close()
 	f.Client = missing.Client()
 	f.Retries = 2
-	if err := f.Fetch(context.Background(), missing.URL+"/x", dest, wrong, false, nil); err == nil || !strings.Contains(err.Error(), "could not download "+missing.URL+"/x (HTTP status 404)") {
+	if err := f.Fetch(context.Background(), missing.URL+"/x", dest, wrong, HTTPSOnly, nil); err == nil || !strings.Contains(err.Error(), "could not download "+missing.URL+"/x (HTTP status 404)") {
 		t.Errorf("a missing file: %v", err)
 	}
 }
 
 func TestTemplateIndex(t *testing.T) {
+	t.Parallel()
 	mirror := t.TempDir()
 	writeIndex := func(entries ...[4]string) {
 		var b bytes.Buffer
@@ -490,26 +507,27 @@ func TestTemplateIndex(t *testing.T) {
 		[4]string{"debian-13-standard", "13.10-1", "amd64", "debian-13-standard_13.10-1_amd64.tar.zst"},
 		[4]string{"debian-13-standard", "13.11-1", "arm64", "debian-13-standard_13.11-1_arm64.tar.zst"},
 		[4]string{"debian-12-standard", "12.12-1", "amd64", "debian-12-standard_12.12-1_amd64.tar.zst"})
-	name, _, loc, err := f.TemplateFromIndex(context.Background(), h.exec, t.TempDir(), srv.URL)
-	if err != nil || name != "debian-13-standard_13.10-1_amd64.tar.zst" || loc != "system/"+name {
-		t.Fatalf("the newest listed, by version order: %v %s %s", err, name, loc)
+	got, err := f.TemplateFromIndex(context.Background(), h.exec, t.TempDir(), srv.URL)
+	if err != nil || got.File != "debian-13-standard_13.10-1_amd64.tar.zst" || got.Location != "system/"+got.File {
+		t.Fatalf("the newest listed, by version order: %v %s %s", err, got.File, got.Location)
 	}
 	h.exec.fail("sqv", 1)
-	if _, _, _, err = f.TemplateFromIndex(context.Background(), h.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "fails its signature check") {
+	if _, err = f.TemplateFromIndex(context.Background(), h.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "fails its signature check") {
 		t.Errorf("an index whose signature fails: %v", err)
 	}
 	h2 := newHarness(t, opts{})
 	writeIndex([4]string{"debian-13-standard", "13.9-1", "amd64", "../../etc/passwd"})
-	if _, _, _, err = f.TemplateFromIndex(context.Background(), h2.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "lists no amd64 Debian 13 standard template") {
+	if _, err = f.TemplateFromIndex(context.Background(), h2.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "lists no amd64 Debian 13 standard template") {
 		t.Errorf("an index without a usable template: %v", err)
 	}
 	_ = os.Remove(filepath.Join(mirror, "aplinfo-pve-9.dat.asc"))
-	if _, _, _, err = f.TemplateFromIndex(context.Background(), h2.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "could not download Proxmox's template index") {
+	if _, err = f.TemplateFromIndex(context.Background(), h2.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "could not download Proxmox's template index") {
 		t.Errorf("an index without its signature: %v", err)
 	}
 }
 
 func TestNetworkDetection(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pvesh get /nodes/pve1/network", `[{"type":"bridge","iface":"vmbr7"},{"type":"OVSBridge","iface":"vmbr0"},{"type":"bond","iface":"bond0"}]`)
 	h.exec.on("pvesh get /cluster/sdn/vnets", `[{"vnet":"vn1"}]`)
@@ -535,6 +553,7 @@ func TestNetworkDetection(t *testing.T) {
 }
 
 func TestRefusedBridgeAndLoopbackDNS(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t, opts{})
 	err := h.session(Config{Bridge: "bond0"}).Prepare(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "bond0 is no bridge") {
@@ -566,6 +585,7 @@ func upgradeHarness(t *testing.T) (*harness, *Runner, *bytes.Buffer) {
 }
 
 func TestUpgradeRoads(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h, r, out := upgradeHarness(t)
 	if _, err := r.Upgrade(ctx, out); err != nil {
@@ -611,6 +631,7 @@ func TestUpgradeRoads(t *testing.T) {
 }
 
 func TestReplaceCertificate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	h, r, out := upgradeHarness(t)
 	h.exec.on("pct config 100", "hostname: kubehenge\ntags: kubehenge\nnet0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24\n")

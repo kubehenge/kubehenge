@@ -56,8 +56,7 @@ func (e *OSExec) Run(ctx context.Context, name string, args ...string) (string, 
 	e.logf("$ %s\n%s%s", line, stdout.String(), stderr.String())
 	if err != nil {
 		code := -1
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
+		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 			code = exit.ExitCode()
 			err = fmt.Errorf("exit status %d", code)
 		}
