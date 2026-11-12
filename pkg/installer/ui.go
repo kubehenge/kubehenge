@@ -51,7 +51,7 @@ var stageNames = []struct {
 	{"Done", []stage{stEnd, stFail}},
 }
 
-var hue = lipgloss.Color //nolint:misspell // lipgloss spells its constructor Color
+var hue = lipgloss.Color //nolint:misspell // spellchecker:disable-line, lipgloss spells its constructor Color
 
 var (
 	accent  = hue("#E3B04B")

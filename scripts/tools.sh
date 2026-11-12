@@ -88,8 +88,8 @@ tree() {
 # Go finds its own tree through the link, and the workflows hold it to this release
 # (GOTOOLCHAIN=local) rather than download the one go.mod names.
 # renovate: datasource=golang-version depName=go
-GO=1.27.3
-GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+GO=1.27.4
+GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 tree go "https://go.dev/dl/go${GO}.linux-amd64.tar.gz" "${GO_SHA256}" bin go gofmt
 
 # renovate: datasource=node-version depName=node
