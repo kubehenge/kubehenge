@@ -8,6 +8,7 @@ import (
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -488,7 +489,8 @@ func TestTemplateIndex(t *testing.T) {
 	writeIndex := func(entries ...[4]string) {
 		var b bytes.Buffer
 		for _, e := range entries {
-			b.WriteString("Package: " + e[0] + "\nVersion: " + e[1] + "\nType: lxc\nArchitecture: " + e[2] + "\nLocation: system/" + e[3] + "\nsha512sum: " + strings.Repeat("a", 128) + "\nDescription: a template\n a long description\n\n")
+			fmt.Fprintf(&b, "Package: %s\nVersion: %s\nType: lxc\nArchitecture: %s\nLocation: system/%s\nsha512sum: %s\nDescription: a template\n a long description\n\n",
+				e[0], e[1], e[2], e[3], strings.Repeat("a", 128))
 		}
 		var z bytes.Buffer
 		zw := gzip.NewWriter(&z)
