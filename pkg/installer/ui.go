@@ -634,7 +634,9 @@ func (m *Model) render() string {
 	b.WriteString("\n")
 	switch m.stage {
 	case stDetect:
-		b.WriteString("  " + m.spin.View() + " Detecting this node\n")
+		b.WriteString("  ")
+		b.WriteString(m.spin.View())
+		b.WriteString(" Detecting this node\n")
 	case stSummary:
 		b.WriteString(m.summary())
 		b.WriteString(m.formView())
@@ -646,7 +648,9 @@ func (m *Model) render() string {
 		b.WriteString(m.failView())
 	case stNetwork, stChoices, stTrust, stPVE, stRetry:
 		if m.netErr != "" && m.stage == stNetwork {
-			b.WriteString("  " + badS.Render(m.netErr) + "\n\n")
+			b.WriteString("  ")
+			b.WriteString(badS.Render(m.netErr))
+			b.WriteString("\n\n")
 		}
 		b.WriteString(m.formView())
 	}
@@ -686,7 +690,10 @@ func (m *Model) header() string {
 	right := []string{bold.Render("Kubehenge"), dim.Render("Appliance installer"), strings.Join(crumbs, dim.Render("  ·  "))}
 	var b strings.Builder
 	for i := range mark {
-		b.WriteString(accentS.Render(mark[i]) + "  " + right[i] + "\n")
+		b.WriteString(accentS.Render(mark[i]))
+		b.WriteString("  ")
+		b.WriteString(right[i])
+		b.WriteString("\n")
 	}
 	return b.String()
 }
@@ -779,14 +786,18 @@ func (m *Model) runView() string {
 		}
 		fmt.Fprintf(&b, "  %s %-20s %s\n", icon, label, tail)
 	}
-	b.WriteString("\n" + dim.Render("  ctrl+c stops and removes the container") + "\n")
+	b.WriteString("\n")
+	b.WriteString(dim.Render("  ctrl+c stops and removes the container"))
+	b.WriteString("\n")
 	return b.String()
 }
 
 func (m *Model) endView() string {
 	r := m.res
 	var b strings.Builder
-	b.WriteString("  " + goodS.Bold(true).Render("Kubehenge is running") + "\n\n")
+	b.WriteString("  ")
+	b.WriteString(goodS.Bold(true).Render("Kubehenge is running"))
+	b.WriteString("\n\n")
 	b.WriteString(row("Open", accentS.Underline(true).Render(r.URL)))
 	b.WriteString(row("Sign in", "a Proxmox VE administrator"))
 	b.WriteString(row("Container", r.CTID))
@@ -798,15 +809,21 @@ func (m *Model) endView() string {
 	}
 	b.WriteString(row("Log", r.LogPath))
 	for _, w := range r.Warnings {
-		b.WriteString("\n  " + badS.Render(w) + "\n")
+		b.WriteString("\n  ")
+		b.WriteString(badS.Render(w))
+		b.WriteString("\n")
 	}
-	b.WriteString("\n" + dim.Render("  any key closes") + "\n")
+	b.WriteString("\n")
+	b.WriteString(dim.Render("  any key closes"))
+	b.WriteString("\n")
 	return b.String()
 }
 
 func (m *Model) failView() string {
 	var b strings.Builder
-	b.WriteString("  " + badS.Bold(true).Render("Stopped") + "\n\n")
+	b.WriteString("  ")
+	b.WriteString(badS.Bold(true).Render("Stopped"))
+	b.WriteString("\n\n")
 	var u *UserError
 	var na *NoAddressError
 	switch {
@@ -828,6 +845,8 @@ func (m *Model) failView() string {
 	} else {
 		b.WriteString(row("Changed", "nothing"))
 	}
-	b.WriteString("\n" + dim.Render("  any key closes") + "\n")
+	b.WriteString("\n")
+	b.WriteString(dim.Render("  any key closes"))
+	b.WriteString("\n")
 	return b.String()
 }
