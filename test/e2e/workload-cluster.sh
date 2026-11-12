@@ -2336,6 +2336,21 @@ if [ -n "${addons}" ]; then
         new_namespace wl e2e-privileged
         wl label namespace e2e-privileged pod-security.kubernetes.io/enforce=privileged
         set_variable podSecurity '{"admission":"restricted","kyverno":"restricted"}'
+        # kyverno_ready: every Kyverno Deployment is available, so that a stuck image pull fails here
+        # and names the Deployment, not a later step that needs it.
+        kyverno_ready() {
+            seen=
+            # shellcheck disable=SC2310 # a failed read is a no, polled.
+            names=$(wl -n kyverno get deployment -o name) && [ -n "${names}" ] || return 1
+            for deployment in ${names}; do
+                # shellcheck disable=SC2310 # an unready Deployment is the answer looked for.
+                wl -n kyverno rollout status "${deployment}" --timeout=5s > /dev/null 2>&1 || {
+                    seen=${deployment}
+                    return 1
+                }
+            done
+        }
+        until_true 900 "every Kyverno Deployment ready" kyverno_ready
         kyverno_refuses() {
             # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
             out=$(privileged_pod e2e-privileged) && return 1

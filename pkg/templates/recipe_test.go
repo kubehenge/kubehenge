@@ -289,7 +289,7 @@ func distributionChecks(t *testing.T, d Distribution) []string {
 		return []string{"rpm -q k3s-selinux", "grep -qx k3s", "touch /usr/local/"}
 	case Kubeadm:
 		return []string{
-			"kubeadm version -o short)\" = v1.37.1", "enable_selinux = true", "/sys/module/br_netfilter",
+			"kubeadm version -o short)\" = v1.37.1", "enable_selinux = true", "use_local_image_pull = false", "/sys/module/br_netfilter",
 			"/sys/module/nf_conntrack", "type: spc_t", "crictl images", "enable kubelet.service", iptablesCheck,
 		}
 	case Talos:
@@ -445,6 +445,18 @@ func TestKubeadmNodesForwardBothFamilies(t *testing.T) {
 		if !strings.Contains(string(script), sysctl) {
 			t.Errorf("node/kubeadm.sh does not set %s", sysctl)
 		}
+	}
+}
+
+// A stalled registry request is cancelled only on containerd's local pull path.
+func TestKubeadmNodesPullLocally(t *testing.T) {
+	t.Parallel()
+	script, err := recipeFiles.ReadFile("node/kubeadm.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(script), "s/use_local_image_pull = false/use_local_image_pull = true/") {
+		t.Error("node/kubeadm.sh does not switch containerd to its local image pull")
 	}
 }
 

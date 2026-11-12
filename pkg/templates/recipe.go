@@ -295,7 +295,7 @@ func nodeChecks(b *Bake) [][]string {
 	case Kubeadm:
 		checks = append(checks,
 			[]string{"sh", "-c", `test "$(kubeadm version -o short)" = ` + b.KubernetesVersion},
-			[]string{"sh", "-c", "grep -q 'SystemdCgroup = true' /etc/containerd/config.toml && grep -q 'enable_selinux = true' /etc/containerd/config.toml"},
+			[]string{"sh", "-c", "grep -q 'SystemdCgroup = true' /etc/containerd/config.toml && grep -q 'enable_selinux = true' /etc/containerd/config.toml && ! grep -q 'use_local_image_pull = false' /etc/containerd/config.toml"},
 			[]string{"sh", "-c", "test -d /sys/module/br_netfilter && test -d /sys/module/nf_conntrack"},
 			[]string{"sh", "-c", "grep -qx '      type: spc_t' /etc/kubernetes/patches/etcd+strategic.yaml"},
 			[]string{systemctl, "is-enabled", "kubelet"},

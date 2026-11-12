@@ -110,6 +110,9 @@ data "talos_machine_configuration" "node" {
         }, local.has_ipv6 ? {
         nodeIP = { validSubnets = flatten(local.node_networks) }
       } : {})),
+      # Image pulls in parallel, so that one stalled on a slow registry holds no other image of the
+      # node back. Three leave two free and stay within the kubelet's registry rate of 5 a second.
+      yamlencode({ apiVersion = "v1alpha1", kind = "KubeletConfig", config = { serializeImagePulls = false, maxParallelImagePulls = 3 } }),
       # The leases of the Cluster API providers (local.patient_leases), for the same API stalls.
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeControllerManagerConfig", extraArgs = local.patient_lease_args }),
       yamlencode({ apiVersion = "v1alpha1", kind = "KubeSchedulerConfig", extraArgs = local.patient_lease_args }),

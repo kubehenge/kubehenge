@@ -306,6 +306,7 @@ start on kernel settings other than its own (kubehenge.sysctlFile), and offers o
     serverTLSBootstrap: true
     protectKernelDefaults: true
     tlsCipherSuites: [{{ include "kubehenge.tlsCipherSuites" . }}]
+    {{- include "kubehenge.imagePullSettings" . | nindent 4 }}
 {{- end -}}
 
 {{/*
