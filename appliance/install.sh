@@ -52,7 +52,8 @@ read_download_proxy() {
     [ -z "${https_proxy:-}${HTTPS_PROXY:-}${http_proxy:-}" ] || return 0
     download_proxy=$(sed -n 's/^http_proxy:[[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' "$1" 2> /dev/null | head -n 1)
     [ -n "${download_proxy}" ] || return 0
-    echo "kubehenge: downloading through $(proxy_label "${download_proxy}"), the HTTP proxy of the datacenter options"
+    shown=$(proxy_label "${download_proxy}")
+    echo "kubehenge: downloading through ${shown}, the HTTP proxy of the datacenter options"
 }
 
 # fetch <url> <file> <SHA-256> <what it is>: downloads and checks a file, with a progress bar on a
@@ -131,7 +132,8 @@ for arg in "$@"; do
     esac
 done
 
-[ "$(id -u)" -eq 0 ] || fail "run this as root on a Proxmox VE node"
+uid=$(id -u)
+[ "${uid}" -eq 0 ] || fail "run this as root on a Proxmox VE node"
 command -v pct > /dev/null || fail "this is not a Proxmox VE node"
 if [ -n "${release}" ]; then
     [ -n "${release_sha}" ] || fail "--release needs --sha256"
