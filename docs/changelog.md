@@ -13,6 +13,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 ### Fixed
 
 - A container that gets no DHCP address is no longer deleted without a hint. The guide offers a static address and retries, and an unattended run names `--ip <address>/<prefix> --gateway <address>`.
+- A k3s or RKE2 upgrade that brings the distribution's Gateway API chart no longer leaves the cluster without the chart's admission policy. Helm could delete it while upgrading the Traefik CRD chart, which shipped it before.
 
 ## [0.4.2] - 2026-11-05
 

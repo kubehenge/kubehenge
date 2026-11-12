@@ -1351,7 +1351,9 @@ RKE2 and k3s ship the CRDs in their Traefik CRD charts in some releases. Later r
 
 #### Whose objects
 
-Where the distribution has its own Gateway API chart, the Gateway API is the distribution's, and the controller applies none of it. Otherwise it looks at each object of the bundle in the cluster:
+Where the distribution has its own Gateway API chart, the Gateway API is the distribution's, and the controller applies none of its own release. It only puts back an object the chart's installed revision ships and the cluster lacks, marked as the chart's. The upgrade that brings the chart also upgrades the Traefik CRD chart, and Helm can delete the admission policy there after the Gateway API chart has adopted it.
+
+Otherwise the controller looks at each object of the bundle in the cluster:
 
 - One missing gets Kubehenge's.
 - One of Kubehenge's release or newer stays.

@@ -192,8 +192,9 @@ func older(named string, v *version.Version) bool {
 // as its own while that release's latest revision ships it, and becomes Kubehenge's once it does
 // not: RKE2 and k3s ship the CRDs in their Traefik CRD charts in some releases, and Helm keeps them
 // when a later chart stops shipping them. A distribution release with a Gateway API chart of its own
-// holds all of the Gateway API there, adopting what the Traefik CRD chart left, and Kubehenge then
-// applies none of it. Kubehenge never puts an older release over a newer one. The admission policy
+// holds all of the Gateway API there, adopting what the Traefik CRD chart left. Kubehenge then
+// applies none of its release, and only puts back what the chart ships and the cluster lost.
+// Kubehenge never puts an older release over a newer one. The admission policy
 // stays with whoever holds the CRDs: Kubehenge applies its own only on kubeadm and Talos, beside
 // CRDs no Helm release ships.
 type GatewayAPIReconciler struct {
@@ -311,9 +312,10 @@ func (r *GatewayAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // ensure applies each CRD of the bundle the workload cluster lacks, or has in an older release that
 // no Helm release ships any more. While owner, the Helm release of the distribution's own Gateway
-// API chart, holds the Gateway API, it applies nothing: an object that chart does not ship would mix
-// a second owner's release into the distribution's. It returns the oldest release among the
-// cluster's CRDs of the bundle, and whether it applied anything.
+// API chart, holds the Gateway API, it applies none of the bundle: an object that chart does not
+// ship would mix a second owner's release into the distribution's. It puts back what the chart
+// ships and the cluster lacks. It returns the oldest release among the cluster's CRDs of the bundle,
+// and whether it applied anything.
 //
 // The admission policy refuses CRDs older than its own release, so it goes with whoever holds the
 // CRDs. Kubehenge keeps it, as it keeps the CRDs, only where policy says it may and no Helm release
@@ -327,10 +329,11 @@ func (r *GatewayAPIReconciler) ensure(ctx context.Context, key types.NamespacedN
 	)
 	for i := range r.Bundle.objects {
 		o := &r.Bundle.objects[i]
-		has, err := r.has(ctx, key, workload, o)
+		has, restored, err := r.hasOrRestore(ctx, key, workload, owner, o)
 		if err != nil {
 			return "", false, err
 		}
+		applied = applied || restored
 		if has.holder != "" {
 			held = append(held, o.gvk.Kind+" "+o.name+": "+has.holder)
 		}
@@ -399,6 +402,85 @@ func (r *GatewayAPIReconciler) keep(ctx context.Context, key types.NamespacedNam
 	}
 	ctrl.LoggerFrom(ctx).WithValues("cluster", key).Info("applied an object of the Gateway API", "kind", o.gvk.Kind, "name", o.name, "release", r.Bundle.Version, "had", had)
 	return true, nil
+}
+
+// hasOrRestore reads what the workload cluster has of an object of the bundle, once it has put the
+// object back where owner's chart ships it and the cluster lacks it. It reports whether it put it
+// back.
+func (r *GatewayAPIReconciler) hasOrRestore(ctx context.Context, key types.NamespacedName, workload client.Client, owner string, o *gatewayAPIObject) (gatewayAPIHas, bool, error) {
+	has, err := r.has(ctx, key, workload, o)
+	if err != nil || owner == "" || has.present {
+		return has, false, err
+	}
+	restored, err := r.restore(ctx, key, workload, owner, o)
+	if err != nil || !restored {
+		return has, false, err
+	}
+	has, err = r.has(ctx, key, workload, o)
+	return has, true, err
+}
+
+// restore puts back an object of the bundle that owner's deployed revision ships and the workload
+// cluster lacks, as that revision has it and marked as owner's, so that Helm's next upgrade of the
+// chart takes it over. A distribution upgrade runs its Gateway API chart beside the upgrade of its
+// Traefik CRD chart, which shipped the admission policy before without Helm's keep policy. Where the
+// Gateway API chart adopts the policy first, Helm deletes it in the other chart's upgrade, and only
+// a later upgrade of the Gateway API chart would bring it back. It reports whether it put it back.
+func (r *GatewayAPIReconciler) restore(ctx context.Context, key types.NamespacedName, workload client.Client, owner string, o *gatewayAPIObject) (bool, error) {
+	namespace, release, _ := strings.Cut(owner, "/")
+	latest, err := latestHelmRevision(ctx, workload, namespace, release)
+	if err != nil || latest == nil || latest.Labels["status"] != "deployed" {
+		return false, err
+	}
+	ref := objectRef(o.gvk.GroupKind(), o.name)
+	objects, err := r.revisionObjects(ctx, key, workload, owner, latest)
+	if err != nil || !slices.Contains(objects, ref) {
+		return false, err
+	}
+	secret := &corev1.Secret{}
+	if err = workload.Get(ctx, client.ObjectKey{Namespace: latest.Namespace, Name: latest.Name}, secret); err != nil {
+		return false, fmt.Errorf("reading the Helm release %s: %w", owner, err)
+	}
+	manifest, err := helmReleaseManifest(secret.Data["release"])
+	if err != nil {
+		return false, fmt.Errorf("the Helm release %s: %w", owner, err)
+	}
+	heads, docs, err := manifestObjects([]byte(manifest))
+	if err != nil {
+		return false, fmt.Errorf("the Helm release %s: %w", owner, err)
+	}
+	i := slices.IndexFunc(heads, func(h manifestHead) bool {
+		return objectRef(schema.FromAPIVersionAndKind(h.APIVersion, h.Kind).GroupKind(), h.Metadata.Name) == ref
+	})
+	if i < 0 {
+		return false, nil
+	}
+	u := &unstructured.Unstructured{}
+	if err := yaml.Unmarshal(docs[i], &u.Object); err != nil {
+		return false, fmt.Errorf("reading the Helm release %s's %s %s: %w", owner, o.gvk.Kind, o.name, err)
+	}
+	// The marks Helm checks before it takes over an object it finds.
+	u.SetAnnotations(withEntries(u.GetAnnotations(), helmReleaseName, release, helmReleaseNamespace, namespace))
+	u.SetLabels(withEntries(u.GetLabels(), managedByLabel, "Helm"))
+	if err := workload.Create(ctx, u, client.FieldOwner(fieldOwner)); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("putting back the Gateway API's %s %s: %w", o.gvk.Kind, o.name, err)
+	}
+	ctrl.LoggerFrom(ctx).WithValues("cluster", key).Info("put back an object of the Gateway API that its Helm release ships", "kind", o.gvk.Kind, "name", o.name, "release", owner)
+	return true, nil
+}
+
+// withEntries is m with the key and value pairs kv set, m itself where it is not nil.
+func withEntries(m map[string]string, kv ...string) map[string]string {
+	if m == nil {
+		m = map[string]string{}
+	}
+	for i := 0; i+1 < len(kv); i += 2 {
+		m[kv[i]] = kv[i+1]
+	}
+	return m
 }
 
 // withdrawPolicy deletes the admission policy and binding Kubehenge applied, binding first, where
