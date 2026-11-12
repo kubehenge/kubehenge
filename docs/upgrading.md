@@ -63,7 +63,7 @@ curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/inst
 - It refuses a container that is not Kubehenge's appliance (tagged `kubehenge`) and a release older than the installed one. The same release may be installed again.
 - It keeps the appliance's state, settings and certificate. It also keeps a newer OpenTofu that the appliance's own upgrades brought.
 - It stops, changing nothing, while the management cluster is applied or removed, a VM template is built, or the appliance is upgraded.
-- Like the updater, it keeps the installed release aside until the new one serves. Otherwise it rolls back with the same error.
+- Like the updater, it keeps the installed release aside until the new one serves. Otherwise it rolls back and says `release … did not start: …. Rolled back to …`.
 
 #### API address, CA and certificate options
 
@@ -239,7 +239,7 @@ Cluster API then rolls the nodes as for any upgrade. A rollout that has started 
 
 #### Releases Kubehenge does not pin
 
-RKE2 and k3s nodes install only releases whose checksum file and install script Kubehenge pins, and the API server refuses any other. The newest releases are in the build. For a release that is not, an administrator adds a pin from **Administration**, **Release pins**, or with `kubehenge release pin <version>`.
+RKE2 and k3s nodes install only releases whose checksum file and install script Kubehenge pins, and the API server refuses any other. The newest releases are in the build. For a release that is not, an administrator adds a pin from **Administration**, **Templates**, **Release pins**, or with `kubehenge release pin <version>`.
 
 Both fetch the release's checksum file from the distribution's release page and show its SHA-256 digests before saving. A version that does not exist or has no checksum file is refused. Each pin records who added it. A pin is removed with **Unpin** or `kubehenge release unpin <version>`, and only while no cluster runs that release. The pins built into Kubehenge stay.
 
