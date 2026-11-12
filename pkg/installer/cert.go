@@ -34,13 +34,16 @@ type Certificate struct {
 }
 
 func handshake(ctx context.Context, conn net.Conn, host string) ([]*x509.Certificate, error) {
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true} //nolint:gosec // verifyAPI checks the chain against a CA the user vouched for.
-	if _, err := netip.ParseAddr(host); err != nil {
-		cfg.ServerName = host
-	}
+	// The handshake verifies as usual. A chain this node does not trust yet comes back from the
+	// verification error, and verifyAPI judges it against the CA the user vouches for.
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: host}
 	_ = conn.SetDeadline(time.Now().Add(probeTimeout))
 	c := tls.Client(conn, cfg)
 	if err := c.HandshakeContext(ctx); err != nil {
+		var unverified *tls.CertificateVerificationError
+		if errors.As(err, &unverified) && len(unverified.UnverifiedCertificates) > 0 {
+			return unverified.UnverifiedCertificates, nil
+		}
 		return nil, fmt.Errorf("handshake context: %w", err)
 	}
 	return c.ConnectionState().PeerCertificates, nil
