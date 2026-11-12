@@ -136,7 +136,7 @@ headlamp_offers_actions() {
 upgrade_rolled_back() {
     upgrade "$1"
     to=$(version_of "$1")
-    if [ "${upgraded}" -eq 0 ] || ! grep -q "release ${to} did not start: the interface did not answer within .*; rolled back to $2\$" "${work}/upgrade.log"; then
+    if [ "${upgraded}" -eq 0 ] || ! grep -q "release ${to} did not start: the interface did not answer within .*\. Rolled back to $2\$" "${work}/upgrade.log"; then
         cat "${work}/upgrade.log" >&2
         fail "install.sh --upgrade to ${to} did not roll back to $2"
     fi
