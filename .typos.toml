@@ -28,6 +28,8 @@ extend-ignore-re = [
   "credentialsAuthKey += \"authorization\"",
   # Istio's policy kind.
   "AuthorizationPolicy",
+  # The kubelet's configuration field.
+  "[Ss]erializeImagePulls",
   # go-proxmox's error text.
   "not authorized",
   # Cluster API's status field.

@@ -9,6 +9,8 @@ import (
 // pullSettings are the kubelet settings that keep one stalled image pull from holding every later
 // pull of the node behind it.
 type pullSettings struct {
+	APIVersion            string `json:"apiVersion"`
+	Kind                  string `json:"kind"`
 	SerializeImagePulls   *bool  `json:"serializeImagePulls"`
 	MaxParallelImagePulls *int32 `json:"maxParallelImagePulls"`
 }
@@ -61,6 +63,10 @@ func TestKubeletsOfKubeadmRKE2AndK3sPullImagesInParallel(t *testing.T) {
 			}
 			if !got.parallel() {
 				t.Errorf("%s holds %q, want serializeImagePulls false and maxParallelImagePulls 3", c.path, content)
+			}
+			// The kubelet refuses a drop-in of its configuration directory that names no kind.
+			if c.file != "kubeadm.yaml" && (got.APIVersion != "kubelet.config.k8s.io/v1beta1" || got.Kind != "KubeletConfiguration") {
+				t.Errorf("%s holds %q, want a KubeletConfiguration of kubelet.config.k8s.io/v1beta1", c.path, content)
 			}
 		})
 	}

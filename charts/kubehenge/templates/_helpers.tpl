@@ -1661,13 +1661,15 @@ maxParallelImagePulls: 3
 {{/*
 The same settings as a drop-in for RKE2's and k3s's kubelets, called with the distribution's data
 directory. Neither has a flag for the limit, and both start the kubelet on the drop-ins of this
-directory, after their own defaults.
+directory, after their own defaults. The kubelet refuses a drop-in without its kind.
 */}}
 {{- define "kubehenge.imagePullFile" -}}
 - path: {{ . }}/agent/etc/kubelet.conf.d/50-kubehenge-image-pulls.conf
   owner: root:root
   permissions: "0600"
   content: |
+    apiVersion: kubelet.config.k8s.io/v1beta1
+    kind: KubeletConfiguration
     {{- include "kubehenge.imagePullSettings" . | nindent 4 }}
 {{- end -}}
 
