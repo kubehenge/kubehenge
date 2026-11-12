@@ -2,6 +2,8 @@ package templates
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,6 +15,23 @@ import (
 // TalosDefaultKubernetes is the Kubernetes release DefaultTalosVersion's Talos runs by default,
 // which Kubehenge offers Talos clusters as the stable one.
 var TalosDefaultKubernetes = "v" + constants.DefaultKubernetesVersion
+
+// TalosPin is the images of one Talos release, each by its digest, as Kubehenge captured them
+// once. Imager, InstallerBase and Extensions are "sha256:<64 hex>", GuestAgent "<tag>@sha256:<64 hex>".
+type TalosPin struct{ Imager, InstallerBase, Extensions, GuestAgent string }
+
+// ImagerRef is Sidero's imager image, which also holds the kernel and initramfs.
+func (p TalosPin) ImagerRef() string { return "ghcr.io/siderolabs/imager@" + p.Imager }
+
+// InstallerBaseRef is the base image of the installer.
+func (p TalosPin) InstallerBaseRef() string {
+	return "ghcr.io/siderolabs/installer-base@" + p.InstallerBase
+}
+
+// GuestAgentRef is the QEMU guest agent's extension image.
+func (p TalosPin) GuestAgentRef() string {
+	return "ghcr.io/siderolabs/qemu-guest-agent:" + p.GuestAgent
+}
 
 // TalosMinor is a Talos release's minor version, such as 14 for v1.14.4.
 func TalosMinor(version string) (int, error) {
@@ -103,21 +122,39 @@ func TalosStep(from, to string, releases []string) (string, error) {
 	if now <= was+1 {
 		return to, nil
 	}
-	step, stepPatch := "", -1
-	for _, r := range releases {
-		minor, err := TalosMinor(r)
-		if err != nil || minor != was+1 {
+	for _, r := range NewestOfEachMinor(releases) {
+		if minor, _ := TalosMinor(r); minor == was+1 {
+			return r, nil
+		}
+	}
+	return "", fmt.Errorf("no Talos 1.%d release to step through from %s to %s", was+1, from, to)
+}
+
+// NewestOfEachMinor is the newest release of each minor version among the v1.x.y releases, Talos's
+// or Kubernetes', newest minor version first. It leaves out what TalosMinor refuses. The list is
+// never nil.
+func NewestOfEachMinor(releases []string) []string {
+	newest := map[int]string{}
+	patchOf := func(v string) int {
+		p, _ := strconv.Atoi(v[strings.LastIndex(v, ".")+1:])
+		return p
+	}
+	for _, v := range releases {
+		minor, err := TalosMinor(v)
+		if err != nil {
 			continue
 		}
-		patch, err := strconv.Atoi(r[strings.LastIndex(r, ".")+1:])
-		if err == nil && patch > stepPatch {
-			step, stepPatch = r, patch
+		if old, ok := newest[minor]; !ok || patchOf(old) < patchOf(v) {
+			newest[minor] = v
 		}
 	}
-	if step == "" {
-		return "", fmt.Errorf("no Talos 1.%d release to step through from %s to %s", was+1, from, to)
+	minors := slices.Sorted(maps.Keys(newest))
+	slices.Reverse(minors)
+	out := make([]string, 0, len(minors))
+	for _, m := range minors {
+		out = append(out, newest[m])
 	}
-	return step, nil
+	return out
 }
 
 // TalosUpgrade tells whether nodes on Talos from may move to Talos to: never to an older minor

@@ -6,15 +6,19 @@
 #   scripts/changelog.sh check                     # refuses a fragment or a section out of shape
 #   scripts/changelog.sh fold <version> [<date>]   # new section under [Unreleased], fragments deleted
 #   scripts/changelog.sh unreleased                # the fragments' lines by heading, for the website
+#   scripts/changelog.sh notes <version>           # the version's release notes, for its GitHub release
 #
 # Run it from anywhere in the repository. The date defaults to today. Lines fold in the order their
 # fragments were first committed, and fragments git has not seen yet follow by name.
 set -eu
 
-usage="usage: $0 check | fold <version> [<date>] | unreleased"
+usage="usage: $0 check | fold <version> [<date>] | unreleased | notes <version>"
 mode=${1:?${usage}}
 changes=docs/changes
 changelog=docs/changelog.md
+# Where a release page sends a link to a docs page: kubehenge.dev serves docs/<page>.md at
+# /docs/<page>. A relative link would point into the release page's own address, where nothing is.
+site=https://kubehenge.dev/docs/
 # A section's headings, in the order they appear. A fragment takes them all but Highlights, which the
 # release writes, and adds Internal, which the notes leave out.
 order='Before you upgrade|Highlights|Added|Changed|Fixed|Removed|Security'
@@ -162,15 +166,76 @@ check_changelog() {
     ' "${changelog}"
 }
 
+# anchors: every target a changelog link may name, one per line: each page of docs/ as page.md, and
+# each of its headings as page.md#anchor. The anchor is GitHub's, which the website makes too
+# (website/.vitepress/config.mts): link text kept, lower case, punctuation dropped, each space a
+# hyphen, and a repeated one numbered from -1.
+anchors() {
+    for f in docs/*.md; do
+        [ -e "${f}" ] || continue
+        # shellcheck disable=SC2016 # awk code, which awk expands
+        LC_ALL=C awk -v page="${f#docs/}" '
+            BEGIN { print page }
+            /^(```|~~~)/ { fence = !fence; next }
+            fence || !/^#+ / { next }
+            {
+                text = $0
+                sub(/^#+ +/, "", text)
+                sub(/ +#+ *$/, "", text)
+                plain = ""
+                while (match(text, /\[[^]]*\]\([^)]*\)/)) {
+                    link = substr(text, RSTART, RLENGTH)
+                    plain = plain substr(text, 1, RSTART - 1) substr(link, 2, index(link, "](") - 2)
+                    text = substr(text, RSTART + RLENGTH)
+                }
+                text = tolower(plain text)
+                # U+2000 to U+203F, the punctuation block: dashes, curly quotes and the ellipsis.
+                gsub(/\342\200[\200-\277]/, "", text)
+                gsub(/[^a-z0-9_ \200-\377-]/, "", text)
+                gsub(/ /, "-", text)
+                if (seen[text]++) text = text "-" (seen[text] - 1)
+                print page "#" text
+            }
+        ' "${f}"
+    done
+}
+
+# check_links <file>...: refuses a link that is neither a web address nor a page of docs/ written
+# relative to docs/changelog.md, or that names an anchor no heading of its page makes.
+check_links() {
+    anchors > "${work}/anchors"
+    LC_ALL=C awk "${rules}"'
+        NR == FNR { known[$0] = 1; next }
+        {
+            line = $0
+            while (match(line, /\]\([^)]*\)/)) {
+                target = substr(line, RSTART + 2, RLENGTH - 3)
+                line = substr(line, RSTART + RLENGTH)
+                if (target ~ /^[a-z]+:/) continue
+                page = target
+                sub(/#.*/, "", page)
+                if (page !~ /^[A-Za-z0-9._-]+\.md$/) refuse("a link to " target ", which is neither a web address nor a page in docs/")
+                else if (!(page in known)) refuse("a link to " page ", which is not a page in docs/")
+                else if (!(target in known)) refuse("a link to " target ", an anchor no heading of " page " makes")
+            }
+        }
+        END { exit bad }
+    ' "${work}/anchors" "$@"
+}
+
 check() {
     bad=0
     for f in "${changes}"/*.md; do
         [ -e "${f}" ] || continue
         # shellcheck disable=SC2310 # its status is the verdict, and every file is checked before failing
         check_fragment "${f}" || bad=1
+        # shellcheck disable=SC2310 # as for the fragment's shape
+        check_links "${f}" || bad=1
     done
     # shellcheck disable=SC2310 # its status is the verdict, as for the fragments
     check_changelog || bad=1
+    # shellcheck disable=SC2310 # as for the changelog's shape
+    check_links "${changelog}" || bad=1
     [ "${bad}" = 0 ] || fail "out of shape: see the lines above and the rules in .github/CONTRIBUTING.md"
 }
 
@@ -195,6 +260,47 @@ body() {
     done
 }
 
+# notes <version>: the version's section without its heading, as its GitHub release shows it. Before
+# 1.0.0 it opens with README's alpha warning, so nobody reads a release page without it. Each link to
+# a docs page goes to the page on the website. The heading is matched as a plain string, since a
+# bracket in an awk regex reads differently from one awk to the next.
+notes() {
+    # shellcheck disable=SC2016 # awk code, which awk expands
+    LC_ALL=C awk -v head="## [$1]" -v site="${site}" '
+        function rewrite(line,   out, target, page, anchor) {
+            out = ""
+            while (match(line, /\]\([A-Za-z0-9._-]+\.md(#[^)]*)?\)/)) {
+                target = substr(line, RSTART + 2, RLENGTH - 3)
+                page = target
+                anchor = ""
+                if (index(target, "#")) {
+                    page = substr(target, 1, index(target, "#") - 1)
+                    anchor = substr(target, index(target, "#"))
+                }
+                sub(/\.md$/, "", page)
+                out = out substr(line, 1, RSTART - 1) "](" site page anchor ")"
+                line = substr(line, RSTART + RLENGTH)
+            }
+            return out line
+        }
+        substr($0, 1, 4) == "## [" {
+            on = substr($0, 1, length(head)) == head && (length($0) == length(head) || substr($0, length(head) + 1, 1) == " ")
+            found = found || on
+            next
+        }
+        on { print rewrite($0) }
+        END { exit !found }
+    ' "${changelog}" > "${work}/notes" || fail "${changelog} has no section for $1"
+    case $1 in
+        0.*)
+            alpha=$(grep -m 1 '^> \*\*Alpha' README.md) || fail "README.md has no alpha warning"
+            printf '%s\n' "${alpha}"
+            ;;
+        *) ;;
+    esac
+    cat "${work}/notes"
+}
+
 work=$(mktemp -d)
 trap 'rm -rf "${work}"' EXIT
 
@@ -208,16 +314,20 @@ case ${mode} in
         body "${work}/lines"
         exit 0
         ;;
-    fold) ;;
+    fold | notes) ;;
     *) fail "${usage}" ;;
 esac
 
 version=${2:?${usage}}
-date=${3:-$(date +%F)}
 case ${version} in
     *[!0-9.]* | '' | .* | *. | *..*) fail "the version ${version} is not numbers and dots, such as 0.4.3" ;;
     *) ;;
 esac
+if [ "${mode}" = notes ]; then
+    notes "${version}"
+    exit 0
+fi
+date=${3:-$(date +%F)}
 case ${date} in
     [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
     *) fail "the date ${date} is not YYYY-MM-DD" ;;

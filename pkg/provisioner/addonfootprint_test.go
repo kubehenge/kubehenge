@@ -3,6 +3,7 @@ package provisioner
 import (
 	"cmp"
 	"flag"
+	"fmt"
 	"os"
 	"regexp"
 	"slices"
@@ -245,7 +246,7 @@ func footprintTable(rows []footprintRow) string {
 		if privileges == "" {
 			privileges = "none"
 		}
-		b.WriteString("| " + r.name + " | " + codeList(r.namespaces) + " | " + level + " | " + privileges + " | " + codeList(r.registries) + " |\n")
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", r.name, codeList(r.namespaces), level, privileges, codeList(r.registries))
 	}
 	return b.String()
 }
@@ -262,7 +263,7 @@ func ownedTable(rows []footprintRow) string {
 			if r.addon == monitoringAddon {
 				crds = owned[monitoringAddon]
 			}
-			b.WriteString("| " + r.addon + " | `" + r.release + "` | `" + r.namespace + "` | " + codeList(crds) + " |\n")
+			fmt.Fprintf(&b, "| %s | `%s` | `%s` | %s |\n", r.addon, r.release, r.namespace, codeList(crds))
 		}
 	}
 	return b.String()

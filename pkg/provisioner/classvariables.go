@@ -26,8 +26,8 @@ const (
 // ClusterAdmission, as the API server calls them for every Cluster.
 func AdmissionWebhooks(scheme *runtime.Scheme, hooks *Hooks) map[string]http.Handler {
 	return map[string]http.Handler{
-		DefaultClusterPath:  admission.WithDefaulter[*clusterv1.Cluster](scheme, &ClusterDefaulter{Hooks: hooks}),
-		ValidateClusterPath: admission.WithValidator[*clusterv1.Cluster](scheme, &ClusterAdmission{Hooks: hooks}),
+		DefaultClusterPath:  admission.WithDefaulter(scheme, &ClusterDefaulter{Hooks: hooks}),
+		ValidateClusterPath: admission.WithValidator(scheme, &ClusterAdmission{Hooks: hooks}),
 	}
 }
 

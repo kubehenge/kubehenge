@@ -847,6 +847,7 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 	if err := mgr.Add(versions); err != nil {
 		return fmt.Errorf("the template versions: %w", err)
 	}
+	talosPins := provisioner.DefaultReleasePins().Talos()
 	upgrader := &provisioner.Upgrader{
 		Client:         mgr.GetClient(),
 		ClassNamespace: o.r.ClassNamespace,
@@ -860,7 +861,7 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 		RancherKubernetes: rancherMinors,
 		Interval:          o.upgradeInterval,
 		Soak:              o.nodeImageSoak,
-		TalosImages:       templates.DefaultSources(),
+		TalosImages:       templates.DefaultSources(talosPins),
 		Checker:           &provisioner.IdentityChecker{Reader: mgr.GetAPIReader(), Now: time.Now},
 		Events:            mgr.GetEventRecorder("kubehenge"),
 		Now:               time.Now,
@@ -873,7 +874,7 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 		Client:         mgr.GetClient(),
 		Reader:         mgr.GetAPIReader(),
 		ClassNamespace: o.r.ClassNamespace,
-		Images:         templates.DefaultSources(),
+		Images:         templates.DefaultSources(talosPins),
 		Dial:           provisioner.DialTalos,
 		Nodes:          &provisioner.RemoteDrainer{Remotes: remotes},
 		Events:         mgr.GetEventRecorder("kubehenge"),

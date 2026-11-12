@@ -314,7 +314,10 @@ var demoReleaseFiles = []string{
 func demoChecksumFile(path string) string {
 	var b strings.Builder
 	for _, f := range demoReleaseFiles {
-		b.WriteString(demoDigest(path, f) + "  " + f + "\n")
+		b.WriteString(demoDigest(path, f))
+		b.WriteString("  ")
+		b.WriteString(f)
+		b.WriteString("\n")
 	}
 	return b.String()
 }

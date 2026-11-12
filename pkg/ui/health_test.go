@@ -711,7 +711,8 @@ func TestReadLinesKeepsTheLast(t *testing.T) {
 	t.Parallel()
 	var log strings.Builder
 	for i := range podLogLines + 5 {
-		log.WriteString(strings.Repeat("x", i) + "\n")
+		log.WriteString(strings.Repeat("x", i))
+		log.WriteString("\n")
 	}
 	lines, err := readLines(strings.NewReader(log.String()))
 	if err != nil || len(lines) != podLogLines || lines[0] != strings.Repeat("x", 5) {

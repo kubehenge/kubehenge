@@ -211,7 +211,7 @@ function askText(kind: TemplateKind, os: NodeOSChoice | undefined): string {
   const on = os === undefined ? "" : ` on ${os.title}`;
   const words: Record<TemplateKind, string> = {
     kubeadm: `A version not listed${on} takes about 20 minutes`,
-    talos: "A release not listed takes a few minutes",
+    talos: "A release not listed takes about 2 to 4 minutes",
     distribution: `Building the VM template${on} takes about 20 minutes`,
   };
   return words[kind];

@@ -1,0 +1,20 @@
+ ▟▀▜ ▟▀▜   Kubehenge
+ █ █ █ █   Appliance installer
+ ▀▀▘ ▀▀▘   Network  ·  Choices  ·  Summary  ·  Install  ·  Done
+
+  Address           DHCP
+  DNS               192.0.2.53
+  Bridge            vmbr0
+  Container         100, kubehenge
+  Disk storage      local-lvm
+  Template storage  local-lvm
+  Proxmox VE API    https://pve1.example.com:8006
+  API CA            this cluster's CA
+  Proxmox VE entry  no
+
+  ┃ Next
+  ┃ > Install
+  ┃   Change network
+  ┃   Change Proxmox VE entry
+  ┃   Cancel
+  enter confirm  ctrl+c leave

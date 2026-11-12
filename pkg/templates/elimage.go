@@ -83,6 +83,9 @@ func (f *elFamily) manifest(d Distribution) string {
 // recipe builds the node image in a VM of the family's cloud image and installs it onto the
 // template's disk (el/build.sh), then boots it as a clone would be.
 func (f *elFamily) recipe(b *Bake, keys map[string]string) (Recipe, error) {
+	if b.Distribution == Talos {
+		return f.talosRecipe(b, keys)
+	}
 	repos := f.repositories(b)
 	if repos == nil {
 		return Recipe{}, fmt.Errorf("no node image of %s", b.Distribution)

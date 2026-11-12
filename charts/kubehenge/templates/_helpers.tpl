@@ -1648,6 +1648,32 @@ and ones that followed the add-ons would replace those nodes whenever an add-on 
 {{- end -}}
 
 {{/*
+The kubelet's image pulls, in its configuration. By default it pulls one image at a time, so one
+pull that stalls on a slow registry holds every later image of the node behind it. Three at once
+leave two free when one stalls, and stay within the kubelet's default registry rate of 5 a second
+(registryPullQPS) on a small VM.
+*/}}
+{{- define "kubehenge.imagePullSettings" -}}
+serializeImagePulls: false
+maxParallelImagePulls: 3
+{{- end -}}
+
+{{/*
+The same settings as a drop-in for RKE2's and k3s's kubelets, called with the distribution's data
+directory. Neither has a flag for the limit, and both start the kubelet on the drop-ins of this
+directory, after their own defaults. The kubelet refuses a drop-in without its kind.
+*/}}
+{{- define "kubehenge.imagePullFile" -}}
+- path: {{ . }}/agent/etc/kubelet.conf.d/50-kubehenge-image-pulls.conf
+  owner: root:root
+  permissions: "0600"
+  content: |
+    apiVersion: kubelet.config.k8s.io/v1beta1
+    kind: KubeletConfiguration
+    {{- include "kubehenge.imagePullSettings" . | nindent 4 }}
+{{- end -}}
+
+{{/*
 The kernel settings every node runs with. The kubelet checks them and refuses to start when they
 differ (protect-kernel-defaults), rather than change the host behind its back: the four the CIS
 hardening guides set, and the two the kubelet itself would. A node whose kernel panics or oopses
@@ -1681,6 +1707,11 @@ or lack it. A cluster that names no families has IPv4 alone, the variable's defa
 
 {{- define "kubehenge.lacksFamily" -}}
 {{ printf "{{ with .network }}{{ if not (has %q (.ipFamilies | default (list \"IPv4\"))) }}true{{ end }}{{ end }}" . | quote }}
+{{- end -}}
+
+{{/* A patch's enabledIf for a cluster whose primary family, the first of network.ipFamilies, is the one given. */}}
+{{- define "kubehenge.primaryFamily" -}}
+{{ printf "{{ with .network }}{{ if eq %q (index (.ipFamilies | default (list \"IPv4\")) 0) }}true{{ end }}{{ end }}" . | quote }}
 {{- end -}}
 
 {{/*

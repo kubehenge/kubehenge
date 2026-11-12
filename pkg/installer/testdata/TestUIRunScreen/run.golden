@@ -1,0 +1,16 @@
+ ▟▀▜ ▟▀▜   Kubehenge
+ █ █ █ █   Appliance installer
+ ▀▀▘ ▀▀▘   Network  ·  Choices  ·  Summary  ·  Install  ·  Done
+
+  ✓ OpenTofu             OpenTofu 1.0.0, checksum verified
+  * Container template ▌▌▌▌▌▌▌▌▌▌░░░░░░░░░  50%
+  · Create container
+  · Start container
+  · Wait for address
+  · Check network
+  · Certificate
+  · Install software
+  · Start Kubehenge
+  · Security updates
+
+  ctrl+c stops and removes the container

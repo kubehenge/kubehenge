@@ -331,6 +331,7 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict "controlPlane" true) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.imagePullFile" "/var/lib/rancher/rke2" | nindent 6 }}
       {{- include "kubehenge.clockFile" . | nindent 6 }}
       {{- include "kubehenge.removedServerFile" (dict "distribution" "rke2") | nindent 6 }}
       {{- include "kubehenge.auditPolicyFile" (dict "root" . "path" "/etc/rancher/rke2/audit-policy.yaml") | nindent 6 }}
@@ -400,5 +401,6 @@ template:
     {{- include "kubehenge.rke2AgentConfig" (dict) | nindent 4 }}
     files:
       {{- include "kubehenge.sysctlFile" . | nindent 6 }}
+      {{- include "kubehenge.imagePullFile" "/var/lib/rancher/rke2" | nindent 6 }}
       {{- include "kubehenge.clockFile" . | nindent 6 }}
 {{- end -}}

@@ -243,7 +243,7 @@ RKE2 and k3s nodes install only releases whose checksum file and install script 
 
 Both fetch the release's checksum file from the distribution's release page and show its SHA-256 digests before saving. A version that does not exist or has no checksum file is refused. Each pin records who added it. A pin is removed with **Unpin** or `kubehenge release unpin <version>`, and only while no cluster runs that release. The pins built into Kubehenge stay.
 
-Talos has no pin. Any release of Talos's Image Factory can be built into a template, so a Talos cluster needs no pin to run it.
+Talos releases are pinned too. A Talos patch reaches clusters with the Kubehenge release that pins it.
 
 #### Pinning with kubectl
 

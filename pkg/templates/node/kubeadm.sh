@@ -9,13 +9,18 @@ files=$(dirname "$(dirname "$0")")
 
 # kube-proxy reads conntrack's settings when it starts, before anything else loads the module.
 printf 'overlay\nbr_netfilter\nnf_conntrack\n' > /usr/lib/modules-load.d/kubernetes.conf
-printf 'net.ipv4.ip_forward = 1\nnet.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\n' \
-    > /usr/lib/sysctl.d/90-kubernetes.conf
+# kubeadm's preflight refuses an IPv6 or dual-stack node whose default IPv6 forwarding is off.
+# NetworkManager takes router advertisements itself, so forwarding costs a node no address.
+printf '%s\n' 'net.ipv4.ip_forward = 1' 'net.ipv6.conf.all.forwarding = 1' 'net.ipv6.conf.default.forwarding = 1' \
+    'net.bridge.bridge-nf-call-iptables = 1' 'net.bridge.bridge-nf-call-ip6tables = 1' > /usr/lib/sysctl.d/90-kubernetes.conf
 
 mkdir -p /etc/containerd
+# containerd 2's transfer service never cancels a pull that stalls before its first byte, so every
+# image behind it waits. Its local pull path cancels one after image_pull_progress_timeout and the
+# kubelet retries. A containerd without the key (1.x) pulls locally already, and the sed leaves it.
 containerd config default |
     sed -e 's/SystemdCgroup = false/SystemdCgroup = true/' -e 's/enable_selinux = false/enable_selinux = true/' \
-        > /etc/containerd/config.toml
+        -e 's/use_local_image_pull = false/use_local_image_pull = true/' > /etc/containerd/config.toml
 grep -q 'SystemdCgroup = true' /etc/containerd/config.toml
 grep -q 'enable_selinux = true' /etc/containerd/config.toml
 printf 'runtime-endpoint: unix:///run/containerd/containerd.sock\nimage-endpoint: unix:///run/containerd/containerd.sock\n' \

@@ -193,7 +193,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 		HTTP: savedProxyClient(o.a.Dir, conn.URL, pinFetchTimeout), GitHub: pinsSources.github, Raw: pinsSources.raw,
 		Mirror: o.savedReleaseMirror,
 	}
-	sources := templates.DefaultSources()
+	sources := templates.DefaultSources(provisioner.DefaultReleasePins().Talos())
 	sources.HTTP = savedProxyClient(o.a.Dir, conn.URL, sources.HTTP.Timeout)
 	s.TalosReleases = sources.TalosReleases
 	if s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
@@ -340,7 +340,7 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		if connErr != nil {
 			return 0, fmt.Errorf("connecting to Proxmox VE as %s: %w", t.Username, connErr)
 		}
-		b.Client, b.Sources, b.Proxy = session, templates.DefaultSources(), savedGuestProxy(a)
+		b.Client, b.Sources, b.Proxy = session, templates.DefaultSources(provisioner.DefaultReleasePins().Talos()), savedGuestProxy(a)
 		b.Sources.HTTP = savedProxyClient(a.Dir, pveConfig.URL, b.Sources.HTTP.Timeout)
 		return b.Create(ctx, tpl)
 	}

@@ -34,7 +34,7 @@ A pushed tag starts `.github/workflows/release.yml`. It calls `.github/workflows
 6. `attest` signs the images with Sigstore (keyless) and attests build provenance and the SBOMs ([below](#what-is-attested)). It alone holds the OpenID Connect token Sigstore signs against and runs no code but cosign (installed by its checksum) and the attest action.
 7. `verify` checks everything from the files alone, as a user would, with `release-build.yml` at this tag as the builder. It checks the checksums, each file's provenance, the archive's SBOM, and each image's provenance, SBOM and signature.
 8. `publish` creates the release with every file and starts the website's workflow.
-   - It publishes the release as the latest, with the changelog section as notes (opened before 1.0.0 by the README's alpha warning).
+   - It publishes the release as the latest, with the changelog section as notes (opened before 1.0.0 by the README's alpha warning). Its links to docs pages go to kubehenge.dev (`scripts/changelog.sh notes`).
    - It remakes a draft a failed run left and never rewrites a published release.
 
 ### Build level

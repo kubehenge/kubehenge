@@ -1,5 +1,5 @@
 #!/bin/sh
-# Unit test of how appliance/install.sh --upgrade puts a release in place in the container and,
+# Unit test of how `kubehenge install --upgrade` puts a release in place in the container and,
 # when its interface does not serve, the old release back: the script it runs there, on a root of
 # its own, with stand-ins for systemd and for the two releases' binaries. Needs no Proxmox VE.
 #
@@ -7,7 +7,7 @@
 set -eu
 
 here=$(dirname "$0")
-installer=${here}/../../appliance/install.sh
+installer=${here}/../../pkg/installer/upgrade.sh
 work=$(mktemp -d)
 trap 'rm -rf "${work}"' EXIT
 
@@ -24,9 +24,8 @@ check() {
     fi
 }
 
-KUBEHENGE_INSTALL_FUNCTIONS=1
-# shellcheck source=../../appliance/install.sh
-. "${installer}"
+upgrade_script=$(cat "${installer}")
+units='kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service'
 
 # Stand-ins for what the container has: systemd, which records what it is asked; install, which
 # owns nothing outside a container; the container's address; the trust store's update; and a

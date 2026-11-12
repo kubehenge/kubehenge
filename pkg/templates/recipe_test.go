@@ -188,7 +188,10 @@ func checkGuestExec(t *testing.T, bootcmd []string) {
 // and repositories that check their packages against those keys.
 func checkFiles(t *testing.T, files map[string]string, dir string, keys []RepositoryKey, names map[string]bool) {
 	t.Helper()
-	for _, name := range []string{dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/kubehenge-calico.cil", "node/images.sh", "node/kubeadm.sh", "node/boot-log.sh", "node/kubehenge-boot-log.service", "node/kubehenge-boot-log.timer"} {
+	for _, name := range []string{
+		dir + "/build.sh", dir + "/node.sh", "node/kubehenge-qga.cil", "node/kubehenge-calico.cil", "node/images.sh", "node/kubeadm.sh", "node/boot-log.sh", "node/kubehenge-boot-log.service", "node/kubehenge-boot-log.timer",
+		"node/cloud-init.sh", "node/cloud-init/create-route-section-before-its-metric.patch", "node/cloud-init/dual-stack-ipv4-first.yaml", "node/cloud-init/dual-stack-ipv6-first.yaml",
+	} {
 		if files[name] == "" {
 			t.Errorf("the bake does not carry %s", name)
 		}
@@ -286,7 +289,7 @@ func distributionChecks(t *testing.T, d Distribution) []string {
 		return []string{"rpm -q k3s-selinux", "grep -qx k3s", "touch /usr/local/"}
 	case Kubeadm:
 		return []string{
-			"kubeadm version -o short)\" = v1.37.1", "enable_selinux = true", "/sys/module/br_netfilter",
+			"kubeadm version -o short)\" = v1.37.1", "enable_selinux = true", "use_local_image_pull = false", "/sys/module/br_netfilter",
 			"/sys/module/nf_conntrack", "type: spc_t", "crictl images", "enable kubelet.service", iptablesCheck,
 		}
 	case Talos:
@@ -431,6 +434,32 @@ func TestKubeadmPatchesRunTheControlPlaneAsSPC(t *testing.T) {
 	}
 }
 
+// kubeadm's preflight checks the default IPv6 forwarding of every IPv6 or dual-stack node.
+func TestKubeadmNodesForwardBothFamilies(t *testing.T) {
+	t.Parallel()
+	script, err := recipeFiles.ReadFile("node/kubeadm.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sysctl := range []string{"'net.ipv4.ip_forward = 1'", "'net.ipv6.conf.all.forwarding = 1'", "'net.ipv6.conf.default.forwarding = 1'"} {
+		if !strings.Contains(string(script), sysctl) {
+			t.Errorf("node/kubeadm.sh does not set %s", sysctl)
+		}
+	}
+}
+
+// A stalled registry request is cancelled only on containerd's local pull path.
+func TestKubeadmNodesPullLocally(t *testing.T) {
+	t.Parallel()
+	script, err := recipeFiles.ReadFile("node/kubeadm.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(script), "s/use_local_image_pull = false/use_local_image_pull = true/") {
+		t.Error("node/kubeadm.sh does not switch containerd to its local image pull")
+	}
+}
+
 func TestRecipeRefuses(t *testing.T) {
 	t.Parallel()
 	alma, release, err := ReleaseOf(DefaultNodeOS)
@@ -456,7 +485,7 @@ func TestRecipeRefuses(t *testing.T) {
 			return err
 		},
 		"Talos": func() error {
-			_, err := alma.Recipe(release, &Bake{Distribution: Talos}, nil)
+			_, err := alma.Recipe(release, &Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: DefaultTalosVersion}, nil)
 			return err
 		},
 		"Talos on Leap": func() error {

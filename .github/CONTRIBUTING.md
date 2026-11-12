@@ -73,7 +73,7 @@ Details and reasons: `docs/architecture.md`.
   - A line that changes nothing for a reader stays out, such as behaviour that stays the same, how a fix works inside or a retry count the user never sees.
   - A fix or change to something not yet released goes into that thing's Added line, not under Fixed, Changed or Removed.
   - A change that asks something of an upgrader (a setting to remove, a rebuild, a replaced node) goes under Before you upgrade, with what to do.
-  - Detail goes into the docs, with a link written relative to `docs/changelog.md`. `make test` checks the shape (`scripts/changelog.sh check`).
+  - Detail goes into the docs, with a link written relative to `docs/changelog.md`, such as `clusters.md#machines`. `make test` checks the shape and that each link names a page in `docs/` and one of its headings (`scripts/changelog.sh check`).
   - A release adds one to five highlights to its section, after Before you upgrade (`docs/releasing.md`). A highlight says in plain words what matters most and never repeats a bullet.
 - **Subjects.** Commit subjects are at most 72 characters. Pull request titles are at most 64, as the squash commit adds the number (`(#N)`). CI checks both.
 - **Page dates.** The published site serves each page's fingerprint and the day its content last changed as `/pages.json`, and a deployment starts from it. Nothing is committed for it.
@@ -90,8 +90,9 @@ Details and reasons: `docs/architecture.md`.
   - Where a consumer takes only a version, Kubehenge gives it the digest too and makes it pull by the digest or check it.
   - Where the publisher's bytes change under a version, its signature is required instead. The few left with neither are named in `docs/architecture.md`.
   - An image that another release names for itself (Rancher's webhook, Fleet, shell and Turtles, the FRR of MetalLB's chart) has no Renovate comment. It moves only with that release, as Renovate's pull request for it says.
-- **Release pins.** RKE2's and k3s's releases are pinned in `pkg/provisioner/releasepins.txt`. Renovate raises the newest release named in its header.
-  - On that pull request, `make release-pins` (with `GH_TOKEN` set) adds every release published since, as a unit test requires.
+- **Release pins.** RKE2's, k3s's and Talos's releases are pinned in `pkg/provisioner/releasepins.txt`. Renovate raises the newest release named in its header.
+  - A Talos pin holds the digests of the images its templates are baked from. CI checks it by its own content and Sidero's signature (`make verify-talos-pins`), never against a tag.
+  - On that pull request, `make release-pins` (with `GH_TOKEN` set) adds every release published since, as a unit test requires. For Talos the first CI run fails with `Talos <release> is not pinned` until it has.
 - **Chart versions.** A change to a chart in this repository raises its `version` by the next release.
   - The management cluster's Terraform/OpenTofu configuration installs the charts from their directories and passes each a digest of its files (`chartDigest`).
   - The Helm provider upgrades a release only when its chart version or values change. The digest makes it upgrade a chart changed without a new version.

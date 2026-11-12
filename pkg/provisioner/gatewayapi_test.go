@@ -506,6 +506,64 @@ func TestGatewayAPIMixesNothingIntoTheDistributionsChart(t *testing.T) {
 	}
 }
 
+// A distribution upgrade runs its new Gateway API chart beside the upgrade of its Traefik CRD chart,
+// which shipped the admission policy before without Helm's keep policy. Where the Gateway API chart
+// adopts the policy first, Helm deletes it in the Traefik CRD chart's upgrade. Kubehenge puts back
+// what the chart's deployed revision ships and the cluster lacks, as the chart has it and marked as
+// its own, and keeps it there.
+func TestGatewayAPIRestoresWhatTheDistributionsChartShipsAndLacks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := &GatewayAPIReconciler{Bundle: testGatewayAPI(t)}
+	const owner = "kube-system/gateway-api-crd"
+	helm := []string{helmReleaseName, "gateway-api-crd", helmReleaseNamespace, "kube-system"}
+	workload := gatewayWorkload(t, clusterCRD(testGateways, "v1.6.2", helm...), clusterCRD(testHTTPRoutes, "v1.6.2", helm...),
+		helmRevision(t, "gateway-api-crd", 1, "deployed", testManifest("v1.6.2")))
+
+	oldest, applied, err := r.ensure(ctx, testClusterKey, workload, owner, false)
+	if err != nil || !applied || oldest != "v1.6.2" {
+		t.Fatalf("the chart's policy missing: oldest %q, applied %v, %v", oldest, applied, err)
+	}
+	for _, gvk := range gatewayAPIKinds[1:] {
+		got := &metav1.PartialObjectMetadata{}
+		got.SetGroupVersionKind(gvk)
+		if err = workload.Get(ctx, client.ObjectKey{Name: testPolicy}, got); err != nil {
+			t.Fatalf("the chart's %s is not back: %v", gvk.Kind, err)
+		}
+		a := got.Annotations
+		if a[bundleVersionAnnotation] != "v1.6.2" || a[helmReleaseName] != "gateway-api-crd" || a[helmReleaseNamespace] != "kube-system" ||
+			got.Labels[managedByLabel] != "Helm" {
+			t.Errorf("the %s put back is not the chart's: annotations %v, labels %v", gvk.Kind, a, got.Labels)
+		}
+	}
+
+	if _, applied, err = r.ensure(ctx, testClusterKey, workload, owner, false); err != nil || applied {
+		t.Errorf("once the chart's policy is back: applied %v, %v", applied, err)
+	}
+	if err = r.withdrawPolicy(ctx, testClusterKey, workload, "the distribution's charts hold the CRDs"); err != nil {
+		t.Fatal(err)
+	}
+	if kinds := policyKinds(t, workload); len(kinds) != 2 {
+		t.Errorf("the chart's policy put back was withdrawn: %v left", kinds)
+	}
+}
+
+// Kubehenge puts back nothing of a revision Helm is still installing, which brings its objects itself.
+func TestGatewayAPIRestoresNothingWhileTheChartInstalls(t *testing.T) {
+	t.Parallel()
+	r := &GatewayAPIReconciler{Bundle: testGatewayAPI(t)}
+	helm := []string{helmReleaseName, "gateway-api-crd", helmReleaseNamespace, "kube-system"}
+	workload := gatewayWorkload(t, clusterCRD(testGateways, "v1.6.1", helm...), clusterCRD(testHTTPRoutes, "v1.6.1", helm...),
+		helmRevision(t, "gateway-api-crd", 1, "superseded", testManifest("v1.6.1")),
+		helmRevision(t, "gateway-api-crd", 2, "pending-upgrade", testManifest("v1.6.2")))
+	if _, applied, err := r.ensure(context.Background(), testClusterKey, workload, "kube-system/gateway-api-crd", false); err != nil || applied {
+		t.Errorf("applied %v, %v", applied, err)
+	}
+	if kinds := policyKinds(t, workload); len(kinds) != 0 {
+		t.Errorf("the policy's %v put back while Helm upgrades the chart", kinds)
+	}
+}
+
 func TestHelmReleaseObjectsReadsAnUncompressedRelease(t *testing.T) {
 	t.Parallel()
 	raw, err := json.Marshal(map[string]any{"manifest": crdDoc(testGateways, "v1.6.1") + "---\n" + gatewayDoc("v1", "ConfigMap", "x", "")})

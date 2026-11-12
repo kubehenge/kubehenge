@@ -13,7 +13,7 @@ dir=${1:?usage: $0 <directory>}
 # renovate: datasource=github-releases depName=ko-build/ko
 KO=v0.19.1
 # renovate: datasource=golang-version depName=go
-KO_GO=1.27.3
+KO_GO=1.27.4
 
 ko=${dir}/ko$(go env GOEXE)
 if [ -x "${ko}" ] && go version -m "${ko}" 2> /dev/null | grep -q ": go${KO_GO}$" &&

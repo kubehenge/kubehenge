@@ -4,7 +4,7 @@ Every cluster's nodes are clones of a Proxmox VE VM template. `kubehenge templat
 
 | Distribution | Template | One per |
 | --- | --- | --- |
-| Talos | the Talos Image Factory's image of the release with the QEMU guest agent extension, imported as it is. Talos is its own OS, so no node OS is part of it. Talos clusters' new machines clone it and are then upgraded in place to the cluster's release | Talos release |
+| Talos | a nocloud disk of the release, baked from Sidero's imager, installer base and QEMU guest agent, each pinned by digest. Talos is its own OS, so no node OS is part of it. Only pinned releases are offered. Talos clusters' new machines clone it and are then upgraded in place to the cluster's release | Talos release |
 | RKE2, k3s | a node OS with cloud-init, the QEMU guest agent and the distribution's SELinux policy. The distribution installs itself when a node boots, from files checked against the checksums recorded for its release ([architecture.md](architecture.md#each-clusters-own-corner-of-proxmox-ve)) | distribution and node OS |
 | kubeadm | a node OS with cloud-init, the QEMU guest agent and containerd. The kubelet and kubeadm come from pkgs.k8s.io as Kubernetes' installation guide sets them up. The control-plane images are pulled ahead, each kept only once Kubernetes' release signature for it checks out. containerd is set to kubeadm's pause image | node OS and Kubernetes version |
 
@@ -101,7 +101,11 @@ kubehenge template create kubeadm --kubernetes-version v1.36.5 --node pve1
 
 A node OS template is built by a VM of its own, which boots the family's cloud image. In image mode the VM composes the node image from the family's packages and checks it with `bootc container lint`. It installs the image onto the template's disk, then boots it once on its own. A transactional node OS installs what a node needs as a new snapshot and reboots into it.
 
-That VM reaches the package repositories by DHCP on `--bridge`, or a static address given with `--build-address`, `--build-gateway` and `--build-dns`. Its cloud-init data comes on an ISO uploaded to `--iso-storage` (the node's first ISO storage by default) and removed afterwards.
+A Talos template is baked by the same kind of VM. It runs Sidero's pinned imager and writes the disk the imager makes onto the template's own. That disk is never booted. Baking takes about 2 to 4 minutes.
+
+That VM reaches the package repositories by DHCP on `--bridge`. It can use a static address instead, given with `--build-address`, `--build-gateway` and `--build-dns`. For a Talos template it also reaches `ghcr.io` and `pkg-containers.githubusercontent.com`, where `ghcr.io` redirects its downloads.
+
+Its cloud-init data comes on an ISO uploaded to `--iso-storage` (the node's first ISO storage by default) and removed afterwards.
 
 ### Reuse and failures
 
@@ -111,7 +115,7 @@ A failed run removes what it made. `--keep-on-failure` leaves the VM for inspect
 
 ## How clusters find them
 
-Each template carries a unique set of Proxmox VE tags, such as `kubehenge;talos;talos-v1.14.5`, `kubehenge;os-almalinux-10;rke2` or, in FIPS mode, `fips;kubehenge;os-almalinux-10;rke2`. Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB. Each clone gets the network, size and disk its machine asks for.
+Each template carries a unique set of Proxmox VE tags, such as `baked;kubehenge;talos;talos-v1.14.5`, `kubehenge;os-almalinux-10;rke2` or, in FIPS mode, `fips;kubehenge;os-almalinux-10;rke2`. Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB. Each clone gets the network, size and disk its machine asks for.
 
 ### Builds
 
@@ -204,6 +208,8 @@ The refresh also makes the missing Talos template of each release a Talos cluste
 - the run was asked to make it.
 
 A cluster creator's request names a Talos template as `talos-v1.14.5`.
+
+A Talos template an earlier Kubehenge made from the Image Factory has no `baked` tag. It is no release's template any more, and the refresh deletes it once no machine waits on it.
 
 ## Requirements
 

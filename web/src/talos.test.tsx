@@ -155,7 +155,7 @@ describe("talos clusters", () => {
     await waitFor(() => expect(screen.getByRole("option", { name: "Talos" })).toBeInTheDocument());
     await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-talos");
     await waitFor(() => expect(screen.getByLabelText("Talos release")).toHaveValue("v1.15.1"));
-    // A release the Image Factory builds without a template is listed, but needs its template first.
+    // A pinned release without a template is listed, but needs its template first.
     expect(screen.getByRole("option", { name: "v1.16.0 (no template yet)" })).toBeDisabled();
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5"));
     // Only what the release runs: v1.15.1 runs no 1.38.

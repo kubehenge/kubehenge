@@ -2,9 +2,11 @@
 {{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
 {{- /*
 Placeholder tags: the controller's patch selects the template of the Talos release each machine
-boots. Talos has no cloud-init for capmox to wait for, only the guest agent of its schematic.
+boots. Talos has no cloud-init for capmox to wait for, only the guest agent baked into its disk.
+The baked tag marks the templates this Kubehenge baked, so that a machine never selects one made
+from the Image Factory's image.
 */}}
-{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubehenge" "talos") "serviceJoins" true) }}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "baked" "kubehenge" "talos") "serviceJoins" true) }}
 {{- $controlPlaneSpec := include "kubehenge.talosControlPlaneSpec" . }}
 {{- $workerSpec := include "kubehenge.talosWorkerSpec" . }}
 {{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}
@@ -349,7 +351,7 @@ Both roles:
 - {{ dict "apiVersion" "v1alpha1" "kind" "DummyLinkConfig" "name" "kubehenge-logs" "addresses" (list (dict "address" (printf "%s/32" $address))) | toJson | quote }}
 - {{ dict "machine" (dict "logging" (dict "destinations" (list (dict "endpoint" $logs "format" "json_lines")))) | toJson | quote }}
 - {{ dict "apiVersion" "v1alpha1" "kind" "KmsgLogConfig" "name" "kubehenge-logs" "url" $logs | toJson | quote }}
-- {{ dict "apiVersion" "v1alpha1" "kind" "KubeletConfig" "config" (dict "serverTLSBootstrap" true) | toJson | quote }}
+- {{ dict "apiVersion" "v1alpha1" "kind" "KubeletConfig" "config" (merge (dict "serverTLSBootstrap" true) (include "kubehenge.imagePullSettings" . | fromYaml)) | toJson | quote }}
 - {{ dict "apiVersion" "v1alpha1" "kind" "ImageVerificationConfig" "rules" .Values.talos.imageSignatures | toJson | quote }}
 {{- end -}}
 

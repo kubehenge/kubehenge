@@ -2,7 +2,6 @@ package templates
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -31,8 +31,9 @@ type Resolved struct {
 	ChecksumAlgorithm string
 }
 
-// TalosSchematic is the Image Factory customisation of every Talos image Kubehenge uses: the QEMU
-// guest agent, which Cluster API's Proxmox VE provider waits for.
+// TalosSchematic is the customisation of the installer the nodes install and upgrade with
+// (TalosInstaller). It must hold the extensions talosProfile bakes into the template's disk, so an
+// upgrade keeps them: the QEMU guest agent, which Cluster API's Proxmox VE provider waits for.
 const TalosSchematic = `customization:
   systemExtensions:
     officialExtensions:
@@ -53,50 +54,66 @@ const (
 	sourcesAttempts  = 4
 	sourcesFirstWait = 2 * time.Second
 	// A publisher behind a CDN replaces a checksum file and its signature a second apart, and each
-	// cache node drops its old copy of either on its own clock, which can take an hour. The pair
-	// is fetched again 10s, 20s and on up to 5m20s apart (about 10 minutes in all), so that a
-	// request can land on caches that hold both new files.
-	signedPairAttempts  = 7
+	// cache keeps each file on its own for up to an hour (3600 s on AlmaLinux's Fastly). The pair is
+	// fetched again, the wait doubling from 10s up to 5m, until the budget (the cache's hour and a
+	// margin) is spent, so that a request lands on caches that hold both new files.
+	signedPairBudget    = 65 * time.Minute
 	signedPairFirstWait = 10 * time.Second
+	signedPairMaxWait   = 5 * time.Minute
+	waitFactor          = 2
 )
 
 // Sources fetches image metadata and repository keys from the publishers.
 type Sources struct {
 	HTTP            *http.Client
 	TalosFactoryURL string
+	// TalosPins are the Talos pins by release that pkg/cli fills from the release pins.
+	TalosPins map[string]TalosPin
 	// Mirrors serve a publisher's files from another place, by the publisher's address
-	// (https://host); a test points them at its own server.
+	// (https://host). A test points them at its own server.
 	Mirrors map[string]string
-	// retryWait replaces sourcesFirstWait and signedPairFirstWait, so that a test retries without
-	// waiting.
-	retryWait time.Duration
+	// clock is the time and waits of every retry. The real clock when nil.
+	clock clock
 }
 
-// DefaultSources uses the public Talos Image Factory and every publisher's own address.
-func DefaultSources() *Sources {
+type logKey struct{}
+
+// withLog makes a build's log the one resolving its image writes its waits to.
+func withLog(ctx context.Context, log func(format string, args ...any)) context.Context {
+	return context.WithValue(ctx, logKey{}, log)
+}
+
+func logFrom(ctx context.Context) func(format string, args ...any) {
+	if log, ok := ctx.Value(logKey{}).(func(format string, args ...any)); ok && log != nil {
+		return log
+	}
+	return func(string, ...any) {}
+}
+
+// DefaultSources uses the public Talos Image Factory for the installer an upgrade names, every
+// publisher's own address, and the given Talos pins.
+func DefaultSources(talos map[string]TalosPin) *Sources {
 	return &Sources{
 		HTTP:            &http.Client{Timeout: sourcesTimeout},
 		TalosFactoryURL: "https://factory.talos.dev",
+		TalosPins:       talos,
 	}
 }
 
 // Resolve finds the URL, file name and checksum of an image.
 func (s *Sources) Resolve(ctx context.Context, ref ImageRef) (Resolved, error) {
-	switch ref.Kind {
-	case TalosFactory:
-		return s.talos(ctx, ref.Version)
-	case NodeOSImage:
-		f, r, err := Available(ref.NodeOS)
-		if err != nil {
-			return Resolved{}, err
-		}
-		resolved, err := f.Image(ctx, s, r)
-		if err != nil {
-			return Resolved{}, fmt.Errorf("the image of %s %s: %w", f.Title(), r.Name, err)
-		}
-		return resolved, nil
+	if ref.Kind != NodeOSImage {
+		return Resolved{}, fmt.Errorf("unknown image kind %q", ref.Kind)
 	}
-	return Resolved{}, fmt.Errorf("unknown image kind %q", ref.Kind)
+	f, r, err := Available(ref.NodeOS)
+	if err != nil {
+		return Resolved{}, err
+	}
+	resolved, err := f.Image(ctx, s, r)
+	if err != nil {
+		return Resolved{}, fmt.Errorf("the image of %s %s: %w", f.Title(), r.Name, err)
+	}
+	return resolved, nil
 }
 
 // RepositoryKey fetches a package repository's signing key and returns it ASCII-armoured after
@@ -179,23 +196,10 @@ func (s *Sources) TalosInstaller(ctx context.Context, version string) (string, e
 	return fmt.Sprintf("%s/nocloud-installer/%s:%s", u.Host, id, version), nil
 }
 
-// TalosReleases are the Talos releases the Image Factory builds, pre-releases left out.
-func (s *Sources) TalosReleases(ctx context.Context) ([]string, error) {
-	body, err := s.do(ctx, http.MethodGet, s.TalosFactoryURL+"/versions", nil)
-	if err != nil {
-		return nil, fmt.Errorf("listing the Talos releases: %w", err)
-	}
-	var all []string
-	if err := json.Unmarshal(body, &all); err != nil {
-		return nil, fmt.Errorf("unexpected Image Factory answer %q", body)
-	}
-	out := make([]string, 0, len(all))
-	for _, v := range all {
-		if versionRE.MatchString(v) {
-			out = append(out, v)
-		}
-	}
-	return out, nil
+// TalosReleases are the Talos releases this Kubehenge pins, sorted as text. It makes no request.
+// It returns an error to satisfy the TalosImages interface.
+func (s *Sources) TalosReleases(_ context.Context) ([]string, error) {
+	return slices.Sorted(maps.Keys(s.TalosPins)), nil
 }
 
 // at is where a publisher's URL is fetched from: the publisher itself unless a mirror stands in.
@@ -208,20 +212,22 @@ func (s *Sources) at(address string) string {
 	return address
 }
 
-func (s *Sources) get(ctx context.Context, address string) ([]byte, error) {
-	return s.do(ctx, http.MethodGet, s.at(address), nil)
+func (s *Sources) now() time.Time {
+	if s.clock == nil {
+		return realClock{}.now()
+	}
+	return s.clock.now()
 }
 
-func (s *Sources) talos(ctx context.Context, version string) (Resolved, error) {
-	id, err := s.TalosSchematicID(ctx)
-	if err != nil {
-		return Resolved{}, err
+func (s *Sources) sleep(ctx context.Context, d time.Duration) error {
+	if s.clock == nil {
+		return realClock{}.sleep(ctx, d)
 	}
-	return Resolved{
-		// The uncompressed qcow2: Proxmox VE cannot decompress images it imports.
-		URL:      fmt.Sprintf("%s/image/%s/%s/nocloud-amd64.qcow2", s.TalosFactoryURL, id, version),
-		FileName: fmt.Sprintf("template-talos-%s-%s-nocloud-amd64.qcow2", version, id[:12]),
-	}, nil
+	return s.clock.sleep(ctx, d)
+}
+
+func (s *Sources) get(ctx context.Context, address string) ([]byte, error) {
+	return s.do(ctx, http.MethodGet, s.at(address), nil)
 }
 
 // signedImage resolves an image whose publisher lists its SHA-256 in a checksum file it signs with
@@ -248,10 +254,11 @@ func (s *Sources) signedImage(ctx context.Context, signer signingKey, imageURL, 
 
 // signedPair returns a checksum file whose signature verifies. Both files are fetched again together
 // while they disagree, because a cache can hand out one new file beside the other's old copy. A
-// pair that never agrees fails, so nothing unverified is used.
+// pair that still disagrees once signedPairBudget is spent fails, so nothing unverified is used.
 func (s *Sources) signedPair(ctx context.Context, signer signingKey, sumsURL, sigURL string) ([]byte, error) {
-	wait := cmp.Or(s.retryWait, signedPairFirstWait)
-	for attempt := 1; ; attempt++ {
+	wait := signedPairFirstWait
+	deadline := s.now().Add(signedPairBudget)
+	for fetches := 1; ; fetches++ {
 		sums, err := s.get(ctx, sumsURL)
 		if err != nil {
 			return nil, err
@@ -267,16 +274,19 @@ func (s *Sources) signedPair(ctx context.Context, signer signingKey, sumsURL, si
 		if _, ok := errors.AsType[notSignedError](err); !ok {
 			return nil, fmt.Errorf("%s: %w", sumsURL, err)
 		}
-		if attempt == signedPairAttempts {
-			return nil, fmt.Errorf("%s and %s: the publisher's checksum and signature disagree after %d fetches: %w",
-				sumsURL, sigURL, attempt, err)
+		remaining := deadline.Sub(s.now())
+		if remaining <= 0 {
+			return nil, lasting(fmt.Errorf("%s and %s: the publisher's checksum and signature disagree after %d fetches: %w",
+				sumsURL, sigURL, fetches, err))
 		}
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("%s and %s: %w", sumsURL, sigURL, err)
-		case <-time.After(wait):
+		// The last wait ends on the deadline, so the budget is spent on a final fetch and not left over.
+		wait = min(wait, remaining)
+		logFrom(ctx)("%s and %s do not match yet, as the publisher's cache still holds an old copy. Trying again at %s",
+			sumsURL, sigURL, s.now().Add(wait).Format(time.TimeOnly))
+		if err := s.sleep(ctx, wait); err != nil {
+			return nil, fmt.Errorf("%s and %s: waiting for the publisher's cache: %w", sumsURL, sigURL, err)
 		}
-		wait *= 2
+		wait = min(wait*waitFactor, signedPairMaxWait)
 	}
 }
 
@@ -360,49 +370,51 @@ func fingerprint(e *openpgp.Entity) string {
 	return strings.ToUpper(hex.EncodeToString(e.PrimaryKey.Fingerprint))
 }
 
-// do sends a request, again after a failure that may pass: no answer, a broken answer, a 5xx or a
-// 429. Every request it sends may be repeated, as the schematic's ID is its content.
+// do sends a request, again after a failure that may pass: no answer, a broken answer, a 5xx, a 429
+// or a 408. Every request it sends may be repeated, as the schematic's ID is its content.
 func (s *Sources) do(ctx context.Context, method, address string, body []byte) ([]byte, error) {
-	wait := s.retryWait
-	if wait == 0 {
-		wait = sourcesFirstWait
-	}
-	for attempt := 1; ; attempt++ {
-		data, passing, err := s.once(ctx, method, address, body)
-		if err == nil || !passing || attempt == sourcesAttempts {
-			return data, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, err
-		case <-time.After(wait):
-		}
-		wait *= 2
-	}
+	var data []byte
+	err := retryingOn(ctx, s, sourcesAttempts, sourcesFirstWait, func() error {
+		var err error
+		data, err = s.once(ctx, method, address, body)
+		return err
+	})
+	return data, err
 }
 
-// once sends a request once and says whether its failure may pass.
-func (s *Sources) once(ctx context.Context, method, address string, body []byte) ([]byte, bool, error) {
+// once sends a request once. A failure that may pass is marked Transient.
+func (s *Sources) once(ctx context.Context, method, address string, body []byte) ([]byte, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, address, reader)
 	if err != nil {
-		return nil, false, fmt.Errorf("%s %s: %w", method, address, err)
+		return nil, fmt.Errorf("%s %s: %w", method, address, err)
 	}
 	resp, err := s.HTTP.Do(req)
 	if err != nil {
-		return nil, ctx.Err() == nil, fmt.Errorf("%s %s: %w", method, address, err)
+		return nil, passing(ctx, fmt.Errorf("%s %s: %w", method, address, err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return nil, ctx.Err() == nil, fmt.Errorf("%s %s: reading the answer: %w", method, address, err)
+		return nil, passing(ctx, fmt.Errorf("%s %s: reading the answer: %w", method, address, err))
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		passing := resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests
-		return nil, passing, fmt.Errorf("%s %s: %s", method, address, resp.Status)
+		err = fmt.Errorf("%s %s: %s", method, address, resp.Status)
+		if TransientStatus(resp.StatusCode) {
+			err = Transient(err)
+		}
+		return nil, err
 	}
-	return data, false, nil
+	return data, nil
+}
+
+// passing marks err Transient unless the caller's context has ended, which no retry helps with.
+func passing(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	return Transient(err)
 }

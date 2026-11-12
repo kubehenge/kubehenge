@@ -223,6 +223,27 @@ spec:
         {{- end }}
     {{- include "kubehenge.searchDomainsPatch" (dict "distribution" "kubeadm") | nindent 4 }}
     {{- include "kubehenge.nodeIPPatch" (dict "distribution" "kubeadm" "root" .) | nindent 4 }}
+    # The API server advertises an address of the Services' primary family, or it does not start.
+    # Left unset, kubeadm takes the node's IPv4 address. node-ip.sh writes the node's primary address,
+    # the one its kubelet registers, over the placeholder.
+    - name: kubeadm-advertise-address
+      enabledIf: {{ include "kubehenge.primaryFamily" "IPv6" }}
+      definitions:
+        - selector:
+            apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+            kind: KubeadmControlPlaneTemplate
+            matchResources:
+              controlPlane: true
+          jsonPatches:
+            - op: add
+              path: /spec/template/spec/kubeadmConfigSpec/initConfiguration/localAPIEndpoint
+              value:
+                advertiseAddress: kubehenge-node-address
+            - op: add
+              path: /spec/template/spec/kubeadmConfigSpec/joinConfiguration/controlPlane
+              value:
+                localAPIEndpoint:
+                  advertiseAddress: kubehenge-node-address
     {{- include "kubehenge.nodeSitePatches" (dict "root" . "distribution" "kubeadm" "pods" "10.244.0.0/16" "services" "10.96.0.0/12") | nindent 4 }}
     # Last, so that Kubehenge's own settings come first.
     {{- include "kubehenge.nodeCustomisationPatches" "kubeadm" | nindent 4 }}
@@ -285,6 +306,7 @@ start on kernel settings other than its own (kubehenge.sysctlFile), and offers o
     serverTLSBootstrap: true
     protectKernelDefaults: true
     tlsCipherSuites: [{{ include "kubehenge.tlsCipherSuites" . }}]
+    {{- include "kubehenge.imagePullSettings" . | nindent 4 }}
 {{- end -}}
 
 {{/*

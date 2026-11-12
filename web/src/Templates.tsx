@@ -368,13 +368,10 @@ export function buildRequest(f: BuildForm): TemplateRequest {
   if (f.distribution === "kubeadm") {
     req.kubernetesVersion = f.kubernetesVersion.trim();
   }
-  // A Talos image becomes a template as it is, without booting the VM that prepares the others, and
-  // Talos is its own OS.
+  // Talos is its own OS, and a build VM of the default one writes its image.
   if (f.distribution === "talos") {
     req.talosVersion = f.talosVersion.trim();
-    return req;
-  }
-  if (f.nodeOS) {
+  } else if (f.nodeOS) {
     req.nodeOS = f.nodeOS;
   }
   if (f.vlan) {
@@ -415,14 +412,10 @@ export function buildProblems(f: BuildForm): Partial<Record<keyof BuildForm, str
   if (f.cpuType.trim() && !cpuTypePattern.test(f.cpuType.trim())) {
     p.cpuType = "Enter a CPU type such as host or x86-64-v3";
   }
-  if (f.distribution !== "talos" && f.vlan && !isVLAN(f.vlan)) {
+  if (f.vlan && !isVLAN(f.vlan)) {
     p.vlan = "A whole number from 1 to 4094";
   }
-  if (
-    f.distribution !== "talos" &&
-    f.buildAddress.trim() &&
-    (!f.buildAddress.includes("/") || !f.buildGateway.trim() || !f.buildDNS.trim())
-  ) {
+  if (f.buildAddress.trim() && (!f.buildAddress.includes("/") || !f.buildGateway.trim() || !f.buildDNS.trim())) {
     p.buildAddress = "Enter the prefix length, a gateway and a DNS server";
   }
   return p;
@@ -697,24 +690,18 @@ function BuildDialog({
           />
         )}
       </Field>
-      {!talos && (
-        <Field label="Cloud-init image">
-          {(id) => (
-            <Choice
-              id={id}
-              value={form.isoStorage}
-              options={onNode("iso")}
-              optional="The node's first"
-              onChoose={(v) => set("isoStorage", v)}
-            />
-          )}
-        </Field>
-      )}
-      <Field
-        label="Bridge"
-        hint={talos ? undefined : "Needs to reach the package repositories"}
-        error={shown("bridge")}
-      >
+      <Field label="Cloud-init image">
+        {(id) => (
+          <Choice
+            id={id}
+            value={form.isoStorage}
+            options={onNode("iso")}
+            optional="The node's first"
+            onChoose={(v) => set("isoStorage", v)}
+          />
+        )}
+      </Field>
+      <Field label="Bridge" hint="Needs to reach the package repositories" error={shown("bridge")}>
         {(id) => (
           <Choice
             id={id}
@@ -725,13 +712,11 @@ function BuildDialog({
           />
         )}
       </Field>
-      {!talos && (
-        <Field label="VLAN tag" error={shown("vlan")}>
-          {(id) => (
-            <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
-          )}
-        </Field>
-      )}
+      <Field label="VLAN tag" error={shown("vlan")}>
+        {(id) => (
+          <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
+        )}
+      </Field>
       <details className="advanced">
         <summary>Hardware</summary>
         <Field label="CPU type" hint="Empty keeps the newest build's" error={shown("cpuType")}>
@@ -758,20 +743,18 @@ function BuildDialog({
           </Field>
         ))}
       </details>
-      {!talos && (
-        <details className="advanced">
-          <summary>Static address</summary>
-          <Field label="Address" hint="Such as 192.0.2.50/24" error={shown("buildAddress")}>
-            {(id) => <input id={id} value={form.buildAddress} onChange={(e) => set("buildAddress", e.target.value)} />}
-          </Field>
-          <Field label="Gateway">
-            {(id) => <input id={id} value={form.buildGateway} onChange={(e) => set("buildGateway", e.target.value)} />}
-          </Field>
-          <Field label="DNS servers" hint="Separated by commas">
-            {(id) => <input id={id} value={form.buildDNS} onChange={(e) => set("buildDNS", e.target.value)} />}
-          </Field>
-        </details>
-      )}
+      <details className="advanced">
+        <summary>Static address</summary>
+        <Field label="Address" hint="Such as 192.0.2.50/24" error={shown("buildAddress")}>
+          {(id) => <input id={id} value={form.buildAddress} onChange={(e) => set("buildAddress", e.target.value)} />}
+        </Field>
+        <Field label="Gateway">
+          {(id) => <input id={id} value={form.buildGateway} onChange={(e) => set("buildGateway", e.target.value)} />}
+        </Field>
+        <Field label="DNS servers" hint="Separated by commas">
+          {(id) => <input id={id} value={form.buildDNS} onChange={(e) => set("buildDNS", e.target.value)} />}
+        </Field>
+      </details>
       <ErrorBox message={error} />
     </Dialog>
   );

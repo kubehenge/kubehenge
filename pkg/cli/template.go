@@ -47,7 +47,7 @@ func connect(conn *pve.Config) (*templates.Builder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the proxy: %w", err)
 	}
-	return &templates.Builder{Client: api, Sources: templates.DefaultSources(), Proxy: proxy}, nil
+	return &templates.Builder{Client: api, Sources: templates.DefaultSources(provisioner.DefaultReleasePins().Talos()), Proxy: proxy}, nil
 }
 
 // poolFlag is the pool a template command works in. Clusters clone only from the templates in their
@@ -426,19 +426,20 @@ func newTemplateCreateCommand(conn *pve.Config) *cobra.Command {
 		Short: "Create the template for a distribution on a Proxmox VE node, unless it exists",
 		Long: `Create the template for a distribution on a Proxmox VE node, unless it exists.
 
-Talos templates are the Talos Image Factory's image with the QEMU guest agent. RKE2, k3s and kubeadm
-templates are built from a node OS (--node-os) and its packages alone. They carry cloud-init, the
-QEMU guest agent and SELinux enforcing with the distribution's policy. kubeadm templates add
-containerd, the kubelet and kubeadm at one Kubernetes version. Every image and package is checked
-against its publisher's signature.
+Talos templates are baked from Sidero's imager, installer base and QEMU guest agent, each pinned by
+digest, and need the build VM's network as the others do. RKE2, k3s and kubeadm templates are built
+from a node OS (--node-os) and its packages alone. They carry cloud-init, the QEMU guest agent and
+SELinux enforcing with the distribution's policy. kubeadm templates add containerd, the kubelet and
+kubeadm at one Kubernetes version. Every image and package is checked against its publisher's
+signature.
 
 Node OS templates are built again for their updates. Each build is a template of its own, tagged
 with when it was made. Clusters move to a new build inside their upgrade windows. Without
 --new-build the newest build is kept when there is one.
 
-A node OS template is made by a VM that boots the node OS's cloud image and builds the node from
-its packages. That VM must reach the package repositories, through DHCP or the --build-address
-network.
+A template is made by a VM that boots a node OS's cloud image and builds the node from its
+packages, or for Talos writes the pinned image. That VM must reach the package repositories or
+registries, through DHCP or the --build-address network.
 
 The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 		Args:      argsSay(cobra.ExactArgs(1), distributionArg),

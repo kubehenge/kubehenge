@@ -370,6 +370,12 @@ func checkTalosCommon(t *testing.T, docs map[string]map[string]any) {
 	if on, ok := field(t, docs["KubeletConfig"], "config", "serverTLSBootstrap").(bool); !ok || !on {
 		t.Errorf("kubelet serving certificate bootstrap = %v", docs["KubeletConfig"])
 	}
+	if serial, ok := field(t, docs["KubeletConfig"], "config", "serializeImagePulls").(bool); !ok || serial {
+		t.Errorf("kubelet pulls images one at a time: %v", docs["KubeletConfig"])
+	}
+	if parallel, ok := field(t, docs["KubeletConfig"], "config", "maxParallelImagePulls").(float64); !ok || parallel != 3 {
+		t.Errorf("kubelet parallel image pulls = %v", docs["KubeletConfig"])
+	}
 	rules := asJSON(t, field(t, docs["ImageVerificationConfig"], "rules"))
 	for _, registry := range []string{"factory.talos.dev/*", "ghcr.io/siderolabs/*", "registry.k8s.io/*"} {
 		if !strings.Contains(rules, `"image":"`+registry+`"`) {

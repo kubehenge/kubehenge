@@ -172,7 +172,10 @@ func revisionsOf(digests roleDigests) map[string]string {
 	for role, labels := range digests {
 		var b strings.Builder
 		for _, k := range slices.Sorted(maps.Keys(labels)) {
-			b.WriteString(k + "=" + labels[k] + "\n")
+			b.WriteString(k)
+			b.WriteString("=")
+			b.WriteString(labels[k])
+			b.WriteString("\n")
 		}
 		sum := sha256.Sum256([]byte(b.String()))
 		out[role] = hex.EncodeToString(sum[:])[:revisionHexLen]

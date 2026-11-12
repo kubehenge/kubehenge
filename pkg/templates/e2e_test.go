@@ -10,15 +10,17 @@
 // KUBEHENGE_PROXMOX_CA. It also reads KUBEHENGE_E2E_NODE, _STORAGE, _IMPORT_STORAGE, _POOL and _BRIDGE. Where the
 // bridge has no DHCP, it reads KUBEHENGE_E2E_ADDRESS (with prefix), _GATEWAY and _DNS (comma-separated) for the
 // VMs that bake and boot images. KUBEHENGE_E2E_KUBERNETES_VERSION picks the kubeadm templates' version.
-// Talos is made, and kubeadm, whose template carries the most, on every node OS available. One whose
-// CPU level no node of the host reaches is skipped, and the test says so. RKE2's and k3s's templates are made
-// and booted by the workload cluster tests.
+// Talos is baked for the newest pinned release of each minor version, and kubeadm, whose template
+// carries the most, on every node OS available. One whose CPU level no node of the host reaches
+// is skipped, and the test says so. RKE2's and k3s's templates are made and booted by the
+// workload cluster tests.
 
 package templates
 
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"slices"
@@ -42,6 +44,10 @@ func env(t *testing.T, name, fallback string) string {
 	return fallback
 }
 
+// TalosPinsForE2E are the Talos pins of this build, set by e2e_main_test.go, which may import
+// pkg/provisioner where this package cannot.
+var TalosPinsForE2E map[string]TalosPin
+
 func e2eBuilder(t *testing.T) *Builder {
 	t.Helper()
 	client, err := pve.Connect(pve.Config{
@@ -54,7 +60,7 @@ func e2eBuilder(t *testing.T) *Builder {
 	}
 	b := &Builder{
 		Client:        client,
-		Sources:       DefaultSources(),
+		Sources:       DefaultSources(TalosPinsForE2E),
 		Node:          env(t, "KUBEHENGE_E2E_NODE", ""),
 		Storage:       env(t, "KUBEHENGE_E2E_STORAGE", "local-lvm"),
 		ImportStorage: env(t, "KUBEHENGE_E2E_IMPORT_STORAGE", "local"),
@@ -80,7 +86,16 @@ func TestTemplatesEndToEnd(t *testing.T) {
 	b := e2eBuilder(t)
 	kubernetes := env(t, "KUBEHENGE_E2E_KUBERNETES_VERSION", "v1.37.1")
 	nodeOSes := AvailableNodeOSes()
-	requests := append(make([]Request, 0, 1+len(nodeOSes)), Request{Distribution: Talos})
+	// The newest pinned release of every minor, as the interface offers them: each minor's imager
+	// writes its own disk, the older ones in a privileged container.
+	talos := NewestOfEachMinor(slices.Collect(maps.Keys(TalosPinsForE2E)))
+	if len(talos) == 0 {
+		t.Fatal("TalosPinsForE2E holds no pins")
+	}
+	requests := make([]Request, 0, len(talos)+len(nodeOSes))
+	for _, release := range talos {
+		requests = append(requests, Request{Distribution: Talos, TalosVersion: release})
+	}
 	for _, o := range nodeOSes {
 		nodeOS, err := ParseNodeOS(o)
 		if err != nil {
@@ -96,7 +111,9 @@ func TestTemplatesEndToEnd(t *testing.T) {
 	}
 	for _, req := range requests {
 		name := string(req.Distribution)
-		if req.Distribution != Talos {
+		if req.Distribution == Talos {
+			name += "/" + req.TalosVersion
+		} else {
 			name += "/" + req.NodeOS.String()
 		}
 		t.Run(name, func(t *testing.T) {
@@ -137,7 +154,9 @@ func TestTemplatesEndToEnd(t *testing.T) {
 				t.Fatalf("a second create gave VM %d, %v; want the existing %d", again, err, vmid)
 			}
 
-			if tmpl.Bake != nil {
+			// Talos reads a clone's seed as its machine configuration, and its agent runs no
+			// guest-exec. The talos lanes boot clusters of the baked template.
+			if tmpl.Bake != nil && tmpl.Bake.Distribution != Talos {
 				bootClone(t, b, vmid, tmpl.Bake)
 			}
 		})

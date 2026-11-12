@@ -13,8 +13,6 @@ KO_FLAGS ?=
 # Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
 
-.PHONY: build web changelog gateway-api capmox-crds capi-operator-chart providers website screenshots dist index release-pins image capmox-image helm-addon-image verify-providers lint unit test integration e2e-management-cluster e2e-management-cluster-upgrade e2e-workload-cluster e2e-rancher e2e-cluster-mesh e2e-node-image-refresh e2e-autoscaler e2e-control-plane-ha e2e-two-nodes e2e-templates e2e-volumes e2e-interface e2e-appliance e2e-appliance-upgrade
-.PHONY: advisories website-check links fmt lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos unit-go unit-web unit-tofu unit-shell tofu-init
 # Independent steps, such as the lint and unit steps of `make test`, run side by side, one per CPU;
 # each step's output is printed together once it ends, unless OUTPUT_SYNC=none asks for it as it
 # comes, as the end-to-end runs do.
@@ -23,6 +21,7 @@ MAKEFLAGS += --jobs=$(shell getconf _NPROCESSORS_ONLN) --output-sync=$(OUTPUT_SY
 # The symbol table and DWARF go: a third of the binary, and stack traces keep their names without them.
 LDFLAGS := -s -w -buildid=
 
+.PHONY: build
 build: web gateway-api
 	CGO_ENABLED=0 go build -trimpath -ldflags='$(LDFLAGS)' -o dist/kubehenge ./cmd/kubehenge
 
@@ -40,6 +39,7 @@ $(GATEWAY_API):
 	rm -f pkg/provisioner/gatewayapi/standard-install-*.yaml
 	mv $@.part $@
 
+.PHONY: gateway-api
 gateway-api: $(GATEWAY_API)
 
 # The Proxmox VE provider's CustomResourceDefinitions, which the chart's test validates the rendered
@@ -54,6 +54,7 @@ $(CAPMOX_CRDS):
 	rm -f test/crds/capmox-*.yaml
 	mv $@.part $@
 
+.PHONY: capmox-crds
 capmox-crds: $(CAPMOX_CRDS)
 
 # The Cluster API operator's chart, which the management-cluster module installs from beside it and
@@ -69,6 +70,7 @@ $(CAPI_OPERATOR_CHART):
 	rm -f management-cluster/charts/cluster-api-operator-*.tgz
 	mv $@.part $@
 
+.PHONY: capi-operator-chart
 capi-operator-chart: $(CAPI_OPERATOR_CHART)
 
 # The providers the module's lock file pins, for this machine's tofu, checked against the lock file
@@ -77,6 +79,7 @@ capi-operator-chart: $(CAPI_OPERATOR_CHART)
 $(PROVIDERS)/tofu.tfrc: management-cluster/.terraform.lock.hcl scripts/providers.sh
 	TOFU=$(TOFU) scripts/providers.sh management-cluster/.terraform.lock.hcl $(PROVIDERS)
 
+.PHONY: providers
 providers: $(PROVIDERS)/tofu.tfrc
 
 # The frontend's packages, installed again only when the lockfile changes.
@@ -92,14 +95,17 @@ pkg/ui/dist/index.html: web/node_modules/.package-lock.json $(WEB_SOURCES)
 	cd web && npm run build
 	touch pkg/ui/dist/.keep
 
+.PHONY: web
 web: pkg/ui/dist/index.html
 
 # The website (kubehenge.dev): docs/ with a home page, built into website/.vitepress/dist.
+.PHONY: website
 website:
 	cd website && npm ci --no-audit --no-fund && npm run build
 
 # Folds the changelog fragments of docs/changes/ into the release's section of docs/changelog.md:
 # make changelog VERSION=0.4.3
+.PHONY: changelog
 changelog:
 	sh scripts/changelog.sh fold $(if $(filter command line,$(origin VERSION)),$(VERSION),$(error VERSION is not set: make changelog VERSION=0.4.3))
 
@@ -107,6 +113,7 @@ changelog:
 # composited layer on the home page over 1.5 windows at a phone and a desktop size, and no motion
 # under reduced motion. Then Lighthouse CI on loopback, for mobile and then desktop: the limits in
 # website/lighthouserc.cjs against the median of 5 runs. The reports go to website/.vitepress/lighthouse.
+.PHONY: website-check
 website-check: website
 	cd website && npm exec --no -- playwright install chromium
 	cd website && npm run layers
@@ -115,13 +122,21 @@ website-check: website
 		KUBEHENGE_LIGHTHOUSE=$$form npm exec --no -- lhci autorun --config=lighthouserc.cjs; \
 	done
 
-# The outside links of the README, docs/ and the built website (lychee.toml). Links between pages
-# are the website build's to check. A dead outside link fails the nightly run, never a pull request.
+# The links inside the built website (website/lychee.toml): each must land on a page and a heading
+# the site made, which the build alone does not check. Run it after `make website`.
+.PHONY: website-links
+website-links:
+	lychee --config website/lychee.toml --root-dir "$$PWD/website/.vitepress/dist" 'website/.vitepress/dist/**/*.html'
+
+# The outside links of the README, docs/ and the built website (lychee.toml). A dead outside link
+# fails the nightly run, never a pull request.
+.PHONY: links
 links: website
 	lychee --config lychee.toml README.md docs website/index.md 'website/.vitepress/dist/**/*.html'
 
 # The interface's screenshots in docs/images: `kubehenge serve --demo` in a headless Chromium, the
 # one Playwright pins in web/package-lock.json.
+.PHONY: screenshots
 screenshots: web gateway-api
 	CGO_ENABLED=0 go build -trimpath -o dist/screenshots/kubehenge$(shell go env GOEXE) ./cmd/kubehenge
 	cd web && npm exec --no -- playwright install --only-shell chromium
@@ -144,6 +159,7 @@ HEADLAMP_SHA256 := 1747c5de63963be925ded64dc2a5308144d260e43452855169bc771f03846
 HEADLAMP_VERSION := $(HEADLAMP_TAG:v%=%)
 HEADLAMP_TARBALL := dist/cache/Headlamp-$(HEADLAMP_VERSION)-linux-x64.tar.gz
 UNITS := kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service
+.PHONY: dist
 dist: web gateway-api capi-operator-chart
 	rm -rf dist/stage && mkdir -p dist/stage/bin dist/stage/share/kubehenge/appliance dist/stage/share/kubehenge/headlamp/plugins dist/cache
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' \
@@ -183,8 +199,9 @@ dist: web gateway-api capi-operator-chart
 		appliance/install.sh > dist/install.sh
 	cd dist && sha256sum install.sh >> kubehenge_$(VERSION)_SHA256SUMS
 
-# Pins the RKE2 and k3s releases published since (pkg/provisioner/releasepins.txt), so that clusters
-# may run them. GH_TOKEN, when set, reads GitHub's API with a higher rate limit.
+# Pins the RKE2, k3s and Talos releases published since (pkg/provisioner/releasepins.txt), so that
+# clusters may run them. GH_TOKEN, when set, reads GitHub's API with a higher rate limit.
+.PHONY: release-pins
 release-pins: web gateway-api
 	go run ./cmd/kubehenge release pins pkg/provisioner/releasepins.txt
 
@@ -192,6 +209,7 @@ release-pins: web gateway-api
 # the release keys, with this release added. Run after dist.
 TOFU_VERSION = $(patsubst v%,%,$(shell sed -n 's/^TOFU_TAG=//p' appliance/install.sh))
 TOFU_SHA256 = $(shell sed -n 's/^TOFU_SHA256=//p' appliance/install.sh)
+.PHONY: index
 index: gateway-api
 	CGO_ENABLED=0 go build -trimpath -ldflags='$(RELEASE_LDFLAGS)' -o dist/kubehenge-release ./cmd/kubehenge
 	dist/kubehenge-release release index $(if $(PREVIOUS),--previous $(PREVIOUS)) --version $(VERSION) \
@@ -204,6 +222,7 @@ index: gateway-api
 # Builds and pushes the image the management cluster runs the controller from, and prints its
 # reference by digest. ko's own SBOM would be pushed beside it unsigned; the release attests one
 # instead (scripts/sbom.sh).
+.PHONY: image
 image: web gateway-api
 	sh scripts/ko.sh $(KO_DIR)
 	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge $(KO_DIR)/ko build --bare --sbom=none $(KO_FLAGS) ./cmd/kubehenge
@@ -211,25 +230,36 @@ image: web gateway-api
 # Build and push the provider images the management cluster runs as Kubehenge builds them
 # (capmox_build and helm_addon_build in management-cluster/versions.tf), check their digests and
 # print their references by digest.
+.PHONY: capmox-image
 capmox-image:
 	sh scripts/provider-image.sh $(KO_DIR) capmox $(CAPMOX_IMAGE) $(KO_FLAGS)
 
+.PHONY: helm-addon-image
 helm-addon-image:
 	sh scripts/provider-image.sh $(KO_DIR) helm-addon $(HELM_ADDON_IMAGE) $(KO_FLAGS)
 
 # Check the providers the management cluster runs from Kubehenge's forks: their files and images
 # by the digests versions.tf names, and their provenance and signatures from each fork's release.
+.PHONY: verify-providers
 verify-providers:
 	sh scripts/verify-providers.sh
+
+# The Talos pins, each image naming its release and signed by Sidero. Needs cosign, as
+# scripts/tools.sh installs it.
+.PHONY: verify-talos-pins
+verify-talos-pins: web gateway-api
+	sh scripts/verify-talos-pins.sh
+	go run ./cmd/kubehenge release pins --check pkg/provisioner/releasepins.txt
 
 # Lint and static tier: Go, the frontend, Terraform/OpenTofu, Helm charts, shell, the workflows,
 # YAML, Markdown, the changelog, the e2e image's Dockerfile and the node images' Containerfiles,
 # spelling and Renovate's config, each at its strictest settings; the files are the repository's
 # own, as git lists them.
-lint: lint-go lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
+.PHONY: lint
+lint: lint-go lint-gopls lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
 
 FILES = git ls-files --cached --others --exclude-standard
-SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh website/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
+SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh website/*.sh pkg/installer/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
 SHFMT_FLAGS := -i 4 -ci -sr
 # Installed from lock files, which check every package's hash, their dependencies' included.
 YAMLLINT := uv run --locked --project scripts/lint yamllint
@@ -238,6 +268,7 @@ MARKDOWNLINT := npm --prefix web exec --no -- markdownlint-cli2
 GOVULNCHECK := go tool govulncheck
 
 # Rewrites what the format checks below would refuse.
+.PHONY: fmt
 fmt: web/node_modules/.package-lock.json
 	golangci-lint fmt ./...
 	$(TOFU) fmt -recursive
@@ -259,6 +290,7 @@ fmt: web/node_modules/.package-lock.json
 # linted again: the Go sources, tracked or not, the module, the config and the linter's version.
 LINT_GO := CGO_ENABLED=0 GOMAXPROCS=4 GOMEMLIMIT=2GiB nice -n 10 golangci-lint run --allow-parallel-runners
 LINT_GO_INPUTS := '*.go' go.mod go.sum .golangci.yml
+.PHONY: lint-go
 lint-go: web gateway-api
 	go mod tidy -diff
 	golangci-lint config verify
@@ -270,10 +302,31 @@ lint-go: web gateway-api
 		mkdir -p dist/lint-go && touch "dist/lint-go/$$key"; fi
 	$(GOVULNCHECK) ./...
 
+# The analysers gopls shows in an editor, most of them internal to it (writestring, unusedfunc,
+# infertypeargs, fmtappendf), so only `gopls check` runs them. It exits 0 with findings, so any
+# output fails the step. Severity info and up: the hint tier is the modernisation suite and
+# deprecations, which golangci-lint already runs (staticcheck's SA1019 carries the reasons for the
+# deprecated imports that stay). gopls is pinned in its own module, so its dependencies stay out of
+# the one that ships. One process at a time, on two threads at low priority: gopls starts several
+# analysis workers per file it is given, and side by side they hold every core.
+# Inputs that already passed are not checked again, as for lint-go.
+GOPLS_MOD := scripts/gopls/go.mod
+LINT_GOPLS_INPUTS := '*.go' go.mod go.sum $(GOPLS_MOD) scripts/gopls/go.sum
+.PHONY: lint-gopls
+lint-gopls: web gateway-api
+	key=$$({ git ls-files -s -- $(LINT_GOPLS_INPUTS); git diff HEAD -- $(LINT_GOPLS_INPUTS); \
+		git ls-files -o --exclude-standard -z -- '*.go' | xargs -0 -r git hash-object; } | sha256sum | cut -c1-16); \
+	if [ -f "dist/lint-gopls/$$key" ]; then echo "gopls check: these inputs passed before"; exit 0; fi; \
+	gopls=$$(go tool -modfile=$(GOPLS_MOD) -n gopls) && log=$$(mktemp) && \
+	if git ls-files '*.go' | GOFLAGS=-tags=e2e,integration GOMAXPROCS=2 GOMEMLIMIT=2GiB xargs -n 400 nice -n 19 "$$gopls" check -severity=info >"$$log" 2>&1 \
+		&& [ ! -s "$$log" ]; then rm -f "$$log"; mkdir -p dist/lint-gopls && touch "dist/lint-gopls/$$key"; \
+	else cat "$$log"; rm -f "$$log"; echo "gopls check: findings above (or gopls failed)"; exit 1; fi
+
 # oxfmt's check, type-aware oxlint and TypeScript's check; the build leaves the types to this step.
 # The Proxmox VE entry's script is plain JavaScript, checked with the interface's tools, and so is
 # the formatting of the website's own code. stylelint checks the interface's and the website's CSS.
 WEBSITE_CODE := website/prepare.js website/check-scripts.js website/check-layers.js website/.vitepress/config.mts website/.vitepress/theme website/lighthouserc.cjs
+.PHONY: lint-web
 lint-web: web/node_modules/.package-lock.json
 	cd web && npm run lint
 	npm --prefix web exec --no -- oxfmt --check -c web/.oxfmtrc.json appliance/pve-entry $(WEBSITE_CODE)
@@ -281,13 +334,16 @@ lint-web: web/node_modules/.package-lock.json
 	npm --prefix web exec --no -- stylelint --config web/stylelint.config.mjs --max-warnings 0 'web/src/**/*.css' 'website/.vitepress/theme/**/*.css'
 
 # Spelling in every file git lists, in British English (.typos.toml).
+.PHONY: lint-typos
 lint-typos:
 	typos
 
+.PHONY: tofu-init
 tofu-init: providers
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m init -backend=false -input=false -lockfile=readonly >/dev/null; done
 
 # fmt gets the configuration's directories: from the root it walks web/node_modules, which npm ci may be rebuilding beside it.
+.PHONY: lint-tofu
 lint-tofu: tofu-init
 	$(TOFU) fmt -check -recursive -diff $(MODULES) test/e2e/ci
 	set -e; for m in $(MODULES); do \
@@ -297,10 +353,12 @@ lint-tofu: tofu-init
 
 # With the values they are installed with, which their schemas check.
 LINT_IMAGE := ghcr.io/kubehenge/kubehenge@sha256:0000000000000000000000000000000000000000000000000000000000000000
+.PHONY: lint-helm
 lint-helm:
 	helm lint --strict charts/kubehenge --values pkg/provisioner/testdata/integration-values.yaml
 	helm lint --strict management-cluster/charts/cluster-api-providers --set image=$(LINT_IMAGE)
 
+.PHONY: lint-shell
 lint-shell:
 	shellcheck -x -P SCRIPTDIR -o all -S style $(SHELL_SCRIPTS)
 	shfmt $(SHFMT_FLAGS) -d $(SHELL_SCRIPTS)
@@ -310,38 +368,47 @@ lint-shell:
 # zizmor runs its online audits too when GH_TOKEN is set; ZIZMOR_FLAGS=--format=github has CI
 # annotate the lines it finds.
 ZIZMOR_FLAGS ?=
+.PHONY: lint-actions
 lint-actions:
 	actionlint .github/workflows/*.yml
 	$(ZIZMOR) --persona=auditor $(ZIZMOR_FLAGS) .github/workflows/
 
 # What can change without a commit: advisories published for the Go modules and the actions. The
 # release runs this alone, as the pull request already ran every other check on the same tree.
+.PHONY: advisories
 advisories: web gateway-api
 	$(GOVULNCHECK) ./...
 	$(ZIZMOR) --persona=auditor $(ZIZMOR_FLAGS) .github/workflows/
 
+.PHONY: lint-yaml
 lint-yaml:
 	$(YAMLLINT) --strict $$($(FILES) '*.yml' '*.yaml' ':!:*/templates/*')
 
+.PHONY: lint-markdown
 lint-markdown: web/node_modules/.package-lock.json
 	$(MARKDOWNLINT) $$($(FILES) '*.md')
 
 # The fragments of docs/changes/ and the sections of docs/changelog.md (.github/CONTRIBUTING.md).
+.PHONY: lint-changelog
 lint-changelog:
 	sh scripts/changelog.sh check
 
+.PHONY: lint-docker
 lint-docker:
 	hadolint --failure-threshold style test/e2e/pve/Dockerfile pkg/templates/el/*Containerfile
 
 # Unit tier: the Go packages, under the race detector, the frontend, each Terraform/OpenTofu
 # configuration against mocked providers, and the shell scripts' own tests.
+.PHONY: unit
 unit: unit-go unit-web unit-tofu unit-shell
 
 # KUBEHENGE_REQUIRE_ALLOY turns a missing alloy (scripts/tools.sh) from a skip into a failure, so the
 # generated Alloy configurations are always validated here.
+.PHONY: unit-go
 unit-go: web gateway-api capmox-crds
 	KUBEHENGE_REQUIRE_ALLOY=1 go test -race ./...
 
+.PHONY: unit-web
 unit-web: web/node_modules/.package-lock.json
 	cd web && npm test
 
@@ -352,82 +419,109 @@ ifneq ($(filter test unit,$(MAKECMDGOALS)),)
 unit-tofu: | unit-go
 endif
 
+.PHONY: unit-tofu
 unit-tofu: tofu-init capi-operator-chart
 	set -e; for m in $(MODULES); do $(TOFU) -chdir=$$m test; done
+	$(MAKE) unit-talos-config
+
+# The plans carry the configurations the real Talos provider generates for the nodes, which Talos's
+# own validation then checks. The file holds the generated PKI of a throwaway cluster.
+TALOS_PLANS := $(or $(TMPDIR),/tmp)/kubehenge-talos-plans.json
+.PHONY: unit-talos-config
+unit-talos-config:
+	$(TOFU) -chdir=management-cluster test -test-directory=tests/talos -json -verbose > $(TALOS_PLANS)
+	KUBEHENGE_TALOS_PLANS=$(TALOS_PLANS) go test -count=1 ./management-cluster/tests/talos
 
 UNIT_SHELL := $(patsubst test/unit/%.sh,unit-shell-%,$(wildcard test/unit/*.sh))
-.PHONY: $(UNIT_SHELL)
+.PHONY: unit-shell
 unit-shell: $(UNIT_SHELL)
 
+.PHONY: $(UNIT_SHELL)
 $(UNIT_SHELL): unit-shell-%: test/unit/%.sh
 	sh $<
 
+.PHONY: test
 test: lint unit
 
 # Integration tier: the chart and the controllers against a real API server, envtest's kube-apiserver
 # and etcd, with the CRDs of the releases the management cluster installs; no Proxmox VE, no
 # containers. Its assets are fetched once, into Go's own directory.
 INTEGRATION_ASSETS ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-integration
+.PHONY: integration
 integration: web gateway-api
 	test/integration/assets.sh $(INTEGRATION_ASSETS)
 	KUBEBUILDER_ASSETS=$(INTEGRATION_ASSETS)/bin KUBEHENGE_INTEGRATION_CRDS=$(INTEGRATION_ASSETS)/crds \
 		go test -tags integration -count=1 -run '^TestIntegration' ./pkg/...
 
 # End-to-end tier: needs a Proxmox VE host. DIR is a root configuration applying management-cluster/.
+.PHONY: e2e-management-cluster
 e2e-management-cluster: capi-operator-chart providers
 	TOFU=$(TOFU) test/e2e/management-cluster.sh $(DIR)
 
+.PHONY: e2e-management-cluster-upgrade
 e2e-management-cluster-upgrade: capi-operator-chart providers
 	TOFU=$(TOFU) test/e2e/management-cluster-upgrade.sh $(DIR)
 
 # Against the management cluster in KUBECONFIG; settings in test/e2e/workload-cluster.sh.
+.PHONY: e2e-workload-cluster
 e2e-workload-cluster:
 	test/e2e/workload-cluster.sh $(CLASS) $(VERSION) $(UPGRADE)
 
 # Against the management cluster in KUBECONFIG; settings in test/e2e/rancher.sh.
+.PHONY: e2e-rancher
 e2e-rancher:
 	test/e2e/rancher.sh
 
 # Against the management cluster in KUBECONFIG; settings in test/e2e/cluster-mesh.sh.
+.PHONY: e2e-cluster-mesh
 e2e-cluster-mesh:
 	test/e2e/cluster-mesh.sh
 
 # Against the management cluster in KUBECONFIG, its template refresh on with no soak; settings in
 # test/e2e/node-image-refresh.sh.
+.PHONY: e2e-node-image-refresh
 e2e-node-image-refresh:
 	test/e2e/node-image-refresh.sh
 
 # Against the management cluster in KUBECONFIG; settings in test/e2e/autoscaler.sh.
+.PHONY: e2e-autoscaler
 e2e-autoscaler:
 	test/e2e/autoscaler.sh
 
 # Against the management cluster in KUBECONFIG; settings in test/e2e/control-plane-ha.sh.
+.PHONY: e2e-control-plane-ha
 e2e-control-plane-ha:
 	test/e2e/control-plane-ha.sh
 
 # Against the management cluster in KUBECONFIG on a Proxmox VE cluster of two nodes; settings in
 # test/e2e/two-nodes.sh.
+.PHONY: e2e-two-nodes
 e2e-two-nodes:
 	test/e2e/two-nodes.sh
 
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/templates/e2e_test.go.
+.PHONY: e2e-templates
 e2e-templates:
-	go test -tags e2e -timeout 2h -count=1 -v -run TestTemplatesEndToEnd ./pkg/templates/
+	go test -tags e2e -timeout 3h -count=1 -v -run TestTemplatesEndToEnd ./pkg/templates/
 
 # Against the management cluster in KUBECONFIG (an admin kubeconfig) at KUBEHENGE_E2E_API_ENDPOINT.
+.PHONY: e2e-interface
 e2e-interface:
 	go test -tags e2e -timeout 10m -count=1 -v -run TestInterfaceKubeconfigEndToEnd ./pkg/appliance/
 
 # As root on a Proxmox VE node, with three releases from `make dist` built with RELEASE_PUBLIC_KEYS
 # of a key made for the test; settings in test/e2e/appliance.sh.
+.PHONY: e2e-appliance
 e2e-appliance:
 	test/e2e/appliance.sh $(RELEASE) $(NEWER) $(NEWEST) $(SETTINGS)
 
 # As root on a Proxmox VE node, with the latest published release's install.sh and archive, and a
 # `make dist` archive of a higher VERSION; settings in test/e2e/appliance-upgrade.sh.
+.PHONY: e2e-appliance-upgrade
 e2e-appliance-upgrade:
 	test/e2e/appliance-upgrade.sh $(PUBLISHED_INSTALL) $(PUBLISHED) $(RELEASE) $(SETTINGS)
 
 # Settings come from KUBEHENGE_PROXMOX_* and KUBEHENGE_E2E_*; see pkg/provisioner/e2e_test.go.
+.PHONY: e2e-volumes
 e2e-volumes:
 	go test -tags e2e -timeout 30m -count=1 -v -run TestVolumesEndToEnd ./pkg/provisioner/

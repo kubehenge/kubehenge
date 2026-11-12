@@ -92,6 +92,18 @@ export default defineConfig({
   lang: "en-GB",
   cleanUrls: true,
   lastUpdated: true,
+  // GitHub's heading anchors, which the docs link to so that a link works on GitHub and here alike,
+  // and which scripts/changelog.sh checks the changelog's links against. VitePress's own turn an
+  // apostrophe into a hyphen, where GitHub drops it.
+  markdown: {
+    anchor: {
+      slugify: (heading) =>
+        heading
+          .toLowerCase()
+          .replaceAll(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
+          .replaceAll(" ", "-"),
+    },
+  },
   // VueUse's dark-mode switch writes a style element and reads it back to stop transitions, which
   // makes the browser lay the page out again at start-up. The theme animates the switch itself.
   appearance: { disableTransition: false },

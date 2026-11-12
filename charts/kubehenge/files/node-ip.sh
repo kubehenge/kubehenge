@@ -9,6 +9,11 @@
 #
 # A BGP router id is a dotted 32-bit id, so kube-vip on a node whose primary address is IPv6 takes
 # the node's IPv4 address as its own. The ClusterClass leaves a placeholder for it in the manifest.
+#
+# kubeadm's API server advertises an address of the Services' primary family. Left unset, kubeadm
+# takes the node's IPv4 address, so where the primary family is IPv6 the ClusterClass leaves a
+# placeholder in the configuration kubeadm init or join reads, and the node's primary address
+# replaces it.
 #   node-ip.sh kubeadm|rke2|k3s
 set -eu
 
@@ -41,6 +46,12 @@ done
 case "${1:-}" in
     kubeadm)
         printf 'KUBELET_EXTRA_ARGS=--node-ip=%s\n' "${ips}" > /etc/sysconfig/kubelet
+        for config in /run/kubeadm/kubeadm.yaml /run/kubeadm/kubeadm-join-config.yaml; do
+            if [ -f "${config}" ] && grep -q kubehenge-node-address "${config}"; then
+                # Quoted, so that no YAML reader takes an address of digits and colons for a number.
+                sed -i -E "s/[\"']?kubehenge-node-address[\"']?/\"${ips%%,*}\"/" "${config}"
+            fi
+        done
         kube_vip=/etc/kubernetes/manifests/kube-vip.yaml
         ;;
     rke2 | k3s)

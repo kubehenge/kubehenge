@@ -82,6 +82,12 @@ fragment() {
     git -C "${root}/$1" add docs/changes
     git -C "${root}/$1" commit -q -m "$2"
 }
+# page <repo> <name> <text>: commits the docs page docs/<name>.md.
+page() {
+    printf '%s\n' "$3" > "${root}/$1/docs/$2.md"
+    git -C "${root}/$1" add docs
+    git -C "${root}/$1" commit -q -m "$2"
+}
 # run <repo> <args>...: the script's output and exit status, in out and status.
 run() {
     name=$1
@@ -114,6 +120,7 @@ anchor=$(printf '%0150d' 0 | tr 0 a)
 # its text, code by what is inside the backticks, and 200 letters with accents counted as letters,
 # not bytes.
 repo valid
+page valid install "## ${anchor}"
 fragment valid good "### Before you upgrade
 
 - Upgrade the appliance before its clusters. Each cluster's page says when it may follow.
@@ -408,6 +415,84 @@ run again fold v0.4.3 2026-11-06
 same 'bad version: refused' 1 "${status}"
 run again fold 0.4.3 06.11.2026
 same 'bad date: refused' 1 "${status}"
+
+# Links: a page and heading of docs/ pass, the anchor made as GitHub makes it. A page that docs/ does
+# not hold, an anchor no heading makes, or a path outside docs/ is refused, as the website and the
+# release page would show a dead link.
+repo links
+page links clusters "# Clusters
+
+## The cluster's machines
+
+## Firewall
+## Firewall"
+fragment links good '### Added
+
+- Machines are sized ([clusters.md](clusters.md#the-clusters-machines)), firewalled ([clusters.md](clusters.md#firewall-1)) and listed ([clusters.md](clusters.md)).
+- The [Semantic Versioning](https://semver.org/) rules hold.'
+run links check
+same 'links: a page, its headings and a web address pass' 0 "${status}"
+link_refused() {
+    repo "$1"
+    page "$1" clusters '## Machines'
+    fragment "$1" bad "### Added
+
+- A line ($2)."
+    run "$1" check
+    same "$1: refused" 1 "${status}"
+    mentions "$1: says why" "$3" "${out}"
+}
+link_refused missing-page '[upgrading.md](upgrading.md#steps)' 'upgrading.md, which is not a page in docs/'
+link_refused missing-anchor '[clusters.md](clusters.md#firewall)' 'clusters.md#firewall, an anchor no heading of clusters.md makes'
+link_refused outside-docs '[README](../README.md)' 'neither a web address nor a page in docs/'
+section_refused section-link "## [0.4.2] - 2026-11-05
+
+### Highlights
+
+- Old highlight ([install.md](install.md#steps))." 'install.md, which is not a page in docs/'
+
+# notes: the version's section after the alpha warning. A docs link goes to kubehenge.dev, as a
+# relative one on a release page points into github.com, where no such page is. A link without an
+# anchor goes to the page, and a web address stays as it is. The section stops at the next
+# version, and 0.4 does not take 0.4.2's section.
+repo notes "## [0.4.2] - 2026-11-05
+
+### Highlights
+
+- Machines ([clusters.md](clusters.md#machines)), installs ([install.md](install.md)) and [Semantic Versioning](https://semver.org/spec.md).
+
+### Fixed
+
+- Old line.
+
+## [0.4.1] - 2026-11-01
+
+### Highlights
+
+- Older highlight."
+page notes clusters '## Machines'
+page notes install '# Install'
+printf '%s\n' '# Kubehenge' '' '> **Alpha. Do not use it in production.**' > "${root}/notes/README.md"
+run notes notes 0.4.2
+same 'notes: status' 0 "${status}"
+same 'notes: alpha warning, then the section with web links' '> **Alpha. Do not use it in production.**
+
+### Highlights
+
+- Machines ([clusters.md](https://kubehenge.dev/docs/clusters#machines)), installs ([install.md](https://kubehenge.dev/docs/install)) and [Semantic Versioning](https://semver.org/spec.md).
+
+### Fixed
+
+- Old line.' "${out}"
+run notes notes 0.4
+same 'notes: a version that only begins another one has no section, not the 0.4.2 one' 1 "${status}"
+mentions 'notes: no section says so' 'has no section for 0.4' "${out}"
+run notes notes 0.4.1
+mentions 'notes: the last section ends at the file, without the one before it' '- Older highlight.' "${out}"
+rm "${root}/notes/README.md"
+run notes notes 0.4.2
+same 'notes: no alpha warning before 1.0.0 fails, not a release page without it' 1 "${status}"
+mentions 'notes: no alpha warning says so' 'README.md has no alpha warning' "${out}"
 
 if [ "${failures}" -gt 0 ]; then
     printf '%s failed\n' "${failures}"

@@ -362,7 +362,7 @@ Each distribution boots from a different VM template:
 | Distribution | Template |
 | --- | --- |
 | kubeadm | the cluster's node OS with containerd, the kubelet and kubeadm preinstalled at one Kubernetes version. Its control-plane images are each checked against Kubernetes' release signature |
-| Talos | Talos's own image of one release from the Talos Image Factory, with the QEMU guest agent. Talos is its own OS, so no node OS is chosen |
+| Talos | a disk baked on the host from Sidero's imager, installer base and QEMU guest agent, each pinned by digest. Talos is its own OS, so no node OS is chosen |
 | RKE2, k3s | the cluster's node OS with the distribution's SELinux policy. The distribution installs at boot from checked files |
 
 `kubehenge template create`, or the appliance's Administration page with an administrator's session, fetches the image. It boots the image once where it needs preparing. It then turns the image into a template `capmox` selects by its tags. All of it goes through the Proxmox VE API ([templates.md](templates.md)).
@@ -829,7 +829,7 @@ Every cluster gets the part of the [CIS Kubernetes Benchmark](https://www.cisecu
 - **Requests without credentials** are refused on RKE2 and k3s. On kubeadm they reach health checks and the `cluster-info` ConfigMap alone.
 - **The API server** limits event rates (EventRateLimit) and does not extend projected ServiceAccount tokens past their hour. It and the kubelets offer only forward-secret, authenticated TLS 1.2 ciphers.
   - Profiling is off in it, the controller manager and the scheduler, which serve on loopback only.
-- **Nodes** run with the kernel settings the kubelet expects. kubeadm's kubelet configuration and unit files are readable by root alone.
+- **Nodes** run with the kernel settings the kubelet expects. kubeadm's kubelet configuration and unit files are readable by root alone. Their kubelets pull up to three images at once, since the default of one at a time lets a single stalled pull hold back every other image of the node.
 
 ### CIS hardening
 
@@ -1351,7 +1351,9 @@ RKE2 and k3s ship the CRDs in their Traefik CRD charts in some releases. Later r
 
 #### Whose objects
 
-Where the distribution has its own Gateway API chart, the Gateway API is the distribution's, and the controller applies none of it. Otherwise it looks at each object of the bundle in the cluster:
+Where the distribution has its own Gateway API chart, the Gateway API is the distribution's, and the controller applies none of its own release. It only puts back an object the chart's installed revision ships and the cluster lacks, marked as the chart's. The upgrade that brings the chart also upgrades the Traefik CRD chart, and Helm can delete the admission policy there after the Gateway API chart has adopted it.
+
+Otherwise the controller looks at each object of the bundle in the cluster:
 
 - One missing gets Kubehenge's.
 - One of Kubehenge's release or newer stays.

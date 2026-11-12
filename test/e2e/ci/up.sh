@@ -41,7 +41,11 @@ fi
 if [ "${KUBEHENGE_E2E_IPV6:-}" = 1 ]; then
     docker network create --ipv6 --subnet 172.21.99.0/24 --gateway 172.21.99.1 \
         --subnet fd99:21:99::/64 kubehenge-e2e > /dev/null
-    set -- --ip6 fd99:21:99::2
+    # Proxmox VE's API certificate names only the first address its host name resolves to, and
+    # glibc sorts the IPv6 one first. The tests reach the API over IPv4, so IPv4 goes first here:
+    # glibc's default table with IPv4's precedence raised above every other.
+    printf 'precedence %s\n' '::1/128 50' '::/0 40' '2002::/16 30' '::/96 20' '::ffff:0:0/96 100' > "${work}/gai.conf"
+    set -- --ip6 fd99:21:99::2 -v "${work}/gai.conf:/etc/gai.conf:ro"
 else
     set --
     docker network create --subnet 172.21.99.0/24 --gateway 172.21.99.1 kubehenge-e2e > /dev/null
