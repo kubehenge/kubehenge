@@ -517,7 +517,7 @@ func (r *Runner) ensureKeyVolume(ctx context.Context, out io.Writer) error {
 
 func (r *Runner) renewCertificate(ctx context.Context, current *x509.Certificate, out io.Writer) error {
 	if !r.madeHere(current) {
-		r.sayf(out, "kubehenge: the appliance's own certificate is valid until %s. Install a new one with: kubehenge install --certificate --ctid %s --cert <file> --key <file>",
+		r.sayf(out, "kubehenge: the appliance's own certificate is valid until %s. Install a new one with: sh install.sh --certificate --ctid %s --cert <file> --key <file>",
 			current.NotAfter.UTC().Format(time.RFC1123), r.S.Cfg.CTID)
 		return nil
 	}
