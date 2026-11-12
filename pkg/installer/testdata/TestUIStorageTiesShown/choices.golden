@@ -1,0 +1,12 @@
+ ▟▀▜ ▟▀▜   Kubehenge
+ █ █ █ █   Appliance installer
+ ▀▀▘ ▀▀▘   Network  ·  Choices  ·  Summary  ·  Install  ·  Done
+
+  ┃ Disk storage
+  ┃ > local-lvm  lvmthin, 381.5 GiB free
+  ┃   tank  zfspool, 381.5 GiB free
+
+    Template storage
+    > local-lvm  lvmthin, 381.5 GiB free
+      tank  zfspool, 381.5 GiB free
+  enter confirm  ctrl+c leave

@@ -1,0 +1,15 @@
+ ▟▀▜ ▟▀▜   Kubehenge
+ █ █ █ █   Appliance installer
+ ▀▀▘ ▀▀▘   Network  ·  Choices  ·  Summary  ·  Install  ·  Done
+
+  Kubehenge is running
+
+  Open              https://192.0.2.77/
+  Sign in           a Proxmox VE administrator
+  Container         100
+  Version           9.9.9
+  Fingerprint       <fingerprint>
+  Valid until       2029-02-13
+  Log               /var/log/kubehenge-install.log
+
+  any key closes
