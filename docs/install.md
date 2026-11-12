@@ -162,6 +162,10 @@ The same with a static address:
 sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 ```
 
+On a terminal, the installer is a full-screen guide. It detects the node first, then asks DHCP or static (a static address comes prefilled and is checked for use), asks only what is ambiguous, shows a summary to confirm or change, and installs with a live step list. The commands' output goes to `/var/log/kubehenge-install.log`. If DHCP gives the container no address, it offers a static address and retries.
+
+Without a terminal, or with `--plain`, it prints one line per step and asks nothing. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers.
+
 `install.sh` carries the version of its release and the checksums of the release archive, the OpenTofu release and the container template it installs. It checks each download against them before using it. Once Proxmox's mirror drops that template, it takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
 
 ### Options
@@ -174,7 +178,7 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 | `--bridge <bridge>` | the bridge of the node's default route, else `vmbr0` | A bridge, Open vSwitch bridge or SDN VNet of the node, which the container attaches to. The installer stops before it downloads anything if there is none of that name. |
 | `--vlan <tag>` | none | The VLAN tag of the container's network, 1 to 4094. |
 | `--mtu <bytes>` | the bridge's | The MTU of the container's network, 576 to 65535. |
-| `--ip dhcp`, `--ip none` or `--ip <address>/<prefix>` | `dhcp` | The container's IPv4 address, such as `192.0.2.40/24`. `none` leaves IPv4 out, on an IPv6-only network, and needs `--ip6`. |
+| `--ip dhcp`, `--ip none` or `--ip <address>/<prefix>` | asked | The container's IPv4 address, such as `192.0.2.40/24`. `none` leaves IPv4 out, on an IPv6-only network, and needs `--ip6`. Without a terminal, `dhcp` where the node's own network uses DHCP, else the install stops. |
 | `--gateway <address>` | none | The default gateway, an IPv4 address, with a static `--ip`. |
 | `--ip6 auto`, `--ip6 dhcp` or `--ip6 <address>/<prefix>` | none | The container's IPv6 address, such as `2001:db8::40/64`. `auto` takes one from the router's advertisements. |
 | `--gateway6 <address>` | none | The default IPv6 gateway, with a static `--ip6`. It may be link-local, such as `fe80::1`. |
@@ -189,14 +193,15 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 | `--no-trusted-proxy` | | With `--upgrade`, removes the list of trusted proxies. |
 | `--release <file> --sha256 <hex>` | the published release the script names | Installs a release archive from a file instead, checked against the given checksum. OpenTofu is still downloaded unless `--tofu` names it. |
 | `--tofu <file>` | the published OpenTofu release | Installs OpenTofu from a release archive (`tofu_<version>_linux_amd64.tar.gz`) instead of downloading it. It is checked against the checksum in `install.sh`, so the version must be the one the script names. Together with `--release` and a template on a storage, the node needs no internet access. |
+| `--plain` | off | Prints one line per step and asks nothing, as without a terminal. |
 | `--pve-entry` or `--no-pve-entry` | asked | Whether to add a Kubernetes entry to this node's Proxmox VE interface ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
 | `--upgrade --ctid <id>` | | Upgrades an installed appliance instead ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). |
 | `--certificate --ctid <id>` | | Replaces an installed appliance's certificate instead ([below](#the-appliances-certificate)). |
 
 ### What it does
 
-1. Checks the node: root, Proxmox VE 9, quorum, no appliance in the cluster yet and an existing bridge. It asks which storage to use where several fit and whether to add the interface entry, unless options answered already.
-2. Downloads Kubehenge's release archive and OpenTofu, and checks both against the checksums it carries.
+1. Checks the node: root, Proxmox VE 9, quorum, no appliance in the cluster yet and an existing bridge. Then it asks, all before it changes anything: DHCP or static, which storage where several fit, the API address where several are as good, whether to trust the API's CA, and whether to add the interface entry. Options answer in advance. A summary lists every value to confirm or change.
+2. Downloads Kubehenge's release archive (`install.sh`) and OpenTofu, and checks both against the checksums it carries.
 3. Chooses the Proxmox VE API's address and CA ([below](#the-proxmox-ve-api)), and asks on the terminal where it needs your word. It checks that the API's certificate is valid for that address.
 4. Uses the container template where a storage holds it, or downloads it and checks it against its checksum. Then it creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its addresses.
    - If the container cannot resolve the API's name, it takes the next name or address the certificate covers.
