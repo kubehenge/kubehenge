@@ -523,7 +523,7 @@ func TestTemplateIndex(t *testing.T) {
 		t.Errorf("an index without a usable template: %v", err)
 	}
 	_ = os.Remove(filepath.Join(mirror, "aplinfo-pve-9.dat.asc"))
-	if _, err = f.TemplateFromIndex(context.Background(), h2.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "could not download Proxmox's template index") {
+	if _, err = f.TemplateFromIndex(context.Background(), h2.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "could not download Proxmox VE's template index") {
 		t.Errorf("an index without its signature: %v", err)
 	}
 }

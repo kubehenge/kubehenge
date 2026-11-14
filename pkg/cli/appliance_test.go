@@ -312,7 +312,7 @@ func TestApplianceEtcdBackups(t *testing.T) {
 func TestApplianceTakeOver(t *testing.T) {
 	t.Parallel()
 	f := newFakeInterface(t)
-	if _, err := run(t, f.args("admin@pve", "take-over", "--passphrase-file", writeTemp(t, "right"))...); err == nil || !strings.Contains(err.Error(), "give --overwrite") {
+	if _, err := run(t, f.args("admin@pve", "take-over", "--passphrase-file", writeTemp(t, "right"))...); err == nil || !strings.Contains(err.Error(), "Give --overwrite") {
 		t.Errorf("without --overwrite: %v", err)
 	}
 	if _, err := run(t, f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase" {

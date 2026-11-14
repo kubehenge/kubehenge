@@ -549,7 +549,7 @@ func asRoot(s string) string {
 // the store's keys can write, and goes into the commands a restore runs as root on the nodes.
 func Restorable(cluster *clusterv1.Cluster, s *EtcdSnapshot) error {
 	if !isDigest(s.SHA256) {
-		return fmt.Errorf("snapshot %s has no SHA-256 of 64 lower-case hexadecimal digits to check it by", s.Name)
+		return fmt.Errorf("snapshot %s has no SHA-256 of 64 lowercase hexadecimal digits to check it by", s.Name)
 	}
 	if d := string(distributionOf(cluster)); s.Distribution != "" && s.Distribution != d {
 		return fmt.Errorf("snapshot %s is from a %s cluster, not %s", s.Name, s.Distribution, d)

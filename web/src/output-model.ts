@@ -101,7 +101,7 @@ export function outputProblems(outputs: LogOutput[]): Record<string, string> {
   }
   outputs.forEach((o, i) => {
     if (!namePattern.test(o.name) || o.name.length > maxOutputName) {
-      p[`${i}.name`] = `Lower-case letters, digits and hyphens, at most ${maxOutputName}`;
+      p[`${i}.name`] = `Lowercase letters, digits and hyphens, at most ${maxOutputName}`;
     } else if (outputs.some((other, j) => j < i && other.name === o.name)) {
       p[`${i}.name`] = "Already used";
     }

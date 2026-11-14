@@ -438,7 +438,7 @@ func (m *Model) trustForm() tea.Cmd {
 	m.a.trust = false
 	note := ""
 	if ca.Pinned {
-		note = "\nNo CA is served: this one certificate is trusted, and the appliance fails when it is renewed."
+		note = "\nThe API serves no CA, so only this certificate is trusted. The appliance fails when it is renewed."
 	}
 	return m.startForm(huh.NewGroup(huh.NewConfirm().Title("Trust this CA for the Proxmox VE API?").
 		Description("Subject  " + ca.Subject + "\nIssuer   " + ca.Issuer + "\nSHA-256  " + ca.Fingerprint[:47] + "\n         " + ca.Fingerprint[48:] + note).

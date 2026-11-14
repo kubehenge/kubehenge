@@ -212,8 +212,8 @@ func TestLogOutputsAreRefused(t *testing.T) {
 		want    string
 	}{
 		"too many":                {many, "at most"},
-		"upper-case name":         {with(func(o *LogOutput) { o.Name = "Siem" }), "lower-case label"},
-		"long name":               {with(func(o *LogOutput) { o.Name = strings.Repeat("a", maxLogOutputName+1) }), "lower-case label"},
+		"upper-case name":         {with(func(o *LogOutput) { o.Name = "Siem" }), "lowercase label"},
+		"long name":               {with(func(o *LogOutput) { o.Name = strings.Repeat("a", maxLogOutputName+1) }), "lowercase label"},
 		"twice":                   {[]LogOutput{good, good}, "two log outputs"},
 		"unknown kind":            {with(func(o *LogOutput) { o.Kind = "http" }), "kind must be"},
 		"syslog over https":       {with(func(o *LogOutput) { o.Kind = logOutputSyslog }), "tcp://, tls:// or udp://"},

@@ -258,7 +258,7 @@ function EtcdSnapshotsChoice({
 const tokenRefusal = "Needs Sys.Modify on the workload pool";
 
 const existingCertManagerInfo =
-  "Kubehenge installs none and still makes its issuers and certificates in it. Fixed once the cluster exists.";
+  "Kubehenge installs no cert-manager and makes its issuers and certificates in yours. Fixed once the cluster exists.";
 
 // CertificatesAddOn sets the certificates up, with the DNS provider's credential typed in here for
 // the new cluster.

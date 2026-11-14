@@ -78,18 +78,18 @@ checks apply as on its pages.`,
 }
 
 // errNotReadyForReboot ends ready-for-reboot with a blocker, so that the exit status is not 0.
-var errNotReadyForReboot = errors.New("not ready for a host reboot")
+var errNotReadyForReboot = errors.New("not ready for a node reboot")
 
 func (o *applianceOptions) readyForRebootCommand() *cobra.Command {
 	var node string
 	cmd := &cobra.Command{
 		Use:   "ready-for-reboot",
-		Short: "Exit 0 only when a Proxmox VE host may be rebooted",
+		Short: "Exit 0 only when a Proxmox VE node may be rebooted",
 		Long: `Exit 0 only when every etcd member of the management cluster and of every workload cluster is
 healthy. With --node, the guests of that Proxmox VE node must also be able to go away without costing
 any etcd its quorum. Otherwise the first blocker is printed and the exit status is 1.
 
-Patch the hosts one at a time: run it, reboot one host, wait for it to pass again, then do the next.`,
+Patch the nodes one at a time. Run it, reboot one node, wait for it to pass again, then do the next.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
@@ -109,7 +109,7 @@ Patch the hosts one at a time: run it, reboot one host, wait for it to pass agai
 				if node != "" {
 					return say(cmd, "Ready to reboot "+node)
 				}
-				return say(cmd, "Ready for a host reboot")
+				return say(cmd, "Ready for a node reboot")
 			})
 		},
 	}
@@ -471,7 +471,7 @@ backup or a second appliance. Once taken over, the next apply undoes those chang
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !overwrite {
-				return errors.New("take-over undoes the newer changes at the next apply; give --overwrite to go ahead")
+				return errors.New("take-over undoes the newer changes at the next apply. Give --overwrite to go ahead")
 			}
 			passphrase, err := secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE")
 			if err != nil {

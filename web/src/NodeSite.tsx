@@ -89,7 +89,7 @@ export function mirrorsProblem(rows: MirrorRow[]): string | undefined {
     const at = `Mirror ${i + 1}: `;
     const addresses = list(m.endpoints);
     const problem =
-      (!registryName.test(m.registry.trim()) && "enter a lower-case registry host name, or *") ||
+      (!registryName.test(m.registry.trim()) && "enter a lowercase registry host name, or *") ||
       (seen.has(m.registry.trim()) && "each registry once") ||
       (addresses.length === 0 && "add an endpoint") ||
       (addresses.length > maxEndpoints && `at most ${maxEndpoints} endpoints`) ||

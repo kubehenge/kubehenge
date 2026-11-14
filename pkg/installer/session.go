@@ -208,7 +208,7 @@ func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 		s.noticef("the Proxmox VE API at %s is reached without checking its certificate", c.ProxmoxURL)
 	}
 	if ca.Kind == CASystem {
-		s.noticef("the Proxmox VE API's certificate rests on %s in this node's trust store", ca.Subject)
+		s.noticef("the Proxmox VE API's certificate is signed by %s, from this node's trust store", ca.Subject)
 	}
 	return nil
 }
@@ -241,7 +241,7 @@ func (s *Session) UnattendedCheck() error {
 	if s.CA != nil && s.CA.NeedsTrust && !c.TrustServedCA && c.ProxmoxCA == "" {
 		fix := "Check that it is your CA, then give it with --proxmox-ca <file>"
 		if s.CA.Pinned {
-			fix = "The API serves no CA certificate, so only its own certificate could be trusted, and the appliance would fail when that is renewed. Give the CA that signed it with --proxmox-ca <file>"
+			fix = "The API serves no CA certificate, so only its own certificate could be trusted. The appliance would then fail when that is renewed. Give the CA that signed it with --proxmox-ca <file>"
 		}
 		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate from %s (SHA-256 fingerprint %s) that this node does not trust",
 			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), fix)
@@ -267,7 +267,7 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 	}
 	c.APIHost = cands[0].Host
 	if len(cands) > 1 {
-		s.noticef("the Proxmox VE API at %s, its certificate is also valid for %s", c.APIHost, joinHosts(cands[1:]))
+		s.noticef("the Proxmox VE API at %s has a certificate that is also valid for %s", c.APIHost, joinHosts(cands[1:]))
 	}
 	return false, nil
 }

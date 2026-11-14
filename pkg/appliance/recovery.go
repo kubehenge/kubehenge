@@ -35,7 +35,7 @@ var (
 	// ErrExportDamaged is a file that is no export, or an export that was changed.
 	ErrExportDamaged = errors.New("the file is no export of this appliance's state, or it was changed")
 	// ErrHasState refuses an import over a state the appliance holds.
-	ErrHasState = errors.New("this appliance has a management cluster already; import into a new appliance")
+	ErrHasState = errors.New("this appliance has a management cluster already. Import into a new appliance")
 	// ErrNoWarning is a dismissal asked for while nothing is warned of.
 	ErrNoWarning = errors.New("the management cluster's etcd is backed up, or there is no management cluster")
 )

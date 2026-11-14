@@ -173,7 +173,7 @@ func (f *Fetcher) TemplateFromIndex(ctx context.Context, exec Exec, dir, mirror 
 	index := dir + "/aplinfo-pve-9.dat"
 	for _, suffix := range []string{".gz", ".asc"} {
 		if err := f.try(ctx, mirror+"/aplinfo-pve-9.dat"+suffix, index+suffix, f.Retries, nil); err != nil {
-			return IndexedTemplate{}, userErr("could not download Proxmox's template index "+mirror+"/aplinfo-pve-9.dat"+suffix, "Check that this node reaches the mirror")
+			return IndexedTemplate{}, userErr("could not download Proxmox VE's template index "+mirror+"/aplinfo-pve-9.dat"+suffix, "Check that this node reaches the mirror")
 		}
 	}
 	gz, err := os.Open(index + ".gz") //nolint:gosec // the path is in the installer's own work directory.
@@ -183,14 +183,14 @@ func (f *Fetcher) TemplateFromIndex(ctx context.Context, exec Exec, dir, mirror 
 	defer func() { _ = gz.Close() }()
 	zr, err := gzip.NewReader(gz)
 	if err != nil {
-		return IndexedTemplate{}, userErr("Proxmox's template index does not unpack", "")
+		return IndexedTemplate{}, userErr("Proxmox VE's template index does not unpack", "")
 	}
 	data, err := io.ReadAll(zr)
 	if err != nil || os.WriteFile(index, data, permFile) != nil {
-		return IndexedTemplate{}, userErr("Proxmox's template index does not unpack", "")
+		return IndexedTemplate{}, userErr("Proxmox VE's template index does not unpack", "")
 	}
 	if _, err := exec.Run(ctx, "sqv", "--keyring", templateKeys, index+".asc", index); err != nil {
-		return IndexedTemplate{}, userErr("Proxmox's template index fails its signature check against "+templateKeys, "")
+		return IndexedTemplate{}, userErr("Proxmox VE's template index fails its signature check against "+templateKeys, "")
 	}
 	type entry struct{ ver, loc, sum string }
 	var best []entry
@@ -218,7 +218,7 @@ func (f *Fetcher) TemplateFromIndex(ctx context.Context, exec Exec, dir, mirror 
 		}
 	}
 	if len(best) == 0 {
-		return IndexedTemplate{}, userErr("Proxmox's template index lists no amd64 Debian 13 standard template", "")
+		return IndexedTemplate{}, userErr("Proxmox VE's template index lists no amd64 Debian 13 standard template", "")
 	}
 	slices.SortStableFunc(best, func(a, b entry) int {
 		switch {

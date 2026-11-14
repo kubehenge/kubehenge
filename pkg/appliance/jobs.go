@@ -126,17 +126,17 @@ type JobView struct {
 const shownLines = 500
 
 // ErrBusy is a job already running.
-var ErrBusy = errors.New("the management cluster is being applied or removed; try again once that has finished")
+var ErrBusy = errors.New("the management cluster is being applied or removed. Try again once that has finished")
 
 // ErrUpgrading is the appliance's software being replaced, which restarts the interface and would
 // cut a run off.
-var ErrUpgrading = errors.New("the appliance is being upgraded; try again once it is back")
+var ErrUpgrading = errors.New("the appliance is being upgraded. Try again once it is back")
 
 // ErrTemplateBusy is a VM template being built, which holds the same lock as runs of the module.
-var ErrTemplateBusy = errors.New("a VM template is being built; try again once that has finished")
+var ErrTemplateBusy = errors.New("a VM template is being built. Try again once that has finished")
 
 // ErrStopping is the appliance's service shutting down, which refuses new jobs.
-var ErrStopping = errors.New("the appliance is stopping; try again once it is back")
+var ErrStopping = errors.New("the appliance is stopping. Try again once it is back")
 
 // ErrServiceStopped is what a job is interrupted with when the service stops under it.
 var ErrServiceStopped = errors.New("the appliance's service stopped, as for a migration, a backup in stop mode or a reboot")

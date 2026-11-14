@@ -302,7 +302,7 @@ func (r *BootLogReconciler) readGuest(ctx context.Context, m *clusterv1.Machine)
 		lines, err := streamTail(strings.NewReader(output))
 		cloudInit = section(cloudInitOutputName, lines, err)
 		if truncated && err == nil {
-			cloudInit.Error = fmt.Sprintf("the file is longer than the %d MiB read; these are the last lines of those", cloudInitOutputMiB)
+			cloudInit.Error = fmt.Sprintf("the file is longer than the %d MiB read. These are its last lines", cloudInitOutputMiB)
 		}
 	}
 	sections := []BootLogSection{cloudInit}

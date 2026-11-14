@@ -127,7 +127,7 @@ func (r *Runner) publicName(ctx context.Context, c *x509.Certificate, address st
 			return host
 		}
 	}
-	r.sayf(out, "kubehenge: leaving %s out of the certificate: this node's DNS does not resolve it to %s; give it with --name to keep it", host, address)
+	r.sayf(out, "kubehenge: leaving %s out of the certificate, since this node's DNS does not resolve it to %s. Give it with --name to keep it", host, address)
 	return ""
 }
 
@@ -263,7 +263,7 @@ func (r *Runner) updateEntry(ctx context.Context, url string, out io.Writer) {
 		return
 	}
 	if _, err := r.Exec.Run(ctx, "/usr/local/sbin/kubehenge-pve-entry", "--url", url); err != nil {
-		r.sayf(out, "kubehenge: the entry still leads to %s; see %s", current, r.LogPath)
+		r.sayf(out, "kubehenge: the entry still leads to %s. See %s", current, r.LogPath)
 		return
 	}
 	r.sayf(out, "On every other node with the entry, run: kubehenge-pve-entry --url %s", url)

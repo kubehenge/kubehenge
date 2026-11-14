@@ -333,7 +333,7 @@ func (r *rangePicker) pick(what, family, def string, candidates []string, avoid 
 		nodes = append(nodes, n.String())
 	}
 	if len(avoid) > 0 {
-		return "", fmt.Errorf("every %s %s range Kubehenge tries overlaps the nodes' networks %s or another cluster's ranges; choose one", family, what, strings.Join(nodes, ", "))
+		return "", fmt.Errorf("every %s %s range Kubehenge tries overlaps the nodes' networks %s or another cluster's ranges. Choose one", family, what, strings.Join(nodes, ", "))
 	}
-	return "", fmt.Errorf("every %s %s range Kubehenge tries overlaps the nodes' networks %s; choose one", family, what, strings.Join(nodes, ", "))
+	return "", fmt.Errorf("every %s %s range Kubehenge tries overlaps the nodes' networks %s. Choose one", family, what, strings.Join(nodes, ", "))
 }

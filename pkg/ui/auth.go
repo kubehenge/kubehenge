@@ -103,7 +103,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if utf8.RuneCountInString(username) > maxUsernameLength {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("The user name and realm together are at most %d characters.", maxUsernameLength))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("the user name and realm together are at most %d characters", maxUsernameLength))
 		return
 	}
 	done, ok := s.limiter.reserve(signInCounts(username, r)...)

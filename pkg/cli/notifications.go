@@ -24,7 +24,7 @@ var notificationTargets = map[string]string{"notify-webhook": "Webhook", "notify
 func (o *applianceOptions) notificationsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "notifications",
-		Short: "Show each notification target's last sending",
+		Short: "Show how each notification target's last send went",
 		Long: `Show each notification target's last sending. The targets are set on the Administration page, or
 as the Secrets kubehenge-notify-webhook, kubehenge-notify-ntfy and kubehenge-notify-email.`,
 		Args: noArgs,

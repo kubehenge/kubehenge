@@ -169,7 +169,7 @@ func (s *Settings) checkNodesExist(inv *Inventory, f *Findings) {
 		return
 	}
 	for _, name := range s.Nodes {
-		checkNodeExists(inv, f, name, "Choose a node that is.", "Start it, or choose another node.")
+		checkNodeExists(inv, f, name, "Choose a node that exists.", "Start it, or choose another node.")
 	}
 }
 
@@ -354,7 +354,7 @@ func (s *Settings) checkBuildPlace(inv *Inventory, f *Findings) {
 	if site.node == "" {
 		return
 	}
-	if !checkNodeExists(inv, f, site.node, "Set the template build node to one that is, or leave it empty.", "Start it, or set another template build node.") {
+	if !checkNodeExists(inv, f, site.node, "Set the template build node to one that exists, or leave it empty.", "Start it, or set another template build node.") {
 		return
 	}
 	if inv.Storages != nil && site.storage != "" {
@@ -388,7 +388,7 @@ func (s *Settings) checkAddressesFree(inv *Inventory, f *Findings) {
 	}
 	for _, a := range addrs {
 		if ip, err := netip.ParseAddr(a); err == nil && inv.Answering[ip] {
-			f.Errors = append(f.Errors, fmt.Sprintf("Address %s answers to ping or a connection already. Choose an address no host uses.", a))
+			f.Errors = append(f.Errors, fmt.Sprintf("Address %s already answers to ping or a connection. Choose an address nothing uses.", a))
 		}
 	}
 }

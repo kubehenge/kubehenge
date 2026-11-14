@@ -348,7 +348,7 @@ func (p ReleasePins) offered(release *distributionRelease) []string {
 
 // refusal is the error for a release the pins do not hold, with the releases they offer instead.
 func (p ReleasePins) refusal(release *distributionRelease, version string) error {
-	return fmt.Errorf("%w; the newest it pins of each minor version: %s", unpinnedRelease(release, version), strings.Join(p.offered(release), ", "))
+	return fmt.Errorf("%w. The newest it pins of each minor version: %s", unpinnedRelease(release, version), strings.Join(p.offered(release), ", "))
 }
 
 // newest is the newest pinned release of the distribution's minor version, if any.

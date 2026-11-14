@@ -33,7 +33,7 @@ KUBEHENGE_JOB names the Job, from the pod's batch.kubernetes.io/job-name label.`
 			case "guest-agent":
 				serve = provisioner.ServeGuestRequest
 			default:
-				return fmt.Errorf("no token Job %q: ha or guest-agent", args[0])
+				return fmt.Errorf("no token Job %q. Use ha or guest-agent", args[0])
 			}
 			// A missing token or CA is reported as the request's result, which the controller shows.
 			c, connErr := pve.Connect(*conn)
