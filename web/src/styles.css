@@ -3153,9 +3153,11 @@ details.advanced > summary {
   background: var(--surface-2);
 }
 
+/* Dark enough, and blurred, that the page behind reads as under the dialog in both colour schemes. */
 .dialog::backdrop,
 .palette::backdrop {
-  background: rgb(0 0 0 / 40%);
+  background: rgb(0 0 0 / 65%);
+  backdrop-filter: blur(3px);
 }
 
 .dialog-title {

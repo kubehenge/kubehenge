@@ -15,3 +15,14 @@ describe("a cluster's tabs on a phone", () => {
     expect(views).not.toContain("overflow-x");
   });
 });
+
+describe("a dialog's backdrop", () => {
+  it("hides most of the page and blurs the rest", () => {
+    const rule = [...styles.matchAll(/\.dialog::backdrop,\n\.palette::backdrop \{(?<body>[^}]*)\}/gu)]
+      .map((m) => m.groups?.["body"])
+      .join("\n");
+    const alpha = [...rule.matchAll(/rgb\(0 0 0 \/ (?<percent>\d+)%\)/gu)].map((m) => Number(m.groups?.["percent"]));
+    expect(alpha.at(0)).toBeGreaterThanOrEqual(60);
+    expect(rule).toContain("backdrop-filter: blur");
+  });
+});
