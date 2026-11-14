@@ -158,6 +158,44 @@ describe("the Scale dialog and Review plan", () => {
   });
 });
 
+describe("the memory line of a plan", () => {
+  it("counts the workers a raised most may add", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web");
+    const sized = {
+      controlPlaneMachine: { cores: 2, memoryMiB: 4096, diskGiB: 30 },
+      workerMachine: { cores: 4, memoryMiB: 8192, diskGiB: 50 },
+    };
+    const autoscaled: Cluster = {
+      ...cluster,
+      workerPools: [{ name: "md-0", class: "worker", replicas: 1, autoscaling: { min: 1, max: 3 } }],
+      variables: sized,
+    };
+    const raised: Cluster = {
+      ...autoscaled,
+      workerPools: [{ name: "md-0", class: "worker", replicas: 1, autoscaling: { min: 1, max: 10 } }],
+    };
+    fakeServer({
+      ...session,
+      [`GET ${path}`]: { body: autoscaled },
+      "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true, memory: 0, maxMemory: 40 * gib }] },
+      [`POST ${path}/plan`]: { body: { cluster: raised, changes: [{ setting: "autoscaling", effect: "scales" }] } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Scale" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Scale web" }));
+    await user.clear(dialog.getByLabelText("Most workers"));
+    await user.type(dialog.getByLabelText("Most workers"), "10");
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
+    await user.click(await screen.findByRole("button", { name: "Review plan" }));
+    const plan = within(screen.getByRole("dialog", { name: "Review plan" }));
+    // Seven more workers of 8 GiB each.
+    await expect(
+      within(plan.getByLabelText("Before applying")).findByText("Needs 56.0 GiB, 40.0 GiB free"),
+    ).resolves.toBeInTheDocument();
+  });
+});
+
 describe("the staged bar", () => {
   it("says a deleted pool is deleted", () => {
     const before = pools(["md-0", 1], ["gpu", 2]);
