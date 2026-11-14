@@ -56,7 +56,7 @@ export const backupsHint = "Every namespace but system and add-on ones, with vol
 
 /** backupCredentialHint names the folder of the bucket that a cluster's backups and etcd snapshots are written to, beneath the target's prefix. */
 export function backupCredentialHint(namespace: string | undefined, name: string, target?: OfferedTarget): string {
-  const prefix = target?.prefix?.replace(/^\/+|\/+$/g, "");
+  const prefix = target?.prefix?.replaceAll(/^\/+|\/+$/gu, "");
   const own = `${filled(namespace) ? namespace : "<namespace>"}.${filled(name) ? name : "<name>"}/`;
   return `Limit it to the folder ${filled(prefix) ? `${prefix}/` : ""}${own}`;
 }

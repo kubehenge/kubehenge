@@ -251,7 +251,7 @@ describe("a new cluster started from another", () => {
     // Each copied value says so, the bridge and the gateway among them.
     const marks = screen.getAllByText("Copied from web");
     expect(marks.length).toBeGreaterThan(1);
-    expect(screen.getByLabelText("Bridge").closest(".field")).toContainElement(marks[0] ?? null);
+    expect(screen.getByLabelText("Bridge").closest(".field")).toHaveTextContent("Copied from web");
     expect(screen.getByLabelText("Gateway").closest(".field")).toHaveTextContent("Copied from web");
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.1.0.1");
     // No node reports the network on vmbr1, so the examples come from the gateway's.

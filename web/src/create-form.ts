@@ -2592,20 +2592,17 @@ function thick(s: Storage | undefined): boolean {
   if (s === undefined) {
     return false;
   }
-  switch (s.type) {
-    case undefined:
-    case "":
-    case "lvmthin":
-    case "rbd":
-      return false;
-    case "lvm":
-      return true;
-    case "zfspool":
-    case "zfs":
-      return s.sparse === false;
-    default:
-      return s.preallocation === "falloc" || s.preallocation === "full";
+  const kind = s.type ?? "";
+  if (kind === "lvm") {
+    return true;
   }
+  if (kind === "zfspool" || kind === "zfs") {
+    return s.sparse === false;
+  }
+  if (kind === "" || kind === "lvmthin" || kind === "rbd") {
+    return false;
+  }
+  return s.preallocation === "falloc" || s.preallocation === "full";
 }
 
 /**

@@ -121,11 +121,52 @@ function copiedFields(form: Form, from: Cluster | undefined): string[] {
   }
   const fresh = newForm();
   return Object.entries(copiedLabels).flatMap(([key, label]) =>
-    startKeys.has(key as keyof Form) &&
-    JSON.stringify(form[key as keyof Form]) !== JSON.stringify(fresh[key as keyof Form])
-      ? [label]
-      : [],
+    isCopiedKey(key) && startKeys.has(key) && JSON.stringify(form[key]) !== JSON.stringify(fresh[key]) ? [label] : [],
   );
+}
+
+// storageOf is the storage entered, or else the only one offered.
+function storageOf(entered: Form, usable: Storage[]): string {
+  return filled(entered.storage) ? entered.storage : (sole(usable.map((s) => s.storage)) ?? "");
+}
+
+// lacksSharedKey tells whether the namespace the cluster goes to, or else the user's own, is known
+// to hold no access key for every cluster.
+function lacksSharedKey(
+  sharedKeys: Record<string, boolean>,
+  namespace: string,
+  sessionNamespace: string | undefined,
+): boolean {
+  return sharedKeys[namespace || (sessionNamespace ?? "")] === false;
+}
+
+// copiedContext is what the steps say was copied from the cluster the form started from, if any.
+function copiedContext(form: Form, from: Cluster | undefined): { from: string; labels: string[] } | undefined {
+  return from === undefined ? undefined : { from: from.name, labels: copiedFields(form, from) };
+}
+
+// isCopiedKey narrows a key of copiedLabels, which Object.entries gives as a string, back to the
+// form field it labels.
+function isCopiedKey(key: string): key is keyof Form {
+  return Object.hasOwn(copiedLabels, key);
+}
+
+// createLabelOf is Confirm's create button: it says so when the cluster waits for memory, or when
+// its disks may exceed the free space.
+function createLabelOf(room: ReturnType<typeof createRoom>): string {
+  if (room.nodeWarning !== undefined) {
+    return "Create and wait";
+  }
+  return room.diskWarning === undefined ? "Create" : "Create anyway";
+}
+
+// controlPlanesFor is three control planes where the cluster has three online nodes it may use to
+// spread them over, unless the user or the cluster started from chose a count.
+function controlPlanesFor(entered: Form, nodes: PveNode[], kept: boolean): number {
+  if (kept || spreadOver(nodes, entered) < haControlPlanes) {
+    return entered.controlPlaneReplicas;
+  }
+  return haControlPlanes;
 }
 
 // CreateButton is Confirm's primary button. It says so when the cluster waits for memory, or when
@@ -302,16 +343,11 @@ export function CreateCluster({
       namespace: formNamespace,
       taken: clusters.filter((x) => formNamespace === "" || x.namespace === formNamespace).map((x) => x.name),
       rancherExists,
-      // Three control planes where the cluster has three online nodes it may use to spread them over.
-      controlPlaneReplicas: kept("controlPlaneReplicas")
-        ? entered.controlPlaneReplicas
-        : spreadOver(nodes, entered) >= haControlPlanes
-          ? haControlPlanes
-          : entered.controlPlaneReplicas,
-      noSharedKey: sharedKeys[namespaceOf(entered, namespaces) || (sessionNamespace ?? "")] === false,
+      controlPlaneReplicas: controlPlanesFor(entered, nodes, kept("controlPlaneReplicas")),
+      noSharedKey: lacksSharedKey(sharedKeys, namespaceOf(entered, namespaces), sessionNamespace),
       rancherRegister: entered.rancherRegister,
       bridge,
-      storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),
+      storage: storageOf(entered, usableStorages),
     },
     cls,
     canTrust,
@@ -352,7 +388,8 @@ export function CreateCluster({
   };
 
   const copiedFrom = clusters.find((x) => clusterKey(x) === entered.from);
-  const copied = copiedFields(form, copiedFrom);
+  // React Compiler keeps the context's value while its inputs stay.
+  const copied = copiedContext(form, copiedFrom);
   const index = steps.indexOf(step);
   const previous = steps[index - 1];
   const following = steps[index + 1];
@@ -371,12 +408,7 @@ export function CreateCluster({
   const open = Object.values(byField);
   // A cluster that fits the nodes but not what they have free now waits for room.
   const room = createRoom(form, nodes, usableStorages);
-  let createLabel = "Create";
-  if (room.nodeWarning !== undefined) {
-    createLabel = "Create and wait";
-  } else if (room.diskWarning !== undefined) {
-    createLabel = "Create anyway";
-  }
+  const createLabel = createLabelOf(room);
   const refused = Object.keys(capacityProblems("Machines", form, { nodes, storages: usableStorages })).length > 0;
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
@@ -475,7 +507,7 @@ export function CreateCluster({
           ))}
         </nav>
         <div className="wizard-body" ref={wizardRef}>
-          <CopiedFrom.Provider value={copiedFrom === undefined ? undefined : { from: copiedFrom.name, labels: copied }}>
+          <CopiedFrom.Provider value={copied}>
             {step === "General" && (
               <GeneralStep
                 form={form}

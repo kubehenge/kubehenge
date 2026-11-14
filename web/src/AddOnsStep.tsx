@@ -201,6 +201,15 @@ function BackupsChoice({
   );
 }
 
+// keyHint is the access key's hint: where an own key is optional, what leaving it empty does, and
+// otherwise the folder to limit it to.
+function keyHint(optional: boolean, waitText: string | undefined, folder: string): string {
+  if (!optional) {
+    return folder;
+  }
+  return waitText === undefined ? "Empty uses the key stored for every cluster" : "Enter one to take snapshots at once";
+}
+
 // AccessKey takes the S3 access key that backups and etcd snapshots are both written with. It is
 // stored once the cluster exists, which needs Sys.Modify on the pool.
 function AccessKey({
@@ -229,13 +238,7 @@ function AccessKey({
       {canTrust === false ? (
         <p className="hint">Storing it needs Sys.Modify on the workload pool</p>
       ) : (
-        <p className="hint">
-          {optional
-            ? waitText === undefined
-              ? "Empty uses the key stored for every cluster"
-              : "Enter one to take snapshots at once"
-            : backupCredentialHint(namespace, form.name, target)}
-        </p>
+        <p className="hint">{keyHint(optional, waitText, backupCredentialHint(namespace, form.name, target))}</p>
       )}
       {waitText !== undefined && <p className="hint">{waitText}</p>}
       {own &&

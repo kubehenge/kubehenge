@@ -18,8 +18,7 @@ import {
   withBackupChoices,
   type Form,
 } from "./create-form";
-import { fromCluster } from "./start-from";
-import type { Cluster, ClusterClass } from "./types";
+import type { ClusterClass } from "./types";
 import { check } from "./writing";
 
 // The zone backups start in, which snapshots start in too.
@@ -53,6 +52,9 @@ const withoutVariable = classOf("rke2", targets, ["backups"]);
 
 const key = { accessKeyID: "AKIA", secretAccessKey: "secret" };
 
+// hintTexts are the texts of the hints rendered in root.
+const hintTexts = (root: ParentNode): string[] => [...root.querySelectorAll("p.hint")].map((p) => p.textContent ?? "");
+
 const filledForm = (c: ClusterClass, patch: Partial<Form> = {}): Form =>
   withBackupChoices({ ...newForm(), name: "web", etcdSnapshots: true, backups: false, ...patch }, c, true);
 
@@ -70,14 +72,15 @@ describe("a new cluster's etcd snapshots", () => {
   it("pass Next in all three key cases, and wait only with no key at all", () => {
     const wait = "No snapshots until a key for store is stored";
     const cases = [
-      { name: "shared key", patch: { noSharedKey: false }, waits: false, sent: undefined },
+      { name: "shared key", patch: { noSharedKey: false }, waits: false, sent: undefined, pending: [] },
       {
         name: "own key",
         patch: { noSharedKey: true, backupKey: { accessKeyID: "AK", secretAccessKey: "SK" } },
         waits: false,
         sent: { accessKeyID: "AK", secretAccessKey: "SK" },
+        pending: ["backup"],
       },
-      { name: "neither", patch: { noSharedKey: true }, waits: true, sent: undefined },
+      { name: "neither", patch: { noSharedKey: true }, waits: true, sent: undefined, pending: [] },
     ];
     for (const c of cases) {
       const form = filledForm(kubeadm, c.patch);
@@ -87,9 +90,7 @@ describe("a new cluster's etcd snapshots", () => {
       });
       expect({ name: c.name, waits: snapshotsWait(form, kubeadm) }).toStrictEqual({ name: c.name, waits: c.waits });
       expect({ name: c.name, key: request(form, kubeadm).backupKey }).toStrictEqual({ name: c.name, key: c.sent });
-      expect(pendingCredentials(form, kubeadm).map((p) => p.purpose)).toStrictEqual(
-        c.sent === undefined ? [] : ["backup"],
-      );
+      expect(pendingCredentials(form, kubeadm).map((p) => p.purpose)).toStrictEqual(c.pending);
     }
     expect(snapshotsWaitText("store")).toBe(wait);
   });
@@ -249,69 +250,6 @@ describe("a new cluster's etcd snapshots", () => {
   });
 });
 
-describe("a new cluster started from another", () => {
-  const source: Cluster = {
-    namespace: "default",
-    name: "web",
-    class: "kubehenge-rke2",
-    distribution: "rke2",
-    version: "v1.36.5",
-    generation: 1,
-    created: "2026-10-01T00:00:00Z",
-    deleting: false,
-    phase: "Provisioned",
-    available: true,
-    conditions: [],
-    controlPlane: { desired: 3, ready: 3, available: 3, upToDate: 3 },
-    workers: { desired: 2, ready: 2, available: 2, upToDate: 2 },
-    workerPools: [{ name: "md-0", class: "worker", replicas: 2 }],
-    variables: {},
-    pool: "/pool/kubehenge/default.web",
-    allowed: { change: true, kubeconfig: true },
-  };
-
-  it("takes the other's etcd snapshot settings", () => {
-    const started = fromCluster(
-      {
-        ...source,
-        variables: {
-          etcdSnapshots: {
-            enabled: true,
-            target: "aws",
-            schedule: "0 */6 * * *",
-            timeZone: "Europe/Zurich",
-            keep: 5,
-            distributionUpload: true,
-          },
-        },
-      },
-      newForm(),
-    );
-    expect(started).toMatchObject({ etcdSnapshots: true });
-    expect(started.etcdFields).toStrictEqual({
-      target: "aws",
-      schedule: "0 */6 * * *",
-      timeZone: "Europe/Zurich",
-      keep: "5",
-      upload: true,
-    });
-    expect(request(withBackupChoices(started, rke2, true), rke2).variables["etcdSnapshots"]).toMatchObject({
-      target: "aws",
-      keep: 5,
-      distributionUpload: true,
-    });
-  });
-
-  it("takes that they are off, and leaves the default where the other never set them", () => {
-    const off = fromCluster({ ...source, variables: { etcdSnapshots: { enabled: false } } }, newForm());
-    expect(off).toMatchObject({ etcdSnapshots: false });
-    expect(fromCluster(source, newForm())).toMatchObject({
-      etcdSnapshots: true,
-      etcdFields: newForm().etcdFields,
-    });
-  });
-});
-
 // Step keeps the form as the wizard does: the key and targets are filled in by withBackupChoices
 // and a field's problem shows once Next was pressed.
 function Step({
@@ -410,11 +348,11 @@ describe("the add-ons step", () => {
 
   it("keeps the step's hints within the hint limit", () => {
     const { container, unmount } = render(<Step cls={bare} />);
-    const shown = [...container.querySelectorAll("p.hint")].map((p) => p.textContent ?? "");
+    const shown = hintTexts(container);
     unmount();
     for (const first of [{ noSharedKey: true }, { noSharedKey: false }]) {
       const { container: c, unmount: done } = render(<Step cls={kubeadm} first={first} />);
-      shown.push(...[...c.querySelectorAll("p.hint")].map((p) => p.textContent ?? ""));
+      shown.push(...hintTexts(c));
       done();
     }
     const problems = shown.flatMap((text) => check({ file: "step", line: 0, kind: "hint", text }));
