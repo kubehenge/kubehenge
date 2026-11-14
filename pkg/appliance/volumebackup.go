@@ -52,6 +52,8 @@ type VolumeBackupStatus struct {
 	Failed *time.Time                `json:"failed,omitempty"`
 	// Copy is the appliance's own copy of the latest snapshot.
 	Copy *ApplianceCopy `json:"copy,omitempty"`
+	// Export is the last export of Kubehenge's objects taken with a snapshot.
+	Export *ExportRecord `json:"export,omitempty"`
 }
 
 // ApplianceCopy is the copy of the latest backups the appliance keeps on its own disk.
@@ -67,6 +69,7 @@ type volumeBackupRecord struct {
 	Error  string                    `json:"error,omitempty"`
 	Failed *time.Time                `json:"failed,omitempty"`
 	Copy   *ApplianceCopy            `json:"copy,omitempty"`
+	Export *ExportRecord             `json:"export,omitempty"`
 }
 
 func (a *Appliance) applianceCopy() backupstore.Dir {
@@ -141,7 +144,7 @@ func (a *Appliance) VolumeBackups() *VolumeBackupStatus {
 	rec := a.volumeBackupRecord()
 	st := &VolumeBackupStatus{
 		Claim: backupstore.Namespace + "/" + backupstore.Claim,
-		Last:  rec.Last, Error: rec.Error, Failed: rec.Failed, Copy: rec.Copy,
+		Last:  rec.Last, Error: rec.Error, Failed: rec.Failed, Copy: rec.Copy, Export: rec.Export,
 	}
 	// The first snapshot is due from the setup on.
 	next := keys.Since
@@ -311,6 +314,11 @@ func (a *Appliance) backUpToVolume(ctx context.Context, keys *volumeBackupKeys, 
 	stored, err := a.storeOnVolume(ctx, keys, file, taken)
 	rec := a.volumeBackupRecord()
 	rec.Copy = a.copyOnAppliance(ctx, keys, file, taken)
+	export, exportErr := a.exportToVolume(ctx, keys, taken.Name)
+	if exportErr == nil {
+		rec.Export = export
+	}
+	err = errors.Join(err, exportErr)
 	if err != nil {
 		now := a.now()
 		rec.Error, rec.Failed = err.Error(), &now

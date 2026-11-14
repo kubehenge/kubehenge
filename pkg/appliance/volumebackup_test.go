@@ -2,7 +2,9 @@ package appliance
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ func volumeAppliance(t *testing.T, now *time.Time) (*Appliance, backupstore.Dir,
 	a, _ := backupAppliance(t, bucket)
 	vol := backupstore.Dir{Root: t.TempDir()}
 	a.OpenVolume = func(context.Context) (provisioner.ObjectStore, error) { return vol, nil }
+	a.ExportObjects = func(context.Context) ([]byte, error) { return []byte(exportedObjects), nil }
 	a.Now = func() time.Time { return *now }
 	admin, err := a.Credential(t.Context(), passphrase, "talosconfig")
 	if err != nil {
@@ -74,6 +77,66 @@ func TestVolumeBackupsRunWithNoInput(t *testing.T) {
 	if a.EtcdBackupDue(last.Time.Add(volumeBackupEvery - time.Minute)) {
 		t.Error("due before its 6 hours")
 	}
+}
+
+const exportedObjects = "apiVersion: cluster.x-k8s.io/v1beta2\nkind: Cluster\nmetadata:\n  name: web\n"
+
+func TestExportGoesWithEachSnapshot(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	a, vol, _ := volumeAppliance(t, &now)
+	var last *provisioner.EtcdSnapshot
+	for range 2 {
+		taken, err := a.TakeEtcdSnapshot(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = taken
+		now = now.Add(volumeBackupEvery)
+	}
+	identity, err := openIdentity(strings.NewReader(mustDecode(t, a.volumeBackupKeys().Sealed)), passphrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []struct {
+		store provisioner.ObjectStore
+		count int
+	}{{vol, 2}, {a.applianceCopy(), 1}} {
+		keys, err := newestFirst(ctx, s.store, exportFolder)
+		if err != nil || len(keys) != s.count || keys[0] != exportKey(last.Name) {
+			t.Fatalf("exports %v (%v), want %d, newest for %s", keys, err, s.count, last.Name)
+		}
+		r, err := s.store.Get(ctx, keys[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, err := openExport(r, identity)
+		_ = r.Close()
+		if err != nil || e.Objects != exportedObjects || e.Snapshot != last.Name || e.Settings == nil || len(e.Settings.Nodes) == 0 {
+			t.Fatalf("the export reads back as %+v, %v", e, err)
+		}
+	}
+	if st := a.EtcdBackups().Volume; st.Export == nil || st.Export.Name != path.Base(exportKey(last.Name)) {
+		t.Fatalf("the status shows the export as %+v", st.Export)
+	}
+
+	a.ExportObjects = func(context.Context) ([]byte, error) { return nil, errors.New("clusters: forbidden") }
+	if _, err := a.TakeEtcdSnapshot(ctx); err == nil {
+		t.Fatal("a backup whose export failed succeeded")
+	}
+	if st := a.EtcdBackups().Volume; !strings.Contains(st.Error, "exporting Kubehenge's objects: clusters: forbidden") || st.Failed == nil {
+		t.Fatalf("a failed export shows as %+v", st)
+	}
+}
+
+func mustDecode(t *testing.T, s string) string {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }
 
 func TestApplySetsUpVolumeBackups(t *testing.T) {

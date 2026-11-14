@@ -236,6 +236,9 @@ const (
 // Run prepares the server and keeps its sessions, upgrades and Headlamp up to date until ctx ends.
 // It returns once each of them has stopped.
 func (s *Server) Run(ctx context.Context) {
+	if s.Appliance != nil {
+		s.Appliance.ExportObjects = s.exportObjects
+	}
 	s.init()
 	var wg sync.WaitGroup
 	wg.Go(func() { s.autoUpgrade(ctx) })

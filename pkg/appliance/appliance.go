@@ -72,6 +72,9 @@ type Appliance struct {
 	// OpenVolume reaches the store on the management cluster's backup volume, through the
 	// interface's kubeconfig when nil.
 	OpenVolume func(ctx context.Context) (provisioner.ObjectStore, error)
+	// ExportObjects reads Kubehenge's own objects from the management cluster as a YAML stream, for
+	// the export taken with each snapshot onto the backup volume.
+	ExportObjects func(ctx context.Context) ([]byte, error)
 	// CopyCap bounds the appliance's copy of the latest backups, ApplianceCopyCap when 0.
 	CopyCap int64
 	Now     func() time.Time
