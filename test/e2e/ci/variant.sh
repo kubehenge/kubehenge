@@ -55,8 +55,19 @@ variant() {
                 ;;
             *) ;;
         esac
+        case ${variant_option} in
+            recreate-bucket | recreate-volume)
+                if [ "${variant_test}" != appliance ]; then
+                    echo "only the appliance recreates its management cluster, so ${variant_test} takes no ${variant_option}" >&2
+                    return 2
+                fi
+                printf 'export KUBEHENGE_E2E_RECREATE=%s\n' "${variant_option#recreate-}"
+                continue
+                ;;
+            *) ;;
+        esac
         if [ "${variant_workload}" = false ]; then
-            echo "test ${variant_test} takes no option but management-<MiB>, not ${variant_option}" >&2
+            echo "test ${variant_test} takes no option but management-<MiB> or, for appliance, recreate-bucket or recreate-volume, not ${variant_option}" >&2
             return 2
         fi
         case ${variant_option} in

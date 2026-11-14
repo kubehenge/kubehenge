@@ -58,6 +58,9 @@ lanes_and_parts=$(sh "${ci}/scope.sh" --all | jq -j '(.[] | . + " "), "|", (.[] 
 lanes=${lanes_and_parts%%|*}
 # The dual-stack lane is the nightly run's own, kept out of the rotation's checks below.
 dual_stack=kubeadm+calico+dual-stack
+# The recreations of the management cluster, from a bucket and from the backup volume, run nightly as
+# the appliance test with an option.
+recreates='appliance+recreate-bucket appliance+recreate-volume'
 queue=" ${lanes} management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade "
 all_lanes=" ${lanes_and_parts#*|}"
 node_oses=" $(jq -j '.available[] | . + " "' "${chart}/files/node-oses.json")"
@@ -82,7 +85,7 @@ while [ "${night}" -lt "${nights}" ]; do
             ;;
     esac
     tests=" ${parsed#* }"
-    for t in ${queue} ${dual_stack}; do
+    for t in ${queue} ${dual_stack} ${recreates}; do
         case ${tests} in
             *" ${t} "*) ok ;;
             *) bad "night ${night} leaves ${t} out" ;;
@@ -91,6 +94,10 @@ while [ "${night}" -lt "${nights}" ]; do
     # Every lane is one a pull request runs, its tests without their options, or one of the
     # nightly run's own: none runs only at night by accident.
     for lane in ${tests}; do
+        case " ${recreates} " in
+            *" ${lane} "*) continue ;;
+            *) ;;
+        esac
         strip_options "${lane}"
         case ${queue} in
             *" ${bare} "*) ok ;;
@@ -99,7 +106,7 @@ while [ "${night}" -lt "${nights}" ]; do
     done
     for lane in ${tests}; do
         case ${lane} in
-            "${dual_stack}") continue ;;
+            "${dual_stack}" | appliance+recreate-*) continue ;;
             *+*) ;;
             *) continue ;;
         esac
@@ -239,6 +246,8 @@ refused 'k3s+Cilium'
 refused appliance+management-3584
 refused appliance-upgrade+management-3584
 refused appliance-upgrade+calico
+refused management-cluster+recreate-bucket
+refused appliance-upgrade+recreate-volume
 refused management-cluster+management-
 refused management-cluster+management-0
 refused management-cluster+management-035

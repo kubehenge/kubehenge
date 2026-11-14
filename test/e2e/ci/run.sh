@@ -351,6 +351,7 @@ case "${test}" in
         exec docker exec -e KUBEHENGE_E2E_APPLIANCE_ID=900 -e KUBEHENGE_E2E_APPLIANCE_ADDRESS=172.20.99.40/24 \
             -e KUBEHENGE_E2E_GATEWAY="${KUBEHENGE_E2E_GATEWAY}" -e KUBEHENGE_E2E_DNS="${KUBEHENGE_E2E_DNS}" \
             -e KUBEHENGE_E2E_STORAGE=local -e KUBEHENGE_E2E_S3_ADDRESS=172.20.99.1 \
+            -e KUBEHENGE_E2E_RECREATE="${KUBEHENGE_E2E_RECREATE:-}" \
             -e KUBEHENGE_E2E_RELEASE_KEY=/root/kubehenge/release.key \
             "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \
             /root/kubehenge/kubehenge_0.0.1_linux_amd64.tar.gz /root/kubehenge/kubehenge_0.0.2_linux_amd64.tar.gz \
