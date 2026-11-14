@@ -182,7 +182,7 @@ import { quantity, record, text, texts } from "./values";
 
 export { nodeCustomisationOf } from "./node-customisation";
 
-export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
+export const steps = ["General", "Network", "Machines", "Add-ons", "Policies", "Identity providers", "Confirm"] as const;
 export type Step = (typeof steps)[number];
 
 export interface Machine {
@@ -2137,10 +2137,6 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (certificates.length > 0) {
     p.certificates = certificates.join(" ");
   }
-  const labels = variable(c, "namespaceLabels") ? parseLabels(form.namespaceLabels).problem : undefined;
-  if (labels !== undefined) {
-    p.namespaceLabels = labels;
-  }
   if (variable(c, "gitops") !== undefined) {
     const g = gitOpsProblems(form.gitops);
     for (const field of gitOpsFields) {
@@ -2152,11 +2148,17 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   return {
     ...p,
-    ...egressFormProblems(form, c),
     ...backupsProblems(form, c),
     ...etcdSnapshotsProblems(form, c),
     ...accessKeyProblems(form, c),
   };
+}
+
+// policyProblems are what keeps the policies step from being complete: the egress proxy and the
+// namespace labels.
+function policyProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const labels = variable(c, "namespaceLabels") ? parseLabels(form.namespaceLabels).problem : undefined;
+  return { ...egressFormProblems(form, c), ...(labels === undefined ? {} : { namespaceLabels: labels }) };
 }
 
 // egressFormProblems are what is wrong with the egress proxy the form names, by field.
@@ -2266,6 +2268,9 @@ export function fieldProblems(step: Step, form: Form, c: ClusterClass | undefine
     }
     case "Add-ons": {
       return addOnProblems(form, c);
+    }
+    case "Policies": {
+      return policyProblems(form, c);
     }
     case "Identity providers": {
       const o = oidcProblems(form.oidc);

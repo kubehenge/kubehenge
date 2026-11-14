@@ -2156,6 +2156,7 @@ describe("create", () => {
     expect(within(screen.getByRole("group", { name: "Control plane" })).getByLabelText("Cores")).toHaveValue(4);
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
     // The class's default providers come pre-filled. Adding one more is checked before going on.
     expect(screen.getByLabelText("Issuer URL")).toHaveValue("https://sso.example");
     await user.click(screen.getByRole("button", { name: "Add identity provider" }));
@@ -2268,6 +2269,7 @@ describe("create", () => {
     expect(screen.getByRole("checkbox", { name: /Install Rancher/u })).toHaveAccessibleDescription(
       "Needs Sys.Modify on the workload pool",
     );
+    await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("button", { name: "Add identity provider" })).toBeDisabled();
     expect(screen.getByLabelText("Issuer URL")).toBeDisabled();

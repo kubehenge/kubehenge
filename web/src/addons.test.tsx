@@ -244,7 +244,7 @@ const wizard = (): ReturnType<typeof fakeServer> => {
     "GET /api/classes": () => ({ body: [rke2] }),
     "GET /api/proxmox/storages": () => ({
       body: [
-        { storage: "local-lvm", node: "pve1", shared: false, content: ["images"], avail: 1, total: 2, usable: true },
+        { storage: "local-lvm", node: "pve1", shared: false, content: ["images"], avail: 2 ** 40, total: 2 ** 41, usable: true },
       ],
     }),
     "GET /api/proxmox/nodes": () => ({ body: [{ node: "pve1", online: true }] }),
@@ -273,6 +273,11 @@ const toAddOns = async (user: ReturnType<typeof userEvent.setup>): Promise<void>
   await user.click(screen.getByRole("button", { name: "Next" }));
 };
 
+const toPolicies = async (user: ReturnType<typeof userEvent.setup>): Promise<void> => {
+  await toAddOns(user);
+  await user.click(screen.getByRole("button", { name: "Next" }));
+};
+
 const created = (calls: ReturnType<typeof fakeServer>): Record<string, unknown> =>
   record(record(calls.find((c) => c.key === "POST /api/clusters")?.body)["variables"]);
 
@@ -284,6 +289,7 @@ describe("add-on installs of a new cluster", () => {
     await toAddOns(user);
     const certificates = within(screen.getByRole("group", { name: "Certificates" }));
     await user.click(certificates.getByRole("checkbox", { name: "Use existing cert-manager" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
     const podSecurity = within(screen.getByRole("group", { name: "Pod security" }));
     await user.type(podSecurity.getByLabelText("Namespace labels"), "team=payments{Enter}env = prod");
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -299,12 +305,26 @@ describe("add-on installs of a new cluster", () => {
     });
   });
 
+  it("keeps pod security on its own Policies step, after the add-ons", async () => {
+    wizard();
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await toAddOns(user);
+    expect(screen.getByRole("group", { name: "Certificates" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Pod security" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByRole("button", { name: "Policies" })).toHaveAttribute("aria-current", "step");
+    expect(screen.getByRole("group", { name: "Pod security" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Certificates" })).not.toBeInTheDocument();
+  });
+
   it("sends neither while they are left alone", async () => {
     const calls = wizard();
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await toAddOns(user);
     expect(screen.getByRole("checkbox", { name: "Use existing cert-manager" })).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
@@ -318,7 +338,7 @@ describe("add-on installs of a new cluster", () => {
     wizard();
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await toAddOns(user);
+    await toPolicies(user);
     const labels = screen.getByLabelText("Namespace labels");
     await user.type(labels, "team");
     expect(labels).toHaveAccessibleDescription(/^Line 1 needs key=value/u);
@@ -336,7 +356,7 @@ describe("add-on installs of a new cluster", () => {
     wizard();
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await toAddOns(user);
+    await toPolicies(user);
     const labels = screen.getByLabelText("Namespace labels");
     await user.click(labels);
     await user.paste(Array.from({ length: maxNamespaceLabels + 1 }, (_, i) => `k${i}=v`).join("\n"));

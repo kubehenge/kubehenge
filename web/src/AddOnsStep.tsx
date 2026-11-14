@@ -662,25 +662,32 @@ function AddonCards({
           <GitOpsChoices form={form} set={set} shown={shown} canTrust={canTrust} />
         </AddonCard>
       )}
-      {variable(cls, "egressProxy") && (
-        <AddonCard mib={0} on={form.egress.mode !== "management"}>
-          <EgressFields
-            value={form.egress}
-            managementProxy={hasManagementProxy(cls)}
-            onChange={(e) => set("egress", e)}
-            problems={Object.fromEntries(egressFields.map((f) => [f, shown(`egress.${f}`)]))}
-          />
-        </AddonCard>
-      )}
     </div>
   );
 }
 
 export function AddOnsStep(props: AddOnsProps): JSX.Element {
-  const { form, set, cls, shown } = props;
   return (
     <>
       <AddonCards step={props} />
+      <AddonRoom form={props.form} cls={props.cls} />
+    </>
+  );
+}
+
+/** PoliciesStep holds what every node and workload of the cluster is held to: the proxy, hardening, pod security and upgrades. */
+export function PoliciesStep(props: AddOnsProps): JSX.Element {
+  const { form, set, cls, shown } = props;
+  return (
+    <>
+      {variable(cls, "egressProxy") && (
+        <EgressFields
+          value={form.egress}
+          managementProxy={hasManagementProxy(cls)}
+          onChange={(e) => set("egress", e)}
+          problems={Object.fromEntries(egressFields.map((f) => [f, shown(`egress.${f}`)]))}
+        />
+      )}
       {variable(cls, "cis") && (
         <>
           <label className="check">
@@ -717,8 +724,6 @@ export function AddOnsStep(props: AddOnsProps): JSX.Element {
           )}
         </fieldset>
       )}
-      <AddonRoom form={form} cls={cls} />
-
       {variable(cls, "upgrades") && (
         <>
           <Field

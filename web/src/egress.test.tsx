@@ -133,8 +133,8 @@ describe("the egress proxy settings", () => {
     const ownRows = Object.fromEntries(summary(withOwn, cls));
     expect(ownRows).toMatchObject({ "Egress proxy": "http://proxy.example:3128, 1 exception" });
     expect(Object.fromEntries(summary(form, bare))).not.toHaveProperty("Egress proxy");
-    expect(fieldProblems("Add-ons", wrongUrl, cls)).toHaveProperty("egress.url");
-    expect(fieldProblems("Add-ons", tooMany, cls)).toHaveProperty("egress.noProxy");
+    expect(fieldProblems("Policies", wrongUrl, cls)).toHaveProperty("egress.url");
+    expect(fieldProblems("Policies", tooMany, cls)).toHaveProperty("egress.noProxy");
     expect(fieldProblems("Add-ons", wrongUrl, bare)).toStrictEqual({});
   });
 });

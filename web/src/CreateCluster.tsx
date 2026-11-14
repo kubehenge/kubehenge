@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 
-import { AddOnsStep } from "./AddOnsStep";
+import { AddOnsStep, PoliciesStep } from "./AddOnsStep";
 import { api, bridgesOf, dnsOf } from "./api";
 import { clusterPath } from "./cluster-paths";
 import {
@@ -437,6 +437,16 @@ export function CreateCluster({
               canTrust={canTrust}
               namespace={namespaceOf(form, namespaces)}
               showAll={attempted.has("Add-ons")}
+            />
+          )}
+          {step === "Policies" && (
+            <PoliciesStep
+              form={form}
+              set={set}
+              shown={shown}
+              cls={cls}
+              canTrust={canTrust}
+              namespace={namespaceOf(form, namespaces)}
             />
           )}
           {step === "Identity providers" && (
