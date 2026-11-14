@@ -25,7 +25,7 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
  	log.V(2).Info("Located chart at path", "path", cp)
 
  	log.V(2).Info("Writing values to file")
-@@ -418,6 +415,93 @@ func verifyChart(chartPath, repoURL, version, digest string) error {
+@@ -418,6 +415,99 @@ func verifyChart(chartPath, repoURL, version, digest string) error {
  	return nil
  }
 
@@ -62,6 +62,12 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
 +			log.V(2).Info("Using cached chart", "path", cached)
 +
 +			return cached, nil
++		}
++		if !errors.Is(err, os.ErrNotExist) {
++			log.Info("Removing cached chart", "path", cached, "reason", err.Error())
++			if err := os.Remove(cached); err != nil && !errors.Is(err, os.ErrNotExist) {
++				return "", err
++			}
 +		}
 +	}
 +
@@ -119,7 +125,7 @@ diff --git a/internal/helm_client.go b/internal/helm_client.go
  // UpgradeHelmReleaseIfChanged upgrades a Helm release. The boolean refers to if an upgrade was attempted.
  func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig *rest.Config, credentialsPath, caFilePath string, spec addonsv1alpha1.HelmReleaseProxySpec, existing *helmRelease.Release) (*helmRelease.Release, error) {
  	log := ctrl.LoggerFrom(ctx)
-@@ -449,14 +533,10 @@ func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig
+@@ -449,14 +539,10 @@ func (c *HelmClient) UpgradeHelmReleaseIfChanged(ctx context.Context, restConfig
  	upgradeClient.Version = locateVersion(spec.RepoURL, version, digest)
  	upgradeClient.Namespace = spec.ReleaseNamespace
 
