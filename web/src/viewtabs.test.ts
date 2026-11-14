@@ -18,7 +18,7 @@ describe("a cluster's tabs on a phone", () => {
 
 describe("a Proxmox VE node's tile", () => {
   it("wraps its count below the name instead of cutting the name", () => {
-    const head = /\n\.host-head \{(?<body>[^}]*)\}/u.exec(styles)?.groups?.["body"] ?? "";
+    const head = /\n\.host-head \{(?<body>[^}]*)\}/u.exec(styles)?.groups?.["body"];
     expect(head).toContain("flex-wrap: wrap");
   });
 });

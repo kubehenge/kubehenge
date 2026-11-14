@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { fakeServer } from "./fake-server";
+import { fakeServer, held } from "./fake-server";
 import type { Cluster } from "./types";
 
 const created = new Date(Date.now() - 3_600_000).toISOString();
@@ -30,15 +30,12 @@ const web: Cluster = {
 
 describe("the Scale button before the cluster has loaded", () => {
   it("opens the dialog on the cluster the list has, and keeps it open when the cluster loads", async () => {
-    let load: (c: Cluster) => void = () => undefined;
-    const loaded = new Promise<Cluster>((resolve) => {
-      load = resolve;
-    });
+    const detail = held();
     window.history.replaceState(null, "", "/clusters/default/web");
     fakeServer({
       "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
       "GET /api/clusters": { body: [web] },
-      "GET /api/clusters/default/web": async () => ({ body: await loaded }),
+      "GET /api/clusters/default/web": detail.route,
       "GET /api/runs": { body: [] },
       "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] },
     });
@@ -46,7 +43,7 @@ describe("the Scale button before the cluster has loaded", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Scale" }));
     await expect(screen.findByRole("dialog", { name: "Scale web" })).resolves.toBeInTheDocument();
-    load({ ...web, generation: 2 });
+    detail.answer({ body: { ...web, generation: 2 } });
     await waitFor(() => expect(screen.getByRole("dialog", { name: "Scale web" })).toBeInTheDocument());
   });
 });
