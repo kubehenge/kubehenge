@@ -209,6 +209,8 @@ export interface Form {
   /** Empty while the interface creates clusters in one namespace only. */
   namespace: string;
   name: string;
+  /** The names of the clusters in the form's namespace, which a new name may not repeat. */
+  taken: string[];
   className: string;
   /** The node OS as one word, such as almalinux-10. Empty while the class offers none. */
   nodeOS: string;
@@ -876,6 +878,7 @@ export function withBridgeNetwork(f: Form, net: BridgeNetwork | undefined, touch
 export const newForm = (): Form => ({
   from: "",
   namespace: "",
+  taken: [],
   name: "",
   className: "",
   nodeOS: "",
@@ -1747,9 +1750,14 @@ function nameProblem(name: string): string | undefined {
   return name.endsWith("-") ? "End the name with a letter or digit" : undefined;
 }
 
+// nameTaken tells that a cluster of the form's namespace already has the name: the cluster could
+// not be created, and the last step would only say so as a warning.
+const nameTaken = (form: Form): string | undefined =>
+  form.taken.includes(form.name) ? `${form.name} is in use. Enter another name.` : undefined;
+
 function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
-  const name = nameProblem(form.name);
+  const name = nameProblem(form.name) ?? nameTaken(form);
   if (name !== undefined) {
     p.name = name;
   }

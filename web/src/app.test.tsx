@@ -1086,6 +1086,7 @@ describe("create", () => {
     rancherHostname: "",
     rancherRegister: false,
     rancherExists: true,
+    taken: [],
     certificates: newForm().certificates,
     namespaceLabels: "",
     existingCertManager: false,
@@ -1931,6 +1932,47 @@ describe("create", () => {
     expect(screen.getByLabelText("Distribution")).toHaveAttribute("aria-invalid", "true");
 
     await user.type(name, "lab");
+    expect(name).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("refuses a name another cluster has on the first step", async () => {
+    window.history.replaceState(null, "", "/clusters/new");
+    fakeServer({
+      "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
+      "GET /api/classes": () => ({ body: [rke2] }),
+      "GET /api/clusters": () => ({
+        body: [
+          {
+            namespace: "clusters",
+            name: "web",
+            class: "kubehenge-rke2",
+            distribution: "rke2",
+            version: "v1.36.5+rke2r1",
+            generation: 1,
+            created: "2026-10-01T00:00:00Z",
+            deleting: false,
+            phase: "Provisioned",
+            available: true,
+            conditions: [],
+            controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workers: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workerPools: [{ name: "md-0", class: "worker", replicas: 1 }],
+            variables: {},
+            pool: "/pool/kubehenge/clusters.web",
+            allowed: { change: true, kubeconfig: true },
+          },
+        ],
+      }),
+      "GET /api/proxmox/storages": () => ({ body: [] }),
+      "GET /api/proxmox/nodes": () => ({ body: [] }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const name = await screen.findByLabelText("Name");
+    await screen.findByLabelText("Start from");
+    await user.type(name, "web");
+    await waitFor(() => expect(name).toHaveAccessibleDescription("web is in use. Enter another name."));
+    await user.type(name, "2");
     expect(name).not.toHaveAttribute("aria-invalid");
   });
 

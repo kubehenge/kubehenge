@@ -216,10 +216,12 @@ export function CreateCluster({
     : bridgeNetwork(bridge, bridgesByNode, dnsByNode);
   // Registering needs a Rancher that one of the clusters runs.
   const rancherExists = clusters.some((x) => record(x.variables["rancher"])["install"] === true);
+  const namespace = namespaces.length > 1 ? namespaceOf(entered, namespaces) : "";
   const chosen: Form = withBackupChoices(
     {
       ...withBridgeNetwork(withTalosRelease(entered, talos, offered), net, kept),
-      namespace: namespaces.length > 1 ? namespaceOf(entered, namespaces) : "",
+      namespace,
+      taken: clusters.filter((x) => namespace === "" || x.namespace === namespace).map((x) => x.name),
       rancherExists,
       rancherRegister: rancherExists && entered.rancherRegister,
       bridge,
