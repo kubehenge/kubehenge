@@ -238,7 +238,15 @@ const wizard = (store: Route): ReturnType<typeof fakeServer> => {
     "GET /api/classes": () => ({ body: [rke2] }),
     "GET /api/proxmox/storages": () => ({
       body: [
-        { storage: "local-lvm", node: "pve1", shared: false, content: ["images"], avail: 1, total: 2, usable: true },
+        {
+          storage: "local-lvm",
+          node: "pve1",
+          shared: false,
+          content: ["images"],
+          avail: 500 * 2 ** 30,
+          total: 1024 * 2 ** 30,
+          usable: true,
+        },
       ],
     }),
     "GET /api/proxmox/nodes": () => ({ body: [{ node: "pve1", online: true }] }),
@@ -375,6 +383,8 @@ describe("certificates of an ACME server with a binding, and of an issuer you ru
     await user.type(certificates.getByLabelText("ACME server"), "https://ca.example/acme/directory");
     await user.type(certificates.getByLabelText("Key ID"), "kid-1");
     await user.type(certificates.getByLabelText("HMAC key"), "hmac-secret");
+    // Policies, Identity providers, Confirm.
+    await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByText("ACME HMAC key")).toBeInTheDocument();
@@ -413,6 +423,8 @@ const createWithToken = async (): Promise<void> => {
   expect(certificates.getByLabelText("Domain")).toHaveAccessibleDescription(/^Enter a domain name/u);
   await user.type(certificates.getByLabelText("Domain"), "apps.example.com");
   await user.type(certificates.getByLabelText("API token"), "zone-token");
+  // Policies, Identity providers, Confirm.
+  await user.click(screen.getByRole("button", { name: "Next" }));
   await user.click(screen.getByRole("button", { name: "Next" }));
   await user.click(screen.getByRole("button", { name: "Next" }));
   expect(screen.getByText("Stored once created")).toBeInTheDocument();
