@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"net/netip"
@@ -46,12 +47,12 @@ func poolScale(md *clusterv1.MachineDeploymentTopology) (workerBounds, bool, err
 		return workerBounds{}, false, nil
 	}
 	if !hasMin || !hasMax {
-		return workerBounds{}, true, fmt.Errorf("pool %s: set both %s and %s", md.Name, AutoscalerMinAnnotation, AutoscalerMaxAnnotation)
+		return workerBounds{}, true, fmt.Errorf("set both %s and %s", AutoscalerMinAnnotation, AutoscalerMaxAnnotation)
 	}
 	lo, err1 := strconv.ParseInt(minValue, 10, 32)
 	hi, err2 := strconv.ParseInt(maxValue, 10, 32)
 	if err1 != nil || err2 != nil {
-		return workerBounds{}, true, fmt.Errorf("pool %s: minimum and maximum workers are whole numbers", md.Name)
+		return workerBounds{}, true, errors.New("minimum and maximum workers are whole numbers")
 	}
 	return workerBounds{least: int32(lo), most: int32(hi)}, true, nil
 }
@@ -92,7 +93,8 @@ func validateAutoscaling(c *clusterv1.Cluster) field.ErrorList {
 		case !ok:
 			continue
 		case err != nil:
-			errs = append(errs, field.Invalid(path.Child("metadata", "annotations"), md.Metadata.Annotations, err.Error()))
+			errs = append(errs, field.Invalid(path.Child("metadata", "annotations"), md.Metadata.Annotations,
+				"pool "+PoolLabel(md.Name, TopologyPools(c))+": "+err.Error()))
 			continue
 		case lo < 0 || hi < 1 || lo > hi || hi > MaxAutoscaledWorkers:
 			errs = append(errs, field.Invalid(path.Child("metadata", "annotations"), fmt.Sprintf("%d to %d", lo, hi),

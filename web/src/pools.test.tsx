@@ -232,7 +232,7 @@ describe("the pools", () => {
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({
-        pools: { gpu: { replicas: 1, machine: { cores: 2, memoryMiB: 16_384, diskGiB: 40 } } },
+        pools: { gpu: { add: true, replicas: 1, machine: { cores: 2, memoryMiB: 16_384, diskGiB: 40 } } },
       }),
     );
   });
@@ -258,6 +258,7 @@ describe("the pools", () => {
       expect(sent(calls)).toStrictEqual({
         pools: {
           gpu: {
+            add: true,
             replicas: 1,
             machine: { cores: 2, memoryMiB: 8192, diskGiB: 40 },
             nodes: {
@@ -268,6 +269,16 @@ describe("the pools", () => {
         },
       }),
     );
+  });
+
+  it("refuse the default pool's label as a new pool's name where it is typed", async () => {
+    const { calls, user } = await machinesView();
+    await user.click(screen.getByRole("button", { name: "Add pool…" }));
+    const dialog = screen.getByRole("dialog", { name: "Add pool to web" });
+    await user.type(within(dialog).getByLabelText("Name"), "workers");
+    expect(within(dialog).getByLabelText("Name")).toHaveAccessibleDescription("workers is the default pool's name");
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
+    expect(calls.filter((c) => c.key.startsWith("PATCH"))).toStrictEqual([]);
   });
 
   it("show a new pool's node problem only once a field was touched", async () => {
@@ -313,6 +324,13 @@ describe("the pools", () => {
   it("refuse a name the server would", () => {
     expect(poolNameProblem(web, "GPU")).toBe("Lowercase letters, digits and dashes, from a letter");
     expect(poolNameProblem(web, "md-0")).toBe("A pool has this name");
+    // The default pool goes by Workers, so a new pool of that name would change it instead.
+    expect(poolNameProblem(web, "workers")).toBe("workers is the default pool's name");
+    const withWorkers: Cluster = {
+      ...web,
+      workerPools: [...web.workerPools, { name: "workers", class: "worker", replicas: 1 }],
+    };
+    expect(poolNameProblem(withWorkers, "workers")).toBe("A pool has this name");
     expect(poolNameProblem(web, "p".repeat(42))).toBe("At most 41 characters for this cluster");
     expect(poolNameProblem(web, "gpu-2")).toBeUndefined();
   });

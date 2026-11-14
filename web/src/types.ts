@@ -186,6 +186,8 @@ export interface MachineSize {
 
 /** A worker pool to add or change: its workers, and its own size, or the cluster's with null. */
 export interface PoolChange {
+  /** Adds the pool, so that a name the cluster's pools already go by is refused. */
+  add?: boolean;
   replicas?: number;
   machine?: MachineSize | null;
   /** Replaces all the pool's timeouts. Those left out are the class's. */

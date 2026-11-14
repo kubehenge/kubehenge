@@ -23,6 +23,12 @@ const labelled = (name: string, pools: readonly { name: string }[]): boolean =>
 export const poolLabel = (name: string, pools: readonly { name: string }[]): string =>
   labelled(name, pools) ? defaultLabel : name;
 
+/** isDefaultLabel is whether a name, in any case, stands for the default pool by its label. */
+export const isDefaultLabel = (name: string, pools: readonly { name: string }[]): boolean =>
+  name.toLowerCase() === defaultLabel.toLowerCase() &&
+  pools.some((p) => p.name === defaultPool) &&
+  labelled(defaultPool, pools);
+
 /** poolSuffix tells a pool from the others in a label, and leaves the default pool's unmarked. */
 export const poolSuffix = (name: string, pools: readonly { name: string }[]): string =>
   labelled(name, pools) ? "" : ` (${name})`;

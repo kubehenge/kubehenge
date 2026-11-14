@@ -103,3 +103,46 @@ func TestAChangeNamingTheDefaultPoolTwiceIsRefused(t *testing.T) {
 		t.Errorf("pool = %+v, want it as it was", pool)
 	}
 }
+
+// The Add pool dialog's change: a pool added under the default pool's label would change the
+// default pool instead.
+func TestAPoolAddedUnderTheDefaultPoolsLabelIsRefused(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, cluster("default", "one"))
+	b := h.browser()
+	b.signIn("dev@pve")
+	const size = `"replicas":1,"machine":{"cores":2,"memoryMiB":4096,"diskGiB":30}`
+	for _, name := range []string{"workers", "Workers"} {
+		rec := b.do("PATCH", "/api/clusters/default/one", `{"pools":{"`+name+`":{"add":true,`+size+`}}}`)
+		expect(t, rec, http.StatusUnprocessableEntity)
+		if !strings.Contains(rec.Body.String(), name+" is the default pool's name") {
+			t.Errorf("adding %s: %s", name, rec.Body.String())
+		}
+	}
+	rec := b.do("PATCH", "/api/clusters/default/one", `{"pools":{"md-0":{"add":true,`+size+`}}}`)
+	expect(t, rec, http.StatusUnprocessableEntity)
+	pools := poolsByName(t, h)
+	if md := pools[workerPool]; len(pools) != 1 || md.Replicas == nil || *md.Replicas != 2 || len(md.Variables.Overrides) != 0 {
+		t.Errorf("pools %+v, want md-0 alone and as it was", pools)
+	}
+	// Any other name is added as before.
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"pools":{"gpu":{"add":true,`+size+`}}}`), http.StatusOK)
+	if pools = poolsByName(t, h); len(pools) != 2 {
+		t.Errorf("pools %+v, want md-0 and gpu", pools)
+	}
+}
+
+func TestAnAutoscaledPoolIsNamedByItsLabel(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, cluster("default", "one"))
+	b := h.browser()
+	b.signIn("dev@pve")
+	expect(t, b.do("PATCH", "/api/clusters/default/one", `{"autoscaling":{"md-0":{"min":1,"max":4}}}`), http.StatusOK)
+	for _, body := range []string{`{"workerPools":{"workers":3}}`, `{"pools":{"workers":{"replicas":3}}}`} {
+		rec := b.do("PATCH", "/api/clusters/default/one", body)
+		expect(t, rec, http.StatusUnprocessableEntity)
+		if !strings.Contains(rec.Body.String(), "pool Workers is autoscaled") {
+			t.Errorf("%s: %s, want the pool by its label", body, rec.Body.String())
+		}
+	}
+}

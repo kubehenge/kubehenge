@@ -300,16 +300,23 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	}
 	verdicts := demoVerdicts(t, b)
 	// Most of the fleet is healthy, beside a few clusters with something to show.
-	want := map[string]string{"web": verdictHealthy, "ci": verdictHealthy, "data": verdictHealthy, "platform": verdictHealthy, "edge": verdictChanging}
+	want := map[string]string{
+		"web": verdictHealthy, "ci": verdictHealthy, "data": verdictHealthy, "platform": verdictHealthy,
+		"edge": verdictChanging, "payments": verdictDegraded, "staging": verdictDegraded, "legacy": verdictDegraded,
+	}
+	if len(verdicts) != len(want) {
+		t.Errorf("verdicts %v, want one for each of %d clusters", verdicts, len(want))
+	}
 	for name, verdict := range want {
 		if verdicts[name] != verdict {
 			t.Errorf("%s is %s, want %s", name, verdicts[name], verdict)
 		}
 	}
-	for _, name := range []string{"payments", "staging", "legacy"} {
-		if v := verdicts[name]; v == verdictHealthy || v == verdictChanging {
-			t.Errorf("%s is %s, want it to show its problem", name, v)
-		}
+	// Staging is the cluster that shows what the node the appliance cannot reach means.
+	var staging healthView
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/staging/health", ""), &staging)
+	if !slices.ContainsFunc(staging.Attention, func(a attentionView) bool { return a.What == "Proxmox VE node not reachable" }) {
+		t.Errorf("staging lists %q, want the node it cannot reach", attentionWhats(&staging))
 	}
 	var runs []runView
 	decodeDemo(t, b.do("GET", "/api/runs", ""), &runs)

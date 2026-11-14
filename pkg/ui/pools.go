@@ -44,6 +44,9 @@ func poolsNamed[V any](c *clusterv1.Cluster, given map[string]V, spelt map[strin
 // change that names one pool in two ways is refused, since which of its values was meant cannot be
 // told.
 func namePools(c *clusterv1.Cluster, req *changeRequest) string {
+	if problem := addedPoolsProblem(c, req.Pools); problem != "" {
+		return problem
+	}
 	spelt := map[string][]string{}
 	req.WorkerPools = poolsNamed(c, req.WorkerPools, spelt)
 	req.Autoscaling = poolsNamed(c, req.Autoscaling, spelt)
@@ -66,9 +69,30 @@ func namePools(c *clusterv1.Cluster, req *changeRequest) string {
 	return ""
 }
 
+// addedPoolsProblem says what is wrong with the pools a change adds, or returns "". A pool added
+// takes a name of its own: not an existing pool's, and not the default pool's label, which would
+// otherwise change the default pool.
+func addedPoolsProblem(c *clusterv1.Cluster, pools map[string]*poolChange) string {
+	existing := provisioner.TopologyPools(c)
+	for _, name := range slices.Sorted(maps.Keys(pools)) {
+		switch change := pools[name]; {
+		case change == nil || !change.Add:
+			continue
+		case slices.Contains(existing, name):
+			return "the cluster has a pool named " + name
+		case poolNamed(c, name) != name:
+			return name + " is the default pool's name"
+		}
+	}
+	return ""
+}
+
 // poolChange adds a worker pool or changes one: its workers, and its size, which JSON null sets
 // back to the cluster's workerMachine. A pool the cluster lacks is added, and needs its workers.
 type poolChange struct {
+	// Add says the change means to add the pool, so that a name standing for an existing pool is
+	// refused rather than changing that pool.
+	Add      bool            `json:"add,omitempty"`
 	Replicas *int32          `json:"replicas"`
 	Machine  json.RawMessage `json:"machine"`
 	// Timeouts sets the pool's waits for a removed machine's node. It replaces all three, and a
@@ -103,21 +127,22 @@ func applyPools(c *clusterv1.Cluster, pools map[string]*poolChange) string {
 			workers.MachineDeployments = append(workers.MachineDeployments, clusterv1.MachineDeploymentTopology{Class: workerClass, Name: name})
 			i = len(workers.MachineDeployments) - 1
 		}
-		if problem := applyPool(&workers.MachineDeployments[i], change); problem != "" {
+		if problem := applyPool(&workers.MachineDeployments[i], change, provisioner.TopologyPools(c)); problem != "" {
 			return problem
 		}
 	}
 	return ""
 }
 
-// applyPool sets what a change gives one existing pool, or says what is wrong with it.
-func applyPool(md *clusterv1.MachineDeploymentTopology, change *poolChange) string {
+// applyPool sets what a change gives one existing pool, or says what is wrong with it, naming the
+// pool as people know it among pools.
+func applyPool(md *clusterv1.MachineDeploymentTopology, change *poolChange, pools []string) string {
 	if n := change.Replicas; n != nil {
 		if !provisioner.ValidWorkers(*n) {
 			return provisioner.WorkersRule + " in each pool"
 		}
 		if autoscalingOf(md.Metadata.Annotations) != nil {
-			return "pool " + md.Name + " is autoscaled. Switch autoscaling off to set its workers"
+			return "pool " + provisioner.PoolLabel(md.Name, pools) + " is autoscaled. Switch autoscaling off to set its workers"
 		}
 		md.Replicas = n
 	}
