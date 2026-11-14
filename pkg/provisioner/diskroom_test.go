@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -80,7 +81,11 @@ func clonedVM(name string, vmid int64) *unstructured.Unstructured {
 
 func placedOnSpace(t *testing.T, sites *spaceSites, objs ...client.Object) (*Placer, client.Client, *clusterv1.Cluster) {
 	t.Helper()
-	web := diskCluster(t)
+	return placeOnSpace(t, diskCluster(t), sites, objs...)
+}
+
+func placeOnSpace(t *testing.T, web *clusterv1.Cluster, sites *spaceSites, objs ...client.Object) (*Placer, client.Client, *clusterv1.Cluster) {
+	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := clusterv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -166,6 +171,64 @@ func TestPlacerCountsClonedVMsAsMade(t *testing.T) {
 	p.placeAll(t.Context())
 	if cond := spaceCondition(t, c, web); cond != nil {
 		t.Errorf("%s = %+v while every VM is cloned", StorageLacksSpaceCondition, cond)
+	}
+}
+
+// autoscaledOnSpace places web with its pool md-0 autoscaled from 2 to 10 workers, running at 2 with
+// its control plane, every VM made.
+func autoscaledOnSpace(t *testing.T, sites *spaceSites) (*Placer, client.Client, *clusterv1.Cluster, *events.FakeRecorder) {
+	t.Helper()
+	web := diskCluster(t)
+	md := &web.Spec.Topology.Workers.MachineDeployments[0]
+	md.Replicas = nil
+	md.Metadata.Annotations = map[string]string{AutoscalerMinAnnotation: "2", AutoscalerMaxAnnotation: "10"}
+	p, c, web := placeOnSpace(t, web, sites,
+		webMachine("web-cp-a", "", true), webMachine("web-md-a", "md-0", true), webMachine("web-md-b", "md-0", true))
+	rec := events.NewFakeRecorder(10)
+	p.Events = rec
+	return p, c, web, rec
+}
+
+// An autoscaled pool at its minimum with nothing waiting runs as asked: the workers it may grow to
+// are not machines still to be made.
+func TestPlacerLeavesAnAutoscaledPoolAtRestAlone(t *testing.T) {
+	t.Parallel()
+	sites := &spaceSites{}
+	sites.set("lvm", 100)
+	p, c, web, _ := autoscaledOnSpace(t, sites)
+	p.placeAll(t.Context())
+	if cond := spaceCondition(t, c, web); cond != nil {
+		t.Errorf("%s = %+v for a pool at 2 of 2 to 10 with nothing waiting", StorageLacksSpaceCondition, cond)
+	}
+}
+
+// A maximum the storage can never hold is said once in the autoscaler's warning, not as a fault on
+// the cluster, and said again once it has gone and come back.
+func TestPlacerWarnsOnceThatTheAutoscaledMaximumLacksRoom(t *testing.T) {
+	t.Parallel()
+	sites := &spaceSites{}
+	sites.set("lvm", 100)
+	p, c, web, rec := autoscaledOnSpace(t, sites)
+	p.placeAll(t.Context())
+	p.placeAll(t.Context())
+	want := "Warning AutoscalerNoRoom Storage local-lvm (on pve1) reserves each disk's whole size and has 100 GiB free. " +
+		"At the autoscaler's maximum, the machines still to be made need 240 GiB. A worker past that room waits, and the autoscaler gives it up after 30 minutes"
+	got := recorded(rec)
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("events %q, want once %q", got, want)
+	}
+	if cond := spaceCondition(t, c, web); cond != nil {
+		t.Errorf("%s = %+v for a maximum the autoscaler may never reach", StorageLacksSpaceCondition, cond)
+	}
+	sites.set("lvm", 240)
+	p.placeAll(t.Context())
+	if got := recorded(rec); len(got) != 0 {
+		t.Errorf("events %q once the maximum fits", got)
+	}
+	sites.set("lvm", 100)
+	p.placeAll(t.Context())
+	if got := recorded(rec); len(got) != 1 {
+		t.Errorf("events %q once the room is short again, want one", got)
 	}
 }
 

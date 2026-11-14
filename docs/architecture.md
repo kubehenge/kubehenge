@@ -894,7 +894,7 @@ A worker pool with Cluster API's `cluster-api-autoscaler-node-group-min-size` an
 
 The node addresses must hold the control planes, every pool at its most and one machine for a rollout. The validating webhook and `BeforeClusterCreate` refuse a change that makes a shortage worse.
 
-While a pool grows, the controller records `AutoscalerNoRoom` for a worker whose VM Proxmox VE cannot place for want of memory. The autoscaler gives that machine up after 30 minutes.
+While a pool grows, the controller records `AutoscalerNoRoom` for a worker whose VM Proxmox VE cannot place for want of memory. The autoscaler gives that machine up after 30 minutes. The controller records it too where thick storage cannot hold the pools at their maximum.
 
 ### Rights of the autoscaler
 

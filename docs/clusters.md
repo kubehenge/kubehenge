@@ -781,6 +781,7 @@ A pool with 0 as its fewest empties while nothing waits.
 The Scale dialog warns when a pool's remaining workers need more memory than the allowed Proxmox VE nodes have free. It is only advice, since memory frees and fills as other VMs come and go.
 
 - A worker that finds no room waits. The cluster's events show `AutoscalerNoRoom` with the Proxmox VE provider's reason.
+- Thick storage too small for the pools at their maximum also shows `AutoscalerNoRoom`, before any worker waits.
 - After 30 minutes the autoscaler gives the machine up and tries again.
 - Shared storage suits autoscaled pools best, as it lets a new worker start on whichever allowed node has the room.
 

@@ -17,10 +17,13 @@ type Fit struct {
 	Storage string
 }
 
-// PoolFit is one pool's share of a Fit. Name is empty for the control planes.
+// PoolFit is one pool's share of a Fit. Name is empty for the control planes. Machines are those the
+// pool runs without the autoscaler: its replicas, or the autoscaler's minimum. Most is what the
+// autoscaler may grow it to.
 type PoolFit struct {
 	Name     string
 	Machines int64
+	Most     int64
 	DiskGiB  int64
 }
 
@@ -41,17 +44,18 @@ func FitOf(c *clusterv1.Cluster, class *clusterv1.ClusterClass) (Fit, error) {
 	if err != nil {
 		return f, err
 	}
-	f.Pools = append(f.Pools, PoolFit{Machines: controlPlanes, DiskGiB: diskOf(shape)})
+	f.Pools = append(f.Pools, PoolFit{Machines: controlPlanes, Most: controlPlanes, DiskGiB: diskOf(shape)})
 	for i := range topology.Workers.MachineDeployments {
 		md := &topology.Workers.MachineDeployments[i]
 		shape, err = nodeShape(c, class, "workerMachine", md.Variables.Overrides)
 		if err != nil {
 			return f, err
 		}
-		f.Pools = append(f.Pools, PoolFit{Name: md.Name, Machines: int64(workerRange(md).most), DiskGiB: diskOf(shape)})
+		bounds := workerRange(md)
+		f.Pools = append(f.Pools, PoolFit{Name: md.Name, Machines: int64(bounds.least), Most: int64(bounds.most), DiskGiB: diskOf(shape)})
 	}
 	for _, p := range f.Pools {
-		f.DiskGiB += p.Machines * p.DiskGiB
+		f.DiskGiB += p.Most * p.DiskGiB
 	}
 	f.Nodes, f.Storage, err = placementVariables(c)
 	if err != nil {

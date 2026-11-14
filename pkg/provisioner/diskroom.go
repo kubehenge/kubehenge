@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,10 +25,15 @@ const StorageLacksSpaceCondition = "StorageLacksSpace"
 // disksToMake is the disk, in GiB, of the machines a cluster has still to make: in each pool those
 // beyond the machines that exist, and those whose VM is not cloned yet. A cloned VM's disk holds
 // its space already, so the storage's free space leaves it out. vmids are the VM IDs capmox
-// recorded on the cluster's ProxmoxMachines, by name.
-func disksToMake(fit Fit, machines []clusterv1.Machine, vmids map[string]int) int64 {
+// recorded on the cluster's ProxmoxMachines, by name. An autoscaled pool runs its minimum and the
+// machines the autoscaler asked for, which exist as Machines, or its maximum where grown counts.
+func disksToMake(fit Fit, machines []clusterv1.Machine, vmids map[string]int, grown bool) int64 {
 	var need int64
 	for _, pool := range fit.Pools {
+		target := pool.Machines
+		if grown {
+			target = pool.Most
+		}
 		var exist, unmade int64
 		for i := range machines {
 			m := &machines[i]
@@ -39,7 +45,7 @@ func disksToMake(fit Fit, machines []clusterv1.Machine, vmids map[string]int) in
 				unmade++
 			}
 		}
-		need += (max(pool.Machines-exist, 0) + unmade) * pool.DiskGiB
+		need += (max(target-exist, 0) + unmade) * pool.DiskGiB
 	}
 	return need
 }
@@ -59,28 +65,38 @@ func inPool(m *clusterv1.Machine, pool string) bool {
 }
 
 // diskRoom says why the storage has no room for the disks still to be made, or "" when it has, or
-// when a figure is not known.
-func diskRoom(fit Fit, machines []clusterv1.Machine, vmids map[string]int, storages []pve.Storage, nodes []string) string {
-	need := disksToMake(fit, machines, vmids)
-	if fit.Storage == "" || need == 0 {
-		return ""
+// when a figure is not known. growth says the same of the autoscaled pools at their maximum, where
+// only they lack room.
+func diskRoom(fit Fit, machines []clusterv1.Machine, vmids map[string]int, storages []pve.Storage, nodes []string) (short, growth string) {
+	need, grown := disksToMake(fit, machines, vmids, false), disksToMake(fit, machines, vmids, true)
+	if fit.Storage == "" || grown == 0 {
+		return "", ""
 	}
 	free, thick := pve.FreeOn(storages, fit.Storage, nodes)
-	if !thick || free < 0 || need*bytesPerGiB <= free {
-		return ""
+	if !thick || free < 0 || grown*bytesPerGiB <= free {
+		return "", ""
 	}
-	where := "shared"
-	if !slices.ContainsFunc(storages, func(s pve.Storage) bool { return s.Storage == fit.Storage && s.Shared }) {
-		var on []string
-		for _, s := range storages {
-			if s.Storage == fit.Storage && s.Total > 0 && slices.Contains(nodes, s.Node) {
-				on = append(on, s.Node)
-			}
+	where := storageWhere(fit.Storage, storages, nodes)
+	if need*bytesPerGiB > free {
+		return fmt.Sprintf("Storage %s (%s) reserves each disk's whole size and has %d GiB free. The machines still to be made need %d GiB",
+			fit.Storage, where, free/bytesPerGiB, need), ""
+	}
+	return "", fmt.Sprintf("Storage %s (%s) reserves each disk's whole size and has %d GiB free. At the autoscaler's maximum, the machines still to be made need %d GiB. A worker past that room waits, and the autoscaler gives it up after 30 minutes",
+		fit.Storage, where, free/bytesPerGiB, grown)
+}
+
+// storageWhere words where a storage is: shared, or on which of the nodes.
+func storageWhere(storage string, storages []pve.Storage, nodes []string) string {
+	if slices.ContainsFunc(storages, func(s pve.Storage) bool { return s.Storage == storage && s.Shared }) {
+		return "shared"
+	}
+	var on []string
+	for _, s := range storages {
+		if s.Storage == storage && s.Total > 0 && slices.Contains(nodes, s.Node) {
+			on = append(on, s.Node)
 		}
-		where = "on " + strings.Join(on, ", ")
 	}
-	return fmt.Sprintf("Storage %s (%s) reserves each disk's whole size and has %d GiB free. The machines still to be made need %d GiB",
-		fit.Storage, where, free/bytesPerGiB, need)
+	return "on " + strings.Join(on, ", ")
 }
 
 // markDisks records on the cluster that its storage has no room for the disks still to be made,
@@ -110,9 +126,11 @@ func (p *Placer) markDisks(ctx context.Context, c *clusterv1.Cluster, storages [
 			return
 		}
 	}
+	msg, growth := diskRoom(fit, machines.Items, vmids, storages, nodes)
+	p.sayGrowth(c, growth)
 	var cond *metav1.Condition
 	have := meta.FindStatusCondition(c.Status.Conditions, StorageLacksSpaceCondition)
-	if msg := diskRoom(fit, machines.Items, vmids, storages, nodes); msg != "" {
+	if msg != "" {
 		cond = &metav1.Condition{Status: metav1.ConditionTrue, Reason: "NoSpace", Message: msg}
 		if have != nil && have.Message == msg {
 			return
@@ -122,5 +140,26 @@ func (p *Placer) markDisks(ctx context.Context, c *clusterv1.Cluster, storages [
 	}
 	if _, err := markCluster(ctx, p.Client, p.Client, client.ObjectKeyFromObject(c), StorageLacksSpaceCondition, cond); err != nil && !apierrors.IsNotFound(err) && ctx.Err() == nil {
 		log.Error(err, "recording the lack of disk space", "cluster", client.ObjectKeyFromObject(c))
+	}
+}
+
+// sayGrowth warns in an event, once each time it starts or changes, that the storage lacks room for
+// the autoscaled pools at their maximum. The autoscaler may never grow that far, so the cluster
+// carries no condition for it.
+func (p *Placer) sayGrowth(c *clusterv1.Cluster, msg string) {
+	key := client.ObjectKeyFromObject(c).String()
+	if msg == "" {
+		delete(p.growth, key)
+		return
+	}
+	if p.growth[key] == msg {
+		return
+	}
+	if p.growth == nil {
+		p.growth = map[string]string{}
+	}
+	p.growth[key] = msg
+	if p.Events != nil {
+		p.Events.Eventf(c, nil, corev1.EventTypeWarning, "AutoscalerNoRoom", "AddWorker", "%s", msg)
 	}
 }

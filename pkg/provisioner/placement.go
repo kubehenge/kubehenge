@@ -61,6 +61,8 @@ type Placer struct {
 	// different major versions. Unset, none is.
 	Events events.EventRecorder
 	newer  map[string]bool
+	// growth is the room warning last given for each cluster's autoscaled pools, by cluster.
+	growth map[string]string
 	// WorkloadPool names the clusters' VM pools, for reading the interface sizes of their VMs.
 	// Unset, the sizes are not read.
 	WorkloadPool string
