@@ -763,7 +763,7 @@ A pool with 0 as its fewest empties while nothing waits.
 - The autoscaler reads what a new worker would hold from the pool's machines: the cores and 90% of their memory and disk.
 - It also reads the pool's node labels (`node.cluster.x-k8s.io/…`), so a pod's node selector can bring a worker up from none.
 - A pod that asks for more than 90% of a worker's memory is never given one.
-- Control planes stay kept for the control plane while a pool may grow, even while every pool is at none. A cluster whose pools may all go down to none therefore runs no workloads at those times.
+- Control planes keep their taint while a pool may grow, even while every pool is at none. A cluster whose pools may all go down to none therefore runs no workloads at those times.
 
 ### What a cluster must hold
 
@@ -1352,6 +1352,8 @@ The interface says which volumes stay when you switch monitoring off. Delete the
 
 The default StorageClass `proxmox` puts volumes on the cluster's storage. They belong to a VM named `<name>-<hash>-volumes`, tagged `kubehenge` and `volumes`, in the cluster's pool. The VM is never started and exists so that only this cluster's token may attach them. Kubehenge protects it, so Proxmox VE refuses to delete it by hand. A released volume is deleted through that VM.
 
+Kubehenge offers any storage that allows the content type `images` and that you may allocate space on, whatever its type. Only [volume snapshots](#volume-snapshots) limit the type.
+
 Kubernetes does not let a StorageClass change its parameters. Where the default class `proxmox` has other parameters than the cluster's storage asks for, the controller deletes it and the CSI plugin's release creates it again. Volumes keep working. Only volumes created after that get `discard` and `ssd`.
 
 ### Volumes on node-local storage
@@ -1733,7 +1735,7 @@ Each add-on installs into namespaces of its own. A cluster that enforces an admi
 
 ### What the add-ons need from a policy
 
-Namespaces, privileges and registries, as the code and the chart define them. A namespace marked exempt is outside Pod Security Admission in every cluster. Kyverno exempts it only where the cluster runs the add-on. Every image is pinned by its digest.
+The table lists each add-on's namespaces, privileges and registries. A namespace marked exempt is outside Pod Security Admission in every cluster. Kyverno exempts it only where the cluster runs the add-on. Every image is pinned by its digest.
 
 <!-- addon-footprint:start -->
 
