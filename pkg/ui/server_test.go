@@ -1955,7 +1955,12 @@ func TestDeleteAndKubeconfig(t *testing.T) {
 		Namespace: "default", Name: "one-kubeconfig",
 		Data: map[string][]byte{"value": []byte("apiVersion: v1\nkind: Config\n")},
 	}
-	h := newHarness(t, cluster("default", "one"), cluster("default", "two"), secret)
+	// A finalizer keeps the deleted cluster readable, as Cluster API's does.
+	one := cluster("default", "one")
+	one.Finalizers = []string{clusterv1.ClusterFinalizer}
+	h := newHarness(t, one, cluster("default", "two"), secret)
+	// The deletion policy refuses a delete before the annotation, as the API server does.
+	h.admitClusters()
 	b := h.browser()
 	b.signIn("dev@pve")
 	rec := b.do("GET", "/api/clusters/default/one/kubeconfig", "")
@@ -1971,10 +1976,22 @@ func TestDeleteAndKubeconfig(t *testing.T) {
 	if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "one"}, &clusterv1.Cluster{}); err != nil {
 		t.Fatalf("an unconfirmed deletion: %v", err)
 	}
+	got := &clusterv1.Cluster{}
+	if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "one"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Annotations[provisioner.AllowDeletionAnnotation]; ok {
+		t.Fatal("an unconfirmed deletion lifted the deletion guard")
+	}
 	expect(t, b.do("DELETE", "/api/clusters/default/one", `{"confirm":"one"}`), http.StatusAccepted)
-	err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "one"}, &clusterv1.Cluster{})
-	if err == nil {
-		t.Fatal("the cluster is still there")
+	if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "one"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.DeletionTimestamp.IsZero() {
+		t.Error("the cluster is not being deleted")
+	}
+	if by := got.Annotations[provisioner.AllowDeletionAnnotation]; by != "dev@pve" {
+		t.Errorf("the deletion guard was lifted by %q, want the user who confirmed, dev@pve", by)
 	}
 }
 

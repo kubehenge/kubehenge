@@ -43,27 +43,36 @@ var registryName = regexp.MustCompile(`^(\*|[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:\d{1
 
 // validateNodeSite holds the site settings a cluster's nodes take, the mirrors and the trusted
 // authorities, to the rules the schema cannot state: certificates that parse and have not
-// expired, endpoints that are addresses, and a mirror host that has one authority.
-func validateNodeSite(c *clusterv1.Cluster, now time.Time) field.ErrorList {
+// expired, endpoints that are addresses, and a mirror host that has one authority. On an update
+// each setting is checked only when it changes, since a certificate expires without one.
+func validateNodeSite(old, c *clusterv1.Cluster, now time.Time) field.ErrorList {
 	variables := field.NewPath("spec", "topology", "variables")
+	changed := func(name string) bool { return old == nil || variableChanged(old, c, name) }
 	var errs field.ErrorList
-	mirrors, _, err := optionalVariable[[]RegistryMirror](c, registryMirrorsVariable)
-	if err != nil {
-		return field.ErrorList{field.Invalid(variables.Key(registryMirrorsVariable), nil, err.Error())}
-	}
-	errs = append(errs, checkMirrors(mirrors, variables.Key(registryMirrorsVariable), now)...)
-	cas, _, err := optionalVariable[[]string](c, trustedCAsVariable)
-	if err != nil {
-		return append(errs, field.Invalid(variables.Key(trustedCAsVariable), nil, err.Error()))
-	}
-	path := variables.Key(trustedCAsVariable)
-	if len(cas) > maxTrustedCAs {
-		errs = append(errs, field.TooMany(path, len(cas), maxTrustedCAs))
-	}
-	for i, ca := range cas {
-		if caErr := checkCertificates(ca, now); caErr != nil {
-			errs = append(errs, field.Invalid(path.Index(i), nil, caErr.Error()))
+	if changed(registryMirrorsVariable) {
+		mirrors, _, err := optionalVariable[[]RegistryMirror](c, registryMirrorsVariable)
+		if err != nil {
+			return field.ErrorList{field.Invalid(variables.Key(registryMirrorsVariable), nil, err.Error())}
 		}
+		errs = append(errs, checkMirrors(mirrors, variables.Key(registryMirrorsVariable), now)...)
+	}
+	if changed(trustedCAsVariable) {
+		cas, _, err := optionalVariable[[]string](c, trustedCAsVariable)
+		if err != nil {
+			return append(errs, field.Invalid(variables.Key(trustedCAsVariable), nil, err.Error()))
+		}
+		path := variables.Key(trustedCAsVariable)
+		if len(cas) > maxTrustedCAs {
+			errs = append(errs, field.TooMany(path, len(cas), maxTrustedCAs))
+		}
+		for i, ca := range cas {
+			if caErr := checkCertificates(ca, now); caErr != nil {
+				errs = append(errs, field.Invalid(path.Index(i), nil, caErr.Error()))
+			}
+		}
+	}
+	if !changed(releaseMirrorVariable) {
+		return errs
 	}
 	release, set, err := ClusterReleaseMirror(c)
 	switch {

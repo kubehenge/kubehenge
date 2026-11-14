@@ -1560,6 +1560,13 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request, u user) {
 	if !readJSON(w, r, &req) || !confirmed(w, c, req.Confirm) {
 		return
 	}
+	// The typed name confirms the deletion as the annotation does for kubectl, so the chart's
+	// deletion guard is lifted here rather than asked of the user again.
+	allow := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, provisioner.AllowDeletionAnnotation, u.ticket.Username)
+	if err := u.kube.Patch(r.Context(), c, client.RawPatch(types.MergePatchType, allow)); err != nil && !apierrors.IsNotFound(err) {
+		s.kubeError(w, r, err)
+		return
+	}
 	if err := u.kube.Delete(r.Context(), c, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
 		s.kubeError(w, r, err)
 		return
@@ -1660,7 +1667,9 @@ func (s *Server) applyAddonChanges(w http.ResponseWriter, r *http.Request, u use
 }
 
 // kubeError answers with what the management cluster refused. Validation messages are the user's
-// to read. Anything else is logged and kept vague.
+// to read, an admission policy's refusal among them, which the API server answers as Invalid.
+// Anything else is logged and kept vague: a Forbidden is the interface's own account lacking a
+// right, which only the deployment can fix.
 func (s *Server) kubeError(w http.ResponseWriter, r *http.Request, err error) {
 	var status apierrors.APIStatus
 	switch {

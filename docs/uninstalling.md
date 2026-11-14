@@ -12,8 +12,11 @@ Work through these steps in order. The management cluster cleans up the Proxmox 
 Delete every cluster from its page (**Delete**, then type its name), or with kubectl:
 
 ```sh
+kubectl annotate clusters.cluster.x-k8s.io --all --all-namespaces kubehenge.dev/allow-deletion=true
 kubectl delete clusters.cluster.x-k8s.io --all --all-namespaces
 ```
+
+The annotation lifts the guard that refuses deleting a cluster with kubectl alone ([details](clusters.md#delete-with-kubectl-or-gitops)).
 
 Deleting a cluster deletes its VMs and persistent volumes and takes it out of Rancher where it was registered. Kubehenge's controller then removes its Proxmox VE pool, user, token and volume owner VM ([details](clusters.md#delete)). A cluster is gone when it no longer shows in the list.
 

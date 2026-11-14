@@ -90,15 +90,19 @@ func checkTalos(old, c *clusterv1.Cluster) error {
 	if err != nil {
 		return err
 	}
-	// The templates package's errors name the releases, and the caller's field path the variable.
-	if err = templates.TalosRunsKubernetes(talos, c.Spec.Topology.Version); err != nil {
-		return err //nolint:wrapcheck // as above
-	}
 	var was string
 	if old != nil && isTalos(old) {
 		if was, err = TalosVersion(old); err != nil {
 			return err
 		}
+	}
+	// A later Kubehenge may drop a pairing a running cluster keeps, which holds no unrelated edit back.
+	if old != nil && was == talos && old.Spec.Topology.Version == c.Spec.Topology.Version {
+		return nil
+	}
+	// The templates package's errors name the releases, and the caller's field path the variable.
+	if err = templates.TalosRunsKubernetes(talos, c.Spec.Topology.Version); err != nil {
+		return err //nolint:wrapcheck // as above
 	}
 	// Only a release this Kubehenge pins has a template it can bake. A cluster that stays on a release
 	// it once ran, which a later Kubehenge no longer pins, keeps being edited.

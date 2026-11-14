@@ -1725,6 +1725,26 @@ Only a VM deleted by hand, outside Cluster API, leaves its cloud-init ISO (`user
 
 Deleting the cluster that runs Rancher first removes every registered cluster from Rancher.
 
+### Delete with kubectl or GitOps
+
+A cluster is deleted only once it carries the annotation `kubehenge.dev/allow-deletion`. Without it, the API server refuses the delete. This also holds for a GitOps prune and a deleted namespace. The interface and `kubehenge cluster delete --yes` set it themselves.
+
+```sh
+kubectl -n clusters annotate cluster prod kubehenge.dev/allow-deletion=true
+kubectl -n clusters delete cluster prod
+```
+
+A deleted namespace stays `Terminating` until each cluster in it carries the annotation:
+
+```sh
+kubectl -n clusters annotate clusters --all kubehenge.dev/allow-deletion=true
+kubectl delete namespace clusters
+```
+
+With GitOps, add the annotation to the cluster's manifest and let it sync. Then remove the manifest.
+
+The annotation goes through even on a cluster that no longer meets a rule, such as one whose trusted authority expired. An update is checked only on the settings it changes.
+
 ### A deletion that waits
 
 While the cluster is being deleted, its page lists what the deletion waits on. That is each object whose finalizer holds it, with what that object reports. Examples are a node drain a disruption budget refuses, or a VM on a node that is offline.
@@ -2060,6 +2080,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 kubectl -n clusters patch cluster prod --type=json \
   -p '[{"op":"replace","path":"/spec/topology/workers/machineDeployments/0/replicas","value":5}]'
 kubectl -n clusters patch cluster prod --type=merge -p '{"spec":{"topology":{"version":"v1.37.1+rke2r1"}}}'
+kubectl -n clusters annotate cluster prod kubehenge.dev/allow-deletion=true
 kubectl -n clusters delete cluster prod
 ```
 

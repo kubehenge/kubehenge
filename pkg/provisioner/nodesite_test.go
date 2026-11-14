@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -27,6 +28,55 @@ func testCertificate(t *testing.T, name string, from, to time.Time) string {
 		t.Fatal(err)
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func TestAnAuthorityThatExpiredHoldsNoUnrelatedUpdateBack(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Now()
+	expired := testCertificate(t, "old", now.Add(-48*time.Hour), now.Add(-time.Hour))
+	valid := testCertificate(t, "valid", now.Add(-time.Hour), now.Add(time.Hour))
+	old := withAddons(networkCluster("192.168.1.1", 16), map[string]string{trustedCAsVariable: `[` + quoted(t, expired) + `]`})
+	old.Annotations = map[string]string{CiliumClusterIDAnnotation: "7"}
+	h, _ := hooksFor(t)
+	v := &ClusterValidator{Hooks: h}
+
+	marked := old.DeepCopy()
+	marked.Annotations[AllowDeletionAnnotation] = "dev@pve"
+	marked.Labels = map[string]string{"team": "a"}
+	marked.Finalizers = append(marked.Finalizers, "example.org/hold")
+	if _, err := v.ValidateUpdate(ctx, old, marked); err != nil {
+		t.Errorf("annotations, labels and a finalizer on a cluster whose authority expired: %v", err)
+	}
+	renamed := old.DeepCopy()
+	renamed.Spec.Topology.Workers.MachineDeployments[0].Name = "md-1"
+	if _, err := v.ValidateUpdate(ctx, old, renamed); err != nil {
+		t.Errorf("a pool renamed on a cluster whose authority expired: %v", err)
+	}
+	added := old.DeepCopy()
+	for i := range added.Spec.Topology.Variables {
+		if added.Spec.Topology.Variables[i].Name == trustedCAsVariable {
+			added.Spec.Topology.Variables[i].Value.Raw = []byte(`[` + quoted(t, expired) + `,` + quoted(t, valid) + `]`)
+		}
+	}
+	if _, err := v.ValidateUpdate(ctx, old, added); err == nil || !strings.Contains(err.Error(), "expired on") {
+		t.Errorf("an authority added beside the expired one: %v, want the expired one refused", err)
+	}
+	// A rule a later Kubehenge adds, which a stored cluster falls short of.
+	behind := withAddons(old.DeepCopy(), map[string]string{gitopsVariable: `{"enabled":true,"repository":{"url":"ssh://git@git.example.org/a/b.git"}}`})
+	if len(validateGitOps(behind)) == 0 {
+		t.Fatal("the GitOps settings meet every rule")
+	}
+	behindMarked := behind.DeepCopy()
+	behindMarked.Annotations[AllowDeletionAnnotation] = "dev@pve"
+	if _, err := v.ValidateUpdate(ctx, behind, behindMarked); err != nil {
+		t.Errorf("an annotation on a cluster that falls short of a later rule: %v", err)
+	}
+	moved := old.DeepCopy()
+	moved.Annotations[CiliumClusterIDAnnotation] = "8"
+	if _, err := v.ValidateUpdate(ctx, old, moved); err == nil || !strings.Contains(err.Error(), "Cilium cluster id") {
+		t.Errorf("the Cilium cluster id changed alone: %v, want it refused", err)
+	}
 }
 
 func quoted(t *testing.T, s string) string {
@@ -105,7 +155,7 @@ func TestNodeSiteSettingsAreHeldToCertificatesAndAddresses(t *testing.T) {
 		if tc.cas != "" {
 			set[trustedCAsVariable] = tc.cas
 		}
-		errs := validateNodeSite(withAddons(cluster(), set), now)
+		errs := validateNodeSite(nil, withAddons(cluster(), set), now)
 		switch {
 		case tc.want == "" && len(errs) > 0:
 			t.Errorf("%s: %v", name, errs)
@@ -123,7 +173,7 @@ func TestNodeSiteVariableOfTheWrongTypeIsRefused(t *testing.T) {
 		"mirror":   {registryMirrorsVariable: `[3]`},
 		"no value": {},
 	} {
-		errs := validateNodeSite(withAddons(cluster(), set), time.Now())
+		errs := validateNodeSite(nil, withAddons(cluster(), set), time.Now())
 		if (name == "no value") != (len(errs) == 0) {
 			t.Errorf("%s: %v", name, errs)
 		}

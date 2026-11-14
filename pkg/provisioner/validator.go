@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -59,6 +60,12 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 	}
 	if err := validateAbandon(old, c); err != nil || !c.DeletionTimestamp.IsZero() {
 		return nil, err
+	}
+	// The spec checks read the clock, Proxmox VE and the class, so a cluster can fall short of them
+	// without a change. Annotations, labels and finalizers must still go through: deleting a cluster
+	// starts with an annotation.
+	if old != nil && equality.Semantic.DeepEqual(old.Spec, c.Spec) {
+		return nil, invalid(c, validateCiliumClusterID(old, c))
 	}
 	r, err := rancherOf(c)
 	if err != nil {
@@ -116,7 +123,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateMonitoring(c)...)
 	errs = append(errs, validateGitOps(c)...)
 	errs = append(errs, validateEgress(c)...)
-	errs = append(errs, validateNodeSite(c, time.Now())...)
+	errs = append(errs, validateNodeSite(old, c, time.Now())...)
 	errs = append(errs, validateAddonSettings(old, c)...)
 	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
 	errs = append(errs, validateAutoscaling(c)...)
@@ -139,11 +146,15 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 		}
 	}
 	errs = append(errs, v.validateGrants(ctx, old, c, class)...)
+	return invalid(c, errs)
+}
+
+// invalid is Invalid, not the plain denial a validator's error becomes, so that the interface shows
+// the reason as it does the API server's own validation.
+func invalid(c *clusterv1.Cluster, errs field.ErrorList) error {
 	if len(errs) == 0 {
 		return nil
 	}
-	// Invalid, not the plain denial a validator's error becomes, so that the interface shows the
-	// reason as it does the API server's own validation.
 	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
 }
 
@@ -296,13 +307,20 @@ func validateClusterMesh(old, c *clusterv1.Cluster) field.ErrorList {
 	case slices.Contains(mesh.Peers, c.Name):
 		errs = append(errs, field.Invalid(variables.Child("peers"), c.Name, "a cluster cannot list itself"))
 	}
-	if old != nil {
-		if was, ok := old.Annotations[CiliumClusterIDAnnotation]; ok && c.Annotations[CiliumClusterIDAnnotation] != was {
-			errs = append(errs, field.Forbidden(field.NewPath("metadata", "annotations").Key(CiliumClusterIDAnnotation),
-				"the Cilium cluster id cannot change once set"))
-		}
+	return append(errs, validateCiliumClusterID(old, c)...)
+}
+
+// validateCiliumClusterID keeps a Cilium cluster id once given, since Cluster Mesh peers know the
+// cluster by it.
+func validateCiliumClusterID(old, c *clusterv1.Cluster) field.ErrorList {
+	if old == nil {
+		return nil
 	}
-	return errs
+	if was, ok := old.Annotations[CiliumClusterIDAnnotation]; ok && c.Annotations[CiliumClusterIDAnnotation] != was {
+		return field.ErrorList{field.Forbidden(field.NewPath("metadata", "annotations").Key(CiliumClusterIDAnnotation),
+			"the Cilium cluster id cannot change once set")}
+	}
+	return nil
 }
 
 // validateEgress holds a cluster's egressProxy to checkEgress.

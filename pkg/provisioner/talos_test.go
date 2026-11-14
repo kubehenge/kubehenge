@@ -64,6 +64,8 @@ func TestCheckTalosHoldsTheReleaseToTalosRules(t *testing.T) {
 		{"a new cluster on a release not pinned", nil, with("v1.14.99", templates.TalosDefaultKubernetes), unpinned},
 		{"a move to a release not pinned", with("v1.14.4", both), with("v1.14.99", both), unpinned},
 		{"a release not pinned, which the cluster stays on", with("v1.14.99", both), with("v1.14.99", templates.TalosDefaultKubernetes), ""},
+		{"a pairing no longer run, which the cluster keeps", with("v1.14.4", "v1.20.0"), with("v1.14.4", "v1.20.0"), ""},
+		{"a pairing no longer run, which an update moves to", with("v1.14.4", both), with("v1.14.4", "v1.20.0"), "does not run"},
 	} {
 		if tc.name == "no release" {
 			tc.c.Spec.Topology.ClassRef.Name = ClassPrefix + "talos"

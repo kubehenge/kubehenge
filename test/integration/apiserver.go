@@ -13,11 +13,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -61,7 +63,8 @@ type Options struct {
 	// with the certificates API.Webhooks holds.
 	Webhooks Webhooks
 	// ClusterAPI serves Cluster API's Cluster and ClusterClass webhooks, from the configurations its
-	// release ships, and runs its ClusterClass controller, with the feature gates the management
+	// release ships, and the conversion of its kinds from the older version it still serves. It runs
+	// its ClusterClass controller, with the feature gates the management
 	// cluster sets: its defaulting and its checks of the classes and of the clusters' variables
 	// against them, their CEL rules included, then apply as they do in a management cluster.
 	ClusterAPI bool
@@ -135,8 +138,42 @@ func Start(t *testing.T, o *Options) *API {
 	if o.ClusterAPI || o.Serve != nil {
 		serve(t, cfg, c, &env.WebhookInstallOptions, o)
 	}
+	if o.ClusterAPI {
+		convertClusterAPI(t, c, &env.WebhookInstallOptions)
+	}
 	Install(t, c, o.Namespaces, o.Objects)
 	return &API{Config: cfg, Client: c, Webhooks: &env.WebhookInstallOptions}
+}
+
+// convertedKinds are the CRDs whose older version Cluster API's webhooks convert here, those of
+// the converters its Cluster and ClusterClass webhooks register.
+var convertedKinds = []string{"clusters.cluster.x-k8s.io", "clusterclasses.cluster.x-k8s.io"}
+
+// convertClusterAPI sends the conversion of Cluster API's Clusters and ClusterClasses to the local
+// server, as a management cluster sends it to Cluster API. envtest finds convertible kinds by the
+// scheme's hub and spokes, which Cluster API's registered converters are not, so it would leave
+// them to relabelling: a request through v1beta1 would then hand admission a shape no real API
+// server does.
+func convertClusterAPI(t *testing.T, c client.Client, w *envtest.WebhookInstallOptions) {
+	t.Helper()
+	ctx := context.Background()
+	url := "https://" + net.JoinHostPort(w.LocalServingHost, strconv.Itoa(w.LocalServingPort)) + "/convert"
+	for _, name := range convertedKinds {
+		crd := &apiextensionsv1.CustomResourceDefinition{}
+		if err := c.Get(ctx, client.ObjectKey{Name: name}, crd); err != nil {
+			t.Fatal(err)
+		}
+		crd.Spec.Conversion = &apiextensionsv1.CustomResourceConversion{
+			Strategy: apiextensionsv1.WebhookConverter,
+			Webhook: &apiextensionsv1.WebhookConversion{
+				ClientConfig:             &apiextensionsv1.WebhookClientConfig{URL: &url, CABundle: w.LocalServingCAData},
+				ConversionReviewVersions: []string{"v1"},
+			},
+		}
+		if err := c.Update(ctx, crd); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // Stop stops an API server and its etcd. It ends them first where envtest cannot.
@@ -196,18 +233,23 @@ type noExtensions struct {
 	runtimeclient.Client
 }
 
+// clusterAPIScheme is Scheme with the older Cluster API version its webhooks convert from.
+func clusterAPIScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := Scheme(t)
+	if err := clusterv1beta1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	return scheme
+}
+
 // serve runs a manager with the webhook server and, with ClusterAPI, Cluster API's webhooks and
 // ClusterClass controller, until the test ends.
 func serve(t *testing.T, cfg *rest.Config, admin client.Client, w *envtest.WebhookInstallOptions, o *Options) {
 	t.Helper()
 	srv := webhook.NewServer(webhook.Options{Host: w.LocalServingHost, Port: w.LocalServingPort, CertDir: w.LocalServingCertDir})
-	// Cluster API's webhooks convert from the older API version they also serve.
-	scheme := Scheme(t)
-	if err := clusterv1beta1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:                 scheme,
+		Scheme:                 clusterAPIScheme(t),
 		Logger:                 testr.New(t),
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0",

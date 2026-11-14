@@ -40,7 +40,7 @@ ns=e2e-nodes-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 cleanup() {
     status=$?
     if [ "${status}" -ne 0 ]; then
-        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${ns}"
+        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${ns}" "${ns}"
     fi
     rm -rf "${work}"
 }
@@ -182,6 +182,7 @@ until_true 600 "${join_mib} MiB free on ${second} as it reports itself" free_at_
 # Whether the first node stays in the placement depends on its own free memory, which in CI is a
 # runner that also holds the second node. Only the second node's return is checked.
 until_true 300 "${second} back in the cluster's placement" placed_with "${second}"
+webhook_retried kubectl -n "${ns}" annotate cluster/nodes kubehenge.dev/allow-deletion=true > /dev/null
 kubectl -n "${ns}" delete cluster/nodes --wait --timeout=30m
 left=$(pve_get "cluster/resources?type=vm" | jq --arg p "/${ns}." '[.data[] | select(.pool // "" | contains($p))] | length')
 [ "${left}" = 0 ] || fail "VMs of the cluster are still there"
