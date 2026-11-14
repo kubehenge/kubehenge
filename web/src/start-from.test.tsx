@@ -6,7 +6,7 @@ import { newAlerting } from "./Alerting";
 import { App } from "./App";
 import { newForm, request, type Form } from "./create-form";
 import { fakeServer, reads, type Route } from "./fake-server";
-import { fromCluster, startDefault, startKeys } from "./start-from";
+import { fromCluster, startKeys } from "./start-from";
 import type { Cluster, ClusterClass } from "./types";
 import { quantity, record, text } from "./values";
 
@@ -197,14 +197,6 @@ describe("a new cluster started from another", () => {
     expect(fromCluster(k3s, chosen).version).toBe("");
   });
 
-  it("starts by default from the newest cluster that works", () => {
-    const failed = { ...web, name: "failed", created: "2026-10-03T00:00:00Z", available: false };
-    const gone = { ...web, name: "gone", created: "2026-10-02T00:00:00Z", deleting: true };
-    expect(startDefault([web, failed, gone])?.name).toBe("web");
-    expect(startDefault([failed, gone])?.name).toBe("failed");
-    expect(startDefault([gone])).toBeUndefined();
-  });
-
   it("autoscales its workers where the other does", () => {
     const autoscaled = {
       ...web,
@@ -218,7 +210,7 @@ describe("a new cluster started from another", () => {
     expect(fromCluster(web, newForm())).toMatchObject({ workerAutoscale: false, workerReplicas: 2 });
   });
 
-  it("starts as the newest cluster, or from the defaults", async () => {
+  it("starts from the defaults, and copies a cluster only when one is chosen", async () => {
     window.history.replaceState(null, "", "/clusters/new");
     const variables = { cni: "canal", network: { bridge: "vmbr1", gateway: "10.1.0.1", prefix: 16 } };
     const older = { ...web, name: "old", created: "2026-01-01T00:00:00Z" };
@@ -234,16 +226,19 @@ describe("a new cluster started from another", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     const from = await screen.findByLabelText("Start from");
-    await waitFor(() => expect(from).toHaveValue("default/web"));
+    await screen.findByRole("option", { name: "web" });
+    expect(from).toHaveValue("");
     expect(
       within(from)
         .getAllByRole("option")
         .map((o) => o.textContent),
     ).toStrictEqual(["Defaults", "web", "old"]);
-    expect(screen.getByLabelText("Distribution")).toHaveValue("kubehenge-rke2");
-    expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("3");
+    expect(screen.getByLabelText("Distribution")).toHaveValue("");
+    expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("1");
 
     await user.type(screen.getByLabelText("Name"), "next");
+    await user.selectOptions(from, "web");
+    expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("3");
     await user.selectOptions(from, "Defaults");
     expect(screen.getByLabelText("Distribution")).toHaveValue("");
     expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("1");
@@ -253,6 +248,7 @@ describe("a new cluster started from another", () => {
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5+rke2r1"));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await expect(screen.findByLabelText("Bridge")).resolves.toHaveValue("vmbr1");
+    expect(screen.getByText("Copied from web")).toBeInTheDocument();
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.1.0.1");
     // No node reports the network on vmbr1, so the examples come from the gateway's.
     expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
@@ -282,7 +278,8 @@ describe("a new cluster started from another", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     const from = await screen.findByLabelText("Start from");
-    await waitFor(() => expect(from).toHaveValue("default/web"));
+    await screen.findByRole("option", { name: "web" });
+    await user.selectOptions(from, "web");
     await user.type(screen.getByLabelText("Name"), "next");
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5+rke2r1"));
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -344,7 +341,8 @@ describe("a new cluster started from another", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     const from = await screen.findByLabelText("Start from");
-    await waitFor(() => expect(from).toHaveValue("default/web"));
+    await screen.findByRole("option", { name: "web" });
+    await user.selectOptions(from, "web");
     await user.type(screen.getByLabelText("Name"), "next");
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5+rke2r1"));
     await user.click(screen.getByRole("button", { name: "Next" }));

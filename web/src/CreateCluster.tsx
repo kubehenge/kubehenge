@@ -45,7 +45,7 @@ import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos, us
 import { useFleet } from "./fleet";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
-import { clusterKey, fromCluster, startable, startDefault, startKeys } from "./start-from";
+import { clusterKey, fromCluster, startable, startKeys } from "./start-from";
 import type { Bridge, Cluster, ClusterClass, NodeDNS, PveNode, Storage, Versions } from "./types";
 import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
 
@@ -191,13 +191,7 @@ export function CreateCluster({
     }
     async function loadClusters(): Promise<void> {
       try {
-        const listed = await api.clusters();
-        setClusters(listed);
-        // A new cluster starts as the newest working one is, unless a distribution was chosen meanwhile.
-        const last = startDefault(listed);
-        if (last !== undefined) {
-          setEntered((f) => (f.className === "" ? fromCluster(last, f) : f));
-        }
+        setClusters(await api.clusters());
       } catch {
         // The controller refuses a storage another cluster uses in any case. The list only says so sooner.
         setClusters([]);
@@ -262,6 +256,7 @@ export function CreateCluster({
     setEntered((f) => withNamespace(f, namespace, namespaceOf(f, namespaces)));
   };
 
+  const copiedFrom = clusters.find((x) => clusterKey(x) === entered.from);
   const index = steps.indexOf(step);
   const previous = steps[index - 1];
   const following = steps[index + 1];
@@ -372,6 +367,9 @@ export function CreateCluster({
           ))}
         </nav>
         <div className="wizard-body" ref={wizardRef}>
+          {copiedFrom !== undefined && step !== "General" && step !== "Confirm" && (
+            <p className="hint">Copied from {copiedFrom.name}</p>
+          )}
           {step === "General" && (
             <GeneralStep
               form={form}
