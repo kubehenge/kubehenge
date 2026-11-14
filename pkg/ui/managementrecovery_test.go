@@ -216,6 +216,23 @@ func TestRecreateOverTheInterfaceChecksBeforeItStarts(t *testing.T) {
 	}
 }
 
+func TestRecoverFromOwnBackupsOverTheInterface(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.clock = time.Now()
+	managementWithTarget(t, h)
+	admin := h.browser()
+	admin.signIn("admin@pve")
+	dev := h.browser()
+	dev.signIn("dev@pve")
+	path := "/api/appliance/etcd-backups/recover"
+	expect(t, dev.do("POST", path, `{"passphrase":"`+statePassphrase+`"}`), http.StatusForbidden)
+	rec := admin.do("POST", path, `{"passphrase":"`+statePassphrase+`"}`)
+	if rec.Code < 400 || !strings.Contains(rec.Body.String(), "holds no backups of its own") {
+		t.Fatalf("a recovery with no backups of the appliance's own: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestClusterSpecIsStoredOnChangeAndRecreatesTheCluster(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
