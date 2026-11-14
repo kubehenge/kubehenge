@@ -57,9 +57,9 @@ func (s *Session) Prepare(ctx context.Context) error {
 		}
 	} else if facts.DefaultBridge != "" {
 		s.Cfg.Bridge = facts.DefaultBridge
-		if err = s.useRouteVLAN(ctx); err != nil {
-			return err
-		}
+	}
+	if err = s.checkRouteVLAN(ctx); err != nil {
+		return err
 	}
 	if s.Cfg.CTID == "" {
 		s.Cfg.CTID = facts.NextID
@@ -139,7 +139,7 @@ func (s *Session) FillStorages(ties Ties) error {
 			return userErr("no enabled, active storage here takes container disks", "Enable one, or name one with --storage")
 		case len(list) == 1 || ties == PickBest:
 			c.Storage = list[0].Name
-			s.noticef("storage %s (%s) for the appliance's disks, %s", list[0].Name, list[0].Type, why(len(list)))
+			s.noticef("storage %s (%s) for the appliance's disks, %s", list[0].Name, list[0].Type, why(len(list), false))
 		}
 	} else if !hasStorage(s.Facts.RootStorages, c.Storage) {
 		return userErr(fmt.Sprintf("storage %s is disabled, inactive, takes no container disks here or has under 9 GiB free for them", c.Storage), "Name another with --storage")
@@ -153,12 +153,11 @@ func (s *Session) FillStorages(ties Ties) error {
 			return userErr("no enabled, active storage here takes container templates", "Give a directory, NFS or CIFS storage the content type Container template, or name one with --template-storage")
 		case len(list) == 1 || ties == PickBest:
 			c.TemplateStorage = list[0].Name
+			room := ""
 			if s.Facts.TemplateShort {
-				s.noticef("storage %s (%s) for the container template, the most free of %d, though under %d MiB and short of room for it",
-					list[0].Name, list[0].Type, len(list), templateKiB/kibPerMiB)
-				break
+				room = fmt.Sprintf(", though under %d MiB and short of room for it", templateKiB/kibPerMiB)
 			}
-			s.noticef("storage %s (%s) for the container template, %s", list[0].Name, list[0].Type, why(len(list)))
+			s.noticef("storage %s (%s) for the container template, %s%s", list[0].Name, list[0].Type, why(len(list), s.Facts.TemplateShort), room)
 		}
 	} else if !hasStorage(s.Facts.TemplateStorages, c.TemplateStorage) && !hasStorage(s.Facts.TemplateTight, c.TemplateStorage) {
 		return userErr(fmt.Sprintf("storage %s is disabled, inactive or takes no container templates here", c.TemplateStorage), "Name another with --template-storage")
@@ -166,11 +165,16 @@ func (s *Session) FillStorages(ties Ties) error {
 	return nil
 }
 
-func why(count int) string {
-	if count > 1 {
-		return fmt.Sprintf("the best of %d by type and free space", count)
+// why says how the storage was picked from the count that take the content. With all of them
+// short of room, the pick is the one with the most free, not the best.
+func why(count int, short bool) string {
+	switch {
+	case count == 1:
+		return "the only one here that takes it"
+	case short:
+		return fmt.Sprintf("the most free of %d", count)
 	}
-	return "the only one here that takes it"
+	return fmt.Sprintf("the best of %d by type and free space", count)
 }
 
 func hasStorage(list []Storage, name string) bool {
@@ -266,20 +270,23 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 	return false, nil
 }
 
-// useRouteVLAN accepts the VLAN taken from the node's default route, which needs a VLAN-aware
-// bridge. On any other bridge a tag makes Proxmox VE create a second bridge and take over the
-// port's VLAN device, which would cut the node's own network.
-func (s *Session) useRouteVLAN(ctx context.Context) error {
-	f := s.Facts
-	if !f.VLANFromRoute {
+// checkRouteVLAN refuses the VLAN of the node's default route on its bridge, taken from the route
+// or named by hand, unless the bridge is VLAN aware. On any other bridge the tag makes Proxmox VE
+// create a second bridge and take over the port's VLAN device, which would cut the node's own
+// network.
+func (s *Session) checkRouteVLAN(ctx context.Context) error {
+	f, c := s.Facts, &s.Cfg
+	b, v := f.DefaultBridge, f.DefaultVLAN
+	if v == "" || c.Bridge != b || c.VLAN != v {
 		return nil
 	}
-	b, v := f.DefaultBridge, f.DefaultVLAN
 	if !s.Node.bridgeVLANAware(ctx, b) {
 		return userErr(fmt.Sprintf("the node's default route leaves by %s.%s, but %s is not VLAN aware, so a tag on it would make Proxmox VE create %sv%s and take over the port's .%s, which cuts the node's own network", b, v, b, b, v, v),
-			fmt.Sprintf("Make %s VLAN aware in the node's network settings, or name --bridge and --vlan yourself", b))
+			fmt.Sprintf("Make %s VLAN aware in the node's network settings, or name another bridge or VLAN with --bridge and --vlan", b))
 	}
-	s.noticef("VLAN %s on %s, since the node's default route leaves by %s.%s (name --bridge %s for no VLAN)", v, b, b, v, b)
+	if f.VLANFromRoute {
+		s.noticef("VLAN %s on %s, since the node's default route leaves by %s.%s (name --bridge %s for no VLAN)", v, b, b, v, b)
+	}
 	return nil
 }
 

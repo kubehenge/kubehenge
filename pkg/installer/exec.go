@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // Exec runs the node's own commands (pct, pvesm, pvesh, ip). It is the one seam between the
@@ -48,6 +49,11 @@ type OSExec struct {
 // Run implements Exec.
 func (e *OSExec) Run(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // running the command it is given is what an Exec does.
+	// pct runs its task in a worker in a session of its own and passes SIGTERM on to it, which
+	// then undoes its half-done work and lets go of the guest's lock. A SIGKILL would leave the
+	// worker running with the guest locked, so it comes only after commandStopWait.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = commandStopWait
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

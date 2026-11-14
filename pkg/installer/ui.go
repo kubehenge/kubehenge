@@ -142,6 +142,9 @@ func (m *Model) Err() error { return m.fail }
 // Cancelled reports whether the user left before the run.
 func (m *Model) Cancelled() bool { return m.cancelled }
 
+// Finished reports whether the run installed the appliance, which the end screen shows.
+func (m *Model) Finished() bool { return m.res != nil }
+
 // Left says what a stopped run left behind that the user must look after, empty for nothing.
 func (m *Model) Left() string {
 	if m.runner == nil {
@@ -223,6 +226,9 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case msg.String() == "ctrl+c" && m.stage == stRun:
 		m.cancel()
 		return nil, true
+	case m.stage == stEnd:
+		// The appliance is installed and protected, so even Ctrl+C only closes the screen.
+		return tea.Quit, true
 	case msg.String() == "ctrl+c":
 		return m.leave(), true
 	case m.stage == stEnd || m.stage == stFail:
