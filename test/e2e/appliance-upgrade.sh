@@ -167,7 +167,9 @@ until_true 3600 "the removal to end" job_ended
 job_was remove succeeded false
 
 step "remove the appliance"
+pct config "${ctid}" | grep -qx 'protection: 1' || fail "the upgrade left the appliance unprotected"
 pct stop "${ctid}"
+pct set "${ctid}" --protection 0
 pct destroy "${ctid}" --purge
 
 step "Proxmox VE as it was"

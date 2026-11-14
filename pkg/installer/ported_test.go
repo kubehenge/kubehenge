@@ -597,6 +597,9 @@ func TestUpgradeRoads(t *testing.T) {
 	if !strings.Contains(out.String(), "Kubehenge 9.9.9 is running in container 100") || h.exec.count("pct exec 100 -- flock -n -E 75") != 1 {
 		t.Fatalf("an upgrade that serves: %s", out)
 	}
+	if h.exec.count("pct set 100 --protection 1") != 1 {
+		t.Errorf("an upgrade leaves the appliance unprotected: %v", h.exec.calls)
+	}
 	for code, want := range map[int]string{
 		exitBusy:       "the management cluster is being applied or removed",
 		exitRolledBack: "Rolled back to 0.1.0",
