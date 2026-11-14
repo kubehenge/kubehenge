@@ -55,8 +55,8 @@ describe("the Scale dialog", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Scale" }));
     const dialog = screen.getByRole("dialog", { name: "Scale web" });
-    await user.selectOptions(within(dialog).getByLabelText("Scaling (md-0)"), "autoscaled");
-    const most = within(dialog).getByLabelText("Most workers (md-0)");
+    await user.selectOptions(within(dialog).getByLabelText("Scaling"), "autoscaled");
+    const most = within(dialog).getByLabelText("Most workers");
     expect(most).toHaveValue(4);
     expect(most).toHaveAccessibleDescription("Node addresses leave room for 6");
     // Two more workers of 8 GiB, and the node has 4 GiB free.
@@ -67,7 +67,7 @@ describe("the Scale dialog", () => {
     expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.clear(most);
     await user.type(most, "4");
-    const fewest = within(dialog).getByLabelText("Fewest workers (md-0)");
+    const fewest = within(dialog).getByLabelText("Fewest workers");
     await user.clear(fewest);
     await user.type(fewest, "1");
     await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
@@ -89,11 +89,11 @@ describe("the Scale dialog", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     const term = await screen.findByText("Worker pools", { selector: "dt" });
-    expect(term.nextElementSibling).toHaveTextContent("md-0: 3 of 1 to 4, autoscaled");
+    expect(term.nextElementSibling).toHaveTextContent("Workers: 3 of 1 to 4, autoscaled");
     await user.click(screen.getByRole("button", { name: "Scale" }));
     const dialog = screen.getByRole("dialog", { name: "Scale web" });
-    await user.selectOptions(within(dialog).getByLabelText("Scaling (md-0)"), "fixed");
-    const workers = within(dialog).getByLabelText("Workers (md-0)");
+    await user.selectOptions(within(dialog).getByLabelText("Scaling"), "fixed");
+    const workers = within(dialog).getByLabelText("Workers");
     expect(workers).toHaveValue(3);
     expect(workers).toHaveAccessibleDescription("Keeps its current workers unless changed");
     await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));

@@ -482,7 +482,7 @@ describe("clusters", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Scale" }));
-    const workers = screen.getByLabelText("Workers (md-0)");
+    const workers = screen.getByLabelText("Workers");
     await user.clear(workers);
     await user.type(workers, "4");
     const dialog = within(screen.getByRole("dialog"));
@@ -872,7 +872,7 @@ describe("clusters", () => {
     expect(screen.queryByRole("button", { name: "Delete cp-a" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete md-a" }));
     const dialog = screen.getByRole("dialog", { name: "Delete md-a" });
-    expect(dialog).toHaveTextContent("Pool md-0 shrinks by one.");
+    expect(dialog).toHaveTextContent("Pool Workers shrinks by one.");
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/md-a")).toBe(1));
   });

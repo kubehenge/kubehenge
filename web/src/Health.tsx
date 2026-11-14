@@ -4,6 +4,7 @@ import { api } from "./api";
 import { useClusterHealth, pollUnwell } from "./cluster-health";
 import { attentionFix } from "./cluster-paths";
 import { standing } from "./fleet";
+import { poolLabel } from "./pool-machine";
 import { Link } from "./router";
 import type {
   AddonRelease,
@@ -610,7 +611,9 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
       <td className="nowrap">
         {n.name}
         <div className="hint">
-          {n.role === "control-plane" ? "Control plane" : `Worker${filled(n.pool) ? `, pool ${n.pool}` : ""}`}
+          {n.role === "control-plane"
+            ? "Control plane"
+            : `Worker${filled(n.pool) ? `, pool ${poolLabel(n.pool)}` : ""}`}
         </div>
         {(n.taints ?? []).length > 0 && (
           <ul className="node-tags" aria-label={`${n.name} taints`}>

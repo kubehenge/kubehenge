@@ -15,6 +15,7 @@ import { ClusterStatus, fleetKey, useFleet } from "./fleet";
 import { useClusterChanges } from "./live";
 import { Machines, Placement, useReadyCounts } from "./Machines";
 import { nodeOSKey } from "./node-os";
+import { poolLabel } from "./pool-machine";
 import { Pools } from "./Pools";
 import { QuorumLost, RecoveryState, RollStalled } from "./Recovery";
 import { Link, navigate, useQuery } from "./router";
@@ -705,7 +706,7 @@ function Summary({
             <dt>Worker pools</dt>
             <dd>
               {c.workerPools.map((p) => (
-                <div key={p.name}>{`${p.name}: ${poolText(p)}`}</div>
+                <div key={p.name}>{`${poolLabel(p.name)}: ${poolText(p)}`}</div>
               ))}
             </dd>
           </>

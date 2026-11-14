@@ -1,6 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { NodeTimeoutFields, entryOf, timeoutProblems, timeoutsOf, type TimeoutEntry } from "./NodeTimeouts";
+import { poolLabel } from "./pool-machine";
 import type { Cluster, ClusterClass, WorkerPool } from "./types";
 import { Dialog, ErrorBox, stageLabel, useChange } from "./ui";
 
@@ -25,7 +26,7 @@ export function TimeoutsDialog({
   const same = JSON.stringify(timeouts) === JSON.stringify(was);
   return (
     <Dialog
-      title={pool === undefined ? "Control plane timeouts" : `Pool ${pool.name} timeouts`}
+      title={pool === undefined ? "Control plane timeouts" : `Pool ${poolLabel(pool.name)} timeouts`}
       onClose={onClose}
       onSubmit={() => {
         void send(pool === undefined ? { controlPlaneTimeouts: timeouts } : { pools: { [pool.name]: { timeouts } } });

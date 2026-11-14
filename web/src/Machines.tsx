@@ -4,6 +4,7 @@ import { api } from "./api";
 import { BootLogDialog } from "./BootLog";
 import { useClusterHealth } from "./cluster-health";
 import { clusterPath } from "./cluster-paths";
+import { poolLabel } from "./pool-machine";
 import { Link, useQuery } from "./router";
 import type { Cluster, HealthNode, Machine, PveNode } from "./types";
 import {
@@ -262,7 +263,7 @@ export function Machines({
             onChanged();
           }}
         >
-          {`Drains the node and deletes the VM and its disks. Pool ${deleting.pool ?? ""} shrinks by one.`}
+          {`Drains the node and deletes the VM and its disks. Pool ${poolLabel(deleting.pool ?? "")} shrinks by one.`}
         </MachineDialog>
       )}
       {rebooting !== undefined && (

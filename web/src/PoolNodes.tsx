@@ -11,6 +11,7 @@ import {
   type NodeSettings,
 } from "./node-settings";
 import { NodeSettingsFields } from "./NodeSettings";
+import { poolLabel } from "./pool-machine";
 import type { Cluster, WorkerPool } from "./types";
 import { BreakableText, Dialog, ErrorBox, stageLabel, useChange } from "./ui";
 
@@ -57,7 +58,7 @@ export function NodesDialog({
   const changed = inherit ? pool.nodes !== undefined : !sameNodeSettings(value, was);
   return (
     <Dialog
-      title={`Edit pool ${pool.name} nodes`}
+      title={`Edit pool ${poolLabel(pool.name)} nodes`}
       onClose={onClose}
       onSubmit={() => {
         void send({ pools: { [pool.name]: { nodes: inherit ? null : nodesVariable(value) } } });

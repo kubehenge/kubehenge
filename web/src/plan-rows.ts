@@ -4,10 +4,11 @@ import { everything, optionRows, type OptionRow } from "./ClusterOptions";
 import { etcdSnapshotsRows } from "./EtcdSnapshots";
 import { nodeCustomisationChanges, nodeCustomisationOf } from "./node-customisation";
 import { timeoutsText } from "./NodeTimeouts";
+import { poolLabel } from "./pool-machine";
 import type { Cluster, ClusterClass, Effect, PlannedChange } from "./types";
 
 const controlPlaneTimeoutsLabel = "Control plane timeouts";
-const poolTimeoutsLabel = (pool: string): string => `Pool ${pool} timeouts`;
+const poolTimeoutsLabel = (pool: string): string => `Pool ${poolLabel(pool)} timeouts`;
 
 // The rows of the page a setting shows in. Most show in one.
 const settingLabels: Record<string, string[]> = {
@@ -80,11 +81,15 @@ export function worstEffect(changes: PlannedChange[]): Effect {
   );
 }
 
-const workersText = (c: Cluster): string => c.workerPools.map((p) => `${p.name} ${p.replicas}`).join(", ");
+// A cluster with one pool has just its number of workers. Several are told apart by name.
+const workersText = (c: Cluster): string =>
+  c.workerPools.length === 1
+    ? String(c.workerPools[0]?.replicas)
+    : c.workerPools.map((p) => `${poolLabel(p.name)} ${p.replicas}`).join(", ");
 
 function autoscalingText(c: Cluster): string {
   const scaled = c.workerPools.flatMap((p) =>
-    p.autoscaling ? [`${p.name} ${p.autoscaling.min} to ${p.autoscaling.max}`] : [],
+    p.autoscaling ? [`${poolLabel(p.name)} ${p.autoscaling.min} to ${p.autoscaling.max}`] : [],
   );
   return scaled.length === 0 ? "Off" : scaled.join(", ");
 }
@@ -201,7 +206,7 @@ export function changeLines(
       const names = [...new Set([...before.workerPools, ...after.workerPools].map((p) => p.name))];
       return names
         .filter((n) => poolSide(before, n) !== poolSide(after, n))
-        .map((n) => named(names.length === 1 ? "Workers" : `Workers ${n}`, poolSide(before, n), poolSide(after, n)));
+        .map((n) => named(names.length === 1 ? "Workers" : poolLabel(n), poolSide(before, n), poolSide(after, n)));
     }
     return planRows({ before, after }, [change], cls)
       .filter((r) => r.label !== "")

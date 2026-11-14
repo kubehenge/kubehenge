@@ -6,6 +6,15 @@ import { sizeOf } from "./MachineFields";
 import { whole } from "./network";
 import type { Cluster, ClusterClass, MachineSize, WorkerPool } from "./types";
 
+// The name Cluster API gives the pool every cluster starts with. It is no name the user chose.
+const defaultPool = "md-0";
+
+/** poolLabel is a pool's name as the user knows it: the name they gave, or "Workers" for the default pool. */
+export const poolLabel = (name: string): string => (name === defaultPool ? "Workers" : name);
+
+/** poolSuffix tells a pool from the others in a label, and leaves the default pool's unmarked. */
+export const poolSuffix = (name: string): string => (name === defaultPool ? "" : ` (${name})`);
+
 /** poolSize is a pool's machine size: its own, or the cluster's for its workers. */
 export const poolSize = (c: Cluster, p: WorkerPool): MachineSize | undefined =>
   p.machine ?? sizeOf(c.variables["workerMachine"]);

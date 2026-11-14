@@ -4,6 +4,7 @@ import { api } from "./api";
 import { autoscales, controlPlaneSizes, mostWorkers, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import { addressCount, whole } from "./network";
+import { poolSuffix } from "./pool-machine";
 import type {
   AutoscalerSettings,
   Autoscaling,
@@ -294,7 +295,7 @@ export function PoolFields({
 }): JSX.Element {
   return (
     <>
-      <Field label={`Scaling (${p.name})`}>
+      <Field label={`Scaling${poolSuffix(p.name)}`}>
         {(id) => (
           <select
             id={id}
@@ -307,7 +308,7 @@ export function PoolFields({
       </Field>
       {e.autoscale ? (
         <>
-          <Field label={`Fewest workers (${p.name})`} error={problem?.least}>
+          <Field label={`Fewest workers${poolSuffix(p.name)}`} error={problem?.least}>
             {(id) => (
               <input
                 id={id}
@@ -320,7 +321,7 @@ export function PoolFields({
             )}
           </Field>
           <Field
-            label={`Most workers (${p.name})`}
+            label={`Most workers${poolSuffix(p.name)}`}
             error={problem?.most}
             hint={room === undefined ? undefined : `Node addresses leave room for ${room}`}
           >
@@ -339,7 +340,7 @@ export function PoolFields({
         </>
       ) : (
         <Field
-          label={`Workers (${p.name})`}
+          label={`Workers${poolSuffix(p.name)}`}
           error={problem?.least}
           hint={p.autoscaling ? "Keeps its current workers unless changed" : undefined}
         >
