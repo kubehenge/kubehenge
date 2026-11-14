@@ -34,7 +34,7 @@ func TestRecoveryReadsTheVolumeElseTheCopy(t *testing.T) {
 		t.Fatalf("a wrong passphrase: %v", err)
 	}
 
-	recover := func(want string) {
+	recoverFrom := func(want string) {
 		t.Helper()
 		talos.restored = nil
 		if err := a.RecoverManagement(passphrase, ticket(), ready); err != nil {
@@ -49,12 +49,12 @@ func TestRecoveryReadsTheVolumeElseTheCopy(t *testing.T) {
 			t.Fatalf("restored %q", talos.restored)
 		}
 	}
-	recover(FromBackupVolume)
+	recoverFrom(FromBackupVolume)
 
 	// The volume was lost with the cluster, and the apply made an empty one.
 	empty := backupstore.Dir{Root: t.TempDir()}
 	a.OpenVolume = func(context.Context) (provisioner.ObjectStore, error) { return empty, nil }
-	recover(FromApplianceCopy)
+	recoverFrom(FromApplianceCopy)
 }
 
 // Recovery waits for the volume's store before it reads the appliance's copy, never restores a copy

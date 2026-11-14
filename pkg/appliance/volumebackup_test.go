@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"path"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -153,7 +154,11 @@ func TestCopyTightWarnsBeforeTheCapOrTheDisk(t *testing.T) {
 	if c := a.CopyTight(1 << 30); c != nil {
 		t.Fatalf("a %d-byte copy with a GiB free is tight: %+v", size, c)
 	}
-	if a.CopyTight(uint64(2*size-1)) == nil {
+	short, err := strconv.ParseUint(strconv.FormatInt(copyRoom*size-1, 10), 10, 64)
+	if err != nil {
+		t.Fatalf("a %d-byte copy: %v", size, err)
+	}
+	if a.CopyTight(short) == nil {
 		t.Error("a disk without room for the next snapshot and its copy is not tight")
 	}
 	a.CopyCap = size * 100 / copyNearCap
@@ -214,7 +219,7 @@ func TestApplianceKeepsACopyOfTheLatest(t *testing.T) {
 	ctx := t.Context()
 	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
 	a, _, _ := volumeAppliance(t, &now)
-	var names []string
+	names := make([]string, 0, 3)
 	for range 3 {
 		taken, err := a.TakeEtcdSnapshot(ctx)
 		if err != nil {

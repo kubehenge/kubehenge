@@ -232,17 +232,31 @@ func (a *Appliance) Idle() error {
 	return a.running()
 }
 
+// BackupsOnRemove is what a removal does with the backup volume and the appliance's copy.
+type BackupsOnRemove int
+
+const (
+	// KeepBackups keeps the backup volume on Proxmox VE and the appliance's copy.
+	KeepBackups BackupsOnRemove = iota
+	// DeleteBackups deletes the backup volume with its disk, and the appliance's copy.
+	DeleteBackups
+)
+
 // Remove destroys the management cluster and everything the module made on Proxmox VE, on the
 // user's ticket, and returns the appliance to its first run. before runs first: what the module
 // does not own but its pools still hold, the templates, has to go before the pools can. gone is
-// called once the management cluster is gone. The backup volume stays, out of OpenTofu's state,
-// unless removeBackups asks for it to go too.
-func (a *Appliance) Remove(passphrase string, removeBackups bool, ticket *pve.Ticket, before func(ctx context.Context, j *Job) error, gone func()) error {
+// called once the management cluster is gone. backups says whether the backup volume stays, out of
+// OpenTofu's state, or goes too.
+func (a *Appliance) Remove(passphrase string, backups BackupsOnRemove, ticket *pve.Ticket, before func(ctx context.Context, j *Job) error, gone func()) error {
 	if err := ValidPassphrase(passphrase); err != nil {
 		return err
 	}
 	if _, err := os.Stat(filepath.Join(a.workdir(), "terraform.tfstate")); err != nil {
 		return errors.New("there is no management cluster to remove")
+	}
+	release, forget := a.keepBackupVolume, a.forgetRemoved
+	if backups == DeleteBackups {
+		release, forget = a.liftBackupVolume, a.forgetRemovedWithCopy
 	}
 	return a.start(ticket, "remove", func(ctx context.Context, j *Job) error {
 		env, err := a.env(passphrase, ticketAuth(ticket))
@@ -262,14 +276,14 @@ func (a *Appliance) Remove(passphrase string, removeBackups bool, ticket *pve.Ti
 		if err := a.init(ctx, j, env); err != nil {
 			return err
 		}
-		if err := a.releaseBackupVolume(ctx, j, env, removeBackups); err != nil {
+		if err := release(ctx, j, env); err != nil {
 			return err
 		}
 		j.Add("Destroying the management cluster")
 		if err := a.tofu(ctx, j, env, jsonMessage, "destroy", "-auto-approve", "-input=false", "-json"); err != nil {
 			return err
 		}
-		if err := a.forgetRemoved(removeBackups); err != nil {
+		if err := forget(); err != nil {
 			return err
 		}
 		gone()
@@ -277,10 +291,14 @@ func (a *Appliance) Remove(passphrase string, removeBackups bool, ticket *pve.Ti
 	})
 }
 
+// talosconfigName names the management cluster's talosconfig: the module's output, and the file
+// the bucket's snapshots are taken with.
+const talosconfigName = "talosconfig"
+
 // Credential reads the management cluster's admin kubeconfig or talosconfig out of the encrypted
 // state, for repairs the interface cannot make. A wrong passphrase cannot decrypt it.
 func (a *Appliance) Credential(ctx context.Context, passphrase, name string) ([]byte, error) {
-	if name != "kubeconfig" && name != "talosconfig" {
+	if name != "kubeconfig" && name != talosconfigName {
 		return nil, fmt.Errorf("no credential %q", name)
 	}
 	out, err := a.stateOutput(ctx, passphrase, name)
@@ -347,13 +365,8 @@ func (a *Appliance) Stop(ctx context.Context) error {
 // settings stay to fill that setup in. The etcd snapshots stay in their target and on a kept
 // backup volume, and the keys and the talosconfigs that took them go, so that nothing is scheduled
 // for a cluster that is gone and the next setup makes a key of its own. The appliance's copy of the
-// latest backups goes with the backup volume, and otherwise stays for the removed cluster alone.
-func (a *Appliance) forgetRemoved(deleteBackups bool) error {
-	if deleteBackups {
-		if err := os.RemoveAll(a.applianceCopy().Root); err != nil {
-			return fmt.Errorf("deleting the appliance's copy of the backups: %w", err)
-		}
-	}
+// latest backups stays for the removed cluster alone (forgetRemovedWithCopy deletes it).
+func (a *Appliance) forgetRemoved() error {
 	for _, name := range []string{
 		a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath(),
 		a.etcdBackupFile("volume.json"), a.etcdBackupFile("volume-status.json"), a.etcdBackupFile(volumeTalosconfig),
@@ -363,6 +376,15 @@ func (a *Appliance) forgetRemoved(deleteBackups bool) error {
 		}
 	}
 	return a.StopEtcdBackups()
+}
+
+// forgetRemovedWithCopy is forgetRemoved where the backup volume went too, which takes the
+// appliance's copy of the latest backups with it.
+func (a *Appliance) forgetRemovedWithCopy() error {
+	if err := os.RemoveAll(a.applianceCopy().Root); err != nil {
+		return fmt.Errorf("deleting the appliance's copy of the backups: %w", err)
+	}
+	return a.forgetRemoved()
 }
 
 // stateOutput reads one output of the encrypted state with the passphrase, outside any run.

@@ -64,7 +64,7 @@ type VolumeBackupStatus struct {
 	Error  string                    `json:"error,omitempty"`
 	Failed *time.Time                `json:"failed,omitempty"`
 	// Copy is the appliance's own copy of the latest snapshot.
-	Copy *ApplianceCopy `json:"copy,omitempty"`
+	Copy *BackupCopy `json:"copy,omitempty"`
 	// Export is the last export of Kubehenge's objects taken with a snapshot.
 	Export *ExportRecord `json:"export,omitempty"`
 	// SharesHost is set where one Proxmox VE host's loss can take the volume, and the appliance's
@@ -72,8 +72,8 @@ type VolumeBackupStatus struct {
 	SharesHost bool `json:"sharesHost,omitempty"`
 }
 
-// ApplianceCopy is the copy of the latest backups the appliance keeps on its own disk.
-type ApplianceCopy struct {
+// BackupCopy is the copy of the latest backups the appliance keeps on its own disk.
+type BackupCopy struct {
 	Snapshot string `json:"snapshot,omitempty"`
 	Bytes    int64  `json:"bytes"`
 	Cap      int64  `json:"cap"`
@@ -84,7 +84,7 @@ type volumeBackupRecord struct {
 	Last   *provisioner.EtcdSnapshot `json:"last,omitempty"`
 	Error  string                    `json:"error,omitempty"`
 	Failed *time.Time                `json:"failed,omitempty"`
-	Copy   *ApplianceCopy            `json:"copy,omitempty"`
+	Copy   *BackupCopy               `json:"copy,omitempty"`
 	Export *ExportRecord             `json:"export,omitempty"`
 }
 
@@ -216,7 +216,7 @@ func (a *Appliance) openVolume(ctx context.Context) (provisioner.ObjectStore, er
 	if err != nil {
 		return nil, fmt.Errorf("a client for the management cluster: %w", err)
 	}
-	if err := a.wakeStore(ctx, kube); err != nil {
+	if err = a.wakeStore(ctx, kube); err != nil {
 		return nil, err
 	}
 	secret, err := kube.CoreV1().Secrets(backupstore.Namespace).Get(ctx, backupstore.TokenSecret, metav1.GetOptions{})
@@ -249,10 +249,10 @@ func (a *Appliance) wakeStore(ctx context.Context, kube kubernetes.Interface) er
 		return fmt.Errorf("the backup volume's store: %w", err)
 	}
 	if d.Spec.Replicas == nil || *d.Spec.Replicas == 0 {
-		if err := a.followZones(ctx, kube); err != nil {
+		if err = a.followZones(ctx, kube); err != nil {
 			return err
 		}
-		if _, err := deps.Patch(ctx, backupstore.Service, types.MergePatchType, []byte(`{"spec":{"replicas":1}}`), metav1.PatchOptions{}); err != nil {
+		if _, err = deps.Patch(ctx, backupstore.Service, types.MergePatchType, []byte(`{"spec":{"replicas":1}}`), metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("starting the backup volume's store: %w", err)
 		}
 	}
@@ -306,7 +306,9 @@ func (a *Appliance) sleepVolume(ctx context.Context) error {
 
 // storeOnVolume stores the snapshot in file on the volume, encrypted, with the sealed key beside
 // it, and keeps the newest volumeBackupKeep. The appliance then keeps a copy of it alone.
-func (a *Appliance) storeOnVolume(ctx context.Context, keys *volumeBackupKeys, file string, taken provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
+func (a *Appliance) storeOnVolume(ctx context.Context, keys *volumeBackupKeys, file string, taken *provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
+	// Each place fills in its own record of the snapshot.
+	snap := *taken
 	to, err := age.ParseX25519Recipient(keys.Recipient)
 	if err != nil {
 		return nil, fmt.Errorf("the snapshots' key: %w", err)
@@ -316,25 +318,25 @@ func (a *Appliance) storeOnVolume(ctx context.Context, keys *volumeBackupKeys, f
 		return nil, err
 	}
 	key := volumeIdentityKey(keys.Recipient)
-	if _, err := store.Stat(ctx, key); errors.Is(err, provisioner.ErrNoObject) {
+	if _, err = store.Stat(ctx, key); errors.Is(err, provisioner.ErrNoObject) {
 		sealed, derr := base64.StdEncoding.DecodeString(keys.Sealed)
 		if derr != nil {
 			return nil, fmt.Errorf("the snapshots' sealed key: %w", derr)
 		}
-		if _, err := store.Put(ctx, key, bytes.NewReader(sealed), nil); err != nil {
+		if _, err = store.Put(ctx, key, bytes.NewReader(sealed), nil); err != nil {
 			return nil, fmt.Errorf("storing the snapshots' key: %w", err)
 		}
 	} else if err != nil {
 		return nil, fmt.Errorf("the backup volume: %w", err)
 	}
 	folder := provisioner.ManagementEtcdFolder("")
-	if err := storeFile(ctx, store, folder, &taken, file, to); err != nil {
+	if err = storeFile(ctx, store, folder, &snap, file, to); err != nil {
 		return nil, fmt.Errorf("storing the snapshot on the backup volume: %w", err)
 	}
-	if _, err := provisioner.PruneEtcdSnapshots(ctx, store, folder, volumeBackupKeep); err != nil {
-		return &taken, fmt.Errorf("deleting older snapshots on the backup volume: %w", err)
+	if _, err = provisioner.PruneEtcdSnapshots(ctx, store, folder, volumeBackupKeep); err != nil {
+		return &snap, fmt.Errorf("deleting older snapshots on the backup volume: %w", err)
 	}
-	return &taken, nil
+	return &snap, nil
 }
 
 func storeFile(ctx context.Context, store provisioner.ObjectStore, folder string, taken *provisioner.EtcdSnapshot, file string, to age.Recipient) error {
@@ -350,6 +352,9 @@ func storeFile(ctx context.Context, store provisioner.ObjectStore, folder string
 // of. Each setup makes a key of its own, so a copy left by a removed cluster names another.
 const copyOwnerKey = "management/cluster"
 
+// maxRecipient bounds what is read of the owner's recipient, an age X25519 recipient of 62 bytes.
+const maxRecipient = 256
+
 // ErrForeignCopy refuses the appliance's copy of a management cluster other than this one.
 var ErrForeignCopy = errors.New("the appliance's copy holds the backups of a management cluster removed since, not of this one. It is not restored onto this cluster")
 
@@ -364,7 +369,7 @@ func (a *Appliance) checkCopyOwner(ctx context.Context, recipient string) error 
 		return fmt.Errorf("the appliance's copy: %w", err)
 	}
 	defer func() { _ = r.Close() }()
-	owner, err := io.ReadAll(io.LimitReader(r, 256))
+	owner, err := io.ReadAll(io.LimitReader(r, maxRecipient))
 	if err != nil {
 		return fmt.Errorf("the appliance's copy: %w", err)
 	}
@@ -384,8 +389,8 @@ func (a *Appliance) copyCap() int64 {
 // copyOnAppliance keeps the snapshot, encrypted, with its export and key, as the appliance's one
 // copy, within its cap. A copy over the cap, or one that fails, leaves the copy before it, prev, in
 // place.
-func (a *Appliance) copyOnAppliance(ctx context.Context, keys *volumeBackupKeys, file string, taken provisioner.EtcdSnapshot, export []byte, prev *ApplianceCopy) *ApplianceCopy {
-	c := &ApplianceCopy{Cap: a.copyCap()}
+func (a *Appliance) copyOnAppliance(ctx context.Context, keys *volumeBackupKeys, file string, taken *provisioner.EtcdSnapshot, export []byte, prev *BackupCopy) *BackupCopy {
+	c := &BackupCopy{Cap: a.copyCap()}
 	err := a.replaceCopy(ctx, keys, file, taken, export, c.Cap)
 	switch {
 	case err == nil:
@@ -407,7 +412,9 @@ const (
 	copyReplaced = ".old"
 )
 
-func (a *Appliance) replaceCopy(ctx context.Context, keys *volumeBackupKeys, file string, taken provisioner.EtcdSnapshot, export []byte, capBytes int64) error {
+func (a *Appliance) replaceCopy(ctx context.Context, keys *volumeBackupKeys, file string, taken *provisioner.EtcdSnapshot, export []byte, capBytes int64) error {
+	// The copy fills in its own record of the snapshot.
+	snap := *taken
 	to, err := age.ParseX25519Recipient(keys.Recipient)
 	if err != nil {
 		return fmt.Errorf("the snapshots' key: %w", err)
@@ -418,11 +425,11 @@ func (a *Appliance) replaceCopy(ctx context.Context, keys *volumeBackupKeys, fil
 	}
 	live := a.applianceCopy().Root
 	staged := backupstore.Dir{Root: live + copyStaging}
-	if err := os.RemoveAll(staged.Root); err != nil {
+	if err = os.RemoveAll(staged.Root); err != nil {
 		return fmt.Errorf("clearing room for the appliance's copy: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(staged.Root) }()
-	err = storeFile(ctx, staged, provisioner.ManagementEtcdFolder(""), &taken, file, to)
+	err = storeFile(ctx, staged, provisioner.ManagementEtcdFolder(""), &snap, file, to)
 	if err == nil {
 		_, err = staged.Put(ctx, volumeIdentityKey(keys.Recipient), bytes.NewReader(sealed), nil)
 	}
@@ -470,10 +477,10 @@ func (a *Appliance) sweepCopy() error {
 
 // mebibytes writes a size in MiB, rounded up, so that a size just over a cap never reads as it.
 func mebibytes(n int64) string {
-	if n < 1<<20 {
+	if n < mib {
 		return fmt.Sprintf("%d bytes", n)
 	}
-	return fmt.Sprintf("%d MiB", (n+1<<20-1)>>20)
+	return fmt.Sprintf("%d MiB", (n+mib-1)/mib)
 }
 
 // CleanUp clears what a run cut short by a crash or a power loss left on the appliance's disk. It
@@ -535,7 +542,7 @@ func (c *ctxReader) Read(p []byte) (int, error) {
 }
 
 // backUpToVolume takes a snapshot onto the volume and the appliance's copy, and records how it went.
-func (a *Appliance) backUpToVolume(ctx context.Context, keys *volumeBackupKeys, file string, taken provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
+func (a *Appliance) backUpToVolume(ctx context.Context, keys *volumeBackupKeys, file string, taken *provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
 	stored, err := a.storeOnVolume(ctx, keys, file, taken)
 	rec := a.volumeBackupRecord()
 	export, sealedExport, exportErr := a.exportToVolume(ctx, keys, taken.Name)
@@ -610,17 +617,21 @@ func (st *EtcdBackupStatus) Summary() *BackupSummary {
 // it.
 const copyNearCap = 80
 
+// copyRoom is how many times the copy's size the next snapshot needs free on the disk: its plain
+// file, and its new copy beside the old one.
+const copyRoom = 2
+
 // CopyTight returns the appliance's copy of the latest backups when the next may not fit: the copy
-// is near its cap, or the disk's free bytes hold less than the next snapshot needs, which is its
-// plain file and its new copy beside the old one. Nil while there is room.
-func (a *Appliance) CopyTight(free uint64) *ApplianceCopy {
+// is near its cap, or the disk's free bytes hold less than the next snapshot needs. Nil while there
+// is room.
+func (a *Appliance) CopyTight(free uint64) *BackupCopy {
 	st := a.VolumeBackups()
 	if st == nil || st.Copy == nil {
 		return nil
 	}
 	c := *st.Copy
 	c.Cap = a.copyCap()
-	if c.Bytes*100 >= c.Cap*copyNearCap || free < uint64(2*c.Bytes) { //nolint:gosec // a size is never negative
+	if c.Bytes*100 >= c.Cap*copyNearCap || free < uint64(copyRoom*c.Bytes) { //nolint:gosec // a size is never negative
 		return &c
 	}
 	return nil
@@ -632,15 +643,17 @@ const moduleAddress = "module.management."
 // backupVolumeAddress is the backup volume's VM, as the root config's state names it.
 const backupVolumeAddress = moduleAddress + "proxmox_virtual_environment_vm.backups"
 
-// releaseBackupVolume prepares the backup volume for a destroy of the module. Kept, its VM leaves
-// OpenTofu's state, so that the destroy passes it by. Removed, its protection is lifted, so that
+// liftBackupVolume lifts the backup volume's protection before a destroy of the module, so that
 // the destroy deletes it with its disk.
-func (a *Appliance) releaseBackupVolume(ctx context.Context, j *Job, env []string, remove bool) error {
-	if remove {
-		j.Add("Lifting the backup volume's protection, so that it is removed too")
-		return a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json",
-			"-target="+backupVolumeAddress, "-var=backup_volume_protection=false")
-	}
+func (a *Appliance) liftBackupVolume(ctx context.Context, j *Job, env []string) error {
+	j.Add("Lifting the backup volume's protection, so that it is removed too")
+	return a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json",
+		"-target="+backupVolumeAddress, "-var=backup_volume_protection=false")
+}
+
+// keepBackupVolume takes the backup volume's VM out of OpenTofu's state before a destroy of the
+// module, so that the destroy passes it by.
+func (a *Appliance) keepBackupVolume(ctx context.Context, j *Job, env []string) error {
 	// The whole list, since OpenTofu fails on an address the state does not hold, as a cluster set
 	// up before the backup volume existed.
 	held := false

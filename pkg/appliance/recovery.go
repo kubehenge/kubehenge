@@ -203,7 +203,7 @@ func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPass
 	if err != nil {
 		return nil, err
 	}
-	talosconfig, err := a.Credential(ctx, statePassphrase, "talosconfig")
+	talosconfig, err := a.Credential(ctx, statePassphrase, talosconfigName)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +327,7 @@ func (a *Appliance) ImportState(ctx context.Context, sealed []byte, exportPassph
 	// reads the admin talosconfig from the state, works without it.
 	if a.Talos != nil {
 		if talosconfig, err := a.etcdBackupCredential(ctx, []byte(b.Talosconfig), &keys); err == nil {
-			if err := writeFileAtomic(a.etcdBackupFile("talosconfig"), talosconfig); err != nil {
+			if err := writeFileAtomic(a.etcdBackupFile(talosconfigName), talosconfig); err != nil {
 				return err
 			}
 			return writeJSONFile(a.etcdBackupFile("keys.json"), keys)

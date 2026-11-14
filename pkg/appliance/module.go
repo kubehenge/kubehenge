@@ -151,7 +151,7 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err != nil {
 		return nil, err
 	}
-	talos, err := a.output(ctx, env, "talosconfig")
+	talos, err := a.output(ctx, env, talosconfigName)
 	if err != nil {
 		return nil, err
 	}

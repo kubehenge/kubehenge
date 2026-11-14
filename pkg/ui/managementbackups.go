@@ -166,11 +166,11 @@ func (s *Server) takeManagementSnapshot(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) snapshotManagement(ctx context.Context, now time.Time) {
 	taken, err := s.Appliance.TakeScheduledEtcdSnapshot(ctx, now)
-	if err != nil {
-		s.Log.Error("management cluster snapshot", "error", err)
+	if errors.Is(err, appliance.ErrNoSnapshotDue) {
 		return
 	}
-	if taken == nil {
+	if err != nil {
+		s.Log.Error("management cluster snapshot", "error", err)
 		return
 	}
 	s.Log.Info("management cluster snapshot taken", "snapshot", taken.Name)

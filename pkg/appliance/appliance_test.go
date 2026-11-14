@@ -503,14 +503,14 @@ func TestRemove(t *testing.T) {
 
 	before, gone := 0, 0
 	step := func(_ context.Context, j *Job) error { before++; j.Add("deleting templates"); return nil }
-	if err := a.Remove("the wrong passphrase entirely", false, ticket(), step, func() { gone++ }); err != nil {
+	if err := a.Remove("the wrong passphrase entirely", KeepBackups, ticket(), step, func() { gone++ }); err != nil {
 		t.Fatal(err)
 	}
 	if j := waitFor(t, a); j.State != "failed" || j.Kind != "remove" || before != 0 || gone != 0 || !a.Ready() {
 		t.Fatalf("wrong passphrase: job %+v, before %d, gone %d", j, before, gone)
 	}
 
-	if err := a.Remove("correct horse battery staple", false, ticket(), step, func() { gone++ }); err != nil {
+	if err := a.Remove("correct horse battery staple", KeepBackups, ticket(), step, func() { gone++ }); err != nil {
 		t.Fatal(err)
 	}
 	j := waitFor(t, a)

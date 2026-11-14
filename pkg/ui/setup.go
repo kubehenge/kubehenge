@@ -207,7 +207,7 @@ func (s *Server) diskFull(ctx context.Context) *diskFull {
 	}
 	// Rounded up, as df rounds it.
 	percent := (used*100 + total - 1) / total
-	var tight *appliance.ApplianceCopy
+	var tight *appliance.BackupCopy
 	if s.Appliance != nil {
 		tight = s.Appliance.CopyTight(free)
 	}
@@ -433,7 +433,11 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	err = a.Remove(req.Passphrase, req.RemoveBackups, ticket, s.beforeRemoval(ticket), func() { s.activeKube.Store(nil) }) //nolint:contextcheck // the job outlives the request on purpose
+	backups := appliance.KeepBackups
+	if req.RemoveBackups {
+		backups = appliance.DeleteBackups
+	}
+	err = a.Remove(req.Passphrase, backups, ticket, s.beforeRemoval(ticket), func() { s.activeKube.Store(nil) }) //nolint:contextcheck // the job outlives the request on purpose
 	switch {
 	case jobConflict(err):
 		writeError(w, http.StatusConflict, err.Error())

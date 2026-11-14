@@ -230,7 +230,7 @@ func (a *Appliance) ConfigureEtcdBackups(ctx context.Context, s *EtcdBackupSetti
 	if accessKeyID == "" || secretAccessKey == "" {
 		return errors.New("access key: both its ID and its secret are needed")
 	}
-	admin, err := a.Credential(ctx, passphrase, "talosconfig")
+	admin, err := a.Credential(ctx, passphrase, talosconfigName)
 	if err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func (a *Appliance) ConfigureEtcdBackups(ctx context.Context, s *EtcdBackupSetti
 	if err := os.MkdirAll(a.etcdBackupDir(), privateDir); err != nil {
 		return fmt.Errorf("keeping the backups' settings: %w", err)
 	}
-	if err := writeFileAtomic(a.etcdBackupFile("talosconfig"), talosconfig); err != nil {
+	if err := writeFileAtomic(a.etcdBackupFile(talosconfigName), talosconfig); err != nil {
 		return err
 	}
 	if err := writeJSONFile(a.etcdBackupFile("keys.json"), keys); err != nil {
@@ -297,7 +297,7 @@ func (a *Appliance) renewEtcdBackupCredential(ctx context.Context, admin []byte)
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(a.etcdBackupFile("talosconfig"), talosconfig); err != nil {
+	if err := writeFileAtomic(a.etcdBackupFile(talosconfigName), talosconfig); err != nil {
 		return err
 	}
 	return writeJSONFile(a.etcdBackupFile("keys.json"), keys)
@@ -312,7 +312,7 @@ func (a *Appliance) EtcdBackupKeysStored() bool {
 // StopEtcdBackups switches the backups off and forgets the access key. The snapshots stay.
 func (a *Appliance) StopEtcdBackups() error {
 	var errs []error
-	for _, name := range []string{"settings.json", "keys.json", "talosconfig", "status.json"} {
+	for _, name := range []string{"settings.json", "keys.json", talosconfigName, "status.json"} {
 		if err := os.Remove(a.etcdBackupFile(name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, err)
 		}
@@ -456,8 +456,8 @@ func (a *Appliance) TakeEtcdSnapshot(ctx context.Context) (*provisioner.EtcdSnap
 }
 
 // TakeScheduledEtcdSnapshot takes the snapshot the schedules have due at now, into the places
-// whose own schedule has it due, so that each keeps the spacing it was set to. It returns nil when
-// none is due.
+// whose own schedule has it due, so that each keeps the spacing it was set to. It returns
+// ErrNoSnapshotDue when none is due.
 func (a *Appliance) TakeScheduledEtcdSnapshot(ctx context.Context, now time.Time) (*provisioner.EtcdSnapshot, error) {
 	if err := a.claimEtcdSnapshot(); err != nil {
 		return nil, err
@@ -501,6 +501,41 @@ func (a *Appliance) claimEtcdSnapshot() error {
 	return nil
 }
 
+// ErrNoSnapshotDue is TakeScheduledEtcdSnapshot's answer when no place has a snapshot due.
+var ErrNoSnapshotDue = errors.New("no management snapshot is due")
+
+// snapshotPlaces are the places one snapshot goes.
+type snapshotPlaces struct {
+	// vol is the backup volume's keys, nil where the volume takes none.
+	vol *volumeBackupKeys
+	// b and berr are the bucket target's setup, and bucket whether it takes the snapshot.
+	b      *backupSetup
+	berr   error
+	bucket bool
+}
+
+// placesFor picks every place backups go, or with due set, those whose schedule has one due then.
+func (a *Appliance) placesFor(due *time.Time) (snapshotPlaces, error) {
+	p := snapshotPlaces{vol: a.volumeBackupKeys()}
+	p.b, p.berr = a.backupSetup()
+	p.bucket = !errors.Is(p.berr, ErrNoEtcdBackups)
+	if due != nil {
+		if !a.volumeBackupDue(*due) {
+			p.vol = nil
+		}
+		if st := a.EtcdBackups(); st.Settings == nil || st.Next == nil || due.Before(*st.Next) {
+			p.bucket = false
+		}
+		if p.vol == nil && !p.bucket {
+			return p, ErrNoSnapshotDue
+		}
+	}
+	if p.vol == nil && !p.bucket {
+		return p, p.berr
+	}
+	return p, nil
+}
+
 // snapshotEtcd takes a snapshot into every place backups go, or with due set, into those whose
 // schedule has one due then.
 func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisioner.EtcdSnapshot, error) {
@@ -511,23 +546,11 @@ func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisio
 	}()
 	ctx, cancel := context.WithTimeout(ctx, etcdBackupTimeout)
 	defer cancel()
-	vol := a.volumeBackupKeys()
-	b, berr := a.backupSetup()
-	bucket := !errors.Is(berr, ErrNoEtcdBackups)
-	if due != nil {
-		if !a.volumeBackupDue(*due) {
-			vol = nil
-		}
-		if st := a.EtcdBackups(); st.Settings == nil || st.Next == nil || due.Before(*st.Next) {
-			bucket = false
-		}
-		if vol == nil && !bucket {
-			return nil, nil
-		}
+	p, err := a.placesFor(due)
+	if err != nil {
+		return nil, err
 	}
-	if vol == nil && !bucket {
-		return nil, berr
-	}
+	vol, b, berr, bucket := p.vol, p.b, p.berr, p.bucket
 	failed := func(err error) {
 		if vol != nil {
 			a.volumeBackupFailed(err)
@@ -537,7 +560,7 @@ func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisio
 		}
 	}
 	var nodes []string
-	credential := "talosconfig"
+	credential := talosconfigName
 	switch {
 	case vol != nil:
 		nodes, credential = vol.Nodes, volumeTalosconfig
@@ -557,7 +580,7 @@ func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisio
 	if applied := a.LastApplied(); applied != nil && applied.Versions["kubernetes"] != "" {
 		version = applied.Versions["kubernetes"]
 	}
-	taken := provisioner.EtcdSnapshot{Name: provisioner.EtcdSnapshotName(a.now(), version), KubernetesVersion: version, Distribution: "talos"}
+	taken := &provisioner.EtcdSnapshot{Name: provisioner.EtcdSnapshotName(a.now(), version), KubernetesVersion: version, Distribution: "talos"}
 	var stored *provisioner.EtcdSnapshot
 	var errs []error
 	if vol != nil {
@@ -575,12 +598,12 @@ func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisio
 }
 
 // backUpToTarget stores the snapshot in file in the target and records how it went.
-func (a *Appliance) backUpToTarget(ctx context.Context, b *backupSetup, berr error, file string, taken provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
+func (a *Appliance) backUpToTarget(ctx context.Context, b *backupSetup, berr error, file string, taken *provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
 	if berr != nil {
 		a.etcdBackupFailed(berr)
 		return nil, berr
 	}
-	stored, err := a.storeEtcdSnapshot(ctx, b, file, taken)
+	stored, err := storeEtcdSnapshot(ctx, b, file, taken)
 	if err != nil {
 		a.etcdBackupFailed(err)
 		return stored, err
@@ -609,19 +632,21 @@ func (a *Appliance) etcdBackupFailed(err error) {
 	}
 }
 
-func (a *Appliance) storeEtcdSnapshot(ctx context.Context, b *backupSetup, file string, taken provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
+func storeEtcdSnapshot(ctx context.Context, b *backupSetup, file string, taken *provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
+	// The bucket fills in its own record of the snapshot.
+	snap := *taken
 	to, err := age.ParseX25519Recipient(b.keys.Recipient)
 	if err != nil {
 		return nil, fmt.Errorf("the snapshots' key: %w", err)
 	}
 	folder := provisioner.ManagementEtcdFolder(b.target.Prefix)
-	if err := storeFile(ctx, b.store, folder, &taken, file, to); err != nil {
+	if err = storeFile(ctx, b.store, folder, &snap, file, to); err != nil {
 		return nil, fmt.Errorf("storing the snapshot: %w", err)
 	}
-	if _, err := provisioner.PruneEtcdSnapshots(ctx, b.store, folder, b.settings.Keep); err != nil {
-		return &taken, fmt.Errorf("deleting older snapshots: %w", err)
+	if _, err = provisioner.PruneEtcdSnapshots(ctx, b.store, folder, b.settings.Keep); err != nil {
+		return &snap, fmt.Errorf("deleting older snapshots: %w", err)
 	}
-	return &taken, nil
+	return &snap, nil
 }
 
 // ListEtcdSnapshots lists the management cluster's snapshots in the target, newest first.
@@ -688,7 +713,7 @@ func (a *Appliance) etcdRestoreAccess(ctx context.Context, passphrase string) (*
 	if err != nil {
 		return nil, err
 	}
-	admin, err := a.Credential(ctx, passphrase, "talosconfig")
+	admin, err := a.Credential(ctx, passphrase, talosconfigName)
 	if err != nil {
 		return nil, err
 	}

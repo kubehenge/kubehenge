@@ -45,10 +45,13 @@ func TestABucketKeepsItsOwnScheduleBesideTheVolume(t *testing.T) {
 	}
 }
 
+// backupsOf is the removal that deletes the backup volume, or keeps it, as the tests' cases say.
+var backupsOf = map[bool]BackupsOnRemove{false: KeepBackups, true: DeleteBackups}
+
 // removed is a with its management cluster removed, the backup volume kept or deleted with it.
 func removed(t *testing.T, a *Appliance, deleteVolume bool) {
 	t.Helper()
-	if err := a.Remove(passphrase, deleteVolume, ticket(), func(context.Context, *Job) error { return nil }, func() {}); err != nil {
+	if err := a.Remove(passphrase, backupsOf[deleteVolume], ticket(), func(context.Context, *Job) error { return nil }, func() {}); err != nil {
 		t.Fatal(err)
 	}
 	if j := waitFor(t, a); j.State != StateSucceeded {
@@ -101,7 +104,7 @@ func TestRemoveDeletesOrFencesTheAppliancesCopy(t *testing.T) {
 			}
 			// A setup a month later, whose volume holds nothing yet.
 			now = now.Add(30 * 24 * time.Hour)
-			if err := os.WriteFile(filepath.Join(a.workdir(), "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
+			if err = os.WriteFile(filepath.Join(a.workdir(), "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			talosconfig, err := a.Credential(ctx, passphrase, "talosconfig")
@@ -179,13 +182,13 @@ func TestCleanUpPutsBackTheCopyACrashLeftAside(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := a.applianceCopy().Root
-	if err := os.Rename(live, live+copyReplaced); err != nil {
+	if err = os.Rename(live, live+copyReplaced); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(live+copyStaging, "management"), 0o700); err != nil {
+	if err = os.MkdirAll(filepath.Join(live+copyStaging, "management"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.CleanUp(); err != nil {
+	if err = a.CleanUp(); err != nil {
 		t.Fatal(err)
 	}
 	copies, err := provisioner.ListEtcdSnapshots(t.Context(), a.applianceCopy(), provisioner.ManagementEtcdFolder(""))

@@ -21,7 +21,7 @@ type tofuConfig struct {
 
 var (
 	tofuBlock   = regexp.MustCompile(`(?m)^(resource|data|module|variable)\s+"([^"]+)"(?:\s+"([^"]+)")?\s*\{`)
-	moduleInput = regexp.MustCompile(`(?m)^  (\w+)\s+=`)
+	moduleInput = regexp.MustCompile(`(?m)^ {2}(\w+)\s+=`)
 	tofuIndex   = regexp.MustCompile(`\[[^\]]*\]$`)
 )
 
@@ -66,8 +66,11 @@ func readTofuConfig(t *testing.T) tofuConfig {
 	if calls != 1 {
 		t.Fatalf("the root config calls %d modules", calls)
 	}
-	block := root[strings.Index(root, "module \"management\""):]
-	block = block[:strings.Index(block, "\n}\n")]
+	_, rest, found := strings.Cut(root, "module \"management\"")
+	block, _, closed := strings.Cut(rest, "\n}\n")
+	if !found || !closed {
+		t.Fatal("the root config has no whole module \"management\" block")
+	}
 	for _, m := range moduleInput.FindAllStringSubmatch(block, -1) {
 		if m[1] != "source" && !c.moduleVars[m[1]] {
 			t.Errorf("the root config passes %s, which the module does not declare", m[1])
@@ -171,7 +174,7 @@ func TestTofuAddressesNameTheRootConfig(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := a.Remove("correct horse battery staple", deleteVolume, ticket(), func(context.Context, *Job) error { return nil }, func() {}); err != nil {
+			if err := a.Remove("correct horse battery staple", backupsOf[deleteVolume], ticket(), func(context.Context, *Job) error { return nil }, func() {}); err != nil {
 				t.Fatal(err)
 			}
 			if j := waitFor(t, a); j.State != StateSucceeded {

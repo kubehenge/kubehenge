@@ -48,7 +48,7 @@ func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, rea
 	}
 	// Read before the run, which the state's own reads wait for. The machine secrets, and so the
 	// nodes' addresses, stay the same across the apply.
-	admin, err := a.Credential(context.Background(), passphrase, "talosconfig")
+	admin, err := a.Credential(context.Background(), passphrase, talosconfigName)
 	if err != nil {
 		return err
 	}
@@ -61,17 +61,17 @@ func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, rea
 		if _, err := a.run(ctx, j, settings, passphrase, ticket); err != nil {
 			return err
 		}
-		file, name, from, err := a.newestBackup(ctx, j, identity, passphrase)
+		read, err := a.newestBackup(ctx, j, identity, passphrase)
 		if err != nil {
 			return err
 		}
-		defer func() { _ = os.Remove(file) }()
-		if err := a.sleepVolume(ctx); err != nil {
-			j.Add("The backup volume's store stays up: " + err.Error())
+		defer func() { _ = os.Remove(read.file) }()
+		if serr := a.sleepVolume(ctx); serr != nil {
+			j.Add("The backup volume's store stays up: " + serr.Error())
 		}
-		j.Add("Restoring the management cluster's etcd from " + name + ", read from " + from)
-		open := func() (io.ReadCloser, error) { return os.Open(file) } //nolint:gosec // the appliance's own file
-		if err := a.Talos.Restore(ctx, admin, nodes, open, j.Add); err != nil {
+		j.Add("Restoring the management cluster's etcd from " + read.name + ", read from " + read.from)
+		open := func() (io.ReadCloser, error) { return os.Open(read.file) }
+		if err = a.Talos.Restore(ctx, admin, nodes, open, j.Add); err != nil {
 			return fmt.Errorf("restoring etcd: %w", err)
 		}
 		j.Add("Applying the management cluster whole")
@@ -96,10 +96,15 @@ const (
 // errNoSnapshot is a store that answers and holds no snapshot.
 var errNoSnapshot = errors.New("it holds no snapshot")
 
+// readBackup is a snapshot decrypted into file, with its name and the place it was read from.
+type readBackup struct {
+	file, name, from string
+}
+
 // newestBackup decrypts the newest snapshot of the backup volume and the appliance's copy into a
 // file, and says which it read and why. It waits for the volume's store first, so that a store not
 // started yet never hands the restore to an older copy.
-func (a *Appliance) newestBackup(ctx context.Context, j *Job, identity *age.X25519Identity, passphrase string) (string, string, string, error) {
+func (a *Appliance) newestBackup(ctx context.Context, j *Job, identity *age.X25519Identity, passphrase string) (readBackup, error) {
 	folder := provisioner.ManagementEtcdFolder("")
 	store, onVolume, volErr := a.waitForVolume(ctx, j, folder)
 	copied := a.applianceCopy()
@@ -112,12 +117,12 @@ func (a *Appliance) newestBackup(ctx context.Context, j *Job, identity *age.X255
 		j.Add("Reading the backup volume, which holds the newest snapshot")
 		file, err := a.decryptWithKeys(ctx, store, folder, onVolume, identity, passphrase)
 		if err == nil {
-			return file, onVolume.Name, FromBackupVolume, nil
+			return readBackup{file, onVolume.Name, FromBackupVolume}, nil
 		}
 		volErr = err
 	}
 	if copyErr != nil {
-		return "", "", "", fmt.Errorf("neither the backup volume nor the appliance's copy gives a snapshot: %w", errors.Join(fmt.Errorf("the backup volume: %w", volErr), fmt.Errorf("the appliance's copy: %w", copyErr)))
+		return readBackup{}, fmt.Errorf("neither the backup volume nor the appliance's copy gives a snapshot: %w", errors.Join(fmt.Errorf("the backup volume: %w", volErr), fmt.Errorf("the appliance's copy: %w", copyErr)))
 	}
 	if volErr != nil {
 		j.Add("Reading the appliance's copy, since the backup volume gives no snapshot: " + volErr.Error())
@@ -126,17 +131,18 @@ func (a *Appliance) newestBackup(ctx context.Context, j *Job, identity *age.X255
 	}
 	file, err := a.decryptSnapshot(ctx, copied, folder, inCopy, identity.String())
 	if err != nil {
-		return "", "", "", fmt.Errorf("the appliance's copy, snapshot %s: %w", inCopy.Name, err)
+		return readBackup{}, fmt.Errorf("the appliance's copy, snapshot %s: %w", inCopy.Name, err)
 	}
-	return file, inCopy.Name, FromApplianceCopy, nil
+	return readBackup{file, inCopy.Name, FromApplianceCopy}, nil
 }
 
 // waitForVolume lists the backup volume's newest snapshot, retrying while its store does not
 // answer, up to volumeWait. A store that answers with no snapshot ends the wait.
-func (a *Appliance) waitForVolume(ctx context.Context, j *Job, folder string) (provisioner.ObjectStore, *provisioner.EtcdSnapshot, error) {
+func (a *Appliance) waitForVolume(ctx context.Context, j *Job, folder string) (provisioner.ObjectStore, *provisioner.EtcdSnapshot, error) { //nolint:ireturn // the store openVolume gives, which tests stand in for
 	wait, retry := volumeWait, volumeRetry
 	if a.waitVolume > 0 {
-		wait, retry = a.waitVolume, a.waitVolume/10
+		// A shorter wait keeps the same number of tries.
+		wait, retry = a.waitVolume, a.waitVolume/(volumeWait/volumeRetry)
 	}
 	deadline := time.Now().Add(wait)
 	for said := false; ; said = true {
@@ -217,7 +223,7 @@ func (a *Appliance) decryptSnapshot(ctx context.Context, store provisioner.Objec
 	}
 	if err != nil {
 		_ = os.Remove(f.Name())
-		return "", err //nolint:wrapcheck // DecryptEtcdSnapshot names what failed
+		return "", err
 	}
 	return f.Name(), nil
 }

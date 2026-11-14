@@ -348,7 +348,7 @@ func TestApplianceEtcdBackupsShowTheVolume(t *testing.T) {
 		Volume: &appliance.VolumeBackupStatus{
 			Claim: "kubehenge-system/kubehenge-backups",
 			Last:  &provisioner.EtcdSnapshot{Name: "20270301T120000Z-v1.37.2.db.age", Time: last},
-			Copy:  &appliance.ApplianceCopy{Snapshot: "20270301T120000Z-v1.37.2.db.age", Bytes: 3 << 20, Cap: 1 << 30},
+			Copy:  &appliance.BackupCopy{Snapshot: "20270301T120000Z-v1.37.2.db.age", Bytes: 3 << 20, Cap: 1 << 30},
 		},
 		Where: &appliance.BackupSummary{Where: []string{"backup volume kubehenge-system/kubehenge-backups", "appliance copy"}, Last: &last, Error: "backup volume: unreachable"},
 	}
