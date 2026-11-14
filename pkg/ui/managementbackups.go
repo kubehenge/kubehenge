@@ -152,16 +152,24 @@ func (s *Server) takeManagementSnapshot(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	err := s.Appliance.StartEtcdSnapshot(r.Context())
-	if errors.Is(err, appliance.ErrNoEtcdBackups) || errors.Is(err, appliance.ErrEtcdSnapshotTaking) {
+	if errors.Is(err, appliance.ErrNoEtcdBackups) || errors.Is(err, appliance.ErrEtcdSnapshotTaking) ||
+		errors.Is(err, appliance.ErrEtcdRecovering) || errors.Is(err, appliance.ErrEtcdRemoving) {
 		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.Log.Info("management cluster snapshot asked for", "user", u.ticket.Username)
 	writeJSON(w, http.StatusAccepted, s.managementBackupsOf())
 }
 
-func (s *Server) snapshotManagement(ctx context.Context) {
-	taken, err := s.Appliance.TakeEtcdSnapshot(ctx)
+func (s *Server) snapshotManagement(ctx context.Context, now time.Time) {
+	taken, err := s.Appliance.TakeScheduledEtcdSnapshot(ctx, now)
+	if errors.Is(err, appliance.ErrNoSnapshotDue) {
+		return
+	}
 	if err != nil {
 		s.Log.Error("management cluster snapshot", "error", err)
 		return
@@ -203,8 +211,8 @@ func (s *Server) backUpManagementEtcd(ctx context.Context) {
 	t := time.NewTicker(etcdBackupLook)
 	defer t.Stop()
 	for {
-		if a.EtcdBackupDue(time.Now()) {
-			s.snapshotManagement(ctx)
+		if now := time.Now(); a.EtcdBackupDue(now) {
+			s.snapshotManagement(ctx, now)
 		}
 		select {
 		case <-ctx.Done():

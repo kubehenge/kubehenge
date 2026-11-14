@@ -444,6 +444,10 @@ resource "proxmox_virtual_environment_vm" "node" {
   # A VM given another node moves there rather than being made again, which would take its etcd
   # member with it.
   migrate = true
+  # The backups VM's disk may still be attached to a node VM, so a destroy deletes the node VMs
+  # first. The order runs this way round so that an apply targeting the backups VM alone, as a
+  # removal that lifts its protection does, makes or changes no node VM.
+  depends_on = [proxmox_virtual_environment_vm.backups]
 
   machine         = "q35"
   scsi_hardware   = "virtio-scsi-single"

@@ -1,0 +1,252 @@
+{{- $ns := .Values.backupVolume.namespace }}
+{{- $name := "kubehenge-backup-store" }}
+{{- /* The token is made once and kept, so that clients holding it keep working across upgrades. */}}
+{{- $token := randAlphaNum 48 }}
+{{- with lookup "v1" "Secret" $ns $name }}
+{{- $token = index .data "token" | b64dec }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+type: Opaque
+data:
+  token: {{ $token | b64enc | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ $name }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/part-of: kubehenge
+  {{- /* A disk on one node's own storage stays attached to a node VM only while the store runs, and an
+  attached disk keeps Proxmox VE from migrating that VM. There the store sleeps, and the appliance
+  wakes it for each backup or recovery, then puts it back to these replicas. */}}
+  annotations:
+    kubehenge.dev/idle-replicas: {{ ternary "0" "1" (ne .Values.backupVolume.zone "") | quote }}
+    {{- /* Whether one Proxmox VE host's loss takes the volume, for the interface's warning. */}}
+    kubehenge.dev/shares-host: {{ .Values.backupVolume.sharesHost | toString | quote }}
+    {{- with .Values.backupVolume.zone }}
+    {{- /* The Proxmox VE node that holds the disk, where the store's pod must run. */}}
+    kubehenge.dev/volume-zone: {{ . | quote }}
+    {{- end }}
+spec:
+  replicas: {{ ternary 0 1 (ne .Values.backupVolume.zone "") }}
+  # The volume attaches to one node at a time.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $name }}
+        app.kubernetes.io/part-of: kubehenge
+      annotations:
+        kubehenge.dev/chart-digest: {{ .Values.chartDigest | quote }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: store
+          image: {{ .Values.image | quote }}
+          args: [backup-store, --listen=:8080, --dir=/backups]
+          env:
+            - name: KUBEHENGE_BACKUP_STORE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: token
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: backups
+              mountPath: /backups
+      volumes:
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ .Values.backupVolume.claim }}
+---
+# The appliance reaches the store through the API server as the interface, and reads its token.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-client
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: [services/proxy]
+    resourceNames: [{{ $name }}, "{{ $name }}:http"]
+    verbs: [get, update, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ $name }}]
+    verbs: [get]
+  # Waking the store for a backup or recovery, and putting it back to its idle replicas.
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [{{ $name }}]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-client
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-client
+subjects:
+  - kind: ServiceAccount
+    name: kubehenge-interface
+    namespace: {{ $ns }}
+{{- $zones := printf "%s-zones" $name }}
+{{- with .Values.backupVolume.zonesToken }}
+{{- /* The appliance alone sets the nodes' zone labels. It reads where the node VMs run with this
+token after each apply, through the admin kubeconfig. */}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $zones }}
+  namespace: {{ $ns }}
+type: Opaque
+data:
+  token: {{ . | quote }}
+{{- end }}
+{{- if and .Values.backupVolume.zone .Values.backupVolume.zonesToken }}
+{{- $interface := printf "system:serviceaccount:%s:kubehenge-interface" $ns }}
+{{- /* On a node's own storage the plugin attaches the volume only to a node with the disk's zone.
+A node VM HA or an administrator moved since the last apply carries its old node's zone, so before
+each wake the interface reads the token and sets the labels too. */}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $zones }}
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ $zones }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $zones }}
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $zones }}
+subjects:
+  - kind: ServiceAccount
+    name: kubehenge-interface
+    namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $zones }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    resourceNames: {{ toJson .Values.backupVolume.nodes }}
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $zones }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $zones }}
+subjects:
+  - kind: ServiceAccount
+    name: kubehenge-interface
+    namespace: {{ $ns }}
+{{- /* RBAC cannot narrow a patch to one label, so this policy holds the interface's changes to a
+node to setting its two zone labels. It may add one a node joined without, never remove one. */}}
+{{- $labels := "['topology.kubernetes.io/zone', 'failure-domain.beta.kubernetes.io/zone']" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $zones }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [nodes]
+  matchConditions:
+    - name: interface
+      expression: request.userInfo.username == '{{ $interface }}'
+  variables:
+    - name: before
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+    - name: after
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+  validations:
+    - expression: >-
+        object.spec == oldObject.spec
+        && (has(object.metadata.annotations) ? object.metadata.annotations : {}) == (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {})
+        && (has(object.metadata.finalizers) ? object.metadata.finalizers : []) == (has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers : [])
+        && (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+        && variables.after.all(k, k in {{ $labels }} || (k in variables.before && variables.before[k] == variables.after[k]))
+        && variables.before.all(k, k in {{ $labels }} || k in variables.after)
+        && {{ $labels }}.all(k, !(k in variables.before) || k in variables.after)
+      message: the interface changes nothing of a node but the values of its zone labels
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $zones }}
+spec:
+  policyName: {{ $zones }}
+  validationActions: [Deny]
+{{- end }}

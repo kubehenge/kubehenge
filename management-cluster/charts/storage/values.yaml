@@ -1,0 +1,26 @@
+---
+# Set by the module.
+chartDigest: ""
+secret: kubehenge-proxmox-csi
+# Kubehenge's own image, which serves the backup volume.
+image: ""
+# The plugin's configuration, base64, with the token in it.
+encodedConfig: ""
+caCert: ""
+storageClass:
+  name: kubehenge-management
+  storage: ""
+backupVolume:
+  claim: kubehenge-backups
+  namespace: kubehenge-system
+  sizeGB: 20
+  # region/zone/storage/volume, as the plugin names a volume.
+  handle: ""
+  zone: ""
+  region: ""
+  # The management nodes, and a Proxmox VE token, base64, that reads where their VMs run. With a
+  # zone, the appliance corrects a moved node's zone label with them.
+  nodes: []
+  zonesToken: ""
+  # Whether one Proxmox VE host's loss takes the volume.
+  sharesHost: true

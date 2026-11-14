@@ -356,6 +356,22 @@ variable "node_disk_gb" {
   default     = 32
 }
 
+variable "backup_volume" {
+  description = "The volume the management cluster's backups are kept on: a disk of size_gb on vm_datastore, owned by a VM of its own that never starts, so that it outlives every node VM. With protection, Proxmox VE refuses deleting that VM and its disk, and a destroy of the module stops there until protection is set false and applied. shared says whether vm_datastore reaches every node, read from Proxmox VE when null: a shared volume attaches on any node, and one on a node's own storage only while a backup or recovery runs."
+  type = object({
+    size_gb    = optional(number, 20)
+    protection = optional(bool, true)
+    shared     = optional(bool)
+  })
+  default  = {}
+  nullable = false
+
+  validation {
+    condition     = var.backup_volume.size_gb >= 1 && floor(var.backup_volume.size_gb) == var.backup_volume.size_gb
+    error_message = "backup_volume.size_gb is a whole number of GB, 1 or more."
+  }
+}
+
 variable "vm_id_range" {
   description = "The range the control-plane VMs' IDs are drawn from at random: start is the lowest ID and end is one past the highest, as the provider draws them. Set it inside the datacenter's next-id range (Datacenter, Options) when administrators reserve ID bands. The VMs keep the IDs they have when it changes."
   type = object({

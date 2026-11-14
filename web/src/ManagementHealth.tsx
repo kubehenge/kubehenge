@@ -1,7 +1,7 @@
 import type { JSX } from "react";
 
 import { api } from "./api";
-import type { ManagementHealth, RebootReadiness } from "./types";
+import type { BackupSummary, ManagementHealth, RebootReadiness } from "./types";
 import { Detail, ErrorBox, Said, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
 
 const managementCache = pollCache<ManagementHealth>();
@@ -24,7 +24,8 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
     filled(h.proxmox?.blind) ||
     (h.proxmox?.tokens ?? []).length > 0 ||
     (h.proxmox?.unreachable ?? []).length > 0 ||
-    (h.etcd !== undefined && h.etcd.healthy < h.etcd.members);
+    (h.etcd !== undefined && h.etcd.healthy < h.etcd.members) ||
+    filled(h.backups?.error);
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
 
@@ -127,6 +128,38 @@ function UnownedVMs({ vms }: { vms: { vmid: number }[] }): JSX.Element | null {
   );
 }
 
+/** SameHostWarning says that one Proxmox VE host's loss can take every backup, and what survives it. */
+export function SameHostWarning(): JSX.Element {
+  return (
+    <p className="warning">
+      Losing one Proxmox VE host can lose the backup volume and the appliance&apos;s copy. Add a bucket target to keep
+      backups elsewhere.
+    </p>
+  );
+}
+
+// BackupLine says where the management backups are and when the last ran, or why the last failed.
+export function BackupLine({ backups }: { backups: BackupSummary }): JSX.Element {
+  const last = backups.last === undefined ? "none yet" : new Date(backups.last).toLocaleString();
+  return (
+    <>
+      {filled(backups.error) ? (
+        <Status state="error" text="Failed" />
+      ) : (
+        <Status state={backups.last === undefined ? "warning" : "ok"} text={`Last ${last}`} />
+      )}{" "}
+      <span className="muted">{backups.where.join(", ")}</span>
+      {filled(backups.error) && (
+        <span className="mono">
+          {" "}
+          <Said text={backups.error} />
+        </span>
+      )}
+      {backups.sameHost === true && <SameHostWarning />}
+    </>
+  );
+}
+
 // ManagementHealthCard is the management cluster's own health, read on its own so that it answers
 // while the cluster does not, when the Administration page is what repairs it.
 export function ManagementHealthCard(): JSX.Element {
@@ -199,6 +232,14 @@ function AnsweringHealth({
             <dt>Proxmox VE API</dt>
             <dd>
               <Status state={h.proxmox.ok ? "ok" : "error"} text={h.proxmox.ok ? "Reachable" : "Not reachable"} />
+            </dd>
+          </>
+        )}
+        {h.backups !== undefined && (
+          <>
+            <dt>Backups</dt>
+            <dd>
+              <BackupLine backups={h.backups} />
             </dd>
           </>
         )}

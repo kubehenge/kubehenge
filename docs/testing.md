@@ -295,12 +295,14 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 
 ### The nightly run
 
-- The nightly run (`test/e2e/ci/nightly.sh`) runs every test and adds five:
+- The nightly run (`test/e2e/ci/nightly.sh`) runs every test and adds seven:
   - the management cluster's upgrade
   - Rancher
   - a control plane of three servers
   - a two-node Proxmox VE cluster
-  - the upgrade from the latest published appliance.
+  - the upgrade from the latest published appliance
+  - `appliance+recreate-bucket`, which deletes every management VM and recreates the cluster from the bucket's snapshot
+  - `appliance+recreate-volume`, which does the same from the backup volume.
 - It runs kubeadm's test on IPv4 and IPv6 too, as `kubeadm+calico+dual-stack`.
 - It runs every part of each workload distribution's test once more on another CNI of its class and another node OS. The run drops CIS hardening every other night and rotates the combination.
 - In that rotation, RKE2's and k3s's nodes download their releases from GitHub (`+github-releases`). Every other lane serves them from the runner as a release mirror (`test/e2e/ci/releases.sh`).
@@ -351,6 +353,7 @@ test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+rocky-10+cis-off   # a workload test 
 test/e2e/ci/run.sh /tmp/e2e management-cluster-upgrade+management-3584   # any test but the appliance, its management node at 3584 MiB
 test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+dual-stack   # IPv4 and IPv6, IPv4 first, or +ipv6-first (up.sh then needs KUBEHENGE_E2E_IPV6=1)
 test/e2e/ci/run.sh /tmp/e2e k3s+github-releases   # RKE2 or k3s nodes download from GitHub, without the runner's release mirror
+test/e2e/ci/run.sh /tmp/e2e appliance+recreate-bucket   # the appliance test, its management cluster lost and recreated from the bucket, or +recreate-volume from the backup volume
 ```
 
 The nightly rotation leaves both options out. `ipv6-first` runs on dispatch only.

@@ -408,6 +408,107 @@ body_has "the credential's download is not on Activity with the administrator" -
     '.entries | any(.what == $w and .user == $u)'
 expect 403 "the appliance's activity for a user without Sys.Audit on /" request "${work}/user.jar" "${ui}/api/activity"
 
+# mapi <method> <path> [merge patch]: the management cluster's API with its admin kubeconfig, the
+# answer in $work/body.
+mapi() {
+    code=$(curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
+        -o "${work}/body" -w '%{http_code}' -X "$1" -H 'Content-Type: application/merge-patch+json' \
+        ${3:+--data "$3"} "${management_api}$2")
+    [ "${code}" -lt 300 ] || fail_with_body "$1 $2 answered ${code}"
+}
+store_deployment=/apis/apps/v1/namespaces/kubehenge-system/deployments/kubehenge-backup-store
+store_ready() {
+    mapi GET "${store_deployment}"
+    jq -e '(.status.readyReplicas // 0) >= 1' "${work}/body" > /dev/null
+}
+store_idle() {
+    mapi GET "${store_deployment}"
+    jq -e --arg idle "$1" '(.spec.replicas | tostring) == $idle' "${work}/body" > /dev/null
+}
+# volume_snapshots: the etcd snapshots on the backup volume itself, in $work/volume-list, read
+# through its store with the store's token. A store asleep on a node's own storage is woken for it
+# and put back to sleep after, as the appliance does.
+volume_snapshots() {
+    mapi GET "${store_deployment}"
+    idle=$(jq -r '.metadata.annotations["kubehenge.dev/idle-replicas"] // "1"' "${work}/body")
+    mapi PATCH "${store_deployment}" '{"spec":{"replicas":1}}'
+    until_true 600 "the backup volume's store, ready" store_ready
+    mapi GET /api/v1/namespaces/kubehenge-system/secrets/kubehenge-backup-store
+    store_token=$(jq -r .data.token "${work}/body" | base64 -d)
+    curl -sS --fail --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
+        -H "X-Kubehenge-Store-Token: ${store_token}" -o "${work}/volume-list" \
+        "${management_api}/api/v1/namespaces/kubehenge-system/services/kubehenge-backup-store:http/proxy/list?prefix=management%2F" ||
+        fail "the backup volume's store does not list its objects"
+    mapi PATCH "${store_deployment}" "{\"spec\":{\"replicas\":${idle}}}"
+}
+volume_backed_up() {
+    expect 200 "the etcd backups" request "${work}/admin.jar" "${ui}/api/appliance/etcd-backups"
+    if jq -e '(.volume.error // "") != ""' "${work}/body" > /dev/null; then
+        fail_with_body "the backup onto the volume failed"
+    fi
+    jq -e '.volume.last.name != null and .volume.export.name != null' "${work}/body" > /dev/null
+}
+
+step "the backup volume: bound, its first snapshot and export, its store asleep or up as its storage needs"
+mapi GET /api/v1/namespaces/kubehenge-system/persistentvolumeclaims/kubehenge-backups
+body_is '.status.phase == "Bound"' "the claim kubehenge-system/kubehenge-backups is not bound"
+# The first snapshot onto the volume is due at once after the setup, and the appliance looks every minute.
+until_true 600 "the first snapshot and export on the backup volume" volume_backed_up
+volume_last=$(jq -r .volume.last.name "${work}/body")
+volume_export=$(jq -r .volume.export.name "${work}/body")
+mapi GET "${store_deployment}"
+idle=$(jq -r '.metadata.annotations["kubehenge.dev/idle-replicas"]' "${work}/body")
+case "${idle}" in
+    1) until_true 600 "the backup volume's store on shared storage, ready" store_ready ;;
+    # On a node's own storage the store sleeps between backups, so that its disk is detached.
+    0) until_true 120 "the backup volume's store, asleep after the backup" store_idle 0 ;;
+    *) fail "the backup volume's store has no idle replicas, but ${idle}" ;;
+esac
+volume_snapshots
+jq -e --arg s "${volume_last}" --arg e "${volume_export}" \
+    '[.[].key] | contains(["management/etcd/" + $s, "management/exports/" + $e])' "${work}/volume-list" > /dev/null ||
+    fail "the backup volume does not hold ${volume_last} and ${volume_export}"
+cli "${admin}" etcd-backups
+cli_says true "${volume_last}" "the shell does not show the volume's last snapshot"
+cli_says true "${volume_export}" "the shell does not show the volume's last export"
+
+step "the nodes carry the plugin's region and their Proxmox VE node as zone"
+mapi GET /api/v1/nodes
+# shellcheck disable=SC2016 # jq's variables, not the shell's.
+body_has "a node lacks topology.kubernetes.io/region=kubehenge or its Proxmox VE node as zone" \
+    --slurpfile s "${settings}" '.items | length > 0 and all(.[]; .metadata.labels["topology.kubernetes.io/region"] == "kubehenge"
+        and (.metadata.labels["topology.kubernetes.io/zone"] as $z | $s[0].nodes | index($z) != null))'
+
+step "a management VM deleted and made again: the backup volume keeps its snapshots"
+jq -r '[.[].key | select(startswith("management/etcd/"))] | sort | .[]' "${work}/volume-list" > "${work}/volume-before"
+pvesh get /cluster/resources --type vm --output-format json |
+    jq '[.[] | select((.tags // "" | split(";")) as $t | ($t | index("management")) and ($t | index("backups") | not))] | sort_by(.vmid)' > "${work}/management-vms"
+lost=$(jq -r 'last | "\(.node) \(.vmid)"' "${work}/management-vms")
+[ -n "${lost}" ] && [ "${lost}" != "null null" ] || fail "no management node VM to delete"
+lost_node=${lost% *} lost_vmid=${lost#* }
+pvesh create "/nodes/${lost_node}/qemu/${lost_vmid}/status/stop" > /dev/null
+pvesh delete "/nodes/${lost_node}/qemu/${lost_vmid}" --purge 1 > /dev/null
+# Two members left keep etcd's quorum, so an apply makes the VM again and it rejoins. A cluster of
+# fewer nodes lost etcd, which only a recovery from a snapshot brings back.
+management_vms=$(jq length "${work}/management-vms")
+if [ "${management_vms}" -ge 3 ]; then
+    expect 202 "applying again after the loss" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"
+    until_true 3600 "the apply after the loss to end" job_ended
+    job_was apply succeeded true
+else
+    recover_body=$(jq -n --arg p "${passphrase}" '{passphrase: $p}')
+    expect 202 "recovering after the loss" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/etcd-backups/recover" "${recover_body}"
+    until_true 3600 "the recovery after the loss to end" job_ended
+    job_was recover succeeded true
+fi
+volume_snapshots
+jq -r '[.[].key | select(startswith("management/etcd/"))] | sort | .[]' "${work}/volume-list" > "${work}/volume-after"
+# Newer snapshots may join. Every one from before stays.
+if grep -qvxFf "${work}/volume-after" "${work}/volume-before"; then
+    diff "${work}/volume-before" "${work}/volume-after" >&2
+    fail "the backup volume lost snapshots when a management VM was deleted and made again"
+fi
+
 step "the shared Headlamp behind the interface's sign-in"
 # Its service starts on the first request.
 until_true 120 "Headlamp's page through the gate" headlamp_serves
@@ -603,6 +704,54 @@ body_has "the management cluster is not recorded as applied by ${version}" \
 expect 202 "a snapshot after the upgrade" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots" ''
 until_true 300 "the snapshot after the upgrade" snapshot_taken "${second}"
 
+# lose_management_vms: deletes every management node VM, as a lost host or storage would. The
+# backup volume's VM stays.
+lose_management_vms() {
+    pvesh get /cluster/resources --type vm --output-format json |
+        jq -r '.[] | select((.tags // "" | split(";")) as $t | ($t | index("management")) and ($t | index("backups") | not)) | "\(.node) \(.vmid)"' \
+            > "${work}/lost"
+    [ -s "${work}/lost" ] || fail "no management node VM to delete"
+    while read -r lost_node lost_vmid; do
+        pvesh create "/nodes/${lost_node}/qemu/${lost_vmid}/status/stop" > /dev/null
+        pvesh delete "/nodes/${lost_node}/qemu/${lost_vmid}" --purge 1 > /dev/null
+    done < "${work}/lost"
+}
+# management_back: the recreated management cluster answers with its nodes Ready and Kubehenge's
+# objects as the snapshot held them.
+management_back() {
+    expect 200 "the ClusterClasses after the recreation" request "${work}/admin.jar" "${ui}/api/classes"
+    body_is '[.[].name] | contains(["kubehenge-kubeadm", "kubehenge-rke2", "kubehenge-k3s"])' "the recreated management cluster lost its ClusterClasses"
+    mapi GET /api/v1/nodes
+    body_is '.items | length > 0 and all(.[]; any(.status.conditions[]; .type == "Ready" and .status == "True"))' "a recreated management node is not Ready"
+    mapi GET /apis/apps/v1/namespaces/kubehenge-system/deployments
+    body_is '.items | length > 0 and all(.[]; (.status.readyReplicas // 0) >= (.spec.replicas // 1))' "a Kubehenge Deployment is not ready after the recreation"
+}
+recreate_body=$(jq -n --arg p "${passphrase}" '{passphrase: $p}')
+case "${KUBEHENGE_E2E_RECREATE:-}" in
+    bucket)
+        step "the management cluster recreated from the bucket's snapshot, all its VMs lost"
+        lose_management_vms
+        expect 202 "recreating from ${second}" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots/${second}/recreate" "${recreate_body}"
+        until_true 3600 "the recreation to end" job_ended
+        job_was recreate succeeded true
+        management_back
+        ;;
+    volume)
+        step "the management cluster recovered from the backup volume, all its VMs lost"
+        lose_management_vms
+        expect 202 "recovering from the appliance's own backups" post "${work}/admin.jar" "${admin_csrf}" "${backups}/recover" "${recreate_body}"
+        until_true 3600 "the recovery to end" job_ended
+        job_was recover succeeded true
+        management_back
+        ;;
+    '') ;;
+    *) fail "KUBEHENGE_E2E_RECREATE is bucket or volume, not ${KUBEHENGE_E2E_RECREATE}" ;;
+esac
+# The recreation lanes delete the backup volume with the cluster, which lifts its protection
+# through the module. The others keep it, which takes it out of the module's state.
+remove_backups=false
+[ -z "${KUBEHENGE_E2E_RECREATE:-}" ] || remove_backups=true
+
 step "remove the management cluster from the interface"
 body=$(jq -n --arg p "${passphrase}" '{passphrase: $p, confirm: "delete"}')
 expect 422 "a removal without the word remove" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/remove" "${body}"
@@ -610,12 +759,27 @@ body=$(jq -n --arg p "not-${passphrase}" '{passphrase: $p, confirm: "remove"}')
 expect 202 "a removal with a wrong passphrase" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/remove" "${body}"
 until_true 600 "the removal with a wrong passphrase to end" job_ended
 job_was remove failed true
-body=$(jq -n --arg p "${passphrase}" '{passphrase: $p, confirm: "remove"}')
+body=$(jq -n --arg p "${passphrase}" --argjson r "${remove_backups}" '{passphrase: $p, confirm: "remove", removeBackups: $r}')
 expect 202 "the removal" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/remove" "${body}"
 until_true 3600 "the removal to end" job_ended
 job_was remove succeeded false
 expect 200 "the etcd backups after the removal" request "${work}/admin.jar" "${backups}"
 body_is '.settings == null and (.keysStored | not)' "the removed management cluster's etcd backups are still set up"
+body_is '.volume == null' "the removed management cluster's backup volume is still backed up onto"
+kept=$(pvesh get /cluster/resources --type vm --output-format json |
+    jq -r '[.[] | select((.tags // "" | split(";")) | index("backups"))] | if length == 1 then "\(.[0].node) \(.[0].vmid)" else "" end')
+if [ "${remove_backups}" = true ]; then
+    # Deleted with it: "Proxmox VE as it was" below finds anything left.
+    [ -z "${kept}" ] || fail "the removal kept the backup volume's VM it was asked to delete"
+else
+    # Kept: its VM left the state and stays, protected, until deleted by hand as the docs say.
+    [ -n "${kept}" ] || fail "the removal did not keep the backup volume's VM"
+    kept_node=${kept% *} kept_vmid=${kept#* }
+    pvesh get "/nodes/${kept_node}/qemu/${kept_vmid}/config" --output-format json | jq -e '.protection == 1' > /dev/null ||
+        fail "the kept backup volume's VM is not protected"
+    pvesh set "/nodes/${kept_node}/qemu/${kept_vmid}/config" --protection 0
+    pvesh delete "/nodes/${kept_node}/qemu/${kept_vmid}" --purge 1 > /dev/null
+fi
 
 step "remove the appliance"
 pct config "${ctid}" | grep -qx 'protection: 1' || fail "the installer left the appliance unprotected"

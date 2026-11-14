@@ -628,6 +628,26 @@ The management cluster's etcd holds every cluster's objects. **Administration, B
 
 The appliance takes each snapshot itself through the nodes' Talos API, with a talosconfig that may take etcd snapshots and nothing else. It encrypts the snapshot before it leaves the appliance. The key that opens the snapshots is kept in the target, encrypted with the state passphrase ([details](install-settings.md#management-cluster-etcd-backups)).
 
+#### The backup volume
+
+With no settings at all, every management cluster backs up onto its own backup volume. That is the claim `kubehenge-system/kubehenge-backups`, the disk of the stopped, protected VM `kubehenge-backups`. Proxmox VE deletes a VM's own disks only, so the volume outlives the loss of every management VM.
+
+On shared storage (Ceph RBD, NFS, shared LVM) the volume attaches to whichever node runs its store. On a node's own storage (directory, LVM, LVM-thin, ZFS) it stays on the first node of the setup, and its store runs only during a backup or recovery. The disk is detached the rest of the time, so Proxmox VE can migrate the management VMs and a node can go into maintenance. A backup then needs one management VM on the disk's node.
+
+The appliance alone sets each management node's `topology.kubernetes.io/zone` label, to the Proxmox VE node its VM runs on. It reads that with a read-only token on the management pool, after each apply and before each backup. A node whose VM it cannot find keeps its label. Backups stop only when no management VM runs on the Proxmox VE node that holds the volume.
+
+On a node's own storage, or in a Proxmox VE cluster of one node, losing that host can lose the backup volume. The appliance's copy can go with it when the appliance runs there too. Only a [backup target](install-settings.md#backup-targets) survives that, so set one up as above. Setup, Administration and Health warn until one is set.
+
+Every 6 hours the appliance puts an etcd snapshot there, encrypted with the state passphrase, and keeps the newest 28. Beside each goes an export of Kubehenge's objects: the clusters, their classes, the Secrets Kubehenge owns and the setup settings. A backup target, when set up, gets snapshots on its own schedule.
+
+The appliance keeps a copy of the latest snapshot, its export and its key, up to 1 GiB in all. A copy over that cap is not made, and the last copy that fit stays. The disk warning names the copy once it reaches 80 % of its cap, or once the disk has no room for the next one.
+
+**Administration, Backups**, the management cluster's Health and `kubehenge appliance etcd-backups` show where the backups are and the last one. A failed backup degrades Health until the next one succeeds.
+
+To recover after the management VMs are lost, use **Recover…** in the backup volume's box, or `kubehenge appliance etcd-backups recover`. Both ask for the state passphrase. The run applies the management cluster and waits up to 10 minutes for the backup volume. It then restores the newest snapshot of the volume and the appliance's copy, and applies again. Its log names the snapshot, where it was read and why.
+
+Removing the management cluster stops these backups. **Also delete the backup volume** deletes the appliance's copy too. Kept, the copy is never restored onto a management cluster set up later.
+
 #### Restoring
 
 **Restore…** on a snapshot wipes etcd on every control-plane node of the management cluster and restores it from the snapshot. Every cluster's objects go back to then.
@@ -636,7 +656,7 @@ After a restore, and then daily, the controller compares each cluster with its V
 
 #### The warning while backups are off
 
-While the backups are off, a warning stands on **Administration, Backups** and above the cluster list. Every cluster's CAs, kubeconfigs and backup keys live only in this etcd.
+While neither a target nor the backup volume takes the backups, a warning stands on **Administration, Backups** and above the cluster list. Every cluster's CAs, kubeconfigs and backup keys live only in this etcd.
 
 An administrator can dismiss the warning for 30 days. The page records who did and when. Notifications repeat it weekly.
 
@@ -653,6 +673,7 @@ The appliance's shell has the same commands, with the page's privileges and refu
 | `kubehenge appliance etcd-backups take` | takes a snapshot and waits until it is stored |
 | `kubehenge appliance etcd-backups restore … --passphrase-file …` | restores a snapshot by name and prints the run's log until it ends |
 | `kubehenge appliance etcd-backups recreate … --passphrase-file …` | makes the management cluster's VMs again, then restores a snapshot into them |
+| `kubehenge appliance etcd-backups recover --passphrase-file …` | makes the management cluster again from the newest snapshot on the backup volume or the appliance's copy |
 | `kubehenge appliance etcd-backups dismiss-warning` | silences the warning that the backups are off for 30 days |
 | `kubehenge appliance export` | saves the appliance's state, encrypted with `--export-passphrase-file`, for a new appliance ([details](install-settings.md#export-for-a-new-appliance)) |
 | `kubehenge appliance import <file>` | reads an export into a new appliance |

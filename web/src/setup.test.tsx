@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within, type BoundFunctions, type queries } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within, type BoundFunctions, type queries } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -1444,6 +1444,43 @@ describe("setup", () => {
     expect(wizard.getByLabelText("VM disks")).toHaveValue("local-lvm");
     await user.click(wizard.getByRole("button", { name: "Cancel" }));
     expect(screen.getByRole("button", { name: "Apply again…" })).toBeInTheDocument();
+  });
+
+  it("warns that one host's loss can take every backup until a bucket target is set", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const saved = {
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    };
+    const lostWithHost = /Losing one Proxmox VE host can lose the backup volume/u;
+    const edit = async (settings: object): Promise<void> => {
+      fakeServer({
+        ...administrator,
+        ...administration,
+        ...oneNode,
+        "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings } },
+      });
+      const user = userEvent.setup({ delay: null });
+      render(<App />);
+      await user.click(await screen.findByRole("button", { name: "Edit settings" }));
+    };
+
+    await edit(saved);
+    await expect(screen.findByText(lostWithHost)).resolves.toBeVisible();
+    cleanup();
+
+    await edit({ ...saved, backupTargets: [{ name: "store", bucket: "backups", endpoint: "https://s3.example.org" }] });
+    await screen.findByRole("heading", { name: "Services" });
+    expect(screen.queryByText(lostWithHost)).not.toBeInTheDocument();
   });
 
   it("shows a saved proxy password as set, and replaces or removes it without ever holding it", async () => {

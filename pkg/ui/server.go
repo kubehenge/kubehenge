@@ -236,6 +236,9 @@ const (
 // Run prepares the server and keeps its sessions, upgrades and Headlamp up to date until ctx ends.
 // It returns once each of them has stopped.
 func (s *Server) Run(ctx context.Context) {
+	if s.Appliance != nil {
+		s.Appliance.ExportObjects = s.exportObjects
+	}
 	s.init()
 	var wg sync.WaitGroup
 	wg.Go(func() { s.autoUpgrade(ctx) })
@@ -334,6 +337,7 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/restore", s.signedIn(s.restoreManagementEtcd))
 	mux.HandleFunc("POST /api/appliance/etcd-backups/warning/dismissal", s.signedIn(s.dismissBackupWarning))
 	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/recreate", s.signedIn(s.recreateManagement))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/recover", s.signedIn(s.recoverManagement))
 	mux.HandleFunc("POST /api/appliance/export", s.signedIn(s.exportManagement))
 	mux.HandleFunc("POST /api/appliance/import", s.signedIn(s.importManagement))
 	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))

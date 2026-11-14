@@ -313,13 +313,16 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 	if err != nil {
 		return fmt.Errorf("--proxmox-ca: %w", err)
 	}
-	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxInsecure, a.Log, a.Release = conn.URL, string(ca), conn.Insecure, s.Log, release.Version
+	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxCAFile, a.ProxmoxInsecure, a.Log, a.Release = conn.URL, string(ca), conn.CAFile, conn.Insecure, s.Log, release.Version
 	s.ProxmoxInsecure = conn.Insecure
 	a.InterfaceKubeconfig = appliance.InterfaceKubeconfig
 	if s.Accounts != nil {
 		a.NextID = s.Accounts.NextID
 	}
 	a.Talos = &provisioner.ManagementTalos{}
+	if err = a.CleanUp(); err != nil {
+		return fmt.Errorf("clearing what the last run left: %w", err)
+	}
 	a.LoadLast()
 	if a.Ready() {
 		kubeconfig, readErr := os.ReadFile(a.KubeconfigPath())

@@ -242,6 +242,69 @@ function ImportDialog({ onClose, onImported }: { onClose: () => void; onImported
   );
 }
 
+/** RecoverDialog makes the management cluster again from the newest of its own backups. */
+export function RecoverDialog({ onClose }: { onClose: () => void }): JSX.Element {
+  const [passphrase, setPassphrase] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [started, setStarted] = useState(false);
+  const submit = async (): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.recoverManagement(passphrase);
+      setStarted(true);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (started) {
+    return (
+      <Dialog
+        title="Recovering"
+        onClose={onClose}
+        actions={
+          <button type="button" className="primary" onClick={onClose}>
+            Done
+          </button>
+        }
+      >
+        <p>
+          Started. <Link to="/runs/management-cluster">Follow the run</Link>.
+        </p>
+      </Dialog>
+    );
+  }
+  return (
+    <Dialog
+      title="Recover management cluster"
+      onClose={onClose}
+      onSubmit={() => {
+        void submit();
+      }}
+      actions={
+        <>
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="danger" disabled={busy || passphraseShort(passphrase)}>
+            Recover
+          </button>
+        </>
+      }
+    >
+      <p className="warning">
+        Applies the management cluster and restores etcd from the newest snapshot of the backup volume or the
+        appliance&apos;s copy. Clusters changed since go back to then.
+      </p>
+      <Field label="State passphrase">{password(passphrase, setPassphrase)}</Field>
+      <ErrorBox message={error} />
+    </Dialog>
+  );
+}
+
 /** RecreateDialog makes the management cluster's VMs again and restores a snapshot into them. */
 export function RecreateDialog({ snapshot: s, onClose }: { snapshot: EtcdSnapshot; onClose: () => void }): JSX.Element {
   const [passphrase, setPassphrase] = useState("");

@@ -5,6 +5,7 @@ import { backupKeys } from "./Backups";
 import { BackupTargets, cleanTargets, targetProblems, targetSummary } from "./BackupTargets";
 import { CredentialField } from "./CredentialField";
 import { FamiliesField } from "./Families";
+import { SameHostWarning } from "./ManagementHealth";
 import { ImportBox, TakeOver } from "./ManagementRecovery";
 import {
   bridgeLabel,
@@ -685,6 +686,17 @@ function preferredDisk(storages: Storage[], offered: string[]): string {
     .filter((s) => offered.includes(s.storage) && s.content.includes("images"))
     .toSorted((a, b) => Number(b.shared) - Number(a.shared) || b.avail - a.avail);
   return best?.storage ?? "";
+}
+
+// sharesHost tells whether one Proxmox VE host's loss can take the backup volume, as the module
+// decides it: the VM disks' storage is a node's own, or the cluster has one node. It is false while
+// either is unread.
+function sharesHost(storages: Storage[] | undefined, nodes: PveNode[], vmDatastore: string): boolean {
+  const disk = (storages ?? []).filter((s) => s.storage === vmDatastore);
+  if (disk.length === 0 || nodes.length === 0) {
+    return false;
+  }
+  return nodes.length < 2 || !disk.some((s) => s.shared);
 }
 
 // uplink is the bridge a node reaches its gateway through, or else one it has an address on.
@@ -2492,6 +2504,7 @@ function SetupWizard({
     handleAdvanced: setAdvancedOpen,
     handleAskRestore: () => setAskingRestore(true),
     missing,
+    sameHost: sharesHost(storages, nodes, form.vmDatastore),
   });
 
   return (
@@ -2850,6 +2863,7 @@ function setupFields({
   handleAdvanced: (open: boolean) => void;
   handleAskRestore: () => void;
   missing: { images: string | undefined; isos: string | undefined };
+  sameHost: boolean;
 }): Record<SetupStep, ReactNode> {
   const { nodes, toggle, fixed } = more;
   return {
@@ -3051,6 +3065,7 @@ function setupFields({
             showAll={more.attempted}
             onChange={(v) => set("backupTargets", v)}
           />
+          {more.sameHost && form.backupTargets.length === 0 && <SameHostWarning />}
         </fieldset>
         <EtcdRestoreChoice form={form} set={set} onAsk={more.handleAskRestore} />
       </>

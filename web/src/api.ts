@@ -432,7 +432,7 @@ export interface Api {
   notifications: () => Promise<NotificationSent[]>;
   testNotifications: () => Promise<NotificationSent[]>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
-  removeManagement: (passphrase: string) => Promise<Job>;
+  removeManagement: (passphrase: string, removeBackups: boolean) => Promise<Job>;
   takeOverManagement: (passphrase: string) => Promise<void>;
   managementHealth: () => Promise<ManagementHealth>;
   rebootReady: () => Promise<RebootReadiness>;
@@ -445,6 +445,8 @@ export interface Api {
   restoreManagement: (snapshot: string, passphrase: string) => Promise<Job>;
   /** recreateManagement makes the management cluster's VMs again and restores a snapshot into them. */
   recreateManagement: (snapshot: string, passphrase: string) => Promise<Job>;
+  /** recoverManagement makes the management cluster again from the backup volume or the appliance's copy. */
+  recoverManagement: (passphrase: string) => Promise<Job>;
   dismissBackupWarning: () => Promise<ManagementBackups>;
   /** exportManagement downloads the appliance's state, encrypted with exportPassphrase. */
   exportManagement: (passphrase: string, exportPassphrase: string) => Promise<Blob>;
@@ -605,7 +607,8 @@ export const api: Api = {
   notifications: () => request("GET", "/api/notifications"),
   testNotifications: () => request("POST", "/api/notifications/test"),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
-  removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
+  removeManagement: (passphrase, removeBackups) =>
+    request("POST", "/api/setup/remove", { passphrase, confirm: "remove", removeBackups }),
   takeOverManagement: (passphrase) => act("POST", "/api/setup/take-over", { passphrase }),
   managementHealth: () => request("GET", "/api/setup/health"),
   rebootReady: () => request("GET", "/api/appliance/reboot-ready"),
@@ -618,6 +621,7 @@ export const api: Api = {
     request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/restore`, { passphrase }),
   recreateManagement: (snapshot, passphrase) =>
     request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/recreate`, { passphrase }),
+  recoverManagement: (passphrase) => request("POST", "/api/appliance/etcd-backups/recover", { passphrase }),
   dismissBackupWarning: () => request("POST", "/api/appliance/etcd-backups/warning/dismissal"),
   exportManagement: (passphrase, exportPassphrase) =>
     download("POST", "/api/appliance/export", { passphrase, exportPassphrase }),

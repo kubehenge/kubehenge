@@ -59,10 +59,10 @@ func (w *EtcdBackupWarning) Shown() bool { return w != nil && w.Dismissal == nil
 
 func (a *Appliance) dismissalFile() string { return a.etcdBackupFile("warning-dismissed.json") }
 
-// etcdBackupWarning is the warning that stands now, nil when the backups are on or there is no
-// management cluster.
+// etcdBackupWarning is the warning that stands now, nil when the backups go to a target or the
+// backup volume, or there is no management cluster.
 func (a *Appliance) etcdBackupWarning(st *EtcdBackupStatus) *EtcdBackupWarning {
-	if st.Settings != nil || !a.Ready() {
+	if st.Settings != nil || st.Volume != nil || !a.Ready() {
 		return nil
 	}
 	w := &EtcdBackupWarning{}
@@ -203,7 +203,7 @@ func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPass
 	if err != nil {
 		return nil, err
 	}
-	talosconfig, err := a.Credential(ctx, statePassphrase, "talosconfig")
+	talosconfig, err := a.Credential(ctx, statePassphrase, talosconfigName)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +327,7 @@ func (a *Appliance) ImportState(ctx context.Context, sealed []byte, exportPassph
 	// reads the admin talosconfig from the state, works without it.
 	if a.Talos != nil {
 		if talosconfig, err := a.etcdBackupCredential(ctx, []byte(b.Talosconfig), &keys); err == nil {
-			if err := writeFileAtomic(a.etcdBackupFile("talosconfig"), talosconfig); err != nil {
+			if err := writeFileAtomic(a.etcdBackupFile(talosconfigName), talosconfig); err != nil {
 				return err
 			}
 			return writeJSONFile(a.etcdBackupFile("keys.json"), keys)
@@ -349,7 +349,7 @@ func (a *Appliance) importSpecKey(key string) error {
 // with, and nothing after: the cluster's bootstrap and health, which cannot finish on nodes whose
 // etcd is empty. Each node's module waits for the one before, so naming the last names them all.
 func recreateTargets(nodes int) []string {
-	return []string{"-target=proxmox_virtual_environment_vm.node", fmt.Sprintf("-target=module.talos_node_%d", max(nodes, 1)-1)}
+	return []string{"-target=" + moduleAddress + "proxmox_virtual_environment_vm.node", fmt.Sprintf("-target=%smodule.talos_node_%d", moduleAddress, max(nodes, 1)-1)}
 }
 
 // RecreateRequest is what a recreation of the management cluster was started with.
@@ -384,6 +384,9 @@ func (a *Appliance) RecreateManagement(ctx context.Context, name, passphrase str
 	}
 	//nolint:contextcheck // the run outlives the request that starts it
 	return a.startIn(&a.job, sessionRunner(ticket), "recreate", RecreateRequest{Snapshot: name}, func(ctx context.Context, j *Job) error {
+		if err := a.stopEtcdSnapshot(ctx, j); err != nil {
+			return err
+		}
 		return a.recreate(ctx, j, r)
 	})
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,8 @@ const (
 	applianceRequestTimeout = time.Minute
 	// maxApplianceAnswer bounds what is read of one answer.
 	maxApplianceAnswer = 4 << 20
+	// mib is the bytes of a MiB, the unit sizes are shown in.
+	mib = 1 << 20
 	// appliancePoll is how often a command that waits asks again.
 	appliancePoll = 2 * time.Second
 	// snapshotWait and restoreWait bound how long take and restore wait for the result.
@@ -242,13 +245,45 @@ func (o *applianceOptions) etcdBackupsCommand() *cobra.Command {
 	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	cmd.AddCommand(o.setUpBackupsCommand(), o.backupsOffCommand(), o.snapshotsCommand(), o.takeSnapshotCommand(), o.restoreEtcdCommand(),
-		o.recreateCommand(), o.dismissWarningCommand())
+		o.recreateCommand(), o.recoverCommand(), o.dismissWarningCommand())
 	return cmd
+}
+
+// printBackupPlaces writes where the backups are and what the backup volume holds.
+func printBackupPlaces(t *tabwriter.Writer, v *appliance.EtcdBackupStatus) {
+	if v.Where != nil {
+		row(t, "Backups in", strings.Join(v.Where.Where, ", "))
+		last := "none yet"
+		if v.Where.Last != nil {
+			last = v.Where.Last.UTC().Format(time.RFC3339)
+		}
+		row(t, "Last backup", last)
+		if v.Where.Error != "" {
+			row(t, "Failed", v.Where.Error)
+		}
+	}
+	vol := v.Volume
+	if vol == nil {
+		return
+	}
+	if vol.Last != nil {
+		row(t, "Volume snapshot", vol.Last.Name)
+	}
+	if vol.Export != nil {
+		row(t, "Volume export", vol.Export.Name)
+	}
+	if vol.Copy != nil {
+		row(t, "Appliance copy", fmt.Sprintf("%s, %d of %d MiB", cmp.Or(vol.Copy.Snapshot, "none"), vol.Copy.Bytes/mib, vol.Copy.Cap/mib))
+	}
 }
 
 func printBackups(cmd *cobra.Command, v *appliance.EtcdBackupStatus) error {
 	t := table(cmd)
+	printBackupPlaces(t, v)
 	if v.Settings == nil {
+		if v.Volume != nil {
+			return flush(t)
+		}
 		row(t, "Backups", "Off")
 		if v.Warning.Shown() {
 			row(t, "Warning", "The management cluster's etcd is not backed up. Every cluster's CAs, kubeconfigs and backup keys live only there.")

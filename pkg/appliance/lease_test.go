@@ -173,7 +173,7 @@ func TestRemoveRefusesAnOlderState(t *testing.T) {
 	t.Parallel()
 	a, _ := leased(t, 2)
 	var removed atomic.Bool
-	if err := a.Remove(testPassphrase, ticket(), func(context.Context, *Job) error { removed.Store(true); return nil }, func() {}); err != nil {
+	if err := a.Remove(testPassphrase, DeleteBackups, ticket(), func(context.Context, *Job) error { removed.Store(true); return nil }, func() {}); err != nil {
 		t.Fatal(err)
 	}
 	if j := waitFor(t, a); j.State != StateFailed || j.Stale == nil || removed.Load() {
