@@ -41,6 +41,7 @@ const (
 	maxSuggestBits  = 29
 	ipv4Bits        = 32
 	cleanupTimeout  = 2 * time.Minute
+	commandStopWait = 30 * time.Second
 	dialTimeout     = 5 * time.Second
 	httpTimeout     = 10 * time.Second
 	stepPause       = 2 * time.Second

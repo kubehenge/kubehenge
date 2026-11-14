@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -469,29 +470,47 @@ func (n *Node) bridgeIsDHCP(bridge string) bool {
 
 var vlanAwareRE = regexp.MustCompile(`(?m)^\s*bridge[-_]vlan[-_]aware\s+(yes|1|true|on)\b`)
 
-// bridgeVLANAware reports whether the bridge filters VLANs, from Proxmox VE's view of the node's
-// network, else from /etc/network/interfaces. A bridge neither source shows as aware is not.
+// bridgeVLANAware reports whether the bridge carries VLAN tags on its own ports: from Proxmox VE's
+// view of the node's network, else of the SDN VNet, else from /etc/network/interfaces and the
+// files it sources. A bridge no source shows as aware is not.
 func (n *Node) bridgeVLANAware(ctx context.Context, bridge string) bool {
 	if out, err := n.run(ctx, "pvesh", "get", "/nodes/"+n.Hostname+"/network/"+bridge, "--output-format", "json"); err == nil {
 		if aware, known := vlanAwareFromJSON(out); known {
 			return aware
 		}
 	}
-	data, err := n.readFile(interfaces)
-	if err != nil {
-		return false
+	if out, err := n.run(ctx, "pvesh", "get", "/cluster/sdn/vnets/"+bridge, "--output-format", "json"); err == nil {
+		var vnet map[string]any
+		if json.Unmarshal([]byte(out), &vnet) == nil && str(vnet, "vnet") == bridge {
+			aware, _ := flagOn(vnet["vlanaware"])
+			return aware
+		}
 	}
-	return vlanAwareInFile(string(data), bridge)
+	return n.vlanAwareInFiles(interfaces, bridge, map[string]bool{})
 }
 
 // vlanAwareFromJSON reads Proxmox VE's description of one interface. It is unknown when the text
-// describes no interface.
+// describes no interface. An Open vSwitch bridge carries tags on its ports and has no VLAN-aware
+// setting.
 func vlanAwareFromJSON(out string) (bool, bool) {
 	var conf map[string]any
 	if json.Unmarshal([]byte(out), &conf) != nil {
 		return false, false
 	}
-	switch v := conf["bridge_vlan_aware"].(type) {
+	if str(conf, "type") == "OVSBridge" {
+		return true, true
+	}
+	if aware, set := flagOn(conf["bridge_vlan_aware"]); set {
+		return aware, true
+	}
+	_, described := conf["iface"]
+	return false, described
+}
+
+// flagOn reads a Proxmox VE boolean, which its API gives as a number, a boolean or a string. The
+// second result is false when the value is missing.
+func flagOn(v any) (bool, bool) {
+	switch v := v.(type) {
 	case float64:
 		return v != 0, true
 	case bool:
@@ -499,29 +518,79 @@ func vlanAwareFromJSON(out string) (bool, bool) {
 	case string:
 		return v == "1" || v == "yes" || v == "true", true
 	}
-	_, described := conf["iface"]
-	return false, described
+	return false, false
 }
 
-// vlanAwareInFile reports whether the bridge's stanza in /etc/network/interfaces turns VLAN
-// filtering on.
-func vlanAwareInFile(data, bridge string) bool {
+// vlanAwareInFiles reports whether the bridge's stanza turns VLAN filtering on or makes it an Open
+// vSwitch bridge, in the file or one it sources, such as interfaces.d/sdn with the SDN's VNets.
+func (n *Node) vlanAwareInFiles(file, bridge string, seen map[string]bool) bool {
+	if seen[file] {
+		return false
+	}
+	seen[file] = true
+	data, err := n.readFile(file)
+	if err != nil {
+		return false
+	}
+	aware, sources := vlanAwareInFile(string(data), bridge)
+	if aware {
+		return true
+	}
+	for _, pattern := range sources {
+		if !strings.HasPrefix(pattern, "/") {
+			pattern = path.Join(path.Dir(file), pattern)
+		}
+		for _, f := range n.glob(pattern) {
+			if n.vlanAwareInFiles(f, bridge, seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// glob lists the node's files that match the pattern, as paths on the node.
+func (n *Node) glob(pattern string) []string {
+	matches, _ := filepath.Glob(n.path(pattern))
+	var list []string
+	for _, m := range matches {
+		if n.Root != "" {
+			rel, err := filepath.Rel(n.Root, m)
+			if err != nil {
+				continue
+			}
+			m = "/" + filepath.ToSlash(rel)
+		}
+		list = append(list, m)
+	}
+	return list
+}
+
+var ovsBridgeRE = regexp.MustCompile(`^\s*ovs_type\s+OVSBridge\b`)
+
+// vlanAwareInFile reports whether the bridge's stanza in an interfaces file turns VLAN filtering
+// on or makes it an Open vSwitch bridge, and lists the files the text sources.
+func vlanAwareInFile(data, bridge string) (bool, []string) {
 	stanza := false
+	var sources []string
 	for line := range strings.SplitSeq(data, "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 2 && f[0] == "iface" {
 			stanza = f[1] == bridge
 			continue
 		}
+		if len(f) >= 2 && f[0] == "source" {
+			sources = append(sources, f[1:]...)
+		}
 		if len(f) > 0 && (f[0] == "auto" || strings.HasPrefix(f[0], "allow-") || f[0] == "source") {
 			stanza = false
 			continue
 		}
-		if stanza && vlanAwareRE.MatchString(line) {
-			return true
+		if stanza && (vlanAwareRE.MatchString(line) || ovsBridgeRE.MatchString(line)) {
+			return true, nil
 		}
 	}
-	return false
+	return false, sources
 }
 
 func (n *Node) resolvers() ([]string, bool) {

@@ -2,6 +2,7 @@ package installer
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // A container that gets no DHCP address names the VLAN as the first thing to check.
@@ -112,16 +116,21 @@ func TestShutdownRemovesTheHalfMadeContainer(t *testing.T) {
 		tune(r)
 		r.Sleep = func(time.Duration) { time.Sleep(20 * time.Millisecond) }
 	}
-	_ = executeOn(run, env, &cfg, ioStreams{keys, io.Discard}, true, "xterm")
+	_ = executeOn(run, env, &cfg, ioStreams{in: keys, out: io.Discard, errs: io.Discard}, true, "xterm")
 	if h.exec.count("pct destroy 100") != 1 {
 		t.Fatalf("the half-made container stayed: %v", h.exec.calls)
 	}
 }
 
 // On a dumb terminal the installer prints lines, though its questions would otherwise open the
-// full-screen guide.
+// full-screen guide. A terminal emulator and the Linux console get the guide.
 func TestDumbTerminalGetsPlainOutput(t *testing.T) {
 	t.Parallel()
+	for term, want := range map[string]bool{"xterm": true, "screen": true, "linux": true, "dumb": false, "": false} {
+		if CanDrawScreen(term) != want {
+			t.Errorf("TERM=%q: full screen %v, want %v", term, !want, want)
+		}
+	}
 	h := newHarness(t, opts{rootStorages: 2})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -129,11 +138,72 @@ func TestDumbTerminalGetsPlainOutput(t *testing.T) {
 	var out strings.Builder
 	for _, term := range []string{"dumb", ""} {
 		out.Reset()
-		if err := executeOn(ctx, h.env(), &cfg, ioStreams{strings.NewReader(""), &out}, true, term); err != nil {
+		if err := executeOn(ctx, h.env(), &cfg, ioStreams{in: strings.NewReader(""), out: &out, errs: io.Discard}, true, term); err != nil {
 			t.Fatalf("TERM=%q: %v", term, err)
 		}
 		if !strings.Contains(out.String(), "ok   Create container") || strings.Contains(out.String(), "\x1b") {
 			t.Fatalf("TERM=%q gave no plain lines: %q", term, out.String())
+		}
+	}
+}
+
+// pressEnter types Enter every 50 ms until the context ends or until stop says so. The writer types
+// more keys.
+func pressEnter(ctx context.Context, stop func() bool) (*io.PipeReader, *io.PipeWriter) {
+	keys, typed := io.Pipe()
+	go func() {
+		for ctx.Err() == nil && !stop() {
+			if _, err := typed.Write([]byte("\r")); err != nil {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		_ = typed.Close()
+	}()
+	return keys, typed
+}
+
+// syncBuffer is a screen the program writes to while the test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Execute takes the terminal from TERM: lines on a dumb one, the full-screen guide on xterm.
+func TestExecuteReadsTERM(t *testing.T) { //nolint:paralleltest // sets TERM and stands in for the machine
+	saved := newEnv
+	t.Cleanup(func() { newEnv = saved })
+	for term, guide := range map[string]bool{"dumb": false, "xterm": true} {
+		h := newHarness(t, opts{rootStorages: 2})
+		newEnv = func(context.Context) (*Env, error) { return h.env(), nil }
+		t.Setenv("TERM", term)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		keys, _ := pressEnter(ctx, func() bool { return false })
+		cfg := h.session(Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"}).Cfg
+		var out syncBuffer
+		err := Execute(ctx, &cfg, keys, &out, true)
+		cancel()
+		if err != nil {
+			t.Fatalf("TERM=%s: %v", term, err)
+		}
+		screen := out.String()
+		if strings.Contains(screen, "\x1b") != guide || strings.Contains(screen, "ok   Create container") == guide || h.exec.count("pct create") != 1 {
+			t.Errorf("TERM=%s: full screen %v, want %v: %q", term, !guide, guide, screen)
 		}
 	}
 }
@@ -220,11 +290,61 @@ func TestVLANRouteNeedsAVLANAwareBridge(t *testing.T) {
 			t.Errorf("%s: the refusal lacks the cause or a fix: %v", name, err)
 		}
 	}
-	h := newHarness(t, opts{})
-	h.exec.on("pvesh get /nodes/pve1/network", `[{"type":"bridge","iface":"vmbr1"},{"type":"vlan","iface":"vmbr1.20"}]`)
-	h.exec.on("ip -4 route show default", "default via 198.51.100.1 dev vmbr1.20\n")
-	if err := h.session(Config{Bridge: "vmbr1", VLAN: "20"}).Prepare(context.Background()); err != nil {
-		t.Errorf("a bridge and VLAN named by hand were refused: %v", err)
+	// The same bridge and VLAN named by hand cut the same network. Another VLAN does not.
+	for vlan, refused := range map[string]bool{"20": true, "30": false} {
+		h := newHarness(t, opts{})
+		h.exec.on("pvesh get /nodes/pve1/network", `[{"type":"bridge","iface":"vmbr1"},{"type":"vlan","iface":"vmbr1.20"}]`)
+		h.exec.on("ip -4 route show default", "default via 198.51.100.1 dev vmbr1.20\n")
+		err := h.session(Config{Bridge: "vmbr1", VLAN: vlan}).Prepare(context.Background())
+		if refused != (err != nil) || err != nil && !strings.Contains(err.Error(), "vmbr1 is not VLAN aware") {
+			t.Errorf("--bridge vmbr1 --vlan %s: refused=%v, got %v", vlan, refused, err)
+		}
+	}
+}
+
+// An Open vSwitch bridge carries tags on its ports, and an SDN VNet says itself whether it is VLAN
+// aware. Both are read from Proxmox VE, else from the interfaces files, sourced ones included.
+func TestVLANRouteOnOpenVSwitchAndSDN(t *testing.T) {
+	t.Parallel()
+	sdn := "auto vn1\niface vn1\n\tbridge_ports vmbr0.7\n\tbridge-vlan-aware yes\n"
+	for name, c := range map[string]struct {
+		bridge, kind, pvesh, vnet, sourced string
+		refused                            bool
+	}{
+		"Open vSwitch by Proxmox VE": {"vmbr0", "OVSBridge", `{"iface":"vmbr0","type":"OVSBridge"}`, "", "", false},
+		"Open vSwitch in the file":   {"vmbr0", "OVSBridge", "", "", "iface vmbr0 inet manual\n\tovs_type OVSBridge\n", false},
+		"aware VNet":                 {"vn1", "", "", `{"vnet":"vn1","zone":"z1","vlanaware":1}`, "", false},
+		"unaware VNet":               {"vn1", "", "", `{"vnet":"vn1","zone":"z1"}`, "", true},
+		"aware VNet in sdn":          {"vn1", "", "", "", sdn, false},
+	} {
+		h := newHarness(t, opts{})
+		network := `[{"type":"eth","iface":"eno1"}]`
+		if c.kind != "" {
+			network = `[{"type":"` + c.kind + `","iface":"` + c.bridge + `"}]`
+		}
+		h.exec.on("pvesh get /nodes/pve1/network", network)
+		h.exec.on("pvesh get /cluster/sdn/vnets", `[{"vnet":"vn1","zone":"z1"}]`)
+		h.exec.fail("pvesh get /nodes/pve1/network/", 2)
+		h.exec.fail("pvesh get /cluster/sdn/vnets/", 2)
+		if c.pvesh != "" {
+			h.exec.on("pvesh get /nodes/pve1/network/"+c.bridge, c.pvesh)
+		}
+		if c.vnet != "" {
+			h.exec.on("pvesh get /cluster/sdn/vnets/"+c.bridge, c.vnet)
+		}
+		h.exec.on("ip -4 route show default", "default via 198.51.100.1 dev "+c.bridge+".7\n")
+		writeTestFile(t, filepath.Join(h.root, interfaces), []byte("auto lo\niface lo inet loopback\n\nsource /etc/network/interfaces.d/*\n"))
+		if c.sourced != "" {
+			writeTestFile(t, filepath.Join(h.root, "etc", "network", "interfaces.d", "sdn"), []byte(c.sourced))
+		}
+		s := h.session(Config{})
+		err := s.Prepare(context.Background())
+		if c.refused != (err != nil) {
+			t.Errorf("%s: refused=%v, got %v", name, c.refused, err)
+		}
+		if err == nil && (s.Cfg.Bridge != c.bridge || s.Cfg.VLAN != "7") {
+			t.Errorf("%s: bridge %q VLAN %q", name, s.Cfg.Bridge, s.Cfg.VLAN)
+		}
 	}
 }
 
@@ -285,8 +405,19 @@ func TestShortTemplateStoragesGoByFreeSpace(t *testing.T) {
 		t.Fatalf("template storage %q, want the one with most free", s.Cfg.TemplateStorage)
 	}
 	notices := strings.Join(s.Notices, "\n")
-	if strings.Contains(notices, "the best of") || !strings.Contains(notices, "short of room") {
+	if strings.Contains(notices, "the best of") || !strings.Contains(notices, "the most free of 3") || !strings.Contains(notices, "short of room") {
 		t.Fatalf("notice %q", notices)
+	}
+
+	h = newHarness(t, opts{})
+	h.exec.on("pvesm status --content vztmpl", "Name Type Status Total Used Available %\nlocal dir active 1000 900 90000 90%\n")
+	s = prepared(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+	if err := s.FillStorages(PickBest); err != nil {
+		t.Fatal(err)
+	}
+	notices = strings.Join(s.Notices, "\n")
+	if !strings.Contains(notices, "storage local (dir) for the container template, the only one here that takes it, though under") {
+		t.Fatalf("one short storage: notice %q", notices)
 	}
 }
 
@@ -324,37 +455,115 @@ func TestCleanupRunsOnce(t *testing.T) {
 	}
 }
 
-// A create that fails because another session took the id leaves that session's guest alone.
+// A create that fails because another session took the id leaves that session's guest alone, a
+// second installer on the same node included. Proxmox VE refuses such a create before it makes
+// anything, with one of these two messages.
 func TestFailedCreateLeavesTheOtherGuest(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, opts{})
-	h.exec.fail("pct create", 255)
-	s := prepared(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
-	r := h.runner(s, nil)
-	if _, err := r.Run(context.Background()); err == nil {
-		t.Fatal("a failed create went on")
-	}
-	r.Cleanup(context.Background())
-	if n := h.exec.count("pct destroy") + h.exec.count("pct stop") + h.exec.count("pct unlock"); n != 0 {
-		t.Fatalf("the other guest was touched: %v", h.exec.calls)
-	}
-
-	// A create cut off by a cancel leaves the installer's own locked container, found by its tag.
-	for conf, want := range map[string]int{"tags: kubehenge\nlock: create\n": 1, "hostname: other\n": 0} {
-		h = newHarness(t, opts{})
-		h.exec.fail("pct create", 255)
-		h.exec.on("pct config 100", conf)
-		s = prepared(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
-		r = h.runner(s, nil)
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if err := r.stepCreate(ctx); err == nil {
-			t.Fatal("a failed create succeeded")
+	for _, refusal := range []string{
+		"unable to create CT 100 - CT 100 already exists on node 'pve1'\n",
+		"CT 100 already exists on node 'pve2'\n",
+		"unable to create CT 100 - can't lock file '/run/lock/lxc/pve-config-100.lock' - got timeout\n",
+	} {
+		h := newHarness(t, opts{})
+		h.exec.failWith("pct create", refusal)
+		s := prepared(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+		r := h.runner(s, nil)
+		_, err := r.Run(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "taken by another guest") {
+			t.Fatalf("%q: got %v", refusal, err)
 		}
 		r.Cleanup(context.Background())
-		if got := h.exec.count("pct destroy 100"); got != want {
-			t.Errorf("config %q: destroyed %d times, want %d", conf, got, want)
+		if n := h.exec.count("pct destroy") + h.exec.count("pct stop") + h.exec.count("pct unlock") + h.exec.count("pct config"); n != 0 {
+			t.Fatalf("%q: the other guest was touched: %v", refusal, h.exec.calls)
 		}
+	}
+
+	// A cancel that lands while the create waits on the other installer's lock changes nothing.
+	h := newHarness(t, opts{})
+	h.exec.stall("pct create", "unable to create CT 100 - can't lock file '/run/lock/lxc/pve-config-100.lock' - got timeout\n")
+	s := prepared(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+	r := h.runner(s, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for h.exec.count("pct create") == 0 && ctx.Err() == nil {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+	_, _ = r.Run(ctx)
+	cancel()
+	r.Cleanup(context.Background())
+	if n := h.exec.count("pct destroy") + h.exec.count("pct stop") + h.exec.count("pct unlock"); n != 0 {
+		t.Fatalf("a cancelled create touched the other installer's guest: %v", h.exec.calls)
+	}
+}
+
+// Any other failed create got past the existence check, so what it left is the installer's own.
+// A cancel during the template's extraction is the common case: Proxmox VE writes the tags only
+// after it.
+func TestCancelledCreateRemovesItsContainer(t *testing.T) {
+	t.Parallel()
+	for name, failure := range map[string]func(h *harness){
+		"cancel during extraction": func(h *harness) { h.exec.stall("pct create") },
+		"failed extraction": func(h *harness) {
+			h.exec.failWith("pct create", "unable to create CT 100 - command 'lxc-usernsexec ... tar xpf - --zstd' failed: exit code 2\n")
+		},
+	} {
+		h := newHarness(t, opts{})
+		failure(h)
+		s := prepared(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+		var out strings.Builder
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			for h.exec.count("pct create") == 0 && ctx.Err() == nil {
+				time.Sleep(time.Millisecond)
+			}
+			cancel()
+		}()
+		err := RunPlain(ctx, s, func(func(Event)) *Runner { return h.runner(s, nil) }, &out)
+		cancel()
+		if err == nil || h.exec.count("pct destroy 100") != 1 || h.exec.count("pct config") != 0 {
+			t.Errorf("%s: err %v, calls %v", name, err, h.exec.calls)
+		}
+		if !strings.Contains(out.String(), "removing container 100") {
+			t.Errorf("%s: the removal was not said: %q", name, out.String())
+		}
+	}
+}
+
+// A stalled pct, such as on a hung cluster file system, holds neither the cancelled run nor its
+// cleanup past the cleanup's deadline.
+func TestStalledPctEndsAtTheDeadline(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	h.exec.stall("pct create")
+	h.exec.stall("pct config")
+	h.exec.stall("pct unlock")
+	h.exec.stall("pct stop")
+	h.exec.stall("pct destroy")
+	s := prepared(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+	r := h.runner(s, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = r.Run(ctx)
+		clean, stop := context.WithTimeout(context.WithoutCancel(ctx), 100*time.Millisecond)
+		defer stop()
+		r.Cleanup(clean)
+	}()
+	for h.exec.count("pct create") == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the run and its cleanup still wait: %v", h.exec.calls)
+	}
+	if h.exec.count("pct destroy 100") != 1 {
+		t.Fatalf("the cleanup did not try to remove the container: %v", h.exec.calls)
 	}
 }
 
@@ -389,7 +598,8 @@ func TestUnprotectedApplianceIsNamed(t *testing.T) {
 	}
 }
 
-// An upgrade to another API address pushes the API's CA beside its places for the swap.
+// An upgrade to another API address pushes the API's CA beside its places for the swap, and that
+// CA vouches for the certificate the API serves.
 func TestUpgradePushesTheAPICA(t *testing.T) {
 	t.Parallel()
 	h, r, out := upgradeHarness(t)
@@ -398,8 +608,126 @@ func TestUpgradePushesTheAPICA(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	for _, dest := range []string{"/etc/kubehenge/proxmox-ca.pem.new", "/usr/local/share/ca-certificates/proxmox-ca.crt.new"} {
-		if !strings.Contains(strings.Join(h.exec.calls, "\n"), "pct push 100 "+filepath.Join(h.work, filepath.Base(strings.TrimSuffix(dest, ".new")))+" "+dest) {
-			t.Errorf("no push to %s: %v", dest, h.exec.calls)
+		h.exec.mu.Lock()
+		pem, pushed := h.exec.pushed[dest]
+		h.exec.mu.Unlock()
+		pool := x509.NewCertPool()
+		if !pushed || !pool.AppendCertsFromPEM(pem) {
+			t.Errorf("%s: pushed %v, no certificate in %q", dest, pushed, pem)
+			continue
+		}
+		if _, err := h.chain[0].Verify(x509.VerifyOptions{Roots: pool, DNSName: "pve1.example.com"}); err != nil {
+			t.Errorf("%s: the pushed CA does not vouch for the API: %v", dest, err)
+		}
+	}
+}
+
+// Once the appliance is protected, nothing calls it unprotected or offers to destroy it: not the
+// runner, not Ctrl+C on the end screen and not a signal there.
+func TestFinishedApplianceIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	s := prepared(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+	r := h.runner(s, nil)
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if left := r.Left(); left != "" {
+		t.Fatalf("a protected appliance left %q", left)
+	}
+
+	for _, how := range []string{"ctrl+c", "signal"} {
+		h := newHarness(t, opts{dhcp: true, rootStorages: 2})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		run, signal := context.WithCancel(ctx)
+		started := func() bool { return h.exec.count("pct create") > 0 }
+		keys, typed := pressEnter(ctx, started)
+		screen := &syncBuffer{}
+		var errs strings.Builder
+		ended := make(chan error, 1)
+		cfg := h.session(Config{IP: "dhcp", PVEEntry: "no"}).Cfg
+		streams := ioStreams{in: keys, out: screen, errs: &errs, size: []tea.ProgramOption{tea.WithWindowSize(100, 40)}}
+		go func() { ended <- executeOn(run, h.env(), &cfg, streams, true, "xterm") }()
+		// The renderer moves the cursor over blanks, so the words show without their spaces.
+		for !strings.Contains(strings.ReplaceAll(ansi.Strip(screen.String()), " ", ""), "anykeycloses") && ctx.Err() == nil {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("%s: the end screen never showed: %q", how, ansi.Strip(screen.String()))
+		}
+		if how == "signal" {
+			signal()
+		} else {
+			_, _ = typed.Write([]byte{0x03})
+		}
+		err := <-ended
+		signal()
+		cancel()
+		if err != nil || errs.Len() != 0 || h.exec.count("pct destroy") != 0 || h.exec.count("pct set 100 --protection 1") != 1 {
+			t.Errorf("%s on the end screen: err %v, said %q, calls %v", how, err, errs.String(), h.exec.calls)
+		}
+	}
+}
+
+// Ctrl+C on the failure screen keeps the failure and says what was undone and what stays.
+func TestCtrlCOnFailureKeepsTheFailure(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true, rootStorages: 2})
+	h.exec.fail("pct start 100", 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	keys, typed := pressEnter(ctx, func() bool { return h.exec.count("pct create") > 0 })
+	screen := &syncBuffer{}
+	var errs strings.Builder
+	cfg := h.session(Config{IP: "dhcp", PVEEntry: "no"}).Cfg
+	streams := ioStreams{in: keys, out: screen, errs: &errs, size: []tea.ProgramOption{tea.WithWindowSize(100, 40)}}
+	ended := make(chan error, 1)
+	go func() { ended <- executeOn(ctx, h.env(), &cfg, streams, true, "xterm") }()
+	for !strings.Contains(strings.ReplaceAll(ansi.Strip(screen.String()), " ", ""), "Container100wasremoved") && ctx.Err() == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("the failure screen never said what was undone: %q", ansi.Strip(screen.String()))
+	}
+	_, _ = typed.Write([]byte{0x03})
+	err := <-ended
+	if err == nil || !strings.Contains(err.Error(), "did not start") || !strings.Contains(err.Error(), "Container 100 was removed.") ||
+		!strings.Contains(err.Error(), "template stays on storage local-lvm") || errs.Len() != 0 {
+		t.Fatalf("Ctrl+C on the failure screen: err %v, said %q", err, errs.String())
+	}
+}
+
+// An upgraded appliance that cannot be protected gets one warning with pct's own message and the
+// one fix, and is never offered for removal, since it holds the management cluster's state.
+func TestUpgradeProtectionWarning(t *testing.T) {
+	t.Parallel()
+	h, r, out := upgradeHarness(t)
+	h.exec.failWith("pct set 100 --protection 1", "CT 100 is locked (backup)\n")
+	res, err := r.Upgrade(context.Background(), out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	warning := strings.Join(res.Warnings, "\n")
+	if !strings.Contains(warning, "CT 100 is locked (backup)") || strings.Count(warning, "Protect it with") != 1 ||
+		strings.Contains(warning, "destroy") || strings.Contains(warning, "the appliance is installed") {
+		t.Fatalf("warning %q", warning)
+	}
+}
+
+// One line per step says it removes the container only when there is one of the run's own to
+// remove.
+func TestPlainSaysWhatItRemoves(t *testing.T) {
+	t.Parallel()
+	for call, removes := range map[string]bool{"pct set 100 --protection 1": false, "pct start 100": true, "pct create": false} {
+		h := newHarness(t, opts{})
+		h.exec.fail(call, 1)
+		if call == "pct create" {
+			h.exec.failWith(call, "CT 100 already exists on node 'pve1'\n")
+		}
+		out, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
+		said := strings.Contains(out, "removing container 100")
+		if err == nil || said != removes || (h.exec.count("pct destroy 100") == 1) != removes {
+			t.Errorf("%s failing: said %v, destroyed %d, want %v: %q", call, said, h.exec.count("pct destroy 100"), removes, out)
 		}
 	}
 }

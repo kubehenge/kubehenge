@@ -22,17 +22,23 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 	if err := cfg.CheckOptionFiles(); err != nil {
 		return err
 	}
-	env, err := NewEnv(ctx)
+	env, err := newEnv(ctx)
 	if err != nil {
 		return err
 	}
 	defer env.Cleanup()
-	return executeOn(ctx, env, cfg, ioStreams{stdin, stdout}, interactive, os.Getenv("TERM"))
+	return executeOn(ctx, env, cfg, ioStreams{in: stdin, out: stdout, errs: os.Stderr}, interactive, os.Getenv("TERM"))
 }
 
+// newEnv prepares this machine for the run. Tests stand in a scripted node.
+var newEnv = NewEnv
+
 type ioStreams struct {
-	in  io.Reader
-	out io.Writer
+	in   io.Reader
+	out  io.Writer
+	errs io.Writer
+	// size gives the screen's size where out is no terminal to ask, as in tests.
+	size []tea.ProgramOption
 }
 
 // executeOn is Execute on a prepared machine, for the terminal named by term.
@@ -57,26 +63,33 @@ func executeOn(ctx context.Context, env *Env, cfg *Config, streams ioStreams, in
 		return RunPlain(ctx, s, newRunner, stdout)
 	}
 	model := NewModel(s, newRunner)
-	prog := tea.NewProgram(model, tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithContext(ctx))
+	prog := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithContext(ctx)}, streams.size...)...)
 	_, err = prog.Run()
 	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
 	model.Shutdown(cleanCtx)
 	if err != nil {
+		if model.Finished() {
+			// A signal on the end screen, such as a dropped SSH session, ends a finished install.
+			return nil
+		}
 		if left := model.Left(); left != "" {
 			return fmt.Errorf("run: %w. %s", err, left)
 		}
 		return fmt.Errorf("run: %w", err)
 	}
+	outcome := model.Outcome()
 	if model.Cancelled() {
-		if left := model.Left(); left != "" {
-			_, _ = fmt.Fprintln(os.Stderr, "Cancelled. "+left)
-			return nil
+		if outcome == "" {
+			outcome = "Nothing was changed."
 		}
-		_, _ = fmt.Fprintln(os.Stderr, "Cancelled. Nothing was changed.")
+		_, _ = fmt.Fprintln(streams.errs, "Cancelled. "+outcome)
 		return nil
 	}
-	return model.Err()
+	if err = model.Err(); err != nil && outcome != "" && outcome != model.Left() {
+		return fmt.Errorf("%w. %s", err, outcome)
+	}
+	return err
 }
 
 // CanDrawScreen reports whether a terminal of this TERM value can show the full-screen installer.

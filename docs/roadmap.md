@@ -50,4 +50,10 @@ What each release changed is in the [changelog](changelog.md).
 
 ## Later
 
+- An optional services cluster that Kubehenge creates for the others, each service on it optional. The other clusters use it by default once it runs. The management cluster stays small. It could hold:
+  - a registry and pull-through cache
+  - backups, metrics and logs from every cluster
+  - Argo CD for every cluster
+  - security scanning
+
 Driven by what users ask for, such as clusters across several Proxmox VE clusters and more add-ons. OKD clusters may follow once Cluster API's OpenShift Assisted providers support ClusterClass and work with the Proxmox VE provider.

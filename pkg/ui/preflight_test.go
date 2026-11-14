@@ -79,7 +79,7 @@ func TestSetupRefusesWhatProxmoxVEWouldFailAndStartsNothing(t *testing.T) {
 	for _, want := range []string{
 		"Storage local on node pve1 lacks the import content type. Add it under Datacenter, Storage, Edit, Content.",
 		"Pool kubehenge exists in Proxmox VE already",
-		"Address 10.0.0.11 answers",
+		"Address 10.0.0.11 already answers",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the check lacks %q in:\n%s", want, joined)
@@ -167,7 +167,7 @@ func TestSetupCheckOfAnIPv6Bridge(t *testing.T) {
 "apiAddress":"2001:db8:0:2::10","gatewayIPv6":"2001:db8:0:2::1","dnsServers":["2001:db8:0:2::53"],
 "podSubnets":["2001:db8::/63"],"workloadDatastores":["local-lvm"],"workloadBridges":["vmbr0"],"bootstrapDatastore":"local"}}`
 	f := checkSettings(t, b, settings)
-	mentions(t, f.Errors, "Address 2001:db8:0:2::12 answers")
+	mentions(t, f.Errors, "Address 2001:db8:0:2::12 already answers")
 	if len(f.Errors) != 1 {
 		t.Errorf("errors = %q, want the one address that answers", f.Errors)
 	}

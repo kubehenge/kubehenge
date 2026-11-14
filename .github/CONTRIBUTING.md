@@ -64,6 +64,18 @@ Details and reasons: `docs/architecture.md`.
   - a proxy, no internet, or an API certificate from a private CA
 - **Wording.** British English. Write "Terraform/OpenTofu", never either alone.
 
+## Interface rules
+
+These hold for the web interface, the installer and the CLI alike. The text rules are in `web/WRITING.md`.
+
+- **Safeguards are on by default.** That covers etcd snapshots, backups, protection against deletion and certificate checks. When a safeguard needs input, fix that need and keep the safeguard on.
+- **A default never stops the user.** No step blocks on a field the user did not touch.
+- **Defaults come from the site.** Copying another cluster is the user's choice, and copied values are marked.
+- **Input is checked where it is entered,** with the same figures as the final check.
+- **What it says is what happens.** A button says whether it applies or only stages. A summary row matches what will be created. A count matches the items shown.
+- **A risk never looks like a pass.** A change that replaces nodes or skips a check is shown as such and asks to be confirmed.
+- **The interface and kubectl agree.** Every rule and check runs on the server, so it holds the same through the interface, kubectl, GitOps and the CLI.
+
 ## Code checks
 
 - **Strictest checks.** Every linter, formatter and type checker runs at its strictest setting. A rule is switched off only where it contradicts another or the language's own conventions.

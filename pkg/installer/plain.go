@@ -148,7 +148,9 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 		// The cleanup must run even when the run was cancelled.
 		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
-		_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
+		if runner.Made() {
+			_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
+		}
 		runner.Cleanup(cleanCtx)
 		return err
 	}
