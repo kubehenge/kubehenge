@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -158,9 +159,15 @@ func (w *EtcdWatch) controlPlaneVMs(ctx context.Context, c *clusterv1.Cluster, l
 	if err != nil {
 		return nil, err
 	}
-	ids, err := ProxmoxMachineVMIDs(ctx, w.Client, c.Namespace, c.Name)
-	if err != nil {
-		return nil, err
+	pms := proxmoxMachineList()
+	if err := w.Client.List(ctx, pms, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
+		return nil, fmt.Errorf("listing the cluster's ProxmoxMachines: %w", err)
+	}
+	ids := map[string]int64{}
+	for i := range pms.Items {
+		if vmid, found, _ := unstructured.NestedInt64(pms.Items[i].Object, "spec", "virtualMachineID"); found {
+			ids[pms.Items[i].GetName()] = vmid
+		}
 	}
 	var out []cpMachine
 	for i := range machines {
@@ -168,7 +175,7 @@ func (w *EtcdWatch) controlPlaneVMs(ctx context.Context, c *clusterv1.Cluster, l
 		if _, cp := m.Labels[clusterv1.MachineControlPlaneLabel]; !cp {
 			continue
 		}
-		vmid := int64(ids[m.Spec.InfrastructureRef.Name])
+		vmid := ids[m.Spec.InfrastructureRef.Name]
 		g, listed := look.guests[vmid]
 		out = append(out, cpMachine{machine: m, vmid: vmid, guest: g, listed: listed && vmid != 0})
 	}

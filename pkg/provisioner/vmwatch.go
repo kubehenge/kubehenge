@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -317,9 +318,15 @@ func (w *VMWatch) clusterVMs(ctx context.Context, c *clusterv1.Cluster) ([]clust
 	if err != nil {
 		return nil, err
 	}
-	ids, err := ProxmoxMachineVMIDs(ctx, w.Client, c.Namespace, c.Name)
-	if err != nil {
-		return nil, err
+	pms := proxmoxMachineList()
+	if err := w.Client.List(ctx, pms, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
+		return nil, fmt.Errorf("listing the cluster's ProxmoxMachines: %w", err)
+	}
+	ids := map[string]int64{}
+	for i := range pms.Items {
+		if vmid, found, _ := unstructured.NestedInt64(pms.Items[i].Object, "spec", "virtualMachineID"); found {
+			ids[pms.Items[i].GetName()] = vmid
+		}
 	}
 	var vms []clusterVM
 	for i := range machines {
@@ -328,7 +335,7 @@ func (w *VMWatch) clusterVMs(ctx context.Context, c *clusterv1.Cluster) ([]clust
 		if !ok || m.Status.NodeRef.Name == "" {
 			continue
 		}
-		vms = append(vms, clusterVM{machine: m.Name, vmid: int64(vmid), vmName: m.Spec.InfrastructureRef.Name, node: m.Status.NodeRef.Name, m: m})
+		vms = append(vms, clusterVM{machine: m.Name, vmid: vmid, vmName: m.Spec.InfrastructureRef.Name, node: m.Status.NodeRef.Name, m: m})
 	}
 	slices.SortFunc(vms, func(a, b clusterVM) int { return int(a.vmid - b.vmid) })
 	return vms, nil
