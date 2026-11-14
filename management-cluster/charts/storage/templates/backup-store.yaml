@@ -36,8 +36,13 @@ metadata:
   labels:
     app.kubernetes.io/name: {{ $name }}
     app.kubernetes.io/part-of: kubehenge
+  {{- /* A disk on one node's own storage stays attached to a node VM only while the store runs, and an
+  attached disk keeps Proxmox VE from migrating that VM. There the store sleeps, and the appliance
+  wakes it for each backup or recovery, then puts it back to these replicas. */}}
+  annotations:
+    kubehenge.dev/idle-replicas: {{ ternary "0" "1" (ne .Values.backupVolume.zone "") | quote }}
 spec:
-  replicas: 1
+  replicas: {{ ternary 0 1 (ne .Values.backupVolume.zone "") }}
   # The volume attaches to one node at a time.
   strategy:
     type: Recreate
@@ -110,6 +115,11 @@ rules:
     resources: [secrets]
     resourceNames: [{{ $name }}]
     verbs: [get]
+  # Waking the store for a backup or recovery, and putting it back to its idle replicas.
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [{{ $name }}]
+    verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

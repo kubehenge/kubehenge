@@ -136,6 +136,31 @@ run "backup_volume_outlives_the_node_vms" {
   }
 }
 
+run "backup_volume_on_shared_storage_attaches_on_any_node" {
+  command = apply
+
+  variables {
+    backup_volume = { shared = true }
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.storage.values[0]).backupVolume.handle == "kubehenge//fast/${proxmox_virtual_environment_vm.backups.disk[0].path_in_datastore}" &&
+      yamldecode(helm_release.storage.values[0]).backupVolume.zone == ""
+    )
+    error_message = "on shared storage the backup volume must name no zone, so that the store runs on any node"
+  }
+}
+
+run "backup_volume_on_local_storage_stays_on_its_node" {
+  command = apply
+
+  assert {
+    condition     = yamldecode(helm_release.storage.values[0]).backupVolume.zone == "pve1"
+    error_message = "on a node's own storage the backup volume must stay on that node"
+  }
+}
+
 run "backup_volume_protection_off" {
   command = plan
 

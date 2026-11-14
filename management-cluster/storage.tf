@@ -15,6 +15,17 @@ locals {
     claim     = "kubehenge-backups"
     namespace = local.kubehenge_namespace
     node      = local.nodes[0].proxmox_node
+    # Shared storage (Ceph RBD, NFS, shared LVM) attaches the disk on any node. Its handle names no
+    # zone, the plugin's own form for shared volumes, so the store runs wherever a node is up.
+    shared = coalesce(var.backup_volume.shared, try(data.proxmox_virtual_environment_datastores.backup_volume.datastores[0].shared, false), false)
+  }
+  backup_volume_zone = local.backup_volume.shared ? "" : local.backup_volume.node
+}
+
+data "proxmox_virtual_environment_datastores" "backup_volume" {
+  node_name = local.nodes[0].proxmox_node
+  filters = {
+    id = var.vm_datastore
   }
 }
 
@@ -113,8 +124,8 @@ locals {
       claim     = local.backup_volume.claim
       namespace = local.backup_volume.namespace
       sizeGB    = var.backup_volume.size_gb
-      handle    = "${local.csi_region}/${local.backup_volume.node}/${var.vm_datastore}/${proxmox_virtual_environment_vm.backups.disk[0].path_in_datastore}"
-      zone      = local.backup_volume.node
+      handle    = "${local.csi_region}/${local.backup_volume_zone}/${var.vm_datastore}/${proxmox_virtual_environment_vm.backups.disk[0].path_in_datastore}"
+      zone      = local.backup_volume_zone
       region    = local.csi_region
     }
   }

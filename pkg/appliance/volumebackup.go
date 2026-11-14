@@ -11,11 +11,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"filippo.io/age"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -185,6 +187,9 @@ func (a *Appliance) openVolume(ctx context.Context) (provisioner.ObjectStore, er
 	if err != nil {
 		return nil, fmt.Errorf("a client for the management cluster: %w", err)
 	}
+	if err := wakeStore(ctx, kube); err != nil {
+		return nil, err
+	}
 	secret, err := kube.CoreV1().Secrets(backupstore.Namespace).Get(ctx, backupstore.TokenSecret, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("the backup volume's token: %w", err)
@@ -194,6 +199,75 @@ func (a *Appliance) openVolume(ctx context.Context) (provisioner.ObjectStore, er
 		return nil, fmt.Errorf("a client for the management cluster: %w", err)
 	}
 	return &backupstore.Client{Base: backupstore.ProxyBase(cfg.Host), Token: string(secret.Data[backupstore.TokenKey]), HTTP: client}, nil
+}
+
+// idleReplicas annotates the store's Deployment with the replicas it keeps between backups. The
+// storage chart sets it: 0 on a node's own storage, whose disk then stays detached, so that
+// Proxmox VE can migrate the node VMs and a node can go into maintenance.
+const idleReplicas = "kubehenge.dev/idle-replicas"
+
+// storeReadyPoll is how often a wake looks for the store's pod to be ready.
+var storeReadyPoll = 2 * time.Second
+
+// wakeStore starts the backup volume's store when it sleeps and waits, within ctx, until its pod is
+// ready, which is once the plugin has attached the disk to that pod's node.
+func wakeStore(ctx context.Context, kube kubernetes.Interface) error {
+	deps := kube.AppsV1().Deployments(backupstore.Namespace)
+	d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("the backup volume's store: %w", err)
+	}
+	if d.Spec.Replicas == nil || *d.Spec.Replicas == 0 {
+		if _, err := deps.Patch(ctx, backupstore.Service, types.MergePatchType, []byte(`{"spec":{"replicas":1}}`), metav1.PatchOptions{}); err != nil {
+			return fmt.Errorf("starting the backup volume's store: %w", err)
+		}
+	}
+	for d.Status.ReadyReplicas < 1 {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("the backup volume's store did not start: %w", ctx.Err())
+		case <-time.After(storeReadyPoll):
+		}
+		if d, err = deps.Get(ctx, backupstore.Service, metav1.GetOptions{}); err != nil {
+			return fmt.Errorf("the backup volume's store: %w", err)
+		}
+	}
+	return nil
+}
+
+// restStore puts the backup volume's store back to the replicas its chart keeps between backups,
+// which detaches a node-local disk again.
+func restStore(ctx context.Context, kube kubernetes.Interface) error {
+	deps := kube.AppsV1().Deployments(backupstore.Namespace)
+	d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("the backup volume's store: %w", err)
+	}
+	idle, ok := d.Annotations[idleReplicas]
+	if !ok || (d.Spec.Replicas != nil && strconv.Itoa(int(*d.Spec.Replicas)) == idle) {
+		return nil
+	}
+	if _, err := strconv.Atoi(idle); err != nil {
+		return fmt.Errorf("the backup volume's store: %s %q is no number", idleReplicas, idle)
+	}
+	patch := []byte(`{"spec":{"replicas":` + idle + `}}`)
+	if _, err := deps.Patch(ctx, backupstore.Service, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("putting the backup volume's store back to sleep: %w", err)
+	}
+	return nil
+}
+
+// sleepVolume puts the store back once a backup or a recovery is done with it. Tests that stand in
+// for the store have none.
+func (a *Appliance) sleepVolume(ctx context.Context) error {
+	if a.OpenVolume != nil {
+		return nil
+	}
+	kube, err := a.interfaceClient()
+	if err != nil {
+		return err
+	}
+	return restStore(ctx, kube)
 }
 
 // storeOnVolume stores the snapshot in file on the volume, encrypted, with the sealed key beside
@@ -431,6 +505,7 @@ func (a *Appliance) backUpToVolume(ctx context.Context, keys *volumeBackupKeys, 
 	stored, err := a.storeOnVolume(ctx, keys, file, taken)
 	rec := a.volumeBackupRecord()
 	export, sealedExport, exportErr := a.exportToVolume(ctx, keys, taken.Name)
+	err = errors.Join(err, a.sleepVolume(ctx))
 	if exportErr == nil {
 		rec.Export = export
 	}

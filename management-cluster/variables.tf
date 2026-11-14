@@ -357,10 +357,11 @@ variable "node_disk_gb" {
 }
 
 variable "backup_volume" {
-  description = "The volume the management cluster's backups are kept on: a disk of size_gb on vm_datastore, owned by a VM of its own that never starts, so that it outlives every node VM. With protection, Proxmox VE refuses deleting that VM and its disk, and a destroy of the module stops there until protection is set false and applied."
+  description = "The volume the management cluster's backups are kept on: a disk of size_gb on vm_datastore, owned by a VM of its own that never starts, so that it outlives every node VM. With protection, Proxmox VE refuses deleting that VM and its disk, and a destroy of the module stops there until protection is set false and applied. shared says whether vm_datastore reaches every node, read from Proxmox VE when null: a shared volume attaches on any node, and one on a node's own storage only while a backup or recovery runs."
   type = object({
     size_gb    = optional(number, 20)
     protection = optional(bool, true)
+    shared     = optional(bool)
   })
   default  = {}
   nullable = false

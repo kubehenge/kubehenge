@@ -66,6 +66,9 @@ func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, rea
 			return err
 		}
 		defer func() { _ = os.Remove(file) }()
+		if err := a.sleepVolume(ctx); err != nil {
+			j.Add("The backup volume's store stays up: " + err.Error())
+		}
 		j.Add("Restoring the management cluster's etcd from " + name + ", read from " + from)
 		open := func() (io.ReadCloser, error) { return os.Open(file) } //nolint:gosec // the appliance's own file
 		if err := a.Talos.Restore(ctx, admin, nodes, open, j.Add); err != nil {

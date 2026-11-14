@@ -632,6 +632,8 @@ The appliance takes each snapshot itself through the nodes' Talos API, with a ta
 
 With no settings at all, every management cluster backs up onto its own backup volume. That is the claim `kubehenge-system/kubehenge-backups`, the disk of the stopped, protected VM `kubehenge-backups`. Proxmox VE deletes a VM's own disks only, so the volume outlives the loss of every management VM.
 
+On shared storage (Ceph RBD, NFS, shared LVM) the volume attaches to whichever node runs its store. On a node's own storage (directory, LVM, LVM-thin, ZFS) it stays on the first node of the setup, and its store runs only during a backup or recovery. The disk is detached the rest of the time, so Proxmox VE can migrate the management VMs and a node can go into maintenance.
+
 Every 6 hours the appliance puts an etcd snapshot there, encrypted with the state passphrase, and keeps the newest 28. Beside each goes an export of Kubehenge's objects: the clusters, their classes, the Secrets Kubehenge owns and the setup settings. A backup target, when set up, gets snapshots on its own schedule.
 
 The appliance keeps a copy of the latest snapshot, its export and its key, up to 1 GiB in all. A copy over that cap is not made, and the last copy that fit stays. The disk warning names the copy once it reaches 80 % of its cap, or once the disk has no room for the next one.
