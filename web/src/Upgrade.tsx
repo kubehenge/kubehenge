@@ -279,9 +279,9 @@ export function useChecks({
         }
       }
       try {
-        const read = await api.nodes();
+        const listed = await api.nodes();
         if (current) {
-          setNodes(read);
+          setNodes(listed);
         }
       } catch {
         // Without the nodes there is no offline or memory line, and the cluster shows a VM that found no room.
