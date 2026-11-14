@@ -5,3 +5,4 @@
 ### Fixed
 
 - A cluster that no longer meets a rule, such as one whose trusted authority expired, still takes annotations, labels, finalizers and changes to its other settings.
+- While the controller is away, a cluster still takes labels, finalizers and `kubehenge.dev/allow-deletion`, so it can be deleted.
