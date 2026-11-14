@@ -1,4 +1,4 @@
-import { autoscalerText } from "./Autoscaling";
+import { autoscalerText, poolText } from "./Autoscaling";
 import { backupsRows } from "./Backups";
 import { everything, optionRows, type OptionRow } from "./ClusterOptions";
 import { etcdSnapshotsRows } from "./EtcdSnapshots";
@@ -172,5 +172,39 @@ export function planRows(
     const changed = rows.filter((r) => r.now !== r.after);
     const shown = changed.length > 0 ? changed : rows.slice(0, 1);
     return shown.flatMap((r) => (r.label === "Node customisation" ? nodeRows(r, before, after) : [r]));
+  });
+}
+
+// A pool's text on one side of a change. A pool the change adds has none yet.
+const poolSide = (c: Cluster, name: string): string => {
+  const p = c.workerPools.find((x) => x.name === name);
+  return p === undefined ? "" : poolText(p);
+};
+
+const named = (label: string, now: string, after: string): string =>
+  now === "" ? `${label}: ${after}` : `${label}: ${now} to ${after}`;
+
+/**
+ * changeLines name each staged change with the numbers it sets, such as "Workers: 4 to 60" or
+ * "Control plane: 3 to 5", for the bar that holds them until they are applied.
+ */
+export function changeLines(
+  { before, after }: { before: Cluster; after: Cluster },
+  changes: PlannedChange[],
+  cls?: ClusterClass,
+): string[] {
+  return changes.flatMap((change) => {
+    if (change.setting === "controlPlaneReplicas") {
+      return [named("Control plane", String(before.controlPlane.desired), String(after.controlPlane.desired))];
+    }
+    if (change.setting === "workerPools") {
+      const names = [...new Set([...before.workerPools, ...after.workerPools].map((p) => p.name))];
+      return names
+        .filter((n) => poolSide(before, n) !== poolSide(after, n))
+        .map((n) => named(names.length === 1 ? "Workers" : `Workers ${n}`, poolSide(before, n), poolSide(after, n)));
+    }
+    return planRows({ before, after }, [change], cls)
+      .filter((r) => r.label !== "")
+      .map((r) => named(r.label, r.now, r.after));
   });
 }

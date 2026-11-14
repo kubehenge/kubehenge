@@ -475,7 +475,9 @@ describe("clusters", () => {
     const calls = fakeServer({
       ...signedIn,
       "GET /api/clusters/default/web": () => ({ body: web }),
-      "PATCH /api/clusters/default/web": () => ({ body: web }),
+      "PATCH /api/clusters/default/web": () => ({
+        body: { ...web, workerPools: [{ name: "md-0", class: "worker", replicas: 4 }] },
+      }),
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
@@ -483,7 +485,11 @@ describe("clusters", () => {
     const workers = screen.getByLabelText("Workers (md-0)");
     await user.clear(workers);
     await user.type(workers, "4");
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Scale" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByRole("button", { name: "Scale" })).not.toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
+    const bar = await screen.findByRole("region", { name: "Staged changes" });
+    expect(bar).toHaveTextContent("Workers: 2 to 4");
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({

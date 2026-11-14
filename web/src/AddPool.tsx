@@ -67,7 +67,7 @@ export function AddPoolDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !ready}>
-            Add
+            Add to plan
           </button>
         </>
       }

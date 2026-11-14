@@ -225,10 +225,10 @@ describe("the pools", () => {
     await user.clear(memory);
     await user.type(memory, "2048");
     expect(memory).toHaveAccessibleDescription(/At least 4096 MiB of memory/u);
-    expect(within(dialog).getByRole("button", { name: "Add" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.clear(memory);
     await user.type(memory, "16384");
-    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({
@@ -252,7 +252,7 @@ describe("the pools", () => {
     await user.type(within(taint).getByLabelText("Key"), "dedicated");
     await user.type(within(taint).getByLabelText("Value"), "gpu");
     expect(within(dialog).queryByText(/replaces this pool's nodes/u)).not.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({
@@ -278,7 +278,7 @@ describe("the pools", () => {
     await user.click(within(dialog).getByRole("button", { name: "Add label" }));
     const key = within(within(dialog).getByRole("group", { name: "Label 1" })).getByLabelText("Key");
     expect(key).not.toHaveAccessibleDescription(/Enter a key/u);
-    expect(within(dialog).getByRole("button", { name: "Add" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(key);
     await user.tab();
     expect(key).toHaveAccessibleDescription("Enter a key");
@@ -291,7 +291,7 @@ describe("the pools", () => {
     const cores = within(dialog).getByLabelText("Cores");
     await user.clear(cores);
     await user.type(cores, "4");
-    await user.click(within(dialog).getByRole("button", { name: "Resize" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({

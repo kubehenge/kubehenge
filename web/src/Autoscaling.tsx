@@ -550,7 +550,7 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || Object.keys(invalid).length > 0}>
-            Scale
+            Add to plan
           </button>
         </>
       }

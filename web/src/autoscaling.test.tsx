@@ -64,13 +64,13 @@ describe("the Scale dialog", () => {
     await user.clear(most);
     await user.type(most, "7");
     expect(most).toHaveAccessibleDescription(/Needs 9 node addresses, but there are 8/u);
-    expect(within(dialog).getByRole("button", { name: "Scale" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.clear(most);
     await user.type(most, "4");
     const fewest = within(dialog).getByLabelText("Fewest workers (md-0)");
     await user.clear(fewest);
     await user.type(fewest, "1");
-    await user.click(within(dialog).getByRole("button", { name: "Scale" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
@@ -96,7 +96,7 @@ describe("the Scale dialog", () => {
     const workers = within(dialog).getByLabelText("Workers (md-0)");
     expect(workers).toHaveValue(3);
     expect(workers).toHaveAccessibleDescription("Keeps its current workers unless changed");
-    await user.click(within(dialog).getByRole("button", { name: "Scale" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({

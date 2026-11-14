@@ -1,7 +1,7 @@
 import { useEffect, useState, type JSX, type ReactNode } from "react";
 
 import { api, ApiError, httpPreconditionFailed } from "./api";
-import { effects, planRows, worstEffect } from "./plan-rows";
+import { changeLines, effects, planRows, worstEffect } from "./plan-rows";
 import { StagingContext, useStaging, type Staging } from "./staging-context";
 import type { ChangeRequest, Cluster, ClusterClass } from "./types";
 import { Dialog, ErrorBox, errorMessage } from "./ui";
@@ -122,11 +122,17 @@ export function StagedBar({ cluster: c }: { cluster: Cluster }): JSX.Element | n
     return <ErrorBox message={staging?.dropped} />;
   }
   const { changes } = staging.staged.plan;
+  const lines = changeLines({ before: c, after: staging.staged.plan.cluster }, changes);
   return (
     <section className="staged" aria-label="Staged changes">
       <strong>
         {changes.length} {changes.length === 1 ? "change" : "changes"} not applied
       </strong>
+      <ul className="staged-lines">
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
       <span className="staged-effect">{effects[worstEffect(changes)]}</span>
       <span className="spacer" />
       <button type="button" onClick={() => staging.discard()}>

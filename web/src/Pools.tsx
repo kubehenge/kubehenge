@@ -210,7 +210,7 @@ function ResizeDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || same || problem !== undefined}>
-            Resize
+            Add to plan
           </button>
         </>
       }
