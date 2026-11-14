@@ -12,7 +12,7 @@ import {
 } from "./node-settings";
 import { NodeSettingsFields } from "./NodeSettings";
 import type { Cluster, WorkerPool } from "./types";
-import { BreakableText, Dialog, ErrorBox, useChange } from "./ui";
+import { BreakableText, Dialog, ErrorBox, stageLabel, useChange } from "./ui";
 
 /** poolNodes are the labels and taints a pool's workers get: its own, or the cluster's for its workers. */
 export const poolNodes = (c: Cluster, p: WorkerPool): NodeSettings => nodesOf(p.nodes ?? c.variables["workerNodes"]);
@@ -68,7 +68,7 @@ export function NodesDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || problem !== undefined}>
-            Add to plan
+            {stageLabel}
           </button>
         </>
       }

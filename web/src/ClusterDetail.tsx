@@ -36,6 +36,7 @@ import {
   pollIdle,
   saveFile,
   settled,
+  stageLabel,
   useChange,
   usePoll,
   Skeleton,
@@ -814,7 +815,7 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changing || read?.error !== undefined}>
-            Add to plan
+            {stageLabel}
           </button>
         </>
       }

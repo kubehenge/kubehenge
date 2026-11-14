@@ -2,7 +2,7 @@ import { useState, type JSX } from "react";
 
 import { NodeTimeoutFields, entryOf, timeoutProblems, timeoutsOf, type TimeoutEntry } from "./NodeTimeouts";
 import type { Cluster, ClusterClass, WorkerPool } from "./types";
-import { Dialog, ErrorBox, useChange } from "./ui";
+import { Dialog, ErrorBox, stageLabel, useChange } from "./ui";
 
 /** TimeoutsDialog sets how long a removed machine of the control planes, or of a pool, waits for its node. */
 export function TimeoutsDialog({
@@ -36,7 +36,7 @@ export function TimeoutsDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || same || invalid}>
-            Add to plan
+            {stageLabel}
           </button>
         </>
       }

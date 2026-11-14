@@ -190,15 +190,15 @@ describe("the autoscaler's options", () => {
     );
     await user.click(screen.getByRole("button", { name: "Edit the autoscaler" }));
     const dialog = screen.getByRole("dialog", { name: "Edit autoscaler" });
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     const runs = within(dialog).getByLabelText("Runs");
     await user.selectOptions(runs, "workload");
     expect(runs).toHaveAccessibleDescription("Its token reads the machines of the namespace's clusters");
     const unneeded = within(dialog).getByLabelText("Unneeded for (minutes)");
     await user.clear(unneeded);
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.type(unneeded, "5");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({

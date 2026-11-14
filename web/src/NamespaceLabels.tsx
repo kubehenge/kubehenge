@@ -2,7 +2,7 @@ import { useState, type JSX } from "react";
 
 import { labelsLines, labelsOf, parseLabels } from "./namespace-labels";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
 
 const labelRows = 4;
 
@@ -53,7 +53,7 @@ export function NamespaceLabelsDialog({ cluster: c, onClose }: { cluster: Cluste
             className="primary"
             disabled={busy || parsed.problem !== undefined || value.trim() === kept.trim()}
           >
-            Save
+            {stageLabel}
           </button>
         </>
       }

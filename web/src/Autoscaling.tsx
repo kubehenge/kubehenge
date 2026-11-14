@@ -13,7 +13,7 @@ import type {
   PveNode,
   WorkerPool,
 } from "./types";
-import { Dialog, ErrorBox, Field, bytes, maxWorkers, shownNumber, typedNumber, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, bytes, maxWorkers, shownNumber, typedNumber, stageLabel, useChange } from "./ui";
 import { flag, quantity, record, text, texts } from "./values";
 
 const bytesPerMiB = 1_048_576;
@@ -461,7 +461,7 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || invalid}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -550,7 +550,7 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || Object.keys(invalid).length > 0}>
-            Add to plan
+            {stageLabel}
           </button>
         </>
       }

@@ -146,7 +146,7 @@ describe("etcd limit", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit etcd" });
     const field = within(dialog).getByLabelText("Database limit (GiB)");
     expect(within(dialog).queryByText(/Not lower than/u)).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
 
     await user.clear(field);
     await user.type(field, "4");
@@ -154,7 +154,7 @@ describe("etcd limit", () => {
     await user.clear(field);
     await user.type(field, "7");
     expect(within(dialog).queryByText("Not lower than 6")).not.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({

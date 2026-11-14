@@ -980,7 +980,7 @@ const cases: Case[] = [
         within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"),
       );
       await user.click(
-        within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+        within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
       );
       await screen.findByRole("region", { name: "Staged changes" });
       await check("Staged changes bar");
@@ -1006,7 +1006,7 @@ const cases: Case[] = [
       );
       await user.selectOptions(dialog.getByLabelText("File 1 source"), "secret");
       await check("Node customisation rows");
-      await user.click(dialog.getByRole("button", { name: "Save" }));
+      await user.click(dialog.getByRole("button", { name: "Add to plan" }));
       await check("Node customisation problems");
     },
   },

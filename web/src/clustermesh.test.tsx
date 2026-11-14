@@ -70,9 +70,9 @@ describe("a Cluster Mesh", () => {
     expect(within(dialog).getByText("(Not linked)")).toBeInTheDocument();
     expect(within(dialog).getByText("it does not list this cluster")).toBeInTheDocument();
     expect(within(dialog).queryByRole("checkbox", { name: /legacy|far|web/u })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(within(dialog).getByRole("checkbox", { name: "api" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({

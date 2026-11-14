@@ -8,7 +8,7 @@ import { NodesDialog, NodeTags, poolNodes } from "./PoolNodes";
 import { TimeoutsDialog } from "./PoolTimeouts";
 import { useStaging } from "./staging-context";
 import type { Cluster, MachineSize, WorkerPool } from "./types";
-import { Dialog, ErrorBox, RowMenu, useChange } from "./ui";
+import { Dialog, ErrorBox, RowMenu, stageLabel, useChange } from "./ui";
 
 const mibPerGiB = 1024;
 
@@ -210,7 +210,7 @@ function ResizeDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || same || problem !== undefined}>
-            Add to plan
+            {stageLabel}
           </button>
         </>
       }
@@ -251,7 +251,7 @@ function DeletePoolDialog({
             Cancel
           </button>
           <button type="submit" className="danger" disabled={busy}>
-            Add to plan
+            {stageLabel}
           </button>
         </>
       }

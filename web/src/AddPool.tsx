@@ -7,7 +7,7 @@ import { hasNodeSettings, nodeSettingsProblem, nodesVariable, type NodeSettings 
 import { NodeSettingsFields } from "./NodeSettings";
 import { sizeProblem, useClass } from "./pool-machine";
 import type { Cluster, MachineSize } from "./types";
-import { Dialog, ErrorBox, Field, maxWorkers, shownNumber, typedNumber, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, maxWorkers, shownNumber, typedNumber, stageLabel, useChange } from "./ui";
 
 // As the API server holds them: a DNS label, and host names of <cluster>-<pool>-<three random
 // parts> within one.
@@ -67,7 +67,7 @@ export function AddPoolDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !ready}>
-            Add to plan
+            {stageLabel}
           </button>
         </>
       }

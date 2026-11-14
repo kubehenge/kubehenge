@@ -3,7 +3,7 @@ import { useId, useState, type JSX } from "react";
 import { LogOutputsFields } from "./LogOutputs";
 import { outputProblems, outputVariable, outputsOf, type LogOutput } from "./output-model";
 import type { Cluster, ClusterRef } from "./types";
-import { Dialog, ErrorBox, Field, Info, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, Info, stageLabel, useChange } from "./ui";
 import { flag, quantity, record, text } from "./values";
 
 /** How a cluster's logs are collected, by its logs variable's collector. */
@@ -208,7 +208,7 @@ export function LogsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || problem !== undefined}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

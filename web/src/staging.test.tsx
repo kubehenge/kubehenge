@@ -58,7 +58,7 @@ describe("staged changes", () => {
     await user.click(await screen.findByRole("button", { name: "Edit Headlamp" }));
     await user.click(within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"));
     await user.click(
-      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
     );
     const bar = within(await screen.findByRole("region", { name: "Staged changes" }));
     expect(bar.getByText("1 change not applied")).toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("staged changes", () => {
     await user.click(screen.getByRole("button", { name: "Edit monitoring" }));
     const monitoring = within(screen.getByRole("dialog", { name: "Edit monitoring" }));
     await user.click(monitoring.getByLabelText("Install monitoring"));
-    await user.click(monitoring.getByRole("button", { name: "Save" }));
+    await user.click(monitoring.getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(bar.getByText("2 changes not applied")).toBeInTheDocument());
     expect(bar.getByText("Replaces workers one by one")).toBeInTheDocument();
     expect(calls.map((c) => c.key)).not.toContain(`PATCH ${path}`);
@@ -111,7 +111,7 @@ describe("staged changes", () => {
     await user.click(await screen.findByRole("button", { name: "Edit Headlamp" }));
     await user.click(within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"));
     await user.click(
-      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
     );
     await screen.findByRole("region", { name: "Staged changes" });
     shown = { ...cluster, generation: 2, variables: { headlamp: { enabled: true } } };
@@ -129,7 +129,7 @@ describe("staged changes", () => {
     await user.click(screen.getByRole("button", { name: "Edit monitoring" }));
     const monitoring = within(screen.getByRole("dialog", { name: "Edit monitoring" }));
     await user.click(monitoring.getByLabelText("Install monitoring"));
-    await user.click(monitoring.getByRole("button", { name: "Save" }));
+    await user.click(monitoring.getByRole("button", { name: "Add to plan" }));
     await screen.findByRole("region", { name: "Staged changes" });
     expect(calls.findLast((c) => c.key === `POST ${path}/plan`)?.headers.get("X-Kubehenge-Generation")).toBe("2");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -148,7 +148,7 @@ describe("staged changes", () => {
     await user.click(await screen.findByRole("button", { name: "Edit Headlamp" }));
     await user.click(within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"));
     await user.click(
-      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
     );
     const bar = within(await screen.findByRole("region", { name: "Staged changes" }));
     await user.click(bar.getByRole("button", { name: "Discard" }));

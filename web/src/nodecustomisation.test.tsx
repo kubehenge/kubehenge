@@ -376,8 +376,8 @@ describe("a cluster's node customisation in its options", () => {
 
   it("saves the variable, staged with the plan that replaces every machine", async () => {
     const { calls, dialog, user } = await dialogOf(cluster);
-    expect(dialog.getByText("Saving replaces every node, one at a time.")).toBeVisible();
-    expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(dialog.getByText("Replaces every node, one at a time.")).toBeVisible();
+    expect(dialog.getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(dialog.getByRole("button", { name: "Add file" }));
     const file = within(screen.getByRole("group", { name: "File 1" }));
     await user.type(file.getByLabelText("Path"), "/etc/audit/rules.d/50-x.rules");
@@ -392,7 +392,7 @@ describe("a cluster's node customisation in its options", () => {
     await user.type(screen.getByLabelText("Name"), "event-qps");
     await user.type(screen.getByLabelText("Value"), "50");
     await user.type(dialog.getByLabelText("Policy ConfigMap"), "audit");
-    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
     await user.click(await screen.findByRole("button", { name: "Review plan" }));
@@ -428,7 +428,7 @@ describe("a cluster's node customisation in its options", () => {
     await user.click(dialog.getByRole("button", { name: "Add file" }));
     await user.type(screen.getByLabelText("Path"), "etc/x");
     await user.type(screen.getByLabelText("File 1 text"), "a");
-    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await expect(screen.findByText("Start the path with /")).resolves.toBeVisible();
     expect(screen.getByRole("dialog", { name: "Edit node customisation" })).toBeVisible();
     expect(calls.map((c) => c.key)).not.toContain(`PATCH ${path}`);
@@ -442,7 +442,7 @@ describe("a cluster's node customisation in its options", () => {
     await user.click(dialog.getByRole("button", { name: "Add file" }));
     await user.type(screen.getByLabelText("Path"), "/etc/kubernetes/x");
     await user.type(screen.getByLabelText("File 1 text"), "a");
-    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await expect(dialog.findByRole("alert")).resolves.toHaveTextContent("/etc/kubernetes/x is protected");
     expect(screen.getByRole("dialog", { name: "Edit node customisation" })).toBeVisible();
   });
@@ -454,7 +454,7 @@ describe("a cluster's node customisation in its options", () => {
     };
     const { calls, dialog, user } = await dialogOf(set);
     await user.click(dialog.getByRole("button", { name: "Remove kubelet flags 1" }));
-    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === `PATCH ${path}`)?.body).toStrictEqual({
@@ -480,7 +480,7 @@ describe("a cluster's node customisation in its options", () => {
       within(dialog.getByRole("group", { name: "Kubelet flags" })).getByRole("button", { name: "Add flag" }),
     );
     await user.type(screen.getByLabelText("Name"), "event-qps");
-    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === `PATCH ${path}`)?.body).toStrictEqual({

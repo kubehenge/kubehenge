@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
-import { Detail, Dialog, ErrorBox, Field, Info, Status, errorMessage, filled, useChange } from "./ui";
+import { Detail, Dialog, ErrorBox, Field, Info, Status, errorMessage, filled, stageLabel, useChange } from "./ui";
 import { flag, record, texts } from "./values";
 
 /** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
@@ -332,7 +332,7 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || problem !== undefined}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

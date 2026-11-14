@@ -159,7 +159,7 @@ describe("certificates", () => {
     const token = within(dialog.getByRole("group", { name: "API token" }));
     await expect(token.findByText("Not set")).resolves.toBeInTheDocument();
     expect(token.getByText(/Zone, DNS, Edit on this zone only/u)).toBeInTheDocument();
-    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(calls.at(-1)?.key).toBe("PATCH /api/clusters/default/web"));
     expect(calls.at(-1)?.body).toStrictEqual({
       variables: {
@@ -179,7 +179,7 @@ describe("certificates", () => {
     };
     render(<CertificatesDialog cluster={on} onClose={closed} />);
     await user.click(screen.getByRole("checkbox", { name: "Issue certificates" }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(closed).toHaveBeenCalledTimes(2));
     expect(calls.at(-1)?.body).toStrictEqual({
       variables: { certificates: { enabled: false, issuer: "ca", domain: "lab.internal", extra: 1 } },
@@ -205,7 +205,7 @@ describe("certificates", () => {
     expect(screen.getByLabelText("Secret name")).toHaveAccessibleDescription(
       "In cert-manager, with keys clientToken, clientSecret and accessToken",
     );
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: "Add to plan" }));
     expect(screen.getByLabelText("Domain")).toHaveAccessibleDescription(/^Enter a domain name/u);
     expect(screen.getByLabelText("Service consumer domain")).toHaveAccessibleDescription(
       /^Enter the service consumer domain/u,
@@ -327,7 +327,7 @@ describe("certificates of an ACME server with a binding, and of an issuer you ru
     await expect(
       within(await dialog.findByRole("group", { name: "HMAC key" })).findByText("Not set"),
     ).resolves.toBeInTheDocument();
-    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(calls.at(-1)?.key).toBe("PATCH /api/clusters/default/web"));
     expect(calls.at(-1)?.body).toMatchObject({
       variables: { certificates: { acme: { externalAccountBinding: { keyID: "kid-1" } } } },
@@ -345,7 +345,7 @@ describe("certificates of an ACME server with a binding, and of an issuer you ru
     expect(dialog.queryByLabelText("DNS provider")).not.toBeInTheDocument();
     expect(dialog.queryByLabelText("Contact email")).not.toBeInTheDocument();
     expect(dialog.getByLabelText("Issuer name")).not.toHaveAccessibleDescription(/Use lowercase/u);
-    await user.click(dialog.getByRole("button", { name: "Save" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     expect(dialog.getByLabelText("Issuer name")).toHaveAccessibleDescription(/^Use lowercase letters/u);
     await user.type(dialog.getByLabelText("Issuer name"), "vault");
     expect(dialog.getByLabelText("Issuer name")).not.toHaveAccessibleDescription(/Use lowercase/u);
