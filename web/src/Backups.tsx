@@ -54,7 +54,9 @@ export const backupKeys: CredentialKey[] = [
 
 export const backupsHint = "Every namespace but system and add-on ones, with volume data";
 
-export const backupCredentialHint = "Limit it to this cluster's folder";
+/** backupCredentialHint names the folder of the bucket that a cluster's backups and etcd snapshots are written to. */
+export const backupCredentialHint = (namespace: string | undefined, name: string): string =>
+  `Limit it to the folder ${filled(namespace) ? namespace : "<namespace>"}.${filled(name) ? name : "<name>"}/`;
 
 export const noTargets = "No backup targets. An administrator adds them in the appliance settings.";
 
@@ -629,7 +631,7 @@ function BackupKey({
   return filled(existingSecret) ? (
     <p className="hint">Access key: Secret {existingSecret} in velero</p>
   ) : (
-    <CredentialField label="Access key" purpose="backup" cluster={c} keys={backupKeys} hint={backupCredentialHint} />
+    <CredentialField label="Access key" purpose="backup" cluster={c} keys={backupKeys} hint={backupCredentialHint(c.namespace, c.name)} />
   );
 }
 

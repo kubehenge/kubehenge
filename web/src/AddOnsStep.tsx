@@ -181,7 +181,7 @@ function BackupsChoice({
               onChange={(readFrom) => set("backupFields", { ...form.backupFields, readFrom })}
             />
           )}
-          <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} />
+          <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} namespace={namespace} />
         </>
       )}
     </>
@@ -190,7 +190,13 @@ function BackupsChoice({
 
 // AccessKey takes the S3 access key that backups and etcd snapshots are both written with. It is
 // stored once the cluster exists, which needs Sys.Modify on the pool.
-function AccessKey({ form, set, shown, canTrust }: StepProps & { canTrust: boolean | undefined }): JSX.Element {
+function AccessKey({
+  form,
+  set,
+  shown,
+  canTrust,
+  namespace,
+}: StepProps & { canTrust: boolean | undefined; namespace: string | undefined }): JSX.Element {
   const own = form.storeBackupKey && canTrust !== false;
   return (
     <fieldset className="group">
@@ -198,7 +204,7 @@ function AccessKey({ form, set, shown, canTrust }: StepProps & { canTrust: boole
       {canTrust === false ? (
         <p className="hint">Storing it needs Sys.Modify on the workload pool</p>
       ) : (
-        <p className="hint">{backupCredentialHint}</p>
+        <p className="hint">{backupCredentialHint(namespace, form.name)}</p>
       )}
       {own &&
         backupKeys.map((k, i) => (
@@ -227,7 +233,12 @@ function EtcdSnapshotsChoice({
   shown,
   cls,
   canTrust,
-}: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
+  namespace,
+}: StepProps & {
+  cls: ClusterClass | undefined;
+  canTrust: boolean | undefined;
+  namespace: string | undefined;
+}): JSX.Element {
   return (
     <>
       <label className="check">
@@ -244,7 +255,9 @@ function EtcdSnapshotsChoice({
             problems={{ target: shown("etcdTarget"), schedule: shown("etcdSchedule"), keep: shown("etcdKeep") }}
             distribution={cls?.distribution ?? ""}
           />
-          {!backupsChosen(form, cls) && <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} />}
+          {!backupsChosen(form, cls) && (
+            <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} namespace={namespace} />
+          )}
         </>
       )}
     </>
@@ -630,7 +643,7 @@ function AddonCards({
       )}
       {etcdOffered(cls) && (
         <AddonCard mib={0} on={form.etcdSnapshots}>
-          <EtcdSnapshotsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />
+          <EtcdSnapshotsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
         </AddonCard>
       )}
       {variable(cls, "certificates") && (

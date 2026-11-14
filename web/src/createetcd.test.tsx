@@ -317,6 +317,11 @@ describe("the add-ons step", () => {
     expect(screen.getByLabelText("Also take RKE2 snapshots")).toBeChecked();
   });
 
+  it("names the folder the access key is limited to", () => {
+    render(<Step cls={kubeadm} />);
+    expect(screen.getByText("Limit it to the folder <namespace>.web/")).toBeInTheDocument();
+  });
+
   it("says a key cannot be stored without Sys.Modify", () => {
     render(<Step cls={kubeadm} canTrust={false} />);
     expect(screen.getByText("Storing it needs Sys.Modify on the workload pool")).toBeInTheDocument();
