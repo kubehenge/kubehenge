@@ -164,10 +164,13 @@ func (s *Server) takeManagementSnapshot(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusAccepted, s.managementBackupsOf())
 }
 
-func (s *Server) snapshotManagement(ctx context.Context) {
-	taken, err := s.Appliance.TakeEtcdSnapshot(ctx)
+func (s *Server) snapshotManagement(ctx context.Context, now time.Time) {
+	taken, err := s.Appliance.TakeScheduledEtcdSnapshot(ctx, now)
 	if err != nil {
 		s.Log.Error("management cluster snapshot", "error", err)
+		return
+	}
+	if taken == nil {
 		return
 	}
 	s.Log.Info("management cluster snapshot taken", "snapshot", taken.Name)
@@ -207,8 +210,8 @@ func (s *Server) backUpManagementEtcd(ctx context.Context) {
 	t := time.NewTicker(etcdBackupLook)
 	defer t.Stop()
 	for {
-		if a.EtcdBackupDue(time.Now()) {
-			s.snapshotManagement(ctx)
+		if now := time.Now(); a.EtcdBackupDue(now) {
+			s.snapshotManagement(ctx, now)
 		}
 		select {
 		case <-ctx.Done():

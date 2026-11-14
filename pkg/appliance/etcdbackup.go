@@ -452,7 +452,17 @@ func (a *Appliance) TakeEtcdSnapshot(ctx context.Context) (*provisioner.EtcdSnap
 	if err := a.claimEtcdSnapshot(); err != nil {
 		return nil, err
 	}
-	return a.snapshotEtcd(ctx)
+	return a.snapshotEtcd(ctx, nil)
+}
+
+// TakeScheduledEtcdSnapshot takes the snapshot the schedules have due at now, into the places
+// whose own schedule has it due, so that each keeps the spacing it was set to. It returns nil when
+// none is due.
+func (a *Appliance) TakeScheduledEtcdSnapshot(ctx context.Context, now time.Time) (*provisioner.EtcdSnapshot, error) {
+	if err := a.claimEtcdSnapshot(); err != nil {
+		return nil, err
+	}
+	return a.snapshotEtcd(ctx, &now)
 }
 
 // StartEtcdSnapshot takes a snapshot as TakeEtcdSnapshot does, in the background, and returns
@@ -462,7 +472,7 @@ func (a *Appliance) StartEtcdSnapshot(ctx context.Context) error {
 		return err
 	}
 	go func() {
-		taken, err := a.snapshotEtcd(context.WithoutCancel(ctx))
+		taken, err := a.snapshotEtcd(context.WithoutCancel(ctx), nil)
 		switch {
 		case a.Log == nil:
 		case err != nil:
@@ -491,7 +501,9 @@ func (a *Appliance) claimEtcdSnapshot() error {
 	return nil
 }
 
-func (a *Appliance) snapshotEtcd(ctx context.Context) (*provisioner.EtcdSnapshot, error) {
+// snapshotEtcd takes a snapshot into every place backups go, or with due set, into those whose
+// schedule has one due then.
+func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisioner.EtcdSnapshot, error) {
 	defer func() {
 		a.mu.Lock()
 		a.takingEtcd = false
@@ -502,6 +514,17 @@ func (a *Appliance) snapshotEtcd(ctx context.Context) (*provisioner.EtcdSnapshot
 	vol := a.volumeBackupKeys()
 	b, berr := a.backupSetup()
 	bucket := !errors.Is(berr, ErrNoEtcdBackups)
+	if due != nil {
+		if !a.volumeBackupDue(*due) {
+			vol = nil
+		}
+		if st := a.EtcdBackups(); st.Settings == nil || st.Next == nil || due.Before(*st.Next) {
+			bucket = false
+		}
+		if vol == nil && !bucket {
+			return nil, nil
+		}
+	}
 	if vol == nil && !bucket {
 		return nil, berr
 	}
