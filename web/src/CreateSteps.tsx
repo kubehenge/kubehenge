@@ -22,7 +22,7 @@ import {
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
 import { FamiliesField } from "./Families";
-import { SecurityGroupsField } from "./Firewall";
+import { FirewallField } from "./Firewall";
 import { HostOutageField, graceVariable } from "./HostOutage";
 import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
@@ -762,11 +762,17 @@ function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterCl
           )}
         </Field>
       )}
-      {variable(cls, "securityGroups") === undefined ? null : (
-        <SecurityGroupsField
-          value={form.securityGroups}
-          onChange={(s) => set("securityGroups", s)}
-          error={shown("securityGroups")}
+      {variable(cls, "firewall") === undefined ? null : (
+        <FirewallField
+          value={{ on: form.firewall, ports: form.firewallPorts }}
+          onChange={(f) => {
+            set("firewall", f.on);
+            set("firewallPorts", f.ports);
+          }}
+          groups={form.securityGroups}
+          onGroups={(s) => set("securityGroups", s)}
+          portsError={shown("firewallPorts")}
+          groupsError={shown("securityGroups")}
         />
       )}
     </>

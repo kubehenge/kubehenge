@@ -20,6 +20,26 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
+// A firewall that filters nothing is said beside the phase and what holds the cluster, never in
+// their place.
+func TestClusterListSaysTheFirewallIsInactive(t *testing.T) {
+	t.Parallel()
+	inactive := listedCondition{Type: provisioner.FirewallInactiveCondition, Status: "True"}
+	for _, tc := range []struct {
+		conditions []listedCondition
+		want       string
+	}{
+		{conditions: []listedCondition{inactive}, want: "Provisioned, firewall inactive (datacenter firewall off)"},
+		{conditions: []listedCondition{inactive, {Type: provisioner.TemplateNodeDownCondition, Status: "True"}}, want: "Provisioned, template node down, firewall inactive (datacenter firewall off)"},
+		{conditions: []listedCondition{{Type: provisioner.FirewallInactiveCondition, Status: "Unknown"}}, want: "Provisioned"},
+	} {
+		c := listedCluster{Phase: "Provisioned", Conditions: tc.conditions}
+		if got := c.status(); got != tc.want {
+			t.Errorf("status = %q, want %q", got, tc.want)
+		}
+	}
+}
+
 // fakeClusterAPI answers the interface's cluster API for the token dev@pve!ci=secret, and records
 // each change it is sent.
 type fakeClusterAPI struct {

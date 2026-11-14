@@ -347,7 +347,8 @@ type listedCondition struct {
 	Reason string `json:"reason"`
 }
 
-// status is the cluster's phase, and the reason its upgrade is held where it is.
+// status is the cluster's phase, and the reason its upgrade is held where it is. A firewall that
+// filters nothing is said beside it, since it holds nothing up.
 func (c *listedCluster) status() string {
 	held := func(kind string) *listedCondition {
 		for i := range c.Conditions {
@@ -356,6 +357,13 @@ func (c *listedCluster) status() string {
 			}
 		}
 		return nil
+	}
+	if held(provisioner.FirewallInactiveCondition) != nil {
+		phase := *c
+		phase.Conditions = slices.DeleteFunc(slices.Clone(c.Conditions), func(l listedCondition) bool {
+			return l.Type == provisioner.FirewallInactiveCondition
+		})
+		return phase.status() + ", firewall inactive (datacenter firewall off)"
 	}
 	switch {
 	case held(provisioner.UpgradeHeldCondition) != nil:

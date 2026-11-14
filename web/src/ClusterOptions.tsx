@@ -9,7 +9,7 @@ import { CredentialField } from "./CredentialField";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { EgressDialog, egressOf, egressText } from "./EgressProxy";
 import { EtcdDialog, etcdQuotaOf, etcdText } from "./EtcdSize";
-import { FirewallDialog, securityGroupsOf, securityGroupsText } from "./Firewall";
+import { FirewallDialog, firewallOf, firewallText, securityGroupsOf } from "./Firewall";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { HostOutageDialog, graceOf, graceText, graceVariable } from "./HostOutage";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
@@ -480,11 +480,14 @@ export function optionRows<A extends string = never>(
         ]
       : []),
     {
-      label: "Firewall security groups",
-      value: securityGroupsText(securityGroupsOf(c.variables["securityGroups"])),
+      label: "Firewall",
+      value: firewallText(
+        firewallOf(c.variables["firewall"], c.variables["securityGroups"]),
+        securityGroupsOf(c.variables["securityGroups"]),
+      ),
       group: "Network",
       action: "firewall",
-      name: "the firewall security groups",
+      name: "the firewall",
     },
     {
       label: "Automatic upgrades",

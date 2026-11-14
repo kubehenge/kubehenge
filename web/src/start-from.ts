@@ -1,4 +1,4 @@
-import { networkFieldsOf, newForm, nodeCustomisationOf, type Form, type Machine } from "./create-form";
+import { firewallOf, networkFieldsOf, newForm, nodeCustomisationOf, type Form, type Machine } from "./create-form";
 import { graceOf, graceVariable } from "./HostOutage";
 import { loadBalancerOf } from "./LoadBalancer";
 import { nodeOSKey } from "./node-os";
@@ -35,6 +35,8 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "mtu",
   "queues",
   "securityGroups",
+  "firewall",
+  "firewallPorts",
   "families",
   "prefix",
   "gateway",
@@ -111,6 +113,8 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     workerTimeouts: entryOf(c.workerPools[0]?.timeouts ?? {}),
     ...networkFieldsOf(v["network"], base),
     securityGroups: (texts(v["securityGroups"]) ?? []).join(", "),
+    firewall: firewallOf(v["firewall"], v["securityGroups"]).on,
+    firewallPorts: firewallOf(v["firewall"], v["securityGroups"]).ports,
     loadBalancer: lb.implementation,
     loadBalancerMode: lb.mode,
     loadBalancerAsn: lb.asn,

@@ -41,8 +41,65 @@ func TestEveryClassAnnotatesTheMachinesWithTheFirewall(t *testing.T) {
 	}
 }
 
+// Every class defaults a new cluster's firewall on, and the defaulted value writes the serving
+// ports, ICMP echo of both families and the cluster's own further ports beside any groups. Off, no
+// firewall is written.
+func TestEveryClassDefaultsTheFirewallOn(t *testing.T) {
+	t.Parallel()
+	const serving = "tcp/6443,tcp/80,tcp/443,tcp/30000:32767,udp/30000:32767,icmp/echo-request,ipv6-icmp/echo-request"
+	for _, file := range everyClass {
+		t.Run(file, func(t *testing.T) {
+			t.Parallel()
+			class := renderClass(t, file)
+			schema := class.variables["firewall"]
+			if schema == nil || schema.Default == nil || string(schema.Default.Raw) != `{"enabled":true}` {
+				t.Fatalf("the firewall variable's default = %v, want on", schema)
+			}
+			annotations := func(extra string) any {
+				vars := variablesOf(t, `{"builtin": {"cluster": {"name": "c", "namespace": "n", "network": {"pods": ["10.244.0.0/16"]}}},
+					"controlPlaneEndpoint": "10.0.0.5", "network": `+ipv4Net+extra+`}`)
+				spec := asMap(t, field(t, class.patched(t, "ProxmoxMachineTemplate", vars), "spec", "template"))
+				if metadata, ok := spec["metadata"]; ok {
+					return asMap(t, metadata)["annotations"]
+				}
+				return nil
+			}
+			if got, want := annotations(`, "firewall": {"enabled": true}`), map[string]any{"kubehenge.dev/firewall-ports": serving}; !reflect.DeepEqual(got, want) {
+				t.Errorf("default annotations = %v, want %v", got, want)
+			}
+			got := annotations(`, "securityGroups": ["k8s"], "firewall": {"enabled": true, "ports": [{"protocol": "udp", "port": 51820}, {"protocol": "tcp", "port": 8000, "endPort": 8100}]}`)
+			want := map[string]any{"kubehenge.dev/firewall-groups": "k8s", "kubehenge.dev/firewall-ports": serving + ",udp/51820,tcp/8000:8100"}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("annotations with groups and ports = %v, want %v", got, want)
+			}
+			if got := annotations(`, "firewall": {"enabled": false}`); got != nil {
+				t.Errorf("annotations with the firewall off = %v, want none", got)
+			}
+		})
+	}
+}
+
+func TestFirewallPortsFollowTheirRules(t *testing.T) {
+	t.Parallel()
+	class := renderClass(t, "kubeadm.yaml")
+	for name, tc := range map[string]struct{ value, want string }{
+		"on":                {value: `{"enabled": true}`},
+		"a port":            {value: `{"enabled": true, "ports": [{"protocol": "tcp", "port": 8443}]}`},
+		"a range":           {value: `{"enabled": true, "ports": [{"protocol": "udp", "port": 4000, "endPort": 4010}]}`},
+		"a range backwards": {value: `{"enabled": true, "ports": [{"protocol": "tcp", "port": 4010, "endPort": 4000}]}`, want: "A range ends above its first port."},
+		"sctp":              {value: `{"enabled": true, "ports": [{"protocol": "sctp", "port": 9}]}`, want: "Unsupported value"},
+		"port 0":            {value: `{"enabled": true, "ports": [{"protocol": "tcp", "port": 0}]}`, want: "should be greater than or equal to 1"},
+		"ports while off":   {value: `{"enabled": false, "ports": [{"protocol": "tcp", "port": 8443}]}`, want: "Ports need the firewall on."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			checkRule(t, class, "firewall", tc.value, "", tc.want)
+		})
+	}
+}
+
 // The management cluster's nodes reach the controller, which adds them to the firewall sources of
-// every cluster with groups. They are in no class, where a change would replace nodes. The
+// every firewalled cluster. They are in no class, where a change would replace nodes. The
 // appliance's ConfigMap comes without data, so an upgrade keeps what the appliance wrote.
 func TestTheFirewallAcceptsTheManagementCluster(t *testing.T) {
 	t.Parallel()

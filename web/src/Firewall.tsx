@@ -3,66 +3,194 @@ import { useState, type JSX } from "react";
 import { isSecurityGroup, list } from "./network";
 import type { Cluster } from "./types";
 import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
-import { texts } from "./values";
+import { quantity, record, text, texts } from "./values";
 
 /** securityGroupsOf reads the securityGroups variable into the text its field edits. */
 export const securityGroupsOf = (v: unknown): string => (texts(v) ?? []).join(", ");
 
-/** securityGroupsText is how the settings list the groups. */
-export function securityGroupsText(s: string): string {
-  const groups = list(s);
-  return groups.length > 0 ? groups.join(", ") : "Off";
+/** A port the nodes accept from anywhere, as the firewall variable holds it. */
+interface FirewallPort {
+  protocol: "tcp" | "udp";
+  port: number;
+  endPort?: number;
+}
+
+/** The firewall as its fields edit it. */
+export interface FirewallFields {
+  on: boolean;
+  /** Further ports, comma-separated, such as tcp/8443, udp/4000-4010. */
+  ports: string;
+}
+
+/**
+ * firewallOf reads the firewall variable. A cluster without it, made before it existed, has the
+ * firewall its security groups give it.
+ */
+export function firewallOf(v: unknown, groups: unknown): FirewallFields {
+  if (v === undefined || v === null) {
+    return { on: (texts(groups) ?? []).length > 0, ports: "" };
+  }
+  const fw = record(v);
+  const ports = Array.isArray(fw["ports"]) ? fw["ports"].map((p) => portText(record(p))) : [];
+  return { on: fw["enabled"] !== false, ports: ports.join(", ") };
+}
+
+const portText = (p: Record<string, unknown>): string => {
+  const end = p["endPort"];
+  return `${text(p["protocol"]) ?? ""}/${quantity(p["port"]) ?? ""}${typeof end === "number" ? `-${end}` : ""}`;
+};
+
+const portPattern = /^(?<protocol>tcp|udp)\/(?<port>\d{1,5})(?:-(?<end>\d{1,5}))?$/u;
+const maxPort = 65_535;
+
+/** parsePorts reads the ports' text, undefined where an entry is not a port or a range. */
+function parsePorts(s: string): FirewallPort[] | undefined {
+  const ports: FirewallPort[] = [];
+  for (const entry of list(s)) {
+    const g = portPattern.exec(entry.toLowerCase())?.groups;
+    if (g === undefined) {
+      return undefined;
+    }
+    const port = Number(g["port"]);
+    const end = g["end"] === undefined ? undefined : Number(g["end"]);
+    if (port < 1 || port > maxPort || (end !== undefined && (end <= port || end > maxPort))) {
+      return undefined;
+    }
+    const protocol = g["protocol"] === "udp" ? "udp" : "tcp";
+    ports.push(end === undefined ? { protocol, port } : { protocol, port, endPort: end });
+  }
+  return ports;
+}
+
+/** firewallVariable is the firewall variable the fields give. */
+export function firewallVariable(f: FirewallFields): { enabled: boolean; ports?: FirewallPort[] } {
+  const ports = f.on ? (parsePorts(f.ports) ?? []) : [];
+  return ports.length > 0 ? { enabled: f.on, ports } : { enabled: f.on };
+}
+
+/** firewallText is how Confirm and the settings list the firewall. */
+export function firewallText(f: FirewallFields, groups: string): string {
+  if (!f.on) {
+    return "Off";
+  }
+  const parts = ["On, serving ports open"];
+  if (list(f.ports).length > 0) {
+    parts.push(`also ${list(f.ports).join(", ")}`);
+  }
+  if (list(groups).length > 0) {
+    parts.push(`security groups ${list(groups).join(", ")}`);
+  }
+  return parts.join(", ");
+}
+
+/** firewallPortsProblem names what is wrong with the ports, or nothing. */
+export function firewallPortsProblem(f: FirewallFields): string | undefined {
+  return f.on && parsePorts(f.ports) === undefined ? "Ports as tcp/8443 or ranges as udp/4000-4010" : undefined;
 }
 
 /** securityGroupsProblem names what is wrong with the groups, or nothing. The server checks they exist. */
-export function securityGroupsProblem(s: string): string | undefined {
+export function securityGroupsProblem(s: string, on = true): string | undefined {
   const groups = list(s);
+  if (groups.length > 0 && !on) {
+    return "Security groups need the firewall on";
+  }
   if (groups.some((g) => !isSecurityGroup(g))) {
     return "Names of 2 to 18 letters, digits, hyphens and underscores, starting with a letter";
   }
   return new Set(groups).size < groups.length ? "Each group once" : undefined;
 }
 
-/** SecurityGroupsField edits the Proxmox VE security groups of a cluster's nodes. */
-export function SecurityGroupsField({
+/** FirewallField edits a cluster's firewall: on or off, its further ports and its security groups. */
+export function FirewallField({
   value,
   onChange,
-  error,
+  groups,
+  onGroups,
+  portsError,
+  groupsError,
 }: {
-  value: string;
-  onChange: (s: string) => void;
-  error?: string | undefined;
+  value: FirewallFields;
+  onChange: (f: FirewallFields) => void;
+  groups: string;
+  onGroups: (s: string) => void;
+  portsError?: string | undefined;
+  groupsError?: string | undefined;
 }): JSX.Element {
   return (
-    <Field
-      label="Firewall security groups"
-      hint="Optional, comma-separated"
-      info="The nodes accept the cluster's own traffic. The groups must accept the rest, such as ingress."
-      error={error}
-    >
-      {(id) => <input id={id} spellCheck={false} value={value} onChange={(e) => onChange(e.target.value)} />}
-    </Field>
+    <>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={value.on}
+          onChange={(e) => {
+            onChange({ ...value, on: e.target.checked });
+          }}
+        />{" "}
+        Firewall
+      </label>
+      <p className="hint">
+        {value.on
+          ? "Open: API, ingress, load balancer, NodePorts, ping. Acts once the datacenter firewall is on."
+          : "Every port open"}
+      </p>
+      {value.on && (
+        <Field label="Further open ports" hint="Optional, such as tcp/8443, udp/4000-4010" error={portsError}>
+          {(id) => (
+            <input
+              id={id}
+              spellCheck={false}
+              value={value.ports}
+              onChange={(e) => {
+                onChange({ ...value, ports: e.target.value });
+              }}
+            />
+          )}
+        </Field>
+      )}
+      {value.on && (
+        <Field label="Firewall security groups" hint="Optional, comma-separated" error={groupsError}>
+          {(id) => (
+            <input
+              id={id}
+              spellCheck={false}
+              value={groups}
+              onChange={(e) => {
+                onGroups(e.target.value);
+              }}
+            />
+          )}
+        </Field>
+      )}
+    </>
   );
 }
 
 export function FirewallDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const current = securityGroupsOf(c.variables["securityGroups"]);
+  const currentGroups = securityGroupsOf(c.variables["securityGroups"]);
+  const current = firewallOf(c.variables["firewall"], c.variables["securityGroups"]);
   const [value, setValue] = useState(current);
+  const [groups, setGroups] = useState(currentGroups);
   const [attempted, setAttempted] = useState(false);
   const { busy, error, send } = useChange(c, onClose);
-  const found = securityGroupsProblem(value);
-  const changed = list(value).join(",") !== list(current).join(",");
+  const portsFound = firewallPortsProblem(value);
+  const groupsFound = value.on ? securityGroupsProblem(groups) : undefined;
+  const changed =
+    value.on !== current.on ||
+    (value.on && list(value.ports).join(",") !== list(current.ports).join(",")) ||
+    (value.on && list(groups).join(",") !== list(currentGroups).join(","));
   return (
     <Dialog
-      title="Edit firewall security groups"
+      title="Edit firewall"
       onClose={onClose}
       onSubmit={() => {
-        if (found !== undefined) {
+        if (portsFound !== undefined || groupsFound !== undefined) {
           setAttempted(true);
           return;
         }
-        const groups = list(value);
-        void send({ variables: { securityGroups: groups.length > 0 ? groups : null } });
+        const named = value.on ? list(groups) : [];
+        void send({
+          variables: { firewall: firewallVariable(value), securityGroups: named.length > 0 ? named : null },
+        });
       }}
       actions={
         <>
@@ -75,7 +203,14 @@ export function FirewallDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
         </>
       }
     >
-      <SecurityGroupsField value={value} onChange={setValue} error={attempted ? found : undefined} />
+      <FirewallField
+        value={value}
+        onChange={setValue}
+        groups={groups}
+        onGroups={setGroups}
+        portsError={attempted ? portsFound : undefined}
+        groupsError={attempted ? groupsFound : undefined}
+      />
       <p className="muted">Replaces every node, one at a time.</p>
       <ErrorBox message={error} />
     </Dialog>

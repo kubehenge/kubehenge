@@ -1476,15 +1476,56 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       maxItems: 16
       uniqueItems: true
       description: >-
-        Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the
-        firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped,
-        so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A
-        change replaces the nodes.
+        Proxmox VE security groups whose rules police the nodes' traffic, in order, after the
+        firewall's own rules. They need the firewall on. A change replaces the nodes.
       items:
         type: string
         minLength: 2
         maxLength: 18
         pattern: "^[A-Za-z][A-Za-z0-9_-]+$"
+- name: firewall
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      default:
+        enabled: true
+      description: >-
+        The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound
+        traffic except the cluster's own, the management side's, the Kubernetes API (6443),
+        ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767), ICMP
+        echo and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on.
+        A change replaces the nodes.
+      properties:
+        enabled:
+          type: boolean
+          default: true
+        ports:
+          type: array
+          maxItems: 32
+          description: Further ports the nodes accept from anywhere.
+          items:
+            type: object
+            properties:
+              protocol:
+                type: string
+                enum: [tcp, udp]
+              port:
+                type: integer
+                minimum: 1
+                maximum: 65535
+              endPort:
+                type: integer
+                minimum: 1
+                maximum: 65535
+                description: The last port of a range from port.
+            required: [protocol, port]
+            x-kubernetes-validations:
+              - rule: "!has(self.endPort) || self.endPort > self.port"
+                message: A range ends above its first port.
+      x-kubernetes-validations:
+        - rule: "!has(self.ports) || !has(self.enabled) || self.enabled"
+          message: Ports need the firewall on.
 - name: egressProxy
   required: false
   schema:
@@ -2506,16 +2547,21 @@ Call with the root context.
               {{- .Files.Get "files/proxmox-network.tpl" | nindent 14 }}
 # Cluster API copies the machine template's annotations onto each ProxmoxMachine, where Kubehenge's
 # capmox build reads them (scripts/capmox-patches): capmox has no firewall field, and a field of its
-# own would be pruned by the CRDs of capmox's release. The groups are part of the machine, so a change
-# replaces the nodes. capmox keeps each VM's IPSet, which the firewall accepts everything from ahead
-# of the groups, at the cluster's own addresses: the control-plane endpoint, the node addresses and
+# own would be pruned by the CRDs of capmox's release. The groups and the ports the firewall serves
+# from anywhere are part of the machine, so a change replaces the nodes. capmox writes each VM's
+# rules before it first starts, in order: everything from the VM's IPSet kubehenge, everything to its
+# IPSet kubehenge-lb, each port, then the groups. Inbound traffic no rule accepts is dropped. Rules
+# without an address match both families, and ICMP echo has a rule per family. capmox keeps the IPSet
+# kubehenge at the cluster's own addresses: the control-plane endpoint, the node addresses and
 # the pods (which reach other nodes unencapsulated with Cilium's native routing or Calico's BGP). That
 # keeps every port and protocol a distribution or CNI uses (VXLAN, Geneve, BGP, WireGuard, etcd, the
-# kubelet) open between them without a port list. The controller's annotation on the ProxmoxCluster
-# adds the management cluster's nodes and the appliance. capmox follows a change of the
-# ProxmoxCluster on the running VMs, so a new address replaces no node.
+# kubelet) open between them without a port list. The controller's annotations on the ProxmoxCluster
+# add the management cluster's nodes, the appliance and Cluster Mesh peers to kubehenge, and the
+# load-balancer addresses to kubehenge-lb. capmox follows a change of the ProxmoxCluster on the
+# running VMs, so a new address replaces no node. A cluster without the firewall variable, made
+# before it existed or past the defaulting webhook, keeps the firewall its groups give it.
 - name: proxmox-firewall
-  enabledIf: {{ `{{ if .securityGroups }}true{{ end }}` | quote }}
+  enabledIf: {{ `{{ if or .securityGroups (and .firewall .firewall.enabled) }}true{{ end }}` | quote }}
   definitions:
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
@@ -2529,8 +2575,7 @@ Call with the root context.
           path: /spec/template/metadata
           valueFrom:
             template: |
-              annotations:
-                kubehenge.dev/firewall-groups: {{ `{{ join "," .securityGroups | quote }}` }}
+              {{- .Files.Get "files/proxmox-firewall.tpl" | nindent 14 }}
 - name: proxmox-storage
   definitions:
     - selector:

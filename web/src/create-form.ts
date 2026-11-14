@@ -53,7 +53,7 @@ import {
   type EtcdSnapshotFields,
   type EtcdSnapshotsValue,
 } from "./EtcdSnapshots";
-import { securityGroupsProblem } from "./Firewall";
+import { firewallPortsProblem, firewallText, firewallVariable, securityGroupsProblem } from "./Firewall";
 import {
   gitOpsFields,
   gitOpsProblems,
@@ -181,6 +181,7 @@ import {
 } from "./ui";
 import { quantity, record, text, texts } from "./values";
 
+export { firewallOf } from "./Firewall";
 export { nodeCustomisationOf } from "./node-customisation";
 
 export const steps = [
@@ -244,8 +245,12 @@ export interface Form {
   mtu: string;
   /** The nodes' interface queues, empty for one. */
   queues: string;
-  /** Proxmox VE security groups of the nodes' firewall, comma-separated, empty to leave the firewall off. */
+  /** Proxmox VE security groups of the nodes' firewall, comma-separated, applied after its own rules. */
   securityGroups: string;
+  /** Whether the nodes' firewall is on, which the class defaults to. */
+  firewall: boolean;
+  /** Further ports the firewall opens to anywhere, such as tcp/8443, udp/4000-4010. */
+  firewallPorts: string;
   /** The address families of the nodes, the primary first. Fixed once the cluster exists. */
   families: FamilyChoice;
   /** The IPv4 network. Left out of the cluster with IPv6 alone. */
@@ -976,6 +981,8 @@ export const newForm = (): Form => ({
   mtu: "",
   queues: "",
   securityGroups: "",
+  firewall: true,
+  firewallPorts: "",
   families: "ipv4",
   addresses: "",
   prefix: 24,
@@ -1403,7 +1410,11 @@ function proxmoxVariables(form: Form, defined: ReadonlySet<string>): Record<stri
   if (!form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: false };
   }
-  if (list(form.securityGroups).length > 0 && defined.has("securityGroups")) {
+  const fields = { on: form.firewall, ports: form.firewallPorts };
+  if (defined.has("firewall")) {
+    variables["firewall"] = firewallVariable(fields);
+  }
+  if (form.firewall && list(form.securityGroups).length > 0 && defined.has("securityGroups")) {
     variables["securityGroups"] = list(form.securityGroups);
   }
   return variables;
@@ -1526,8 +1537,7 @@ function interfaceRows(form: Form): [string, string][] {
   if (form.queues) {
     rows.push(["Queues", form.queues]);
   }
-  const groups = list(form.securityGroups);
-  rows.push(["Firewall", groups.length > 0 ? `Security groups ${groups.join(", ")}` : "Off, no security groups"]);
+  rows.push(["Firewall", firewallText({ on: form.firewall, ports: form.firewallPorts }, form.securityGroups)]);
   return rows;
 }
 
@@ -1784,6 +1794,7 @@ export type FieldKey =
   | "mtu"
   | "queues"
   | "securityGroups"
+  | "firewallPorts"
   | "endpoint"
   | "addresses"
   | "prefix"
@@ -2015,9 +2026,13 @@ function interfaceProblems(form: Form): Problems {
   if (form.queues && !isQueues(form.queues)) {
     p.queues = `A whole number from 1 to ${maxQueues}`;
   }
-  const groups = securityGroupsProblem(form.securityGroups);
+  const groups = form.firewall ? securityGroupsProblem(form.securityGroups) : undefined;
   if (groups !== undefined) {
     p.securityGroups = groups;
+  }
+  const ports = firewallPortsProblem({ on: form.firewall, ports: form.firewallPorts });
+  if (ports !== undefined) {
+    p.firewallPorts = ports;
   }
   return p;
 }

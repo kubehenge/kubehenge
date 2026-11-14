@@ -2,15 +2,21 @@ package provisioner
 
 import (
 	"context"
+	"reflect"
+	"strconv"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // firewallCluster is a Kubehenge cluster named name, with the security groups given, and its
@@ -126,6 +132,140 @@ func TestFirewallSourcesPassOverClustersNotReady(t *testing.T) {
 		}
 		if _, ok := got.GetAnnotations()[FirewallSourcesAnnotation]; ok != want {
 			t.Errorf("%s annotated: %v, want %v", pc.GetName(), ok, want)
+		}
+	}
+}
+
+// withVariable sets a cluster's variable to raw.
+func withVariable(c *clusterv1.Cluster, name, raw string) {
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: name, Value: apiextensionsv1.JSON{Raw: []byte(raw)}})
+}
+
+// annotationsOf reads a ProxmoxCluster's firewall annotations.
+func annotationsOf(t *testing.T, kube client.Client, pc *unstructured.Unstructured) map[string]string {
+	t.Helper()
+	got := proxmoxClusterObject()
+	if err := kube.Get(t.Context(), client.ObjectKeyFromObject(pc), got); err != nil {
+		t.Fatal(err)
+	}
+	held := map[string]string{}
+	for _, key := range []string{FirewallSourcesAnnotation, FirewallDestinationsAnnotation} {
+		if v, ok := got.GetAnnotations()[key]; ok {
+			held[key] = v
+		}
+	}
+	return held
+}
+
+// A cluster with the firewall on by default gets the management side as its sources and its
+// load-balancer addresses as its destinations, without any security group. Off, it gets neither.
+func TestFirewallSourcesOfADefaultCluster(t *testing.T) {
+	t.Parallel()
+	on, onPC := firewallCluster("on", "")
+	withVariable(on, FirewallVariable, `{"enabled": true}`)
+	withVariable(on, loadBalancerVariable, `{"enabled": true, "addresses": ["10.0.0.30-10.0.0.40", "2001:db8::30/124"]}`)
+	off, offPC := firewallCluster("off", "")
+	withVariable(off, FirewallVariable, `{"enabled": false}`)
+	withVariable(off, loadBalancerVariable, `{"enabled": true, "addresses": ["10.0.0.50"]}`)
+	disabledLB, disabledLBPC := firewallCluster("nolb", "")
+	withVariable(disabledLB, FirewallVariable, `{"enabled": true}`)
+	withVariable(disabledLB, loadBalancerVariable, `{"enabled": false, "addresses": ["10.0.0.60"]}`)
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(on, onPC, off, offPC, disabledLB, disabledLBPC).Build()
+	f := &FirewallSources{Client: kube, Reader: kube, Namespace: "kubehenge-system", Management: []string{"192.0.2.11", "2001:db8::11"}}
+	if err := f.runOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for pc, want := range map[*unstructured.Unstructured]map[string]string{
+		onPC: {
+			FirewallSourcesAnnotation:      "192.0.2.11,2001:db8::11",
+			FirewallDestinationsAnnotation: "10.0.0.30-10.0.0.40,2001:db8::30/124",
+		},
+		offPC:        {},
+		disabledLBPC: {FirewallSourcesAnnotation: "192.0.2.11,2001:db8::11"},
+	} {
+		if got := annotationsOf(t, kube, pc); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %v, want %v", pc.GetName(), got, want)
+		}
+	}
+}
+
+// The nodes and pods of a cluster linked by Cluster Mesh reach a firewalled cluster's nodes. A
+// cluster it lists that does not list it back adds nothing.
+func TestFirewallSourcesLetInClusterMeshPeers(t *testing.T) {
+	t.Parallel()
+	mesh := func(name string, id int, endpoint, pods, peers string) (*clusterv1.Cluster, *unstructured.Unstructured) {
+		c := meshCluster(name, id, endpoint, pods, `{"enabled": true, "peers": `+peers+`}`)
+		c.Namespace = "team"
+		withVariable(c, FirewallVariable, `{"enabled": true}`)
+		_, pc := firewallCluster(name, "")
+		pc.Object["spec"] = map[string]any{
+			"controlPlaneEndpoint": map[string]any{"host": endpoint},
+			"ipv4Config":           map[string]any{"addresses": []any{"10.0." + strconv.Itoa(id) + ".10-10.0." + strconv.Itoa(id) + ".20"}},
+			"zoneConfigs":          []any{map[string]any{"ipv6Config": map[string]any{"addresses": []any{"2001:db8:" + strconv.Itoa(id) + "::/120"}}}},
+		}
+		return c, pc
+	}
+	a, aPC := mesh("a", 1, "10.0.1.5", "10.244.0.0/16", `["b", "c"]`)
+	b, bPC := mesh("b", 2, "10.0.2.5", "10.245.0.0/16", `["a"]`)
+	c, cPC := mesh("c", 3, "10.0.3.5", "10.246.0.0/16", `[]`)
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(a, aPC, b, bPC, c, cPC).Build()
+	f := &FirewallSources{Client: kube, Reader: kube, Namespace: "kubehenge-system", Management: []string{"192.0.2.11"}}
+	if err := f.runOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := annotationsOf(t, kube, aPC)[FirewallSourcesAnnotation], "192.0.2.11,10.0.2.10-10.0.2.20,10.0.2.5,10.245.0.0/16,2001:db8:2::/120"; got != want {
+		t.Errorf("a's sources = %q, want %q", got, want)
+	}
+	if got, want := annotationsOf(t, kube, cPC)[FirewallSourcesAnnotation], "192.0.2.11"; got != want {
+		t.Errorf("c's sources = %q, want %q", got, want)
+	}
+}
+
+// A firewalled cluster says when Proxmox VE's datacenter firewall is off, and Unknown when that
+// cannot be read. Once it is on, or the cluster's firewall is off, the condition goes.
+func TestFirewallSourcesWarnWhileTheDatacenterFirewallIsOff(t *testing.T) {
+	t.Parallel()
+	on, onPC := firewallCluster("on", "")
+	withVariable(on, FirewallVariable, `{"enabled": true}`)
+	off, offPC := firewallCluster("off", "")
+	withVariable(off, FirewallVariable, `{"enabled": false}`)
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(on, onPC, off, offPC).
+		WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	reach := &fakeAPIReach{reach: &pve.APIReach{Enabled: false}, ok: true}
+	f := &FirewallSources{Client: kube, Reader: kube, Namespace: "kubehenge-system", Datacenter: reach}
+	condition := func(c *clusterv1.Cluster) *metav1.Condition {
+		t.Helper()
+		got := &clusterv1.Cluster{}
+		if err := kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
+			t.Fatal(err)
+		}
+		return meta.FindStatusCondition(got.Status.Conditions, FirewallInactiveCondition)
+	}
+	for _, step := range []struct {
+		name     string
+		reach    *pve.APIReach
+		readable bool
+		want     metav1.ConditionStatus
+	}{
+		{name: "datacenter off", reach: &pve.APIReach{}, readable: true, want: metav1.ConditionTrue},
+		{name: "unreadable", readable: false, want: metav1.ConditionUnknown},
+		{name: "datacenter on", reach: &pve.APIReach{Enabled: true}, readable: true},
+	} {
+		reach.reach, reach.ok = step.reach, step.readable
+		if err := f.runOnce(t.Context()); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		got := condition(on)
+		switch {
+		case step.want == "" && got != nil:
+			t.Errorf("%s: %+v, want none", step.name, got)
+		case step.want != "" && (got == nil || got.Status != step.want):
+			t.Errorf("%s: %+v, want %s", step.name, got, step.want)
+		case step.want == metav1.ConditionTrue && got.Message != FirewallInactiveMessage:
+			t.Errorf("%s: message %q", step.name, got.Message)
+		}
+		if got := condition(off); got != nil {
+			t.Errorf("%s: the cluster without a firewall has %+v", step.name, got)
 		}
 	}
 }

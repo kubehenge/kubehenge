@@ -23,6 +23,43 @@ func (f *fakeAPIReach) APIReach(context.Context) (*pve.APIReach, bool) {
 	return f.reach, f.ok
 }
 
+// The default firewall, without groups, is held to the lockout check once the datacenter firewall
+// is on, under the firewall variable. While the datacenter's is off nothing is cut, so it is let
+// through. Groups with the firewall off are refused.
+func TestValidatorHoldsTheDefaultFirewallToTheLockoutCheck(t *testing.T) {
+	t.Parallel()
+	cut := fakeManagement{addresses: []string{"10.0.0.20", "10.3.0.4"}}
+	for _, tc := range []struct {
+		name, firewall, groups string
+		datacenter             bool
+		refusal                string
+	}{
+		{name: "datacenter on", firewall: `{"enabled": true}`, datacenter: true, refusal: `spec.topology.variables[firewall]: Invalid value: "firewall": The Proxmox VE nodes' firewall`},
+		{name: "datacenter off", firewall: `{"enabled": true}`},
+		{name: "firewall off", firewall: `{"enabled": false}`, datacenter: true},
+		{name: "groups while off", firewall: `{"enabled": false}`, groups: `["k8s"]`, refusal: "Security groups need the firewall on"},
+		{name: "groups, datacenter off", firewall: `{"enabled": true}`, groups: `["k8s"]`, refusal: cutRefusal},
+	} {
+		hooks, _ := hooksFor(t)
+		hooks.SecurityGroups = &fakeSecurityGroups{groups: []string{"k8s"}, readable: true}
+		reach := localReach()
+		reach.Enabled = tc.datacenter
+		hooks.APIReach = &fakeAPIReach{reach: reach, ok: true}
+		hooks.Management = cut
+		hooks.Endpoint = endpointV4
+		v := &ClusterValidator{Hooks: hooks}
+		c := withSecurityGroups(networkCluster("192.168.1.1", 24), tc.groups)
+		withVariable(c, FirewallVariable, tc.firewall)
+		_, err := v.ValidateCreate(context.Background(), c)
+		switch {
+		case tc.refusal == "" && err != nil && (strings.Contains(err.Error(), "IPSet management") || strings.Contains(err.Error(), "firewall on")):
+			t.Errorf("%s: refused: %v", tc.name, err)
+		case tc.refusal != "" && (!apierrors.IsInvalid(err) || !strings.Contains(err.Error(), tc.refusal)):
+			t.Errorf("%s: %v, want %q", tc.name, err, tc.refusal)
+		}
+	}
+}
+
 type fakeManagement struct {
 	addresses []string
 	err       error

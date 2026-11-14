@@ -357,6 +357,7 @@ const negativePolarity = new Set([
   "NodesSkipped",
   "NodesLackMemory",
   "StorageLacksSpace",
+  "FirewallInactive",
   "HARulesPending",
   "StorageUnavailable",
   "RemediationHeld",
