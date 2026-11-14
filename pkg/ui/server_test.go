@@ -85,6 +85,8 @@ type fakeAccounts struct {
 	nextID          pve.NextID
 	vmids           []int
 	nextIDForbidden bool
+	// nodeReads counts the listings of the nodes.
+	nodeReads int
 }
 
 func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
@@ -216,7 +218,10 @@ func (f *fakeAccounts) Storages(context.Context, *pve.Ticket) ([]pve.Storage, er
 	}, nil
 }
 
-func (*fakeAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
+func (f *fakeAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nodeReads++
 	return []pve.Node{{Node: "pve1", Online: true, MaxMemory: 64 << 30}, {Node: "pve2", Online: true, MaxMemory: 64 << 30}}, nil
 }
 

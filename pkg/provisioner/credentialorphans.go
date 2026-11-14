@@ -14,9 +14,9 @@ import (
 )
 
 // CredentialOrphans looks after the credentials a create request stored ahead of its cluster, which
-// have no owner until the Cluster exists. It makes the Cluster the request made their owner once it
+// have no owner until the Cluster exists. It makes the Cluster of their name their owner once it
 // does, and deletes those whose Cluster has not appeared within Grace, such as when its creation
-// failed. Credentials without the request's mark (CreateRequestKey) are never touched.
+// failed. Credentials without a request's mark (CreateRequestKey) are never touched.
 type CredentialOrphans struct {
 	Client   client.Client
 	Interval time.Duration
@@ -63,21 +63,22 @@ func (o *CredentialOrphans) RunOnce(ctx context.Context) error {
 		}
 		cluster := &clusterv1.Cluster{}
 		err := o.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Labels[CredentialClusterLabel]}, cluster)
-		// A Cluster of that name made by another request, or with kubectl, is not this key's.
-		if err == nil && cluster.Annotations[CreateRequestKey] != s.Labels[CreateRequestKey] {
-			err = apierrors.NewNotFound(clusterv1.GroupVersion.WithResource("clusters").GroupResource(), cluster.Name)
-		}
 		switch {
 		case err == nil:
+			// A live Cluster of that name reads the credential, whichever request's mark either
+			// carries, as one made without a key after an earlier create was cut short does. It
+			// becomes the owner, and the mark goes with the question it answered.
 			s.OwnerReferences = []metav1.OwnerReference{CredentialOwner(cluster)}
-			if err = o.Client.Update(ctx, s); err != nil && !apierrors.IsNotFound(err) {
+			delete(s.Labels, CreateRequestKey)
+			if err = o.Client.Update(ctx, s); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 				return fmt.Errorf("making cluster %s the owner of %s: %w", cluster.Name, s.Name, err)
 			}
 		case apierrors.IsNotFound(err):
 			if now().Sub(s.CreationTimestamp.Time) < o.Grace {
 				continue
 			}
-			if err = o.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID}); err != nil && !apierrors.IsNotFound(err) {
+			// The resource version keeps the delete off a key a later create stored in its place.
+			if err = o.Client.Delete(ctx, s, client.Preconditions{UID: &s.UID, ResourceVersion: &s.ResourceVersion}); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 				return fmt.Errorf("deleting %s, whose cluster never came: %w", s.Name, err)
 			}
 		default:

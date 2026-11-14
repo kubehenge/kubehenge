@@ -812,7 +812,7 @@ type createRequest struct {
 func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 	ctx, cancel := context.WithTimeout(r.Context(), createTimeout)
 	defer cancel()
-	r = r.WithContext(ctx)
+	r = r.WithContext(context.WithValue(ctx, nodesReadKey{}, &nodesRead{}))
 	var req createRequest
 	if !readJSON(w, r, &req) {
 		return
@@ -1043,6 +1043,30 @@ func vlanOnTaggedNetwork(vnet string) string {
 // allowedNodesVariable keeps a cluster's VMs to some of the Proxmox VE nodes.
 const allowedNodesVariable = "allowedNodes"
 
+// nodesReadKey holds, in a request's context, the one read of the nodes its checks share. A read
+// can wait on a node that does not answer, and a create's checks run against one deadline.
+type nodesReadKey struct{}
+
+type nodesRead struct {
+	done  bool
+	nodes []pve.Node
+	err   error
+}
+
+// visibleNodes lists the nodes the user sees, once per request where the request holds a nodesRead.
+// Each caller gets its own copy to narrow.
+func (s *Server) visibleNodes(r *http.Request, u user) ([]pve.Node, error) {
+	read, ok := r.Context().Value(nodesReadKey{}).(*nodesRead)
+	if !ok {
+		return s.Accounts.Nodes(r.Context(), u.ticket)
+	}
+	if !read.done {
+		read.nodes, read.err = s.Accounts.Nodes(r.Context(), u.ticket)
+		read.done = true
+	}
+	return slices.Clone(read.nodes), read.err
+}
+
 // mayPlace checks the nodes a cluster's VMs are kept to: none twice, and each one the user sees or
 // one of kept, those the cluster already has, which the user may keep without seeing.
 func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, kept json.RawMessage) bool {
@@ -1057,7 +1081,7 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 		writeError(w, http.StatusUnprocessableEntity, "allowed nodes: choose at least one Proxmox VE node")
 		return false
 	}
-	visible, err := s.Accounts.Nodes(r.Context(), u.ticket)
+	visible, err := s.visibleNodes(r, u)
 	if err != nil {
 		s.proxmoxError(w, r, err)
 		return false

@@ -27,7 +27,7 @@ func (s *Server) machinesFit(w http.ResponseWriter, r *http.Request, u user, cla
 		// Admission says what is wrong with the sizes.
 		return true
 	}
-	nodes, err := s.Accounts.Nodes(r.Context(), u.ticket)
+	nodes, err := s.visibleNodes(r, u)
 	if err != nil {
 		s.proxmoxError(w, r, err)
 		return false

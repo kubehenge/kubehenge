@@ -424,7 +424,7 @@ Kubehenge copies the credential into the Secret `kubehenge-log-outputs` in the n
 
 Velero backs up every namespace but Kubernetes' own and the add-ons', with the data in its pods' volumes. It writes to one of the S3 stores an administrator set ([install-settings.md](install-settings.md#backup-targets)). The cluster writes under a folder of its own, encrypted with keys of its own ([Back up and restore](#back-up-and-restore)). Backups run daily at 02:00 by default, each kept for 7 days.
 
-Choose the target, the schedule, its time zone, how long each backup is kept and the access key Velero signs in with. Storing that key needs `Sys.Modify` on the workload pool. Without it, backups wait until someone holding that stores one. The key an administrator stored for every cluster never goes into a cluster. Without any target, the choice is off and says so.
+Choose the target, the schedule, its time zone, how long each backup is kept and the access key Velero signs in with. Storing that key needs `Sys.Modify` on the workload pool. Without it, backups wait until someone holding that stores one. The key an administrator stored for every cluster never goes into a cluster. Without any target, the choice is off and says so. After a create that was cut short, a new create of that name with a key works once 30 seconds have passed.
 
 #### etcd snapshot settings
 
@@ -1328,7 +1328,7 @@ The monitoring add-on's Alertmanager routes every alert but the always-firing Wa
 An address holds no user name or password. The variable is plain text, so every secret is a stored credential, like the [DNS-01 one](#dns-providers):
 
 - Type it under the cluster's **Options**, **Monitoring**, or when creating the cluster. The interface keeps it in the Secret `<cluster>.<purpose>` beside the Cluster and never shows it again.
-- With kubectl, create that Secret yourself ([With kubectl](#with-kubectl)) with the type `kubehenge.dev/user-credential` and the labels `kubehenge.dev/user-credential=<purpose>` and `kubehenge.dev/credential-cluster=<cluster>`. Kubehenge never deletes such a Secret or makes the Cluster its owner, so it stays when you delete or re-create the Cluster.
+- With kubectl, create that Secret yourself ([With kubectl](#with-kubectl)) with the type `kubehenge.dev/user-credential` and the labels `kubehenge.dev/user-credential=<purpose>` and `kubehenge.dev/credential-cluster=<cluster>`. Kubehenge never deletes such a Secret or makes the Cluster its owner, so it stays when you delete or re-create the Cluster. Storing it again in the interface makes the Cluster its owner.
 - Kubehenge's controller copies the values into the Secrets `kubehenge-alertmanager` and `kubehenge-prometheus` of the `monitoring` namespace.
 - Storing, replacing or removing a credential needs `Sys.Modify` on the cluster's pool ([Who may do what](#who-may-do-what)).
 

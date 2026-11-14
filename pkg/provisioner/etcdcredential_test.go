@@ -112,8 +112,8 @@ func TestEtcdSnapshotWaitEndsWithTheKey(t *testing.T) {
 	}
 }
 
-// A credential a create request stored ahead of its cluster gets that request's cluster as its
-// owner once it exists, and goes when the cluster does not come. A credential made with kubectl,
+// A credential a create request stored ahead of its cluster gets the cluster of its name as its
+// owner once it exists, and goes when no cluster comes. A credential made with kubectl,
 // without the request's mark, is never adopted or deleted.
 func TestCredentialOrphans(t *testing.T) {
 	t.Parallel()
@@ -133,7 +133,8 @@ func TestCredentialOrphans(t *testing.T) {
 	web := etcdCluster(`{"enabled":false}`)
 	web.Namespace = "team-a"
 	web.Annotations = map[string]string{CreateRequestKey: "r1"}
-	// Another request's cluster of this name won: the loser's key is not its.
+	// A cluster whose mark differs from its key's, as one made without a key after a create was cut
+	// short.
 	db := etcdCluster(`{"enabled":false}`)
 	db.Namespace, db.Name, db.UID = "team-a", "db", "db-uid"
 	db.Annotations = map[string]string{CreateRequestKey: "r2"}
@@ -157,7 +158,7 @@ func TestCredentialOrphans(t *testing.T) {
 		s := &corev1.Secret{}
 		return s, kube.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: name}, s)
 	}
-	if s, err := read("web.backup"); err != nil || len(s.OwnerReferences) != 1 || s.OwnerReferences[0].UID != web.UID {
+	if s, err := read("web.backup"); err != nil || len(s.OwnerReferences) != 1 || s.OwnerReferences[0].UID != web.UID || s.Labels[CreateRequestKey] != "" {
 		t.Errorf("the cluster's key: %+v, %v", s, err)
 	}
 	if _, err := read("gone.backup"); err == nil {
@@ -169,8 +170,9 @@ func TestCredentialOrphans(t *testing.T) {
 	if s, err := read("owned.backup"); err != nil || s.OwnerReferences[0].Name != "x" {
 		t.Errorf("an owned key: %+v, %v", s, err)
 	}
-	if _, err := read("db.backup"); err == nil {
-		t.Error("the losing request's key was kept beside another request's cluster")
+	// The live cluster reads the key, so it stays and becomes the cluster's, whatever its mark said.
+	if s, err := read("db.backup"); err != nil || len(s.OwnerReferences) != 1 || s.OwnerReferences[0].UID != db.UID || s.Labels[CreateRequestKey] != "" {
+		t.Errorf("a key with a stale mark beside a live cluster: %+v, %v", s, err)
 	}
 	for _, name := range []string{"ops.backup", "lone.alerts-slack"} {
 		if s, err := read(name); err != nil || len(s.OwnerReferences) > 0 {
