@@ -2501,6 +2501,10 @@ export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefi
   return `No node has ${needGiB} GiB free, the most is ${Math.floor(freeMiB(best) / mibPerGiB)} GiB on ${best.node}. The cluster waits for room.`;
 }
 
+// thick tells whether a storage reserves a disk's full size when it is made: plain LVM, and ZFS
+// without sparse volumes. Thin kinds and storages of unknown type overcommit, so they only warn.
+const thick = (s: Storage | undefined): boolean => s?.type === "lvm" || (s?.type === "zfspool" && s.sparse === false);
+
 /**
  * capacityProblems holds the machines step to what the cluster could never fit, with the figures
  * Confirm shows: a machine larger than the memory of every node it may use, and disks beyond the
@@ -2530,7 +2534,11 @@ export function capacityProblems(
     }
   }
   const room = createRoom(form, nodes, storages);
-  if (room.freeDisk !== undefined && room.disk > room.freeDisk) {
+  if (
+    room.freeDisk !== undefined &&
+    room.disk > room.freeDisk &&
+    thick(storages.find((s) => s.storage === form.storage))
+  ) {
     p[workers ? "workerMachine" : "controlPlaneMachine"] ??=
       `The disks need ${bytes(room.disk)}, ${bytes(room.freeDisk)} free. Lower a disk size or the node count.`;
   }

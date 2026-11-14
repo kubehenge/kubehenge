@@ -237,7 +237,7 @@ describe("namespace labels", () => {
   });
 });
 
-const wizard = (): ReturnType<typeof fakeServer> => {
+const wizard = (nodes: object[] = [{ node: "pve1", online: true }]): ReturnType<typeof fakeServer> => {
   window.history.replaceState(null, "", "/clusters/new");
   return fakeServer({
     ...session,
@@ -255,7 +255,7 @@ const wizard = (): ReturnType<typeof fakeServer> => {
         },
       ],
     }),
-    "GET /api/proxmox/nodes": () => ({ body: [{ node: "pve1", online: true }] }),
+    "GET /api/proxmox/nodes": () => ({ body: nodes }),
     "GET /api/proxmox/nodes/pve1/bridges": () => ({
       body: [{ bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true }],
     }),
@@ -324,6 +324,17 @@ describe("add-on installs of a new cluster", () => {
     expect(screen.getByRole("button", { name: "Policies" })).toHaveAttribute("aria-current", "step");
     expect(screen.getByRole("group", { name: "Pod security" })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Certificates" })).not.toBeInTheDocument();
+  });
+
+  it("says Create and wait where the nodes fit the machines but have no memory free now", async () => {
+    wizard([{ node: "pve1", online: true, memory: 2 ** 33 - 1, maxMemory: 2 ** 33 }]);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await toAddOns(user);
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: "Next" }));
+    }
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create and wait" })).toBeEnabled());
   });
 
   it("sends neither while they are left alone", async () => {

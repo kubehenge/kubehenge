@@ -704,6 +704,10 @@ export interface Storage {
   usable: boolean;
   /** Whether the user may give a cluster's token Datastore.Allocate there. */
   allocatable: boolean;
+  /** The storage plugin, such as lvm, lvmthin, zfspool, rbd, dir or nfs. Absent where Proxmox VE did not say. */
+  type?: string;
+  /** Whether a ZFS pool allocates a disk's space on write. */
+  sparse?: boolean;
 }
 
 export interface PveNode {

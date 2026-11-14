@@ -61,9 +61,21 @@ describe("the machines step and what the cluster could never fit", () => {
       workerMachine: "No node has 878.9 GiB of memory. Lower the machine's memory.",
     });
     const disks = { ...sized, workerMachine: { cores: 4, memoryMiB: 4096, diskGiB: 9000 } };
-    expect(capacityProblems("Machines", disks, { nodes: [node("pve1", 20)], storages: [local] })).toStrictEqual({
+    expect(
+      capacityProblems("Machines", disks, { nodes: [node("pve1", 20)], storages: [{ ...local, type: "lvm" }] }),
+    ).toStrictEqual({
       workerMachine: "The disks need 8.8 TiB, 610.0 GiB free. Lower a disk size or the node count.",
     });
+  });
+
+  it("blocks disks only on thick storage, and warns on thin or unknown storage", () => {
+    const disks = { ...sized, workerMachine: { cores: 4, memoryMiB: 4096, diskGiB: 9000 } };
+    const on = (s: Storage) => capacityProblems("Machines", disks, { nodes: [node("pve1", 20)], storages: [s] });
+    expect(on({ ...local, type: "lvm" })).toHaveProperty("workerMachine");
+    expect(on({ ...local, type: "zfspool", sparse: false })).toHaveProperty("workerMachine");
+    for (const s of [{ type: "lvmthin" }, { type: "zfspool", sparse: true }, { type: "rbd" }, { type: "nfs" }, {}]) {
+      expect(on({ ...local, ...s })).toStrictEqual({});
+    }
   });
 
   it("only warns, elsewhere and for memory in use, since the cluster waits for room", () => {
