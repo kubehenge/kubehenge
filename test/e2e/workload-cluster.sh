@@ -4239,7 +4239,7 @@ set +e
 refusal=$(creator -n "${ns}" delete "cluster/${name}" --wait=false 2>&1)
 deleted=$?
 set -e
-[ "${deleted}" != 0 ] || fail "the cluster was deleted without kubehenge.dev/allow-deletion"
+[ "${deleted}" -ne 0 ] || fail "the cluster was deleted without kubehenge.dev/allow-deletion"
 case "${refusal}" in
     *kubehenge.dev/allow-deletion*) ;;
     *) fail "the unannotated delete failed for another reason: ${refusal}" ;;

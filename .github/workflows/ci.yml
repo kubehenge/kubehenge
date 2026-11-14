@@ -27,28 +27,48 @@ jobs:
   # providers, the Helm charts, the shell scripts, and the chart and controllers against a real API
   # server.
   # End-to-end tests need a Proxmox VE host (docs/testing.md).
-  test:
-    name: Test
+  # Each tier on its own runner, side by side: on one runner they took over 30 minutes from a cold
+  # cache, and a pull request's runs always start cold.
+  checks:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Go lint, target: ci-lint-go}
+          - {name: Lint, target: lint-other}
+          - {name: Unit, target: unit}
+          - {name: Integration, target: ci-integration}
+    env:
+      # zizmor's online audits: impostor commits and actions with known vulnerabilities.
+      # verify-providers reads the forks' releases.
+      GH_TOKEN: ${{ github.token }}
+      # Pull requests show zizmor's findings on the lines they are about.
+      ZIZMOR_FLAGS: --format=github
+      # scripts/fetch.sh reads release files through the API when the download address fails.
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # What Go, npm and uv download and build, by the lock files they read. Only a push to main
-      # saves it: a pull request's entry would serve no other run and push main's out of the
-      # cache's 10 GB.
+      # What Go, golangci-lint, npm and uv download and build, by the lock files they read, one
+      # entry per tier. Only a push to main saves it: a pull request's entry would serve no other
+      # run and push main's out of the cache's 10 GB.
       - id: cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
+            ~/.cache/golangci-lint
             ~/go/pkg/mod
             ~/.npm
             ~/.cache/uv
           key: >-
-            ci-${{ hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
-          restore-keys: ci-
+            ci-${{ matrix.target }}-${{
+              hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
+          restore-keys: ci-${{ matrix.target }}-
       # The tools by scripts/tools.sh's hash and the list named, downloaded only on a miss. Only
       # main saves, as above, and no job that publishes restores it.
       - id: tools
@@ -67,34 +87,31 @@ jobs:
           path: ${{ runner.temp }}/bin
           key: ${{ steps.tools.outputs.cache-primary-key }}
       - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - run: make test
-        env:
-          # zizmor's online audits: impostor commits and actions with known vulnerabilities.
-          GH_TOKEN: ${{ github.token }}
-          # Pull requests show zizmor's findings on the lines they are about.
-          ZIZMOR_FLAGS: --format=github
-          # scripts/fetch.sh reads release files through the API when the download address fails.
-          GITHUB_TOKEN: ${{ github.token }}
-      - run: make integration
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-      # The providers from Kubehenge's forks, as their pins stand or as Renovate moves them.
-      - run: make verify-providers
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_TOKEN: ${{ github.token }}
-      # Sidero's images the Talos pins name, by their content and signature.
-      # The registry reads are anonymous.
-      - run: make verify-talos-pins
+      - env:
+          TARGET: ${{ matrix.target }}
+        run: make "${TARGET}"
       - if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
+            ~/.cache/golangci-lint
             ~/go/pkg/mod
             ~/.npm
             ~/.cache/uv
           key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  # The one check the ruleset requires, passing only when every tier passed.
+  test:
+    name: Test
+    if: always()
+    needs: checks
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULT: ${{ needs.checks.result }}
+        run: test "${RESULT}" = success
 
   # A pull request's new or changed dependencies: their licences and known vulnerabilities, against
   # .github/dependency-review-config.yml.

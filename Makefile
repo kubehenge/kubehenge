@@ -255,8 +255,11 @@ verify-talos-pins: web gateway-api
 # YAML, Markdown, the changelog, the e2e image's Dockerfile and the node images' Containerfiles,
 # spelling and Renovate's config, each at its strictest settings; the files are the repository's
 # own, as git lists them.
-.PHONY: lint
-lint: lint-go lint-gopls lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
+# CI runs the Go analysis and the rest on separate runners, so `lint-other` is everything but Go.
+.PHONY: lint lint-other ci-lint-go
+lint: ci-lint-go lint-other
+ci-lint-go: lint-go lint-gopls
+lint-other: lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
 
 FILES = git ls-files --cached --others --exclude-standard
 SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh website/*.sh pkg/installer/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
@@ -452,6 +455,11 @@ integration: web gateway-api
 	test/integration/assets.sh $(INTEGRATION_ASSETS)
 	KUBEBUILDER_ASSETS=$(INTEGRATION_ASSETS)/bin KUBEHENGE_INTEGRATION_CRDS=$(INTEGRATION_ASSETS)/crds \
 		go test -tags integration -count=1 -run '^TestIntegration' ./pkg/...
+
+# CI's integration runner also checks the providers from Kubehenge's forks, as their pins stand or
+# as Renovate moves them, and Sidero's images the Talos pins name, by content and signature.
+.PHONY: ci-integration
+ci-integration: integration verify-providers verify-talos-pins
 
 # End-to-end tier: needs a Proxmox VE host. DIR is a root configuration applying management-cluster/.
 .PHONY: e2e-management-cluster
