@@ -13,26 +13,21 @@ func TestDecideCANamesWhatTheCertificateIsValidFor(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	h := newHarness(t, opts{})
-	given := filepath.Join(t.TempDir(), "ca.pem")
-	cluster, err := os.ReadFile(filepath.Join(h.root, clusterCA))
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeTestFile(t, given, cluster)
+	given := filepath.Join(h.root, clusterCA)
 
 	for name, cfg := range map[string]*Config{"the cluster's CA": {}, "a CA given": {ProxmoxCA: given}} {
-		_, err := h.node.DecideCA(ctx, cfg, "https://192.0.2.99:8006")
-		if err == nil {
+		_, refused := h.node.DecideCA(ctx, cfg, "https://192.0.2.99:8006")
+		if refused == nil {
 			t.Fatalf("%s: an address the certificate lacks was accepted", name)
 		}
 		for _, want := range []string{"is valid for 192.0.2.10, pve1.example.com, not 192.0.2.99", "pvecm updatecerts --force", "--proxmox-url"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("%s: %q lacks %q", name, err, want)
+			if !strings.Contains(refused.Error(), want) {
+				t.Errorf("%s: %q lacks %q", name, refused, want)
 			}
 		}
 	}
 
-	_, err = h.node.DecideCA(ctx, &Config{}, "https://pve2.example.com:8006")
+	_, err := h.node.DecideCA(ctx, &Config{}, "https://pve2.example.com:8006")
 	if err == nil || !strings.Contains(err.Error(), "not pve2.example.com") || !strings.Contains(err.Error(), "install a certificate for pve2.example.com") || strings.Contains(err.Error(), "pvecm") {
 		t.Errorf("a name the certificate lacks: %v, want a certificate of its own asked for, never pvecm", err)
 	}
@@ -58,15 +53,9 @@ func TestAPIFamilyNote(t *testing.T) {
 	} {
 		h := newHarness(t, opts{names: []string{"pve1.example.com"}, ips: c.ips})
 		if c.own {
-			served := filepath.Join(h.root, pveServedPEM)
-			data, err := os.ReadFile(served)
-			if err != nil {
+			if err := os.Rename(filepath.Join(h.root, pveServedPEM), filepath.Join(h.root, pveNodePEM)); err != nil {
 				t.Fatal(err)
 			}
-			if err = os.Remove(served); err != nil {
-				t.Fatal(err)
-			}
-			writeTestFile(t, filepath.Join(h.root, pveNodePEM), data)
 		}
 		s := h.session(Config{APIHost: c.host, Bridge: "vmbr0", CTID: "105"})
 		s.Facts = &Facts{Prefix: netip.MustParsePrefix("192.0.2.10/24")}

@@ -19,6 +19,12 @@ type CertificateNameError struct {
 	Names []string
 }
 
+// NewCertificateNameError is the error for a certificate that is not valid for host, a name or an
+// address as a URL gives it.
+func NewCertificateNameError(host string, cert *x509.Certificate) *CertificateNameError {
+	return &CertificateNameError{Host: strings.Trim(host, "[]"), Names: certificateNames(cert)}
+}
+
 func (e *CertificateNameError) Error() string {
 	listed := "no name or address but loopback"
 	if len(e.Names) > 0 {
@@ -42,12 +48,6 @@ func certificateNamed(err error) error {
 		return err
 	}
 	return NewCertificateNameError(mismatch.Host, mismatch.Certificate)
-}
-
-// NewCertificateNameError is the error for a certificate that is not valid for host, a name or an
-// address as a URL gives it.
-func NewCertificateNameError(host string, cert *x509.Certificate) *CertificateNameError {
-	return &CertificateNameError{Host: strings.Trim(host, "[]"), Names: certificateNames(cert)}
 }
 
 // certificateNames are the names and addresses a certificate is valid for, as CertificateNameError
