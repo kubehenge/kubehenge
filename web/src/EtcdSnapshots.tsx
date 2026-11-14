@@ -34,7 +34,6 @@ import {
   pollRunning,
   Said,
   sentence,
-  sole,
   useChange,
   usePoll,
   Skeleton,
@@ -188,8 +187,7 @@ export function withEtcdTarget(
   if (filled(f.target)) {
     return f;
   }
-  const chosen =
-    backups !== undefined && targets.some((t) => t.name === backups) ? backups : sole(targets.map((t) => t.name));
+  const chosen = backups !== undefined && targets.some((t) => t.name === backups) ? backups : targets[0]?.name;
   return { ...f, target: chosen ?? "" };
 }
 

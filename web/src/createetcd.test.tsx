@@ -54,17 +54,21 @@ const filledForm = (c: ClusterClass, patch: Partial<Form> = {}): Form =>
   withBackupChoices({ ...newForm(), name: "web", etcdSnapshots: true, ...patch }, c, true);
 
 describe("a new cluster's etcd snapshots", () => {
-  it("are off until chosen, so a first Next needs no access key", () => {
-    const fresh = withBackupChoices({ ...newForm(), name: "web" }, kubeadm, true);
-    expect({ chosen: etcdChosen(fresh, kubeadm) }).toStrictEqual({ chosen: false });
-    expect(fieldProblems("Add-ons", fresh, kubeadm)).toStrictEqual({});
+  it("are on from the defaults with the first target chosen, and Next needs no input", () => {
+    for (const c of [kubeadm, rke2]) {
+      const fresh = withBackupChoices({ ...newForm(), name: "web" }, c, true);
+      expect({ chosen: etcdChosen(fresh, c) }).toStrictEqual({ chosen: true });
+      expect(fresh.etcdFields.target).toBe("store");
+      expect(fieldProblems("Add-ons", fresh, c)).toStrictEqual({});
+      expect(pendingCredentials(fresh, c)).toStrictEqual([]);
+    }
   });
 
   it("take the one target the class offers once chosen", () => {
     const form = filledForm(kubeadm);
     expect({ chosen: etcdChosen(form, kubeadm) }).toStrictEqual({ chosen: true });
     expect(form.etcdFields.target).toBe("store");
-    expect(filledForm(rke2).etcdFields.target).toBe("");
+    expect(filledForm(rke2).etcdFields.target).toBe("store");
   });
 
   it("are off and absent where no target or no variable is offered", () => {
@@ -93,7 +97,9 @@ describe("a new cluster's etcd snapshots", () => {
 
   it("hold the step until the target, schedule and number kept are right", () => {
     const form = filledForm(rke2, { backupKey: key });
-    expect(fieldProblems("Add-ons", form, rke2)).toStrictEqual({ etcdTarget: "Choose a target" });
+    expect(fieldProblems("Add-ons", { ...form, etcdFields: { ...form.etcdFields, target: "" } }, rke2)).toStrictEqual({
+      etcdTarget: "Choose a target",
+    });
     const wrong = {
       ...form,
       etcdFields: { ...form.etcdFields, target: "gone", schedule: "daily", keep: "0" },
@@ -158,7 +164,9 @@ describe("a new cluster's etcd snapshots", () => {
 
   it("share the backups' key, which is asked for once", () => {
     const etcdOnly = filledForm(kubeadm);
-    expect(fieldProblems("Add-ons", etcdOnly, kubeadm)).toStrictEqual({
+    expect(fieldProblems("Add-ons", etcdOnly, kubeadm)).toStrictEqual({});
+    const uploading = filledForm(rke2, { etcdFields: { ...filledForm(rke2).etcdFields, upload: true } });
+    expect(fieldProblems("Add-ons", uploading, rke2)).toStrictEqual({
       backupKey: "Enter both parts of the access key",
     });
     const both = { ...etcdOnly, backups: true, backupKey: key };
@@ -249,7 +257,7 @@ describe("a new cluster started from another", () => {
     const off = fromCluster({ ...source, variables: { etcdSnapshots: { enabled: false } } }, newForm());
     expect(off).toMatchObject({ etcdSnapshots: false });
     expect(fromCluster(source, newForm())).toMatchObject({
-      etcdSnapshots: false,
+      etcdSnapshots: true,
       etcdFields: newForm().etcdFields,
     });
   });
@@ -318,8 +326,21 @@ describe("the add-ons step", () => {
   });
 
   it("names the folder the access key is limited to", () => {
-    render(<Step cls={kubeadm} />);
+    render(<Step cls={kubeadm} first={{ backups: true }} />);
     expect(screen.getByText("Limit it to the folder <namespace>.web/")).toBeInTheDocument();
+  });
+
+  it("makes the access key optional for etcd snapshots alone", () => {
+    render(<Step cls={kubeadm} />);
+    expect(screen.getByText("Optional. Empty uses the key stored for every cluster")).toBeInTheDocument();
+  });
+
+  it("says where snapshots go without a backup target, by distribution", () => {
+    const { unmount } = render(<Step cls={bare} />);
+    expect(screen.getByText(/stay on the control-plane nodes\. Add a backup target/u)).toBeInTheDocument();
+    unmount();
+    render(<Step cls={classOf("kubeadm", undefined)} />);
+    expect(screen.getByText("No etcd snapshots without a backup target.")).toBeInTheDocument();
   });
 
   it("says a key cannot be stored without Sys.Modify", () => {

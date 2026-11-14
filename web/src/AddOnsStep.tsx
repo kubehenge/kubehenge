@@ -23,6 +23,7 @@ import {
   coresText,
   etcdOffered,
   hasManagementProxy,
+  keyRequired,
   logsChosen,
   machineLeast,
   offersMesh,
@@ -195,7 +196,13 @@ function AccessKey({
   shown,
   canTrust,
   namespace,
-}: StepProps & { canTrust: boolean | undefined; namespace: string | undefined }): JSX.Element {
+  optional = false,
+}: StepProps & {
+  canTrust: boolean | undefined;
+  namespace: string | undefined;
+  /** The cluster does without a key of its own, taking the one stored for every cluster. */
+  optional?: boolean;
+}): JSX.Element {
   const own = form.storeBackupKey && canTrust !== false;
   return (
     <fieldset className="group">
@@ -203,7 +210,11 @@ function AccessKey({
       {canTrust === false ? (
         <p className="hint">Storing it needs Sys.Modify on the workload pool</p>
       ) : (
-        <p className="hint">{backupCredentialHint(namespace, form.name)}</p>
+        <p className="hint">
+          {optional
+            ? "Optional. Empty uses the key stored for every cluster"
+            : backupCredentialHint(namespace, form.name)}
+        </p>
       )}
       {own &&
         backupKeys.map((k, i) => (
@@ -223,6 +234,12 @@ function AccessKey({
     </fieldset>
   );
 }
+
+// noTargetSnapshots says what etcd snapshots a cluster has where the class offers no backup target.
+const noTargetSnapshots = (distribution: string): string =>
+  distribution === "rke2" || distribution === "k3s"
+    ? "etcd snapshots stay on the control-plane nodes. Add a backup target to copy them off the cluster."
+    : "No etcd snapshots without a backup target.";
 
 // EtcdSnapshotsChoice switches a new cluster's etcd snapshots on, as they are its way back from lost
 // state. It takes the access key only when backups, which ask for it in their own block, are off.
@@ -255,7 +272,14 @@ function EtcdSnapshotsChoice({
             distribution={cls?.distribution ?? ""}
           />
           {!backupsChosen(form, cls) && (
-            <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} namespace={namespace} />
+            <AccessKey
+              form={form}
+              set={set}
+              shown={shown}
+              canTrust={canTrust}
+              namespace={namespace}
+              optional={!keyRequired(form, cls)}
+            />
           )}
         </>
       )}
@@ -640,6 +664,7 @@ function AddonCards({
           <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
         </AddonCard>
       )}
+      {cls !== undefined && !etcdOffered(cls) && <p className="hint">{noTargetSnapshots(cls.distribution)}</p>}
       {etcdOffered(cls) && (
         <AddonCard mib={0} on={form.etcdSnapshots}>
           <EtcdSnapshotsChoice

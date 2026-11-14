@@ -716,6 +716,14 @@ export const etcdChosen = (f: Form, c: ClusterClass | undefined): boolean => f.e
 export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) || etcdChosen(f, c);
 
 /**
+ * keyRequired says whether the access key must be entered. Velero's backups run in the cluster and
+ * need one of their own. Etcd snapshots are streamed by the controller, which takes the key stored
+ * for every cluster when the cluster has none, so only an upload by the nodes themselves needs one.
+ */
+export const keyRequired = (f: Form, c: ClusterClass | undefined): boolean =>
+  backupsChosen(f, c) || (etcdChosen(f, c) && f.etcdFields.upload && c !== undefined && uploadsItself(c.distribution));
+
+/**
  * withBackupChoices takes the one backup target a class offers until another is chosen, the backups'
  * target for etcd snapshots when it is one of them, and a key of the cluster's own only for those who
  * may store one.
@@ -976,7 +984,7 @@ export const newForm = (): Form => ({
   backupFields: newBackupFields(),
   storeBackupKey: true,
   backupKey: {},
-  etcdSnapshots: false,
+  etcdSnapshots: true,
   etcdFields: etcdFieldsOf({ enabled: false }),
 });
 
@@ -1185,7 +1193,11 @@ export interface PendingCredential {
 /** pendingCredentials are the credentials to store for the created cluster that the form holds. */
 export function pendingCredentials(form: Form, c: ClusterClass): PendingCredential[] {
   const pending: PendingCredential[] = [];
-  if (keyNeeded(form, c) && form.storeBackupKey) {
+  if (
+    keyNeeded(form, c) &&
+    form.storeBackupKey &&
+    (keyRequired(form, c) || backupKeys.some((k) => filled(form.backupKey[k.key])))
+  ) {
     pending.push({
       purpose: "backup",
       values: form.backupKey,
@@ -1607,7 +1619,9 @@ function backupRows(form: Form, c: ClusterClass, defined: Set<string>): [string,
   }
   if (etcdOffered(c)) {
     const sum = etcdSnapshotsText(etcdVariable(form, c), c.distribution);
-    rows.push(["etcd snapshots", form.etcdSnapshots ? `${sum}, ${key}` : "Off"]);
+    const etcdKey =
+      !keyRequired(form, c) && !backupKeys.some((k) => filled(form.backupKey[k.key])) ? "key for every cluster" : key;
+    rows.push(["etcd snapshots", form.etcdSnapshots ? `${sum}, ${etcdKey}` : "Off"]);
   }
   return rows;
 }
@@ -2259,7 +2273,7 @@ function etcdSnapshotsProblems(form: Form, c: ClusterClass | undefined): Problem
 
 // accessKeyProblems keep the one key that backups and etcd snapshots share from being left out.
 function accessKeyProblems(form: Form, c: ClusterClass | undefined): Problems {
-  if (keyNeeded(form, c) && form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
+  if (keyRequired(form, c) && form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
     return { backupKey: "Enter both parts of the access key" };
   }
   return {};
