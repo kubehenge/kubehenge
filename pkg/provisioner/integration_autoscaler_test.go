@@ -178,11 +178,21 @@ func TestIntegrationAutoscalerPolicy(t *testing.T) { //nolint:paralleltest // st
 	refused("changing its machine's spec", autoscaler.Update(ctx, mine), "changes nothing else of them")
 	refused("an autoscaler the policy has no entry for", scale(as("stray"), prod, "1"), "serves no cluster")
 
-	// An entry removed, the autoscaler can do nothing more.
+	// An entry removed, the autoscaler can do nothing more. The policy reads its entries through the
+	// API server's watch of the ConfigMap, so the removal counts a moment later.
 	if err := a.setPolicyEntry(ctx, accounts["prod"], nil); err != nil {
 		t.Fatal(err)
 	}
-	refused("an autoscaler switched off", scale(autoscaler, prod, "1"), "serves no cluster")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		err := scale(autoscaler, prod, "1")
+		if apierrors.IsInvalid(err) || time.Now().After(deadline) {
+			refused("an autoscaler switched off", err, "serves no cluster")
+			break
+		}
+		if err != nil {
+			t.Fatalf("an autoscaler switched off: %v", err)
+		}
+	}
 
 	// Anyone else, the controller or kubectl, is the policy's no concern.
 	if err := scale(admin, other, "3"); err != nil {
