@@ -374,21 +374,12 @@ func (a *Appliance) RecreateManagement(ctx context.Context, name, passphrase str
 	if settings == nil || !a.HasState() {
 		return errors.New("there is no management cluster state to recreate it from: import an export first")
 	}
-	b, err := a.backupSetup()
+	acc, err := a.etcdRestoreAccess(ctx, passphrase)
 	if err != nil {
 		return err
 	}
-	admin, err := a.Credential(ctx, passphrase, "talosconfig")
-	if err != nil {
-		return err
-	}
-	nodes, err := provisioner.TalosEndpoints(admin)
-	if err != nil {
-		return fmt.Errorf("the management cluster's talosconfig: %w", err)
-	}
-	folder := provisioner.ManagementEtcdFolder(b.target.Prefix)
 	r := &recreation{
-		name: name, passphrase: passphrase, ticket: ticket, settings: settings, setup: b, folder: folder, admin: admin, nodes: nodes,
+		name: name, passphrase: passphrase, ticket: ticket, settings: settings, setup: acc.setup, folder: acc.folder, admin: acc.admin, nodes: acc.nodes,
 		targets: recreateTargets(len(settings.Nodes)), ready: ready,
 	}
 	//nolint:contextcheck // the run outlives the request that starts it
