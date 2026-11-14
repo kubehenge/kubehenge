@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -176,10 +175,9 @@ func (inv *Inventory) queryDNS(server, name string, qtype dnsmessage.Type) ([]ne
 	if _, err = rand.Read(id[:]); err != nil {
 		return nil, failed
 	}
-	query := dnsmessage.Message{
-		Header:    dnsmessage.Header{ID: binary.BigEndian.Uint16(id[:]), RecursionDesired: true},
-		Questions: []dnsmessage.Question{{Name: qname, Type: qtype, Class: dnsmessage.ClassINET}},
-	}
+	var query dnsmessage.Message
+	query.ID, query.RecursionDesired = binary.BigEndian.Uint16(id[:]), true
+	query.Questions = []dnsmessage.Question{{Name: qname, Type: qtype, Class: dnsmessage.ClassINET}}
 	packet, err := query.Pack()
 	if err != nil {
 		return nil, absent
@@ -187,27 +185,26 @@ func (inv *Inventory) queryDNS(server, name string, qtype dnsmessage.Type) ([]ne
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	address := net.JoinHostPort(server, port)
-	reply, err := exchange(ctx, "udp", address, packet)
-	if err == nil && reply.Truncated {
-		reply, err = exchange(ctx, "tcp", address, packet)
+	reply, ok := exchange(ctx, "udp", address, packet)
+	if ok && reply.Truncated {
+		reply, ok = exchange(ctx, "tcp", address, packet)
 	}
-	if err != nil || reply.ID != query.ID || !reply.Response {
+	if !ok || reply.ID != query.ID || !reply.Response {
 		return nil, failed
 	}
-	switch reply.RCode {
-	case dnsmessage.RCodeSuccess:
-	case dnsmessage.RCodeNameError:
+	if reply.RCode == dnsmessage.RCodeNameError {
 		return nil, absent
-	default:
+	}
+	if reply.RCode != dnsmessage.RCodeSuccess {
 		return nil, failed
 	}
 	var addrs []netip.Addr
-	for _, r := range reply.Answers {
-		switch body := r.Body.(type) {
-		case *dnsmessage.AResource:
-			addrs = append(addrs, netip.AddrFrom4(body.A))
-		case *dnsmessage.AAAAResource:
-			addrs = append(addrs, netip.AddrFrom16(body.AAAA).Unmap())
+	for i := range reply.Answers {
+		if a, isA := reply.Answers[i].Body.(*dnsmessage.AResource); isA {
+			addrs = append(addrs, netip.AddrFrom4(a.A))
+		}
+		if a, isAAAA := reply.Answers[i].Body.(*dnsmessage.AAAAResource); isAAAA {
+			addrs = append(addrs, netip.AddrFrom16(a.AAAA).Unmap())
 		}
 	}
 	if len(addrs) == 0 {
@@ -218,46 +215,54 @@ func (inv *Inventory) queryDNS(server, name string, qtype dnsmessage.Type) ([]ne
 
 // exchange sends a packet and reads the reply, over TCP with the two-byte length that stream
 // transport adds.
-func exchange(ctx context.Context, network, address string, packet []byte) (dnsmessage.Message, error) {
+// ok is false for any failure, which the check files as a server that did not answer.
+func exchange(ctx context.Context, network, address string, packet []byte) (dnsmessage.Message, bool) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, network, address)
 	if err != nil {
-		return dnsmessage.Message{}, err
+		return dnsmessage.Message{}, false
 	}
 	defer func() { _ = conn.Close() }()
-	if deadline, ok := ctx.Deadline(); ok {
-		if err = conn.SetDeadline(deadline); err != nil {
-			return dnsmessage.Message{}, err
-		}
+	if deadline, has := ctx.Deadline(); has && conn.SetDeadline(deadline) != nil {
+		return dnsmessage.Message{}, false
 	}
 	var raw []byte
 	if network == "tcp" {
-		framed := binary.BigEndian.AppendUint16(nil, uint16(len(packet))) //nolint:gosec // a query is a few hundred bytes
-		if _, err = conn.Write(append(framed, packet...)); err != nil {
-			return dnsmessage.Message{}, err
-		}
-		var head [2]byte
-		if _, err = io.ReadFull(conn, head[:]); err != nil {
-			return dnsmessage.Message{}, err
-		}
-		raw = make([]byte, binary.BigEndian.Uint16(head[:]))
-		if _, err = io.ReadFull(conn, raw); err != nil {
-			return dnsmessage.Message{}, err
-		}
+		raw = exchangeStream(conn, packet)
 	} else {
-		if _, err = conn.Write(packet); err != nil {
-			return dnsmessage.Message{}, err
-		}
-		buf := make([]byte, maxUDPReply)
-		n, rerr := conn.Read(buf)
-		if rerr != nil {
-			return dnsmessage.Message{}, rerr
-		}
-		raw = buf[:n]
+		raw = exchangeDatagram(conn, packet)
 	}
 	var m dnsmessage.Message
-	if err = m.Unpack(raw); err != nil {
-		return dnsmessage.Message{}, errors.Join(errors.New("unreadable DNS reply"), err)
+	if raw == nil || m.Unpack(raw) != nil {
+		return dnsmessage.Message{}, false
 	}
-	return m, nil
+	return m, true
+}
+
+func exchangeDatagram(conn net.Conn, packet []byte) []byte {
+	if _, err := conn.Write(packet); err != nil {
+		return nil
+	}
+	buf := make([]byte, maxUDPReply)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil
+	}
+	return buf[:n]
+}
+
+func exchangeStream(conn net.Conn, packet []byte) []byte {
+	framed := binary.BigEndian.AppendUint16(nil, uint16(len(packet))) //nolint:gosec // a query is a few hundred bytes
+	if _, err := conn.Write(append(framed, packet...)); err != nil {
+		return nil
+	}
+	var head [2]byte
+	if _, err := io.ReadFull(conn, head[:]); err != nil {
+		return nil
+	}
+	raw := make([]byte, binary.BigEndian.Uint16(head[:]))
+	if _, err := io.ReadFull(conn, raw); err != nil {
+		return nil
+	}
+	return raw
 }

@@ -75,15 +75,15 @@ func (d fakeDNS) serveTCP(l net.Listener) {
 			if q.Unpack(raw) != nil || len(q.Questions) != 1 {
 				return
 			}
-			if out, err := d.answer(q, false).Pack(); err == nil {
+			if out, err := d.answer(q).Pack(); err == nil {
 				_, _ = conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(out))), out...)) //nolint:gosec // a short test reply
 			}
 		}()
 	}
 }
 
-// answer is the reply to a query. Over UDP a truncating fake answers with the flag alone.
-func (d fakeDNS) answer(q dnsmessage.Message, udp bool) *dnsmessage.Message {
+// answer is the reply to a query.
+func (d fakeDNS) answer(q dnsmessage.Message) *dnsmessage.Message {
 	if d.asked != nil {
 		d.asked.Add(1)
 	}
@@ -91,10 +91,6 @@ func (d fakeDNS) answer(q dnsmessage.Message, udp bool) *dnsmessage.Message {
 	var reply dnsmessage.Message
 	reply.ID, reply.Response, reply.Authoritative, reply.RCode = q.ID, true, true, dnsmessage.RCodeNameError
 	reply.Questions = q.Questions
-	if udp && d.truncate {
-		reply.Truncated, reply.RCode = true, dnsmessage.RCodeSuccess
-		return &reply
-	}
 	if slices.Contains(d.servfail, question.Name.String()) {
 		reply.RCode = dnsmessage.RCodeServerFailure
 		return &reply
@@ -138,7 +134,11 @@ func (d fakeDNS) serve(c net.PacketConn) {
 		if d.silent || q.Unpack(buf[:n]) != nil || len(q.Questions) != 1 {
 			continue
 		}
-		if out, err := d.answer(q, true).Pack(); err == nil {
+		reply := d.answer(q)
+		if d.truncate {
+			reply.Answers, reply.Truncated, reply.RCode = nil, true, dnsmessage.RCodeSuccess
+		}
+		if out, err := reply.Pack(); err == nil {
 			_, _ = c.WriteTo(out, from)
 		}
 	}
