@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"filippo.io/age"
 
@@ -23,8 +24,8 @@ const (
 
 // RecoverManagement makes a lost management cluster again from Kubehenge's own backups. It applies
 // the module whole first, which brings the backup volume back to the new nodes when it survived.
-// It then restores the newest snapshot on the volume, or the appliance's copy when the volume holds
-// none, says which in the log, and applies the module again. ready is called as for Apply.
+// It then restores the newest snapshot of the volume and the appliance's copy, says which in the
+// log and why, and applies the module again. ready is called as for Apply.
 func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, ready func(ctx context.Context, kubeconfig []byte) error) error {
 	if a.Talos == nil {
 		return errors.New("this appliance does not reach Talos nodes")
@@ -82,41 +83,96 @@ func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, rea
 	})
 }
 
-// newestBackup decrypts the newest snapshot of the backup volume into a file, or the appliance's
-// copy's when the volume holds none or cannot be read, and says which it read.
+const (
+	// volumeWait bounds how long a recovery waits for the backup volume's store, which starts only
+	// once the apply's nodes run and the volume is attached to one of them.
+	volumeWait  = 10 * time.Minute
+	volumeRetry = 10 * time.Second
+)
+
+// errNoSnapshot is a store that answers and holds no snapshot.
+var errNoSnapshot = errors.New("it holds no snapshot")
+
+// newestBackup decrypts the newest snapshot of the backup volume and the appliance's copy into a
+// file, and says which it read and why. It waits for the volume's store first, so that a store not
+// started yet never hands the restore to an older copy.
 func (a *Appliance) newestBackup(ctx context.Context, j *Job, identity *age.X25519Identity, passphrase string) (string, string, string, error) {
 	folder := provisioner.ManagementEtcdFolder("")
-	store, err := a.openVolume(ctx)
-	if err == nil {
-		file, name, rerr := a.decryptNewest(ctx, store, folder, identity, passphrase)
-		if rerr == nil {
-			return file, name, FromBackupVolume, nil
+	store, onVolume, volErr := a.waitForVolume(ctx, j, folder)
+	copied := a.applianceCopy()
+	var inCopy *provisioner.EtcdSnapshot
+	copyErr := a.checkCopyOwner(ctx, identity.Recipient().String())
+	if copyErr == nil {
+		inCopy, copyErr = newestIn(ctx, copied, folder)
+	}
+	if volErr == nil && (copyErr != nil || !inCopy.Time.After(onVolume.Time)) {
+		j.Add("Reading the backup volume, which holds the newest snapshot")
+		file, err := a.decryptWithKeys(ctx, store, folder, onVolume, identity, passphrase)
+		if err == nil {
+			return file, onVolume.Name, FromBackupVolume, nil
 		}
-		err = rerr
+		volErr = err
 	}
-	j.Add("The backup volume gives no snapshot (" + err.Error() + "). Reading the appliance's copy")
-	if cerr := a.checkCopyOwner(ctx, identity.Recipient().String()); cerr != nil {
-		return "", "", "", fmt.Errorf("neither the backup volume nor the appliance's copy gives a snapshot: %w", errors.Join(err, cerr))
+	if copyErr != nil {
+		return "", "", "", fmt.Errorf("neither the backup volume nor the appliance's copy gives a snapshot: %w", errors.Join(fmt.Errorf("the backup volume: %w", volErr), fmt.Errorf("the appliance's copy: %w", copyErr)))
 	}
-	file, name, cerr := a.decryptNewest(ctx, a.applianceCopy(), folder, identity, passphrase)
-	if cerr != nil {
-		return "", "", "", fmt.Errorf("neither the backup volume nor the appliance's copy gives a snapshot: %w", errors.Join(err, cerr))
+	if volErr != nil {
+		j.Add("Reading the appliance's copy, since the backup volume gives no snapshot: " + volErr.Error())
+	} else {
+		j.Add("Reading the appliance's copy, which holds a snapshot newer than the backup volume's " + onVolume.Name)
 	}
-	return file, name, FromApplianceCopy, nil
+	file, err := a.decryptSnapshot(ctx, copied, folder, inCopy, identity.String())
+	if err != nil {
+		return "", "", "", fmt.Errorf("the appliance's copy, snapshot %s: %w", inCopy.Name, err)
+	}
+	return file, inCopy.Name, FromApplianceCopy, nil
 }
 
-// decryptNewest decrypts the newest snapshot in store into a file of the appliance's and checks its
-// checksum. It opens it with identity, or with a key the store keeps that the passphrase opens,
-// which an earlier appliance left.
-func (a *Appliance) decryptNewest(ctx context.Context, store provisioner.ObjectStore, folder string, identity *age.X25519Identity, passphrase string) (string, string, error) {
+// waitForVolume lists the backup volume's newest snapshot, retrying while its store does not
+// answer, up to volumeWait. A store that answers with no snapshot ends the wait.
+func (a *Appliance) waitForVolume(ctx context.Context, j *Job, folder string) (provisioner.ObjectStore, *provisioner.EtcdSnapshot, error) {
+	wait, retry := volumeWait, volumeRetry
+	if a.waitVolume > 0 {
+		wait, retry = a.waitVolume, a.waitVolume/10
+	}
+	deadline := time.Now().Add(wait)
+	for said := false; ; said = true {
+		store, err := a.openVolume(ctx)
+		if err == nil {
+			var newest *provisioner.EtcdSnapshot
+			if newest, err = newestIn(ctx, store, folder); err == nil || errors.Is(err, errNoSnapshot) {
+				return store, newest, err
+			}
+		}
+		if time.Now().Add(retry).After(deadline) {
+			return nil, nil, fmt.Errorf("it did not answer within %s: %w", wait, err)
+		}
+		if !said {
+			j.Add("Waiting for the backup volume's store to answer: " + err.Error())
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err() //nolint:wrapcheck // the run's own end
+		case <-time.After(retry):
+		}
+	}
+}
+
+func newestIn(ctx context.Context, store provisioner.ObjectStore, folder string) (*provisioner.EtcdSnapshot, error) {
 	list, err := provisioner.ListEtcdSnapshots(ctx, store, folder)
 	if err != nil {
-		return "", "", err //nolint:wrapcheck // the caller names the store
+		return nil, err //nolint:wrapcheck // the caller names the store
 	}
 	if len(list) == 0 {
-		return "", "", errors.New("it holds no snapshot")
+		return nil, errNoSnapshot
 	}
-	newest := list[0]
+	return &list[0], nil
+}
+
+// decryptWithKeys decrypts snapshot newest in store into a file of the appliance's and checks its
+// checksum. It opens it with identity, or with a key the store keeps that the passphrase opens,
+// which an earlier appliance left.
+func (a *Appliance) decryptWithKeys(ctx context.Context, store provisioner.ObjectStore, folder string, newest *provisioner.EtcdSnapshot, identity *age.X25519Identity, passphrase string) (string, error) {
 	ids := []string{identity.String()}
 	if keys, err := newestFirst(ctx, store, "management/identities"); err == nil {
 		for _, k := range keys {
@@ -130,13 +186,13 @@ func (a *Appliance) decryptNewest(ctx context.Context, store provisioner.ObjectS
 	}
 	var errs []error
 	for _, id := range ids {
-		file, err := a.decryptSnapshot(ctx, store, folder, &newest, id)
+		file, err := a.decryptSnapshot(ctx, store, folder, newest, id)
 		if err == nil {
-			return file, newest.Name, nil
+			return file, nil
 		}
 		errs = append(errs, err)
 	}
-	return "", "", fmt.Errorf("snapshot %s: %w", newest.Name, errors.Join(errs...))
+	return "", fmt.Errorf("snapshot %s: %w", newest.Name, errors.Join(errs...))
 }
 
 func (a *Appliance) decryptSnapshot(ctx context.Context, store provisioner.ObjectStore, folder string, snap *provisioner.EtcdSnapshot, identity string) (string, error) {

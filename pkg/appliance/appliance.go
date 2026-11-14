@@ -77,7 +77,9 @@ type Appliance struct {
 	ExportObjects func(ctx context.Context) ([]byte, error)
 	// CopyCap bounds the appliance's copy of the latest backups, ApplianceCopyCap when 0.
 	CopyCap int64
-	Now     func() time.Time
+	// waitVolume bounds a recovery's wait for the backup volume's store, volumeWait when 0.
+	waitVolume time.Duration
+	Now        func() time.Time
 	// KeyWorkFactor is the scrypt work factor the passphrase seals the snapshots' key with, age's
 	// own when 0. Opening the key reads it from the sealed key.
 	KeyWorkFactor int
