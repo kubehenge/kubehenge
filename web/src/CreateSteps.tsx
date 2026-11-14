@@ -312,6 +312,7 @@ function TemplateAsk({
     <fieldset className="group">
       <legend>Build a VM template</legend>
       <p className="muted">{askText(kind, os)}</p>
+      <p className="muted">The build VM takes its address from DHCP, unless the settings give a build address.</p>
       {builds.building.length > 0 && <p className="muted">{`Building: ${builds.building.join(", ")}`}</p>}
       {builds.requested.length > 0 && (
         <p className="muted">{`Requested: ${builds.requested.map((k) => requestName(k, oses)).join(", ")}`}</p>
