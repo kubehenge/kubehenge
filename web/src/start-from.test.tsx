@@ -248,7 +248,11 @@ describe("a new cluster started from another", () => {
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.36.5+rke2r1"));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await expect(screen.findByLabelText("Bridge")).resolves.toHaveValue("vmbr1");
-    expect(screen.getByText("Copied from web")).toBeInTheDocument();
+    // Each copied value says so, the bridge and the gateway among them.
+    const marks = screen.getAllByText("Copied from web");
+    expect(marks.length).toBeGreaterThan(1);
+    expect(screen.getByLabelText("Bridge").closest(".field")).toContainElement(marks[0] ?? null);
+    expect(screen.getByLabelText("Gateway").closest(".field")).toHaveTextContent("Copied from web");
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.1.0.1");
     // No node reports the network on vmbr1, so the examples come from the gateway's.
     expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
@@ -295,23 +299,28 @@ describe("a new cluster started from another", () => {
     expect(asked.at(-1)).toMatchObject({ gateway: "10.0.70.1", prefix: 24 });
     expect(addresses).toHaveAccessibleDescription("Ranges like 10.0.70.21-10.0.70.29, networks or addresses");
 
-    // The suggestion follows the gateway.
-    const gateway = screen.getByLabelText("Gateway");
-    await user.clear(gateway);
-    await user.type(gateway, "10.0.80.1");
-    await waitFor(() => expect(addresses).toHaveValue("10.0.80.21-10.0.80.23"));
-    expect(screen.getByLabelText("API address")).toHaveValue("10.0.80.20");
-
     // A full network leaves the fields empty and says so.
     const prefix = screen.getByLabelText("Prefix length");
     await user.clear(prefix);
     await user.type(prefix, "30");
-    await waitFor(() => expect(addresses).toHaveAccessibleDescription("No free addresses found in 10.0.80.0/30"));
+    await waitFor(() => expect(addresses).toHaveAccessibleDescription("No free addresses found in 10.0.70.0/30"));
     expect(addresses).toHaveValue("");
     expect(screen.getByLabelText("API address")).toHaveValue("");
+    await user.clear(prefix);
+    await user.type(prefix, "24");
+    await waitFor(() => expect(addresses).toHaveValue("10.0.70.21-10.0.70.23"));
+
+    // A gateway typed over the copied one moves no address the user left alone. It is marked instead.
+    const gateway = screen.getByLabelText("Gateway");
+    await user.clear(gateway);
+    await user.type(gateway, "192.168.5.1");
+    await waitFor(() => expect(gateway).toHaveAccessibleDescription(/Not in the bridge's network 10\.0\.0\.0\/16/u));
+    expect(addresses).toHaveValue("10.0.70.21-10.0.70.23");
+    expect(screen.getByLabelText("API address")).toHaveValue("10.0.70.20");
 
     // Typed addresses replace the message.
-    await user.type(addresses, "10.0.80.2");
+    await user.clear(addresses);
+    await user.type(addresses, "10.0.70.2");
     expect(addresses).toHaveAccessibleDescription(/Ranges like/u);
     expect(addresses).not.toHaveAccessibleDescription(/No free addresses/u);
   });

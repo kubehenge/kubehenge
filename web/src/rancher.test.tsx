@@ -83,7 +83,7 @@ describe("registering with Rancher in the create wizard", () => {
   it("says there is no Rancher yet, and sends nothing, where no cluster runs one", () => {
     const form = { ...newForm(), rancherExists: false, rancherRegister: false };
     expect(request(form, cls).variables).not.toHaveProperty("rancher");
-    expect(Object.fromEntries(summary(form, cls))["Rancher"]).toBe("No Rancher yet");
+    expect(Object.fromEntries(summary(form, cls))["Rancher"]).toBe("Registers once a cluster installs Rancher");
     const there = { ...newForm(), rancherExists: true, rancherRegister: false };
     expect(request(there, cls).variables["rancher"]).toStrictEqual({ register: false });
     expect(Object.fromEntries(summary({ ...there, rancherRegister: true }, cls))["Rancher"]).toBe(

@@ -2099,7 +2099,7 @@ describe("create", () => {
     expect(screen.getByLabelText("Search domains")).toHaveValue("corp.example");
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
     expect(screen.getByLabelText("Prefix length")).toHaveValue(16);
-    expect(screen.getByLabelText("API address")).toHaveAttribute("placeholder", "10.0.0.20");
+    expect(screen.getByLabelText("API address")).not.toHaveAttribute("placeholder");
     expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
       "Ranges like 10.0.0.21-10.0.0.29, networks or addresses",
     );

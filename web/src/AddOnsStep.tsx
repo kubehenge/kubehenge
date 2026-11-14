@@ -20,6 +20,7 @@ import {
   type AddonKey,
   addonsProblem,
   backupsChosen,
+  backupsWait,
   coresText,
   etcdOffered,
   hasManagementProxy,
@@ -143,13 +144,14 @@ function BackupsChoice({
 }): JSX.Element {
   const targets = classTargets(cls);
   const none = targets.length === 0;
+  const on = form.backups && !none;
   return (
     <>
       <label className="check">
         <input
           type="checkbox"
-          checked={form.backups}
-          disabled={none && !form.backups}
+          checked={on}
+          disabled={none}
           aria-describedby={none ? "backups-hint" : undefined}
           onChange={(e) => set("backups", e.target.checked)}
         />{" "}
@@ -161,7 +163,7 @@ function BackupsChoice({
           {noTargets}
         </p>
       )}
-      {form.backups && (
+      {on && (
         <>
           <BackupFieldset
             value={form.backupFields}
@@ -183,7 +185,14 @@ function BackupsChoice({
               onChange={(readFrom) => set("backupFields", { ...form.backupFields, readFrom })}
             />
           )}
-          <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} namespace={namespace} />
+          <AccessKey
+            form={form}
+            set={set}
+            shown={shown}
+            canTrust={canTrust}
+            namespace={namespace}
+            waitText={backupsWait(form, cls) ? "Velero waits for the cluster's own key" : undefined}
+          />
         </>
       )}
     </>
@@ -766,12 +775,7 @@ export function PoliciesStep(props: AddOnsProps): JSX.Element {
       )}
       {variable(cls, "upgrades") && (
         <>
-          <Field
-            label="Upgrade automatically"
-            hint={
-              form.upgradeMode === "off" && !form.nodeImages ? undefined : `Daily 02:00 to 06:00, ${browserZone()} time`
-            }
-          >
+          <Field label="Upgrade automatically">
             {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}
           </Field>
           <label className="check">
@@ -783,6 +787,9 @@ export function PoliciesStep(props: AddOnsProps): JSX.Element {
               ? "Upgrades the nodes in place, one at a time."
               : "Replaces the nodes with each new template build."}
           </Info>
+          {(form.upgradeMode !== "off" || form.nodeImages) && (
+            <p className="hint">Upgrades run daily 02:00 to 06:00, {browserZone()} time</p>
+          )}
         </>
       )}
     </>

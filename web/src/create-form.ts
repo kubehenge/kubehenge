@@ -13,7 +13,6 @@ import {
   backupsVariable,
   classTargets,
   newBackupFields,
-  withTarget,
   type BackupFields,
 } from "./Backups";
 import {
@@ -98,8 +97,10 @@ import {
   maxQueues,
   minMTU,
   networkOf,
+  parseAddress,
   parseCidr,
   rangeProblem,
+  sameNetwork,
   searchDomainsProblem,
   timeServersProblem,
   whole,
@@ -476,6 +477,8 @@ export interface Room {
   nodeWarning?: string | undefined;
   disk: number;
   freeDisk?: number | undefined;
+  /** Set where the disks exceed the free space of a storage that can overcommit, so the cluster may still be made. */
+  diskWarning?: string | undefined;
 }
 
 /** createRoom weighs a form's VMs against the online nodes it may use and the storage it chose. */
@@ -490,14 +493,20 @@ export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): R
   const disks = chosen.some((s) => s.shared)
     ? chosen.slice(0, 1)
     : chosen.filter((s) => usable.some((n) => n.node === s.node));
+  const disk = (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB;
+  const freeDisk = disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined;
   return {
+    diskWarning:
+      freeDisk !== undefined && disk > freeDisk && !thick(chosen[0])
+        ? `The disks need ${bytes(disk)}, ${bytes(freeDisk)} free. Thin storage may take them, until it runs out.`
+        : undefined,
     memory: (cp * form.controlPlaneMachine.memoryMiB + workers * form.workerMachine.memoryMiB) * bytesPerMiB,
     freeMemory: known
       ? usable.reduce((sum, n) => sum + Math.max(0, (n.maxMemory ?? 0) - (n.memory ?? 0)), 0)
       : undefined,
     nodeWarning: memoryNodeWarning(form, nodes),
-    disk: (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB,
-    freeDisk: disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined,
+    disk,
+    freeDisk,
   };
 }
 
@@ -549,7 +558,7 @@ function addonTotal(
       (form.monitoring || form.rancherInstall || form.certificates.enabled) && !usesExistingCertManager(form, c),
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
-    backups: form.backups && variable(c, "backups") !== undefined,
+    backups: backupsChosen(form, c),
     argocd: form.gitops.engine === "argocd",
     flux: form.gitops.engine === "flux",
   };
@@ -703,9 +712,14 @@ export function withRoom(form: Form, c: ClusterClass | undefined): Form {
   return raised;
 }
 
-/** backupsChosen says whether the form's backups are on and its class has them. */
+/** backupsChosen says whether the form's backups are on and its class has them and a target to take them to. */
 export const backupsChosen = (f: Form, c: ClusterClass | undefined): boolean =>
-  f.backups && variable(c, "backups") !== undefined;
+  f.backups && variable(c, "backups") !== undefined && classTargets(c).length > 0;
+
+const keyTyped = (f: Form): boolean => backupKeys.some((k) => filled(f.backupKey[k.key]));
+
+/** backupsWait says whether Velero's backups are on but have no access key of the cluster's own yet. */
+export const backupsWait = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) && !keyTyped(f);
 
 /** etcdOffered says whether a class has etcd snapshots and a backup target to take them to. */
 export const etcdOffered = (c: ClusterClass | undefined): boolean =>
@@ -718,33 +732,35 @@ export const etcdChosen = (f: Form, c: ClusterClass | undefined): boolean => f.e
 export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) || etcdChosen(f, c);
 
 /**
- * keyRequired says whether the access key must be entered. Velero's backups run in the cluster and
- * need one of their own. Etcd snapshots are streamed by the controller, which takes the key stored
- * for every cluster when the cluster has none, so only an upload by the nodes themselves needs one.
- * Snapshots without any key wait for one (snapshotsWait).
+ * keyRequired says whether the access key must be entered to go on: only for an upload by the nodes
+ * themselves. Velero's backups run in the cluster and need a key of its own, and etcd snapshots one
+ * of its own or for every cluster, but both wait for it rather than stop the wizard (backupsWait,
+ * snapshotsWait).
  */
 export const keyRequired = (f: Form, c: ClusterClass | undefined): boolean =>
-  backupsChosen(f, c) || (etcdChosen(f, c) && f.etcdFields.upload && c !== undefined && uploadsItself(c.distribution));
+  etcdChosen(f, c) && f.etcdFields.upload && c !== undefined && uploadsItself(c.distribution);
 
 /**
  * snapshotsWait says whether the etcd snapshots have no key yet: none stored for every cluster and
  * none entered. The management cluster keeps them until a key for their target is stored.
  */
 export const snapshotsWait = (f: Form, c: ClusterClass | undefined): boolean =>
-  etcdChosen(f, c) && f.noSharedKey && !backupKeys.some((k) => filled(f.backupKey[k.key]));
+  etcdChosen(f, c) && f.noSharedKey && !keyTyped(f);
 
 /** snapshotsWaitText is what the snapshot step says of snapshots that wait for a key. */
 export const snapshotsWaitText = (target: string): string =>
   `Kept on the management cluster until a key for ${target} is stored`;
 
 /**
- * withBackupChoices takes the one backup target a class offers until another is chosen, the backups'
+ * withBackupChoices takes the first backup target a class offers until another is chosen, the backups'
  * target for etcd snapshots when it is one of them, and a key of the cluster's own only for those who
  * may store one.
  */
 export function withBackupChoices(f: Form, c: ClusterClass | undefined, canTrust: boolean | undefined): Form {
   const targets = classTargets(c);
-  const backupFields = withTarget(f.backupFields, targets);
+  const backupFields = filled(f.backupFields.target)
+    ? f.backupFields
+    : { ...f.backupFields, target: targets[0]?.name ?? "" };
   return {
     ...f,
     backupFields,
@@ -993,9 +1009,9 @@ export const newForm = (): Form => ({
   gitops: newGitOps(),
   egress: newEgress(),
   oidc: [],
-  upgradeMode: "off",
+  upgradeMode: "patch",
   nodeImages: true,
-  backups: false,
+  backups: true,
   backupFields: newBackupFields(),
   storeBackupKey: true,
   backupKey: {},
@@ -1208,11 +1224,7 @@ export interface PendingCredential {
 /** pendingCredentials are the credentials to store for the created cluster that the form holds. */
 export function pendingCredentials(form: Form, c: ClusterClass): PendingCredential[] {
   const pending: PendingCredential[] = [];
-  if (
-    keyNeeded(form, c) &&
-    form.storeBackupKey &&
-    (keyRequired(form, c) || backupKeys.some((k) => filled(form.backupKey[k.key])))
-  ) {
+  if (keyNeeded(form, c) && form.storeBackupKey && (keyRequired(form, c) || keyTyped(form))) {
     pending.push({
       purpose: "backup",
       values: form.backupKey,
@@ -1449,7 +1461,7 @@ function rancherChoice(form: Form): string {
     return `Installed at ${form.rancherHostname}`;
   }
   if (!form.rancherExists) {
-    return "No Rancher yet";
+    return "Registers once a cluster installs Rancher";
   }
   return form.rancherRegister ? registeredWithRancher : "Not registered";
 }
@@ -1484,9 +1496,8 @@ function interfaceRows(form: Form): [string, string][] {
   if (form.queues) {
     rows.push(["Queues", form.queues]);
   }
-  if (list(form.securityGroups).length > 0) {
-    rows.push(["Security groups", list(form.securityGroups).join(", ")]);
-  }
+  const groups = list(form.securityGroups);
+  rows.push(["Firewall", groups.length > 0 ? `Security groups ${groups.join(", ")}` : "Off, no security groups"]);
   return rows;
 }
 
@@ -1534,7 +1545,7 @@ function proxmoxRows(form: Form, defined: ReadonlySet<string>, offered: SummaryO
     rows.push(["Volume snapshots", snapshotsText(form.volumeSnapshots)]);
   }
   if (offered.haGroups === true) {
-    rows.push(["HA group labels", haGroupsText(form.haGroups)]);
+    rows.push(["HA rule labels", haGroupsText(form.haGroups)]);
   }
   return rows;
 }
@@ -1633,13 +1644,16 @@ const customisationRows = (form: Form, defined: Set<string>): [string, string][]
 // backupRows sums up the backups and etcd snapshots, each with where its access key comes from.
 function backupRows(form: Form, c: ClusterClass, defined: Set<string>): [string, string][] {
   const rows: [string, string][] = [];
-  const key = form.storeBackupKey ? "own access key" : "access key to store later";
+  let key = form.storeBackupKey ? "own access key" : "access key to store later";
+  if (backupsWait(form, c)) {
+    key = "waits for the cluster's access key";
+  }
   if (defined.has("backups")) {
     rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off"]);
   }
   if (etcdOffered(c)) {
     const sum = etcdSnapshotsText(etcdVariable(form, c), c.distribution);
-    const typed = backupKeys.some((k) => filled(form.backupKey[k.key]));
+    const typed = keyTyped(form);
     let etcdKey = key;
     if (snapshotsWait(form, c)) {
       etcdKey = "kept on the management cluster until a key is stored";
@@ -2298,7 +2312,8 @@ function etcdSnapshotsProblems(form: Form, c: ClusterClass | undefined): Problem
 
 // accessKeyProblems keep the one key that backups and etcd snapshots share from being left out.
 function accessKeyProblems(form: Form, c: ClusterClass | undefined): Problems {
-  if (keyRequired(form, c) && form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
+  const wanted = keyRequired(form, c) || (keyNeeded(form, c) && keyTyped(form));
+  if (wanted && form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
     return { backupKey: "Enter both parts of the access key" };
   }
   return {};
@@ -2487,6 +2502,22 @@ export function bridgeMtuProblems(step: Step, form: Form, bridges: Bridge[]): Pr
   return { mtu: `The bridge has MTU ${mtu}. Use ${mtu} or less` };
 }
 
+/**
+ * gatewayProblems marks a gateway outside the network the bridge's nodes sit in. The addresses the
+ * user did not touch stay as they were: the gateway is what was changed.
+ */
+export function gatewayProblems(step: Step, form: Form, net: BridgeNetwork | undefined): Problems {
+  const cidr = net?.cidr === undefined ? undefined : parseCidr(net.cidr);
+  const gateway = parseAddress(form.gateway);
+  if (step !== "Network" || cidr === undefined || gateway === undefined || gateway.family !== cidr.address.family) {
+    return {};
+  }
+  if (sameNetwork(gateway, cidr.address, cidr.bits)) {
+    return {};
+  }
+  return { gateway: `Not in the bridge's network ${networkOf(net?.cidr ?? "") ?? ""}` };
+}
+
 /** csiProblems holds the machines step to the CSI plugin's release a new cluster chose. */
 export function csiProblems(step: Step, form: Form, csi: CSIOffer): Problems {
   if (step !== "Machines" || !csi.offered || !form.datastoreAllocate || csi.problem === undefined) {
@@ -2534,6 +2565,10 @@ export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefi
   const need = Math.max(form.controlPlaneMachine.memoryMiB, form.workerReplicas > 0 ? form.workerMachine.memoryMiB : 0);
   const [best] = candidates.toSorted((a, b) => freeMiB(b) - freeMiB(a));
   if (best === undefined || freeMiB(best) >= need) {
+    return undefined;
+  }
+  // A machine no node could ever hold is refused on its field, and waiting would not help.
+  if (candidates.every((n) => n.maxMemory !== undefined && n.maxMemory / bytesPerMiB < need)) {
     return undefined;
   }
   const needGiB = Math.ceil(need / mibPerGiB);

@@ -62,13 +62,13 @@ describe("the HA group labels", () => {
     expect(
       request({ ...form, haGroups: false }, { ...rke2, variables: rke2.variables.slice(0, 1) }).variables,
     ).not.toHaveProperty("ccm");
-    expect(Object.fromEntries(summary(form, rke2, { haGroups: true }))["HA group labels"]).toBe(
+    expect(Object.fromEntries(summary(form, rke2, { haGroups: true }))["HA rule labels"]).toBe(
       "On, Sys.Audit on / for the token",
     );
-    expect(Object.fromEntries(summary({ ...form, haGroups: false }, rke2, { haGroups: true }))["HA group labels"]).toBe(
+    expect(Object.fromEntries(summary({ ...form, haGroups: false }, rke2, { haGroups: true }))["HA rule labels"]).toBe(
       "Off",
     );
-    expect(Object.fromEntries(summary(form, rke2))).not.toHaveProperty("HA group labels");
+    expect(Object.fromEntries(summary(form, rke2))).not.toHaveProperty("HA rule labels");
   });
 
   it("are shown ticked on the machines step where offered, and can be switched off", async () => {
@@ -90,9 +90,9 @@ describe("the HA group labels", () => {
       />
     );
     const { rerender } = render(step(false));
-    expect(screen.queryByLabelText("Add HA group labels")).toBeNull();
+    expect(screen.queryByLabelText("Add HA rule labels")).toBeNull();
     rerender(step(true));
-    const box = screen.getByLabelText("Add HA group labels");
+    const box = screen.getByLabelText("Add HA rule labels");
     expect(box).toBeChecked();
     expect(box).toBeEnabled();
     await userEvent.setup({ delay: null }).click(box);

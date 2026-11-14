@@ -6,6 +6,7 @@ import { clusterPath } from "./cluster-paths";
 import {
   bridgeMtuProblems,
   bridgeNodeProblems,
+  gatewayProblems,
   classBridges,
   classStorages,
   createRoom,
@@ -48,7 +49,7 @@ import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import { clusterKey, fromCluster, startable, startKeys } from "./start-from";
 import type { Bridge, Cluster, ClusterClass, NodeDNS, PveNode, Storage, Versions } from "./types";
-import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
+import { CopiedFrom, Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
 import { record } from "./values";
 
 // customisationRefusal is the server's error where it names the node customisation, which then shows with it.
@@ -90,26 +91,56 @@ const raising = new Set<keyof Form>([
   "existingCertManager",
 ]);
 
-// CopiedNote says on the steps after General which cluster the values were copied from.
-function CopiedNote({ from, step }: { from: Cluster | undefined; step: Step }): JSX.Element | null {
-  return from === undefined || step === "General" || step === "Confirm" ? null : (
-    <p className="hint">Copied from {from.name}</p>
+const haControlPlanes = 3;
+
+// copiedLabels are the labels of the fields whose values a form copies from the cluster it started
+// from, by the form key. Those that the cluster left at the wizard's own value are not marked.
+const copiedLabels: Partial<Record<keyof Form, string>> = {
+  nodeOS: "Node OS",
+  controlPlaneReplicas: "Control-plane nodes",
+  workerReplicas: "Workers",
+  bridge: "Bridge",
+  vlan: "VLAN tag",
+  mtu: "MTU",
+  queues: "Queues",
+  prefix: "Prefix length",
+  gateway: "Gateway",
+  dnsServers: "DNS servers",
+  searchDomains: "Search domains",
+  ntpServers: "Time servers",
+  storage: "Storage",
+  cni: "Pod network",
+  loadBalancer: "Load balancer",
+};
+
+// copiedFields lists the labels of the copied values that differ from a new form's.
+function copiedFields(form: Form, from: Cluster | undefined): string[] {
+  if (from === undefined) {
+    return [];
+  }
+  const fresh = newForm();
+  return Object.entries(copiedLabels).flatMap(([key, label]) =>
+    startKeys.has(key as keyof Form) &&
+    JSON.stringify(form[key as keyof Form]) !== JSON.stringify(fresh[key as keyof Form])
+      ? [label]
+      : [],
   );
 }
 
-// CreateButton is Confirm's primary button. It says so when the cluster waits for room.
+// CreateButton is Confirm's primary button. It says so when the cluster waits for memory, or when
+// its disks exceed the free space of storage that may take them.
 function CreateButton({
   blocked,
-  waits,
+  label,
   onCreate,
 }: {
   blocked: boolean;
-  waits: boolean;
+  label: string;
   onCreate: () => void;
 }): JSX.Element {
   return (
     <button type="button" className="primary" disabled={blocked} onClick={onCreate}>
-      {waits ? "Create and wait" : "Create"}
+      {label}
     </button>
   );
 }
@@ -147,7 +178,15 @@ export function CreateCluster({
   const cls = classes.find((c) => c.name === entered.className);
   // What the user set, and what the cluster started from set, stays when a default would replace it.
   const kept = (k: keyof Form): boolean => touched.has(k) || (filled(entered.from) && startKeys.has(k));
+  // The gateway the free addresses were looked for on before the user typed their own, so that a
+  // gateway typed over it moves no address the user left alone.
+  const [gatewayBase, setGatewayBase] = useState<string>();
   const set = <K extends keyof Form>(k: K, v: Form[K]): void => {
+    if (k === "gateway") {
+      setGatewayBase((b) => b ?? chosen.gateway);
+    } else if (k === "bridge") {
+      setGatewayBase(undefined);
+    }
     setEntered((f) => (raising.has(k) ? withRoom({ ...f, [k]: v }, cls) : { ...f, [k]: v }));
     setTouched((t) => (t.has(k) ? t : new Set([...t, k])));
   };
@@ -262,6 +301,12 @@ export function CreateCluster({
       namespace: formNamespace,
       taken: clusters.filter((x) => formNamespace === "" || x.namespace === formNamespace).map((x) => x.name),
       rancherExists,
+      // Three control planes where the Proxmox VE cluster has three nodes to spread them over.
+      controlPlaneReplicas: kept("controlPlaneReplicas")
+        ? entered.controlPlaneReplicas
+        : nodes.length >= haControlPlanes
+          ? haControlPlanes
+          : entered.controlPlaneReplicas,
       noSharedKey: sharedKeys[namespaceOf(entered, namespaces) || (sessionNamespace ?? "")] === false,
       rancherRegister: rancherExists && entered.rancherRegister,
       bridge,
@@ -275,7 +320,8 @@ export function CreateCluster({
     bridge,
     vlan: entered.vlan,
     families: entered.families,
-    gateway: chosen.gateway,
+    // A gateway the user mistypes must not move the addresses they left alone to its network.
+    gateway: gatewayBase ?? chosen.gateway,
     prefix: chosen.prefix,
     gateway6: chosen.gateway6,
     prefix6: chosen.prefix6,
@@ -295,6 +341,7 @@ export function CreateCluster({
   };
   // Starting from another cluster, or from none, replaces all but the name and namespace.
   const chooseFrom = (key: string): void => {
+    setGatewayBase(undefined);
     const c = clusters.find((x) => clusterKey(x) === key);
     setEntered((f) => (c === undefined ? { ...newForm(), name: f.name, namespace: f.namespace } : fromCluster(c, f)));
     setTouched((t) => new Set(["from", ...[...t].filter((k) => k === "name")]));
@@ -304,12 +351,14 @@ export function CreateCluster({
   };
 
   const copiedFrom = clusters.find((x) => clusterKey(x) === entered.from);
+  const copied = copiedFields(form, copiedFrom);
   const index = steps.indexOf(step);
   const previous = steps[index - 1];
   const following = steps[index + 1];
   const byField = {
     ...fieldProblems(step, form, cls),
     ...bridgeMtuProblems(step, form, bridgeOptions),
+    ...gatewayProblems(step, form, net),
     ...bridgeNodeProblems(step, form, {
       bridgesByNode,
       online: nodes.filter((x) => x.online).map((x) => x.node),
@@ -320,7 +369,13 @@ export function CreateCluster({
   };
   const open = Object.values(byField);
   // A cluster that fits the nodes but not what they have free now waits for room.
-  const waits = createRoom(form, nodes, usableStorages).nodeWarning !== undefined;
+  const room = createRoom(form, nodes, usableStorages);
+  let createLabel = "Create";
+  if (room.nodeWarning !== undefined) {
+    createLabel = "Create and wait";
+  } else if (room.diskWarning !== undefined) {
+    createLabel = "Create anyway";
+  }
   const refused = Object.keys(capacityProblems("Machines", form, { nodes, storages: usableStorages })).length > 0;
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
@@ -419,135 +474,136 @@ export function CreateCluster({
           ))}
         </nav>
         <div className="wizard-body" ref={wizardRef}>
-          <CopiedNote from={copiedFrom} step={step} />
-          {step === "General" && (
-            <GeneralStep
-              form={form}
-              set={set}
-              shown={shown}
-              classes={classes}
-              cls={cls}
-              offered={offered}
-              talos={talos}
-              onChooseClass={chooseClass}
-              namespaces={namespaces}
-              onChooseNamespace={chooseNamespace}
-              starts={startable(clusters)}
-              onChooseFrom={chooseFrom}
-            />
-          )}
-          {step === "Network" && (
-            <NetworkStep
-              form={form}
-              set={set}
-              shown={shown}
-              cls={cls}
-              bridgeOptions={bridgeOptions}
-              network={network}
-              network6={network6}
-              free={free}
-              checked={typed}
-            />
-          )}
-          {step === "Machines" && (
-            <MachinesStep
-              form={form}
-              set={set}
-              shown={shown}
-              cls={cls}
-              usableStorages={usableStorages}
-              placed={variable(cls, "allowedNodes") !== undefined}
-              haOffered={haOffered}
-              csi={csi}
-              snapshots={snapshots}
-              haGroups={haGroups}
-              nodes={nodes}
-              rules={rules}
-              attempted={attempted.has(step)}
-              refusal={checkRefusal(error, checked, { form, cls })}
-            />
-          )}
-          {step === "Add-ons" && (
-            <AddOnsStep
-              form={form}
-              set={set}
-              shown={shown}
-              cls={cls}
-              canTrust={canTrust}
-              namespace={namespaceOf(form, namespaces)}
-              showAll={attempted.has("Add-ons")}
-            />
-          )}
-          {step === "Policies" && (
-            <PoliciesStep
-              form={form}
-              set={set}
-              shown={shown}
-              cls={cls}
-              canTrust={canTrust}
-              namespace={namespaceOf(form, namespaces)}
-            />
-          )}
-          {step === "Identity providers" && (
-            <IdentityStep form={form} set={set} canTrust={canTrust} showAll={attempted.has("Identity providers")} />
-          )}
-          {step === "Confirm" && cls && (
-            <ConfirmStep
-              read={checked.read}
-              room={createRoom(form, nodes, usableStorages)}
-              summary={summary(form, cls, {
-                ha: haOffered,
-                csi: csi.offered,
-                snapshots: snapshots.offered,
-                haGroups,
-              })}
-            />
-          )}
+          <CopiedFrom.Provider value={copiedFrom === undefined ? undefined : { from: copiedFrom.name, labels: copied }}>
+            {step === "General" && (
+              <GeneralStep
+                form={form}
+                set={set}
+                shown={shown}
+                classes={classes}
+                cls={cls}
+                offered={offered}
+                talos={talos}
+                onChooseClass={chooseClass}
+                namespaces={namespaces}
+                onChooseNamespace={chooseNamespace}
+                starts={startable(clusters)}
+                onChooseFrom={chooseFrom}
+              />
+            )}
+            {step === "Network" && (
+              <NetworkStep
+                form={form}
+                set={set}
+                shown={shown}
+                cls={cls}
+                bridgeOptions={bridgeOptions}
+                network={network}
+                network6={network6}
+                free={free}
+                checked={typed}
+              />
+            )}
+            {step === "Machines" && (
+              <MachinesStep
+                form={form}
+                set={set}
+                shown={shown}
+                cls={cls}
+                usableStorages={usableStorages}
+                placed={variable(cls, "allowedNodes") !== undefined}
+                haOffered={haOffered}
+                csi={csi}
+                snapshots={snapshots}
+                haGroups={haGroups}
+                nodes={nodes}
+                rules={rules}
+                attempted={attempted.has(step)}
+                refusal={checkRefusal(error, checked, { form, cls })}
+              />
+            )}
+            {step === "Add-ons" && (
+              <AddOnsStep
+                form={form}
+                set={set}
+                shown={shown}
+                cls={cls}
+                canTrust={canTrust}
+                namespace={namespaceOf(form, namespaces)}
+                showAll={attempted.has("Add-ons")}
+              />
+            )}
+            {step === "Policies" && (
+              <PoliciesStep
+                form={form}
+                set={set}
+                shown={shown}
+                cls={cls}
+                canTrust={canTrust}
+                namespace={namespaceOf(form, namespaces)}
+              />
+            )}
+            {step === "Identity providers" && (
+              <IdentityStep form={form} set={set} canTrust={canTrust} showAll={attempted.has("Identity providers")} />
+            )}
+            {step === "Confirm" && cls && (
+              <ConfirmStep
+                read={checked.read}
+                room={createRoom(form, nodes, usableStorages)}
+                summary={summary(form, cls, {
+                  ha: haOffered,
+                  csi: csi.offered,
+                  snapshots: snapshots.offered,
+                  haGroups,
+                })}
+              />
+            )}
 
-          <ErrorBox message={error} />
-          {reasons.length > 0 && <Detail>{reasons.join(" ")}</Detail>}
-          {created === undefined ? (
-            <div className="actions">
-              <button type="button" onClick={() => (touched.size > 0 ? setDiscarding(true) : navigate("/"))}>
-                Cancel
-              </button>
-              <span className="spacer" />
-              <button
-                type="button"
-                disabled={previous === undefined}
-                onClick={() => {
-                  if (previous !== undefined) {
-                    setStep(previous);
-                  }
-                }}
-              >
-                Back
-              </button>
-              {step === "Confirm" ? (
-                <CreateButton
-                  blocked={[busy, !checked.accepted, refused].some(Boolean)}
-                  waits={waits}
-                  onCreate={() => {
-                    void create();
-                  }}
-                />
-              ) : (
-                <button type="button" className="primary" onClick={next}>
-                  Next
+            <ErrorBox message={error} />
+            {reasons.length > 0 && <Detail>{reasons.join(" ")}</Detail>}
+            {created === undefined ? (
+              <div className="actions">
+                <button type="button" onClick={() => (touched.size > 0 ? setDiscarding(true) : navigate("/"))}>
+                  Cancel
                 </button>
-              )}
-            </div>
-          ) : (
-            <div className="actions">
-              <button
-                type="button"
-                className="primary"
-                onClick={() => navigate(clusterPath(created.namespace, created.name, "options"))}
-              >
-                Open cluster
-              </button>
-            </div>
-          )}
+                <span className="spacer" />
+                <button
+                  type="button"
+                  disabled={previous === undefined}
+                  onClick={() => {
+                    if (previous !== undefined) {
+                      setStep(previous);
+                    }
+                  }}
+                >
+                  Back
+                </button>
+                {step === "Confirm" ? (
+                  <CreateButton
+                    blocked={[busy, !checked.accepted, refused].some(Boolean)}
+                    label={createLabel}
+                    onCreate={() => {
+                      void create();
+                    }}
+                  />
+                ) : (
+                  <button type="button" className="primary" onClick={next}>
+                    Next
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="actions">
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => navigate(clusterPath(created.namespace, created.name, "options"))}
+                >
+                  Open cluster
+                </button>
+              </div>
+            )}
+          </CopiedFrom.Provider>
         </div>
       </div>
       {discarding && (

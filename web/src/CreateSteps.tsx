@@ -8,6 +8,7 @@ import {
   formLoadBalancerValue,
   formReleaseMirror,
   machineLeast,
+  createRoom,
   memoryNodeWarning,
   mostWorkers,
   setLoadBalancer,
@@ -620,7 +621,10 @@ export function GeneralStep({
         missing={templateMissing(form, cls)}
         oses={classes.flatMap((c) => c.nodeOSes ?? [])}
       />
-      <Field label="Control-plane nodes">
+      <Field
+        label="Control-plane nodes"
+        hint={form.controlPlaneReplicas === 1 ? "One has no high availability" : undefined}
+      >
         {(id) => (
           <select
             id={id}
@@ -659,7 +663,6 @@ export function GeneralStep({
 const ownNetworks: Record<string, string> = { talos: "flannel" };
 
 // Where in the bridge's network the examples of the API and node addresses lie.
-const exampleEndpoint = 20;
 const exampleFirst = 21;
 const exampleLast = 29;
 const exampleRangeFirst = 100;
@@ -740,13 +743,7 @@ function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterCl
       {network?.["mtu"] === undefined ? null : (
         <Field label="MTU" hint={shown("mtu") === undefined ? "Optional" : undefined} error={shown("mtu")}>
           {(id) => (
-            <input
-              id={id}
-              inputMode="numeric"
-              value={form.mtu}
-              onChange={(e) => set("mtu", e.target.value.trim())}
-              placeholder="1500"
-            />
+            <input id={id} inputMode="numeric" value={form.mtu} onChange={(e) => set("mtu", e.target.value.trim())} />
           )}
         </Field>
       )}
@@ -850,14 +847,7 @@ export function NetworkStep({
         hint={endpointInUse ?? "A free address outside the node addresses"}
         error={shown("endpoint")}
       >
-        {(id) => (
-          <input
-            id={id}
-            value={form.endpoint}
-            onChange={(e) => set("endpoint", e.target.value.trim())}
-            placeholder={sample(primary, exampleEndpoint)}
-          />
-        )}
+        {(id) => <input id={id} value={form.endpoint} onChange={(e) => set("endpoint", e.target.value.trim())} />}
       </Field>
       {families.map((family) => (
         <FamilyFields
@@ -877,14 +867,7 @@ export function NetworkStep({
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
       <Field label="Search domains" error={shown("searchDomains")}>
-        {(id) => (
-          <input
-            id={id}
-            value={form.searchDomains}
-            placeholder="corp.example"
-            onChange={(e) => set("searchDomains", e.target.value)}
-          />
-        )}
+        {(id) => <input id={id} value={form.searchDomains} onChange={(e) => set("searchDomains", e.target.value)} />}
       </Field>
       <Field label="Time servers" hint="Optional, separated by commas" error={shown("ntpServers")}>
         {(id) => <input id={id} value={form.ntpServers} onChange={(e) => set("ntpServers", e.target.value)} />}
@@ -1064,9 +1047,10 @@ export function MachinesStep({
         label="Storage"
         error={shown("storage")}
         hint={
-          usableStorages.some((s) => s.storage === form.storage && !s.shared)
+          createRoom(form, nodes, usableStorages).diskWarning ??
+          (usableStorages.some((s) => s.storage === form.storage && !s.shared)
             ? "Volumes on node-local storage stay on one node."
-            : undefined
+            : undefined)
         }
       >
         {(id) => (
