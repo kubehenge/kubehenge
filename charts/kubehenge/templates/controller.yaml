@@ -695,3 +695,27 @@ webhooks:
         apiVersions: [v1beta2]
         operations: [CREATE]
         resources: [clusters]
+  # A new worker of a cluster on storage local to each node goes to a node whose volumes have no
+  # worker (pkg/provisioner's WorkerPlacement). While the controller is away a worker goes where
+  # capmox puts it, which is better than none.
+  - name: worker-placement.kubehenge.dev
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Ignore
+    reinvocationPolicy: Never
+    timeoutSeconds: 5
+    matchConditions:
+      - name: worker
+        expression: >-
+          has(object.metadata.labels) && 'cluster.x-k8s.io/deployment-name' in object.metadata.labels
+    clientConfig:
+      service:
+        name: {{ $extension }}
+        namespace: {{ .Release.Namespace }}
+        path: /place-worker
+        port: 443
+    rules:
+      - apiGroups: [infrastructure.cluster.x-k8s.io]
+        apiVersions: [v1alpha2]
+        operations: [CREATE]
+        resources: [proxmoxmachines]

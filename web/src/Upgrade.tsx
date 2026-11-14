@@ -266,11 +266,33 @@ function nodesCheck(c: Cluster, nodes: NodesRead): Check | undefined {
 const counted = (n: number, what: string): string => `${n} ${what}${n === 1 ? "" : "s"}`;
 
 /**
- * scaleChecks are the addresses and memory a change of the cluster's size needs, from the same
- * figures in the Scale dialog as in Review plan.
+ * volumesCheck warns when the cluster would have fewer workers than Proxmox VE nodes holding its
+ * volumes on node-local storage. An autoscaled pool counts at its minimum.
+ */
+export function volumesCheck(after: Cluster): Check | undefined {
+  const held = after.volumeNodes ?? [];
+  if (held.length === 0) {
+    return undefined;
+  }
+  const workers = after.workerPools.reduce((sum, p) => sum + (p.autoscaling?.min ?? p.replicas), 0);
+  const text = `On ${counted(held.length, "node")}, ${counted(workers, "worker")}`;
+  if (workers >= held.length) {
+    return { what: "Volumes", state: "ok", text };
+  }
+  return {
+    what: "Volumes",
+    state: "warning",
+    text,
+    detail: ["A pod starts only on a worker on its volume's node.", `Nodes with volumes: ${held.join(", ")}`],
+  };
+}
+
+/**
+ * scaleChecks are the addresses and memory a change of the cluster's size needs, and the workers
+ * its volumes need, from the same figures in the Scale dialog as in Review plan.
  */
 export function scaleChecks(before: Cluster, after: Cluster, nodes: NodesRead): Check[] {
-  return [addressCheck(after), memoryCheck(before, after, nodes)].filter((ch) => ch !== undefined);
+  return [addressCheck(after), memoryCheck(before, after, nodes), volumesCheck(after)].filter((ch) => ch !== undefined);
 }
 
 /**

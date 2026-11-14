@@ -66,6 +66,9 @@ type Placer struct {
 	// WorkloadPool names the clusters' VM pools, for reading the interface sizes of their VMs.
 	// Unset, the sizes are not read.
 	WorkloadPool string
+	// Workload reads a workload cluster, for the volumes on storage local to each node. Unset, none
+	// are read and nothing steers workers to them.
+	Workload func(ctx context.Context, c *clusterv1.Cluster) (r client.Reader, found bool, err error)
 }
 
 // NodesSkippedCondition on a Cluster says that Placer left Proxmox VE nodes out of its placement
@@ -164,6 +167,7 @@ func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node,
 		p.clearNewer(c)
 	}
 	p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
+	p.markVolumes(ctx, c, online, sites, chosen, storage)
 }
 
 // nodeNames are the names of the nodes, kept to chosen where the cluster chose any.

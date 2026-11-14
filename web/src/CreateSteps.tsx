@@ -12,6 +12,7 @@ import {
   memoryNodeWarning,
   mostWorkers,
   setLoadBalancer,
+  volumeWorkersWarning,
   templateMissing,
   variable,
   versionExamples,
@@ -1049,12 +1050,7 @@ export function MachinesStep({
       <Field
         label="Storage"
         error={shown("storage")}
-        hint={
-          createRoom(form, nodes, usableStorages).diskWarning ??
-          (usableStorages.some((s) => s.storage === form.storage && !s.shared)
-            ? "Volumes on node-local storage stay on one node."
-            : undefined)
-        }
+        hint={createRoom(form, nodes, usableStorages).diskWarning ?? volumeWorkersWarning(form, nodes, usableStorages)}
       >
         {(id) => (
           <select id={id} value={form.storage} onChange={(e) => set("storage", e.target.value)}>

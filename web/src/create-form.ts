@@ -494,6 +494,19 @@ export const spreadOver = (nodes: PveNode[], form: Form): number => {
   return nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node))).length;
 };
 
+/**
+ * volumeWorkersWarning is said of node-local storage: a warning when the workers, an autoscaled
+ * pool at its fewest, are fewer than the nodes their volumes can come to be on, else a note.
+ */
+export function volumeWorkersWarning(form: Form, nodes: PveNode[], storages: Storage[]): string | undefined {
+  if (!storages.some((s) => s.storage === form.storage && !s.shared)) {
+    return undefined;
+  }
+  return form.workerReplicas > 0 && form.workerReplicas < spreadOver(nodes, form)
+    ? "Fewer workers than nodes can leave volumes without a worker."
+    : "Volumes on node-local storage stay on one node.";
+}
+
 /** createRoom weighs a form's VMs against the online nodes it may use and the storage it chose. */
 export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): Room {
   const workers = mostWorkers(form);

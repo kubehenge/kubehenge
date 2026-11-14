@@ -1362,10 +1362,24 @@ Kubernetes does not let a StorageClass change its parameters. Where the default 
 
 On storage local to each node, a volume lives on one node. A pod can use it only on a worker running on that node.
 
-The Proxmox VE provider places a replacement worker in an upgrade, a node image refresh or a health-check repair. It does not look at volumes, and Kubehenge cannot steer it. When no worker is left on a volume's node, its pod stays Pending with `volume node affinity conflict`.
+Kubehenge keeps a worker on every node that holds the cluster's bound volumes. It records those nodes in the cluster's `kubehenge.dev/volume-nodes` annotation.
 
-- **Shared storage** has no such limit.
-- **Workers on every node with volumes:** choose the nodes under **Placement** so that each has a worker.
+- **Replacements:** in an upgrade, a node image refresh or a health-check repair, a new worker goes to a node whose volumes would be left without a worker. That is usually its predecessor's node.
+- **More workers:** when a pool grows, new workers go to the nodes with volumes and no worker first.
+- **Shared storage** has no such limit, and nothing changes there.
+
+When a volume's node has no worker, the cluster's `VolumesWithoutWorker` condition names the volumes and the fix. `kubectl describe cluster` shows it.
+
+| Reason | Fix |
+| --- | --- |
+| `NodeOffline`, `NodeInMaintenance` | Bring the node back. |
+| `NodeNotAllowed` | Add the node to `allowedNodes`, or move the volumes. |
+| `TooFewWorkers` | Add workers, at least one per node with volumes. |
+| `NoWorker` | Delete a worker on another node. Its replacement goes to the node with volumes. |
+| `NodeGone` | The node left the Proxmox VE cluster. Restore the volumes from a backup or delete their claims. |
+
+The create wizard and the change checks warn when a cluster has fewer workers than nodes its volumes are on. An autoscaled pool counts at its minimum.
+
 - **Moving a volume:** the CSI plugin's `pvecsictl migrate --config <file> -n <namespace> <pvc> <node>` moves the disk and rewrites its node affinity. It stops the pod using the volume.
 - **Root access:** the tool needs `root@pam` credentials, so Kubehenge never runs it.
 

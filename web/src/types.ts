@@ -567,6 +567,8 @@ export interface Cluster {
   pool: string;
   allowed: { change: boolean; kubeconfig: boolean };
   machines?: Machine[];
+  /** The Proxmox VE nodes holding the cluster's volumes on node-local storage. Each needs a worker. */
+  volumeNodes?: string[];
   /** The cluster's name in the shared Headlamp. */
   headlamp?: string;
   /** How each peer the cluster lists for Cluster Mesh stands, while it is on. */
