@@ -11,7 +11,7 @@ import (
 	"strconv"
 
 	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
