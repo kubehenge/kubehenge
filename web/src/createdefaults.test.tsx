@@ -35,11 +35,13 @@ const withoutTarget = classOf({}, ["backups", "etcdSnapshots", "upgrades"]);
 describe("the create wizard's defaults", () => {
   it("backs up with Velero where a target is offered, and stays off with the reason where none is", () => {
     const on = withBackupChoices({ ...newForm(), name: "web" }, withTarget, true);
-    expect(backupsChosen(on, withTarget)).toBe(true);
     expect(fieldProblems("Add-ons", on, withTarget)).toStrictEqual({});
-    expect(backupsWait(on, withTarget)).toBe(true);
     const off = withBackupChoices({ ...newForm(), name: "web" }, withoutTarget, true);
-    expect(backupsChosen(off, withoutTarget)).toBe(false);
+    expect([
+      backupsChosen(on, withTarget),
+      backupsWait(on, withTarget),
+      backupsChosen(off, withoutTarget),
+    ]).toStrictEqual([true, true, false]);
     expect(fieldProblems("Add-ons", off, withoutTarget)).toStrictEqual({});
     // What is sent and confirmed matches the box: no backups variable, which admission would refuse.
     expect(request(off, withoutTarget).variables).not.toHaveProperty("backups");
@@ -73,17 +75,20 @@ describe("a gateway outside the bridge's network", () => {
   });
 });
 
+const storage = (type: string): Storage => ({
+  storage: "s",
+  node: "pve1",
+  content: ["images"],
+  active: true,
+  total: 2 ** 40,
+  avail: 610 * 2 ** 30,
+  usable: true,
+  allocatable: false,
+  shared: false,
+  type,
+});
+
 describe("disks beyond the free space", () => {
-  const storage = (type: string): Storage =>
-    ({
-      storage: "s",
-      node: "pve1",
-      total: 2 ** 40,
-      avail: 610 * 2 ** 30,
-      usable: true,
-      shared: false,
-      type,
-    }) as Storage;
   const nodes = [{ node: "pve1", online: true, maxMemory: 2 ** 40, memory: 0 }] as PveNode[];
   const big = {
     ...newForm(),
@@ -110,23 +115,32 @@ describe("a machine no node could hold", () => {
   });
 });
 
-describe("the control-plane default", () => {
-  async function open(count: number, offline = 0): Promise<void> {
-    window.history.replaceState(null, "", "/clusters/new");
-    fakeServer({
-      "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
-      "GET /api/classes": () => ({ body: [withTarget] }),
-      "GET /api/versions/rke2": () => ({ body: { versions: ["v1.36.5+rke2r1"], stable: "v1.36.5+rke2r1" } }),
-      "GET /api/clusters": () => ({ body: [] }),
-      "GET /api/proxmox/storages": () => ({ body: [] }),
-      "GET /api/proxmox/nodes": () => ({
-        body: Array.from({ length: count }, (_, i) => ({ node: `pve${i + 1}`, online: i < count - offline })),
-      }),
-    });
-    render(<App />);
-    await screen.findByLabelText("Control-plane nodes");
-  }
+// open renders the wizard over count nodes, offline of them down.
+async function open(count: number, offline = 0): Promise<void> {
+  window.history.replaceState(null, "", "/clusters/new");
+  fakeServer({
+    "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
+    "GET /api/classes": () => ({ body: [withTarget] }),
+    "GET /api/versions/rke2": () => ({ body: { versions: ["v1.36.5+rke2r1"], stable: "v1.36.5+rke2r1" } }),
+    "GET /api/clusters": () => ({ body: [] }),
+    "GET /api/proxmox/storages": () => ({ body: [] }),
+    "GET /api/proxmox/nodes": () => ({
+      body: Array.from({ length: count }, (_, i) => ({ node: `pve${i + 1}`, online: i < count - offline })),
+    }),
+  });
+  render(<App />);
+  await screen.findByLabelText("Control-plane nodes");
+}
 
+// The form starts at one, so a test of one waits for the nodes to have had their chance to raise it:
+// as long as the test of three waits for them to raise it.
+async function nodesHadTheirChance(): Promise<void> {
+  await expect(waitFor(() => expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("3"))).rejects.toThrow(
+    "toHaveValue",
+  );
+}
+
+describe("the control-plane default", () => {
   it("is three where the Proxmox VE cluster has three nodes", async () => {
     await open(3);
     await waitFor(() => expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("3"));
@@ -134,16 +148,14 @@ describe("the control-plane default", () => {
 
   it("is one, marked as without high availability, where it has fewer", async () => {
     await open(2);
-    await waitFor(() => expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("1"));
+    await nodesHadTheirChance();
+    expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("1");
     expect(screen.getByText("One has no high availability")).toBeInTheDocument();
   });
 
   it("is one where only two of three nodes are online", async () => {
     await open(3, 1);
-    // The form starts at one, so the test waits for the nodes to have had their chance to raise it.
-    await expect(
-      waitFor(() => expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("3"), { timeout: 500 }),
-    ).rejects.toThrow();
+    await nodesHadTheirChance();
     expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("1");
   });
 });

@@ -466,7 +466,7 @@ They also bring the warnings about the [backup](#back-up-the-appliance) and the 
 | Template disks | The storage for clusters the builds go to. The first one by default. |
 | Build address, Build gateway, Build DNS servers | A static address for the VM that prepares an image. Empty, that VM takes DHCP on the first bridge for clusters. |
 | Let creators request builds | Off by default, recommended. When on, anyone with `VM.Allocate` on the workload pool may ask the create wizard for a missing RKE2, k3s or kubeadm template of their node OS. The build runs with the refresh's token, never theirs. |
-| HA group labels | On by default. Each cluster's nodes are labelled with Proxmox VE's HA groups unless the cluster switches them off. Its token then reads the Proxmox VE cluster's configuration. Untick it to give no cluster that read ([details](install-settings.md#ha-group-labels)). |
+| HA rule labels | On by default. Each cluster's nodes are labelled with Proxmox VE's HA groups or node-affinity rules unless the cluster switches them off. Its token then reads the Proxmox VE cluster's configuration. Untick it to give no cluster that read ([details](install-settings.md#ha-rule-labels)). |
 | Nodes' boot logs | On by default. The controller reads kubeadm, RKE2 and k3s nodes' boot logs through their guest agents (files only). A node that never joins then shows why. Untick it to take that privilege away ([details](install-settings.md#nodes-boot-logs)). |
 | kubectl changes | Off by default. When on, Activity also lists each change people make to the management cluster with kubectl or its API, with their user ([details](install-settings.md#kubectl-changes)). |
 | Cluster namespaces | Off by default. The interface creates and manages clusters in `clusters` only. When on, cluster creators choose among `clusters` and the namespaces named here, separated by commas, such as one per team ([clusters.md](clusters.md#more-namespaces-for-clusters)). A namespace that does not exist yet is created. One taken off the list keeps its clusters. |
@@ -520,7 +520,7 @@ A lost passphrase cannot be recovered. The management cluster and every cluster 
      - `kubehenge-ha@pve` (Proxmox VE HA)
      - `kubehenge-etcd-restore@pve` (etcd restores)
      - `kubehenge-upgrader@pve` (automatic upgrades of the management cluster)
-   - the groups `kubehenge-clusters` and, where HA group labels were on, `kubehenge-clusters-audit`.
+   - the groups `kubehenge-clusters` and, where HA rule labels were on, `kubehenge-clusters-audit`.
    - the roles named `kubehenge-…`.
    - the Talos disk image, `talos-<version>-<id>-nocloud-amd64.qcow2`, on the Talos image storage of each node that ran the management cluster.
 3. [Remove the appliance](uninstalling.md#remove-the-appliance) and install it again.
@@ -548,7 +548,7 @@ It creates objects on Proxmox VE and installs charts in the management cluster.
 - with [Proxmox VE HA](install-settings.md#proxmox-ve-ha) on, a user and API token for HA resources and rules.
 - with [etcd restores](install-settings.md#etcd-restores) on, a user and API token for restores through the guest agent.
 - a group for the clusters' users and the roles all of these use.
-- with [HA group labels](install-settings.md#ha-group-labels) on, a second group holding `Sys.Audit` on `/`.
+- with [HA rule labels](install-settings.md#ha-rule-labels) on, a second group holding `Sys.Audit` on `/`.
 - the Talos disk image, and the management cluster's VMs, tagged `kubehenge` and `management`.
 
 ##### In the management cluster
@@ -815,7 +815,7 @@ tofu output -raw talosconfig > talosconfig
 | `offer_ha_rules` | `false` | Offer Proxmox VE's HA node-affinity rules (names and nodes) to those with `VM.Allocate` on the workload pool or a cluster's pool who lack `Sys.Audit` on `/`. The controller reads them with its own token and asks nothing new of Proxmox VE ([details](install-settings.md#ha-rule-placements)). |
 | `cluster_datastore_allocate` | `false` | Let clusters choose the CSI plugin's newest release. The controller grants the cluster's token `Datastore.Allocate` on a storage of its own ([details](install-settings.md#csi-plugin)). |
 | `template_refresh` | [below](#template_refresh-fields) | The weekly build of the node OS VM templates ([templates.md](templates.md#the-weekly-build)) and its own API token ([details](install-settings.md#what-the-template-builds-may-do)). |
-| `cluster_sys_audit` | `true` | Give each cluster the cloud controller manager's HA group labels unless it switches them off. This gives the cluster's token `Sys.Audit` on `/`, unpropagated, through a group the controller adds its user to. It reads the Proxmox VE cluster's configuration and changes nothing ([details](install-settings.md#ha-group-labels)). `false` gives no cluster `Sys.Audit` on `/`. |
+| `cluster_sys_audit` | `true` | Give each cluster the cloud controller manager's HA rule labels unless it switches them off. This gives the cluster's token `Sys.Audit` on `/`, unpropagated, through a group the controller adds its user to. It reads the Proxmox VE cluster's configuration and changes nothing ([details](install-settings.md#ha-rule-labels)). `false` gives no cluster `Sys.Audit` on `/`. |
 | `watch` | `stall_minutes = 20` | `stall_minutes` (1 to 1440) is how long Kubehenge's controller waits before it reports a stall on the Cluster and the Health page. That covers a new machine in the roll of a cluster's only control plane becoming ready ([troubleshooting.md](troubleshooting.md#one-control-plane-its-roll-stalled)) and a cluster's deletion finishing ([troubleshooting.md](troubleshooting.md#a-cluster-does-not-finish-deleting)). |
 | `node_boot_logs` | `true` | Let the controller read kubeadm, RKE2 and k3s nodes' boot logs through their guest agents (files only). Its token gets `VM.GuestAgent.FileRead` on the workload pool ([details](install-settings.md#nodes-boot-logs)). `false` takes the privilege away. Talos nodes' boot logs are read through their Talos API either way. |
 | `extra_cluster_namespaces` | `[]` | Namespaces the interface creates and manages clusters in beside `clusters` ([clusters.md](clusters.md#more-namespaces-for-clusters)). Each is created if missing and kept when taken off the list. `default`, `cert-manager`, `kube-*` and `*-system` are refused. |

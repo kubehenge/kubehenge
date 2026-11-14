@@ -860,7 +860,7 @@ export interface ManagementSettings {
   etcdRestore?: boolean;
   /** The weekly build of the node OS VM templates. Absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
-  /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token. Absent, they have them. */
+  /** Clusters have the cloud controller manager's HA rule labels unless they switch them off, with Sys.Audit on / for their token. Absent, they have them. */
   clusterSysAudit?: boolean;
   /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead. Absent, it does. */
   nodeBootLogs?: boolean;

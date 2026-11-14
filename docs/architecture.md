@@ -189,7 +189,7 @@ A workload cluster's cloud controller manager and CSI plugin controller reach Pr
 - **A user and API token per cluster**, with rights on its pool only.
   - The token reads the VMs and configures their disks.
   - A group of all clusters' users adds space on the workload storages and reading the nodes.
-  - No token may delete arbitrary volumes, change a storage's definition or read beyond its pool and nodes. The CSI plugin's newest release and the HA group labels are the exceptions (below).
+  - No token may delete arbitrary volumes, change a storage's definition or read beyond its pool and nodes. The CSI plugin's newest release and the HA rule labels are the exceptions (below).
 - **A volume owner VM**, in the pool, never started. The CSI plugin creates volumes under its VMID, so only this cluster's token may attach them.
   - Deleting the cluster deletes its volumes.
 
@@ -213,7 +213,7 @@ The admission webhook and `BeforeClusterCreate` allow that only on a storage the
 
 They also refuse any cluster on a storage where another cluster holds the grant. The controller checks the same on every reconcile. When a check fails it takes the grant back, installs the earlier release and records a `DatastoreAllocateRefused` event.
 
-### HA group labels
+### HA rule labels
 
 The cloud controller manager labels each node with the HA groups, or HA node-affinity rules, of its Proxmox VE node. Proxmox VE lists those only with `Sys.Audit` on `/`.
 

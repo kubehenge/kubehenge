@@ -1270,7 +1270,7 @@ function optInRows(s: ManagementSettings): [string, string][] {
     ["Proxmox VE HA", onOff(s.proxmoxHA === true)],
     ["HA rule placements", onOff(s.offerHARules === true)],
     ["Newest CSI release", onOff(s.clusterDatastoreAllocate === true)],
-    ["HA group labels", onOff(s.clusterSysAudit !== false)],
+    ["HA rule labels", onOff(s.clusterSysAudit !== false)],
     ["Nodes' boot logs", onOff(s.nodeBootLogs !== false)],
     ["kubectl changes", onOff(s.apiAuditLog === true)],
   ];
@@ -1955,7 +1955,7 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
   const hint = useId();
   return (
     <fieldset className="group">
-      <legend>HA group labels</legend>
+      <legend>HA rule labels</legend>
       <label className="check">
         <input
           type="checkbox"
@@ -1963,9 +1963,9 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
           aria-describedby={hint}
           onChange={(e) => set("clusterSysAudit", e.target.checked)}
         />{" "}
-        Add HA group labels
+        Add HA rule labels
       </label>
-      <Info about="HA group labels">
+      <Info about="HA rule labels">
         Clusters can read firewall rules, backup jobs and HA and corosync settings, not guests or storage. Each cluster
         can switch it off.
       </Info>

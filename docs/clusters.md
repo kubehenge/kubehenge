@@ -218,7 +218,7 @@ RKE2 installs its choice itself. For kubeadm, and for k3s and Talos given Cilium
 | Placement | The Proxmox VE nodes the cluster's VMs may run on: **Any node**, **HA rule nodes**, or **Chosen nodes**. |
 | Proxmox VE HA | Shown when the management cluster has Proxmox VE HA and the storage is shared. On by default. |
 | Newest CSI plugin release | Shown when the management cluster lets clusters choose it. Off by default. See [Persistent volumes](#persistent-volumes). |
-| HA rule labels | Shown unless the management cluster switched them off for every cluster ([install-settings.md](install-settings.md#ha-group-labels)). On by default. See below. |
+| HA rule labels | Shown unless the management cluster switched them off for every cluster ([install-settings.md](install-settings.md#ha-rule-labels)). On by default. See below. |
 | Volume snapshots | Shown when the storage is local to each node. Off by default. See [Volume snapshots](#volume-snapshots). |
 
 Placement and the four options below it change later under **Options**.

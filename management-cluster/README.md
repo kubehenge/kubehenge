@@ -35,7 +35,7 @@ One Terraform/OpenTofu apply creates Kubehenge's management cluster on Proxmox V
   - It may use its node's network for the download and its bridge.
   - The chart's CronJob runs `kubehenge template refresh` with it each week. Clusters' nodes move to the new builds in their upgrade windows once they are `soak_hours` old.
 - **`cluster_sys_audit`**, on by default, adds a group holding `Sys.Audit` on `/`, unpropagated.
-  - The controller adds a cluster's user to it for its nodes' HA group labels, unless the cluster switches them off. The controller's token holds `User.Modify` on the group to do so ([clusters](../docs/clusters.md#machines)).
+  - The controller adds a cluster's user to it for its nodes' HA rule labels, unless the cluster switches them off. The controller's token holds `User.Modify` on the group to do so ([clusters](../docs/clusters.md#machines)).
   - The cluster's token can then read the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, the corosync configuration). It sees nothing of its guests, storages or nodes.
 - **`node_boot_logs`**, on by default, gives the controller's token `VM.GuestAgent.FileRead` on the workload pool.
   - With it the controller reads the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents. It reads only the files the node's agent policy opens ([install settings](../docs/install-settings.md#nodes-boot-logs)).
