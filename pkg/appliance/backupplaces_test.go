@@ -35,3 +35,27 @@ func TestABucketKeepsItsOwnScheduleBesideTheVolume(t *testing.T) {
 		t.Fatalf("the volume keeps %d snapshots (%v), want one every 6 hours", len(onVolume), err)
 	}
 }
+
+// Switching the bucket's backups off leaves the volume's backups their own credential.
+func TestStoppingTheBucketKeepsTheVolumeBackups(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	a, vol, _ := volumeAppliance(t, &now)
+	s := EtcdBackupSettings{Target: "minio", EveryHours: 24, Keep: 2}
+	if err := a.ConfigureEtcdBackups(ctx, &s, "AKID", "secret", passphrase); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.StopEtcdBackups(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.TakeScheduledEtcdSnapshot(ctx, now); err != nil {
+		t.Fatalf("a volume backup after the bucket's were switched off: %v", err)
+	}
+	if list, err := provisioner.ListEtcdSnapshots(ctx, vol, provisioner.ManagementEtcdFolder("")); err != nil || len(list) != 1 {
+		t.Fatalf("the volume holds %d snapshots (%v)", len(list), err)
+	}
+	if st := a.EtcdBackups().Volume; st == nil || st.Error != "" {
+		t.Fatalf("the volume's backups show %+v", st)
+	}
+}

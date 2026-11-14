@@ -32,6 +32,10 @@ const (
 	ApplianceCopyCap = 1 << 30
 )
 
+// volumeTalosconfig takes the volume's snapshots. It is apart from the bucket's, which goes when
+// the bucket's backups are switched off.
+const volumeTalosconfig = "volume-talosconfig"
+
 // volumeBackupKeys is what the appliance keeps to back up onto the volume with nobody signed in:
 // the age recipient the snapshots are encrypted to, its identity sealed with the passphrase, and
 // the control-plane nodes.
@@ -104,7 +108,7 @@ func (a *Appliance) setUpVolumeBackups(ctx context.Context, admin []byte, passph
 	if err := os.MkdirAll(a.etcdBackupDir(), privateDir); err != nil {
 		return fmt.Errorf("keeping the backups' settings: %w", err)
 	}
-	if err := writeFileAtomic(a.etcdBackupFile("talosconfig"), talosconfig); err != nil {
+	if err := writeFileAtomic(a.etcdBackupFile(volumeTalosconfig), talosconfig); err != nil {
 		return err
 	}
 	return writeJSONFile(a.etcdBackupFile("volume.json"), keys)
@@ -270,10 +274,10 @@ func (a *Appliance) copyOnAppliance(ctx context.Context, keys *volumeBackupKeys,
 	return c
 }
 
-// snapshotToFile streams a snapshot of the management cluster's etcd into a file of the
-// appliance's, from which each place the backups go reads it.
-func (a *Appliance) snapshotToFile(ctx context.Context, nodes []string) (string, error) {
-	talosconfig, err := os.ReadFile(a.etcdBackupFile("talosconfig"))
+// snapshotToFile streams a snapshot of the management cluster's etcd, taken with the talosconfig
+// in credential, into a file of the appliance's, from which each place the backups go reads it.
+func (a *Appliance) snapshotToFile(ctx context.Context, credential string, nodes []string) (string, error) {
+	talosconfig, err := os.ReadFile(a.etcdBackupFile(credential))
 	if err != nil {
 		return "", fmt.Errorf("the snapshots' talosconfig: %w", err)
 	}

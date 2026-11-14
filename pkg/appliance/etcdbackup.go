@@ -537,16 +537,17 @@ func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisio
 		}
 	}
 	var nodes []string
+	credential := "talosconfig"
 	switch {
 	case vol != nil:
-		nodes = vol.Nodes
+		nodes, credential = vol.Nodes, volumeTalosconfig
 	case berr != nil:
 		failed(berr)
 		return nil, berr
 	default:
 		nodes = b.keys.Nodes
 	}
-	file, err := a.snapshotToFile(ctx, nodes)
+	file, err := a.snapshotToFile(ctx, credential, nodes)
 	if err != nil {
 		failed(err)
 		return nil, err
