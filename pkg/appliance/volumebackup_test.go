@@ -169,11 +169,17 @@ func TestApplySetsUpVolumeBackups(t *testing.T) {
 	if a.EtcdBackupDue(time.Now()) {
 		t.Fatal("a snapshot is due before any apply")
 	}
+	setUp := time.Now()
 	if err := a.Apply(settings("pve1"), passphrase, ticket(), func(context.Context, []byte) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if j := waitFor(t, a); j.State != StateSucceeded {
 		t.Fatalf("apply: %+v", j)
+	}
+	// The first snapshot is due from the setup on, not from the zero time, which the schedule
+	// would read as long overdue.
+	if st := a.VolumeBackups(); st == nil || st.Next == nil || st.Next.Before(setUp) || st.Next.After(time.Now()) {
+		t.Fatalf("the first snapshot onto the volume is due at %+v, want the setup's time", st)
 	}
 	keys := a.volumeBackupKeys()
 	if keys == nil || len(keys.Nodes) != 2 || keys.Recipient == "" {
