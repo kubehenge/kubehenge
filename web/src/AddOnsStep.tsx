@@ -197,11 +197,14 @@ function AccessKey({
   canTrust,
   namespace,
   optional = false,
+  lacksShared = false,
 }: StepProps & {
   canTrust: boolean | undefined;
   namespace: string | undefined;
   /** The cluster does without a key of its own, taking the one stored for every cluster. */
   optional?: boolean;
+  /** No key for every cluster is stored, so the cluster's own is its only one. */
+  lacksShared?: boolean;
 }): JSX.Element {
   const own = form.storeBackupKey && canTrust !== false;
   return (
@@ -213,7 +216,14 @@ function AccessKey({
         <p className="hint">
           {optional
             ? "Optional. Empty uses the key stored for every cluster"
-            : backupCredentialHint(namespace, form.name)}
+            : lacksShared
+              ? "Needed. Or store a Shared backup key in Administration."
+              : backupCredentialHint(namespace, form.name)}
+        </p>
+      )}
+      {!own && shown("backupKey") !== undefined && (
+        <p className="field-error" role="alert">
+          {shown("backupKey")}
         </p>
       )}
       {own &&
@@ -279,6 +289,7 @@ function EtcdSnapshotsChoice({
               canTrust={canTrust}
               namespace={namespace}
               optional={!keyRequired(form, cls)}
+              lacksShared={form.noSharedKey}
             />
           )}
         </>

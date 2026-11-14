@@ -315,6 +315,8 @@ export interface Form {
   rancherRegister: boolean;
   /** Whether a cluster already runs Rancher, so that registering has something to register with. */
   rancherExists: boolean;
+  /** Whether the namespace is known to hold no access key for every cluster. Unknown counts as held. */
+  noSharedKey: boolean;
   certificates: CertificatesForm;
   /** The labels of every namespace Kubehenge makes, one key=value per line. */
   namespaceLabels: string;
@@ -718,10 +720,12 @@ export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => back
 /**
  * keyRequired says whether the access key must be entered. Velero's backups run in the cluster and
  * need one of their own. Etcd snapshots are streamed by the controller, which takes the key stored
- * for every cluster when the cluster has none, so only an upload by the nodes themselves needs one.
+ * for every cluster when the cluster has none, so only an upload by the nodes themselves needs one,
+ * or snapshots where no key for every cluster is stored.
  */
 export const keyRequired = (f: Form, c: ClusterClass | undefined): boolean =>
-  backupsChosen(f, c) || (etcdChosen(f, c) && f.etcdFields.upload && c !== undefined && uploadsItself(c.distribution));
+  backupsChosen(f, c) ||
+  (etcdChosen(f, c) && (f.noSharedKey || (f.etcdFields.upload && c !== undefined && uploadsItself(c.distribution))));
 
 /**
  * withBackupChoices takes the one backup target a class offers until another is chosen, the backups'
@@ -970,6 +974,7 @@ export const newForm = (): Form => ({
   rancherHostname: "",
   rancherRegister: true,
   rancherExists: true,
+  noSharedKey: false,
   certificates: newCertificates(),
   namespaceLabels: "",
   existingCertManager: false,
@@ -2275,6 +2280,10 @@ function etcdSnapshotsProblems(form: Form, c: ClusterClass | undefined): Problem
 function accessKeyProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (keyRequired(form, c) && form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
     return { backupKey: "Enter both parts of the access key" };
+  }
+  // Without the right to store a key, snapshots would look on and write nothing.
+  if (keyRequired(form, c) && !form.storeBackupKey && form.noSharedKey && !backupsChosen(form, c)) {
+    return { backupKey: "Ask an administrator to store a shared backup key" };
   }
   return {};
 }

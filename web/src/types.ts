@@ -27,6 +27,8 @@ export interface Session {
   namespace?: string;
   /** Every namespace the interface creates and changes clusters in, namespace first. */
   namespaces?: string[];
+  /** Whether each namespace holds the access key for every cluster. A namespace left out could not be read. */
+  sharedBackupKeys?: Record<string, boolean>;
 }
 
 /** A cluster, by where it lives. */

@@ -129,6 +129,9 @@ export function CreateCluster({
   const [storages, setStorages] = useState<Storage[]>([]);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
+  // Whether each namespace holds the access key for every cluster.
+  const [sharedKeys, setSharedKeys] = useState<Record<string, boolean>>({});
+  const [sessionNamespace, setSessionNamespace] = useState<string>();
   const rules = useHARules();
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
@@ -223,6 +226,17 @@ export function CreateCluster({
         setClusters([]);
       }
     }
+    async function loadSharedKeys(): Promise<void> {
+      try {
+        const s = await api.session();
+        setSharedKeys({ ...s.sharedBackupKeys });
+        setSessionNamespace(s.namespace);
+      } catch {
+        // Unknown counts as stored: the server refuses a cluster that has no key, so nothing is lost.
+        setSharedKeys({});
+      }
+    }
+    void loadSharedKeys();
     void loadClasses();
     void loadStorages();
     void loadNodes();
@@ -248,6 +262,7 @@ export function CreateCluster({
       namespace: formNamespace,
       taken: clusters.filter((x) => formNamespace === "" || x.namespace === formNamespace).map((x) => x.name),
       rancherExists,
+      noSharedKey: sharedKeys[namespaceOf(entered, namespaces) || (sessionNamespace ?? "")] === false,
       rancherRegister: rancherExists && entered.rancherRegister,
       bridge,
       storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),

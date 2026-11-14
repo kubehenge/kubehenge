@@ -1665,6 +1665,22 @@ func TestSessionTellsWhoMayCreate(t *testing.T) {
 	}
 }
 
+func TestSessionTellsWhetherTheSharedBackupKeyIsStored(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	b := h.browser()
+	b.signIn("dev@pve")
+	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"sharedBackupKeys":{"default":false}`) {
+		t.Errorf("session without the key = %s", got)
+	}
+	if err := h.kube.Create(t.Context(), &corev1.Secret{Namespace: "default", Name: provisioner.CredentialName("", "backup")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"sharedBackupKeys":{"default":true}`) {
+		t.Errorf("session with the key = %s", got)
+	}
+}
+
 func TestOnlyOneClusterRunsRancher(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, cluster("default", "one"), cluster("default", "two"))

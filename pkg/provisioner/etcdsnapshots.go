@@ -147,6 +147,42 @@ func checkEtcdSnapshots(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass
 	return targetOffered(class, s.Target, "etcd snapshots")
 }
 
+// etcdCredentialMissing says what the controller lacks to write the cluster's etcd snapshots to its
+// target: the store's keys, from the cluster's own credential or the one for every cluster. It is
+// empty where snapshots are off or the keys are there.
+func etcdCredentialMissing(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster) (string, error) {
+	s, err := EtcdSnapshotsOf(cluster)
+	if err != nil || !s.Enabled || s.Target == "" {
+		return "", err
+	}
+	_, why, err := backupCredential(ctx, c, cluster)
+	return why, err
+}
+
+// checkEtcdCredential refuses a change that turns etcd snapshots on, or moves them to another
+// target, while the cluster has no keys for the target. A new cluster is held by BeforeClusterCreate
+// instead, since the interface stores the keys it is given once the cluster exists.
+func checkEtcdCredential(ctx context.Context, c client.Reader, old, cluster *clusterv1.Cluster) error {
+	if old == nil || c == nil {
+		return nil
+	}
+	s, err := EtcdSnapshotsOf(cluster)
+	if err != nil || !s.Enabled {
+		return err
+	}
+	if was, werr := EtcdSnapshotsOf(old); werr == nil && was.Enabled && was.Target == s.Target {
+		return nil
+	}
+	why, err := etcdCredentialMissing(ctx, c, cluster)
+	if err != nil {
+		return err
+	}
+	if why != "" {
+		return errors.New("etcdSnapshots: " + why)
+	}
+	return nil
+}
+
 // checkSharedTarget holds etcd snapshots and backups that are both on to one target. Both are
 // written with the one access key the cluster has, which reaches one store. A cluster already on two
 // targets is refused only once it changes either.

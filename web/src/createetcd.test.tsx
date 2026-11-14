@@ -64,6 +64,28 @@ describe("a new cluster's etcd snapshots", () => {
     }
   });
 
+  it("need a key of their own where no key for every cluster is stored", () => {
+    const keyless = filledForm(kubeadm, { noSharedKey: true });
+    expect(fieldProblems("Add-ons", keyless, kubeadm)).toStrictEqual({
+      backupKey: "Enter both parts of the access key",
+    });
+    const typed = filledForm(kubeadm, { noSharedKey: true, backupKey: { accessKeyID: "AK", secretAccessKey: "SK" } });
+    expect(fieldProblems("Add-ons", typed, kubeadm)).toStrictEqual({});
+    expect(pendingCredentials(typed, kubeadm).map((p) => p.purpose)).toStrictEqual(["backup"]);
+    const shared = filledForm(kubeadm, { noSharedKey: false });
+    expect(fieldProblems("Add-ons", shared, kubeadm)).toStrictEqual({});
+    expect(pendingCredentials(shared, kubeadm)).toStrictEqual([]);
+    const cannotStore = withBackupChoices({ ...keyless }, kubeadm, false);
+    expect(fieldProblems("Add-ons", cannotStore, kubeadm)).toStrictEqual({
+      backupKey: "Ask an administrator to store a shared backup key",
+    });
+  });
+
+  it("name where to store the key for every cluster when none is stored", () => {
+    render(<Step cls={kubeadm} first={{ noSharedKey: true }} />);
+    expect(screen.getByText("Needed. Or store a Shared backup key in Administration.")).toBeInTheDocument();
+  });
+
   it("take the one target the class offers once chosen", () => {
     const form = filledForm(kubeadm);
     expect({ chosen: etcdChosen(form, kubeadm) }).toStrictEqual({ chosen: true });

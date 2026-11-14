@@ -237,6 +237,18 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
+	// The interface stores a cluster's keys once the cluster exists, so a cluster whose etcd snapshots
+	// have no keys yet waits for them rather than being refused.
+	missing, err := etcdCredentialMissing(ctx, h.Reader, cluster)
+	if err != nil {
+		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
+		return
+	}
+	if missing != "" {
+		resp.RetryAfterSeconds = 5
+		resp.Message = "etcd snapshots: " + missing
+		return
+	}
 	if isTalos(cluster) {
 		var waiting string
 		var retry int32
