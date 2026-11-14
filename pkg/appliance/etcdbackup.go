@@ -108,6 +108,8 @@ type EtcdBackupStatus struct {
 	// SpecKey is set once the appliance holds the recovery key that opens the stored specs' Secrets.
 	// Only an export carries it.
 	SpecKey bool `json:"specKey,omitempty"`
+	// Volume is how the backups on the management cluster's own volume go, which need no settings.
+	Volume *VolumeBackupStatus `json:"volume,omitempty"`
 }
 
 // etcdBackupKeys is what the appliance keeps to take snapshots with nobody signed in: the target's
@@ -168,6 +170,7 @@ func (a *Appliance) EtcdBackups() *EtcdBackupStatus {
 	st.ExportDue, st.ExportedAt = a.exportDue(st)
 	_, keyErr := os.Stat(a.specKeyFile())
 	st.SpecKey = keyErr == nil
+	st.Volume = a.VolumeBackups()
 	return st
 }
 
@@ -189,10 +192,11 @@ func later(a, b time.Time) time.Time {
 	return a
 }
 
-// EtcdBackupDue tells whether a scheduled snapshot is due at now.
+// EtcdBackupDue tells whether a scheduled snapshot is due at now, for the target or the volume.
 func (a *Appliance) EtcdBackupDue(now time.Time) bool {
 	st := a.EtcdBackups()
-	return st.Settings != nil && !st.Taking && !now.Before(*st.Next) && a.Idle() == nil
+	due := (st.Settings != nil && !now.Before(*st.Next)) || a.volumeBackupDue(now)
+	return due && !st.Taking && a.Idle() == nil
 }
 
 // ConfigureEtcdBackups sets the backups up, or changes them, with the passphrase, which opens the
@@ -345,6 +349,18 @@ func etcdIdentity(ctx context.Context, store provisioner.ObjectStore, prefix, pa
 	if err != nil {
 		return nil, fmt.Errorf("making the snapshots' key: %w", err)
 	}
+	sealed, err := sealIdentity(identity, passphrase, workFactor)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := store.Put(ctx, key, bytes.NewReader(sealed), nil); err != nil {
+		return nil, fmt.Errorf("storing the snapshots' key: %w", err)
+	}
+	return identity, nil
+}
+
+// sealIdentity encrypts identity with the passphrase at scrypt's work factor, age's own when 0.
+func sealIdentity(identity *age.X25519Identity, passphrase string, workFactor int) ([]byte, error) {
 	to, err := age.NewScryptRecipient(passphrase)
 	if err != nil {
 		return nil, fmt.Errorf("encrypting the snapshots' key: %w", err)
@@ -363,10 +379,7 @@ func etcdIdentity(ctx context.Context, store provisioner.ObjectStore, prefix, pa
 	if err != nil {
 		return nil, fmt.Errorf("encrypting the snapshots' key: %w", err)
 	}
-	if _, err := store.Put(ctx, key, &sealed, nil); err != nil {
-		return nil, fmt.Errorf("storing the snapshots' key: %w", err)
-	}
-	return identity, nil
+	return sealed.Bytes(), nil
 }
 
 func openIdentity(r io.Reader, passphrase string) (*age.X25519Identity, error) {
@@ -451,7 +464,7 @@ func (a *Appliance) StartEtcdSnapshot(ctx context.Context) error {
 
 // claimEtcdSnapshot marks a snapshot as being taken, unless one is or the backups are off.
 func (a *Appliance) claimEtcdSnapshot() error {
-	if a.EtcdBackups().Settings == nil {
+	if a.EtcdBackups().Settings == nil && a.volumeBackupKeys() == nil {
 		return ErrNoEtcdBackups
 	}
 	a.mu.Lock()
@@ -471,17 +484,71 @@ func (a *Appliance) snapshotEtcd(ctx context.Context) (*provisioner.EtcdSnapshot
 	}()
 	ctx, cancel := context.WithTimeout(ctx, etcdBackupTimeout)
 	defer cancel()
-	taken, err := a.storeEtcdSnapshot(ctx)
+	vol := a.volumeBackupKeys()
+	b, berr := a.backupSetup()
+	bucket := !errors.Is(berr, ErrNoEtcdBackups)
+	if vol == nil && !bucket {
+		return nil, berr
+	}
+	failed := func(err error) {
+		if vol != nil {
+			a.volumeBackupFailed(err)
+		}
+		if bucket {
+			a.etcdBackupFailed(err)
+		}
+	}
+	var nodes []string
 	switch {
-	case errors.Is(err, ErrNoEtcdBackups):
+	case vol != nil:
+		nodes = vol.Nodes
+	case berr != nil:
+		failed(berr)
+		return nil, berr
+	default:
+		nodes = b.keys.Nodes
+	}
+	file, err := a.snapshotToFile(ctx, nodes)
+	if err != nil {
+		failed(err)
 		return nil, err
-	case err != nil:
+	}
+	defer func() { _ = os.Remove(file) }()
+	version := "unknown"
+	if applied := a.LastApplied(); applied != nil && applied.Versions["kubernetes"] != "" {
+		version = applied.Versions["kubernetes"]
+	}
+	taken := provisioner.EtcdSnapshot{Name: provisioner.EtcdSnapshotName(a.now(), version), KubernetesVersion: version, Distribution: "talos"}
+	var stored *provisioner.EtcdSnapshot
+	var errs []error
+	if vol != nil {
+		stored, err = a.backUpToVolume(ctx, vol, file, taken)
+		errs = append(errs, err)
+	}
+	if bucket {
+		inBucket, err := a.backUpToTarget(ctx, b, berr, file, taken)
+		if stored == nil {
+			stored = inBucket
+		}
+		errs = append(errs, err)
+	}
+	return stored, errors.Join(errs...)
+}
+
+// backUpToTarget stores the snapshot in file in the target and records how it went.
+func (a *Appliance) backUpToTarget(ctx context.Context, b *backupSetup, berr error, file string, taken provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
+	if berr != nil {
+		a.etcdBackupFailed(berr)
+		return nil, berr
+	}
+	stored, err := a.storeEtcdSnapshot(ctx, b, file, taken)
+	if err != nil {
 		a.etcdBackupFailed(err)
-		return taken, err
+		return stored, err
 	}
 	rec := a.etcdBackupRecord()
-	rec.Last, rec.Error, rec.Failed = taken, "", nil
-	return taken, writeJSONFile(a.etcdBackupFile("status.json"), rec)
+	rec.Last, rec.Error, rec.Failed = stored, "", nil
+	return stored, writeJSONFile(a.etcdBackupFile("status.json"), rec)
 }
 
 func (a *Appliance) etcdBackupRecord() *etcdBackupRecord {
@@ -503,39 +570,19 @@ func (a *Appliance) etcdBackupFailed(err error) {
 	}
 }
 
-func (a *Appliance) storeEtcdSnapshot(ctx context.Context) (*provisioner.EtcdSnapshot, error) {
-	b, err := a.backupSetup()
-	if err != nil {
-		return nil, err
-	}
-	talosconfig, err := os.ReadFile(a.etcdBackupFile("talosconfig"))
-	if err != nil {
-		return nil, fmt.Errorf("the snapshots' talosconfig: %w", err)
-	}
+func (a *Appliance) storeEtcdSnapshot(ctx context.Context, b *backupSetup, file string, taken provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
 	to, err := age.ParseX25519Recipient(b.keys.Recipient)
 	if err != nil {
 		return nil, fmt.Errorf("the snapshots' key: %w", err)
 	}
-	stream, err := a.Talos.Snapshot(ctx, talosconfig, b.keys.Nodes)
-	if err != nil {
-		return nil, fmt.Errorf("reaching etcd: %w", err)
-	}
-	defer func() { _ = stream.Close() }()
-	version := "unknown"
-	if applied := a.LastApplied(); applied != nil && applied.Versions["kubernetes"] != "" {
-		version = applied.Versions["kubernetes"]
-	}
-	taken := &provisioner.EtcdSnapshot{
-		Name: provisioner.EtcdSnapshotName(a.now(), version), KubernetesVersion: version, Distribution: "talos",
-	}
 	folder := provisioner.ManagementEtcdFolder(b.target.Prefix)
-	if err := provisioner.StoreEtcdSnapshot(ctx, b.store, folder, taken, stream, to); err != nil {
+	if err := storeFile(ctx, b.store, folder, &taken, file, to); err != nil {
 		return nil, fmt.Errorf("storing the snapshot: %w", err)
 	}
 	if _, err := provisioner.PruneEtcdSnapshots(ctx, b.store, folder, b.settings.Keep); err != nil {
-		return taken, fmt.Errorf("deleting older snapshots: %w", err)
+		return &taken, fmt.Errorf("deleting older snapshots: %w", err)
 	}
-	return taken, nil
+	return &taken, nil
 }
 
 // ListEtcdSnapshots lists the management cluster's snapshots in the target, newest first.

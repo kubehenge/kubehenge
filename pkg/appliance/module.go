@@ -155,6 +155,10 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 		j.Add("Renewing the credential of the etcd backups failed: " + err.Error())
 		a.etcdBackupFailed(err)
 	}
+	if err = a.setUpVolumeBackups(ctx, []byte(talos), passphrase); err != nil {
+		j.Add("Setting up the backups on the backup volume failed: " + err.Error())
+		a.volumeBackupFailed(err)
+	}
 	return kubeconfig, nil
 }
 

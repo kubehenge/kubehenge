@@ -69,7 +69,12 @@ type Appliance struct {
 	// target, provisioner.OpenTarget when nil.
 	Talos     TalosAccess
 	OpenStore provisioner.OpenStore
-	Now       func() time.Time
+	// OpenVolume reaches the store on the management cluster's backup volume, through the
+	// interface's kubeconfig when nil.
+	OpenVolume func(ctx context.Context) (provisioner.ObjectStore, error)
+	// CopyCap bounds the appliance's copy of the latest backups, ApplianceCopyCap when 0.
+	CopyCap int64
+	Now     func() time.Time
 	// KeyWorkFactor is the scrypt work factor the passphrase seals the snapshots' key with, age's
 	// own when 0. Opening the key reads it from the sealed key.
 	KeyWorkFactor int
