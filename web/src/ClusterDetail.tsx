@@ -932,7 +932,7 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
         </>
       }
     >
-      <p>Deletes its VMs and persistent volumes, and removes it from Rancher. This can&apos;t be undone.</p>
+      <p>Deletes its machines and persistent volumes, and removes it from Rancher. This can&apos;t be undone.</p>
       {kept.length > 0 && <p>{`${kept.join(" and ")} stay in the target.`}</p>}
       <Field label="Confirm name" hint={`Type ${c.name}.`}>
         {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}
