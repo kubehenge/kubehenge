@@ -33,7 +33,7 @@ Once a worker has joined, the control-plane nodes carry `node-role.kubernetes.io
 
 ## Create a cluster in the interface
 
-**Create cluster** on the cluster list opens a wizard of six steps: General, Network, Machines, Add-ons, Identity providers and Confirm.
+**Create cluster** on the cluster list opens a wizard of seven steps: General, Network, Machines, Add-ons, Policies, Identity providers and Confirm. The egress proxy, CIS hardening, Pod security and automatic upgrades below are on Policies.
 
 ![The wizard's General step: distribution, node OS, Kubernetes version, control-plane nodes and workers](images/create-cluster.png)
 
@@ -47,7 +47,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 
 | Field | What it is |
 | --- | --- |
-| Start from | Once there is a cluster: the cluster to copy settings from, by default the newest that works, or **Defaults**. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA group labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name, the namespace, and the Kubernetes version while the distribution stays. |
+| Start from | Once there is a cluster: the cluster to copy settings from, or **Defaults**, which is chosen until another is. The later steps say **Copied from** that cluster. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA group labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name, the namespace, and the Kubernetes version while the distribution stays. |
 | Namespace | Only where an administrator has named [more namespaces for clusters](#more-namespaces-for-clusters): the namespace in the management cluster the cluster goes to, `clusters` unless another is chosen. |
 | Name | Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters. It also names the cluster's Proxmox VE pool and VMs. |
 | Distribution | kubeadm, RKE2, k3s or Talos: one per ClusterClass in the management cluster. A distribution without a VM template in the template pool says so. Its clusters cannot be created until an administrator builds one ([templates.md](templates.md)). Where cluster creators may have missing templates built, **Build template** does it from the wizard. |
@@ -528,7 +528,7 @@ Kubehenge keeps Rancher's cluster within the Kubernetes versions Rancher's relea
 
 **Upgrade automatically** is off, patch releases, or patch and minor releases, inside a window. The window is every day from 02:00 for four hours in your browser's time zone. The cluster's **Options** change it later ([upgrading.md](upgrading.md#automatically-inside-a-window)).
 
-The nodes of a kubeadm, RKE2 or k3s cluster move to new builds of their VM template in the same window whatever this says ([below](#node-image-refresh)).
+The nodes of a kubeadm, RKE2 or k3s cluster move to new builds of their VM template in the same window whatever this says, unless **Update node images** is unticked ([below](#node-image-refresh)).
 
 ### Identity providers
 
