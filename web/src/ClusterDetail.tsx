@@ -139,13 +139,13 @@ function ClusterViews({ cluster: c, view }: { cluster: Cluster; view: View }): J
             current={view === v.path}
             description={badge?.text}
           >
+            <kbd aria-hidden="true">{i + 1}</kbd>
             {v.label}
             {badge && (
               <span className={`tab-badge tab-badge-${badge.state}`} aria-hidden="true">
                 {badge.shown}
               </span>
             )}
-            <kbd aria-hidden="true">{i + 1}</kbd>
           </Link>
         );
       })}
