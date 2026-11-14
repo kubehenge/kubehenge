@@ -54,6 +54,37 @@ variables {
   controller_image       = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 }
 
+# These two run first, on an empty state: a setup that stopped after the first node VM.
+run "setup_stopped_after_one_node_vm" {
+  command = apply
+
+  plan_options {
+    target = [proxmox_virtual_environment_vm.node[0]]
+  }
+
+  assert {
+    condition     = length(proxmox_virtual_environment_vm.node) == 1 && proxmox_virtual_environment_vm.backups.protection
+    error_message = "a node VM must come after the protected backups VM, whose disk it may hold"
+  }
+}
+
+run "lifting_the_backup_volumes_protection_makes_no_node_vm" {
+  command = plan
+
+  plan_options {
+    target = [proxmox_virtual_environment_vm.backups]
+  }
+
+  variables {
+    backup_volume = { protection = false }
+  }
+
+  assert {
+    condition     = !proxmox_virtual_environment_vm.backups.protection && length(proxmox_virtual_environment_vm.node) == 1
+    error_message = "the removal's apply targeting the backups VM must lift its protection and make none of the node VMs the setup never made"
+  }
+}
+
 run "csi_plugin_is_the_workload_clusters_pinned_release" {
   command = apply
 

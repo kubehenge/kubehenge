@@ -634,7 +634,7 @@ With no settings at all, every management cluster backs up onto its own backup v
 
 On shared storage (Ceph RBD, NFS, shared LVM) the volume attaches to whichever node runs its store. On a node's own storage (directory, LVM, LVM-thin, ZFS) it stays on the first node of the setup, and its store runs only during a backup or recovery. The disk is detached the rest of the time, so Proxmox VE can migrate the management VMs and a node can go into maintenance. A backup then needs one management VM on the disk's node.
 
-The appliance alone sets each management node's `topology.kubernetes.io/zone` label, to the Proxmox VE node its VM runs on. It reads that with a read-only token on the management pool, after each apply and before each backup. A node whose VM it cannot find keeps the store asleep.
+The appliance alone sets each management node's `topology.kubernetes.io/zone` label, to the Proxmox VE node its VM runs on. It reads that with a read-only token on the management pool, after each apply and before each backup. A node whose VM it cannot find keeps its label. Backups stop only when no management VM runs on the Proxmox VE node that holds the volume.
 
 On a node's own storage, or in a Proxmox VE cluster of one node, losing that host can lose the backup volume. The appliance's copy can go with it when the appliance runs there too. Only a [backup target](install-settings.md#backup-targets) survives that, so set one up as above. Setup, Administration and Health warn until one is set.
 

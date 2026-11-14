@@ -95,8 +95,9 @@ type Appliance struct {
 	mu          sync.Mutex
 	job         *Job
 	templateJob *Job
-	takingEtcd  bool
-	stopping    bool
+	// snapshot is the etcd snapshot being taken, nil while none is.
+	snapshot *snapshotRun
+	stopping bool
 }
 
 // ErrPassphrase is a state the passphrase does not open.
@@ -259,15 +260,8 @@ func (a *Appliance) Remove(passphrase string, backups BackupsOnRemove, ticket *p
 		release, forget = a.liftBackupVolume, a.forgetRemovedWithCopy
 	}
 	return a.start(ticket, "remove", func(ctx context.Context, j *Job) error {
-		env, err := a.env(passphrase, ticketAuth(ticket))
+		env, err := a.removalEnv(ctx, j, passphrase, ticket)
 		if err != nil {
-			return err
-		}
-		// A wrong passphrase must stop the removal before anything is deleted.
-		if _, err := a.output(ctx, env, "api_endpoint"); err != nil {
-			return ErrPassphrase
-		}
-		if err := a.checkLease(ctx, env); err != nil {
 			return err
 		}
 		if err := before(ctx, j); err != nil {
@@ -358,6 +352,23 @@ func (a *Appliance) Stop(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// removalEnv is OpenTofu's environment for a removal, once nothing stands in the removal's way.
+func (a *Appliance) removalEnv(ctx context.Context, j *Job, passphrase string, ticket *pve.Ticket) ([]string, error) {
+	// What a snapshot under way writes must be on disk before the removal clears it.
+	if err := a.stopEtcdSnapshot(ctx, j); err != nil {
+		return nil, err
+	}
+	env, err := a.env(passphrase, ticketAuth(ticket))
+	if err != nil {
+		return nil, err
+	}
+	// A wrong passphrase must stop the removal before anything is deleted.
+	if _, err := a.output(ctx, env, "api_endpoint"); err != nil {
+		return nil, ErrPassphrase
+	}
+	return env, a.checkLease(ctx, env)
 }
 
 // forgetRemoved clears what the appliance kept of a management cluster just destroyed. The state

@@ -158,20 +158,30 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err = a.recordApplied(CredentialsExpire([]byte(admin), []byte(talos))); err != nil {
 		return nil, err
 	}
-	// The cluster runs as applied either way. The backups' status says why their snapshots fail.
-	if err = a.renewEtcdBackupCredential(ctx, []byte(talos)); err != nil {
+	a.setUpBackups(ctx, j, []byte(admin), []byte(talos), passphrase)
+	return kubeconfig, nil
+}
+
+// setUpBackups readies the etcd backups for the applied cluster. The cluster runs as applied either
+// way, so a failure only goes into the job's log and the backups' status, which says why their
+// snapshots fail.
+func (a *Appliance) setUpBackups(ctx context.Context, j *Job, admin, talos []byte, passphrase string) {
+	if err := a.renewEtcdBackupCredential(ctx, talos); err != nil {
 		j.Add("Renewing the credential of the etcd backups failed: " + err.Error())
 		a.etcdBackupFailed(err)
 	}
-	if err = a.setUpVolumeBackups(ctx, []byte(talos), []byte(admin), passphrase); err != nil {
+	if err := a.setUpVolumeBackups(ctx, talos, admin, passphrase); err != nil {
 		j.Add("Setting up the backups on the backup volume failed: " + err.Error())
 		a.volumeBackupFailed(err)
 	}
 	// The next wake of the backup store tries again, so a failure holds no apply up.
-	if err = a.labelZones(ctx, []byte(admin)); err != nil {
+	unknown, err := a.labelZones(ctx, admin)
+	if err != nil {
 		j.Add("Setting the management nodes' zones failed: " + err.Error())
 	}
-	return kubeconfig, nil
+	if len(unknown) > 0 {
+		j.Add("Proxmox VE lists no VM for node " + strings.Join(unknown, ", ") + ", whose zone stays as it is")
+	}
 }
 
 // init prepares OpenTofu for the module released with the appliance. OpenTofu reads the lock file

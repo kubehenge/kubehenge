@@ -73,7 +73,7 @@ func TestIntegrationInterfaceFollowsZones(t *testing.T) { //nolint:paralleltest 
 	}
 
 	a := &Appliance{vmHosts: hostsAt(t, map[string]string{"mgmt-cp-0": "pve2", "mgmt-cp-1": "pve1", "mgmt-cp-2": "pve3", "worker": "pve1"})}
-	if err = a.followZones(ctx, ui); err != nil {
+	if _, err = a.followZones(ctx, ui, "pve1"); err != nil {
 		t.Fatalf("the interface could not correct the zones: %v", err)
 	}
 	moved, err := admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{})

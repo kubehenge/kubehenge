@@ -43,6 +43,10 @@ metadata:
     kubehenge.dev/idle-replicas: {{ ternary "0" "1" (ne .Values.backupVolume.zone "") | quote }}
     {{- /* Whether one Proxmox VE host's loss takes the volume, for the interface's warning. */}}
     kubehenge.dev/shares-host: {{ .Values.backupVolume.sharesHost | toString | quote }}
+    {{- with .Values.backupVolume.zone }}
+    {{- /* The Proxmox VE node that holds the disk, where the store's pod must run. */}}
+    kubehenge.dev/volume-zone: {{ . | quote }}
+    {{- end }}
 spec:
   replicas: {{ ternary 0 1 (ne .Values.backupVolume.zone "") }}
   # The volume attaches to one node at a time.

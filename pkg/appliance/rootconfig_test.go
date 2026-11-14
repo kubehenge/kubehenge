@@ -194,3 +194,34 @@ func TestTofuAddressesNameTheRootConfig(t *testing.T) {
 		})
 	}
 }
+
+// A setup that stopped before the backups VM leaves a state without it. Removing that cluster with
+// its backups runs no apply, which would make the VM only for the destroy to delete it.
+func TestRemovingAPartMadeClusterAppliesNothing(t *testing.T) {
+	t.Parallel()
+	a, ready := newAppliance(t)
+	if err := a.Apply(settings("pve1"), "correct horse battery staple", ticket(), func(_ context.Context, k []byte) error { ready <- k; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a)
+	for name, body := range map[string]string{
+		filepath.Join(a.Dir, "management", "terraform.tfstate"): "{}",
+		filepath.Join(a.Dir, "state-list"):                      moduleAddress + "proxmox_virtual_environment_pool.management\n",
+	} {
+		if err := os.WriteFile(name, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	applied := len(tofuCalls(t, a))
+	if err := a.Remove("correct horse battery staple", DeleteBackups, ticket(), func(context.Context, *Job) error { return nil }, func() {}); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != StateSucceeded {
+		t.Fatalf("remove: %+v", j)
+	}
+	for _, args := range tofuCalls(t, a)[applied:] {
+		if args[0] == "apply" {
+			t.Errorf("the removal ran tofu %q", args)
+		}
+	}
+}

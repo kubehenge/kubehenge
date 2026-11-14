@@ -22,10 +22,13 @@ const (
 	FromApplianceCopy = "the appliance's copy"
 )
 
-// RecoverManagement makes a lost management cluster again from Kubehenge's own backups. It applies
-// the module whole first, which brings the backup volume back to the new nodes when it survived.
-// It then restores the newest snapshot of the volume and the appliance's copy, says which in the
-// log and why, and applies the module again. ready is called as for Apply.
+// RecoverManagement makes a lost management cluster again from Kubehenge's own backups, in
+// RecreateManagement's order. It applies the module for the VMs and the nodes' configuration only,
+// since a whole apply waits out the health read on nodes whose etcd is lost. It then restores the
+// newest snapshot of the volume and the appliance's copy, says which in the log and why, and
+// applies the module whole. The volume is read through the management cluster's own store, so it
+// answers only where etcd survived. With every VM lost the appliance's copy is restored, and the
+// whole apply brings the volume back to the new nodes. ready is called as for Apply.
 func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, ready func(ctx context.Context, kubeconfig []byte) error) error {
 	if a.Talos == nil {
 		return errors.New("this appliance does not reach Talos nodes")
@@ -56,23 +59,17 @@ func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, rea
 	if err != nil {
 		return fmt.Errorf("the management cluster's talosconfig: %w", err)
 	}
+	vms := &recreation{passphrase: passphrase, ticket: ticket, settings: settings, targets: recreateTargets(len(settings.Nodes))}
 	return a.start(ticket, "recover", func(ctx context.Context, j *Job) error {
-		j.Add("Applying the management cluster, so that its backup volume can be read")
-		if _, err := a.run(ctx, j, settings, passphrase, ticket); err != nil {
+		// A backup under way would put the store back to sleep under the recovery.
+		if err := a.stopEtcdSnapshot(ctx, j); err != nil {
 			return err
 		}
-		read, err := a.newestBackup(ctx, j, identity, passphrase)
-		if err != nil {
+		if err := a.applyVMs(ctx, j, vms); err != nil {
 			return err
 		}
-		defer func() { _ = os.Remove(read.file) }()
-		if serr := a.sleepVolume(ctx); serr != nil {
-			j.Add("The backup volume's store stays up: " + serr.Error())
-		}
-		j.Add("Restoring the management cluster's etcd from " + read.name + ", read from " + read.from)
-		open := func() (io.ReadCloser, error) { return os.Open(read.file) }
-		if err = a.Talos.Restore(ctx, admin, nodes, open, j.Add); err != nil {
-			return fmt.Errorf("restoring etcd: %w", err)
+		if err := a.restoreNewest(ctx, j, identity, passphrase, admin, nodes); err != nil {
+			return err
 		}
 		j.Add("Applying the management cluster whole")
 		kubeconfig, err := a.run(ctx, j, settings, passphrase, ticket)
@@ -84,6 +81,25 @@ func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, rea
 		}
 		return nil
 	})
+}
+
+// restoreNewest restores the newest snapshot of the volume and the appliance's copy onto the nodes
+// the talosconfig admin reaches.
+func (a *Appliance) restoreNewest(ctx context.Context, j *Job, identity *age.X25519Identity, passphrase string, admin []byte, nodes []string) error {
+	read, err := a.newestBackup(ctx, j, identity, passphrase)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(read.file) }()
+	if serr := a.sleepVolume(ctx); serr != nil {
+		j.Add("The backup volume's store stays up: " + serr.Error())
+	}
+	j.Add("Restoring the management cluster's etcd from " + read.name + ", read from " + read.from)
+	open := func() (io.ReadCloser, error) { return os.Open(read.file) }
+	if err = a.Talos.Restore(ctx, admin, nodes, open, j.Add); err != nil {
+		return fmt.Errorf("restoring etcd: %w", err)
+	}
+	return nil
 }
 
 const (

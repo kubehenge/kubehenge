@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,36 @@ func TestRecoveryReadsTheVolumeElseTheCopy(t *testing.T) {
 	empty := backupstore.Dir{Root: t.TempDir()}
 	a.OpenVolume = func(context.Context) (provisioner.ObjectStore, error) { return empty, nil }
 	recoverFrom(FromApplianceCopy)
+}
+
+// The bootstrap of a lost first node never runs again from the state, so a whole apply onto lost VMs
+// waits for etcd forever. The recovery makes the VMs and their node config first, restores, and only
+// then applies the whole module.
+func TestRecoveryMakesTheVMsBeforeTheRestoreAndAppliesWholeAfter(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	a, _, _ := volumeAppliance(t, &now)
+	if _, err := a.TakeEtcdSnapshot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	traced := &tracedTalos{tofuLog: filepath.Join(a.Dir, "fake-tofu.log")}
+	a.Talos = traced
+	earlier := len(appliesIn(traced.tofuLog))
+	if err := a.RecoverManagement(passphrase, ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != StateSucceeded {
+		t.Fatalf("recovery %s: %s", j.State, j.Error)
+	}
+	before := traced.applies[earlier:]
+	if len(before) != 1 || !strings.Contains(before[0], "-target=module.management.proxmox_virtual_environment_vm.node") ||
+		!strings.Contains(before[0], "-target=module.management.module.talos_node_0") {
+		t.Fatalf("before the restore, applies were %q: only the VMs and nodes belong there", before)
+	}
+	all := appliesIn(traced.tofuLog)[earlier:]
+	if len(all) != 2 || strings.Contains(all[1], "-target") {
+		t.Fatalf("applies of the recovery: %q, want the targeted one, then a whole one", all)
+	}
 }
 
 // Recovery waits for the volume's store before it reads the appliance's copy, never restores a copy

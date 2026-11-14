@@ -113,9 +113,6 @@ resource "proxmox_virtual_environment_vm" "backups" {
   tags        = ["kubehenge", "management", "backups"]
   node_name   = local.backup_volume.node
 
-  # Destroyed after the node VMs, which may still have its disk attached.
-  depends_on = [proxmox_virtual_environment_vm.node]
-
   started    = false
   on_boot    = false
   protection = var.backup_volume.protection

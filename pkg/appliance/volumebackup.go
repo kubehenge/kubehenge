@@ -249,8 +249,12 @@ func (a *Appliance) wakeStore(ctx context.Context, kube kubernetes.Interface) er
 		return fmt.Errorf("the backup volume's store: %w", err)
 	}
 	if d.Spec.Replicas == nil || *d.Spec.Replicas == 0 {
-		if err = a.followZones(ctx, kube); err != nil {
-			return err
+		unknown, zerr := a.followZones(ctx, kube, d.Annotations[volumeZone])
+		if zerr != nil {
+			return zerr
+		}
+		if len(unknown) > 0 && a.Log != nil {
+			a.Log.Warn("Proxmox VE lists no VM for these management nodes, whose zone labels stay as they are", "nodes", unknown)
 		}
 		if _, err = deps.Patch(ctx, backupstore.Service, types.MergePatchType, []byte(`{"spec":{"replicas":1}}`), metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("starting the backup volume's store: %w", err)
@@ -646,6 +650,12 @@ const backupVolumeAddress = moduleAddress + "proxmox_virtual_environment_vm.back
 // liftBackupVolume lifts the backup volume's protection before a destroy of the module, so that
 // the destroy deletes it with its disk.
 func (a *Appliance) liftBackupVolume(ctx context.Context, j *Job, env []string) error {
+	// A targeted apply makes the backups VM when the state lacks it, as a removal of a cluster whose
+	// setup stopped before that VM must not.
+	held, err := a.backupVolumeHeld(ctx, j, env)
+	if err != nil || !held {
+		return err
+	}
 	j.Add("Lifting the backup volume's protection, so that it is removed too")
 	return a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json",
 		"-target="+backupVolumeAddress, "-var=backup_volume_protection=false")
@@ -654,18 +664,24 @@ func (a *Appliance) liftBackupVolume(ctx context.Context, j *Job, env []string) 
 // keepBackupVolume takes the backup volume's VM out of OpenTofu's state before a destroy of the
 // module, so that the destroy passes it by.
 func (a *Appliance) keepBackupVolume(ctx context.Context, j *Job, env []string) error {
-	// The whole list, since OpenTofu fails on an address the state does not hold, as a cluster set
-	// up before the backup volume existed.
-	held := false
-	err := a.tofu(ctx, j, env, func(line string) string {
-		held = held || strings.TrimSpace(line) == backupVolumeAddress
-		return ""
-	}, "state", "list")
+	held, err := a.backupVolumeHeld(ctx, j, env)
 	if err != nil || !held {
 		return err
 	}
 	j.Add("Keeping the backup volume and its VM " + backupVolumeAddress + " on Proxmox VE")
 	return a.tofu(ctx, j, env, plainLine, "state", "rm", backupVolumeAddress)
+}
+
+// backupVolumeHeld reports whether OpenTofu's state holds the backup volume's VM. It reads the whole
+// list, since OpenTofu fails on an address the state does not hold, as with a cluster set up before
+// the backup volume existed or one whose setup stopped short of it.
+func (a *Appliance) backupVolumeHeld(ctx context.Context, j *Job, env []string) (bool, error) {
+	held := false
+	err := a.tofu(ctx, j, env, func(line string) string {
+		held = held || strings.TrimSpace(line) == backupVolumeAddress
+		return ""
+	}, "state", "list")
+	return held, err
 }
 
 // volumeBackupFailed records why a snapshot for the volume could not be taken at all.

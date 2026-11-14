@@ -45,8 +45,51 @@ var ErrEtcdSnapshotTaking = errors.New("a snapshot is being taken already")
 // half made, as the newest backup the restore then reads.
 var ErrEtcdRecovering = errors.New("the management cluster is being recovered. Take a snapshot once that has finished")
 
-// recoveryKinds are the runs that restore the management cluster's etcd.
-var recoveryKinds = []string{"recover", "recreate", "etcd-restore"}
+// ErrEtcdRemoving refuses a snapshot while the management cluster is being removed. It would
+// write the removed cluster's backup back after the removal cleared it.
+var ErrEtcdRemoving = errors.New("the management cluster is being removed")
+
+// snapshotRefusals are the runs no snapshot may start beside, each with its refusal. Each stops a
+// snapshot under way before it goes on (stopEtcdSnapshot).
+var snapshotRefusals = map[string]error{
+	"recover": ErrEtcdRecovering, "recreate": ErrEtcdRecovering, "etcd-restore": ErrEtcdRecovering,
+	"remove": ErrEtcdRemoving,
+}
+
+// snapshotRun is an etcd snapshot under way. Its owner closes done once it has returned, after
+// its last write to the appliance's disk.
+type snapshotRun struct {
+	done chan struct{}
+	// cancel ends the snapshot's context, once the snapshot has made it. cancelled asks for that
+	// before then.
+	cancel    context.CancelFunc
+	cancelled bool
+}
+
+// stopEtcdSnapshot cancels the snapshot under way, if any, and waits for it to return. A run that
+// restores or removes the management cluster calls it first, once it holds the job, so that no
+// snapshot can start after it either (claimEtcdSnapshot).
+func (a *Appliance) stopEtcdSnapshot(ctx context.Context, j *Job) error {
+	a.mu.Lock()
+	run := a.snapshot
+	if run != nil {
+		run.cancelled = true
+		if run.cancel != nil {
+			run.cancel()
+		}
+	}
+	a.mu.Unlock()
+	if run == nil {
+		return nil
+	}
+	j.Add("Stopping the etcd snapshot under way")
+	select {
+	case <-run.done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("the etcd snapshot under way did not stop: %w", ctx.Err())
+	}
+}
 
 // TalosAccess reaches the management cluster's control-plane nodes for its etcd backups.
 // provisioner.ManagementTalos is the real one.
@@ -173,7 +216,7 @@ func (a *Appliance) EtcdBackups() *EtcdBackupStatus {
 		st.Next = &next
 	}
 	a.mu.Lock()
-	st.Taking = a.takingEtcd
+	st.Taking = a.snapshot != nil
 	a.mu.Unlock()
 	st.Volume = a.VolumeBackups()
 	st.Warning = a.etcdBackupWarning(st)
@@ -491,13 +534,15 @@ func (a *Appliance) claimEtcdSnapshot() error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.job.running() && slices.Contains(recoveryKinds, a.job.Kind) {
-		return ErrEtcdRecovering
+	if a.job.running() {
+		if refusal := snapshotRefusals[a.job.Kind]; refusal != nil {
+			return refusal
+		}
 	}
-	if a.takingEtcd {
+	if a.snapshot != nil {
 		return ErrEtcdSnapshotTaking
 	}
-	a.takingEtcd = true
+	a.snapshot = &snapshotRun{done: make(chan struct{})}
 	return nil
 }
 
@@ -539,13 +584,8 @@ func (a *Appliance) placesFor(due *time.Time) (snapshotPlaces, error) {
 // snapshotEtcd takes a snapshot into every place backups go, or with due set, into those whose
 // schedule has one due then.
 func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisioner.EtcdSnapshot, error) {
-	defer func() {
-		a.mu.Lock()
-		a.takingEtcd = false
-		a.mu.Unlock()
-	}()
-	ctx, cancel := context.WithTimeout(ctx, etcdBackupTimeout)
-	defer cancel()
+	ctx, finish := a.runSnapshot(ctx)
+	defer finish()
 	p, err := a.placesFor(due)
 	if err != nil {
 		return nil, err
@@ -595,6 +635,27 @@ func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisio
 		errs = append(errs, err)
 	}
 	return stored, errors.Join(errs...)
+}
+
+// runSnapshot bounds the claimed snapshot run by its timeout and hands stopEtcdSnapshot its cancel,
+// which a stop asked for before the run began takes effect at once. finish frees the claim and
+// tells a waiting stop that nothing more is written.
+func (a *Appliance) runSnapshot(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(ctx, etcdBackupTimeout)
+	a.mu.Lock()
+	run := a.snapshot
+	run.cancel = cancel
+	if run.cancelled {
+		cancel()
+	}
+	a.mu.Unlock()
+	return ctx, func() {
+		cancel()
+		a.mu.Lock()
+		a.snapshot = nil
+		a.mu.Unlock()
+		close(run.done)
+	}
 }
 
 // backUpToTarget stores the snapshot in file in the target and records how it went.
@@ -683,6 +744,9 @@ func (a *Appliance) RestoreEtcd(ctx context.Context, name, passphrase string, ti
 	}
 	//nolint:contextcheck // the run outlives the request that starts it
 	return a.startIn(&a.job, sessionRunner(ticket), "etcd-restore", EtcdRestoreRequest{Snapshot: name}, func(ctx context.Context, j *Job) error {
+		if err := a.stopEtcdSnapshot(ctx, j); err != nil {
+			return err
+		}
 		j.Add("Restoring the management cluster's etcd from " + name)
 		file, err := a.fetchEtcdSnapshot(ctx, acc.setup, acc.folder, name, passphrase)
 		if err != nil {

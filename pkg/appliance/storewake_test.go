@@ -200,15 +200,54 @@ func TestAMovedNodeVMsZoneIsCorrectedBeforeTheStoreWakes(t *testing.T) {
 	if got, _ := blind.AppsV1().Deployments(backupstore.Namespace).Get(t.Context(), backupstore.Service, metav1.GetOptions{}); *got.Spec.Replicas != 0 {
 		t.Fatal("a wake that could not read where the node VMs run started the store")
 	}
+}
 
-	// A node Proxmox VE lists no VM for may carry any zone, so the store stays asleep.
-	unlisted := fake.NewClientset(storeDeployment(0, "0"), zonesToken(), zoned("mgmt-cp-0", "pve1", zoneOnly...), zoned("mgmt-cp-9", "pve1", zoneOnly...))
-	err := (&Appliance{vmHosts: hostsAt(t, map[string]string{"mgmt-cp-0": "pve1"})}).wakeStore(short, unlisted)
-	if err == nil || !strings.Contains(err.Error(), "reading where the management VMs run: Proxmox VE lists no VM for node mgmt-cp-9") {
-		t.Fatalf("a wake with node mgmt-cp-9 unlisted: %v", err)
+// One management VM is gone, lost with its host's disk, and its node stays. The backups go on while
+// a VM runs on the node that holds the disk, and stop, naming that node, once none does.
+func TestAWakeGoesOnWithOneManagementVMGone(t *testing.T) {
+	t.Parallel()
+	sleeping := func() *appsv1.Deployment {
+		d := storeDeployment(0, "0")
+		d.Annotations[volumeZone] = "pve1"
+		d.Status.ReadyReplicas = 1
+		return d
 	}
-	if got, _ := unlisted.AppsV1().Deployments(backupstore.Namespace).Get(t.Context(), backupstore.Service, metav1.GetOptions{}); *got.Spec.Replicas != 0 {
-		t.Fatal("a wake with a node of unknown zone started the store")
+	replicas := func(kube *fake.Clientset) int32 {
+		got, err := kube.AppsV1().Deployments(backupstore.Namespace).Get(t.Context(), backupstore.Service, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return *got.Spec.Replicas
+	}
+	nodes := func() []runtime.Object {
+		return []runtime.Object{
+			sleeping(), zonesToken(),
+			zoned("mgmt-cp-0", "pve1", zoneOnly...), zoned("mgmt-cp-1", "pve2", zoneOnly...), zoned("mgmt-cp-2", "pve3", zoneOnly...),
+		}
+	}
+
+	kube := fake.NewClientset(nodes()...)
+	a := &Appliance{vmHosts: hostsAt(t, map[string]string{"mgmt-cp-0": "pve1", "mgmt-cp-1": "pve3"})}
+	if err := a.wakeStore(t.Context(), kube); err != nil {
+		t.Fatalf("a wake with mgmt-cp-2's VM gone: %v", err)
+	}
+	if got := replicas(kube); got != 1 {
+		t.Fatalf("with mgmt-cp-2's VM gone the store keeps %d replicas", got)
+	}
+	if n, _ := kube.CoreV1().Nodes().Get(t.Context(), "mgmt-cp-1", metav1.GetOptions{}); n.Labels[corev1.LabelTopologyZone] != "pve3" {
+		t.Errorf("node mgmt-cp-1, whose VM runs on pve3, is labelled %v", n.Labels)
+	}
+
+	lost := fake.NewClientset(nodes()...)
+	short, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	a = &Appliance{vmHosts: hostsAt(t, map[string]string{"mgmt-cp-1": "pve2", "mgmt-cp-2": "pve3"})}
+	err := a.wakeStore(short, lost)
+	if err == nil || !strings.Contains(err.Error(), "no management VM runs on Proxmox VE node pve1, which holds the backup volume") {
+		t.Fatalf("a wake with no VM on the disk's node: %v", err)
+	}
+	if got := replicas(lost); got != 0 {
+		t.Fatalf("with no VM on the disk's node the store was started to %d replicas", got)
 	}
 }
 
@@ -252,7 +291,7 @@ func TestAnApplyLabelsTheManagementNodesZones(t *testing.T) {
 		t.Fatal(err)
 	}
 	j := waitFor(t, a)
-	if j.State != StateSucceeded || !strings.Contains(strings.Join(j.Log, "\n"), "Setting the management nodes' zones failed: reading where the management VMs run: Proxmox VE lists no VM for node mgmt-cp-1") {
+	if j.State != StateSucceeded || !strings.Contains(strings.Join(j.Log, "\n"), "Proxmox VE lists no VM for node mgmt-cp-1, whose zone stays as it is") {
 		t.Fatalf("an apply with node mgmt-cp-1 unlisted: %+v", j)
 	}
 }

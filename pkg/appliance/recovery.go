@@ -384,6 +384,9 @@ func (a *Appliance) RecreateManagement(ctx context.Context, name, passphrase str
 	}
 	//nolint:contextcheck // the run outlives the request that starts it
 	return a.startIn(&a.job, sessionRunner(ticket), "recreate", RecreateRequest{Snapshot: name}, func(ctx context.Context, j *Job) error {
+		if err := a.stopEtcdSnapshot(ctx, j); err != nil {
+			return err
+		}
 		return a.recreate(ctx, j, r)
 	})
 }

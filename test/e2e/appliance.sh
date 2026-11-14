@@ -479,23 +479,34 @@ body_has "a node lacks topology.kubernetes.io/region=kubehenge or its Proxmox VE
     --slurpfile s "${settings}" '.items | length > 0 and all(.[]; .metadata.labels["topology.kubernetes.io/region"] == "kubehenge"
         and (.metadata.labels["topology.kubernetes.io/zone"] as $z | $s[0].nodes | index($z) != null))'
 
-step "a management VM deleted and applied again: the backup volume keeps its snapshots"
+step "a management VM deleted and made again: the backup volume keeps its snapshots"
 jq -r '[.[].key | select(startswith("management/etcd/"))] | sort | .[]' "${work}/volume-list" > "${work}/volume-before"
-lost=$(pvesh get /cluster/resources --type vm --output-format json |
-    jq -r '[.[] | select((.tags // "" | split(";")) as $t | ($t | index("management")) and ($t | index("backups") | not))] | sort_by(.vmid) | last | "\(.node) \(.vmid)"')
+pvesh get /cluster/resources --type vm --output-format json |
+    jq '[.[] | select((.tags // "" | split(";")) as $t | ($t | index("management")) and ($t | index("backups") | not))] | sort_by(.vmid)' > "${work}/management-vms"
+lost=$(jq -r 'last | "\(.node) \(.vmid)"' "${work}/management-vms")
 [ -n "${lost}" ] && [ "${lost}" != "null null" ] || fail "no management node VM to delete"
 lost_node=${lost% *} lost_vmid=${lost#* }
 pvesh create "/nodes/${lost_node}/qemu/${lost_vmid}/status/stop" > /dev/null
 pvesh delete "/nodes/${lost_node}/qemu/${lost_vmid}" --purge 1 > /dev/null
-expect 202 "applying again after the loss" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"
-until_true 3600 "the apply after the loss to end" job_ended
-job_was apply succeeded true
+# Two members left keep etcd's quorum, so an apply makes the VM again and it rejoins. A cluster of
+# fewer nodes lost etcd, which only a recovery from a snapshot brings back.
+management_vms=$(jq length "${work}/management-vms")
+if [ "${management_vms}" -ge 3 ]; then
+    expect 202 "applying again after the loss" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"
+    until_true 3600 "the apply after the loss to end" job_ended
+    job_was apply succeeded true
+else
+    recover_body=$(jq -n --arg p "${passphrase}" '{passphrase: $p}')
+    expect 202 "recovering after the loss" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/appliance/etcd-backups/recover" "${recover_body}"
+    until_true 3600 "the recovery after the loss to end" job_ended
+    job_was recover succeeded true
+fi
 volume_snapshots
 jq -r '[.[].key | select(startswith("management/etcd/"))] | sort | .[]' "${work}/volume-list" > "${work}/volume-after"
 # Newer snapshots may join. Every one from before stays.
 if grep -qvxFf "${work}/volume-after" "${work}/volume-before"; then
     diff "${work}/volume-before" "${work}/volume-after" >&2
-    fail "the backup volume lost snapshots when a management VM was deleted and applied again"
+    fail "the backup volume lost snapshots when a management VM was deleted and made again"
 fi
 
 step "the shared Headlamp behind the interface's sign-in"
