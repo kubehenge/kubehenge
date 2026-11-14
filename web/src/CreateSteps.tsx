@@ -732,13 +732,13 @@ function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterCl
   const network = variable(cls, "network")?.properties;
   return (
     <>
-      <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
+      <Field label="VLAN tag" hint={shown("vlan") === undefined ? "Optional" : undefined} error={shown("vlan")}>
         {(id) => (
           <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
         )}
       </Field>
       {network?.["mtu"] === undefined ? null : (
-        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+        <Field label="MTU" hint={shown("mtu") === undefined ? "Optional" : undefined} error={shown("mtu")}>
           {(id) => (
             <input
               id={id}
@@ -751,7 +751,7 @@ function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterCl
         </Field>
       )}
       {network?.["queues"] === undefined ? null : (
-        <Field label="Queues" hint="Optional" error={shown("queues")}>
+        <Field label="Queues" hint={shown("queues") === undefined ? "Optional" : undefined} error={shown("queues")}>
           {(id) => (
             <input
               id={id}

@@ -2019,6 +2019,29 @@ describe("create", () => {
     const calls = fakeServer({
       "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
       "GET /api/classes": () => ({ body: [rke2OS] }),
+      "GET /api/clusters": () => ({
+        body: [
+          {
+            namespace: "clusters",
+            name: "rancher",
+            class: "kubehenge-rke2",
+            distribution: "rke2",
+            version: "v1.36.5+rke2r1",
+            generation: 1,
+            created: "2026-10-01T00:00:00Z",
+            deleting: false,
+            phase: "Provisioned",
+            available: true,
+            conditions: [],
+            controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workers: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workerPools: [{ name: "md-0", class: "worker", replicas: 1 }],
+            variables: { rancher: { install: true, hostname: "rancher.example.org" } },
+            pool: "/pool/kubehenge/clusters.rancher",
+            allowed: { change: true, kubeconfig: true },
+          },
+        ],
+      }),
       "GET /api/proxmox/storages": () => ({
         body: [
           {
@@ -2094,6 +2117,10 @@ describe("create", () => {
     await user.type(screen.getByLabelText("VLAN tag"), "10");
     expect(screen.getByLabelText("Gateway")).toHaveValue("");
     expect(screen.getByLabelText("API address")).toHaveValue("");
+    // A problem replaces the hint rather than sitting above it.
+    await user.type(screen.getByLabelText("VLAN tag"), "0000");
+    expect(screen.getByLabelText("VLAN tag")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("VLAN tag")).not.toHaveAccessibleDescription(/Optional/u);
     await user.clear(screen.getByLabelText("VLAN tag"));
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
     await waitFor(() => expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30"));
