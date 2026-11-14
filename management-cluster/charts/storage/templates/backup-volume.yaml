@@ -1,0 +1,55 @@
+---
+# The disk the module made on the backups VM, bound by name. Both stay when the release goes: the
+# claim's data is the management cluster's backups.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.backupVolume.claim }}
+  labels:
+    app.kubernetes.io/part-of: kubehenge
+    kubehenge.dev/backups: "true"
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  capacity:
+    storage: {{ .Values.backupVolume.sizeGB }}Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: {{ .Values.storageClass.name }}
+  claimRef:
+    namespace: {{ .Values.backupVolume.namespace }}
+    name: {{ .Values.backupVolume.claim }}
+  csi:
+    driver: csi.proxmox.sinextra.dev
+    fsType: ext4
+    volumeHandle: {{ .Values.backupVolume.handle | quote }}
+    volumeAttributes:
+      storage: {{ .Values.storageClass.storage | quote }}
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: topology.kubernetes.io/region
+              operator: In
+              values: [{{ .Values.backupVolume.region | quote }}]
+            - key: topology.kubernetes.io/zone
+              operator: In
+              values: [{{ .Values.backupVolume.zone | quote }}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.backupVolume.claim }}
+  namespace: {{ .Values.backupVolume.namespace }}
+  labels:
+    app.kubernetes.io/part-of: kubehenge
+    kubehenge.dev/backups: "true"
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.storageClass.name }}
+  volumeName: {{ .Values.backupVolume.claim }}
+  resources:
+    requests:
+      storage: {{ .Values.backupVolume.sizeGB }}Gi

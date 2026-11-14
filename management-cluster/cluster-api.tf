@@ -18,6 +18,7 @@ locals {
     kubehenge             = "${path.module}/../charts/kubehenge"
     cluster_api_providers = "${path.module}/charts/cluster-api-providers"
     proxy                 = "${path.module}/charts/proxy"
+    storage               = "${path.module}/charts/storage"
     } : name => sha256(join("\n", [
       for f in sort(fileset(dir, "{Chart.yaml,values.yaml,values.schema.json,templates/**,files/**}")) : "${f} ${filesha256("${dir}/${f}")}"
   ])) }

@@ -1,0 +1,8 @@
+---
+apiVersion: v2
+name: storage
+description: >-
+  The Proxmox CSI plugin's configuration in a Kubehenge management cluster, and the volume its
+  backups are kept on.
+type: application
+version: 0.1.0
