@@ -9,11 +9,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
@@ -29,15 +25,9 @@ func pinStoreFor(namespace string) (*provisioner.PinStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the management cluster's API (KUBECONFIG): %w", err)
 	}
-	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{clientgoscheme.AddToScheme, clusterv1.AddToScheme} {
-		if err = add(scheme); err != nil {
-			return nil, fmt.Errorf("the management cluster's scheme: %w", err)
-		}
-	}
-	kube, err := client.New(cfg, client.Options{Scheme: scheme})
+	kube, err := managementKube(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("the management cluster's API: %w", err)
+		return nil, err
 	}
 	return &provisioner.PinStore{Reader: kube, Writer: kube, Namespace: namespace}, nil
 }

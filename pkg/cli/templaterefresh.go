@@ -15,16 +15,13 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	coordinationv1client "k8s.io/client-go/kubernetes/typed/coordination/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	"k8s.io/client-go/util/retry"
-	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -115,15 +112,9 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 	if err != nil {
 		return fmt.Errorf("the management cluster's API: %w", err)
 	}
-	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{clientgoscheme.AddToScheme, clusterv1.AddToScheme} {
-		if err = add(scheme); err != nil {
-			return fmt.Errorf("the refresh's scheme: %w", err)
-		}
-	}
-	kube, err := client.New(cfg, client.Options{Scheme: scheme})
+	kube, err := managementKube(cfg)
 	if err != nil {
-		return fmt.Errorf("the management cluster's API: %w", err)
+		return err
 	}
 	status := &refreshStatus{kube: kube, namespace: o.namespace, out: cmd.ErrOrStderr()}
 	if conn.Token == "" && o.tokenSecret != "" {

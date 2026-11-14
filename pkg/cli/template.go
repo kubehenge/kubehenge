@@ -14,9 +14,6 @@ import (
 	"github.com/spf13/pflag"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -188,15 +185,9 @@ func buildUsers(ctx context.Context, classNamespace string, list []*proxmox.Clus
 	if err != nil {
 		return nil, fmt.Errorf("finding which clusters run the builds needs the management cluster's API (KUBECONFIG): %w", err)
 	}
-	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{clientgoscheme.AddToScheme, clusterv1.AddToScheme} {
-		if err = add(scheme); err != nil {
-			return nil, fmt.Errorf("the management cluster's scheme: %w", err)
-		}
-	}
-	kube, err := client.New(cfg, client.Options{Scheme: scheme})
+	kube, err := managementKube(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("the management cluster's API: %w", err)
+		return nil, err
 	}
 	soak := provisioner.DefaultNodeImageSoak
 	cm := &corev1.ConfigMap{}
