@@ -3,7 +3,8 @@
 - A dropped SSH session removes the installer's half-made container, and Ctrl+C no longer waits out the two-minute address check. A `nohup` install ignores the drop.
 - `curl … | sh` asks its questions on the terminal again, as the shell installer did, instead of running without any.
 - The installer prints one line per step when `TERM` is `dumb` or unset.
-- A default route over a VLAN device such as `vmbr1.20` puts the container on that bridge and VLAN. A bridge that is not VLAN aware is refused, also when named with `--bridge` and `--vlan` or in the **VLAN** field.
+- A default route over a VLAN device such as `vmbr1.20` puts the container on that bridge and VLAN.
+- A VLAN on a bridge that is not VLAN aware is refused, whether found, given by flag or entered in the **VLAN** field.
 - Open vSwitch bridges and VLAN-aware SDN VNets take the route's VLAN.
 - The installer removes only a container it made itself, also after a cancel during the template's extraction. Another installer's container stays.
 - A cancel during the last protection step says the appliance exists and how to protect or remove it. Ctrl+C or a dropped session on the end screen just closes it.
