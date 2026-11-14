@@ -282,7 +282,7 @@ func TestHealthSaysWhatIsWrong(t *testing.T) {
 		"warning: Pod web/big: Unschedulable",
 		"warning: Worker one-md-0-a: memory pressure",
 		"warning: Control plane: EtcdClusterHealthy is False",
-		"progress: Pool md-0 rolling out: 1 of 2 up to date",
+		"progress: Pool Workers rolling out: 1 of 2 up to date",
 	} {
 		if !slices.Contains(whats, want) {
 			t.Errorf("needs attention lacks %q: %q", want, whats)

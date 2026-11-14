@@ -167,7 +167,7 @@ describe("etcd snapshot settings", () => {
     expect(within(dialog).getByText("Choose a target")).toBeInTheDocument();
     await user.selectOptions(within(dialog).getByLabelText("Target"), "store");
     expect(within(dialog).getByLabelText("Schedule")).toHaveAccessibleDescription(/Every 12 hours from 00:00/u);
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -222,7 +222,7 @@ describe("etcd snapshot settings", () => {
     await user.click(within(dialog).getByRole("button", { name: "About RKE2 snapshots" }));
     expect(within(dialog).getByText(/RKE2 snapshots are unencrypted, restored by hand/u)).toBeVisible();
     await user.click(upload);
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -243,7 +243,7 @@ describe("etcd snapshot settings", () => {
     dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
     expect(within(dialog).getByLabelText("Also take RKE2 snapshots")).toBeChecked();
     await user.click(within(dialog).getByLabelText("Take etcd snapshots"));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({

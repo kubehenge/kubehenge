@@ -90,9 +90,9 @@ describe("the HA group labels", () => {
       />
     );
     const { rerender } = render(step(false));
-    expect(screen.queryByLabelText("Add HA group labels")).toBeNull();
+    expect(screen.queryByLabelText("Add HA rule labels")).toBeNull();
     rerender(step(true));
-    const box = screen.getByLabelText("Add HA group labels");
+    const box = screen.getByLabelText("Add HA rule labels");
     expect(box).toBeChecked();
     expect(box).toBeEnabled();
     await userEvent.setup({ delay: null }).click(box);
@@ -118,7 +118,7 @@ describe("a cluster's HA group labels", () => {
   it("are switched off under Options", async () => {
     const sent = openOptions([rke2]);
     const user = userEvent.setup({ delay: null });
-    const labels = await screen.findByRole("switch", { name: "HA group labels" });
+    const labels = await screen.findByRole("switch", { name: "HA rule labels" });
     expect(labels).toBeChecked();
     expect(labels.closest("tr")).toHaveTextContent("On, Sys.Audit on / for the token");
     await user.click(labels);
@@ -129,7 +129,7 @@ describe("a cluster's HA group labels", () => {
   it("are switched on again by someone without Sys.Audit on / of their own", async () => {
     const sent = openOptions([rke2], { ...cluster, variables: { storage: "ceph", ccm: { haGroups: false } } });
     const user = userEvent.setup({ delay: null });
-    const labels = await screen.findByRole("switch", { name: "HA group labels" });
+    const labels = await screen.findByRole("switch", { name: "HA rule labels" });
     expect(labels.closest("tr")).toHaveTextContent("Off");
     await user.click(labels);
     await applyStaged(user);
@@ -139,7 +139,7 @@ describe("a cluster's HA group labels", () => {
   it("can be switched off after the administrator withdrew them", async () => {
     const sent = openOptions([{ ...rke2, annotations: {} }]);
     const user = userEvent.setup({ delay: null });
-    const labels = await screen.findByRole("switch", { name: "HA group labels" });
+    const labels = await screen.findByRole("switch", { name: "HA rule labels" });
     expect(labels.closest("tr")).toHaveTextContent("On, Sys.Audit on / for the token");
     await user.click(labels);
     await applyStaged(user);
@@ -149,7 +149,7 @@ describe("a cluster's HA group labels", () => {
   it("are not shown where an administrator does not let clusters have them", async () => {
     openOptions([{ ...rke2, annotations: {} }], { ...cluster, variables: { storage: "ceph" } });
     await screen.findByRole("rowheader", { name: "Placement" });
-    await expect(screen.findByRole("rowheader", { name: "HA group labels" }, { timeout: 200 })).rejects.toThrow(
+    await expect(screen.findByRole("rowheader", { name: "HA rule labels" }, { timeout: 200 })).rejects.toThrow(
       /Unable to find/u,
     );
   });

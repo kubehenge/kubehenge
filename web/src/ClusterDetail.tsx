@@ -15,6 +15,7 @@ import { ClusterStatus, fleetKey, useFleet } from "./fleet";
 import { useClusterChanges } from "./live";
 import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
+import { poolLabel } from "./pool-machine";
 import { Pools } from "./Pools";
 import { QuorumLost, RecoveryState, RollStalled } from "./Recovery";
 import { Link, navigate, useQuery } from "./router";
@@ -36,12 +37,13 @@ import {
   pollIdle,
   saveFile,
   settled,
+  stageLabel,
   useChange,
   usePoll,
   Skeleton,
   Views,
 } from "./ui";
-import { UpgradeChecksList, usePlan } from "./Upgrade";
+import { ChecksList, scaleChecks, useChecks, usePlan } from "./Upgrade";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
 
@@ -139,13 +141,13 @@ function ClusterViews({ cluster: c, view }: { cluster: Cluster; view: View }): J
             current={view === v.path}
             description={badge?.text}
           >
+            <kbd aria-hidden="true">{i + 1}</kbd>
             {v.label}
             {badge && (
               <span className={`tab-badge tab-badge-${badge.state}`} aria-hidden="true">
                 {badge.shown}
               </span>
             )}
-            <kbd aria-hidden="true">{i + 1}</kbd>
           </Link>
         );
       })}
@@ -588,7 +590,7 @@ function Facts({ cluster: c }: { cluster: Cluster }): JSX.Element {
       <span className="id">{c.version}</span>
       {c.talos && <span className="id">Talos {c.talos.version}</span>}
       <span>
-        {counted(c.controlPlane.desired, "control plane")}, {counted(c.workers.desired, "worker")}
+        {counted(c.controlPlane.desired, "control-plane node")}, {counted(c.workers.desired, "worker")}
       </span>
       {filled(c.endpoint) && <span className="id">{c.endpoint}</span>}
       {c.namespace !== "default" && <span>namespace {c.namespace}</span>}
@@ -608,7 +610,19 @@ function ActionDialog({
   // A dialog starts from what is staged, so that a second change builds on the first.
   const c = useStaging()?.staged?.plan.cluster ?? current;
   if (action === "scale") {
-    return <ScaleDialog cluster={c} onClose={onClose} />;
+    return (
+      <ScaleDialog
+        cluster={c}
+        onClose={onClose}
+        renderChecks={(after, nodes) => (
+          <ChecksList
+            checks={scaleChecks(c, after, nodes)}
+            healthPath={clusterPath(c.namespace, c.name, "health")}
+            label="Before scaling"
+          />
+        )}
+      />
+    );
   }
   if (action === "upgrade") {
     return <UpgradeDialog cluster={c} onClose={onClose} />;
@@ -705,7 +719,7 @@ function Summary({
             <dt>Worker pools</dt>
             <dd>
               {c.workerPools.map((p) => (
-                <div key={p.name}>{`${p.name}: ${poolText(p)}`}</div>
+                <div key={p.name}>{`${poolLabel(p.name, c.workerPools)}: ${poolText(p)}`}</div>
               ))}
             </dd>
           </>
@@ -800,6 +814,8 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
   const held = c.talos ? targets.filter((v) => !runsKubernetes(talos, running, v)) : [];
   const version = chosen ?? preferredTarget(targets, held, c.version);
   const read = usePlan(c, version);
+  const changing = version !== c.version;
+  const checks = useChecks({ before: c, version, read, change: true, on: changing });
   return (
     <Dialog
       title={`Upgrade ${c.name}`}
@@ -812,12 +828,8 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="submit"
-            className="primary"
-            disabled={busy || version === c.version || read?.error !== undefined}
-          >
-            Upgrade
+          <button type="submit" className="primary" disabled={busy || !changing || read?.error !== undefined}>
+            {stageLabel}
           </button>
         </>
       }
@@ -849,13 +861,8 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
         </p>
       )}
       {c.talos && <TalosNote running={running} held={held} upgrading={filled(c.talos.upgrading)} />}
-      {version !== c.version && (
-        <UpgradeChecksList
-          cluster={c}
-          version={version}
-          read={read}
-          healthPath={clusterPath(c.namespace, c.name, "health")}
-        />
+      {changing && (
+        <ChecksList checks={checks} healthPath={clusterPath(c.namespace, c.name, "health")} label="Before upgrading" />
       )}
       <UpgradeAddonChanges cluster={c} onClose={onClose} />
       <ErrorBox message={error} />
@@ -926,7 +933,7 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
         </>
       }
     >
-      <p>Deletes its VMs and persistent volumes, and removes it from Rancher. This can&apos;t be undone.</p>
+      <p>Deletes its machines and persistent volumes, and removes it from Rancher. This can&apos;t be undone.</p>
       {kept.length > 0 && <p>{`${kept.join(" and ")} stay in the target.`}</p>}
       <Field label="Confirm name" hint={`Type ${c.name}.`}>
         {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}

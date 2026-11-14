@@ -6,6 +6,33 @@ import { sizeOf } from "./MachineFields";
 import { whole } from "./network";
 import type { Cluster, ClusterClass, MachineSize, WorkerPool } from "./types";
 
+// The name Cluster API gives the pool every cluster starts with. It is no name the user chose.
+const defaultPool = "md-0";
+
+// The default pool's label. A pool's name is a DNS label, so a user's can match it only in lower case.
+const defaultLabel = "Workers";
+
+// The default pool goes by its label unless one of the user's pools would read the same.
+const labelled = (name: string, pools: readonly { name: string }[]): boolean =>
+  name === defaultPool && !pools.some((p) => p.name === defaultLabel.toLowerCase());
+
+/**
+ * poolLabel is a pool's name as the user knows it among the cluster's pools: the name they gave, or
+ * "Workers" for the default pool, which keeps its own name beside a user's pool named workers.
+ */
+export const poolLabel = (name: string, pools: readonly { name: string }[]): string =>
+  labelled(name, pools) ? defaultLabel : name;
+
+/** isDefaultLabel is whether a name, in any case, stands for the default pool by its label. */
+export const isDefaultLabel = (name: string, pools: readonly { name: string }[]): boolean =>
+  name.toLowerCase() === defaultLabel.toLowerCase() &&
+  pools.some((p) => p.name === defaultPool) &&
+  labelled(defaultPool, pools);
+
+/** poolSuffix tells a pool from the others in a label, and leaves the default pool's unmarked. */
+export const poolSuffix = (name: string, pools: readonly { name: string }[]): string =>
+  labelled(name, pools) ? "" : ` (${name})`;
+
 /** poolSize is a pool's machine size: its own, or the cluster's for its workers. */
 export const poolSize = (c: Cluster, p: WorkerPool): MachineSize | undefined =>
   p.machine ?? sizeOf(c.variables["workerMachine"]);

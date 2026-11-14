@@ -220,7 +220,7 @@ describe("a cluster's backups", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit backups" });
     await user.click(within(dialog).getByLabelText("Back up with Velero"));
     expect(within(dialog).getByText("Choose a target")).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.selectOptions(within(dialog).getByLabelText("Target"), "store");
     const schedule = within(dialog).getByLabelText("Schedule");
     expect(schedule).toHaveAccessibleDescription(/Every day at 02:00/u);
@@ -229,7 +229,7 @@ describe("a cluster's backups", () => {
     expect(schedule).toHaveAccessibleDescription(/Every Sunday at 03:00/u);
     await user.selectOptions(within(dialog).getByLabelText("Time zone"), "UTC");
     expect(within(dialog).getByText("Not set")).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({

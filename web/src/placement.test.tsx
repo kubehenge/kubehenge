@@ -61,7 +61,7 @@ async function openPlacement(haRules: HARules = readRules): Promise<{
 describe("a cluster's placement", () => {
   it("keeps the nodes it has, those the user cannot see too, and saves only a change", async () => {
     const { dialog, sent, user } = await openPlacement();
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(within(dialog).getByLabelText("Chosen nodes")).toBeChecked();
     expect(within(dialog).getByLabelText("Chosen nodes")).toHaveFocus();
     expect(within(dialog).getByRole("group", { name: "Placement" })).toBeInTheDocument();
@@ -87,7 +87,7 @@ describe("a cluster's placement", () => {
     await user.selectOptions(within(dialog).getByLabelText("HA rule"), "fast");
     await user.click(within(dialog).getByLabelText("Any node"));
     await user.click(within(dialog).getByLabelText("HA rule nodes"));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: ["pve2"] } }));
   });
@@ -102,7 +102,7 @@ describe("a cluster's placement", () => {
     const picker = within(dialog).getByLabelText("HA rule");
     expect(within(picker).getByRole("option", { name: "racks-a: pve1, pve2" })).toBeInTheDocument();
     await user.selectOptions(picker, "racks-a");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: ["pve1", "pve2"] } }));
   });
@@ -116,7 +116,7 @@ describe("a cluster's placement", () => {
   it("lets new VMs go to any node", async () => {
     const { dialog, sent, user } = await openPlacement();
     await user.click(within(dialog).getByLabelText("Any node"));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { allowedNodes: null } }));
   });

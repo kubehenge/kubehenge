@@ -64,9 +64,9 @@ describe("a cluster's options", () => {
     const install = within(dialog).getByLabelText("Install Headlamp");
     expect(install).toHaveFocus();
     expect(within(dialog).getByRole("button", { name: "About Headlamp" })).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(install);
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -77,7 +77,7 @@ describe("a cluster's options", () => {
     dialog = screen.getByRole("dialog", { name: "Edit monitoring" });
     await user.click(within(dialog).getByLabelText("Install monitoring"));
     await user.type(within(dialog).getByLabelText("Grafana host name"), "grafana.example.org");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -89,11 +89,11 @@ describe("a cluster's options", () => {
     dialog = screen.getByRole("dialog", { name: "Edit pod security" });
     const admission = within(dialog).getByLabelText("Pod Security Admission");
     expect(admission).toHaveAccessibleDescription(/replaces the control-plane nodes/u);
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     expect(admission).toHaveValue("baseline");
     await user.selectOptions(admission, "privileged");
     await user.selectOptions(within(dialog).getByLabelText("Kyverno"), "restricted");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -113,14 +113,14 @@ describe("a cluster's options", () => {
     dialog = screen.getByRole("dialog", { name: "Edit Rancher" });
     const register = within(dialog).getByLabelText("Register with Rancher");
     expect(register).toHaveAccessibleDescription(/Joins the Rancher/u);
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(register);
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeEnabled();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     await user.click(screen.getByRole("button", { name: "Edit identity providers" }));
     dialog = screen.getByRole("dialog", { name: "Edit identity providers" });
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
   });
 
   it("hold pods to restricted under CIS hardening, which cannot change", async () => {
@@ -146,7 +146,7 @@ describe("a cluster's options", () => {
     expect(admission).toBeDisabled();
     expect(admission).toHaveValue("restricted");
     await user.selectOptions(within(dialog).getByLabelText("Kyverno"), "restricted");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -169,14 +169,14 @@ describe("a cluster's options", () => {
         /Switching this on replaces every node, one at a time, and enforces the restricted level/u,
       ),
     ).toBeVisible();
-    expect(within(dialog).getByRole("button", { name: "Switch on" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await expect(within(dialog).findByText("40 pods checked")).resolves.toBeVisible();
     const items = within(dialog).getAllByRole("listitem");
     expect(items).toHaveLength(10);
     expect(items[0]).toHaveTextContent("apps/pod-0privileged containers; host namespaces");
     expect(within(dialog).getByText("and 2 more")).toBeVisible();
     await user.click(box);
-    await user.click(within(dialog).getByRole("button", { name: "Switch on" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -208,7 +208,7 @@ describe("a cluster's options", () => {
     expect(box).toBeChecked();
     expect(box).toBeDisabled();
     expect(box).toHaveAccessibleDescription(/Cannot be switched off/u);
-    expect(within(dialog).getByRole("button", { name: "Switch on" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     expect(within(dialog).queryByText(/Checking pods/u)).not.toBeInTheDocument();
   });
 
@@ -234,7 +234,7 @@ describe("a cluster's options", () => {
     expect(row).toHaveTextContent("k3s's own");
     await user.click(screen.getByRole("button", { name: "Edit the load balancer" }));
     const dialog = screen.getByRole("dialog", { name: "Edit load balancer" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(save).toBeDisabled();
     await user.selectOptions(within(dialog).getByLabelText("Load balancer"), "metallb");
     const addresses = within(dialog).getByLabelText("Load-balancer addresses");
@@ -274,7 +274,7 @@ describe("a cluster's options", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit load balancer" });
     await user.selectOptions(within(dialog).getByLabelText("Load balancer"), "");
     expect(within(dialog).queryByLabelText("Load-balancer addresses")).not.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -302,7 +302,7 @@ describe("a cluster's options", () => {
     await screen.findByRole("row", { name: /Load balancer/u });
     await user.click(screen.getByRole("button", { name: "Edit the load balancer" }));
     const dialog = screen.getByRole("dialog", { name: "Edit load balancer" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(within(dialog).queryByLabelText("Routers")).not.toBeInTheDocument();
     await user.selectOptions(within(dialog).getByLabelText("Announce with"), "bgp");
     // A problem shows only once its field has been touched, and Save waits for it to go.
@@ -368,7 +368,7 @@ describe("a cluster's options", () => {
     expect(within(dialog).queryByRole("group", { name: "BGP password" })).not.toBeInTheDocument();
     await user.click(within(dialog).getByLabelText("Use a BGP password"));
     await expect(within(dialog).findByRole("group", { name: "BGP password" })).resolves.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -427,7 +427,7 @@ describe("a cluster's options", () => {
     );
     await user.click(screen.getByRole("button", { name: "Edit logs" }));
     const dialog = screen.getByRole("dialog", { name: "Edit logs" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(save).toBeDisabled();
     const node = within(dialog).getByLabelText("On every node (recommended)");
     expect(node).toBeChecked();
@@ -473,7 +473,7 @@ describe("a cluster's options", () => {
     expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
     await user.click(within(dialog).getByLabelText("Install monitoring"));
     expect(within(dialog).getByRole("status")).toHaveTextContent(/Logs switch off too/u);
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -506,13 +506,13 @@ describe("a cluster's options", () => {
     const view = within(dialog).getByLabelText("Read-only without sign-in");
     expect(view).not.toBeChecked();
     expect(view).toHaveAccessibleDescription(/Secrets excepted/u);
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(view);
     shown = {
       ...cluster,
       variables: { headlamp: { enabled: true, hostname: "headlamp.example.org", access: "view" }, oidc: [] },
     };
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -527,7 +527,7 @@ describe("a cluster's options", () => {
     await user.click(screen.getByRole("button", { name: "Edit Headlamp" }));
     dialog = screen.getByRole("dialog", { name: "Edit Headlamp" });
     await user.click(within(dialog).getByLabelText("Read-only without sign-in"));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({

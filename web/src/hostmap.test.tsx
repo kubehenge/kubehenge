@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
@@ -84,7 +84,7 @@ describe("the cluster's summary", () => {
       "web-w-1, worker, Ready",
       "web-w-2, worker, Not ready",
     ]);
-    expect(within(map).getByText(/pve1 runs 2 of 3 control-plane VMs/u)).toBeInTheDocument();
+    expect(within(map).getByText(/pve1 runs 2 of 3 control-plane machines/u)).toBeInTheDocument();
   });
 
   it("shows a machine on an offline node as down, on the map and in the machines", async () => {
@@ -102,6 +102,10 @@ describe("the cluster's summary", () => {
     await expect(
       within(map).findByRole("link", { name: "web-cp-a, control plane, Node offline" }),
     ).resolves.toBeInTheDocument();
+    expect(screen.getByText("3 control-plane nodes, 2 workers")).toBeInTheDocument();
+    // The count is the machines' own, as `kubehenge cluster list` and kubectl give it.
+    const term = screen.getByText("Control plane", { selector: "dt" });
+    await waitFor(() => expect(term.nextElementSibling).toHaveTextContent("3 of 3 ready"));
     unmount();
 
     window.history.replaceState(null, "", "/clusters/default/web/machines");

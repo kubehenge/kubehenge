@@ -137,9 +137,9 @@
       }
     },
     {
-      // The build's own configuration and the check of the interface's words, which reads the
-      // sources, run in Node.
-      "files": ["vite.config.ts", "src/writing.ts"],
+      // The build's own configuration, the check of the interface's words and the check of the
+      // stylesheet's phone layout read files, so they run in Node.
+      "files": ["vite.config.ts", "src/writing.ts", "src/viewtabs.test.ts"],
       "rules": {
         "import/no-nodejs-modules": "off"
       }

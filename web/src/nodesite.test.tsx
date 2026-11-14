@@ -353,7 +353,7 @@ describe("a cluster's site options", () => {
 
     await user.click(await screen.findByRole("button", { name: "Edit the registry mirrors" }));
     const dialog = screen.getByRole("dialog", { name: "Edit registry mirrors" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByRole("button", { name: "Add mirror" }));
     await user.type(within(dialog).getByLabelText("Registry"), "docker.io");
@@ -388,10 +388,10 @@ describe("a cluster's site options", () => {
     const field = within(dialog).getByLabelText("Trusted CAs");
     await user.clear(field);
     await user.type(field, "junk");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     expect(within(dialog).getByText("Paste PEM certificates only")).toBeInTheDocument();
     await user.clear(field);
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -427,11 +427,11 @@ describe("a cluster's site options", () => {
     await user.click(within(dialog).getByLabelText("Release mirror certificate"));
     await user.paste(certificate);
     expect(fieldError("Release mirror certificate", dialog)).toBe("A certificate is for an https:// mirror");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     expect(calls.filter((c) => c.key === "PATCH /api/clusters/clusters/web")).toHaveLength(0);
     await user.clear(within(dialog).getByLabelText("Release mirror"));
     await user.type(within(dialog).getByLabelText("Release mirror"), "https://site.example/gh");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -454,7 +454,7 @@ describe("a cluster's site options", () => {
     await user.click(screen.getByRole("button", { name: "Edit the release mirror" }));
     const dialog = screen.getByRole("dialog", { name: "Edit release mirror" });
     await user.clear(within(dialog).getByLabelText("Release mirror"));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -480,7 +480,7 @@ describe("a cluster's site options", () => {
     await user.paste(c.caBundle);
     expect(fieldError("Release mirror", dialog)).toBe(c.urlError);
     expect(fieldError("Release mirror certificate", dialog)).toBe(c.caError);
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     expect(screen.getByRole("dialog", { name: "Edit release mirror" })).toBeInTheDocument();
     expect(calls.filter((call) => call.key === "PATCH /api/clusters/clusters/web")).toHaveLength(0);
   });

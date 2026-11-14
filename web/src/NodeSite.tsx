@@ -3,7 +3,7 @@ import { useEffect, useState, type JSX } from "react";
 import { api } from "./api";
 import { list } from "./network";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
 import { record, records, text, texts } from "./values";
 
 /** One registry mirror as the interface edits it: where the nodes pull a registry's images from. */
@@ -376,7 +376,7 @@ export function ReleaseMirrorDialog({ cluster: c, onClose }: { cluster: Cluster;
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -420,7 +420,7 @@ export function MirrorsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -456,7 +456,7 @@ export function TrustedCAsDialog({ cluster: c, onClose }: { cluster: Cluster; on
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

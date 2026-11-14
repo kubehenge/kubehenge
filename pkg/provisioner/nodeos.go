@@ -533,7 +533,7 @@ func (h *Hooks) checkNUMA(ctx context.Context, reads *pveReads, c *clusterv1.Clu
 			return err
 		}
 		if cores < templates.NUMAMinCores {
-			return fmt.Errorf("the templates use NUMA, which needs at least %d cores per machine, and worker pool %s has %d", templates.NUMAMinCores, md.Name, cores)
+			return fmt.Errorf("the templates use NUMA, which needs at least %d cores per machine, and worker pool %s has %d", templates.NUMAMinCores, PoolLabel(md.Name, TopologyPools(c)), cores)
 		}
 	}
 	return nil

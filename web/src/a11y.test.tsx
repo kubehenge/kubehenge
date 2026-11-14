@@ -122,6 +122,7 @@ const activity = { since: when, entries: [], events: section() };
 const nodes = { "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] } };
 
 const signedIn: Record<string, Route> = {
+  ...nodes,
   "GET /api/session": { body: { user: "root@pam", csrf: "c1", canCreate: true, canTrust: true } },
   "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, backup: true } },
   "GET /api/clusters": { body: [cluster("web")] },
@@ -980,7 +981,7 @@ const cases: Case[] = [
         within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"),
       );
       await user.click(
-        within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+        within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
       );
       await screen.findByRole("region", { name: "Staged changes" });
       await check("Staged changes bar");
@@ -1006,7 +1007,7 @@ const cases: Case[] = [
       );
       await user.selectOptions(dialog.getByLabelText("File 1 source"), "secret");
       await check("Node customisation rows");
-      await user.click(dialog.getByRole("button", { name: "Save" }));
+      await user.click(dialog.getByRole("button", { name: "Add to plan" }));
       await check("Node customisation problems");
     },
   },

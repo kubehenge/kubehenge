@@ -187,7 +187,7 @@ describe("a cluster's log outputs", () => {
     await user.selectOptions(within(first).getByLabelText("Authentication"), "bearer");
     await user.click(within(first).getByLabelText("Audit"));
     await expect(within(first).findByText("Not set")).resolves.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -223,6 +223,6 @@ describe("a cluster's log outputs", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit logs" });
     await user.click(within(dialog).getByText("Log outputs"));
     await user.click(within(dialog).getByRole("button", { name: "Add output" }));
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
   });
 });

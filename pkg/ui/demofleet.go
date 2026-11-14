@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -147,6 +148,9 @@ type demoCluster struct {
 	// AvoidSkewedNode keeps the cluster's VMs off the node whose clock is wrong, so that the cluster
 	// stays healthy beside those that show the warning.
 	AvoidSkewedNode bool `json:"avoidSkewedNode"`
+	// OnUnreachableNode puts VMs of the cluster on the node that calls cannot reach, which no other
+	// cluster uses, so that one cluster shows what that node means.
+	OnUnreachableNode bool `json:"onUnreachableNode"`
 	// Unsynced is set on a Talos cluster whose last worker has not synced its clock.
 	Unsynced bool `json:"unsynced"`
 	// Paused is a cluster whose reconciling is paused.
@@ -218,9 +222,10 @@ type demoFleet struct {
 	builds, older provisioner.NodeImageBuilds
 }
 
-func newDemoFleet(now time.Time) (*demoFleet, error) {
+// newDemoFleet makes the fleet raw holds, in the form of demo-fleet.json, dated against now.
+func newDemoFleet(now time.Time, raw []byte) (*demoFleet, error) {
 	f := &demoFleet{now: now, workloads: map[string]*Workload{}, members: map[string][]pve.Member{}}
-	if err := json.Unmarshal(demoFleetJSON, &f.data); err != nil {
+	if err := json.Unmarshal(raw, &f.data); err != nil {
 		return nil, fmt.Errorf("the demo's fleet: %w", err)
 	}
 	if err := f.templateLines(); err != nil {
@@ -269,6 +274,43 @@ func (f *demoFleet) vmStatus(d *demoCluster, m *clusterv1.Machine, i int) string
 	return f.data.VMStatus
 }
 
+// demoControllers are the controllers the management cluster runs, all of them ready.
+func demoControllers() []client.Object {
+	controllers := []struct {
+		namespace, name string
+		replicas        int32
+	}{
+		{demoClassNamespace, "kubehenge-controller", 2},
+		{"capi-system", "capi-controller-manager", 1},
+		{"capmox-system", "capmox-controller-manager", 1},
+	}
+	objects := make([]client.Object, 0, len(controllers))
+	for i := range controllers {
+		c := &controllers[i]
+		objects = append(objects, &appsv1.Deployment{
+			Namespace: c.namespace, Name: c.name,
+			Spec:   appsv1.DeploymentSpec{Replicas: &c.replicas},
+			Status: appsv1.DeploymentStatus{Replicas: c.replicas, ReadyReplicas: c.replicas, AvailableReplicas: c.replicas},
+		})
+	}
+	return objects
+}
+
+// managementSettings are the appliance's saved settings with the backup targets the clusters are
+// offered, so that Administration lists the targets the create wizard offers.
+func (f *demoFleet) managementSettings() ([]byte, error) {
+	var settings map[string]json.RawMessage
+	if err := json.Unmarshal(f.data.Management, &settings); err != nil {
+		return nil, fmt.Errorf("the demo's appliance settings: %w", err)
+	}
+	settings["backupTargets"] = f.data.BackupTargets
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		return nil, fmt.Errorf("the demo's appliance settings: %w", err)
+	}
+	return raw, nil
+}
+
 // etcdHealth is the management cluster's control-plane nodes with their apiserver pods, and the
 // controller's record of the clusters' etcd members, which follow the VMs of the fleet.
 func (f *demoFleet) etcdHealth() ([]client.Object, error) {
@@ -283,6 +325,7 @@ func (f *demoFleet) etcdHealth() ([]client.Object, error) {
 		pod := demoPod(metav1.NamespaceSystem, "kube-apiserver-"+name, name, f.now.AddDate(0, 0, -30), "250m", "512Mi")
 		objects = append(objects, node, pod)
 	}
+	objects = append(objects, demoControllers()...)
 	record := provisioner.EtcdHealth{Checked: f.now, Nodes: f.data.ProxmoxNodes, Clusters: []provisioner.EtcdSet{}}
 	for i := range f.data.Clusters {
 		d := &f.data.Clusters[i]
@@ -503,10 +546,9 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 		f.objects = append(f.objects, demoReferences(&n)...)
 	}
 	nodes := f.data.ProxmoxNodes
-	hosts := nodes
-	if d.AvoidSkewedNode {
-		hosts = slices.DeleteFunc(slices.Clone(nodes), func(n string) bool { return n == f.skewedNode() })
-	}
+	hosts := slices.DeleteFunc(slices.Clone(nodes), func(n string) bool {
+		return d.AvoidSkewedNode && n == f.skewedNode() || !d.OnUnreachableNode && n == f.unreachable().Node
+	})
 	for i, m := range machines {
 		if d.Held && i == len(machines)-1 {
 			m.Annotations = map[string]string{

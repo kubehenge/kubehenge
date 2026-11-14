@@ -39,7 +39,7 @@ func checkRancherNodes(cluster *clusterv1.Cluster, class *clusterv1.ClusterClass
 			return err
 		}
 		if cores < RancherMinimumCores {
-			small = append(small, fmt.Sprintf("pool %s has %d", md.Name, cores))
+			small = append(small, fmt.Sprintf("pool %s has %d", PoolLabel(md.Name, TopologyPools(cluster)), cores))
 		}
 	}
 	if len(small) > 0 {

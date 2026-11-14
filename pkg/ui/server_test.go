@@ -61,6 +61,8 @@ type fakeAccounts struct {
 	now         func() time.Time
 	// nodeSkew is how far each Proxmox VE node's clock is from now.
 	nodeSkew map[string]time.Duration
+	// nodes, when set, replace the Proxmox VE nodes listed.
+	nodes []pve.Node
 	// members are every pool's guests. deleted records the VMs deleted.
 	members []pve.Member
 	deleted []int
@@ -215,7 +217,12 @@ func (f *fakeAccounts) Storages(context.Context, *pve.Ticket) ([]pve.Storage, er
 	}, nil
 }
 
-func (*fakeAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
+func (f *fakeAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nodes != nil {
+		return slices.Clone(f.nodes), nil
+	}
 	return []pve.Node{{Node: "pve1", Online: true, MaxMemory: 64 << 30}, {Node: "pve2", Online: true, MaxMemory: 64 << 30}}, nil
 }
 
