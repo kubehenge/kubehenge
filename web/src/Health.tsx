@@ -519,8 +519,7 @@ const share = (part: number, whole: number): string => `${Math.round((part / who
 
 // uptime is how long a VM has run, as the page says how long ago things happened.
 function uptime(seconds: number): string {
-  const now = Date.now();
-  return age(new Date(now - seconds * msPerSecond).toISOString(), now);
+  return age(new Date(Date.now() - seconds * msPerSecond).toISOString());
 }
 
 const cores = (millicores: number): string => (millicores / millicoresPerCore).toFixed(1);

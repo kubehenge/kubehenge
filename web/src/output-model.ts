@@ -120,6 +120,3 @@ export function outputProblems(outputs: LogOutput[]): Record<string, string> {
   });
   return p;
 }
-
-/** outputsProblem is the first problem of a set of outputs, for a step that holds them. */
-export const outputsProblem = (outputs: LogOutput[]): string | undefined => Object.values(outputProblems(outputs))[0];

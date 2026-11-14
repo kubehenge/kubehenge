@@ -300,10 +300,6 @@ export function nodeCustomisationVariable(v: NodeCustomisation, talos: boolean):
   return out;
 }
 
-/** hasNodeCustomisation tells whether the variable would send anything. */
-export const hasNodeCustomisation = (v: NodeCustomisation, talos: boolean): boolean =>
-  Object.keys(nodeCustomisationVariable(v, talos)).length > 0;
-
 export const sameNodeCustomisation = (a: NodeCustomisation, b: NodeCustomisation, talos: boolean): boolean =>
   JSON.stringify(nodeCustomisationVariable(a, talos)) === JSON.stringify(nodeCustomisationVariable(b, talos));
 

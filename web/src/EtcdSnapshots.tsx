@@ -6,11 +6,10 @@ import {
   backupKeys,
   backupsOf,
   noTargets,
-  scheduleHint,
   scheduleProblem,
   scheduleText,
   targetProblem,
-  targetText,
+  TargetScheduleFields,
   useClassTargets,
   type OfferedTarget,
 } from "./Backups";
@@ -36,7 +35,6 @@ import {
   Said,
   sentence,
   sole,
-  timeZones,
   useChange,
   usePoll,
   Skeleton,
@@ -211,47 +209,9 @@ export function EtcdSnapshotFieldset({
 }): JSX.Element {
   const uploadHintId = useId();
   const update = (patch: Partial<EtcdSnapshotFields>): void => onChange({ ...value, ...patch });
-  const listed = targets.some((t) => t.name === value.target);
   return (
     <>
-      <Field label="Target" error={problems.target}>
-        {(id) => (
-          <select id={id} value={value.target} onChange={(e) => update({ target: e.target.value })}>
-            <option value="" disabled>
-              Choose…
-            </option>
-            {targets.map((t) => (
-              <option key={t.name} value={t.name}>
-                {t.name}: {targetText(t)}
-              </option>
-            ))}
-            {filled(value.target) && !listed && (
-              <option value={value.target}>{value.target} (no longer offered)</option>
-            )}
-          </select>
-        )}
-      </Field>
-      <Field label="Schedule" hint={scheduleHint(value.schedule)} error={problems.schedule}>
-        {(id) => (
-          <input
-            id={id}
-            value={value.schedule}
-            spellCheck={false}
-            onChange={(e) => update({ schedule: e.target.value })}
-          />
-        )}
-      </Field>
-      <Field label="Time zone">
-        {(id) => (
-          <select id={id} value={value.timeZone} onChange={(e) => update({ timeZone: e.target.value })}>
-            {timeZones(value.timeZone).map((z) => (
-              <option key={z} value={z}>
-                {z}
-              </option>
-            ))}
-          </select>
-        )}
-      </Field>
+      <TargetScheduleFields value={value} update={update} targets={targets} problems={problems} />
       <Field label="Snapshots to keep" error={problems.keep}>
         {(id) => (
           <input

@@ -285,6 +285,15 @@ func interfaceScheme() (*runtime.Scheme, error) {
 	return scheme, nil
 }
 
+// managementKube is a client of the management cluster with the types the CLI reads and writes.
+func managementKube(cfg *rest.Config) (client.Client, error) {
+	scheme, err := interfaceScheme()
+	if err != nil {
+		return nil, err
+	}
+	return newClient(cfg, scheme)
+}
+
 func newClient(cfg *rest.Config, scheme *runtime.Scheme) (client.Client, error) {
 	c, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {

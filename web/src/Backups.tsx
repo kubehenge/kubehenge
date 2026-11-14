@@ -417,19 +417,24 @@ export function BackupSourcesField({
   );
 }
 
-/** BackupFieldset edits a cluster's backup settings. problems are those to show. */
-export function BackupFieldset({
+interface ScheduledTarget {
+  target: string;
+  schedule: string;
+  timeZone: string;
+}
+
+/** TargetScheduleFields edits where a cluster's runs go and when they start. */
+export function TargetScheduleFields({
   value,
-  onChange,
+  update,
   targets,
   problems,
 }: {
-  value: BackupFields;
-  onChange: (f: BackupFields) => void;
+  value: ScheduledTarget;
+  update: (patch: Partial<ScheduledTarget>) => void;
   targets: OfferedTarget[];
-  problems: Partial<Record<BackupField, string | undefined>>;
+  problems: { target?: string | undefined; schedule?: string | undefined };
 }): JSX.Element {
-  const update = (patch: Partial<BackupFields>): void => onChange({ ...value, ...patch });
   const listed = targets.some((t) => t.name === value.target);
   return (
     <>
@@ -471,6 +476,26 @@ export function BackupFieldset({
           </select>
         )}
       </Field>
+    </>
+  );
+}
+
+/** BackupFieldset edits a cluster's backup settings. problems are those to show. */
+export function BackupFieldset({
+  value,
+  onChange,
+  targets,
+  problems,
+}: {
+  value: BackupFields;
+  onChange: (f: BackupFields) => void;
+  targets: OfferedTarget[];
+  problems: Partial<Record<BackupField, string | undefined>>;
+}): JSX.Element {
+  const update = (patch: Partial<BackupFields>): void => onChange({ ...value, ...patch });
+  return (
+    <>
+      <TargetScheduleFields value={value} update={update} targets={targets} problems={problems} />
       <Field label="Days to keep" error={problems.retention}>
         {(id) => (
           <input

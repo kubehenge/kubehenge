@@ -566,35 +566,51 @@ func (a *Appliance) RestoreEtcd(ctx context.Context, name, passphrase string, ti
 	if a.Talos == nil {
 		return errors.New("this appliance does not reach Talos nodes")
 	}
-	b, err := a.backupSetup()
+	acc, err := a.etcdRestoreAccess(ctx, passphrase)
 	if err != nil {
 		return err
 	}
-	admin, err := a.Credential(ctx, passphrase, "talosconfig")
-	if err != nil {
-		return err
-	}
-	nodes, err := provisioner.TalosEndpoints(admin)
-	if err != nil {
-		return fmt.Errorf("the management cluster's talosconfig: %w", err)
-	}
-	folder := provisioner.ManagementEtcdFolder(b.target.Prefix)
 	//nolint:contextcheck // the run outlives the request that starts it
 	return a.startIn(&a.job, sessionRunner(ticket), "etcd-restore", EtcdRestoreRequest{Snapshot: name}, func(ctx context.Context, j *Job) error {
 		j.Add("Restoring the management cluster's etcd from " + name)
-		file, err := a.fetchEtcdSnapshot(ctx, b, folder, name, passphrase)
+		file, err := a.fetchEtcdSnapshot(ctx, acc.setup, acc.folder, name, passphrase)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = os.Remove(file) }()
 		j.Add("The snapshot matches its checksum")
 		open := func() (io.ReadCloser, error) { return os.Open(file) } //nolint:gosec // the appliance's own file
-		if err := a.Talos.Restore(ctx, admin, nodes, open, j.Add); err != nil {
+		if err := a.Talos.Restore(ctx, acc.admin, acc.nodes, open, j.Add); err != nil {
 			return fmt.Errorf("restoring etcd: %w", err)
 		}
 		j.Add("etcd runs, restored; the other control-plane nodes join it")
 		return nil
 	})
+}
+
+// etcdRestoreAccess is what a restore of the management cluster's etcd needs to read the snapshots
+// and reach the control-plane nodes.
+type etcdRestoreAccess struct {
+	setup  *backupSetup
+	admin  []byte
+	nodes  []string
+	folder string
+}
+
+func (a *Appliance) etcdRestoreAccess(ctx context.Context, passphrase string) (*etcdRestoreAccess, error) {
+	b, err := a.backupSetup()
+	if err != nil {
+		return nil, err
+	}
+	admin, err := a.Credential(ctx, passphrase, "talosconfig")
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := provisioner.TalosEndpoints(admin)
+	if err != nil {
+		return nil, fmt.Errorf("the management cluster's talosconfig: %w", err)
+	}
+	return &etcdRestoreAccess{setup: b, admin: admin, nodes: nodes, folder: provisioner.ManagementEtcdFolder(b.target.Prefix)}, nil
 }
 
 // fetchEtcdSnapshot decrypts a snapshot into a file of the appliance's and checks it against the
