@@ -91,40 +91,17 @@ func (d *EtcdDialer) Snapshot(ctx context.Context, cluster *clusterv1.Cluster) (
 	if isTalos(cluster) {
 		return d.talosSnapshot(ctx, cluster)
 	}
-	ca, err := etcdCA(ctx, d.Reader, cluster)
+	access, err := d.podAccess(ctx, cluster)
 	if err != nil {
 		return nil, err
-	}
-	now := time.Now
-	if d.Now != nil {
-		now = d.Now
-	}
-	tlsConfig, err := etcdClientTLS(ca, now())
-	if err != nil {
-		return nil, err
-	}
-	workload, found, err := d.Remotes.get(ctx, cluster)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, errors.New("the cluster has no kubeconfig yet")
-	}
-	pods, err := etcdPods(ctx, workload.client, distributionOf(cluster))
-	if err != nil {
-		d.Remotes.forget(cluster)
-		return nil, err
-	}
-	if len(pods) == 0 {
-		return nil, errors.New("no etcd member of the cluster is running and ready")
 	}
 	var errs []error
-	for i := range pods {
-		namespace, name := pods[i].Namespace, pods[i].Name
+	for i := range access.pods {
+		namespace, name := access.pods[i].Namespace, access.pods[i].Name
 		dial := func(context.Context) (net.Conn, error) {
-			return portForward(workload.config, namespace, name, etcdPort)
+			return portForward(access.config, namespace, name, etcdPort)
 		}
-		s, err := snapshotThrough(ctx, dial, tlsConfig)
+		s, err := snapshotThrough(ctx, dial, access.tls)
 		if err == nil {
 			return s, nil
 		}
