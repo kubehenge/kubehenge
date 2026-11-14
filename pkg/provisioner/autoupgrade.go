@@ -797,23 +797,36 @@ func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[
 		u.clearSkipped(ctx, c)
 		return "", nil
 	}
-	if r, err := rancherOf(c); err == nil && r.Install && !u.RancherKubernetes.Allows(to) {
-		return "", nil
+	return u.unheld(ctx, c, ch, to)
+}
+
+// unheld is the first of to and, failing that, the newest patch release of the cluster's own minor
+// version that nothing holds back, or "". A hold on the next minor must not cost the cluster the
+// patch releases of its own. Where all are held, the cluster says why the first waits.
+func (u *Upgrader) unheld(ctx context.Context, c *clusterv1.Cluster, ch Channels, to string) (string, error) {
+	targets := []string{to}
+	if patch := ch.Target(c.Spec.Topology.Version, upgradePatch); patch != "" && patch != to {
+		targets = append(targets, patch)
 	}
-	if isTalos(c) {
-		// The Talos release moves first, by hand: a minor version it does not run waits for it.
-		talos, err := TalosVersion(c)
-		if err != nil || templates.TalosRunsKubernetes(talos, to) != nil {
+	var reason, message string
+	for i, target := range targets {
+		r, m, err := u.heldBy(ctx, c, target)
+		if err != nil {
 			return "", err
 		}
-		if _, upgrading := c.Annotations[TalosUpgradingAnnotation]; upgrading {
+		if r != "" {
+			if i == 0 {
+				reason, message = r, m
+			}
+			continue
+		}
+		if !u.vetUpgrade(ctx, c, target) {
 			return "", nil
 		}
+		return target, nil
 	}
-	if !u.vetUpgrade(ctx, c, to) {
-		return "", nil
-	}
-	return to, nil
+	u.markSkipped(ctx, c, to, reason, fmt.Sprintf("An automatic upgrade to %s is held back. %s", to, message))
+	return "", nil
 }
 
 // channelsOf reads the release channels of a cluster's distribution on its node OS, once a round
