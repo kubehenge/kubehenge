@@ -113,10 +113,11 @@ export function timeoutsText(own: NodeTimeouts, fallback: NodeTimeouts = {}): st
   return all ? `${text} (${classDefault}s)` : text;
 }
 
-const classHint = (classes: number | undefined, unit: number): string =>
-  classes === undefined
-    ? "Empty takes the class's, and 0 sets no limit"
-    : `Empty takes ${classes / unit}, and 0 sets no limit`;
+const noLimitHint = "0 for no limit";
+
+// classPlaceholder shows what an empty field takes: the class's wait, where it sets one.
+const classPlaceholder = (classes: number | undefined, unit: number): string | undefined =>
+  classes === undefined ? undefined : String(classes / unit);
 
 /**
  * NodeTimeoutFields are the waits a removed machine's node is given: for its pods to drain, for its
@@ -138,13 +139,14 @@ export function NodeTimeoutFields({
       <Field
         label="Drain, minutes"
         error={problems.drain}
-        hint={classHint(fallback?.nodeDrainTimeoutSeconds, secondsPerMinute)}
+        hint={noLimitHint}
       >
         {(id) => (
           <input
             id={id}
             inputMode="decimal"
             value={value.drain}
+            placeholder={classPlaceholder(fallback?.nodeDrainTimeoutSeconds, secondsPerMinute)}
             onChange={(e) => onChange({ ...value, drain: e.target.value })}
           />
         )}
@@ -152,13 +154,14 @@ export function NodeTimeoutFields({
       <Field
         label="Volume detach, minutes"
         error={problems.detach}
-        hint={classHint(fallback?.nodeVolumeDetachTimeoutSeconds, secondsPerMinute)}
+        hint={noLimitHint}
       >
         {(id) => (
           <input
             id={id}
             inputMode="decimal"
             value={value.detach}
+            placeholder={classPlaceholder(fallback?.nodeVolumeDetachTimeoutSeconds, secondsPerMinute)}
             onChange={(e) => onChange({ ...value, detach: e.target.value })}
           />
         )}
@@ -166,13 +169,14 @@ export function NodeTimeoutFields({
       <Field
         label="Node removal, seconds"
         error={problems.deletion}
-        hint={classHint(fallback?.nodeDeletionTimeoutSeconds, 1)}
+        hint={noLimitHint}
       >
         {(id) => (
           <input
             id={id}
             inputMode="decimal"
             value={value.deletion}
+            placeholder={classPlaceholder(fallback?.nodeDeletionTimeoutSeconds, 1)}
             onChange={(e) => onChange({ ...value, deletion: e.target.value })}
           />
         )}
