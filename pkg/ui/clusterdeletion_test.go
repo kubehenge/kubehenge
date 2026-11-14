@@ -10,13 +10,18 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -108,5 +113,68 @@ func TestAClusterWhoseAuthorityExpiredCanBeDeleted(t *testing.T) {
 	got := storedCluster(t, h, "one")
 	if got.DeletionTimestamp.IsZero() {
 		t.Error("the cluster is not being deleted")
+	}
+}
+
+// What the API server refuses reaches the user with its status and its own message. Only a
+// management cluster that cannot be reached, or does not answer in time, is a bad gateway.
+func TestManagementClusterAnswersKeepTheirStatus(t *testing.T) {
+	t.Parallel()
+	clusters := clusterv1.GroupVersion.WithResource("clusters").GroupResource()
+	invalid := apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), "one",
+		field.ErrorList{field.Invalid(field.NewPath("spec", "topology"), nil, "a webhook refused it")})
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+		says   string
+	}{
+		"forbidden":       {apierrors.NewForbidden(clusters, "one", errors.New("a policy refused it")), http.StatusForbidden, "a policy refused it"},
+		"invalid":         {invalid, http.StatusUnprocessableEntity, "spec.topology: Invalid value: null: a webhook refused it"},
+		"conflict":        {apierrors.NewConflict(clusters, "one", errors.New("modified")), http.StatusConflict, clusterChanged},
+		"not found":       {apierrors.NewNotFound(clusters, "one"), http.StatusNotFound, "not found"},
+		"wrapped":         {fmt.Errorf("deleting: %w", apierrors.NewForbidden(clusters, "one", errors.New("held"))), http.StatusForbidden, "held"},
+		"timeout":         {apierrors.NewTimeoutError("the request timed out", 1), http.StatusBadGateway, "did not answer"},
+		"deadline":        {context.DeadlineExceeded, http.StatusBadGateway, "did not answer"},
+		"no connection":   {&url.Error{Op: "Get", URL: "https://10.0.0.1:6443", Err: errors.New("connection refused")}, http.StatusBadGateway, "did not answer"},
+		"webhook unreach": {apierrors.NewInternalError(errors.New(`failed calling webhook "clusters.kubehenge.dev"`)), http.StatusBadGateway, "did not answer"},
+	} {
+		h := newHarness(t)
+		rec := httptest.NewRecorder()
+		h.server.kubeError(rec, httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/clusters/default/one", nil), tc.err)
+		if rec.Code != tc.status || !strings.Contains(rec.Body.String(), tc.says) {
+			t.Errorf("%s: status %d, %s; want %d saying %q", name, rec.Code, rec.Body, tc.status, tc.says)
+		}
+	}
+}
+
+// The guard's refusal reaches the user as the guard words it, as when a GitOps sync takes the
+// annotation off between the interface's patch and its delete.
+func TestTheDeletionGuardsRefusalReachesTheUser(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, cluster("default", "one"))
+	h.admitClusters()
+	admitted := h.server.currentKube()
+	h.server.setKube(interceptor.NewClient(admitted.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if err := c.Patch(ctx, obj, patch, opts...); err != nil {
+				return err
+			}
+			synced := &clusterv1.Cluster{}
+			if err := h.kube.Get(ctx, client.ObjectKeyFromObject(obj), synced); err != nil {
+				return err
+			}
+			delete(synced.Annotations, provisioner.AllowDeletionAnnotation)
+			return h.kube.Update(ctx, synced)
+		},
+	}))
+	b := h.browser()
+	b.signIn("dev@pve")
+	rec := b.do("DELETE", "/api/clusters/default/one", `{"confirm":"one"}`)
+	expect(t, rec, http.StatusForbidden)
+	if !strings.Contains(rec.Body.String(), "cluster one is protected from deletion: annotate it with kubehenge.dev/allow-deletion=true") {
+		t.Errorf("refusal = %s", rec.Body)
+	}
+	if got := storedCluster(t, h, "one"); !got.DeletionTimestamp.IsZero() {
+		t.Error("the cluster is being deleted")
 	}
 }

@@ -1623,10 +1623,10 @@ func (s *Server) applyAddonChanges(w http.ResponseWriter, r *http.Request, u use
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// kubeError answers with what the management cluster refused. Validation messages are the user's
-// to read. Anything else is logged and kept vague.
+// kubeError answers with what the management cluster refused. Validation messages and refusals,
+// an admission policy's or webhook's among them, are the user's to read. Anything else is a
+// management cluster that could not be reached or failed, which is logged and kept vague.
 func (s *Server) kubeError(w http.ResponseWriter, r *http.Request, err error) {
-	var status apierrors.APIStatus
 	switch {
 	case apierrors.IsNotFound(err):
 		writeError(w, http.StatusNotFound, "not found")
@@ -1635,13 +1635,20 @@ func (s *Server) kubeError(w http.ResponseWriter, r *http.Request, err error) {
 	case apierrors.IsConflict(err):
 		writeError(w, http.StatusConflict, clusterChanged)
 	case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
-		if errors.As(err, &status) {
-			writeError(w, http.StatusUnprocessableEntity, status.Status().Message)
-			return
-		}
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeError(w, http.StatusUnprocessableEntity, apiMessage(err))
+	case apierrors.IsForbidden(err):
+		writeError(w, http.StatusForbidden, apiMessage(err))
 	default:
 		s.Log.ErrorContext(r.Context(), "management cluster request failed", "error", err)
 		writeError(w, http.StatusBadGateway, "the management cluster did not answer")
 	}
+}
+
+// apiMessage is the API server's own message, without the client's wrapping.
+func apiMessage(err error) string {
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return status.Status().Message
+	}
+	return err.Error()
 }
