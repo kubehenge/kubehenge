@@ -149,7 +149,7 @@ func TestInterfaceTokenRenewal(t *testing.T) {
 	issuer.refuse = apierrors.NewUnauthorized("token expired")
 	issuer.mu.Unlock()
 	err = a.renewTokenWhenDue(t.Context(), start.Add(60*24*time.Hour), kube)
-	if err == nil || !strings.Contains(err.Error(), "apply the management cluster again") {
+	if err == nil || !strings.Contains(err.Error(), "Apply the management cluster again") {
 		t.Fatalf("a token run out: %v", err)
 	}
 	if after, _ := os.ReadFile(a.TokenPath()); !bytes.Equal(after, raw) {
