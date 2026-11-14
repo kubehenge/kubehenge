@@ -49,8 +49,11 @@ const (
 
 // Firewall is a cluster's firewall variable.
 type Firewall struct {
-	Enabled bool           `json:"enabled"`
-	Ports   []FirewallPort `json:"ports,omitempty"`
+	Enabled bool `json:"enabled"`
+	// ServingPorts, unless false, opens the API, ingress, the load-balancer addresses, the
+	// NodePorts and ICMP echo to anyone, after the security groups.
+	ServingPorts *bool          `json:"servingPorts,omitempty"`
+	Ports        []FirewallPort `json:"ports,omitempty"`
 }
 
 // FirewallPort is a port or a range of ports a cluster's nodes accept from anywhere.
@@ -75,6 +78,8 @@ type FirewallSources struct {
 	Interval   time.Duration
 	// Datacenter reads whether Proxmox VE's datacenter firewall is on. Nil, no condition is kept.
 	Datacenter APIReach
+	// unreached counts the runs in a row whose read of the datacenter firewall got no answer.
+	unreached int
 	// Events, when set, records a warning on the cluster once its firewall does nothing or its
 	// state cannot be read.
 	Events events.EventRecorder
@@ -147,20 +152,34 @@ func (f *FirewallSources) runOnce(ctx context.Context) error {
 		if pc == nil || !Owns(c, f.Namespace) || !c.DeletionTimestamp.IsZero() {
 			continue
 		}
-		want := map[string]string{FirewallSourcesAnnotation: "", FirewallDestinationsAnnotation: ""}
-		on := firewalled(c)
-		if on {
-			want[FirewallSourcesAnnotation] = strings.Join(append(slices.Clone(sources), meshSources(c, clusters.Items, byCluster)...), ",")
-			want[FirewallDestinationsAnnotation] = strings.Join(loadBalancerDestinations(c), ",")
+		// A cluster without a firewall has nothing the datacenter firewall's state could say.
+		seen := datacenterUnasked
+		if firewalled(c) {
+			seen = datacenter
 		}
-		if err := f.annotate(ctx, pc, want); err != nil {
+		if err := f.annotate(ctx, pc, firewallAnnotations(c, sources, clusters.Items, byCluster)); err != nil {
 			errs = append(errs, fmt.Errorf("cluster %s/%s: %w", c.Namespace, c.Name, err))
 		}
-		if err := f.markInactive(ctx, c, on, datacenter); err != nil {
+		if err := f.markInactive(ctx, c, seen); err != nil {
 			errs = append(errs, fmt.Errorf("cluster %s/%s: %w", c.Namespace, c.Name, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// firewallAnnotations are the firewall annotations a cluster's ProxmoxCluster should hold, each
+// empty where it has none: the sources of a firewalled cluster, and the load-balancer addresses
+// where its serving ports are open.
+func firewallAnnotations(c *clusterv1.Cluster, sources []string, clusters []clusterv1.Cluster, byCluster map[types.NamespacedName]*unstructured.Unstructured) map[string]string {
+	want := map[string]string{FirewallSourcesAnnotation: "", FirewallDestinationsAnnotation: ""}
+	if !firewalled(c) {
+		return want
+	}
+	want[FirewallSourcesAnnotation] = strings.Join(append(slices.Clone(sources), meshSources(c, clusters, byCluster)...), ",")
+	if servesPorts(c) {
+		want[FirewallDestinationsAnnotation] = strings.Join(loadBalancerDestinations(c), ",")
+	}
+	return want
 }
 
 // firewalled tells whether a cluster's nodes have a firewall: the firewall variable on, or security
@@ -171,6 +190,14 @@ func firewalled(c *clusterv1.Cluster) bool {
 	}
 	groups, set, err := optionalVariable[[]string](c, SecurityGroupsVariable)
 	return err == nil && set && len(groups) > 0
+}
+
+// servesPorts tells whether a cluster's firewall opens its serving ports to anyone, as its class's
+// template does: when the firewall variable is on and its serving ports are not switched off. A
+// cluster made before the variable has its groups alone.
+func servesPorts(c *clusterv1.Cluster) bool {
+	fw, set, err := optionalVariable[Firewall](c, FirewallVariable)
+	return err == nil && set && fw.Enabled && (fw.ServingPorts == nil || *fw.ServingPorts)
 }
 
 // loadBalancerDestinations are the addresses a cluster's load balancer hands out, none without one.
@@ -233,21 +260,42 @@ func proxmoxClusterAddresses(pc *unstructured.Unstructured) []string {
 type datacenterState int
 
 const (
-	datacenterUnread datacenterState = iota
+	// datacenterUnasked is a run that read nothing, as no cluster is firewalled.
+	datacenterUnasked datacenterState = iota
 	datacenterOn
 	datacenterOff
+	// datacenterRefused is Proxmox VE refusing the read for want of Sys.Audit on /.
+	datacenterRefused
+	// datacenterHeld is a read that got no answer, too few runs in a row to say so: each cluster
+	// keeps what it holds, so a flaky read neither flips the condition nor records events.
+	datacenterHeld
+	// datacenterUnreached is unreachedRuns or more runs in a row without an answer.
+	datacenterUnreached
 )
+
+// unreachedRuns is how many runs in a row get no answer before a cluster says its firewall's state
+// is unknown.
+const unreachedRuns = 3
 
 // datacenter reads the datacenter firewall's state once a run, and only where a cluster is
 // firewalled.
 func (f *FirewallSources) datacenter(ctx context.Context, clusters []clusterv1.Cluster) datacenterState {
 	if f.Datacenter == nil || !slices.ContainsFunc(clusters, func(c clusterv1.Cluster) bool { return firewalled(&c) }) {
-		return datacenterUnread
+		return datacenterUnasked
 	}
-	reach, ok := f.Datacenter.APIReach(ctx)
+	reach, err := f.Datacenter.APIReach(ctx)
+	if err == nil || refused(err) {
+		f.unreached = 0
+	}
 	switch {
-	case !ok:
-		return datacenterUnread
+	case refused(err):
+		return datacenterRefused
+	case err != nil:
+		f.unreached++
+		if f.unreached < unreachedRuns {
+			return datacenterHeld
+		}
+		return datacenterUnreached
 	case reach.Enabled:
 		return datacenterOn
 	default:
@@ -255,26 +303,38 @@ func (f *FirewallSources) datacenter(ctx context.Context, clusters []clusterv1.C
 	}
 }
 
-// markInactive keeps FirewallInactiveCondition on a firewalled cluster at what is known of the
-// datacenter firewall, and takes it off a cluster without a firewall or once the datacenter's is on.
-// It is a warning only: the cluster is never held for it.
-func (f *FirewallSources) markInactive(ctx context.Context, c *clusterv1.Cluster, on bool, datacenter datacenterState) error {
-	if f.Datacenter == nil {
-		return nil
-	}
-	var cond *metav1.Condition
-	switch {
-	case !on || datacenter == datacenterOn:
-	case datacenter == datacenterOff:
-		cond = &metav1.Condition{Status: metav1.ConditionTrue, Reason: "DatacenterFirewallOff", Message: FirewallInactiveMessage}
-	default:
-		cond = &metav1.Condition{
+// inactiveCondition is FirewallInactiveCondition for a firewalled cluster in the datacenter state
+// given, nil where it has none.
+func inactiveCondition(datacenter datacenterState) *metav1.Condition {
+	switch datacenter {
+	case datacenterOff:
+		return &metav1.Condition{Status: metav1.ConditionTrue, Reason: "DatacenterFirewallOff", Message: FirewallInactiveMessage}
+	case datacenterRefused:
+		return &metav1.Condition{
 			Status: metav1.ConditionUnknown, Reason: "FirewallStateUnknown",
 			Message: "Kubehenge cannot read whether Proxmox VE's datacenter firewall is on, which needs Sys.Audit on /",
 		}
+	case datacenterUnreached:
+		return &metav1.Condition{
+			Status: metav1.ConditionUnknown, Reason: "FirewallStateUnknown",
+			Message: "Kubehenge cannot reach Proxmox VE to read whether its datacenter firewall is on",
+		}
+	case datacenterUnasked, datacenterOn, datacenterHeld:
+		return nil
 	}
+	return nil
+}
+
+// markInactive keeps FirewallInactiveCondition on a cluster at what is known of the datacenter
+// firewall for it, and takes it off once there is nothing to say, as for a cluster without a
+// firewall or once the datacenter's is on. It is a warning only: the cluster is never held for it.
+func (f *FirewallSources) markInactive(ctx context.Context, c *clusterv1.Cluster, datacenter datacenterState) error {
+	if f.Datacenter == nil || datacenter == datacenterHeld {
+		return nil
+	}
+	cond := inactiveCondition(datacenter)
 	have := meta.FindStatusCondition(c.Status.Conditions, FirewallInactiveCondition)
-	if (cond == nil && have == nil) || (cond != nil && have != nil && have.Status == cond.Status && have.Reason == cond.Reason) {
+	if (cond == nil && have == nil) || (cond != nil && have != nil && have.Status == cond.Status && have.Reason == cond.Reason && have.Message == cond.Message) {
 		return nil
 	}
 	before, err := markCluster(ctx, f.Client, f.Reader, client.ObjectKeyFromObject(c), FirewallInactiveCondition, cond)

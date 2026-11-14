@@ -7,6 +7,7 @@ import {
   controlPlaneSizes,
   formLoadBalancerValue,
   formReleaseMirror,
+  firewallFieldsOf,
   machineLeast,
   createRoom,
   memoryNodeWarning,
@@ -770,9 +771,10 @@ function InterfaceFields({
       )}
       {variable(cls, "firewall") === undefined ? null : (
         <FirewallField
-          value={{ on: form.firewall, ports: form.firewallPorts }}
+          value={firewallFieldsOf(form)}
           onChange={(f) => {
             set("firewall", f.on);
+            set("firewallServing", f.serving);
             set("firewallPorts", f.ports);
           }}
           groups={form.securityGroups}

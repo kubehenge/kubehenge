@@ -65,9 +65,10 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | VLAN tag | Optional, 1 to 4094. With a tag, the wizard fills in nothing from the bridge's untagged network. A VNet of a VLAN zone tags its traffic already, so Kubehenge refuses a tag on it. |
 | MTU | Optional, 1280 to 65520, [below](#interface-mtu-and-queues). |
 | Queues | Optional, 1 to 64. The queues of the VMs' virtio interface, which spread its traffic over several vCPUs. Unset, it has one. |
-| Firewall | On. The nodes' Proxmox VE firewall, with the serving ports open, [below](#firewall). |
+| Firewall | On. The nodes' Proxmox VE firewall, [below](#firewall). |
+| Serving ports open | On. The API, ingress, the load balancer, NodePorts and ping, open to anyone. |
 | Further open ports | Optional. Ports the firewall opens to anywhere, such as `tcp/8443`. |
-| Firewall security groups | Optional. Proxmox VE security groups applied after the firewall's own rules. |
+| Firewall security groups | Optional. Proxmox VE security groups, applied before the serving ports. |
 | Address families | IPv4, IPv6, or both for dual-stack, the first one primary. Fixed for the cluster's life, [below](#ipv6-and-dual-stack). |
 | API address | The control plane's virtual IP: an unused address in the nodes' network of the primary family, outside the node addresses. |
 | Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds. It counts an autoscaled pool at its most. Leave more for scaling up. |
@@ -121,26 +122,40 @@ Every node's VM and interface get the Proxmox VE firewall, on by default. It dro
 
 - **Datacenter firewall.** The VMs' rules act only while it is on (Datacenter, Firewall, Options). Kubehenge never turns it on. While it is off, the wizard, the cluster's options, `kubehenge cluster list` and the cluster's `FirewallInactive` condition say so, and a warning event is recorded. Where Proxmox VE refuses the read, the condition is Unknown with reason `FirewallStateUnknown`, and the wizard shows the state as unknown. A cluster with its firewall off gets neither. Nothing is held for it.
 - **Off.** Clear **Firewall** in the wizard or the cluster's options, or set `firewall.enabled: false`. The nodes then get no VM firewall.
-- **When.** Each VM's rules are written before it first starts. Switching the firewall, its ports or its groups replaces every node, one at a time.
+- **Serving ports closed.** Clear **Serving ports open**, or set `firewall.servingPorts: false`. The nodes then accept only the cluster's own traffic, the management side, the security groups and the further ports.
+- **When.** Each VM's rules are written before it first starts. Switching the firewall, its serving ports, its further ports or its groups replaces every node, one at a time.
 - **Privileges.** The rules and IPSets live on each VM. They need no right beyond those the controller holds on its VMs.
 
 ##### What the firewall accepts
 
-- **The cluster's own traffic.** All traffic from the cluster's API address, node addresses and pod ranges. That covers etcd, the kubelet and the pod network on any port.
-- **The management side.** All traffic from the management cluster's nodes and the appliance. The appliance's interface and Headlamp reach the API server directly.
-- **Serving ports, from anywhere.** The Kubernetes API (6443), ingress (80 and 443), NodePorts (30000 to 32767, TCP and UDP) and ICMP echo of both families.
-- **Load-balancer addresses.** All traffic to the addresses of the [load balancer](#load-balancer).
-- **Cluster Mesh peers.** All traffic from the nodes and pods of each cluster it is [linked](#cluster-mesh) with. A listed cluster that does not list it back adds nothing.
-- **Further ports.** `firewall.ports`, such as `tcp/8443` or `udp/4000-4010` in the wizard.
-- **Security groups.** Groups named under **Firewall security groups** apply after Kubehenge's rules. Each exists under Datacenter, Firewall, Security Group, or the controller refuses it. Up to 16 groups of 2 to 18 letters, digits, `-` and `_`, the first a letter.
+The rules apply in this order, and the first that matches decides.
 
-The NodePort rule covers Kubernetes' default range, since no class sets another. A Service on another port needs it in `firewall.ports`. On k3s without a load balancer, servicelb answers on each node's address, so its ports need opening too.
+1. **The cluster's own traffic.** All traffic from the cluster's API address, node addresses and pod ranges. That covers etcd, the kubelet and the pod network on any port.
+2. **The management side.** All traffic from the management cluster's nodes and the appliance. The appliance's interface and Headlamp reach the API server directly.
+3. **Cluster Mesh peers.** All traffic from the nodes and pods of each cluster it is [linked](#cluster-mesh) with. A listed cluster that does not list it back adds nothing.
+4. **Security groups.** Groups named under **Firewall security groups**, in their order. A group can drop or narrow anything below, such as the API to one network. Each exists under Datacenter, Firewall, Security Group, or the controller refuses it. Up to 16 groups of 2 to 18 letters, digits, `-` and `_`, the first a letter.
+5. **Load-balancer addresses**, while the serving ports are open. All traffic to the addresses of the [load balancer](#load-balancer).
+6. **Serving ports, from anywhere**, while they are open. The Kubernetes API (6443), ingress (80 and 443), NodePorts (30000 to 32767, TCP and UDP) and ICMP echo of both families. On Talos also Talos's API (50000), which takes only the cluster's client certificates, as the Kubernetes API does.
+7. **Further ports.** `firewall.ports`, such as `tcp/8443` or `udp/4000-4010` in the wizard.
+
+SSH (22) is not among them, so it stays closed unless a group lets it in ([below](#ssh-to-the-nodes)). The NodePort rule covers Kubernetes' default range, since no class sets another. A Service on another port needs it in `firewall.ports`. On k3s without a load balancer, servicelb answers on each node's address, so its ports need opening too.
 
 A new address of the nodes, the management cluster, the appliance, a mesh peer or the load balancer goes into each running VM's `kubehenge` or `kubehenge-lb` IPSet. No node is replaced. When the appliance gets a new address by DHCP, the clusters accept it within a minute. While the controller is away, the IPSets keep what was last written.
 
+##### SSH to the nodes
+
+Make a security group that lets SSH in from your administrators' network, then name it under **Firewall security groups**. On a Proxmox VE node, with `192.0.2.0/24` as that network:
+
+```sh
+pvesh create /cluster/firewall/groups --group ssh
+pvesh create /cluster/firewall/groups/ssh --type in --action ACCEPT --proto tcp --dport 22 --source 192.0.2.0/24
+```
+
+In the web interface, that is Datacenter, Firewall, Security Group, **Create** `ssh`, then a rule with direction `in`, action `ACCEPT`, protocol `tcp`, destination port `22` and source `192.0.2.0/24`. Talos nodes run no SSH.
+
 ##### Lockout check
 
-With the datacenter firewall on, each Proxmox VE node's own firewall lets the API in only from the node's local network and the `management` IPSet. The controller refuses a firewall that would cut the appliance or the management cluster off the API, and names the addresses to add to the IPSet. It checks security groups also while the datacenter firewall is off, since they are named to act. The setup's pre-flight does the same.
+Security groups act only with the datacenter firewall on, which also turns on each Proxmox VE node's own firewall. That one lets the API in only from the node's local network and the `management` IPSet. So the controller refuses security groups that would cut the appliance or the management cluster off the API, and names the addresses to add to the IPSet. It checks them also while the datacenter firewall is off, since they are named to act. A firewall without groups is never refused, since the VMs' rules leave the nodes' own firewall alone. The setup's pre-flight does the same.
 
 Both of Proxmox VE's firewalls read what Kubehenge writes: the default one on iptables and the one on nftables (Host, Firewall, Options, nftables). The end-to-end tests run the nftables one.
 
@@ -1046,7 +1061,7 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 | Network | Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
 | Network | Load balancer | always | See the list below. |
 | Network | Cluster Mesh | on a cluster that runs Cilium | See the list below. |
-| Network | Firewall | always | On or off, further ports and security groups. Replaces every node, one at a time ([Firewall](#firewall)). |
+| Network | Firewall | always | On or off, the serving ports open or closed, further ports and security groups. Replaces every node, one at a time ([Firewall](#firewall)). |
 | Storage | CSI plugin | where the management cluster lets clusters choose its newest release, or while the cluster runs it | [Persistent volumes](#persistent-volumes). |
 | Storage | Volume snapshots | where the management cluster lets clusters take them, or while they are on | [Volume snapshots](#volume-snapshots). |
 | Add-ons | Headlamp, Monitoring, Logs, Certificates, Istio, Rancher, GitOps | always | See the list below. |
@@ -1724,7 +1739,7 @@ A restore that fails before etcd was restored starts every control plane again a
 
 #### Restore by hand
 
-Without that, **Restore…** lists the steps for the chosen snapshot, with the commands for the cluster's distribution. Those for the nodes run as root over SSH or the VM's console, after downloading the snapshot to the first node as `/var/lib/kubehenge-restore/snapshot.db`. On RKE2 and k3s, `etcdutl` and `openssl` first move the snapshot's revision on, on any machine that has both. The `kubectl` ones run with the management cluster's kubeconfig.
+Without that, **Restore…** lists the steps for the chosen snapshot, with the commands for the cluster's distribution. Those for the nodes run as root over SSH or the VM's console, after downloading the snapshot to the first node as `/var/lib/kubehenge-restore/snapshot.db`. The firewall keeps SSH closed until a security group [lets it in](#ssh-to-the-nodes). On RKE2 and k3s, `etcdutl` and `openssl` first move the snapshot's revision on, on any machine that has both. The `kubectl` ones run with the management cluster's kubeconfig.
 
 ## Delete
 
@@ -2058,8 +2073,8 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `registryMirrors` | no | Up to 16 entries. `registry` is a lower-case host name with an optional port, or `*` for every registry. `endpoints` are 1 to 4 `http://` or `https://` addresses, tried in order. A path has to end in `/v2`. `caBundle` is the PEM authority of the endpoints. |
 | `trustedCAs` | no | Up to 8 PEM bundles of certificates, for the nodes' trust store. |
 | `releaseMirror` | RKE2 and k3s only | The cluster's own release mirror ([above](#a-clusters-own-release-mirror)). `url` is an `http://` or `https://` address without credentials, a query or a trailing slash. `caBundle` is the PEM authority of an `https://` mirror. Unset, the management cluster's mirror or GitHub. |
-| `firewall` | no | `enabled` (default `true`) and `ports`, a list of `protocol` (`tcp` or `udp`), `port` and an optional `endPort` ([above](#firewall)). Changing it replaces every node. |
-| `securityGroups` | no | Up to 16 Proxmox VE security group names, applied after the firewall's own rules. They need the firewall on ([above](#firewall)). Changing it replaces every node. |
+| `firewall` | no | `enabled` (default `true`), `servingPorts` (default `true`) and `ports`, a list of `protocol` (`tcp` or `udp`), `port` and an optional `endPort` ([above](#firewall)). Changing it replaces every node. |
+| `securityGroups` | no | Up to 16 Proxmox VE security group names, applied after the cluster's own traffic and before the serving ports. They need the firewall on ([above](#firewall)). Changing it replaces every node. |
 | `gitops` | no | `enabled` (default false). `engine`, `argocd` (default) or `flux`. `repository`, with `url` (`https://` or `ssh://`), `revision` (a branch or full ref, default `main`) and `path` (default `.`) and `caBundle` (PEM, for an `https://` server the usual authorities do not sign, not with Flux and `existingSecret`). `auth`, `none` (default), `deployKey`, `token` or `existingSecret`. `deployKey` works over `ssh://`. The key is in the Secret `<name>-gitops` beside the Cluster, its public half under `identity.pub`. `token` is the cluster's `gitops` credential, `username` and `password`. With `existingSecret`, the field `existingSecret` names the Secret. `knownHosts`, the server's host keys as known_hosts lines, at least one for the URL's host and port. It is required over `ssh://` except for Flux with `existingSecret`. `hostname` and `tlsSecret`, to serve the web interface through the ingress controller. `admins`, the first provider's groups that administer Argo CD. `signIn`, with `clientID` (the provider's own when unset) and `clientSecret`, `none` (default, PKCE), `stored` or `existingSecret`. `stored` is the cluster's `oidc-client` credential, key `clientSecret`. With `existingSecret`, the field `signIn.existingSecret` names the Secret. `ui` (default false), Flux's web interface, which needs `hostname` and a client secret. `ui` and `admins` need an identity provider in `oidc`. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
 | `upgrades` | no | Automatic Kubernetes upgrades. `mode` (`off`, `patch` or `minor`, default `off`) and `window` ([upgrading.md](upgrading.md#automatically-inside-a-window)). `nodeImages` (default true) sets whether the nodes move to new builds of their VM template in the window ([above](#node-image-refresh)). On Talos it sets whether they move to new Talos patch releases ([above](#talos-upgrades)). |

@@ -69,10 +69,14 @@ describe("a new cluster's firewall", () => {
     expect(set).toHaveBeenLastCalledWith("firewallPorts", "t");
     await user.type(screen.getByLabelText("Firewall security groups"), "k");
     expect(set).toHaveBeenLastCalledWith("securityGroups", "k");
+    expect(screen.getByRole("checkbox", { name: "Serving ports open" })).toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: "Serving ports open" }));
+    expect(set).toHaveBeenCalledWith("firewallServing", false);
     await user.click(screen.getByRole("checkbox", { name: "Firewall" }));
     expect(set).toHaveBeenCalledWith("firewall", false);
 
     rerender(step(withFirewall, { ...newForm(), firewall: false }));
+    expect(screen.queryByRole("checkbox", { name: "Serving ports open" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Further open ports")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Firewall security groups")).not.toBeInTheDocument();
 
@@ -98,7 +102,13 @@ describe("a new cluster's firewall", () => {
       "On, serving ports open, also tcp/8443, udp/4000-4010, security groups k8s, corp-base",
     );
 
-    const off = { ...open, firewall: false };
+    const closed = { ...filled, firewallServing: false, securityGroups: "k8s" };
+    expect(request(closed, withFirewall).variables["firewall"]).toStrictEqual({ enabled: true, servingPorts: false });
+    expect(Object.fromEntries(summary(closed, withFirewall))["Firewall"]).toBe(
+      "On, serving ports closed, security groups k8s",
+    );
+
+    const off = { ...open, firewall: false, firewallServing: false };
     expect(request(off, withFirewall).variables["firewall"]).toStrictEqual({ enabled: false });
     expect(request(off, withFirewall).variables).not.toHaveProperty("securityGroups");
     expect(Object.fromEntries(summary(off, withFirewall))["Firewall"]).toBe("Off");
@@ -244,7 +254,7 @@ describe("a cluster's firewall in its options", () => {
   });
 
   it("switches off, which drops the groups", async () => {
-    expect(firewallText({ on: false, ports: "" }, "k8s")).toBe("Off");
+    expect(firewallText({ on: false, serving: true, ports: "" }, "k8s")).toBe("Off");
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
     const held = { ...cluster, variables: { firewall: { enabled: true }, securityGroups: ["k8s"] } };
     const calls = fakeServer({
@@ -268,6 +278,38 @@ describe("a cluster's firewall in its options", () => {
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
       variables: { firewall: { enabled: false }, securityGroups: null },
+    });
+  });
+
+  it("closes and opens the serving ports", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const held = {
+      ...cluster,
+      variables: { firewall: { enabled: true, servingPorts: false }, securityGroups: ["k8s"] },
+    };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: held },
+      "PATCH /api/clusters/clusters/web": { body: held },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await expect(
+      screen.findByRole("cell", { name: "On, serving ports closed, security groups k8s" }),
+    ).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit the firewall" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit firewall" });
+    const serving = within(dialog).getByRole("checkbox", { name: "Serving ports open" });
+    expect(serving).not.toBeChecked();
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
+    expect(save).toBeDisabled();
+    await user.click(serving);
+    await user.click(save);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { firewall: { enabled: true }, securityGroups: ["k8s"] },
     });
   });
 

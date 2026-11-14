@@ -145,17 +145,27 @@ EOF
 }
 # serving_rules: whether every VM's firewall has Kubehenge's rules for the API, ingress, the
 # NodePorts and ICMP echo of both families, the rule for its load-balancer IPSet, and that IPSet.
+# The security group comes after the cluster's own traffic and before the load-balancer addresses
+# and the serving ports, so a group can drop or narrow those.
 # shellcheck disable=SC2310,SC2312 # polled.
 serving_rules() {
     vm_list=$(cluster_vms) || return 1
     [ -n "${vm_list}" ] || return 1
     while read -r vm_node vm_id; do
-        rules=$(pve_get "nodes/${vm_node}/qemu/${vm_id}/firewall/rules" |
+        listed=$(pve_get "nodes/${vm_node}/qemu/${vm_id}/firewall/rules") || return 1
+        rules=$(printf '%s' "${listed}" |
             jq -c '[.data[] | select(.comment // "" | startswith("kubehenge:")) | "\(.proto // "")/\(.dport // .["icmp-type"] // .dest // .source)"] | sort') || return 1
         seen="VM ${vm_id} on ${vm_node}: ${rules}"
         printf '%s' "${rules}" | jq -e 'index("tcp/6443") and index("tcp/80") and index("tcp/443") and
             index("tcp/30000:32767") and index("udp/30000:32767") and index("icmp/echo-request") and
             index("ipv6-icmp/echo-request") and index("/+guest/kubehenge-lb") and index("/+guest/kubehenge")' > /dev/null || return 1
+        order=$(printf '%s' "${listed}" | jq -c --arg g "${group}" '.data | sort_by(.pos) |
+            map(if .type == "group" then (if .action == $g then "group" else "other group" end)
+                elif .source == "+guest/kubehenge" then "own" elif (.comment // "" | startswith("kubehenge:")) then "serving"
+                else "other" end)') || return 1
+        seen="VM ${vm_id} on ${vm_node}: ${rules}, in order ${order}"
+        printf '%s' "${order}" | jq -e 'index(["own"]) as $own | index(["group"]) as $group | index(["serving"]) as $serving |
+            $own != null and $group != null and $serving != null and $own < $group and $group < $serving' > /dev/null || return 1
         pve_get "nodes/${vm_node}/qemu/${vm_id}/firewall/ipset" | jq -e '[.data[].name] | index("kubehenge-lb")' > /dev/null || return 1
     done << EOF
 ${vm_list}

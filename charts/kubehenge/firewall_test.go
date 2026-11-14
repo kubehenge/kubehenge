@@ -42,22 +42,31 @@ func TestEveryClassAnnotatesTheMachinesWithTheFirewall(t *testing.T) {
 }
 
 // Every class defaults a new cluster's firewall on, and the defaulted value writes the serving
-// ports, ICMP echo of both families and the cluster's own further ports beside any groups. Off, no
-// firewall is written.
+// ports, ICMP echo of both families, Talos's API on Talos, and the cluster's own further ports
+// beside any groups. With the serving ports closed, only the groups and the further ports are
+// written, and the ports annotation stays to keep the firewall on. Off, no firewall is written.
 func TestEveryClassDefaultsTheFirewallOn(t *testing.T) {
 	t.Parallel()
-	const serving = "tcp/6443,tcp/80,tcp/443,tcp/30000:32767,udp/30000:32767,icmp/echo-request,ipv6-icmp/echo-request"
 	for _, file := range everyClass {
 		t.Run(file, func(t *testing.T) {
 			t.Parallel()
+			serving := "tcp/6443,tcp/80,tcp/443,tcp/30000:32767,udp/30000:32767,icmp/echo-request,ipv6-icmp/echo-request"
+			release := ""
+			if file == "talos.yaml" {
+				serving += ",tcp/50000"
+				release = `, "talosVersion": "v1.12.0"`
+			}
 			class := renderClass(t, file)
 			schema := class.variables["firewall"]
 			if schema == nil || schema.Default == nil || string(schema.Default.Raw) != `{"enabled":true}` {
 				t.Fatalf("the firewall variable's default = %v, want on", schema)
 			}
+			if serving, ok := schema.Properties["servingPorts"]; !ok || serving.Type != "boolean" || serving.Default == nil || string(serving.Default.Raw) != "true" {
+				t.Errorf("the firewall's servingPorts = %+v, want a boolean that defaults to true", serving)
+			}
 			annotations := func(extra string) any {
 				vars := variablesOf(t, `{"builtin": {"cluster": {"name": "c", "namespace": "n", "network": {"pods": ["10.244.0.0/16"]}}},
-					"controlPlaneEndpoint": "10.0.0.5", "network": `+ipv4Net+extra+`}`)
+					"controlPlaneEndpoint": "10.0.0.5", "network": `+ipv4Net+release+extra+`}`)
 				spec := asMap(t, field(t, class.patched(t, "ProxmoxMachineTemplate", vars), "spec", "template"))
 				if metadata, ok := spec["metadata"]; ok {
 					return asMap(t, metadata)["annotations"]
@@ -71,6 +80,19 @@ func TestEveryClassDefaultsTheFirewallOn(t *testing.T) {
 			want := map[string]any{"kubehenge.dev/firewall-groups": "k8s", "kubehenge.dev/firewall-ports": serving + ",udp/51820,tcp/8000:8100"}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("annotations with groups and ports = %v, want %v", got, want)
+			}
+			for extra, want := range map[string]map[string]any{
+				`, "securityGroups": ["k8s"], "firewall": {"enabled": true, "servingPorts": false}`: {
+					"kubehenge.dev/firewall-groups": "k8s", "kubehenge.dev/firewall-ports": "",
+				},
+				`, "firewall": {"enabled": true, "servingPorts": false, "ports": [{"protocol": "tcp", "port": 6443}]}`: {
+					"kubehenge.dev/firewall-ports": "tcp/6443",
+				},
+				`, "firewall": {"enabled": true, "servingPorts": true}`: {"kubehenge.dev/firewall-ports": serving},
+			} {
+				if got := annotations(extra); !reflect.DeepEqual(got, want) {
+					t.Errorf("annotations with%s = %v, want %v", extra, got, want)
+				}
 			}
 			off := variablesOf(t, `{"builtin": {"cluster": {"name": "c", "namespace": "n", "network": {"pods": ["10.244.0.0/16"]}}},
 				"controlPlaneEndpoint": "10.0.0.5", "network": `+ipv4Net+`, "firewall": {"enabled": false}}`)
@@ -86,6 +108,7 @@ func TestFirewallPortsFollowTheirRules(t *testing.T) {
 	class := renderClass(t, "kubeadm.yaml")
 	for name, tc := range map[string]struct{ value, want string }{
 		"on":                {value: `{"enabled": true}`},
+		"serving ports off": {value: `{"enabled": true, "servingPorts": false}`},
 		"a port":            {value: `{"enabled": true, "ports": [{"protocol": "tcp", "port": 8443}]}`},
 		"a range":           {value: `{"enabled": true, "ports": [{"protocol": "udp", "port": 4000, "endPort": 4010}]}`},
 		"a range backwards": {value: `{"enabled": true, "ports": [{"protocol": "tcp", "port": 4010, "endPort": 4000}]}`, want: "A range ends above its first port."},

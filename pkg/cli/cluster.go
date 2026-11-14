@@ -358,12 +358,11 @@ func (c *listedCluster) status() string {
 		}
 		return nil
 	}
-	if held(provisioner.FirewallInactiveCondition) != nil {
+	if i := slices.IndexFunc(c.Conditions, func(l listedCondition) bool { return l.Type == provisioner.FirewallInactiveCondition }); i >= 0 {
+		said := map[string]string{"True": ", firewall inactive (datacenter firewall off)", "Unknown": ", firewall state unknown"}[c.Conditions[i].Status]
 		phase := *c
-		phase.Conditions = slices.DeleteFunc(slices.Clone(c.Conditions), func(l listedCondition) bool {
-			return l.Type == provisioner.FirewallInactiveCondition
-		})
-		return phase.status() + ", firewall inactive (datacenter firewall off)"
+		phase.Conditions = slices.Delete(slices.Clone(c.Conditions), i, i+1)
+		return phase.status() + said
 	}
 	switch {
 	case held(provisioner.UpgradeHeldCondition) != nil:

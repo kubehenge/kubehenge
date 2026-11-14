@@ -60,6 +60,7 @@ import {
   firewallVariable,
   securityGroupsProblem,
   type DatacenterFirewallState,
+  type FirewallFields,
 } from "./Firewall";
 import {
   gitOpsFields,
@@ -256,6 +257,8 @@ export interface Form {
   securityGroups: string;
   /** Whether the nodes' firewall is on, which the class defaults to. */
   firewall: boolean;
+  /** Whether the firewall opens its serving ports to anyone, which the class defaults to. */
+  firewallServing: boolean;
   /** Further ports the firewall opens to anywhere, such as tcp/8443, udp/4000-4010. */
   firewallPorts: string;
   /** The address families of the nodes, the primary first. Fixed once the cluster exists. */
@@ -989,6 +992,7 @@ export const newForm = (): Form => ({
   queues: "",
   securityGroups: "",
   firewall: true,
+  firewallServing: true,
   firewallPorts: "",
   families: "ipv4",
   addresses: "",
@@ -1417,9 +1421,8 @@ function proxmoxVariables(form: Form, defined: ReadonlySet<string>): Record<stri
   if (!form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: false };
   }
-  const fields = { on: form.firewall, ports: form.firewallPorts };
   if (defined.has("firewall")) {
-    variables["firewall"] = firewallVariable(fields);
+    variables["firewall"] = firewallVariable(firewallFieldsOf(form));
   }
   if (form.firewall && list(form.securityGroups).length > 0 && defined.has("securityGroups")) {
     variables["securityGroups"] = list(form.securityGroups);
@@ -1536,6 +1539,13 @@ function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string
   return rows;
 }
 
+/** firewallFieldsOf is the form's firewall as its field edits it. */
+export const firewallFieldsOf = (form: Form): FirewallFields => ({
+  on: form.firewall,
+  serving: form.firewallServing,
+  ports: form.firewallPorts,
+});
+
 function interfaceRows(form: Form, datacenter: DatacenterFirewallState | undefined): [string, string][] {
   const rows: [string, string][] = [];
   if (form.mtu) {
@@ -1544,7 +1554,7 @@ function interfaceRows(form: Form, datacenter: DatacenterFirewallState | undefin
   if (form.queues) {
     rows.push(["Queues", form.queues]);
   }
-  const firewall = firewallText({ on: form.firewall, ports: form.firewallPorts }, form.securityGroups);
+  const firewall = firewallText(firewallFieldsOf(form), form.securityGroups);
   const note = form.firewall ? datacenterNote(datacenter) : undefined;
   rows.push(["Firewall", note === undefined ? firewall : `${firewall}. ${note}`]);
   return rows;
@@ -2041,7 +2051,7 @@ function interfaceProblems(form: Form): Problems {
   if (groups !== undefined) {
     p.securityGroups = groups;
   }
-  const ports = firewallPortsProblem({ on: form.firewall, ports: form.firewallPorts });
+  const ports = firewallPortsProblem(firewallFieldsOf(form));
   if (ports !== undefined) {
     p.firewallPorts = ports;
   }

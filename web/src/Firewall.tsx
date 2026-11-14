@@ -19,21 +19,23 @@ interface FirewallPort {
 /** The firewall as its fields edit it. */
 export interface FirewallFields {
   on: boolean;
+  /** Whether the API, ingress, the load balancer, the NodePorts and ping are open to anyone. */
+  serving: boolean;
   /** Further ports, comma-separated, such as tcp/8443, udp/4000-4010. */
   ports: string;
 }
 
 /**
  * firewallOf reads the firewall variable. A cluster without it, made before it existed, has the
- * firewall its security groups give it.
+ * firewall its security groups give it, with no port open to anyone.
  */
 export function firewallOf(v: unknown, groups: unknown): FirewallFields {
   if (v === undefined || v === null) {
-    return { on: (texts(groups) ?? []).length > 0, ports: "" };
+    return { on: (texts(groups) ?? []).length > 0, serving: false, ports: "" };
   }
   const fw = record(v);
   const ports = Array.isArray(fw["ports"]) ? fw["ports"].map((p) => portText(record(p))) : [];
-  return { on: fw["enabled"] !== false, ports: ports.join(", ") };
+  return { on: fw["enabled"] !== false, serving: fw["servingPorts"] !== false, ports: ports.join(", ") };
 }
 
 const portText = (p: Record<string, unknown>): string => {
@@ -64,9 +66,17 @@ function parsePorts(s: string): FirewallPort[] | undefined {
 }
 
 /** firewallVariable is the firewall variable the fields give. */
-export function firewallVariable(f: FirewallFields): { enabled: boolean; ports?: FirewallPort[] } {
+export function firewallVariable(f: FirewallFields): {
+  enabled: boolean;
+  servingPorts?: false;
+  ports?: FirewallPort[];
+} {
   const ports = f.on ? (parsePorts(f.ports) ?? []) : [];
-  return ports.length > 0 ? { enabled: f.on, ports } : { enabled: f.on };
+  return {
+    enabled: f.on,
+    ...(f.on && !f.serving ? { servingPorts: false as const } : {}),
+    ...(ports.length > 0 ? { ports } : {}),
+  };
 }
 
 export type DatacenterFirewallState = DatacenterFirewall["state"];
@@ -120,7 +130,7 @@ export function firewallText(f: FirewallFields, groups: string): string {
   if (!f.on) {
     return "Off";
   }
-  const parts = ["On, serving ports open"];
+  const parts = [f.serving ? "On, serving ports open" : "On, serving ports closed"];
   if (list(f.ports).length > 0) {
     parts.push(`also ${list(f.ports).join(", ")}`);
   }
@@ -179,12 +189,23 @@ export function FirewallField({
         />{" "}
         Firewall
       </label>
-      <p className="hint">
-        {!value.on && "Every port open"}
-        {value.on && "Opens the API, ingress, load balancer, NodePorts and ping."}
-        {value.on && datacenter === undefined && " Acts once the datacenter firewall is on."}
-      </p>
+      {!value.on && <p className="hint">Every port open</p>}
       {note !== undefined && <p className="warning">{note}</p>}
+      {value.on && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={value.serving}
+              onChange={(e) => {
+                onChange({ ...value, serving: e.target.checked });
+              }}
+            />{" "}
+            Serving ports open
+          </label>
+          <p className="hint">API, ingress, load balancer, NodePorts and ping from anywhere</p>
+        </>
+      )}
       {value.on && (
         <Field label="Further open ports" hint="Optional, such as tcp/8443, udp/4000-4010" error={portsError}>
           {(id) => (
@@ -228,6 +249,7 @@ export function FirewallDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
   const groupsFound = value.on ? securityGroupsProblem(groups) : undefined;
   const changed =
     value.on !== current.on ||
+    (value.on && value.serving !== current.serving) ||
     (value.on && list(value.ports).join(",") !== list(current.ports).join(",")) ||
     (value.on && list(groups).join(",") !== list(currentGroups).join(","));
   return (

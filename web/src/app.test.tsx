@@ -1039,6 +1039,7 @@ describe("create", () => {
     queues: "",
     securityGroups: "",
     firewall: true,
+    firewallServing: true,
     firewallPorts: "",
     families: "ipv4",
     addresses: "10.0.0.21-10.0.0.29\n10.0.0.32/28",

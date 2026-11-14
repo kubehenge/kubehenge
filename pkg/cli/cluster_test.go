@@ -31,7 +31,8 @@ func TestClusterListSaysTheFirewallIsInactive(t *testing.T) {
 	}{
 		{conditions: []listedCondition{inactive}, want: "Provisioned, firewall inactive (datacenter firewall off)"},
 		{conditions: []listedCondition{inactive, {Type: provisioner.TemplateNodeDownCondition, Status: "True"}}, want: "Provisioned, template node down, firewall inactive (datacenter firewall off)"},
-		{conditions: []listedCondition{{Type: provisioner.FirewallInactiveCondition, Status: "Unknown"}}, want: "Provisioned"},
+		{conditions: []listedCondition{{Type: provisioner.FirewallInactiveCondition, Status: "Unknown"}}, want: "Provisioned, firewall state unknown"},
+		{conditions: []listedCondition{{Type: provisioner.FirewallInactiveCondition, Status: "False"}}, want: "Provisioned"},
 	} {
 		c := listedCluster{Phase: "Provisioned", Conditions: tc.conditions}
 		if got := c.status(); got != tc.want {

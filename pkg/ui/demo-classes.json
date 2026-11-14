@@ -2028,7 +2028,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the firewall's own rules. They need the firewall on. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -2050,7 +2050,7 @@
               "default": {
                 "enabled": true
               },
-              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, the Kubernetes API (6443), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767), ICMP echo and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
               "properties": {
                 "enabled": {
                   "default": true,
@@ -2093,6 +2093,11 @@
                   },
                   "maxItems": 32,
                   "type": "array"
+                },
+                "servingPorts": {
+                  "default": true,
+                  "description": "Whether the nodes accept the Kubernetes API (6443), the Talos API (50000, Talos only), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767) and ICMP echo from anywhere. Off, only the security groups and the ports listed let them in.",
+                  "type": "boolean"
                 }
               },
               "type": "object",
@@ -4985,7 +4990,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the firewall's own rules. They need the firewall on. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -5007,7 +5012,7 @@
               "default": {
                 "enabled": true
               },
-              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, the Kubernetes API (6443), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767), ICMP echo and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
               "properties": {
                 "enabled": {
                   "default": true,
@@ -5050,6 +5055,11 @@
                   },
                   "maxItems": 32,
                   "type": "array"
+                },
+                "servingPorts": {
+                  "default": true,
+                  "description": "Whether the nodes accept the Kubernetes API (6443), the Talos API (50000, Talos only), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767) and ICMP echo from anywhere. Off, only the security groups and the ports listed let them in.",
+                  "type": "boolean"
                 }
               },
               "type": "object",
@@ -7951,7 +7961,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the firewall's own rules. They need the firewall on. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -7973,7 +7983,7 @@
               "default": {
                 "enabled": true
               },
-              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, the Kubernetes API (6443), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767), ICMP echo and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
               "properties": {
                 "enabled": {
                   "default": true,
@@ -8016,6 +8026,11 @@
                   },
                   "maxItems": 32,
                   "type": "array"
+                },
+                "servingPorts": {
+                  "default": true,
+                  "description": "Whether the nodes accept the Kubernetes API (6443), the Talos API (50000, Talos only), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767) and ICMP echo from anywhere. Off, only the security groups and the ports listed let them in.",
+                  "type": "boolean"
                 }
               },
               "type": "object",
@@ -9237,6 +9252,34 @@
             }
           ],
           "name": "reach-storage"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .talosVersion }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-talosVersion"
         },
         {
           "definitions": [
@@ -10871,7 +10914,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the firewall's own rules. They need the firewall on. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -10893,7 +10936,7 @@
               "default": {
                 "enabled": true
               },
-              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, the Kubernetes API (6443), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767), ICMP echo and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
               "properties": {
                 "enabled": {
                   "default": true,
@@ -10936,6 +10979,11 @@
                   },
                   "maxItems": 32,
                   "type": "array"
+                },
+                "servingPorts": {
+                  "default": true,
+                  "description": "Whether the nodes accept the Kubernetes API (6443), the Talos API (50000, Talos only), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767) and ICMP echo from anywhere. Off, only the security groups and the ports listed let them in.",
+                  "type": "boolean"
                 }
               },
               "type": "object",

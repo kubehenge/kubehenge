@@ -2,10 +2,12 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
 
+	"github.com/luthermonson/go-proxmox"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
@@ -39,8 +41,8 @@ func (p *Proxmox) SecurityGroups(ctx context.Context) ([]string, bool) {
 
 // APIReach reads what the Proxmox VE firewalls let in on the API port; *Proxmox is the real one.
 type APIReach interface {
-	// APIReach reads the firewalls' settings, and false where the datacenter's cannot be read.
-	APIReach(ctx context.Context) (*pve.APIReach, bool)
+	// APIReach reads the firewalls' settings. It fails where the datacenter's cannot be read.
+	APIReach(ctx context.Context) (*pve.APIReach, error)
 }
 
 // ManagementAddresses are the addresses the appliance and the management cluster's nodes reach
@@ -51,17 +53,26 @@ type ManagementAddresses interface {
 
 // APIReach implements APIReach. Every read needs Sys.Audit, which the controller's account holds
 // on / when the setup asks for it.
-func (p *Proxmox) APIReach(ctx context.Context) (*pve.APIReach, bool) {
+func (p *Proxmox) APIReach(ctx context.Context) (*pve.APIReach, error) {
 	r, err := pve.ReadAPIReach(ctx, p.Client.Get)
-	return r, err == nil
+	if err != nil {
+		return nil, fmt.Errorf("reading the Proxmox VE firewall: %w", err)
+	}
+	return r, nil
 }
 
-// checkAPIReach refuses a firewall that would cut the management side off the Proxmox VE API. It
-// needs the datacenter firewall, which turns each node's own firewall on. That one lets the API
+// refused tells whether Proxmox VE answered a request with a refusal for want of privileges, as
+// opposed to giving no answer.
+func refused(err error) bool {
+	return errors.Is(err, proxmox.ErrNotAuthorized) || errors.Is(err, pve.ErrForbidden)
+}
+
+// checkAPIReach refuses security groups that would cut the management side off the Proxmox VE API.
+// They need the datacenter firewall, which turns each node's own firewall on. That one lets the API
 // in only from the node's local network and the IPSet management, so an appliance or management
 // cluster on another network could then no longer create or manage a VM. What cannot be told is
 // let through, since Proxmox VE's own answer is not read here.
-func checkAPIReach(reach *pve.APIReach, management []string, endpoints []netip.Addr, variable string) field.ErrorList {
+func checkAPIReach(reach *pve.APIReach, management []string, endpoints []netip.Addr) field.ErrorList {
 	var addrs []netip.Addr
 	for _, text := range management {
 		// Only an address in a family of the endpoint reaches the API, so an IPv6 address of an
@@ -75,8 +86,8 @@ func checkAPIReach(reach *pve.APIReach, management []string, endpoints []netip.A
 	if len(cut) == 0 {
 		return nil
 	}
-	path := field.NewPath("spec", "topology", "variables").Key(variable)
-	return field.ErrorList{field.Invalid(path, variable, pve.LockoutMessage(cut))}
+	path := field.NewPath("spec", "topology", "variables").Key(SecurityGroupsVariable)
+	return field.ErrorList{field.Invalid(path, SecurityGroupsVariable, pve.LockoutMessage(cut))}
 }
 
 // checkSecurityGroups refuses a security group Proxmox VE does not have. Proxmox VE's firewall skips
@@ -93,39 +104,40 @@ func checkSecurityGroups(groups, existing []string) field.ErrorList {
 	return errs
 }
 
-// validateFirewall holds a firewalled cluster, when it is created and when its firewall or groups
-// change: groups need the firewall on and must be ones Proxmox VE lists, and the management side
-// must keep the Proxmox VE API once the datacenter firewall is on.
+// validateFirewall holds a cluster's security groups: they need the firewall on, checked whenever
+// either changes, and on create or when the groups change they must be ones Proxmox VE lists and
+// must not cost the management side the Proxmox VE API. The firewall alone is never held to that
+// check: a VM's firewall leaves the nodes' own untouched. So a change Cluster API's defaulting
+// makes, such as adding the firewall variable to an older cluster, passes.
 func (v *ClusterValidator) validateFirewall(ctx context.Context, old, c *clusterv1.Cluster) field.ErrorList {
-	if old != nil && !variableChanged(old, c, SecurityGroupsVariable) && !variableChanged(old, c, FirewallVariable) {
+	groupsChanged := old == nil || variableChanged(old, c, SecurityGroupsVariable)
+	if !groupsChanged && !variableChanged(old, c, FirewallVariable) {
 		return nil
 	}
 	// The class's schema refuses values that are malformed.
 	groups, _, _ := optionalVariable[[]string](c, SecurityGroupsVariable)
+	if len(groups) == 0 {
+		return nil
+	}
 	if !firewalled(c) {
-		if len(groups) == 0 {
-			return nil
-		}
 		path := field.NewPath("spec", "topology", "variables").Key(SecurityGroupsVariable)
 		return field.ErrorList{field.Forbidden(path, "Security groups need the firewall on")}
 	}
+	if !groupsChanged {
+		return nil
+	}
 	var errs field.ErrorList
-	if len(groups) > 0 && v.Hooks.SecurityGroups != nil {
+	if v.Hooks.SecurityGroups != nil {
 		if existing, readable := v.Hooks.SecurityGroups.SecurityGroups(ctx); readable {
 			errs = checkSecurityGroups(groups, existing)
 		}
 	}
-	checked := FirewallVariable
-	if len(groups) > 0 {
-		checked = SecurityGroupsVariable
-	}
-	return append(errs, v.validateAPIReach(ctx, checked)...)
+	return append(errs, v.validateAPIReach(ctx)...)
 }
 
-// validateAPIReach is checkAPIReach with what the hooks read, its error under the variable checked.
-// Security groups are named to act, which needs the datacenter firewall on, so they are held to the
-// check also while it is off. The firewall alone is held to it once the datacenter's is on.
-func (v *ClusterValidator) validateAPIReach(ctx context.Context, variable string) field.ErrorList {
+// validateAPIReach is checkAPIReach with what the hooks read. Security groups are named to act,
+// which needs the datacenter firewall on, so they are held to the check also while it is off.
+func (v *ClusterValidator) validateAPIReach(ctx context.Context) field.ErrorList {
 	if v.Hooks.APIReach == nil || v.Hooks.Management == nil {
 		return nil
 	}
@@ -137,9 +149,9 @@ func (v *ClusterValidator) validateAPIReach(ctx context.Context, variable string
 	if err != nil || len(management) == 0 {
 		return nil
 	}
-	reach, ok := v.Hooks.APIReach.APIReach(ctx)
-	if !ok || (variable != SecurityGroupsVariable && !reach.Enabled) {
+	reach, err := v.Hooks.APIReach.APIReach(ctx)
+	if err != nil {
 		return nil
 	}
-	return checkAPIReach(reach, management, endpoints, variable)
+	return checkAPIReach(reach, management, endpoints)
 }

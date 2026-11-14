@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -172,7 +173,11 @@ func TestFirewallSourcesOfADefaultCluster(t *testing.T) {
 	disabledLB, disabledLBPC := firewallCluster("nolb", "")
 	addVariable(disabledLB, FirewallVariable, `{"enabled": true}`)
 	addVariable(disabledLB, loadBalancerVariable, `{"enabled": false, "addresses": ["10.0.0.60"]}`)
-	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(on, onPC, off, offPC, disabledLB, disabledLBPC).Build()
+	// With its serving ports closed, the load balancer is reached only through the groups.
+	closed, closedPC := firewallCluster("closed", "")
+	addVariable(closed, FirewallVariable, `{"enabled": true, "servingPorts": false}`)
+	addVariable(closed, loadBalancerVariable, `{"enabled": true, "addresses": ["10.0.0.70"]}`)
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(on, onPC, off, offPC, disabledLB, disabledLBPC, closed, closedPC).Build()
 	f := &FirewallSources{Client: kube, Reader: kube, Namespace: "kubehenge-system", Management: []string{"192.0.2.11", "2001:db8::11"}}
 	if err := f.runOnce(t.Context()); err != nil {
 		t.Fatal(err)
@@ -184,6 +189,7 @@ func TestFirewallSourcesOfADefaultCluster(t *testing.T) {
 		},
 		offPC:        {},
 		disabledLBPC: {FirewallSourcesAnnotation: "192.0.2.11,2001:db8::11"},
+		closedPC:     {FirewallSourcesAnnotation: "192.0.2.11,2001:db8::11"},
 	} {
 		if got := annotationsOf(t, kube, pc); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %v, want %v", pc.GetName(), got, want)
@@ -244,20 +250,35 @@ func TestFirewallSourcesWarnWhileTheDatacenterFirewallIsOff(t *testing.T) {
 		}
 		return meta.FindStatusCondition(got.Status.Conditions, FirewallInactiveCondition)
 	}
+	timeout := fmt.Errorf("reading the Proxmox VE firewall: %w", context.DeadlineExceeded)
 	for _, step := range []struct {
 		name     string
 		reach    *pve.APIReach
 		readable bool
-		want     metav1.ConditionStatus
-		reason   string
+		err      error
+		// runs is how many passes the step makes, two where zero: a second pass over the same
+		// state records no second event.
+		runs    int
+		want    metav1.ConditionStatus
+		reason  string
+		message string
+		events  int
 	}{
-		{name: "datacenter off", reach: &pve.APIReach{}, readable: true, want: metav1.ConditionTrue, reason: "DatacenterFirewallOff"},
-		{name: "unreadable", readable: false, want: metav1.ConditionUnknown, reason: "FirewallStateUnknown"},
+		{name: "datacenter off", reach: &pve.APIReach{}, readable: true, want: metav1.ConditionTrue, reason: "DatacenterFirewallOff", message: FirewallInactiveMessage, events: 1},
+		{name: "refused", want: metav1.ConditionUnknown, reason: "FirewallStateUnknown", message: "Kubehenge cannot read whether Proxmox VE's datacenter firewall is on, which needs Sys.Audit on /", events: 1},
 		{name: "datacenter on", reach: &pve.APIReach{Enabled: true}, readable: true},
+		{name: "a flaky read", err: timeout},
+		{name: "datacenter on again", reach: &pve.APIReach{Enabled: true}, readable: true},
+		{name: "datacenter off again", reach: &pve.APIReach{}, readable: true, want: metav1.ConditionTrue, reason: "DatacenterFirewallOff", message: FirewallInactiveMessage, events: 1},
+		{name: "a flaky read while off", err: timeout, want: metav1.ConditionTrue, reason: "DatacenterFirewallOff", message: FirewallInactiveMessage},
+		{name: "no answer", err: timeout, runs: unreachedRuns, want: metav1.ConditionUnknown, reason: "FirewallStateUnknown", message: "Kubehenge cannot reach Proxmox VE to read whether its datacenter firewall is on", events: 1},
 	} {
-		reach.reach, reach.ok = step.reach, step.readable
-		// A second pass over the same state records no second event.
-		for range 2 {
+		reach.reach, reach.ok, reach.err = step.reach, step.readable, step.err
+		runs := step.runs
+		if runs == 0 {
+			runs = 2
+		}
+		for range runs {
 			if err := f.runOnce(t.Context()); err != nil {
 				t.Fatalf("%s: %v", step.name, err)
 			}
@@ -266,17 +287,15 @@ func TestFirewallSourcesWarnWhileTheDatacenterFirewallIsOff(t *testing.T) {
 		switch {
 		case step.want == "" && got != nil:
 			t.Errorf("%s: %+v, want none", step.name, got)
-		case step.want != "" && (got == nil || got.Status != step.want || got.Reason != step.reason):
-			t.Errorf("%s: %+v, want %s for %s", step.name, got, step.want, step.reason)
-		case step.want == metav1.ConditionTrue && got.Message != FirewallInactiveMessage:
-			t.Errorf("%s: message %q", step.name, got.Message)
+		case step.want != "" && (got == nil || got.Status != step.want || got.Reason != step.reason || got.Message != step.message):
+			t.Errorf("%s: %+v, want %s for %s: %s", step.name, got, step.want, step.reason, step.message)
 		}
 		var recorded []string
 		for len(recorder.Events) > 0 {
 			recorded = append(recorded, <-recorder.Events)
 		}
-		if want := step.want != ""; want != (len(recorded) == 1) || len(recorded) > 1 {
-			t.Errorf("%s: events %q, want one warning only while the firewall does nothing or is unknown", step.name, recorded)
+		if len(recorded) != step.events {
+			t.Errorf("%s: events %q, want %d", step.name, recorded, step.events)
 		}
 		if len(recorded) == 1 && !strings.HasPrefix(recorded[0], "Warning "+FirewallInactiveCondition) {
 			t.Errorf("%s: event %q", step.name, recorded[0])
