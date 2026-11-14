@@ -331,9 +331,10 @@ describe("add-on installs of a new cluster", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await toAddOns(user);
-    for (let i = 0; i < 3; i++) {
-      await user.click(screen.getByRole("button", { name: "Next" }));
-    }
+    const next = async (): Promise<void> => user.click(screen.getByRole("button", { name: "Next" }));
+    await next();
+    await next();
+    await next();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create and wait" })).toBeEnabled());
   });
 
