@@ -94,39 +94,6 @@ jobs:
             ~/.cache/uv
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
-  # The workflows are code with credentials attached, the release's among them, so actionlint and
-  # zizmor check them in a job of their own as well as in `make test`: it answers within a minute,
-  # and zizmor's findings are annotated on the lines they concern.
-  workflows:
-    name: Workflows
-    runs-on: ubuntu-26.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - id: tools
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/bin
-          key: >-
-            tools-${{ runner.os }}-${{ runner.arch }}-actionlint+shellcheck+uv-${{
-            hashFiles('scripts/tools.sh') }}
-      - if: steps.tools.outputs.cache-hit != 'true'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: scripts/tools.sh "$RUNNER_TEMP/bin" actionlint shellcheck uv
-      - if: steps.tools.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/bin
-          key: ${{ steps.tools.outputs.cache-primary-key }}
-      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - run: make lint-actions ZIZMOR_FLAGS=--format=github
-        env:
-          # zizmor's online audits: impostor commits and actions with known vulnerabilities.
-          GH_TOKEN: ${{ github.token }}
-
   # A pull request's new or changed dependencies: their licences and known vulnerabilities, against
   # .github/dependency-review-config.yml.
   dependencies:
