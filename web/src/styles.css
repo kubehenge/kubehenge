@@ -2563,6 +2563,14 @@ fieldset.choices .check {
   border-block-start: 1px solid var(--line);
 }
 
+.accept {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+
+  margin-block: 12px;
+}
+
 .preflight > div {
   display: contents;
 }
