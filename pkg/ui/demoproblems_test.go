@@ -72,15 +72,15 @@ func demoFleetEdited(t *testing.T, edits map[string]func(*demoCluster)) []byte {
 }
 
 // newDemoWith is newDemo over the demo's fleet with the clusters named changed as edits say.
-func newDemoWith(t *testing.T, edits map[string]func(*demoCluster)) (*Server, *demoBrowser) {
+func newDemoWith(t *testing.T, edits map[string]func(*demoCluster)) *demoBrowser {
 	t.Helper()
 	s := &Server{Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}}}
-	cleanup, err := setUpDemo(s, func() time.Time { return demoAt }, demoFleetEdited(t, edits))
+	cleanup, err := demoFrom(s, func() time.Time { return demoAt }, demoFleetEdited(t, edits))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(cleanup)
-	return s, &demoBrowser{t: t, handler: s.Handler()}
+	return &demoBrowser{t: t, handler: s.Handler()}
 }
 
 // demoVerdicts are the fleet's verdicts by cluster. No cluster lists an offline node, as none of
@@ -90,11 +90,12 @@ func demoVerdicts(t *testing.T, b *demoBrowser) map[string]string {
 	var health []fleetHealthView
 	decodeDemo(t, b.do("GET", "/api/fleet/health", ""), &health)
 	verdicts := map[string]string{}
-	for _, h := range health {
+	for i := range health {
+		h := &health[i]
 		verdicts[h.Name] = h.Verdict
-		for _, a := range h.Attention {
-			if strings.Contains(a.What, "offline") {
-				t.Errorf("%s lists %q, but no Proxmox VE node of the demo is offline", h.Name, a.What)
+		for j := range h.Attention {
+			if what := h.Attention[j].What; strings.Contains(what, "offline") {
+				t.Errorf("%s lists %q, but no Proxmox VE node of the demo is offline", h.Name, what)
 			}
 		}
 	}
@@ -111,7 +112,7 @@ func TestDemoShowsEachProblemOnItsCluster(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, b := newDemoWith(t, edits)
+			b := newDemoWith(t, edits)
 			b.signIn()
 			verdicts := demoVerdicts(t, b)
 			for cluster := range edits {
@@ -125,7 +126,7 @@ func TestDemoShowsEachProblemOnItsCluster(t *testing.T) {
 
 func TestDemoShowsAClusterShortOfMemory(t *testing.T) {
 	t.Parallel()
-	_, b := newDemoWith(t, map[string]func(*demoCluster){"ci": ciShort})
+	b := newDemoWith(t, map[string]func(*demoCluster){"ci": ciShort})
 	b.signIn()
 	var clusters []clusterView
 	decodeDemo(t, b.do("GET", "/api/clusters", ""), &clusters)

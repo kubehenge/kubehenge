@@ -30,8 +30,9 @@ func TestChangeTakesTheDefaultPoolsLabel(t *testing.T) {
 func poolsByName(t *testing.T, h *harness) map[string]clusterv1.MachineDeploymentTopology {
 	t.Helper()
 	pools := map[string]clusterv1.MachineDeploymentTopology{}
-	for _, md := range poolsOf(t, h) {
-		pools[md.Name] = md
+	mds := poolsOf(t, h)
+	for i := range mds {
+		pools[mds[i].Name] = mds[i]
 	}
 	return pools
 }
