@@ -276,6 +276,8 @@ export KUBEHENGE_E2E_IP_FAMILIES=IPv6,IPv4'
 reads k3s-addons-b+flannel+github-releases 'export KUBEHENGE_E2E_CNI=flannel
 export KUBEHENGE_E2E_RELEASES=github'
 reads rke2-machines+github-releases 'export KUBEHENGE_E2E_RELEASES=github'
+reads appliance+recreate-bucket 'export KUBEHENGE_E2E_RECREATE=bucket'
+reads appliance+recreate-volume 'export KUBEHENGE_E2E_RECREATE=volume'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
 variant_of control-plane-ha

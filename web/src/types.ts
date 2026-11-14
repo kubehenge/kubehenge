@@ -1065,6 +1065,8 @@ export interface ManagementBackups {
     failed?: string;
     copy?: { snapshot?: string; bytes: number; cap: number; error?: string };
     export?: { name: string; time: string; bytes: number };
+    /** Set where one Proxmox VE host's loss can take the volume. */
+    sharesHost?: boolean;
   };
   /** Where the backups are, when the last ran and why one failed. */
   summary?: BackupSummary;
@@ -1253,6 +1255,8 @@ export interface BackupSummary {
   where: string[];
   last?: string;
   error?: string;
+  /** Set while one Proxmox VE host's loss can take every backup: no bucket target is set. */
+  sameHost?: boolean;
 }
 
 /** Whether a Proxmox VE node may be rebooted, or why not. */

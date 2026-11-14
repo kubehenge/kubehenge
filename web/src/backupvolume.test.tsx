@@ -4,11 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { fakeServer } from "./fake-server";
 import { ManagementBackups } from "./ManagementBackups";
-import { healthVerdict } from "./ManagementHealth";
+import { BackupLine, healthVerdict } from "./ManagementHealth";
 import { RemoveDialog } from "./RemoveManagement";
 import type { ManagementBackups as Backups, ManagementHealth } from "./types";
 
 const passphrase = "correct horse battery staple";
+
+const lostWithHost = /Losing one Proxmox VE host can lose the backup volume/u;
 
 const onVolume: NonNullable<Backups["volume"]> = {
   claim: "kubehenge-system/kubehenge-backups",
@@ -41,6 +43,30 @@ describe("the backup volume", () => {
     await screen.findByRole("alert");
     expect(screen.getByRole("alert")).toHaveTextContent("Failed");
     expect(screen.getByRole("alert")).toHaveTextContent("The backup volume's token: not found.");
+  });
+
+  it("warns on Administration while one host's loss can take every backup", async () => {
+    const sameHost = { ...volume, summary: { where: ["backup volume x"], sameHost: true } };
+    fakeServer({ "GET /api/appliance/etcd-backups": { body: sameHost } });
+    const { unmount } = render(<ManagementBackups running={false} />);
+    await screen.findByRole("heading", { name: "Backup volume" });
+    expect(screen.getByText(lostWithHost)).toBeVisible();
+    unmount();
+
+    fakeServer({ "GET /api/appliance/etcd-backups": { body: { ...volume, summary: { where: ["backup volume x"] } } } });
+    render(<ManagementBackups running={false} />);
+    await screen.findByRole("heading", { name: "Backup volume" });
+    expect(screen.queryByText(lostWithHost)).not.toBeInTheDocument();
+  });
+
+  it("warns on Health while one host's loss can take every backup, without degrading it", () => {
+    const { unmount } = render(<BackupLine backups={{ where: ["backup volume x"], sameHost: true }} />);
+    expect(screen.getByText(lostWithHost)).toBeVisible();
+    unmount();
+    render(<BackupLine backups={{ where: ["backup volume x", "target minio"] }} />);
+    expect(screen.queryByText(lostWithHost)).not.toBeInTheDocument();
+    const h: ManagementHealth = { answers: true, nodes: [{ name: "cp-0", ready: true }], controllers: [] };
+    expect(healthVerdict({ ...h, backups: { where: ["backup volume x"], sameHost: true } }).state).toBe("ok");
   });
 
   it("degrades Health while a backup fails", () => {

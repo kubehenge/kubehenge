@@ -2,6 +2,7 @@ import { useState, type JSX } from "react";
 
 import { adminPath } from "./admin-views";
 import { api } from "./api";
+import { SameHostWarning } from "./ManagementHealth";
 import { BackupWarning, ExportBox, RecoverDialog, RecreateDialog } from "./ManagementRecovery";
 import { Link } from "./router";
 import type { EtcdSnapshot, ManagementBackups as Backups, ManagementBackupSettings } from "./types";
@@ -65,7 +66,7 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
   }
   return (
     <>
-      {b.volume !== undefined && <VolumeBox volume={b.volume} />}
+      {b.volume !== undefined && <VolumeBox volume={b.volume} sameHost={b.summary?.sameHost === true} />}
       <div className="box">
         <h3>Management cluster etcd</h3>
         <BackupWarning
@@ -125,7 +126,13 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
 
 // VolumeBox shows the backups on the management cluster's own volume, which run with no settings,
 // and the appliance's copy of the latest.
-function VolumeBox({ volume: v }: { volume: NonNullable<Backups["volume"]> }): JSX.Element {
+function VolumeBox({
+  volume: v,
+  sameHost,
+}: {
+  volume: NonNullable<Backups["volume"]>;
+  sameHost: boolean;
+}): JSX.Element {
   const [recovering, setRecovering] = useState(false);
   return (
     <div className="box">
@@ -181,6 +188,7 @@ function VolumeBox({ volume: v }: { volume: NonNullable<Backups["volume"]> }): J
         </p>
       )}
       {v.copy?.error !== undefined && <p className="warning">{sentence(v.copy.error)}</p>}
+      {sameHost && <SameHostWarning />}
       <div className="actions">
         <button type="button" className="danger" onClick={() => setRecovering(true)}>
           Recover…

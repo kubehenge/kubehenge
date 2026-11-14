@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -46,7 +47,13 @@ type volumeBackupKeys struct {
 	Sealed    string    `json:"sealed"`
 	Nodes     []string  `json:"nodes"`
 	Since     time.Time `json:"since"`
+	// SharesHost is the storage chart's word that one Proxmox VE host's loss takes the volume.
+	SharesHost bool `json:"sharesHost,omitempty"`
 }
+
+// sharesHost annotates the store's Deployment, from the module: "true" where the volume sits on a
+// node's own storage or the Proxmox VE cluster has one node, so that losing a host loses it.
+const sharesHost = "kubehenge.dev/shares-host"
 
 // VolumeBackupStatus is how the backups on the management cluster's volume go.
 type VolumeBackupStatus struct {
@@ -60,6 +67,9 @@ type VolumeBackupStatus struct {
 	Copy *ApplianceCopy `json:"copy,omitempty"`
 	// Export is the last export of Kubehenge's objects taken with a snapshot.
 	Export *ExportRecord `json:"export,omitempty"`
+	// SharesHost is set where one Proxmox VE host's loss can take the volume, and the appliance's
+	// copy with it.
+	SharesHost bool `json:"sharesHost,omitempty"`
 }
 
 // ApplianceCopy is the copy of the latest backups the appliance keeps on its own disk.
@@ -107,6 +117,7 @@ func (a *Appliance) setUpVolumeBackups(ctx context.Context, admin []byte, passph
 		return err
 	}
 	keys.Nodes = nodes.Nodes
+	keys.SharesHost = a.volumeSharesHost(ctx, admin, keys.SharesHost)
 	if err := os.MkdirAll(a.etcdBackupDir(), privateDir); err != nil {
 		return fmt.Errorf("keeping the backups' settings: %w", err)
 	}
@@ -114,6 +125,22 @@ func (a *Appliance) setUpVolumeBackups(ctx context.Context, admin []byte, passph
 		return err
 	}
 	return writeJSONFile(a.etcdBackupFile("volume.json"), keys)
+}
+
+// volumeSharesHost reads the store's sharesHost annotation. A cluster that does not answer keeps
+// what was read before, since the warning is advice and never holds an apply up.
+func (a *Appliance) volumeSharesHost(ctx context.Context, admin []byte, before bool) bool {
+	kube, err := a.managementClient(admin)
+	if err == nil {
+		var d *appsv1.Deployment
+		if d, err = kube.AppsV1().Deployments(backupstore.Namespace).Get(ctx, backupstore.Service, metav1.GetOptions{}); err == nil {
+			return d.Annotations[sharesHost] == "true"
+		}
+	}
+	if a.Log != nil {
+		a.Log.Warn("reading whether the backup volume shares its host", "error", err)
+	}
+	return before
 }
 
 func newVolumeBackupKeys(passphrase string, workFactor int) (*volumeBackupKeys, error) {
@@ -151,6 +178,7 @@ func (a *Appliance) VolumeBackups() *VolumeBackupStatus {
 	st := &VolumeBackupStatus{
 		Claim: backupstore.Namespace + "/" + backupstore.Claim,
 		Last:  rec.Last, Error: rec.Error, Failed: rec.Failed, Copy: rec.Copy, Export: rec.Export,
+		SharesHost: keys.SharesHost,
 	}
 	// The first snapshot is due from the setup on.
 	next := keys.Since
@@ -187,7 +215,7 @@ func (a *Appliance) openVolume(ctx context.Context) (provisioner.ObjectStore, er
 	if err != nil {
 		return nil, fmt.Errorf("a client for the management cluster: %w", err)
 	}
-	if err := wakeStore(ctx, kube); err != nil {
+	if err := a.wakeStore(ctx, kube); err != nil {
 		return nil, err
 	}
 	secret, err := kube.CoreV1().Secrets(backupstore.Namespace).Get(ctx, backupstore.TokenSecret, metav1.GetOptions{})
@@ -210,14 +238,19 @@ const idleReplicas = "kubehenge.dev/idle-replicas"
 var storeReadyPoll = 2 * time.Second
 
 // wakeStore starts the backup volume's store when it sleeps and waits, within ctx, until its pod is
-// ready, which is once the plugin has attached the disk to that pod's node.
-func wakeStore(ctx context.Context, kube kubernetes.Interface) error {
+// ready, which is once the plugin has attached the disk to that pod's node. Only a store on a node's
+// own storage sleeps, and its pod must land on a node VM on that node, so the nodes' zone labels are
+// corrected first.
+func (a *Appliance) wakeStore(ctx context.Context, kube kubernetes.Interface) error {
 	deps := kube.AppsV1().Deployments(backupstore.Namespace)
 	d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("the backup volume's store: %w", err)
 	}
 	if d.Spec.Replicas == nil || *d.Spec.Replicas == 0 {
+		if err := a.followZones(ctx, kube); err != nil {
+			return err
+		}
 		if _, err := deps.Patch(ctx, backupstore.Service, types.MergePatchType, []byte(`{"spec":{"replicas":1}}`), metav1.PatchOptions{}); err != nil {
 			return fmt.Errorf("starting the backup volume's store: %w", err)
 		}
@@ -529,6 +562,9 @@ type BackupSummary struct {
 	Where []string   `json:"where"`
 	Last  *time.Time `json:"last,omitempty"`
 	Error string     `json:"error,omitempty"`
+	// SameHost warns that every backup can be lost with one Proxmox VE host: the volume shares it
+	// and no bucket target is set.
+	SameHost bool `json:"sameHost,omitempty"`
 }
 
 // Summary sums the backups' status up.
@@ -565,6 +601,7 @@ func (st *EtcdBackupStatus) Summary() *BackupSummary {
 		}
 	}
 	s.Error = strings.Join(errs, "; ")
+	s.SameHost = st.Volume != nil && st.Volume.SharesHost && st.Settings == nil
 	return s
 }
 

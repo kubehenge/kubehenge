@@ -17,12 +17,17 @@ locals {
     node      = local.nodes[0].proxmox_node
     # Shared storage (Ceph RBD, NFS, shared LVM) attaches the disk on any node. Its handle names no
     # zone, the plugin's own form for shared volumes, so the store runs wherever a node is up.
-    shared = coalesce(var.backup_volume.shared, try(data.proxmox_virtual_environment_datastores.backup_volume.datastores[0].shared, false), false)
+    shared = coalesce(var.backup_volume.shared, try(data.proxmox_datastores.backup_volume.datastores[0].shared, false), false)
   }
   backup_volume_zone = local.backup_volume.shared ? "" : local.backup_volume.node
+  # Losing one Proxmox VE host loses the volume on that host's own storage, and every disk where the
+  # cluster has one node. Only a bucket survives that, which the interface then suggests.
+  backup_volume_shares_host = !local.backup_volume.shared || length(data.proxmox_virtual_environment_nodes.all.names) < 2
 }
 
-data "proxmox_virtual_environment_datastores" "backup_volume" {
+data "proxmox_virtual_environment_nodes" "all" {}
+
+data "proxmox_datastores" "backup_volume" {
   node_name = local.nodes[0].proxmox_node
   filters = {
     id = var.vm_datastore
@@ -73,6 +78,35 @@ resource "proxmox_acl" "management_csi_backups" {
   path      = "/vms/${proxmox_virtual_environment_vm.backups.vm_id}"
   role_id   = proxmox_virtual_environment_role.management_csi.role_id
   propagate = false
+}
+
+# On a node's own storage the plugin attaches the backup volume only to a node labelled with that
+# node's zone. HA or an administrator may move a node VM, and the label still names the old node.
+# Before it wakes the store, the appliance reads where each node VM runs and corrects the label.
+# This token is all it holds for that: VM.Audit (the templates' audit role) on the management pool.
+resource "proxmox_virtual_environment_user" "management_zones" {
+  count = local.backup_volume.shared ? 0 : 1
+
+  user_id = "${var.cluster_name}-management-zones@pve"
+  comment = "Reads where Kubehenge management cluster ${var.cluster_name}'s VMs run; signs in with its API token only"
+}
+
+resource "proxmox_user_token" "management_zones" {
+  count = local.backup_volume.shared ? 0 : 1
+
+  user_id               = proxmox_virtual_environment_user.management_zones[0].user_id
+  token_name            = "zones"
+  comment               = "Where the management cluster's VMs run"
+  privileges_separation = false
+}
+
+resource "proxmox_acl" "management_zones" {
+  count = local.backup_volume.shared ? 0 : 1
+
+  user_id   = proxmox_virtual_environment_user.management_zones[0].user_id
+  path      = "/pool/${proxmox_virtual_environment_pool.management.pool_id}"
+  role_id   = proxmox_virtual_environment_role.templates_audit.role_id
+  propagate = true
 }
 
 # The backup volume is the one disk of a VM that never starts. Proxmox VE deletes a disk with a VM
@@ -127,6 +161,9 @@ locals {
       handle    = "${local.csi_region}/${local.backup_volume_zone}/${var.vm_datastore}/${proxmox_virtual_environment_vm.backups.disk[0].path_in_datastore}"
       zone      = local.backup_volume_zone
       region    = local.csi_region
+      # The nodes whose zone label the appliance may correct.
+      nodes      = local.nodes[*].name
+      sharesHost = local.backup_volume_shares_host
     }
   }
 }
@@ -143,8 +180,8 @@ resource "helm_release" "storage" {
 
   values = [yamlencode(local.storage_values)]
 
-  set_sensitive = [{
-    # Base64, which Helm's --set parsing leaves as it is.
+  # Base64, which Helm's --set parsing leaves as it is.
+  set_sensitive = concat([{
     name = "encodedConfig"
     value = base64encode(yamlencode({
       features = { provider = "capmox", controllerVMID = proxmox_virtual_environment_vm.backups.vm_id }
@@ -157,9 +194,13 @@ resource "helm_release" "storage" {
       }]
     }))
     type = "string"
-  }]
+    }], [for t in proxmox_user_token.management_zones : {
+    name  = "backupVolume.zonesToken"
+    value = base64encode("${t.id}=${reverse(split("=", t.value))[0]}")
+    type  = "string"
+  }])
 
-  depends_on = [helm_release.cluster_api_providers, proxmox_acl.management_csi, proxmox_acl.management_csi_backups]
+  depends_on = [helm_release.cluster_api_providers, proxmox_acl.management_csi, proxmox_acl.management_csi_backups, proxmox_acl.management_zones]
 }
 
 resource "helm_release" "proxmox_csi" {

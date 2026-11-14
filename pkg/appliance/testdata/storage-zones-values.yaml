@@ -1,0 +1,10 @@
+---
+# The storage chart as the module renders it for a backup volume on pve1's own storage.
+image: ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+backupVolume:
+  handle: kubehenge/pve1/fast/vm-9000-disk-0
+  zone: pve1
+  region: kubehenge
+  nodes: [mgmt-cp-0, mgmt-cp-1]
+  # "fake", base64, a stand-in for the token the module makes.
+  zonesToken: ZmFrZQ==

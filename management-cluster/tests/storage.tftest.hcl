@@ -150,14 +150,70 @@ run "backup_volume_on_shared_storage_attaches_on_any_node" {
     )
     error_message = "on shared storage the backup volume must name no zone, so that the store runs on any node"
   }
+
+  assert {
+    condition = (
+      length(proxmox_user_token.management_zones) == 0 &&
+      length(proxmox_acl.management_zones) == 0 &&
+      !contains([for s in helm_release.storage.set_sensitive : s.name], "backupVolume.zonesToken")
+    )
+    error_message = "on shared storage no node's zone matters to the store, so no token reads where the VMs run"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.storage.values[0]).backupVolume.sharesHost
+    error_message = "a Proxmox VE cluster of one node loses shared storage with that node, so the volume shares its host"
+  }
+}
+
+run "backup_volume_on_shared_storage_of_several_nodes_outlives_a_host" {
+  command = apply
+
+  variables {
+    backup_volume = { shared = true }
+  }
+
+  override_data {
+    target = data.proxmox_virtual_environment_nodes.all
+    values = { names = ["pve1", "pve2", "pve3"] }
+  }
+
+  assert {
+    condition     = !yamldecode(helm_release.storage.values[0]).backupVolume.sharesHost
+    error_message = "shared storage of several nodes outlives one host, so no warning is due"
+  }
 }
 
 run "backup_volume_on_local_storage_stays_on_its_node" {
   command = apply
 
+  override_data {
+    target = data.proxmox_virtual_environment_nodes.all
+    values = { names = ["pve1", "pve2", "pve3"] }
+  }
+
   assert {
     condition     = yamldecode(helm_release.storage.values[0]).backupVolume.zone == "pve1"
     error_message = "on a node's own storage the backup volume must stay on that node"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.storage.values[0]).backupVolume.sharesHost
+    error_message = "a volume on a node's own storage is lost with that node, so it shares its host"
+  }
+
+  assert {
+    condition = (
+      proxmox_acl.management_zones[0].path == "/pool/kubehenge-management" &&
+      proxmox_acl.management_zones[0].propagate &&
+      toset(proxmox_virtual_environment_role.templates_audit.privileges) == toset(["VM.Audit"]) &&
+      proxmox_acl.management_zones[0].role_id == proxmox_virtual_environment_role.templates_audit.role_id &&
+      proxmox_acl.management_zones[0].user_id == "kubehenge-management-zones@pve" &&
+      !proxmox_user_token.management_zones[0].privileges_separation &&
+      one([for s in helm_release.storage.set_sensitive : base64decode(s.value) if s.name == "backupVolume.zonesToken"]) == "kubehenge-management-csi@pve!csi=00000000-0000-0000-0000-000000000000" &&
+      yamldecode(helm_release.storage.values[0]).backupVolume.nodes == [for n in local.nodes : n.name]
+    )
+    error_message = "on a node's own storage the appliance must get a token that only sees the management pool's VMs, and the nodes whose zone it corrects"
   }
 }
 

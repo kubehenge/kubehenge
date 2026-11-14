@@ -128,8 +128,16 @@ function UnownedVMs({ vms }: { vms: { vmid: number }[] }): JSX.Element | null {
   );
 }
 
-// ManagementHealthCard is the management cluster's own health, read on its own so that it answers
-// while the cluster does not, when the Administration page is what repairs it.
+/** SameHostWarning says that one Proxmox VE host's loss can take every backup, and what survives it. */
+export function SameHostWarning(): JSX.Element {
+  return (
+    <p className="warning">
+      Losing one Proxmox VE host can lose the backup volume and the appliance&apos;s copy. Add a bucket target to keep
+      backups elsewhere.
+    </p>
+  );
+}
+
 // BackupLine says where the management backups are and when the last ran, or why the last failed.
 export function BackupLine({ backups }: { backups: BackupSummary }): JSX.Element {
   const last = backups.last === undefined ? "none yet" : new Date(backups.last).toLocaleString();
@@ -147,10 +155,13 @@ export function BackupLine({ backups }: { backups: BackupSummary }): JSX.Element
           <Said text={backups.error} />
         </span>
       )}
+      {backups.sameHost === true && <SameHostWarning />}
     </>
   );
 }
 
+// ManagementHealthCard is the management cluster's own health, read on its own so that it answers
+// while the cluster does not, when the Administration page is what repairs it.
 export function ManagementHealthCard(): JSX.Element {
   const { data: h, error, stale } = usePoll(api.managementHealth, pollIdle, managementKept);
   const { data: reboot } = usePoll(api.rebootReady, pollIdle, rebootKept);

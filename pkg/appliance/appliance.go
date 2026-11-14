@@ -47,10 +47,12 @@ type Appliance struct {
 	Module string
 	// Tofu is the OpenTofu binary.
 	Tofu string
-	// ProxmoxURL and ProxmoxCA (PEM) are the Proxmox VE API the module signs in to.
+	// ProxmoxURL and ProxmoxCA (PEM) are the Proxmox VE API the module signs in to, and
+	// ProxmoxCAFile the file ProxmoxCA was read from, for the appliance's own calls.
 	// ProxmoxInsecure has the module and the management cluster skip verifying its certificate.
 	ProxmoxURL      string
 	ProxmoxCA       string
+	ProxmoxCAFile   string
 	ProxmoxInsecure bool
 	// Release is the appliance's own release, which carries the module. Every apply records it, so
 	// that the interface can tell when the management cluster runs what an older one applied.
@@ -79,7 +81,10 @@ type Appliance struct {
 	CopyCap int64
 	// waitVolume bounds a recovery's wait for the backup volume's store, volumeWait when 0.
 	waitVolume time.Duration
-	Now        func() time.Time
+	// vmHosts reads with token which Proxmox VE node each VM it may see runs on, by VM name. Nil
+	// asks the Proxmox VE API.
+	vmHosts func(ctx context.Context, token string) (map[string]string, error)
+	Now     func() time.Time
 	// KeyWorkFactor is the scrypt work factor the passphrase seals the snapshots' key with, age's
 	// own when 0. Opening the key reads it from the sealed key.
 	KeyWorkFactor int

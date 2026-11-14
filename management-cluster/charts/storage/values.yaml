@@ -18,3 +18,9 @@ backupVolume:
   handle: ""
   zone: ""
   region: ""
+  # The management nodes, and a Proxmox VE token, base64, that reads where their VMs run. With a
+  # zone, the appliance corrects a moved node's zone label with them.
+  nodes: []
+  zonesToken: ""
+  # Whether one Proxmox VE host's loss takes the volume.
+  sharesHost: true

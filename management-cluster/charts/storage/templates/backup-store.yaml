@@ -41,6 +41,8 @@ metadata:
   wakes it for each backup or recovery, then puts it back to these replicas. */}}
   annotations:
     kubehenge.dev/idle-replicas: {{ ternary "0" "1" (ne .Values.backupVolume.zone "") | quote }}
+    {{- /* Whether one Proxmox VE host's loss takes the volume, for the interface's warning. */}}
+    kubehenge.dev/shares-host: {{ .Values.backupVolume.sharesHost | toString | quote }}
 spec:
   replicas: {{ ternary 0 1 (ne .Values.backupVolume.zone "") }}
   # The volume attaches to one node at a time.
@@ -134,3 +136,109 @@ subjects:
   - kind: ServiceAccount
     name: kubehenge-interface
     namespace: {{ $ns }}
+{{- if and .Values.backupVolume.zone .Values.backupVolume.zonesToken }}
+{{- $zones := printf "%s-zones" $name }}
+{{- $interface := printf "system:serviceaccount:%s:kubehenge-interface" $ns }}
+{{- /* A node VM HA or an administrator moved still carries its old node's zone label, and the plugin
+would attach the volume to a VM on another node than its disk. Before each wake the appliance reads
+where the node VMs run with this token and corrects the label. */}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $zones }}
+  namespace: {{ $ns }}
+type: Opaque
+data:
+  token: {{ .Values.backupVolume.zonesToken | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $zones }}
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ $zones }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $zones }}
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $zones }}
+subjects:
+  - kind: ServiceAccount
+    name: kubehenge-interface
+    namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $zones }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    resourceNames: {{ toJson .Values.backupVolume.nodes }}
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $zones }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $zones }}
+subjects:
+  - kind: ServiceAccount
+    name: kubehenge-interface
+    namespace: {{ $ns }}
+{{- /* RBAC cannot narrow a patch to one label, so this policy holds the interface's changes to a
+node to its two zone labels. */}}
+{{- $labels := "['topology.kubernetes.io/zone', 'failure-domain.beta.kubernetes.io/zone']" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $zones }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [nodes]
+  matchConditions:
+    - name: interface
+      expression: request.userInfo.username == '{{ $interface }}'
+  variables:
+    - name: before
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+    - name: after
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+  validations:
+    - expression: >-
+        object.spec == oldObject.spec
+        && (has(object.metadata.annotations) ? object.metadata.annotations : {}) == (has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {})
+        && (has(object.metadata.finalizers) ? object.metadata.finalizers : []) == (has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers : [])
+        && (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])
+        && variables.after.all(k, k in {{ $labels }} || (k in variables.before && variables.before[k] == variables.after[k]))
+        && variables.before.all(k, k in {{ $labels }} || k in variables.after)
+        && {{ $labels }}.all(k, (k in variables.after) == (k in variables.before))
+      message: the interface changes nothing of a node but the values of its zone labels
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $zones }}
+spec:
+  policyName: {{ $zones }}
+  validationActions: [Deny]
+{{- end }}
