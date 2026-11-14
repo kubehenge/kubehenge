@@ -103,48 +103,15 @@ describe("the cluster's summary", () => {
       within(map).findByRole("link", { name: "web-cp-a, control plane, Node offline" }),
     ).resolves.toBeInTheDocument();
     expect(screen.getByText("3 control-plane nodes, 2 workers")).toBeInTheDocument();
-    // The count agrees with the machine shown as down.
+    // The count is the machines' own, as `kubehenge cluster list` and kubectl give it.
     const term = screen.getByText("Control plane", { selector: "dt" });
-    await waitFor(() => expect(term.nextElementSibling).toHaveTextContent("2 of 3 ready"));
+    await waitFor(() => expect(term.nextElementSibling).toHaveTextContent("3 of 3 ready"));
     unmount();
 
     window.history.replaceState(null, "", "/clusters/default/web/machines");
     render(<App />);
     const row = await screen.findByRole("row", { name: /^web-cp-a/u });
     await expect(within(row).findByText("Node offline")).resolves.toBeInTheDocument();
-  });
-
-  it("does not call a cluster healthy while a control-plane node of it is on an offline node", async () => {
-    const calm: ClusterHealth = {
-      read: created,
-      verdict: "healthy",
-      attention: [],
-      nodes: { items: [] },
-      pods: { items: [] },
-      volumes: { items: [] },
-      addons: { items: [] },
-      pools: { items: [] },
-      controlPlane: { conditions: [] },
-      healthChecks: { items: [] },
-      events: { items: [] },
-      logs: false,
-    };
-    const stale = {
-      ...web,
-      workers: { desired: 2, ready: 2, available: 2, upToDate: 2 },
-      machines: [machine("web-cp-a", "control-plane", { proxmoxNode: "pve4" })],
-    };
-    fakeServer({
-      "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
-      "GET /api/clusters": { body: [stale] },
-      "GET /api/clusters/default/web": { body: stale },
-      "GET /api/clusters/default/web/health": { body: calm },
-      "GET /api/runs": { body: [] },
-      "GET /api/proxmox/nodes": { body: [{ node: "pve4", online: false }] },
-    });
-    window.history.replaceState(null, "", "/clusters/default/web/health");
-    render(<App />);
-    await expect(screen.findByText("Degraded", { selector: ".verdict .status" })).resolves.toBeInTheDocument();
   });
 
   it("shows a machine whose node stopped reporting as down, not as on its way", async () => {

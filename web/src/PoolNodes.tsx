@@ -58,7 +58,7 @@ export function NodesDialog({
   const changed = inherit ? pool.nodes !== undefined : !sameNodeSettings(value, was);
   return (
     <Dialog
-      title={`Edit pool ${poolLabel(pool.name)} nodes`}
+      title={`Edit pool ${poolLabel(pool.name, c.workerPools)} nodes`}
       onClose={onClose}
       onSubmit={() => {
         void send({ pools: { [pool.name]: { nodes: inherit ? null : nodesVariable(value) } } });

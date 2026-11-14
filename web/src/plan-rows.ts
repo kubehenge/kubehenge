@@ -8,7 +8,12 @@ import { poolLabel } from "./pool-machine";
 import type { Cluster, ClusterClass, Effect, PlannedChange } from "./types";
 
 const controlPlaneTimeoutsLabel = "Control plane timeouts";
-const poolTimeoutsLabel = (pool: string): string => `Pool ${poolLabel(pool)} timeouts`;
+// The pools are every pool on either side of a change, so that a pool keeps one label on both.
+type Pools = readonly { name: string }[];
+
+const poolTimeoutsLabel = (pool: string, pools: Pools): string => `Pool ${poolLabel(pool, pools)} timeouts`;
+
+const bothSides = (before: Cluster, after: Cluster): Pools => [...before.workerPools, ...after.workerPools];
 
 // The rows of the page a setting shows in. Most show in one.
 const settingLabels: Record<string, string[]> = {
@@ -82,40 +87,40 @@ export function worstEffect(changes: PlannedChange[]): Effect {
 }
 
 // A cluster with one pool has just its number of workers. Several are told apart by name.
-const workersText = (c: Cluster): string =>
+const workersText = (c: Cluster, pools: Pools): string =>
   c.workerPools.length === 1
     ? String(c.workerPools[0]?.replicas)
-    : c.workerPools.map((p) => `${poolLabel(p.name)} ${p.replicas}`).join(", ");
+    : c.workerPools.map((p) => `${poolLabel(p.name, pools)} ${p.replicas}`).join(", ");
 
-function autoscalingText(c: Cluster): string {
+function autoscalingText(c: Cluster, pools: Pools): string {
   const scaled = c.workerPools.flatMap((p) =>
-    p.autoscaling ? [`${poolLabel(p.name)} ${p.autoscaling.min} to ${p.autoscaling.max}`] : [],
+    p.autoscaling ? [`${poolLabel(p.name, pools)} ${p.autoscaling.min} to ${p.autoscaling.max}`] : [],
   );
   return scaled.length === 0 ? "Off" : scaled.join(", ");
 }
 
 // The timeouts of the control plane and of each pool, as they apply with the class's behind them.
-function timeoutRows(c: Cluster, cls: ClusterClass | undefined): Setting[] {
+function timeoutRows(c: Cluster, cls: ClusterClass | undefined, pools: Pools): Setting[] {
   return [
     {
       label: controlPlaneTimeoutsLabel,
       value: timeoutsText(c.controlPlaneTimeouts ?? {}, cls?.controlPlaneTimeouts),
     },
     ...c.workerPools.map((p) => ({
-      label: poolTimeoutsLabel(p.name),
+      label: poolTimeoutsLabel(p.name, pools),
       value: timeoutsText(p.timeouts ?? {}, cls?.workerTimeouts),
     })),
   ];
 }
 
 // settingRows are every setting of a cluster a change can set, as the page shows them.
-function settingRows(c: Cluster, cls: ClusterClass | undefined): Setting[] {
+function settingRows(c: Cluster, cls: ClusterClass | undefined, pools: Pools): Setting[] {
   return [
     { label: "Kubernetes version", value: c.version },
     { label: "Control plane", value: String(c.controlPlane.desired) },
-    { label: "Workers", value: workersText(c) },
-    { label: "Autoscaling", value: autoscalingText(c) },
-    ...timeoutRows(c, cls),
+    { label: "Workers", value: workersText(c, pools) },
+    { label: "Autoscaling", value: autoscalingText(c, pools) },
+    ...timeoutRows(c, cls, pools),
     ...optionRows<string>(c, everything, [
       ...backupsRows(c, true),
       ...etcdSnapshotsRows(c, true),
@@ -162,11 +167,10 @@ export function planRows(
   changes: PlannedChange[],
   cls?: ClusterClass,
 ): PlanRow[] {
-  const now = settingRows(before, cls);
-  const then = settingRows(after, cls);
-  const pools = [...new Set([...before.workerPools, ...after.workerPools].map((p) => p.name))].map((name) =>
-    poolTimeoutsLabel(name),
-  );
+  const all = bothSides(before, after);
+  const now = settingRows(before, cls, all);
+  const then = settingRows(after, cls, all);
+  const pools = [...new Set(all.map((p) => p.name))].map((name) => poolTimeoutsLabel(name, all));
   return changes.flatMap(({ setting, effect }) => {
     const rows = (setting === "pools" ? [...labelsOf(setting), ...pools] : labelsOf(setting)).map((label) => ({
       label,
@@ -180,7 +184,7 @@ export function planRows(
   });
 }
 
-// A pool's text on one side of a change. A pool the change adds has none yet.
+// A pool's text on one side of a change. A pool the change adds has none yet, nor has one it deletes.
 const poolSide = (c: Cluster, name: string): string => {
   const p = c.workerPools.find((x) => x.name === name);
   return p === undefined ? "" : poolText(p);
@@ -188,6 +192,9 @@ const poolSide = (c: Cluster, name: string): string => {
 
 const named = (label: string, now: string, after: string): string =>
   now === "" ? `${label}: ${after}` : `${label}: ${now} to ${after}`;
+
+const poolLine = (label: string, now: string, after: string): string =>
+  after === "" ? `${label}: deleted` : named(label, now, after);
 
 /**
  * changeLines name each staged change with the numbers it sets, such as "Workers: 4 to 60" or
@@ -202,14 +209,28 @@ export function changeLines(
     if (change.setting === "controlPlaneReplicas") {
       return [named("Control plane", String(before.controlPlane.desired), String(after.controlPlane.desired))];
     }
+    const all = bothSides(before, after);
+    const names = [...new Set(all.map((p) => p.name))];
+    const sized = names
+      .filter((n) => poolSide(before, n) !== poolSide(after, n))
+      .map((n) =>
+        poolLine(names.length === 1 ? "Workers" : poolLabel(n, all), poolSide(before, n), poolSide(after, n)),
+      );
     if (change.setting === "workerPools") {
-      const names = [...new Set([...before.workerPools, ...after.workerPools].map((p) => p.name))];
-      return names
-        .filter((n) => poolSide(before, n) !== poolSide(after, n))
-        .map((n) => named(names.length === 1 ? "Workers" : poolLabel(n), poolSide(before, n), poolSide(after, n)));
+      return sized;
     }
-    return planRows({ before, after }, [change], cls)
-      .filter((r) => r.label !== "")
-      .map((r) => named(r.label, r.now, r.after));
+    // A pool the change adds or deletes is its line alone, without a row for each of its settings.
+    const comesOrGoes = new Set(
+      names
+        .filter((n) => poolSide(before, n) === "" || poolSide(after, n) === "")
+        .map((n) => poolTimeoutsLabel(n, all)),
+    );
+    const rows = planRows({ before, after }, [change], cls).filter((r) => r.label !== "");
+    if (change.setting !== "pools") {
+      return rows.map((r) => named(r.label, r.now, r.after));
+    }
+    // The pools row itself has no text, and the lines above name each pool.
+    const settings = rows.filter((r) => !comesOrGoes.has(r.label) && (r.now !== "" || r.after !== ""));
+    return [...sized, ...settings.map((r) => named(r.label, r.now, r.after))];
   });
 }

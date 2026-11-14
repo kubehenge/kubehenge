@@ -1251,6 +1251,7 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, r
 		return nil, false
 	}
 	before := c.DeepCopy()
+	req.WorkerPools, req.Autoscaling = poolsNamed(c, req.WorkerPools), poolsNamed(c, req.Autoscaling)
 	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
 	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
 	if err != nil {
@@ -1345,7 +1346,7 @@ func applyTopology(c *clusterv1.Cluster, req *changeRequest) string {
 			return provisioner.WorkersRule + " in each pool"
 		}
 		if isAutoscaled(c, name) {
-			return "pool " + name + " is autoscaled. Switch autoscaling off to set its workers"
+			return "pool " + poolLabel(name, topologyPools(c)) + " is autoscaled. Switch autoscaling off to set its workers"
 		}
 		if !setWorkerReplicas(c, name, n) {
 			return "the cluster has no worker pool " + name

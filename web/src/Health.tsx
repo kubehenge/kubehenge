@@ -4,7 +4,6 @@ import { api } from "./api";
 import { useClusterHealth, pollUnwell } from "./cluster-health";
 import { attentionFix } from "./cluster-paths";
 import { standing } from "./fleet";
-import { offlineOf, useProxmoxNodes, withNodeFindings } from "./offline-nodes";
 import { poolLabel } from "./pool-machine";
 import { Link } from "./router";
 import type {
@@ -132,8 +131,7 @@ function Verdict({
   stale: boolean;
 }): JSX.Element {
   const at = new Date(h.read).toLocaleTimeString();
-  const own = { ...h, namespace: c.namespace, name: c.name };
-  const s = standing(c, withNodeFindings(c, own, offlineOf(useProxmoxNodes())) ?? own);
+  const s = standing(c, { ...h, namespace: c.namespace, name: c.name });
   return (
     <div className="verdict">
       <Status state={s.state} text={s.verdict} />
@@ -605,7 +603,15 @@ function nodeNotes(n: HealthNode): string[] {
   return [...(n.pressure ?? []).map((p) => pressureText[p] ?? p), ...(n.unschedulable === true ? ["Cordoned"] : [])];
 }
 
-function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JSX.Element {
+function NodeRow({
+  node: n,
+  inside,
+  pools,
+}: {
+  node: HealthNode;
+  inside: boolean;
+  pools: readonly { name: string }[];
+}): JSX.Element {
   const s = nodeStatus(n, inside);
   const { vm } = n;
   return (
@@ -615,7 +621,7 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
         <div className="hint">
           {n.role === "control-plane"
             ? "Control plane"
-            : `Worker${filled(n.pool) ? `, pool ${poolLabel(n.pool)}` : ""}`}
+            : `Worker${filled(n.pool) ? `, pool ${poolLabel(n.pool, pools)}` : ""}`}
         </div>
         {(n.taints ?? []).length > 0 && (
           <ul className="node-tags" aria-label={`${n.name} taints`}>
@@ -687,7 +693,7 @@ function Nodes({ health: h }: { health: ClusterHealth }): JSX.Element {
             </tr>
           )}
           {h.nodes.items.map((n) => (
-            <NodeRow key={n.name} node={n} inside={!filled(h.workload)} />
+            <NodeRow key={n.name} node={n} inside={!filled(h.workload)} pools={h.pools.items} />
           ))}
         </tbody>
       </table>
@@ -926,7 +932,7 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
             const s = poolStatus(p);
             return (
               <tr key={p.name} className={s.state === "ok" ? "" : "attention"}>
-                <td className="nowrap">{p.name}</td>
+                <td className="nowrap">{poolLabel(p.name, pools.items)}</td>
                 <td data-label="Status">
                   <Status state={s.state} text={s.text} />
                   {filled(p.message) && (

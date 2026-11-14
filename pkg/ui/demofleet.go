@@ -148,6 +148,9 @@ type demoCluster struct {
 	// AvoidSkewedNode keeps the cluster's VMs off the node whose clock is wrong, so that the cluster
 	// stays healthy beside those that show the warning.
 	AvoidSkewedNode bool `json:"avoidSkewedNode"`
+	// OnUnreachableNode puts VMs of the cluster on the node that calls cannot reach, which no other
+	// cluster uses, so that one cluster shows what that node means.
+	OnUnreachableNode bool `json:"onUnreachableNode"`
 	// Unsynced is set on a Talos cluster whose last worker has not synced its clock.
 	Unsynced bool `json:"unsynced"`
 	// Paused is a cluster whose reconciling is paused.
@@ -542,10 +545,9 @@ func (f *demoFleet) add(d *demoCluster, vmid *int) error {
 		f.objects = append(f.objects, demoReferences(&n)...)
 	}
 	nodes := f.data.ProxmoxNodes
-	hosts := nodes
-	if d.AvoidSkewedNode {
-		hosts = slices.DeleteFunc(slices.Clone(nodes), func(n string) bool { return n == f.skewedNode() })
-	}
+	hosts := slices.DeleteFunc(slices.Clone(nodes), func(n string) bool {
+		return d.AvoidSkewedNode && n == f.skewedNode() || !d.OnUnreachableNode && n == f.unreachable().Node
+	})
 	for i, m := range machines {
 		if d.Held && i == len(machines)-1 {
 			m.Annotations = map[string]string{

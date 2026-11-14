@@ -1530,6 +1530,22 @@ h4.subsection {
   color: var(--error);
 }
 
+.host-unreachable {
+  border-color: var(--warning);
+}
+
+.host-unreachable .host-count {
+  color: var(--warning);
+}
+
+.host-fault {
+  margin-block: 0 6px;
+
+  font-size: 12px;
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+
 .host-machines {
   margin: 0;
   padding: 0;

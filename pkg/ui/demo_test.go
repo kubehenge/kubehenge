@@ -251,6 +251,17 @@ func TestDemoHasANodeThatIsOnlineAndNotReachable(t *testing.T) {
 	if !skipped {
 		t.Error("the demo's staging cluster does not show NodesSkipped for the node")
 	}
+	// The node is staging's alone, so the rest of the fleet shows healthy beside it.
+	for i := range clusters {
+		var detail struct {
+			Machines []machineView `json:"machines"`
+		}
+		decodeDemo(t, b.do("GET", "/api/clusters/"+clusters[i].Namespace+"/"+clusters[i].Name, ""), &detail)
+		on := slices.ContainsFunc(detail.Machines, func(m machineView) bool { return m.ProxmoxNode == nodes[faulty].Node })
+		if on != (clusters[i].Name == "staging") {
+			t.Errorf("cluster %s has machines on %s: %v, want only staging's there", clusters[i].Name, nodes[faulty].Node, on)
+		}
+	}
 }
 
 func TestDemoManagementAgreesWithItsClusters(t *testing.T) {
@@ -292,13 +303,15 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	verdicts := map[string]string{}
 	for _, h := range health {
 		verdicts[h.Name] = h.Verdict
-		// A node of Proxmox VE that is offline takes its VMs down, whatever the cluster last reported.
-		if h.Name == "web" && (len(h.Attention) == 0 || !strings.Contains(h.Attention[0].What, "pve3 is offline")) {
-			t.Errorf("web's items %v, want its offline node first", h.Attention)
+		// The node that fails forwarded calls is online in Proxmox VE and runs its VMs.
+		for _, a := range h.Attention {
+			if strings.Contains(a.What, "offline") {
+				t.Errorf("%s lists %q, but no Proxmox VE node of the demo is offline", h.Name, a.What)
+			}
 		}
 	}
-	if verdicts["payments"] != "degraded" || verdicts["web"] != "degraded" || verdicts["edge"] != "degraded" {
-		t.Errorf("verdicts %v", verdicts)
+	if verdicts["payments"] != "degraded" || verdicts["web"] != "healthy" || verdicts["edge"] != "changing" {
+		t.Errorf("verdicts %v, want payments degraded, web healthy and edge changing", verdicts)
 	}
 	lacking := false
 	for i := range clusters {
@@ -398,7 +411,7 @@ func TestDemoShowsPoolLabelsTaintsAndPodChecks(t *testing.T) {
 			notes = append(notes, a.What+" "+a.Message)
 		}
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "pool "+workerPool) || !strings.Contains(notes[0], "maintenance") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "pool "+defaultPoolLabel) || !strings.Contains(notes[0], "maintenance") {
 		t.Errorf("taint notes %q, want one naming the pool and the taint", notes)
 	}
 	var check struct {

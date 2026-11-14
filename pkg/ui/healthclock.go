@@ -104,7 +104,8 @@ func (s *Server) poolNodes(ctx context.Context, u user, poolPath string) []strin
 
 // addOfflineNodes adds an error for each Proxmox VE node that runs one of the cluster's VMs and is
 // offline, which Cluster API and the cluster itself take a while to notice. A user who cannot read the
-// nodes sees none.
+// nodes sees none. A node that answered one forwarded call badly still runs its VMs, so it is no
+// error of the cluster's.
 func (s *Server) addOfflineNodes(ctx context.Context, u user, poolPath string, v *healthView) {
 	names := s.poolNodes(ctx, u, poolPath)
 	if len(names) == 0 {
@@ -116,7 +117,7 @@ func (s *Server) addOfflineNodes(ctx context.Context, u user, poolPath string, v
 	}
 	var a attention
 	for i := range nodes {
-		if n := &nodes[i]; !n.Online && slices.Contains(names, n.Node) {
+		if n := &nodes[i]; n.Offline() && slices.Contains(names, n.Node) {
 			a.add(severityError, sectionNodes, "Proxmox VE node "+n.Node+" is offline",
 				"The cluster's VMs on it are down, whatever the cluster last reported.", time.Time{})
 		}

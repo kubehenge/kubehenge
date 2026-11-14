@@ -13,7 +13,7 @@ import { EtcdSizeView } from "./EtcdSize";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { ClusterStatus, fleetKey, useFleet } from "./fleet";
 import { useClusterChanges } from "./live";
-import { Machines, Placement, useReadyCounts } from "./Machines";
+import { Machines, Placement } from "./Machines";
 import { nodeOSKey } from "./node-os";
 import { poolLabel } from "./pool-machine";
 import { Pools } from "./Pools";
@@ -614,7 +614,7 @@ function ActionDialog({
       <ScaleDialog
         cluster={c}
         onClose={onClose}
-        checks={(after, nodes) => (
+        renderChecks={(after, nodes) => (
           <ChecksList
             checks={scaleChecks(c, after, nodes)}
             healthPath={clusterPath(c.namespace, c.name, "health")}
@@ -680,7 +680,6 @@ function Summary({
   why: string | undefined;
   onChanged: () => void;
 }): JSX.Element {
-  const ready = useReadyCounts(c);
   return (
     <div className="box">
       <dl className="summary">
@@ -707,18 +706,20 @@ function Summary({
         <dd>{(c.services ?? []).join(", ") || "Default"}</dd>
         <dt>Control plane</dt>
         <dd>
-          {ready.controlPlane} of {c.controlPlane.desired} ready
+          {c.controlPlane.ready} of {c.controlPlane.desired} ready
         </dd>
         <dt>Workers</dt>
         <dd>
-          {c.workers.desired === 0 && c.workers.ready === 0 ? "None" : `${ready.workers} of ${c.workers.desired} ready`}
+          {c.workers.desired === 0 && c.workers.ready === 0
+            ? "None"
+            : `${c.workers.ready} of ${c.workers.desired} ready`}
         </dd>
         {c.workerPools.some((p) => p.autoscaling) && (
           <>
             <dt>Worker pools</dt>
             <dd>
               {c.workerPools.map((p) => (
-                <div key={p.name}>{`${poolLabel(p.name)}: ${poolText(p)}`}</div>
+                <div key={p.name}>{`${poolLabel(p.name, c.workerPools)}: ${poolText(p)}`}</div>
               ))}
             </dd>
           </>

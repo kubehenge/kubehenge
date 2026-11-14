@@ -4,7 +4,7 @@ import { api } from "./api";
 import { autoscales, controlPlaneSizes, mostWorkers, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import { addressCount, whole } from "./network";
-import { poolSuffix } from "./pool-machine";
+import { poolSuffix as suffixOf } from "./pool-machine";
 import type {
   AutoscalerSettings,
   Autoscaling,
@@ -280,6 +280,7 @@ export function roomWarning(c: Cluster, pool: { p: WorkerPool; e: PoolEntry }, n
 /** PoolFields edit one worker pool in the Scale dialog: a fixed number of workers, or autoscaled between two. */
 export function PoolFields({
   pool: p,
+  pools,
   entry: e,
   problem,
   warning,
@@ -287,12 +288,15 @@ export function PoolFields({
   onChange,
 }: {
   pool: WorkerPool;
+  /** Every pool of the cluster, which decide how the pool is named. */
+  pools: readonly WorkerPool[];
   entry: PoolEntry;
   problem: PoolProblem | undefined;
   warning: string | undefined;
   room: number | undefined;
   onChange: (e: PoolEntry) => void;
 }): JSX.Element {
+  const poolSuffix = (name: string): string => suffixOf(name, pools);
   return (
     <>
       <Field label={`Scaling${poolSuffix(p.name)}`}>
@@ -523,16 +527,38 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
   );
 }
 
+/**
+ * scaledCluster is the cluster as the Scale dialog's entries leave it, in the shape the server's plan
+ * gives, so that the dialog and Review plan check the same pools. An autoscaled pool keeps the
+ * workers it runs and takes the bounds entered.
+ */
+export function scaledCluster(c: Cluster, controlPlane: number, entries: Record<string, PoolEntry>): Cluster {
+  const workerPools = c.workerPools.map((p): WorkerPool => {
+    const e = entries[p.name] ?? poolEntry(p);
+    if (e.autoscale) {
+      return { ...p, autoscaling: { min: entryLeast(e) || 0, max: entryMost(e) } };
+    }
+    const { autoscaling: _, ...fixed } = p;
+    return { ...fixed, replicas: entryMost(e) };
+  });
+  return {
+    ...c,
+    controlPlane: { ...c.controlPlane, desired: controlPlane },
+    workers: { ...c.workers, desired: workerPools.reduce((sum, p) => sum + p.replicas, 0) },
+    workerPools,
+  };
+}
+
 /** ScaleDialog sets a cluster's control-plane nodes and, for each worker pool, its workers or its autoscaling bounds. */
 export function ScaleDialog({
   cluster: c,
   onClose,
-  checks,
+  renderChecks,
 }: {
   cluster: Cluster;
   onClose: () => void;
   /** The checks of the cluster as the entries would leave it, as Review plan lists them. */
-  checks: (after: Cluster, nodes: PveNode[]) => ReactNode;
+  renderChecks: (after: Cluster, nodes: PveNode[]) => ReactNode;
 }): JSX.Element {
   const current = c.controlPlane.desired || 1;
   const [controlPlane, setControlPlane] = useState(current);
@@ -547,14 +573,7 @@ export function ScaleDialog({
   const room = roomFor(scaling);
   const change = poolChange(c.workerPools, pools);
   const changed = controlPlane !== current || Object.keys(change).length > 0;
-  // An autoscaled pool counts at its most, which is what its addresses and memory must allow.
-  const workerPools = c.workerPools.map((p) => ({ ...p, replicas: entryMost(pools[p.name] ?? poolEntry(p)) }));
-  const after: Cluster = {
-    ...c,
-    controlPlane: { ...c.controlPlane, desired: controlPlane },
-    workers: { ...c.workers, desired: workerPools.reduce((sum, p) => sum + p.replicas, 0) },
-    workerPools,
-  };
+  const after = scaledCluster(c, controlPlane, pools);
   return (
     <Dialog
       title={`Scale ${c.name}`}
@@ -592,6 +611,7 @@ export function ScaleDialog({
           <PoolFields
             key={p.name}
             pool={p}
+            pools={c.workerPools}
             entry={entry}
             problem={invalid[p.name]}
             warning={roomWarning(c, { p, e: entry }, nodes)}
@@ -600,7 +620,7 @@ export function ScaleDialog({
           />
         );
       })}
-      {changed && checks(after, nodes)}
+      {changed && renderChecks(after, nodes)}
       <ErrorBox message={error} />
     </Dialog>
   );

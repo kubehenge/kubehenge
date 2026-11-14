@@ -101,7 +101,7 @@ decide what it may do, as they do for a user signed in to the interface.`,
 		},
 	}
 	scale.Flags().Int32Var(&controlPlanes, "control-planes", 0, "control-plane nodes: 1, 3, 5 or 7")
-	scale.Flags().StringArrayVar(&workers, "workers", nil, "a pool's workers as POOL=N, such as md-0=3, repeated for more pools")
+	scale.Flags().StringArrayVar(&workers, "workers", nil, "a pool's workers as POOL=N, such as workers=3 for the default pool, repeated for more pools")
 	o.namespaceFlag(scale.Flags())
 
 	var yes bool
@@ -596,7 +596,7 @@ func scaleRequest(controlPlanes *int32, workers []string) (map[string]any, error
 			pool, n, ok := strings.Cut(w, "=")
 			count, err := strconv.ParseInt(n, 10, 32)
 			if !ok || pool == "" || err != nil {
-				return nil, fmt.Errorf("--workers %q: give POOL=N, such as md-0=3", w)
+				return nil, fmt.Errorf("--workers %q: give POOL=N, such as workers=3", w)
 			}
 			pools[pool] = int32(count)
 		}

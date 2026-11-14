@@ -443,6 +443,10 @@ func poolsSection(m *managementRead, a *attention) section[poolView] {
 		s.Error = problem(m.deploymentsErr)
 		return s
 	}
+	pools := make([]string, len(m.deployments))
+	for i := range m.deployments {
+		pools[i] = cmp.Or(m.deployments[i].Labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel], m.deployments[i].Name)
+	}
 	for i := range m.deployments {
 		md := &m.deployments[i]
 		v := poolView{
@@ -458,7 +462,7 @@ func poolsSection(m *managementRead, a *attention) section[poolView] {
 		if scaling == nil || scaling.Status != metav1.ConditionTrue {
 			scaling = meta.FindStatusCondition(conds, clusterv1.MachineDeploymentScalingDownCondition)
 		}
-		who := "Pool " + v.Name
+		who := "Pool " + poolLabel(v.Name, pools)
 		switch available, notAvailable := isFalse(conds, clusterv1.MachineDeploymentAvailableCondition); {
 		case v.RollingOut:
 			if rolling != nil {

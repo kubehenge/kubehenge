@@ -4,12 +4,62 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strings"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
+
+// defaultPoolLabel is what the interface, its health items and the CLI call the pool every cluster
+// starts with. A pool's name is a DNS label, so a user's pool can match it only in lower case.
+const defaultPoolLabel = "Workers"
+
+// labelled is whether the default pool goes by its label among pools: not beside a user's pool that
+// would read the same.
+func labelled(name string, pools []string) bool {
+	return name == workerPool && !slices.Contains(pools, strings.ToLower(defaultPoolLabel))
+}
+
+// poolLabel is a pool's name as people know it among the cluster's pools, as the interface writes it.
+func poolLabel(name string, pools []string) string {
+	if labelled(name, pools) {
+		return defaultPoolLabel
+	}
+	return name
+}
+
+// topologyPools are the names of the cluster's worker pools.
+func topologyPools(c *clusterv1.Cluster) []string {
+	names := make([]string, len(c.Spec.Topology.Workers.MachineDeployments))
+	for i, md := range c.Spec.Topology.Workers.MachineDeployments {
+		names[i] = md.Name
+	}
+	return names
+}
+
+// poolNamed is the pool a name given in a change stands for: a pool of that name, or the default
+// pool for its label in any case, so that "workers" works where the interface shows "Workers".
+func poolNamed(c *clusterv1.Cluster, given string) string {
+	pools := topologyPools(c)
+	if slices.Contains(pools, given) || !strings.EqualFold(given, defaultPoolLabel) || !slices.Contains(pools, workerPool) || !labelled(workerPool, pools) {
+		return given
+	}
+	return workerPool
+}
+
+// poolsNamed is a change's pools by the names of the pools they stand for.
+func poolsNamed[V any](c *clusterv1.Cluster, given map[string]V) map[string]V {
+	if given == nil {
+		return nil
+	}
+	out := make(map[string]V, len(given))
+	for name, v := range given {
+		out[poolNamed(c, name)] = v
+	}
+	return out
+}
 
 // poolChange adds a worker pool or changes one: its workers, and its size, which JSON null sets
 // back to the cluster's workerMachine. A pool the cluster lacks is added, and needs its workers.

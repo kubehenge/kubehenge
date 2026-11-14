@@ -3,10 +3,10 @@ import { useEffect, useState, type JSX } from "react";
 import { api } from "./api";
 import { addressRoom, freeMemory } from "./Autoscaling";
 import { sizeOf } from "./MachineFields";
-import { nodeFindings, offlineOf } from "./offline-nodes";
+import { offlineOf, unreachable } from "./offline-nodes";
 import { poolSize } from "./pool-machine";
 import { Link } from "./router";
-import type { Attention, Cluster, ClusterHealth, Effect, Plan, PveNode, UpgradeChecks } from "./types";
+import type { Cluster, ClusterHealth, Effect, Plan, PveNode, UpgradeChecks, WorkerPool } from "./types";
 import { Detail, Status, bytes, errorMessage, localDates } from "./ui";
 
 // What the machines go through, by the most a change does.
@@ -159,6 +159,9 @@ function changeCheck(read: PlanRead | undefined): Check {
   return { what: "Change", state: "info", text: replaces[effectOrder[Math.max(0, ...effects)] ?? "none"] };
 }
 
+// An autoscaled pool may grow to its most, so its most is what addresses and memory must allow.
+const poolMost = (p: WorkerPool): number => p.autoscaling?.max ?? p.replicas;
+
 // A rollout makes each new node before it removes the old one, so it needs one address spare.
 function addressCheck(c: Cluster): Check | undefined {
   const room = addressRoom(c);
@@ -166,15 +169,14 @@ function addressCheck(c: Cluster): Check | undefined {
     return undefined;
   }
   // The pools are what a plan changes, where the workers' status is what the cluster has now.
-  const workers = c.workerPools.reduce((sum, p) => sum + (p.autoscaling?.max ?? p.replicas), 0);
+  const workers = c.workerPools.reduce((sum, p) => sum + poolMost(p), 0);
   const spare = room - c.controlPlane.desired - workers;
   return spare > 0
     ? { what: "Addresses", state: "ok", text: `${spare} spare` }
     : { what: "Addresses", state: "error", text: "None spare. Add one under Options." };
 }
 
-// The cluster's own health and what its offline nodes mean count together, as on the health page.
-function healthCheck(health: ClusterHealth | string | undefined, onNodes: Attention[]): Check {
+function healthCheck(health: ClusterHealth | string | undefined): Check {
   if (health === undefined) {
     return { what: "Health", state: "progress", text: "Checking" };
   }
@@ -184,7 +186,7 @@ function healthCheck(health: ClusterHealth | string | undefined, onNodes: Attent
   if (health.verdict === "unreachable") {
     return { what: "Health", state: "error", text: "Unreachable" };
   }
-  const found = [...onNodes, ...health.attention];
+  const found = health.attention;
   const errors = found.filter((a) => a.severity === "error").length;
   const warnings = found.filter((a) => a.severity === "warning").length;
   if (errors + warnings === 0) {
@@ -205,8 +207,10 @@ function addedMiB(before: Cluster, after: Cluster): number {
   const controlPlane = sizeOf(after.variables["controlPlaneMachine"])?.memoryMiB ?? 0;
   const added = Math.max(0, after.controlPlane.desired - before.controlPlane.desired) * controlPlane;
   return after.workerPools.reduce((sum, p) => {
-    const was = before.workerPools.find((x) => x.name === p.name)?.replicas ?? 0;
-    return sum + Math.max(0, p.replicas - was) * (poolSize(after, p)?.memoryMiB ?? 0);
+    const was = before.workerPools.find((x) => x.name === p.name);
+    return (
+      sum + Math.max(0, poolMost(p) - (was === undefined ? 0 : poolMost(was))) * (poolSize(after, p)?.memoryMiB ?? 0)
+    );
   }, added);
 }
 
@@ -223,22 +227,37 @@ function memoryCheck(before: Cluster, after: Cluster, nodes: PveNode[]): Check |
     : { what: "Memory", state: "ok", text: `${bytes(free)} free` };
 }
 
-// nodesCheck names the Proxmox VE nodes that run the cluster's machines and are offline.
-function nodesCheck(c: Cluster, nodes: PveNode[]): Check | undefined {
+// nodesCheck names the Proxmox VE nodes that run the cluster's machines and are offline, or are up
+// and out of the appliance's reach, which a change that deletes or makes a VM there runs into.
+function nodesCheck(c: Cluster, nodes: PveNode[] | undefined): Check | undefined {
+  if (nodes === undefined) {
+    return { what: "Nodes", state: "progress", text: "Checking" };
+  }
   if (nodes.length === 0) {
     return undefined;
   }
   const placed = c.machines ?? [];
-  const down = nodes.filter((n) => !n.online && placed.some((m) => m.proxmoxNode === n.node));
-  if (down.length === 0) {
-    return { what: "Nodes", state: "ok", text: "All online" };
+  const used = nodes.filter((n) => placed.some((m) => m.proxmoxNode === n.node));
+  const offline = offlineOf(used);
+  const down = used.filter((n) => offline.has(n.node));
+  if (down.length > 0) {
+    const machines = placed.filter((m) => offline.has(m.proxmoxNode ?? "")).length;
+    return {
+      what: "Nodes",
+      state: "error",
+      text: `${down.map((n) => n.node).join(", ")} offline, ${counted(machines, "machine")}`,
+    };
   }
-  const machines = placed.filter((m) => down.some((n) => n.node === m.proxmoxNode)).length;
-  return {
-    what: "Nodes",
-    state: "error",
-    text: `${down.map((n) => n.node).join(", ")} offline, ${counted(machines, "machine")}`,
-  };
+  const away = used.filter((n) => unreachable(n));
+  if (away.length > 0) {
+    return {
+      what: "Nodes",
+      state: "warning",
+      text: `${away.map((n) => n.node).join(", ")} not reachable`,
+      detail: away.map((n) => `${n.node}: ${n.fault ?? ""}`),
+    };
+  }
+  return { what: "Nodes", state: "ok", text: "All online" };
 }
 
 const counted = (n: number, what: string): string => `${n} ${what}${n === 1 ? "" : "s"}`;
@@ -277,7 +296,8 @@ export function useChecks({
 }): Check[] {
   const found = useUpgradeChecks(before, on ? version : undefined);
   const [health, setHealth] = useState<ClusterHealth | string>();
-  const [nodes, setNodes] = useState<PveNode[]>([]);
+  // Unread until the list answers, so that the plan waits for it.
+  const [nodes, setNodes] = useState<PveNode[]>();
   const { namespace, name } = before;
   useEffect(() => {
     let current = true;
@@ -299,6 +319,9 @@ export function useChecks({
         }
       } catch {
         // Without the nodes there is no offline or memory line, and the cluster shows a VM that found no room.
+        if (current) {
+          setNodes([]);
+        }
       }
     }
     if (on) {
@@ -311,16 +334,19 @@ export function useChecks({
   const optional = (check: Check | undefined): Check[] => (check === undefined ? [] : [check]);
   return [
     ...(change ? [changeCheck(read)] : []),
-    ...scaleChecks(before, after, nodes),
+    ...scaleChecks(before, after, nodes ?? []),
     ...optional(nodesCheck(before, nodes)),
     ...(version === undefined ? [] : [removedAPIsCheck(found), ...optional(webhooksCheck(found))]),
-    healthCheck(health, nodeFindings(before, offlineOf(nodes))),
+    healthCheck(health),
   ];
 }
 
 /** needsAccepting is whether a list holds a problem that goes ahead only on the admin's say. */
 export const needsAccepting = (checks: Check[]): boolean =>
   checks.some((ch) => ch.state === "warning" || ch.state === "error");
+
+/** stillChecking is whether a check has not answered yet, so that nothing it may find is passed over. */
+export const stillChecking = (checks: Check[]): boolean => checks.some((ch) => ch.state === "progress");
 
 /** ChecksList shows the checks, a problem with its findings behind Detail. */
 export function ChecksList({
