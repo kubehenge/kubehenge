@@ -108,6 +108,7 @@ describe("the egress proxy settings", () => {
     const cls: ClusterClass = {
       name: "kubehenge-rke2",
       distribution: "rke2",
+      annotations: { "kubehenge.dev/management-proxy": "true" },
       versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+rke2r\d+$` },
       variables: [
         { name: "storage", required: true, schema: { type: "string" } },
@@ -135,6 +136,32 @@ describe("the egress proxy settings", () => {
     expect(fieldProblems("Add-ons", wrongUrl, cls)).toHaveProperty("egress.url");
     expect(fieldProblems("Add-ons", tooMany, cls)).toHaveProperty("egress.noProxy");
     expect(fieldProblems("Add-ons", wrongUrl, bare)).toStrictEqual({});
+  });
+});
+
+describe("the egress proxy without a management proxy", () => {
+  const cls: ClusterClass = {
+    name: "kubehenge-rke2",
+    distribution: "rke2",
+    versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+rke2r\d+$` },
+    variables: [{ name: "egressProxy", required: false, schema: { type: "object" } }],
+  };
+
+  it("is not offered, and the summary says no proxy", () => {
+    const form = { ...newForm(), rancherRegister: false };
+    expect(Object.fromEntries(summary(form, cls))["Egress proxy"]).toBe("No proxy");
+    const proxied = { ...cls, annotations: { "kubehenge.dev/management-proxy": "true" } };
+    expect(Object.fromEntries(summary(form, proxied))["Egress proxy"]).toBe("Management proxy");
+  });
+
+  it("offers no management proxy, and no proxy is the choice", async () => {
+    const changes: EgressChoice[] = [];
+    const user = userEvent.setup({ delay: null });
+    render(<EgressFields value={newEgress()} managementProxy={false} onChange={(e) => changes.push(e)} />);
+    expect(screen.queryByRole("radio", { name: "Management proxy" })).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "No proxy" })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: "Own proxy" }));
+    expect(changes.at(-1)).toMatchObject({ mode: "own" });
   });
 });
 

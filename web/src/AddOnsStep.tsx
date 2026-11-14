@@ -22,6 +22,7 @@ import {
   backupsChosen,
   coresText,
   etcdOffered,
+  hasManagementProxy,
   logsChosen,
   machineLeast,
   offersMesh,
@@ -391,17 +392,19 @@ function RancherAddOn({ form, set, shown, canTrust }: StepProps & { canTrust: bo
           )}
         </Field>
       ) : (
-        <>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={form.rancherRegister}
-              onChange={(e) => set("rancherRegister", e.target.checked)}
-            />{" "}
-            Register with Rancher
-          </label>
-          <Info about="registering with Rancher">{registerHint}</Info>
-        </>
+        form.rancherExists && (
+          <>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={form.rancherRegister}
+                onChange={(e) => set("rancherRegister", e.target.checked)}
+              />{" "}
+              Register with Rancher
+            </label>
+            <Info about="registering with Rancher">{registerHint}</Info>
+          </>
+        )
       )}
     </>
   );
@@ -650,6 +653,7 @@ function AddonCards({
         <AddonCard mib={0} on={form.egress.mode !== "management"}>
           <EgressFields
             value={form.egress}
+            managementProxy={hasManagementProxy(cls)}
             onChange={(e) => set("egress", e)}
             problems={Object.fromEntries(egressFields.map((f) => [f, shown(`egress.${f}`)]))}
           />

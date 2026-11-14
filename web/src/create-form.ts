@@ -301,6 +301,8 @@ export interface Form {
   rancherInstall: boolean;
   rancherHostname: string;
   rancherRegister: boolean;
+  /** Whether a cluster already runs Rancher, so that registering has something to register with. */
+  rancherExists: boolean;
   certificates: CertificatesForm;
   /** The labels of every namespace Kubehenge makes, one key=value per line. */
   namespaceLabels: string;
@@ -340,6 +342,10 @@ export const versionExamples: Record<string, string> = {
   kubeadm: "v1.36.5",
   talos: "v1.36.5",
 };
+
+/** hasManagementProxy says whether the management side has a proxy that a cluster takes unless it names its own. */
+export const hasManagementProxy = (c: ClusterClass | undefined): boolean =>
+  c?.annotations?.["kubehenge.dev/management-proxy"] === "true";
 
 export function variable(c: ClusterClass | undefined, name: string): Schema | undefined {
   return c?.variables.find((v) => v.name === name)?.schema;
@@ -940,6 +946,7 @@ export const newForm = (): Form => ({
   rancherInstall: false,
   rancherHostname: "",
   rancherRegister: true,
+  rancherExists: true,
   certificates: newCertificates(),
   namespaceLabels: "",
   existingCertManager: false,
@@ -1091,7 +1098,7 @@ function addOnVariables(form: Form, c: ClusterClass, defined: Set<string>): Reco
   }
   if (form.rancherInstall) {
     variables["rancher"] = { install: true, hostname: form.rancherHostname };
-  } else if (!form.rancherRegister) {
+  } else if (!form.rancherRegister && form.rancherExists) {
     variables["rancher"] = { register: false };
   }
   if (form.backups) {
@@ -1392,6 +1399,9 @@ function rancherChoice(form: Form): string {
   if (form.rancherInstall) {
     return `Installed at ${form.rancherHostname}`;
   }
+  if (!form.rancherExists) {
+    return "No Rancher yet";
+  }
   return form.rancherRegister ? registeredWithRancher : "Not registered";
 }
 
@@ -1611,17 +1621,17 @@ function addOnRows(form: Form, c: ClusterClass, defined: Set<string>): [string, 
   if (defined.has("certificates")) {
     rows.push(...certificatesRows(form));
   }
-  return [...rows, ...reachRows(form, defined)];
+  return [...rows, ...reachRows(form, defined, c)];
 }
 
 // reachRows sum up the add-ons that reach beyond the cluster.
-function reachRows(form: Form, defined: Set<string>): [string, string][] {
+function reachRows(form: Form, defined: Set<string>, c: ClusterClass): [string, string][] {
   const rows: [string, string][] = [];
   if (defined.has("gitops")) {
     rows.push(["GitOps", gitOpsText(form.gitops)]);
   }
   if (defined.has("egressProxy")) {
-    rows.push(["Egress proxy", egressText(form.egress)]);
+    rows.push(["Egress proxy", egressText(form.egress, hasManagementProxy(c))]);
   }
   if (defined.has("registryMirrors") && mirrorsVariable(form.registryMirrors) !== undefined) {
     rows.push(["Registry mirrors", mirrorsText(form.registryMirrors)]);

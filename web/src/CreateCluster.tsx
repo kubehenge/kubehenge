@@ -48,6 +48,7 @@ import { navigate } from "./router";
 import { clusterKey, fromCluster, startable, startKeys } from "./start-from";
 import type { Bridge, Cluster, ClusterClass, NodeDNS, PveNode, Storage, Versions } from "./types";
 import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
+import { record } from "./values";
 
 // customisationRefusal is the server's error where it names the node customisation, which then shows with it.
 const customisationRefusal = (error: string | undefined): string | undefined =>
@@ -213,10 +214,14 @@ export function CreateCluster({
   const { net, network, network6, node } = filled(entered.vlan)
     ? noNetwork
     : bridgeNetwork(bridge, bridgesByNode, dnsByNode);
+  // Registering needs a Rancher that one of the clusters runs.
+  const rancherExists = clusters.some((x) => record(x.variables["rancher"])["install"] === true);
   const chosen: Form = withBackupChoices(
     {
       ...withBridgeNetwork(withTalosRelease(entered, talos, offered), net, kept),
       namespace: namespaces.length > 1 ? namespaceOf(entered, namespaces) : "",
+      rancherExists,
+      rancherRegister: rancherExists && entered.rancherRegister,
       bridge,
       storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),
     },

@@ -35,6 +35,9 @@ metadata:
     # leader-election leases' deadlines.
     kubehenge.dev/cni-control-plane-memory: '{"cilium":1160,"calico":1808}'
     {{- include "kubehenge.backupTargets" . | nindent 4 }}
+    {{- if .Values.proxy.secret }}
+    kubehenge.dev/management-proxy: "true"
+    {{- end }}
     # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
     # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
     kubehenge.dev/node-memory: '{"controlPlane":1848,"worker":448}'

@@ -1085,6 +1085,7 @@ describe("create", () => {
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
+    rancherExists: true,
     certificates: newForm().certificates,
     namespaceLabels: "",
     existingCertManager: false,

@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
+import { newForm, request, summary } from "./create-form";
 import { applyStaged, fakeServer } from "./fake-server";
+import type { ClusterClass } from "./types";
 
 const cluster = {
   namespace: "clusters",
@@ -66,6 +68,26 @@ describe("rancher", () => {
     await applyStaged(user);
     await waitFor(() =>
       expect(sent()).toStrictEqual({ variables: { rancher: { install: false, hostname: "rancher.example.org" } } }),
+    );
+  });
+});
+
+describe("registering with Rancher in the create wizard", () => {
+  const cls: ClusterClass = {
+    name: "kubehenge-rke2",
+    distribution: "rke2",
+    versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+rke2r\d+$` },
+    variables: [{ name: "rancher", required: false, schema: { type: "object" } }],
+  };
+
+  it("says there is no Rancher yet, and sends nothing, where no cluster runs one", () => {
+    const form = { ...newForm(), rancherExists: false, rancherRegister: false };
+    expect(request(form, cls).variables).not.toHaveProperty("rancher");
+    expect(Object.fromEntries(summary(form, cls))["Rancher"]).toBe("No Rancher yet");
+    const there = { ...newForm(), rancherExists: true, rancherRegister: false };
+    expect(request(there, cls).variables["rancher"]).toStrictEqual({ register: false });
+    expect(Object.fromEntries(summary({ ...there, rancherRegister: true }, cls))["Rancher"]).toBe(
+      "Registered with Rancher",
     );
   });
 });
