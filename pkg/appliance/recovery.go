@@ -59,10 +59,10 @@ func (w *EtcdBackupWarning) Shown() bool { return w != nil && w.Dismissal == nil
 
 func (a *Appliance) dismissalFile() string { return a.etcdBackupFile("warning-dismissed.json") }
 
-// etcdBackupWarning is the warning that stands now, nil when the backups are on or there is no
-// management cluster.
+// etcdBackupWarning is the warning that stands now, nil when the backups go to a target or the
+// backup volume, or there is no management cluster.
 func (a *Appliance) etcdBackupWarning(st *EtcdBackupStatus) *EtcdBackupWarning {
-	if st.Settings != nil || !a.Ready() {
+	if st.Settings != nil || st.Volume != nil || !a.Ready() {
 		return nil
 	}
 	w := &EtcdBackupWarning{}

@@ -110,6 +110,8 @@ type EtcdBackupStatus struct {
 	SpecKey bool `json:"specKey,omitempty"`
 	// Volume is how the backups on the management cluster's own volume go, which need no settings.
 	Volume *VolumeBackupStatus `json:"volume,omitempty"`
+	// Where sums up where the backups are, when the last ran and why one failed.
+	Where *BackupSummary `json:"summary,omitempty"`
 }
 
 // etcdBackupKeys is what the appliance keeps to take snapshots with nobody signed in: the target's
@@ -166,11 +168,14 @@ func (a *Appliance) EtcdBackups() *EtcdBackupStatus {
 	a.mu.Lock()
 	st.Taking = a.takingEtcd
 	a.mu.Unlock()
+	st.Volume = a.VolumeBackups()
 	st.Warning = a.etcdBackupWarning(st)
 	st.ExportDue, st.ExportedAt = a.exportDue(st)
 	_, keyErr := os.Stat(a.specKeyFile())
 	st.SpecKey = keyErr == nil
-	st.Volume = a.VolumeBackups()
+	if sum := st.Summary(); len(sum.Where) > 0 {
+		st.Where = sum
+	}
 	return st
 }
 

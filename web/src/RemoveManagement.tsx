@@ -38,6 +38,7 @@ export function DangerZone({ running, onStarted }: { running: boolean; onStarted
 export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onStarted: () => void }): JSX.Element {
   const [typed, setTyped] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const [removeBackups, setRemoveBackups] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const ready = !busy && typed === "remove" && !passphraseShort(passphrase);
@@ -49,7 +50,7 @@ export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onSt
     setBusy(true);
     setError(undefined);
     try {
-      await api.removeManagement(passphrase);
+      await api.removeManagement(passphrase, removeBackups);
       onStarted();
     } catch (err) {
       setError(errorMessage(err));
@@ -76,6 +77,11 @@ export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onSt
       }
     >
       <p>Deletes the management cluster, templates, pools, users and roles. Delete every cluster first.</p>
+      <p>Keeps the backup volume: the VM kubehenge-backups and its disk, with the etcd snapshots and exports.</p>
+      <label className="check">
+        <input type="checkbox" checked={removeBackups} onChange={(e) => setRemoveBackups(e.target.checked)} /> Also
+        delete the backup volume
+      </label>
       <Field label="State passphrase">
         {(id) => (
           <input

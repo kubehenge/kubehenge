@@ -331,6 +331,71 @@ func (a *Appliance) backUpToVolume(ctx context.Context, keys *volumeBackupKeys, 
 	return stored, err
 }
 
+// BackupSummary is where the management backups are, when the last was taken and why the last one
+// failed, over the backup volume, the appliance's copy and a target.
+type BackupSummary struct {
+	Where []string   `json:"where"`
+	Last  *time.Time `json:"last,omitempty"`
+	Error string     `json:"error,omitempty"`
+}
+
+// Summary sums the backups' status up.
+func (st *EtcdBackupStatus) Summary() *BackupSummary {
+	s := &BackupSummary{}
+	var errs []string
+	newer := func(t time.Time) {
+		if s.Last == nil || t.After(*s.Last) {
+			s.Last = &t
+		}
+	}
+	if v := st.Volume; v != nil {
+		s.Where = append(s.Where, "backup volume "+v.Claim)
+		if v.Copy != nil && v.Copy.Snapshot != "" {
+			s.Where = append(s.Where, "appliance copy")
+		}
+		if v.Last != nil {
+			newer(v.Last.Time)
+		}
+		if v.Error != "" {
+			errs = append(errs, "backup volume: "+v.Error)
+		}
+		if v.Copy != nil && v.Copy.Error != "" {
+			errs = append(errs, "appliance copy: "+v.Copy.Error)
+		}
+	}
+	if st.Settings != nil {
+		s.Where = append(s.Where, "target "+st.Settings.Target)
+		if st.Last != nil {
+			newer(st.Last.Time)
+		}
+		if st.Error != "" {
+			errs = append(errs, "target "+st.Settings.Target+": "+st.Error)
+		}
+	}
+	s.Error = strings.Join(errs, "; ")
+	return s
+}
+
+// copyNearCap is the share of its cap, in per cent, from which the appliance's copy counts as near
+// it.
+const copyNearCap = 80
+
+// CopyTight returns the appliance's copy of the latest backups when the next may not fit: the copy
+// is near its cap, or the disk's free bytes hold less than the next snapshot needs, which is its
+// plain file and its new copy beside the old one. Nil while there is room.
+func (a *Appliance) CopyTight(free uint64) *ApplianceCopy {
+	st := a.VolumeBackups()
+	if st == nil || st.Copy == nil {
+		return nil
+	}
+	c := *st.Copy
+	c.Cap = a.copyCap()
+	if c.Bytes*100 >= c.Cap*copyNearCap || free < uint64(2*c.Bytes) { //nolint:gosec // a size is never negative
+		return &c
+	}
+	return nil
+}
+
 // backupVolumeAddress is the backup volume's VM in the module.
 const backupVolumeAddress = "proxmox_virtual_environment_vm.backups"
 

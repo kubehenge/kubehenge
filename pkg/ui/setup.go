@@ -180,6 +180,14 @@ const (
 type diskFull struct {
 	UsedPercent uint64 `json:"usedPercent"`
 	FreeMiB     uint64 `json:"freeMiB"`
+	// BackupCopy is set while the appliance's copy of the management backups nears its cap, or the
+	// disk lacks room for the next.
+	BackupCopy *backupCopyView `json:"backupCopy,omitempty"`
+}
+
+type backupCopyView struct {
+	MiB    int64 `json:"mib"`
+	CapMiB int64 `json:"capMiB"`
 }
 
 // diskFull tells how full the appliance's disk is, once it is past diskWarning. Nil below that, or
@@ -199,10 +207,18 @@ func (s *Server) diskFull(ctx context.Context) *diskFull {
 	}
 	// Rounded up, as df rounds it.
 	percent := (used*100 + total - 1) / total
-	if percent < diskWarning {
+	var tight *appliance.ApplianceCopy
+	if s.Appliance != nil {
+		tight = s.Appliance.CopyTight(free)
+	}
+	if percent < diskWarning && tight == nil {
 		return nil
 	}
-	return &diskFull{UsedPercent: percent, FreeMiB: free / mebibyte}
+	d := &diskFull{UsedPercent: percent, FreeMiB: free / mebibyte}
+	if tight != nil {
+		d.BackupCopy = &backupCopyView{MiB: tight.Bytes / mebibyte, CapMiB: tight.Cap / mebibyte}
+	}
+	return d
 }
 
 // applianceID is the appliance's guest ID as the user sees it, found by its MAC addresses where

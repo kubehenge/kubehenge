@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -248,7 +249,32 @@ func (o *applianceOptions) etcdBackupsCommand() *cobra.Command {
 
 func printBackups(cmd *cobra.Command, v *appliance.EtcdBackupStatus) error {
 	t := table(cmd)
+	if v.Where != nil {
+		row(t, "Backups in", strings.Join(v.Where.Where, ", "))
+		last := "none yet"
+		if v.Where.Last != nil {
+			last = v.Where.Last.UTC().Format(time.RFC3339)
+		}
+		row(t, "Last backup", last)
+		if v.Where.Error != "" {
+			row(t, "Failed", v.Where.Error)
+		}
+	}
+	if vol := v.Volume; vol != nil {
+		if vol.Last != nil {
+			row(t, "Volume snapshot", vol.Last.Name)
+		}
+		if vol.Export != nil {
+			row(t, "Volume export", vol.Export.Name)
+		}
+		if vol.Copy != nil {
+			row(t, "Appliance copy", fmt.Sprintf("%s, %d of %d MiB", cmp.Or(vol.Copy.Snapshot, "none"), vol.Copy.Bytes>>20, vol.Copy.Cap>>20))
+		}
+	}
 	if v.Settings == nil {
+		if v.Volume != nil {
+			return flush(t)
+		}
 		row(t, "Backups", "Off")
 		if v.Warning.Shown() {
 			row(t, "Warning", "The management cluster's etcd is not backed up. Every cluster's CAs, kubeconfigs and backup keys live only there.")

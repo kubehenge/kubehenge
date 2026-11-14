@@ -1056,6 +1056,18 @@ export interface ManagementBackups {
   exportedAt?: string;
   /** Set once the appliance holds the recovery key that opens the specs' Secrets. */
   specKey?: boolean;
+  /** The backups on the management cluster's own volume, which need no settings. */
+  volume?: {
+    claim: string;
+    last?: EtcdSnapshot;
+    next?: string;
+    error?: string;
+    failed?: string;
+    copy?: { snapshot?: string; bytes: number; cap: number; error?: string };
+    export?: { name: string; time: string; bytes: number };
+  };
+  /** Where the backups are, when the last ran and why one failed. */
+  summary?: BackupSummary;
 }
 
 export interface ManagementSnapshots {
@@ -1195,8 +1207,11 @@ export interface SetupStatus {
   applianceVMID?: number;
   /** The appliance's addresses moved away from those its certificate is for. For administrators only. */
   addressMoved?: { from: string[]; to: string[] };
-  /** The appliance's disk is at least 80 % full. For administrators only. */
-  diskFull?: { usedPercent: number; freeMiB: number };
+  /**
+   * The appliance's disk is at least 80 % full, or its copy of the management backups nears its cap
+   * or lacks room for the next. For administrators only.
+   */
+  diskFull?: { usedPercent: number; freeMiB: number; backupCopy?: { mib: number; capMiB: number } };
   /** The Proxmox VE API's certificate goes unverified (--proxmox-insecure); for administrators only. */
   proxmoxInsecure?: boolean;
   /** An earlier run left its encrypted state, so the setup takes that run's passphrase. */
@@ -1230,6 +1245,14 @@ export interface ManagementHealth {
   etcd?: { healthy: number; members: number };
   /** VMs in Kubehenge's pools that no cluster owns. Nothing deletes them. */
   unowned?: { checked: string; vms: { vmid: number; name?: string; node?: string; pool: string }[] };
+  /** Where the management backups are, when the last ran, and why the last one failed. */
+  backups?: BackupSummary;
+}
+
+export interface BackupSummary {
+  where: string[];
+  last?: string;
+  error?: string;
 }
 
 /** Whether a Proxmox VE node may be rebooted, or why not. */

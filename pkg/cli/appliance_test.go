@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -11,6 +12,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 const (
@@ -305,6 +312,36 @@ func TestApplianceEtcdBackups(t *testing.T) {
 	wantOut := "Restoring\nThe snapshot matches its checksum\netcd runs\nRestored from 20270301T120000Z-v1.37.1.db.age\n"
 	if err != nil || out != wantOut {
 		t.Errorf("restore: %v\n%q\nwant %q", err, out, wantOut)
+	}
+}
+
+func TestApplianceEtcdBackupsShowTheVolume(t *testing.T) {
+	t.Parallel()
+	last := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	v := &appliance.EtcdBackupStatus{
+		Volume: &appliance.VolumeBackupStatus{
+			Claim: "kubehenge-system/kubehenge-backups",
+			Last:  &provisioner.EtcdSnapshot{Name: "20270301T120000Z-v1.37.2.db.age", Time: last},
+			Copy:  &appliance.ApplianceCopy{Snapshot: "20270301T120000Z-v1.37.2.db.age", Bytes: 3 << 20, Cap: 1 << 30},
+		},
+		Where: &appliance.BackupSummary{Where: []string{"backup volume kubehenge-system/kubehenge-backups", "appliance copy"}, Last: &last, Error: "backup volume: unreachable"},
+	}
+	cmd := &cobra.Command{}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	if err := printBackups(cmd, v); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"backup volume kubehenge-system/kubehenge-backups, appliance copy", "2027-03-01T12:00:00Z",
+		"backup volume: unreachable", "20270301T120000Z-v1.37.2.db.age, 3 of 1024 MiB",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the status lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "Off") {
+		t.Errorf("backups on the volume show as off:\n%s", out.String())
 	}
 }
 

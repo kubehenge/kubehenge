@@ -139,6 +139,29 @@ func mustDecode(t *testing.T, s string) string {
 	return string(raw)
 }
 
+func TestCopyTightWarnsBeforeTheCapOrTheDisk(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	a, _, _ := volumeAppliance(t, &now)
+	if a.CopyTight(0) != nil {
+		t.Fatal("a copy that is not there is tight")
+	}
+	if _, err := a.TakeEtcdSnapshot(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	size := a.VolumeBackups().Copy.Bytes
+	if c := a.CopyTight(1 << 30); c != nil {
+		t.Fatalf("a %d-byte copy with a GiB free is tight: %+v", size, c)
+	}
+	if a.CopyTight(uint64(2*size-1)) == nil {
+		t.Error("a disk without room for the next snapshot and its copy is not tight")
+	}
+	a.CopyCap = size * 100 / copyNearCap
+	if a.CopyTight(1<<30) == nil {
+		t.Errorf("a copy at %d of its %d-byte cap is not tight", size, a.CopyCap)
+	}
+}
+
 func TestApplySetsUpVolumeBackups(t *testing.T) {
 	t.Parallel()
 	a, _ := newAppliance(t)
@@ -158,6 +181,9 @@ func TestApplySetsUpVolumeBackups(t *testing.T) {
 	}
 	if !a.EtcdBackupDue(time.Now()) {
 		t.Fatal("no snapshot onto the volume is due after the first apply")
+	}
+	if st := a.EtcdBackups(); st.Warning != nil || st.Where == nil || st.Where.Where[0] != "backup volume kubehenge-system/kubehenge-backups" {
+		t.Fatalf("with the volume's backups set up, the warning is %+v and the summary %+v", st.Warning, st.Where)
 	}
 }
 

@@ -1,7 +1,7 @@
 import type { JSX } from "react";
 
 import { api } from "./api";
-import type { ManagementHealth, RebootReadiness } from "./types";
+import type { BackupSummary, ManagementHealth, RebootReadiness } from "./types";
 import { Detail, ErrorBox, Said, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
 
 const managementCache = pollCache<ManagementHealth>();
@@ -24,7 +24,8 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
     filled(h.proxmox?.blind) ||
     (h.proxmox?.tokens ?? []).length > 0 ||
     (h.proxmox?.unreachable ?? []).length > 0 ||
-    (h.etcd !== undefined && h.etcd.healthy < h.etcd.members);
+    (h.etcd !== undefined && h.etcd.healthy < h.etcd.members) ||
+    filled(h.backups?.error);
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
 
@@ -129,6 +130,27 @@ function UnownedVMs({ vms }: { vms: { vmid: number }[] }): JSX.Element | null {
 
 // ManagementHealthCard is the management cluster's own health, read on its own so that it answers
 // while the cluster does not, when the Administration page is what repairs it.
+// BackupLine says where the management backups are and when the last ran, or why the last failed.
+export function BackupLine({ backups }: { backups: BackupSummary }): JSX.Element {
+  const last = backups.last === undefined ? "none yet" : new Date(backups.last).toLocaleString();
+  return (
+    <>
+      {filled(backups.error) ? (
+        <Status state="error" text="Failed" />
+      ) : (
+        <Status state={backups.last === undefined ? "warning" : "ok"} text={`Last ${last}`} />
+      )}{" "}
+      <span className="muted">{backups.where.join(", ")}</span>
+      {filled(backups.error) && (
+        <span className="mono">
+          {" "}
+          <Said text={backups.error} />
+        </span>
+      )}
+    </>
+  );
+}
+
 export function ManagementHealthCard(): JSX.Element {
   const { data: h, error, stale } = usePoll(api.managementHealth, pollIdle, managementKept);
   const { data: reboot } = usePoll(api.rebootReady, pollIdle, rebootKept);
@@ -199,6 +221,14 @@ function AnsweringHealth({
             <dt>Proxmox VE API</dt>
             <dd>
               <Status state={h.proxmox.ok ? "ok" : "error"} text={h.proxmox.ok ? "Reachable" : "Not reachable"} />
+            </dd>
+          </>
+        )}
+        {h.backups !== undefined && (
+          <>
+            <dt>Backups</dt>
+            <dd>
+              <BackupLine backups={h.backups} />
             </dd>
           </>
         )}

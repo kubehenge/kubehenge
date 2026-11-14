@@ -65,6 +65,7 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
   }
   return (
     <>
+      {b.volume !== undefined && <VolumeBox volume={b.volume} />}
       <div className="box">
         <h3>Management cluster etcd</h3>
         <BackupWarning
@@ -119,6 +120,67 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
         />
       )}
     </>
+  );
+}
+
+// VolumeBox shows the backups on the management cluster's own volume, which run with no settings,
+// and the appliance's copy of the latest.
+function VolumeBox({ volume: v }: { volume: NonNullable<Backups["volume"]> }): JSX.Element {
+  return (
+    <div className="box">
+      <h3>Backup volume</h3>
+      <dl className="summary">
+        <dt>Claim</dt>
+        <dd className="mono">{v.claim}</dd>
+        <dt>Schedule</dt>
+        <dd>Every 6 h, newest 28 kept</dd>
+        <dt>Last snapshot</dt>
+        <dd>
+          {v.last === undefined ? (
+            <span className="muted">None yet</span>
+          ) : (
+            <>
+              <span className="mono">{v.last.name}</span> <span className="muted">{age(v.last.time)} ago</span>
+            </>
+          )}
+        </dd>
+        {v.export !== undefined && (
+          <>
+            <dt>Export</dt>
+            <dd>
+              <span className="mono">{v.export.name}</span> <span className="muted">{bytes(v.export.bytes)}</span>
+            </dd>
+          </>
+        )}
+        {v.copy !== undefined && (
+          <>
+            <dt>Appliance copy</dt>
+            <dd>
+              {v.copy.snapshot === undefined ? (
+                <span className="muted">None</span>
+              ) : (
+                <span className="mono">{v.copy.snapshot}</span>
+              )}{" "}
+              <span className="muted">
+                {bytes(v.copy.bytes)} of {bytes(v.copy.cap)}
+              </span>
+            </dd>
+          </>
+        )}
+        {v.next !== undefined && (
+          <>
+            <dt>Next</dt>
+            <dd>{when(v.next)}</dd>
+          </>
+        )}
+      </dl>
+      {v.error !== undefined && (
+        <p className="warning" role="alert">
+          <Status state="error" text="Failed" /> {when(v.failed)}: {sentence(v.error)}
+        </p>
+      )}
+      {v.copy?.error !== undefined && <p className="warning">{sentence(v.copy.error)}</p>}
+    </div>
   );
 }
 
