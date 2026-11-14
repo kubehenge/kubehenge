@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/netip"
 	"sync"
-	"syscall"
 	"time"
 
 	"golang.org/x/net/icmp"
@@ -90,7 +89,7 @@ func probeAddresses(ctx context.Context, addrs []netip.Addr, log *slog.Logger) m
 
 // answered tells whether a connection attempt reached a host: it connected, or the host refused it.
 func answered(err error) bool {
-	return err == nil || errors.Is(err, syscall.ECONNREFUSED)
+	return err == nil || errors.Is(err, errRefused)
 }
 
 // echoReplies sends each address an ICMP echo request and returns those that reply before ctx
