@@ -279,15 +279,14 @@ func demoControllers() []client.Object {
 		{demoClassNamespace, "kubehenge-controller", 2},
 		{"capi-system", "capi-controller-manager", 1},
 		{"capmox-system", "capmox-controller-manager", 1},
-		{"cert-manager", "cert-manager", 1},
 	}
 	objects := make([]client.Object, 0, len(controllers))
 	for i := range controllers {
 		c := &controllers[i]
 		objects = append(objects, &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Namespace: c.namespace, Name: c.name},
-			Spec:       appsv1.DeploymentSpec{Replicas: &c.replicas},
-			Status:     appsv1.DeploymentStatus{Replicas: c.replicas, ReadyReplicas: c.replicas, AvailableReplicas: c.replicas},
+			Namespace: c.namespace, Name: c.name,
+			Spec:   appsv1.DeploymentSpec{Replicas: &c.replicas},
+			Status: appsv1.DeploymentStatus{Replicas: c.replicas, ReadyReplicas: c.replicas, AvailableReplicas: c.replicas},
 		})
 	}
 	return objects
