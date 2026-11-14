@@ -721,7 +721,7 @@ func (a *Appliance) fetchEtcdSnapshot(ctx context.Context, b *backupSetup, folde
 		return "", fmt.Errorf("reading snapshot %s: %w", name, err)
 	}
 	defer func() { _ = sealed.Close() }()
-	f, err := os.CreateTemp(a.Dir, "etcd-restore-*.db")
+	f, err := a.plainFile("etcd-restore-*.db")
 	if err != nil {
 		return "", fmt.Errorf("making room for the snapshot: %w", err)
 	}

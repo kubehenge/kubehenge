@@ -371,7 +371,20 @@ func mebibytes(n int64) string {
 // CleanUp clears what a run cut short by a crash or a power loss left on the appliance's disk. It
 // runs at start, before any run or backup.
 func (a *Appliance) CleanUp() error {
-	return a.sweepCopy()
+	return errors.Join(a.sweepCopy(), os.RemoveAll(a.plainDir()))
+}
+
+// plainDir holds the unencrypted etcd snapshots a backup or a restore works on, each removed once
+// it is done, and the folder whole at the next start after a crash.
+func (a *Appliance) plainDir() string {
+	return filepath.Join(a.Dir, "plain")
+}
+
+func (a *Appliance) plainFile(pattern string) (*os.File, error) {
+	if err := os.MkdirAll(a.plainDir(), privateDir); err != nil {
+		return nil, err //nolint:wrapcheck // the caller says what it made room for
+	}
+	return os.CreateTemp(a.plainDir(), pattern) //nolint:wrapcheck // the caller says what it made room for
 }
 
 // snapshotToFile streams a snapshot of the management cluster's etcd, taken with the talosconfig
@@ -386,7 +399,7 @@ func (a *Appliance) snapshotToFile(ctx context.Context, credential string, nodes
 		return "", fmt.Errorf("reaching etcd: %w", err)
 	}
 	defer func() { _ = stream.Close() }()
-	f, err := os.CreateTemp(a.Dir, "etcd-snapshot-*.db")
+	f, err := a.plainFile("etcd-snapshot-*.db")
 	if err != nil {
 		return "", fmt.Errorf("making room for the snapshot: %w", err)
 	}

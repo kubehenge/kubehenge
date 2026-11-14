@@ -145,7 +145,7 @@ func (a *Appliance) decryptSnapshot(ctx context.Context, store provisioner.Objec
 		return "", fmt.Errorf("reading it: %w", err)
 	}
 	defer func() { _ = sealed.Close() }()
-	f, err := os.CreateTemp(a.Dir, "etcd-restore-*.db")
+	f, err := a.plainFile("etcd-restore-*.db")
 	if err != nil {
 		return "", fmt.Errorf("making room for it: %w", err)
 	}

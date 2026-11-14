@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -195,6 +196,86 @@ func TestCleanUpPutsBackTheCopyACrashLeftAside(t *testing.T) {
 		if _, err := os.Stat(left); !errors.Is(err, fs.ErrNotExist) {
 			t.Errorf("%s is left: %v", filepath.Base(left), err)
 		}
+	}
+}
+
+// heldTalos sends the first bytes of a snapshot, says so on sending, then holds the rest until the
+// snapshot's context ends.
+type heldTalos struct {
+	*fakeManagementTalos
+
+	sending chan struct{}
+}
+
+func (h *heldTalos) Snapshot(ctx context.Context, _ []byte, _ []string) (io.ReadCloser, error) {
+	r, w := io.Pipe()
+	go func() {
+		_, _ = w.Write(etcdDatabase()[:4])
+		close(h.sending)
+		<-ctx.Done()
+		_ = w.CloseWithError(ctx.Err())
+	}()
+	return r, nil
+}
+
+// plainFiles lists the unencrypted snapshots anywhere on the appliance's disk.
+func plainFiles(t *testing.T, a *Appliance) []string {
+	t.Helper()
+	var found []string
+	err := filepath.WalkDir(a.Dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasPrefix(d.Name(), "etcd-") && strings.HasSuffix(d.Name(), ".db") {
+			found = append(found, p)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
+// An unencrypted snapshot lives only in the plain folder, only while a backup reads it: a backup
+// cut off removes it, and the start clears what a crash left.
+func TestNoPlainSnapshotOutlivesItsBackup(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	a, _, _ := volumeAppliance(t, &now)
+	held := &heldTalos{fakeManagementTalos: &fakeManagementTalos{}, sending: make(chan struct{})}
+	a.Talos = held
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := a.TakeEtcdSnapshot(ctx)
+		done <- err
+	}()
+	<-held.sending
+	for range 100 {
+		if len(plainFiles(t, a)) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mid := plainFiles(t, a)
+	if len(mid) != 1 || filepath.Dir(mid[0]) != a.plainDir() {
+		t.Fatalf("mid-backup the unencrypted snapshot is at %q, want one file in %s", mid, a.plainDir())
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("a backup cut off succeeded")
+	}
+	if left := plainFiles(t, a); len(left) != 0 {
+		t.Fatalf("a backup cut off left %q", left)
+	}
+
+	// A crash leaves the file. The next start removes it.
+	if err := os.WriteFile(filepath.Join(a.plainDir(), "etcd-snapshot-1.db"), etcdDatabase(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.CleanUp(); err != nil {
+		t.Fatal(err)
+	}
+	if left := plainFiles(t, a); len(left) != 0 {
+		t.Fatalf("the start left %q", left)
 	}
 }
 
