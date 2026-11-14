@@ -27,13 +27,25 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 		return err
 	}
 	defer env.Cleanup()
+	return executeOn(ctx, env, cfg, ioStreams{stdin, stdout}, interactive, os.Getenv("TERM"))
+}
+
+type ioStreams struct {
+	in  io.Reader
+	out io.Writer
+}
+
+// executeOn is Execute on a prepared machine, for the terminal named by term.
+func executeOn(ctx context.Context, env *Env, cfg *Config, streams ioStreams, interactive bool, term string) error {
+	stdin, stdout := streams.in, streams.out
+	var err error
 	s := &Session{Node: env.Node, Cfg: *cfg}
 	newRunner := func(emit func(Event)) *Runner { return env.NewRunner(s, emit) }
 	if cfg.Mode() != ModeInstall {
 		return maintain(ctx, s, newRunner(nil), stdout)
 	}
 
-	plain := !interactive || cfg.Plain || !CanDrawScreen(os.Getenv("TERM"))
+	plain := !interactive || cfg.Plain || !CanDrawScreen(term)
 	if !plain && cfg.IP != "" && cfg.PVEEntry != "" {
 		// Every flag the road needs is given: detect once, and ask only what a tie leaves open.
 		if err = s.detect(ctx); err != nil {
@@ -51,9 +63,16 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 	defer cancel()
 	model.Shutdown(cleanCtx)
 	if err != nil {
+		if left := model.Left(); left != "" {
+			return fmt.Errorf("run: %w. %s", err, left)
+		}
 		return fmt.Errorf("run: %w", err)
 	}
 	if model.Cancelled() {
+		if left := model.Left(); left != "" {
+			_, _ = fmt.Fprintln(os.Stderr, "Cancelled. "+left)
+			return nil
+		}
 		_, _ = fmt.Fprintln(os.Stderr, "Cancelled. Nothing was changed.")
 		return nil
 	}

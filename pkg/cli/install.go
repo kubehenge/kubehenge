@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"io"
 	"os"
 
@@ -13,16 +14,30 @@ import (
 // newInstallCommand installs the appliance on this Proxmox VE node, with a full-screen installer
 // on a terminal and one line per step without.
 func newInstallCommand() *cobra.Command {
+	return newInstallCommandOn(installHost{
+		isTerminal:   func(f *os.File) bool { return term.IsTerminal(f.Fd()) },
+		openTerminal: func() (io.ReadCloser, error) { return os.Open("/dev/tty") },
+		execute:      installer.Execute,
+	})
+}
+
+// installHost is what the install command takes from the machine, so a test can stand in for it.
+type installHost struct {
+	isTerminal   func(*os.File) bool
+	openTerminal func() (io.ReadCloser, error)
+	execute      func(ctx context.Context, cfg *installer.Config, stdin io.Reader, stdout io.Writer, interactive bool) error
+}
+
+func newInstallCommandOn(host installHost) *cobra.Command {
 	var cfg installer.Config
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install the appliance on this Proxmox VE node",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			in, interactive, closeIn := questionInput(cmd.InOrStdin(), term.IsTerminal(os.Stdin.Fd()), term.IsTerminal(os.Stdout.Fd()),
-				func() (io.ReadCloser, error) { return os.Open("/dev/tty") })
+			in, interactive, closeIn := questionInput(cmd.InOrStdin(), host.isTerminal(os.Stdin), host.isTerminal(os.Stdout), host.openTerminal)
 			defer closeIn()
-			return installer.Execute(cmd.Context(), &cfg, in, cmd.OutOrStdout(), interactive)
+			return host.execute(cmd.Context(), &cfg, in, cmd.OutOrStdout(), interactive)
 		},
 	}
 	installer.BindFlags(cmd.Flags(), &cfg)

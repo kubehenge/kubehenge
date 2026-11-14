@@ -59,6 +59,8 @@ type Facts struct {
 	Members          []Member
 	// TemplateTight holds the storages that take templates but have under 200 MiB free.
 	TemplateTight []Storage
+	// TemplateShort is set when TemplateStorages are all short of room, the one with the most free first.
+	TemplateShort bool
 }
 
 // Member is an address of one of the cluster's nodes.
@@ -83,8 +85,8 @@ type Node struct {
 const (
 	rootDiskKiB  = 9437184
 	templateKiB  = 204800
-	workKiB      = 1048576
-	clusterCA    = "/etc/pve/pve-root-ca.pem"
+	workKiB      = 524288 // OpenTofu's archive and its copy, beside the release install.sh unpacked after its own 1 GiB check.
+	clusterCA   = "/etc/pve/pve-root-ca.pem"
 	systemCA     = "/etc/ssl/certs/ca-certificates.crt"
 	resolvConf   = "/etc/resolv.conf"
 	interfaces   = "/etc/network/interfaces"
@@ -124,6 +126,8 @@ func (n *Node) Storages(ctx context.Context, content string, leastKiB int64) ([]
 			short = append(short, s)
 		}
 	}
+	// Where none has the room asked for, the one with the most free is the least short.
+	slices.SortStableFunc(short, func(a, b Storage) int { return cmp.Compare(b.FreeKiB, a.FreeKiB) })
 	slices.SortStableFunc(fit, func(a, b Storage) int {
 		if a.rank != b.rank {
 			return cmp.Compare(a.rank, b.rank)
@@ -242,7 +246,7 @@ func (n *Node) Detect(ctx context.Context, cfg *Config) (*Facts, error) {
 	// names the shortage.
 	f.TemplateStorages, f.TemplateTight = roomy, tight
 	if len(roomy) == 0 {
-		f.TemplateStorages = tight
+		f.TemplateStorages, f.TemplateShort = tight, len(tight) > 0
 	}
 	f.TemplateHeld = n.TemplateHeld(ctx, append(slices.Clone(roomy), tight...), Template)
 	if out, err := n.run(ctx, "pvesh", "get", "/cluster/nextid"); err == nil {
@@ -458,6 +462,49 @@ func (n *Node) bridgeIsDHCP(bridge string) bool {
 	}
 	re := regexp.MustCompile(`(?m)^\s*iface\s+` + regexp.QuoteMeta(bridge) + `\s+inet\s+dhcp\b`)
 	return re.Match(data)
+}
+
+var vlanAwareRE = regexp.MustCompile(`(?m)^\s*bridge[-_]vlan[-_]aware\s+(yes|1|true|on)\b`)
+
+// bridgeVLANAware reports whether the bridge filters VLANs, from Proxmox VE's view of the node's
+// network, else from /etc/network/interfaces. A bridge neither source shows as aware is not.
+func (n *Node) bridgeVLANAware(ctx context.Context, bridge string) bool {
+	if out, err := n.run(ctx, "pvesh", "get", "/nodes/"+n.Hostname+"/network/"+bridge, "--output-format", "json"); err == nil {
+		var conf map[string]any
+		if json.Unmarshal([]byte(out), &conf) == nil {
+			switch v := conf["bridge_vlan_aware"].(type) {
+			case float64:
+				return v != 0
+			case bool:
+				return v
+			case string:
+				return v == "1" || v == "yes" || v == "true"
+			}
+			if _, ok := conf["iface"]; ok {
+				return false
+			}
+		}
+	}
+	data, err := n.readFile(interfaces)
+	if err != nil {
+		return false
+	}
+	stanza := false
+	for line := range strings.SplitSeq(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == "iface" {
+			stanza = f[1] == bridge
+			continue
+		}
+		if len(f) > 0 && (f[0] == "auto" || strings.HasPrefix(f[0], "allow-") || f[0] == "source") {
+			stanza = false
+			continue
+		}
+		if stanza && vlanAwareRE.MatchString(line) {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *Node) resolvers() ([]string, bool) {

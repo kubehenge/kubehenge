@@ -142,6 +142,14 @@ func (m *Model) Err() error { return m.fail }
 // Cancelled reports whether the user left before the run.
 func (m *Model) Cancelled() bool { return m.cancelled }
 
+// Left says what a stopped run left behind that the user must look after, empty for nothing.
+func (m *Model) Left() string {
+	if m.runner == nil {
+		return ""
+	}
+	return m.runner.Left()
+}
+
 // Shutdown ends a run still going and removes what it made. A signal or a lost terminal ends the
 // program without its own cleanup, which would leave a half-made container behind.
 func (m *Model) Shutdown(ctx context.Context) {

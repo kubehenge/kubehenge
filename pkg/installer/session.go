@@ -58,6 +58,11 @@ func (s *Session) Prepare(ctx context.Context) error {
 	} else if facts.DefaultBridge != "" {
 		s.Cfg.Bridge = facts.DefaultBridge
 		if facts.VLANFromRoute {
+			if !s.Node.bridgeVLANAware(ctx, facts.DefaultBridge) {
+				b, v := facts.DefaultBridge, facts.DefaultVLAN
+				return userErr(fmt.Sprintf("the node's default route leaves by %s.%s, but %s is not VLAN aware, so a tag on it would make Proxmox VE create %sv%s and take over the port's .%s, which cuts the node's own network", b, v, b, b, v, v),
+					fmt.Sprintf("Make %s VLAN aware in the node's network settings, or name --bridge and --vlan yourself", b))
+			}
 			s.noticef("VLAN %s on %s, since the node's default route leaves by %s.%s (name --bridge %s for no VLAN)",
 				facts.DefaultVLAN, facts.DefaultBridge, facts.DefaultBridge, facts.DefaultVLAN, facts.DefaultBridge)
 		}
@@ -154,6 +159,11 @@ func (s *Session) FillStorages(ties Ties) error {
 			return userErr("no enabled, active storage here takes container templates", "Give a directory, NFS or CIFS storage the content type Container template, or name one with --template-storage")
 		case len(list) == 1 || ties == PickBest:
 			c.TemplateStorage = list[0].Name
+			if s.Facts.TemplateShort {
+				s.noticef("storage %s (%s) for the container template, the most free of %d, though under %d MiB and short of room for it",
+					list[0].Name, list[0].Type, len(list), templateKiB/kibPerMiB)
+				break
+			}
 			s.noticef("storage %s (%s) for the container template, %s", list[0].Name, list[0].Type, why(len(list)))
 		}
 	} else if !hasStorage(s.Facts.TemplateStorages, c.TemplateStorage) && !hasStorage(s.Facts.TemplateTight, c.TemplateStorage) {

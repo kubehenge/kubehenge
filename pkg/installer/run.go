@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -89,6 +90,10 @@ type Runner struct {
 	// Pin replaces the pinned container template, for tests.
 	Pin TemplatePin
 
+	// mu guards created, installed and what Cleanup resets, since a failed run's own cleanup and
+	// the shutdown after a signal can run at once.
+	mu          sync.Mutex
+	installed   bool
 	done        map[string]bool
 	created     bool
 	started     bool
@@ -106,8 +111,11 @@ type Runner struct {
 const keyDir = "/var/lib/kubehenge-keys"
 
 // aptTimeouts keeps apt from waiting minutes on a mirror an air-gapped or filtered network drops
-// without an answer.
-const aptTimeouts = "-o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=0"
+// without an answer. Apt keeps its own retries.
+const aptTimeouts = "-o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+
+// ownTagRE matches the tag the installer gives its container.
+var ownTagRE = regexp.MustCompile(`(?m)^tags:.*\bkubehenge\b`)
 
 const units = "kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service"
 
@@ -259,14 +267,33 @@ func realmsStatusAt(ctx context.Context, public, connectTo string, certPEM []byt
 
 // Protect makes the finished appliance undeletable until its protection is taken off.
 func (r *Runner) Protect(ctx context.Context) error {
-	r.created = false
-	_, err := r.pct(ctx, "set", r.S.Cfg.CTID, "--protection", "1")
-	return err
+	id := r.S.Cfg.CTID
+	r.mu.Lock()
+	r.created, r.installed = false, true
+	r.mu.Unlock()
+	if _, err := r.pct(ctx, "set", id, "--protection", "1"); err != nil {
+		return userErr("the appliance is installed in container "+id+" but could not be protected against deletion",
+			"Protect it with: pct set "+id+" --protection 1, or remove it with: pct destroy "+id+" --purge")
+	}
+	return nil
+}
+
+// Left says what a stopped run left behind that the user must look after, empty for nothing.
+func (r *Runner) Left() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.installed {
+		return ""
+	}
+	id := r.S.Cfg.CTID
+	return "The appliance is installed in container " + id + " but not protected against deletion. Protect it with: pct set " + id + " --protection 1, or remove it with: pct destroy " + id + " --purge"
 }
 
 // Cleanup removes what a failed run made, so running it again starts clean. It is safe to call
-// when nothing was made.
+// when nothing was made, and from two places at once: the second call finds nothing left to do.
 func (r *Runner) Cleanup(ctx context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.partial != "" {
 		_ = os.Remove(r.partial)
 		r.partial = ""
@@ -343,7 +370,7 @@ func (r *Runner) stepTofu(ctx context.Context) error {
 	if r.TofuV == "" || r.TofuSH == "" {
 		return userErr("this run carries no OpenTofu checksum", "Run the installer through install.sh")
 	}
-	if err := r.needSpace(ctx, r.Work, workKiB, "the downloaded archives and what they unpack to", "Free space there, or set TMPDIR to a directory on a larger file system"); err != nil {
+	if err := r.needSpace(ctx, r.Work, workKiB, "OpenTofu's download and its unpacked copy", "Free space there, or set TMPDIR to a directory on a larger file system"); err != nil {
 		return err
 	}
 	archive := filepath.Join(r.Work, "tofu.tar.gz")
@@ -443,7 +470,6 @@ func (r *Runner) stepCreate(ctx context.Context) error {
 	if !r.S.Node.IDFree(ctx, c.CTID) {
 		return userErr(fmt.Sprintf("id %s was taken by another guest while the installer ran", c.CTID), "Run it again, or name a free id with --ctid")
 	}
-	r.created = true
 	args := []string{
 		"create", c.CTID, c.TemplateStorage + ":vztmpl/" + r.template,
 		"--hostname", c.Hostname, "--cores", "2", "--memory", "1024", "--swap", "512",
@@ -456,8 +482,19 @@ func (r *Runner) stepCreate(ctx context.Context) error {
 	args = append(args, "--unprivileged", "1", "--features", "nesting=1", "--onboot", "1", "--tags", "kubehenge",
 		"--description", "Kubehenge's appliance: its web interface and the management cluster's state. Include it in backups.")
 	if _, err := r.pct(ctx, args...); err != nil {
+		// A create cut off by a cancel leaves a locked container behind. A create that failed
+		// because another session took the id left that session's guest, which is none of ours.
+		if ctx.Err() != nil {
+			conf, _ := r.pct(context.WithoutCancel(ctx), "config", c.CTID)
+			r.mu.Lock()
+			r.created = ownTagRE.MatchString(conf)
+			r.mu.Unlock()
+		}
 		return userErr("Proxmox VE could not create container "+c.CTID, "See "+r.LogPath+" for its message")
 	}
+	r.mu.Lock()
+	r.created = true
+	r.mu.Unlock()
 	r.finish("create", "container "+c.CTID)
 	return nil
 }
