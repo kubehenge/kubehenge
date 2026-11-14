@@ -45,6 +45,7 @@ type fakeAccounts struct {
 	// that exist.
 	storages       []pve.Storage
 	reach          *pve.APIReach
+	reachErr       error
 	names          pve.Names
 	privilegeCalls int
 	backupChecks   int
@@ -228,6 +229,9 @@ func (f *fakeAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, err
 func (f *fakeAccounts) APIReach(context.Context, *pve.Ticket) (*pve.APIReach, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.reachErr != nil {
+		return nil, f.reachErr
+	}
 	if f.reach == nil {
 		return &pve.APIReach{}, nil
 	}

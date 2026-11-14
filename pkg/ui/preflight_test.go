@@ -23,7 +23,7 @@ var preflightApply = strings.TrimSuffix(preflightSettings, "}") + `,"passphrase"
 func preflightHarness(t *testing.T) (*harness, *browser) {
 	t.Helper()
 	h := newHarness(t)
-	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir(), ProxmoxURL: "https://pve.example.org:8006", Log: slog.New(slog.DiscardHandler)}
+	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir(), ProxmoxURL: "https://10.0.0.50:8006", Log: slog.New(slog.DiscardHandler)}
 	h.server.Probe = func(context.Context, []netip.Addr) map[netip.Addr]bool { return nil }
 	b := h.browser()
 	b.signIn("admin@pve")

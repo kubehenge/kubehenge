@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"io"
 	"os"
 
@@ -11,33 +10,26 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/installer"
 )
 
+// What the install command takes from the machine. Tests stand in for it.
+var (
+	isTerminal     = func(f *os.File) bool { return term.IsTerminal(f.Fd()) }
+	openFile       = func(name string) (io.ReadCloser, error) { return os.Open(name) } //nolint:gosec // the one file opened is the controlling terminal.
+	executeInstall = installer.Execute
+)
+
 // newInstallCommand installs the appliance on this Proxmox VE node, with a full-screen installer
 // on a terminal and one line per step without.
 func newInstallCommand() *cobra.Command {
-	return newInstallCommandOn(installHost{
-		isTerminal:   func(f *os.File) bool { return term.IsTerminal(f.Fd()) },
-		openTerminal: func() (io.ReadCloser, error) { return os.Open("/dev/tty") },
-		execute:      installer.Execute,
-	})
-}
-
-// installHost is what the install command takes from the machine, so a test can stand in for it.
-type installHost struct {
-	isTerminal   func(*os.File) bool
-	openTerminal func() (io.ReadCloser, error)
-	execute      func(ctx context.Context, cfg *installer.Config, stdin io.Reader, stdout io.Writer, interactive bool) error
-}
-
-func newInstallCommandOn(host installHost) *cobra.Command {
 	var cfg installer.Config
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install the appliance on this Proxmox VE node",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			in, interactive, closeIn := questionInput(cmd.InOrStdin(), host.isTerminal(os.Stdin), host.isTerminal(os.Stdout), host.openTerminal)
+			openTerminal := func() (io.ReadCloser, error) { return openFile("/dev/tty") }
+			in, interactive, closeIn := questionInput(cmd.InOrStdin(), isTerminal(os.Stdin), isTerminal(os.Stdout), openTerminal)
 			defer closeIn()
-			return host.execute(cmd.Context(), &cfg, in, cmd.OutOrStdout(), interactive)
+			return executeInstall(cmd.Context(), &cfg, in, cmd.OutOrStdout(), interactive)
 		},
 	}
 	installer.BindFlags(cmd.Flags(), &cfg)

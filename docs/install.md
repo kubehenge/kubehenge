@@ -25,7 +25,7 @@ Then [create clusters](clusters.md).
 | The container template | `vztmpl` | Debian's standard container template. The installer uses it where it already is, or downloads it to a storage chosen like the disk's (`--template-storage`). |
 | The Talos disk image, and the images VM templates start from | `import` | Proxmox VE's `local` storage does not allow `import` until you add it (Datacenter, Storage, Edit, Content). |
 | The management cluster's disks | `images` | 32 GB per node. |
-| Cloud-init images | `iso` | Cluster API keeps each new cluster VM's cloud-init ISO here and gets full control of the storage. Give it a directory storage of its own with the content type `ISO image` alone (Datacenter, Storage, Add, Directory). In the shell, that is `pvesm add dir kubehenge-iso --path /var/lib/kubehenge-iso --content iso`. Choose it as **Cloud-init images** in the setup. |
+| Cloud-init images | `iso` | Cluster API keeps each new cluster VM's cloud-init ISO here and gets full control of the storage. With several nodes or HA, a node-local storage here warns when the disks are on shared storage, since a VM that restarts on another node cannot find its ISO. Choose a shared storage then. Give it a directory storage of its own with the content type `ISO image` alone (Datacenter, Storage, Add, Directory). In the shell, that is `pvesm add dir kubehenge-iso --path /var/lib/kubehenge-iso --content iso`. Choose it as **Cloud-init images** in the setup. |
 | Clusters' disks and persistent volumes | `images` | One or more storages, chosen when the management cluster is set up. |
 | VM templates | `images` | Shared storage in a Proxmox VE cluster, so that clones can start on any node. |
 
@@ -234,6 +234,8 @@ If a step up to starting the interface fails, the installer removes the containe
 The appliance, the management cluster and every cluster reach the Proxmox VE API at one URL and check the certificate it serves. Without `--proxmox-url`, the installer reads the names and addresses in this node's API certificate (`/etc/pve/local/pveproxy-ssl.pem`, else `pve-ssl.pem`). It keeps an address only if it belongs to one of this cluster's nodes. It keeps a name only if every address it resolves to belongs to one. A wildcard name counts for this node's own name (`hostname -f`) where it covers it.
 
 Where the certificate is valid for none of the cluster's names and addresses, the installer stops and says what it names. Then give `--proxmox-url` with a name or address the certificate is valid for.
+
+The management cluster's nodes resolve a name in that URL with the DNS servers from the setup, not with the appliance's resolver. The setup page asks each server for the name, as given and with each of the setup's search domains, and ignores the appliance's hosts file. It refuses to start when a server says it does not know the name and none resolves it. Put an address in the URL, or add a DNS record for the name. Where every server stays silent, the appliance may only be on the wrong network, so the page warns that it could not check. It also warns when the servers and the appliance resolve the name to different addresses.
 
 #### Choosing the address
 

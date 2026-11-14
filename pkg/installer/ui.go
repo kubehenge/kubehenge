@@ -71,6 +71,8 @@ type (
 	probeMsg    struct {
 		address string
 		used    bool
+		// refused is the VLAN check's refusal of the bridge and VLAN, empty when they pass.
+		refused string
 	}
 	eventMsg Event
 	doneMsg  struct {
@@ -141,6 +143,17 @@ func (m *Model) Err() error { return m.fail }
 
 // Cancelled reports whether the user left before the run.
 func (m *Model) Cancelled() bool { return m.cancelled }
+
+// Outcome says what a stopped run undid and what it left, empty when no run started.
+func (m *Model) Outcome() string {
+	if m.runner == nil {
+		return ""
+	}
+	return m.runner.Outcome()
+}
+
+// Finished reports whether the run installed the appliance, which the end screen shows.
+func (m *Model) Finished() bool { return m.res != nil }
 
 // Left says what a stopped run left behind that the user must look after, empty for nothing.
 func (m *Model) Left() string {
@@ -223,10 +236,11 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case msg.String() == "ctrl+c" && m.stage == stRun:
 		m.cancel()
 		return nil, true
+	case m.stage == stEnd || m.stage == stFail:
+		// Even Ctrl+C only closes the screen: the run is over, and its failure stays the result.
+		return tea.Quit, true
 	case msg.String() == "ctrl+c":
 		return m.leave(), true
-	case m.stage == stEnd || m.stage == stFail:
-		return tea.Quit, true
 	}
 	return nil, false
 }
@@ -242,6 +256,12 @@ func (m *Model) afterDetect(err error) (*Model, tea.Cmd) {
 
 // afterProbe asks for another address when the one typed answers on the network.
 func (m *Model) afterProbe(msg probeMsg) (*Model, tea.Cmd) {
+	if msg.refused != "" {
+		m.netErr = msg.refused
+		m.stage = stNetwork
+		cmd := m.networkForm()
+		return m, cmd
+	}
 	if msg.used {
 		m.netErr = msg.address + " answers on this network"
 		m.S.Cfg.IP = ""
@@ -338,10 +358,23 @@ func (m *Model) networkForm() tea.Cmd {
 		huh.NewInput().Title("IPv6").Placeholder("auto, dhcp or 2001:db8::40/64").Value(&a.ip6).Validate(validateIPv6),
 		huh.NewInput().Title("IPv6 gateway").Value(&a.gateway6).Validate(validateIPv6Gateway),
 		huh.NewSelect[string]().Title("Bridge").Options(huh.NewOptions(f.Bridges...)...).Value(&a.bridge),
-		huh.NewInput().Title("VLAN").Placeholder("none").Value(&a.vlan).Validate(validateRange("1 to 4094", 1, vlanMax)),
+		huh.NewInput().Title("VLAN").Placeholder("none").Value(&a.vlan).Validate(m.validateVLAN),
 		huh.NewInput().Title("MTU").Placeholder("bridge default").Value(&a.mtu).Validate(validateRange("576 to 65535", mtuMin, mtuMax)),
 	).WithHideFunc(func() bool { return !a.more })
 	return m.startForm(huh.NewGroup(modeGroup...), static, dhcpDNS, more, adv)
+}
+
+// validateVLAN checks the VLAN field against the bridge picked above it, with the check the flags
+// get.
+func (m *Model) validateVLAN(vlan string) error {
+	if err := validateRange("1 to 4094", 1, vlanMax)(vlan); err != nil {
+		return err
+	}
+	bridge := m.a.bridge
+	if bridge == "" {
+		bridge = m.S.Cfg.Bridge
+	}
+	return m.S.routeVLANError(m.ctx, bridge, vlan)
 }
 
 // prefillNetwork fills the network answers from what was detected, the first time.
@@ -474,6 +507,11 @@ func (m *Model) networkDone() tea.Cmd {
 		bridge = a.bridge
 	}
 	return func() tea.Msg {
+		// The field checked the VLAN against the bridge as it stood then. The bridge can change
+		// after it.
+		if err := m.S.routeVLANError(m.ctx, bridge, c.VLAN); err != nil {
+			return probeMsg{refused: err.Error()}
+		}
 		if bridge != c.Bridge || c.Bridge == "" {
 			m.S.RefreshForBridge(m.ctx, bridge)
 		}
@@ -868,8 +906,9 @@ func (m *Model) failView() string {
 	}
 	if m.runner != nil {
 		b.WriteString(row("Log", m.runner.LogPath))
-		if m.cleaned {
-			b.WriteString(row("Container", "removed"))
+		// An unprotected appliance is the failure itself, and the Do row has its fix.
+		if out := m.runner.Outcome(); m.cleaned && out != m.runner.Left() {
+			b.WriteString(row("Left", out))
 		}
 	} else {
 		b.WriteString(row("Changed", "nothing"))
