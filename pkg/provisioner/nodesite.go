@@ -92,7 +92,7 @@ func checkMirrors(mirrors []RegistryMirror, path *field.Path, now time.Time) fie
 		at := path.Index(i)
 		switch {
 		case !registryName.MatchString(m.Registry):
-			errs = append(errs, field.Invalid(at.Child("registry"), m.Registry, "is no lower-case host name with an optional port, and no *"))
+			errs = append(errs, field.Invalid(at.Child("registry"), m.Registry, "is no lowercase host name with an optional port, and no *"))
 		case registries[m.Registry]:
 			errs = append(errs, field.Duplicate(at.Child("registry"), m.Registry))
 		}

@@ -71,7 +71,7 @@ func TestNodeSiteSettingsAreHeldToCertificatesAndAddresses(t *testing.T) {
 		"a query":                  {mirrors: `[` + mirror("docker.io", `["https://m.example.org/v2?x=1"]`, "") + `]`, want: "query"},
 		"a quote in the host":      {mirrors: `[` + mirror("docker.io", `["https://m'.example.org"]`, "") + `]`, want: "characters other than"},
 		"an IPv6 host":             {mirrors: `[` + mirror("docker.io", `["https://[::1]:5000"]`, "") + `]`, want: "host"},
-		"an upper-case registry":   {mirrors: `[` + mirror("Docker.io", `["https://m.example.org"]`, "") + `]`, want: "lower-case"},
+		"an upper-case registry":   {mirrors: `[` + mirror("Docker.io", `["https://m.example.org"]`, "") + `]`, want: "lowercase"},
 		"no endpoint":              {mirrors: `[` + mirror("docker.io", `[]`, "") + `]`, want: "takes 1 to 4"},
 		"five endpoints":           {mirrors: `[` + mirror("docker.io", `["https://a.example.org","https://b.example.org","https://c.example.org","https://d.example.org","https://e.example.org"]`, "") + `]`, want: "takes 1 to 4"},
 		"the same endpoint twice":  {mirrors: `[` + mirror("docker.io", `["https://a.example.org","https://a.example.org"]`, "") + `]`, want: "Duplicate"},
