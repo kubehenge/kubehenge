@@ -29,6 +29,8 @@ const (
 	applianceRequestTimeout = time.Minute
 	// maxApplianceAnswer bounds what is read of one answer.
 	maxApplianceAnswer = 4 << 20
+	// mib is the bytes of a MiB, the unit sizes are shown in.
+	mib = 1 << 20
 	// appliancePoll is how often a command that waits asks again.
 	appliancePoll = 2 * time.Second
 	// snapshotWait and restoreWait bound how long take and restore wait for the result.
@@ -247,8 +249,8 @@ func (o *applianceOptions) etcdBackupsCommand() *cobra.Command {
 	return cmd
 }
 
-func printBackups(cmd *cobra.Command, v *appliance.EtcdBackupStatus) error {
-	t := table(cmd)
+// printBackupPlaces writes where the backups are and what the backup volume holds.
+func printBackupPlaces(t *tabwriter.Writer, v *appliance.EtcdBackupStatus) {
 	if v.Where != nil {
 		row(t, "Backups in", strings.Join(v.Where.Where, ", "))
 		last := "none yet"
@@ -260,17 +262,24 @@ func printBackups(cmd *cobra.Command, v *appliance.EtcdBackupStatus) error {
 			row(t, "Failed", v.Where.Error)
 		}
 	}
-	if vol := v.Volume; vol != nil {
-		if vol.Last != nil {
-			row(t, "Volume snapshot", vol.Last.Name)
-		}
-		if vol.Export != nil {
-			row(t, "Volume export", vol.Export.Name)
-		}
-		if vol.Copy != nil {
-			row(t, "Appliance copy", fmt.Sprintf("%s, %d of %d MiB", cmp.Or(vol.Copy.Snapshot, "none"), vol.Copy.Bytes>>20, vol.Copy.Cap>>20))
-		}
+	vol := v.Volume
+	if vol == nil {
+		return
 	}
+	if vol.Last != nil {
+		row(t, "Volume snapshot", vol.Last.Name)
+	}
+	if vol.Export != nil {
+		row(t, "Volume export", vol.Export.Name)
+	}
+	if vol.Copy != nil {
+		row(t, "Appliance copy", fmt.Sprintf("%s, %d of %d MiB", cmp.Or(vol.Copy.Snapshot, "none"), vol.Copy.Bytes/mib, vol.Copy.Cap/mib))
+	}
+}
+
+func printBackups(cmd *cobra.Command, v *appliance.EtcdBackupStatus) error {
+	t := table(cmd)
+	printBackupPlaces(t, v)
 	if v.Settings == nil {
 		if v.Volume != nil {
 			return flush(t)

@@ -33,6 +33,9 @@ management cluster. Every call carries the token in KUBEHENGE_BACKUP_STORE_TOKEN
 	return cmd
 }
 
+// storeShutdownTimeout lets a snapshot under way finish being written when the store's pod stops.
+const storeShutdownTimeout = 30 * time.Second
+
 func runBackupStore(ctx context.Context, listen, dir, token string) error {
 	if strings.TrimSpace(token) == "" {
 		return errors.New("KUBEHENGE_BACKUP_STORE_TOKEN is empty: set it to the store's token")
@@ -43,13 +46,13 @@ func runBackupStore(ctx context.Context, listen, dir, token string) error {
 	srv := &http.Server{
 		Addr:              listen,
 		Handler:           (&backupstore.Server{Dir: dir, Token: strings.TrimSpace(token)}).Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 	go func() {
 		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeShutdownTimeout)
 		defer cancel()
-		_ = srv.Shutdown(shutdown) //nolint:contextcheck // the shutdown outlives the cancelled context
+		_ = srv.Shutdown(shutdown)
 	}()
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serving the backup volume: %w", err)

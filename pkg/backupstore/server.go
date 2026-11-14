@@ -62,7 +62,8 @@ func (s *Server) authorised(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) key(w http.ResponseWriter, r *http.Request) (string, bool) {
+// requestKey reads the object's key from the path, and refuses the request when it names none.
+func requestKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	key := r.PathValue("key")
 	if err := checkKey(key); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -80,7 +81,7 @@ func fail(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) put(w http.ResponseWriter, r *http.Request) {
-	key, ok := s.key(w, r)
+	key, ok := requestKey(w, r)
 	if !ok {
 		return
 	}
@@ -101,7 +102,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
-	key, ok := s.key(w, r)
+	key, ok := requestKey(w, r)
 	if !ok {
 		return
 	}
@@ -125,7 +126,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
-	key, ok := s.key(w, r)
+	key, ok := requestKey(w, r)
 	if !ok {
 		return
 	}
@@ -146,6 +147,11 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	for _, o := range list {
 		entries = append(entries, Entry{Key: o.Key, Size: o.Size, Modified: o.Modified})
 	}
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		fail(w, fmt.Errorf("listing: %w", err))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(entries)
+	_, _ = w.Write(raw)
 }

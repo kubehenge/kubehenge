@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,7 +22,7 @@ const (
 	Service   = "kubehenge-backup-store"
 	Port      = "http"
 	// TokenSecret holds the store's token under TokenKey.
-	TokenSecret = "kubehenge-backup-store" //nolint:gosec // a Secret's name
+	TokenSecret = "kubehenge-backup-store"
 	TokenKey    = "token"
 	// Claim is the backup volume's claim.
 	Claim = "kubehenge-backups"
@@ -44,26 +45,6 @@ func ProxyBase(host string) string {
 	return strings.TrimSuffix(host, "/") + "/api/v1/namespaces/" + Namespace + "/services/" + Service + ":" + Port + "/proxy"
 }
 
-func (c *Client) do(ctx context.Context, method, rel string, body io.Reader, header http.Header) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.Base+rel, body)
-	if err != nil {
-		return nil, fmt.Errorf("the backup volume: %w", err)
-	}
-	for k, v := range header {
-		req.Header[k] = v
-	}
-	req.Header.Set(TokenHeader, c.Token)
-	client := c.HTTP
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("the backup volume: %w", err)
-	}
-	return resp, nil
-}
-
 func objectPath(key string) string {
 	parts := strings.Split(key, "/")
 	for i, p := range parts {
@@ -72,12 +53,15 @@ func objectPath(key string) string {
 	return "/objects/" + strings.Join(parts, "/")
 }
 
+// errorTextLimit is as much of a refusal's body as an error quotes.
+const errorTextLimit = 1024
+
 // failed turns a response that is not want into an error, with the store's own text.
 func failed(resp *http.Response, key string) error {
 	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("%s: %w", key, provisioner.ErrNoObject)
 	}
-	text, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	text, _ := io.ReadAll(io.LimitReader(resp.Body, errorTextLimit))
 	return fmt.Errorf("the backup volume answered %s for %s: %s", resp.Status, key, strings.TrimSpace(string(text)))
 }
 
@@ -186,6 +170,24 @@ func (c *Client) Remove(ctx context.Context, key string) error {
 }
 
 // PresignGet is refused: the volume is reached only through the store.
-func (c *Client) PresignGet(context.Context, string, time.Duration) (string, error) {
+func (*Client) PresignGet(context.Context, string, time.Duration) (string, error) {
 	return "", ErrNoPresign
+}
+
+func (c *Client) do(ctx context.Context, method, rel string, body io.Reader, header http.Header) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.Base+rel, body)
+	if err != nil {
+		return nil, fmt.Errorf("the backup volume: %w", err)
+	}
+	maps.Copy(req.Header, header)
+	req.Header.Set(TokenHeader, c.Token)
+	client := c.HTTP
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("the backup volume: %w", err)
+	}
+	return resp, nil
 }

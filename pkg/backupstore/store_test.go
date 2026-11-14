@@ -16,22 +16,22 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-func newStore(t *testing.T) (*Client, string) {
+func newStore(t *testing.T) *Client {
 	t.Helper()
-	dir := t.TempDir()
-	srv := httptest.NewServer((&Server{Dir: dir, Token: "secret"}).Handler())
+	srv := httptest.NewServer((&Server{Dir: t.TempDir(), Token: "secret"}).Handler())
 	t.Cleanup(srv.Close)
-	return &Client{Base: srv.URL, Token: "secret", HTTP: srv.Client()}, dir
+	return &Client{Base: srv.URL, Token: "secret", HTTP: srv.Client()}
 }
 
 func TestBackupStoreKeepsObjects(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	c, _ := newStore(t)
+	c := newStore(t)
 	n, err := c.Put(ctx, "management/etcd/a.db", strings.NewReader("hello"), map[string]string{"sha256": "x"})
 	if err != nil || n != 5 {
 		t.Fatalf("put: %d, %v", n, err)
 	}
-	if _, err := c.Put(ctx, "management/export/b.json", strings.NewReader("{}"), nil); err != nil {
+	if _, err = c.Put(ctx, "management/export/b.json", strings.NewReader("{}"), nil); err != nil {
 		t.Fatal(err)
 	}
 	list, err := c.List(ctx, "management/etcd/")
@@ -63,13 +63,18 @@ func TestBackupStoreKeepsObjects(t *testing.T) {
 }
 
 func TestBackupStoreRefusesWithoutTheToken(t *testing.T) {
-	c, _ := newStore(t)
+	t.Parallel()
+	c := newStore(t)
 	c.Token = "wrong"
 	_, err := c.Put(t.Context(), "a", strings.NewReader("x"), nil)
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("a wrong token stored an object: %v", err)
 	}
-	resp, err := c.HTTP.Get(c.Base + "/list")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, c.Base+"/list", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,12 +85,13 @@ func TestBackupStoreRefusesWithoutTheToken(t *testing.T) {
 }
 
 func TestBackupStoreRefusesKeysOutsideIt(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{"", "../x", "a/../../x", "a//b", "/a", "a/.put-1", `a\b`} {
 		if ValidKey(key) {
 			t.Errorf("%q passes as a key", key)
 		}
 	}
-	c, _ := newStore(t)
+	c := newStore(t)
 	req, _ := http.NewRequestWithContext(t.Context(), http.MethodPut, c.Base+"/objects/a/%2e%2e/%2e%2e/x", strings.NewReader("x"))
 	req.Header.Set(TokenHeader, c.Token)
 	resp, err := c.HTTP.Do(req)
@@ -100,8 +106,9 @@ func TestBackupStoreRefusesKeysOutsideIt(t *testing.T) {
 
 // The etcd snapshot code stores, lists and prunes on the volume as on a bucket.
 func TestBackupStoreHoldsEtcdSnapshots(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	c, _ := newStore(t)
+	c := newStore(t)
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
 		t.Fatal(err)
@@ -114,11 +121,11 @@ func TestBackupStoreHoldsEtcdSnapshots(t *testing.T) {
 		// etcd sends the database, then its SHA-256.
 		db := []byte("etcd database")
 		sum := sha256.Sum256(db)
-		if err := provisioner.StoreEtcdSnapshot(ctx, c, "management/etcd", taken, bytes.NewReader(append(db, sum[:]...)), id.Recipient()); err != nil {
+		if err = provisioner.StoreEtcdSnapshot(ctx, c, "management/etcd", taken, bytes.NewReader(append(db, sum[:]...)), id.Recipient()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := provisioner.PruneEtcdSnapshots(ctx, c, "management/etcd", 2); err != nil {
+	if _, err = provisioner.PruneEtcdSnapshots(ctx, c, "management/etcd", 2); err != nil {
 		t.Fatal(err)
 	}
 	list, err := provisioner.ListEtcdSnapshots(ctx, c, "management/etcd")

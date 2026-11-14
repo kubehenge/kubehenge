@@ -184,7 +184,7 @@ func (s *Server) recoverManagement(w http.ResponseWriter, r *http.Request, u use
 	if !ok {
 		return
 	}
-	err := s.Appliance.RecoverManagement(req.Passphrase, ticket, s.applied(ticket)) //nolint:contextcheck // the job outlives the request on purpose
+	err := s.Appliance.RecoverManagement(req.Passphrase, ticket, s.applied(ticket))
 	if jobConflict(err) {
 		done(false)
 		writeError(w, http.StatusConflict, err.Error())

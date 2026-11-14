@@ -25,21 +25,19 @@ type Dir struct {
 
 var _ provisioner.ObjectStore = Dir{}
 
+// maxKey is the longest key in bytes, as S3 allows.
+const maxKey = 1024
+
+// privateDir is the mode of the store's folders, which only its own process reads.
+const privateDir = 0o700
+
 // ValidKey tells whether key names an object: slash-separated names, none empty, and none starting
 // with a dot, which the store's own files do.
 func ValidKey(key string) bool {
-	if key == "" || len(key) > 1024 || strings.ContainsAny(key, "\\\x00") {
+	if key == "" || len(key) > maxKey || strings.ContainsAny(key, "\\\x00") {
 		return false
 	}
 	return !slices.ContainsFunc(strings.Split(key, "/"), func(part string) bool { return part == "" || strings.HasPrefix(part, ".") })
-}
-
-func (d Dir) objectPath(key string) string {
-	return filepath.Join(d.Root, "objects", filepath.FromSlash(key))
-}
-
-func (d Dir) metaPath(key string) string {
-	return filepath.Join(d.Root, "metadata", filepath.FromSlash(key)+".json")
 }
 
 func checkKey(key string) error {
@@ -71,7 +69,7 @@ func (d Dir) Put(ctx context.Context, key string, r io.Reader, metadata map[stri
 // writeAtomic writes r to a hidden file beside name and renames it there once complete, so that a
 // reader never sees half an object.
 func writeAtomic(ctx context.Context, name string, r io.Reader) (int64, error) {
-	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(name), privateDir); err != nil {
 		return 0, err //nolint:wrapcheck // the caller names the object
 	}
 	f, err := os.CreateTemp(filepath.Dir(name), ".put-*")
@@ -90,7 +88,7 @@ func writeAtomic(ctx context.Context, name string, r io.Reader) (int64, error) {
 	}
 	if err != nil {
 		_ = os.Remove(f.Name())
-		return 0, err
+		return 0, fmt.Errorf("writing %s: %w", filepath.Base(name), err)
 	}
 	return size, nil
 }
@@ -106,30 +104,6 @@ func (c *ctxReader) Read(p []byte) (int, error) {
 		return 0, err //nolint:wrapcheck // the context's own
 	}
 	return c.r.Read(p) //nolint:wrapcheck // io.Reader's own errors, io.EOF among them
-}
-
-func (d Dir) open(key string) (*os.File, error) {
-	if err := checkKey(key); err != nil {
-		return nil, err
-	}
-	f, err := os.Open(d.objectPath(key))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("%s: %w", key, provisioner.ErrNoObject)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", key, err)
-	}
-	return f, nil
-}
-
-func (d Dir) metadata(key string) map[string]string {
-	raw, err := os.ReadFile(d.metaPath(key))
-	if err != nil {
-		return nil
-	}
-	var meta map[string]string
-	_ = json.Unmarshal(raw, &meta)
-	return meta
 }
 
 // Stat reads one object's size, time and metadata.
@@ -168,12 +142,12 @@ func (d Dir) Remove(_ context.Context, key string) error {
 func (d Dir) List(ctx context.Context, prefix string) ([]provisioner.StoredObject, error) {
 	root := filepath.Join(d.Root, "objects")
 	out := []provisioner.StoredObject{}
-	err := filepath.WalkDir(root, func(name string, e fs.DirEntry, err error) error {
-		if errors.Is(err, fs.ErrNotExist) && name == root {
+	err := filepath.WalkDir(root, func(name string, e fs.DirEntry, walkErr error) error {
+		if errors.Is(walkErr, fs.ErrNotExist) && name == root {
 			return fs.SkipAll
 		}
-		if err != nil || e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			return err
+		if walkErr != nil || e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			return walkErr
 		}
 		if err := ctx.Err(); err != nil {
 			return err //nolint:wrapcheck // the context's own
@@ -212,4 +186,36 @@ func (d Dir) Size(ctx context.Context) (int64, error) {
 		n += o.Size
 	}
 	return n, err
+}
+
+func (d Dir) objectPath(key string) string {
+	return filepath.Join(d.Root, "objects", filepath.FromSlash(key))
+}
+
+func (d Dir) metaPath(key string) string {
+	return filepath.Join(d.Root, "metadata", filepath.FromSlash(key)+".json")
+}
+
+func (d Dir) open(key string) (*os.File, error) {
+	if err := checkKey(key); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(d.objectPath(key))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%s: %w", key, provisioner.ErrNoObject)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", key, err)
+	}
+	return f, nil
+}
+
+func (d Dir) metadata(key string) map[string]string {
+	raw, err := os.ReadFile(d.metaPath(key))
+	if err != nil {
+		return nil
+	}
+	var meta map[string]string
+	_ = json.Unmarshal(raw, &meta)
+	return meta
 }
