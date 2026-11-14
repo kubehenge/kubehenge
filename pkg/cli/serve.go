@@ -320,6 +320,9 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		a.NextID = s.Accounts.NextID
 	}
 	a.Talos = &provisioner.ManagementTalos{}
+	if err := a.CleanUp(); err != nil {
+		return fmt.Errorf("clearing what the last run left: %w", err)
+	}
 	a.LoadLast()
 	if a.Ready() {
 		kubeconfig, readErr := os.ReadFile(a.KubeconfigPath())

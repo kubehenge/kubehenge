@@ -128,6 +128,76 @@ func TestRemoveDeletesOrFencesTheAppliancesCopy(t *testing.T) {
 	}
 }
 
+// The copy's cap counts all it holds, the export included, and a copy over it never replaces the
+// last that fit.
+func TestTheCopysCapCountsItsExport(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	a, _, _ := volumeAppliance(t, &now)
+	first, err := a.TakeEtcdSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	whole := a.VolumeBackups().Copy.Bytes
+	exports, err := newestFirst(ctx, a.applianceCopy(), exportFolder)
+	if err != nil || len(exports) != 1 {
+		t.Fatalf("the copy holds exports %v (%v)", exports, err)
+	}
+	// A cap the snapshot fits, but not the copy whole.
+	a.CopyCap = whole - 1
+	if int64(len(etcdDatabase())) >= a.CopyCap {
+		t.Fatal("the snapshot alone does not fit the cap")
+	}
+	now = now.Add(volumeBackupEvery)
+	second, err := a.TakeEtcdSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("the volume's backup failed with the copy over its cap: %v", err)
+	}
+	c := a.VolumeBackups().Copy
+	if c.Snapshot != first.Name || c.Bytes != whole || !strings.Contains(c.Error, second.Name) ||
+		!strings.Contains(c.Error, fmt.Sprintf("%d bytes, more than its cap of %d bytes", whole, whole-1)) {
+		t.Fatalf("over the cap the copy shows %+v", c)
+	}
+	copies, err := provisioner.ListEtcdSnapshots(ctx, a.applianceCopy(), provisioner.ManagementEtcdFolder(""))
+	if err != nil || len(copies) != 1 || copies[0].Name != first.Name {
+		t.Fatalf("the copy holds %+v (%v), want the last that fit", copies, err)
+	}
+	if _, err := os.Stat(a.applianceCopy().Root + copyStaging); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the refused copy is left beside the one in use: %v", err)
+	}
+}
+
+// A crash between the two renames of a swap leaves the copy it replaced, which the start puts back.
+func TestCleanUpPutsBackTheCopyACrashLeftAside(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	a, _, _ := volumeAppliance(t, &now)
+	taken, err := a.TakeEtcdSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := a.applianceCopy().Root
+	if err := os.Rename(live, live+copyReplaced); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(live+copyStaging, "management"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.CleanUp(); err != nil {
+		t.Fatal(err)
+	}
+	copies, err := provisioner.ListEtcdSnapshots(t.Context(), a.applianceCopy(), provisioner.ManagementEtcdFolder(""))
+	if err != nil || len(copies) != 1 || copies[0].Name != taken.Name {
+		t.Fatalf("after the start the copy holds %+v (%v)", copies, err)
+	}
+	for _, left := range []string{live + copyStaging, live + copyReplaced} {
+		if _, err := os.Stat(left); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s is left: %v", filepath.Base(left), err)
+		}
+	}
+}
+
 // Switching the bucket's backups off leaves the volume's backups their own credential.
 func TestStoppingTheBucketKeepsTheVolumeBackups(t *testing.T) {
 	t.Parallel()

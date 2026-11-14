@@ -273,36 +273,105 @@ func (a *Appliance) copyCap() int64 {
 	return ApplianceCopyCap
 }
 
-// copyOnAppliance keeps the snapshot, encrypted, as the appliance's one copy, within its cap. A
-// snapshot over the cap leaves the copy before it in place.
-func (a *Appliance) copyOnAppliance(ctx context.Context, keys *volumeBackupKeys, file string, taken provisioner.EtcdSnapshot) *ApplianceCopy {
+// copyOnAppliance keeps the snapshot, encrypted, with its export and key, as the appliance's one
+// copy, within its cap. A copy over the cap, or one that fails, leaves the copy before it, prev, in
+// place.
+func (a *Appliance) copyOnAppliance(ctx context.Context, keys *volumeBackupKeys, file string, taken provisioner.EtcdSnapshot, export []byte, prev *ApplianceCopy) *ApplianceCopy {
 	c := &ApplianceCopy{Cap: a.copyCap()}
-	d := a.applianceCopy()
-	to, err := age.ParseX25519Recipient(keys.Recipient)
-	if err == nil {
-		if info, serr := os.Stat(file); serr == nil && info.Size() > c.Cap {
-			err = fmt.Errorf("snapshot %s takes %d MiB, more than the appliance's copy may hold (%d MiB): the backup volume keeps it alone, and the appliance keeps its last copy that fit", taken.Name, info.Size()>>20, c.Cap>>20)
-		}
-	}
-	if err == nil {
-		err = storeFile(ctx, d, provisioner.ManagementEtcdFolder(""), &taken, file, to)
-	}
-	if err == nil {
-		sealed, _ := base64.StdEncoding.DecodeString(keys.Sealed)
-		_, err = d.Put(ctx, volumeIdentityKey(keys.Recipient), bytes.NewReader(sealed), nil)
-	}
-	if err == nil {
-		_, err = d.Put(ctx, copyOwnerKey, strings.NewReader(keys.Recipient), nil)
-	}
-	if err == nil {
-		_, err = provisioner.PruneEtcdSnapshots(ctx, d, provisioner.ManagementEtcdFolder(""), 1)
+	err := a.replaceCopy(ctx, keys, file, taken, export, c.Cap)
+	switch {
+	case err == nil:
 		c.Snapshot = taken.Name
+	case prev != nil:
+		c.Snapshot = prev.Snapshot
 	}
-	c.Bytes, _ = d.Size(ctx)
+	c.Bytes, _ = a.applianceCopy().Size(ctx)
 	if err != nil {
 		c.Error = err.Error()
 	}
 	return c
+}
+
+// The appliance's copy is made whole beside the one in use, then swapped in, so that its size is
+// known before it replaces the last that fit, and a crash leaves one whole copy (sweepCopy).
+const (
+	copyStaging  = ".new"
+	copyReplaced = ".old"
+)
+
+func (a *Appliance) replaceCopy(ctx context.Context, keys *volumeBackupKeys, file string, taken provisioner.EtcdSnapshot, export []byte, capBytes int64) error {
+	to, err := age.ParseX25519Recipient(keys.Recipient)
+	if err != nil {
+		return fmt.Errorf("the snapshots' key: %w", err)
+	}
+	sealed, err := base64.StdEncoding.DecodeString(keys.Sealed)
+	if err != nil {
+		return fmt.Errorf("the snapshots' sealed key: %w", err)
+	}
+	live := a.applianceCopy().Root
+	staged := backupstore.Dir{Root: live + copyStaging}
+	if err := os.RemoveAll(staged.Root); err != nil {
+		return fmt.Errorf("clearing room for the appliance's copy: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(staged.Root) }()
+	err = storeFile(ctx, staged, provisioner.ManagementEtcdFolder(""), &taken, file, to)
+	if err == nil {
+		_, err = staged.Put(ctx, volumeIdentityKey(keys.Recipient), bytes.NewReader(sealed), nil)
+	}
+	if err == nil {
+		_, err = staged.Put(ctx, copyOwnerKey, strings.NewReader(keys.Recipient), nil)
+	}
+	if err == nil && export != nil {
+		_, err = staged.Put(ctx, exportKey(taken.Name), bytes.NewReader(export), nil)
+	}
+	if err != nil {
+		return fmt.Errorf("the appliance's copy: %w", err)
+	}
+	size, err := staged.Size(ctx)
+	if err != nil {
+		return fmt.Errorf("the appliance's copy: %w", err)
+	}
+	if size > capBytes {
+		return fmt.Errorf("the appliance's copy of snapshot %s with its export would take %s, more than its cap of %s. The backup volume keeps it alone, and the appliance keeps its last copy that fit", taken.Name, mebibytes(size), mebibytes(capBytes))
+	}
+	old := live + copyReplaced
+	if err := os.RemoveAll(old); err != nil {
+		return fmt.Errorf("the appliance's copy: %w", err)
+	}
+	if err := os.Rename(live, old); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("the appliance's copy: %w", err)
+	}
+	if err := os.Rename(staged.Root, live); err != nil {
+		_ = os.Rename(old, live)
+		return fmt.Errorf("the appliance's copy: %w", err)
+	}
+	_ = os.RemoveAll(old)
+	return nil
+}
+
+// sweepCopy finishes or undoes a swap of the appliance's copy a crash cut short.
+func (a *Appliance) sweepCopy() error {
+	live := a.applianceCopy().Root
+	if _, err := os.Stat(live); errors.Is(err, fs.ErrNotExist) {
+		if err := os.Rename(live+copyReplaced, live); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("restoring the appliance's copy: %w", err)
+		}
+	}
+	return errors.Join(os.RemoveAll(live+copyStaging), os.RemoveAll(live+copyReplaced))
+}
+
+// mebibytes writes a size in MiB, rounded up, so that a size just over a cap never reads as it.
+func mebibytes(n int64) string {
+	if n < 1<<20 {
+		return fmt.Sprintf("%d bytes", n)
+	}
+	return fmt.Sprintf("%d MiB", (n+1<<20-1)>>20)
+}
+
+// CleanUp clears what a run cut short by a crash or a power loss left on the appliance's disk. It
+// runs at start, before any run or backup.
+func (a *Appliance) CleanUp() error {
+	return a.sweepCopy()
 }
 
 // snapshotToFile streams a snapshot of the management cluster's etcd, taken with the talosconfig
@@ -348,11 +417,11 @@ func (c *ctxReader) Read(p []byte) (int, error) {
 func (a *Appliance) backUpToVolume(ctx context.Context, keys *volumeBackupKeys, file string, taken provisioner.EtcdSnapshot) (*provisioner.EtcdSnapshot, error) {
 	stored, err := a.storeOnVolume(ctx, keys, file, taken)
 	rec := a.volumeBackupRecord()
-	rec.Copy = a.copyOnAppliance(ctx, keys, file, taken)
-	export, exportErr := a.exportToVolume(ctx, keys, taken.Name)
+	export, sealedExport, exportErr := a.exportToVolume(ctx, keys, taken.Name)
 	if exportErr == nil {
 		rec.Export = export
 	}
+	rec.Copy = a.copyOnAppliance(ctx, keys, file, taken, sealedExport, rec.Copy)
 	err = errors.Join(err, exportErr)
 	if err != nil {
 		now := a.now()

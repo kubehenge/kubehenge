@@ -44,23 +44,24 @@ func exportKey(snapshot string) string {
 }
 
 // exportToVolume exports Kubehenge's objects, encrypted like the snapshots, onto the volume, where
-// the newest volumeBackupKeep stay, and into the appliance's copy, which keeps the newest alone.
-func (a *Appliance) exportToVolume(ctx context.Context, keys *volumeBackupKeys, snapshot string) (*ExportRecord, error) {
+// the newest volumeBackupKeep stay. It returns the encrypted export for the appliance's copy, also
+// when the volume could not take it.
+func (a *Appliance) exportToVolume(ctx context.Context, keys *volumeBackupKeys, snapshot string) (*ExportRecord, []byte, error) {
 	if a.ExportObjects == nil {
-		return nil, errors.New("this appliance cannot read Kubehenge's objects to export them")
+		return nil, nil, errors.New("this appliance cannot read Kubehenge's objects to export them")
 	}
 	objects, err := a.ExportObjects(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("exporting Kubehenge's objects: %w", err)
+		return nil, nil, fmt.Errorf("exporting Kubehenge's objects: %w", err)
 	}
 	to, err := age.ParseX25519Recipient(keys.Recipient)
 	if err != nil {
-		return nil, fmt.Errorf("the snapshots' key: %w", err)
+		return nil, nil, fmt.Errorf("the snapshots' key: %w", err)
 	}
 	now := a.now()
 	plain, err := json.Marshal(ManagementExport{Taken: now, Snapshot: snapshot, Settings: a.SavedSettings(), Objects: string(objects)})
 	if err != nil {
-		return nil, fmt.Errorf("encoding the export: %w", err)
+		return nil, nil, fmt.Errorf("encoding the export: %w", err)
 	}
 	var sealed bytes.Buffer
 	w, err := age.Encrypt(&sealed, to)
@@ -71,26 +72,20 @@ func (a *Appliance) exportToVolume(ctx context.Context, keys *volumeBackupKeys, 
 		err = w.Close()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("encrypting the export: %w", err)
+		return nil, nil, fmt.Errorf("encrypting the export: %w", err)
 	}
 	key := exportKey(snapshot)
 	store, err := a.openVolume(ctx)
 	if err != nil {
-		return nil, err
+		return nil, sealed.Bytes(), err
 	}
-	for _, s := range []struct {
-		store provisioner.ObjectStore
-		keep  int
-		where string
-	}{{store, volumeBackupKeep, "the backup volume"}, {a.applianceCopy(), 1, "the appliance's copy"}} {
-		if _, err := s.store.Put(ctx, key, bytes.NewReader(sealed.Bytes()), nil); err != nil {
-			return nil, fmt.Errorf("storing the export on %s: %w", s.where, err)
-		}
-		if err := pruneFolder(ctx, s.store, exportFolder, s.keep); err != nil {
-			return nil, fmt.Errorf("deleting older exports on %s: %w", s.where, err)
-		}
+	if _, err := store.Put(ctx, key, bytes.NewReader(sealed.Bytes()), nil); err != nil {
+		return nil, sealed.Bytes(), fmt.Errorf("storing the export on the backup volume: %w", err)
 	}
-	return &ExportRecord{Name: path.Base(key), Time: now, Bytes: int64(sealed.Len())}, nil
+	if err := pruneFolder(ctx, store, exportFolder, volumeBackupKeep); err != nil {
+		return nil, sealed.Bytes(), fmt.Errorf("deleting older exports on the backup volume: %w", err)
+	}
+	return &ExportRecord{Name: path.Base(key), Time: now, Bytes: int64(sealed.Len())}, sealed.Bytes(), nil
 }
 
 // newestFirst lists the objects under folder, newest first. Their names start with the time.
