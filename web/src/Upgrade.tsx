@@ -164,7 +164,9 @@ function addressCheck(c: Cluster): Check | undefined {
   if (room === undefined) {
     return undefined;
   }
-  const spare = room - c.controlPlane.desired - c.workers.desired;
+  // The pools are what a plan changes, where the workers' status is what the cluster has now.
+  const workers = c.workerPools.reduce((sum, p) => sum + (p.autoscaling?.max ?? p.replicas), 0);
+  const spare = room - c.controlPlane.desired - workers;
   return spare > 0
     ? { what: "Addresses", state: "ok", text: `${spare} spare` }
     : { what: "Addresses", state: "error", text: "None spare. Add one under Options." };
@@ -239,6 +241,14 @@ function nodesCheck(c: Cluster, nodes: PveNode[]): Check | undefined {
 const counted = (n: number, what: string): string => `${n} ${what}${n === 1 ? "" : "s"}`;
 
 /**
+ * scaleChecks are the addresses and memory a change of the cluster's size needs, from the same
+ * figures in the Scale dialog as in Review plan.
+ */
+export function scaleChecks(before: Cluster, after: Cluster, nodes: PveNode[]): Check[] {
+  return [addressCheck(after), memoryCheck(before, after, nodes)].filter((ch) => ch !== undefined);
+}
+
+/**
  * useChecks reads what to know before a change goes ahead: what it replaces, whether the nodes have
  * the addresses and memory it needs, the removed APIs and fail-closed webhooks an upgrade meets,
  * the offline nodes, and what is wrong with the cluster already. The dialog of a change and the
@@ -298,8 +308,7 @@ export function useChecks({
   const optional = (check: Check | undefined): Check[] => (check === undefined ? [] : [check]);
   return [
     ...(change ? [changeCheck(read)] : []),
-    ...optional(addressCheck(after)),
-    ...optional(memoryCheck(before, after, nodes)),
+    ...scaleChecks(before, after, nodes),
     ...optional(nodesCheck(before, nodes)),
     ...(version === undefined ? [] : [removedAPIsCheck(found), ...optional(webhooksCheck(found))]),
     healthCheck(health),

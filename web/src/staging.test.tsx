@@ -205,6 +205,30 @@ describe("staged changes", () => {
     await waitFor(() => expect(calls.map((c) => c.key)).toContain(`PATCH ${path}`));
   });
 
+  it("hold Apply for the acknowledgement when the workers outgrow the addresses", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web");
+    const network = { addresses: ["10.0.0.21-10.0.0.28"], prefix: 24, gateway: "10.0.0.1" };
+    const before: Cluster = { ...cluster, variables: { ...cluster.variables, network } };
+    const grown: Cluster = { ...before, workerPools: [{ name: "md-0", class: "worker", replicas: 20 }] };
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      [`GET ${path}`]: { body: before },
+      [`POST ${path}/plan`]: { body: { cluster: grown, changes: [{ setting: "workerPools", effect: "scales" }] } },
+      [`PATCH ${path}`]: { body: grown },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Scale" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Scale web" }));
+    await user.clear(dialog.getByLabelText("Workers"));
+    await user.type(dialog.getByLabelText("Workers"), "6");
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
+    await user.click(await screen.findByRole("button", { name: "Review plan" }));
+    const plan = within(screen.getByRole("dialog", { name: "Review plan" }));
+    await expect(plan.findByText(/^None spare/u)).resolves.toHaveClass("status-error");
+    expect(plan.getByRole("button", { name: "Apply" })).toBeDisabled();
+  });
+
   it("merge, a later change of a setting winning", () => {
     expect(
       merged(

@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, useState, type JSX, type ReactNode } from "react";
 
 import { api } from "./api";
 import { autoscales, controlPlaneSizes, mostWorkers, variable } from "./create-form";
@@ -524,7 +524,16 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
 }
 
 /** ScaleDialog sets a cluster's control-plane nodes and, for each worker pool, its workers or its autoscaling bounds. */
-export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+export function ScaleDialog({
+  cluster: c,
+  onClose,
+  checks,
+}: {
+  cluster: Cluster;
+  onClose: () => void;
+  /** The checks of the cluster as the entries would leave it, as Review plan lists them. */
+  checks: (after: Cluster, nodes: PveNode[]) => ReactNode;
+}): JSX.Element {
   const current = c.controlPlane.desired || 1;
   const [controlPlane, setControlPlane] = useState(current);
   // Kept as typed, so a cleared field stays empty instead of turning into 0.
@@ -538,6 +547,14 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
   const room = roomFor(scaling);
   const change = poolChange(c.workerPools, pools);
   const changed = controlPlane !== current || Object.keys(change).length > 0;
+  // An autoscaled pool counts at its most, which is what its addresses and memory must allow.
+  const workerPools = c.workerPools.map((p) => ({ ...p, replicas: entryMost(pools[p.name] ?? poolEntry(p)) }));
+  const after: Cluster = {
+    ...c,
+    controlPlane: { ...c.controlPlane, desired: controlPlane },
+    workers: { ...c.workers, desired: workerPools.reduce((sum, p) => sum + p.replicas, 0) },
+    workerPools,
+  };
   return (
     <Dialog
       title={`Scale ${c.name}`}
@@ -583,6 +600,7 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
           />
         );
       })}
+      {changed && checks(after, nodes)}
       <ErrorBox message={error} />
     </Dialog>
   );

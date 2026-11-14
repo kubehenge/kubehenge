@@ -43,7 +43,7 @@ import {
   Skeleton,
   Views,
 } from "./ui";
-import { ChecksList, useChecks, usePlan } from "./Upgrade";
+import { ChecksList, scaleChecks, useChecks, usePlan } from "./Upgrade";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
 
@@ -610,7 +610,19 @@ function ActionDialog({
   // A dialog starts from what is staged, so that a second change builds on the first.
   const c = useStaging()?.staged?.plan.cluster ?? current;
   if (action === "scale") {
-    return <ScaleDialog cluster={c} onClose={onClose} />;
+    return (
+      <ScaleDialog
+        cluster={c}
+        onClose={onClose}
+        checks={(after, nodes) => (
+          <ChecksList
+            checks={scaleChecks(c, after, nodes)}
+            healthPath={clusterPath(c.namespace, c.name, "health")}
+            label="Before scaling"
+          />
+        )}
+      />
+    );
   }
   if (action === "upgrade") {
     return <UpgradeDialog cluster={c} onClose={onClose} />;

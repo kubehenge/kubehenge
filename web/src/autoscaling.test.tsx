@@ -79,6 +79,27 @@ describe("the Scale dialog", () => {
     );
   });
 
+  it("shows the addresses and memory the new count needs, as Review plan does", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const nodes: PveNode[] = [{ node: "pve1", online: true, memory: 60 * gib, maxMemory: 64 * gib }];
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": { body: web },
+      "GET /api/proxmox/nodes": { body: nodes },
+      "PATCH /api/clusters/default/web": { body: web },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Scale" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Scale web" }));
+    const workers = dialog.getByLabelText("Workers");
+    await user.clear(workers);
+    await user.type(workers, "4");
+    // Eight addresses, a control plane and four workers leave three. Two more workers of 8 GiB need 16 GiB of 4 free.
+    await expect(dialog.findByText("3 spare")).resolves.toHaveClass("status-ok");
+    expect(dialog.getByText(/^Needs 16\.0 GiB/u)).toHaveClass("status-warning");
+  });
+
   it("switches it off at the workers it runs", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const calls = fakeServer({
