@@ -21,4 +21,4 @@ The engineering rules are in `.github/CONTRIBUTING.md` and apply in full. Read i
 
 ## Checks
 
-`make test` (lint and unit) before every change is handed back: Go under the race detector, the frontend, the charts, the module and the shell scripts. The end-to-end targets (`make e2e-*`, `docs/testing.md`) need a Proxmox VE host and run in CI.
+`make test` (lint and unit) before every change is handed back: Go under the race detector, the frontend, the charts, the module and the shell scripts. A change to `charts/kubehenge/templates` runs `go test ./charts/kubehenge`, which renders every distribution's class. The end-to-end targets (`make e2e-*`, `docs/testing.md`) need a Proxmox VE host and run in CI.
