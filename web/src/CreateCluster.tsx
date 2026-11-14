@@ -10,6 +10,7 @@ import {
   classStorages,
   createRoom,
   csiOffer,
+  capacityProblems,
   csiProblems,
   fieldProblems,
   snapshotsOffer,
@@ -274,10 +275,13 @@ export function CreateCluster({
       bridgesByNode,
       online: nodes.filter((x) => x.online).map((x) => x.node),
     }),
+    ...capacityProblems(step, form, nodes, usableStorages),
     ...csiProblems(step, form, csi),
     ...snapshotsProblems(step, form, snapshots),
   };
   const open = Object.values(byField);
+  // A cluster that fits the nodes but not what they have free now waits for room.
+  const waits = createRoom(form, nodes, usableStorages).nodeWarning !== undefined;
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
 
@@ -474,12 +478,12 @@ export function CreateCluster({
                 <button
                   type="button"
                   className="primary"
-                  disabled={busy || !checked.accepted}
+                  disabled={busy || !checked.accepted || Object.keys(capacityProblems("Machines", form, nodes, usableStorages)).length > 0}
                   onClick={() => {
                     void create();
                   }}
                 >
-                  Create
+                  {waits ? "Create and wait" : "Create"}
                 </button>
               ) : (
                 <button type="button" className="primary" onClick={next}>

@@ -2484,6 +2484,38 @@ export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefi
   return `No node has ${needGiB} GiB free, the most is ${Math.floor(freeMiB(best) / mibPerGiB)} GiB on ${best.node}. The cluster waits for room.`;
 }
 
+/**
+ * capacityProblems holds the machines step to what the cluster could never fit, with the figures
+ * Confirm shows: a machine larger than the memory of every node it may use, and disks beyond the
+ * storage's free space. Memory that is merely in use now only warns, since the cluster waits for it.
+ */
+export function capacityProblems(step: Step, form: Form, nodes: PveNode[], storages: Storage[]): Problems {
+  if (step !== "Machines") {
+    return {};
+  }
+  const p: Problems = {};
+  const allowed = allowedNodes(form.place);
+  const usable = nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node)));
+  const biggest = usable.every((n) => n.maxMemory !== undefined)
+    ? Math.max(0, ...usable.map((n) => (n.maxMemory ?? 0) / bytesPerMiB))
+    : Infinity;
+  const workers = mostWorkers(form) > 0;
+  for (const [key, m, used] of [
+    ["controlPlaneMachine", form.controlPlaneMachine, true],
+    ["workerMachine", form.workerMachine, workers],
+  ] as const) {
+    if (used && usable.length > 0 && m.memoryMiB > biggest) {
+      p[key] = `No node has ${size(m.memoryMiB)} of memory. Lower the machine's memory.`;
+    }
+  }
+  const room = createRoom(form, nodes, storages);
+  if (room.freeDisk !== undefined && room.disk > room.freeDisk) {
+    p[workers ? "workerMachine" : "controlPlaneMachine"] ??=
+      `The disks need ${bytes(room.disk)}, ${bytes(room.freeDisk)} free. Lower a disk size or the node count.`;
+  }
+  return p;
+}
+
 // freeMiB is a node's free memory, unlimited while it reports none.
 function freeMiB(n: PveNode): number {
   return n.maxMemory === undefined || n.memory === undefined ? Infinity : (n.maxMemory - n.memory) / bytesPerMiB;
