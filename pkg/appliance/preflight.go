@@ -220,9 +220,14 @@ func (s *Settings) checkStorages(inv *Inventory, f *Findings) {
 // move or restart from, but the cloud-init ISOs are on node-local storage. A cluster VM that Proxmox
 // VE HA or a migration puts on another node then cannot find its ISO. The management VMs keep their
 // own cloud-init drive on the VM storage and need neither this storage nor the image storage once
-// created, so setup itself works and the finding is a warning.
+// created, so setup itself works and the finding is a warning. Cluster VMs may run on any node of
+// the Proxmox VE cluster, so its nodes are counted, or the settings' nodes where it could not be read.
 func (s *Settings) checkISOStorageShared(inv *Inventory, f *Findings) {
-	if inv.Storages == nil || (len(s.Nodes) < 2 && !s.ProxmoxHA) {
+	nodes := len(inv.Nodes)
+	if inv.Nodes == nil {
+		nodes = len(s.Nodes)
+	}
+	if inv.Storages == nil || nodes < 2 {
 		return
 	}
 	shared := func(name string) bool {

@@ -2,9 +2,13 @@ package appliance
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +22,13 @@ import (
 type fakeDNS struct {
 	records map[string][]netip.Addr
 	silent  bool
+	// servfail names get SERVFAIL.
+	servfail []string
+	// truncate has UDP replies carry no answers and the truncation flag, so that a client asks again
+	// over TCP.
+	truncate bool
+	// asked counts the queries, when set.
+	asked *atomic.Int32
 }
 
 // serveDNS starts the fakes on 127.0.0.1, 127.0.0.2 and so on, all on one port, and returns that port
@@ -32,8 +43,77 @@ func serveDNS(t *testing.T, fakes ...fakeDNS) (string, []string) {
 		_, port, _ = net.SplitHostPort(c.LocalAddr().String())
 		servers = append(servers, host)
 		go fake.serve(c)
+		if fake.truncate {
+			l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", net.JoinHostPort(host, port))
+			if err != nil {
+				t.Skipf("cannot listen on %s: %v", host, err)
+			}
+			t.Cleanup(func() { _ = l.Close() })
+			go fake.serveTCP(l)
+		}
 	}
 	return port, servers
+}
+
+func (d fakeDNS) serveTCP(l net.Listener) {
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer func() { _ = conn.Close() }()
+			var head [2]byte
+			if _, err := io.ReadFull(conn, head[:]); err != nil {
+				return
+			}
+			raw := make([]byte, binary.BigEndian.Uint16(head[:]))
+			if _, err := io.ReadFull(conn, raw); err != nil {
+				return
+			}
+			var q dnsmessage.Message
+			if q.Unpack(raw) != nil || len(q.Questions) != 1 {
+				return
+			}
+			if out, err := d.answer(q, false).Pack(); err == nil {
+				_, _ = conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(out))), out...)) //nolint:gosec // a short test reply
+			}
+		}()
+	}
+}
+
+// answer is the reply to a query. Over UDP a truncating fake answers with the flag alone.
+func (d fakeDNS) answer(q dnsmessage.Message, udp bool) *dnsmessage.Message {
+	if d.asked != nil {
+		d.asked.Add(1)
+	}
+	question := q.Questions[0]
+	var reply dnsmessage.Message
+	reply.ID, reply.Response, reply.Authoritative, reply.RCode = q.ID, true, true, dnsmessage.RCodeNameError
+	reply.Questions = q.Questions
+	if udp && d.truncate {
+		reply.Truncated, reply.RCode = true, dnsmessage.RCodeSuccess
+		return &reply
+	}
+	if slices.Contains(d.servfail, question.Name.String()) {
+		reply.RCode = dnsmessage.RCodeServerFailure
+		return &reply
+	}
+	if addrs, ok := d.records[question.Name.String()]; ok {
+		reply.RCode = dnsmessage.RCodeSuccess
+		for _, a := range addrs {
+			h := dnsmessage.ResourceHeader{Name: question.Name, Class: dnsmessage.ClassINET, TTL: 60}
+			switch {
+			case a.Is4() && question.Type == dnsmessage.TypeA:
+				h.Type = dnsmessage.TypeA
+				reply.Answers = append(reply.Answers, dnsmessage.Resource{Header: h, Body: &dnsmessage.AResource{A: a.As4()}})
+			case a.Is6() && question.Type == dnsmessage.TypeAAAA:
+				h.Type = dnsmessage.TypeAAAA
+				reply.Answers = append(reply.Answers, dnsmessage.Resource{Header: h, Body: &dnsmessage.AAAAResource{AAAA: a.As16()}})
+			}
+		}
+	}
+	return &reply
 }
 
 // listenUDP listens on a loopback address and closes the socket when the test ends.
@@ -58,25 +138,7 @@ func (d fakeDNS) serve(c net.PacketConn) {
 		if d.silent || q.Unpack(buf[:n]) != nil || len(q.Questions) != 1 {
 			continue
 		}
-		question := q.Questions[0]
-		var reply dnsmessage.Message
-		reply.ID, reply.Response, reply.Authoritative, reply.RCode = q.ID, true, true, dnsmessage.RCodeNameError
-		reply.Questions = q.Questions
-		if addrs, ok := d.records[question.Name.String()]; ok {
-			reply.RCode = dnsmessage.RCodeSuccess
-			for _, a := range addrs {
-				h := dnsmessage.ResourceHeader{Name: question.Name, Class: dnsmessage.ClassINET, TTL: 60}
-				switch {
-				case a.Is4() && question.Type == dnsmessage.TypeA:
-					h.Type = dnsmessage.TypeA
-					reply.Answers = append(reply.Answers, dnsmessage.Resource{Header: h, Body: &dnsmessage.AResource{A: a.As4()}})
-				case a.Is6() && question.Type == dnsmessage.TypeAAAA:
-					h.Type = dnsmessage.TypeAAAA
-					reply.Answers = append(reply.Answers, dnsmessage.Resource{Header: h, Body: &dnsmessage.AAAAResource{AAAA: a.As16()}})
-				}
-			}
-		}
-		if out, err := reply.Pack(); err == nil {
+		if out, err := d.answer(q, true).Pack(); err == nil {
 			_, _ = c.WriteTo(out, from)
 		}
 	}
@@ -175,6 +237,61 @@ func TestPreflightDNSShortNameResolvingNowhereIsRefused(t *testing.T) {
 	mentions(t, f.Errors, "pvevip does not resolve", "127.0.0.1 does not know it")
 }
 
+func TestPreflightDNSIgnoresTheAppliancesHostsFile(t *testing.T) {
+	t.Parallel()
+	// localhost is in every hosts file or special-cased by the system resolver, and no server here
+	// knows it.
+	var asked atomic.Int32
+	f := dnsCase(t, "https://localhost:8006", fakeDNS{asked: &asked})
+	mentions(t, f.Errors, "localhost does not resolve", "127.0.0.1 does not know it")
+	if asked.Load() == 0 {
+		t.Error("the server was never asked")
+	}
+}
+
+func TestPreflightDNSDottedNameTriesTheSearchDomains(t *testing.T) {
+	t.Parallel()
+	port, servers := serveDNS(t, fakeDNS{records: map[string][]netip.Addr{"pve1.dc1.example.com.": {netip.MustParseAddr("10.0.0.5")}}})
+	s := settings("pve1")
+	s.DNSServers, s.SearchDomains = servers, []string{"example.com"}
+	inv := healthy()
+	inv.ProxmoxURL, inv.DNSPort = "https://pve1.dc1:8006", port
+	if f := s.Preflight(inv, false); len(f.Errors) != 0 || len(f.Warnings) != 0 {
+		t.Errorf("findings = %+v", f)
+	}
+}
+
+func TestPreflightDNSServfailOnOneNameDoesNotStopTheOthers(t *testing.T) {
+	t.Parallel()
+	port, servers := serveDNS(t,
+		fakeDNS{servfail: []string{"pvevip."}, records: map[string][]netip.Addr{"pvevip.corp.example.": {netip.MustParseAddr("10.0.0.5")}}},
+		fakeDNS{})
+	s := settings("pve1")
+	s.DNSServers, s.SearchDomains = servers, []string{"corp.example"}
+	inv := healthy()
+	inv.ProxmoxURL, inv.DNSPort, inv.DNSTimeout = "https://pvevip:8006", port, 500*time.Millisecond
+	if f := s.Preflight(inv, false); len(f.Errors) != 0 {
+		t.Errorf("errors = %v", f.Errors)
+	}
+}
+
+func TestPreflightDNSAServerThatOnlyServfailsWarnsLikeASilentOne(t *testing.T) {
+	t.Parallel()
+	f := dnsCase(t, nameURL, fakeDNS{servfail: []string{pveName}})
+	if len(f.Errors) != 0 {
+		t.Errorf("errors = %v", f.Errors)
+	}
+	mentions(t, f.Warnings, "Could not check from the appliance", "127.0.0.1")
+}
+
+func TestPreflightDNSAsksAgainOverTCPWhenTheReplyIsTruncated(t *testing.T) {
+	t.Parallel()
+	f := dnsCase(t, nameURL, fakeDNS{truncate: true, records: map[string][]netip.Addr{pveName: {netip.MustParseAddr("10.0.0.5")}}})
+	if len(f.Errors) != 0 || len(f.Warnings) != 0 {
+		t.Errorf("findings = %+v", f)
+	}
+}
+
 func TestPreflightDNSWarnsWhenTheServersAnswerDiffers(t *testing.T) {
 	t.Parallel()
 	port, servers := serveDNS(t, knows("10.9.9.9"))
@@ -268,11 +385,24 @@ func TestPreflightISOStorageLocalEverywhereIsUnchanged(t *testing.T) {
 	}
 }
 
-func TestPreflightISOStorageHAAloneCountsAsMoreNodes(t *testing.T) {
+func TestPreflightISOStorageCountsTheProxmoxVENodesNotTheManagementNodes(t *testing.T) {
 	t.Parallel()
 	s := settings("pve1")
 	s.ProxmoxHA = true
 	inv := healthy()
+	inv.Nodes = append(inv.Nodes, pve.Node{Node: "pve3", Online: true, MaxMemory: 64 * gib})
 	inv.Storages[0].Shared = true
 	mentions(t, s.Preflight(inv, false).Warnings, "local to a node")
+}
+
+func TestPreflightISOStorageOneProxmoxVENodeHasNowhereToMoveTo(t *testing.T) {
+	t.Parallel()
+	s := settings("pve1")
+	s.ProxmoxHA = true
+	inv := healthy()
+	inv.Nodes = inv.Nodes[:1]
+	inv.Storages[0].Shared = true
+	for _, w := range s.Preflight(inv, false).Warnings {
+		t.Errorf("warning = %s", w)
+	}
 }

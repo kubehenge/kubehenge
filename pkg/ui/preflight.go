@@ -34,7 +34,7 @@ func (s *Server) setupPreflight(ctx context.Context, u user, settings *appliance
 // inventory reads Proxmox VE. What the user may not read is left nil, and the checks that need it
 // stay out, as Proxmox VE itself judges the run then.
 func (s *Server) inventory(ctx context.Context, u user, settings *appliance.Settings, owned bool) (*appliance.Inventory, error) { //nolint:revive // owned picks which reads apply, not a mode of one
-	inv := &appliance.Inventory{ProxmoxURL: s.Appliance.ProxmoxURL}
+	inv := &appliance.Inventory{ProxmoxURL: s.Appliance.ProxmoxURL, DNSPort: s.DNSPort}
 	var err error
 	if inv.Storages, err = s.Accounts.Storages(ctx, u.ticket); err != nil {
 		return nil, fmt.Errorf("reading the storages: %w", err)

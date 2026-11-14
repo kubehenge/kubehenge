@@ -2,8 +2,11 @@ package appliance
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"net/url"
@@ -11,15 +14,23 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/dns/dnsmessage"
 )
 
-const defaultDNSTimeout = 3 * time.Second
+const (
+	defaultDNSTimeout = 3 * time.Second
+	// maxUDPReply is the largest reply read over UDP. Larger ones come truncated, and are asked again
+	// over TCP.
+	maxUDPReply = 4096
+)
 
 // dnsAnswer is what one DNS server said of the Proxmox VE URL's host.
 type dnsAnswer struct {
 	server string
 	addrs  []netip.Addr
-	// known is false when the server did not answer, so that it said nothing of the name.
+	// known is false when the server gave no usable answer to any name asked, so that it said nothing
+	// of the host.
 	known bool
 	// problem is empty for an answer. Otherwise it says what the server did.
 	problem string
@@ -80,13 +91,10 @@ func joinAddrs(addrs []netip.Addr) string {
 	return strings.Join(out, ", ")
 }
 
-// dnsCandidates are the names a management VM's resolver tries for the host: a name without dots as
-// given and then with each search domain of the settings, any other name as given only.
+// dnsCandidates are the names a management VM's resolver may try for the host: the name as given and
+// then with each search domain of the settings.
 func (s *Settings) dnsCandidates(host string) []string {
 	names := []string{host}
-	if strings.Contains(host, ".") {
-		return names
-	}
 	for _, d := range s.SearchDomains {
 		if d = strings.Trim(d, "."); d != "" {
 			names = append(names, host+"."+d)
@@ -95,25 +103,64 @@ func (s *Settings) dnsCandidates(host string) []string {
 	return names
 }
 
-// askDNS asks one server for the candidate names in turn, and the first answer with addresses wins.
-// A server that does not answer ends the asking, as its next query would wait as long. The queries
-// go to that server alone and to rooted names, so that no search domain of the appliance applies.
+// outcome is what a server did with one query.
+type outcome int
+
+const (
+	// found is an answer with addresses.
+	found outcome = iota
+	// absent is NXDOMAIN, or an answer without addresses.
+	absent
+	// failed is silence, an error or a SERVFAIL or REFUSED, which say nothing of the name.
+	failed
+)
+
+// askDNS asks one server for every candidate name, which are asked at once. The first candidate with
+// addresses wins. The server does not know the host only when it said so of every candidate.
 func (inv *Inventory) askDNS(server string, names []string) dnsAnswer {
-	answer := dnsAnswer{server: server, known: true}
-	for _, name := range names {
-		a := inv.askDNSName(server, name)
-		if len(a.addrs) > 0 {
-			return a
-		}
-		answer = a
-		if !a.known {
-			break
+	results := make([]dnsAnswer, len(names))
+	outcomes := make([]outcome, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Go(func() { results[i], outcomes[i] = inv.askDNSName(server, name) })
+	}
+	wg.Wait()
+	for i := range names {
+		if outcomes[i] == found {
+			return results[i]
 		}
 	}
-	return answer
+	if slices.Contains(outcomes, failed) {
+		return dnsAnswer{server: server, problem: "did not answer"}
+	}
+	return dnsAnswer{server: server, known: true, problem: "does not know it"}
 }
 
-func (inv *Inventory) askDNSName(server, host string) dnsAnswer {
+// askDNSName asks for a name's A and AAAA records at once. The resolver of the appliance is left
+// out, as its hosts file and search list are not the VMs'.
+func (inv *Inventory) askDNSName(server, name string) (dnsAnswer, outcome) {
+	var results [2]struct {
+		addrs []netip.Addr
+		out   outcome
+	}
+	var wg sync.WaitGroup
+	for i, t := range [...]dnsmessage.Type{dnsmessage.TypeA, dnsmessage.TypeAAAA} {
+		wg.Go(func() { results[i].addrs, results[i].out = inv.queryDNS(server, name, t) })
+	}
+	wg.Wait()
+	addrs := slices.Concat(results[0].addrs, results[1].addrs)
+	switch {
+	case len(addrs) > 0:
+		return dnsAnswer{server: server, addrs: addrs, known: true}, found
+	case results[0].out == failed || results[1].out == failed:
+		return dnsAnswer{server: server}, failed
+	default:
+		return dnsAnswer{server: server}, absent
+	}
+}
+
+// queryDNS sends one query over UDP, and over TCP when the reply is truncated.
+func (inv *Inventory) queryDNS(server, name string, qtype dnsmessage.Type) ([]netip.Addr, outcome) {
 	port, timeout := inv.DNSPort, inv.DNSTimeout
 	if port == "" {
 		port = "53"
@@ -121,24 +168,96 @@ func (inv *Inventory) askDNSName(server, host string) dnsAnswer {
 	if timeout <= 0 {
 		timeout = defaultDNSTimeout
 	}
+	qname, err := dnsmessage.NewName(strings.TrimSuffix(name, ".") + ".")
+	if err != nil {
+		return nil, absent
+	}
+	var id [2]byte
+	if _, err = rand.Read(id[:]); err != nil {
+		return nil, failed
+	}
+	query := dnsmessage.Message{
+		Header:    dnsmessage.Header{ID: binary.BigEndian.Uint16(id[:]), RecursionDesired: true},
+		Questions: []dnsmessage.Question{{Name: qname, Type: qtype, Class: dnsmessage.ClassINET}},
+	}
+	packet, err := query.Pack()
+	if err != nil {
+		return nil, absent
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	resolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, network, net.JoinHostPort(server, port))
-	}}
-	addrs, err := resolver.LookupNetIP(ctx, "ip", strings.TrimSuffix(host, ".")+".")
-	a := dnsAnswer{server: server, known: true}
-	var dnsErr *net.DNSError
-	switch {
-	case err == nil:
-		for _, ip := range addrs {
-			a.addrs = append(a.addrs, ip.Unmap())
-		}
-	case errors.As(err, &dnsErr) && dnsErr.IsNotFound:
-		a.problem = "does not know it"
-	default:
-		a.problem, a.known = "did not answer", false
+	address := net.JoinHostPort(server, port)
+	reply, err := exchange(ctx, "udp", address, packet)
+	if err == nil && reply.Truncated {
+		reply, err = exchange(ctx, "tcp", address, packet)
 	}
-	return a
+	if err != nil || reply.ID != query.ID || !reply.Response {
+		return nil, failed
+	}
+	switch reply.RCode {
+	case dnsmessage.RCodeSuccess:
+	case dnsmessage.RCodeNameError:
+		return nil, absent
+	default:
+		return nil, failed
+	}
+	var addrs []netip.Addr
+	for _, r := range reply.Answers {
+		switch body := r.Body.(type) {
+		case *dnsmessage.AResource:
+			addrs = append(addrs, netip.AddrFrom4(body.A))
+		case *dnsmessage.AAAAResource:
+			addrs = append(addrs, netip.AddrFrom16(body.AAAA).Unmap())
+		}
+	}
+	if len(addrs) == 0 {
+		return nil, absent
+	}
+	return addrs, found
+}
+
+// exchange sends a packet and reads the reply, over TCP with the two-byte length that stream
+// transport adds.
+func exchange(ctx context.Context, network, address string, packet []byte) (dnsmessage.Message, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, network, address)
+	if err != nil {
+		return dnsmessage.Message{}, err
+	}
+	defer func() { _ = conn.Close() }()
+	if deadline, ok := ctx.Deadline(); ok {
+		if err = conn.SetDeadline(deadline); err != nil {
+			return dnsmessage.Message{}, err
+		}
+	}
+	var raw []byte
+	if network == "tcp" {
+		framed := binary.BigEndian.AppendUint16(nil, uint16(len(packet))) //nolint:gosec // a query is a few hundred bytes
+		if _, err = conn.Write(append(framed, packet...)); err != nil {
+			return dnsmessage.Message{}, err
+		}
+		var head [2]byte
+		if _, err = io.ReadFull(conn, head[:]); err != nil {
+			return dnsmessage.Message{}, err
+		}
+		raw = make([]byte, binary.BigEndian.Uint16(head[:]))
+		if _, err = io.ReadFull(conn, raw); err != nil {
+			return dnsmessage.Message{}, err
+		}
+	} else {
+		if _, err = conn.Write(packet); err != nil {
+			return dnsmessage.Message{}, err
+		}
+		buf := make([]byte, maxUDPReply)
+		n, rerr := conn.Read(buf)
+		if rerr != nil {
+			return dnsmessage.Message{}, rerr
+		}
+		raw = buf[:n]
+	}
+	var m dnsmessage.Message
+	if err = m.Unpack(raw); err != nil {
+		return dnsmessage.Message{}, errors.Join(errors.New("unreadable DNS reply"), err)
+	}
+	return m, nil
 }

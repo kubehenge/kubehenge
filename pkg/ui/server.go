@@ -111,6 +111,8 @@ type Server struct {
 	// Probe tells which of the addresses a host answers on, for the addresses a new cluster is
 	// offered. Nil probes them from where the interface runs.
 	Probe func(ctx context.Context, addrs []netip.Addr) map[netip.Addr]bool
+	// DNSPort is the port the setup's DNS servers listen on. Empty is 53.
+	DNSPort string
 	// Appliance is set when the interface runs in Kubehenge's appliance, which creates and looks
 	// after the management cluster.
 	Appliance *appliance.Appliance

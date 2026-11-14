@@ -235,7 +235,7 @@ The appliance, the management cluster and every cluster reach the Proxmox VE API
 
 Where the certificate is valid for none of the cluster's names and addresses, the installer stops and says what it names. Then give `--proxmox-url` with a name or address the certificate is valid for.
 
-The management cluster's nodes resolve a name in that URL with the DNS servers from the setup, not with the appliance's resolver. The setup page asks each server for the name, trying the setup's search domains for a name without dots. It refuses to start when a server says it does not know the name and none resolves it. Put an address in the URL, or add a DNS record for the name. Where every server stays silent, the appliance may only be on the wrong network, so the page warns that it could not check. It also warns when the servers and the appliance resolve the name to different addresses.
+The management cluster's nodes resolve a name in that URL with the DNS servers from the setup, not with the appliance's resolver. The setup page asks each server for the name, as given and with each of the setup's search domains, and ignores the appliance's hosts file. It refuses to start when a server says it does not know the name and none resolves it. Put an address in the URL, or add a DNS record for the name. Where every server stays silent, the appliance may only be on the wrong network, so the page warns that it could not check. It also warns when the servers and the appliance resolve the name to different addresses.
 
 #### Choosing the address
 
