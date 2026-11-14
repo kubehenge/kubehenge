@@ -92,6 +92,7 @@ locals {
   storage_values = {
     chartDigest = local.chart_digests.storage
     secret      = local.storage_secret.name
+    image       = local.controller_image
     caCert      = var.proxmox_ca_certificate
     storageClass = {
       name    = local.storage_class
@@ -114,7 +115,9 @@ resource "helm_release" "storage" {
   name      = "kubehenge-storage"
   namespace = local.storage_secret.namespace
   chart     = "${path.module}/charts/storage"
-  wait      = true
+  # The backup store becomes ready only once the plugin, installed after this release, attaches
+  # the volume. The plugin's release waits for its own pods instead.
+  wait = false
 
   values = [yamlencode(local.storage_values)]
 

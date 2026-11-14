@@ -2,6 +2,8 @@
 # Set by the module.
 chartDigest: ""
 secret: kubehenge-proxmox-csi
+# Kubehenge's own image, which serves the backup volume.
+image: ""
 # The plugin's configuration, base64, with the token in it.
 encodedConfig: ""
 caCert: ""

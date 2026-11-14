@@ -1,0 +1,126 @@
+{{- $ns := .Values.backupVolume.namespace }}
+{{- $name := "kubehenge-backup-store" }}
+{{- /* The token is made once and kept, so that clients holding it keep working across upgrades. */}}
+{{- $token := randAlphaNum 48 }}
+{{- with lookup "v1" "Secret" $ns $name }}
+{{- $token = index .data "token" | b64dec }}
+{{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+type: Opaque
+data:
+  token: {{ $token | b64enc | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ $name }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/part-of: kubehenge
+spec:
+  replicas: 1
+  # The volume attaches to one node at a time.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $name }}
+        app.kubernetes.io/part-of: kubehenge
+      annotations:
+        kubehenge.dev/chart-digest: {{ .Values.chartDigest | quote }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: store
+          image: {{ .Values.image | quote }}
+          args: [backup-store, --listen=:8080, --dir=/backups]
+          env:
+            - name: KUBEHENGE_BACKUP_STORE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}
+                  key: token
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: backups
+              mountPath: /backups
+      volumes:
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ .Values.backupVolume.claim }}
+---
+# The appliance reaches the store through the API server as the interface, and reads its token.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-client
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: [services/proxy]
+    resourceNames: [{{ $name }}, "{{ $name }}:http"]
+    verbs: [get, update, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ $name }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-client
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-client
+subjects:
+  - kind: ServiceAccount
+    name: kubehenge-interface
+    namespace: {{ $ns }}
