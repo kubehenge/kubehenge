@@ -87,6 +87,7 @@ import {
   familyLabels,
   familyNames,
   familyOf,
+  offNetworkText,
   hasFamily,
   inList,
   isMTU,
@@ -1847,7 +1848,7 @@ function addressProblems(form: Form, routed: boolean): Problems {
     } else if (other !== undefined) {
       p[n.key] = `${other} is an ${n.family === "IPv4" ? "IPv6" : "IPv4"} address. Enter ${n.family} addresses here`;
     } else if (bad !== undefined) {
-      p[n.key] = `${bad} is not an address, range or network on the gateway's network`;
+      p[n.key] = offNetworkText(bad);
     } else if (count < needed) {
       p[n.key] = `Enter at least ${needed} addresses, one per node plus one spare`;
     }

@@ -8,6 +8,7 @@ import {
   hasFamily,
   isRouterID,
   list,
+  offNetworkText,
   overlapping,
   parseAddress,
   reservedAddresses,
@@ -275,7 +276,7 @@ export function addressesProblem(entries: string[], network: NodesNetwork, route
   if (bad !== undefined) {
     return routed
       ? `${bad} is not an address, range or network`
-      : `${bad} is not an address, range or network on the gateway's network`;
+      : offNetworkText(bad);
   }
   const reserved = holdingReserved(entries, network);
   if (reserved !== undefined) {

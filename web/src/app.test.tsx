@@ -1370,7 +1370,7 @@ describe("create", () => {
 
     for (const [addresses, problem] of [
       ["", "Enter at least one address, range or network"],
-      ["10.0.1.100-10.0.1.120", "10.0.1.100-10.0.1.120 is not an address, range or network on the gateway's network"],
+      ["10.0.1.100-10.0.1.120", "10.0.1.100-10.0.1.120 is outside the gateway's network"],
       ["10.0.0.25-10.0.0.30", "10.0.0.25-10.0.0.30 overlaps the node addresses"],
       ["10.0.0.40/28", "10.0.0.40/28 overlaps the node addresses"],
       ["10.0.0.20", "10.0.0.20 overlaps the API address"],
@@ -1437,7 +1437,7 @@ describe("create", () => {
     // Layer 2 holds the pool and the API address to the nodes' network.
     expect(fieldProblems("Network", { ...bgp, loadBalancerMode: "l2" }, withLB)).toMatchObject({
       endpoint: "Use an address on the gateway's network",
-      loadBalancerAddresses: "198.51.100.0/28 is not an address, range or network on the gateway's network",
+      loadBalancerAddresses: "198.51.100.0/28 is outside the gateway's network",
     });
     // kube-vip and Talos only answer by ARP, so the mode stays layer 2.
     expect(request({ ...bgp, loadBalancer: "kube-vip" }, withLB).variables["loadBalancer"]).not.toHaveProperty("mode");
@@ -1662,7 +1662,7 @@ describe("create", () => {
       /^Enter at least 6 addresses/u,
     );
     expect(fieldProblems("Network", { ...form, addresses: "10.0.1.21-10.0.1.29" }, rke2).addresses).toMatch(
-      /on the gateway's network$/u,
+      /is outside the gateway's network$/u,
     );
     expect(fieldProblems("Network", { ...form, addresses: "10.0.0.29-10.0.0.21" }, rke2).addresses).toMatch(
       /is not an address/u,
