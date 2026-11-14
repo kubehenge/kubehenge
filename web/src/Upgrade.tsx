@@ -223,11 +223,12 @@ function nodesCheck(c: Cluster, nodes: PveNode[]): Check | undefined {
   if (nodes.length === 0) {
     return undefined;
   }
-  const down = nodes.filter((n) => !n.online && c.machines.some((m) => m.proxmoxNode === n.node));
+  const placed = c.machines ?? [];
+  const down = nodes.filter((n) => !n.online && placed.some((m) => m.proxmoxNode === n.node));
   if (down.length === 0) {
     return { what: "Nodes", state: "ok", text: "All online" };
   }
-  const machines = c.machines.filter((m) => down.some((n) => n.node === m.proxmoxNode)).length;
+  const machines = placed.filter((m) => down.some((n) => n.node === m.proxmoxNode)).length;
   return {
     what: "Nodes",
     state: "error",
