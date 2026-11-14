@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,14 +55,9 @@ const defaultWindowMinutes = 240
 // Open tells whether now lies in the window. A window may run past midnight, so the one that
 // opened the day before counts too.
 func (w *Window) Open(now time.Time) (bool, error) {
-	loc, err := time.LoadLocation(cmpOr(w.TimeZone, "UTC"))
+	loc, hm, err := w.zoneAndStart()
 	if err != nil {
-		return false, fmt.Errorf("window time zone: %w", err)
-	}
-	start := cmpOr(w.Start, "02:00")
-	hm, err := time.Parse("15:04", start)
-	if err != nil {
-		return false, fmt.Errorf("window start %q: %w", start, err)
+		return false, err
 	}
 	minutes := w.DurationMinutes
 	if minutes == 0 {
@@ -81,18 +77,26 @@ func (w *Window) Open(now time.Time) (bool, error) {
 	return false, nil
 }
 
+// zoneAndStart is the window's time zone and the time of day it opens, with the defaults for
+// either left unset.
+func (w *Window) zoneAndStart() (*time.Location, time.Time, error) {
+	loc, err := time.LoadLocation(cmp.Or(w.TimeZone, "UTC"))
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("window time zone: %w", err)
+	}
+	start := cmp.Or(w.Start, "02:00")
+	hm, err := time.Parse("15:04", start)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("window start %q: %w", start, err)
+	}
+	return loc, hm, nil
+}
+
 func (w *Window) onDay(d time.Time) bool {
 	if len(w.Weekdays) == 0 && len(w.MonthDays) == 0 {
 		return true
 	}
 	return slices.Contains(w.Weekdays, d.Weekday().String()[:3]) || slices.Contains(w.MonthDays, d.Day())
-}
-
-func cmpOr(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
 }
 
 // kubeVersion is a distribution's Kubernetes version: v1.36.5, v1.36.5+rke2r1 or v1.36.5+k3s1.
@@ -533,7 +537,7 @@ func (p *poolTemplates) add(tags []string, facts *templates.BuildFacts) {
 // template offers a new cluster is left out, since it cannot be cloned from.
 func (p *poolTemplates) addDown(r *proxmox.ClusterResource) {
 	tags := templates.NormaliseTags(templates.ParseTags(r.Tags))
-	vmid, _ := templateVMID(r)
+	vmid, _ := templates.VMID(r)
 	p.down = append(p.down, DownTemplate{Name: r.Name, VMID: vmid, Node: r.Node, Tags: tags})
 	at, built := templates.BuildOf(tags)
 	os, known := templates.NodeOSOf(tags)
@@ -542,15 +546,6 @@ func (p *poolTemplates) addDown(r *proxmox.ClusterResource) {
 	}
 	line := templates.LineKey(tags)
 	p.builds[line] = append(p.builds[line], at)
-}
-
-// templateVMID reads a VM ID from the cluster's resource list, where it is unsigned.
-func templateVMID(r *proxmox.ClusterResource) (int, error) {
-	const largest = 999999999 // Proxmox VE's own upper bound
-	if r.VMID > largest {
-		return 0, fmt.Errorf("VM ID %d is outside Proxmox VE's range", r.VMID)
-	}
-	return int(r.VMID), nil
 }
 
 // sort puts the versions and releases newest first, the node OSes by name and the builds oldest
@@ -773,7 +768,7 @@ func variableValue(c *clusterv1.Cluster, name string) []byte {
 
 // next returns the version a cluster should move to now, or "".
 func (u *Upgrader) next(ctx context.Context, c *clusterv1.Cluster, channels map[string]Channels) (string, error) {
-	if !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+	if !ownedAndLive(c, u.ClassNamespace) {
 		return "", nil
 	}
 	policy, set, err := optionalVariable[UpgradePolicy](c, "upgrades")
@@ -858,7 +853,7 @@ func (u *Upgrader) channelsOf(ctx context.Context, c *clusterv1.Cluster, channel
 // window and a build it does not run yet has been offered. Outside the window it records that it
 // holds the cluster, and until when.
 func (u *Upgrader) refresh(ctx context.Context, c *clusterv1.Cluster) error {
-	if !Owns(c, u.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+	if !ownedAndLive(c, u.ClassNamespace) {
 		return nil
 	}
 	if isTalos(c) {
@@ -1061,7 +1056,7 @@ func ClassBuilds(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (No
 // records as being on a down node.
 func classBuildsAndDown(ctx context.Context, r client.Reader, c *clusterv1.Cluster) (NodeImageBuilds, []DownTemplate, error) {
 	ref := c.Spec.Topology.ClassRef
-	ns := cmpOr(ref.Namespace, c.Namespace)
+	ns := cmp.Or(ref.Namespace, c.Namespace)
 	class := &clusterv1.ClusterClass{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, class); err != nil {
 		return nil, nil, fmt.Errorf("reading ClusterClass %s/%s: %w", ns, ref.Name, err)

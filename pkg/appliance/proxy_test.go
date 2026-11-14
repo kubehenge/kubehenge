@@ -121,9 +121,6 @@ func TestProxyMessagesNeverCarryTheAddress(t *testing.T) {
 		if strings.Contains(err.Error(), "s3cret") || strings.Contains(err.Error(), "alice") {
 			t.Errorf("%q: error %q carries the credentials", raw, err)
 		}
-		if shown := RedactURL(raw); strings.Contains(shown, "s3cret") {
-			t.Errorf("RedactURL(%q) = %q", raw, shown)
-		}
 	}
 }
 

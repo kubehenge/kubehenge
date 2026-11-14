@@ -119,7 +119,7 @@ func (p *Placer) placeAll(ctx context.Context) {
 	}
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		if Owns(c, p.ClassNamespace) && c.DeletionTimestamp.IsZero() {
+		if ownedAndLive(c, p.ClassNamespace) {
 			p.place(ctx, c, online, sites, skipped)
 		}
 	}
