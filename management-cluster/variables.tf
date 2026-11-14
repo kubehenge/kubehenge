@@ -581,7 +581,7 @@ variable "template_refresh" {
 }
 
 variable "cluster_sys_audit" {
-  description = "Give each cluster the cloud controller manager's HA group labels unless the cluster switches them off. They need Sys.Audit on /: Kubehenge's controller adds the cluster's user to a group holding Sys.Audit on /, unpropagated, so that its token can list Proxmox VE's HA groups and rules and read the rest of the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, the corosync configuration), but nothing of its guests, storages, nodes or users. Off, no cluster's token holds Sys.Audit on / and nodes go without the labels."
+  description = "Give each cluster the cloud controller manager's HA rule labels unless the cluster switches them off. They need Sys.Audit on /: Kubehenge's controller adds the cluster's user to a group holding Sys.Audit on /, unpropagated, so that its token can list Proxmox VE's HA groups and rules and read the rest of the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, the corosync configuration), but nothing of its guests, storages, nodes or users. Off, no cluster's token holds Sys.Audit on / and nodes go without the labels."
   type        = bool
   default     = true
   nullable    = false

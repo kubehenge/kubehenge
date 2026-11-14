@@ -295,6 +295,12 @@ export function spanOf(entry: string): Span | undefined {
   return a === undefined ? undefined : { family: a.family, first: a.value, last: a.value };
 }
 
+/** offNetworkText says why an entry is refused: it is no address, range or network, or it lies off the gateway's. */
+export const offNetworkText = (entry: string): string =>
+  spanOf(entry) === undefined
+    ? `${entry} is not an address, range or network`
+    : `${entry} is outside the gateway's network`;
+
 /** A node network as the forms hold it: its gateway and prefix length, as typed. */
 export interface NodeNetwork {
   gateway: string;

@@ -382,9 +382,9 @@ Persistent volumes that stay pending point the same way. The CSI plugin's contro
 
 #### HA group errors in the cloud controller manager's log
 
-The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. It means only that the nodes go without the HA group labels. Reading Proxmox VE's HA groups needs `Sys.Audit` on `/`. A cluster's token holds it only with **Add HA group labels** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)).
+The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. It means only that the nodes go without the HA rule labels. Reading Proxmox VE's HA groups needs `Sys.Audit` on `/`. A cluster's token holds it only with **Add HA rule labels** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)).
 
-Either the cluster switched it off, or an administrator switched off **HA group labels** for every cluster in the setup ([install-settings.md](install-settings.md#ha-group-labels)). With it on again, the messages stop within a few minutes. If they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
+Either the cluster switched it off, or an administrator switched off **HA rule labels** for every cluster in the setup ([install-settings.md](install-settings.md#ha-rule-labels)). With it on again, the messages stop within a few minutes. If they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
 
 ### A node's clock is off
 
@@ -908,6 +908,14 @@ New machines of an upgrade or replacement wait at "Cloning", and the cluster has
 
 Kubehenge judges a node by the memory Proxmox VE reports free, not by what the guests on it are configured with. Free memory, or stop guests. Allow more nodes under **Placement**, or give the machines less memory. The placement stays as it was meanwhile. The condition clears once a node has room.
 
+### Not enough space on thick storage
+
+New machines wait at "Cloning", and the cluster has a `StorageLacksSpace` condition. Its message names the storage, its nodes, the free space and the space the machines still to be made need. Thick LVM, ZFS without sparse volumes and file storages with `falloc` or `full` preallocation reserve each disk's whole size. Disks of machines whose VM is already cloned count as used.
+
+Free space on the storage, lower the disk size or the node count, or move the cluster to thin storage. The condition clears once the disks fit.
+
+An autoscaled pool counts at its minimum and at the workers the autoscaler has asked for. Where only its maximum does not fit, the cluster gets no condition. Its events show `AutoscalerNoRoom` with the space the maximum needs.
+
 ### Pods Pending with "volume node affinity conflict"
 
 The pod's volume is on storage local to one node. No worker runs there. It happens after an upgrade, a node image refresh or a repair replaced the worker that stood on that node.
@@ -980,7 +988,7 @@ A node in maintenance, or without the cluster's storage, gets no new VMs. When n
 
 ### Autoscaling
 
-- **`AutoscalerNoRoom`**, "Proxmox VE has no node with the memory for a new worker of pool …: …", means the new worker waits for room. After 30 minutes the autoscaler gives the machine up and tries again.
+- **`AutoscalerNoRoom`**, "Proxmox VE has no node with the memory for a new worker of pool …: …", means the new worker waits for room. After 30 minutes the autoscaler gives the machine up and tries again. "Storage … reserves each disk's whole size …" means the storage cannot hold the pools at their maximum.
   - Free memory on the Proxmox VE nodes the cluster may use, or let it use more nodes ([clusters.md](clusters.md#autoscaling)).
 - **`AutoscalerNotPlaced`**, `"the autoscaler cannot run inside the cluster: Kubehenge was installed without the management cluster's address (managementEndpoint)"`, means the autoscaler is set to run on the cluster's own control planes, which needs the address. Until it is set, no autoscaler runs.
   - Apply the management cluster again, whose module sets it, or set `managementEndpoint` in the chart's values. Or have the autoscaler run in the management cluster.

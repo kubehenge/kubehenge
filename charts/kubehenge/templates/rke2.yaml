@@ -22,6 +22,9 @@ metadata:
     {{- include "kubehenge.addonMemory" . | nindent 4 }}
     {{- include "kubehenge.addonControlPlaneMemory" . | nindent 4 }}
     {{- include "kubehenge.backupTargets" . | nindent 4 }}
+    {{- if .Values.proxy.secret }}
+    kubehenge.dev/management-proxy: "true"
+    {{- end }}
     # What a node uses before any add-on, measured by the end-to-end tests: a control plane with a
     # quarter on top, which the kernel's caches and the API server's peaks take; a worker with a tenth.
     kubehenge.dev/node-memory: '{"controlPlane":3120,"worker":704}'

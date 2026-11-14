@@ -73,7 +73,7 @@ The names below are the defaults. The users, groups and roles start with the man
   - `kubehenge-ha@pve` where Proxmox VE HA is on
   - `kubehenge-etcd-restore@pve` where etcd restores are on
   - `kubehenge-template-builder@pve` where the weekly template build is on
-- the groups: `kubehenge-clusters`, which every cluster's user joins, and `kubehenge-clusters-audit`, for the HA group labels, unless they were switched off for every cluster.
+- the groups: `kubehenge-clusters`, which every cluster's user joins, and `kubehenge-clusters-audit`, for the HA rule labels, unless they were switched off for every cluster.
 - the roles, each named `kubehenge-…`, and the permissions that grant them.
 
 ## Remove the appliance

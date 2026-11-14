@@ -3,12 +3,12 @@ import { useState, type JSX } from "react";
 import { AddPoolDialog, fallbackSize } from "./AddPool";
 import { poolText } from "./Autoscaling";
 import { MachineFields, sizeOf } from "./MachineFields";
-import { leastSize, poolSize, sizeProblem, useClass } from "./pool-machine";
+import { leastSize, poolLabel, poolSize, sizeProblem, useClass } from "./pool-machine";
 import { NodesDialog, NodeTags, poolNodes } from "./PoolNodes";
 import { TimeoutsDialog } from "./PoolTimeouts";
 import { useStaging } from "./staging-context";
 import type { Cluster, MachineSize, WorkerPool } from "./types";
-import { Dialog, ErrorBox, RowMenu, useChange } from "./ui";
+import { Dialog, ErrorBox, RowMenu, stageLabel, useChange } from "./ui";
 
 const mibPerGiB = 1024;
 
@@ -106,18 +106,18 @@ export function Pools({
           {c.workerPools.map((p) => (
             <tr key={p.name}>
               <td className="id">
-                {p.name}
+                {poolLabel(p.name, c.workerPools)}
                 <NodeTags nodes={poolNodes(c, p)} />
               </td>
               <td data-label="Nodes">{poolText(p)}</td>
               <SizeCells size={poolSize(c, p)} />
               <td className="row-action">
-                <RowMenu label={`Actions for pool ${p.name}`}>
+                <RowMenu label={`Actions for pool ${poolLabel(p.name, c.workerPools)}`}>
                   <button
                     type="button"
                     disabled={!can}
                     title={why}
-                    aria-label={`Resize pool ${p.name}`}
+                    aria-label={`Resize pool ${poolLabel(p.name, c.workerPools)}`}
                     onClick={() => setAction({ kind: "resize", pool: p })}
                   >
                     Resize…
@@ -126,7 +126,7 @@ export function Pools({
                     type="button"
                     disabled={!can}
                     title={why}
-                    aria-label={`Pool ${p.name} timeouts`}
+                    aria-label={`Pool ${poolLabel(p.name, c.workerPools)} timeouts`}
                     onClick={() => setAction({ kind: "timeouts", pool: p })}
                   >
                     Timeouts…
@@ -135,7 +135,7 @@ export function Pools({
                     type="button"
                     disabled={!can}
                     title={why}
-                    aria-label={`Edit pool ${p.name} nodes`}
+                    aria-label={`Edit pool ${poolLabel(p.name, c.workerPools)} nodes`}
                     onClick={() => setAction({ kind: "nodes", pool: p })}
                   >
                     Labels and taints…
@@ -145,7 +145,7 @@ export function Pools({
                     className="danger"
                     disabled={!can}
                     title={why}
-                    aria-label={`Delete pool ${p.name}`}
+                    aria-label={`Delete pool ${poolLabel(p.name, c.workerPools)}`}
                     onClick={() => setAction({ kind: "delete", pool: p })}
                   >
                     Delete…
@@ -195,7 +195,9 @@ function ResizeDialog({
   const same = size.cores === was.cores && size.memoryMiB === was.memoryMiB && size.diskGiB === was.diskGiB;
   return (
     <Dialog
-      title={pool === undefined ? `Resize ${c.name}'s control plane` : `Resize pool ${pool.name}`}
+      title={
+        pool === undefined ? `Resize ${c.name}'s control plane` : `Resize pool ${poolLabel(pool.name, c.workerPools)}`
+      }
       onClose={onClose}
       onSubmit={() => {
         void send(
@@ -210,7 +212,7 @@ function ResizeDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || same || problem !== undefined}>
-            Resize
+            {stageLabel}
           </button>
         </>
       }
@@ -240,7 +242,7 @@ function DeletePoolDialog({
   const { busy, error, send } = useChange(c, onClose);
   return (
     <Dialog
-      title={`Delete pool ${pool.name}`}
+      title={`Delete pool ${poolLabel(pool.name, c.workerPools)}`}
       onClose={onClose}
       onSubmit={() => {
         void send({ pools: { [pool.name]: null } });
@@ -251,7 +253,7 @@ function DeletePoolDialog({
             Cancel
           </button>
           <button type="submit" className="danger" disabled={busy}>
-            Delete
+            {stageLabel}
           </button>
         </>
       }

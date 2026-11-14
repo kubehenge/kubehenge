@@ -1,8 +1,9 @@
 import { useState, type JSX } from "react";
 
 import { NodeTimeoutFields, entryOf, timeoutProblems, timeoutsOf, type TimeoutEntry } from "./NodeTimeouts";
+import { poolLabel } from "./pool-machine";
 import type { Cluster, ClusterClass, WorkerPool } from "./types";
-import { Dialog, ErrorBox, useChange } from "./ui";
+import { Dialog, ErrorBox, stageLabel, useChange } from "./ui";
 
 /** TimeoutsDialog sets how long a removed machine of the control planes, or of a pool, waits for its node. */
 export function TimeoutsDialog({
@@ -25,7 +26,7 @@ export function TimeoutsDialog({
   const same = JSON.stringify(timeouts) === JSON.stringify(was);
   return (
     <Dialog
-      title={pool === undefined ? "Control plane timeouts" : `Pool ${pool.name} timeouts`}
+      title={pool === undefined ? "Control plane timeouts" : `Pool ${poolLabel(pool.name, c.workerPools)} timeouts`}
       onClose={onClose}
       onSubmit={() => {
         void send(pool === undefined ? { controlPlaneTimeouts: timeouts } : { pools: { [pool.name]: { timeouts } } });
@@ -36,7 +37,7 @@ export function TimeoutsDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || same || invalid}>
-            Set
+            {stageLabel}
           </button>
         </>
       }

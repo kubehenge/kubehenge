@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, Info, browserZone, timeZones, useChange, weekdays } from "./ui";
+import { Dialog, ErrorBox, Field, Info, browserZone, stageLabel, timeZones, useChange, weekdays } from "./ui";
 import { oneOf, quantities, quantity, record, text, texts } from "./values";
 
 export const upgradeModes = ["off", "patch", "minor"] as const;
@@ -209,7 +209,7 @@ export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || Object.keys(problems).length > 0}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

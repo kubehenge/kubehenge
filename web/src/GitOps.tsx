@@ -3,7 +3,7 @@ import { useState, type JSX } from "react";
 import { CredentialField } from "./CredentialField";
 import { list } from "./network";
 import type { Cluster, GitOpsKeys } from "./types";
-import { Dialog, ErrorBox, Field, Info, filled, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, Info, filled, stageLabel, useChange } from "./ui";
 import { flag, oneOf, record, text, texts } from "./values";
 
 /** The engines a cluster chooses from, by their names in its gitops variable; "" is none. */
@@ -561,7 +561,7 @@ export function GitOpsDialog({ cluster: c, onClose }: { cluster: Cluster; onClos
             className="primary"
             disabled={busy || !changed || next === undefined || Object.keys(problems).length > 0}
           >
-            Save
+            {stageLabel}
           </button>
         </>
       }

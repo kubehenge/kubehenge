@@ -5,9 +5,9 @@ import { MachineFields, sizeOf } from "./MachineFields";
 import { whole } from "./network";
 import { hasNodeSettings, nodeSettingsProblem, nodesVariable, type NodeSettings } from "./node-settings";
 import { NodeSettingsFields } from "./NodeSettings";
-import { sizeProblem, useClass } from "./pool-machine";
+import { isDefaultLabel, sizeProblem, useClass } from "./pool-machine";
 import type { Cluster, MachineSize } from "./types";
-import { Dialog, ErrorBox, Field, maxWorkers, shownNumber, typedNumber, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, maxWorkers, shownNumber, typedNumber, stageLabel, useChange } from "./ui";
 
 // As the API server holds them: a DNS label, and host names of <cluster>-<pool>-<three random
 // parts> within one.
@@ -22,7 +22,10 @@ export function poolNameProblem(c: Cluster, name: string): string | undefined {
   if (c.name.length + name.length > maxPoolNames) {
     return `At most ${maxPoolNames - c.name.length} characters for this cluster`;
   }
-  return c.workerPools.some((p) => p.name === name) ? "A pool has this name" : undefined;
+  if (c.workerPools.some((p) => p.name === name)) {
+    return "A pool has this name";
+  }
+  return isDefaultLabel(name, c.workerPools) ? `${name} is the default pool's name` : undefined;
 }
 
 export const fallbackSize: MachineSize = { cores: 2, memoryMiB: 4096, diskGiB: 30 };
@@ -54,6 +57,7 @@ export function AddPoolDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
         void send({
           pools: {
             [name]: {
+              add: true,
               replicas: workers,
               machine: size,
               ...(hasNodeSettings(nodes) && { nodes: nodesVariable(nodes) }),
@@ -67,7 +71,7 @@ export function AddPoolDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !ready}>
-            Add
+            {stageLabel}
           </button>
         </>
       }

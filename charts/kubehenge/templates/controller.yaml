@@ -64,7 +64,7 @@ rules:
   # the identity, such as the backup ones when backups are switched off.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, create, update, patch, delete]
+    verbs: [get, list, create, update, patch, delete]
   # The boot logs of the machines a cluster asks for, <cluster>-boot-logs beside it, which the
   # Cluster owns and takes with it.
   - apiGroups: [""]

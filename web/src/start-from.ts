@@ -86,12 +86,6 @@ function machineOf(v: unknown, fallback: Machine): Machine {
   };
 }
 
-/** startDefault is the cluster a new one starts from unless another is chosen: the newest that works, else the newest. */
-export function startDefault(clusters: Cluster[]): Cluster | undefined {
-  const starts = startable(clusters);
-  return starts.find((c) => c.available) ?? starts[0];
-}
-
 /**
  * fromCluster is a new cluster's form set up as c is, keeping the name and namespace already
  * entered, and the version while the distribution stays: its versions are not offered again.

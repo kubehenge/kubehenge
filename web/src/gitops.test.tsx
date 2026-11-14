@@ -218,7 +218,7 @@ describe("a cluster's GitOps options", () => {
     await expect(navigator.clipboard.readText()).resolves.toBe("ssh-ed25519 AAAAC3Nza kubehenge clusters/web");
     await expect(within(dialog).findByRole("button", { name: "Copied" })).resolves.toBeInTheDocument();
 
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(save).toBeDisabled();
     await user.clear(within(dialog).getByLabelText("Path"));
     await user.type(within(dialog).getByLabelText("Path"), "clusters/web");
@@ -263,7 +263,7 @@ describe("a cluster's GitOps options", () => {
     expect(within(dialog).getByRole("option", { name: "Argo CD (recommended)" })).toBeDisabled();
     expect(within(dialog).getByText(/needs Sys.Modify/u)).toBeInTheDocument();
     await user.selectOptions(within(dialog).getByLabelText("GitOps"), "");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toMatchObject({

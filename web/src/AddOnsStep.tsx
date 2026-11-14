@@ -9,6 +9,7 @@ import {
   backupsHint,
   classTargets,
   noTargets,
+  type OfferedTarget,
 } from "./Backups";
 import { CertificatesFields } from "./Certificates";
 import { MeshPeersField, meshInfo } from "./ClusterMesh";
@@ -20,12 +21,17 @@ import {
   type AddonKey,
   addonsProblem,
   backupsChosen,
+  backupsWait,
   coresText,
   etcdOffered,
+  hasManagementProxy,
+  keyRequired,
   logsChosen,
   machineLeast,
   offersMesh,
   rancherMinimumCores,
+  snapshotsWait,
+  snapshotsWaitText,
   variable,
 } from "./create-form";
 import type { StepProps } from "./CreateSteps";
@@ -48,10 +54,6 @@ import {
   istioHint,
   registerHint,
 } from "./ui";
-
-// Talos nodes take Talos patch releases in place and the others move to new builds of their VM
-// template, both in the window whatever the mode.
-const upgradesInfo = "Nodes also get OS updates in this window, whatever the mode.";
 
 // HeadlampAddOn installs Headlamp, at a host name of its own if one is given, and read-only for
 // everyone if asked.
@@ -143,13 +145,14 @@ function BackupsChoice({
 }): JSX.Element {
   const targets = classTargets(cls);
   const none = targets.length === 0;
+  const on = form.backups && !none;
   return (
     <>
       <label className="check">
         <input
           type="checkbox"
-          checked={form.backups}
-          disabled={none && !form.backups}
+          checked={on}
+          disabled={none}
           aria-describedby={none ? "backups-hint" : undefined}
           onChange={(e) => set("backups", e.target.checked)}
         />{" "}
@@ -161,7 +164,7 @@ function BackupsChoice({
           {noTargets}
         </p>
       )}
-      {form.backups && (
+      {on && (
         <>
           <BackupFieldset
             value={form.backupFields}
@@ -183,16 +186,51 @@ function BackupsChoice({
               onChange={(readFrom) => set("backupFields", { ...form.backupFields, readFrom })}
             />
           )}
-          <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} />
+          <AccessKey
+            form={form}
+            set={set}
+            shown={shown}
+            canTrust={canTrust}
+            namespace={namespace}
+            target={targets.find((t) => t.name === form.backupFields.target)}
+            waitText={backupsWait(form, cls) ? "Velero waits for the cluster's own key" : undefined}
+          />
         </>
       )}
     </>
   );
 }
 
+// keyHint is the access key's hint: where an own key is optional, what leaving it empty does, and
+// otherwise the folder to limit it to.
+function keyHint(optional: boolean, waitText: string | undefined, folder: string): string {
+  if (!optional) {
+    return folder;
+  }
+  return waitText === undefined ? "Empty uses the key stored for every cluster" : "Enter one to take snapshots at once";
+}
+
 // AccessKey takes the S3 access key that backups and etcd snapshots are both written with. It is
 // stored once the cluster exists, which needs Sys.Modify on the pool.
-function AccessKey({ form, set, shown, canTrust }: StepProps & { canTrust: boolean | undefined }): JSX.Element {
+function AccessKey({
+  form,
+  set,
+  shown,
+  canTrust,
+  namespace,
+  target,
+  optional = false,
+  waitText,
+}: StepProps & {
+  canTrust: boolean | undefined;
+  namespace: string | undefined;
+  /** The target the key is for, whose prefix the folder sits beneath. */
+  target: OfferedTarget | undefined;
+  /** The cluster does without a key of its own, taking the one stored for every cluster. */
+  optional?: boolean;
+  /** What happens to snapshots while no key exists at all. Unset where one does. */
+  waitText?: string | undefined;
+}): JSX.Element {
   const own = form.storeBackupKey && canTrust !== false;
   return (
     <fieldset className="group">
@@ -200,8 +238,9 @@ function AccessKey({ form, set, shown, canTrust }: StepProps & { canTrust: boole
       {canTrust === false ? (
         <p className="hint">Storing it needs Sys.Modify on the workload pool</p>
       ) : (
-        <p className="hint">{backupCredentialHint}</p>
+        <p className="hint">{keyHint(optional, waitText, backupCredentialHint(namespace, form.name, target))}</p>
       )}
+      {waitText !== undefined && <p className="hint">{waitText}</p>}
       {own &&
         backupKeys.map((k, i) => (
           <Field key={k.key} label={k.label} error={i === backupKeys.length - 1 ? shown("backupKey") : undefined}>
@@ -221,6 +260,12 @@ function AccessKey({ form, set, shown, canTrust }: StepProps & { canTrust: boole
   );
 }
 
+// noTargetSnapshots says what etcd snapshots a cluster has where the class offers no backup target.
+const noTargetSnapshots = (distribution: string): string =>
+  distribution === "rke2" || distribution === "k3s"
+    ? "Snapshots stay on the control-plane nodes without a backup target"
+    : "No etcd snapshots without a backup target";
+
 // EtcdSnapshotsChoice switches a new cluster's etcd snapshots on, as they are its way back from lost
 // state. It takes the access key only when backups, which ask for it in their own block, are off.
 function EtcdSnapshotsChoice({
@@ -229,7 +274,12 @@ function EtcdSnapshotsChoice({
   shown,
   cls,
   canTrust,
-}: StepProps & { cls: ClusterClass | undefined; canTrust: boolean | undefined }): JSX.Element {
+  namespace,
+}: StepProps & {
+  cls: ClusterClass | undefined;
+  canTrust: boolean | undefined;
+  namespace: string | undefined;
+}): JSX.Element {
   return (
     <>
       <label className="check">
@@ -246,7 +296,18 @@ function EtcdSnapshotsChoice({
             problems={{ target: shown("etcdTarget"), schedule: shown("etcdSchedule"), keep: shown("etcdKeep") }}
             distribution={cls?.distribution ?? ""}
           />
-          {!backupsChosen(form, cls) && <AccessKey form={form} set={set} shown={shown} canTrust={canTrust} />}
+          {!backupsChosen(form, cls) && (
+            <AccessKey
+              form={form}
+              set={set}
+              shown={shown}
+              canTrust={canTrust}
+              namespace={namespace}
+              target={classTargets(cls).find((t) => t.name === form.etcdFields.target)}
+              optional={!keyRequired(form, cls)}
+              waitText={snapshotsWait(form, cls) ? snapshotsWaitText(form.etcdFields.target) : undefined}
+            />
+          )}
         </>
       )}
     </>
@@ -394,6 +455,7 @@ function RancherAddOn({ form, set, shown, canTrust }: StepProps & { canTrust: bo
           )}
         </Field>
       ) : (
+        // Shown where no Rancher is seen too: the user may not see the cluster that runs it.
         <>
           <label className="check">
             <input
@@ -628,9 +690,17 @@ function AddonCards({
           <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
         </AddonCard>
       )}
+      {cls !== undefined && !etcdOffered(cls) && <p className="hint">{noTargetSnapshots(cls.distribution)}</p>}
       {etcdOffered(cls) && (
         <AddonCard mib={0} on={form.etcdSnapshots}>
-          <EtcdSnapshotsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} />
+          <EtcdSnapshotsChoice
+            form={form}
+            set={set}
+            shown={shown}
+            cls={cls}
+            canTrust={canTrust}
+            namespace={namespace}
+          />
         </AddonCard>
       )}
       {variable(cls, "certificates") && (
@@ -649,24 +719,32 @@ function AddonCards({
           <GitOpsChoices form={form} set={set} shown={shown} canTrust={canTrust} />
         </AddonCard>
       )}
-      {variable(cls, "egressProxy") && (
-        <AddonCard mib={0} on={form.egress.mode !== "management"}>
-          <EgressFields
-            value={form.egress}
-            onChange={(e) => set("egress", e)}
-            problems={Object.fromEntries(egressFields.map((f) => [f, shown(`egress.${f}`)]))}
-          />
-        </AddonCard>
-      )}
     </div>
   );
 }
 
 export function AddOnsStep(props: AddOnsProps): JSX.Element {
-  const { form, set, cls, shown } = props;
   return (
     <>
       <AddonCards step={props} />
+      <AddonRoom form={props.form} cls={props.cls} />
+    </>
+  );
+}
+
+/** PoliciesStep holds what every node and workload of the cluster is held to: the proxy, hardening, pod security and upgrades. */
+export function PoliciesStep(props: AddOnsProps): JSX.Element {
+  const { form, set, cls, shown } = props;
+  return (
+    <>
+      {variable(cls, "egressProxy") && (
+        <EgressFields
+          value={form.egress}
+          managementProxy={hasManagementProxy(cls)}
+          onChange={(e) => set("egress", e)}
+          problems={Object.fromEntries(egressFields.map((f) => [f, shown(`egress.${f}`)]))}
+        />
+      )}
       {variable(cls, "cis") && (
         <>
           <label className="check">
@@ -703,12 +781,24 @@ export function AddOnsStep(props: AddOnsProps): JSX.Element {
           )}
         </fieldset>
       )}
-      <AddonRoom form={form} cls={cls} />
-
       {variable(cls, "upgrades") && (
-        <Field label="Upgrade automatically" hint={`Daily 02:00 to 06:00, ${browserZone()} time`} info={upgradesInfo}>
-          {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}
-        </Field>
+        <>
+          <Field label="Upgrade automatically">
+            {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}
+          </Field>
+          <label className="check">
+            <input type="checkbox" checked={form.nodeImages} onChange={(e) => set("nodeImages", e.target.checked)} />{" "}
+            {cls?.distribution === "talos" ? "Apply Talos patch releases" : "Update node images"}
+          </label>
+          <Info about={cls?.distribution === "talos" ? "Talos patch releases" : "node images"}>
+            {cls?.distribution === "talos"
+              ? "Upgrades the nodes in place, one at a time."
+              : "Replaces the nodes with each new template build."}
+          </Info>
+          {(form.upgradeMode !== "off" || form.nodeImages) && (
+            <p className="hint">Upgrades run daily 02:00 to 06:00, {browserZone()} time</p>
+          )}
+        </>
       )}
     </>
   );

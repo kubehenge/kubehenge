@@ -30,6 +30,9 @@ metadata:
     {{- include "kubehenge.addonMemory" . | nindent 4 }}
     {{- include "kubehenge.addonControlPlaneMemory" . | nindent 4 }}
     {{- include "kubehenge.backupTargets" . | nindent 4 }}
+    {{- if .Values.proxy.secret }}
+    kubehenge.dev/management-proxy: "true"
+    {{- end }}
     # What a node uses before any add-on: kubeadm's measured figures, for the same Kubernetes
     # components on a system that runs nothing else.
     kubehenge.dev/node-memory: '{"controlPlane":2392,"worker":704}'

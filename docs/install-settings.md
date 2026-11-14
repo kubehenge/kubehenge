@@ -152,7 +152,7 @@ Three settings of `template_refresh` place the VM that builds a node image:
 
 The setup checks that the node is online and carries the template disks' storage and the bridge.
 
-## HA group labels
+## HA rule labels
 
 The cloud controller manager labels each node with the Proxmox VE HA groups, or node-affinity HA rules, its Proxmox VE node is in. Proxmox VE lists them only with `Sys.Audit` on `/`. On by default, the setting gives each cluster the labels unless it switches them off ([clusters.md](clusters.md#machines)). Its token then holds `Sys.Audit` on `/`.
 
@@ -164,7 +164,7 @@ The setting creates a group, `<name>-clusters-audit`, with `Sys.Audit` on `/` wi
 
 ### Turning the labels off
 
-Unticking **HA group labels** in the setup, or `cluster_sys_audit = false`, removes the group and with it every cluster's `Sys.Audit` on `/`. New clusters go without the labels. The cloud controller manager logs a permission error for each node every few minutes ([troubleshooting.md](troubleshooting.md)).
+Unticking **Add HA rule labels** in the setup, or `cluster_sys_audit = false`, removes the group and with it every cluster's `Sys.Audit` on `/`. New clusters go without the labels. The cloud controller manager logs a permission error for each node every few minutes ([troubleshooting.md](troubleshooting.md)).
 
 ## Nodes' boot logs
 

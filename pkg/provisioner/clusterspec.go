@@ -23,7 +23,7 @@ import (
 // ClusterSpecFile is the name of a cluster's spec in the backup target.
 const ClusterSpecFile = "cluster.yaml"
 
-// clusterSpecKind is the kind of the one object a spec must hold.
+// clusterSpecKind is the kind of a Cluster API cluster, the one object a spec must hold.
 const clusterSpecKind = "Cluster"
 
 // ClusterSpecClusterLabel marks the ConfigMaps and Secrets that belong to one Cluster and travel

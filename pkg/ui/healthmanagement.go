@@ -16,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // helmReleaseProxyList is the Add-on Provider for Helm's record of each add-on's release in a cluster.
@@ -443,6 +445,10 @@ func poolsSection(m *managementRead, a *attention) section[poolView] {
 		s.Error = problem(m.deploymentsErr)
 		return s
 	}
+	pools := make([]string, len(m.deployments))
+	for i := range m.deployments {
+		pools[i] = cmp.Or(m.deployments[i].Labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel], m.deployments[i].Name)
+	}
 	for i := range m.deployments {
 		md := &m.deployments[i]
 		v := poolView{
@@ -458,7 +464,7 @@ func poolsSection(m *managementRead, a *attention) section[poolView] {
 		if scaling == nil || scaling.Status != metav1.ConditionTrue {
 			scaling = meta.FindStatusCondition(conds, clusterv1.MachineDeploymentScalingDownCondition)
 		}
-		who := "Pool " + v.Name
+		who := "Pool " + provisioner.PoolLabel(v.Name, pools)
 		switch available, notAvailable := isFalse(conds, clusterv1.MachineDeploymentAvailableCondition); {
 		case v.RollingOut:
 			if rolling != nil {

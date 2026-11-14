@@ -122,6 +122,7 @@ const activity = { since: when, entries: [], events: section() };
 const nodes = { "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] } };
 
 const signedIn: Record<string, Route> = {
+  ...nodes,
   "GET /api/session": { body: { user: "root@pam", csrf: "c1", canCreate: true, canTrust: true } },
   "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, backup: true } },
   "GET /api/clusters": { body: [cluster("web")] },
@@ -980,7 +981,7 @@ const cases: Case[] = [
         within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"),
       );
       await user.click(
-        within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+        within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
       );
       await screen.findByRole("region", { name: "Staged changes" });
       await check("Staged changes bar");
@@ -1006,7 +1007,7 @@ const cases: Case[] = [
       );
       await user.selectOptions(dialog.getByLabelText("File 1 source"), "secret");
       await check("Node customisation rows");
-      await user.click(dialog.getByRole("button", { name: "Save" }));
+      await user.click(dialog.getByRole("button", { name: "Add to plan" }));
       await check("Node customisation problems");
     },
   },
@@ -1246,7 +1247,9 @@ const cases: Case[] = [
       await check("General");
       await user.click(screen.getByRole("button", { name: "Next" }));
       await waitFor(() => expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0"));
+      await user.clear(screen.getByLabelText("Gateway"));
       await user.type(screen.getByLabelText("Gateway"), "192.0.2.1");
+      await user.clear(screen.getByLabelText("DNS servers"));
       await user.type(screen.getByLabelText("DNS servers"), "192.0.2.53");
       await user.type(screen.getByLabelText("API address"), "192.0.2.30");
       await user.type(screen.getByLabelText("Node addresses"), "192.0.2.31-192.0.2.39");
@@ -1265,8 +1268,10 @@ const cases: Case[] = [
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Add-ons");
       await user.click(screen.getByRole("checkbox", { name: "Use existing cert-manager" }));
+      await user.click(screen.getByRole("button", { name: "Next" }));
+      await check("Policies");
       await user.type(screen.getByLabelText("Namespace labels"), "team");
-      await check("Add-ons with a label problem");
+      await check("Policies with a label problem");
       await user.clear(screen.getByLabelText("Namespace labels"));
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Identity providers");

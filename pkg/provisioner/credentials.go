@@ -28,6 +28,11 @@ const (
 	// and when (RFC 3339, UTC).
 	CredentialSetBy = "kubehenge.dev/credential-set-by" //nolint:gosec // an annotation's name, not a credential
 	CredentialSetAt = "kubehenge.dev/credential-set-at" //nolint:gosec // an annotation's name, not a credential
+	// CreateRequestKey names the create request that stored a credential ahead of its cluster: a
+	// label on the Secret, an annotation on the Cluster that request made. Only a Secret so marked
+	// is adopted by the Cluster with the same mark, or deleted when that Cluster never came. A
+	// credential made any other way, as with kubectl, is the user's own and left alone.
+	CreateRequestKey = "kubehenge.dev/create-request"
 )
 
 // CredentialPurpose is what a user credential is for, and the values it holds.

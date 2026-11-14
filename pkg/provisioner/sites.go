@@ -11,6 +11,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -46,6 +47,9 @@ type Sites struct {
 	// applied on, for the zones the token sees.
 	VNets     map[string]string
 	ZoneNodes map[string][]string
+	// Space is each storage on each node with its free space and how it allocates a disk, read as
+	// the interface reads it (pve.StoragesOf).
+	Space []pve.Storage
 }
 
 // SiteSource looks at the storages and templates; *Proxmox is the real one.
@@ -55,11 +59,18 @@ type SiteSource interface {
 
 // Sites reads where the storages are available and where the templates' disks are.
 func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
-	var uses []pveStorageUse
-	if err := p.Client.Get(ctx, "/cluster/resources?type=storage", &uses); err != nil {
+	var uses []pve.StorageResource
+	if err := p.Client.Get(ctx, pve.StorageResourcesPath, &uses); err != nil {
 		return nil, fmt.Errorf("listing the storages: %w", err)
 	}
-	s := &Sites{Storages: map[string]StorageSite{}}
+	var configs []pve.StorageConfig
+	if err := p.Client.Get(ctx, pve.StorageConfigPath, &configs); err != nil {
+		// Without the configuration, a storage whose type does not tell counts as thin, which
+		// refuses nothing.
+		ctrl.LoggerFrom(ctx).V(1).Info("reading the storage configuration", "error", err.Error())
+		configs = nil
+	}
+	s := &Sites{Storages: map[string]StorageSite{}, Space: pve.StoragesOf(uses, configs)}
 	for _, u := range uses {
 		site := s.Storages[u.Storage]
 		site.Shared = site.Shared || u.Shared != 0

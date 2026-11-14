@@ -489,7 +489,7 @@ describe("setup", () => {
     ]);
   });
 
-  it("gives clusters the HA group labels unless it is switched off", () => {
+  it("gives clusters the HA rule labels unless it is switched off", () => {
     const off = settings({ ...form, clusterSysAudit: false });
     expect(off).toHaveProperty("clusterSysAudit", false);
     expect(settings(form)).not.toHaveProperty("clusterSysAudit");
@@ -654,9 +654,12 @@ describe("setup", () => {
     expect(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" })).toBeChecked();
     expect(forClusters("Storages").getByRole("checkbox", { name: "local" })).not.toBeChecked();
     expect(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" })).toBeChecked();
+    expect(forClusters("HA rule labels").getByRole("checkbox", { name: "Add HA rule labels" })).toBeChecked();
     // A storage added keeps the one offered to start with.
     await user.click(forClusters("Storages").getByRole("checkbox", { name: "local" }));
     expect(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" })).toBeChecked();
+    // The appliance-wide setting goes by the name each cluster's own switch has.
+    expect(forClusters("HA rule labels").getByRole("checkbox", { name: "Add HA rule labels" })).toBeChecked();
     await next(user);
 
     const signIn = screen.getByLabelText("Sign in as cluster-admin");

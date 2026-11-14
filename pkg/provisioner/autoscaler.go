@@ -899,7 +899,7 @@ func (a *AutoscalerReconciler) reportNoRoom(ctx context.Context, cluster *cluste
 		}
 		if message, ok := noRoom(pm); ok {
 			a.event(cluster, corev1.EventTypeWarning, "AutoscalerNoRoom", "AddWorker",
-				fmt.Sprintf("Proxmox VE has no node with the memory for a new worker of pool %s: %s", pool, message))
+				fmt.Sprintf("Proxmox VE has no node with the memory for a new worker of pool %s: %s", PoolLabel(pool, TopologyPools(cluster)), message))
 		}
 	}
 	return nil

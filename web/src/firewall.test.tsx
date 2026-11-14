@@ -66,8 +66,8 @@ describe("a new cluster's firewall security groups", () => {
     const form = { ...filled, securityGroups: " k8s, corp-base " };
     expect(request(form, withGroups).variables["securityGroups"]).toStrictEqual(["k8s", "corp-base"]);
     expect(request(form, withoutGroups).variables).not.toHaveProperty("securityGroups");
-    expect(Object.fromEntries(summary(form, withGroups))).toMatchObject({ "Security groups": "k8s, corp-base" });
-    expect(summary(filled, withGroups).map(([label]) => label)).not.toContain("Security groups");
+    expect(Object.fromEntries(summary(form, withGroups))).toMatchObject({ Firewall: "Security groups k8s, corp-base" });
+    expect(Object.fromEntries(summary(filled, withGroups))["Firewall"]).toBe("Off, no security groups");
   });
 
   it("follow Proxmox VE's names", () => {
@@ -103,7 +103,7 @@ describe("a cluster's firewall security groups", () => {
 
     await user.click(await screen.findByRole("button", { name: "Edit the firewall security groups" }));
     const dialog = screen.getByRole("dialog", { name: "Edit firewall security groups" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(save).toBeDisabled();
     await user.type(within(dialog).getByLabelText("Firewall security groups"), "k8s, 1bad");
     await user.click(save);
@@ -135,7 +135,7 @@ describe("a cluster's firewall security groups", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit firewall security groups" });
     expect(within(dialog).getByLabelText("Firewall security groups")).toHaveValue("k8s, corp-base");
     await user.clear(within(dialog).getByLabelText("Firewall security groups"));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({

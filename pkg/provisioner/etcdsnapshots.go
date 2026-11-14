@@ -147,6 +147,23 @@ func checkEtcdSnapshots(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass
 	return targetOffered(class, s.Target, "etcd snapshots")
 }
 
+// etcdCredentialMissing says what the controller lacks to write the cluster's etcd snapshots to its
+// target: the store's keys, from the cluster's own credential or the one for every cluster. It is
+// empty where snapshots are off or the keys are there.
+func etcdCredentialMissing(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster) (string, error) {
+	s, err := EtcdSnapshotsOf(cluster)
+	if err != nil || !s.Enabled || s.Target == "" {
+		return "", err
+	}
+	_, why, err := backupCredential(ctx, c, cluster)
+	return why, err
+}
+
+// EtcdSnapshotWaitingForKey is the reason of the snapshot condition of a cluster whose snapshots
+// have no keys for their target yet. The condition holds until a key is stored, and is the one place
+// that says so.
+const EtcdSnapshotWaitingForKey = "WaitingForKey"
+
 // checkSharedTarget holds etcd snapshots and backups that are both on to one target. Both are
 // written with the one access key the cluster has, which reaches one store. A cluster already on two
 // targets is refused only once it changes either.
@@ -469,6 +486,9 @@ func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if !settings.Enabled {
 		return ctrl.Result{}, s.off(ctx, cluster)
 	}
+	if waiting, werr := s.snapshotsWaitForKey(ctx, cluster); werr != nil || waiting {
+		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, werr
+	}
 	_, requested := cluster.Annotations[EtcdSnapshotRequestAnnotation]
 	if RestoreInProgress(cluster) || !meta.IsStatusConditionTrue(cluster.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
 		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, nil
@@ -516,6 +536,25 @@ func (s *EtcdSnapshotter) succeeded(ctx context.Context, cluster *clusterv1.Clus
 	}
 	next, err := s.nextSnapshot(cluster, settings)
 	return ctrl.Result{RequeueAfter: max(next.Sub(s.now()), etcdSnapshotWait)}, err
+}
+
+// snapshotsWaitForKey sets the snapshot condition to waiting while the cluster has no keys for its
+// target, and says whether it did. Once a key is there it clears the wait at once: the control
+// plane may still be coming up, and no snapshot would set the condition for a while.
+func (s *EtcdSnapshotter) snapshotsWaitForKey(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+	missing, err := etcdCredentialMissing(ctx, s.Client, cluster)
+	if err != nil {
+		return false, err
+	}
+	if missing == "" {
+		if have := meta.FindStatusCondition(cluster.Status.Conditions, EtcdSnapshotCondition); have != nil && have.Reason == EtcdSnapshotWaitingForKey {
+			return false, s.condition(ctx, cluster, nil)
+		}
+		return false, nil
+	}
+	return true, s.condition(ctx, cluster, &metav1.Condition{
+		Type: EtcdSnapshotCondition, Status: metav1.ConditionFalse, Reason: EtcdSnapshotWaitingForKey, Message: missing,
+	})
 }
 
 // off clears what a cluster that no longer snapshots shows of its snapshots: a request nobody will

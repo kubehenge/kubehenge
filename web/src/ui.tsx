@@ -2,8 +2,10 @@ import {
   Component,
   Fragment,
   cloneElement,
+  createContext,
   isValidElement,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -354,6 +356,7 @@ const negativePolarity = new Set([
   "NodeImageHeld",
   "NodesSkipped",
   "NodesLackMemory",
+  "StorageLacksSpace",
   "HARulesPending",
   "StorageUnavailable",
   "RemediationHeld",
@@ -743,6 +746,12 @@ export function Views({ label, open, children }: { label: string; open: string; 
 // Field labels one control. The control is the single child and gets the generated id, and with an
 // error the attributes that tie it to the message shown under it. A hint is a few words that stay
 // in view. info is the rare longer explanation, shown on request.
+/**
+ * CopiedFrom names the cluster a form started from and the labels of the fields whose values it
+ * copied, so that each such field says so. A label also matches the same label with a family after it.
+ */
+export const CopiedFrom = createContext<{ from: string; labels: readonly string[] } | undefined>(undefined);
+
 export function Field({
   label,
   hint,
@@ -758,6 +767,8 @@ export function Field({
 }): JSX.Element {
   const id = useId();
   const [open, setOpen] = useState(false);
+  const copied = useContext(CopiedFrom);
+  const marked = copied?.labels.some((l) => label === l || label.startsWith(`${l} `)) === true;
   const message = error ?? "";
   const hinted = shows(hint);
   const informed = shows(info);
@@ -780,6 +791,7 @@ export function Field({
       <div className="field-label">
         <label htmlFor={id}>{label}</label>
         {informed && <InfoToggle about={label} open={open} target={`${id}-info`} onToggle={() => setOpen(!open)} />}
+        {marked && <span className="hint">Copied from {copied?.from}</span>}
       </div>
       <div className="field-control">
         {withAria(children(id, aria), aria)}
@@ -907,6 +919,9 @@ export function Dialog({
     </dialog>
   );
 }
+
+/** stageLabel is the confirm button of every dialog that only adds its change to the page's plan. */
+export const stageLabel = "Add to plan";
 
 // useChange stages one change on a page that stages them, or else makes it, and closes the dialog
 // once the server accepts it.

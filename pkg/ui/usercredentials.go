@@ -221,16 +221,10 @@ func credentialValues(purpose provisioner.CredentialPurpose, values map[string]s
 	return data, ""
 }
 
-// newCredential is a credential's Secret before its first values.
+// newCredential is a credential's Secret before its first values. storeCredential makes a
+// cluster's credential owned by the cluster, so that deleting the cluster deletes it with it.
 func newCredential(t *credentialTarget) *corev1.Secret {
-	secret := &corev1.Secret{Namespace: t.key.Namespace, Name: t.key.Name, Type: provisioner.CredentialType}
-	if t.cluster != nil {
-		// Deleting the cluster deletes its credentials with it.
-		secret.OwnerReferences = []metav1.OwnerReference{{
-			APIVersion: clusterv1.GroupVersion.String(), Kind: "Cluster", Name: t.cluster.Name, UID: t.cluster.UID,
-		}}
-	}
-	return secret
+	return &corev1.Secret{Namespace: t.key.Namespace, Name: t.key.Name, Type: provisioner.CredentialType}
 }
 
 // storeCredential stores a credential, or replaces the one stored, as a whole.
@@ -261,6 +255,12 @@ func (s *Server) storeCredential(w http.ResponseWriter, r *http.Request, u user,
 	secret.Labels[provisioner.CredentialLabel] = t.purpose.Name
 	if t.cluster != nil {
 		secret.Labels[provisioner.CredentialClusterLabel] = t.cluster.Name
+		// The credential is the live cluster's from here on, whichever create stored it first. A
+		// create's mark would have the controller judge it by that create's Cluster.
+		delete(secret.Labels, provisioner.CreateRequestKey)
+		if !slices.ContainsFunc(secret.OwnerReferences, func(o metav1.OwnerReference) bool { return o.UID == t.cluster.UID }) {
+			secret.OwnerReferences = append(secret.OwnerReferences, provisioner.CredentialOwner(t.cluster))
+		}
 	}
 	if secret.Annotations == nil {
 		secret.Annotations = map[string]string{}

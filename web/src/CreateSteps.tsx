@@ -8,6 +8,7 @@ import {
   formLoadBalancerValue,
   formReleaseMirror,
   machineLeast,
+  createRoom,
   memoryNodeWarning,
   mostWorkers,
   setLoadBalancer,
@@ -312,6 +313,7 @@ function TemplateAsk({
     <fieldset className="group">
       <legend>Build a VM template</legend>
       <p className="muted">{askText(kind, os)}</p>
+      <p className="muted">The build VM takes its address from DHCP, unless the settings give a build address.</p>
       {builds.building.length > 0 && <p className="muted">{`Building: ${builds.building.join(", ")}`}</p>}
       {builds.requested.length > 0 && (
         <p className="muted">{`Requested: ${builds.requested.map((k) => requestName(k, oses)).join(", ")}`}</p>
@@ -540,6 +542,7 @@ export function GeneralStep({
   onChooseNamespace,
   starts,
   onChooseFrom,
+  growthWarning,
 }: StepProps & {
   classes: ClusterClass[];
   cls: ClusterClass | undefined;
@@ -552,6 +555,8 @@ export function GeneralStep({
   /** The clusters a new one may start from, the newest first. */
   starts: Cluster[];
   onChooseFrom: (key: string) => void;
+  /** Thick storage too small for the autoscaled pool at its most, said on the most workers. */
+  growthWarning?: string | undefined;
 }): JSX.Element {
   const runs = forRelease(offered, talos, form.talosVersion);
   const typed = typedVersion(cls, runs);
@@ -619,7 +624,10 @@ export function GeneralStep({
         missing={templateMissing(form, cls)}
         oses={classes.flatMap((c) => c.nodeOSes ?? [])}
       />
-      <Field label="Control-plane nodes">
+      <Field
+        label="Control-plane nodes"
+        hint={form.controlPlaneReplicas === 1 ? "One has no high availability" : undefined}
+      >
         {(id) => (
           <select
             id={id}
@@ -634,7 +642,7 @@ export function GeneralStep({
           </select>
         )}
       </Field>
-      <WorkerFields form={form} set={set} shown={shown} cls={cls} />
+      <WorkerFields form={form} set={set} shown={shown} cls={cls} growthWarning={growthWarning} />
       <details className="advanced" open={shown("timeouts") === undefined ? undefined : true}>
         <summary>Node timeouts</summary>
         <h4 className="subsection">Control planes</h4>
@@ -658,9 +666,10 @@ export function GeneralStep({
 const ownNetworks: Record<string, string> = { talos: "flannel" };
 
 // Where in the bridge's network the examples of the API and node addresses lie.
-const exampleEndpoint = 20;
 const exampleFirst = 21;
 const exampleLast = 29;
+const exampleRangeFirst = 100;
+const exampleRangeLast = 120;
 
 // The ranges the controller takes for an IPv6 family when none is asked for.
 const defaultPodsIPv6 = "fd5e:4b1c:9a20::/56";
@@ -729,26 +738,20 @@ function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterCl
   const network = variable(cls, "network")?.properties;
   return (
     <>
-      <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
+      <Field label="VLAN tag" hint={shown("vlan") === undefined ? "Optional" : undefined} error={shown("vlan")}>
         {(id) => (
           <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
         )}
       </Field>
       {network?.["mtu"] === undefined ? null : (
-        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+        <Field label="MTU" hint={shown("mtu") === undefined ? "Optional" : undefined} error={shown("mtu")}>
           {(id) => (
-            <input
-              id={id}
-              inputMode="numeric"
-              value={form.mtu}
-              onChange={(e) => set("mtu", e.target.value.trim())}
-              placeholder="1500"
-            />
+            <input id={id} inputMode="numeric" value={form.mtu} onChange={(e) => set("mtu", e.target.value.trim())} />
           )}
         </Field>
       )}
       {network?.["queues"] === undefined ? null : (
-        <Field label="Queues" hint="Optional" error={shown("queues")}>
+        <Field label="Queues" hint={shown("queues") === undefined ? "Optional" : undefined} error={shown("queues")}>
           {(id) => (
             <input
               id={id}
@@ -847,14 +850,7 @@ export function NetworkStep({
         hint={endpointInUse ?? "A free address outside the node addresses"}
         error={shown("endpoint")}
       >
-        {(id) => (
-          <input
-            id={id}
-            value={form.endpoint}
-            onChange={(e) => set("endpoint", e.target.value.trim())}
-            placeholder={sample(primary, exampleEndpoint)}
-          />
-        )}
+        {(id) => <input id={id} value={form.endpoint} onChange={(e) => set("endpoint", e.target.value.trim())} />}
       </Field>
       {families.map((family) => (
         <FamilyFields
@@ -874,14 +870,7 @@ export function NetworkStep({
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
       <Field label="Search domains" error={shown("searchDomains")}>
-        {(id) => (
-          <input
-            id={id}
-            value={form.searchDomains}
-            placeholder="corp.example"
-            onChange={(e) => set("searchDomains", e.target.value)}
-          />
-        )}
+        {(id) => <input id={id} value={form.searchDomains} onChange={(e) => set("searchDomains", e.target.value)} />}
       </Field>
       <Field label="Time servers" hint="Optional, separated by commas" error={shown("ntpServers")}>
         {(id) => <input id={id} value={form.ntpServers} onChange={(e) => set("ntpServers", e.target.value)} />}
@@ -914,6 +903,7 @@ export function NetworkStep({
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
+          example={`${sample(primary, exampleRangeFirst)}-${sample(primary, exampleRangeLast)}`}
           families={form.families}
           value={formLoadBalancerValue(form)}
           errors={{
@@ -1060,9 +1050,10 @@ export function MachinesStep({
         label="Storage"
         error={shown("storage")}
         hint={
-          usableStorages.some((s) => s.storage === form.storage && !s.shared)
+          createRoom(form, nodes, usableStorages).diskWarning ??
+          (usableStorages.some((s) => s.storage === form.storage && !s.shared)
             ? "Volumes on node-local storage stay on one node."
-            : undefined
+            : undefined)
         }
       >
         {(id) => (

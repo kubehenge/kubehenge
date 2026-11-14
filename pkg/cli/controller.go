@@ -69,6 +69,11 @@ const (
 	// firewallSourcesInterval is how soon a new address of the appliance reaches the clusters'
 	// ProxmoxClusters, after the appliance's own check.
 	firewallSourcesInterval = 15 * time.Second
+	// credentialOrphansInterval is how often a credential stored ahead of its cluster is looked at,
+	// and credentialOrphansGrace how long its cluster has to appear: a create request makes the
+	// cluster seconds after the credential.
+	credentialOrphansInterval = time.Minute
+	credentialOrphansGrace    = 10 * time.Minute
 	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
 	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
 	certificateWatchInterval = 5 * time.Minute
@@ -288,7 +293,7 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.csiProxyImage, "csi-proxy-image", "", "image of the proxy beside the CSI plugin's controller in clusters that take volume snapshots, as <repository>@sha256:<digest>. It runs kubehenge csi-proxy and copies volumes with each cluster's own token. Empty, no cluster takes volume snapshots")
 	f.StringVar(&o.snapshotChart, "snapshot-controller-chart", "", "the volume snapshot controller's chart, with its CRDs and the VolumeSnapshotClass, for clusters that take volume snapshots, as <repository>/<name>:<version>@sha256:<digest>")
-	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on /, joined by the user of each cluster that asks for the cloud controller manager's HA group labels. Empty, no cluster joins it")
+	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on /, joined by the user of each cluster that asks for the cloud controller manager's HA rule labels. Empty, no cluster joins it")
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role holding Datastore.Allocate, given on its storage to each cluster that asks for it. Empty, no cluster holds it")
 	f.StringSliceVar(&o.r.DatastoreAllocate.Management, "management-storages", nil, "storages the management cluster uses, on which no cluster may hold Datastore.Allocate (comma-separated)")
@@ -747,6 +752,9 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	}
 	if err = mgr.Add(firewall); err != nil {
 		return fmt.Errorf("the firewall sources: %w", err)
+	}
+	if err = mgr.Add(&provisioner.CredentialOrphans{Client: mgr.GetClient(), Interval: credentialOrphansInterval, Grace: credentialOrphansGrace}); err != nil {
+		return fmt.Errorf("the credentials stored ahead of their clusters: %w", err)
 	}
 	if err = o.addAutoscalers(mgr, registrar.Remotes); err != nil {
 		return err

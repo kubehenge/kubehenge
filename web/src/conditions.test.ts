@@ -15,6 +15,7 @@ describe("the Health page's condition list", () => {
       "CertificatesExpiring",
       "NodesSkipped",
       "NodesLackMemory",
+      "StorageLacksSpace",
       "HARulesPending",
     ];
     expect(marked(kubehenge, "True")).toStrictEqual(kubehenge.map(() => true));
