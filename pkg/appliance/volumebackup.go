@@ -238,6 +238,34 @@ func storeFile(ctx context.Context, store provisioner.ObjectStore, folder string
 	return provisioner.StoreEtcdSnapshot(ctx, store, folder, taken, f, to) //nolint:wrapcheck // the caller names the store
 }
 
+// copyOwnerKey names, in the appliance's copy, the recipient of the management cluster the copy is
+// of. Each setup makes a key of its own, so a copy left by a removed cluster names another.
+const copyOwnerKey = "management/cluster"
+
+// ErrForeignCopy refuses the appliance's copy of a management cluster other than this one.
+var ErrForeignCopy = errors.New("the appliance's copy holds the backups of a management cluster removed since, not of this one. It is not restored onto this cluster")
+
+// checkCopyOwner tells whether the appliance's copy is of the management cluster whose snapshots
+// are encrypted to recipient.
+func (a *Appliance) checkCopyOwner(ctx context.Context, recipient string) error {
+	r, err := a.applianceCopy().Get(ctx, copyOwnerKey)
+	if err != nil {
+		if errors.Is(err, provisioner.ErrNoObject) || errors.Is(err, fs.ErrNotExist) {
+			return ErrForeignCopy
+		}
+		return fmt.Errorf("the appliance's copy: %w", err)
+	}
+	defer func() { _ = r.Close() }()
+	owner, err := io.ReadAll(io.LimitReader(r, 256))
+	if err != nil {
+		return fmt.Errorf("the appliance's copy: %w", err)
+	}
+	if string(owner) != recipient {
+		return ErrForeignCopy
+	}
+	return nil
+}
+
 func (a *Appliance) copyCap() int64 {
 	if a.CopyCap > 0 {
 		return a.CopyCap
@@ -262,6 +290,9 @@ func (a *Appliance) copyOnAppliance(ctx context.Context, keys *volumeBackupKeys,
 	if err == nil {
 		sealed, _ := base64.StdEncoding.DecodeString(keys.Sealed)
 		_, err = d.Put(ctx, volumeIdentityKey(keys.Recipient), bytes.NewReader(sealed), nil)
+	}
+	if err == nil {
+		_, err = d.Put(ctx, copyOwnerKey, strings.NewReader(keys.Recipient), nil)
 	}
 	if err == nil {
 		_, err = provisioner.PruneEtcdSnapshots(ctx, d, provisioner.ManagementEtcdFolder(""), 1)

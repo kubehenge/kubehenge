@@ -95,6 +95,9 @@ func (a *Appliance) newestBackup(ctx context.Context, j *Job, identity *age.X255
 		err = rerr
 	}
 	j.Add("The backup volume gives no snapshot (" + err.Error() + "). Reading the appliance's copy")
+	if cerr := a.checkCopyOwner(ctx, identity.Recipient().String()); cerr != nil {
+		return "", "", "", fmt.Errorf("neither the backup volume nor the appliance's copy gives a snapshot: %w", errors.Join(err, cerr))
+	}
 	file, name, cerr := a.decryptNewest(ctx, a.applianceCopy(), folder, identity, passphrase)
 	if cerr != nil {
 		return "", "", "", fmt.Errorf("neither the backup volume nor the appliance's copy gives a snapshot: %w", errors.Join(err, cerr))

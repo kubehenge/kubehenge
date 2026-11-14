@@ -3,9 +3,15 @@ package appliance
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/kubehenge/kubehenge/pkg/backupstore"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
@@ -68,6 +74,57 @@ func TestRemoveStopsTheVolumeBackups(t *testing.T) {
 	}
 	if _, err := a.TakeEtcdSnapshot(t.Context()); !errors.Is(err, ErrNoEtcdBackups) {
 		t.Errorf("a snapshot after the removal: %v", err)
+	}
+}
+
+// The appliance's copy goes with the backup volume. Kept, it is never restored onto a cluster set
+// up after the one it is of.
+func TestRemoveDeletesOrFencesTheAppliancesCopy(t *testing.T) {
+	t.Parallel()
+	for _, deleteVolume := range []bool{false, true} {
+		t.Run(fmt.Sprintf("delete volume %v", deleteVolume), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+			a, _, _ := volumeAppliance(t, &now)
+			if _, err := a.TakeEtcdSnapshot(ctx); err != nil {
+				t.Fatal(err)
+			}
+			removed(t, a, deleteVolume)
+			left, err := a.applianceCopy().Size(ctx)
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				t.Fatal(err)
+			}
+			if deleteVolume != (left == 0) {
+				t.Fatalf("the copy holds %d bytes after a removal that deleted the volume: %v", left, deleteVolume)
+			}
+			// A setup a month later, whose volume holds nothing yet.
+			now = now.Add(30 * 24 * time.Hour)
+			if err := os.WriteFile(filepath.Join(a.workdir(), "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			admin, err := a.Credential(ctx, passphrase, "talosconfig")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := a.setUpVolumeBackups(ctx, admin, passphrase); err != nil {
+				t.Fatal(err)
+			}
+			empty := backupstore.Dir{Root: t.TempDir()}
+			a.OpenVolume = func(context.Context) (provisioner.ObjectStore, error) { return empty, nil }
+			talos := &fakeManagementTalos{}
+			a.Talos = talos
+			if err := a.RecoverManagement(passphrase, ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			j := waitFor(t, a)
+			if j.State != StateFailed || talos.restored != nil {
+				t.Fatalf("the new cluster was recovered from the removed one's backup: %s, restored %q", j.State, talos.restored)
+			}
+			if !deleteVolume && !strings.Contains(j.Error, ErrForeignCopy.Error()) {
+				t.Errorf("the refusal says %q", j.Error)
+			}
+		})
 	}
 }
 

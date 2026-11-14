@@ -262,7 +262,7 @@ func (a *Appliance) Remove(passphrase string, removeBackups bool, ticket *pve.Ti
 		if err := a.tofu(ctx, j, env, jsonMessage, "destroy", "-auto-approve", "-input=false", "-json"); err != nil {
 			return err
 		}
-		if err := a.forgetRemoved(); err != nil {
+		if err := a.forgetRemoved(removeBackups); err != nil {
 			return err
 		}
 		gone()
@@ -339,8 +339,14 @@ func (a *Appliance) Stop(ctx context.Context) error {
 // now records nothing. It goes, so that the next setup starts with a passphrase of its own. The
 // settings stay to fill that setup in. The etcd snapshots stay in their target and on a kept
 // backup volume, and the keys and the talosconfigs that took them go, so that nothing is scheduled
-// for a cluster that is gone and the next setup makes a key of its own.
-func (a *Appliance) forgetRemoved() error {
+// for a cluster that is gone and the next setup makes a key of its own. The appliance's copy of the
+// latest backups goes with the backup volume, and otherwise stays for the removed cluster alone.
+func (a *Appliance) forgetRemoved(deleteBackups bool) error {
+	if deleteBackups {
+		if err := os.RemoveAll(a.applianceCopy().Root); err != nil {
+			return fmt.Errorf("deleting the appliance's copy of the backups: %w", err)
+		}
+	}
 	for _, name := range []string{
 		a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath(),
 		a.etcdBackupFile("volume.json"), a.etcdBackupFile("volume-status.json"), a.etcdBackupFile(volumeTalosconfig),
