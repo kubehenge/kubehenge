@@ -4,11 +4,20 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// Snapshots need the store's keys: the cluster's own, or the ones for every cluster.
+// Snapshots need the store's keys: the cluster's own, or the ones for every cluster. A cluster with
+// neither is accepted, and its snapshots wait for a key.
 func TestEtcdSnapshotsNeedKeys(t *testing.T) {
 	t.Parallel()
 	const on = `{"enabled":true,"target":"store"}`
@@ -32,27 +41,83 @@ func TestEtcdSnapshotsNeedKeys(t *testing.T) {
 		if err != nil || (tc.want == "") != (missing == "") || !strings.Contains(missing, tc.want) {
 			t.Errorf("%s: missing %q, %v", tc.name, missing, err)
 		}
-		// A change turning snapshots on is refused for the same cases.
-		err = checkEtcdCredential(context.Background(), r.Client, etcdCluster(`{"enabled":false}`), c)
-		if (tc.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.want)) {
-			t.Errorf("%s: the change was refused with %v", tc.name, err)
+		// Whatever the keys, the cluster is accepted.
+		if err = checkEtcdSnapshots(nil, c, targetClass()); err != nil {
+			t.Errorf("%s: refused: %v", tc.name, err)
 		}
 	}
 }
 
-// A cluster created without keys is not refused, since the interface stores them once it exists.
-// One already on a target is not refused for an edit of the snapshots.
-func TestEtcdKeysNotAskedOfCreatesAndEdits(t *testing.T) {
+func credentialScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, clusterv1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return scheme
+}
+
+// A cluster with snapshots on and no key shows why none are taken.
+func TestEtcdSnapshotsWaitForAKey(t *testing.T) {
 	t.Parallel()
-	r, _ := newReconciler(t, &fakeCloud{})
-	was := etcdCluster(`{"enabled":true,"target":"store"}`)
-	if err := checkEtcdCredential(context.Background(), r.Client, nil, was); err != nil {
-		t.Errorf("a create: %v", err)
+	c := etcdCluster(`{"enabled":true,"target":"store"}`)
+	c.Namespace = "team-a"
+	kube := fake.NewClientBuilder().WithScheme(credentialScheme(t)).WithObjects(c).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	s := &EtcdSnapshotter{Client: kube, Reader: kube, ClassNamespace: "kubehenge-system"}
+	res, err := s.Reconcile(context.Background(), ctrl.Request{Namespace: "team-a", Name: "web"})
+	if err != nil || res.RequeueAfter == 0 {
+		t.Fatalf("reconciled to %+v, %v", res, err)
 	}
-	if err := checkEtcdCredential(context.Background(), r.Client, was, etcdCluster(`{"enabled":true,"target":"store","keep":3}`)); err != nil {
-		t.Errorf("an edit: %v", err)
+	got := &clusterv1.Cluster{}
+	if err = kube.Get(context.Background(), client.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatal(err)
 	}
-	if err := checkEtcdCredential(context.Background(), r.Client, was, etcdCluster(`{"enabled":true,"target":"aws"}`)); err == nil {
-		t.Error("a move to another target without keys was allowed")
+	cond := meta.FindStatusCondition(got.Status.Conditions, EtcdSnapshotCondition)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != EtcdSnapshotWaitingForKey {
+		t.Errorf("condition %+v", cond)
+	}
+}
+
+// A credential stored ahead of its cluster gets the cluster as its owner once it exists, and goes
+// when the cluster does not come.
+func TestCredentialOrphans(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	ahead := func(cluster string, age time.Duration) *corev1.Secret {
+		s := storeKeys(cluster+".backup", cluster, backupKeysData)
+		s.Namespace = "team-a"
+		s.Type = CredentialType
+		s.CreationTimestamp = metav1.NewTime(now.Add(-age))
+		return s
+	}
+	web := etcdCluster(`{"enabled":false}`)
+	web.Namespace = "team-a"
+	owned := ahead("web", time.Hour)
+	owned.Name = "owned.backup"
+	owned.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: "x", UID: "u"}}
+	kube := fake.NewClientBuilder().WithScheme(credentialScheme(t)).WithObjects(
+		web, ahead("web", time.Minute), ahead("gone", time.Hour), ahead("late", time.Minute), owned,
+	).Build()
+	o := &CredentialOrphans{Client: kube, Grace: 10 * time.Minute, Now: func() time.Time { return now }}
+	if err := o.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string) (*corev1.Secret, error) {
+		s := &corev1.Secret{}
+		return s, kube.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: name}, s)
+	}
+	if s, err := read("web.backup"); err != nil || len(s.OwnerReferences) != 1 || s.OwnerReferences[0].UID != web.UID {
+		t.Errorf("the cluster's key: %+v, %v", s, err)
+	}
+	if _, err := read("gone.backup"); err == nil {
+		t.Error("the key of a cluster that never came was kept")
+	}
+	if _, err := read("late.backup"); err != nil {
+		t.Errorf("a key within its grace: %v", err)
+	}
+	if s, err := read("owned.backup"); err != nil || s.OwnerReferences[0].Name != "x" {
+		t.Errorf("an owned key: %+v, %v", s, err)
 	}
 }

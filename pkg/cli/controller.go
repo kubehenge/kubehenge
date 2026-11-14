@@ -69,6 +69,11 @@ const (
 	// firewallSourcesInterval is how soon a new address of the appliance reaches the clusters'
 	// ProxmoxClusters, after the appliance's own check.
 	firewallSourcesInterval = 15 * time.Second
+	// credentialOrphansInterval is how often a credential stored ahead of its cluster is looked at,
+	// and credentialOrphansGrace how long its cluster has to appear: a create request makes the
+	// cluster seconds after the credential.
+	credentialOrphansInterval = time.Minute
+	credentialOrphansGrace    = 10 * time.Minute
 	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
 	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
 	certificateWatchInterval = 5 * time.Minute
@@ -747,6 +752,9 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	}
 	if err = mgr.Add(firewall); err != nil {
 		return fmt.Errorf("the firewall sources: %w", err)
+	}
+	if err = mgr.Add(&provisioner.CredentialOrphans{Client: mgr.GetClient(), Interval: credentialOrphansInterval, Grace: credentialOrphansGrace}); err != nil {
+		return fmt.Errorf("the credentials stored ahead of their clusters: %w", err)
 	}
 	if err = o.addAutoscalers(mgr, registrar.Remotes); err != nil {
 		return err

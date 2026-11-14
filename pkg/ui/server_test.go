@@ -980,6 +980,37 @@ func TestCreate(t *testing.T) {
 	expect(t, b.do("POST", "/api/clusters", tagged), http.StatusCreated)
 }
 
+// A key sent with a create request is stored before the cluster, which then owns it. One that does
+// not read, or a cluster that exists already, leaves nothing behind and the live cluster's key alone.
+func TestCreateStoresTheKeyAhead(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	b := h.browser()
+	b.signIn("dev@pve")
+	read := func(name string) (*corev1.Secret, error) {
+		s := &corev1.Secret{}
+		return s, h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, s)
+	}
+	withKey := func(body, values string) string {
+		return strings.Replace(body, `"variables":`, `"backupKey":`+values+`,"variables":`, 1)
+	}
+	expect(t, b.do("POST", "/api/clusters", withKey(createBody, `{"accessKeyID":"AK"}`)), http.StatusUnprocessableEntity)
+	if _, err := read("web.backup"); err == nil {
+		t.Fatal("a key that did not read was stored")
+	}
+	both := `{"accessKeyID":"AK","secretAccessKey":"SK"}`
+	expect(t, b.do("POST", "/api/clusters", withKey(createBody, both)), http.StatusCreated)
+	s, err := read("web.backup")
+	if err != nil || string(s.Data["accessKeyID"]) != "AK" || len(s.OwnerReferences) != 1 || s.OwnerReferences[0].Name != "web" {
+		t.Fatalf("the key after the create: %+v, %v", s, err)
+	}
+	other := `{"accessKeyID":"XX","secretAccessKey":"YY"}`
+	expect(t, b.do("POST", "/api/clusters", withKey(createBody, other)), http.StatusConflict)
+	if s, err = read("web.backup"); err != nil || string(s.Data["accessKeyID"]) != "AK" {
+		t.Errorf("the live cluster's key after a clash: %+v, %v", s, err)
+	}
+}
+
 func TestCreateNeedsTheTemplate(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

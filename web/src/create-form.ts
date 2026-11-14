@@ -720,12 +720,22 @@ export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => back
 /**
  * keyRequired says whether the access key must be entered. Velero's backups run in the cluster and
  * need one of their own. Etcd snapshots are streamed by the controller, which takes the key stored
- * for every cluster when the cluster has none, so only an upload by the nodes themselves needs one,
- * or snapshots where no key for every cluster is stored.
+ * for every cluster when the cluster has none, so only an upload by the nodes themselves needs one.
+ * Snapshots without any key wait for one (snapshotsWait).
  */
 export const keyRequired = (f: Form, c: ClusterClass | undefined): boolean =>
-  backupsChosen(f, c) ||
-  (etcdChosen(f, c) && (f.noSharedKey || (f.etcdFields.upload && c !== undefined && uploadsItself(c.distribution))));
+  backupsChosen(f, c) || (etcdChosen(f, c) && f.etcdFields.upload && c !== undefined && uploadsItself(c.distribution));
+
+/**
+ * snapshotsWait says whether the etcd snapshots have no key yet: none stored for every cluster and
+ * none entered. The management cluster keeps them until a key for their target is stored.
+ */
+export const snapshotsWait = (f: Form, c: ClusterClass | undefined): boolean =>
+  etcdChosen(f, c) && f.noSharedKey && !backupKeys.some((k) => filled(f.backupKey[k.key]));
+
+/** snapshotsWaitText is what the snapshot step says of snapshots that wait for a key. */
+export const snapshotsWaitText = (target: string): string =>
+  `Kept on the management cluster until a key for ${target} is stored`;
 
 /**
  * withBackupChoices takes the one backup target a class offers until another is chosen, the backups'
@@ -1396,6 +1406,11 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     variables: Object.fromEntries(Object.entries(variables).filter(([k]) => defined.has(k))),
     ...timeoutRequests(form),
   };
+  // The cluster's own access key is stored before the cluster, which then owns it.
+  const key = pendingCredentials(form, c).find((p) => p.purpose === "backup");
+  if (key !== undefined) {
+    req.backupKey = key.values;
+  }
   if (autoscales(form, c)) {
     req.workerAutoscaling = { min: form.workerReplicas, max: form.workerMax };
   }
@@ -1624,8 +1639,13 @@ function backupRows(form: Form, c: ClusterClass, defined: Set<string>): [string,
   }
   if (etcdOffered(c)) {
     const sum = etcdSnapshotsText(etcdVariable(form, c), c.distribution);
-    const etcdKey =
-      !keyRequired(form, c) && !backupKeys.some((k) => filled(form.backupKey[k.key])) ? "key for every cluster" : key;
+    const typed = backupKeys.some((k) => filled(form.backupKey[k.key]));
+    let etcdKey = key;
+    if (snapshotsWait(form, c)) {
+      etcdKey = "kept on the management cluster until a key is stored";
+    } else if (!keyRequired(form, c) && !typed) {
+      etcdKey = "key for every cluster";
+    }
     rows.push(["etcd snapshots", form.etcdSnapshots ? `${sum}, ${etcdKey}` : "Off"]);
   }
   return rows;
@@ -2280,10 +2300,6 @@ function etcdSnapshotsProblems(form: Form, c: ClusterClass | undefined): Problem
 function accessKeyProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (keyRequired(form, c) && form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
     return { backupKey: "Enter both parts of the access key" };
-  }
-  // Without the right to store a key, snapshots would look on and write nothing.
-  if (keyRequired(form, c) && !form.storeBackupKey && form.noSharedKey && !backupsChosen(form, c)) {
-    return { backupKey: "Ask an administrator to store a shared backup key" };
   }
   return {};
 }

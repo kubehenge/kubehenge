@@ -159,28 +159,21 @@ func etcdCredentialMissing(ctx context.Context, c client.Reader, cluster *cluste
 	return why, err
 }
 
-// checkEtcdCredential refuses a change that turns etcd snapshots on, or moves them to another
-// target, while the cluster has no keys for the target. A new cluster is held by BeforeClusterCreate
-// instead, since the interface stores the keys it is given once the cluster exists.
-func checkEtcdCredential(ctx context.Context, c client.Reader, old, cluster *clusterv1.Cluster) error {
-	if old == nil || c == nil {
-		return nil
+// EtcdSnapshotWaitingForKey is the reason of the snapshot condition of a cluster whose snapshots
+// have no keys for their target yet. The condition holds until a key is stored, and is the one place
+// that says so.
+const EtcdSnapshotWaitingForKey = "WaitingForKey"
+
+// snapshotsWaitForKey sets the snapshot condition to waiting while the cluster has no keys for its
+// target, and says whether it did.
+func (s *EtcdSnapshotter) snapshotsWaitForKey(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+	missing, err := etcdCredentialMissing(ctx, s.Client, cluster)
+	if err != nil || missing == "" {
+		return false, err
 	}
-	s, err := EtcdSnapshotsOf(cluster)
-	if err != nil || !s.Enabled {
-		return err
-	}
-	if was, werr := EtcdSnapshotsOf(old); werr == nil && was.Enabled && was.Target == s.Target {
-		return nil
-	}
-	why, err := etcdCredentialMissing(ctx, c, cluster)
-	if err != nil {
-		return err
-	}
-	if why != "" {
-		return errors.New("etcdSnapshots: " + why)
-	}
-	return nil
+	return true, s.condition(ctx, cluster, &metav1.Condition{
+		Type: EtcdSnapshotCondition, Status: metav1.ConditionFalse, Reason: EtcdSnapshotWaitingForKey, Message: missing,
+	})
 }
 
 // checkSharedTarget holds etcd snapshots and backups that are both on to one target. Both are
@@ -504,6 +497,9 @@ func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	if !settings.Enabled {
 		return ctrl.Result{}, s.off(ctx, cluster)
+	}
+	if waiting, werr := s.snapshotsWaitForKey(ctx, cluster); werr != nil || waiting {
+		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, werr
 	}
 	_, requested := cluster.Annotations[EtcdSnapshotRequestAnnotation]
 	if RestoreInProgress(cluster) || !meta.IsStatusConditionTrue(cluster.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {

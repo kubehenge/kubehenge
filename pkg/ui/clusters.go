@@ -804,6 +804,9 @@ type createRequest struct {
 	// clear of the nodes' network (provisioner.ClusterDefaulter).
 	Pods     []string `json:"pods,omitempty"`
 	Services []string `json:"services,omitempty"`
+	// BackupKey is the cluster's own access key for its backup target. It is stored before the
+	// cluster, which then owns it.
+	BackupKey map[string]string `json:"backupKey,omitempty"`
 }
 
 func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
@@ -837,14 +840,20 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	c := s.newCluster(u, &req)
+	key, ok := s.storeKeyAhead(w, r, u, &req)
+	if !ok {
+		return
+	}
 	if r.URL.Query().Get("dryRun") == metav1.DryRunAll {
 		s.checkCreate(w, r, u, c)
 		return
 	}
 	if err = u.kube.Create(r.Context(), c); err != nil {
+		s.dropKeyAhead(r, u, key)
 		s.kubeError(w, r, err)
 		return
 	}
+	s.ownKeyAhead(r, u, key, c)
 	s.Log.InfoContext(r.Context(), "created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
 	privs, err := s.Accounts.Privileges(r.Context(), u.ticket, pool)
 	if err != nil {

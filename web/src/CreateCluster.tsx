@@ -362,7 +362,8 @@ export function CreateCluster({
       return;
     }
     fleet?.show(c);
-    const pending = pendingCredentials(form, cls);
+    // The access key went with the request.
+    const pending = pendingCredentials(form, cls).filter((p) => p.purpose !== "backup");
     const stored = await Promise.allSettled(
       pending.map(async (p) => api.storeCredential(p.purpose, p.values, { namespace: c.namespace, name: c.name })),
     );

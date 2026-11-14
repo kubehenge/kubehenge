@@ -12,6 +12,8 @@ import {
   newForm,
   pendingCredentials,
   request,
+  snapshotsWait,
+  snapshotsWaitText,
   summary,
   withBackupChoices,
   type Form,
@@ -64,26 +66,41 @@ describe("a new cluster's etcd snapshots", () => {
     }
   });
 
-  it("need a key of their own where no key for every cluster is stored", () => {
-    const keyless = filledForm(kubeadm, { noSharedKey: true });
-    expect(fieldProblems("Add-ons", keyless, kubeadm)).toStrictEqual({
-      backupKey: "Enter both parts of the access key",
-    });
-    const typed = filledForm(kubeadm, { noSharedKey: true, backupKey: { accessKeyID: "AK", secretAccessKey: "SK" } });
-    expect(fieldProblems("Add-ons", typed, kubeadm)).toStrictEqual({});
-    expect(pendingCredentials(typed, kubeadm).map((p) => p.purpose)).toStrictEqual(["backup"]);
-    const shared = filledForm(kubeadm, { noSharedKey: false });
-    expect(fieldProblems("Add-ons", shared, kubeadm)).toStrictEqual({});
-    expect(pendingCredentials(shared, kubeadm)).toStrictEqual([]);
-    const cannotStore = withBackupChoices({ ...keyless }, kubeadm, false);
-    expect(fieldProblems("Add-ons", cannotStore, kubeadm)).toStrictEqual({
-      backupKey: "Ask an administrator to store a shared backup key",
-    });
+  it("pass Next in all three key cases, and wait only with no key at all", () => {
+    const wait = "Kept on the management cluster until a key for store is stored";
+    const cases = [
+      { name: "shared key", patch: { noSharedKey: false }, waits: false, sent: undefined },
+      {
+        name: "own key",
+        patch: { noSharedKey: true, backupKey: { accessKeyID: "AK", secretAccessKey: "SK" } },
+        waits: false,
+        sent: { accessKeyID: "AK", secretAccessKey: "SK" },
+      },
+      { name: "neither", patch: { noSharedKey: true }, waits: true, sent: undefined },
+    ];
+    for (const c of cases) {
+      const form = filledForm(kubeadm, c.patch);
+      expect({ name: c.name, problems: fieldProblems("Add-ons", form, kubeadm) }).toStrictEqual({
+        name: c.name,
+        problems: {},
+      });
+      expect({ name: c.name, waits: snapshotsWait(form, kubeadm) }).toStrictEqual({ name: c.name, waits: c.waits });
+      expect({ name: c.name, key: request(form, kubeadm).backupKey }).toStrictEqual({ name: c.name, key: c.sent });
+      expect(pendingCredentials(form, kubeadm).map((p) => p.purpose)).toStrictEqual(
+        c.sent === undefined ? [] : ["backup"],
+      );
+    }
+    expect(snapshotsWaitText("store")).toBe(wait);
   });
 
-  it("name where to store the key for every cluster when none is stored", () => {
+  it("say on the step that snapshots are kept on the management cluster while no key exists", () => {
     render(<Step cls={kubeadm} first={{ noSharedKey: true }} />);
-    expect(screen.getByText("Needed. Or store a Shared backup key in Administration.")).toBeInTheDocument();
+    expect(screen.getByText("Kept on the management cluster until a key for store is stored")).toBeInTheDocument();
+  });
+
+  it("say nothing of waiting where a key for every cluster is stored", () => {
+    render(<Step cls={kubeadm} />);
+    expect(screen.queryByText(/Kept on the management cluster/u)).not.toBeInTheDocument();
   });
 
   it("take the one target the class offers once chosen", () => {
@@ -168,7 +185,8 @@ describe("a new cluster's etcd snapshots", () => {
       timeZone: browserZone(),
       keep: 30,
     });
-    expect(JSON.stringify(request(form, rke2))).not.toContain("secret");
+    // The key travels beside the variables, which the cluster object keeps.
+    expect(JSON.stringify(request(form, rke2).variables)).not.toContain("secret");
     expect(request({ ...form, etcdSnapshots: false }, rke2).variables).not.toHaveProperty("etcdSnapshots");
   });
 

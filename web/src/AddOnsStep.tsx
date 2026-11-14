@@ -28,6 +28,8 @@ import {
   machineLeast,
   offersMesh,
   rancherMinimumCores,
+  snapshotsWait,
+  snapshotsWaitText,
   variable,
 } from "./create-form";
 import type { StepProps } from "./CreateSteps";
@@ -197,14 +199,14 @@ function AccessKey({
   canTrust,
   namespace,
   optional = false,
-  lacksShared = false,
+  waitText,
 }: StepProps & {
   canTrust: boolean | undefined;
   namespace: string | undefined;
   /** The cluster does without a key of its own, taking the one stored for every cluster. */
   optional?: boolean;
-  /** No key for every cluster is stored, so the cluster's own is its only one. */
-  lacksShared?: boolean;
+  /** What happens to snapshots while no key exists at all. Unset where one does. */
+  waitText?: string | undefined;
 }): JSX.Element {
   const own = form.storeBackupKey && canTrust !== false;
   return (
@@ -215,17 +217,13 @@ function AccessKey({
       ) : (
         <p className="hint">
           {optional
-            ? "Optional. Empty uses the key stored for every cluster"
-            : lacksShared
-              ? "Needed. Or store a Shared backup key in Administration."
-              : backupCredentialHint(namespace, form.name)}
+            ? waitText === undefined
+              ? "Optional. Empty uses the key stored for every cluster"
+              : "Optional. Enter one to take snapshots at once"
+            : backupCredentialHint(namespace, form.name)}
         </p>
       )}
-      {!own && shown("backupKey") !== undefined && (
-        <p className="field-error" role="alert">
-          {shown("backupKey")}
-        </p>
-      )}
+      {waitText !== undefined && <p className="hint">{waitText}</p>}
       {own &&
         backupKeys.map((k, i) => (
           <Field key={k.key} label={k.label} error={i === backupKeys.length - 1 ? shown("backupKey") : undefined}>
@@ -289,7 +287,7 @@ function EtcdSnapshotsChoice({
               canTrust={canTrust}
               namespace={namespace}
               optional={!keyRequired(form, cls)}
-              lacksShared={form.noSharedKey}
+              waitText={snapshotsWait(form, cls) ? snapshotsWaitText(form.etcdFields.target) : undefined}
             />
           )}
         </>

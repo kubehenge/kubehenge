@@ -1476,6 +1476,8 @@ export interface CreateRequest {
   variables: Record<string, unknown>;
   pods?: string[];
   services?: string[];
+  /** The cluster's own access key for its backup target, stored before the cluster is made. */
+  backupKey?: Record<string, string>;
 }
 
 export interface ChangeRequest {
