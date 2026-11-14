@@ -654,6 +654,7 @@ describe("setup", () => {
     expect(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" })).toBeChecked();
     expect(forClusters("Storages").getByRole("checkbox", { name: "local" })).not.toBeChecked();
     expect(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" })).toBeChecked();
+    expect(forClusters("HA rule labels").getByRole("checkbox", { name: "Add HA rule labels" })).toBeChecked();
     // A storage added keeps the one offered to start with.
     await user.click(forClusters("Storages").getByRole("checkbox", { name: "local" }));
     expect(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" })).toBeChecked();

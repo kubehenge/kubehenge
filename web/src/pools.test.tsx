@@ -99,7 +99,7 @@ describe("the pools", () => {
     expect(rows.map((r) => r.textContent)).toStrictEqual([
       "PoolNodesCoresMemoryDiskActions",
       "Control plane124 GiB30 GiBResize…Timeouts…",
-      "md-0228 GiB40 GiBResize…Timeouts…Labels and taints…Delete…",
+      "Workers228 GiB40 GiBResize…Timeouts…Labels and taints…Delete…",
     ]);
   });
 
@@ -109,10 +109,10 @@ describe("the pools", () => {
     const dialog = screen.getByRole("dialog", { name: "Control plane timeouts" });
     expect(within(dialog).getByLabelText("Drain, minutes")).toHaveAccessibleDescription("0 for no limit");
     expect(within(dialog).getByLabelText("Drain, minutes")).toHaveAttribute("placeholder", "60");
-    expect(within(dialog).getByRole("button", { name: "Set" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.type(within(dialog).getByLabelText("Drain, minutes"), "30");
     await user.type(within(dialog).getByLabelText("Node removal, seconds"), "0");
-    await user.click(within(dialog).getByRole("button", { name: "Set" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({
@@ -123,16 +123,16 @@ describe("the pools", () => {
 
   it("show each pool's labels and taints, its own or the cluster's", async () => {
     await machinesView(tagged);
-    expect(tags("md-0")).toStrictEqual(["team=a", "zone=", "dedicated=db:NoSchedule"]);
+    expect(tags("Workers")).toStrictEqual(["team=a", "zone=", "dedicated=db:NoSchedule"]);
     expect(tags("md-1")).toStrictEqual(["team=cluster"]);
   });
 
   it("show a pool's labels and taints, and send them when saved", async () => {
     const { calls, user } = await machinesView();
-    await user.click(screen.getByRole("button", { name: "Edit pool md-0 nodes" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit pool md-0 nodes" });
+    await user.click(screen.getByRole("button", { name: "Edit pool Workers nodes" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit pool Workers nodes" });
     expect(within(dialog).queryByText(/replaces this pool's nodes/u)).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(within(dialog).getByRole("button", { name: "Add label" }));
     const label = within(dialog).getByRole("group", { name: "Label 1" });
     await user.type(within(label).getByLabelText("Key"), "team");
@@ -145,7 +145,7 @@ describe("the pools", () => {
     await user.type(within(taint).getByLabelText("Key"), "dedicated");
     await user.type(within(taint).getByLabelText("Value"), "db");
     await user.selectOptions(within(taint).getByLabelText("Effect"), "NoExecute");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({
@@ -163,15 +163,15 @@ describe("the pools", () => {
 
   it("set a pool's timeouts and refuse one out of range", async () => {
     const { calls, user } = await machinesView();
-    await user.click(screen.getByRole("button", { name: "Pool md-0 timeouts" }));
-    const dialog = screen.getByRole("dialog", { name: "Pool md-0 timeouts" });
+    await user.click(screen.getByRole("button", { name: "Pool Workers timeouts" }));
+    const dialog = screen.getByRole("dialog", { name: "Pool Workers timeouts" });
     const detach = within(dialog).getByLabelText("Volume detach, minutes");
     await user.type(detach, "5000");
     expect(detach).toHaveAccessibleDescription(/0 to 1440 minutes/u);
-    expect(within(dialog).getByRole("button", { name: "Set" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.clear(detach);
     await user.type(detach, "20");
-    await user.click(within(dialog).getByRole("button", { name: "Set" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({ pools: { "md-0": { timeouts: { nodeVolumeDetachTimeoutSeconds: 1200 } } } }),
@@ -180,8 +180,8 @@ describe("the pools", () => {
 
   it("show a problem with a field only once it was touched", async () => {
     const { user } = await machinesView();
-    await user.click(screen.getByRole("button", { name: "Edit pool md-0 nodes" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit pool md-0 nodes" });
+    await user.click(screen.getByRole("button", { name: "Edit pool Workers nodes" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit pool Workers nodes" });
     await user.click(within(dialog).getByRole("button", { name: "Add label" }));
     const label = within(dialog).getByRole("group", { name: "Label 1" });
     const key = within(label).getByLabelText("Key");
@@ -192,7 +192,7 @@ describe("the pools", () => {
     expect(key).toHaveAccessibleDescription("Enter a key");
     await user.type(key, "k8s.io/x");
     expect(key).toHaveAccessibleDescription(/The kubelet refuses labels in kubernetes.io and k8s.io/u);
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(within(dialog).getByRole("button", { name: "Add label" }));
     const second = within(dialog).getByRole("group", { name: "Label 2" });
     await user.type(within(second).getByLabelText("Key"), "k8s.io/x");
@@ -203,14 +203,14 @@ describe("the pools", () => {
 
   it("take the cluster's labels and taints again", async () => {
     const { calls, user } = await machinesView(tagged);
-    await user.click(screen.getByRole("button", { name: "Edit pool md-0 nodes" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit pool md-0 nodes" });
+    await user.click(screen.getByRole("button", { name: "Edit pool Workers nodes" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit pool Workers nodes" });
     expect(within(dialog).getByRole("group", { name: "Label 2" })).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Use the cluster's" }));
     expect(within(dialog).getByText(/replaces this pool's nodes/u)).toBeVisible();
     expect(within(dialog).queryByRole("group", { name: "Label 2" })).not.toBeInTheDocument();
     expect(within(dialog).getByLabelText("Value")).toHaveValue("cluster");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() => expect(sent(calls)).toStrictEqual({ pools: { "md-0": { nodes: null } } }));
   });
@@ -224,14 +224,14 @@ describe("the pools", () => {
     await user.clear(memory);
     await user.type(memory, "2048");
     expect(memory).toHaveAccessibleDescription(/At least 4096 MiB of memory/u);
-    expect(within(dialog).getByRole("button", { name: "Add" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.clear(memory);
     await user.type(memory, "16384");
-    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({
-        pools: { gpu: { replicas: 1, machine: { cores: 2, memoryMiB: 16_384, diskGiB: 40 } } },
+        pools: { gpu: { add: true, replicas: 1, machine: { cores: 2, memoryMiB: 16_384, diskGiB: 40 } } },
       }),
     );
   });
@@ -251,12 +251,13 @@ describe("the pools", () => {
     await user.type(within(taint).getByLabelText("Key"), "dedicated");
     await user.type(within(taint).getByLabelText("Value"), "gpu");
     expect(within(dialog).queryByText(/replaces this pool's nodes/u)).not.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({
         pools: {
           gpu: {
+            add: true,
             replicas: 1,
             machine: { cores: 2, memoryMiB: 8192, diskGiB: 40 },
             nodes: {
@@ -269,6 +270,16 @@ describe("the pools", () => {
     );
   });
 
+  it("refuse the default pool's label as a new pool's name where it is typed", async () => {
+    const { calls, user } = await machinesView();
+    await user.click(screen.getByRole("button", { name: "Add pool…" }));
+    const dialog = screen.getByRole("dialog", { name: "Add pool to web" });
+    await user.type(within(dialog).getByLabelText("Name"), "workers");
+    expect(within(dialog).getByLabelText("Name")).toHaveAccessibleDescription("workers is the default pool's name");
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
+    expect(calls.filter((c) => c.key.startsWith("PATCH"))).toStrictEqual([]);
+  });
+
   it("show a new pool's node problem only once a field was touched", async () => {
     const { user } = await machinesView();
     await user.click(screen.getByRole("button", { name: "Add pool…" }));
@@ -277,7 +288,7 @@ describe("the pools", () => {
     await user.click(within(dialog).getByRole("button", { name: "Add label" }));
     const key = within(within(dialog).getByRole("group", { name: "Label 1" })).getByLabelText("Key");
     expect(key).not.toHaveAccessibleDescription(/Enter a key/u);
-    expect(within(dialog).getByRole("button", { name: "Add" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(key);
     await user.tab();
     expect(key).toHaveAccessibleDescription("Enter a key");
@@ -290,7 +301,7 @@ describe("the pools", () => {
     const cores = within(dialog).getByLabelText("Cores");
     await user.clear(cores);
     await user.type(cores, "4");
-    await user.click(within(dialog).getByRole("button", { name: "Resize" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent(calls)).toStrictEqual({
@@ -301,9 +312,9 @@ describe("the pools", () => {
 
   it("delete a pool", async () => {
     const { calls, user } = await machinesView();
-    await user.click(screen.getByRole("button", { name: "Delete pool md-0" }));
+    await user.click(screen.getByRole("button", { name: "Delete pool Workers" }));
     await user.click(
-      within(screen.getByRole("dialog", { name: "Delete pool md-0" })).getByRole("button", { name: "Delete" }),
+      within(screen.getByRole("dialog", { name: "Delete pool Workers" })).getByRole("button", { name: "Add to plan" }),
     );
     await applyStaged(user);
     await waitFor(() => expect(sent(calls)).toStrictEqual({ pools: { "md-0": null } }));
@@ -312,6 +323,13 @@ describe("the pools", () => {
   it("refuse a name the server would", () => {
     expect(poolNameProblem(web, "GPU")).toBe("Lowercase letters, digits and dashes, from a letter");
     expect(poolNameProblem(web, "md-0")).toBe("A pool has this name");
+    // The default pool goes by Workers, so a new pool of that name would change it instead.
+    expect(poolNameProblem(web, "workers")).toBe("workers is the default pool's name");
+    const withWorkers: Cluster = {
+      ...web,
+      workerPools: [...web.workerPools, { name: "workers", class: "worker", replicas: 1 }],
+    };
+    expect(poolNameProblem(withWorkers, "workers")).toBe("A pool has this name");
     expect(poolNameProblem(web, "p".repeat(42))).toBe("At most 41 characters for this cluster");
     expect(poolNameProblem(web, "gpu-2")).toBeUndefined();
   });

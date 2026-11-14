@@ -623,7 +623,7 @@ The Summary shows, in order:
   - Other nodes you may see follow empty, as places for new machines. Machines on nodes you may not see come last.
   - It carries the Machines view's warning when one node runs more than one control-plane VM.
 - The status, distribution, Kubernetes version, API endpoint, and pod and service ranges.
-- The ready control-plane nodes and workers, with autoscaled pools as `md-0: 2 of 0 to 5, autoscaled`.
+- The ready control-plane nodes and workers, with autoscaled pools as `Workers: 2 of 0 to 5, autoscaled`.
 - The Proxmox VE pool, namespace, creator and creation date, and the last automatic upgrade.
 - For kubeadm, RKE2 and k3s, the VM template build the nodes run, their next build and their last ([Node image refresh](#node-image-refresh)).
 - For Talos, the release the nodes run, the one new machines boot first when it differs, and the node being upgraded ([Talos upgrades](#talos-upgrades)).
@@ -708,7 +708,7 @@ Nothing changes in the cluster until the changes are applied. A bar above the vi
 
 ## Pools
 
-**Machines** lists the control plane and each worker pool with its nodes, cores, memory and disk. A new cluster starts with one pool, `md-0`.
+**Machines** lists the control plane and each worker pool with its nodes, cores, memory and disk. A new cluster starts with one pool, Workers. Cluster API names it `md-0`, and both names work in the CLI. Beside a pool of your own named `workers`, it shows as `md-0`.
 
 ![The Machines view: the pools with their sizes, then every machine with its role, Proxmox VE node, version and address](images/machines.png)
 
@@ -1892,8 +1892,8 @@ export KUBEHENGE_URL=https://kubehenge.example.org
 export KUBEHENGE_PROXMOX_TOKEN='ci@pve!kubehenge=<secret>'
 kubehenge cluster list
 kubehenge cluster create -f web.yaml
-kubehenge cluster scale web --control-planes 3 --workers md-0=5
-kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h
+kubehenge cluster scale web --control-planes 3 --workers workers=5
+kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool workers=drain=1h
 kubehenge cluster update web --host-outage-grace-minutes 60 --label team=web
 kubehenge cluster upgrade web --version v1.37.1
 kubehenge cluster kubeconfig web > web.kubeconfig

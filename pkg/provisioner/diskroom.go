@@ -25,15 +25,11 @@ const StorageLacksSpaceCondition = "StorageLacksSpace"
 // disksToMake is the disk, in GiB, of the machines a cluster has still to make: in each pool those
 // beyond the machines that exist, and those whose VM is not cloned yet. A cloned VM's disk holds
 // its space already, so the storage's free space leaves it out. vmids are the VM IDs capmox
-// recorded on the cluster's ProxmoxMachines, by name. An autoscaled pool runs its minimum and the
-// machines the autoscaler asked for, which exist as Machines, or its maximum where grown counts.
-func disksToMake(fit Fit, machines []clusterv1.Machine, vmids map[string]int, grown bool) int64 {
+// recorded on the cluster's ProxmoxMachines, by name. target is how many machines a pool runs.
+func disksToMake(fit *Fit, machines []clusterv1.Machine, vmids map[string]int, target func(*PoolFit) int64) int64 {
 	var need int64
-	for _, pool := range fit.Pools {
-		target := pool.Machines
-		if grown {
-			target = pool.Most
-		}
+	for p := range fit.Pools {
+		pool := &fit.Pools[p]
 		var exist, unmade int64
 		for i := range machines {
 			m := &machines[i]
@@ -45,10 +41,17 @@ func disksToMake(fit Fit, machines []clusterv1.Machine, vmids map[string]int, gr
 				unmade++
 			}
 		}
-		need += (max(target-exist, 0) + unmade) * pool.DiskGiB
+		need += (max(target(pool)-exist, 0) + unmade) * pool.DiskGiB
 	}
 	return need
 }
+
+// asked is the machines a pool runs without growing: its replicas, or an autoscaled pool's minimum.
+// The machines the autoscaler adds exist as Machines, and count once they do.
+func asked(p *PoolFit) int64 { return p.Machines }
+
+// atMost is the machines a pool runs once the autoscaler has grown it as far as it may.
+func atMost(p *PoolFit) int64 { return p.Most }
 
 // provisioned tells whether Cluster API records a machine's infrastructure as made.
 func provisioned(m *clusterv1.Machine) bool {
@@ -65,10 +68,10 @@ func inPool(m *clusterv1.Machine, pool string) bool {
 }
 
 // diskRoom says why the storage has no room for the disks still to be made, or "" when it has, or
-// when a figure is not known. growth says the same of the autoscaled pools at their maximum, where
-// only they lack room.
-func diskRoom(fit Fit, machines []clusterv1.Machine, vmids map[string]int, storages []pve.Storage, nodes []string) (short, growth string) {
-	need, grown := disksToMake(fit, machines, vmids, false), disksToMake(fit, machines, vmids, true)
+// when a figure is not known. The second message says the same of the autoscaled pools at their
+// maximum, where only they lack room.
+func diskRoom(fit *Fit, machines []clusterv1.Machine, vmids map[string]int, storages []pve.Storage, nodes []string) (string, string) {
+	need, grown := disksToMake(fit, machines, vmids, asked), disksToMake(fit, machines, vmids, atMost)
 	if fit.Storage == "" || grown == 0 {
 		return "", ""
 	}
@@ -91,8 +94,8 @@ func storageWhere(storage string, storages []pve.Storage, nodes []string) string
 		return "shared"
 	}
 	var on []string
-	for _, s := range storages {
-		if s.Storage == storage && s.Total > 0 && slices.Contains(nodes, s.Node) {
+	for i := range storages {
+		if s := &storages[i]; s.Storage == storage && s.Total > 0 && slices.Contains(nodes, s.Node) {
 			on = append(on, s.Node)
 		}
 	}
@@ -114,7 +117,7 @@ func (p *Placer) markDisks(ctx context.Context, c *clusterv1.Cluster, storages [
 		return
 	}
 	machines := &clusterv1.MachineList{}
-	if err := p.Client.List(ctx, machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
+	if err = p.Client.List(ctx, machines, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
 		log.Error(err, "listing the cluster's machines", "cluster", client.ObjectKeyFromObject(c))
 		return
 	}
@@ -126,7 +129,7 @@ func (p *Placer) markDisks(ctx context.Context, c *clusterv1.Cluster, storages [
 			return
 		}
 	}
-	msg, growth := diskRoom(fit, machines.Items, vmids, storages, nodes)
+	msg, growth := diskRoom(&fit, machines.Items, vmids, storages, nodes)
 	p.sayGrowth(c, growth)
 	var cond *metav1.Condition
 	have := meta.FindStatusCondition(c.Status.Conditions, StorageLacksSpaceCondition)

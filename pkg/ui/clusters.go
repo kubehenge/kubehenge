@@ -51,7 +51,7 @@ const createdBy = "kubehenge.dev/created-by"
 // here start with.
 const (
 	workerClass = "worker"
-	workerPool  = "md-0"
+	workerPool  = provisioner.DefaultPool
 )
 
 // The variables that size machines: the control planes', and the workers' of every pool that does
@@ -812,7 +812,8 @@ type createRequest struct {
 func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 	ctx, cancel := context.WithTimeout(r.Context(), createTimeout)
 	defer cancel()
-	r = r.WithContext(context.WithValue(ctx, nodesReadKey{}, &nodesRead{}))
+	ctx = context.WithValue(ctx, nodesReadKey{}, &nodesRead{})
+	r = r.WithContext(ctx)
 	var req createRequest
 	if !readJSON(w, r, &req) {
 		return
@@ -854,14 +855,14 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		s.checkCreate(w, r, u, c)
 		return
 	}
-	if err = u.kube.Create(r.Context(), c); err != nil {
+	if err = u.kube.Create(ctx, c); err != nil {
 		s.dropKeyAhead(r, u, key)
 		s.kubeError(w, r, err)
 		return
 	}
 	s.ownKeyAhead(r, u, key, c)
-	s.Log.InfoContext(r.Context(), "created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
-	privs, err := s.Accounts.Privileges(r.Context(), u.ticket, pool)
+	s.Log.InfoContext(ctx, "created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
+	privs, err := s.Accounts.Privileges(ctx, u.ticket, pool)
 	if err != nil {
 		privs = pve.Privileges{}
 	}
@@ -1058,11 +1059,14 @@ type nodesRead struct {
 func (s *Server) visibleNodes(r *http.Request, u user) ([]pve.Node, error) {
 	read, ok := r.Context().Value(nodesReadKey{}).(*nodesRead)
 	if !ok {
-		return s.Accounts.Nodes(r.Context(), u.ticket)
+		read = &nodesRead{}
 	}
 	if !read.done {
 		read.nodes, read.err = s.Accounts.Nodes(r.Context(), u.ticket)
 		read.done = true
+		if read.err != nil {
+			read.err = fmt.Errorf("listing the Proxmox VE nodes: %w", read.err)
+		}
 	}
 	return slices.Clone(read.nodes), read.err
 }
@@ -1290,6 +1294,13 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, r
 		return nil, false
 	}
 	before := c.DeepCopy()
+	// The names stand for the pools of this read, which a retry after a conflict reads afresh.
+	named := *req
+	req = &named
+	if msg := namePools(c, req); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return nil, false
+	}
 	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
 	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
 	if err != nil {
@@ -1384,7 +1395,7 @@ func applyTopology(c *clusterv1.Cluster, req *changeRequest) string {
 			return provisioner.WorkersRule + " in each pool"
 		}
 		if isAutoscaled(c, name) {
-			return "pool " + name + " is autoscaled. Switch autoscaling off to set its workers"
+			return "pool " + provisioner.PoolLabel(name, provisioner.TopologyPools(c)) + " is autoscaled. Switch autoscaling off to set its workers"
 		}
 		if !setWorkerReplicas(c, name, n) {
 			return "the cluster has no worker pool " + name

@@ -48,7 +48,7 @@ func keyLeftBehind(t *testing.T, h *harness, b *browser, cause error) *corev1.Se
 	on := true
 	cutShort(t, h, cause, &on)
 	defer func() { on = false }()
-	if rec := b.do("POST", "/api/clusters", withKey(createBody, `{"accessKeyID":"OLD","secretAccessKey":"S"}`)); rec.Code == http.StatusCreated {
+	if rec := b.do("POST", "/api/clusters", withKey(`{"accessKeyID":"OLD","secretAccessKey":"S"}`)); rec.Code == http.StatusCreated {
 		t.Fatalf("a create cut short answered %d", rec.Code)
 	}
 	s, err := readSecret(h, "web.backup")
@@ -69,7 +69,7 @@ func TestCreateRetryReplacesTheKeyACutShortCreateLeft(t *testing.T) {
 		b := h.browser()
 		b.signIn("dev@pve")
 		old := keyLeftBehind(t, h, b, cause)
-		fresh := withKey(createBody, `{"accessKeyID":"NEW","secretAccessKey":"S2"}`)
+		fresh := withKey(`{"accessKeyID":"NEW","secretAccessKey":"S2"}`)
 
 		rec := b.do("POST", "/api/clusters", fresh)
 		expect(t, rec, http.StatusConflict)

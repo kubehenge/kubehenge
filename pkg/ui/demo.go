@@ -65,6 +65,11 @@ var errDemo = errors.New("the demo changes nothing")
 // cluster, and changes are refused. clock is the demo's time, which its sample data is dated
 // against. The appliance it sets up keeps its settings in a folder that cleanup removes.
 func SetUpDemo(s *Server, clock func() time.Time) (func(), error) {
+	return demoFrom(s, clock, demoFleetJSON)
+}
+
+// demoFrom is SetUpDemo over the fleet raw holds, in the form of demo-fleet.json.
+func demoFrom(s *Server, clock func() time.Time, raw []byte) (func(), error) {
 	if s.Appliance != nil || s.Headlamp != nil || s.Upgrades != nil {
 		return nil, errors.New("the demo runs without the appliance, Headlamp or upgrades")
 	}
@@ -73,15 +78,15 @@ func SetUpDemo(s *Server, clock func() time.Time) (func(), error) {
 		return nil, fmt.Errorf("the demo's appliance: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
-	if err := fillDemo(s, clock, dir); err != nil {
+	if err := fillDemo(s, clock, dir, raw); err != nil {
 		cleanup()
 		return nil, err
 	}
 	return cleanup, nil
 }
 
-func fillDemo(s *Server, clock func() time.Time, dir string) error {
-	fleet, err := newDemoFleet(clock().UTC())
+func fillDemo(s *Server, clock func() time.Time, dir string, raw []byte) error {
+	fleet, err := newDemoFleet(clock().UTC(), raw)
 	if err != nil {
 		return err
 	}
@@ -92,7 +97,11 @@ func fillDemo(s *Server, clock func() time.Time, dir string) error {
 	if err = os.MkdirAll(filepath.Join(dir, "management"), demoDirMode); err != nil {
 		return fmt.Errorf("the demo's appliance: %w", err)
 	}
-	if err = os.WriteFile(filepath.Join(dir, "management", "settings.json"), fleet.data.Management, demoFileMode); err != nil {
+	settings, err := fleet.managementSettings()
+	if err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(dir, "management", "settings.json"), settings, demoFileMode); err != nil {
 		return fmt.Errorf("the demo's appliance: %w", err)
 	}
 	s.Appliance = &appliance.Appliance{Dir: dir, Release: demoName, Now: clock}

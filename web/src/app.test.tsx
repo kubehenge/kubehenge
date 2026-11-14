@@ -475,15 +475,21 @@ describe("clusters", () => {
     const calls = fakeServer({
       ...signedIn,
       "GET /api/clusters/default/web": () => ({ body: web }),
-      "PATCH /api/clusters/default/web": () => ({ body: web }),
+      "PATCH /api/clusters/default/web": () => ({
+        body: { ...web, workerPools: [{ name: "md-0", class: "worker", replicas: 4 }] },
+      }),
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Scale" }));
-    const workers = screen.getByLabelText("Workers (md-0)");
+    const workers = screen.getByLabelText("Workers");
     await user.clear(workers);
     await user.type(workers, "4");
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Scale" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByRole("button", { name: "Scale" })).not.toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
+    const bar = await screen.findByRole("region", { name: "Staged changes" });
+    expect(bar).toHaveTextContent("Workers: 2 to 4");
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
@@ -531,7 +537,7 @@ describe("clusters", () => {
     expect(dialog.getByText("None spare. Add one under Options.")).toBeInTheDocument();
     await waitFor(() => expect(dialog.getByText("2 problems")).toBeInTheDocument());
     expect(dialog.getByRole("link", { name: "Health" })).toHaveAttribute("href", "/clusters/default/web/health");
-    expect(dialog.getByRole("button", { name: "Upgrade" })).toBeDisabled();
+    expect(dialog.getByRole("button", { name: "Add to plan" })).toBeDisabled();
   });
 
   it("warns of removed APIs and fail-closed webhooks in the upgrade dialog, and still upgrades", async () => {
@@ -561,7 +567,7 @@ describe("clusters", () => {
     expect(dialog.getByText("1 at risk")).toBeInTheDocument();
     expect(dialog.getByText("flowcontrol.apiserver.k8s.io/v1beta3 flowschemas, removed in 1.32")).toBeInTheDocument();
     expect(dialog.getByText("policy-guard: Service guard/policy has 1 ready endpoint")).toBeInTheDocument();
-    await user.click(dialog.getByRole("button", { name: "Upgrade" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
@@ -634,7 +640,7 @@ describe("clusters", () => {
       ).toStrictEqual(["v1.32.4+rke2r1 (running)", "v1.33.13+rke2r3", "v1.32.13+rke2r2"]),
     );
     await user.selectOptions(within(dialog).getByLabelText("Kubernetes version"), "v1.33.13+rke2r3");
-    await user.click(within(dialog).getByRole("button", { name: "Upgrade" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
@@ -728,7 +734,7 @@ describe("clusters", () => {
     await expect(screen.findByText(/Cluster not found/u)).resolves.toBeInTheDocument();
   });
 
-  it("shows where the VMs run, and warns when control-plane VMs share a node", async () => {
+  it("shows where the machines run, and warns when control-plane machines share a node", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/machines");
     fakeServer({
       ...signedIn,
@@ -746,7 +752,7 @@ describe("clusters", () => {
     });
     render(<App />);
     await expect(
-      screen.findByText(/^pve1 runs 2 of 3 control-plane VMs, so losing it stops the control plane\./u),
+      screen.findByText(/^pve1 runs 2 of 3 control-plane machines, so losing it stops the control plane\./u),
     ).resolves.toBeInTheDocument();
     expect(screen.getAllByRole("cell", { name: "pve1" })).toHaveLength(3);
   });
@@ -866,7 +872,7 @@ describe("clusters", () => {
     expect(screen.queryByRole("button", { name: "Delete cp-a" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete md-a" }));
     const dialog = screen.getByRole("dialog", { name: "Delete md-a" });
-    expect(dialog).toHaveTextContent("Pool md-0 shrinks by one.");
+    expect(dialog).toHaveTextContent("Pool Workers shrinks by one.");
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/md-a")).toBe(1));
   });

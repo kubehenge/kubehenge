@@ -139,9 +139,20 @@ export function held(): { route: () => Promise<Answer>; answer: (a: Answer) => v
   return { route: async () => given, answer: (a) => answer?.(a), fail: (err) => fail?.(err) };
 }
 
+/** acceptProblems ticks the box a plan asks for once its checks found a problem, after they are read. */
+export async function acceptProblems(user: UserEvent): Promise<void> {
+  const plan = within(screen.getByRole("dialog", { name: "Review plan" }));
+  await waitFor(() => expect(plan.queryByText("Checking")).not.toBeInTheDocument());
+  const accept = plan.queryByRole("checkbox", { name: "Accept the risks" });
+  if (accept !== null) {
+    await user.click(accept);
+  }
+}
+
 /** applyStaged reviews the plan of what a cluster's page has staged and applies it. */
 export async function applyStaged(user: UserEvent): Promise<void> {
   await user.click(await screen.findByRole("button", { name: "Review plan" }));
+  await acceptProblems(user);
   await user.click(within(screen.getByRole("dialog", { name: "Review plan" })).getByRole("button", { name: "Apply" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 }

@@ -32,8 +32,8 @@ describe("control-plane VMs sharing a node", () => {
 
   it("names the node and what losing it costs", () => {
     expect(crowding(threeOnTwo)).toBe(
-      "pve1 runs 2 of 3 control-plane VMs, so losing it stops the control plane. Migrate one to another node.",
+      "pve1 runs 2 of 3 control-plane machines, so losing it stops the control plane. Migrate one to another node.",
     );
-    expect(crowding(fiveOnFour)).toMatch(/^pve1 runs 2 of 5 control-plane VMs, so losing it takes 2 down\./u);
+    expect(crowding(fiveOnFour)).toMatch(/^pve1 runs 2 of 5 control-plane machines, so losing it takes 2 down\./u);
   });
 });

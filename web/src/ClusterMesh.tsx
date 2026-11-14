@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, MeshPeer } from "./types";
-import { Detail, Dialog, ErrorBox, Info, Skeleton, errorMessage, filled, useChange } from "./ui";
+import { Detail, Dialog, ErrorBox, Info, Skeleton, errorMessage, filled, stageLabel, useChange } from "./ui";
 import { flag, record, text, texts } from "./values";
 
 /** A cluster's clusterMesh variable. */
@@ -121,7 +121,7 @@ export function ClusterMeshDialog({ cluster: c, onClose }: { cluster: Cluster; o
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

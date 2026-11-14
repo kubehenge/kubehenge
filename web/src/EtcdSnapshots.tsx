@@ -34,6 +34,7 @@ import {
   pollRunning,
   Said,
   sentence,
+  stageLabel,
   useChange,
   usePoll,
   Skeleton,
@@ -280,7 +281,7 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || Object.keys(problems).length > 0}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

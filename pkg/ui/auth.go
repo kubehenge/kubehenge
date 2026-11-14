@@ -301,8 +301,8 @@ func (s *Server) signOut(w http.ResponseWriter, r *http.Request, u user) {
 // clientAddress is the connection's peer, or behind a trusted proxy (Server.TrustedProxies) the
 // client it forwards for. Forwarding headers from any other peer are not believed.
 func clientAddress(r *http.Request) string {
-	if client, ok := r.Context().Value(clientAddressKey{}).(string); ok {
-		return client
+	if peer, ok := r.Context().Value(clientAddressKey{}).(string); ok {
+		return peer
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

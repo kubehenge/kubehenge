@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, TalosReleases, TalosStatus, Versions } from "./types";
-import { Detail, Dialog, ErrorBox, Field, Status, errorMessage, filled, sentence, useChange } from "./ui";
+import { Detail, Dialog, ErrorBox, Field, Status, errorMessage, filled, sentence, stageLabel, useChange } from "./ui";
 import { text } from "./values";
 
 /** talosRelease is what a Talos release looks like, such as v1.14.4. */
@@ -341,7 +341,7 @@ export function TalosDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
             className="primary"
             disabled={busy || version === current || !talosRelease.test(version)}
           >
-            Upgrade
+            {stageLabel}
           </button>
         </>
       }

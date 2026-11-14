@@ -232,7 +232,7 @@ describe("a cluster's egress proxy option", () => {
 
     await user.click(await screen.findByRole("button", { name: "Edit the egress proxy" }));
     const dialog = screen.getByRole("dialog", { name: "Edit egress proxy" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByRole("radio", { name: "Own proxy" }));
     expect(within(dialog).queryByText(/without credentials or path/u)).not.toBeInTheDocument();
@@ -272,7 +272,7 @@ describe("a cluster's egress proxy option", () => {
     expect(within(dialog).getByLabelText("Proxy address")).toHaveValue("http://proxy.example:3128");
     expect(within(dialog).getByLabelText("Exceptions")).toHaveValue(".corp");
     await user.click(within(dialog).getByRole("radio", { name: "Management proxy" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -293,7 +293,7 @@ describe("a cluster's egress proxy option", () => {
     await user.click(await screen.findByRole("button", { name: "Edit the egress proxy" }));
     const dialog = screen.getByRole("dialog", { name: "Edit egress proxy" });
     await user.click(within(dialog).getByRole("radio", { name: "No proxy" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({

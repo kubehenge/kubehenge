@@ -1,9 +1,10 @@
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, useState, type JSX, type ReactNode } from "react";
 
 import { api } from "./api";
 import { autoscales, controlPlaneSizes, mostWorkers, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import { addressCount, whole } from "./network";
+import { poolSize, poolSuffix as suffixOf } from "./pool-machine";
 import type {
   AutoscalerSettings,
   Autoscaling,
@@ -13,7 +14,7 @@ import type {
   PveNode,
   WorkerPool,
 } from "./types";
-import { Dialog, ErrorBox, Field, bytes, maxWorkers, shownNumber, typedNumber, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, bytes, maxWorkers, shownNumber, typedNumber, stageLabel, useChange } from "./ui";
 import { flag, quantity, record, text, texts } from "./values";
 
 const bytesPerMiB = 1_048_576;
@@ -118,7 +119,8 @@ const entryMost = (e: PoolEntry): number => number(e.autoscale ? e.max : e.repli
 
 const entryLeast = (e: PoolEntry): number => number(e.autoscale ? e.min : e.replicas);
 
-const poolMost = (p: WorkerPool): number => p.autoscaling?.max ?? p.replicas;
+/** poolMost is the most workers a pool may run: an autoscaled pool may grow to its most. */
+export const poolMost = (p: WorkerPool): number => p.autoscaling?.max ?? p.replicas;
 
 // The add-ons that use memory on the nodes by the classes' figures, read from the variables. The
 // server counts them exactly and refuses what they leave no room for. Logs need monitoring, and
@@ -262,7 +264,7 @@ export function poolChange(
 }
 
 /** freeMemory is the memory the nodes a cluster may use have free, in bytes, unknown without figures. */
-function freeMemory(c: Cluster, nodes: PveNode[]): number | undefined {
+export function freeMemory(c: Cluster, nodes: PveNode[]): number | undefined {
   const allowed = texts(c.variables["allowedNodes"]);
   const usable = nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node)));
   if (usable.length === 0 || usable.some((n) => n.maxMemory === undefined)) {
@@ -271,24 +273,43 @@ function freeMemory(c: Cluster, nodes: PveNode[]): number | undefined {
   return usable.reduce((sum, n) => sum + Math.max(0, (n.maxMemory ?? 0) - (n.memory ?? 0)), 0);
 }
 
+/** addedWorkers is how many more workers pool p of a changed cluster may run than it could before. */
+export function addedWorkers(before: Cluster, p: WorkerPool): number {
+  const was = before.workerPools.find((x) => x.name === p.name);
+  return Math.max(0, poolMost(p) - (was === undefined ? 0 : poolMost(was)));
+}
+
+/** addedWorkersMiB is the memory the workers pool p of a changed cluster may add need, in MiB. */
+export const addedWorkersMiB = (before: Cluster, after: Cluster, p: WorkerPool): number =>
+  addedWorkers(before, p) * (poolSize(after, p)?.memoryMiB ?? 0);
+
 /**
- * roomWarning warns when the workers an autoscaled pool may still add need more memory than the
- * nodes the cluster may use have free. It is advice: memory frees and fills as other VMs come and go.
+ * roomWarning warns when the workers an autoscaled pool may add by a change need more memory than
+ * the nodes the cluster may use have free. It counts as the Memory check does, for the one pool. It
+ * is advice: memory frees and fills as other VMs come and go.
  */
-export function roomWarning(c: Cluster, pool: { p: WorkerPool; e: PoolEntry }, nodes: PveNode[]): string | undefined {
-  const workerMiB = quantity(record(c.variables["workerMachine"])["memoryMiB"]);
-  const free = freeMemory(c, nodes);
-  const added = number(pool.e.max) - pool.p.replicas;
-  if (!pool.e.autoscale || workerMiB === undefined || free === undefined || !(added > 0)) {
+export function roomWarning(
+  { before, after }: { before: Cluster; after: Cluster },
+  pool: string,
+  nodes: PveNode[],
+): string | undefined {
+  const p = after.workerPools.find((x) => x.name === pool);
+  const free = freeMemory(after, nodes);
+  if (p?.autoscaling === undefined || free === undefined) {
     return undefined;
   }
-  const wanted = added * workerMiB * bytesPerMiB;
-  return wanted > free ? `${added} more workers need ${bytes(wanted)}, the nodes have ${bytes(free)} free` : undefined;
+  const added = addedWorkers(before, p);
+  const wanted = addedWorkersMiB(before, after, p) * bytesPerMiB;
+  if (!(wanted > free)) {
+    return undefined;
+  }
+  return `${added} more ${added === 1 ? "worker needs" : "workers need"} ${bytes(wanted)}, the nodes have ${bytes(free)} free`;
 }
 
 /** PoolFields edit one worker pool in the Scale dialog: a fixed number of workers, or autoscaled between two. */
 export function PoolFields({
   pool: p,
+  pools,
   entry: e,
   problem,
   warning,
@@ -296,15 +317,18 @@ export function PoolFields({
   onChange,
 }: {
   pool: WorkerPool;
+  /** Every pool of the cluster, which decide how the pool is named. */
+  pools: readonly WorkerPool[];
   entry: PoolEntry;
   problem: PoolProblem | undefined;
   warning: string | undefined;
   room: number | undefined;
   onChange: (e: PoolEntry) => void;
 }): JSX.Element {
+  const poolSuffix = (name: string): string => suffixOf(name, pools);
   return (
     <>
-      <Field label={`Scaling (${p.name})`}>
+      <Field label={`Scaling${poolSuffix(p.name)}`}>
         {(id) => (
           <select
             id={id}
@@ -317,7 +341,7 @@ export function PoolFields({
       </Field>
       {e.autoscale ? (
         <>
-          <Field label={`Fewest workers (${p.name})`} error={problem?.least}>
+          <Field label={`Fewest workers${poolSuffix(p.name)}`} error={problem?.least}>
             {(id) => (
               <input
                 id={id}
@@ -330,7 +354,7 @@ export function PoolFields({
             )}
           </Field>
           <Field
-            label={`Most workers (${p.name})`}
+            label={`Most workers${poolSuffix(p.name)}`}
             error={problem?.most}
             hint={room === undefined ? undefined : `Node addresses leave room for ${room}`}
           >
@@ -349,7 +373,7 @@ export function PoolFields({
         </>
       ) : (
         <Field
-          label={`Workers (${p.name})`}
+          label={`Workers${poolSuffix(p.name)}`}
           error={problem?.least}
           hint={p.autoscaling ? "Keeps its current workers unless changed" : undefined}
         >
@@ -471,7 +495,7 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || invalid}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -532,8 +556,39 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
   );
 }
 
+/**
+ * scaledCluster is the cluster as the Scale dialog's entries leave it, in the shape the server's plan
+ * gives, so that the dialog and Review plan check the same pools. An autoscaled pool keeps the
+ * workers it runs and takes the bounds entered.
+ */
+export function scaledCluster(c: Cluster, controlPlane: number, entries: Record<string, PoolEntry>): Cluster {
+  const workerPools = c.workerPools.map((p): WorkerPool => {
+    const e = entries[p.name] ?? poolEntry(p);
+    if (e.autoscale) {
+      return { ...p, autoscaling: { min: entryLeast(e) || 0, max: entryMost(e) } };
+    }
+    const { autoscaling: _, ...fixed } = p;
+    return { ...fixed, replicas: entryMost(e) };
+  });
+  return {
+    ...c,
+    controlPlane: { ...c.controlPlane, desired: controlPlane },
+    workers: { ...c.workers, desired: workerPools.reduce((sum, p) => sum + p.replicas, 0) },
+    workerPools,
+  };
+}
+
 /** ScaleDialog sets a cluster's control-plane nodes and, for each worker pool, its workers or its autoscaling bounds. */
-export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+export function ScaleDialog({
+  cluster: c,
+  onClose,
+  renderChecks,
+}: {
+  cluster: Cluster;
+  onClose: () => void;
+  /** The checks of the cluster as the entries would leave it, as Review plan lists them. */
+  renderChecks: (after: Cluster, nodes: PveNode[]) => ReactNode;
+}): JSX.Element {
   const current = c.controlPlane.desired || 1;
   const [controlPlane, setControlPlane] = useState(current);
   // Kept as typed, so a cleared field stays empty instead of turning into 0.
@@ -547,6 +602,7 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
   const room = roomFor(scaling);
   const change = poolChange(c.workerPools, pools);
   const changed = controlPlane !== current || Object.keys(change).length > 0;
+  const after = scaledCluster(c, controlPlane, pools);
   return (
     <Dialog
       title={`Scale ${c.name}`}
@@ -560,7 +616,7 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || Object.keys(invalid).length > 0}>
-            Scale
+            {stageLabel}
           </button>
         </>
       }
@@ -584,14 +640,16 @@ export function ScaleDialog({ cluster: c, onClose }: { cluster: Cluster; onClose
           <PoolFields
             key={p.name}
             pool={p}
+            pools={c.workerPools}
             entry={entry}
             problem={invalid[p.name]}
-            warning={roomWarning(c, { p, e: entry }, nodes)}
+            warning={roomWarning({ before: c, after }, p.name, nodes)}
             room={room[p.name]}
             onChange={(e) => setPools({ ...pools, [p.name]: e })}
           />
         );
       })}
+      {changed && renderChecks(after, nodes)}
       <ErrorBox message={error} />
     </Dialog>
   );

@@ -17,7 +17,7 @@ import {
   type NodeNetwork,
 } from "./network";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
 import { flag, quantity, record, text, texts } from "./values";
 
 /** The load balancers a cluster chooses from, by their names in its loadBalancer variable; "" is none. */
@@ -479,7 +479,7 @@ export function LoadBalancerDialog({ cluster: c, onClose }: { cluster: Cluster; 
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || invalid}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

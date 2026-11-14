@@ -2,7 +2,7 @@ import { useId, useState, type JSX } from "react";
 
 import { list } from "./network";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, Info, filled, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, Info, filled, stageLabel, useChange } from "./ui";
 import { flag, record, text, texts } from "./values";
 
 /** Where the add-ons that reach beyond a cluster send their traffic. */
@@ -223,7 +223,7 @@ export function EgressDialog({ cluster: c, onClose }: { cluster: Cluster; onClos
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

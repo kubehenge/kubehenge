@@ -90,5 +90,5 @@ func (o *CredentialOrphans) RunOnce(ctx context.Context) error {
 
 // CredentialOwner is the owner reference that has a cluster's credentials go with it.
 func CredentialOwner(c *clusterv1.Cluster) metav1.OwnerReference {
-	return metav1.OwnerReference{APIVersion: clusterv1.GroupVersion.String(), Kind: "Cluster", Name: c.Name, UID: c.UID}
+	return metav1.OwnerReference{APIVersion: clusterv1.GroupVersion.String(), Kind: clusterSpecKind, Name: c.Name, UID: c.UID}
 }

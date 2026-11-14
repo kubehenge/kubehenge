@@ -4,7 +4,7 @@ import { api } from "./api";
 import { CredentialField } from "./CredentialField";
 import { list } from "./network";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, Info, errorMessage, filled, saveFile, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, Info, errorMessage, filled, saveFile, stageLabel, useChange } from "./ui";
 import { flag, oneOf, record, text, texts } from "./values";
 
 export const issuers = ["acme-dns01", "acme-http01", "ca", "external"] as const;
@@ -901,7 +901,7 @@ export function CertificatesDialog({ cluster: c, onClose }: { cluster: Cluster; 
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

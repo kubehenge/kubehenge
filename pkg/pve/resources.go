@@ -59,13 +59,17 @@ type Node struct {
 	// Online is set only for a node that is a cluster member and answers calls forwarded to it.
 	Online bool `json:"online"`
 	// Fault says why a node that is a cluster member does not answer them, as Reason words it. It is
-	// empty for every other node.
+	// empty for every other node. Such a node is up and runs its VMs: it is not Offline.
 	Fault string `json:"fault,omitempty"`
 	// Memory is what the node uses and MaxMemory what it has, in bytes, 0 where Proxmox VE does not
 	// say, as for a node that is down.
 	Memory    int64 `json:"memory,omitempty"`
 	MaxMemory int64 `json:"maxMemory,omitempty"`
 }
+
+// Offline is whether Proxmox VE itself lists the node as down. A node that failed only a forwarded
+// call is not offline.
+func (n *Node) Offline() bool { return !n.Online && n.Fault == "" }
 
 // Bridge is a Linux or Open vSwitch bridge on a node.
 type Bridge struct {
@@ -330,7 +334,7 @@ func StoragesOf(res []StorageResource, configs []StorageConfig) []Storage {
 	for i := range configs {
 		byName[configs[i].Storage] = &configs[i]
 	}
-	var storages []Storage
+	storages := make([]Storage, 0, len(res))
 	for _, r := range res {
 		s := Storage{Storage: r.Storage, Node: r.Node, Shared: r.Shared != 0, Content: strings.Split(r.Content, ","), Type: r.Type}
 		if c, ok := byName[r.Storage]; ok {

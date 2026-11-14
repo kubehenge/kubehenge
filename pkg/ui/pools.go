@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strings"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -11,9 +12,87 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
+// poolNamed is the pool a name given in a change stands for: a pool of that name, or the default
+// pool for its label in any case, so that "workers" works where the interface shows "Workers".
+func poolNamed(c *clusterv1.Cluster, given string) string {
+	pools := provisioner.TopologyPools(c)
+	if !slices.Contains(pools, given) && strings.EqualFold(given, provisioner.DefaultPoolLabel) &&
+		slices.Contains(pools, workerPool) && provisioner.PoolLabel(workerPool, pools) == provisioner.DefaultPoolLabel {
+		return workerPool
+	}
+	return given
+}
+
+// poolsNamed is a change's pools by the names of the pools they stand for. It adds each name given
+// to the names spelt, by the pool it stands for.
+func poolsNamed[V any](c *clusterv1.Cluster, given map[string]V, spelt map[string][]string) map[string]V {
+	if given == nil {
+		return nil
+	}
+	out := make(map[string]V, len(given))
+	for name, v := range given {
+		pool := poolNamed(c, name)
+		if !slices.Contains(spelt[pool], name) {
+			spelt[pool] = append(spelt[pool], name)
+		}
+		out[pool] = v
+	}
+	return out
+}
+
+// namePools turns every pool a change names into the pool's own name, or says what is wrong. A
+// change that names one pool in two ways is refused, since which of its values was meant cannot be
+// told.
+func namePools(c *clusterv1.Cluster, req *changeRequest) string {
+	if problem := addedPoolsProblem(c, req.Pools); problem != "" {
+		return problem
+	}
+	spelt := map[string][]string{}
+	req.WorkerPools = poolsNamed(c, req.WorkerPools, spelt)
+	req.Autoscaling = poolsNamed(c, req.Autoscaling, spelt)
+	req.Pools = poolsNamed(c, req.Pools, spelt)
+	for _, pool := range slices.Sorted(maps.Keys(spelt)) {
+		if names := spelt[pool]; len(names) > 1 {
+			// The pool's own name first, then the others as given.
+			slices.SortFunc(names, func(a, b string) int {
+				switch {
+				case a == pool:
+					return -1
+				case b == pool:
+					return 1
+				}
+				return strings.Compare(a, b)
+			})
+			return "the change names pool " + pool + " as both " + strings.Join(names, " and ") + ". Name it once"
+		}
+	}
+	return ""
+}
+
+// addedPoolsProblem says what is wrong with the pools a change adds, or returns "". A pool added
+// takes a name of its own: not an existing pool's, and not the default pool's label, which would
+// otherwise change the default pool.
+func addedPoolsProblem(c *clusterv1.Cluster, pools map[string]*poolChange) string {
+	existing := provisioner.TopologyPools(c)
+	for _, name := range slices.Sorted(maps.Keys(pools)) {
+		switch change := pools[name]; {
+		case change == nil || !change.Add:
+			continue
+		case slices.Contains(existing, name):
+			return "the cluster has a pool named " + name
+		case poolNamed(c, name) != name:
+			return name + " is the default pool's name"
+		}
+	}
+	return ""
+}
+
 // poolChange adds a worker pool or changes one: its workers, and its size, which JSON null sets
 // back to the cluster's workerMachine. A pool the cluster lacks is added, and needs its workers.
 type poolChange struct {
+	// Add says the change means to add the pool, so that a name standing for an existing pool is
+	// refused rather than changing that pool.
+	Add      bool            `json:"add,omitempty"`
 	Replicas *int32          `json:"replicas"`
 	Machine  json.RawMessage `json:"machine"`
 	// Timeouts sets the pool's waits for a removed machine's node. It replaces all three, and a
@@ -48,21 +127,22 @@ func applyPools(c *clusterv1.Cluster, pools map[string]*poolChange) string {
 			workers.MachineDeployments = append(workers.MachineDeployments, clusterv1.MachineDeploymentTopology{Class: workerClass, Name: name})
 			i = len(workers.MachineDeployments) - 1
 		}
-		if problem := applyPool(&workers.MachineDeployments[i], change); problem != "" {
+		if problem := applyPool(&workers.MachineDeployments[i], change, provisioner.TopologyPools(c)); problem != "" {
 			return problem
 		}
 	}
 	return ""
 }
 
-// applyPool sets what a change gives one existing pool, or says what is wrong with it.
-func applyPool(md *clusterv1.MachineDeploymentTopology, change *poolChange) string {
+// applyPool sets what a change gives one existing pool, or says what is wrong with it, naming the
+// pool as people know it among pools.
+func applyPool(md *clusterv1.MachineDeploymentTopology, change *poolChange, pools []string) string {
 	if n := change.Replicas; n != nil {
 		if !provisioner.ValidWorkers(*n) {
 			return provisioner.WorkersRule + " in each pool"
 		}
 		if autoscalingOf(md.Metadata.Annotations) != nil {
-			return "pool " + md.Name + " is autoscaled. Switch autoscaling off to set its workers"
+			return "pool " + provisioner.PoolLabel(md.Name, pools) + " is autoscaled. Switch autoscaling off to set its workers"
 		}
 		md.Replicas = n
 	}

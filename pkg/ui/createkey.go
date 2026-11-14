@@ -57,16 +57,14 @@ func (s *Server) storeKeyAhead(w http.ResponseWriter, r *http.Request, u user, r
 	}
 	request := rand.Text()
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: req.Namespace, Name: provisioner.CredentialName(req.Name, purpose.Name),
-			Labels: map[string]string{
-				provisioner.CredentialLabel: purpose.Name, provisioner.CredentialClusterLabel: req.Name,
-				provisioner.CreateRequestKey: request,
-			},
-			Annotations: map[string]string{
-				provisioner.CredentialSetBy: u.ticket.Username,
-				provisioner.CredentialSetAt: s.now().UTC().Format(time.RFC3339),
-			},
+		Namespace: req.Namespace, Name: provisioner.CredentialName(req.Name, purpose.Name),
+		Labels: map[string]string{
+			provisioner.CredentialLabel: purpose.Name, provisioner.CredentialClusterLabel: req.Name,
+			provisioner.CreateRequestKey: request,
+		},
+		Annotations: map[string]string{
+			provisioner.CredentialSetBy: u.ticket.Username,
+			provisioner.CredentialSetAt: s.now().UTC().Format(time.RFC3339),
 		},
 		Type: provisioner.CredentialType,
 		Data: data,

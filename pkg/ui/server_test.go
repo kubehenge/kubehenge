@@ -62,6 +62,8 @@ type fakeAccounts struct {
 	now         func() time.Time
 	// nodeSkew is how far each Proxmox VE node's clock is from now.
 	nodeSkew map[string]time.Duration
+	// nodes, when set, replace the Proxmox VE nodes listed.
+	nodes []pve.Node
 	// members are every pool's guests. deleted records the VMs deleted.
 	members []pve.Member
 	deleted []int
@@ -222,6 +224,9 @@ func (f *fakeAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nodeReads++
+	if f.nodes != nil {
+		return slices.Clone(f.nodes), nil
+	}
 	return []pve.Node{{Node: "pve1", Online: true, MaxMemory: 64 << 30}, {Node: "pve2", Online: true, MaxMemory: 64 << 30}}, nil
 }
 
@@ -990,8 +995,9 @@ func TestCreate(t *testing.T) {
 	expect(t, b.do("POST", "/api/clusters", tagged), http.StatusCreated)
 }
 
-func withKey(body, values string) string {
-	return strings.Replace(body, `"variables":`, `"backupKey":`+values+`,"variables":`, 1)
+// withKey is createBody with a backup key.
+func withKey(values string) string {
+	return strings.Replace(createBody, `"variables":`, `"backupKey":`+values+`,"variables":`, 1)
 }
 
 const bothKeys = `{"accessKeyID":"AK","secretAccessKey":"SK"}`
@@ -1010,7 +1016,7 @@ func TestCreateStoresTheKeyAhead(t *testing.T) {
 	b := h.browser()
 	b.signIn("dev@pve")
 	read := func(name string) (*corev1.Secret, error) { return readSecret(h, name) }
-	rec := b.do("POST", "/api/clusters", withKey(createBody, bothKeys))
+	rec := b.do("POST", "/api/clusters", withKey(bothKeys))
 	expect(t, rec, http.StatusForbidden)
 	if !strings.Contains(rec.Body.String(), "Sys.Modify on /pool/kubehenge/default.web") {
 		t.Errorf("refused with %s", rec.Body)
@@ -1021,11 +1027,11 @@ func TestCreateStoresTheKeyAhead(t *testing.T) {
 	h.accounts.mu.Lock()
 	h.accounts.grants["dev@pve"]["/pool/kubehenge/default.web"] = []string{"Sys.Modify"}
 	h.accounts.mu.Unlock()
-	expect(t, b.do("POST", "/api/clusters", withKey(createBody, `{"accessKeyID":"AK"}`)), http.StatusUnprocessableEntity)
+	expect(t, b.do("POST", "/api/clusters", withKey(`{"accessKeyID":"AK"}`)), http.StatusUnprocessableEntity)
 	if _, err := read("web.backup"); err == nil {
 		t.Fatal("a key that did not read was stored")
 	}
-	expect(t, b.do("POST", "/api/clusters", withKey(createBody, bothKeys)), http.StatusCreated)
+	expect(t, b.do("POST", "/api/clusters", withKey(bothKeys)), http.StatusCreated)
 	s, err := read("web.backup")
 	if err != nil || string(s.Data["accessKeyID"]) != "AK" || len(s.OwnerReferences) != 1 || s.OwnerReferences[0].Name != "web" {
 		t.Fatalf("the key after the create: %+v, %v", s, err)
@@ -1036,7 +1042,7 @@ func TestCreateStoresTheKeyAhead(t *testing.T) {
 		t.Errorf("the request's mark: key %v, cluster %v, %v", s.Labels, c.Annotations, err)
 	}
 	other := `{"accessKeyID":"XX","secretAccessKey":"YY"}`
-	expect(t, b.do("POST", "/api/clusters", withKey(createBody, other)), http.StatusConflict)
+	expect(t, b.do("POST", "/api/clusters", withKey(other)), http.StatusConflict)
 	if s, err = read("web.backup"); err != nil || string(s.Data["accessKeyID"]) != "AK" {
 		t.Errorf("the live cluster's key after a clash: %+v, %v", s, err)
 	}
@@ -1049,9 +1055,9 @@ func TestCreateLeavesAKubectlKeyAlone(t *testing.T) {
 	h := newHarness(t)
 	h.accounts.grants["dev@pve"]["/pool/kubehenge/default.web"] = []string{"Sys.Modify"}
 	mine := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web.backup", Labels: map[string]string{
+		Namespace: "default", Name: "web.backup", Labels: map[string]string{
 			provisioner.CredentialLabel: "backup", provisioner.CredentialClusterLabel: "web",
-		}},
+		},
 		Type: provisioner.CredentialType, Data: map[string][]byte{"accessKeyID": []byte("MINE"), "secretAccessKey": []byte("S")},
 	}
 	if err := h.kube.Create(context.Background(), mine); err != nil {
@@ -1059,7 +1065,7 @@ func TestCreateLeavesAKubectlKeyAlone(t *testing.T) {
 	}
 	b := h.browser()
 	b.signIn("dev@pve")
-	expect(t, b.do("POST", "/api/clusters", withKey(createBody, bothKeys)), http.StatusConflict)
+	expect(t, b.do("POST", "/api/clusters", withKey(bothKeys)), http.StatusConflict)
 	s, err := readSecret(h, "web.backup")
 	if err != nil || string(s.Data["accessKeyID"]) != "MINE" || len(s.OwnerReferences) > 0 || s.Labels[provisioner.CreateRequestKey] != "" {
 		t.Errorf("the kubectl-made key: %+v, %v", s, err)
@@ -1078,9 +1084,9 @@ func TestCreateRaceLeavesTheWinnersKey(t *testing.T) {
 			t.Fatal("the harness's client cannot be wrapped")
 		}
 		winner := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web.backup", Labels: map[string]string{
+			Namespace: "default", Name: "web.backup", Labels: map[string]string{
 				provisioner.CredentialLabel: "backup", provisioner.CredentialClusterLabel: "web", provisioner.CreateRequestKey: "winner",
-			}},
+			},
 			Type: provisioner.CredentialType, Data: map[string][]byte{"accessKeyID": []byte("WIN"), "secretAccessKey": []byte("S")},
 		}
 		landed := false
@@ -1091,8 +1097,9 @@ func TestCreateRaceLeavesTheWinnersKey(t *testing.T) {
 			}
 			landed = true
 			c := &clusterv1.Cluster{}
-			if err := json.Unmarshal([]byte(`{"metadata":{"namespace":"default","name":"web","annotations":{"kubehenge.dev/create-request":"winner"}},
-				"spec":{"topology":{"classRef":{"name":"kubehenge-rke2"},"version":"v1.36.5+rke2r1"}}}`), c); err != nil {
+			won := `{"metadata":{"namespace":"default","name":"web","annotations":{"kubehenge.dev/create-request":"winner"}},
+				"spec":{"topology":{"classRef":{"name":"kubehenge-rke2"},"version":"v1.36.5+rke2r1"}}}`
+			if err := json.Unmarshal([]byte(won), c); err != nil {
 				t.Fatal(err)
 			}
 			if step == "key" {
@@ -1116,7 +1123,7 @@ func TestCreateRaceLeavesTheWinnersKey(t *testing.T) {
 		}))
 		b := h.browser()
 		b.signIn("dev@pve")
-		expect(t, b.do("POST", "/api/clusters", withKey(createBody, bothKeys)), http.StatusConflict)
+		expect(t, b.do("POST", "/api/clusters", withKey(bothKeys)), http.StatusConflict)
 		s, err := readSecret(h, "web.backup")
 		switch step {
 		case "key":

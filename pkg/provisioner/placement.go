@@ -119,45 +119,51 @@ func (p *Placer) placeAll(ctx context.Context) {
 	}
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		if !Owns(c, p.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
-			continue
+		if Owns(c, p.ClassNamespace) && c.DeletionTimestamp.IsZero() {
+			p.place(ctx, c, online, sites, skipped)
 		}
-		p.markSkipped(ctx, c, skipped)
-		p.markVersions(ctx, c, online)
-		p.markMTUs(ctx, c, online)
-		needs, err := needsOf(c, sites)
-		if err != nil {
-			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
-			continue
-		}
-		level := needs.Level
-		chosen, storage, err := placementVariables(c)
-		if err != nil {
-			log.Error(err, "reading the cluster's nodes and storage", "cluster", client.ObjectKeyFromObject(c))
-			continue
-		}
-		// The annotation lists every node the cluster could use, whichever it chose, for the hook to
-		// narrow. Whether a VM has a place at all is judged against the chosen ones.
-		hosts, _ := nodesToPlace(online, level, nil, storage)
-		_, blocked := nodesToPlace(online, level, chosen, storage)
-		usable := placeable(online, storage)
-		if sites != nil {
-			hosts = sites.Hosts(c, usable, level)
-		}
-		hosts, short, newer := preferOldest(online, hosts, func(h []string) ([]string, *roomOn) {
-			return fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, h)
-		})
-		p.markShort(ctx, c, short)
-		if sites != nil {
-			p.markDisks(ctx, c, sites.Space, nodeNames(usable, chosen))
-		}
-		if newer {
-			p.sayNewer(c, online)
-		} else {
-			p.clearNewer(c)
-		}
-		p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
 	}
+}
+
+// place records where one cluster's VMs may go, and what keeps them from going anywhere, as one look
+// at the nodes and the storages found them.
+func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node, sites *Sites, skipped []NodeFault) {
+	log := ctrl.LoggerFrom(ctx).WithName("placer")
+	p.markSkipped(ctx, c, skipped)
+	p.markVersions(ctx, c, online)
+	p.markMTUs(ctx, c, online)
+	needs, err := needsOf(c, sites)
+	if err != nil {
+		log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
+		return
+	}
+	level := needs.Level
+	chosen, storage, err := placementVariables(c)
+	if err != nil {
+		log.Error(err, "reading the cluster's nodes and storage", "cluster", client.ObjectKeyFromObject(c))
+		return
+	}
+	// The annotation lists every node the cluster could use, whichever it chose, for the hook to
+	// narrow. Whether a VM has a place at all is judged against the chosen ones.
+	hosts, _ := nodesToPlace(online, level, nil, storage)
+	_, blocked := nodesToPlace(online, level, chosen, storage)
+	usable := placeable(online, storage)
+	if sites != nil {
+		hosts = sites.Hosts(c, usable, level)
+	}
+	hosts, short, newer := preferOldest(online, hosts, func(h []string) ([]string, *roomOn) {
+		return fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, h)
+	})
+	p.markShort(ctx, c, short)
+	if sites != nil {
+		p.markDisks(ctx, c, sites.Space, nodeNames(usable, chosen))
+	}
+	if newer {
+		p.sayNewer(c, online)
+	} else {
+		p.clearNewer(c)
+	}
+	p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
 }
 
 // nodeNames are the names of the nodes, kept to chosen where the cluster chose any.
@@ -270,7 +276,7 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 		item := &req.Items[i]
 		var patch []byte
 		switch {
-		case item.HolderReference.Kind == "Cluster" && item.HolderReference.FieldPath == "spec.infrastructureRef":
+		case item.HolderReference.Kind == clusterSpecKind && item.HolderReference.FieldPath == "spec.infrastructureRef":
 			patch, err = h.placementPatch(ctx, cluster, chosen)
 		case kindOf(item) == proxmoxMachineTemplate:
 			patch, err = images.patch(ctx, item)

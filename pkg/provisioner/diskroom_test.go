@@ -61,10 +61,10 @@ func webMachine(name, pool string, made bool) *clusterv1.Machine {
 	} else {
 		labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel] = pool
 	}
-	m := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: name, Labels: labels}}
+	m := &clusterv1.Machine{Namespace: "team-a", Name: name, Labels: labels}
 	m.Spec.ClusterName = "web"
 	m.Spec.InfrastructureRef.Name = name
-	m.Status.Initialization.InfrastructureProvisioned = ptr.To(made)
+	m.Status.Initialization.InfrastructureProvisioned = new(made)
 	return m
 }
 
@@ -92,7 +92,7 @@ func placeOnSpace(t *testing.T, web *clusterv1.Cluster, sites *spaceSites, objs 
 	}
 	scheme.AddKnownTypeWithName(proxmoxMachineGVK, &unstructured.Unstructured{})
 	scheme.AddKnownTypeWithName(proxmoxMachineGVK.GroupVersion().WithKind("ProxmoxMachineList"), &unstructured.UnstructuredList{})
-	class := &clusterv1.ClusterClass{ObjectMeta: metav1.ObjectMeta{Name: "kubehenge-rke2", Namespace: "kubehenge-system"}}
+	class := &clusterv1.ClusterClass{Name: "kubehenge-rke2", Namespace: "kubehenge-system"}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append([]client.Object{class, web}, objs...)...).
 		WithStatusSubresource(&clusterv1.Cluster{}).Build()
 	nodes := &memNodes{free: map[string]int64{"pve1": 64_000}}
@@ -175,8 +175,8 @@ func TestPlacerCountsClonedVMsAsMade(t *testing.T) {
 }
 
 // autoscaledOnSpace places web with its pool md-0 autoscaled from 2 to 10 workers, running at 2 with
-// its control plane, every VM made.
-func autoscaledOnSpace(t *testing.T, sites *spaceSites) (*Placer, client.Client, *clusterv1.Cluster, *events.FakeRecorder) {
+// its control plane, every VM made. Its events go to rec.
+func autoscaledOnSpace(t *testing.T, sites *spaceSites, rec events.EventRecorder) (*Placer, client.Client, *clusterv1.Cluster) {
 	t.Helper()
 	web := diskCluster(t)
 	md := &web.Spec.Topology.Workers.MachineDeployments[0]
@@ -184,9 +184,8 @@ func autoscaledOnSpace(t *testing.T, sites *spaceSites) (*Placer, client.Client,
 	md.Metadata.Annotations = map[string]string{AutoscalerMinAnnotation: "2", AutoscalerMaxAnnotation: "10"}
 	p, c, web := placeOnSpace(t, web, sites,
 		webMachine("web-cp-a", "", true), webMachine("web-md-a", "md-0", true), webMachine("web-md-b", "md-0", true))
-	rec := events.NewFakeRecorder(10)
 	p.Events = rec
-	return p, c, web, rec
+	return p, c, web
 }
 
 // An autoscaled pool at its minimum with nothing waiting runs as asked: the workers it may grow to
@@ -195,7 +194,7 @@ func TestPlacerLeavesAnAutoscaledPoolAtRestAlone(t *testing.T) {
 	t.Parallel()
 	sites := &spaceSites{}
 	sites.set("lvm", 100)
-	p, c, web, _ := autoscaledOnSpace(t, sites)
+	p, c, web := autoscaledOnSpace(t, sites, events.NewFakeRecorder(10))
 	p.placeAll(t.Context())
 	if cond := spaceCondition(t, c, web); cond != nil {
 		t.Errorf("%s = %+v for a pool at 2 of 2 to 10 with nothing waiting", StorageLacksSpaceCondition, cond)
@@ -208,7 +207,8 @@ func TestPlacerWarnsOnceThatTheAutoscaledMaximumLacksRoom(t *testing.T) {
 	t.Parallel()
 	sites := &spaceSites{}
 	sites.set("lvm", 100)
-	p, c, web, rec := autoscaledOnSpace(t, sites)
+	rec := events.NewFakeRecorder(10)
+	p, c, web := autoscaledOnSpace(t, sites, rec)
 	p.placeAll(t.Context())
 	p.placeAll(t.Context())
 	want := "Warning AutoscalerNoRoom Storage local-lvm (on pve1) reserves each disk's whole size and has 100 GiB free. " +

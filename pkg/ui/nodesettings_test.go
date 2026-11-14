@@ -159,7 +159,7 @@ func TestHealthNotesATaintThePoolDoesNotSet(t *testing.T) {
 		t.Fatalf("notes %v", attentionWhat(a))
 	}
 	byMachine := map[string]attentionView{got[0].Machine: got[0], got[1].Machine: got[1]}
-	if n := byMachine["one-md-0-a"]; !strings.Contains(n.What, "pool md-0") || !strings.Contains(n.Message, "Not in the pool's taints: gpu:NoExecute") ||
+	if n := byMachine["one-md-0-a"]; !strings.Contains(n.What, "pool Workers") || !strings.Contains(n.Message, "Not in the pool's taints: gpu:NoExecute") ||
 		strings.Contains(n.Message, "dedicated") || strings.Contains(n.Message, "unschedulable") || n.Severity != severityWarning {
 		t.Errorf("the hand-set taint: %+v", n)
 	}

@@ -441,9 +441,9 @@ describe("add-on installs of a cluster", () => {
     let dialog = screen.getByRole("dialog", { name: "Edit namespace labels" });
     const text = within(dialog).getByLabelText("Namespace labels");
     expect(text).toHaveValue("team=payments");
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.type(text, "{Enter}env=prod");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent()).toStrictEqual([{ variables: { namespaceLabels: { team: "payments", env: "prod" } } }]),
@@ -452,7 +452,7 @@ describe("add-on installs of a cluster", () => {
     await user.click(screen.getByRole("button", { name: "Edit namespace labels" }));
     dialog = screen.getByRole("dialog", { name: "Edit namespace labels" });
     await user.clear(within(dialog).getByLabelText("Namespace labels"));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() => expect(sent()).toHaveLength(2));
     expect(sent()[1]).toStrictEqual({ variables: { namespaceLabels: {} } });
@@ -467,6 +467,6 @@ describe("add-on installs of a cluster", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit namespace labels" });
     await user.type(within(dialog).getByLabelText("Namespace labels"), "{Enter}=x");
     expect(within(dialog).getByLabelText("Namespace labels")).toHaveAccessibleDescription(/^Line 2 has no key/u);
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
   });
 });

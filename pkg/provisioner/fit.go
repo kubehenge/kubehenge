@@ -71,6 +71,3 @@ func diskOf(m machineSize) int64 {
 	}
 	return int64(*m.DiskGiB)
 }
-
-// NeededGiB words a machine's memory in GiB, as the placement's condition does.
-func NeededGiB(mib int64) string { return neededGiB(mib) }

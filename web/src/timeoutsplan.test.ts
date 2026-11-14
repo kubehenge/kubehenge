@@ -80,7 +80,7 @@ describe("the plan's timeouts", () => {
         effect: "none",
       },
       {
-        label: "Pool md-0 timeouts",
+        label: "Pool Workers timeouts",
         now: "Drain 60 min, volume detach 10 min, node removal 60 s (class defaults)",
         after: "Drain 60 min (class default), volume detach no limit, node removal 60 s (class default)",
         effect: "none",

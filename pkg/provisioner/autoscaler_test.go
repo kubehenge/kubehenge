@@ -526,7 +526,7 @@ func TestAutoscalerReportsAWorkerProxmoxHasNoRoomFor(t *testing.T) {
 	}
 	select {
 	case e := <-f.events.Events:
-		if !strings.Contains(e, "AutoscalerNoRoom") || !strings.Contains(e, "pool md-0") || !strings.Contains(e, "on node pve1") {
+		if !strings.Contains(e, "AutoscalerNoRoom") || !strings.Contains(e, "pool Workers:") || !strings.Contains(e, "on node pve1") {
 			t.Errorf("event %q", e)
 		}
 	default:

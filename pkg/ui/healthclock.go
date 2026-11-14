@@ -102,6 +102,36 @@ func (s *Server) poolNodes(ctx context.Context, u user, poolPath string) []strin
 	return names
 }
 
+// addOfflineNodes adds an error for each Proxmox VE node that runs one of the cluster's VMs and is
+// offline, which Cluster API and the cluster itself take a while to notice. A user who cannot read the
+// nodes sees none. A node that answered one forwarded call badly still runs its VMs, so it is no
+// error of the cluster's.
+func (s *Server) addOfflineNodes(ctx context.Context, u user, poolPath string, v *healthView) {
+	names := s.poolNodes(ctx, u, poolPath)
+	if len(names) == 0 {
+		return
+	}
+	nodes, err := s.Accounts.Nodes(ctx, u.ticket)
+	if err != nil {
+		return
+	}
+	var a attention
+	for i := range nodes {
+		if n := &nodes[i]; n.Offline() && slices.Contains(names, n.Node) {
+			a.add(severityError, sectionNodes, "Proxmox VE node "+n.Node+" is offline",
+				"The cluster's VMs on it are down, whatever the cluster last reported.", time.Time{})
+		}
+	}
+	if len(a) == 0 {
+		return
+	}
+	v.Attention = append(v.Attention, a...)
+	slices.SortStableFunc(v.Attention, func(x, y attentionView) int { return severityRank(x.Severity) - severityRank(y.Severity) })
+	if v.Verdict == verdictHealthy || v.Verdict == verdictChanging {
+		v.Verdict = verdictDegraded
+	}
+}
+
 // addNodeClocks adds a warning for each Proxmox VE node that runs one of the cluster's VMs and whose
 // clock is over nodeClockWarn from this machine's. Proxmox VE shows a node's time to users with
 // Sys.Audit on the node, so a user without it sees nothing, and a node that does not answer is left

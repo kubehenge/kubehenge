@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { poolChange, poolEntry, poolProblems, roomFor, roomWarning } from "./Autoscaling";
+import { poolChange, poolEntry, poolProblems, roomFor, roomWarning, scaledCluster } from "./Autoscaling";
 import { applyStaged, fakeServer } from "./fake-server";
 import type { Cluster, PveNode, WorkerPool } from "./types";
 
@@ -39,6 +39,12 @@ const web: Cluster = {
 
 const autoscaled: Cluster = { ...web, workerPools: [scaledPool] };
 
+// mostRaised is a change of c's autoscaled pool to max workers at most, as the Scale dialog makes it.
+const mostRaised = (c: Cluster, max: string): { before: Cluster; after: Cluster } => ({
+  before: c,
+  after: scaledCluster(c, 1, { "md-0": { ...poolEntry(scaledPool), max } }),
+});
+
 const signedIn = { "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }) };
 
 describe("the Scale dialog", () => {
@@ -55,8 +61,8 @@ describe("the Scale dialog", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Scale" }));
     const dialog = screen.getByRole("dialog", { name: "Scale web" });
-    await user.selectOptions(within(dialog).getByLabelText("Scaling (md-0)"), "autoscaled");
-    const most = within(dialog).getByLabelText("Most workers (md-0)");
+    await user.selectOptions(within(dialog).getByLabelText("Scaling"), "autoscaled");
+    const most = within(dialog).getByLabelText("Most workers");
     expect(most).toHaveValue(4);
     expect(most).toHaveAccessibleDescription("Node addresses leave room for 6");
     // Two more workers of 8 GiB, and the node has 4 GiB free.
@@ -64,19 +70,40 @@ describe("the Scale dialog", () => {
     await user.clear(most);
     await user.type(most, "7");
     expect(most).toHaveAccessibleDescription(/Needs 9 node addresses, but there are 8/u);
-    expect(within(dialog).getByRole("button", { name: "Scale" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.clear(most);
     await user.type(most, "4");
-    const fewest = within(dialog).getByLabelText("Fewest workers (md-0)");
+    const fewest = within(dialog).getByLabelText("Fewest workers");
     await user.clear(fewest);
     await user.type(fewest, "1");
-    await user.click(within(dialog).getByRole("button", { name: "Scale" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
         autoscaling: { "md-0": { min: 1, max: 4 } },
       }),
     );
+  });
+
+  it("shows the addresses and memory the new count needs, as Review plan does", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const nodes: PveNode[] = [{ node: "pve1", online: true, memory: 60 * gib, maxMemory: 64 * gib }];
+    fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": { body: web },
+      "GET /api/proxmox/nodes": { body: nodes },
+      "PATCH /api/clusters/default/web": { body: web },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Scale" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Scale web" }));
+    const workers = dialog.getByLabelText("Workers");
+    await user.clear(workers);
+    await user.type(workers, "4");
+    // Eight addresses, a control plane and four workers leave three. Two more workers of 8 GiB need 16 GiB of 4 free.
+    await expect(dialog.findByText("3 spare")).resolves.toHaveClass("status-ok");
+    expect(dialog.getByText(/^Needs 16\.0 GiB/u)).toHaveClass("status-warning");
   });
 
   it("switches it off at the workers it runs", async () => {
@@ -89,14 +116,14 @@ describe("the Scale dialog", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     const term = await screen.findByText("Worker pools", { selector: "dt" });
-    expect(term.nextElementSibling).toHaveTextContent("md-0: 3 of 1 to 4, autoscaled");
+    expect(term.nextElementSibling).toHaveTextContent("Workers: 3 of 1 to 4, autoscaled");
     await user.click(screen.getByRole("button", { name: "Scale" }));
     const dialog = screen.getByRole("dialog", { name: "Scale web" });
-    await user.selectOptions(within(dialog).getByLabelText("Scaling (md-0)"), "fixed");
-    const workers = within(dialog).getByLabelText("Workers (md-0)");
+    await user.selectOptions(within(dialog).getByLabelText("Scaling"), "fixed");
+    const workers = within(dialog).getByLabelText("Workers");
     expect(workers).toHaveValue(3);
     expect(workers).toHaveAccessibleDescription("Keeps its current workers unless changed");
-    await user.click(within(dialog).getByRole("button", { name: "Scale" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
@@ -161,17 +188,19 @@ describe("the pools' checks", () => {
   });
 
   it("warns only when the nodes the cluster may use lack the memory", () => {
-    const e = { ...poolEntry(scaledPool), max: "5" };
     const roomy: PveNode[] = [{ node: "pve1", online: true, memory: 0, maxMemory: 64 * gib }];
     const tight: PveNode[] = [
       { node: "pve1", online: true, memory: 60 * gib, maxMemory: 64 * gib },
       { node: "pve2", online: true, memory: 0, maxMemory: 256 * gib },
     ];
-    expect(roomWarning(autoscaled, { p: scaledPool, e }, roomy)).toBeUndefined();
-    expect(roomWarning(autoscaled, { p: scaledPool, e }, tight)).toBeUndefined();
+    expect(roomWarning(mostRaised(autoscaled, "5"), "md-0", roomy)).toBeUndefined();
+    expect(roomWarning(mostRaised(autoscaled, "5"), "md-0", tight)).toBeUndefined();
     const kept: Cluster = { ...autoscaled, variables: { ...autoscaled.variables, allowedNodes: ["pve1"] } };
-    expect(roomWarning(kept, { p: scaledPool, e }, tight)).toMatch(/^2 more workers need 16\.0 GiB/u);
-    expect(roomWarning(kept, { p: scaledPool, e }, [])).toBeUndefined();
+    // The most goes from 4 to 5 and to 6: one and two more workers of 8 GiB, on 4 GiB free.
+    expect(roomWarning(mostRaised(kept, "5"), "md-0", tight)).toMatch(/^1 more worker needs 8\.0 GiB/u);
+    expect(roomWarning(mostRaised(kept, "6"), "md-0", tight)).toMatch(/^2 more workers need 16\.0 GiB/u);
+    expect(roomWarning(mostRaised(kept, "4"), "md-0", tight)).toBeUndefined();
+    expect(roomWarning(mostRaised(kept, "5"), "md-0", [])).toBeUndefined();
   });
 });
 
@@ -190,15 +219,15 @@ describe("the autoscaler's options", () => {
     );
     await user.click(screen.getByRole("button", { name: "Edit the autoscaler" }));
     const dialog = screen.getByRole("dialog", { name: "Edit autoscaler" });
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     const runs = within(dialog).getByLabelText("Runs");
     await user.selectOptions(runs, "workload");
     expect(runs).toHaveAccessibleDescription("Its token reads the machines of the namespace's clusters");
     const unneeded = within(dialog).getByLabelText("Unneeded for (minutes)");
     await user.clear(unneeded);
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.type(unneeded, "5");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.findLast((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({

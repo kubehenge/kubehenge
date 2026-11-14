@@ -4,6 +4,8 @@ import { api } from "./api";
 import { BootLogDialog } from "./BootLog";
 import { useClusterHealth } from "./cluster-health";
 import { clusterPath } from "./cluster-paths";
+import { offlineOf, unreachable, useProxmoxNodes } from "./offline-nodes";
+import { poolLabel } from "./pool-machine";
 import { Link, useQuery } from "./router";
 import type { Cluster, HealthNode, Machine, PveNode } from "./types";
 import {
@@ -17,9 +19,6 @@ import {
   age,
   errorMessage,
   filled,
-  pollCache,
-  pollIdle,
-  usePoll,
   type Health,
 } from "./ui";
 
@@ -37,10 +36,6 @@ function heldText(m: Machine): string {
   const until = new Date(m.heldUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   return `${held}. Replaced after ${until} at the latest.`;
 }
-
-// The Proxmox VE nodes, kept for every view of every cluster that places machines on them.
-const nodesCache = pollCache<PveNode[]>();
-const nodesKept = { cache: nodesCache, key: "nodes" };
 
 // machineStatus says how far a machine is, as the cluster list says it of clusters. A machine on a
 // Proxmox VE node that is offline is down whatever Cluster API last read of it, and so is one whose
@@ -88,7 +83,7 @@ export function crowding(machines: Machine[]): string | undefined {
   }
   // etcd needs a majority of the control-plane nodes.
   const cost = count * 2 > controlPlane.length ? "stops the control plane" : `takes ${count} down`;
-  return `${node} runs ${count} of ${controlPlane.length} control-plane VMs, so losing it ${cost}. Migrate one to another node.`;
+  return `${node} runs ${count} of ${controlPlane.length} control-plane machines, so losing it ${cost}. Migrate one to another node.`;
 }
 
 /**
@@ -106,7 +101,7 @@ export function Machines({
   why: string | undefined;
   onChanged: () => void;
 }): JSX.Element {
-  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
+  const nodes = useProxmoxNodes();
   const health = useClusterHealth(c);
   const [replacing, setReplacing] = useState<Machine>();
   const [deleting, setDeleting] = useState<Machine>();
@@ -114,7 +109,7 @@ export function Machines({
   const [forgetting, setForgetting] = useState<Machine>();
   const [rowError, setRowError] = useState<string>();
   const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));
-  const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
+  const offline = offlineOf(nodes);
   const machines = c.machines ?? [];
   const autoscaled = new Set(c.workerPools.filter((p) => p.autoscaling !== undefined).map((p) => p.name));
   const crowded = crowding(machines);
@@ -246,7 +241,7 @@ export function Machines({
             onChanged();
           }}
         >
-          {`Drains the node and deletes the VM and its disks. Pool ${deleting.pool ?? ""} shrinks by one.`}
+          {`Drains the node and deletes the VM and its disks. Pool ${poolLabel(deleting.pool ?? "", c.workerPools)} shrinks by one.`}
         </MachineDialog>
       )}
       {rebooting !== undefined && (
@@ -472,15 +467,20 @@ const rolesFirst = (a: Machine, b: Machine): number =>
 interface Host {
   name: string;
   online: boolean | undefined;
+  /** Why the appliance's calls to a node that is up fail, for one it cannot reach. */
+  fault?: string | undefined;
   machines: Machine[];
 }
+
+// A node the appliance cannot reach is up, and so are the machines on it.
+const down = (h: Host): boolean => h.online === false && !filled(h.fault);
 
 // hosts are the Proxmox VE nodes with the cluster's machines on them, then the others the user
 // sees, empty, as places a new machine may go. Machines whose node the user may not see last.
 function hosts(machines: Machine[], nodes: PveNode[] | undefined): Host[] {
   const byName = new Map<string, Host>();
   for (const n of nodes ?? []) {
-    byName.set(n.node, { name: n.node, online: n.online, machines: [] });
+    byName.set(n.node, { name: n.node, online: n.online, fault: unreachable(n) ? n.fault : undefined, machines: [] });
   }
   for (const m of machines) {
     const name = m.proxmoxNode ?? unplaced;
@@ -509,11 +509,13 @@ const countedRoles = (machines: Machine[]): string => {
   return parts.join(", ");
 };
 
-// hostState is a node tile's line: whether it is offline, and which of the cluster's machines it runs.
+// hostState is a node tile's line: whether it is offline or out of the appliance's reach, and which
+// of the cluster's machines it runs.
 function hostState(h: Host): string {
   const roles = countedRoles(h.machines);
   if (h.online === false) {
-    return roles === "" ? "Offline" : `Offline, ${roles}`;
+    const state = down(h) ? "Offline" : "Not reachable";
+    return roles === "" ? state : `${state}, ${roles}`;
   }
   return roles === "" ? "Empty" : roles;
 }
@@ -524,7 +526,7 @@ function hostState(h: Host): string {
  */
 export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
   // Only those who see the nodes get them. The others see the nodes of their machines alone.
-  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
+  const nodes = useProxmoxNodes();
   const health = useClusterHealth(c);
   const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));
   const machines = c.machines ?? [];
@@ -540,16 +542,17 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
         {list.map((h) => (
           <li
             key={h.name}
-            className={`host${h.machines.length === 0 ? " host-empty" : ""}${h.online === false ? " host-offline" : ""}`}
+            className={`host${h.machines.length === 0 ? " host-empty" : ""}${down(h) ? " host-offline" : ""}${filled(h.fault) ? " host-unreachable" : ""}`}
           >
             <div className="host-head">
               <span className="host-name">{h.name === unplaced ? "Hidden node" : h.name}</span>
               <span className="host-count">{hostState(h)}</span>
             </div>
+            {filled(h.fault) && <p className="host-fault">{h.fault}</p>}
             {h.machines.length > 0 && (
               <ul className="host-machines">
                 {h.machines.map((m) => {
-                  const s = machineStatus(m, h.online === false, nodeOf.get(m.name));
+                  const s = machineStatus(m, down(h), nodeOf.get(m.name));
                   return (
                     <li key={m.name}>
                       <Link
