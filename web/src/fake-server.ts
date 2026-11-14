@@ -143,7 +143,7 @@ export function held(): { route: () => Promise<Answer>; answer: (a: Answer) => v
 export async function acceptProblems(user: UserEvent): Promise<void> {
   const plan = within(screen.getByRole("dialog", { name: "Review plan" }));
   await waitFor(() => expect(plan.queryByText("Checking")).not.toBeInTheDocument());
-  const accept = plan.queryByRole("checkbox", { name: "Accept the problems" });
+  const accept = plan.queryByRole("checkbox", { name: "Accept the risks" });
   if (accept !== null) {
     await user.click(accept);
   }

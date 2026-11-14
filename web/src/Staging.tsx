@@ -179,7 +179,9 @@ function PlanDialog({
     return null;
   }
   const { plan } = staged;
-  const stopped = needsAccepting(checks) && !accepted;
+  // Replacing nodes is a risk the admin confirms, whether or not a check found a problem.
+  const risky = needsAccepting(checks) || !["none", "scales"].includes(worstEffect(plan.changes));
+  const stopped = risky && !accepted;
   const apply = async (): Promise<void> => {
     if (stopped) {
       return;
@@ -220,7 +222,7 @@ function PlanDialog({
         </p>
       ))}
       <ChecksList checks={checks} healthPath={clusterPath(c.namespace, c.name, "health")} label="Before applying" />
-      <Accept checks={checks} accepted={accepted} onChange={setAccepted} />
+      <Accept required={risky} accepted={accepted} onChange={setAccepted} />
       <div className="scroll">
         <table className="grid plan stack">
           <thead>

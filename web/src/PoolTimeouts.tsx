@@ -36,7 +36,7 @@ export function TimeoutsDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || same || invalid}>
-            Set
+            Add to plan
           </button>
         </>
       }

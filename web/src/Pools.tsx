@@ -251,7 +251,7 @@ function DeletePoolDialog({
             Cancel
           </button>
           <button type="submit" className="danger" disabled={busy}>
-            Delete
+            Add to plan
           </button>
         </>
       }

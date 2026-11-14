@@ -68,7 +68,7 @@ export function NodesDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || problem !== undefined}>
-            Save
+            Add to plan
           </button>
         </>
       }

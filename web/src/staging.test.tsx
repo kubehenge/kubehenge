@@ -79,6 +79,8 @@ describe("staged changes", () => {
     expect(plan.getByRole("row", { name: /^Monitoring/u })).toHaveTextContent(
       "MonitoringOffOnReplaces workers one by one",
     );
+    // Monitoring replaces workers, so applying waits for the admin to confirm it.
+    expect(plan.getByRole("button", { name: "Apply" })).toBeDisabled();
     await acceptProblems(user);
     await user.click(plan.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Staged changes" })).not.toBeInTheDocument());
@@ -197,7 +199,7 @@ describe("staged changes", () => {
     await plan.findByText("1 in use");
     expect(plan.getByText("1 problem")).toBeInTheDocument();
     expect(plan.getByRole("button", { name: "Apply" })).toBeDisabled();
-    await user.click(plan.getByRole("checkbox", { name: "Accept the problems" }));
+    await user.click(plan.getByRole("checkbox", { name: "Accept the risks" }));
     expect(plan.getByRole("button", { name: "Apply" })).toBeEnabled();
     await user.click(plan.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(calls.map((c) => c.key)).toContain(`PATCH ${path}`));

@@ -342,23 +342,26 @@ export function ChecksList({
   );
 }
 
-/** Accept is the box to tick before a change that met a problem goes ahead, as the command line asks. */
+/**
+ * Accept is the box to tick before a change goes ahead that met a problem or replaces nodes, as the
+ * command line asks.
+ */
 export function Accept({
-  checks,
+  required,
   accepted,
   onChange,
 }: {
-  checks: Check[];
+  required: boolean;
   accepted: boolean;
   onChange: (accepted: boolean) => void;
 }): JSX.Element | null {
-  if (!needsAccepting(checks)) {
+  if (!required) {
     return null;
   }
   return (
     <label className="accept">
       <input type="checkbox" checked={accepted} onChange={(e) => onChange(e.target.checked)} />
-      Accept the problems
+      Accept the risks
     </label>
   );
 }
