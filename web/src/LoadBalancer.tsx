@@ -126,12 +126,19 @@ export function loadBalancerText(lb: LoadBalancer, distribution: string | undefi
   return `${lb.implementation === "kube-vip" ? "kube-vip" : "MetalLB"}, on ${lb.addresses.join(", ")}${bgp}`;
 }
 
-const loadBalancerInfo = "Gives each LoadBalancer Service its own address.";
+/** loadBalancerInfo says what each choice gives a LoadBalancer Service. */
+const loadBalancerInfo = (distribution: string | undefined): string =>
+  `MetalLB or kube-vip gives each LoadBalancer Service an address from the range below. ${
+    distribution === "k3s"
+      ? "With k3s's own, a Service answers on the nodes' own addresses."
+      : "With none, a Service gets no address."
+  }`;
 
-const addressesHint = (families: FamilyChoice): string =>
-  hasFamily(families, "IPv4")
-    ? "Free addresses on the nodes' network, like 10.0.0.100-10.0.0.120"
-    : "Free addresses on the nodes' network, like 2001:db8::100-2001:db8::120";
+const addressesHint = (families: FamilyChoice, example?: string): string => {
+  const like =
+    example ?? (hasFamily(families, "IPv4") ? "10.0.0.100-10.0.0.120" : "2001:db8::100-2001:db8::120");
+  return `Free addresses on the nodes' network, like ${like}`;
+};
 
 const routedHint = (families: FamilyChoice): string =>
   hasFamily(families, "IPv4")
@@ -324,8 +331,11 @@ export function LoadBalancerFields({
   errors,
   onChange,
   password,
+  example,
 }: {
   distribution: string | undefined;
+  /** A range on the nodes' network to show as the example, where the network is known. */
+  example?: string | undefined;
   families: FamilyChoice;
   value: LoadBalancerValue;
   errors: LoadBalancerErrors;
@@ -337,7 +347,7 @@ export function LoadBalancerFields({
   const bgp = value.mode === "bgp" && bgpOffered(distribution, value.implementation);
   return (
     <>
-      <Field label="Load balancer" info={loadBalancerInfo}>
+      <Field label="Load balancer" info={loadBalancerInfo(distribution)}>
         {(id) => (
           <select
             id={id}
@@ -372,7 +382,7 @@ export function LoadBalancerFields({
       {value.implementation !== "" && (
         <Field
           label="Load-balancer addresses"
-          hint={bgp ? routedHint(families) : addressesHint(families)}
+          hint={bgp ? routedHint(families) : addressesHint(families, example)}
           error={errors.addresses}
         >
           {(id) => (

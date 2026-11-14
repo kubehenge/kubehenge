@@ -662,6 +662,8 @@ const ownNetworks: Record<string, string> = { talos: "flannel" };
 const exampleEndpoint = 20;
 const exampleFirst = 21;
 const exampleLast = 29;
+const exampleRangeFirst = 100;
+const exampleRangeLast = 120;
 
 // The ranges the controller takes for an IPv6 family when none is asked for.
 const defaultPodsIPv6 = "fd5e:4b1c:9a20::/56";
@@ -915,6 +917,7 @@ export function NetworkStep({
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
+          example={`${sample(primary, exampleRangeFirst)}-${sample(primary, exampleRangeLast)}`}
           families={form.families}
           value={formLoadBalancerValue(form)}
           errors={{
