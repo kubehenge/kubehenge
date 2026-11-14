@@ -99,8 +99,9 @@ func volumeIdentityKey(recipient string) string {
 }
 
 // setUpVolumeBackups prepares the backups onto the volume after an apply, with no input: a new key
-// sealed with the passphrase the first time, and the credential the snapshots are taken with.
-func (a *Appliance) setUpVolumeBackups(ctx context.Context, admin []byte, passphrase string) error {
+// sealed with the passphrase the first time, and the credential the snapshots are taken with. talos
+// is the management cluster's talosconfig and admin its admin kubeconfig.
+func (a *Appliance) setUpVolumeBackups(ctx context.Context, talos, admin []byte, passphrase string) error {
 	keys, err := readJSONFile[volumeBackupKeys](a.etcdBackupFile("volume.json"))
 	if errors.Is(err, fs.ErrNotExist) {
 		keys, err = newVolumeBackupKeys(passphrase, a.KeyWorkFactor)
@@ -112,7 +113,7 @@ func (a *Appliance) setUpVolumeBackups(ctx context.Context, admin []byte, passph
 		return err
 	}
 	var nodes etcdBackupKeys
-	talosconfig, err := a.etcdBackupCredential(ctx, admin, &nodes)
+	talosconfig, err := a.etcdBackupCredential(ctx, talos, &nodes)
 	if err != nil {
 		return err
 	}
@@ -240,7 +241,7 @@ var storeReadyPoll = 2 * time.Second
 // wakeStore starts the backup volume's store when it sleeps and waits, within ctx, until its pod is
 // ready, which is once the plugin has attached the disk to that pod's node. Only a store on a node's
 // own storage sleeps, and its pod must land on a node VM on that node, so the nodes' zone labels are
-// corrected first.
+// set first. A node whose zone is unknown keeps the store asleep.
 func (a *Appliance) wakeStore(ctx context.Context, kube kubernetes.Interface) error {
 	deps := kube.AppsV1().Deployments(backupstore.Namespace)
 	d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})

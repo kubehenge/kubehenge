@@ -2,6 +2,7 @@ package appliance
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -188,5 +190,62 @@ func TestAMovedNodeVMsZoneIsCorrectedBeforeTheStoreWakes(t *testing.T) {
 	}
 	if got, _ := blind.AppsV1().Deployments(backupstore.Namespace).Get(t.Context(), backupstore.Service, metav1.GetOptions{}); *got.Spec.Replicas != 0 {
 		t.Fatal("a wake that could not read where the node VMs run started the store")
+	}
+
+	// A node Proxmox VE lists no VM for may carry any zone, so the store stays asleep.
+	unlisted := fake.NewClientset(storeDeployment(0, "0"), zonesToken(), zoned("mgmt-cp-0", "pve1", false), zoned("mgmt-cp-9", "pve1", false))
+	err := (&Appliance{vmHosts: hostsAt(t, map[string]string{"mgmt-cp-0": "pve1"})}).wakeStore(short, unlisted)
+	if err == nil || !strings.Contains(err.Error(), "reading where the management VMs run: Proxmox VE lists no VM for node mgmt-cp-9") {
+		t.Fatalf("a wake with node mgmt-cp-9 unlisted: %v", err)
+	}
+	if got, _ := unlisted.AppsV1().Deployments(backupstore.Namespace).Get(t.Context(), backupstore.Service, metav1.GetOptions{}); *got.Spec.Replicas != 0 {
+		t.Fatal("a wake with a node of unknown zone started the store")
+	}
+}
+
+// The machine config sets only the region, so each apply leaves the zones to the appliance. It
+// adds the zone a new node lacks and moves a stale one, through the admin kubeconfig.
+func TestAnApplyLabelsTheManagementNodesZones(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	a.Talos = &fakeManagementTalos{}
+	fresh := zoned("mgmt-cp-0", "", false)
+	delete(fresh.Labels, corev1.LabelTopologyZone)
+	management := fake.NewClientset(storeDeployment(0, "0"), zonesToken(), fresh, zoned("mgmt-cp-1", "pve1", true))
+	a.ManagementClient = func(admin []byte) (kubernetes.Interface, error) {
+		if string(admin) != "admin-kubeconfig" {
+			t.Errorf("the management cluster was reached with %q, not the admin kubeconfig", admin)
+		}
+		return management, nil
+	}
+	a.vmHosts = hostsAt(t, map[string]string{"mgmt-cp-0": "pve2", "mgmt-cp-1": "pve3"})
+	if err := a.Apply(settings("pve1"), passphrase, ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != StateSucceeded {
+		t.Fatalf("apply: %+v", j)
+	}
+	for node, want := range map[string]string{"mgmt-cp-0": "pve2", "mgmt-cp-1": "pve3"} {
+		n, err := management.CoreV1().Nodes().Get(t.Context(), node, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := n.Labels[corev1.LabelTopologyZone]; got != want {
+			t.Errorf("after the apply node %s is labelled zone %q, but its VM runs on %s", node, got, want)
+		}
+		_, beta := n.Labels[corev1.LabelFailureDomainBetaZone]
+		if beta != (node == "mgmt-cp-1") || (beta && n.Labels[corev1.LabelFailureDomainBetaZone] != want) {
+			t.Errorf("after the apply node %s has the beta zone label %q", node, n.Labels[corev1.LabelFailureDomainBetaZone])
+		}
+	}
+
+	// A node of unknown zone fails no apply. The job's log says which one.
+	a.vmHosts = hostsAt(t, map[string]string{"mgmt-cp-0": "pve2"})
+	if err := a.Apply(settings("pve1"), passphrase, ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	j := waitFor(t, a)
+	if j.State != StateSucceeded || !strings.Contains(strings.Join(j.Log, "\n"), "Setting the management nodes' zones failed: reading where the management VMs run: Proxmox VE lists no VM for node mgmt-cp-1") {
+		t.Fatalf("an apply with node mgmt-cp-1 unlisted: %+v", j)
 	}
 }

@@ -23,11 +23,11 @@ func volumeAppliance(t *testing.T, now *time.Time) (*Appliance, backupstore.Dir,
 	a.OpenVolume = func(context.Context) (provisioner.ObjectStore, error) { return vol, nil }
 	a.ExportObjects = func(context.Context) ([]byte, error) { return []byte(exportedObjects), nil }
 	a.Now = func() time.Time { return *now }
-	admin, err := a.Credential(t.Context(), passphrase, "talosconfig")
+	talos, err := a.Credential(t.Context(), passphrase, "talosconfig")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.setUpVolumeBackups(t.Context(), admin, passphrase); err != nil {
+	if err := a.setUpVolumeBackups(t.Context(), talos, nil, passphrase); err != nil {
 		t.Fatal(err)
 	}
 	return a, vol, bucket

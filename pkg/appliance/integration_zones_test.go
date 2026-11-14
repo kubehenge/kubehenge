@@ -42,7 +42,10 @@ func TestIntegrationInterfaceFollowsZones(t *testing.T) { //nolint:paralleltest 
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	for _, n := range []*corev1.Node{zoned("mgmt-cp-0", "pve1", true), zoned("mgmt-cp-1", "pve1", false), zoned("worker", "pve1", false)} {
+	// mgmt-cp-2 joined since the last apply, with no zone yet.
+	joined := zoned("mgmt-cp-2", "", false)
+	delete(joined.Labels, corev1.LabelTopologyZone)
+	for _, n := range []*corev1.Node{zoned("mgmt-cp-0", "pve1", true), zoned("mgmt-cp-1", "pve1", false), joined, zoned("worker", "pve1", false)} {
 		n.Labels["kept"] = "yes"
 		if _, err := admin.CoreV1().Nodes().Create(ctx, n, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
@@ -70,7 +73,7 @@ func TestIntegrationInterfaceFollowsZones(t *testing.T) { //nolint:paralleltest 
 		}
 	}
 
-	a := &Appliance{vmHosts: hostsAt(t, map[string]string{"mgmt-cp-0": "pve2", "mgmt-cp-1": "pve1"})}
+	a := &Appliance{vmHosts: hostsAt(t, map[string]string{"mgmt-cp-0": "pve2", "mgmt-cp-1": "pve1", "mgmt-cp-2": "pve3", "worker": "pve1"})}
 	if err := a.followZones(ctx, ui); err != nil {
 		t.Fatalf("the interface could not correct the zones: %v", err)
 	}
@@ -80,6 +83,16 @@ func TestIntegrationInterfaceFollowsZones(t *testing.T) { //nolint:paralleltest 
 	}
 	if moved.Labels[corev1.LabelTopologyZone] != "pve2" || moved.Labels[corev1.LabelFailureDomainBetaZone] != "pve2" || moved.Labels["kept"] != "yes" {
 		t.Errorf("the moved node's labels are %v, want both zones pve2 and the rest kept", moved.Labels)
+	}
+	added, err := admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-2", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added.Labels[corev1.LabelTopologyZone] != "pve3" || added.Labels["kept"] != "yes" {
+		t.Errorf("the joined node's labels are %v, want zone pve3 and the rest kept", added.Labels)
+	}
+	if _, beta := added.Labels[corev1.LabelFailureDomainBetaZone]; beta {
+		t.Error("the joined node gained a beta zone label it never had")
 	}
 
 	const outside = "changes nothing of a node but the values of its zone labels"

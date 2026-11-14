@@ -2,7 +2,8 @@
 
 - The management cluster runs the Proxmox CSI plugin, with the storage class `kubehenge-management` (Retain) on its VMs' storage and a token that deletes no volume.
 - A backup volume, the protected disk of the VM `kubehenge-backups`, outlives every management VM. Its claim is `kubehenge-system/kubehenge-backups`.
-- On a node's own storage the volume attaches only during a backup, so the management VMs can migrate. Before each backup the appliance corrects the zone label of a node whose VM moved.
+- On a node's own storage the volume attaches only during a backup, so the management VMs can migrate.
+- The appliance sets each management node's `topology.kubernetes.io/zone` to the Proxmox VE node its VM runs on, after each apply and before each backup. The machine config sets only the region, so a node restart never puts back the node a VM moved from.
 - Where one Proxmox VE host's loss can take the backup volume (a node's own storage, or a cluster of one node), Setup, Administration and Health suggest a bucket target until one is set.
 - The management cluster's etcd is backed up onto that volume every 6 hours, 28 kept, encrypted with the state passphrase, with no settings. A bucket target keeps its own schedule and retention.
 - Each snapshot comes with an export of the clusters, their classes, the Secrets Kubehenge owns and the setup settings.

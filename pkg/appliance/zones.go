@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,20 +16,33 @@ import (
 )
 
 // zonesSecret holds the Proxmox VE token that reads where the management cluster's VMs run. The
-// storage chart makes it only where the backup volume sits on one node's own storage.
+// storage chart makes it on every storage.
 const (
 	zonesSecret = backupstore.Service + "-zones" //nolint:gosec // a Secret's name
 	zonesKey    = "token"
 )
 
-// followZones points each management node's zone label at the Proxmox VE node its VM runs on now.
-// HA or an administrator may have moved the VM since Talos set the label, and on a node's own
-// storage the CSI plugin attaches the backup volume to a node with the disk's zone. A stale label
-// lets the store's pod land on a VM elsewhere, where the attach fails.
+// labelZones sets the management nodes' zones after an apply, through the admin kubeconfig, which
+// may add a label a new node lacks.
+func (a *Appliance) labelZones(ctx context.Context, admin []byte) error {
+	kube, err := a.managementClient(admin)
+	if err != nil {
+		return err
+	}
+	return a.followZones(ctx, kube)
+}
+
+// followZones points each management node's zone labels at the Proxmox VE node its VM runs on now.
+// The appliance is their only owner: the machine config sets only the region, so no kubelet start
+// puts back a zone that HA or an administrator moved the VM away from. On a node's own storage the
+// CSI plugin attaches the backup volume to a node with the disk's zone, and a stale label lets the
+// store's pod land on a VM elsewhere, where the attach fails. A node Proxmox VE lists no VM for
+// fails the call, after the other nodes are set.
 //
 // The label is all that goes stale. The plugin finds a node's VM by its ID or SMBIOS UUID at each
 // attach, and tells the kubelet the zone it reads from this label whenever it registers, so its
-// node pod needs no restart.
+// node pod needs no restart. Only the static backup volume uses the plugin's storage class, so no
+// volume is ever placed by the zones the node registered with.
 func (a *Appliance) followZones(ctx context.Context, kube kubernetes.Interface) error {
 	secret, err := kube.CoreV1().Secrets(backupstore.Namespace).Get(ctx, zonesSecret, metav1.GetOptions{})
 	if err != nil {
@@ -42,10 +56,15 @@ func (a *Appliance) followZones(ctx context.Context, kube kubernetes.Interface) 
 	if err != nil {
 		return fmt.Errorf("the management cluster's nodes: %w", err)
 	}
+	var unknown []string
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
-		host, ok := hosts[n.Name]
-		if !ok || host == "" || n.Labels[corev1.LabelTopologyZone] == host {
+		host := hosts[n.Name]
+		if host == "" {
+			unknown = append(unknown, n.Name)
+			continue
+		}
+		if n.Labels[corev1.LabelTopologyZone] == host {
 			continue
 		}
 		labels := map[string]string{corev1.LabelTopologyZone: host}
@@ -60,8 +79,11 @@ func (a *Appliance) followZones(ctx context.Context, kube kubernetes.Interface) 
 			return fmt.Errorf("labelling node %s with zone %s: %w", n.Name, host, err)
 		}
 		if a.Log != nil {
-			a.Log.Info("a management node's VM moved, so its zone label follows", "node", n.Name, "from", n.Labels[corev1.LabelTopologyZone], "to", host)
+			a.Log.Info("a management node's zone label follows its VM", "node", n.Name, "from", n.Labels[corev1.LabelTopologyZone], "to", host)
 		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("reading where the management VMs run: Proxmox VE lists no VM for node %s", strings.Join(unknown, ", "))
 	}
 	return nil
 }

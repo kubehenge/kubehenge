@@ -92,10 +92,10 @@ run "csi_plugin_is_the_workload_clusters_pinned_release" {
   assert {
     condition = alltrue([for i, n in local.nodes : anytrue([
       for d in split("---\n", data.talos_machine_configuration.node[i].config_patches[1]) :
-      try(yamlencode(yamldecode(d).labels), "") == yamlencode({ "topology.kubernetes.io/region" = "kubehenge", "topology.kubernetes.io/zone" = n.proxmox_node })
+      try(yamlencode(yamldecode(d).labels), "") == yamlencode({ "topology.kubernetes.io/region" = "kubehenge" })
       if try(yamldecode(d).kind, "") == "KubeNodeConfig"
     ])])
-    error_message = "every node must carry the region and its Proxmox VE node as zone, which the plugin places volumes by"
+    error_message = "every node must carry the region the plugin registers it by, and no zone, which the appliance alone sets from where the VM runs"
   }
 }
 
@@ -153,11 +153,10 @@ run "backup_volume_on_shared_storage_attaches_on_any_node" {
 
   assert {
     condition = (
-      length(proxmox_user_token.management_zones) == 0 &&
-      length(proxmox_acl.management_zones) == 0 &&
-      !contains([for s in helm_release.storage.set_sensitive : s.name], "backupVolume.zonesToken")
+      proxmox_acl.management_zones.path == "/pool/kubehenge-management" &&
+      contains([for s in helm_release.storage.set_sensitive : s.name], "backupVolume.zonesToken")
     )
-    error_message = "on shared storage no node's zone matters to the store, so no token reads where the VMs run"
+    error_message = "on shared storage too the appliance sets the nodes' zones after an apply, so it must get the token that reads where the VMs run"
   }
 
   assert {
@@ -204,12 +203,12 @@ run "backup_volume_on_local_storage_stays_on_its_node" {
 
   assert {
     condition = (
-      proxmox_acl.management_zones[0].path == "/pool/kubehenge-management" &&
-      proxmox_acl.management_zones[0].propagate &&
+      proxmox_acl.management_zones.path == "/pool/kubehenge-management" &&
+      proxmox_acl.management_zones.propagate &&
       toset(proxmox_virtual_environment_role.templates_audit.privileges) == toset(["VM.Audit"]) &&
-      proxmox_acl.management_zones[0].role_id == proxmox_virtual_environment_role.templates_audit.role_id &&
-      proxmox_acl.management_zones[0].user_id == "kubehenge-management-zones@pve" &&
-      !proxmox_user_token.management_zones[0].privileges_separation &&
+      proxmox_acl.management_zones.role_id == proxmox_virtual_environment_role.templates_audit.role_id &&
+      proxmox_acl.management_zones.user_id == "kubehenge-management-zones@pve" &&
+      !proxmox_user_token.management_zones.privileges_separation &&
       one([for s in helm_release.storage.set_sensitive : base64decode(s.value) if s.name == "backupVolume.zonesToken"]) == "kubehenge-management-csi@pve!csi=00000000-0000-0000-0000-000000000000" &&
       yamldecode(helm_release.storage.values[0]).backupVolume.nodes == [for n in local.nodes : n.name]
     )

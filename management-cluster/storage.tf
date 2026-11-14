@@ -80,30 +80,24 @@ resource "proxmox_acl" "management_csi_backups" {
   propagate = false
 }
 
-# On a node's own storage the plugin attaches the backup volume only to a node labelled with that
-# node's zone. HA or an administrator may move a node VM, and the label still names the old node.
-# Before it wakes the store, the appliance reads where each node VM runs and corrects the label.
-# This token is all it holds for that: VM.Audit (the templates' audit role) on the management pool.
+# The appliance alone sets the nodes' zone labels, from where each node VM runs: after each apply,
+# and before it wakes a store on a node's own storage, whose disk attaches only to a node labelled
+# with that node's zone. HA or an administrator may have moved a node VM since. This token is all
+# it holds for that: VM.Audit (the templates' audit role) on the management pool.
 resource "proxmox_virtual_environment_user" "management_zones" {
-  count = local.backup_volume.shared ? 0 : 1
-
   user_id = "${var.cluster_name}-management-zones@pve"
   comment = "Reads where Kubehenge management cluster ${var.cluster_name}'s VMs run; signs in with its API token only"
 }
 
 resource "proxmox_user_token" "management_zones" {
-  count = local.backup_volume.shared ? 0 : 1
-
-  user_id               = proxmox_virtual_environment_user.management_zones[0].user_id
+  user_id               = proxmox_virtual_environment_user.management_zones.user_id
   token_name            = "zones"
   comment               = "Where the management cluster's VMs run"
   privileges_separation = false
 }
 
 resource "proxmox_acl" "management_zones" {
-  count = local.backup_volume.shared ? 0 : 1
-
-  user_id   = proxmox_virtual_environment_user.management_zones[0].user_id
+  user_id   = proxmox_virtual_environment_user.management_zones.user_id
   path      = "/pool/${proxmox_virtual_environment_pool.management.pool_id}"
   role_id   = proxmox_virtual_environment_role.templates_audit.role_id
   propagate = true
@@ -161,7 +155,7 @@ locals {
       handle    = "${local.csi_region}/${local.backup_volume_zone}/${var.vm_datastore}/${proxmox_virtual_environment_vm.backups.disk[0].path_in_datastore}"
       zone      = local.backup_volume_zone
       region    = local.csi_region
-      # The nodes whose zone label the appliance may correct.
+      # The nodes whose zone label the interface may set before a wake.
       nodes      = local.nodes[*].name
       sharesHost = local.backup_volume_shares_host
     }
@@ -181,7 +175,7 @@ resource "helm_release" "storage" {
   values = [yamlencode(local.storage_values)]
 
   # Base64, which Helm's --set parsing leaves as it is.
-  set_sensitive = concat([{
+  set_sensitive = [{
     name = "encodedConfig"
     value = base64encode(yamlencode({
       features = { provider = "capmox", controllerVMID = proxmox_virtual_environment_vm.backups.vm_id }
@@ -194,11 +188,11 @@ resource "helm_release" "storage" {
       }]
     }))
     type = "string"
-    }], [for t in proxmox_user_token.management_zones : {
+    }, {
     name  = "backupVolume.zonesToken"
-    value = base64encode("${t.id}=${reverse(split("=", t.value))[0]}")
+    value = base64encode("${proxmox_user_token.management_zones.id}=${reverse(split("=", proxmox_user_token.management_zones.value))[0]}")
     type  = "string"
-  }])
+  }]
 
   depends_on = [helm_release.cluster_api_providers, proxmox_acl.management_csi, proxmox_acl.management_csi_backups, proxmox_acl.management_zones]
 }

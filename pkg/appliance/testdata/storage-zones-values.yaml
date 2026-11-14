@@ -5,6 +5,6 @@ backupVolume:
   handle: kubehenge/pve1/fast/vm-9000-disk-0
   zone: pve1
   region: kubehenge
-  nodes: [mgmt-cp-0, mgmt-cp-1]
+  nodes: [mgmt-cp-0, mgmt-cp-1, mgmt-cp-2]
   # "fake", base64, a stand-in for the token the module makes.
   zonesToken: ZmFrZQ==

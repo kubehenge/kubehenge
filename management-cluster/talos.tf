@@ -102,15 +102,17 @@ data "talos_machine_configuration" "node" {
       # The management cluster has no workers: its controllers run on the control plane. With IPv6
       # the kubelet registers one address per family, primary first, picked from the nodes'
       # networks so the VIP is never taken. Talos refuses that setting in .machine.kubelet beside
-      # this document. The labels say where the node's VM runs, which the CSI plugin places and
-      # attaches volumes by. Talos refuses .machine.nodeLabels beside this document too.
+      # this document. The CSI plugin registers a node only with the region label. The zone label
+      # names the Proxmox VE node the VM runs on, which a migration changes, so the appliance alone
+      # sets it, after each apply and before each wake of the backup store. Set here, a kubelet start
+      # would put back the node the VM was made on. Talos refuses .machine.nodeLabels beside this
+      # document too.
       yamlencode(merge({
         apiVersion = "v1alpha1"
         kind       = "KubeNodeConfig"
         taints     = { "node-role.kubernetes.io/control-plane" = { "$patch" = "delete" } }
         labels = {
           "topology.kubernetes.io/region" = local.csi_region
-          "topology.kubernetes.io/zone"   = local.nodes[count.index].proxmox_node
         }
         }, local.has_ipv6 ? {
         nodeIP = { validSubnets = flatten(local.node_networks) }

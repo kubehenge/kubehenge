@@ -104,11 +104,11 @@ func TestRemoveDeletesOrFencesTheAppliancesCopy(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(a.workdir(), "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			admin, err := a.Credential(ctx, passphrase, "talosconfig")
+			talosconfig, err := a.Credential(ctx, passphrase, "talosconfig")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := a.setUpVolumeBackups(ctx, admin, passphrase); err != nil {
+			if err := a.setUpVolumeBackups(ctx, talosconfig, nil, passphrase); err != nil {
 				t.Fatal(err)
 			}
 			empty := backupstore.Dir{Root: t.TempDir()}

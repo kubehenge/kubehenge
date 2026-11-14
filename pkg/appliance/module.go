@@ -163,9 +163,13 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 		j.Add("Renewing the credential of the etcd backups failed: " + err.Error())
 		a.etcdBackupFailed(err)
 	}
-	if err = a.setUpVolumeBackups(ctx, []byte(talos), passphrase); err != nil {
+	if err = a.setUpVolumeBackups(ctx, []byte(talos), []byte(admin), passphrase); err != nil {
 		j.Add("Setting up the backups on the backup volume failed: " + err.Error())
 		a.volumeBackupFailed(err)
+	}
+	// The next wake of the backup store tries again, so a failure holds no apply up.
+	if err = a.labelZones(ctx, []byte(admin)); err != nil {
+		j.Add("Setting the management nodes' zones failed: " + err.Error())
 	}
 	return kubeconfig, nil
 }
