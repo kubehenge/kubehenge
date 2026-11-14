@@ -521,7 +521,7 @@ func TestRemove(t *testing.T) {
 	if err != nil || !strings.Contains(string(log), `"destroy"`) {
 		t.Fatalf("tofu destroy did not run: %v", err)
 	}
-	if !strings.Contains(string(log), backupVolumeAddress) || strings.Contains(string(log), "protection=false") {
+	if !strings.Contains(string(log), `["state","list"]`) || strings.Contains(string(log), "protection=false") {
 		t.Fatalf("a removal that keeps the backup volume did not look for it in the state, or lifted its protection:\n%s", log)
 	}
 	if s := a.SavedSettings(); s == nil || !slices.Equal(s.Nodes, []string{"pve1"}) {

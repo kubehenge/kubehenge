@@ -396,8 +396,11 @@ func (a *Appliance) CopyTight(free uint64) *ApplianceCopy {
 	return nil
 }
 
-// backupVolumeAddress is the backup volume's VM in the module.
-const backupVolumeAddress = "proxmox_virtual_environment_vm.backups"
+// moduleAddress prefixes an address of the module's with the root config's call of it.
+const moduleAddress = "module.management."
+
+// backupVolumeAddress is the backup volume's VM, as the root config's state names it.
+const backupVolumeAddress = moduleAddress + "proxmox_virtual_environment_vm.backups"
 
 // releaseBackupVolume prepares the backup volume for a destroy of the module. Kept, its VM leaves
 // OpenTofu's state, so that the destroy passes it by. Removed, its protection is lifted, so that
@@ -406,13 +409,15 @@ func (a *Appliance) releaseBackupVolume(ctx context.Context, j *Job, env []strin
 	if remove {
 		j.Add("Lifting the backup volume's protection, so that it is removed too")
 		return a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json",
-			"-target="+backupVolumeAddress, "-var=backup_volume={protection=false}")
+			"-target="+backupVolumeAddress, "-var=backup_volume_protection=false")
 	}
+	// The whole list, since OpenTofu fails on an address the state does not hold, as a cluster set
+	// up before the backup volume existed.
 	held := false
 	err := a.tofu(ctx, j, env, func(line string) string {
 		held = held || strings.TrimSpace(line) == backupVolumeAddress
 		return ""
-	}, "state", "list", backupVolumeAddress)
+	}, "state", "list")
 	if err != nil || !held {
 		return err
 	}

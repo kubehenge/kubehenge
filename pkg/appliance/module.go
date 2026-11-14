@@ -29,8 +29,16 @@ variable "settings" {
   type = any
 }
 
+# Lifted only by a removal that deletes the backup volume too.
+variable "backup_volume_protection" {
+  type    = bool
+  default = true
+}
+
 module "management" {
   source = %q
+
+  backup_volume = { protection = var.backup_volume_protection }
 
   proxmox_endpoint       = var.settings.proxmox_endpoint
   proxmox_ca_certificate = var.settings.proxmox_ca_certificate

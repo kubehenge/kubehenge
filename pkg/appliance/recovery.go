@@ -349,7 +349,7 @@ func (a *Appliance) importSpecKey(key string) error {
 // with, and nothing after: the cluster's bootstrap and health, which cannot finish on nodes whose
 // etcd is empty. Each node's module waits for the one before, so naming the last names them all.
 func recreateTargets(nodes int) []string {
-	return []string{"-target=proxmox_virtual_environment_vm.node", fmt.Sprintf("-target=module.talos_node_%d", max(nodes, 1)-1)}
+	return []string{"-target=" + moduleAddress + "proxmox_virtual_environment_vm.node", fmt.Sprintf("-target=%smodule.talos_node_%d", moduleAddress, max(nodes, 1)-1)}
 }
 
 // RecreateRequest is what a recreation of the management cluster was started with.

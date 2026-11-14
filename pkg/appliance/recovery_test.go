@@ -368,8 +368,8 @@ func TestRecreateMakesTheVMsBeforeTheRestoreAndAppliesWholeAfter(t *testing.T) {
 	if j.State != "succeeded" || len(kubeconfig) == 0 {
 		t.Fatalf("recreate %+v, kubeconfig %q", j, kubeconfig)
 	}
-	if len(traced.applies) != 1 || !strings.Contains(traced.applies[0], "-target=proxmox_virtual_environment_vm.node") ||
-		!strings.Contains(traced.applies[0], "-target=module.talos_node_0") {
+	if len(traced.applies) != 1 || !strings.Contains(traced.applies[0], "-target=module.management.proxmox_virtual_environment_vm.node") ||
+		!strings.Contains(traced.applies[0], "-target=module.management.module.talos_node_0") {
 		t.Fatalf("before the restore, applies were %q: only the VMs and nodes belong there", traced.applies)
 	}
 	all := appliesIn(traced.tofuLog)

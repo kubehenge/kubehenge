@@ -96,6 +96,12 @@ func run(dir string, args []string) int {
 			fmt.Println(`{"@level":"error","@message":"Error: no such node","type":"diagnostic","diagnostic":{"summary":"Error","detail":"node fail does not exist"}}`)
 			return 1
 		}
+	case "state":
+		// A test lists what the state holds in <dir>/../state-list.
+		if len(args) > 1 && args[1] == "list" {
+			held, _ := os.ReadFile(filepath.Join(dir, "..", "state-list"))
+			fmt.Print(string(held))
+		}
 	case "output":
 		// The state opens only with the passphrase the tests use.
 		if !strings.Contains(os.Getenv("TF_ENCRYPTION"), "correct horse battery staple") {
