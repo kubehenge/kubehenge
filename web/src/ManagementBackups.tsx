@@ -2,7 +2,7 @@ import { useState, type JSX } from "react";
 
 import { adminPath } from "./admin-views";
 import { api } from "./api";
-import { BackupWarning, ExportBox, RecreateDialog } from "./ManagementRecovery";
+import { BackupWarning, ExportBox, RecoverDialog, RecreateDialog } from "./ManagementRecovery";
 import { Link } from "./router";
 import type { EtcdSnapshot, ManagementBackups as Backups, ManagementBackupSettings } from "./types";
 import {
@@ -126,6 +126,7 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
 // VolumeBox shows the backups on the management cluster's own volume, which run with no settings,
 // and the appliance's copy of the latest.
 function VolumeBox({ volume: v }: { volume: NonNullable<Backups["volume"]> }): JSX.Element {
+  const [recovering, setRecovering] = useState(false);
   return (
     <div className="box">
       <h3>Backup volume</h3>
@@ -180,6 +181,12 @@ function VolumeBox({ volume: v }: { volume: NonNullable<Backups["volume"]> }): J
         </p>
       )}
       {v.copy?.error !== undefined && <p className="warning">{sentence(v.copy.error)}</p>}
+      <div className="actions">
+        <button type="button" className="danger" onClick={() => setRecovering(true)}>
+          Recover…
+        </button>
+      </div>
+      {recovering && <RecoverDialog onClose={() => setRecovering(false)} />}
     </div>
   );
 }

@@ -268,7 +268,10 @@ The management cluster's Health shows the failure, and **Administration, Backups
 | --- | --- |
 | "the backup volume's token: …" or "the backup volume: …" | The store `kubehenge-system/kubehenge-backup-store` is not running. `kubectl -n kubehenge-system get pods,pvc` shows whether the claim `kubehenge-backups` is bound and the pod ready. A claim that stays pending means the VM `kubehenge-backups` or its disk is gone. Apply again to make a new one. |
 | "exporting Kubehenge's objects: …" | The snapshot was stored, but the export was not. The reason after the colon names the object the interface could not read. |
-| The appliance's copy is over its cap | The snapshot is larger than 1 GiB. It went to the volume alone, and the copy before it stays. |
+| "the appliance's copy of snapshot … would take …, more than its cap of …" | The snapshot, its export and its key take more than 1 GiB. The snapshot went to the volume alone, and the copy before it stays. |
+| "the management cluster is being recovered" | A snapshot is refused while a restore, a recreation or a recovery runs. Take it once the run has finished. |
+| A recovery says "the appliance's copy holds the backups of a management cluster removed since" | The copy is of the cluster removed before this one was set up, and is never restored onto it. Recover from the backup volume, or recreate from a backup target's snapshot. |
+| A recovery says "it did not answer within 10m0s" | The backup volume's store did not start. Check the claim and the pod as above. The recovery used the appliance's copy, when it held one. |
 
 ### Template missing
 

@@ -445,6 +445,8 @@ export interface Api {
   restoreManagement: (snapshot: string, passphrase: string) => Promise<Job>;
   /** recreateManagement makes the management cluster's VMs again and restores a snapshot into them. */
   recreateManagement: (snapshot: string, passphrase: string) => Promise<Job>;
+  /** recoverManagement makes the management cluster again from the backup volume or the appliance's copy. */
+  recoverManagement: (passphrase: string) => Promise<Job>;
   dismissBackupWarning: () => Promise<ManagementBackups>;
   /** exportManagement downloads the appliance's state, encrypted with exportPassphrase. */
   exportManagement: (passphrase: string, exportPassphrase: string) => Promise<Blob>;
@@ -619,6 +621,7 @@ export const api: Api = {
     request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/restore`, { passphrase }),
   recreateManagement: (snapshot, passphrase) =>
     request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/recreate`, { passphrase }),
+  recoverManagement: (passphrase) => request("POST", "/api/appliance/etcd-backups/recover", { passphrase }),
   dismissBackupWarning: () => request("POST", "/api/appliance/etcd-backups/warning/dismissal"),
   exportManagement: (passphrase, exportPassphrase) =>
     download("POST", "/api/appliance/export", { passphrase, exportPassphrase }),

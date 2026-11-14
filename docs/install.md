@@ -632,13 +632,15 @@ The appliance takes each snapshot itself through the nodes' Talos API, with a ta
 
 With no settings at all, every management cluster backs up onto its own backup volume. That is the claim `kubehenge-system/kubehenge-backups`, the disk of the stopped, protected VM `kubehenge-backups`. Proxmox VE deletes a VM's own disks only, so the volume outlives the loss of every management VM.
 
-Every 6 hours the appliance puts an etcd snapshot there, encrypted with the state passphrase, and keeps the newest 28. Beside each goes an export of Kubehenge's objects: the clusters, their classes, the Secrets Kubehenge owns and the setup settings. A backup target, when set up, gets its own snapshots too.
+Every 6 hours the appliance puts an etcd snapshot there, encrypted with the state passphrase, and keeps the newest 28. Beside each goes an export of Kubehenge's objects: the clusters, their classes, the Secrets Kubehenge owns and the setup settings. A backup target, when set up, gets snapshots on its own schedule.
 
-The appliance keeps a copy of the latest snapshot and export, up to 1 GiB. Above that cap the snapshot goes to the volume alone. The disk warning names the copy once it reaches 80 % of its cap, or once the disk has no room for the next one.
+The appliance keeps a copy of the latest snapshot, its export and its key, up to 1 GiB in all. A copy over that cap is not made, and the last copy that fit stays. The disk warning names the copy once it reaches 80 % of its cap, or once the disk has no room for the next one.
 
 **Administration, Backups**, the management cluster's Health and `kubehenge appliance etcd-backups` show where the backups are and the last one. A failed backup degrades Health until the next one succeeds.
 
-To recover, `POST /api/appliance/etcd-backups/recover` with the state passphrase applies the management cluster, restores the newest snapshot and applies again. It reads the volume when the volume survived, else the appliance's copy, and its log names which.
+To recover after the management VMs are lost, use **Recover…** in the backup volume's box, or `kubehenge appliance etcd-backups recover`. Both ask for the state passphrase. The run applies the management cluster and waits up to 10 minutes for the backup volume. It then restores the newest snapshot of the volume and the appliance's copy, and applies again. Its log names the snapshot, where it was read and why.
+
+Removing the management cluster stops these backups. **Also delete the backup volume** deletes the appliance's copy too. Kept, the copy is never restored onto a management cluster set up later.
 
 #### Restoring
 
@@ -665,6 +667,7 @@ The appliance's shell has the same commands, with the page's privileges and refu
 | `kubehenge appliance etcd-backups take` | takes a snapshot and waits until it is stored |
 | `kubehenge appliance etcd-backups restore … --passphrase-file …` | restores a snapshot by name and prints the run's log until it ends |
 | `kubehenge appliance etcd-backups recreate … --passphrase-file …` | makes the management cluster's VMs again, then restores a snapshot into them |
+| `kubehenge appliance etcd-backups recover --passphrase-file …` | makes the management cluster again from the newest snapshot on the backup volume or the appliance's copy |
 | `kubehenge appliance etcd-backups dismiss-warning` | silences the warning that the backups are off for 30 days |
 | `kubehenge appliance export` | saves the appliance's state, encrypted with `--export-passphrase-file`, for a new appliance ([details](install-settings.md#export-for-a-new-appliance)) |
 | `kubehenge appliance import <file>` | reads an export into a new appliance |

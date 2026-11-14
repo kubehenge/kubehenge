@@ -109,37 +109,60 @@ KUBEHENGE_PASSPHRASE.`,
 	})
 }
 
+func (o *applianceOptions) recoverCommand() *cobra.Command {
+	return o.snapshotRunCommand(&snapshotRun{
+		use:   "recover",
+		short: "Make the management cluster again from the backup volume or the appliance's copy",
+		long: `Recover the management cluster after its VMs were lost, from Kubehenge's own backups. It applies the
+management cluster, waits for the backup volume, restores the newest snapshot of the volume and the
+appliance's copy, then applies again. The log names the snapshot and where it was read. The state
+passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+		action: "recover", started: "Recovering the management cluster", done: "Recovered the management cluster",
+		own: true,
+	})
+}
+
 // snapshotRun describes a command that starts a run of the appliance from one snapshot and follows
-// it: restoring etcd, or recreating the management cluster.
+// it: restoring etcd, or recreating the management cluster. With own, the run picks the snapshot
+// from the appliance's own backups and the command takes none.
 type snapshotRun struct {
 	use, short, long, action, started, done string
+	own                                     bool
 }
 
 func (o *applianceOptions) snapshotRunCommand(spec *snapshotRun) *cobra.Command {
 	wait := true
 	var passphraseFile string
+	takes := argsSay(cobra.ExactArgs(1), "give the snapshot's name")
+	if spec.own {
+		takes = argsSay(cobra.NoArgs, "it takes no snapshot: the newest of the appliance's own is restored")
+	}
 	cmd := &cobra.Command{
 		Use:   spec.use,
 		Short: spec.short,
 		Long:  spec.long,
-		Args:  argsSay(cobra.ExactArgs(1), "give the snapshot's name"),
+		Args:  takes,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			passphrase, err := secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE")
 			if err != nil {
 				return err
 			}
+			path, name := "/api/appliance/etcd-backups/"+spec.action, ""
+			if !spec.own {
+				path = "/api/appliance/etcd-backups/snapshots/" + url.PathEscape(args[0]) + "/" + spec.action
+				name = args[0]
+			}
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
-				path := "/api/appliance/etcd-backups/snapshots/" + url.PathEscape(args[0]) + "/" + spec.action
 				if _, err := s.call(ctx, http.MethodPost, path, map[string]string{passphraseField: passphrase}, nil); err != nil {
 					return err
 				}
 				if !wait {
-					return say(cmd, spec.started+args[0])
+					return say(cmd, spec.started+name)
 				}
 				if err := s.untilJobEnds(ctx, cmd.OutOrStdout()); err != nil {
 					return err
 				}
-				return say(cmd, spec.done+args[0])
+				return say(cmd, spec.done+name)
 			})
 		},
 	}

@@ -91,6 +91,13 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		answer(w, http.StatusAccepted, `{}`)
 	}))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/recover", f.admin(func(w http.ResponseWriter, r *http.Request) {
+		if f.bodies[r.Method+" "+r.URL.Path]["passphrase"] != "right" {
+			answer(w, http.StatusForbidden, `{"error":"wrong passphrase"}`)
+			return
+		}
+		answer(w, http.StatusAccepted, `{}`)
+	}))
 	mux.HandleFunc("POST /api/setup/take-over", f.admin(func(w http.ResponseWriter, r *http.Request) {
 		if f.bodies[r.Method+" "+r.URL.Path]["passphrase"] != "right" {
 			answer(w, http.StatusForbidden, `{"error":"wrong passphrase"}`)
@@ -312,6 +319,25 @@ func TestApplianceEtcdBackups(t *testing.T) {
 	wantOut := "Restoring\nThe snapshot matches its checksum\netcd runs\nRestored from 20270301T120000Z-v1.37.1.db.age\n"
 	if err != nil || out != wantOut {
 		t.Errorf("restore: %v\n%q\nwant %q", err, out, wantOut)
+	}
+}
+
+// recover goes through the route the interface's button takes, with no snapshot to name.
+func TestApplianceEtcdBackupsRecover(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if _, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "right"))...); err == nil {
+		t.Error("recover took a snapshot's name")
+	}
+	if _, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || !strings.Contains(err.Error(), "wrong passphrase") {
+		t.Errorf("a wrong passphrase: %v", err)
+	}
+	out, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "--passphrase-file", writeTemp(t, "right"))...)
+	if err != nil || !strings.HasSuffix(out, "Recovered the management cluster\n") {
+		t.Errorf("recover: %v\n%s", err, out)
+	}
+	if got := f.bodies["POST /api/appliance/etcd-backups/recover"]; got["passphrase"] != "right" {
+		t.Errorf("recover sent %v", got)
 	}
 }
 

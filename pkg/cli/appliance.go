@@ -243,7 +243,7 @@ func (o *applianceOptions) etcdBackupsCommand() *cobra.Command {
 	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	cmd.AddCommand(o.setUpBackupsCommand(), o.backupsOffCommand(), o.snapshotsCommand(), o.takeSnapshotCommand(), o.restoreEtcdCommand(),
-		o.recreateCommand(), o.dismissWarningCommand())
+		o.recreateCommand(), o.recoverCommand(), o.dismissWarningCommand())
 	return cmd
 }
 
