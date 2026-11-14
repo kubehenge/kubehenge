@@ -102,6 +102,7 @@ describe("the cluster's summary", () => {
     await expect(
       within(map).findByRole("link", { name: "web-cp-a, control plane, Node offline" }),
     ).resolves.toBeInTheDocument();
+    expect(screen.getByText("3 control-plane nodes, 2 workers")).toBeInTheDocument();
     // The count agrees with the machine shown as down.
     const term = screen.getByText("Control plane", { selector: "dt" });
     await waitFor(() => expect(term.nextElementSibling).toHaveTextContent("2 of 3 ready"));

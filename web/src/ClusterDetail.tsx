@@ -588,7 +588,7 @@ function Facts({ cluster: c }: { cluster: Cluster }): JSX.Element {
       <span className="id">{c.version}</span>
       {c.talos && <span className="id">Talos {c.talos.version}</span>}
       <span>
-        {counted(c.controlPlane.desired, "control plane")}, {counted(c.workers.desired, "worker")}
+        {counted(c.controlPlane.desired, "control-plane node")}, {counted(c.workers.desired, "worker")}
       </span>
       {filled(c.endpoint) && <span className="id">{c.endpoint}</span>}
       {c.namespace !== "default" && <span>namespace {c.namespace}</span>}
