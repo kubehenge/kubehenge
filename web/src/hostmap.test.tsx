@@ -114,7 +114,21 @@ describe("the cluster's summary", () => {
     await expect(within(row).findByText("Node offline")).resolves.toBeInTheDocument();
   });
 
-  it("calls no cluster well while a node of it is offline", async () => {
+  it("does not call a cluster healthy while a control-plane node of it is on an offline node", async () => {
+    const calm: ClusterHealth = {
+      read: created,
+      verdict: "healthy",
+      attention: [],
+      nodes: { items: [] },
+      pods: { items: [] },
+      volumes: { items: [] },
+      addons: { items: [] },
+      pools: { items: [] },
+      controlPlane: { conditions: [] },
+      healthChecks: { items: [] },
+      events: { items: [] },
+      logs: false,
+    };
     const stale = {
       ...web,
       workers: { desired: 2, ready: 2, available: 2, upToDate: 2 },
@@ -124,14 +138,13 @@ describe("the cluster's summary", () => {
       "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
       "GET /api/clusters": { body: [stale] },
       "GET /api/clusters/default/web": { body: stale },
+      "GET /api/clusters/default/web/health": { body: calm },
       "GET /api/runs": { body: [] },
       "GET /api/proxmox/nodes": { body: [{ node: "pve4", online: false }] },
     });
-    window.history.replaceState(null, "", "/clusters/default/web");
+    window.history.replaceState(null, "", "/clusters/default/web/health");
     render(<App />);
-    await waitFor(() => expect(screen.getAllByText("Degraded").length).toBeGreaterThan(0));
-    expect(screen.queryAllByText("Available")).toHaveLength(0);
-    expect(screen.queryAllByText("Healthy")).toHaveLength(0);
+    await expect(screen.findByText("Degraded", { selector: ".verdict .status" })).resolves.toBeInTheDocument();
   });
 
   it("shows a machine whose node stopped reporting as down, not as on its way", async () => {

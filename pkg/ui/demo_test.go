@@ -292,8 +292,12 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	verdicts := map[string]string{}
 	for _, h := range health {
 		verdicts[h.Name] = h.Verdict
+		// A node of Proxmox VE that is offline takes its VMs down, whatever the cluster last reported.
+		if h.Name == "web" && (len(h.Attention) == 0 || !strings.Contains(h.Attention[0].What, "pve3 is offline")) {
+			t.Errorf("web's items %v, want its offline node first", h.Attention)
+		}
 	}
-	if verdicts["payments"] != "degraded" || verdicts["web"] != "healthy" || verdicts["edge"] != "changing" {
+	if verdicts["payments"] != "degraded" || verdicts["web"] != "degraded" || verdicts["edge"] != "degraded" {
 		t.Errorf("verdicts %v", verdicts)
 	}
 	lacking := false

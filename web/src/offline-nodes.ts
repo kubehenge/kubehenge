@@ -1,5 +1,3 @@
-import { useEffect } from "react";
-
 import { api } from "./api";
 import type { Attention, Cluster, FleetHealth, Machine, PveNode } from "./types";
 import { pollCache, pollIdle, usePoll } from "./ui";
@@ -7,19 +5,8 @@ import { pollCache, pollIdle, usePoll } from "./ui";
 /** nodesKept keeps the Proxmox VE nodes for every view of every cluster that places machines on them. */
 export const nodesKept = { cache: pollCache<PveNode[]>(), key: "nodes" };
 
-// Until the appliance is set up there are no clusters, and no nodes to ask for.
-const noNodes = async (): Promise<PveNode[]> => [];
-
-/** useProxmoxNodes reads the Proxmox VE nodes, as every cluster view shares them, once `on`. */
-export function useProxmoxNodes(on = true): PveNode[] | undefined {
-  const { data, reload } = usePoll(on ? api.nodes : noNodes, pollIdle, on ? nodesKept : undefined);
-  useEffect(() => {
-    if (on) {
-      void reload();
-    }
-  }, [on, reload]);
-  return data;
-}
+/** useProxmoxNodes reads the Proxmox VE nodes, as every cluster view shares them. */
+export const useProxmoxNodes = (): PveNode[] | undefined => usePoll(api.nodes, pollIdle, nodesKept).data;
 
 /** offlineOf are the names of the Proxmox VE nodes that are offline. */
 export const offlineOf = (nodes: PveNode[] | undefined): Set<string> =>
@@ -45,27 +32,21 @@ export function readyCounts(c: Cluster, offline: Set<string>): { controlPlane: n
 }
 
 /**
- * nodeFindings are what an offline Proxmox VE node or a control-plane node that is not ready means
- * for a cluster, as the items its health lists, so that no view calls such a cluster well.
+ * nodeFindings are what control-plane nodes lost to an offline Proxmox VE node mean for a cluster, as
+ * the items its health lists. The server lists the offline node itself, and cannot tell which
+ * machines of the cluster ran on it.
  */
 export function nodeFindings(c: Cluster, offline: Set<string>): Attention[] {
-  const machines = c.machines ?? [];
-  const down = [...offline].filter((n) => machines.some((m) => m.proxmoxNode === n));
-  const found: Attention[] = down.map((n) => ({
-    severity: "error",
-    section: "machines",
-    what: `Node ${n} offline`,
-    message: `${machines.filter((m) => m.proxmoxNode === n).length} machines run on it.`,
-  }));
-  const short = c.controlPlane.desired - readyCounts(c, offline).controlPlane;
-  if (short > 0) {
-    found.push({
-      severity: "error",
-      section: "machines",
-      what: `${c.controlPlane.desired - short} of ${c.controlPlane.desired} control-plane nodes ready`,
-    });
-  }
-  return found;
+  const ready = readyCounts(c, offline).controlPlane;
+  return placed(c, "control-plane", offline).lost > 0 && ready < c.controlPlane.desired
+    ? [
+        {
+          severity: "error",
+          section: "machines",
+          what: `${ready} of ${c.controlPlane.desired} control-plane nodes ready`,
+        },
+      ]
+    : [];
 }
 
 /** withNodeFindings adds a cluster's node findings to what its health found, ahead of it. */
