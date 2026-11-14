@@ -36,9 +36,10 @@ const (
 // the age recipient the snapshots are encrypted to, its identity sealed with the passphrase, and
 // the control-plane nodes.
 type volumeBackupKeys struct {
-	Recipient string   `json:"recipient"`
-	Sealed    string   `json:"sealed"`
-	Nodes     []string `json:"nodes"`
+	Recipient string    `json:"recipient"`
+	Sealed    string    `json:"sealed"`
+	Nodes     []string  `json:"nodes"`
+	Since     time.Time `json:"since"`
 }
 
 // VolumeBackupStatus is how the backups on the management cluster's volume go.
@@ -84,6 +85,9 @@ func (a *Appliance) setUpVolumeBackups(ctx context.Context, admin []byte, passph
 	keys, err := readJSONFile[volumeBackupKeys](a.etcdBackupFile("volume.json"))
 	if errors.Is(err, fs.ErrNotExist) {
 		keys, err = newVolumeBackupKeys(passphrase, a.KeyWorkFactor)
+		if keys != nil {
+			keys.Since = a.now()
+		}
 	}
 	if err != nil {
 		return err
@@ -130,7 +134,8 @@ func (a *Appliance) volumeBackupRecord() *volumeBackupRecord {
 
 // VolumeBackups returns how the backups on the volume go, or nil before they are set up.
 func (a *Appliance) VolumeBackups() *VolumeBackupStatus {
-	if a.volumeBackupKeys() == nil {
+	keys := a.volumeBackupKeys()
+	if keys == nil {
 		return nil
 	}
 	rec := a.volumeBackupRecord()
@@ -138,7 +143,8 @@ func (a *Appliance) VolumeBackups() *VolumeBackupStatus {
 		Claim: backupstore.Namespace + "/" + backupstore.Claim,
 		Last:  rec.Last, Error: rec.Error, Failed: rec.Failed, Copy: rec.Copy,
 	}
-	next := a.now()
+	// The first snapshot is due from the setup on.
+	next := keys.Since
 	if rec.Last != nil {
 		next = rec.Last.Time.Add(volumeBackupEvery)
 	}

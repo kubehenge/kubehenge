@@ -76,6 +76,28 @@ func TestVolumeBackupsRunWithNoInput(t *testing.T) {
 	}
 }
 
+func TestApplySetsUpVolumeBackups(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	a.Talos = &fakeManagementTalos{}
+	if a.EtcdBackupDue(time.Now()) {
+		t.Fatal("a snapshot is due before any apply")
+	}
+	if err := a.Apply(settings("pve1"), passphrase, ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != StateSucceeded {
+		t.Fatalf("apply: %+v", j)
+	}
+	keys := a.volumeBackupKeys()
+	if keys == nil || len(keys.Nodes) != 2 || keys.Recipient == "" {
+		t.Fatalf("the apply set the volume's backups up as %+v", keys)
+	}
+	if !a.EtcdBackupDue(time.Now()) {
+		t.Fatal("no snapshot onto the volume is due after the first apply")
+	}
+}
+
 func TestVolumeBackupFailureShows(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
