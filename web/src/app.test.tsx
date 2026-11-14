@@ -734,7 +734,7 @@ describe("clusters", () => {
     await expect(screen.findByText(/Cluster not found/u)).resolves.toBeInTheDocument();
   });
 
-  it("shows where the VMs run, and warns when control-plane VMs share a node", async () => {
+  it("shows where the machines run, and warns when control-plane machines share a node", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/machines");
     fakeServer({
       ...signedIn,
@@ -752,7 +752,7 @@ describe("clusters", () => {
     });
     render(<App />);
     await expect(
-      screen.findByText(/^pve1 runs 2 of 3 control-plane VMs, so losing it stops the control plane\./u),
+      screen.findByText(/^pve1 runs 2 of 3 control-plane machines, so losing it stops the control plane\./u),
     ).resolves.toBeInTheDocument();
     expect(screen.getAllByRole("cell", { name: "pve1" })).toHaveLength(3);
   });

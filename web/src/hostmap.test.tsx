@@ -84,7 +84,7 @@ describe("the cluster's summary", () => {
       "web-w-1, worker, Ready",
       "web-w-2, worker, Not ready",
     ]);
-    expect(within(map).getByText(/pve1 runs 2 of 3 control-plane VMs/u)).toBeInTheDocument();
+    expect(within(map).getByText(/pve1 runs 2 of 3 control-plane machines/u)).toBeInTheDocument();
   });
 
   it("shows a machine on an offline node as down, on the map and in the machines", async () => {

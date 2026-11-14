@@ -88,7 +88,7 @@ export function crowding(machines: Machine[]): string | undefined {
   }
   // etcd needs a majority of the control-plane nodes.
   const cost = count * 2 > controlPlane.length ? "stops the control plane" : `takes ${count} down`;
-  return `${node} runs ${count} of ${controlPlane.length} control-plane VMs, so losing it ${cost}. Migrate one to another node.`;
+  return `${node} runs ${count} of ${controlPlane.length} control-plane machines, so losing it ${cost}. Migrate one to another node.`;
 }
 
 /**

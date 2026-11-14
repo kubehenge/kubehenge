@@ -1498,14 +1498,17 @@ h4.subsection {
 .host-head {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
 
   margin-block-end: 6px;
 }
 
+/* The count wraps below a long name's tile before the name is cut, so an offline node stays readable. */
 .host-name {
   overflow: hidden;
+  max-inline-size: 100%;
 
   font-family: var(--mono);
   font-weight: 600;

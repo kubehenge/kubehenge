@@ -16,6 +16,13 @@ describe("a cluster's tabs on a phone", () => {
   });
 });
 
+describe("a Proxmox VE node's tile", () => {
+  it("wraps its count below the name instead of cutting the name", () => {
+    const head = /\n\.host-head \{(?<body>[^}]*)\}/u.exec(styles)?.groups?.["body"] ?? "";
+    expect(head).toContain("flex-wrap: wrap");
+  });
+});
+
 describe("a dialog's backdrop", () => {
   it("hides most of the page and blurs the rest", () => {
     const rule = [...styles.matchAll(/\.dialog::backdrop,\n\.palette::backdrop \{(?<body>[^}]*)\}/gu)]
