@@ -23,7 +23,7 @@ func healthy() *Inventory {
 		Groups:        map[string]bool{},
 		NodeAddresses: map[string][]netip.Addr{"pve1": {netip.MustParseAddr("10.0.0.5")}},
 		Answering:     map[netip.Addr]bool{},
-		ProxmoxURL:    "https://pve.example.org:8006",
+		ProxmoxURL:    "https://10.0.0.50:8006",
 	}
 }
 
@@ -361,10 +361,13 @@ func TestPreflightWarnsOfVMsSharingNodes(t *testing.T) {
 
 func TestPreflightWarnsWhenTheAPIAddressIsOneNodes(t *testing.T) {
 	t.Parallel()
+	port, servers := serveDNS(t, fakeDNS{records: map[string][]netip.Addr{"pve1.": {netip.MustParseAddr("10.0.0.5")}}})
 	for _, url := range []string{"https://10.0.0.5:8006", "https://pve1:8006"} {
 		inv := healthy()
-		inv.ProxmoxURL = url
-		mentions(t, settings("pve1").Preflight(inv, false).Warnings, "is node pve1 alone")
+		inv.ProxmoxURL, inv.DNSPort = url, port
+		s := settings("pve1")
+		s.DNSServers = servers
+		mentions(t, s.Preflight(inv, false).Warnings, "is node pve1 alone")
 	}
 }
 

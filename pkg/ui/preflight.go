@@ -28,7 +28,7 @@ func (s *Server) setupPreflight(ctx context.Context, u user, settings *appliance
 	if err != nil {
 		return appliance.Findings{}, err
 	}
-	return settings.Preflight(inv, owned), nil
+	return settings.Preflight(inv, owned), nil //nolint:contextcheck // Preflight takes no context, and each DNS lookup in it has a deadline of its own
 }
 
 // inventory reads Proxmox VE. What the user may not read is left nil, and the checks that need it
@@ -65,8 +65,8 @@ func (s *Server) inventory(ctx context.Context, u user, settings *appliance.Sett
 	// A user without Sys.Audit on / cannot read the firewall, and Proxmox VE then judges the run.
 	if reach, err := s.Accounts.APIReach(ctx, u.ticket); err == nil {
 		inv.APIReach = reach
-		inv.Route = appliance.RouteToAPI(ctx, s.Appliance.ProxmoxURL)
 	}
+	inv.Route = appliance.RouteToAPI(ctx, s.Appliance.ProxmoxURL)
 	if !owned {
 		inv.Answering = s.probe(ctx, setupAddresses(settings))
 		if idErr := s.readVMIDs(ctx, u, inv); idErr != nil {

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -53,8 +54,13 @@ type Inventory struct {
 	// read.
 	APIReach *pve.APIReach
 	// Route is how traffic reaches the API endpoint from the appliance. The management cluster's
-	// nodes reach it in the endpoint's families.
+	// nodes reach it in the endpoint's families. Its Endpoints are what the appliance itself resolves
+	// the URL's host to.
 	Route APIRoute
+	// DNSPort and DNSTimeout are the port the DNS servers listen on and how long each has to answer.
+	// The zero values are 53 and three seconds.
+	DNSPort    string
+	DNSTimeout time.Duration
 }
 
 // Findings are what a preflight found. Errors stop the run, warnings do not. Each names the node,
@@ -130,6 +136,8 @@ func (s *Settings) Preflight(inv *Inventory, owned bool) Findings { //nolint:rev
 		s.checkVMIDs(inv, &f)
 	}
 	s.checkAPIReach(inv, &f)
+	s.checkURLResolves(inv, &f)
+	s.checkISOStorageShared(inv, &f)
 	s.warnPlacement(inv, &f)
 	s.warnRanges(inv, &f)
 	return f
@@ -206,6 +214,29 @@ func (s *Settings) checkStorages(inv *Inventory, f *Findings) {
 			checkStorageOn(inv, f, c.name, c.content, node, "choose another storage")
 		}
 	}
+}
+
+// checkISOStorageShared warns when the clusters' VM disks can sit on shared storage that a VM can
+// move or restart from, but the cloud-init ISOs are on node-local storage. A cluster VM that Proxmox
+// VE HA or a migration puts on another node then cannot find its ISO. The management VMs keep their
+// own cloud-init drive on the VM storage and need neither this storage nor the image storage once
+// created, so setup itself works and the finding is a warning.
+func (s *Settings) checkISOStorageShared(inv *Inventory, f *Findings) {
+	if inv.Storages == nil || (len(s.Nodes) < 2 && !s.ProxmoxHA) {
+		return
+	}
+	shared := func(name string) bool {
+		return slices.ContainsFunc(inv.Storages, func(x pve.Storage) bool { return x.Storage == name && x.Shared })
+	}
+	if shared(s.BootstrapDatastore) || !slices.ContainsFunc(inv.Storages, func(x pve.Storage) bool { return x.Storage == s.BootstrapDatastore }) {
+		return
+	}
+	disks := slices.Concat([]string{s.VMDatastore}, s.WorkloadDatastores)
+	i := slices.IndexFunc(disks, shared)
+	if i < 0 {
+		return
+	}
+	f.Warnings = append(f.Warnings, fmt.Sprintf("The cloud-init images are on storage %s, which is local to a node, while disks are on shared storage %s. A cluster VM that restarts or migrates to another node cannot find its ISO. Choose a shared storage with the iso content type as Cloud-init images.", s.BootstrapDatastore, disks[i]))
 }
 
 // checkStorageOn checks one storage on one node: enabled there, active and with the content type.
