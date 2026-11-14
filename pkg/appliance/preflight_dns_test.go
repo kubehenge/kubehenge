@@ -75,7 +75,7 @@ func (d fakeDNS) serveTCP(l net.Listener) {
 			if q.Unpack(raw) != nil || len(q.Questions) != 1 {
 				return
 			}
-			if out, err := d.answer(q).Pack(); err == nil {
+			if out, err := d.answer(&q).Pack(); err == nil {
 				_, _ = conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(out))), out...)) //nolint:gosec // a short test reply
 			}
 		}()
@@ -83,7 +83,7 @@ func (d fakeDNS) serveTCP(l net.Listener) {
 }
 
 // answer is the reply to a query.
-func (d fakeDNS) answer(q dnsmessage.Message) *dnsmessage.Message {
+func (d fakeDNS) answer(q *dnsmessage.Message) *dnsmessage.Message {
 	if d.asked != nil {
 		d.asked.Add(1)
 	}
@@ -134,7 +134,7 @@ func (d fakeDNS) serve(c net.PacketConn) {
 		if d.silent || q.Unpack(buf[:n]) != nil || len(q.Questions) != 1 {
 			continue
 		}
-		reply := d.answer(q)
+		reply := d.answer(&q)
 		if d.truncate {
 			reply.Answers, reply.Truncated, reply.RCode = nil, true, dnsmessage.RCodeSuccess
 		}
