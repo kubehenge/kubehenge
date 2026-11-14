@@ -87,7 +87,7 @@ func TestAnExistingManagementClusterDoesNotShrink(t *testing.T) {
 	for _, c := range []struct{ was, now int }{{3, 1}, {5, 3}, {5, 1}} {
 		for name, now := range nodeCountSettings(c.now) {
 			err := now.KeepsFixed(nodeCountSettings(c.was)[name])
-			if err == nil || !strings.Contains(err.Error(), "the nodes there are keep theirs") {
+			if err == nil || !strings.Contains(err.Error(), "the nodes there keep theirs") {
 				t.Errorf("%s from %d to %d: %v", name, c.was, c.now, err)
 			}
 		}

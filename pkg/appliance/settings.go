@@ -460,7 +460,7 @@ func (s *Settings) Validate() error {
 	}
 	if len(nets) == maxFamilies && len(s.NodeAddresses) != len(s.NodeAddressesIPv6) {
 		label, _ := familyLabels(families[1], len(families))
-		p.addf("%s: as many as the %s ones, node i taking the i-th of each", label, families[0])
+		p.addf("%s: as many as the %s ones, in the same node order", label, families[0])
 	}
 	s.checkServers(&p, families)
 	s.checkSubnets(&p, families)
@@ -499,7 +499,7 @@ func (s *Settings) KeepsFixed(was *Settings) error {
 	for _, f := range [...]string{familyIPv4, familyIPv6} {
 		label, gateway := familyLabels(f, shown)
 		if changesAddresses(s.addressesOf(f), was.addressesOf(f)) {
-			p.addf("%s: the nodes there are keep theirs (%s), and more can only be added after them", label, strings.Join(was.addressesOf(f), ", "))
+			p.addf("%s: the nodes there keep theirs (%s), and more can only be added after them", label, strings.Join(was.addressesOf(f), ", "))
 		}
 		if s.gatewayOf(f) != was.gatewayOf(f) {
 			p.addf("%s: stays %s once the management cluster exists", gateway, was.gatewayOf(f))

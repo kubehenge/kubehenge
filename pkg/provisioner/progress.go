@@ -123,7 +123,7 @@ func (r *ProgressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		cond.Message = clip(fmt.Sprintf("no machine has become ready since %s; %s", mark.since.UTC().Format("2006-01-02 15:04 UTC"), worst), conditionMessageMax)
+		cond.Message = clip(fmt.Sprintf("no machine has become ready since %s. %s", mark.since.UTC().Format("2006-01-02 15:04 UTC"), worst), conditionMessageMax)
 	}
 	before, err := setClusterCondition(ctx, r.Client, r.Reader, req.NamespacedName, MachinesStalledCondition, &cond)
 	if err != nil {

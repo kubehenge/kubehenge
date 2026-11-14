@@ -1122,7 +1122,7 @@ func TestFixedOnceCreated(t *testing.T) {
 		change func(*Settings)
 		want   string
 	}{
-		"address changed": {func(s *Settings) { s.NodeAddresses = []string{"10.0.0.12/24"} }, "Node addresses: the nodes there are keep theirs (10.0.0.11/24)"},
+		"address changed": {func(s *Settings) { s.NodeAddresses = []string{"10.0.0.12/24"} }, "Node addresses: the nodes there keep theirs (10.0.0.11/24)"},
 		"node removed":    {func(s *Settings) { s.NodeAddresses = nil }, "Node addresses:"},
 		"API address":     {func(s *Settings) { s.APIAddress = "10.0.0.9" }, "API address: stays 10.0.0.10"},
 		"gateway":         {func(s *Settings) { s.Gateway = "10.0.0.254" }, "Gateway: stays 10.0.0.1"},

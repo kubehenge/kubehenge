@@ -209,8 +209,8 @@ func TestIPv6FamilyIsFixedOnceCreated(t *testing.T) {
 	}{
 		"IPv6 first":        {func(s *Settings) { s.IPFamilies = []string{"IPv6", "IPv4"} }, "Address families: stay IPv4, IPv6"},
 		"IPv6 dropped":      {func(s *Settings) { s.IPFamilies = nil }, "Address families: stay IPv4, IPv6"},
-		"IPv6 address":      {func(s *Settings) { s.NodeAddressesIPv6 = []string{"fd00:1::12/64"} }, "IPv6 node addresses: the nodes there are keep theirs (fd00:1::11/64)"},
-		"IPv6 node removed": {func(s *Settings) { s.NodeAddressesIPv6 = nil }, "IPv6 node addresses: the nodes there are keep theirs"},
+		"IPv6 address":      {func(s *Settings) { s.NodeAddressesIPv6 = []string{"fd00:1::12/64"} }, "IPv6 node addresses: the nodes there keep theirs (fd00:1::11/64)"},
+		"IPv6 node removed": {func(s *Settings) { s.NodeAddressesIPv6 = nil }, "IPv6 node addresses: the nodes there keep theirs"},
 		"IPv6 gateway":      {func(s *Settings) { s.GatewayIPv6 = "fd00:1::254" }, "IPv6 gateway: stays fd00:1::1"},
 	} {
 		s := dualSettings("IPv4", "IPv6")
