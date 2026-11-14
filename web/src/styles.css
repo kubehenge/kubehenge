@@ -1497,8 +1497,8 @@ h4.subsection {
 
 .host-head {
   display: flex;
-  gap: 8px;
   flex-wrap: wrap;
+  gap: 8px;
   align-items: baseline;
   justify-content: space-between;
 
@@ -1508,6 +1508,7 @@ h4.subsection {
 /* The count wraps below a long name's tile before the name is cut, so an offline node stays readable. */
 .host-name {
   overflow: hidden;
+
   max-inline-size: 100%;
 
   font-family: var(--mono);
@@ -1540,7 +1541,6 @@ h4.subsection {
 
 .host-fault {
   margin-block: 0 6px;
-
   font-size: 12px;
   color: var(--dim);
   overflow-wrap: anywhere;
@@ -2586,7 +2586,6 @@ fieldset.choices .check {
   display: flex;
   gap: 8px;
   align-items: center;
-
   margin-block: 12px;
 }
 
