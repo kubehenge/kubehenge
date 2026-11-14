@@ -43,7 +43,7 @@ workload clusters on Proxmox VE VMs
 
 ## Management cluster
 
-The management cluster is an appliance that runs Cluster API, its providers and Kubehenge, and nobody's workloads. Monitoring, Rancher and everything else users run go into the clusters it creates. Kept bare, it stays small. Its attack surface is what Kubehenge needs. Losing a workload cluster never touches the piece that repairs it.
+The management cluster is an appliance that runs Cluster API, its providers and Kubehenge, and nobody's workloads. Monitoring, Rancher and everything else users run go into the clusters it creates. It stays small, and its attack surface is only what Kubehenge needs. Losing a workload cluster does not affect the cluster that repairs it.
 
 ### Operating system
 

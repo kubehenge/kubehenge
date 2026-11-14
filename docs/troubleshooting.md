@@ -207,7 +207,7 @@ The task log shows what each Kubehenge account did. In an appliance's management
 | No bridges to choose from | Proxmox VE lists a node's bridges only with `Sys.Audit` on the node. Type the bridge's name instead. A bridge marked "no SDN.Use" needs that privilege on `/sdn/zones/localnetwork/<bridge>`, or on `/sdn/zones/<zone>/<vnet>` for a VNet. |
 | "`<user>` needs `Pool.Audit` on `<pool>`" | Proxmox VE lists a pool's VMs only to a user with `Pool.Audit` on it. Without it a cluster shows no nodes, console links or reboot. `PVEPoolUser` and `PVEAuditor` hold it. A role of your own needs it added. |
 | "Proxmox VE refused: …" | Proxmox VE answered. The reason after the colon is its own, such as "VM is locked (backup)" or "cluster not ready - no quorum?". Fix that first. |
-| "Proxmox VE did not answer" | No connection, a timeout or a certificate error. |
+| "Proxmox VE did not answer" | No connection, a timeout or a certificate error. Check that the appliance reaches the Proxmox VE API on port 8006 and trusts its certificate ([install.md](install.md#the-proxmox-ve-api)). |
 | "The user name and realm together are at most 64 characters" | Proxmox VE takes no longer sign-in name, `user@realm` counted whole. |
 | "Sign-in failed" with a right password | Proxmox VE gives one answer to a wrong password, an unknown or disabled user, and a realm that requires a second factor the user lacks. Ask an administrator to set up the factor. |
 | "Wrong code, a locked factor or a cluster without quorum" | Eight wrong TOTP codes lock TOTP until a recovery key is used. Proxmox VE says nothing of it. Sign in with a recovery key. Without one, an administrator resets the user's factors. A cluster without quorum refuses every code, a right one too, because Proxmox VE records each use in its cluster files. Sign in on a node's console until quorum returns. |
@@ -718,7 +718,7 @@ Shut that VM down in Proxmox VE before the node goes down. Start it again once t
 | `TalosUpgradeAbandoned`, "node … to Talos …: its machine is being deleted" | The cluster scaled down or replaced the node while it was upgraded. Nothing to do. Its successor is upgraded as any other node. |
 | `TalosDrainBlocked`, "node … is held while it drains: Pod … cannot evict pod …" | A PodDisruptionBudget keeps a pod on the node and the upgrade waits. The text names the pod and the budget. **Upgrade held by** on the cluster shows it too. `kubectl get pdb -A` shows why the budget allows no disruption. A workload short of ready replicas explains most. Once it is healthy the pod leaves and the upgrade goes on. A budget that can never be met, such as `minAvailable` equal to a single replica, holds until the drain timeout. Lower the budget, or shorten the drain timeout of the control plane or the pool under **Machines**, **Timeouts…**. |
 | `TalosStatefulSetsWaiting`, "node … waits to drain: StatefulSet … replicas ready" | A StatefulSet with a ready pod on the node is short of replicas. Bring it back, or wait for the drain timeout (`TalosStatefulSetsNotReady`). |
-| `TalosDrain`, "node … reboots without all its pods moved: the drain timeout of … ran out" | The pods named were still on the node at the timeout. It rebooted anyway. |
+| `TalosDrain`, "node … reboots without all its pods moved: the drain timeout of … ran out" | The pods named were still on the node at the timeout. It rebooted anyway. `kubectl get pdb -A` shows what held them. Raise the drain timeout if they only needed longer ([clusters.md](clusters.md#node-timeouts)). |
 
 ### Upgrades held back
 
