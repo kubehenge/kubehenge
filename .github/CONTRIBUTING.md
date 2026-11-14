@@ -57,6 +57,11 @@ Details and reasons: `docs/architecture.md`.
 - **Upstream first.** Kubehenge assembles and tests the maintained upstream Cluster API providers, charts and images rather than forking them. Fixes that belong upstream go upstream.
 - **Forks and own builds.** Talos's bootstrap and control-plane providers come from Kubehenge's own forks, whose releases `make verify-providers` checks. Sidero Labs' releases are on a Cluster API contract the core has removed, and lack the `TalosControlPlaneTemplate` a ClusterClass needs.
   - Until upstream releases carry their fixes, `capmox` and the Add-on Provider for Helm run Kubehenge's own builds (`scripts/capmox-patches/`, `scripts/helm-addon-patches/`). Details: `docs/architecture.md`.
+- **Every kind of Proxmox VE setup.** Where a change cannot work on one of these, the interface or installer says so before it creates anything:
+  - one node, or a cluster
+  - directory, LVM, LVM-thin, ZFS, Ceph or NFS storage
+  - no DHCP, VLANs, SDN, IPv6 or dual-stack
+  - a proxy, no internet, or an API certificate from a private CA
 - **Wording.** British English. Write "Terraform/OpenTofu", never either alone.
 
 ## Code checks

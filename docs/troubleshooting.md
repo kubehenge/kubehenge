@@ -630,7 +630,7 @@ The proxy's errors:
     - `root`'s key is not among the keys it lets in
     - the node has no SSH host key under its name in that file
   - `pvecm updatecerts` puts the keys back where Proxmox VE expects them. The task's log shows the full error.
-- **A large volume's snapshot or restore fails, or holds less than it should.** The plugin waits up to 4 minutes for Proxmox VE's copy.
+- **A large volume's snapshot or restore fails, or holds less than it should.** The plugin waits up to 5 minutes for Proxmox VE's copy.
   - A longer copy can leave a snapshot reported ready before all its data is written ([clusters.md](clusters.md#volume-snapshots)). Delete it and take snapshots of smaller volumes.
 
 ### The CSI plugin's newest release
