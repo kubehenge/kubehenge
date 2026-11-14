@@ -697,9 +697,7 @@ function Summary({
         </dd>
         <dt>Workers</dt>
         <dd>
-          {c.workers.desired === 0 && c.workers.ready === 0
-            ? "None"
-            : `${ready.workers} of ${c.workers.desired} ready`}
+          {c.workers.desired === 0 && c.workers.ready === 0 ? "None" : `${ready.workers} of ${c.workers.desired} ready`}
         </dd>
         {c.workerPools.some((p) => p.autoscaling) && (
           <>
@@ -815,11 +813,7 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="submit"
-            className="primary"
-            disabled={busy || !changing || read?.error !== undefined}
-          >
+          <button type="submit" className="primary" disabled={busy || !changing || read?.error !== undefined}>
             Add to plan
           </button>
         </>
