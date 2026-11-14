@@ -337,10 +337,14 @@ func (a *Appliance) Stop(ctx context.Context) error {
 
 // forgetRemoved clears what the appliance kept of a management cluster just destroyed. The state
 // now records nothing. It goes, so that the next setup starts with a passphrase of its own. The
-// settings stay to fill that setup in. The etcd snapshots stay in their target, and the keys and
-// the talosconfig that took them go.
+// settings stay to fill that setup in. The etcd snapshots stay in their target and on a kept
+// backup volume, and the keys and the talosconfigs that took them go, so that nothing is scheduled
+// for a cluster that is gone and the next setup makes a key of its own.
 func (a *Appliance) forgetRemoved() error {
-	for _, name := range []string{a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath()} {
+	for _, name := range []string{
+		a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath(),
+		a.etcdBackupFile("volume.json"), a.etcdBackupFile("volume-status.json"), a.etcdBackupFile(volumeTalosconfig),
+	} {
 		if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("clearing the removed cluster's state: %w", err)
 		}
