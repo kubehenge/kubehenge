@@ -10,6 +10,7 @@ import {
   classBridges,
   classStorages,
   createRoom,
+  spreadOver,
   csiOffer,
   capacityProblems,
   csiProblems,
@@ -301,14 +302,14 @@ export function CreateCluster({
       namespace: formNamespace,
       taken: clusters.filter((x) => formNamespace === "" || x.namespace === formNamespace).map((x) => x.name),
       rancherExists,
-      // Three control planes where the Proxmox VE cluster has three nodes to spread them over.
+      // Three control planes where the cluster has three online nodes it may use to spread them over.
       controlPlaneReplicas: kept("controlPlaneReplicas")
         ? entered.controlPlaneReplicas
-        : nodes.length >= haControlPlanes
+        : spreadOver(nodes, entered) >= haControlPlanes
           ? haControlPlanes
           : entered.controlPlaneReplicas,
       noSharedKey: sharedKeys[namespaceOf(entered, namespaces) || (sessionNamespace ?? "")] === false,
-      rancherRegister: rancherExists && entered.rancherRegister,
+      rancherRegister: entered.rancherRegister,
       bridge,
       storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),
     },

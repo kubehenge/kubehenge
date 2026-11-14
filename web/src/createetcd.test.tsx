@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { AddOnsStep } from "./AddOnsStep";
 import { expectNoViolations } from "./axe";
-import { newBackupFields } from "./Backups";
+import { backupCredentialHint, classTargets, newBackupFields } from "./Backups";
 import {
   etcdChosen,
   fieldProblems,
@@ -20,6 +20,7 @@ import {
 } from "./create-form";
 import { fromCluster } from "./start-from";
 import type { Cluster, ClusterClass } from "./types";
+import { check } from "./writing";
 
 // The zone backups start in, which snapshots start in too.
 const browserZone = (): string => newBackupFields().timeZone;
@@ -67,7 +68,7 @@ describe("a new cluster's etcd snapshots", () => {
   });
 
   it("pass Next in all three key cases, and wait only with no key at all", () => {
-    const wait = "Kept on the management cluster until a key for store is stored";
+    const wait = "No snapshots until a key for store is stored";
     const cases = [
       { name: "shared key", patch: { noSharedKey: false }, waits: false, sent: undefined },
       {
@@ -93,9 +94,13 @@ describe("a new cluster's etcd snapshots", () => {
     expect(snapshotsWaitText("store")).toBe(wait);
   });
 
-  it("say on the step that snapshots are kept on the management cluster while no key exists", () => {
+  it("say on the step and on Confirm that no snapshots are taken while no key exists", () => {
     render(<Step cls={kubeadm} first={{ noSharedKey: true }} />);
-    expect(screen.getByText("Kept on the management cluster until a key for store is stored")).toBeInTheDocument();
+    expect(screen.getByText("No snapshots until a key for store is stored")).toBeInTheDocument();
+    const form = filledForm(kubeadm, { noSharedKey: true });
+    expect(Object.fromEntries(summary(form, kubeadm))["etcd snapshots"]).toBe(
+      "No snapshots until a key for store is stored",
+    );
   });
 
   it("say nothing of waiting where a key for every cluster is stored", () => {
@@ -380,17 +385,40 @@ describe("the add-ons step", () => {
     expect(screen.getByText("Limit it to the folder <namespace>.web/")).toBeInTheDocument();
   });
 
+  it("names the folder beneath the target's prefix", () => {
+    const prefixed = classOf("kubeadm", JSON.stringify([{ name: "store", bucket: "backups", prefix: "site/a" }]));
+    expect(classTargets(prefixed)).toStrictEqual([{ name: "store", bucket: "backups", prefix: "site/a" }]);
+    expect(backupCredentialHint("clusters", "web", classTargets(prefixed)[0])).toBe(
+      "Limit it to the folder site/a/clusters.web/",
+    );
+    render(<Step cls={prefixed} first={{ backups: true }} />);
+    expect(screen.getByText("Limit it to the folder site/a/<namespace>.web/")).toBeInTheDocument();
+  });
+
   it("makes the access key optional for etcd snapshots alone", () => {
     render(<Step cls={kubeadm} />);
-    expect(screen.getByText("Optional. Empty uses the key stored for every cluster")).toBeInTheDocument();
+    expect(screen.getByText("Empty uses the key stored for every cluster")).toBeInTheDocument();
   });
 
   it("says where snapshots go without a backup target, by distribution", () => {
     const { unmount } = render(<Step cls={bare} />);
-    expect(screen.getByText(/stay on the control-plane nodes\. Add a backup target/u)).toBeInTheDocument();
+    expect(screen.getByText("Snapshots stay on the control-plane nodes without a backup target")).toBeInTheDocument();
     unmount();
     render(<Step cls={classOf("kubeadm", undefined)} />);
-    expect(screen.getByText("No etcd snapshots without a backup target.")).toBeInTheDocument();
+    expect(screen.getByText("No etcd snapshots without a backup target")).toBeInTheDocument();
+  });
+
+  it("keeps the step's hints within the hint limit", () => {
+    const { container, unmount } = render(<Step cls={bare} />);
+    const shown = [...container.querySelectorAll("p.hint")].map((p) => p.textContent ?? "");
+    unmount();
+    for (const first of [{ noSharedKey: true }, { noSharedKey: false }]) {
+      const { container: c, unmount: done } = render(<Step cls={kubeadm} first={first} />);
+      shown.push(...[...c.querySelectorAll("p.hint")].map((p) => p.textContent ?? ""));
+      done();
+    }
+    const problems = shown.flatMap((text) => check({ file: "step", line: 0, kind: "hint", text }));
+    expect(problems.map((p) => `${p.text}: ${p.detail}`)).toStrictEqual([]);
   });
 
   it("says a key cannot be stored without Sys.Modify", () => {

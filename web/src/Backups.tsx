@@ -54,11 +54,14 @@ export const backupKeys: CredentialKey[] = [
 
 export const backupsHint = "Every namespace but system and add-on ones, with volume data";
 
-/** backupCredentialHint names the folder of the bucket that a cluster's backups and etcd snapshots are written to. */
-export const backupCredentialHint = (namespace: string | undefined, name: string): string =>
-  `Limit it to the folder ${filled(namespace) ? namespace : "<namespace>"}.${filled(name) ? name : "<name>"}/`;
+/** backupCredentialHint names the folder of the bucket that a cluster's backups and etcd snapshots are written to, beneath the target's prefix. */
+export function backupCredentialHint(namespace: string | undefined, name: string, target?: OfferedTarget): string {
+  const prefix = target?.prefix?.replace(/^\/+|\/+$/g, "");
+  const own = `${filled(namespace) ? namespace : "<namespace>"}.${filled(name) ? name : "<name>"}/`;
+  return `Limit it to the folder ${filled(prefix) ? `${prefix}/` : ""}${own}`;
+}
 
-export const noTargets = "No backup targets. An administrator adds them in the appliance settings.";
+export const noTargets = "No backup targets until an administrator adds one";
 
 /** A cluster's backups variable. */
 export interface BackupsValue {
@@ -102,6 +105,8 @@ export interface OfferedTarget {
   name: string;
   bucket: string;
   endpoint?: string;
+  /** The folder every cluster's own folder sits beneath. */
+  prefix?: string;
 }
 
 /** classTargets lists the backup targets a class offers. */
@@ -123,6 +128,10 @@ export function classTargets(c: ClusterClass | undefined): OfferedTarget[] {
     const endpoint = text(r["endpoint"]);
     if (filled(endpoint)) {
       t.endpoint = endpoint;
+    }
+    const prefix = text(r["prefix"]);
+    if (filled(prefix)) {
+      t.prefix = prefix;
     }
     return [t];
   });
@@ -612,7 +621,13 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
           onChange={(readFrom) => setTyped({ ...fields, readFrom })}
         />
       )}
-      {enabled && <BackupKey cluster={c} existingSecret={current.existingSecret} />}
+      {enabled && (
+        <BackupKey
+          cluster={c}
+          existingSecret={current.existingSecret}
+          target={targets.find((t) => t.name === fields.target)}
+        />
+      )}
       {current.enabled && !enabled && <p className="warning">Removes Velero. Backups stay in the target.</p>}
       <ErrorBox message={error} />
     </Dialog>
@@ -624,9 +639,11 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
 function BackupKey({
   cluster: c,
   existingSecret,
+  target,
 }: {
   cluster: Cluster;
   existingSecret: string | undefined;
+  target: OfferedTarget | undefined;
 }): JSX.Element {
   return filled(existingSecret) ? (
     <p className="hint">Access key: Secret {existingSecret} in velero</p>
@@ -636,7 +653,7 @@ function BackupKey({
       purpose="backup"
       cluster={c}
       keys={backupKeys}
-      hint={backupCredentialHint(c.namespace, c.name)}
+      hint={backupCredentialHint(c.namespace, c.name, target)}
     />
   );
 }

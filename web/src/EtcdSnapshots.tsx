@@ -315,7 +315,11 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
             purpose="backup"
             cluster={c}
             keys={backupKeys}
-            hint={backupCredentialHint(c.namespace, c.name)}
+            hint={backupCredentialHint(
+              c.namespace,
+              c.name,
+              targets.find((t) => t.name === fields.target),
+            )}
           />
         </>
       )}

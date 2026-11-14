@@ -710,6 +710,8 @@ export interface Storage {
   type?: string;
   /** Whether a ZFS pool allocates a disk's space on write. */
   sparse?: boolean;
+  /** How a storage that keeps files lays out a new disk: off, metadata, falloc or full. Absent is off. */
+  preallocation?: string;
 }
 
 export interface PveNode {

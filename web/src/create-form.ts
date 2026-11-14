@@ -481,6 +481,12 @@ export interface Room {
   diskWarning?: string | undefined;
 }
 
+/** spreadOver counts the online nodes a form's cluster may use, which its control planes spread over. */
+export const spreadOver = (nodes: PveNode[], form: Form): number => {
+  const allowed = allowedNodes(form.place);
+  return nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node))).length;
+};
+
 /** createRoom weighs a form's VMs against the online nodes it may use and the storage it chose. */
 export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): Room {
   const workers = mostWorkers(form);
@@ -742,14 +748,13 @@ export const keyRequired = (f: Form, c: ClusterClass | undefined): boolean =>
 
 /**
  * snapshotsWait says whether the etcd snapshots have no key yet: none stored for every cluster and
- * none entered. The management cluster keeps them until a key for their target is stored.
+ * none entered. The controller takes none until a key for their target is stored.
  */
 export const snapshotsWait = (f: Form, c: ClusterClass | undefined): boolean =>
   etcdChosen(f, c) && f.noSharedKey && !keyTyped(f);
 
-/** snapshotsWaitText is what the snapshot step says of snapshots that wait for a key. */
-export const snapshotsWaitText = (target: string): string =>
-  `Kept on the management cluster until a key for ${target} is stored`;
+/** snapshotsWaitText is what the snapshot step and Confirm say of snapshots that wait for a key. */
+export const snapshotsWaitText = (target: string): string => `No snapshots until a key for ${target} is stored`;
 
 /**
  * withBackupChoices takes the first backup target a class offers until another is chosen, the backups'
@@ -1152,10 +1157,10 @@ function addOnVariables(form: Form, c: ClusterClass, defined: Set<string>): Reco
   }
   if (form.rancherInstall) {
     variables["rancher"] = { install: true, hostname: form.rancherHostname };
-  } else if (!form.rancherRegister && form.rancherExists) {
+  } else if (!form.rancherRegister) {
     variables["rancher"] = { register: false };
   }
-  if (form.backups) {
+  if (backupsChosen(form, c)) {
     variables["backups"] = backupsVariable(form.backupFields);
   }
   if (etcdChosen(form, c)) {
@@ -1460,10 +1465,10 @@ function rancherChoice(form: Form): string {
   if (form.rancherInstall) {
     return `Installed at ${form.rancherHostname}`;
   }
-  if (!form.rancherExists) {
-    return "Registers once a cluster installs Rancher";
+  if (!form.rancherRegister) {
+    return "Not registered";
   }
-  return form.rancherRegister ? registeredWithRancher : "Not registered";
+  return form.rancherExists ? registeredWithRancher : "Registers once a cluster installs Rancher";
 }
 
 function meshChoice(form: Form): string {
@@ -1551,7 +1556,7 @@ function proxmoxRows(form: Form, defined: ReadonlySet<string>, offered: SummaryO
 }
 
 // summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
-// VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
+// VE HA, the CSI plugin's release and the HA rule labels only where they can be chosen.
 export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {}): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
   const shownFamilies = familiesOf(form.families).length;
@@ -1649,18 +1654,23 @@ function backupRows(form: Form, c: ClusterClass, defined: Set<string>): [string,
     key = "waits for the cluster's access key";
   }
   if (defined.has("backups")) {
-    rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off"]);
+    rows.push([
+      "Backups",
+      backupsChosen(form, c) ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off",
+    ]);
   }
   if (etcdOffered(c)) {
     const sum = etcdSnapshotsText(etcdVariable(form, c), c.distribution);
     const typed = keyTyped(form);
     let etcdKey = key;
-    if (snapshotsWait(form, c)) {
-      etcdKey = "kept on the management cluster until a key is stored";
-    } else if (!keyRequired(form, c) && !typed) {
+    if (!keyRequired(form, c) && !typed) {
       etcdKey = "key for every cluster";
     }
-    rows.push(["etcd snapshots", form.etcdSnapshots ? `${sum}, ${etcdKey}` : "Off"]);
+    let etcd = form.etcdSnapshots ? `${sum}, ${etcdKey}` : "Off";
+    if (snapshotsWait(form, c)) {
+      etcd = snapshotsWaitText(form.etcdFields.target);
+    }
+    rows.push(["etcd snapshots", etcd]);
   }
   return rows;
 }
@@ -2575,9 +2585,28 @@ export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefi
   return `No node has ${needGiB} GiB free, the most is ${Math.floor(freeMiB(best) / mibPerGiB)} GiB on ${best.node}. The cluster waits for room.`;
 }
 
-// thick tells whether a storage reserves a disk's full size when it is made: plain LVM, and ZFS
-// without sparse volumes. Thin kinds and storages of unknown type overcommit, so they only warn.
-const thick = (s: Storage | undefined): boolean => s?.type === "lvm" || (s?.type === "zfspool" && s.sparse === false);
+// thick tells whether a storage reserves a disk's full size when it is made, as the server judges
+// it (pve.Storage.AllocatesOnWrite): plain LVM, ZFS without sparse volumes, and file storages that
+// preallocate. Thin kinds and storages whose type or ZFS setting is unknown only warn.
+function thick(s: Storage | undefined): boolean {
+  if (s === undefined) {
+    return false;
+  }
+  switch (s.type) {
+    case undefined:
+    case "":
+    case "lvmthin":
+    case "rbd":
+      return false;
+    case "lvm":
+      return true;
+    case "zfspool":
+    case "zfs":
+      return s.sparse === false;
+    default:
+      return s.preallocation === "falloc" || s.preallocation === "full";
+  }
+}
 
 /**
  * capacityProblems holds the machines step to what the cluster could never fit, with the figures

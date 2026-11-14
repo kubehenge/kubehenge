@@ -7,7 +7,7 @@
 - New clusters back up with Velero where the class offers a target, upgrade Kubernetes patch releases, and take three control-plane nodes where Proxmox VE has three nodes.
 - **Copied from** marks each copied value, Confirm shows the firewall's state, and a mistyped gateway is marked without moving the addresses.
 - **Update node images** can be switched off when a cluster is created.
-- The egress proxy offers **Management proxy** only when the management cluster has one, and Rancher registration only when a cluster runs Rancher.
+- The egress proxy offers **Management proxy** only when the management cluster has one.
 
 ### Fixed
 

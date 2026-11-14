@@ -47,7 +47,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 
 | Field | What it is |
 | --- | --- |
-| Start from | Once there is a cluster: the cluster to copy settings from, or **Defaults**, which is chosen until another is. The later steps say **Copied from** that cluster. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA group labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name, the namespace, and the Kubernetes version while the distribution stays. |
+| Start from | Once there is a cluster: the cluster to copy settings from, or **Defaults**, which is chosen until another is. The later steps say **Copied from** that cluster. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA rule labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name, the namespace, and the Kubernetes version while the distribution stays. |
 | Namespace | Only where an administrator has named [more namespaces for clusters](#more-namespaces-for-clusters): the namespace in the management cluster the cluster goes to, `clusters` unless another is chosen. |
 | Name | Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters. It also names the cluster's Proxmox VE pool and VMs. |
 | Distribution | kubeadm, RKE2, k3s or Talos: one per ClusterClass in the management cluster. A distribution without a VM template in the template pool says so. Its clusters cannot be created until an administrator builds one ([templates.md](templates.md)). Where cluster creators may have missing templates built, **Build template** does it from the wizard. |
@@ -218,7 +218,7 @@ RKE2 installs its choice itself. For kubeadm, and for k3s and Talos given Cilium
 | Placement | The Proxmox VE nodes the cluster's VMs may run on: **Any node**, **HA rule nodes**, or **Chosen nodes**. |
 | Proxmox VE HA | Shown when the management cluster has Proxmox VE HA and the storage is shared. On by default. |
 | Newest CSI plugin release | Shown when the management cluster lets clusters choose it. Off by default. See [Persistent volumes](#persistent-volumes). |
-| HA group labels | Shown unless the management cluster switched them off for every cluster ([install-settings.md](install-settings.md#ha-group-labels)). On by default. See below. |
+| HA rule labels | Shown unless the management cluster switched them off for every cluster ([install-settings.md](install-settings.md#ha-group-labels)). On by default. See below. |
 | Volume snapshots | Shown when the storage is local to each node. Off by default. See [Volume snapshots](#volume-snapshots). |
 
 Placement and the four options below it change later under **Options**.
@@ -260,9 +260,9 @@ Proxmox VE's HA manager migrates VMs that share a node apart. It restarts the VM
 
 Workers are not HA resources. The health check replaces a worker lost with its node.
 
-#### HA group labels
+#### HA rule labels
 
-**Add HA group labels** has the cloud controller manager label each node with its Proxmox VE node's HA groups (or HA node-affinity rules). The label is `group.topology.proxmox.sinextra.dev/<group or rule>`, with an empty value. Reading the groups takes `Sys.Audit` on `/`. While the option is on, Kubehenge's controller adds the cluster's user to a group holding it there, unpropagated.
+**Add HA rule labels** has the cloud controller manager label each node with its Proxmox VE node's HA groups (or HA node-affinity rules). The label is `group.topology.proxmox.sinextra.dev/<group or rule>`, with an empty value. Reading the groups takes `Sys.Audit` on `/`. While the option is on, Kubehenge's controller adds the cluster's user to a group holding it there, unpropagated.
 
 The token can then read the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, corosync) but change nothing. It reads no more of the guests, storages or nodes than before. Switching the option takes no privilege beyond changing the cluster.
 
@@ -1020,7 +1020,7 @@ New machines, from scaling up or a repair, clone the template of the release the
 
 ![The Options view: node, network, storage and add-on settings, each with its value and Edit](images/options.png)
 
-A setting that is only on or off has a switch in its row. These are Proxmox VE HA, HA group labels, the CSI plugin's newest release, volume snapshots and Istio. The switch says what switching it on brings, or why it cannot be. The rest have **Edit**.
+A setting that is only on or off has a switch in its row. These are Proxmox VE HA, HA rule labels, the CSI plugin's newest release, volume snapshots and Istio. The switch says what switching it on brings, or why it cannot be. The rest have **Edit**.
 
 | Group | Setting | Shown | Changing it |
 | --- | --- | --- | --- |
@@ -1028,7 +1028,7 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 | Nodes | Talos release | Talos | **Upgrade** upgrades the nodes in place ([Talos upgrades](#talos-upgrades)). |
 | Nodes | Placement | always | Applies to the VMs created after it, by scaling up, an upgrade or a replacement. Those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept ([Machines](#machines)). |
 | Nodes | Proxmox VE HA | where the management cluster has Proxmox VE HA and the storage is shared | Takes the control-plane VMs into HA or out of it ([Machines](#machines)). |
-| Nodes | HA group labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
+| Nodes | HA rule labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
 | Nodes | Autoscaler | always | Its expander, its timing and where it runs ([Autoscaling](#autoscaling)). |
 | Network | Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
 | Network | Load balancer | always | See the list below. |

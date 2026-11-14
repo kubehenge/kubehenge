@@ -72,8 +72,23 @@ describe("the machines step and what the cluster could never fit", () => {
     const disks = { ...sized, workerMachine: { cores: 4, memoryMiB: 4096, diskGiB: 9000 } };
     const on = (s: Storage) => capacityProblems("Machines", disks, { nodes: [node("pve1", 20)], storages: [s] });
     expect(on({ ...local, type: "lvm" })).toHaveProperty("workerMachine");
-    expect(on({ ...local, type: "zfspool", sparse: false })).toHaveProperty("workerMachine");
-    for (const s of [{ type: "lvmthin" }, { type: "zfspool", sparse: true }, { type: "rbd" }, { type: "nfs" }, {}]) {
+    for (const s of [
+      { type: "zfspool", sparse: false },
+      { type: "dir", preallocation: "full" },
+      { type: "nfs", preallocation: "falloc" },
+      { type: "zfs", sparse: false },
+    ]) {
+      expect(on({ ...local, ...s })).toHaveProperty("workerMachine");
+    }
+    for (const s of [
+      { type: "lvmthin" },
+      { type: "zfspool", sparse: true },
+      { type: "zfs" },
+      { type: "rbd" },
+      { type: "nfs" },
+      { type: "dir", preallocation: "metadata" },
+      {},
+    ]) {
       expect(on({ ...local, ...s })).toStrictEqual({});
     }
   });

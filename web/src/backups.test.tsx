@@ -170,10 +170,9 @@ describe("backup schedules", () => {
 describe("a new cluster's backups", () => {
   it("go into the request with the target its class offers", () => {
     const form = withBackupChoices({ ...newForm(), name: "web", backups: true }, k3s, true);
-    expect(fieldProblems("Add-ons", form, k3s)).toStrictEqual({
-      backupTarget: "Choose a target",
-      backupKey: "Enter both parts of the access key",
-    });
+    // The first target is taken, and Velero waits for a key rather than stopping the wizard.
+    expect(form.backupFields.target).toBe("store");
+    expect(fieldProblems("Add-ons", form, k3s)).toStrictEqual({});
     const chosen = withBackupChoices(
       {
         ...form,
@@ -192,14 +191,16 @@ describe("a new cluster's backups", () => {
       retentionDays: 30,
       volumes: "all",
     });
-    expect(JSON.stringify(request(chosen, k3s))).not.toContain("secret");
+    // The key goes beside the variables, which the cluster's spec keeps in plain text.
+    expect(JSON.stringify(request(chosen, k3s).variables)).not.toContain("secret");
+    expect(request(chosen, k3s).backupKey).toStrictEqual({ accessKeyID: "AKIA", secretAccessKey: "secret" });
     expect(Object.fromEntries(summary(chosen, k3s))["Backups"]).toMatch(/kept 30 days, to aws, own access key/u);
     // Without Sys.Modify nobody types the cluster's key in now, and backups wait for it.
     const waiting = withBackupChoices({ ...chosen, backupKey: {} }, k3s, false);
     expect(waiting).toMatchObject({ storeBackupKey: false });
     expect(fieldProblems("Add-ons", waiting, k3s)).toStrictEqual({});
     expect(pendingCredentials(waiting, k3s)).toStrictEqual([]);
-    expect(Object.fromEntries(summary(waiting, k3s))["Backups"]).toMatch(/access key to store later/u);
+    expect(Object.fromEntries(summary(waiting, k3s))["Backups"]).toMatch(/waits for the cluster's access key/u);
   });
 });
 

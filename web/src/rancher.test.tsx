@@ -80,10 +80,14 @@ describe("registering with Rancher in the create wizard", () => {
     variables: [{ name: "rancher", required: false, schema: { type: "object" } }],
   };
 
-  it("says there is no Rancher yet, and sends nothing, where no cluster runs one", () => {
-    const form = { ...newForm(), rancherExists: false, rancherRegister: false };
+  it("says there is no Rancher yet where the user sees none, and still sends an opt-out", () => {
+    const form = { ...newForm(), rancherExists: false, rancherRegister: true };
     expect(request(form, cls).variables).not.toHaveProperty("rancher");
     expect(Object.fromEntries(summary(form, cls))["Rancher"]).toBe("Registers once a cluster installs Rancher");
+    // The user may not see the cluster that runs Rancher.
+    const out = { ...form, rancherRegister: false };
+    expect(request(out, cls).variables["rancher"]).toStrictEqual({ register: false });
+    expect(Object.fromEntries(summary(out, cls))["Rancher"]).toBe("Not registered");
     const there = { ...newForm(), rancherExists: true, rancherRegister: false };
     expect(request(there, cls).variables["rancher"]).toStrictEqual({ register: false });
     expect(Object.fromEntries(summary({ ...there, rancherRegister: true }, cls))["Rancher"]).toBe(

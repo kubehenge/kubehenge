@@ -367,7 +367,7 @@ Persistent volumes that stay pending point the same way. The CSI plugin's contro
 
 #### HA group errors in the cloud controller manager's log
 
-The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. It means only that the nodes go without the HA group labels. Reading Proxmox VE's HA groups needs `Sys.Audit` on `/`. A cluster's token holds it only with **Add HA group labels** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)).
+The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. It means only that the nodes go without the HA group labels. Reading Proxmox VE's HA groups needs `Sys.Audit` on `/`. A cluster's token holds it only with **Add HA rule labels** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)).
 
 Either the cluster switched it off, or an administrator switched off **HA group labels** for every cluster in the setup ([install-settings.md](install-settings.md#ha-group-labels)). With it on again, the messages stop within a few minutes. If they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
 

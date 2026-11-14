@@ -10,6 +10,7 @@ import {
   gatewayProblems,
   memoryNodeWarning,
   newForm,
+  request,
   summary,
   withBackupChoices,
   type BridgeNetwork,
@@ -40,6 +41,10 @@ describe("the create wizard's defaults", () => {
     const off = withBackupChoices({ ...newForm(), name: "web" }, withoutTarget, true);
     expect(backupsChosen(off, withoutTarget)).toBe(false);
     expect(fieldProblems("Add-ons", off, withoutTarget)).toStrictEqual({});
+    // What is sent and confirmed matches the box: no backups variable, which admission would refuse.
+    expect(request(off, withoutTarget).variables).not.toHaveProperty("backups");
+    expect(Object.fromEntries(summary(off, withoutTarget))["Backups"]).toBe("Off");
+    expect(request(on, withTarget).variables).toHaveProperty("backups");
   });
 
   it("upgrades Kubernetes patch releases", () => {
@@ -106,7 +111,7 @@ describe("a machine no node could hold", () => {
 });
 
 describe("the control-plane default", () => {
-  async function open(count: number): Promise<void> {
+  async function open(count: number, offline = 0): Promise<void> {
     window.history.replaceState(null, "", "/clusters/new");
     fakeServer({
       "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
@@ -115,7 +120,7 @@ describe("the control-plane default", () => {
       "GET /api/clusters": () => ({ body: [] }),
       "GET /api/proxmox/storages": () => ({ body: [] }),
       "GET /api/proxmox/nodes": () => ({
-        body: Array.from({ length: count }, (_, i) => ({ node: `pve${i + 1}`, online: true })),
+        body: Array.from({ length: count }, (_, i) => ({ node: `pve${i + 1}`, online: i < count - offline })),
       }),
     });
     render(<App />);
@@ -131,5 +136,10 @@ describe("the control-plane default", () => {
     await open(2);
     await waitFor(() => expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("1"));
     expect(screen.getByText("One has no high availability")).toBeInTheDocument();
+  });
+
+  it("is one where only two of three nodes are online", async () => {
+    await open(3, 1);
+    await waitFor(() => expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("1"));
   });
 });

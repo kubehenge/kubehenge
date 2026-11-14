@@ -371,7 +371,7 @@ export function optionRows<A extends string = never>(
     });
   }
   if (offered.haGroups || haGroupsOn(c)) {
-    rows.push({ label: "HA group labels", value: haGroupsText(haGroupsOn(c)), group: "Nodes", toggle: haGroupsToggle });
+    rows.push({ label: "HA rule labels", value: haGroupsText(haGroupsOn(c)), group: "Nodes", toggle: haGroupsToggle });
   }
   rows.push(
     {

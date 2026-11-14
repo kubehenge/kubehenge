@@ -9,6 +9,7 @@ import {
   backupsHint,
   classTargets,
   noTargets,
+  type OfferedTarget,
 } from "./Backups";
 import { CertificatesFields } from "./Certificates";
 import { MeshPeersField, meshInfo } from "./ClusterMesh";
@@ -191,6 +192,7 @@ function BackupsChoice({
             shown={shown}
             canTrust={canTrust}
             namespace={namespace}
+            target={targets.find((t) => t.name === form.backupFields.target)}
             waitText={backupsWait(form, cls) ? "Velero waits for the cluster's own key" : undefined}
           />
         </>
@@ -207,11 +209,14 @@ function AccessKey({
   shown,
   canTrust,
   namespace,
+  target,
   optional = false,
   waitText,
 }: StepProps & {
   canTrust: boolean | undefined;
   namespace: string | undefined;
+  /** The target the key is for, whose prefix the folder sits beneath. */
+  target: OfferedTarget | undefined;
   /** The cluster does without a key of its own, taking the one stored for every cluster. */
   optional?: boolean;
   /** What happens to snapshots while no key exists at all. Unset where one does. */
@@ -227,9 +232,9 @@ function AccessKey({
         <p className="hint">
           {optional
             ? waitText === undefined
-              ? "Optional. Empty uses the key stored for every cluster"
-              : "Optional. Enter one to take snapshots at once"
-            : backupCredentialHint(namespace, form.name)}
+              ? "Empty uses the key stored for every cluster"
+              : "Enter one to take snapshots at once"
+            : backupCredentialHint(namespace, form.name, target)}
         </p>
       )}
       {waitText !== undefined && <p className="hint">{waitText}</p>}
@@ -255,8 +260,8 @@ function AccessKey({
 // noTargetSnapshots says what etcd snapshots a cluster has where the class offers no backup target.
 const noTargetSnapshots = (distribution: string): string =>
   distribution === "rke2" || distribution === "k3s"
-    ? "etcd snapshots stay on the control-plane nodes. Add a backup target to copy them off the cluster."
-    : "No etcd snapshots without a backup target.";
+    ? "Snapshots stay on the control-plane nodes without a backup target"
+    : "No etcd snapshots without a backup target";
 
 // EtcdSnapshotsChoice switches a new cluster's etcd snapshots on, as they are its way back from lost
 // state. It takes the access key only when backups, which ask for it in their own block, are off.
@@ -295,6 +300,7 @@ function EtcdSnapshotsChoice({
               shown={shown}
               canTrust={canTrust}
               namespace={namespace}
+              target={classTargets(cls).find((t) => t.name === form.etcdFields.target)}
               optional={!keyRequired(form, cls)}
               waitText={snapshotsWait(form, cls) ? snapshotsWaitText(form.etcdFields.target) : undefined}
             />
@@ -446,19 +452,18 @@ function RancherAddOn({ form, set, shown, canTrust }: StepProps & { canTrust: bo
           )}
         </Field>
       ) : (
-        form.rancherExists && (
-          <>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={form.rancherRegister}
-                onChange={(e) => set("rancherRegister", e.target.checked)}
-              />{" "}
-              Register with Rancher
-            </label>
-            <Info about="registering with Rancher">{registerHint}</Info>
-          </>
-        )
+        // Shown where no Rancher is seen too: the user may not see the cluster that runs it.
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.rancherRegister}
+              onChange={(e) => set("rancherRegister", e.target.checked)}
+            />{" "}
+            Register with Rancher
+          </label>
+          <Info about="registering with Rancher">{registerHint}</Info>
+        </>
       )}
     </>
   );
