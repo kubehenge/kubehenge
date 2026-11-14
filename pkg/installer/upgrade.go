@@ -299,6 +299,14 @@ func (r *Runner) stageSoftware(ctx context.Context, tofu tofuPlan) error {
 	return nil
 }
 
+// stageCA pushes the CA of the Proxmox VE API beside its places, for the upgrade script to rename.
+func (r *Runner) stageCA(ctx context.Context, ca []byte) error {
+	if err := r.pushData(ctx, "proxmox-ca.pem", ca, "/etc/kubehenge/proxmox-ca.pem.new", "0644"); err != nil {
+		return err
+	}
+	return r.pushData(ctx, "proxmox-ca.crt", ca, "/usr/local/share/ca-certificates/proxmox-ca.crt.new", "0644")
+}
+
 // Upgrade replaces the software of an installed appliance with a release no older, keeps its
 // state, and stops if the management cluster is being applied.
 func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
@@ -327,10 +335,7 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 		return nil, userErr("copying the software into container "+c.CTID+" failed", "See "+r.LogPath+" for the command's message")
 	}
 	if plan.newCA {
-		if err = r.pushData(ctx, "proxmox-ca.pem", plan.ca.PEM, "/etc/kubehenge/proxmox-ca.pem.new", "0644"); err != nil {
-			return nil, err
-		}
-		if err = r.pushData(ctx, "proxmox-ca.crt", plan.ca.PEM, "/usr/local/share/ca-certificates/proxmox-ca.crt.new", "0644"); err != nil {
+		if err = r.stageCA(ctx, plan.ca.PEM); err != nil {
 			return nil, err
 		}
 	}

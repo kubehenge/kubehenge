@@ -37,6 +37,10 @@ type Facts struct {
 	FQDN          string
 	Bridges       []string
 	DefaultBridge string
+	// DefaultVLAN is the tag of the VLAN device (such as vmbr0.20) the default route leaves by.
+	DefaultVLAN string
+	// VLANFromRoute is set when the container's VLAN was taken from that device.
+	VLANFromRoute bool
 	// NodeDHCP is whether the node's own bridge address comes from DHCP, which is the best
 	// sign that its network has a DHCP server.
 	NodeDHCP         bool
@@ -53,6 +57,8 @@ type Facts struct {
 	SuggestedIP      string
 	Candidates       []APICandidate
 	Members          []Member
+	// TemplateTight holds the storages that take templates but have under 200 MiB free.
+	TemplateTight []Storage
 }
 
 // Member is an address of one of the cluster's nodes.
@@ -77,6 +83,7 @@ type Node struct {
 const (
 	rootDiskKiB  = 9437184
 	templateKiB  = 204800
+	workKiB      = 1048576
 	clusterCA    = "/etc/pve/pve-root-ca.pem"
 	systemCA     = "/etc/ssl/certs/ca-certificates.crt"
 	resolvConf   = "/etc/resolv.conf"
@@ -214,6 +221,12 @@ func (n *Node) Detect(ctx context.Context, cfg *Config) (*Facts, error) {
 	gw, dev := n.defaultRoute(ctx)
 	f.Gateway = gw
 	f.DefaultBridge = pickDefaultBridge(f.Bridges, dev)
+	if bridge, tag := vlanOfDevice(f.Bridges, dev); bridge != "" {
+		f.DefaultBridge, f.DefaultVLAN = bridge, tag
+		if cfg.Bridge == "" && cfg.VLAN == "" {
+			cfg.VLAN, f.VLANFromRoute = tag, true
+		}
+	}
 	f.DNS, f.LoopbackDNSOnly = n.resolvers()
 	var err error
 	if f.RootStorages, _, err = n.Storages(ctx, "rootdir", rootDiskKiB); err != nil {
@@ -221,12 +234,17 @@ func (n *Node) Detect(ctx context.Context, cfg *Config) (*Facts, error) {
 	}
 	_, short, _ := n.Storages(ctx, "rootdir", rootDiskKiB)
 	f.ShortRoot = shortText(short)
-	all, _, err := n.Storages(ctx, "vztmpl", 0)
+	roomy, tight, err := n.Storages(ctx, "vztmpl", templateKiB)
 	if err != nil {
 		return nil, fmt.Errorf("listing storages: %w", err)
 	}
-	f.TemplateStorages = all
-	f.TemplateHeld = n.TemplateHeld(ctx, all, Template)
+	// A storage with no room for the template is offered only where none has, so its own error
+	// names the shortage.
+	f.TemplateStorages, f.TemplateTight = roomy, tight
+	if len(roomy) == 0 {
+		f.TemplateStorages = tight
+	}
+	f.TemplateHeld = n.TemplateHeld(ctx, append(slices.Clone(roomy), tight...), Template)
 	if out, err := n.run(ctx, "pvesh", "get", "/cluster/nextid"); err == nil {
 		f.NextID = strings.Trim(strings.TrimSpace(out), `"`)
 	}
@@ -236,15 +254,35 @@ func (n *Node) Detect(ctx context.Context, cfg *Config) (*Facts, error) {
 		bridge = f.DefaultBridge
 	}
 	if bridge != "" {
-		f.Prefix = n.bridgeAddress4(ctx, bridge)
-		f.NodeDHCP = n.bridgeIsDHCP(bridge)
+		dev := f.addressDevice(bridge, cfg.VLAN)
+		f.Prefix = n.bridgeAddress4(ctx, dev)
+		f.NodeDHCP = n.bridgeIsDHCP(dev)
 		if f.Prefix.IsValid() {
-			f.SuggestedIP = n.SuggestAddress(ctx, bridge, f)
+			f.SuggestedIP = n.SuggestAddress(ctx, dev, f)
 		}
 		f.Members = n.clusterAddresses(ctx)
-		f.Candidates = n.APICandidates(ctx, f, bridge)
+		f.Candidates = n.APICandidates(ctx, f, dev)
 	}
 	return f, nil
+}
+
+// vlanOfDevice splits a VLAN device such as vmbr0.20 into the bridge it sits on and its tag. Both
+// are empty for any other device.
+func vlanOfDevice(bridges []string, dev string) (string, string) {
+	i := strings.LastIndex(dev, ".")
+	if i <= 0 || !slices.Contains(bridges, dev[:i]) || !inRange(dev[i+1:], 1, vlanMax) {
+		return "", ""
+	}
+	return dev[:i], dev[i+1:]
+}
+
+// addressDevice is the device that holds the node's address on the container's network: the
+// bridge, else the bridge's VLAN device where the node's default route leaves by it.
+func (f *Facts) addressDevice(bridge, vlan string) string {
+	if f.DefaultVLAN != "" && bridge == f.DefaultBridge && vlan == f.DefaultVLAN {
+		return bridge + "." + vlan
+	}
+	return bridge
 }
 
 func shortText(short []Storage) string {

@@ -105,6 +105,10 @@ type Runner struct {
 
 const keyDir = "/var/lib/kubehenge-keys"
 
+// aptTimeouts keeps apt from waiting minutes on a mirror an air-gapped or filtered network drops
+// without an answer.
+const aptTimeouts = "-o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=0"
+
 const units = "kubehenge.service kubehenge-update.service kubehenge-update.path kubehenge-headlamp.service kubehenge-headlamp.socket kubehenge-headlamp-proxy.service"
 
 // Steps lists the steps of this run, in order.
@@ -280,6 +284,15 @@ func (r *Runner) Cleanup(ctx context.Context) {
 	}
 }
 
+// pause waits one step interval, and ends at once when the run was cancelled.
+func (r *Runner) pause(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("run cancelled: %w", err)
+	}
+	r.Sleep(stepPause)
+	return nil
+}
+
 func (r *Runner) emit(e Event) {
 	if r.Emit != nil {
 		r.Emit(e)
@@ -329,6 +342,9 @@ func (r *Runner) unpackRelease() error {
 func (r *Runner) stepTofu(ctx context.Context) error {
 	if r.TofuV == "" || r.TofuSH == "" {
 		return userErr("this run carries no OpenTofu checksum", "Run the installer through install.sh")
+	}
+	if err := r.needSpace(ctx, r.Work, workKiB, "the downloaded archives and what they unpack to", "Free space there, or set TMPDIR to a directory on a larger file system"); err != nil {
+		return err
 	}
 	archive := filepath.Join(r.Work, "tofu.tar.gz")
 	if r.S.Cfg.Tofu != "" {
@@ -489,23 +505,25 @@ func (r *Runner) stepAddress(ctx context.Context) error {
 		if (r.address != "" || r.address6 != "") && (c.IP6 == "" || r.address6 != "") {
 			break
 		}
-		r.Sleep(stepPause)
+		if err := r.pause(ctx); err != nil {
+			return err
+		}
 	}
 	if r.address == "" && r.address6 == "" {
 		if c.IP == optNone {
 			return &NoAddressError{
 				Cause: "container " + c.CTID + " got no IPv6 address",
-				Fix:   "Check that the router advertises a prefix or a DHCPv6 server answers, or give --ip6 and --gateway6",
+				Fix:   "Check that --vlan is the right one and that the router advertises a prefix or a DHCPv6 server answers on it, or give --ip6 and --gateway6",
 			}
 		}
 		return &NoAddressError{
 			DHCP:  c.IP == optDHCP,
 			Cause: "container " + c.CTID + " got no IPv4 address",
-			Fix:   "Check that a DHCP server answers on this network, or give --ip <address>/<prefix> --gateway <address>",
+			Fix:   "Check that --vlan is the right one and that a DHCP server answers on it, or give --ip <address>/<prefix> --gateway <address>",
 		}
 	}
 	if c.IP6 != "" && r.address6 == "" {
-		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address yet, so its certificate names its IPv4 address only")
+		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address yet, so its certificate names its IPv4 address only. Check --ip6, then run: sh install.sh --certificate --ctid "+c.CTID)
 	}
 	shown := r.address
 	if shown == "" {
@@ -714,7 +732,9 @@ func (r *Runner) stepService(ctx context.Context) error {
 	status := 0
 	for i := 0; i < 10 && status != http.StatusOK; i++ {
 		if status = r.realms(ctx); status != http.StatusOK {
-			r.Sleep(stepPause)
+			if err := r.pause(ctx); err != nil {
+				return err
+			}
 		}
 	}
 	if status != http.StatusOK {
@@ -752,7 +772,7 @@ func (r *Runner) stepUpdates(ctx context.Context) error {
 		conf := fmt.Sprintf("Acquire::http::Proxy %q;\nAcquire::https::Proxy %q;\n", proxy, proxy)
 		_ = r.pushData(ctx, "apt-proxy.conf", []byte(conf), "/etc/apt/apt.conf.d/80kubehenge-proxy", "0600")
 	}
-	_, err := r.inCT(ctx, "sh", "-c", "apt-get -q update && DEBIAN_FRONTEND=noninteractive apt-get -q -y install unattended-upgrades")
+	_, err := r.inCT(ctx, "sh", "-c", "apt-get -q "+aptTimeouts+" update && DEBIAN_FRONTEND=noninteractive apt-get -q "+aptTimeouts+" -y install unattended-upgrades")
 	if err != nil {
 		r.warnings = append(r.warnings, "container "+r.S.Cfg.CTID+" could not install unattended-upgrades from Debian's mirrors ("+err.Error()+"). Update it with: pct exec "+r.S.Cfg.CTID+" -- sh -c 'apt-get update && apt-get -y upgrade'")
 		r.emit(Event{Step: stepUpdatesName, State: StepSkipped, Detail: "not installed"})

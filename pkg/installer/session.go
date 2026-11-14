@@ -47,16 +47,20 @@ func (s *Session) Prepare(ctx context.Context) error {
 		e := facts.Existing[0]
 		return userErr(fmt.Sprintf("an appliance exists as container %s on %s", e.ID, e.Node), "Run this with --upgrade on that node")
 	}
-	list := strings.Join(facts.Bridges, ", ")
-	if list == "" {
-		list = optNone
+	if len(facts.Bridges) == 0 {
+		return userErr("this node lists no bridge, Open vSwitch bridge or SDN VNet for the container's network", "Create one in the node's network settings, apply them, then run this again")
 	}
+	list := strings.Join(facts.Bridges, ", ")
 	if s.Cfg.Bridge != "" {
 		if !contains(facts.Bridges, s.Cfg.Bridge) {
 			return userErr(s.Cfg.Bridge+" is no bridge, Open vSwitch bridge or SDN VNet of this node", "Name one of "+list+" with --bridge")
 		}
 	} else if facts.DefaultBridge != "" {
 		s.Cfg.Bridge = facts.DefaultBridge
+		if facts.VLANFromRoute {
+			s.noticef("VLAN %s on %s, since the node's default route leaves by %s.%s (name --bridge %s for no VLAN)",
+				facts.DefaultVLAN, facts.DefaultBridge, facts.DefaultBridge, facts.DefaultVLAN, facts.DefaultBridge)
+		}
 	}
 	if s.Cfg.CTID == "" {
 		s.Cfg.CTID = facts.NextID
@@ -74,7 +78,7 @@ func (s *Session) CheckStaticFree(ctx context.Context) error {
 		return nil
 	}
 	addr, _, _ := strings.Cut(c.IP, "/")
-	if s.Node.AddressInUse(ctx, c.Bridge, addr) {
+	if s.Node.AddressInUse(ctx, s.Facts.addressDevice(c.Bridge, c.VLAN), addr) {
 		return userErr(addr+" answers on the network of "+c.Bridge, "Give a free address with --ip")
 	}
 	return nil
@@ -88,13 +92,14 @@ func contains(list []string, want string) bool {
 // the user picked another bridge.
 func (s *Session) RefreshForBridge(ctx context.Context, bridge string) {
 	s.Cfg.Bridge = bridge
-	s.Facts.Prefix = s.Node.bridgeAddress4(ctx, bridge)
-	s.Facts.NodeDHCP = s.Node.bridgeIsDHCP(bridge)
+	dev := s.Facts.addressDevice(bridge, s.Cfg.VLAN)
+	s.Facts.Prefix = s.Node.bridgeAddress4(ctx, dev)
+	s.Facts.NodeDHCP = s.Node.bridgeIsDHCP(dev)
 	s.Facts.SuggestedIP = ""
 	if s.Facts.Prefix.IsValid() {
-		s.Facts.SuggestedIP = s.Node.SuggestAddress(ctx, bridge, s.Facts)
+		s.Facts.SuggestedIP = s.Node.SuggestAddress(ctx, dev, s.Facts)
 	}
-	s.Facts.Candidates = s.Node.APICandidates(ctx, s.Facts, bridge)
+	s.Facts.Candidates = s.Node.APICandidates(ctx, s.Facts, dev)
 }
 
 // Questions says which questions the options and the node leave open.
@@ -146,12 +151,12 @@ func (s *Session) FillStorages(ties Ties) error {
 		case s.Facts.TemplateHeld != "":
 			c.TemplateStorage = s.Facts.TemplateHeld
 		case len(list) == 0:
-			return userErr("no enabled, active storage here takes container templates", "Enable one, or name one with --template-storage")
+			return userErr("no enabled, active storage here takes container templates", "Give a directory, NFS or CIFS storage the content type Container template, or name one with --template-storage")
 		case len(list) == 1 || ties == PickBest:
 			c.TemplateStorage = list[0].Name
 			s.noticef("storage %s (%s) for the container template, %s", list[0].Name, list[0].Type, why(len(list)))
 		}
-	} else if !hasStorage(s.Facts.TemplateStorages, c.TemplateStorage) {
+	} else if !hasStorage(s.Facts.TemplateStorages, c.TemplateStorage) && !hasStorage(s.Facts.TemplateTight, c.TemplateStorage) {
 		return userErr(fmt.Sprintf("storage %s is disabled, inactive or takes no container templates here", c.TemplateStorage), "Name another with --template-storage")
 	}
 	return nil
@@ -224,8 +229,12 @@ func (s *Session) UnattendedCheck() error {
 		c.IP = optDHCP
 	}
 	if s.CA != nil && s.CA.NeedsTrust && !c.TrustServedCA && c.ProxmoxCA == "" {
+		fix := "Check that it is your CA, then give it with --proxmox-ca <file>"
+		if s.CA.Pinned {
+			fix = "The API serves no CA certificate, so only its own certificate could be trusted, and the appliance would fail when that is renewed. Give the CA that signed it with --proxmox-ca <file>"
+		}
 		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate from %s (SHA-256 fingerprint %s) that this node does not trust",
-			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), "Check that it is your CA, then give it with --proxmox-ca <file>")
+			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), fix)
 	}
 	return nil
 }

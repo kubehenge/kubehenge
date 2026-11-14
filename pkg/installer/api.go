@@ -244,6 +244,9 @@ type CAChoice struct {
 	Fingerprint string
 	// NeedsTrust is set for a served CA nothing vouches for yet: the user decides.
 	NeedsTrust bool
+	// Pinned is set when the API serves no CA certificate, so trusting it means trusting its own
+	// certificate alone, which stops working when that is renewed.
+	Pinned bool
 }
 
 func fingerprint(c *x509.Certificate) string {
@@ -349,7 +352,7 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 	authority := servedAuthority(served)
 	if _, ok := check(encodeCerts(authority)); ok {
 		return &CAChoice{
-			Kind: CAServed, PEM: encodeCerts(authority), NeedsTrust: true,
+			Kind: CAServed, PEM: encodeCerts(authority), NeedsTrust: true, Pinned: !authority.IsCA,
 			Subject: subjectOf(authority), Issuer: authority.Issuer.String(), Fingerprint: fingerprint(authority),
 		}, nil
 	}

@@ -113,7 +113,9 @@ type Model struct {
 	detail map[string]string
 	frac   map[string]float64
 	events chan any
-	res    *Result
+	// running closes when the runner's goroutine has returned.
+	running chan struct{}
+	res     *Result
 
 	urlGiven  bool
 	noAddr    *NoAddressError
@@ -139,6 +141,18 @@ func (m *Model) Err() error { return m.fail }
 
 // Cancelled reports whether the user left before the run.
 func (m *Model) Cancelled() bool { return m.cancelled }
+
+// Shutdown ends a run still going and removes what it made. A signal or a lost terminal ends the
+// program without its own cleanup, which would leave a half-made container behind.
+func (m *Model) Shutdown(ctx context.Context) {
+	m.cancel()
+	if m.running != nil {
+		<-m.running
+	}
+	if m.runner != nil {
+		m.runner.Cleanup(ctx)
+	}
+}
 
 // Init starts the detection behind one spinner.
 func (m *Model) Init() tea.Cmd {
@@ -414,8 +428,12 @@ func (m *Model) choicesForm(n Needs) tea.Cmd {
 func (m *Model) trustForm() tea.Cmd {
 	ca := m.S.CA
 	m.a.trust = false
+	note := ""
+	if ca.Pinned {
+		note = "\nNo CA is served: this one certificate is trusted, and the appliance fails when it is renewed."
+	}
 	return m.startForm(huh.NewGroup(huh.NewConfirm().Title("Trust this CA for the Proxmox VE API?").
-		Description("Subject  " + ca.Subject + "\nIssuer   " + ca.Issuer + "\nSHA-256  " + ca.Fingerprint[:47] + "\n         " + ca.Fingerprint[48:]).
+		Description("Subject  " + ca.Subject + "\nIssuer   " + ca.Issuer + "\nSHA-256  " + ca.Fingerprint[:47] + "\n         " + ca.Fingerprint[48:] + note).
 		Affirmative("Trust").Negative("Refuse").Value(&m.a.trust)))
 }
 
@@ -453,7 +471,7 @@ func (m *Model) networkDone() tea.Cmd {
 		}
 		if a.mode == optStatic {
 			addr, _, _ := strings.Cut(c.IP, "/")
-			return probeMsg{address: addr, used: m.S.Node.AddressInUse(m.ctx, c.Bridge, addr)}
+			return probeMsg{address: addr, used: m.S.Node.AddressInUse(m.ctx, m.S.Facts.addressDevice(c.Bridge, c.VLAN), addr)}
 		}
 		return probeMsg{}
 	}
@@ -560,8 +578,11 @@ func (m *Model) startRun() tea.Cmd {
 			m.state[st.ID] = StepPending
 		}
 	}
+	running := make(chan struct{})
+	m.running = running
 	go func() {
 		res, err := m.runner.Run(m.ctx)
+		close(running)
 		m.events <- doneMsg{res, err}
 	}()
 	return tea.Batch(m.wait(), m.spin.Tick)

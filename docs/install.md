@@ -164,7 +164,7 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 
 On a terminal, the installer is a full-screen guide. It detects the node first, then asks DHCP or static (a static address comes prefilled and is checked for use), asks only what is ambiguous, shows a summary to confirm or change, and installs with a live step list. The commands' output goes to `/var/log/kubehenge-install.log`. If DHCP gives the container no address, it offers a static address and retries.
 
-Without a terminal, or with `--plain`, it prints one line per step and asks nothing. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers.
+Without a terminal, with `TERM` empty or `dumb` (a serial console, an editor's shell), or with `--plain`, it prints one line per step and asks nothing. A dropped SSH session or Ctrl+C removes the container it was making. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers.
 
 `install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The installer inside the archive carries the container template's checksum. Every download is checked against its checksum before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](#verifying-a-release).
 
@@ -176,7 +176,7 @@ Without a terminal, or with `--plain`, it prints one line per step and asks noth
 | `--storage <storage>` | the only storage that takes container disks, else asked | Where the container's disks go, 9 GiB. Storages with less free are left out. Without a terminal, the best by type (local block storage, then directories, NFS, CIFS, CephFS), then by free space. |
 | `--template-storage <storage>` | where the template already is, else the only storage that takes it, else asked | Where the container template goes. Without a terminal, ranked like `--storage`. |
 | `--bridge <bridge>` | the bridge of the node's default route, else `vmbr0` | A bridge, Open vSwitch bridge or SDN VNet of the node, which the container attaches to. The installer stops before it downloads anything if there is none of that name. |
-| `--vlan <tag>` | none | The VLAN tag of the container's network, 1 to 4094. |
+| `--vlan <tag>` | none, or the tag of the VLAN device (such as `vmbr1.20`) the node's default route leaves by | The VLAN tag of the container's network, 1 to 4094. Naming `--bridge` yourself leaves the default off. |
 | `--mtu <bytes>` | the bridge's | The MTU of the container's network, 576 to 65535. |
 | `--ip dhcp`, `--ip none` or `--ip <address>/<prefix>` | asked | The container's IPv4 address, such as `192.0.2.40/24`. `none` leaves IPv4 out, on an IPv6-only network, and needs `--ip6`. Without a terminal, `dhcp` where the node's own network uses DHCP, else the install stops. |
 | `--gateway <address>` | none | The default gateway, an IPv4 address, with a static `--ip`. |

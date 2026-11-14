@@ -33,10 +33,10 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 		return maintain(ctx, s, newRunner(nil), stdout)
 	}
 
-	plain := !interactive || cfg.Plain
+	plain := !interactive || cfg.Plain || !CanDrawScreen(os.Getenv("TERM"))
 	if !plain && cfg.IP != "" && cfg.PVEEntry != "" {
 		// Every flag the road needs is given: detect once, and ask only what a tie leaves open.
-		if err := s.detect(ctx); err != nil {
+		if err = s.detect(ctx); err != nil {
 			return err
 		}
 		plain = !s.Questions().Any()
@@ -46,7 +46,11 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 	}
 	model := NewModel(s, newRunner)
 	prog := tea.NewProgram(model, tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithContext(ctx))
-	if _, err := prog.Run(); err != nil {
+	_, err = prog.Run()
+	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	model.Shutdown(cleanCtx)
+	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
 	if model.Cancelled() {
@@ -54,6 +58,12 @@ func Execute(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer
 		return nil
 	}
 	return model.Err()
+}
+
+// CanDrawScreen reports whether a terminal of this TERM value can show the full-screen installer.
+// A dumb terminal, such as a serial console or an editor's shell, gets the one-line-per-step output.
+func CanDrawScreen(term string) bool {
+	return term != "" && term != "dumb"
 }
 
 // maintain runs --upgrade or --certificate, which print one line per step.
