@@ -379,11 +379,11 @@ export function HAGroupsField({
     <>
       <label className="check">
         <input type="checkbox" checked={checked} aria-describedby={hint} onChange={(e) => onChange(e.target.checked)} />{" "}
-        Add HA group labels
+        Add HA rule labels
       </label>
-      <Info about="HA group labels">
-        Labels nodes group.topology.proxmox.sinextra.dev/&lt;group&gt; by HA group and node-affinity rule. Sys.Audit
-        cannot read guests or storages.
+      <Info about="HA rule labels">
+        Labels nodes group.topology.proxmox.sinextra.dev/&lt;group&gt; by their Proxmox VE HA rule. Sys.Audit cannot
+        read guests or storages.
       </Info>
       <p className="hint" id={hint}>
         The token gets Sys.Audit on /: reads the cluster configuration

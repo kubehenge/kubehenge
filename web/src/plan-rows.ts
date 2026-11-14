@@ -27,7 +27,7 @@ const settingLabels: Record<string, string[]> = {
   namespaceLabels: ["Namespace labels"],
   autoscaler: ["Autoscaler"],
   backups: ["Backups"],
-  ccm: ["HA group labels"],
+  ccm: ["HA rule labels"],
   certificates: ["Certificates"],
   clusterMesh: ["Cluster Mesh"],
   csi: ["CSI plugin", "Volume snapshots"],
