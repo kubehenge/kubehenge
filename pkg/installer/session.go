@@ -1,8 +1,10 @@
 package installer
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -199,6 +201,7 @@ func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 			return err
 		}
 		c.ProxmoxURL = APIURL(c.APIHost)
+		s.noteAPIFamily()
 	}
 	ca, err := s.Node.DecideCA(ctx, c, c.ProxmoxURL)
 	if err != nil {
@@ -271,6 +274,28 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 		s.noticef("the Proxmox VE API at %s has a certificate that is also valid for %s", c.APIHost, joinHosts(cands[1:]))
 	}
 	return false, nil
+}
+
+// noteAPIFamily notes that the API is reached at an IPv6 address because Proxmox VE's own
+// certificate lacks this node's IPv4 address on the bridge, as on a dual-stack node whose name
+// resolves to its IPv6 address first. Clusters without IPv6 cannot reach it there. A certificate of
+// the administrator's is theirs to choose.
+func (s *Session) noteAPIFamily() {
+	bridge := s.Facts.Prefix.Addr()
+	host, err := netip.ParseAddr(s.Cfg.APIHost)
+	if err != nil || !host.Unmap().Is6() || !bridge.Is4() {
+		return
+	}
+	cert, file, err := s.Node.servedCertificate()
+	if err != nil || file != pveNodePEM {
+		return
+	}
+	if _, ips := certNames(cert); slices.Contains(ips, bridge.String()) {
+		return
+	}
+	ctid := cmp.Or(s.Cfg.CTID, "<id>")
+	s.noticef("Proxmox VE's certificate does not list this node's address %[1]s on %[2]s, so the appliance and the clusters reach the API at %[3]s, which clusters without IPv6 cannot. To use %[1]s, make this node's name resolve to it first (/etc/hosts), run pvecm updatecerts --force and systemctl restart pveproxy, then: sh install.sh --upgrade --ctid %[4]s --proxmox-url https://%[1]s:8006",
+		bridge, s.Cfg.Bridge, s.Cfg.APIHost, ctid)
 }
 
 // checkRouteVLAN refuses the VLAN of the node's default route on its bridge, taken from the route

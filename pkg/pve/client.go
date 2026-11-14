@@ -155,10 +155,12 @@ const (
 type connections struct{ reads, writes *http.Transport }
 
 func (c connections) RoundTrip(req *http.Request) (*http.Response, error) {
+	t := c.writes
 	if req.Method == http.MethodGet || req.Method == http.MethodHead {
-		return c.reads.RoundTrip(req) //nolint:wrapcheck // a RoundTripper passes its transport's error on; http.Client adds the method and URL
+		t = c.reads
 	}
-	return c.writes.RoundTrip(req) //nolint:wrapcheck // as above
+	resp, err := t.RoundTrip(req)
+	return resp, certificateNamed(err)
 }
 
 // transports holds one connection pool per CA, keyed by its PEM ("" for the system's trust store)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -140,6 +141,19 @@ func TestSignInTellsAStrangerNothingOfProxmoxVEsReasons(t *testing.T) {
 	expect(t, down, http.StatusBadGateway)
 	if strings.Contains(down.Body.String(), "pmxcfs") {
 		t.Errorf("a stranger reads Proxmox VE's reason: %s", down.Body)
+	}
+}
+
+// Fails on a build whose anonymousProxmoxError answers a certificate not valid for the API's URL as
+// "Proxmox VE did not answer", which leaves the administrator nothing to fix.
+func TestSignInNamesTheAddressesProxmoxVEsCertificateIsValidFor(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	refusing(h).signIn = fmt.Errorf("signing in: %w", &pve.CertificateNameError{Host: "172.21.99.2", Names: []string{"fd99:21:99::2", "pve"}})
+	rec := h.browser().do("POST", "/api/session", `{"username":"admin@pve","password":"secret"}`)
+	expect(t, rec, http.StatusBadGateway)
+	if got := errorText(t, rec); !strings.HasPrefix(got, "Proxmox VE's certificate is valid for fd99:21:99::2, pve, not 172.21.99.2.") {
+		t.Errorf("answered %q", got)
 	}
 }
 

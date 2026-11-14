@@ -15,6 +15,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // APICandidate is a name or address of this cluster that the Proxmox VE API's certificate is valid
@@ -327,6 +329,14 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 	served, dialErr := n.Dial(ctx, host, port)
 	connects := dialErr == nil && len(served) > 0
 	check := func(ca []byte) (*x509.Certificate, bool) { return verifyAPI(served, host, poolOf(ca)) }
+	// fail names the certificate's own names where it is not valid for the URL's host, whichever CA
+	// is asked.
+	fail := func(caFile string) error {
+		if connects && served[0].VerifyHostname(host) != nil {
+			return userErr(pve.NewCertificateNameError(host, served[0]).Error(), "Give a name or address it lists with --proxmox-url")
+		}
+		return apiFailure(connects, apiURL, port, caFile)
+	}
 	if cfg.ProxmoxCA != "" {
 		given, err := os.ReadFile(cfg.ProxmoxCA)
 		if err != nil {
@@ -334,7 +344,7 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 		}
 		anchor, ok := check(given)
 		if !ok {
-			return nil, apiFailure(connects, apiURL, port, cfg.ProxmoxCA)
+			return nil, fail(cfg.ProxmoxCA)
 		}
 		return &CAChoice{Kind: CAGiven, PEM: encodeCerts(anchor), Subject: subjectOf(anchor), Fingerprint: fingerprint(anchor)}, nil
 	}
@@ -356,7 +366,7 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 			Subject: subjectOf(authority), Issuer: authority.Issuer.String(), Fingerprint: fingerprint(authority),
 		}, nil
 	}
-	return nil, apiFailure(connects, apiURL, port, "")
+	return nil, fail("")
 }
 
 func apiFailure(connects bool, apiURL, port, caFile string) error {
