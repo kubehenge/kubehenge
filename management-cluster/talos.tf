@@ -102,11 +102,16 @@ data "talos_machine_configuration" "node" {
       # The management cluster has no workers: its controllers run on the control plane. With IPv6
       # the kubelet registers one address per family, primary first, picked from the nodes'
       # networks so the VIP is never taken. Talos refuses that setting in .machine.kubelet beside
-      # this document.
+      # this document. The labels say where the node's VM runs, which the CSI plugin places and
+      # attaches volumes by. Talos refuses .machine.nodeLabels beside this document too.
       yamlencode(merge({
         apiVersion = "v1alpha1"
         kind       = "KubeNodeConfig"
         taints     = { "node-role.kubernetes.io/control-plane" = { "$patch" = "delete" } }
+        labels = {
+          "topology.kubernetes.io/region" = local.csi_region
+          "topology.kubernetes.io/zone"   = local.nodes[count.index].proxmox_node
+        }
         }, local.has_ipv6 ? {
         nodeIP = { validSubnets = flatten(local.node_networks) }
       } : {})),
@@ -166,11 +171,6 @@ data "talos_machine_configuration" "node" {
         [yamlencode({ machine = { env = local.proxy_talos_env } })],
         local.proxy_has_ca ? [yamlencode({ apiVersion = "v1alpha1", kind = "TrustedRootsConfig", name = "kubehenge-proxy", certificates = var.proxy.ca_bundle })] : [],
       ) : [],
-      # Where the node's VM runs, which the CSI plugin places and attaches volumes by.
-      [yamlencode({ machine = { nodeLabels = {
-        "topology.kubernetes.io/region" = local.csi_region
-        "topology.kubernetes.io/zone"   = local.nodes[count.index].proxmox_node
-      } } })],
       # The same MTU as the Proxmox VE interface, on the link by its alias, so it holds whatever
       # the guest driver negotiates.
       var.mtu == null ? [] : [yamlencode({ apiVersion = "v1alpha1", kind = "LinkConfig", name = "lan", mtu = var.mtu })],

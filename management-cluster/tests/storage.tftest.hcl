@@ -90,10 +90,11 @@ run "csi_plugin_is_the_workload_clusters_pinned_release" {
   }
 
   assert {
-    condition = alltrue([for i, n in local.nodes : contains(
-      split("---\n", data.talos_machine_configuration.node[i].config_patches[1]),
-      yamlencode({ machine = { nodeLabels = { "topology.kubernetes.io/region" = "kubehenge", "topology.kubernetes.io/zone" = n.proxmox_node } } }),
-    )])
+    condition = alltrue([for i, n in local.nodes : anytrue([
+      for d in split("---\n", data.talos_machine_configuration.node[i].config_patches[1]) :
+      try(yamlencode(yamldecode(d).labels), "") == yamlencode({ "topology.kubernetes.io/region" = "kubehenge", "topology.kubernetes.io/zone" = n.proxmox_node })
+      if try(yamldecode(d).kind, "") == "KubeNodeConfig"
+    ])])
     error_message = "every node must carry the region and its Proxmox VE node as zone, which the plugin places volumes by"
   }
 }
