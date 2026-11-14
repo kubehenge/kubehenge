@@ -954,7 +954,7 @@ export const newForm = (): Form => ({
   backupFields: newBackupFields(),
   storeBackupKey: true,
   backupKey: {},
-  etcdSnapshots: true,
+  etcdSnapshots: false,
   etcdFields: etcdFieldsOf({ enabled: false }),
 });
 

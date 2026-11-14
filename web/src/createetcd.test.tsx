@@ -51,10 +51,16 @@ const withoutVariable = classOf("rke2", targets, ["backups"]);
 const key = { accessKeyID: "AKIA", secretAccessKey: "secret" };
 
 const filledForm = (c: ClusterClass, patch: Partial<Form> = {}): Form =>
-  withBackupChoices({ ...newForm(), name: "web", ...patch }, c, true);
+  withBackupChoices({ ...newForm(), name: "web", etcdSnapshots: true, ...patch }, c, true);
 
 describe("a new cluster's etcd snapshots", () => {
-  it("are on when the class offers a target, and the one target is the choice", () => {
+  it("are off until chosen, so a first Next needs no access key", () => {
+    const fresh = withBackupChoices({ ...newForm(), name: "web" }, kubeadm, true);
+    expect({ chosen: etcdChosen(fresh, kubeadm) }).toStrictEqual({ chosen: false });
+    expect(fieldProblems("Add-ons", fresh, kubeadm)).toStrictEqual({});
+  });
+
+  it("take the one target the class offers once chosen", () => {
     const form = filledForm(kubeadm);
     expect({ chosen: etcdChosen(form, kubeadm) }).toStrictEqual({ chosen: true });
     expect(form.etcdFields.target).toBe("store");
@@ -167,7 +173,7 @@ describe("a new cluster's etcd snapshots", () => {
   });
 
   it("wait for the key where it cannot be stored, as backups do", () => {
-    const form = withBackupChoices({ ...newForm(), backupKey: key }, kubeadm, false);
+    const form = withBackupChoices({ ...newForm(), etcdSnapshots: true, backupKey: key }, kubeadm, false);
     expect(form).toMatchObject({ storeBackupKey: false });
     expect(fieldProblems("Add-ons", form, kubeadm)).toStrictEqual({});
     expect(pendingCredentials(form, kubeadm)).toStrictEqual([]);
@@ -243,7 +249,7 @@ describe("a new cluster started from another", () => {
     const off = fromCluster({ ...source, variables: { etcdSnapshots: { enabled: false } } }, newForm());
     expect(off).toMatchObject({ etcdSnapshots: false });
     expect(fromCluster(source, newForm())).toMatchObject({
-      etcdSnapshots: true,
+      etcdSnapshots: false,
       etcdFields: newForm().etcdFields,
     });
   });
@@ -260,7 +266,7 @@ function Step({
   canTrust?: boolean;
   first?: Partial<Form>;
 }): JSX.Element {
-  const [entered, setEntered] = useState<Form>({ ...newForm(), name: "web", ...first });
+  const [entered, setEntered] = useState<Form>({ ...newForm(), name: "web", etcdSnapshots: true, ...first });
   const form = withBackupChoices(entered, cls, canTrust);
   const found = fieldProblems("Add-ons", form, cls);
   return (
