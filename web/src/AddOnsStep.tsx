@@ -49,9 +49,6 @@ import {
   registerHint,
 } from "./ui";
 
-// Talos nodes take Talos patch releases in place and the others move to new builds of their VM
-// template, both in the window whatever the mode.
-const upgradesInfo = "Nodes also get OS updates in this window, whatever the mode.";
 
 // HeadlampAddOn installs Headlamp, at a host name of its own if one is given, and read-only for
 // everyone if asked.
@@ -706,9 +703,27 @@ export function AddOnsStep(props: AddOnsProps): JSX.Element {
       <AddonRoom form={form} cls={cls} />
 
       {variable(cls, "upgrades") && (
-        <Field label="Upgrade automatically" hint={`Daily 02:00 to 06:00, ${browserZone()} time`} info={upgradesInfo}>
-          {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}
-        </Field>
+        <>
+          <Field
+            label="Upgrade automatically"
+            hint={
+              form.upgradeMode === "off" && !form.nodeImages
+                ? undefined
+                : `Daily 02:00 to 06:00, ${browserZone()} time`
+            }
+          >
+            {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}
+          </Field>
+          <label className="check">
+            <input type="checkbox" checked={form.nodeImages} onChange={(e) => set("nodeImages", e.target.checked)} />{" "}
+            {cls?.distribution === "talos" ? "Apply Talos patch releases" : "Update node images"}
+          </label>
+          <Info about={cls?.distribution === "talos" ? "Talos patch releases" : "node images"}>
+            {cls?.distribution === "talos"
+              ? "Upgrades the nodes in place, one at a time."
+              : "Replaces the nodes with each new template build."}
+          </Info>
+        </>
       )}
     </>
   );

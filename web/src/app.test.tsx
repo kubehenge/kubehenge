@@ -1094,6 +1094,7 @@ describe("create", () => {
     egress: newForm().egress,
     oidc: [],
     upgradeMode: "off",
+    nodeImages: true,
     backups: false,
     backupFields: {
       target: "",
@@ -1456,6 +1457,16 @@ describe("create", () => {
     ] as const) {
       expect(fieldProblems("Network", { ...bgp, ...patch }, withLB)).toStrictEqual(expected);
     }
+  });
+
+  it("lets node image refreshes be switched off", () => {
+    const withUpgrades = {
+      ...rke2,
+      variables: [...rke2.variables, { name: "upgrades", required: false, schema: { type: "object" } }],
+    };
+    const off = { ...form, nodeImages: false };
+    expect(request(off, withUpgrades).variables["upgrades"]).toStrictEqual({ mode: "off", nodeImages: false });
+    expect(Object.fromEntries(summary(off, withUpgrades))["Automatic upgrades"]).toBe("Off");
   });
 
   it("starts automatic upgrades with a window in the browser's time zone", () => {

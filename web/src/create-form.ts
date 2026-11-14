@@ -313,6 +313,8 @@ export interface Form {
   egress: EgressChoice;
   oidc: OIDCProvider[];
   upgradeMode: UpgradeMode;
+  /** Whether the nodes move to new node images (on Talos, patch releases) inside the window. */
+  nodeImages: boolean;
   backups: boolean;
   backupFields: BackupFields;
   /** Whether the cluster gets an access key of its own, stored once it is created. */
@@ -325,9 +327,11 @@ export interface Form {
 }
 
 /** newUpgrades is the policy a new cluster starts with: every day from 02:00 for four hours, in the browser's time zone. */
-export const newUpgrades = (mode: Form["upgradeMode"], timeZone: string): UpgradePolicy => ({
+export const newUpgrades = (mode: Form["upgradeMode"], timeZone: string, nodeImages = true): UpgradePolicy => ({
   mode,
-  window: { start: defaultStart, durationMinutes: defaultMinutes, timeZone },
+  ...(nodeImages ? {} : { nodeImages: false }),
+  // With nothing to run there is no window to keep.
+  ...(mode === "off" && !nodeImages ? {} : { window: { start: defaultStart, durationMinutes: defaultMinutes, timeZone } }),
 });
 
 export const versionExamples: Record<string, string> = {
@@ -945,6 +949,7 @@ export const newForm = (): Form => ({
   egress: newEgress(),
   oidc: [],
   upgradeMode: "off",
+  nodeImages: true,
   backups: false,
   backupFields: newBackupFields(),
   storeBackupKey: true,
@@ -1339,9 +1344,8 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   variables["oidc"] = cleanProviders(form.oidc);
   // A cluster whose nodes move to new template builds needs its window in the browser's time zone
   // even with Kubernetes upgrades off.
-  const upgrades = newUpgrades(form.upgradeMode, browserZone());
-  if (form.upgradeMode !== "off" || (defined.has("upgrades") && refreshesNodes(upgrades))) {
-    variables["upgrades"] = upgrades;
+  if (form.upgradeMode !== "off" || defined.has("upgrades")) {
+    variables["upgrades"] = newUpgrades(form.upgradeMode, browserZone(), form.nodeImages);
   }
   const req: CreateRequest = {
     ...(form.namespace ? { namespace: form.namespace } : {}),
@@ -1531,7 +1535,7 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
   }
   rows.push(...customisationRows(form, defined), ...addOnRows(form, c, defined));
   if (defined.has("upgrades")) {
-    const upgrades = newUpgrades(form.upgradeMode, browserZone());
+    const upgrades = newUpgrades(form.upgradeMode, browserZone(), form.nodeImages);
     rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
   }
   if (defined.has("oidc")) {
