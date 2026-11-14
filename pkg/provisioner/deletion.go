@@ -32,6 +32,11 @@ import (
 // delete, is left behind and named in a LeftBehind event.
 const AbandonAnnotation = "kubehenge.dev/abandon-deletion"
 
+// AllowDeletionAnnotation on a Cluster lets it be deleted. The chart's admission policy refuses the
+// deletion of a Kubehenge cluster without it, so that a stray `kubectl delete` or a GitOps prune ends
+// no cluster unasked. The interface and the CLI set it as part of their delete.
+const AllowDeletionAnnotation = "kubehenge.dev/allow-deletion"
+
 // DeletionStatusAnnotation holds what a cluster being deleted waits for, as a JSON DeletionStatus,
 // for kubectl and the interface alike.
 const DeletionStatusAnnotation = "kubehenge.dev/deletion-status"

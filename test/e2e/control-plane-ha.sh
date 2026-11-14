@@ -350,6 +350,7 @@ until_true 60 "the ProxmoxCluster marked for deletion" marked
 # capmox has to reconcile that deletion while the Cluster still stands. Unpatched, it never looks
 # again once the Cluster goes, and the delete below runs out of time.
 sleep 15
+webhook_retried kubectl -n "${ns}" annotate cluster/ha kubehenge.dev/allow-deletion=true > /dev/null
 kubectl -n "${ns}" delete cluster/ha --wait --timeout=30m
 left=$(vms)
 [ "${left}" = 0 ] || fail "VMs of the cluster are still there"

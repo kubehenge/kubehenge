@@ -219,6 +219,7 @@ kubelet=$(rancher get nodes -o jsonpath='{.items[0].status.nodeInfo.kubeletVersi
 [ "${kubelet}" = "${KUBEHENGE_E2E_RANCHER_VERSION}" ] || fail "Rancher's cluster was upgraded past the versions Rancher runs on"
 
 step "deleting the k3s cluster removes it from Rancher first"
+webhook_retried kubectl -n "${ns}" annotate cluster/downstream cluster/rancher kubehenge.dev/allow-deletion=true > /dev/null
 kubectl -n "${ns}" delete cluster/downstream --wait=false
 until_true 900 "removed from Rancher" gone_from_rancher
 kubectl -n "${ns}" wait --for=delete cluster/downstream --timeout=30m

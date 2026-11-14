@@ -250,6 +250,7 @@ pool_asks 0 || fail "the pool asks for workers, not the fixed 0"
 until_true 300 "the control plane takes workloads again, without workers" cp_untainted
 
 step "delete the cluster"
+webhook_retried kubectl -n "${ns}" annotate cluster/web kubehenge.dev/allow-deletion=true > /dev/null
 kubectl -n "${ns}" delete cluster/web --wait --timeout=30m
 left=$(vms)
 [ "${left}" = 0 ] || fail "VMs of the cluster are still there"

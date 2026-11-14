@@ -258,9 +258,9 @@ cleanup() {
     remove_ha_rule || true
     [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
     if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
-        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s delete cluster %s\n' "${ns}" "${name}" "${ns}" "${name}"
+        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s annotate cluster %s kubehenge.dev/allow-deletion=true && kubectl -n %s delete cluster %s\n' "${ns}" "${name}" "${ns}" "${name}" "${ns}" "${name}"
     elif [ "${status}" -ne 0 ]; then
-        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${name}" "${ns}"
+        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${name}" "${ns}" "${ns}"
     fi
     rm -rf "${work}"
 }
@@ -4219,6 +4219,15 @@ hold=e2e.kubehenge.dev/hold
 worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.name // empty')
 [ -n "${worker}" ] || fail "no worker machine to hold the deletion up with"
 webhook_retried kubectl -n "${ns}" patch "machine/${worker}" --type json -p "[{\"op\":\"add\",\"path\":\"/metadata/finalizers/-\",\"value\":\"${hold}\"}]" > /dev/null
+# The chart's deletion guard refuses a delete until the cluster carries its annotation.
+if refusal=$(creator -n "${ns}" delete "cluster/${name}" --wait=false 2>&1); then
+    fail "the cluster was deleted without kubehenge.dev/allow-deletion"
+fi
+case "${refusal}" in
+*kubehenge.dev/allow-deletion*) ;;
+*) fail "the unannotated delete failed for another reason: ${refusal}" ;;
+esac
+webhook_retried creator -n "${ns}" annotate "cluster/${name}" kubehenge.dev/allow-deletion=true > /dev/null
 creator -n "${ns}" delete "cluster/${name}" --wait=false
 # deletion_holds: the deletion's status names the held Machine and the test's finalizer.
 deletion_holds() {

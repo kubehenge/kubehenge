@@ -170,6 +170,44 @@ spec:
   policyName: {{ $name }}-secrets
   validationActions: [Deny]
 ---
+# A deleted cluster takes its VMs, volumes and CAs with it, so a Kubehenge cluster goes only once it
+# carries kubehenge.dev/allow-deletion, as the interface's typed name and the CLI's --yes set it.
+# kubectl, GitOps prunes and a deleted namespace meet the same guard. It runs inside the API server,
+# so it holds while the controller is away.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-cluster-deletion
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [cluster.x-k8s.io]
+        apiVersions: ["*"]
+        operations: [DELETE]
+        resources: [clusters]
+  # By the class's name alone: CEL reads a field called namespace by an escaped name, which would tie
+  # the guard to how the API server types the object.
+  matchConditions:
+    - name: kubehenge-class
+      expression: >-
+        has(oldObject.spec.topology) && has(oldObject.spec.topology.classRef) &&
+        oldObject.spec.topology.classRef.name.startsWith('kubehenge-')
+  validations:
+    - expression: >-
+        has(oldObject.metadata.deletionTimestamp) ||
+        (has(oldObject.metadata.annotations) && 'kubehenge.dev/allow-deletion' in oldObject.metadata.annotations)
+      messageExpression: >-
+        'cluster ' + oldObject.metadata.name + ' is protected from deletion: annotate it with kubehenge.dev/allow-deletion=true, then delete it'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-cluster-deletion
+spec:
+  policyName: {{ $name }}-cluster-deletion
+  validationActions: [Deny]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
