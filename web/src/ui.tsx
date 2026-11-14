@@ -424,8 +424,8 @@ export function localDates(text: string): string {
   );
 }
 
-export function age(iso: string, now = Date.now()): string {
-  const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / msPerSecond));
+export function age(iso: string): string {
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / msPerSecond));
   if (s < secondsPerMinute) {
     return `${s}s`;
   }
