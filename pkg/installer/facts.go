@@ -82,11 +82,14 @@ type Node struct {
 	Dial func(ctx context.Context, host, port string) ([]*x509.Certificate, error)
 }
 
+// workKiB is what OpenTofu's archive and its copy need beside the release that install.sh unpacked
+// in the same TMPDIR after its own check for 1 GiB.
+const workKiB = 524288
+
 const (
 	rootDiskKiB  = 9437184
 	templateKiB  = 204800
-	workKiB      = 524288 // OpenTofu's archive and its copy, beside the release install.sh unpacked after its own 1 GiB check.
-	clusterCA   = "/etc/pve/pve-root-ca.pem"
+	clusterCA    = "/etc/pve/pve-root-ca.pem"
 	systemCA     = "/etc/ssl/certs/ca-certificates.crt"
 	resolvConf   = "/etc/resolv.conf"
 	interfaces   = "/etc/network/interfaces"
@@ -470,27 +473,41 @@ var vlanAwareRE = regexp.MustCompile(`(?m)^\s*bridge[-_]vlan[-_]aware\s+(yes|1|t
 // network, else from /etc/network/interfaces. A bridge neither source shows as aware is not.
 func (n *Node) bridgeVLANAware(ctx context.Context, bridge string) bool {
 	if out, err := n.run(ctx, "pvesh", "get", "/nodes/"+n.Hostname+"/network/"+bridge, "--output-format", "json"); err == nil {
-		var conf map[string]any
-		if json.Unmarshal([]byte(out), &conf) == nil {
-			switch v := conf["bridge_vlan_aware"].(type) {
-			case float64:
-				return v != 0
-			case bool:
-				return v
-			case string:
-				return v == "1" || v == "yes" || v == "true"
-			}
-			if _, ok := conf["iface"]; ok {
-				return false
-			}
+		if aware, known := vlanAwareFromJSON(out); known {
+			return aware
 		}
 	}
 	data, err := n.readFile(interfaces)
 	if err != nil {
 		return false
 	}
+	return vlanAwareInFile(string(data), bridge)
+}
+
+// vlanAwareFromJSON reads Proxmox VE's description of one interface. It is unknown when the text
+// describes no interface.
+func vlanAwareFromJSON(out string) (bool, bool) {
+	var conf map[string]any
+	if json.Unmarshal([]byte(out), &conf) != nil {
+		return false, false
+	}
+	switch v := conf["bridge_vlan_aware"].(type) {
+	case float64:
+		return v != 0, true
+	case bool:
+		return v, true
+	case string:
+		return v == "1" || v == "yes" || v == "true", true
+	}
+	_, described := conf["iface"]
+	return false, described
+}
+
+// vlanAwareInFile reports whether the bridge's stanza in /etc/network/interfaces turns VLAN
+// filtering on.
+func vlanAwareInFile(data, bridge string) bool {
 	stanza := false
-	for line := range strings.SplitSeq(string(data), "\n") {
+	for line := range strings.SplitSeq(data, "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 2 && f[0] == "iface" {
 			stanza = f[1] == bridge

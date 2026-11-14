@@ -314,11 +314,7 @@ func TestCleanupRunsOnce(t *testing.T) {
 	r.created = true
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.Cleanup(context.Background())
-		}()
+		wg.Go(func() { r.Cleanup(context.Background()) })
 	}
 	wg.Wait()
 	for _, c := range []string{"pct unlock 100", "pct stop 100", "pct destroy 100"} {

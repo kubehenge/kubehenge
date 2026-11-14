@@ -57,14 +57,8 @@ func (s *Session) Prepare(ctx context.Context) error {
 		}
 	} else if facts.DefaultBridge != "" {
 		s.Cfg.Bridge = facts.DefaultBridge
-		if facts.VLANFromRoute {
-			if !s.Node.bridgeVLANAware(ctx, facts.DefaultBridge) {
-				b, v := facts.DefaultBridge, facts.DefaultVLAN
-				return userErr(fmt.Sprintf("the node's default route leaves by %s.%s, but %s is not VLAN aware, so a tag on it would make Proxmox VE create %sv%s and take over the port's .%s, which cuts the node's own network", b, v, b, b, v, v),
-					fmt.Sprintf("Make %s VLAN aware in the node's network settings, or name --bridge and --vlan yourself", b))
-			}
-			s.noticef("VLAN %s on %s, since the node's default route leaves by %s.%s (name --bridge %s for no VLAN)",
-				facts.DefaultVLAN, facts.DefaultBridge, facts.DefaultBridge, facts.DefaultVLAN, facts.DefaultBridge)
+		if err = s.useRouteVLAN(ctx); err != nil {
+			return err
 		}
 	}
 	if s.Cfg.CTID == "" {
@@ -270,6 +264,23 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 		s.noticef("the Proxmox VE API at %s has a certificate that is also valid for %s", c.APIHost, joinHosts(cands[1:]))
 	}
 	return false, nil
+}
+
+// useRouteVLAN accepts the VLAN taken from the node's default route, which needs a VLAN-aware
+// bridge. On any other bridge a tag makes Proxmox VE create a second bridge and take over the
+// port's VLAN device, which would cut the node's own network.
+func (s *Session) useRouteVLAN(ctx context.Context) error {
+	f := s.Facts
+	if !f.VLANFromRoute {
+		return nil
+	}
+	b, v := f.DefaultBridge, f.DefaultVLAN
+	if !s.Node.bridgeVLANAware(ctx, b) {
+		return userErr(fmt.Sprintf("the node's default route leaves by %s.%s, but %s is not VLAN aware, so a tag on it would make Proxmox VE create %sv%s and take over the port's .%s, which cuts the node's own network", b, v, b, b, v, v),
+			fmt.Sprintf("Make %s VLAN aware in the node's network settings, or name --bridge and --vlan yourself", b))
+	}
+	s.noticef("VLAN %s on %s, since the node's default route leaves by %s.%s (name --bridge %s for no VLAN)", v, b, b, v, b)
+	return nil
 }
 
 func (s *Session) noticef(format string, args ...any) {
