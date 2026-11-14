@@ -236,7 +236,7 @@ func TestIntegrationDistributionTemplatesAndScaling(t *testing.T) { //nolint:par
 				t.Fatalf("the class was not marked for its templates: %v", err)
 			}
 
-			if err := c.Delete(ctx, cluster); err != nil {
+			if err := deleteCluster(ctx, c, cluster); err != nil {
 				t.Fatal(err)
 			}
 			reconcileClass(t, class)
@@ -322,7 +322,7 @@ func TestIntegrationClusterLifecycle(t *testing.T) { //nolint:paralleltest // st
 	if err := c.Create(ctx, machine); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Delete(ctx, got); err != nil {
+	if err := deleteCluster(ctx, c, got); err != nil {
 		t.Fatal(err)
 	}
 	reconcileCluster()
@@ -598,7 +598,7 @@ func checkAbandonAdmission(ctx context.Context, t *testing.T, c client.Client) {
 	if err := patch(`{"metadata":{"finalizers":["kubehenge.dev/test-hold"]}}`); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Delete(ctx, cluster); err != nil {
+	if err := deleteCluster(ctx, c, cluster); err != nil {
 		t.Fatal(err)
 	}
 	if err := annotate("not-first"); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "must be the cluster's name") {

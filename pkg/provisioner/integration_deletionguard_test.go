@@ -36,6 +36,16 @@ func whileAway(away *atomic.Bool, next http.Handler) http.Handler {
 	})
 }
 
+// deleteCluster deletes a Kubehenge cluster as the interface and the CLI do: it annotates the
+// cluster first, which the chart's deletion policy asks for.
+func deleteCluster(ctx context.Context, c client.Client, cluster client.Object) error {
+	allow := client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"annotations":{"`+AllowDeletionAnnotation+`":"true"}}}`))
+	if err := c.Patch(ctx, cluster, allow); err != nil {
+		return err
+	}
+	return c.Delete(ctx, cluster)
+}
+
 // TestIntegrationDeletionGuard holds the chart's deletion policy on a real API server, with Cluster
 // API's conversion: a delete of a Kubehenge cluster through v1beta1, alone or as a collection, is
 // refused without the annotation, and the v1beta2 delete with it goes through. The annotation, a

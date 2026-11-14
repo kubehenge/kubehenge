@@ -148,7 +148,7 @@ func TestIntegrationClusterAPIChecksTheClasses(t *testing.T) { //nolint:parallel
 			if want := classRanges[class]; rangesOf(got) != want {
 				t.Errorf("ranges %s, want the distribution's own %s", rangesOf(got), want)
 			}
-			if err := c.Delete(ctx, got); err != nil {
+			if err := deleteCluster(ctx, c, got); err != nil {
 				t.Fatal(err)
 			}
 			checkDefaultsWithEachCNI(ctx, t, c, class, net)

@@ -256,9 +256,13 @@ verify-talos-pins: web gateway-api
 # spelling and Renovate's config, each at its strictest settings; the files are the repository's
 # own, as git lists them.
 # CI runs the Go analysis and the rest on separate runners, so `lint-other` is everything but Go.
-.PHONY: lint lint-other ci-lint-go
+.PHONY: lint
 lint: ci-lint-go lint-other
+
+.PHONY: ci-lint-go
 ci-lint-go: lint-go lint-gopls
+
+.PHONY: lint-other
 lint-other: lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
 
 FILES = git ls-files --cached --others --exclude-standard

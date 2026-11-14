@@ -140,6 +140,9 @@ func tofuCalls(t *testing.T, a *Appliance) [][]string {
 		}
 		calls = append(calls, rec.Args)
 	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return calls
 }
 
